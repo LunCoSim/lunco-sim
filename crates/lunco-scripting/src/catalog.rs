@@ -46,6 +46,12 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
         "Serialize a Rhai map/array into JSON for commands whose contract carries a JSON string.",
     ),
     (
+        "from_json",
+        "from_json(string)",
+        "value | ()",
+        "Parse a JSON string into native Rhai maps/arrays/scalars; () for malformed input.",
+    ),
+    (
         "get",
         "get(id, \"Component.field\")",
         "value | ()",

@@ -1,8 +1,8 @@
 //! Script-authored CLICK TOOLS — the editor half of the `lunco_tools` registry.
 //!
-//! A tool library that exposes `on_click(entity_id)` becomes an armable tool in
-//! the Tools palette. Arm it, click a thing in the scene, and the tool's own
-//! rhai handler runs with the clicked entity's id. Nothing else is required:
+//! A tool library that exposes `on_click(context)` becomes an armable tool in
+//! the Tools palette. Arm it, click in the scene, and the tool's own Rhai
+//! handler receives the canonical click context. Nothing else is required:
 //! there is no registration call, no palette edit, no Rust per tool. Drop
 //! `assets/scripting/tools/<name>.rhai` with an `on_click` in it and the button
 //! is there next launch.
@@ -11,7 +11,7 @@
 //! // assets/scripting/tools/recover.rhai
 //! fn ui_label() { "Recover" }
 //! fn ui_hint()  { "Click a stuck vessel to right it" }
-//! fn on_click(id) { vessel(id); }
+//! fn on_click(context) { vessel(context.target_entity_id); }
 //! ```
 //!
 //! WHY DISCOVERY BY SIGNATURE. `Tool::functions()` already reports `name/arity`
@@ -20,22 +20,34 @@
 //! implements. A separate list of palette entries could disagree with the code —
 //! a button with no handler, or a handler nobody can reach. This cannot.
 //!
-//! The click is handed over as a `RunRhai` call into the tool's namespace. That
-//! is the existing, world-aware script entry point: the snippet is queued and
-//! run by `drain_world_scripts` next `FixedUpdate` with the prelude and every
-//! tool in scope, so a tool handler can do anything a scenario can.
+//! The click is handed over as a typed `RunRhaiTool` command. It is queued and
+//! run by `drain_world_scripts` with the prelude and every tool in scope, so a
+//! tool handler can do anything a scenario can.
 
 use bevy::prelude::*;
+use lunco_core::TelemetryValue;
 
-/// Build the call a click dispatches: `<tool>::on_click(<id>)`.
-///
-/// Split out and unit-tested because it is the one place a tool name and an
-/// entity id become code. Tool names come from the registry (a file stem), not
-/// from user text, so there is nothing to escape — but the shape of the call is
-/// worth pinning so a rename cannot silently produce a snippet that parses and
-/// does nothing.
-fn click_call(tool: &str, entity_id: u64) -> String {
-    format!("{tool}::on_click({entity_id})")
+/// Build the language-neutral map passed to a script tool. The map is an
+/// interaction contract, not an API serialization format; the scripting
+/// backend converts it directly to the target runtime's native value.
+pub(crate) fn tool_map(entries: Vec<(String, TelemetryValue)>) -> TelemetryValue {
+    TelemetryValue::Map(entries.into_iter().collect())
+}
+
+pub(crate) fn tool_string(value: impl Into<String>) -> TelemetryValue {
+    TelemetryValue::String(value.into())
+}
+
+pub(crate) fn tool_i64(value: u64) -> TelemetryValue {
+    TelemetryValue::I64(value as i64)
+}
+
+pub(crate) fn tool_bool(value: bool) -> TelemetryValue {
+    TelemetryValue::Bool(value)
+}
+
+pub(crate) fn tool_vec3(value: [f64; 3]) -> TelemetryValue {
+    TelemetryValue::Array(value.into_iter().map(TelemetryValue::F64).collect())
 }
 
 /// Disarm the armed script tool on Cancel (Esc), like every other cursor mode.
@@ -67,15 +79,20 @@ pub fn forget_missing_script_tool(mut armed: ResMut<lunco_core::ArmedScriptTool>
     }
 }
 
-/// Scene click while a script tool is armed: hand the picked entity to the
-/// tool's `on_click`.
+/// Scene click while a script tool is armed: hand a generic, structured context
+/// to the tool's `on_click`. Target resolution is semantic where possible, but
+/// an empty-space/terrain click is still a valid context for tools that operate
+/// on positions rather than entities.
 pub fn on_scene_click_script_tool(
     mut click: On<Pointer<Click>>,
     armed: Res<lunco_core::ArmedScriptTool>,
     egui_focus: Res<lunco_core::EguiFocus>,
     q_selectable: Query<Entity, With<lunco_core::SelectableRoot>>,
     q_ids: Query<&lunco_core::GlobalEntityId>,
+    q_prim: Query<&lunco_usd_bevy::UsdPrimPath>,
     q_parents: Query<&ChildOf>,
+    backed: Res<lunco_usd::twin_projection::DocBackedTwinScenes>,
+    asset_server: Res<AssetServer>,
     mut commands: Commands,
 ) {
     let Some(tool) = armed.0.clone() else { return };
@@ -93,7 +110,8 @@ pub fn on_scene_click_script_tool(
     click.propagate(false);
 
     // The picked mesh is a wheel, a panel, a dish — walk up to the thing it
-    // belongs to. A tool addresses objects, not triangles.
+    // belongs to. A tool addresses objects, not triangles. There need not be a
+    // semantic root: terrain tools can consume the hit position alone.
     let mut cursor = click.entity;
     let root = loop {
         if q_selectable.contains(cursor) {
@@ -104,24 +122,74 @@ pub fn on_scene_click_script_tool(
             Err(_) => break None,
         }
     };
-    // Empty space or scenery: say nothing. A tool that scolds you for missing is
-    // worse than one that does nothing.
-    let Some(root) = root else { return };
-    let Ok(gid) = q_ids.get(root) else {
-        warn!("[script-tool] {root:?} has no GlobalEntityId — cannot address it");
-        return;
-    };
-    commands.trigger(lunco_scripting::commands::RunRhai {
-        code: click_call(&tool, gid.get()),
-    });
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn click_call_targets_the_tool_namespace() {
-        assert_eq!(click_call("recover", 42), "recover::on_click(42)");
+    let target_prim = root
+        .and_then(|entity| q_prim.get(entity).ok())
+        .or_else(|| q_prim.get(click.entity).ok());
+    let mut context = vec![
+        (
+            "button".to_string(),
+            TelemetryValue::String("primary".to_string()),
+        ),
+        (
+            "screen_position".to_string(),
+            TelemetryValue::Array(
+                click
+                    .pointer_location
+                    .position
+                    .to_array()
+                    .into_iter()
+                    .map(|value| TelemetryValue::F64(value as f64))
+                    .collect(),
+            ),
+        ),
+    ];
+    if let Some(id) = q_ids.get(click.entity).ok() {
+        context.push((
+            "hit_entity_id".to_string(),
+            TelemetryValue::I64(id.get() as i64),
+        ));
     }
+    if let Some(root) = root {
+        if let Ok(id) = q_ids.get(root) {
+            context.push((
+                "target_entity_id".to_string(),
+                TelemetryValue::I64(id.get() as i64),
+            ));
+        }
+    }
+    if let Some(path) = q_prim.get(click.entity).ok() {
+        context.push((
+            "hit_path".to_string(),
+            TelemetryValue::String(path.path.clone()),
+        ));
+    }
+    if let Some(path) = target_prim {
+        context.push((
+            "target_path".to_string(),
+            TelemetryValue::String(path.path.clone()),
+        ));
+        if let Some(doc) = lunco_usd::twin_projection::scene_document_for(
+            &backed,
+            &asset_server,
+            path.stage_handle.id(),
+        ) {
+            context.push(("doc_id".to_string(), TelemetryValue::I64(doc.raw() as i64)));
+        }
+    }
+    if let Some(position) = click.hit.position {
+        context.push((
+            "world_position".to_string(),
+            TelemetryValue::Array(
+                position
+                    .to_array()
+                    .into_iter()
+                    .map(|value| TelemetryValue::F64(value as f64))
+                    .collect(),
+            ),
+        ));
+    }
+    commands.trigger(lunco_scripting::commands::RunRhaiTool {
+        tool,
+        args: tool_map(context),
+    });
 }

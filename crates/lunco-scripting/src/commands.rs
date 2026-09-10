@@ -1,6 +1,6 @@
 //! One-shot script-execution commands.
 //!
-//! `RunRhai` / `RunPython` are typed `#[Command]`s — discoverable on every
+//! `RunRhai`, `RunRhaiTool` / `RunPython` are typed `#[Command]`s — discoverable on every
 //! transport (HTTP API, MCP, scripts) like any other command. `RunRhai` is
 //! always present (pure-Rust, wasm-clean). `RunPython` is `#[cfg]`-gated on the
 //! `python` feature, so it only appears in the API schema when the runtime is
@@ -22,7 +22,7 @@ use crate::backend::ScriptBackends;
 #[cfg(any(feature = "rhai", feature = "python"))]
 use crate::doc::ScriptLanguage;
 #[cfg(feature = "rhai")]
-use crate::world_bridge::PendingWorldScripts;
+use crate::world_bridge::{PendingWorldScript, PendingWorldScripts};
 #[cfg(feature = "rhai")]
 use crate::{
     doc::{ScriptDocument, ScriptedModel},
@@ -35,6 +35,8 @@ use lunco_api::executor::PendingApiRequest;
 use lunco_core::register_commands;
 #[cfg(feature = "rhai")]
 use lunco_core::ActiveCommandId;
+#[cfg(feature = "rhai")]
+use lunco_core::TelemetryValue;
 #[cfg(any(feature = "rhai", feature = "python"))]
 use lunco_core::{on_command, Ack, Command, OpId};
 #[cfg(feature = "rhai")]
@@ -60,6 +62,22 @@ pub struct RunRhai {
     pub code: String,
 }
 
+/// Invoke a registered Rhai tool with a typed value.
+///
+/// This is the structured counterpart to [`RunRhai`]. It is intended for
+/// engine adapters such as scene click tools: the payload crosses the Bevy
+/// command queue as the shared [`TelemetryValue`] model and becomes a native
+/// Rhai value inside the scripting backend. No source snippet or JSON literal
+/// is used to carry the payload.
+#[cfg(feature = "rhai")]
+#[Command(default)]
+pub struct RunRhaiTool {
+    /// Registered tool namespace, for example `recover` or `waypoint_editor`.
+    pub tool: String,
+    /// Structured argument passed as the single `on_click(context)` argument.
+    pub args: TelemetryValue,
+}
+
 // rhai runs with full World access (`cmd`/`world_pos`/`get`/...), which an
 // observer can't hold. So the handler ENQUEUES the snippet under the active
 // request id; the exclusive `drain_world_scripts` system runs it next Update
@@ -80,9 +98,45 @@ fn on_run_rhai(
     let authority = guard.and_then(|g| g.0);
     let correlation_id =
         (pending_request.correlation_id != 0).then_some(pending_request.correlation_id);
-    pending
-        .queue
-        .push((id, cmd.code.clone(), authority, correlation_id));
+    pending.queue.push(PendingWorldScript::Code {
+        id,
+        code: cmd.code.clone(),
+        authority,
+        correlation_id,
+    });
+    Ok(Ack::with_data(
+        OpId::new(),
+        serde_json::json!({ "status": "queued" }),
+    ))
+}
+
+#[cfg(feature = "rhai")]
+#[on_command(RunRhaiTool)]
+fn on_run_rhai_tool(
+    trigger: On<RunRhaiTool>,
+    active: Res<ActiveCommandId>,
+    pending_request: Res<PendingApiRequest>,
+    mut pending: ResMut<PendingWorldScripts>,
+    guard: Option<Res<lunco_core::session::SyncApplyGuard>>,
+) -> Result<Ack, String> {
+    let cmd = trigger.event();
+    if !lunco_tools::has_function(&cmd.tool, lunco_tools::UI_CLICK_FN) {
+        return Err(format!(
+            "Rhai tool '{}' is not a registered on_click/1 tool",
+            cmd.tool
+        ));
+    }
+    let id = active.get().unwrap_or(0);
+    let authority = guard.and_then(|g| g.0);
+    let correlation_id =
+        (pending_request.correlation_id != 0).then_some(pending_request.correlation_id);
+    pending.queue.push(PendingWorldScript::Tool {
+        id,
+        tool: cmd.tool.clone(),
+        args: cmd.args.clone(),
+        authority,
+        correlation_id,
+    });
     Ok(Ack::with_data(
         OpId::new(),
         serde_json::json!({ "status": "queued" }),
@@ -1014,6 +1068,7 @@ pub(crate) fn register_command_policies(app: &mut App) {
     #[cfg(feature = "rhai")]
     {
         reg.register("RunRhai", EXEC);
+        reg.register("RunRhaiTool", EXEC);
         reg.register("RunScenario", EXEC);
         reg.register("RunTimeline", EXEC);
         reg.register("RegisterTimeline", EXEC);
@@ -1068,6 +1123,7 @@ pub(crate) fn register_command_policies(app: &mut App) {
 #[cfg(all(feature = "rhai", feature = "python"))]
 register_commands!(
     on_run_rhai,
+    on_run_rhai_tool,
     on_run_scenario,
     on_run_timeline,
     on_register_timeline,
@@ -1080,6 +1136,7 @@ register_commands!(
 #[cfg(all(feature = "rhai", not(feature = "python")))]
 register_commands!(
     on_run_rhai,
+    on_run_rhai_tool,
     on_run_scenario,
     on_run_timeline,
     on_register_timeline,
@@ -1182,6 +1239,7 @@ mod tests {
         };
         for c in [
             "RunRhai",
+            "RunRhaiTool",
             "RunScenario",
             "RunTimeline",
             "RegisterTimeline",

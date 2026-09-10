@@ -24,8 +24,9 @@
 /// Deliberately unconditional — it does NOT check `is_overturned` first. You
 /// clicked the thing; second-guessing that would resurrect the judgement call
 /// the old automatic system got wrong.
-fn on_click(id) {
-    vessel(id);
+fn on_click(context) {
+    if context.target_entity_id == () { return; }
+    vessel(context.target_entity_id);
 }
 
 /// Right one vessel: rotate it (and its whole joint-connected assembly) upright

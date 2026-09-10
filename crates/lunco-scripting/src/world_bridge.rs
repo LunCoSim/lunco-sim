@@ -594,6 +594,16 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
             .into()
     });
 
+    // from_json(text) -> native value — the inverse of to_json for generic
+    // structured command payloads. Domain policy may use an existing typed
+    // codec command (for example ImportBehaviorXml) and then inspect the
+    // returned JSON without adding a domain-specific Rust binding.
+    engine.register_fn("from_json", |text: ImmutableString| -> Dynamic {
+        serde_json::from_str::<serde_json::Value>(text.as_str())
+            .map(|value| bridge_core::build_from_json(&RhaiBuilder, &value))
+            .unwrap_or(Dynamic::UNIT)
+    });
+
     // Vector + angle math, in Rust. Scripts pass the same `[x, y, z]` arrays
     // `world_pos`/`world_forward` return; see `crate::rhai_math` for why this is
     // not the prelude's job.
@@ -2466,16 +2476,34 @@ fn rhai_diagnostic(message: String, pos: rhai::Position) -> Diagnostic {
 
 // ── One-shot drain (RunRhai) ───────────────────────────────────────────────
 
-/// Queue of `(internal_id, code, authority, correlation_id)` snippets submitted
-/// by `RunRhai`, waiting to run inside the exclusive [`drain_world_scripts`]
-/// system where `&mut World` is available. `correlation_id` is present only
-/// for a transport request that is waiting for the completed response.
-/// `authority` is the submitting session (the wire origin captured by the
-/// handler) the snippet's `cmd()`s are gated against — `None` for a
+/// World-bound script requests submitted by `RunRhai` or `RunRhaiTool`, waiting
+/// to run inside the exclusive [`drain_world_scripts`] system where `&mut World`
+/// is available. A tool request keeps its [`TelemetryValue`] payload typed until
+/// the Rhai backend constructs its native `Dynamic`. `correlation_id` is present
+/// only for a transport request waiting for the completed response. `authority`
+/// is the submitting session whose `cmd()` calls are gated — `None` for a
 /// local/host launch (§3.4).
 #[derive(Resource, Default)]
 pub struct PendingWorldScripts {
-    pub queue: Vec<(u64, String, Option<lunco_core::SessionId>, Option<u64>)>,
+    pub queue: Vec<PendingWorldScript>,
+}
+
+/// A queued world-bound script operation. Tool arguments remain native to the
+/// shared telemetry value model until the Rhai adapter constructs its Dynamic.
+pub enum PendingWorldScript {
+    Code {
+        id: u64,
+        code: String,
+        authority: Option<lunco_core::SessionId>,
+        correlation_id: Option<u64>,
+    },
+    Tool {
+        id: u64,
+        tool: String,
+        args: TelemetryValue,
+        authority: Option<lunco_core::SessionId>,
+        correlation_id: Option<u64>,
+    },
 }
 
 /// Exclusive system: run every queued snippet against the live World, record
@@ -2486,8 +2514,31 @@ pub fn drain_world_scripts(world: &mut World) {
     if pending.is_empty() {
         return;
     }
-    for (id, code, authority, correlation_id) in pending {
-        let outcome = match eval_with_world_as(world, &code, authority) {
+    for request in pending {
+        let (id, correlation_id, outcome) = match request {
+            PendingWorldScript::Code {
+                id,
+                code,
+                authority,
+                correlation_id,
+            } => (
+                id,
+                correlation_id,
+                eval_with_world_as(world, &code, authority),
+            ),
+            PendingWorldScript::Tool {
+                id,
+                tool,
+                args,
+                authority,
+                correlation_id,
+            } => (
+                id,
+                correlation_id,
+                eval_tool_with_world_as(world, &tool, &args, authority),
+            ),
+        };
+        let outcome = match outcome {
             Ok(stdout) => Ok(Ack::with_data(
                 OpId::new(),
                 serde_json::json!({ "stdout": stdout }),
@@ -2549,6 +2600,67 @@ pub fn eval_with_world_as(
     // `enter` reset the authority to None; bind the submitter for this eval.
     bridge_core::set_script_authority(authority);
     let result = engine.eval::<Dynamic>(code).map_err(|e| e.to_string())?;
+
+    let mut captured = out
+        .lock()
+        .map_err(|_| "print buffer poisoned".to_string())?
+        .clone();
+    if !result.is_unit() {
+        captured.push_str(&result.to_string());
+    }
+    Ok(captured)
+}
+
+/// Invoke a registered `on_click(context)` tool with a native Rhai value.
+///
+/// The namespace is the only part interpolated into a tiny dispatch expression;
+/// the context is bound in the Rhai scope as a [`Dynamic`]. This keeps authored
+/// interaction data out of source strings and avoids a Rust → JSON → Rhai
+/// round-trip. `TelemetryValue` is the language-neutral value contract shared
+/// with the rest of the scripting bridge.
+pub fn eval_tool_with_world_as(
+    world: &mut World,
+    tool: &str,
+    args: &TelemetryValue,
+    authority: Option<lunco_core::SessionId>,
+) -> Result<String, String> {
+    if tool.is_empty()
+        || !tool
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    {
+        return Err(format!("invalid script-tool namespace '{tool}'"));
+    }
+    if !lunco_tools::has_function(tool, lunco_tools::UI_CLICK_FN) {
+        return Err(format!("script tool '{tool}' has no on_click/1 handler"));
+    }
+
+    use std::sync::{Arc, Mutex};
+    let sources = world
+        .get_resource::<lunco_assets::script_source::ScriptSources>()
+        .cloned()
+        .unwrap_or_default();
+    let mut engine = build_world_engine(sources);
+    let out = Arc::new(Mutex::new(String::new()));
+    let sink = out.clone();
+    engine.on_print(move |s| {
+        if let Ok(mut buf) = sink.lock() {
+            buf.push_str(s);
+            buf.push('\n');
+        }
+    });
+
+    let _scope = bridge_core::WorldScope::enter(world);
+    bridge_core::set_script_authority(authority);
+    let mut scope = rhai::Scope::new();
+    scope.push_dynamic(
+        "__scene_tool_context",
+        bridge_core::telemetry_value(&RhaiBuilder, args),
+    );
+    let dispatch = format!("{tool}::on_click(__scene_tool_context)");
+    let result = engine
+        .eval_with_scope::<Dynamic>(&mut scope, &dispatch)
+        .map_err(|error| error.to_string())?;
 
     let mut captured = out
         .lock()

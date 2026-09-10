@@ -2230,15 +2230,23 @@ fn on_clear_patrol(
 pub struct DisengageAutopilot {
     /// Vessel whose autopilot to disengage (brake, keep patrol data).
     pub vessel: Entity,
+    /// Return the released vessel to the local manual session in the same
+    /// observer transaction. Interactive input uses this to avoid a deferred
+    /// disengage/claim race; a plain disengage intentionally leaves it unowned.
+    #[serde(default)]
+    #[reflect(default)]
+    pub reclaim_local: bool,
 }
 
 #[on_command(DisengageAutopilot)]
 fn on_disengage_autopilot(
-    _trigger: On<DisengageAutopilot>,
+    trigger: On<DisengageAutopilot>,
     mut q: Query<(Entity, &mut Autopilot)>,
+    q_gid: Query<&GlobalEntityId>,
     mut registry: ResMut<SessionRegistry>,
     mut commands: Commands,
 ) {
+    let cmd = trigger.event();
     // Despawning the actor — not just braking it — is what makes "disengaged"
     // true for everyone: `Autopilot` is the presence signal the UI reads
     // (`autopilot_engaged = any actor whose vessel == v`), so an actor left alive
@@ -2260,6 +2268,25 @@ fn on_disengage_autopilot(
             // whose actor is gone — `may_possess` would then deny the human the
             // very vessel the UI reports as disengaged.
             let freed = registry.release_session(ap.session);
+            if cmd.reclaim_local {
+                match q_gid.get(cmd.vessel) {
+                    Ok(gid) => match registry.claim(SessionId::LOCAL, gid.get()) {
+                        Ok(()) => info!(
+                            "[autopilot] manual handoff: local session reclaimed entity {}",
+                            gid.get()
+                        ),
+                        Err(owner) => warn!(
+                            "[autopilot] manual handoff refused after disengage; entity {} is owned by {:?}",
+                            gid.get(),
+                            owner
+                        ),
+                    },
+                    Err(_) => warn!(
+                        "[autopilot] manual handoff refused after disengage; vessel {:?} has no GlobalEntityId",
+                        cmd.vessel
+                    ),
+                }
+            }
             commands.entity(entity).try_despawn();
             info!(
                 "[autopilot] DisengageAutopilot: vessel {:?} disengaged (patrol kept, {} claim(s) freed)",

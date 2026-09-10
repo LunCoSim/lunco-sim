@@ -100,10 +100,9 @@ pub use labels::{entity_display_name, humanize_identifier};
 pub use log::*;
 pub use markers::{
     CatalogEntryId, CinematicCameraLock, EmbeddedScenarioPath, EmbeddedScenarioSource, GridAnchor,
-    HorizonShadowTerrain, NextScene, PhysicsPoseAuthoritative,
-    ScenarioProgramPrim, ScriptParams, SoiMigrant, SunAngularDiameter, TriggerZone, UsdPrimKind,
-    CELESTIAL_COLLISION_LAYER, NON_PHYSICAL_QUERY_LAYERS, SOLAR_ANGULAR_DIAMETER_DEG,
-    TRIGGER_COLLISION_LAYER,
+    HorizonShadowTerrain, NextScene, PhysicsPoseAuthoritative, ScenarioProgramPrim, ScriptParams,
+    SoiMigrant, SunAngularDiameter, TriggerZone, UsdPrimKind, CELESTIAL_COLLISION_LAYER,
+    NON_PHYSICAL_QUERY_LAYERS, SOLAR_ANGULAR_DIAMETER_DEG, TRIGGER_COLLISION_LAYER,
 };
 pub use reconcile::{reconcile_decision, ReconcileParams, Reconciliation};
 pub use scene::{
@@ -752,8 +751,8 @@ pub struct TerrainToolActive(pub bool);
 /// or `None`.
 ///
 /// A script tool is any registered `lunco_tools` tool exposing `on_click/1`;
-/// the editor lists them in the Tools palette and hands the clicked entity to
-/// the tool's own handler. So this is deliberately a NAME and not an enum:
+/// the editor lists them in the Tools palette and hands a structured scene-click
+/// context to the tool's own handler. So this is deliberately a NAME and not an enum:
 /// the set of tools is data (a `.rhai` file), not a Rust type, and adding one
 /// must not require editing this crate.
 ///

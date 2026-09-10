@@ -23,6 +23,7 @@
 
 use avian3d::prelude::PhysicsTime;
 use bevy::ecs::query::QueryState;
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_core::telemetry::{ChannelSource, Parameter};
@@ -2287,10 +2288,46 @@ pub struct UsdWiredConnection;
 
 /// Set when a drained live edit — a journaled (hence distributed)
 /// `connectionPaths` change on an **already-spawned** prim — requires the wiring
-/// to be re-derived. Structural changes (prim spawn/despawn) need no flag; they
-/// are detected directly via change-detection in [`rewire_usd_connections`].
+/// to be re-derived. Endpoint removals use the same flag because Bevy's removed
+/// component tracker is consumed by run conditions and cannot be read twice as
+/// an independent trigger.
 #[derive(Resource, Default)]
 pub struct WiringDirty(pub bool);
+
+/// Queries used by the wiring projection. Keeping them in one system parameter
+/// leaves the projection below the Bevy system-parameter arity limit while
+/// keeping each query's ownership and change-detection semantics explicit.
+#[derive(SystemParam)]
+struct WiringQueries<'w, 's> {
+    endpoints: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static UsdPrimPath,
+            Has<ModelicaModel>,
+            Option<&'static GeneratedModelicaSource>,
+            Has<lunco_environment::EnvironmentProbe>,
+            Option<&'static lunco_core::PortSurface>,
+            Option<&'static UsdInstanceProjection>,
+        ),
+        Or<(
+            With<lunco_core::PortSurfaceReady>,
+            With<lunco_core::PortSurface>,
+            With<lunco_core::OutputPorts>,
+            With<SimComponent>,
+        )>,
+    >,
+    edges: Query<'w, 's, Entity, With<UsdWiredConnection>>,
+    global_ids: Query<'w, 's, &'static lunco_core::GlobalEntityId>,
+    provenance: Query<'w, 's, &'static lunco_core::Provenance>,
+    instance_roots: Query<'w, 's, (), With<UsdInstanceRoot>>,
+    realtime_safe: Query<'w, 's, &'static lunco_cosim::RealtimeSafe>,
+    predicted_bodies:
+        Query<'w, 's, &'static avian3d::prelude::RigidBody, Without<lunco_core::NotPredictable>>,
+    defaults: Query<'w, 's, &'static UsdInputDefaults>,
+    outputs: Query<'w, 's, &'static lunco_core::OutputPorts>,
+}
 
 /// Run condition for the derived USD wiring cache.
 ///
@@ -2302,23 +2339,23 @@ fn wiring_due(
     arrivals: Query<
         (),
         Or<(
-            Added<UsdPrimPath>,
-            Added<ModelicaModel>,
             Added<SimComponent>,
-            Added<lunco_core::GlobalEntityId>,
             Added<lunco_core::OutputPorts>,
             Added<lunco_core::PortSurface>,
             Added<lunco_core::PortSurfaceReady>,
         )>,
     >,
-    mut removed: RemovedComponents<UsdPrimPath>,
     dirty: Res<WiringDirty>,
     role: Option<Res<lunco_core::NetworkRole>>,
 ) -> bool {
-    !arrivals.is_empty()
-        || removed.read().next().is_some()
-        || dirty.0
-        || role.is_some_and(|role| role.is_changed())
+    !arrivals.is_empty() || dirty.0 || role.is_some_and(|role| role.is_changed())
+}
+
+fn mark_wiring_dirty_on_remove<T: Component>(
+    _trigger: On<Remove, T>,
+    mut dirty: ResMut<WiringDirty>,
+) {
+    dirty.0 = true;
 }
 
 /// Coalesces endpoint lifecycle events into one settlement decision. It is not
@@ -2491,12 +2528,10 @@ fn settle_binding_epoch(
 /// the order they spawn or which end is removed.
 ///
 /// Trigger (dormant otherwise — steady state is zero work):
-/// - **structural** — any `UsdPrimPath` entity added or removed, or a projected
-///   [`ModelicaModel`] arriving on a domain root. Covers initial scene load (the
-///   reconcile spawns prims → this fires), async payload/vessel spawn,
+/// - **structural** — a simulation endpoint or its port surface is added or
+///   removed. Covers initial scene load, async payload/vessel spawn,
 ///   source-after-sink ordering, and a generated island publishing its boundary
-///   contract (each re-runs this and completes the deferred edge); prim removal
-///   omits its edge — no dangling `SimConnection`.
+///   contract; visual-only prims are not wiring endpoints.
 /// - **live edit** — [`WiringDirty`], set by the op-driven projection
 ///   ([`lunco_usd::live_consume`]) when a `connectionPaths` change is drained
 ///   from the live stage (an edit that is not itself a prim spawn/despawn).
@@ -2504,7 +2539,7 @@ fn settle_binding_epoch(
 /// A connection whose source prim is not yet spawned is skipped (its later spawn
 /// re-runs this); a malformed source path is logged and skipped — restoring the
 /// diagnostic the deleted `process_usd_cosim_wire_read` emitted.
-pub fn rewire_usd_connections(
+fn rewire_usd_connections(
     mut commands: Commands,
     // Any endpoint identity or contract arriving must re-derive the USD wire
     // cache. Keeping the three arrival causes in one query avoids giving the
@@ -2512,15 +2547,12 @@ pub fn rewire_usd_connections(
     wiring_arrivals: Query<
         (),
         Or<(
-            Added<UsdPrimPath>,
-            Added<ModelicaModel>,
             // Generated networks publish their actual port surface one
             // deferred step after `ModelicaModel` is installed. Re-run the
             // derived USD wiring when that endpoint contract arrives; without
             // this transition a boundary wire can be permanently absent while
             // diagnostics quite correctly report no broken edge.
             Added<SimComponent>,
-            Added<lunco_core::GlobalEntityId>,
             Added<lunco_core::OutputPorts>,
             // A generic physical surface can be installed after a broader
             // endpoint marker (for example a rigid body) already exists. The
@@ -2530,33 +2562,11 @@ pub fn rewire_usd_connections(
             Added<lunco_core::PortSurfaceReady>,
         )>,
     >,
-    mut removed: RemovedComponents<UsdPrimPath>,
     mut dirty: ResMut<WiringDirty>,
-    // Wiring consumes a projected endpoint, not an initial path stub. A prim
-    // path is not itself an endpoint: require the generic port-surface marker
-    // or a declared SimComponent interface before indexing it. The visual-sync
-    // marker is intentionally not part of this contract: a standard USD light
-    // publishes its scene-property surface when the renderer installs the
-    // Bevy light, and that surface is a valid sink even if visual bookkeeping
-    // is scheduled in a different deferred command batch.
-    q_all: Query<
-        (
-            Entity,
-            &UsdPrimPath,
-            Has<ModelicaModel>,
-            Option<&GeneratedModelicaSource>,
-            Has<lunco_environment::EnvironmentProbe>,
-            Option<&lunco_core::PortSurface>,
-            Option<&UsdInstanceProjection>,
-        ),
-        Or<(
-            With<lunco_core::PortSurfaceReady>,
-            With<lunco_core::PortSurface>,
-            With<lunco_core::OutputPorts>,
-            With<SimComponent>,
-        )>,
-    >,
-    q_edges: Query<Entity, With<UsdWiredConnection>>,
+    // Wiring consumes a projected endpoint, not an initial path stub. The
+    // grouped query parameter keeps this system within Bevy's arity limit;
+    // the endpoint marker remains the authoritative admission contract.
+    wiring: WiringQueries,
     // Wire endpoints resolve by IDENTITY, not raw prim path. Two runtime spawns of
     // the same asset compose byte-IDENTICAL stage-relative paths (`/DescentLander`,
     // …), so a flat path→entity map collapses them onto one entity — a lander's
@@ -2567,9 +2577,6 @@ pub fn rewire_usd_connections(
     // STABLE across a program/script hot-swap (it is `derive_id(parent, role)`, a
     // pure function of identity, not of the ephemeral `Entity`) — so a wire re-
     // resolves to the same endpoints after a dynamic script change.
-    q_gid: Query<&lunco_core::GlobalEntityId>,
-    q_provenance: Query<&lunco_core::Provenance>,
-    q_instance_root: Query<(), With<UsdInstanceRoot>>,
     // The realtime gate: whether the SOURCE program promised it is realtime-safe,
     // and whether the SINK is a client-predicted dynamic body (a `RigidBody` NOT
     // opted out of prediction). The network role is part of this contract: only
@@ -2577,23 +2584,13 @@ pub fn rewire_usd_connections(
     // authoritative, so their live solver is not incorrectly classified as a
     // prediction loop.
     role: Option<Res<lunco_core::NetworkRole>>,
-    q_realtime_safe: Query<&lunco_cosim::RealtimeSafe>,
-    q_predicted_body: Query<&avian3d::prelude::RigidBody, Without<lunco_core::NotPredictable>>,
-    q_defaults: Query<&UsdInputDefaults>,
-    // A producer's output ports are child `Port` entities, so an `outputs:`
-    // forward onto one has to write there, not onto the producer prim.
-    q_outputs: Query<&lunco_core::OutputPorts>,
     stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<CanonicalStages>,
 ) {
     let client_predicts = matches!(role.as_deref(), Some(lunco_core::NetworkRole::Client));
     let role_changed = role.as_ref().is_some_and(|role| role.is_changed());
 
-    // `Added<ModelicaModel>` is the explicit endpoint-contract transition. This
-    // pass no longer relies on accidentally deferred removal events to get an
-    // extra rewire after a generated model appears.
     let structural = !wiring_arrivals.is_empty()
-        || removed.read().next().is_some()
         // Changing authority changes whether a force edge is admissible. Rebuild
         // immediately on a standalone/host ↔ client transition instead of
         // leaving the previous role's wiring decision cached.
@@ -2609,9 +2606,9 @@ pub fn rewire_usd_connections(
     let instance_of = |e: Entity, projection: Option<&UsdInstanceProjection>| {
         lunco_usd_bevy::instance_key_from_projection(
             e,
-            &q_provenance,
-            &q_gid,
-            &q_instance_root,
+            &wiring.provenance,
+            &wiring.global_ids,
+            &wiring.instance_roots,
             projection,
         )
     };
@@ -2642,17 +2639,19 @@ pub fn rewire_usd_connections(
         ),
         (Entity, String),
     > = HashMap::new();
-    let environment_probe_entities: std::collections::HashSet<Entity> = q_all
+    let environment_probe_entities: std::collections::HashSet<Entity> = wiring
+        .endpoints
         .iter()
         .filter_map(|(entity, _, _, _, is_probe, _, _)| is_probe.then_some(entity))
         .collect();
-    let port_surfaces: HashMap<Entity, lunco_core::PortSurface> = q_all
+    let port_surfaces: HashMap<Entity, lunco_core::PortSurface> = wiring
+        .endpoints
         .iter()
         .filter_map(|(entity, _, _, _, _, surface, _)| {
             surface.cloned().map(|surface| (entity, surface))
         })
         .collect();
-    for (e, p, _, generated, _, _, projection) in q_all.iter() {
+    for (e, p, _, generated, _, _, projection) in wiring.endpoints.iter() {
         let instance = instance_of(e, projection);
         let key = (p.stage_handle.id(), instance, p.path.clone());
         by_path.insert(key, e);
@@ -2694,11 +2693,13 @@ pub fn rewire_usd_connections(
     > = HashMap::new();
 
     // Rebuild: drop every derived edge, then re-derive from the composed stage.
-    for e in q_edges.iter() {
+    for e in wiring.edges.iter() {
         commands.entity(e).try_despawn();
     }
 
-    for (entity, prim_path, has_modelica, _, _, wheel_endpoints, projection) in q_all.iter() {
+    for (entity, prim_path, has_modelica, _, _, wheel_endpoints, projection) in
+        wiring.endpoints.iter()
+    {
         let id = prim_path.stage_handle.id();
         let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
             continue;
@@ -2769,7 +2770,8 @@ pub fn rewire_usd_connections(
                 .strip_prefix("outputs:")
                 .filter(|_| !shading_prim)
                 .map(|name| {
-                    match q_outputs
+                    match wiring
+                        .outputs
                         .get(entity)
                         .ok()
                         .and_then(|outputs| outputs.get(name))
@@ -2997,7 +2999,8 @@ pub fn rewire_usd_connections(
                         .get(&start_element)
                         .and_then(|surface| surface.get(&src_conn))
                         .or_else(|| {
-                            q_outputs
+                            wiring
+                                .outputs
                                 .get(start_element)
                                 .ok()
                                 .and_then(|outputs| outputs.get(&src_conn))
@@ -3020,10 +3023,10 @@ pub fn rewire_usd_connections(
                 if client_predicts
                     && lunco_cosim::is_physics_force_port(sink_conn)
                     && matches!(
-                        q_predicted_body.get(entity),
+                        wiring.predicted_bodies.get(entity),
                         Ok(avian3d::prelude::RigidBody::Dynamic)
                     )
-                    && q_realtime_safe.get(start_element).is_err()
+                    && wiring.realtime_safe.get(start_element).is_err()
                 {
                     let source_prim = src_prim.to_string();
                     let detail = format!(
@@ -3112,7 +3115,12 @@ pub fn rewire_usd_connections(
     // script had since written through `SetPorts` — an autopilot's `engage` would
     // silently snap back to its authored default the next time anything spawned.
     for (entity, map) in defaults {
-        if q_defaults.get(entity).map(|d| d.0 != map).unwrap_or(true) {
+        if wiring
+            .defaults
+            .get(entity)
+            .map(|d| d.0 != map)
+            .unwrap_or(true)
+        {
             commands.entity(entity).try_insert(UsdInputDefaults(map));
         }
     }
@@ -4833,6 +4841,10 @@ pub(crate) fn install(app: &mut App) {
         .add_observer(request_binding_epoch_on_remove::<ModelicaModel>)
         .add_observer(crate::domain_projection::on_remove_generated_source)
         .add_observer(request_binding_epoch::<SimComponent>)
+        .add_observer(mark_wiring_dirty_on_remove::<SimComponent>)
+        .add_observer(mark_wiring_dirty_on_remove::<lunco_core::OutputPorts>)
+        .add_observer(mark_wiring_dirty_on_remove::<lunco_core::PortSurface>)
+        .add_observer(mark_wiring_dirty_on_remove::<lunco_core::PortSurfaceReady>)
         .add_observer(forget_binding_model_status)
         .add_observer(request_binding_epoch::<lunco_usd_avian::PendingUsdJoint>)
         .add_observer(request_binding_epoch_on_remove::<lunco_usd_avian::PendingUsdJoint>)
@@ -5168,6 +5180,10 @@ mod tests {
         assert_eq!(app.world().resource::<WiringRuns>().0, 0);
 
         app.world_mut().spawn(UsdPrimPath::default());
+        app.update();
+        assert_eq!(app.world().resource::<WiringRuns>().0, 0);
+
+        app.world_mut().spawn(SimComponent::default());
         app.update();
         assert_eq!(app.world().resource::<WiringRuns>().0, 1);
 

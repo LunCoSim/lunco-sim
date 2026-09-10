@@ -2617,6 +2617,19 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `code` | `String` |  rhai source to evaluate. The scripting prelude is in scope. |
 
+#### `RunRhaiTool`
+
+ Invoke a registered Rhai tool through its structured `on_click(context)` entry
+ point. This is the typed scene/editor path; the argument is converted directly
+ to the backend's native Rhai value and is never embedded in source text.
+
+- *defined in:* `crates/lunco-scripting/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `tool` | `String` | Registered tool namespace. |
+| `args` | `TelemetryValue` | Structured context passed as the single `on_click` argument. |
+
 #### `RunScenario`
 
  Attach a persistent rhai scenario to an entity — the scenario-loading entry

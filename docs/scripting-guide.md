@@ -857,6 +857,7 @@ produces the same sequence — no explicit seeding needed.
 | HTTP API | `{"type":"ExecuteCommand","command":"RunScenario","params":{"target":<gid>,"source":"<rhai>"}}` |
 | MCP | the `run_scenario` tool (`mcp/src/index.js`) |
 | One-shot eval | `RunRhai { code }` — runs once with full world access; stdout in the original deferred response |
+| Structured click tool | `RunRhaiTool { tool, args }` — invokes `on_click(context)` with typed values |
 | Control | `SetScenarioPaused { target, paused }`, `StopScenario { target }` |
 
 ## N. Examples index

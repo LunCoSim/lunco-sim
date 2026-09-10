@@ -63,6 +63,10 @@ pub struct RawStageChange {
     pub resynced: Vec<SdfPath>,
     /// Attribute-only ("info only") prim paths — cheap incremental projection.
     pub info_only: Vec<SdfPath>,
+    /// True when the committed USD change authored the native
+    /// `connectionPaths` field. This is the only live-edit signal that can
+    /// invalidate the derived simulation wiring cache.
+    pub connection_paths_changed: bool,
     /// Identifier of the layer whose edit produced this change.
     pub layer: String,
 }
@@ -100,9 +104,20 @@ impl CanonicalStage {
         let sink_inbox = inbox.clone();
         let sink_id = stage.add_sink(move |_stage: &Stage, change: &CommittedChange<'_>| {
             if let Ok(mut q) = sink_inbox.lock() {
+                let connection_paths_changed = change
+                    .resynced
+                    .iter()
+                    .chain(change.changed_info_only.iter())
+                    .any(|path| {
+                        change
+                            .changed_fields(path)
+                            .iter()
+                            .any(|field| field == "connectionPaths")
+                    });
                 q.push(RawStageChange {
                     resynced: change.resynced.to_vec(),
                     info_only: change.changed_info_only.to_vec(),
+                    connection_paths_changed,
                     layer: change.layer_identifier.to_string(),
                 });
             }
@@ -491,10 +506,8 @@ impl CanonicalStage {
     /// [`author_attribute`](Self::author_attribute)) so a wire can be drawn to a
     /// not-yet-materialised port. `sources` replaces any prior list; empty clears.
     ///
-    /// The projector classified `SetConnection` as an incremental op but had no
-    /// author for it, so the op reached the document and never the live stage —
-    /// a silently dropped edit. Every cosim wire authored at runtime went
-    /// nowhere until the next full rebuild.
+    /// The stage sink preserves the native `connectionPaths` field notice so the
+    /// live projector can invalidate only the derived wiring cache.
     pub(crate) fn author_connection(
         &self,
         prim: &SdfPath,
@@ -1454,8 +1467,8 @@ mod authoring_tests {
 
     #[test]
     fn author_connection_composes_on_live_stage() {
-        // The silent-bug fix: SetConnection was classified incremental but had no
-        // live author, so a wire drawn at runtime vanished until the next rebuild.
+        // A native connection edit composes immediately and carries an exact
+        // field-level invalidation signal for the derived wiring cache.
         let recipe = StageRecipe::from_source("rig.usda", RIG);
         let mut cs = CanonicalStage::from_recipe(&recipe).expect("build rig");
         let _ = cs.drain_changes();
@@ -1472,7 +1485,13 @@ mod authoring_tests {
         assert_eq!(
             cs.view().connections(&bus, "inputs:voltage"),
             vec!["/Rig/Battery.outputs:voltage".to_string()],
-            "the authored wire composes on the live stage (was silently dropped before)"
+            "the authored wire composes on the live stage"
+        );
+        assert!(
+            cs.drain_changes()
+                .iter()
+                .any(|change| change.connection_paths_changed),
+            "native connectionPaths edits must be typed in the stage change"
         );
     }
 

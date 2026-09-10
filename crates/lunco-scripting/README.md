@@ -75,7 +75,7 @@ never on a networked client (which receives behaviour via replication).
 
 ## Key commands & queries
 
-- **Run:** `RunScenario { target, source, params }` (attach/hot-reload), `RunRhai { code }` (one-shot), `RunTimeline` / `RunStoredTimeline` (declarative missions).
+- **Run:** `RunScenario { target, source, params }` (attach/hot-reload), `RunRhai { code }` (one-shot), `RunRhaiTool { tool, args }` (typed tool invocation), `RunTimeline` / `RunStoredTimeline` (declarative missions).
 - **Control:** `SetScenarioPaused`, `StopScenario`.
 - **Tools & timelines:** `RegisterToolLibrary`, `RegisterTimeline` (+ `List`/`Get` discovery queries; persisted under the Twin).
 - **Introspection:** `ScriptStatus` (health), `ScriptInspect` (live state), `ScriptingCatalog` (the full callable surface).

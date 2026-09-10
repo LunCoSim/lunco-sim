@@ -147,7 +147,7 @@ fn terrain_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, tokens: &lunco_theme::
 /// `on_click/1`, straight from the [`lunco_tools`] registry.
 ///
 /// Nothing here knows what any of them do. A `.rhai` dropped into
-/// `assets/scripting/tools/` with an `on_click(id)` appears as a button; delete
+/// `assets/scripting/tools/` with an `on_click(context)` appears as a button; delete
 /// the file and the button goes. That is the whole contract, and it is why this
 /// section has no per-tool code the way the terrain brushes above do.
 ///

@@ -111,8 +111,8 @@ dome, with the dome still visibly emissive.
 A waypoint that needs a screen label authors `lunco:billboard = true` and its
 `lunco:billboard:*` presentation fields on the waypoint prim. The reusable
 waypoint asset opts in, so composed scene references and runtime-created markers
-have the same label contract; the editor authoring helper writes the same fields
-when it creates a marker directly. The generic USD billboard renderer is the
+have the same label contract; the Rhai authoring tool only references that
+asset and does not duplicate its visual metadata. The generic USD billboard renderer is the
 only label reader: it consumes the waypoint's propagated `GlobalTransform`, which
 BigSpace derives from the terrain grid and its ancestors, and projects that render
 pose with the active camera. It wraps labels to a bounded width, clamps their
@@ -137,6 +137,21 @@ terrain-grid markers on the same canonical hierarchy.
 
 `BehaviorSpec`'s own doc already declares JSON its wire format and names "USD
 metadata" as an intended channel.
+
+### Interaction ownership
+
+The editor's pointer layer owns only engine mechanics: the egui gate, click
+identity, camera/frame conversion, terrain surface query, and canonical document
+identity. It emits a typed `RunRhaiTool` request with a structured click/edit
+context. It does not construct a Rhai source string, parse route topology, or
+write USD operations.
+
+`assets/scripting/tools/waypoint_editor.rhai` owns waypoint policy: route shape
+validation, marker naming, BT.CPP import/export, and the single compound
+`ApplyUsdOps` transaction. A new scene processor is a new `on_click(context)`
+tool library; it does not require a Rust registration branch. The only JSON
+remaining in this path is inside explicit command contracts such as the existing
+BT.CPP codec and USD operation API, not as an internal Rust-to-Rhai value hop.
 
 ### One authored marker, explicit visual and interaction geometry
 
