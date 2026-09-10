@@ -64,7 +64,12 @@ after USD projection has committed and applies it at the explicit scene-handoff
 boundary. All explicit camera frame changes stay with the camera subsystem
 through the same atomic migration helper. For a physical entity, keep it under
 `ActivePhysicsFrame` and let
-`BigSpacePhysicsBridgePlugin` own the Avian f64 pose exchange. For a trajectory
+`BigSpacePhysicsBridgePlugin` own the Avian f64 pose exchange. The shared
+`lunco-physics::avian_backend` contract owns numeric backend admission; the
+bridge owns lifecycle admission and raises the runtime fault when changed poses
+or collider AABBs are invalid. It gates the nested physics phases before Avian
+grows AABBs or runs a query; `GridSpatialQuery` reuses the same point check
+after conversion. For a trajectory
 or connection line, convert both endpoints into one semantic frame before
 generating cell-local geometry. Treat trajectory visibility as a work boundary:
 sample ephemeris and rebuild cell-local mesh only for an active trajectory view,

@@ -36,6 +36,7 @@
 //! the wheel drive uses via `wheel_hub_pose`), use [`GridSpatialQuery::cast_ray_grid`]
 //! so the frame contract remains visible at the call site.
 
+use crate::avian_backend::avian_backend_point_is_valid;
 use avian3d::prelude::*;
 use bevy::ecs::system::{SystemParam, SystemState};
 use bevy::math::Dir3;
@@ -137,7 +138,7 @@ impl<'w, 's> GridSpatialQuery<'w, 's> {
         solid: bool,
         filter: &SpatialQueryFilter,
     ) -> Option<RayHitData> {
-        if !render_origin.0.is_finite()
+        if !avian_backend_point_is_valid(render_origin.0)
             || !direction.as_vec3().is_finite()
             || !max_distance.is_finite()
             || max_distance < 0.0
@@ -145,7 +146,7 @@ impl<'w, 's> GridSpatialQuery<'w, 's> {
             return None;
         }
         let origin = self.to_physics(render_origin)?.0;
-        if !origin.is_finite() {
+        if !avian_backend_point_is_valid(origin) {
             return None;
         }
         let frame = self.physics_frame.as_deref()?;
@@ -172,7 +173,7 @@ impl<'w, 's> GridSpatialQuery<'w, 's> {
         solid: bool,
         filter: &SpatialQueryFilter,
     ) -> Option<RayHitData> {
-        if !origin.0.is_finite()
+        if !avian_backend_point_is_valid(origin.0)
             || !direction.as_vec3().is_finite()
             || !max_distance.is_finite()
             || max_distance < 0.0
@@ -201,7 +202,7 @@ impl<'w, 's> GridSpatialQuery<'w, 's> {
         solid: bool,
         filter: &SpatialQueryFilter,
     ) -> Option<RayHitData> {
-        if !origin.0.is_finite()
+        if !avian_backend_point_is_valid(origin.0)
             || !direction.as_vec3().is_finite()
             || !max_distance.is_finite()
             || max_distance < 0.0
@@ -217,6 +218,9 @@ impl<'w, 's> GridSpatialQuery<'w, 's> {
             &self.nodes,
         )?;
         let physics_origin = source_origin + source_rotation * origin.0;
+        if !avian_backend_point_is_valid(physics_origin) {
+            return None;
+        }
         let physics_direction = source_rotation * direction.as_dvec3();
         let physics_direction = Dir3::new(physics_direction.as_vec3()).ok()?;
         self.spatial.cast_ray(
