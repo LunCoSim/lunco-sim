@@ -290,6 +290,62 @@ fn canonical_reference_json(
     }))
 }
 
+fn token_metadata_json(
+    data: &dyn openusd::sdf::AbstractData,
+    path: &SdfPath,
+    field: &str,
+    source: &str,
+) -> serde_json::Value {
+    let Some(value) = data.try_field(path, field).ok().flatten() else {
+        return serde_json::json!({
+            "present": false,
+            "value": serde_json::Value::Null,
+            "source": source,
+        });
+    };
+    match value.as_ref() {
+        SdfValue::Token(token) => serde_json::json!({
+            "present": true,
+            "value": token.to_string(),
+            "source": source,
+        }),
+        _ => serde_json::json!({
+            "present": true,
+            "value": serde_json::Value::Null,
+            "source": source,
+            "error": "metadata is not a USD token",
+        }),
+    }
+}
+
+fn metadata_stack_json(
+    document: &UsdDocument,
+    path: &SdfPath,
+    field: &str,
+    canonical_value: Option<String>,
+) -> serde_json::Value {
+    let mut metadata = serde_json::json!({
+        "authored": {
+            "root": token_metadata_json(document.data(), path, field, "@root@"),
+            "runtime": token_metadata_json(document.runtime_data(), path, field, "@runtime@"),
+        },
+        "composed": token_metadata_json(
+            document.composed_arc().as_ref(),
+            path,
+            field,
+            "document_composed",
+        ),
+    });
+    if let Some(value) = canonical_value {
+        metadata["canonical_stage"] = serde_json::json!({
+            "present": true,
+            "value": value,
+            "source": "canonical_stage",
+        });
+    }
+    metadata
+}
+
 /// Read-only query for one explicit open USD document.
 ///
 /// Parameters:
@@ -345,6 +401,9 @@ impl ApiQueryProvider for InspectUsdDocumentProvider {
             }
         };
         let journal = journal_position(world, doc);
+        let root_path = SdfPath::abs_root();
+        let canonical_default_prim =
+            canonical_stage_for_document(world, doc).and_then(|stage| stage.view().default_prim());
 
         let mut response = serde_json::json!({
             "doc_id": doc,
@@ -369,6 +428,14 @@ impl ApiQueryProvider for InspectUsdDocumentProvider {
                 "dependencies": dependencies,
                 "owner": "lunco-usd-compose",
             },
+            "metadata": {
+                "defaultPrim": metadata_stack_json(
+                    document,
+                    &root_path,
+                    openusd::sdf::FieldKey::DefaultPrim.as_str(),
+                    canonical_default_prim,
+                ),
+            },
             "journal": journal,
             "diagnostics": diagnostics,
         });
@@ -392,6 +459,8 @@ impl ApiQueryProvider for InspectUsdDocumentProvider {
             if let Some(canonical) = canonical_reference_json(world, doc, &path) {
                 references["canonical_stage"] = canonical;
             }
+            let canonical_kind =
+                canonical_stage_for_document(world, doc).and_then(|stage| stage.view().kind(&path));
             response["prim"] = serde_json::json!({
                 "path": raw_path,
                 "exists": exists,
@@ -399,6 +468,14 @@ impl ApiQueryProvider for InspectUsdDocumentProvider {
                 "active": active,
                 "children": children,
                 "attributes": attributes,
+                "metadata": {
+                    "kind": metadata_stack_json(
+                        document,
+                        &path,
+                        openusd::sdf::FieldKey::Kind.as_str(),
+                        canonical_kind,
+                    ),
+                },
                 "references": references,
             });
         }

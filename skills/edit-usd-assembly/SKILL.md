@@ -203,9 +203,9 @@ Do not emulate a variant with duplicate top-level parts, name suffixes, or a
 permanent invisible placeholder. If the live typed surface can select existing
 variants but cannot create a variant set or author variant blocks, report that
 as a Rust/typed-editor capability gap; do not fake canonical USD composition
-with visibility flags. Likewise, if reference-list replacement or authored
-metadata such as `kind`/`defaultPrim` is required but unavailable, record the
-gap and keep the missing operation explicit.
+with visibility flags. Reference-list replacement and authored metadata such as
+`kind`/`defaultPrim` are available through typed editor operations; keep the
+selected layer and generation explicit when using them.
 
 Model at contract fidelity, not manufacturing detail. Use standard primitive
 geometry for the silhouette, mounting envelopes, collision surfaces, and
@@ -481,6 +481,14 @@ Use the smallest existing typed intent that expresses the change:
   clears it. Inspect `references.authored` and `references.composed` before
   editing, and resolve the target first so a composed-only prim is reported as
   read-only rather than flattened or guessed.
+- `assembly_edit::default_prim(doc, edit_target, path, parent_gen)` authors the
+  stage root `defaultPrim` in `@root@` or `@runtime@`; use an absolute or
+  root-relative existing prim path, and pass `()` to clear only that layer.
+  `assembly_edit::prim_kind(doc, edit_target, path, kind, parent_gen)` authors
+  a USD identifier such as `component`, `assembly`, or `group` on an existing
+  prim; pass `()` to clear that layer's opinion. Inspect
+  `metadata.defaultPrim` and `prim.metadata.kind` for root/runtime,
+  document-composed, and canonical-stage values with their source labels.
 - `assembly_edit::attach_component` and `assembly_edit::detach_component` use
   the existing mount, socket, joint, frame, ownership, and occupancy
   validators. Supply exact paths in the

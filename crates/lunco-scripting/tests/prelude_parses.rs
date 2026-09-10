@@ -130,6 +130,8 @@ fn usd_authoring_surface_is_namespaced() {
         "program_input_connection",
         "program_input_default",
         "program_output",
+        "default_prim",
+        "prim_kind",
     ] {
         assert!(
             assembly_edit_functions.iter().any(|name| name == required),

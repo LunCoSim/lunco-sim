@@ -1061,8 +1061,9 @@ pub(crate) fn wake_twin_projection_on_stage_event(
 /// (the Avian joint builder and the cosim wire reconcile) re-read on a subtree
 /// refresh, so the incremental path fully reconciles them.
 ///
-/// `SetApiSchemas` and `SetActive` do NOT: their effect is which ECS *components* a
-/// prim carries (rigid body, collider) and whether its entity exists at all — and
+/// `SetApiSchemas`, `SetPrimKind`, and `SetActive` do NOT: their effect is which
+/// ECS *components* a prim carries (rigid body, collider) and whether its entity
+/// exists at all — and
 /// the incremental subtree refresh only re-derives an entity's *visual*, not its
 /// physics extraction or its presence. So they rebuild, which re-derives both
 /// correctly. This is not the hot path: `AttachComponent` emits neither, so
@@ -1076,8 +1077,9 @@ pub(crate) fn wake_twin_projection_on_stage_event(
 /// joint, or any other physical prim) still rebuilds, since hiding a physics prim
 /// must drop its body/collider, which the visual-only refresh cannot express.
 fn op_needs_rebuild(op: &UsdOp, is_waypoint: bool) -> bool {
-    // Metadata-only APIs do not add/remove bodies, colliders, or entities. They
-    // have live-stage authors below, so they can avoid restarting the scene.
+    // The program API schema is the only metadata-only fast path. Kind and
+    // defaultPrim changes rebuild so the projection reads the new composed
+    // metadata from one authoritative document snapshot.
     if let UsdOp::SetApiSchemas { schemas, .. } = op {
         return !incremental_api_schemas(schemas);
     }
@@ -1096,6 +1098,8 @@ fn op_needs_rebuild(op: &UsdOp, is_waypoint: bool) -> bool {
             | UsdOp::SetVariantSelection { .. }
             | UsdOp::SetPayload { .. }
             | UsdOp::SetReferenceArcs { .. }
+            | UsdOp::SetDefaultPrim { .. }
+            | UsdOp::SetPrimKind { .. }
     )
 }
 
@@ -2299,6 +2303,23 @@ mod tests {
                 edit_target: et.clone(),
                 path: "/Rover/Wheels/W0".into(),
                 active: false,
+            },
+            false
+        ));
+        // Stage and prim metadata are read from the rebuilt composed snapshot
+        // so root/runtime opinions and canonical-stage reads stay coherent.
+        assert!(op_needs_rebuild(
+            &UsdOp::SetDefaultPrim {
+                edit_target: et.clone(),
+                default_prim: Some("World".into()),
+            },
+            false
+        ));
+        assert!(op_needs_rebuild(
+            &UsdOp::SetPrimKind {
+                edit_target: et.clone(),
+                path: "/Rover".into(),
+                kind: Some("component".into()),
             },
             false
         ));

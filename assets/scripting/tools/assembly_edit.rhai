@@ -473,6 +473,33 @@ fn references(doc, edit_target, path, references, list_op, parent_gen) {
     })
 }
 
+/// Set the stage root defaultPrim in one authored layer. Accepts either
+/// "/World" or "World"; pass () to clear only that layer's opinion.
+fn default_prim(doc, edit_target, path, parent_gen) {
+    cmd("ApplyUsdOp", #{
+        doc_id: doc,
+        parent_gen: parent_gen,
+        op: #{ SetDefaultPrim: #{
+            edit_target: edit_target,
+            default_prim: path,
+        }},
+    })
+}
+
+/// Set the standard USD kind metadata on one prim. Pass () to clear only the
+/// selected layer's opinion and reveal any weaker kind.
+fn prim_kind(doc, edit_target, path, kind, parent_gen) {
+    cmd("ApplyUsdOp", #{
+        doc_id: doc,
+        parent_gen: parent_gen,
+        op: #{ SetPrimKind: #{
+            edit_target: edit_target,
+            path: path,
+            kind: kind,
+        }},
+    })
+}
+
 /// Activate or deactivate one exact prim without deleting its authored subtree.
 fn active(doc, edit_target, path, is_active, parent_gen) {
     cmd("ApplyUsdOp", #{

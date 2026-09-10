@@ -286,6 +286,18 @@ and stale generations fail at the typed command boundary. The operation is
 journalled, undoable, and treated as a composition resync so the live projection
 rebuilds the affected composition rather than replaying a flattened delta.
 
+Stage and prim metadata use the same typed owner. `UsdOp::SetDefaultPrim` authors
+the stage root's `defaultPrim` in the selected `@root@` or `@runtime@` layer;
+the value may be a root-relative or absolute prim path and must resolve to an
+existing non-root prim. `UsdOp::SetPrimKind` authors a USD identifier such as
+`component`, `assembly`, or `group` on an existing prim. Passing `None` to
+either operation clears only that layer's opinion, so weaker metadata remains
+visible through composition. `InspectUsdDocument` reports root/runtime,
+document-composed, and (when mounted) canonical-stage values with their source
+labels. Invalid paths, invalid kind identifiers, composed-only prims, and stale
+generations fail before journaling; both edits trigger a composed projection
+resync.
+
 Modelica runtime admission respects the same `UsdPreviewOnly` ancestry as the
 simulation projector. Domain member discovery, synthesis, and asynchronous
 completion use `lunco_usd_bevy::is_preview_only`; presentation collections do

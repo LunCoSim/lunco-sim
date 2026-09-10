@@ -436,14 +436,12 @@ let changed = assembly_edit::transform(
     doc, "@root@", "/Rover",
     [1.0, 0.0, 0.0], (), (), generation,
 );
-let plan = [#{ SetAttribute: #{
-    edit_target: "@root@",
-    path: "/Rover",
-    name: "kind",
-    type_name: "token",
-    value: "\"assembly\"",
-}}];
-assembly_edit::batch(doc, "Declare rover assembly", plan, changed.data.generation);
+let metadata = assembly_edit::prim_kind(
+    doc, "@root@", "/Rover", "assembly", changed.data.generation,
+);
+let defaulted = assembly_edit::default_prim(
+    doc, "@root@", "/Rover", metadata.data.generation,
+);
 ```
 
 Use `assembly_edit::references` to edit an existing prim's USD reference list
@@ -453,6 +451,18 @@ without flattening it. Entries are `#{ asset_path: "lunco://…", prim_path: () 
 `InspectUsdDocument` exposes `prim.references.authored` and
 `prim.references.composed`; resolve the target before submitting so a
 composed-only prim fails as read-only.
+
+Use `assembly_edit::default_prim(doc, edit_target, path, parent_gen)` to set
+the stage root's `defaultPrim`; it accepts `/Rover` or `Rover` and takes `()` as
+`path` to clear only the selected layer. Use
+`assembly_edit::prim_kind(doc, edit_target, path, kind, parent_gen)` for the
+standard USD prim `kind` token, such as `component`, `assembly`, or `group`;
+pass `()` as `kind` to clear that layer's opinion. Both helpers use the typed
+`SetDefaultPrim`/`SetPrimKind` operations and trigger a composed projection
+resync. `InspectUsdDocument` returns stage metadata at `metadata.defaultPrim`
+and prim metadata at `prim.metadata.kind`; each contains `authored.root`,
+`authored.runtime`, `composed`, and, when mounted, `canonical_stage` entries
+with `present`, `value`, and `source` fields.
 
 `propose` submits a complete typed plan for review without changing the
 document. Use `review_session` to inspect its state, `review_proposal` to mute,

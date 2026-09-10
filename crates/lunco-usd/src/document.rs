@@ -495,6 +495,31 @@ pub enum UsdOp {
         /// (e.g. `/Bus/Node.outputs:v`). Empty clears the connection.
         sources: Vec<String>,
     },
+    /// Author the stage root's `defaultPrim` metadata in the selected layer.
+    ///
+    /// The value is an absolute prim path or root-relative prim path supplied
+    /// by the editor; the layer stores the standard root-relative spelling.
+    /// `None` removes this layer's opinion without touching weaker layers.
+    SetDefaultPrim {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Prim path selected as the document's default prim, or `None` to
+        /// clear this layer's opinion.
+        default_prim: Option<String>,
+    },
+    /// Author the standard USD `kind` metadata on an existing prim.
+    ///
+    /// `None` removes the selected layer's opinion and lets composition reveal
+    /// any weaker kind. Kind names are USD identifiers, including standard
+    /// values such as `component`, `assembly`, and `group`.
+    SetPrimKind {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim.
+        path: String,
+        /// Kind token, or `None` to clear this layer's opinion.
+        kind: Option<String>,
+    },
     /// Move the prim at `from_path` to `to_path` — one op covering both
     /// **rename** (same parent, new leaf) and **reparent** (new parent), since
     /// both are a namespace move. The destination parent must already exist. The
@@ -621,6 +646,8 @@ impl UsdOp {
             | Self::RemoveTimeSample { edit_target, .. }
             | Self::SetRelationship { edit_target, .. }
             | Self::SetConnection { edit_target, .. }
+            | Self::SetDefaultPrim { edit_target, .. }
+            | Self::SetPrimKind { edit_target, .. }
             | Self::MovePrim { edit_target, .. }
             | Self::SetApiSchemas { edit_target, .. }
             | Self::SetVariantSelection { edit_target, .. }
@@ -653,6 +680,7 @@ impl UsdOp {
             | Self::RemoveTimeSample { path, .. }
             | Self::SetRelationship { path, .. }
             | Self::SetConnection { path, .. }
+            | Self::SetPrimKind { path, .. }
             | Self::SetApiSchemas { path, .. }
             | Self::SetVariantSelection { path, .. }
             | Self::SetPayload { path, .. }
@@ -661,6 +689,7 @@ impl UsdOp {
             Self::MovePrim {
                 from_path, to_path, ..
             } => vec![from_path.clone(), to_path.clone()],
+            Self::SetDefaultPrim { .. } => vec!["/".to_owned()],
         }
     }
 }
@@ -1463,6 +1492,37 @@ fn normalize_reference_prim_path(path: Option<&str>) -> Result<Option<String>, D
     Ok(Some(path.to_owned()))
 }
 
+fn normalize_default_prim_path(
+    path: Option<&str>,
+) -> Result<Option<(SdfPath, String)>, DocumentError> {
+    let Some(path) = path.filter(|path| !path.is_empty()) else {
+        return Ok(None);
+    };
+    let absolute = if path.starts_with('/') {
+        path.to_owned()
+    } else {
+        format!("/{path}")
+    };
+    let parsed = parse_prim_path(&absolute)?;
+    if parsed.is_abs_root() || parsed.is_property_path() {
+        return Err(DocumentError::ValidationFailed(format!(
+            "SetDefaultPrim target {path} must name a non-root prim"
+        )));
+    }
+    Ok(Some((parsed, absolute.trim_start_matches('/').to_owned())))
+}
+
+fn validate_prim_kind(kind: Option<&str>) -> Result<(), DocumentError> {
+    if let Some(kind) = kind {
+        if kind.is_empty() || !SdfPath::is_valid_identifier(kind) {
+            return Err(DocumentError::ValidationFailed(format!(
+                "SetPrimKind kind {kind} must be a non-empty USD identifier"
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn reference_list_edit(edit: UsdReferenceListOp) -> author::ReferenceListEdit {
     match edit {
         UsdReferenceListOp::Prepend => author::ReferenceListEdit::Prepend,
@@ -1678,6 +1738,8 @@ impl Document for UsdDocument {
             | UsdOp::RemoveTimeSample { edit_target, .. }
             | UsdOp::SetRelationship { edit_target, .. }
             | UsdOp::SetConnection { edit_target, .. }
+            | UsdOp::SetDefaultPrim { edit_target, .. }
+            | UsdOp::SetPrimKind { edit_target, .. }
             | UsdOp::MovePrim { edit_target, .. }
             | UsdOp::SetApiSchemas { edit_target, .. }
             | UsdOp::SetVariantSelection { edit_target, .. }
@@ -2402,6 +2464,117 @@ impl Document for UsdDocument {
                     .map_err(author_err)?;
                 let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
                 self.commit(target, new_data, UsdChange::InfoOnly { path, attr: name });
+                Ok(inverse)
+            }
+
+            UsdOp::SetDefaultPrim { default_prim, .. } => {
+                let normalized = normalize_default_prim_path(default_prim.as_deref())?;
+                if let Some((path, _)) = &normalized {
+                    self.require_prim_anywhere(path.as_str())?;
+                }
+                let prior = self
+                    .layer(target)
+                    .field(&SdfPath::abs_root(), sdf::FieldKey::DefaultPrim.as_str())
+                    .cloned();
+                let inverse = match prior {
+                    Some(sdf::Value::Token(token)) => {
+                        let canonical = normalize_default_prim_path(Some(token.as_str()))
+                            .ok()
+                            .flatten()
+                            .is_some_and(|(_, relative)| relative == token.as_str());
+                        if canonical {
+                            UsdOp::SetDefaultPrim {
+                                edit_target: id.clone(),
+                                default_prim: Some(token.to_string()),
+                            }
+                        } else {
+                            self.coarse_inverse(target, &id)
+                        }
+                    }
+                    None => UsdOp::SetDefaultPrim {
+                        edit_target: id.clone(),
+                        default_prim: None,
+                    },
+                    Some(_) => self.coarse_inverse(target, &id),
+                };
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                if let Some((_, relative)) = normalized {
+                    stage.set_default_prim(relative).map_err(author_err)?;
+                } else {
+                    let root_id = stage.root_layer().identifier().to_owned();
+                    let mut layer = stage
+                        .layer_mut(&root_id)
+                        .ok_or_else(|| author_err("document stage has no root layer"))?;
+                    layer
+                        .edit(|edit| edit.clear_default_prim())
+                        .map_err(author_err)?;
+                }
+                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                self.commit(target, new_data, UsdChange::Resync { path: "/".into() });
+                Ok(inverse)
+            }
+
+            UsdOp::SetPrimKind { path, kind, .. } => {
+                let prim_sdf = match self.require_prim_anywhere(&path) {
+                    Ok(prim) if !prim.is_property_path() => prim,
+                    Ok(_) => {
+                        return Err(DocumentError::ValidationFailed(format!(
+                            "SetPrimKind target {path} must name a prim, not a property"
+                        )))
+                    }
+                    Err(_) if self.path_is_under_composed_arc_path(
+                        &parse_prim_path(&path).unwrap_or_else(|_| SdfPath::abs_root()),
+                    ) => {
+                        return Err(DocumentError::ValidationFailed(format!(
+                            "SetPrimKind target {path} is composed/read-only; author the owning prim or a local override"
+                        )))
+                    }
+                    Err(error) => return Err(error),
+                };
+                validate_prim_kind(kind.as_deref())?;
+                let prior = self
+                    .layer(target)
+                    .field(&prim_sdf, sdf::FieldKey::Kind.as_str())
+                    .cloned();
+                let inverse = match prior {
+                    Some(sdf::Value::Token(token))
+                        if validate_prim_kind(Some(token.as_str())).is_ok() =>
+                    {
+                        UsdOp::SetPrimKind {
+                            edit_target: id.clone(),
+                            path: path.clone(),
+                            kind: Some(token.to_string()),
+                        }
+                    }
+                    None => UsdOp::SetPrimKind {
+                        edit_target: id.clone(),
+                        path: path.clone(),
+                        kind: None,
+                    },
+                    Some(_) => self.coarse_inverse(target, &id),
+                };
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                if let Some(kind) = kind {
+                    stage.override_prim(path.as_str()).map_err(author_err)?;
+                    stage
+                        .prim(path.as_str())
+                        .set_kind(kind)
+                        .map_err(author_err)?;
+                } else if self.layer(target).spec(&prim_sdf).is_some() {
+                    let root_id = stage.root_layer().identifier().to_owned();
+                    let mut layer = stage
+                        .layer_mut(&root_id)
+                        .ok_or_else(|| author_err("document stage has no root layer"))?;
+                    layer
+                        .edit(|edit| {
+                            edit.data_mut()
+                                .erase_field(&prim_sdf, sdf::FieldKey::Kind.as_str());
+                            Ok(())
+                        })
+                        .map_err(author_err)?;
+                }
+                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                self.commit(target, new_data, UsdChange::Resync { path: path.clone() });
                 Ok(inverse)
             }
 
@@ -4015,6 +4188,157 @@ def Xform \"World\" (\n\
             })
             .unwrap_err();
         assert!(read_only.to_string().contains("composed/read-only"));
+    }
+
+    #[test]
+    fn set_default_prim_authors_layers_and_typed_undo() {
+        const SCENE: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\n\ndef Xform \"World\" {}\ndef Xform \"Rover\" {}\n";
+        let mut doc = UsdDocument::new(DocumentId::new(52), SCENE);
+        let root = SdfPath::abs_root();
+        let before = doc.source();
+
+        let inverse = doc
+            .apply(UsdOp::SetDefaultPrim {
+                edit_target: LayerId::root(),
+                default_prim: Some("/Rover".into()),
+            })
+            .unwrap();
+        assert!(matches!(
+            &inverse,
+            UsdOp::SetDefaultPrim {
+                default_prim: Some(value),
+                ..
+            } if value == "World"
+        ));
+        assert_eq!(
+            doc.data()
+                .field(&root, sdf::FieldKey::DefaultPrim.as_str())
+                .and_then(|value| match value {
+                    sdf::Value::Token(token) => Some(token.to_string()),
+                    _ => None,
+                }),
+            Some("Rover".into())
+        );
+        doc.apply(inverse).unwrap();
+        assert_eq!(doc.source(), before);
+
+        doc.apply(UsdOp::SetDefaultPrim {
+            edit_target: LayerId::runtime(),
+            default_prim: Some("Rover".into()),
+        })
+        .unwrap();
+        assert_eq!(
+            doc.composed_arc()
+                .field(&root, sdf::FieldKey::DefaultPrim.as_str())
+                .and_then(|value| match value {
+                    sdf::Value::Token(token) => Some(token.to_string()),
+                    _ => None,
+                }),
+            Some("Rover".into())
+        );
+        doc.apply(UsdOp::SetDefaultPrim {
+            edit_target: LayerId::runtime(),
+            default_prim: None,
+        })
+        .unwrap();
+        assert_eq!(doc.source(), before);
+    }
+
+    #[test]
+    fn set_default_prim_rejects_invalid_or_missing_targets() {
+        let mut doc = UsdDocument::new(DocumentId::new(53), TINY_USDA);
+        for default_prim in [
+            Some("/".into()),
+            Some("/World.radius".into()),
+            Some("/Missing".into()),
+        ] {
+            let generation = doc.generation();
+            let error = doc
+                .apply(UsdOp::SetDefaultPrim {
+                    edit_target: LayerId::root(),
+                    default_prim,
+                })
+                .unwrap_err();
+            assert!(matches!(error, DocumentError::ValidationFailed(_)));
+            assert_eq!(doc.generation(), generation);
+        }
+    }
+
+    #[test]
+    fn set_prim_kind_authors_layers_clears_and_rejects_invalid_targets() {
+        const SCENE: &str = "#usda 1.0\ndef Xform \"World\" (\n    kind = \"group\"\n) {}\n";
+        let mut doc = UsdDocument::new(DocumentId::new(54), SCENE);
+        let path = SdfPath::new("/World").unwrap();
+        let before = doc.source();
+
+        let inverse = doc
+            .apply(UsdOp::SetPrimKind {
+                edit_target: LayerId::runtime(),
+                path: "/World".into(),
+                kind: Some("component".into()),
+            })
+            .unwrap();
+        assert!(matches!(
+            &inverse,
+            UsdOp::SetPrimKind {
+                kind: None,
+                path: inverse_path,
+                ..
+            } if inverse_path == "/World"
+        ));
+        assert_eq!(
+            doc.runtime_data()
+                .field(&path, sdf::FieldKey::Kind.as_str())
+                .and_then(|value| match value {
+                    sdf::Value::Token(token) => Some(token.to_string()),
+                    _ => None,
+                }),
+            Some("component".into())
+        );
+        assert_eq!(
+            doc.composed_arc()
+                .field(&path, sdf::FieldKey::Kind.as_str())
+                .and_then(|value| match value {
+                    sdf::Value::Token(token) => Some(token.to_string()),
+                    _ => None,
+                }),
+            Some("component".into())
+        );
+        doc.apply(inverse).unwrap();
+        assert_eq!(doc.source(), before);
+
+        let invalid = doc
+            .apply(UsdOp::SetPrimKind {
+                edit_target: LayerId::root(),
+                path: "/World".into(),
+                kind: Some("not a kind".into()),
+            })
+            .unwrap_err();
+        assert!(invalid.to_string().contains("USD identifier"));
+
+        let read_only = doc
+            .apply(UsdOp::SetPrimKind {
+                edit_target: LayerId::root(),
+                path: "/World/Child".into(),
+                kind: Some("component".into()),
+            })
+            .unwrap_err();
+        assert!(read_only.to_string().contains("not found"));
+    }
+
+    #[test]
+    fn set_prim_kind_rejects_composed_only_prim() {
+        const SCENE: &str =
+            "#usda 1.0\ndef Xform \"World\" (\n    prepend references = @base.usda@</Base>\n) {}\n";
+        let mut doc = UsdDocument::new(DocumentId::new(55), SCENE);
+        let error = doc
+            .apply(UsdOp::SetPrimKind {
+                edit_target: LayerId::root(),
+                path: "/World/Child".into(),
+                kind: Some("component".into()),
+            })
+            .unwrap_err();
+        assert!(error.to_string().contains("composed/read-only"));
     }
 
     #[test]
