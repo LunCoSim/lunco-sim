@@ -147,6 +147,33 @@ For architecture decisions and standard-schema checks, read
 [`luncosim-architecture`](../luncosim-architecture/SKILL.md). It is the gate
 against special-case Rust, duplicate USD vocabulary, and compatibility paths.
 
+## Componentized vehicle workflow
+
+Build a vehicle as a small set of contracts, not one monolithic USD file. Put
+each independently reusable, articulated, or domain-owning subsystem in its
+own component boundary when it has a local frame, mount interface, mass or
+collision owner, parameters, or a useful independent test. Typical boundaries
+are an egress mechanism, landing leg, solar array, avionics package, payload
+adapter, and propulsion/attitude network. Keep one-off visual trim in the
+assembly when splitting it would add no reusable contract.
+
+For each component, define its topology, frame/datum, known requirements and
+limits, and Rhai requirement test before composing it. Use the live headful
+Editor to author the component with typed USD operations, inspect and
+screenshot it, and run its boundary tests in the same runtime session. Then
+assemble through explicit references, host joints, collections, and native
+connections, and run a second integration suite for counts, placement,
+clearance, reference targets, joint endpoints, and cross-domain wires. A
+component pass is not an assembly pass.
+
+Keep the detail level at contract fidelity: standard USD primitives are enough
+for silhouettes, mounting envelopes, colliders, and tested interfaces. Add
+meshes or parametric detail only when it changes a requirement or the visible
+identity. Never flatten a referenced component into the assembly merely to
+avoid authoring its own contract. If a typed USD gap prevents creating a
+variant set, replacing a reference list, or authoring required metadata,
+report the Rust/typed-editor gap instead of using duplicate hidden geometry.
+
 ## The Twin (on-disk mission unit)
 
 A **Twin** = a folder + a `twin.toml` manifest that owns a default USD scene:

@@ -5,7 +5,8 @@ description: >
   physics, behavior, parameters, or spawn-catalog metadata. Use for new
   habitats, landers, rover parts, shaders, colliders, or parametric assets.
   `xformOpOrder`, standard USD schemas, array display colors, collider
-  approximation, and schema generation are the key contracts. Use build-usd-scene
+  approximation, component requirements, and component tests are the key
+  contracts. Use build-usd-scene
   for assembling existing assets, use-asset-library for placement/discovery, and
   validate-assets for pre-flight checks.
 ---
@@ -34,6 +35,31 @@ file goes, how it is discovered, the `lunco://` scheme),
 assembly authoring with screenshot/user-feedback checkpoints),
 [`validate-assets`](../validate-assets/SKILL.md) (pre-flight it),
 [`test-via-api`](../test-via-api/SKILL.md) (verify), [`compose-multidomain-twin`](../compose-multidomain-twin/SKILL.md).
+
+## Component contract before geometry
+
+Treat a component as a lightweight CAD deliverable rather than an isolated
+mesh. Before authoring, state its local frame, mount datum, required
+topology/types, dimensional envelope, mass/inertia owner, collision policy,
+parameters/units, public provenance, and any deployment or operating limits.
+Keep public/reference-backed facts separate from Twin study assumptions.
+
+One independently reusable or articulated part gets one explicit component
+root and its own USD file under the Twin's `components/` tree. The component's
+Rhai tool creates typed USD operations and its requirement/test Rhai reads the
+composed stage and checks both normal and boundary cases. The parent assembly
+must separately test reference identity, placement, symmetry/clearance, joint
+endpoints, variant selection, and cross-component wiring. Do not rely on the
+assembly test to prove the component's internal contract, or on a component
+test to prove it is correctly mounted.
+
+For live Editor work, create/open the component document, apply the typed
+Rhai plan, wait for projection, inspect the exact prims, capture a screenshot,
+and only then save. Do not hand-edit or flatten USDA text to accelerate a
+component change. Use standard USD variants for genuine configurations; if
+the typed editor cannot create the needed variant set/blocks or reference-list
+opinion, report the Rust capability gap instead of using hidden duplicate
+geometry as a substitute.
 
 ## Skeleton
 
