@@ -207,6 +207,7 @@ You'll use these constantly (the complete table is in
 | `cmd(name, #{params})` | **WRITE** — fire any command by name (spawn, possess, set input…). Returns `#{ id, ok, data, error }`. |
 | `query(name, #{params})` | **READ** — call a read-only query provider (Raycast, Nearest, GroundHeight…). Successful data is returned directly; no-data is `()`; failures return `#{ok:false,error}`. |
 | `query("ListSpawnCatalog", #{})` | **READ** — discover the authoritative `entry_id`, name, category, default transform, source, and `origin` (`builtin` or named `twin`) for assets accepted by `cmd("SpawnEntity", ...)`. |
+| `query("ValidateTwin", #{path: "/work/rover-twin", policy: "warn"})` | **READ** — inspect Twin-wide Modelica, USD, Rhai tool, shader, and asset resolver namespaces; collisions are warnings by default and become errors with `policy: "error"`. |
 | `get(id, "Comp.field")` / `set(id, "Comp.field", v)` | reflected component read/write (vectors → `[x,y,z]`); scalar co-simulation names use the canonical `PortRegistry` surface. |
 | `find(name)` / `world_pos(id)` | locate an entity; read its f64 active-frame position (site-local on a surface). |
 | `emit(name, value?)` | fire a `TelemetryEvent` (delivered to `on_event` on the next scenario pass); scalar, array, and map payloads keep their typed structure. |
@@ -259,6 +260,7 @@ The host exposes a minimal, generic bridge. Everything else is prelude policy.
 | `cmd(name, #{params})` | `#{ id, ok, data, error }` | **WRITE** — fire any `#[Command]` by name (synchronous; `data` carries command-specific result data such as a spawned gid). The full list is the [command reference](./commands-reference.md). |
 | `query(name, #{params})` | value \| `()` \| error map | **READ** — call any query provider (Raycast, Nearest, GroundHeight, …); successful data is direct, successful no-data is `()`, and failures are `#{ok:false,error}` |
 | `query("ListSpawnCatalog", #{})` | map | discover the spawn catalog used to validate `SpawnEntity.entry_id`, including each asset's source and authored `origin` |
+| `query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"})` | map | pre-flight one explicit Twin folder with the same `lint.twin` policy used by `RunLint { scope: "twin" }` |
 | `get(id, "Comp.field")` | value \| `()` | reflected component **read** (vectors → `[x,y,z]`, quats → `[x,y,z,w]`, structs → maps) |
 | `set(id, "Comp.field", value)` | bool | host-side **tuning write** — reflected component field or canonical scalar co-simulation port; supported field types only; not replicated, undoable, or a persistent port hold; `false` on bad path/type |
 | `get_setting("Res.field")` | value \| `()` | reflected **resource read** — global settings/config live in resources, not components |

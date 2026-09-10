@@ -272,6 +272,7 @@ pub fn register_builtin_policies() -> Result<(), String> {
         ("lint_usd", "lint.usd", "lint_usd"),
         ("lint_rhai", "lint.rhai", "lint_rhai"),
         ("lint_modelica", "lint.modelica", "lint_modelica"),
+        ("lint_twin", "lint.twin", "lint_twin"),
         // (Link availability is not a builtin policy. The generic link kernel
         // computes the geometry and applies a builtin range+mask+occlusion rule;
         // an authored `link.connected` hook overrides the verdict, and routing is

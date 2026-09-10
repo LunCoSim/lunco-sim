@@ -67,6 +67,22 @@ This audit is a decision aid, not a new persistent runtime registry. Keep the
 final ownership and parameters in the existing USD, Modelica, Rhai, and Twin
 contracts.
 
+### Check Twin-wide names before loading
+
+Run the explicit namespace pre-flight after adding a source root, tool library,
+shader, or referenced USD asset:
+
+```rhai
+query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
+```
+
+The inspector reports only collisions in the same resolver scope and includes
+every owner/source so the repair is made in the authored Twin. `RunLint` can
+run the same check against the active Twin with
+`cmd("RunLint", #{scope: "twin", policy: "warn"})`. Keep resolver policy in
+`assets/scripting/policy/lint_twin.rhai`; do not add a Rust-side rename,
+silent precedence rule, or duplicate namespace registry.
+
 ### Physics ports vs sensors — pick the wrong one and you author a bug
 
 | | Physics ports | Sensors |

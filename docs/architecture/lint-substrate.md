@@ -4,7 +4,8 @@
 
 Substrate `crates/lunco-lint`; USD facts
 `crates/lunco-usd-avian/src/lint.rs`; rules `assets/scripting/policy/lint_usd.rhai`;
-entry points `RunLint` (live scene) and `ValidateAsset` (file).
+entry points `RunLint` (live scene), `ValidateAsset` (file), and `ValidateTwin`
+(Twin-wide resolver pre-flight).
 
 ## What it is for
 
@@ -40,6 +41,7 @@ separate — one giant rule file is read by no one:
 domain "usd"      → hook `lint.usd`      → assets/scripting/policy/lint_usd.rhai
 domain "rhai"     → hook `lint.rhai`     → assets/scripting/policy/lint_rhai.rhai
 domain "modelica" → hook `lint.modelica` → assets/scripting/policy/lint_modelica.rhai
+domain "twin"     → hook `lint.twin`     → assets/scripting/policy/lint_twin.rhai
 ```
 
 A domain is just a name: `lunco_lint::run_lint(domain, facts)` invokes
@@ -140,6 +142,40 @@ or vehicle-specific Rust input handler. Because projected runtime owners do not 
 in a file by themselves, this diagnostic is available from live `RunLint`, not
 from `ValidateAsset`'s file-only preflight.
 
+## Twin-wide namespace inspection
+
+`RunLint { scope: "twin" }` and `ValidateTwin` share the read-only inspector in
+`lunco-scene-commands::twin_lint`. It builds deterministic entries from the
+active Twin's indexed files and existing resolver owners:
+
+- Modelica declared classes are scoped to the manifest/discovered Modelica
+  source root.
+- USD `defaultPrim` and full composed prim paths are scoped to their composed
+  USD stage; `Shader` prims remain full USD identities rather than becoming
+  global basenames.
+- Rhai tool libraries are scoped to the active tool registry, including Twin
+  `tools/*.rhai` modules and the native/bundled modules they can shadow.
+- WGSL shader modules and other Twin assets use their containing directory as
+  the resolver scope, so equal names in independent directories are legal.
+
+Only entries with the same namespace, name, and resolution scope become a
+collision. Every collision retains owner, source, domain, scope, and the
+resolution rule. The inspector never renames files, chooses a silent winner,
+or treats an unreadable source as an empty namespace.
+
+The default policy is a warning. CI can make collisions fail with `error`:
+
+```rhai
+cmd("RunLint", #{scope: "twin", policy: "warn"});
+query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
+```
+
+The equivalent HTTP/MCP calls use `ExecuteCommand` with `command` set to
+`RunLint` or `ValidateTwin`. `RunLint` reads the active Workspace Twin;
+`ValidateTwin` takes an explicit local folder and is independent of ECS state.
+Both return actionable `twin-namespace-collision` findings through the normal
+lint policy and keep source-read failures visible as warnings.
+
 ## Explicit authoring/preflight only
 
 Linting is something you **run**, not something that runs at you. A check firing
@@ -175,6 +211,7 @@ unregister_hook("lint.usd");                              // back to no USD rule
 |---|---|---|
 | `RunLint` | every **loaded** stage — including runtime spawns and edits no file describes; with `doc_id`, one synchronized Editor document | `cmd`/HTTP/MCP |
 | `ValidateAsset` | one **file**, composed pre-flight | `luncosim --validate <path>`, HTTP query |
+| `ValidateTwin` | one explicit Twin folder and its resolver closure | HTTP query / Rhai `query` |
 
 Both hand the policy the **same file-derived facts in the same shape**.
 `RunLint` additionally inspects the live projected `PortRegistry`, because only

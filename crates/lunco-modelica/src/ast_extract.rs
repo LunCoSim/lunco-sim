@@ -214,7 +214,13 @@ pub fn within_package_of_source(source: &str) -> Option<String> {
 /// classes. This is document metadata, not a model-specific rule: the
 /// compiler uses it to decide whether a durable source root already owns an
 /// extra document before registering a second URI for the same class.
-pub(crate) fn declared_class_names(source: &str, file_label: &str) -> Vec<String> {
+/// Extract every fully qualified class name declared by one source document.
+///
+/// This is the same recovered AST walk used by the Modelica source-root
+/// indexer. Callers that inspect a Twin-wide namespace use it to compare the
+/// names that the compiler can actually resolve, rather than comparing file
+/// basenames.
+pub fn declared_class_names(source: &str, file_label: &str) -> Vec<String> {
     let ast = parse_recovered(source, file_label);
     let prefix = ast
         .within

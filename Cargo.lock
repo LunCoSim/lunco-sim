@@ -7786,10 +7786,13 @@ dependencies = [
  "lunco-storage",
  "lunco-terrain-surface",
  "lunco-time",
+ "lunco-tools",
+ "lunco-twin",
  "lunco-twin-journal",
  "lunco-usd",
  "lunco-usd-avian",
  "lunco-usd-bevy",
+ "lunco-usd-compose",
  "lunco-usd-sim",
  "lunco-workspace",
  "openusd",
@@ -7797,6 +7800,7 @@ dependencies = [
  "rumoca-phase-parse",
  "serde",
  "serde_json",
+ "tempfile",
  "wasm-bindgen-futures",
 ]
 

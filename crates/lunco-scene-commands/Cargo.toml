@@ -44,12 +44,15 @@ lunco-mobility = { path = "../lunco-mobility" }
 lunco-obstacle-field = { path = "../lunco-obstacle-field" }
 lunco-usd = { path = "../lunco-usd", default-features = false }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+lunco-usd-compose = { path = "../lunco-usd-compose" }
 # `QueryUsdPrim` addresses prims by `sdf::Path`, so the read side needs the same
 # path type the stage is keyed on — no conversion layer in between.
 openusd = { workspace = true }
 # Active-document resolution for C4b runtime-layer persistence (ECS-only, no UI).
 lunco-workspace = { path = "../lunco-workspace" }
+lunco-twin = { path = "../lunco-twin" }
 lunco-usd-sim = { path = "../lunco-usd-sim" }
+lunco-tools = { path = "../lunco-tools" }
 # `ValidateAsset` runs the SAME authored lint rules the live loader runs, over the
 # SAME USD physics facts — one rule set, two entry points (pre-flight and load).
 lunco-usd-avian = { path = "../lunco-usd-avian" }
@@ -78,6 +81,9 @@ rhai = { workspace = true }
 # them in. `futures-lite::block_on` backs the native blocking scan used by tests.
 crossbeam-channel = { workspace = true }
 futures-lite = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 # Web: a browser `fetch` future is `!Send`, so the asset reads cannot go on a
 # Bevy task pool — they are driven by `spawn_local` on the JS event loop.

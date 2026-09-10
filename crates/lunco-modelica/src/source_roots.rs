@@ -409,12 +409,14 @@ fn normalize_twin_source_path(path: &Path) -> Result<PathBuf, String> {
     Ok(lunco_assets::asset_path::normalize(path))
 }
 
-/// Discover the source directories represented by a Twin's indexed `.mo` files.
+/// Discover the Modelica source directories represented by a Twin's indexed
+/// `.mo` files when its manifest does not declare `[modelica].paths`.
+///
 /// Package directories are preferred over their nested package members, while
 /// flat files remain grouped by their nearest common indexed directory. This
-/// lets a Twin with no domain-specific path declaration use standard
-/// `package.mo` layout without inventing a second loader.
-fn discover_twin_modelica_paths(twin: &lunco_twin::Twin) -> Vec<PathBuf> {
+/// is the same source-root identity used by the compile gate and by Twin-level
+/// namespace inspection.
+pub fn discover_twin_modelica_paths(twin: &lunco_twin::Twin) -> Vec<PathBuf> {
     fn is_modelica_file(path: &Path) -> bool {
         path.extension()
             .and_then(|extension| extension.to_str())

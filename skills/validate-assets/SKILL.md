@@ -2,9 +2,10 @@
 name: validate-assets
 description: >
   Pre-flight a LunCoSim `.mo`, `.usda`, `.wgsl`, or `.rhai` asset with
-  `ValidateAsset` or the production CLI before loading it. Use for parse,
-  reference, schema, shader-parameter, Modelica, or authored-lint checks.
-  It is a read-only query; use `RunLint` for a loaded scene and test-via-api for
+  `ValidateAsset` or the production CLI, or inspect one Twin's resolver
+  namespaces with `ValidateTwin`. Use for parse, reference, schema,
+  shader-parameter, Modelica, namespace, or authored-lint checks. These are
+  read-only queries; use `RunLint` for a loaded scene and test-via-api for
   runtime behavior.
 ---
 
@@ -74,6 +75,39 @@ when only lunica is up.
 `ok == errors.is_empty()`. **Warnings never fail a file.** `path` echoes what you
 passed, *not* the resolved disk path — if you need to know which file was read,
 pass an unambiguous one.
+
+### Twin-wide namespace pre-flight
+
+Use `ValidateTwin` when the question spans the complete Twin rather than one
+file. It reads the indexed Twin folder and compares only names that share a
+real resolver namespace and scope. The report includes each entry's owner,
+source, domain, scope, and resolution rule, plus the complete collision group.
+Equal names in independent Modelica roots, asset directories, or USD stages are
+not reported.
+
+```bash
+curl -s -X POST http://127.0.0.1:4101/api/commands \
+  -H 'content-type: application/json' \
+  -d '{"type":"ExecuteCommand","command":"ValidateTwin","params":{"path":"/work/rover-twin","policy":"error"}}'
+```
+
+`path` is required and must be a local Twin/folder path. `policy` is optional:
+`warn` (the default) makes namespace collisions warnings; `error` makes only
+those collisions fail the report. Unreadable sources remain visible as warning
+findings. The query does not rename files or choose a winner. Its Rhai policy
+is `assets/scripting/policy/lint_twin.rhai`, so a running session can replace
+`lint.twin` for the next explicit check.
+
+For the active Twin in a running scene, use the live command instead:
+
+```rhai
+cmd("RunLint", #{scope: "twin", policy: "warn"});
+query("LintReport");
+```
+
+`RunLint` and `ValidateTwin` share the same Rust namespace facts and Rhai
+policy; the former uses the active Workspace Twin, while the latter is
+independent of ECS state and is suitable for CI.
 
 ## What each extension actually checks
 

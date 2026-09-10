@@ -27,7 +27,9 @@
 //!
 //! `ValidateAsset` runs the same rules over the same facts for a FILE. This runs
 //! them over what is actually loaded — which, after runtime spawns and edits, is
-//! not the same stage any file describes.
+//! not the same stage any file describes. `RunLint { scope: "twin" }` instead
+//! inspects the active Twin's resolver namespaces through the shared Twin
+//! inspector; its file-only counterpart is `ValidateTwin`.
 
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
@@ -165,6 +167,15 @@ pub struct RunLint {
     /// can produce facts for. Named rather than enumerated so a domain added
     /// later needs no change to this verb.
     pub domain: String,
+    /// Inspection scope. Empty or `"loaded_stages"` keeps the existing live
+    /// stage behavior; `"twin"` inspects the active Twin's resolver namespaces.
+    #[serde(default)]
+    pub scope: String,
+    /// Twin namespace severity policy: `"warn"` (default) or `"error"`.
+    /// The policy is passed to authored Rhai; facts and collision ownership stay
+    /// in the generic Rust inspection path.
+    #[serde(default)]
+    pub policy: String,
     /// When present, lint exactly this open Editor document after its projected
     /// stage reaches the document generation. Omitted keeps the loaded-scene
     /// behavior for live simulation callers.
@@ -207,7 +218,99 @@ pub fn on_run_lint(
     asset_server: Option<Res<AssetServer>>,
     documents: Option<Res<DocumentRegistry<lunco_usd::document::UsdDocument>>>,
     backed: Option<Res<lunco_usd::twin_projection::DocBackedTwinScenes>>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
 ) {
+    let scope = trigger.event().scope.trim();
+    if scope == "twin" {
+        report.clear_domain("twin");
+        let domain = trigger.event().domain.trim();
+        if !domain.is_empty() && domain != "twin" {
+            report.extend_logged(vec![lunco_lint::LintFinding {
+                domain: "twin".to_string(),
+                rule: "invalid-twin-lint-domain".to_string(),
+                severity: lunco_lint::LintSeverity::Error,
+                subject: "RunLint".to_string(),
+                message: format!(
+                    "scope `twin` cannot be combined with domain `{domain}`; omit domain or use `twin`"
+                ),
+            }]);
+            return;
+        }
+        if trigger.event().doc_id.is_some() {
+            report.extend_logged(vec![lunco_lint::LintFinding {
+                domain: "twin".to_string(),
+                rule: "invalid-twin-lint-document".to_string(),
+                severity: lunco_lint::LintSeverity::Error,
+                subject: "RunLint".to_string(),
+                message: "scope `twin` inspects the active Twin and cannot take doc_id".to_string(),
+            }]);
+            return;
+        }
+        let policy = match crate::twin_lint::policy_name(&trigger.event().policy) {
+            Ok(policy) => policy,
+            Err(message) => {
+                report.extend_logged(vec![lunco_lint::LintFinding {
+                    domain: "twin".to_string(),
+                    rule: "invalid-twin-lint-policy".to_string(),
+                    severity: lunco_lint::LintSeverity::Error,
+                    subject: "RunLint".to_string(),
+                    message,
+                }]);
+                return;
+            }
+        };
+        let Some(workspace) = workspace.as_deref() else {
+            report.extend_logged(vec![lunco_lint::LintFinding {
+                domain: "twin".to_string(),
+                rule: "twin-lint-no-workspace".to_string(),
+                severity: lunco_lint::LintSeverity::Error,
+                subject: "RunLint".to_string(),
+                message: "Twin namespace lint requires the Workspace resource".to_string(),
+            }]);
+            return;
+        };
+        let Some(twin_id) = workspace.active_twin else {
+            report.extend_logged(vec![lunco_lint::LintFinding {
+                domain: "twin".to_string(),
+                rule: "twin-lint-no-active-twin".to_string(),
+                severity: lunco_lint::LintSeverity::Error,
+                subject: "Workspace".to_string(),
+                message: "Twin namespace lint requires an active Twin".to_string(),
+            }]);
+            return;
+        };
+        let Some(twin) = workspace.twin(twin_id) else {
+            report.extend_logged(vec![lunco_lint::LintFinding {
+                domain: "twin".to_string(),
+                rule: "twin-lint-missing-active-twin".to_string(),
+                severity: lunco_lint::LintSeverity::Error,
+                subject: format!("TwinId({})", twin_id.raw()),
+                message: "Workspace active_twin does not resolve to an open Twin".to_string(),
+            }]);
+            return;
+        };
+        let snapshot = crate::twin_lint::inspect_twin(twin);
+        let findings = lunco_lint::run_lint("twin", crate::twin_lint::facts(&snapshot, policy));
+        report.extend_logged(findings);
+        info!(
+            "[lint] RunLint: Twin `{}` — {} namespace collision(s), {} source read error(s), policy={policy}",
+            snapshot.twin,
+            snapshot.collisions.len(),
+            snapshot.read_errors.len(),
+        );
+        return;
+    }
+    if !scope.is_empty() && scope != "loaded_stages" {
+        report.clear_domain("twin");
+        report.extend_logged(vec![lunco_lint::LintFinding {
+            domain: "twin".to_string(),
+            rule: "invalid-lint-scope".to_string(),
+            severity: lunco_lint::LintSeverity::Error,
+            subject: "RunLint".to_string(),
+            message: format!("unknown lint scope `{scope}`; use `loaded_stages` or `twin`"),
+        }]);
+        return;
+    }
     let domain = trigger.event().domain.trim().to_string();
     if !domain.is_empty() && domain != lunco_usd_avian::USD_LINT_DOMAIN {
         warn!(

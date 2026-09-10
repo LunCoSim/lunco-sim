@@ -59,11 +59,14 @@ pub mod spawn_meta;
 /// the execution domain.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod test_discovery;
+/// Twin-wide namespace facts for explicit lint and preflight inspection.
+pub mod twin_lint;
 /// `QueryUsdPrim` — the AUTHORED read: composed USD attributes off the live
 /// stage, for asset invariants that scripts (not just Rust) can check.
 pub mod usd_prim_query;
 /// `ValidateAsset` — parse-only pre-flight for asset files (.mo/.usda/.wgsl/
 /// .rhai): no cosim, no scene load, no GPU. Also the `--validate` CLI leg.
+/// `ValidateTwin` — read-only Twin-wide resolver namespace pre-flight.
 pub mod validate;
 
 use bevy::prelude::*;

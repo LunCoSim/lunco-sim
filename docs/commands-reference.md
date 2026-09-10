@@ -479,6 +479,26 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `domain` | `String` |  Restrict to one lint domain (`"usd"`). Empty = every domain this scene  can produce facts for. Named rather than enumerated so a domain added  later needs no change to this verb. |
+| `scope` | `String` |  Set to `"twin"` to inspect the active Twin's resolver namespaces. Empty or `"loaded_stages"` keeps the loaded-stage behavior. |
+| `policy` | `String` |  Twin scope only: `"warn"` (default) reports collisions as warnings; `"error"` makes them error findings. |
+
+#### `ValidateTwin`
+
+Run the same Twin-wide namespace inspector as `RunLint`, using an explicit
+local folder and without requiring an active scene or ECS state. It reports
+Modelica classes, USD default/prim identities, Rhai tools, shader modules, and
+asset stems only when their names collide in a real resolver scope.
+
+- *defined in:* `crates/lunco-scene-commands/src/validate.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `path` | `String` | Required filesystem path to a Twin/folder. |
+| `policy` | `String` | Optional `"warn"` (default) or `"error"`; invalid values fail the report visibly. |
+
+```rhai
+query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
+```
 
 #### `SetCameraLookAt`
 

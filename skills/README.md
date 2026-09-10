@@ -43,7 +43,7 @@ one directly when doing that kind of task by hand.
 | [**inspect-simulation**](inspect-simulation/SKILL.md) | Observe a running sim — read ports/variables, screenshot the viewport |
 | [**record-video**](record-video/SKILL.md) | Record deterministic video/PNG takes — windowed or windowless (`--offscreen`), CLI or rhai-sequenced |
 | [**test-via-api**](test-via-api/SKILL.md) | Verify a change end-to-end via the API instead of asking the user to click |
-| [**validate-assets**](validate-assets/SKILL.md) | Pre-flight a `.mo`/`.usda`/`.wgsl`/`.rhai` — does it parse, and is it *right*? — in seconds, with no app, window or GPU; plus `RunLint` for the loaded scene and where lint rules are authored |
+| [**validate-assets**](validate-assets/SKILL.md) | Pre-flight a `.mo`/`.usda`/`.wgsl`/`.rhai` or an entire Twin namespace — does it parse, resolve, and lint correctly? — in seconds; plus `RunLint` for the loaded scene and where lint rules are authored |
 
 ## Extend the engine
 
@@ -113,7 +113,7 @@ one directly when doing that kind of task by hand.
   seconds with no GPU and catches broken references, missing wheel attrs and
   `if`/`when` in Modelica — **and runs the authored lint rules**, which is what
   reports a part that would fall off a vehicle. On a *loaded* scene use the verb:
-  `cmd("RunLint", #{})` + `query("LintReport")`; nothing lints on its own. Rules
+  `cmd("RunLint", #{})` + `query("LintReport")`, or `query("ValidateTwin", #{path: "..."})` for a Twin-wide namespace pre-flight; nothing lints on its own. Rules
   are rhai (`assets/scripting/policy/lint_*.rhai`), one linter per domain, so a
   new rule is an edit, not a rebuild. See
   [**validate-assets**](validate-assets/SKILL.md) and

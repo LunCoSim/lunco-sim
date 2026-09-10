@@ -209,6 +209,22 @@ target/debug/luncosim --validate assets/models/LunCo/Electrical/Battery.mo
 Full runbook — per-extension checks, exit codes, and the CWD path-resolution
 trap: [`validate-assets`](../validate-assets/SKILL.md).
 
+### Validate a Twin namespace without loading a scene
+
+`ValidateTwin` is the read-only Twin-wide counterpart. Pass an explicit local
+folder and use `policy: "error"` in CI when a resolver collision must fail:
+
+```bash
+curl -s -X POST http://127.0.0.1:4101/api/commands \
+  -H "Content-Type: application/json" \
+  -d '{"type":"ExecuteCommand","command":"ValidateTwin","params":{"path":"/work/rover-twin","policy":"error"}}'
+```
+
+It returns the indexed entries, resolver scopes, collisions, source-read
+errors, and structured `twin-namespace-collision` findings in the same response
+body. For the active Twin after `OpenFolder`/`OpenTwin`, use
+`cmd("RunLint", #{scope: "twin", policy: "warn"})` and read `LintReport`.
+
 ## Command ownership
 
 This skill owns the generic API envelope, runtime lifecycle, screenshots, and

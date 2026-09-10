@@ -1,4 +1,5 @@
-//! `ValidateAsset` — pre-flight "does this file compile?" for asset files.
+//! `ValidateAsset` and `ValidateTwin` — read-only pre-flight checks for asset
+//! files and Twin-wide resolver namespaces.
 //!
 //! ## The light-path contract
 //!
@@ -31,7 +32,7 @@
 //! - `.btxml` / `.xml` — the same BehaviorTree.CPP v4 parser and semantic
 //!   validation used by the runtime asset loader; nothing is executed.
 //!
-//! Registered as an [`ApiQueryProvider`] (it returns data, like
+//! Registered as [`ApiQueryProvider`]s (they return data, like
 //! [`crate::usd_prim_query`]), so one implementation answers rhai `query()`,
 //! Python, raw HTTP and MCP:
 //! `{"type":"ExecuteCommand","command":"ValidateAsset","params":{"path":"lunco://models/X.mo"}}`.
@@ -148,6 +149,149 @@ pub fn validate_asset(reference: &str) -> ValidationReport {
         )),
     };
     apply_lint_policy(report, &text)
+}
+
+/// One Twin-level lint finding in the pre-flight response.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TwinValidationFinding {
+    /// Stable authored rule id.
+    pub rule: String,
+    /// Policy severity.
+    pub severity: String,
+    /// Name or Twin subject involved.
+    pub subject: String,
+    /// Actionable diagnostic text.
+    pub message: String,
+}
+
+/// Read-only Twin-wide resolver namespace pre-flight report.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TwinValidationReport {
+    /// Folder supplied by the caller.
+    pub path: String,
+    /// Twin display name, or the folder name for an unmanifested folder.
+    pub twin: String,
+    /// Absolute root inspected by the namespace reader.
+    pub root: String,
+    /// `warn` by default; `error` makes collisions fail the report.
+    pub policy: String,
+    /// True iff no policy finding has error severity and the Twin opened.
+    pub ok: bool,
+    /// Error-severity policy findings and open/read failures.
+    pub errors: Vec<String>,
+    /// Warning/info policy findings.
+    pub warnings: Vec<String>,
+    /// Every resolver entry used to form the collision index.
+    pub entries: Vec<crate::twin_lint::NamespaceEntry>,
+    /// Only names ambiguous in an actual resolver scope.
+    pub collisions: Vec<crate::twin_lint::NamespaceCollision>,
+    /// Source files the read-only index could not inspect.
+    pub read_errors: Vec<String>,
+    /// Structured policy findings, for callers that do not parse display lines.
+    pub findings: Vec<TwinValidationFinding>,
+}
+
+fn twin_validation_error(
+    reference: &str,
+    policy: &str,
+    message: impl Into<String>,
+) -> TwinValidationReport {
+    let message = message.into();
+    TwinValidationReport {
+        path: reference.to_string(),
+        twin: String::new(),
+        root: String::new(),
+        policy: policy.to_string(),
+        ok: false,
+        errors: vec![message],
+        warnings: Vec::new(),
+        entries: Vec::new(),
+        collisions: Vec::new(),
+        read_errors: Vec::new(),
+        findings: Vec::new(),
+    }
+}
+
+fn resolve_twin_root(reference: &str) -> Result<PathBuf, String> {
+    let as_given = Path::new(reference);
+    if as_given.is_dir() {
+        return Ok(as_given.to_path_buf());
+    }
+    match lunco_assets::engine_asset_local_path(reference) {
+        Some(path) if path.is_dir() => Ok(path),
+        Some(path) => Err(format!(
+            "Twin folder not found: `{reference}` (resolved `{}` is not a directory)",
+            path.display()
+        )),
+        None => Err(format!(
+            "`{reference}` is not a local Twin folder; pass a filesystem path or a lunco:// asset directory"
+        )),
+    }
+}
+
+/// Validate all resolver namespaces visible from one Twin folder.
+///
+/// This is the pure pre-flight counterpart of `RunLint { scope: "twin" }`:
+/// both call the same Twin inspector and authored `lint.twin` policy. The
+/// explicit folder argument keeps this API independent of an active ECS
+/// workspace and makes it suitable for CI.
+pub fn validate_twin(reference: &str, requested_policy: &str) -> TwinValidationReport {
+    let policy = match crate::twin_lint::policy_name(requested_policy) {
+        Ok(policy) => policy,
+        Err(message) => return twin_validation_error(reference, requested_policy, message),
+    };
+    let root = match resolve_twin_root(reference) {
+        Ok(root) => root,
+        Err(message) => return twin_validation_error(reference, policy, message),
+    };
+    let mode = match lunco_twin::TwinMode::open(&root) {
+        Ok(mode) => mode,
+        Err(error) => return twin_validation_error(reference, policy, error.to_string()),
+    };
+    let twin = match mode {
+        lunco_twin::TwinMode::Folder(twin) | lunco_twin::TwinMode::Twin(twin) => twin,
+        lunco_twin::TwinMode::Orphan(path) => {
+            return twin_validation_error(
+                reference,
+                policy,
+                format!(
+                    "Twin validation requires a folder, got file `{}`",
+                    path.display()
+                ),
+            )
+        }
+    };
+    let snapshot = crate::twin_lint::inspect_twin(&twin);
+    let lint_findings = lunco_lint::run_lint("twin", crate::twin_lint::facts(&snapshot, policy));
+    let mut errors = Vec::new();
+    let mut warnings = Vec::new();
+    let mut findings = Vec::with_capacity(lint_findings.len());
+    for finding in lint_findings {
+        let line = finding.line();
+        match finding.severity {
+            lunco_lint::LintSeverity::Error => errors.push(line),
+            _ => warnings.push(line),
+        }
+        findings.push(TwinValidationFinding {
+            rule: finding.rule,
+            severity: finding.severity.as_str().to_string(),
+            subject: finding.subject,
+            message: finding.message,
+        });
+    }
+    TwinValidationReport {
+        path: reference.to_string(),
+        twin: snapshot.twin.clone(),
+        root: snapshot.root.clone(),
+        policy: policy.to_string(),
+        ok: errors.is_empty(),
+        errors,
+        warnings,
+        entries: snapshot.entries.clone(),
+        collisions: snapshot.collisions.clone(),
+        read_errors: snapshot.read_errors.clone(),
+        findings,
+    }
 }
 
 /// Consult the DOMAIN's authored lint rules and fold their findings into the
@@ -484,7 +628,7 @@ fn validate_usda(reference: &str, path: &Path, text: &str) -> ValidationReport {
 /// the same CWD-based root the AssetServer uses. Cargo tests instead run from
 /// the crate directory, so use the compile-time workspace layout only when the
 /// runtime root is absent.
-fn engine_assets_root() -> PathBuf {
+pub(crate) fn engine_assets_root() -> PathBuf {
     let runtime_root = lunco_assets::assets_dir_abs();
     if runtime_root.is_dir() {
         return runtime_root;
@@ -684,6 +828,33 @@ impl ApiQueryProvider for ValidateAssetProvider {
     }
 }
 
+/// `ValidateTwin { path, policy? }` → [`TwinValidationReport`].
+struct ValidateTwinProvider;
+
+impl ApiQueryProvider for ValidateTwinProvider {
+    fn name(&self) -> &'static str {
+        "ValidateTwin"
+    }
+
+    fn execute(&self, _world: &World, params: &serde_json::Value) -> ApiResponse {
+        let Some(path) = params.get("path").and_then(|p| p.as_str()) else {
+            return ApiResponse::error(
+                ApiErrorCode::DeserializationError,
+                "ValidateTwin requires params.path (string): a Twin folder path",
+            );
+        };
+        let policy = params
+            .get("policy")
+            .and_then(|value| value.as_str())
+            .unwrap_or("warn");
+        let report = validate_twin(path, policy);
+        match serde_json::to_value(&report) {
+            Ok(value) => ApiResponse::ok(value),
+            Err(error) => ApiResponse::error(ApiErrorCode::InternalError, error.to_string()),
+        }
+    }
+}
+
 /// Register the provider. Called by [`crate::commands::SpawnCommandPlugin`],
 /// so any binary with the scene verbs answers `ValidateAsset` too — the
 /// headless server included.
@@ -692,6 +863,9 @@ pub fn register(app: &mut App) {
     app.world_mut()
         .resource_mut::<ApiQueryRegistry>()
         .register(ValidateAssetProvider);
+    app.world_mut()
+        .resource_mut::<ApiQueryRegistry>()
+        .register(ValidateTwinProvider);
 }
 
 #[cfg(test)]
