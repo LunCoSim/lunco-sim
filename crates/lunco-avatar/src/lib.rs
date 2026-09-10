@@ -3835,31 +3835,48 @@ fn avatar_global_hotkeys(
 
 // ─── Raycasting ──────────────────────────────────────────────────────────────
 
-/// Resolves a picked vehicle part to its nearest public input-port surface.
+/// Resolves a picked vehicle part to its authored vehicle control root.
 ///
 /// `SelectableRoot` is an editor boundary, and every independently simulated
 /// wheel may carry it. [`lunco_core::InputPorts`] is the public interface:
 /// its nonempty vocabulary is the input surface a session may own. A
-/// [`lunco_core::ControlBinding`] is merely one optional avatar-input adapter.
-/// An [`Avatar`] endpoint is excluded even when it carries its own movement
-/// ports; walking past one to this owner makes a click on a vehicle part
-/// possess the vehicle rather than the avatar.
+/// [`lunco_core::ControlBinding`] or [`lunco_core::MobilityRoot`] identifies the
+/// authored vehicle boundary, which takes precedence over nested component
+/// endpoints. An [`Avatar`] endpoint is excluded even when it carries its own
+/// movement ports; walking past one to this owner makes a click on a vehicle
+/// part possess the vehicle rather than the avatar.
 fn find_control_owner_from_hit(
     mut entity: Entity,
     q_parents: &Query<&ChildOf>,
     q_input_ports: &Query<&lunco_core::InputPorts, Without<Avatar>>,
+    q_vehicle_roots: &Query<
+        (),
+        Or<(
+            With<lunco_core::ControlBinding>,
+            With<lunco_core::MobilityRoot>,
+        )>,
+    >,
     q_preview_only: &Query<(), With<UsdPreviewOnly>>,
     q_ground: &Query<Entity, With<lunco_core::Ground>>,
 ) -> Option<Entity> {
+    let mut nearest_endpoint = None;
     for _ in 0..MAX_HIERARCHY_WALK_DEPTH {
         if q_ground.get(entity).is_ok() {
             return None;
         }
-        // The avatar is also an InputPorts endpoint, but its endpoint is the
-        // free-flight driver, not a vessel that a scene click may possess. The
-        // domain marker is the authority here; render camera metadata is not.
+        // A vehicle may contain nested Modelica or actuator input surfaces.
+        // Those are valid command endpoints for their own generic APIs, but a
+        // scene click on a vehicle part must resolve to the vehicle's authored
+        // control root so the camera and controller switch as one unit.
         if is_vessel_control_endpoint(entity, q_input_ports, q_parents, q_preview_only) {
-            return Some(entity);
+            nearest_endpoint.get_or_insert(entity);
+        }
+        if q_vehicle_roots.get(entity).is_ok() {
+            // A root without its own writable surface is not ready to possess;
+            // never fall through to a nested endpoint and split the vehicle's
+            // interaction identity.
+            return is_vessel_control_endpoint(entity, q_input_ports, q_parents, q_preview_only)
+                .then_some(entity);
         }
         if let Ok(parent) = q_parents.get(entity) {
             entity = parent.parent();
@@ -3867,7 +3884,7 @@ fn find_control_owner_from_hit(
             break;
         }
     }
-    None
+    nearest_endpoint
 }
 
 /// The possession boundary is a writable command surface owned by a domain
@@ -3979,6 +3996,13 @@ pub fn avatar_raycast_possession(
     q_spacecraft: Query<(Entity, &GlobalTransform, &Spacecraft)>,
     q_input_ports: Query<&lunco_core::InputPorts, Without<Avatar>>,
     q_parents: Query<&ChildOf>,
+    q_vehicle_roots: Query<
+        (),
+        Or<(
+            With<lunco_core::ControlBinding>,
+            With<lunco_core::MobilityRoot>,
+        )>,
+    >,
     q_preview_only: Query<(), With<UsdPreviewOnly>>,
     q_ground: Query<Entity, With<lunco_core::Ground>>,
 ) {
@@ -4070,6 +4094,7 @@ pub fn avatar_raycast_possession(
         click.entity,
         &q_parents,
         &q_input_ports,
+        &q_vehicle_roots,
         &q_preview_only,
         &q_ground,
     );
@@ -6197,20 +6222,73 @@ mod tests {
         let mut state: SystemState<(
             Query<&ChildOf>,
             Query<&lunco_core::InputPorts, Without<Avatar>>,
+            Query<
+                (),
+                Or<(
+                    With<lunco_core::ControlBinding>,
+                    With<lunco_core::MobilityRoot>,
+                )>,
+            >,
             Query<(), With<UsdPreviewOnly>>,
             Query<Entity, With<lunco_core::Ground>>,
         )> = SystemState::new(&mut world);
-        let (q_parents, q_input_ports, q_preview_only, q_ground) = state.get(&world).unwrap();
+        let (q_parents, q_input_ports, q_vehicle_roots, q_preview_only, q_ground) =
+            state.get(&world).unwrap();
 
         assert_eq!(
             find_control_owner_from_hit(
                 wheel_mesh,
                 &q_parents,
                 &q_input_ports,
+                &q_vehicle_roots,
                 &q_preview_only,
                 &q_ground,
             ),
             Some(rover)
+        );
+    }
+
+    #[test]
+    fn vehicle_click_prefers_root_over_nested_input_endpoint() {
+        let mut world = World::new();
+        let rover = world
+            .spawn((
+                lunco_core::MobilityRoot,
+                lunco_core::InputPorts::new(&["throttle"]),
+            ))
+            .id();
+        let actuator = world
+            .spawn((lunco_core::InputPorts::new(&["force"]), ChildOf(rover)))
+            .id();
+        let mesh = world.spawn(ChildOf(actuator)).id();
+
+        let mut state: SystemState<(
+            Query<&ChildOf>,
+            Query<&lunco_core::InputPorts, Without<Avatar>>,
+            Query<
+                (),
+                Or<(
+                    With<lunco_core::ControlBinding>,
+                    With<lunco_core::MobilityRoot>,
+                )>,
+            >,
+            Query<(), With<UsdPreviewOnly>>,
+            Query<Entity, With<lunco_core::Ground>>,
+        )> = SystemState::new(&mut world);
+        let (q_parents, q_input_ports, q_vehicle_roots, q_preview_only, q_ground) =
+            state.get(&world).unwrap();
+
+        assert_eq!(
+            find_control_owner_from_hit(
+                mesh,
+                &q_parents,
+                &q_input_ports,
+                &q_vehicle_roots,
+                &q_preview_only,
+                &q_ground,
+            ),
+            Some(rover),
+            "clicking a vehicle part must possess the vehicle root, not its nested endpoint"
         );
     }
 
@@ -6228,16 +6306,25 @@ mod tests {
         let mut state: SystemState<(
             Query<&ChildOf>,
             Query<&lunco_core::InputPorts, Without<Avatar>>,
+            Query<
+                (),
+                Or<(
+                    With<lunco_core::ControlBinding>,
+                    With<lunco_core::MobilityRoot>,
+                )>,
+            >,
             Query<(), With<UsdPreviewOnly>>,
             Query<Entity, With<lunco_core::Ground>>,
         )> = SystemState::new(&mut world);
-        let (q_parents, q_input_ports, q_preview_only, q_ground) = state.get(&world).unwrap();
+        let (q_parents, q_input_ports, q_vehicle_roots, q_preview_only, q_ground) =
+            state.get(&world).unwrap();
 
         assert_eq!(
             find_control_owner_from_hit(
                 mesh,
                 &q_parents,
                 &q_input_ports,
+                &q_vehicle_roots,
                 &q_preview_only,
                 &q_ground,
             ),
@@ -6260,16 +6347,25 @@ mod tests {
         let mut state: SystemState<(
             Query<&ChildOf>,
             Query<&lunco_core::InputPorts, Without<Avatar>>,
+            Query<
+                (),
+                Or<(
+                    With<lunco_core::ControlBinding>,
+                    With<lunco_core::MobilityRoot>,
+                )>,
+            >,
             Query<(), With<UsdPreviewOnly>>,
             Query<Entity, With<lunco_core::Ground>>,
         )> = SystemState::new(&mut world);
-        let (q_parents, q_input_ports, q_preview_only, q_ground) = state.get(&world).unwrap();
+        let (q_parents, q_input_ports, q_vehicle_roots, q_preview_only, q_ground) =
+            state.get(&world).unwrap();
 
         assert_eq!(
             find_control_owner_from_hit(
                 mesh,
                 &q_parents,
                 &q_input_ports,
+                &q_vehicle_roots,
                 &q_preview_only,
                 &q_ground,
             ),
@@ -6294,16 +6390,25 @@ mod tests {
         let mut state: SystemState<(
             Query<&ChildOf>,
             Query<&lunco_core::InputPorts, Without<Avatar>>,
+            Query<
+                (),
+                Or<(
+                    With<lunco_core::ControlBinding>,
+                    With<lunco_core::MobilityRoot>,
+                )>,
+            >,
             Query<(), With<UsdPreviewOnly>>,
             Query<Entity, With<lunco_core::Ground>>,
         )> = SystemState::new(&mut world);
-        let (q_parents, q_input_ports, q_preview_only, q_ground) = state.get(&world).unwrap();
+        let (q_parents, q_input_ports, q_vehicle_roots, q_preview_only, q_ground) =
+            state.get(&world).unwrap();
 
         assert_eq!(
             find_control_owner_from_hit(
                 avatar,
                 &q_parents,
                 &q_input_ports,
+                &q_vehicle_roots,
                 &q_preview_only,
                 &q_ground,
             ),
@@ -6321,16 +6426,25 @@ mod tests {
         let mut state: SystemState<(
             Query<&ChildOf>,
             Query<&lunco_core::InputPorts, Without<Avatar>>,
+            Query<
+                (),
+                Or<(
+                    With<lunco_core::ControlBinding>,
+                    With<lunco_core::MobilityRoot>,
+                )>,
+            >,
             Query<(), With<UsdPreviewOnly>>,
             Query<Entity, With<lunco_core::Ground>>,
         )> = SystemState::new(&mut world);
-        let (q_parents, q_input_ports, q_preview_only, q_ground) = state.get(&world).unwrap();
+        let (q_parents, q_input_ports, q_vehicle_roots, q_preview_only, q_ground) =
+            state.get(&world).unwrap();
 
         assert_eq!(
             find_control_owner_from_hit(
                 avatar,
                 &q_parents,
                 &q_input_ports,
+                &q_vehicle_roots,
                 &q_preview_only,
                 &q_ground,
             ),
@@ -6349,16 +6463,25 @@ mod tests {
         let mut state: SystemState<(
             Query<&ChildOf>,
             Query<&lunco_core::InputPorts, Without<Avatar>>,
+            Query<
+                (),
+                Or<(
+                    With<lunco_core::ControlBinding>,
+                    With<lunco_core::MobilityRoot>,
+                )>,
+            >,
             Query<(), With<UsdPreviewOnly>>,
             Query<Entity, With<lunco_core::Ground>>,
         )> = SystemState::new(&mut world);
-        let (q_parents, q_input_ports, q_preview_only, q_ground) = state.get(&world).unwrap();
+        let (q_parents, q_input_ports, q_vehicle_roots, q_preview_only, q_ground) =
+            state.get(&world).unwrap();
 
         assert_eq!(
             find_control_owner_from_hit(
                 preview_part,
                 &q_parents,
                 &q_input_ports,
+                &q_vehicle_roots,
                 &q_preview_only,
                 &q_ground,
             ),
