@@ -822,115 +822,126 @@ fn render_tree_node(
     if visible == 0 {
         return;
     }
-    egui::CollapsingHeader::new(
-        egui::RichText::new(format!("{} ({visible})", node.label)).strong(),
-    )
-    .id_salt(("tb_entity", &node.id))
-    .default_open(depth < 2)
-    .show(ui, |ui| {
-        for child in node.children.values() {
-            render_tree_node(
-                ui,
-                child,
-                registry,
-                theme,
-                scoped,
-                show_model_variables,
-                show_archived,
-                display_settings,
-                filter,
-                selected,
-                depth + 1,
-                clicked,
-            );
-        }
-        egui::Grid::new(("tb_grid", &node.id))
-            .num_columns(3)
-            .striped(true)
-            .spacing(egui::vec2(theme.spacing.item_spacing, 2.0))
-            .show(ui, |ui| {
-                for row in node.rows.iter().filter(|r| {
-                    row_visible(
-                        r,
-                        scoped,
-                        show_model_variables,
-                        show_archived,
-                        filter,
-                        &node.label,
-                    )
-                }) {
-                    let latest = registry
-                        .scalar_history(&row.sig)
-                        .and_then(|h| h.samples.back())
-                        .map(|s| s.value);
-                    let channel_label =
-                        telemetry_row_label(row, display_settings.show_generated_names);
-                    let payload = ChannelDragPayload::from_signal(&row.sig);
-                    let inner = ui.dnd_drag_source(
-                        ui.id().with(("tb_row", &row.sig)),
-                        payload.clone(),
-                        |ui| {
-                            ui.selectable_label(
-                                selected == Some(&row.sig),
-                                egui::RichText::new(if row.active {
-                                    channel_label.clone()
-                                } else {
-                                    format!("{channel_label} (archived)")
-                                })
-                                .color(telemetry_row_label_color(row, theme)),
-                            )
-                        },
-                    );
-                    let response = inner.inner;
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(
-                            egui::RichText::new(
-                                latest
-                                    .map(|value| fmt_value(value, display_settings))
-                                    .unwrap_or_else(|| "—".into()),
-                            )
-                            .monospace()
-                            .color(if latest.is_some() {
-                                theme.tokens.text
-                            } else {
-                                theme.tokens.text_subdued
-                            }),
+    let id = ui.make_persistent_id(("tb_entity", &node.id));
+    lunco_workbench::tree::branch(
+        ui,
+        id,
+        depth < 2,
+        None,
+        |ui| {
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(format!("{} ({visible})", node.label)).strong(),
+                )
+                .sense(egui::Sense::click()),
+            )
+            .clicked()
+        },
+        |ui| {
+            for child in node.children.values() {
+                render_tree_node(
+                    ui,
+                    child,
+                    registry,
+                    theme,
+                    scoped,
+                    show_model_variables,
+                    show_archived,
+                    display_settings,
+                    filter,
+                    selected,
+                    depth + 1,
+                    clicked,
+                );
+            }
+            egui::Grid::new(("tb_grid", &node.id))
+                .num_columns(3)
+                .striped(true)
+                .spacing(egui::vec2(theme.spacing.item_spacing, 2.0))
+                .show(ui, |ui| {
+                    for row in node.rows.iter().filter(|r| {
+                        row_visible(
+                            r,
+                            scoped,
+                            show_model_variables,
+                            show_archived,
+                            filter,
+                            &node.label,
                         )
-                    });
-                    let unit_response = ui.label(
-                        egui::RichText::new(pretty_unit(row.unit.as_deref()))
-                            .small()
-                            .color(theme.tokens.text_subdued),
-                    );
-                    let tip = unit_tooltip(row.unit.as_deref());
-                    if !tip.is_empty() {
-                        unit_response.on_hover_text(tip);
-                    }
-                    ui.end_row();
-                    if response.double_clicked() {
-                        queue_plot_drop(
-                            ui.ctx(),
-                            PlotDropRequest {
-                                payload,
-                                world_pos: None,
+                    }) {
+                        let latest = registry
+                            .scalar_history(&row.sig)
+                            .and_then(|h| h.samples.back())
+                            .map(|s| s.value);
+                        let channel_label =
+                            telemetry_row_label(row, display_settings.show_generated_names);
+                        let payload = ChannelDragPayload::from_signal(&row.sig);
+                        let inner = ui.dnd_drag_source(
+                            ui.id().with(("tb_row", &row.sig)),
+                            payload.clone(),
+                            |ui| {
+                                ui.selectable_label(
+                                    selected == Some(&row.sig),
+                                    egui::RichText::new(if row.active {
+                                        channel_label.clone()
+                                    } else {
+                                        format!("{channel_label} (archived)")
+                                    })
+                                    .color(telemetry_row_label_color(row, theme)),
+                                )
                             },
                         );
-                        *clicked = Some(row.sig.clone());
-                    } else if response.clicked() {
-                        *clicked = Some(row.sig.clone());
+                        let response = inner.inner;
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(
+                                    latest
+                                        .map(|value| fmt_value(value, display_settings))
+                                        .unwrap_or_else(|| "—".into()),
+                                )
+                                .monospace()
+                                .color(if latest.is_some() {
+                                    theme.tokens.text
+                                } else {
+                                    theme.tokens.text_subdued
+                                }),
+                            )
+                        });
+                        let unit_response = ui.label(
+                            egui::RichText::new(pretty_unit(row.unit.as_deref()))
+                                .small()
+                                .color(theme.tokens.text_subdued),
+                        );
+                        let tip = unit_tooltip(row.unit.as_deref());
+                        if !tip.is_empty() {
+                            unit_response.on_hover_text(tip);
+                        }
+                        ui.end_row();
+                        if response.double_clicked() {
+                            queue_plot_drop(
+                                ui.ctx(),
+                                PlotDropRequest {
+                                    payload,
+                                    world_pos: None,
+                                },
+                            );
+                            *clicked = Some(row.sig.clone());
+                        } else if response.clicked() {
+                            *clicked = Some(row.sig.clone());
+                        }
+                        // One tooltip closure per row. `on_hover_ui` registers a
+                        // closure for every widget it is called on each frame (the
+                        // body only runs when the pointer is over the cell), so
+                        // attaching it to the drag label, value cell, AND unit cell
+                        // tripled the per-frame closure registrations and was a real
+                        // FPS cost on channel-dense scenes. The drag label is the
+                        // primary hover target; the unit cell keeps its own cheap
+                        // static-text tooltip for the dimensionless case.
+                        attach_row_tooltip(response, row);
                     }
-                    // One tooltip closure per row. `on_hover_ui` registers a
-                    // closure for every widget it is called on each frame (the
-                    // body only runs when the pointer is over the cell), so
-                    // attaching it to the drag label, value cell, AND unit cell
-                    // tripled the per-frame closure registrations and was a real
-                    // FPS cost on channel-dense scenes. The drag label is the
-                    // primary hover target; the unit cell keeps its own cheap
-                    // static-text tooltip for the dimensionless case.
-                    attach_row_tooltip(response, row);
-                }
-            });
-    });
+                });
+        },
+    );
 }
 
 /// Attach the source-authored explanation to a single telemetry-row cell.

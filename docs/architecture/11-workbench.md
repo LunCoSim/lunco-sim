@@ -450,6 +450,23 @@ scene-closure, library, and raw-file sections remain responsible for their
 own loading/error/empty rows and for emitting the existing typed navigation
 actions.
 
+### 5c. Shared hierarchy presentation
+
+`lunco-workbench::tree::{branch, leaf}` is the single presentation owner for
+hierarchy rows rendered by workbench panels. It provides the common disclosure
+control, full-width row allocation, persistent expansion identity, and
+indented child body. USD prim/stage browsers, entity trees, telemetry trees,
+Modelica package/class trees, Twin folders, and library paths all use this
+contract.
+
+Domain crates continue to own their view models, filtering, authoritative
+identities, selection, loading, and typed actions. A domain renderer supplies
+only the label/body callbacks and stable `egui::Id`; it does not instantiate a
+second `CollapsingHeader`/`CollapsingState` tree path. Search may force a branch
+open for the current frame, while ordinary expansion remains persistent UI
+state. Settings groups and non-hierarchical detail accordions are not tree
+rows and remain local to their owning panel.
+
 ### Panels as Document Views
 
 Per the Document System design

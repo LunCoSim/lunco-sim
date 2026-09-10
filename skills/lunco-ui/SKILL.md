@@ -86,6 +86,15 @@ human-readable names/paths, retain matching ancestors, and emit the existing
 typed navigation actions. Do not add a per-domain search resource or make the
 browser search generated ids.
 
+For hierarchy rows, use `lunco_workbench::tree::{branch, leaf}`. The shared
+renderer owns the disclosure control, full-width row geometry, persistent
+expansion identity, and indentation. Domain panels own only their view-model
+filtering, stable `egui::Id`, selection/loading state, and typed actions. Do
+not create a second `CollapsingHeader`/`CollapsingState` path for a tree, and do
+not move domain selection or loading policy into the shared renderer. Search
+may force matching branches open for the current frame; ordinary expansion
+remains persistent UI state.
+
 Project-owned settings are not user-global settings: read the active Twin's
 manifest through the workspace resource and emit a typed event for changes.
 For the missing-asset consent flow, the popup's unchecked negative checkbox

@@ -393,15 +393,17 @@ fn render_prim_node(
     let label = prim_label(node);
 
     if node.children.is_empty() {
-        prim_select_label(
-            ui,
-            node,
-            &label,
-            selected,
-            primary,
-            selection_changed,
-            to_select,
-        );
+        let _ = lunco_workbench::tree::leaf(ui, |ui| {
+            prim_select_label(
+                ui,
+                node,
+                &label,
+                selected,
+                primary,
+                selection_changed,
+                to_select,
+            )
+        });
         return;
     }
     // Top two levels open by default so the scene structure is visible without
@@ -410,35 +412,25 @@ fn render_prim_node(
     // The document path is stable and already scoped by this panel's active
     // document, so it is sufficient for collapse-state identity.
     let id = ui.make_persistent_id(("usd_prim_tree", key));
-    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
-        ui.ctx(),
+    let open = reveal_path.is_some_and(|path| is_path_or_descendant(path, key));
+    let mut header_select = None;
+    lunco_workbench::tree::branch(
+        ui,
         id,
         default_open,
-    );
-    if reveal_path.is_some_and(|path| is_path_or_descendant(path, key)) {
-        state.set_open(true);
-    }
-    // Keep the tree structural rather than animated. egui's animated
-    // collapsing body paints the full child subtree into a temporary clipped
-    // region while its height changes, which produces transient stale outlines
-    // over neighbouring rows in a dense editor tree.
-    ui.horizontal(|ui| {
-        let item_spacing = ui.spacing().item_spacing;
-        ui.spacing_mut().item_spacing.x = 0.0;
-        let _toggle = state.show_toggle_button(ui, egui::collapsing_header::paint_default_icon);
-        ui.spacing_mut().item_spacing = item_spacing;
-        prim_select_label(
-            ui,
-            node,
-            &label,
-            selected,
-            primary,
-            selection_changed,
-            to_select,
-        );
-    });
-    if state.is_open() {
-        ui.indent(id, |ui| {
+        open.then_some(true),
+        |ui| {
+            prim_select_label(
+                ui,
+                node,
+                &label,
+                selected,
+                primary,
+                selection_changed,
+                &mut header_select,
+            )
+        },
+        |ui| {
             for child in &node.children {
                 render_prim_node(
                     ui,
@@ -452,9 +444,11 @@ fn render_prim_node(
                     depth + 1,
                 );
             }
-        });
+        },
+    );
+    if header_select.is_some() {
+        *to_select = header_select;
     }
-    state.store(ui.ctx());
 }
 
 /// The row for one prim: selectable when it has an entity, otherwise a dim inert
@@ -467,7 +461,7 @@ fn prim_select_label(
     primary: Option<Entity>,
     selection_changed: bool,
     to_select: &mut Option<Entity>,
-) {
+) -> bool {
     match node.entity {
         Some(entity) => {
             let hint = if node.type_name.is_empty() {
@@ -492,12 +486,14 @@ fn prim_select_label(
             if resp.clicked() {
                 *to_select = Some(entity);
             }
+            resp.clicked()
         }
         None => {
-            ui.add_sized(
+            let resp = ui.add_sized(
                 [ui.available_width(), ui.spacing().interact_size.y],
                 egui::Label::new(egui::RichText::new(label).weak()),
             );
+            resp.clicked()
         }
     }
 }

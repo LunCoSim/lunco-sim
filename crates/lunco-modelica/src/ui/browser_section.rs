@@ -113,16 +113,22 @@ impl BrowserSection for ModelicaSection {
         for (root_id, root_name) in &library_rows {
             // All libraries start collapsed; user expands the ones
             // they care about. Keeps the browser scannable on startup.
-            let _ = root_id;
             let label = format!("[read-only]  {root_name}");
-            let resp = egui::CollapsingHeader::new(label)
-                .id_salt(("twin.modelica.library", root_id))
-                .default_open(false)
-                .show(ui, |ui| {
+            let id = ui.make_persistent_id(("twin.modelica.library", root_id));
+            lunco_workbench::tree::branch(
+                ui,
+                id,
+                false,
+                query.is_active().then_some(true),
+                |ui| {
+                    ui.add(egui::Label::new(label).sense(egui::Sense::click()))
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .clicked()
+                },
+                |ui| {
                     crate::ui::panels::package_browser::render_root_subtree(ui, ctx, root_id);
-                });
-            resp.header_response
-                .on_hover_cursor(egui::CursorIcon::PointingHand);
+                },
+            );
         }
 
         // ── Writable / untitled workspace documents ──────────────
@@ -489,8 +495,8 @@ fn generated_entry_matches(
 }
 
 /// Inline-rename state for Twin Browser doc rows. `Some((doc, draft))`
-/// → the row for `doc` renders a `TextEdit` instead of a header label;
-/// `None` → all rows show their normal collapsing-header. Committed
+/// → the row for `doc` renders a `TextEdit` instead of a tree label;
+/// `None` → all rows show their normal shared tree branch. Committed
 /// on Enter or focus-loss, cancelled on Escape.
 #[derive(bevy::prelude::Resource, Default, Debug)]
 pub struct DocRenameState {
@@ -504,8 +510,8 @@ pub struct DocRenameState {
     pub needs_focus: bool,
 }
 
-/// Renders one writable / Untitled workspace doc row. The header is a
-/// `CollapsingHeader` by default; double-click the header label
+/// Renders one writable / Untitled workspace doc row. The shared tree branch
+/// owns expansion; double-clicking its label
 /// switches to an inline `TextEdit` whose commit dispatches
 /// `RenameModelicaClass` on the doc's default class (and that
 /// command also updates Untitled origins, so the row label flips
@@ -528,7 +534,7 @@ fn render_workspace_doc_row(
     let update_draft: Option<String> = None;
 
     if let Some((_, draft)) = editing {
-        // Inline edit mode — replaces the CollapsingHeader header
+        // Inline edit mode — replaces the tree label
         // with a TextEdit so the doc's child class tree disappears
         // for the moment (consistent with VS Code rename UX in the
         // file explorer).
@@ -563,10 +569,9 @@ fn render_workspace_doc_row(
             }
         });
     } else {
-        // Manual CollapsingState so the header *label* gets its own
-        // Response — `CollapsingHeader::show` returns a header
-        // response whose click is consumed by the toggle, so
-        // double-click on the bare API never fires reliably.
+        // The shared tree branch gives the label its own Response, so
+        // double-click rename and ordinary expand/collapse remain separate
+        // domain actions.
         let id = ui.make_persistent_id(("twin.modelica.workspace_doc", doc_id.raw()));
         // Icon prefix: 📝 untitled draft, 📄 saved on disk. Read
         // the origin once before the header so we don't re-borrow
@@ -582,10 +587,11 @@ fn render_workspace_doc_row(
                 }
             })
             .unwrap_or("File");
-        lunco_ui::helpers::collapsing_row(
+        lunco_workbench::tree::branch(
             ui,
             id,
             true,
+            None,
             |ui| {
                 let resp = ui
                     .add(
@@ -749,7 +755,7 @@ fn render_workspace_doc_row(
 
 /// Render the class tree of one writable / Untitled workspace
 /// document. Called by the Modelica browser section —
-/// the outer `CollapsingHeader` row carrying this doc's name has
+/// the outer tree branch carrying this doc's name has
 /// already been drawn; we just paint the children inline.
 ///
 /// Source-of-truth read of [`crate::state::ModelicaDocumentRegistry`] via the doc's
@@ -998,22 +1004,21 @@ fn render_class_row(
         Some(doc_id) == active_doc && active_qualified == Some(class.qualified_path.as_str());
 
     if class.children.is_empty() {
-        let resp = ui
-            .horizontal(|ui| {
-                paint_badge(ui, badge, theme);
-                let label = if is_active {
-                    egui::RichText::new(&class.short_name).strong()
-                } else {
-                    egui::RichText::new(&class.short_name)
-                };
-                ui.add(
-                    egui::Label::new(label)
-                        .selectable(false)
-                        .sense(egui::Sense::click()),
-                )
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-            })
-            .inner;
+        let resp = lunco_workbench::tree::leaf(ui, |ui| {
+            paint_badge(ui, badge, theme);
+            let label = if is_active {
+                egui::RichText::new(&class.short_name).strong()
+            } else {
+                egui::RichText::new(&class.short_name)
+            };
+            ui.add(
+                egui::Label::new(label)
+                    .selectable(false)
+                    .sense(egui::Sense::click()),
+            )
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+        })
+        .inner;
         // Explicit highlight band — `selectable_label`'s default
         // selected chrome blends into the panel background under a
         // dark egui theme, leaving the user with no visual cue. We
@@ -1049,30 +1054,41 @@ fn render_class_row(
             });
         }
     } else {
-        let mut header_text = egui::RichText::new(format!("{} {}", badge.letter, class.short_name));
-        if is_active {
-            header_text = header_text.strong();
-        }
-        let header = egui::CollapsingHeader::new(header_text)
-            .id_salt(("modelica_class", &class.qualified_path))
-            .default_open(true);
-        let resp = header.show(ui, |ui| {
-            for child in &class.children {
-                render_class_row(ui, child, doc_id, active_doc, active_qualified, theme, ctx);
-            }
-        });
+        let header_text = format!("{} {}", badge.letter, class.short_name);
         let qualified = class.qualified_path.clone();
         let short = class.short_name.clone();
         let muted = theme.text_muted();
-        let header_resp = resp
-            .header_response
-            .clone()
-            .on_hover_cursor(egui::CursorIcon::PointingHand);
-        header_resp.on_hover_ui(move |ui| {
-            ui.strong(&short);
-            ui.label(egui::RichText::new(&qualified).small().color(muted));
-        });
-        if resp.header_response.clicked() {
+        let id = ui.make_persistent_id(("modelica_class", &class.qualified_path));
+        let mut header_clicked = false;
+        lunco_workbench::tree::branch(
+            ui,
+            id,
+            true,
+            None,
+            |ui| {
+                paint_badge(ui, badge, theme);
+                let label = if is_active {
+                    egui::RichText::new(header_text.as_str()).strong()
+                } else {
+                    egui::RichText::new(header_text.as_str())
+                };
+                let resp = ui
+                    .add(egui::Label::new(label).sense(egui::Sense::click()))
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                header_clicked = resp.clicked();
+                resp.on_hover_ui(|ui| {
+                    ui.strong(&short);
+                    ui.label(egui::RichText::new(&qualified).small().color(muted));
+                });
+                header_clicked
+            },
+            |ui| {
+                for child in &class.children {
+                    render_class_row(ui, child, doc_id, active_doc, active_qualified, theme, ctx);
+                }
+            },
+        );
+        if header_clicked {
             ctx.actions.push(BrowserAction::OpenLoadedClass {
                 doc_id: doc_id.raw(),
                 qualified_path: class.qualified_path.clone(),

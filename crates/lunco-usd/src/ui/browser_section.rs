@@ -171,18 +171,19 @@ impl BrowserSection for UsdSceneSection {
             let viewport_doc = row.doc_id;
             let default_open = row.default_open;
 
-            // `add_header` and `add_body` are both `FnOnce` handed to
-            // `collapsing_row` at once, so they can't share a `&mut`.
+            // `add_header` and `add_body` are both `FnOnce` handed to the
+            // shared tree renderer at once, so they can't share a `&mut`.
             // Each records its own click into a distinct local; combine
             // afterwards.
             let mut header_clicked = false;
             let mut body_clicked = false;
             // Clicking the label both shows the stage in the viewport
             // *and* folds/unfolds the row — same as the triangle.
-            lunco_ui::helpers::collapsing_row(
+            lunco_workbench::tree::branch(
                 ui,
                 header_id,
                 default_open,
+                None,
                 |ui| {
                     let label = format!(
                         "{}{}{}{}",
@@ -407,8 +408,8 @@ fn render_stage_body(
     clicked_prim
 }
 
-/// Recursive prim-tree walker. One `CollapsingHeader` per prim;
-/// children fetched from the authored-layer data.
+/// Recursive prim-tree walker. One shared workbench tree branch per prim;
+/// children are fetched from the authored-layer data.
 ///
 /// Composition is intentionally not part of this authoring browser: it shows
 /// the layer being edited, while runtime projection reads the live canonical
@@ -442,24 +443,25 @@ fn render_prim(
     let header_id = ui.make_persistent_id((salt, path.to_string()));
 
     if children.is_empty() {
-        ui.indent(header_id, |ui| {
-            let resp = ui
-                .add(egui::Label::new(&label).sense(egui::Sense::click()))
-                .on_hover_cursor(egui::CursorIcon::PointingHand);
-            if resp.clicked() {
-                *clicked = true;
-            }
-        });
+        let resp = lunco_workbench::tree::leaf(ui, |ui| {
+            ui.add(egui::Label::new(&label).sense(egui::Sense::click()))
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+        })
+        .inner;
+        if resp.clicked() {
+            *clicked = true;
+        }
     } else {
         // Clicking the label both focuses the prim in the viewport
         // *and* folds/unfolds the row — same as clicking the triangle.
         // The click flag goes through a local so the header closure
         // doesn't fight the body closure over `clicked`.
         let mut row_clicked = false;
-        lunco_ui::helpers::collapsing_row(
+        lunco_workbench::tree::branch(
             ui,
             header_id,
             false,
+            None,
             |ui| {
                 let resp = ui
                     .add(egui::Label::new(&label).sense(egui::Sense::click()))

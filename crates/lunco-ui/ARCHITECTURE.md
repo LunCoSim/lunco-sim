@@ -4,6 +4,11 @@
 
 `lunco-ui` provides **reusable mechanisms** that domain crates use to build panels. It does **not** contain panel implementations — those live in `src/ui/` of each domain crate.
 
+Hierarchy-row presentation is owned by `lunco-workbench::tree`, not by this
+widget crate. Domain panels use that shared `branch`/`leaf` contract for
+disclosure controls, row width, expansion state, and indentation while keeping
+their view-model reads and typed actions local.
+
 ## What lunco-ui Provides
 
 > The workbench panel boundary is the in-house `lunco-workbench` `Panel` trait
@@ -111,6 +116,7 @@ time_series_plot(ui, "modelica_plot", &series);
 |-----------|-----------------|
 | Docking (`lunco-workbench`) | Drag/drop panels, tabs, resize, undo — works out of the box |
 | Themes (`lunco-workbench`) | Rerun Dark / Catppuccin — scientific dashboards look good immediately |
+| Hierarchy rows (`lunco-workbench::tree`) | Shared branch/leaf presentation for domain-owned trees |
 | Widget caching (`WidgetSystem`) | O(1) ECS queries for 1,000s of graph/diagram widgets |
 | UI→State (Typed Commands) | All UI actions are observable, replayable, and AI-compatible |
 
@@ -297,7 +303,6 @@ crates/lunco-ui/
     ├── lib.rs               # LuncoUiPlugin + theme
     ├── widget.rs            # WidgetSystem + WidgetId + caching
     ├── context.rs           # UiSelection
-    ├── helpers.rs           # collapsing tree row helpers
     ├── components.rs        # WorldPanel + Label3D
     ├── mission_control.rs   # mission-control panel widget
     ├── telemetry.rs         # telemetry panel widget
