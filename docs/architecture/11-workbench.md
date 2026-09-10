@@ -616,7 +616,9 @@ three converge on the same persisted resource.
 LunCoSim's Settings ▸ HUD submenu is the discoverable view for the shipped
 visibility controls. It edits the existing `OverlaySettings`, `PerfHudSettings`,
 and `InputOverlaySettings` resources and the active Twin's generic
-`ui.camera_status` value; it does not add a parallel visibility map. HUDs whose
+`ui.camera_status` value. It also removes the `celestial-view` entry from the
+existing `RuntimeSurfaceLayouts` resource when the user requests a position
+reset; it does not add a parallel visibility or layout store. HUDs whose
 visibility is inherently automatic — driven-vessel/rover, authored lander
 controls, terrain or download progress, tutorials, notifications, and blackout
 state — are listed with their owner but remain lifecycle-controlled.

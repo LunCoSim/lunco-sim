@@ -17,7 +17,9 @@
 use bevy::prelude::*;
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use lunco_twin::TwinSettingValue;
-use lunco_workbench::{input_overlay::InputOverlaySettings, perf_hud::PerfHudSettings, MenuCtx};
+use lunco_workbench::{
+    input_overlay::InputOverlaySettings, perf_hud::PerfHudSettings, MenuCtx, RuntimeSurfaceLayouts,
+};
 use lunco_workspace::{ResetTwinSetting, SetTwinSetting, TwinSettingInput, WorkspaceResource};
 use serde::{Deserialize, Serialize};
 
@@ -110,6 +112,7 @@ pub(crate) fn camera_menu_ui(ui: &mut bevy_egui::egui::Ui, ctx: &mut lunco_workb
 
 const CAMERA_STATUS_SETTING: &str = "ui.camera_status";
 const CAMERA_STATUS_DEFAULT: bool = true;
+const CELESTIAL_VIEW_SURFACE_ID: &str = "celestial-view";
 
 /// Read a boolean project setting through the active Twin that owns it.
 ///
@@ -226,6 +229,34 @@ fn register_hud_settings_menu(world: &mut World) {
         if overlays != original_overlays {
             ctx.set_resource(overlays);
         }
+
+        let Some(mut surface_layouts) = ctx.resource::<RuntimeSurfaceLayouts>().cloned() else {
+            return;
+        };
+        let has_surface_override = surface_layouts.get(CELESTIAL_VIEW_SURFACE_ID).is_some();
+        let mut reset_surface_position = false;
+        ui.horizontal(|ui| {
+            ui.label("Surface view switcher position");
+            if ui
+                .add_enabled(has_surface_override, egui::Button::new("Reset position"))
+                .on_hover_text("Restore the authored top-centre position for this Twin.")
+                .clicked()
+            {
+                reset_surface_position = surface_layouts.reset(CELESTIAL_VIEW_SURFACE_ID);
+            }
+        });
+        if reset_surface_position {
+            ctx.set_resource(surface_layouts);
+        }
+        ui.label(
+            egui::RichText::new(if has_surface_override {
+                "Custom position"
+            } else {
+                "Authored default: top-centre"
+            })
+            .weak()
+            .small(),
+        );
 
         let Some(mut performance) = ctx.resource::<PerfHudSettings>().copied() else {
             return;

@@ -69,9 +69,11 @@ complete lunar surface pose, the exposure deliberately hides the marker and
 reports the authored no-fix state.
 
 The view switcher keeps its button card in the root's normal vertical flow and
-anchors the map below it. The map is absolutely positioned inside the fixed
+anchors the map below it. The map is absolutely positioned inside the movable
 surface rectangle, so centering both children would let the later map panel
-paint over the switcher controls.
+paint over the switcher controls. Its authored default is top-centre; users can
+drag the window and use Settings ▸ HUD ▸ Reset position to remove the per-Twin
+override.
 
 ## Performance and placement
 

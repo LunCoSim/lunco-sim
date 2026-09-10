@@ -111,7 +111,7 @@ The fields are:
 | `setting` | Optional namespaced boolean in the active Twin's `[settings]` table. The surface is hidden when the value is false. |
 | `setting_default` | Value used when `setting` is absent, including when no Twin is active. This is authored per surface; Rust has no per-setting field. |
 | `interactive` | Enables input ownership for authored controls carrying HUI `on_press`; only those controls' computed Bevy UI rectangles enter the existing chrome/scene pick gate. The surface root and a `viewport` placement never claim the full window. |
-| `draggable` | Allows a `window` surface root to move with primary-button dragging. The user position is clamped to the live logical target, keyed by stable `id`, and reset to the authored anchor with a primary-button double click. `viewport` and `dock_panel` roots cannot opt in. Fixed controls such as the shipped `view-mode` switcher leave this false so their authored anchor remains stable across reloads. |
+| `draggable` | Allows a `window` surface root to move with primary-button dragging. The user position is clamped to the live logical target, keyed by stable `id`, and reset to the authored anchor with a primary-button double click. `viewport` and `dock_panel` roots cannot opt in. The shipped `celestial-view` switcher opts in and also has a surface-specific reset in Settings ▸ HUD. |
 | `placement` | The outer rectangle and its relationship to the workbench. |
 
 The manifest loader rejects unknown fields, duplicate surface IDs/namespaces or
@@ -127,7 +127,9 @@ Twin closes. This keeps runtime layout preferences per-Twin without adding a
 second UI persistence store. A double click restores the authored anchor and
 removes the override. Dragging uses Bevy picking events on the retained HUI
 tree and the existing pointer propagation path; it does not add a parallel
-egui hit-test or per-frame correction loop.
+egui hit-test or per-frame correction loop. The shipped `celestial-view` surface
+uses a top-centre authored default; Settings ▸ HUD removes only its override,
+leaving the shared layout store and other draggable surfaces unchanged.
 
 ### Twin settings and camera policy
 

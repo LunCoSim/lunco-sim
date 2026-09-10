@@ -1875,17 +1875,17 @@ mod tests {
                 width,
                 height,
             } => {
-                assert_eq!(*anchor, RuntimeUiWindowAnchor::TopRight);
-                assert_eq!(*offset, [-12.0, 34.0]);
+                assert_eq!(*anchor, RuntimeUiWindowAnchor::TopCenter);
+                assert_eq!(*offset, [0.0, 34.0]);
                 assert_eq!(*width, 444.0);
                 assert_eq!(*height, 276.0);
             }
-            _ => panic!("celestial-view must keep its authored top-right window placement"),
+            _ => panic!("celestial-view must use an authored top-center window placement"),
         }
     }
 
     #[test]
-    fn shipped_view_switcher_keeps_its_authored_top_right_anchor() {
+    fn shipped_view_switcher_is_draggable_from_its_authored_top_center_anchor() {
         let manifest: RuntimeUiManifest =
             serde_json::from_str(include_str!("../../../../assets/ui/runtime_surfaces.json"))
                 .expect("shipped runtime UI manifest should parse");
@@ -1895,7 +1895,7 @@ mod tests {
             .find(|surface| surface.id == "celestial-view")
             .expect("shipped manifest should author the celestial-view surface");
 
-        assert!(!surface.draggable);
+        assert!(surface.draggable);
         match &surface.placement {
             RuntimeUiPlacementDefinition::Window {
                 anchor,
@@ -1903,17 +1903,17 @@ mod tests {
                 width,
                 height,
             } => {
-                assert_eq!(*anchor, RuntimeUiWindowAnchor::TopRight);
-                assert_eq!(*offset, [-12.0, 34.0]);
+                assert_eq!(*anchor, RuntimeUiWindowAnchor::TopCenter);
+                assert_eq!(*offset, [0.0, 34.0]);
                 assert_eq!(*width, 444.0);
                 assert_eq!(*height, 276.0);
             }
-            _ => panic!("view-mode must use a window placement"),
+            _ => panic!("view-mode must use a top-center window placement"),
         }
     }
 
     #[test]
-    fn fixed_view_switcher_ignores_a_persisted_layout_override() {
+    fn draggable_view_switcher_uses_a_persisted_layout_override() {
         let manifest: RuntimeUiManifest =
             serde_json::from_str(include_str!("../../../../assets/ui/runtime_surfaces.json"))
                 .expect("shipped runtime UI manifest should parse");
@@ -1928,19 +1928,27 @@ mod tests {
         layouts.set(
             "celestial-view",
             RuntimeSurfaceLayout {
-                left: 7_000.0,
-                top: 6_000.0,
+                left: 120.0,
+                top: 72.0,
             },
         );
 
         let placement =
             resolve_surface_placement(&surface, &layouts, None, None, Some(&Window::default()))
-                .expect("fixed view switcher placement should resolve");
-        let window = Window::default();
-        let expected_left = window.width() - 444.0 - 12.0;
+                .expect("draggable view switcher placement should resolve");
 
-        assert_eq!(placement.rect.min.x, expected_left);
-        assert_eq!(placement.rect.min.y, 34.0);
+        assert_eq!(placement.rect.min.x, 120.0);
+        assert_eq!(placement.rect.min.y, 72.0);
+
+        assert!(layouts.reset("celestial-view"));
+        let reset_placement =
+            resolve_surface_placement(&surface, &layouts, None, None, Some(&Window::default()))
+                .expect("reset view switcher placement should resolve");
+        assert_eq!(
+            reset_placement.rect.min.x,
+            (Window::default().width() - 444.0) * 0.5
+        );
+        assert_eq!(reset_placement.rect.min.y, 34.0);
     }
 
     #[test]
