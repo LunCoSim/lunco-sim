@@ -83,6 +83,12 @@ When a camera, body, rover, trajectory, or line jitters:
    A one-shot raycast support placement uses Avian's exact collider geometry
    before the paused broad-phase schedule has built its acceleration tree; the
    normal spatial-query path remains the reader for all steady-state probes.
+   Also verify the shared `lunco-physics::avian_backend` admission contract:
+   changed f64 poses and collider AABBs must remain finite, ordered, and
+   representable at Avian's f32 OBVHS boundary. The bridge owns lifecycle
+   admission and raises `RuntimeFaults`, gating every nested physics phase
+   before Avian's AABB growth or spatial query; USD projection reuses the same
+   contract and rejects invalid mesh/compound candidates before ECS insertion.
 10. For site lighting and solar poses, verify there is no more than one
    `SiteAnchor`; ambiguous authoring must produce a diagnostic and no selected
    site frame.

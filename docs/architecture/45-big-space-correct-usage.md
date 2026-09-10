@@ -189,6 +189,23 @@ mounting, bodies below it are reseeded from their new site-local hierarchy;
 only their velocity vectors are rotated into the new axes. A normal active-frame
 switch without frame reparenting transports the complete existing physics pose.
 
+The shared backend admission contract lives in `lunco-physics::avian_backend`.
+In this f64-physics build Avian's OBVHS spatial-query and collider-tree
+boundaries narrow points and AABBs to f32, so finite f64 values outside that
+range are not valid backend state. The BigSpace bridge owns lifecycle admission:
+before a physics step it validates changed body poses, effective child-collider
+poses/scales, tight AABBs, and the exact grown bounds used by Avian. An invalid
+value raises the scene-scoped `RuntimeFaults` record and
+`PhysicsHolds::SAFETY_FAILURE`; every nested physics phase is gated for that
+same invocation. `GridSpatialQuery` reuses the point contract after every frame
+conversion. USD mesh and compound-collider projection uses fallible geometry
+construction, reuses the shape/AABB contract, and rejects composite children
+before Avian's flat `Compound` constructor or collider insertion observer can
+see them. These are admission boundaries, not per-query workarounds or
+lint-only warnings. During scene replacement, the existing `SceneMountState`
+and runtime-fault gates also prevent outgoing entities from producing new ray
+observations.
+
 The local avatar is a kinematic camera embodiment, not an authored rigid body.
 Its keyboard and wheel movement uses Avian's `MoveAndSlide` with one capsule
 shape against the standard colliders projected from the composed USD stage.

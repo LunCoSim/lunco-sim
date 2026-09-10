@@ -93,6 +93,9 @@ pub enum PhysicsBridgeSystems {
     /// active frame. This runs after READ has transported the body state and
     /// before Avian prepares or solves constraints.
     FrameReset,
+    /// VALIDATE: inspect Avian's post-prepare poses, scaled shapes, and AABBs
+    /// before its broad phase can update the collider tree.
+    Validate,
     /// WRITEBACK: solved `Position`/`Rotation` → `Transform`.
     Writeback,
 }
@@ -135,8 +138,31 @@ fn physics_frame_contract_is_valid(
         })
 }
 
-fn physics_frame_contract_ready(status: Option<Res<PhysicsFrameContractStatus>>) -> bool {
-    status.is_some_and(|status| status.ready)
+fn physics_frame_contract_ready(
+    status: Option<Res<PhysicsFrameContractStatus>>,
+    faults: Option<Res<lunco_core::RuntimeFaults>>,
+) -> bool {
+    status.is_some_and(|status| status.ready) && !faults.is_some_and(|faults| faults.active())
+}
+
+fn physics_backend_state_ready(faults: Option<Res<lunco_core::RuntimeFaults>>) -> bool {
+    !faults.is_some_and(|faults| faults.active())
+}
+
+fn physics_subject(
+    entity: Entity,
+    name: Option<&Name>,
+    prim_path: Option<&crate::UsdPrimPath>,
+) -> String {
+    if let Some(prim_path) = prim_path {
+        return format!(
+            "{} [stage={:?}]",
+            prim_path.path,
+            prim_path.stage_handle.id()
+        );
+    }
+    name.map(ToString::to_string)
+        .unwrap_or_else(|| format!("entity:{entity:?}"))
 }
 
 /// Return whether a topology or frame-boundary input changed since the last
@@ -308,6 +334,32 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
             FixedPostUpdate,
             PhysicsSystems::StepSimulation.run_if(physics_frame_contract_ready),
         );
+        // If validation raises a terminal fault, every later nested simulation
+        // phase must be skipped in the same invocation; pausing Time<Physics>
+        // alone only protects the next invocation.
+        app.configure_sets(
+            PhysicsSchedule,
+            (
+                PhysicsStepSystems::First,
+                PhysicsStepSystems::BroadPhase,
+                PhysicsStepSystems::NarrowPhase,
+                PhysicsStepSystems::Solver,
+                PhysicsStepSystems::Sleeping,
+                PhysicsStepSystems::Finalize,
+                PhysicsStepSystems::Last,
+            )
+                .run_if(physics_backend_state_ready),
+        );
+        // The escape diagnostic owns Avian's Writeback set. Keep the bridge's
+        // Transform writer in its own ordered set after that diagnostic: both
+        // publish the same scene-scoped fault/hold resources, and leaving them
+        // as peer systems makes schedule initialization ambiguous.
+        app.configure_sets(
+            PhysicsSchedule,
+            PhysicsBridgeSystems::Writeback
+                .after(PhysicsSystems::Writeback)
+                .before(PhysicsSystems::Last),
+        );
         // Every body (and standalone collider) carries the bridge's shadow
         // copy from spawn; the NaN sentinel makes the first READ always fire,
         // which is also what initialises `Position` (avian's own spawn init
@@ -373,10 +425,17 @@ impl Plugin for BigSpacePhysicsBridgePlugin {
         );
         app.add_systems(
             PhysicsSchedule,
+            validate_physics_backend_state
+                .run_if(physics_backend_state_ready)
+                .in_set(PhysicsBridgeSystems::Validate)
+                .after(PhysicsStepSystems::First)
+                .before(PhysicsStepSystems::BroadPhase),
+        );
+        app.add_systems(
+            PhysicsSchedule,
             position_to_pose
                 .run_if(physics_frame_contract_ready)
                 .in_set(PhysicsBridgeSystems::Writeback)
-                .in_set(PhysicsSystems::Writeback)
                 .after(PhysicsStepSystems::Last)
                 .after(PhysicsTransformSystems::PositionToTransform)
                 .before(PhysicsSystems::Last),
@@ -653,6 +712,181 @@ fn seeded_pose_in_active_frame(
     }
 }
 
+/// Validate the state that Avian's collider tree and spatial-query backend
+/// will consume before either backend phase runs.
+///
+/// Avian's public physics coordinates are `f64` in this build, while OBVHS
+/// stores query/AABB coordinates as `f32`. The solver can therefore produce a
+/// finite value that is still not representable by the backend. The collider
+/// tree also grows its AABB with a debug assertion, so its tight and grown
+/// bounds are checked without calling the asserting `grow` helper first.
+#[allow(clippy::type_complexity)]
+fn validate_physics_backend_state(
+    q_bodies: Query<(Entity, Ref<Position>, Ref<Rotation>), With<RigidBody>>,
+    q_colliders: Query<
+        (
+            Entity,
+            Ref<Position>,
+            Ref<Rotation>,
+            Ref<Collider>,
+            Option<Ref<CollisionMargin>>,
+            Option<Ref<ColliderOf>>,
+            Option<Ref<ColliderTransform>>,
+            Option<&Name>,
+            Option<&crate::UsdPrimPath>,
+        ),
+        Without<ColliderDisabled>,
+    >,
+    narrow_phase_config: Res<NarrowPhaseConfig>,
+    length_unit: Res<PhysicsLengthUnit>,
+    mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
+    mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
+) {
+    let mut changed_bodies = EntityHashSet::default();
+    for (entity, position, rotation) in &q_bodies {
+        if position.is_changed() || rotation.is_changed() {
+            changed_bodies.insert(entity);
+        }
+        if !position.is_changed() && !rotation.is_changed() {
+            continue;
+        }
+        if !lunco_physics::avian_backend_pose_is_valid(position.0, rotation.0) {
+            crate::raise_physics_runtime_fault(
+                faults.as_deref_mut(),
+                holds.as_deref_mut(),
+                entity,
+                format!("entity:{entity:?}"),
+                "avian-backend-pose-invalid",
+                format!(
+                    "body pose is not finite and f32-representable: position={:?}, rotation={:?}",
+                    position.0, rotation.0
+                ),
+            );
+        }
+    }
+
+    let config_changed = narrow_phase_config.is_changed() || length_unit.is_changed();
+    let contact_tolerance = length_unit.0 * narrow_phase_config.contact_tolerance;
+    let enlarged_aabb_margin = length_unit.0 * 0.05;
+
+    for (
+        entity,
+        position,
+        rotation,
+        collider,
+        collision_margin,
+        collider_of,
+        collider_transform,
+        name,
+        prim_path,
+    ) in &q_colliders
+    {
+        let body_changed = collider_of
+            .as_ref()
+            .is_some_and(|collider_of| changed_bodies.contains(&collider_of.body));
+        let collider_changed = config_changed
+            || position.is_changed()
+            || rotation.is_changed()
+            || collider.is_changed()
+            || collision_margin
+                .as_ref()
+                .is_some_and(|margin| margin.is_changed())
+            || collider_of
+                .as_ref()
+                .is_some_and(|collider_of| collider_of.is_changed())
+            || collider_transform.is_some_and(|transform| transform.is_changed())
+            || body_changed;
+        if !collider_changed {
+            continue;
+        }
+
+        let (effective_position, effective_rotation, scale) =
+            if let Some(collider_of) = collider_of.as_ref() {
+                let Some((body_position, body_rotation)) = q_bodies
+                    .get(collider_of.body)
+                    .ok()
+                    .map(|(_, position, rotation)| (position, rotation))
+                else {
+                    crate::raise_physics_runtime_fault(
+                        faults.as_deref_mut(),
+                        holds.as_deref_mut(),
+                        entity,
+                        physics_subject(entity, name, prim_path),
+                        "avian-collider-topology-invalid",
+                        format!(
+                            "collider points to missing rigid body {:?}",
+                            collider_of.body
+                        ),
+                    );
+                    continue;
+                };
+                let Some(collider_transform) = collider_transform else {
+                    crate::raise_physics_runtime_fault(
+                        faults.as_deref_mut(),
+                        holds.as_deref_mut(),
+                        entity,
+                        physics_subject(entity, name, prim_path),
+                        "avian-collider-topology-invalid",
+                        "body-attached collider has no ColliderTransform".to_string(),
+                    );
+                    continue;
+                };
+                (
+                    body_position.0 + body_rotation.0 * collider_transform.translation,
+                    body_rotation.0 * collider_transform.rotation.0,
+                    collider_transform.scale,
+                )
+            } else {
+                (position.0, rotation.0, collider.scale())
+            };
+
+        let tight_aabb =
+            if !lunco_physics::avian_backend_pose_is_valid(effective_position, effective_rotation)
+                || !lunco_physics::avian_backend_vector_is_valid(scale)
+            {
+                None
+            } else {
+                Some(collider.aabb(effective_position, effective_rotation))
+            };
+        let collision_margin = collision_margin.map_or(0.0, |margin| margin.0);
+        let growth = contact_tolerance + collision_margin;
+        let total_growth = growth + enlarged_aabb_margin;
+        let bounds_valid = tight_aabb.is_some_and(|aabb| {
+            growth.is_finite()
+                && total_growth.is_finite()
+                && lunco_physics::avian_backend_aabb_is_valid(
+                    aabb.min - DVec3::splat(growth),
+                    aabb.max + DVec3::splat(growth),
+                )
+                && lunco_physics::avian_backend_aabb_is_valid(
+                    aabb.min - DVec3::splat(total_growth),
+                    aabb.max + DVec3::splat(total_growth),
+                )
+        });
+        if bounds_valid {
+            continue;
+        }
+
+        let detail = match tight_aabb {
+            Some(aabb) => format!(
+                "collider bounds are not finite, ordered, or f32-representable: position={effective_position:?}, rotation={effective_rotation:?}, scale={scale:?}, tight_min={:?}, tight_max={:?}, growth={growth:?}",
+                aabb.min, aabb.max
+            ),
+            None => format!(
+                "collider pose or scale is not finite and f32-representable: position={effective_position:?}, rotation={effective_rotation:?}, scale={scale:?}"
+            ),
+        };
+        crate::raise_physics_runtime_fault(
+            faults.as_deref_mut(),
+            holds.as_deref_mut(),
+            entity,
+            physics_subject(entity, name, prim_path),
+            "avian-collider-aabb-invalid",
+            detail,
+        );
+    }
+}
+
 /// READ: externally-moved `(cell, Transform)` → f64 `Position`/`Rotation`,
 /// carrying the change to descendant bodies (chassis teleport moves wheels).
 ///
@@ -718,6 +952,9 @@ fn pose_to_position(
             BridgeSynced,
         >,
     )>,
+    q_metadata: Query<(Option<&Name>, Option<&crate::UsdPrimPath>)>,
+    mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
+    mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
 ) {
     let active_frame = active_frame.0;
     if q_grids.get(active_frame).is_err() {
@@ -885,6 +1122,21 @@ fn pose_to_position(
             &q_grids,
             &q_spatial,
         );
+        if !lunco_physics::avian_backend_pose_is_valid(p.0, r.0) {
+            let (name, prim_path) = q_metadata.get(e).unwrap_or((None, None));
+            crate::raise_physics_runtime_fault(
+                faults.as_deref_mut(),
+                holds.as_deref_mut(),
+                e,
+                physics_subject(e, name, prim_path),
+                "avian-backend-pose-invalid",
+                format!(
+                    "authored pose is not finite and f32-representable: position={:?}, rotation={:?}",
+                    p.0, r.0
+                ),
+            );
+            continue;
+        }
         pos.0 = p.0;
         rot.0 = r.0;
         shadow.capture(cell, tf, active_frame);
@@ -1025,6 +1277,9 @@ fn position_to_pose(
         &RigidBody,
         Option<&lunco_core::PhysicsPoseAuthoritative>,
     )>,
+    q_metadata: Query<(Option<&Name>, Option<&crate::UsdPrimPath>)>,
+    mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
+    mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
     // PERSISTENT across ticks, not just scratch: entries for bodies the solver
     // did not touch this tick (sleeping, settled statics, idle kinematics) are
     // carried over from the last tick rather than rebuilt — their `Position`
@@ -1072,6 +1327,21 @@ fn position_to_pose(
         // (Transform stuck at spawn) — visible only on a networked client, where
         // kinematic bodies exist.
         if matches!(rb, RigidBody::Static) {
+            continue;
+        }
+        if !lunco_physics::avian_backend_pose_is_valid(pos.0, rot.0) {
+            let (name, prim_path) = q_metadata.get(e).unwrap_or((None, None));
+            crate::raise_physics_runtime_fault(
+                faults.as_deref_mut(),
+                holds.as_deref_mut(),
+                e,
+                physics_subject(e, name, prim_path),
+                "avian-backend-pose-invalid",
+                format!(
+                    "solved pose is not finite and f32-representable: position={:?}, rotation={:?}",
+                    pos.0, rot.0
+                ),
+            );
             continue;
         }
 

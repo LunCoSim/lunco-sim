@@ -17,6 +17,15 @@ representation:
 | Mission phases, events, policy, objectives | Rhai or behaviour trees | Task/event orchestration in production; `on_tick` is test-only for sampled verdicts |
 | Engine mechanisms, projection, scheduling, hot paths | Rust | Generic implementation; no vehicle- or sensor-name special cases |
 
+For Avian-backed physics, keep one numeric admission contract at
+`lunco-physics::avian_backend`. The BigSpace bridge owns lifecycle admission of
+f64 poses and collider AABBs before the Avian step, `GridSpatialQuery` reuses
+the converted-ray predicate, and USD projection reuses shape/AABB and leaf
+structure predicates before ECS insertion. A failed live invariant raises the
+shared scene-scoped runtime fault and gates the remaining nested physics
+phases. Do not turn these checks into per-call query fallbacks or lint-only
+warnings.
+
 ### Rhai task callback contract
 
 Task leaves use one callback form: an anonymous closure `|me| ...`. `me` is the

@@ -35,7 +35,7 @@
 use avian3d::dynamics::joints::EntityConstraint;
 use avian3d::dynamics::solver::{
     solver_body::{SolverBody, SolverBodyInertia},
-    xpbd::{XpbdConstraint, joints::PrismaticJointSolverData},
+    xpbd::{joints::PrismaticJointSolverData, XpbdConstraint},
 };
 use avian3d::prelude::{
     AngularVelocity, ComputedCenterOfMass, ContactGraph, CustomPositionIntegration, JointDisabled,
@@ -48,11 +48,18 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use std::time::Duration;
 
+pub mod avian_backend;
 pub mod escape;
 pub mod pose;
 pub mod readiness;
 pub mod spatial;
 pub mod support;
+pub use avian_backend::{
+    avian_backend_aabb_is_valid, avian_backend_collider_is_leaf,
+    avian_backend_collider_shape_is_valid, avian_backend_collider_shape_kind,
+    avian_backend_point_is_valid, avian_backend_pose_is_valid, avian_backend_rotation_is_valid,
+    avian_backend_vector_is_valid,
+};
 pub use escape::{EscapeDiagnosticPlugin, WorldBounds};
 pub use pose::{PhysicsPoseSeeded, SimulationPoseQuery, SimulationPoseReadState};
 pub use readiness::{Integrable, ReadinessEffectPlugin};
@@ -1221,13 +1228,13 @@ fn validate_surface_independent_initialization(
             .map(|subject| subject.0.as_str())
             .unwrap_or("<unidentified physics body>");
         let policy = policy.cloned().unwrap_or_default();
-        if !position.0.is_finite() || !rotation.0.is_finite() {
+        if !avian_backend::avian_backend_pose_is_valid(position.0, rotation.0) {
             findings.push(lunco_core::RuntimeDiagnostic {
-                code: "physics-initialization-non-finite".to_string(),
+                code: "physics-initialization-backend-invalid".to_string(),
                 severity: lunco_core::DiagnosticSeverity::Error,
                 producer: "physics-initialization".to_string(),
                 subject: subject.to_string(),
-                message: "authored initial position or rotation is non-finite; dynamic admission remains held".to_string(),
+                message: "authored initial position or rotation is not finite and f32-representable; dynamic admission remains held".to_string(),
             });
             continue;
         }
@@ -1304,8 +1311,7 @@ impl Plugin for PhysicsGatePlugin {
             .init_resource::<lunco_core::RuntimeDiagnostics>()
             .add_systems(
                 Update,
-                validate_surface_independent_initialization
-                    .in_set(PhysicsSupportSet::Consume),
+                validate_surface_independent_initialization.in_set(PhysicsSupportSet::Consume),
             )
             .add_systems(PreUpdate, apply_physics_holds)
             .add_systems(lunco_core::SceneTeardown, reset_scene_physics_state)
@@ -1424,11 +1430,11 @@ mod tests {
         assert_eq!(
             app.world().resource::<lunco_core::RuntimeDiagnostics>().findings,
             vec![lunco_core::RuntimeDiagnostic {
-                code: "physics-initialization-non-finite".into(),
+                code: "physics-initialization-backend-invalid".into(),
                 severity: lunco_core::DiagnosticSeverity::Error,
                 producer: "physics-initialization".into(),
                 subject: "<unidentified physics body>".into(),
-                message: "authored initial position or rotation is non-finite; dynamic admission remains held".into(),
+                message: "authored initial position or rotation is not finite and f32-representable; dynamic admission remains held".into(),
             }]
         );
     }
@@ -1477,17 +1483,15 @@ mod tests {
         assert!((snapshot.dynamic - 0.8).abs() < 1e-6);
         assert!((snapshot.static_coefficient - 1.0).abs() < 1e-6);
 
-        assert!(
-            set_contact_friction(
-                &mut world,
-                entity,
-                ContactFrictionParameters {
-                    dynamic: -0.1,
-                    static_coefficient: 1.0,
-                },
-            )
-            .is_err()
-        );
+        assert!(set_contact_friction(
+            &mut world,
+            entity,
+            ContactFrictionParameters {
+                dynamic: -0.1,
+                static_coefficient: 1.0,
+            },
+        )
+        .is_err());
         assert_eq!(contact_friction_snapshot(&world, entity), Some(snapshot));
     }
 
@@ -1525,17 +1529,15 @@ mod tests {
                 angular: 4.0,
             })
         );
-        assert!(
-            set_joint_damping(
-                &mut world,
-                joint,
-                JointDampingParameters {
-                    linear: -0.1,
-                    angular: 1.0,
-                },
-            )
-            .is_err()
-        );
+        assert!(set_joint_damping(
+            &mut world,
+            joint,
+            JointDampingParameters {
+                linear: -0.1,
+                angular: 1.0,
+            },
+        )
+        .is_err());
     }
 
     #[test]

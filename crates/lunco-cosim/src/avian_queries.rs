@@ -168,11 +168,22 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
 pub fn sample_raycast_observations(
     grid: lunco_physics::GridSpatialQuery,
     time: Res<Time<Physics>>,
+    faults: Option<Res<lunco_core::RuntimeFaults>>,
+    mount_state: Option<Res<lunco_core::SceneMountState>>,
     parents: Query<&ChildOf>,
     transforms: Query<&Transform>,
     bodies: Query<(&Position, &Rotation), With<RigidBody>>,
     mut observations: Query<(Entity, &mut RaycastObservation)>,
 ) {
+    // A replacement clears the active root before deferred teardown. Do not
+    // sample entities from that outgoing hierarchy, and do not query after a
+    // terminal physics fault: both would turn the first owner-level failure
+    // into a downstream ray-query failure.
+    if faults.is_some_and(|faults| faults.active())
+        || mount_state.is_some_and(|mount| mount.active_root().is_none())
+    {
+        return;
+    }
     for (entity, mut observation) in &mut observations {
         let mut cursor = entity;
         let mut mount = Transform::IDENTITY;
