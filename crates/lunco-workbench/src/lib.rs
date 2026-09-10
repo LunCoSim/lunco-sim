@@ -5403,7 +5403,8 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
                                             .small()
                                             .strong()
                                             .color(theme.tokens.error),
-                                    ),
+                                    )
+                                    .truncate(),
                                 )
                                 .on_hover_text(&l.message)
                                 .clicked();
@@ -5925,7 +5926,7 @@ fn settings_submenu_max_width(content_width: f32) -> f32 {
 }
 
 const STATUS_BAR_MIN_SCOPE_WIDTH: f32 = 160.0;
-const STATUS_BAR_NOTIFICATION_MAX_WIDTH: f32 = 420.0;
+const STATUS_BAR_NOTIFICATION_MAX_WIDTH: f32 = 320.0;
 const STATUS_BAR_SEPARATOR_RESERVE: f32 = 12.0;
 const STATUS_BAR_BASE_OVERHEAD: f32 = 16.0;
 const STATUS_BAR_TUTORIAL_MAX_WIDTH: f32 = 190.0;
@@ -7116,7 +7117,8 @@ mod tests {
             status_bar_notification_width(1600.0, 120.0),
             STATUS_BAR_NOTIFICATION_MAX_WIDTH
         );
-        assert_eq!(status_bar_notification_width(520.0, 120.0), 400.0);
+        assert_eq!(status_bar_notification_width(520.0, 120.0), 320.0);
+        assert_eq!(status_bar_notification_width(400.0, 120.0), 280.0);
         assert_eq!(status_bar_notification_width(120.0, 160.0), 1.0);
     }
 
