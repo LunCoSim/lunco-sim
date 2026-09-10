@@ -65,6 +65,7 @@ use std::sync::Arc;
 
 pub mod icons;
 pub use icons::{icon_button, icon_button_sized, icon_text_button, paint_icon, UiIcon};
+pub mod tree;
 
 mod editor_tabs;
 mod menu;

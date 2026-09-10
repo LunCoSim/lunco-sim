@@ -41,8 +41,6 @@ pub mod theme {
     pub use lunco_theme::*;
 }
 
-pub mod helpers;
-
 pub mod diagrams;
 pub use diagrams::*;
 

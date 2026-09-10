@@ -487,7 +487,8 @@ pub trait BrowserSection: Send + Sync + 'static {
 // ─────────────────────────────────────────────────────────────────────
 
 /// The Twin Browser singleton panel. Renders every section in the
-/// registry inside its own `egui::CollapsingHeader`.
+/// registry inside its own collapsing section. Hierarchy rows inside sections
+/// use [`crate::tree`] so every browser has the same disclosure and row layout.
 #[derive(Default)]
 pub struct TwinBrowserPanel;
 

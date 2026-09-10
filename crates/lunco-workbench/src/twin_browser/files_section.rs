@@ -480,7 +480,10 @@ impl BrowserSection for FilesSection {
             self.rename_doc = None;
             let new_name = new_name.trim().to_string();
             if !new_name.is_empty() {
-                ctx.trigger(super::super::file_ops::RenameOpenDocument { doc_id: doc, new_name });
+                ctx.trigger(super::super::file_ops::RenameOpenDocument {
+                    doc_id: doc,
+                    new_name,
+                });
             }
         }
         if doc_cancel {
@@ -596,10 +599,19 @@ impl BrowserSection for FilesSection {
             let hover_path = twin.root.to_string_lossy().into_owned();
             let salt = twin.root.to_string_lossy().into_owned();
             let twin_root = twin.root.clone();
-            let resp = egui::CollapsingHeader::new(header_label)
-                .id_salt(("twin_browser_folder", salt.clone()))
-                .default_open(true)
-                .show(ui, |ui| {
+            let id = ui.make_persistent_id(("twin_browser_folder", salt.clone()));
+            crate::tree::branch(
+                ui,
+                id,
+                true,
+                None,
+                |ui| {
+                    ui.add(egui::Label::new(header_label).sense(egui::Sense::click()))
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .on_hover_text(hover_path.as_str())
+                        .clicked()
+                },
+                |ui| {
                     let files: Vec<lunco_twin::FileEntry> = twin
                         .files()
                         .iter()
@@ -626,7 +638,7 @@ impl BrowserSection for FilesSection {
                     // available height is mostly consumed, so a long
                     // file list collapsed to a few rows behind its own
                     // scrollbar — "tons of files but can't see them".
-                    // Closed CollapsingHeaders still skip their contents,
+                    // Closed tree branches still skip their contents,
                     // so render cost scales with *expanded* entries.
                     let tree = build_tree(&files);
                     render_dir(
@@ -643,10 +655,8 @@ impl BrowserSection for FilesSection {
                         &unsaved_paths,
                         ui,
                     );
-                });
-            resp.header_response
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .on_hover_text(hover_path);
+                },
+            );
         }
 
         // Dispatch queued intents now that the egui closures have
@@ -868,7 +878,7 @@ mod tests {
 
 /// Recursively render one directory of the Twin's filesystem tree.
 ///
-/// Directories render as `CollapsingHeader`s with the folder icon;
+/// Directories render as shared tree branches with the folder label;
 /// files render as `selectable_label`s. Both support double-click to
 /// enter inline rename mode and Enter/Esc to submit/cancel. Files
 /// additionally support single-click to open the editable source panel.
@@ -900,37 +910,48 @@ fn render_dir(
         if in_rename {
             render_inline_rename(ui, &abs, rename, submit_rename, cancel_rename);
         } else {
-            let salt = abs.to_string_lossy().into_owned();
-            let header = egui::CollapsingHeader::new(dir_name)
-                .id_salt(("twin_browser_dir", salt))
-                .default_open(false);
-            let resp = header.show(ui, |ui| {
-                render_dir(
-                    sub,
-                    &rel,
-                    twin_root,
-                    active_rename_abs,
-                    rename,
-                    clicks,
-                    begin_rename,
-                    submit_rename,
-                    cancel_rename,
-                    open_paths,
-                    unsaved_paths,
-                    ui,
-                );
-            });
-            // Header double-click → enter rename mode for this directory.
-            // CollapsingHeader's single click toggles open/closed (egui
-            // default), so single-click here is intentionally ignored.
-            if resp.header_response.double_clicked() {
-                *begin_rename = Some(RenameInProgress {
-                    target_abs: abs.clone(),
-                    twin_root: twin_root.to_path_buf(),
-                    relative_path: rel.clone(),
-                    buffer: dir_name.clone(),
-                    needs_focus: true,
-                });
+            let id = ui.make_persistent_id(("twin_browser_dir", abs.to_string_lossy()));
+            let mut header_begin_rename = None;
+            crate::tree::branch(
+                ui,
+                id,
+                false,
+                None,
+                |ui| {
+                    let resp = ui
+                        .add(egui::Label::new(dir_name).sense(egui::Sense::click()))
+                        .on_hover_cursor(egui::CursorIcon::PointingHand);
+                    // Header double-click → enter rename mode for this directory.
+                    if resp.double_clicked() {
+                        header_begin_rename = Some(RenameInProgress {
+                            target_abs: abs.clone(),
+                            twin_root: twin_root.to_path_buf(),
+                            relative_path: rel.clone(),
+                            buffer: dir_name.clone(),
+                            needs_focus: true,
+                        });
+                    }
+                    resp.clicked()
+                },
+                |ui| {
+                    render_dir(
+                        sub,
+                        &rel,
+                        twin_root,
+                        active_rename_abs,
+                        rename,
+                        clicks,
+                        begin_rename,
+                        submit_rename,
+                        cancel_rename,
+                        open_paths,
+                        unsaved_paths,
+                        ui,
+                    );
+                },
+            );
+            if header_begin_rename.is_some() {
+                *begin_rename = header_begin_rename;
             }
         }
     }
@@ -971,7 +992,7 @@ fn render_dir(
                 Some(m) => format!("{m}{leaf}"),
                 None => leaf.clone(),
             };
-            let r = ui.selectable_label(false, &label);
+            let r = crate::tree::leaf(ui, |ui| ui.selectable_label(false, &label)).inner;
             if r.double_clicked() {
                 clicks.push((twin_root.to_path_buf(), entry.relative_path.clone(), true));
             } else if r.clicked() {

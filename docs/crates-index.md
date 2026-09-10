@@ -269,9 +269,10 @@ Reflection-based data extraction engine. Automatically samples and standardizes 
 
 **`lunco-workbench`**
 The engineering-IDE shell. Handles the docking engine (tabs, splits),
-perspective presets (Build, Simulate), Twin Browser, and picker/command
-adapters. It does not own file bytes or backend I/O; those go through
-`lunco-storage`, while Twin discovery stays in `lunco-workspace`/`lunco-twin`.
+perspective presets (Build, Simulate), Twin Browser, shared hierarchy-row
+presentation (`tree::{branch, leaf}`), and picker/command adapters. It does
+not own file bytes or backend I/O; those go through `lunco-storage`, while
+Twin discovery stays in `lunco-workspace`/`lunco-twin`.
 
 **`lunco-ui`**
 Reusable UI infrastructure. Provides the `WidgetSystem` for cached ECS widgets, support for typed commands, and `WorldPanel` for 3D in-scene UI elements attached to entities.

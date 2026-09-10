@@ -151,11 +151,17 @@ fn render_dir(
             continue;
         }
         visible = true;
-        egui::CollapsingHeader::new(directory)
-            .id_salt(("library_dir", &rel))
-            .default_open(false)
-            .open(query.is_active().then_some(true))
-            .show(ui, |ui| {
+        let id = ui.make_persistent_id(("library_dir", &rel));
+        crate::tree::branch(
+            ui,
+            id,
+            false,
+            query.is_active().then_some(true),
+            |ui| {
+                ui.add(egui::Label::new(directory).sense(egui::Sense::click()))
+                    .clicked()
+            },
+            |ui| {
                 render_dir(
                     child,
                     &rel,
@@ -164,8 +170,9 @@ fn render_dir(
                     directory_matches,
                     clicked,
                     ui,
-                )
-            });
+                );
+            },
+        );
     }
     for asset in &node.files {
         if query.is_active()
@@ -184,11 +191,14 @@ fn render_dir(
                     .split_whitespace()
                     .next()
                     .is_some_and(|first| first == asset.stem));
-        let response = if is_loaded {
-            ui.selectable_label(false, format!("● {}", asset.file_name))
-        } else {
-            ui.selectable_label(false, &asset.file_name)
-        };
+        let response = crate::tree::leaf(ui, |ui| {
+            if is_loaded {
+                ui.selectable_label(false, format!("● {}", asset.file_name))
+            } else {
+                ui.selectable_label(false, &asset.file_name)
+            }
+        })
+        .inner;
         if response.clicked() {
             *clicked = Some(asset.asset_path.clone());
         }

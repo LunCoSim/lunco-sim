@@ -17,9 +17,8 @@ pub(super) enum PackageAction {
 /// cache mutably. Instead of mutating `is_loading` / pushing scan
 /// tasks in place, an unscanned Category pushes its `(id, package_path)`
 /// into `load_out`; the caller schedules the scan through the package-tree
-/// owner. Egui
-/// owns the expand/collapse state (CollapsingHeader id_salt), so the
-/// read-only render still expands correctly.
+/// owner. The shared workbench tree renderer owns expansion and row layout,
+/// so this read-only render only supplies package data and actions.
 pub(crate) fn render_node_single_ro(
     node: &PackageNode,
     ui: &mut egui::Ui,
@@ -51,10 +50,18 @@ pub(crate) fn render_node_single_ro(
             {
                 return None;
             }
-            let header_resp = egui::CollapsingHeader::new(name)
-                .id_salt(id.as_str())
-                .open(query.is_active().then_some(true))
-                .show(ui, |ui| {
+            let branch_id = ui.make_persistent_id(("modelica_package", id));
+            lunco_workbench::tree::branch(
+                ui,
+                branch_id,
+                false,
+                query.is_active().then_some(true),
+                |ui| {
+                    ui.add(egui::Label::new(name.as_str()).sense(egui::Sense::click()))
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .clicked()
+                },
+                |ui| {
                     if let Some(kids) = children {
                         for kid in kids {
                             if let Some(a) = render_node_single_ro(
@@ -83,8 +90,8 @@ pub(crate) fn render_node_single_ro(
                             ui.label("⌛ Loading...");
                         });
                     }
-                });
-            let _ = header_resp;
+                },
+            );
         }
         PackageNode::Model {
             id,
@@ -96,7 +103,7 @@ pub(crate) fn render_node_single_ro(
                 return None;
             }
             let is_active = active_path == Some(name.as_str());
-            let row = ui.horizontal(|ui| {
+            let row = lunco_workbench::tree::leaf(ui, |ui| {
                 if let Some(kind) = *class_kind {
                     let badge = crate::ui::browser_section::type_badge_for_kind(kind, theme);
                     crate::ui::browser_section::paint_badge(ui, badge, theme);

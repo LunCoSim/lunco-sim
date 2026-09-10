@@ -20,7 +20,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_render::SceneCamera;
 use lunco_settings::SettingsSection;
-use lunco_usd::runtime_persistence::{RUNTIME_PERSISTENCE_SETTING, runtime_persistence_for_twin};
+use lunco_usd::runtime_persistence::{runtime_persistence_for_twin, RUNTIME_PERSISTENCE_SETTING};
 use lunco_usd_bevy::camera_switch::camera_display_labels;
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 use lunco_workspace::{SetTwinSetting, TwinClosed, TwinSettingInput, WorkspaceResource};
@@ -969,7 +969,7 @@ impl Panel for EntityList {
 
 /// Render one tree node and its descendants. Children in the view are already
 /// visibility-pruned and sorted, so this is pure paint — leaf nodes are a
-/// selectable label; branch nodes get an expander (`CollapsingState`) whose
+/// selectable label; branch nodes use the shared workbench tree renderer whose
 /// header is itself selectable, so a click on the rover selects the rover and
 /// the triangle drills into its wheels.
 fn render_node(
@@ -987,34 +987,51 @@ fn render_node(
         .unwrap_or_else(|| "Unnamed entity".to_string());
 
     match view.kids.get(&entity) {
-        None => select_label(
-            ui,
-            entity,
-            &label,
-            view.camera_identities.get(&entity).map(String::as_str),
-            selected,
-            to_select,
-            to_focus,
-        ),
+        None => {
+            let _ = lunco_workbench::tree::leaf(ui, |ui| {
+                select_label(
+                    ui,
+                    entity,
+                    &label,
+                    view.camera_identities.get(&entity).map(String::as_str),
+                    selected,
+                    to_select,
+                    to_focus,
+                )
+            });
+        }
         Some(children) => {
             let id = ui.make_persistent_id(("entity_tree", entity));
-            egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false)
-                .show_header(ui, |ui| {
+            let mut header_select = None;
+            let mut header_focus = None;
+            lunco_workbench::tree::branch(
+                ui,
+                id,
+                false,
+                None,
+                |ui| {
                     select_label(
                         ui,
                         entity,
                         &label,
                         view.camera_identities.get(&entity).map(String::as_str),
                         selected,
-                        to_select,
-                        to_focus,
-                    );
-                })
-                .body(|ui| {
+                        &mut header_select,
+                        &mut header_focus,
+                    )
+                },
+                |ui| {
                     for &child in children {
                         render_node(ui, child, view, selected, to_select, to_focus);
                     }
-                });
+                },
+            );
+            if header_select.is_some() {
+                *to_select = header_select;
+            }
+            if header_focus.is_some() {
+                *to_focus = header_focus;
+            }
         }
     }
 }
@@ -1030,7 +1047,7 @@ fn select_label(
     selected: &lunco_scene_commands::SelectedEntities,
     to_select: &mut Option<(Entity, bool)>,
     to_focus: &mut Option<Entity>,
-) {
+) -> bool {
     let hint = match full_identity {
         Some(identity) => format!(
             "{identity}  ·  click to select · Shift+Click to multiselect · double-click to focus"
@@ -1050,6 +1067,7 @@ fn select_label(
         *to_select = Some((entity, shift_held));
         *to_focus = Some(entity);
     }
+    resp.clicked()
 }
 
 fn entity_list_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
