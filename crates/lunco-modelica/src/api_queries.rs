@@ -1341,28 +1341,36 @@ impl ApiQueryProvider for FindModelProvider {
 
         // ── Active Twin folder ───────────────────────────────────
         let twin_files: Vec<(String, String)> = {
-            let ws = world.resource::<WorkspaceResource>();
-            let twin = ws.active_twin.and_then(|id| ws.twin(id));
-            let root = twin.and_then(|t| t.root_handle().as_file_path().map(|p| p.to_path_buf()));
-            twin.map(|t| {
-                t.files()
-                    .iter()
-                    .map(|f| {
-                        let abs = root
-                            .as_ref()
-                            .map(|r| r.join(&f.relative_path).to_string_lossy().into_owned())
-                            .unwrap_or_else(|| f.relative_path.to_string_lossy().into_owned());
-                        let label = f
-                            .relative_path
-                            .file_stem()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or("")
-                            .to_string();
-                        (abs, label)
+            world
+                .get_resource::<WorkspaceResource>()
+                .and_then(|ws| {
+                    let twin = ws.active_twin.and_then(|id| ws.twin(id));
+                    let root =
+                        twin.and_then(|t| t.root_handle().as_file_path().map(|p| p.to_path_buf()));
+                    twin.map(|t| {
+                        t.files()
+                            .iter()
+                            .map(|f| {
+                                let abs = root
+                                    .as_ref()
+                                    .map(|r| {
+                                        r.join(&f.relative_path).to_string_lossy().into_owned()
+                                    })
+                                    .unwrap_or_else(|| {
+                                        f.relative_path.to_string_lossy().into_owned()
+                                    });
+                                let label = f
+                                    .relative_path
+                                    .file_stem()
+                                    .and_then(|s| s.to_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                (abs, label)
+                            })
+                            .collect()
                     })
-                    .collect()
-            })
-            .unwrap_or_default()
+                })
+                .unwrap_or_default()
         };
         for (abs, label) in twin_files {
             if let Some(score) = score(&q, &label, &abs) {
@@ -1400,18 +1408,26 @@ impl ApiQueryProvider for FindModelProvider {
 
         // ── Currently-open documents ─────────────────────────────
         let open_docs: Vec<(u64, String, String)> = {
-            let ws = world.resource::<WorkspaceResource>();
-            ws.documents()
-                .iter()
-                .map(|e| {
-                    let uri = match &e.origin {
-                        DocumentOrigin::File { path, .. } => path.to_string_lossy().into_owned(),
-                        DocumentOrigin::Bundled { filename } => format!("bundled://{filename}"),
-                        DocumentOrigin::Untitled { name } => format!("mem://{name}"),
-                    };
-                    (e.id.raw(), e.title.clone(), uri)
+            world
+                .get_resource::<WorkspaceResource>()
+                .map(|ws| {
+                    ws.documents()
+                        .iter()
+                        .map(|e| {
+                            let uri = match &e.origin {
+                                DocumentOrigin::File { path, .. } => {
+                                    path.to_string_lossy().into_owned()
+                                }
+                                DocumentOrigin::Bundled { filename } => {
+                                    format!("bundled://{filename}")
+                                }
+                                DocumentOrigin::Untitled { name } => format!("mem://{name}"),
+                            };
+                            (e.id.raw(), e.title.clone(), uri)
+                        })
+                        .collect()
                 })
-                .collect()
+                .unwrap_or_default()
         };
         for (_id, title, uri) in open_docs {
             if let Some(score) = score(&q, &title, &uri) {
@@ -1500,6 +1516,30 @@ fn score(q: &str, label: &str, secondary: &str) -> Option<f32> {
         return Some(0.3);
     }
     None
+}
+
+#[cfg(test)]
+mod find_model_tests {
+    use super::*;
+
+    #[test]
+    fn bundled_search_works_without_a_workspace_resource() {
+        let response = FindModelProvider.execute(
+            &World::new(),
+            &serde_json::json!({ "query": "rocket", "limit": 20 }),
+        );
+
+        let ApiResponse::Ok { data } = response else {
+            panic!("bundled search should not require an open WorkspaceResource");
+        };
+        let data = data.expect("FindModel success should include response data");
+        let items = data["items"]
+            .as_array()
+            .expect("FindModel response should include an item array");
+        assert!(items.iter().any(|item| {
+            item["uri"] == "bundled://AnnotatedRocketStage.mo" && item["source"] == "bundled"
+        }));
+    }
 }
 
 // ─── Provider helpers ──────────────────────────────────────────────────

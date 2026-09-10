@@ -86,7 +86,7 @@ Queries return structured data from the simulation. They use the same `POST /api
 | `GetDocumentSource` | `{"doc": u64}` | Get the raw source code of a document (Modelica only). |
 | `DescribeModel` | `{"doc": u64, "class": string?}` | Get structural info (components, pins, parameters) of a class. |
 | `SnapshotVariables` | `{"doc": u64, "names": string[]?}` | Get the current values of simulation variables/inputs. |
-| `FindModel` | `{"query": string, "limit": u64?}` | Fuzzy search across bundled, twin, MSL, and open docs. |
+| `FindModel` | `{"query": string, "limit": u64?}` | Fuzzy search across bundled, Twin, MSL, and open docs. Bundled results remain available in hosts without an active Workspace session; Twin/open-document matches are included when `WorkspacePlugin` is present. |
 | `GetShareLink` | `{"doc": u64?}` | Generate a sharing URL for the document source. |
 | `CosimStatus` | `{}` | List all USD-driven cosim entities with live telemetry. |
 | `ReadPorts` | `{"api_id": u64}` | Read every exposed scalar port and its owner-supplied type, unit, range, source, authority, and write contract. |

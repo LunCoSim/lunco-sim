@@ -1513,7 +1513,7 @@ fn start_recording_when_scene_ready(
     meshes: Query<&bevy::mesh::Mesh3d>,
     asset_server: Res<AssetServer>,
     cameras: Query<(Entity, &Camera, &bevy::camera::RenderTarget)>,
-    viewport: Res<SceneViewport>,
+    viewport: Option<Res<SceneViewport>>,
     capture_target: Option<Res<OfflineCaptureTarget>>,
     render_readiness: Option<Res<OfflineRenderReadiness>>,
     // `Option`: the bus belongs to the workbench UI, which a headless/API-only
@@ -1542,7 +1542,9 @@ fn start_recording_when_scene_ready(
     info!(
         "[offline-record] readiness snapshot: mesh_entities={} active_camera={:?} render={:?}",
         meshes.iter().len(),
-        viewport.active_camera,
+        viewport
+            .as_deref()
+            .and_then(|viewport| viewport.active_camera),
         render_readiness.as_deref(),
     );
 
