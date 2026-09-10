@@ -35,8 +35,9 @@ def Xform "WaypointMarker" (
     # Arrival is session state on the vessel's `ReachedWaypoints` component.
     # The marker remains authored geometry and is never rewritten or deleted
     # when a route leg completes. This keeps the scene reusable and replayable.
-    # Rhai reads the authored inactive color below and applies it as a runtime
-    # USD opinion when the waypoint.reached event arrives.
+    # The USD simulation projection reads this authored inactive look parameter
+    # into a runtime render intent when the marker is projected. Arrival changes
+    # that intent from session state; the authored stage is not rewritten.
     float3 lunco:waypoint:inactiveColor = (0.38, 0.38, 0.38)
 
     # Emission REQUIRES a material. `displayColor` is a real UsdGeomGprim
