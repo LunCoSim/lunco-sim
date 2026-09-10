@@ -186,7 +186,14 @@ that missed. So assert that something was MEASURED (`t_present`) and that
 something MOVED (`t_moved`, or `t_rel`'s both-near-zero rejection), and print a
 per-sample table — a run with no sample rows proves nothing.
 
-Run it headlessly:
+For a user-visible mission or scene review, run the production `luncosim`
+headfully with `--api PORT`, keep the window open, and capture/inspect the
+viewport at each material phase. Do not silently replace that session with
+`--no-ui` or `--offscreen`; the user needs to see whether the authored vehicle
+actually lands, deploys, connects, or falls.
+
+Run the deterministic numeric assertion headlessly only when visual acceptance
+is not part of the request:
 
 ```
 target/debug/luncosim test \
