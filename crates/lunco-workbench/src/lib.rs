@@ -5465,11 +5465,12 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
             .response;
 
         // Keep the notification compact without pulling the right-hand
-        // controls away from the edge of the status bar. The spacer absorbs
-        // the remaining width after the bounded notification and reserved
-        // controls have been laid out.
+        // controls away from the edge of the status bar. Mark the end of the
+        // clickable notification before the spacer so the alignment gap
+        // cannot be mistaken for part of the recent-event surface.
         let spacer_width = (bar_width - status_width - right_reserve).max(0.0);
         if spacer_width > 0.0 {
+            ui.separator();
             ui.add_space(spacer_width);
         }
 
@@ -5988,7 +5989,7 @@ fn status_bar_right_widths(
     tutorial_visible: bool,
     scene_visible: bool,
 ) -> StatusBarRightWidths {
-    let separator_count = 1.0
+    let separator_count = 2.0
         + if tutorial_visible { 1.0 } else { 0.0 }
         + if scene_visible { 1.0 } else { 0.0 }
         + if net_active { 1.0 } else { 0.0 };
