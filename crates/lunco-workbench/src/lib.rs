@@ -5356,11 +5356,12 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
     let scene_popup_id = ui.make_persistent_id("lunco_workbench_loaded_scene_popup");
 
     ui.horizontal(|ui| {
+        let bar_width = ui.available_width();
         // Reserve the exact bounded footprint of every control to the right of
         // the status scope. The controls shrink together on compact windows;
         // the left scope never competes with an unbounded label.
         let right_widths = status_bar_right_widths(
-            ui.available_width(),
+            bar_width,
             perf_enabled,
             net_active,
             !tutorial_title.is_empty(),
@@ -5368,7 +5369,7 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
         );
         let right_reserve = right_widths.total();
 
-        let status_width = (ui.available_width() - right_reserve).max(1.0);
+        let status_width = status_bar_notification_width(bar_width, right_reserve);
 
         // The status message scope on the left
         let latest_attention = latest
@@ -5388,18 +5389,23 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
                             StatusLevel::Progress | StatusLevel::Info => theme.tokens.success,
                         };
                         let attention = l.level == StatusLevel::Attention;
+                        // The strip is a single-line summary surface. Keep the
+                        // complete event in the tooltip and history popup, but
+                        // never let diagnostic/newline-heavy payloads define
+                        // the button or label's intrinsic width.
+                        let display_message = status_message_summary(&l.message);
                         if attention {
                             attention_clicked = ui
                                 .add_sized(
                                     [ui.available_width(), 18.0],
                                     egui::Button::new(
-                                        egui::RichText::new(&l.message)
+                                        egui::RichText::new(display_message)
                                             .small()
                                             .strong()
                                             .color(theme.tokens.error),
                                     ),
                                 )
-                                .on_hover_text("Click to continue")
+                                .on_hover_text(&l.message)
                                 .clicked();
                         } else {
                             // Painted circle instead of `●` so we don't depend
@@ -5418,7 +5424,7 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
                                 );
                             }
                             ui.label(egui::RichText::new(l.source).small().strong());
-                            let text = egui::RichText::new(&l.message).small();
+                            let text = egui::RichText::new(display_message).small();
                             let message_width = status_bar_message_width(
                                 ui.available_width(),
                                 l.progress_pct.is_some(),
@@ -5444,6 +5450,15 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
                 },
             )
             .response;
+
+        // Keep the notification compact without pulling the right-hand
+        // controls away from the edge of the status bar. The spacer absorbs
+        // the remaining width after the bounded notification and reserved
+        // controls have been laid out.
+        let spacer_width = (bar_width - status_width - right_reserve).max(0.0);
+        if spacer_width > 0.0 {
+            ui.add_space(spacer_width);
+        }
 
         if attention_clicked {
             if let Some(source) = latest
@@ -5910,6 +5925,7 @@ fn settings_submenu_max_width(content_width: f32) -> f32 {
 }
 
 const STATUS_BAR_MIN_SCOPE_WIDTH: f32 = 160.0;
+const STATUS_BAR_NOTIFICATION_MAX_WIDTH: f32 = 420.0;
 const STATUS_BAR_SEPARATOR_RESERVE: f32 = 12.0;
 const STATUS_BAR_BASE_OVERHEAD: f32 = 16.0;
 const STATUS_BAR_TUTORIAL_MAX_WIDTH: f32 = 190.0;
@@ -5930,6 +5946,15 @@ impl StatusBarRightWidths {
     fn total(self) -> f32 {
         self.tutorial + self.scene + self.net + self.perf + self.overhead
     }
+}
+
+/// Give the latest-event notification a compact, stable footprint while
+/// preserving enough room for its source and a readable message. The full
+/// event remains available through the strip tooltip and history popup.
+fn status_bar_notification_width(available_width: f32, right_reserve: f32) -> f32 {
+    (available_width - right_reserve)
+        .max(1.0)
+        .min(STATUS_BAR_NOTIFICATION_MAX_WIDTH)
 }
 
 /// Keep every right-hand status control inside the width reserved from the
@@ -7083,6 +7108,16 @@ mod tests {
         assert_eq!(status_bar_message_width(500.0, false, 4.0), 500.0);
         assert_eq!(status_bar_message_width(500.0, true, 4.0), 376.0);
         assert_eq!(status_bar_message_width(80.0, true, 4.0), 1.0);
+    }
+
+    #[test]
+    fn latest_status_notification_stays_compact_and_yields_to_right_controls() {
+        assert_eq!(
+            status_bar_notification_width(1600.0, 120.0),
+            STATUS_BAR_NOTIFICATION_MAX_WIDTH
+        );
+        assert_eq!(status_bar_notification_width(520.0, 120.0), 400.0);
+        assert_eq!(status_bar_notification_width(120.0, 160.0), 1.0);
     }
 
     #[test]
