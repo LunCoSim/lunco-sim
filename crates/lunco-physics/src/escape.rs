@@ -79,11 +79,17 @@
 //! The bounds themselves are recomputed only when a static collider's AABB
 //! actually changes, which after terrain settles is never. Nothing allocates
 //! per frame.
+//!
+//! A reported escape also raises the shared `TelemetryEvent` named
+//! `physics-body-escaped`. The physics boundary remains the single producer:
+//! the existing error log and the workbench Recent Events entry both consume
+//! this one observation, with no log parsing or UI-specific dependency.
 
 use avian3d::math::{Scalar, Vector};
 use avian3d::prelude::*;
 use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
+use lunco_core::{GlobalEntityId, Severity, TelemetryEvent, TelemetryValue};
 
 /// Fraction of the static world's largest extent added as lateral/downward
 /// slack. Ten percent is comfortably more than terrain-tile paging jitter and
@@ -222,6 +228,8 @@ fn report_escaped_bodies(
     mut reported: ResMut<ReportedEscapes>,
     mut holds: ResMut<crate::PhysicsHolds>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
+    world_time: Option<Res<lunco_time::WorldTime>>,
+    mut commands: Commands,
     // `Changed<Position>` is the query-level body-kind gate: avian has no
     // per-variant marker component (`RigidBody` is one enum component), so
     // "dynamic only" cannot be a `With<>` filter — but a body cannot escape
@@ -237,12 +245,13 @@ fn report_escaped_bodies(
             &Position,
             &LinearVelocity,
             Option<&Name>,
+            Option<&GlobalEntityId>,
             &RigidBody,
         ),
         Changed<Position>,
     >,
 ) {
-    for (entity, pos, vel, name, rb) in &q {
+    for (entity, pos, vel, name, global_id, rb) in &q {
         // Kinematic bodies pass the change gate whenever their driver moves
         // them, and an externally teleported static passes it once — but a
         // kinematic body is wherever its driver put it and a static does not
@@ -260,18 +269,31 @@ fn report_escaped_bodies(
         }
         holds.set(crate::PhysicsHolds::SAFETY_FAILURE, true);
         let label = name.map(Name::as_str).unwrap_or("<unnamed>");
+        let global_id = global_id.map(GlobalEntityId::get).unwrap_or(0);
+        let timestamp = world_time.as_ref().map(|time| time.epoch_jd).unwrap_or(0.0);
+        let sim_secs = world_time.as_ref().map(|time| time.sim_secs).unwrap_or(0.0);
+        let detail = format!(
+            "body={label}; entity_bits={}; global_id={global_id}; position={:?}; velocity={:?}; bounds={:?}; sim_secs={sim_secs:.6}",
+            entity.to_bits(),
+            pos.0,
+            vel.0,
+            *bounds,
+        );
         if let Some(faults) = faults.as_deref_mut() {
-            let detail = format!(
-                "position={:?}, velocity={:?}, bounds={:?}",
-                pos.0, vel.0, *bounds
-            );
-            if faults.raise("physics-body-escaped", Some(entity), label, detail) {
+            if faults.raise("physics-body-escaped", Some(entity), label, detail.clone()) {
                 error!(
                     "[physics] terminal runtime failure: body left the world: {} ({entity})",
                     label
                 );
             }
         }
+        commands.trigger(TelemetryEvent {
+            name: "physics-body-escaped".to_string(),
+            source: global_id,
+            severity: Severity::Error,
+            data: TelemetryValue::String(detail),
+            timestamp,
+        });
         error!(
             "[physics] body left the world: {} ({entity}) at {:?}, velocity {:?} \
              — outside {:?}. A dynamic body outside the static geometry has nothing \
@@ -375,6 +397,9 @@ impl Plugin for EscapeDiagnosticPlugin {
 mod tests {
     use super::*;
     use crate::PhysicsHolds;
+
+    #[derive(Resource, Default)]
+    struct SeenTelemetry(Vec<TelemetryEvent>);
 
     /// The orbital guarantee: with no static geometry the diagnostic has no
     /// opinion, so a body at heliocentric distance is NOT flagged. This is the
@@ -597,6 +622,65 @@ mod tests {
             fault.first.as_ref().map(|fault| fault.kind),
             Some("physics-body-escaped")
         );
+    }
+
+    /// The escape boundary emits the same one-shot observation that the
+    /// workbench status bridge consumes. The payload keeps the body identity,
+    /// pose, bounds, and simulation time together so Recent Events is useful
+    /// without scraping the logger.
+    #[test]
+    fn an_escape_emits_one_identified_telemetry_event() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(WorldBounds::Some {
+            min: Vector::splat(-100.0),
+            max: Vector::splat(100.0),
+        });
+        app.init_resource::<ReportedEscapes>();
+        app.insert_resource(PhysicsHolds::default());
+        app.insert_resource(lunco_core::RuntimeFaults::default());
+        app.insert_resource(lunco_time::WorldTime {
+            epoch_jd: 2_460_000.5,
+            sim_secs: 12.5,
+            met_secs: 12.5,
+        });
+        app.init_resource::<SeenTelemetry>();
+        app.add_observer(
+            |trigger: On<TelemetryEvent>, mut seen: ResMut<SeenTelemetry>| {
+                if trigger.event().name == "physics-body-escaped" {
+                    seen.0.push(trigger.event().clone());
+                }
+            },
+        );
+        app.add_systems(Update, report_escaped_bodies);
+
+        let entity = app
+            .world_mut()
+            .spawn((
+                RigidBody::Dynamic,
+                Position(Vector::new(0.0, -1510.0, 0.0)),
+                LinearVelocity(Vector::new(0.0, -100.0, 0.0)),
+                Name::new("escaped-body"),
+                GlobalEntityId::from_raw(42),
+            ))
+            .id();
+
+        app.update();
+        app.update();
+
+        let seen = &app.world().resource::<SeenTelemetry>().0;
+        assert_eq!(seen.len(), 1, "the once-only escape must emit one event");
+        let event = &seen[0];
+        assert_eq!(event.source, 42);
+        assert_eq!(event.timestamp, 2_460_000.5);
+        assert_eq!(event.severity, Severity::Error);
+        let TelemetryValue::String(detail) = &event.data else {
+            panic!("escape telemetry should retain its diagnostic detail");
+        };
+        assert!(detail.contains("body=escaped-body"));
+        assert!(detail.contains(&format!("entity_bits={}", entity.to_bits())));
+        assert!(detail.contains("global_id=42"));
+        assert!(detail.contains("sim_secs=12.500000"));
     }
 
     /// Once per entity, never per frame — the anti-spam contract.
