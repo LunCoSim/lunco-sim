@@ -326,7 +326,11 @@ For a document-scoped authoring check, use `cmd("RunLint", #{domain: "usd",
 doc_id: doc})` only after the document projection is current, then read
 `query("LintReport", #{doc_id: doc})`. The response is scoped to that document
 and reports the generation and `projection_ready`; an unprojected document is
-reported as not ready rather than linting a stale stage.
+reported as not ready rather than linting a stale stage. The report also warns
+when one composed entity has duplicate public port owners, including each
+owner's USD path and registry precedence. Resolve that at the authoring
+boundary by giving separate semantic owners distinct names; do not hide it with
+a runtime write retry or fallback.
 
 For semantic component construction, use `assembly_builder::find_compatible_socket`
 and `assembly_builder::mount_component`. The builder selects the exact

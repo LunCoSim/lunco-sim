@@ -237,6 +237,10 @@ def "Controls" (
   stable `orbit` camera: camera orientation never remaps these body axes.
   W/S/A/D/Q/E and G are only the bundled `input_bindings` labels; help must
   resolve the current settings rather than hardcoding those keys.
+  In the bundled lander mission, G writes the authored `release` input; the
+  scene Rhai program edge-detects it after touchdown and calls generic
+  `DetachJoint` for the authored dock. Keep that delivery policy in Rhai, not
+  in a vehicle-specific Rust port backend.
   The path is relative to the vessel file (`@../../control_profiles.usda@` one dir deeper,
   `@../../vessels/control_profiles.usda@` from a scene).
 - **Override one intent** by redefining that child locally over the reference:

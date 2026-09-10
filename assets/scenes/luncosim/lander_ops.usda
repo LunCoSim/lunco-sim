@@ -28,7 +28,7 @@
 #   Space       — full thrust        (lander, once possessed)
 #   W/S/A/D     — pitch/roll torque  (lander) · drive/steer (rover)
 #   Q/E         — yaw torque         (lander)
-#   G           — detach rover joint
+#   G           — request rover release after the lander settles
 #   P           — pause/unpause simulation
 #   Backspace   — release possession
 #
@@ -37,7 +37,7 @@
 def Xform "LanderTest" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
-    doc = "A lander dropping under gravity with a rocket you can fire to slow and steer it. Hold Space to thrust, WASD to tilt, Q/E to turn, G to release the rover, P to pause."
+    doc = "A lander dropping under gravity with a rocket you can fire to slow and steer it. Hold Space to thrust, WASD to tilt, Q/E to turn, G to request rover release after touchdown, P to pause."
     prepend apiSchemas = ["LunCoCatalogAPI", "LunCoEpochAPI"]
 )
 {

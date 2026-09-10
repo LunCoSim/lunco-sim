@@ -810,11 +810,14 @@ Same pattern as the lander: a vehicle arrives by `references`, the scene supplie
 only its starting pose. `localPos0 = (0, -1.5, 0)` bolts the rover to the underside
 of the lander's tank — into the clearance the legs bought you in Step 3.
 
-The joint holds the two together through the descent, and the mission breaks it with
-`detach_joint(...)` only after the explicit landing-transition join (engine cutoff,
-flight-control handoff, and physical touchdown). That ordering is not cosmetic:
-cut the rover loose in flight and it falls from altitude; release before the GNC
-has handed control to the gear and it can still be under powered-flight authority.
+The joint holds the two together through the descent. The scene's Rhai delivery
+policy breaks it with the generic `DetachJoint` command only after the explicit
+landing-transition join (engine cutoff, flight-control handoff, and physical
+touchdown). While possessing the lander, G writes the authored `release` input;
+the same scene policy edge-detects that command, accepts it only after touchdown,
+and reports a failed detach instead of silently retrying. That ordering is not
+cosmetic: cut the rover loose in flight and it falls from altitude; release before
+the GNC has handed control to the gear and it can still be under powered-flight authority.
 The rover drops the last metre onto the regolith and rolls away. We point it at an
 autopilot script now and write that in Step 10.
 

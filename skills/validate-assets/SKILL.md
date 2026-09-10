@@ -231,6 +231,16 @@ register_hook("lint.usd", "lint_usd", my_rules);   // next RunLint obeys
 
 re-shapes the rules for the next explicit lint run without a rebuild.
 
+`RunLint` also checks the live projected port surface through the shared
+`PortRegistry`. A `port-owner-collision` warning identifies the composed
+entity, `inputs:`/`outputs:` path, owner source/domain/backend, and the actual
+registry precedence that wins reads or writes. Repeated inspection views of one
+owner are deduplicated. This is live-only: `ValidateAsset` cannot see runtime
+owners that are introduced by projection. Repair it in USD/Rhai authoring so one
+semantic public name has one owner; rename a separate actuator (for example to
+`dock_release`) instead of adding retries, fallbacks, or vehicle-specific Rust
+input handlers.
+
 ## Where it fits
 
 ```

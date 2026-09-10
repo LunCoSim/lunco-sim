@@ -120,6 +120,26 @@ renderable vehicle gprim with no one of those owners is an authoring error; the
 fact is composed from the same purpose, schema, and collider builder used by
 the Avian projection.
 
+### Projected port-owner diagnostics
+
+The live `RunLint` path also performs a read-only pass over the already projected
+entities. It asks the shared `PortRegistry` for each entity's distinct runtime
+owners, groups duplicate public names by access direction, and appends a
+structured `warn` finding with rule `port-owner-collision` to `LintReport` (or
+the document-scoped report). The finding includes the composed entity path,
+each owner source/domain/backend, its `inputs:`/`outputs:` property path, and
+the actual registry precedence used by `write_port` and the read operations.
+Repeated inspection views from one owner are deduplicated; different backends
+remain visible. Input, output, and bidirectional collisions are reported on the
+access side that is ambiguous, and do not change routing or make lint fail.
+
+The repair is made at the authoring boundary: one semantic public port name has
+one authoritative owner. Rename or remove the duplicate (for example, use
+`dock_release` for a separate actuator). Do not add a per-frame retry, fallback,
+or vehicle-specific Rust input handler. Because projected runtime owners do not exist
+in a file by themselves, this diagnostic is available from live `RunLint`, not
+from `ValidateAsset`'s file-only preflight.
+
 ## Explicit authoring/preflight only
 
 Linting is something you **run**, not something that runs at you. A check firing
@@ -137,7 +157,8 @@ query("LintReport", #{doc_id: 7}); // includes generation and projection_ready
 After an authored change, the editor or launcher may issue the command again for
 that selected stage; it is still an explicit lint run. There is no cadence,
 background watcher, per-tick physics monitor, or emergency clamp. `ValidateAsset`
-does the same check for a file. Emergent contact/topology failures still require
+applies the file-derived rules to one composed file; it cannot observe projected
+runtime port owners. Emergent contact/topology failures still require
 the relevant behavioral test; a static lint must report "conditionally stable"
 or "not certifiable" rather than claim a nonlinear assembled mechanism is safe.
 
@@ -155,10 +176,14 @@ unregister_hook("lint.usd");                              // back to no USD rule
 | `RunLint` | every **loaded** stage — including runtime spawns and edits no file describes; with `doc_id`, one synchronized Editor document | `cmd`/HTTP/MCP |
 | `ValidateAsset` | one **file**, composed pre-flight | `luncosim --validate <path>`, HTTP query |
 
-Both hand the policy the **same facts in the same shape**. `ValidateAsset` merges
-the domain facts at top level for exactly that reason: nest them and `facts.bodies`
-becomes `facts.subject.bodies`, every rule matches nothing, and a broken file gets
-a clean bill of health. That happened once and is now pinned by a test.
+Both hand the policy the **same file-derived facts in the same shape**.
+`RunLint` additionally inspects the live projected `PortRegistry`, because only
+that path can see runtime owners that came from composed Modelica, USD, physics,
+device, or Rhai projections. `ValidateAsset` merges the domain facts at top level
+for exactly that reason: nest them and `facts.bodies` becomes
+`facts.subject.bodies`, every rule matches nothing, and a broken file gets a
+clean bill of health. That happened once and is now pinned by a test. A
+file-only validation cannot report a runtime-owner collision it cannot observe.
 
 `ValidateAsset`'s own per-extension checks are unchanged and are a different
 tier: they are what the **loader** would refuse (parse, compose, `WheelParams`),
@@ -182,6 +207,7 @@ merely **wrong** — `error` severities join `errors`, everything else joins
 | `joint-drive-negative-damping` | error | a drive has negative damping (or an implicit drive would receive a negative damping ratio) and injects energy |
 | `invalid-gear-drive` | error | a `PhysxPhysicsGearJoint` angular drive has values the canonical USD-sim reader refuses to install |
 | `invalid-network-synthesizer` | error | the composed `CollectionAPI:components` members have incompatible domain roles and runtime cannot select an owner |
+| `port-owner-collision` | warn, live `RunLint` | one composed entity exposes the same public port name through multiple runtime owners; routing still follows registry precedence, so the owners need distinct names |
 
 Network ownership is derived from the same composed role classifier used by the
 runtime domain projection. A collection of `LunCoForceActuatorAPI` members is

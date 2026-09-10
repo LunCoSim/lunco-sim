@@ -468,7 +468,11 @@ actually call, with the fields the deserializer actually accepts. See the
  Lint what is loaded now.
 
  Findings land in [`lunco_lint::LintReport`] (readable via the `LintReport`
- query) and are logged — errors at `error!`, warnings at `warn!`.
+ query) and are logged — errors at `error!`, warnings at `warn!`. On a live
+ composed stage, the report also includes non-fatal `port-owner-collision`
+ warnings when one public port name has multiple runtime owners; each finding
+ identifies the owner paths and the actual registry precedence used for
+ routing. Fix the duplicate in authoring rather than adding a runtime fallback.
 
 - *defined in:* `crates/lunco-scene-commands/src/lint_command.rs`
 

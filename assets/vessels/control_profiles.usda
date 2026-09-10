@@ -144,8 +144,9 @@ def "LanderControls"
         uniform string lunco:port = "external_throttle"
         uniform double lunco:factor = 1
     }
-    # release/detach (G) → the dock-release actuator port; on the rising edge it
-    # detaches the fixed joint attaching this vessel to another body.
+    # release/detach (G) → the authored lander `release` input. The scene-level
+    # Rhai delivery program edge-detects it after touchdown and calls the generic
+    # DetachJoint command for its authored dock.
     def "release"
     {
         uniform string lunco:port = "release"

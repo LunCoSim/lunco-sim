@@ -34,6 +34,15 @@ fn release_control(vehicle) {
     cmd("ReleaseControl", #{ target: vehicle })
 }
 
+/// Read an authored `release` command and return its one-shot transition. The
+/// scene owns the settled/detached policy and the authored joint; this helper
+/// only keeps the edge calculation identical for scene-level delivery scripts.
+fn dock_release_edge(lander, was_held, settled, detached) {
+    let value = get(lander, "release");
+    let held = value != () && value > 0.5;
+    #{ held: held, fire: held && !was_held && settled && !detached }
+}
+
 // ── Scene / world manipulation shortcuts (all generic cmd() under the hood) ──
 
 // `path` must already be a root-qualified address (`lunco://…` or `twin://…`).

@@ -5377,8 +5377,3 @@ fn startup_scene_failguard(
         commands.remove_resource::<StartupSceneGuard>();
     }
 }
-
-// (The hardcoded G-to-detach system was removed: dock release is now a vessel-class
-//  actuator on the normal intent→port machinery — the `Release` intent (KeyG) → the
-//  `release` port → `lunco_scene_commands::commands::ReleaseActuator` → DetachJoint.
-//  See the joint-as-actuator refactor. Works for any possessed vessel + dock joint.)

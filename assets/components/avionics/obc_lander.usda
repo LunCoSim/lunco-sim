@@ -38,7 +38,7 @@
 #              inputs:pitch  ────────────┼──► Lander.mo ──► body force / torque
 #              inputs:roll   ────────────┤
 #              inputs:yaw    ────────────┘
-#              inputs:release ───────────► dock-release actuator
+#              inputs:release ───────────► scene Rhai delivery policy
 #
 # THE VOCABULARY IS THESE PORTS. This set is not "the lander class's commands" as
 # far as the engine is concerned — the engine has no lander class. It is the set of

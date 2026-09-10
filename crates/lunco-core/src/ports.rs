@@ -37,12 +37,12 @@
 //! order *is* resolution precedence (first match wins).
 
 use bevy::prelude::*;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::InputPorts;
 
 /// Direction (causality) of a port.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Reflect)]
 pub enum PortDirection {
     /// Port receives values from connections.
     In,
@@ -142,6 +142,44 @@ pub struct PortInfo {
     pub value: f64,
     /// Owner-provided type, unit, validation, source, and authority.
     pub metadata: PortMetadata,
+}
+
+/// A port owner as seen by the registry, including the precedence used when
+/// more than one backend exposes the same public name.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PortOwnerInfo {
+    /// Public port name.
+    pub name: String,
+    /// Causality declared by the owner.
+    pub direction: PortDirection,
+    /// Registration order used by [`PortRegistry::write_port`] and the read
+    /// methods. Lower values win.
+    pub precedence: usize,
+    /// Owner-provided domain/backend description.
+    pub metadata: PortMetadata,
+}
+
+/// The access side on which a duplicate public name collides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PortCollisionDirection {
+    /// More than one owner can receive a write.
+    Input,
+    /// More than one owner can provide a read value.
+    Output,
+    /// More than one bidirectional owner exposes the same name.
+    InOut,
+}
+
+/// Multiple runtime owners of one public port name on one entity.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PortCollision {
+    /// Public port name.
+    pub name: String,
+    /// Access side that is ambiguous.
+    pub direction: PortCollisionDirection,
+    /// Owners in registry precedence order. The first entry is the owner that
+    /// receives the corresponding registry operation.
+    pub owners: Vec<PortOwnerInfo>,
 }
 
 /// A discovered port: identity, causality, current value.
@@ -360,6 +398,114 @@ impl PortRegistry {
         out
     }
 
+    /// Enumerate the distinct runtime owners of every public port on `entity`.
+    ///
+    /// A backend may expose one port through more than one inspection view. The
+    /// registered backend is the owner identity, so repeated views from the
+    /// same backend are collapsed while distinct backends remain visible.
+    /// The returned precedence is the registry order consumed by the read/write
+    /// methods; this is intentionally a diagnostic read and never changes
+    /// routing.
+    pub fn entity_port_owners(&self, world: &World, entity: Entity) -> Vec<PortOwnerInfo> {
+        let mut out = Vec::new();
+        for (precedence, backend) in self.backends.iter().enumerate() {
+            let mut ports = Vec::new();
+            (backend.list)(world, entity, &mut ports);
+            let mut by_name = BTreeMap::new();
+            for port in ports {
+                by_name
+                    .entry(port.name)
+                    .and_modify(|direction| {
+                        *direction = match (*direction, port.direction) {
+                            (PortDirection::In, PortDirection::In)
+                            | (PortDirection::Out, PortDirection::Out) => *direction,
+                            _ => PortDirection::InOut,
+                        };
+                    })
+                    .or_insert(port.direction);
+            }
+            for (name, direction) in by_name {
+                let metadata = backend
+                    .metadata
+                    .map(|describe| describe(world, entity, &name, direction))
+                    .unwrap_or_else(|| PortMetadata::unknown(direction));
+                out.push(PortOwnerInfo {
+                    name,
+                    direction,
+                    precedence,
+                    metadata,
+                });
+            }
+        }
+        out.sort_by(|a, b| {
+            a.precedence
+                .cmp(&b.precedence)
+                .then_with(|| a.name.cmp(&b.name))
+                .then_with(|| a.direction.cmp(&b.direction))
+                .then_with(|| a.metadata.source.cmp(&b.metadata.source))
+        });
+        out
+    }
+
+    /// Find public names with more than one runtime owner on `entity`.
+    ///
+    /// `InOut` owners participate in both the input and output access sides
+    /// when mixed with a one-way owner. Two or more `InOut` owners produce one
+    /// `InOut` collision, avoiding duplicate warnings for the same ambiguity.
+    pub fn entity_port_collisions(&self, world: &World, entity: Entity) -> Vec<PortCollision> {
+        let mut by_name: BTreeMap<String, Vec<PortOwnerInfo>> = BTreeMap::new();
+        for owner in self.entity_port_owners(world, entity) {
+            by_name.entry(owner.name.clone()).or_default().push(owner);
+        }
+
+        let mut collisions = Vec::new();
+        for (name, owners) in by_name {
+            if owners.len() < 2 {
+                continue;
+            }
+            let all_inout = owners
+                .iter()
+                .all(|owner| owner.direction == PortDirection::InOut);
+            if all_inout {
+                collisions.push(PortCollision {
+                    name,
+                    direction: PortCollisionDirection::InOut,
+                    owners,
+                });
+                continue;
+            }
+
+            let inputs: Vec<_> = owners
+                .iter()
+                .filter(|owner| matches!(owner.direction, PortDirection::In | PortDirection::InOut))
+                .cloned()
+                .collect();
+            if inputs.len() > 1 {
+                collisions.push(PortCollision {
+                    name: name.clone(),
+                    direction: PortCollisionDirection::Input,
+                    owners: inputs,
+                });
+            }
+
+            let outputs: Vec<_> = owners
+                .iter()
+                .filter(|owner| {
+                    matches!(owner.direction, PortDirection::Out | PortDirection::InOut)
+                })
+                .cloned()
+                .collect();
+            if outputs.len() > 1 {
+                collisions.push(PortCollision {
+                    name,
+                    direction: PortCollisionDirection::Output,
+                    owners: outputs,
+                });
+            }
+        }
+        collisions
+    }
+
     /// Read the **output** named `name` on `entity` — the value a connection reads
     /// from its *source*. Searches outputs only (plus bidirectional single-value
     /// ports). Critical when a name exists as both input and output on one entity.
@@ -522,9 +668,119 @@ impl PortRegistry {
 
 #[cfg(test)]
 mod tests {
-    use super::PortRegistry;
+    use super::{
+        PortBackend, PortCollisionDirection, PortDirection, PortMetadata, PortRef, PortRegistry,
+    };
     use crate::InputPorts;
     use bevy::prelude::*;
+
+    fn duplicate_input_list(_world: &World, _entity: Entity, out: &mut Vec<PortRef>) {
+        out.push(PortRef {
+            name: "release".into(),
+            direction: PortDirection::In,
+            value: 0.0,
+        });
+        out.push(PortRef {
+            name: "release".into(),
+            direction: PortDirection::In,
+            value: 0.0,
+        });
+    }
+
+    fn duplicate_inout_list(_world: &World, _entity: Entity, out: &mut Vec<PortRef>) {
+        out.push(PortRef {
+            name: "release".into(),
+            direction: PortDirection::InOut,
+            value: 0.0,
+        });
+        out.push(PortRef {
+            name: "release".into(),
+            direction: PortDirection::InOut,
+            value: 0.0,
+        });
+    }
+
+    fn owner_a_metadata(
+        _world: &World,
+        _entity: Entity,
+        _name: &str,
+        direction: PortDirection,
+    ) -> PortMetadata {
+        PortMetadata::scalar(direction, None, None, None, "Modelica/OBC", "solver", true)
+    }
+
+    fn owner_b_metadata(
+        _world: &World,
+        _entity: Entity,
+        _name: &str,
+        direction: PortDirection,
+    ) -> PortMetadata {
+        PortMetadata::scalar(
+            direction,
+            None,
+            None,
+            None,
+            "dock/runtime actuator",
+            "actuator",
+            true,
+        )
+    }
+
+    fn write_input(_world: &mut World, _entity: Entity, _name: &str, _value: f64) -> bool {
+        true
+    }
+
+    fn no_read(_world: &World, _entity: Entity, _name: &str) -> Option<f64> {
+        None
+    }
+
+    const OWNER_A_INPUT: PortBackend = PortBackend {
+        list: duplicate_input_list,
+        metadata: Some(owner_a_metadata),
+        read_output: no_read,
+        read_input: no_read,
+        write_input,
+        resolve_output: None,
+        resolve_input: None,
+        read_slot: None,
+        write_slot: None,
+    };
+
+    const OWNER_B_INPUT: PortBackend = PortBackend {
+        list: duplicate_input_list,
+        metadata: Some(owner_b_metadata),
+        read_output: no_read,
+        read_input: no_read,
+        write_input,
+        resolve_output: None,
+        resolve_input: None,
+        read_slot: None,
+        write_slot: None,
+    };
+
+    const OWNER_A_INOUT: PortBackend = PortBackend {
+        list: duplicate_inout_list,
+        metadata: Some(owner_a_metadata),
+        read_output: no_read,
+        read_input: no_read,
+        write_input,
+        resolve_output: None,
+        resolve_input: None,
+        read_slot: None,
+        write_slot: None,
+    };
+
+    const OWNER_B_INOUT: PortBackend = PortBackend {
+        list: duplicate_inout_list,
+        metadata: Some(owner_b_metadata),
+        read_output: no_read,
+        read_input: no_read,
+        write_input,
+        resolve_output: None,
+        resolve_input: None,
+        read_slot: None,
+        write_slot: None,
+    };
 
     #[test]
     fn generic_input_ports_are_listed_and_written_through_the_registry() {
@@ -578,5 +834,42 @@ mod tests {
         assert_eq!(arm.metadata.min, None);
         assert_eq!(arm.metadata.max, None);
         assert!(arm.metadata.writable);
+    }
+
+    #[test]
+    fn registry_reports_distinct_input_owners_in_write_precedence_order() {
+        let mut world = World::new();
+        let entity = world.spawn_empty().id();
+        let mut registry = PortRegistry::default();
+        registry.register(OWNER_A_INPUT);
+        registry.register(OWNER_B_INPUT);
+
+        let collisions = registry.entity_port_collisions(&world, entity);
+        assert_eq!(collisions.len(), 1);
+        assert_eq!(collisions[0].direction, PortCollisionDirection::Input);
+        assert_eq!(collisions[0].name, "release");
+        assert_eq!(collisions[0].owners.len(), 2);
+        assert_eq!(collisions[0].owners[0].metadata.source, "Modelica/OBC");
+        assert_eq!(collisions[0].owners[0].precedence, 1);
+        assert_eq!(
+            collisions[0].owners[1].metadata.source,
+            "dock/runtime actuator"
+        );
+        assert_eq!(collisions[0].owners[1].precedence, 2);
+        assert!(registry.write_port(&mut world, entity, "release", 1.0));
+    }
+
+    #[test]
+    fn registry_reports_inout_collision_once_for_both_access_sides() {
+        let mut world = World::new();
+        let entity = world.spawn_empty().id();
+        let mut registry = PortRegistry::default();
+        registry.register(OWNER_A_INOUT);
+        registry.register(OWNER_B_INOUT);
+
+        let collisions = registry.entity_port_collisions(&world, entity);
+        assert_eq!(collisions.len(), 1);
+        assert_eq!(collisions[0].direction, PortCollisionDirection::InOut);
+        assert_eq!(collisions[0].owners.len(), 2);
     }
 }

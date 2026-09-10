@@ -24,7 +24,39 @@
 // runtime emits `waypoint.reached` with a structured {path, state, index} value.
 // The shared prelude applies the authored inactive look through the USD runtime
 // layer; this script only translates the arrival into mission events.
+const LANDER = "/LanderTest/Lander";
+const DOCK = "/LanderTest/LanderRoverJoint";
+
+fn on_start(me) {
+    this.lander_settled = false;
+    this.release_latched = false;
+    this.rover_detached = false;
+}
+
 fn on_event(me, evt) {
+    if evt.name == "cmd:SetPorts" {
+        let transition = dock_release_edge(
+            find(LANDER), this.release_latched, this.lander_settled, this.rover_detached);
+        this.release_latched = transition.held;
+        if transition.fire {
+            let result = cmd("DetachJoint", #{
+                target: find(DOCK),
+                intent: "Interactive",
+            });
+            if !result.ok {
+                print("[lander] dock release failed: " + result.error);
+                notify_kind("Dock release failed: " + result.error, "error");
+            } else {
+                this.rover_detached = true;
+                notify("Releasing the rover...");
+            }
+        }
+        return;
+    }
+    if evt.name == "lander_touchdown" && evt.source == find(LANDER) {
+        this.lander_settled = true;
+        return;
+    }
     let rover = find("/LanderTest/SkidRover");
     if evt.name != "waypoint.reached" || evt.source != rover { return; }
     let index = waypoint_event_index(evt);
@@ -53,7 +85,14 @@ fn touchdown_notice(me) {
 }
 
 fn release_notice(me) {
-    detach_joint(find("/LanderTest/LanderRoverJoint"));
+    let joint = find(DOCK);
+    if joint < 0 { return; }
+    let result = cmd("DetachJoint", #{ target: joint });
+    if !result.ok {
+        print("[lander] mission dock release failed: " + result.error);
+        notify_kind("Dock release failed: " + result.error, "error");
+        return;
+    }
     notify("Releasing the rover...");
 }
 
