@@ -156,7 +156,7 @@ the active simulation viewport.
    already-known generation can be advanced by a typed delta.
 5. Select the `Editor` perspective from the title-bar switcher, or activate it
    through the typed `ActivatePerspective { id: "editor" }` command, then open
-   an isolated preview with `OpenUsdPreview { preview, doc, edit_target }`; the
+   an isolated preview with `OpenUsdPreview { preview, doc_id, edit_target }`; the
    preview's primary view is exposed as an instance-backed dock tab. Use
    `FocusUsdPreview { preview }` when changing the visible document; it
    foregrounds that tab. Every panel and selection must remain bound to that
@@ -201,7 +201,7 @@ the active simulation viewport.
 
    For multi-part inspection, wait for `projection_ready: true`, then use the
    same explicit preview/document handles with
-   `ExplodeUsdPreview { preview, doc, assembly, parts, action, axis, spacing }`.
+   `ExplodeUsdPreview { preview, doc_id, assembly, parts, action, axis, spacing }`.
    `action` is `Enable`, `Update`, or `Reset`; `assembly` must be an authored
    `kind = "assembly"` path and `parts` must be non-empty exact composed paths
    below it. Parts are stably ordered by path. Enable captures original local

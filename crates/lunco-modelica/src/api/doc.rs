@@ -10,7 +10,7 @@ use lunco_doc::DocumentId;
 /// Replace an open document's entire source text.
 #[Command(default)]
 pub struct SetDocumentSource {
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
     pub source: String,
 }
 
@@ -72,7 +72,7 @@ fn stop_live_runs_for_doc(world: &mut World, doc: DocumentId) -> usize {
 
 #[on_command(SetDocumentSource)]
 pub fn on_set_document_source(trigger: On<SetDocumentSource>, mut commands: Commands) {
-    let doc_raw = trigger.event().doc;
+    let doc_raw = trigger.event().doc_id;
     let source = trigger.event().source.clone();
     commands.queue(move |world: &mut World| {
         let Some(doc) = resolve_doc(world, doc_raw) else {

@@ -358,7 +358,7 @@ pub(crate) fn on_scene_click_attach(
     };
 
     commands.trigger(lunco_usd::AttachProgram {
-        doc,
+        doc_id: doc,
         spec: choice.attachment_spec(&prim.path),
     });
     *state = AttachState::Idle;

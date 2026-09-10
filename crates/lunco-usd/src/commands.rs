@@ -1338,7 +1338,7 @@ fn on_fork_usd_document(
 ) -> Result<Ack, String> {
     let command = trigger.event();
     let doc = registry
-        .fork(command.source, command.name.clone())
+        .fork(command.source_doc_id, command.name.clone())
         .map_err(|reject| reject.to_string())?;
     let generation = registry
         .host(doc)
@@ -1347,8 +1347,8 @@ fn on_fork_usd_document(
     Ok(Ack::with_data(
         OpId::new(),
         serde_json::json!({
-            "source_doc": command.source,
-            "doc": doc,
+            "source_doc_id": command.source_doc_id,
+            "doc_id": doc,
             "name": command.name,
             "generation": generation,
             "target_layer": LayerId::root().as_str(),
@@ -1364,7 +1364,7 @@ fn on_close_usd_document(
     trigger: On<CloseDocument>,
     mut registry: ResMut<DocumentRegistry<UsdDocument>>,
 ) {
-    let doc = trigger.event().doc;
+    let doc = trigger.event().doc_id;
     if registry.remove(doc).is_some() {
         bevy::log::info!("[CloseUsd] closed {doc}");
     }
@@ -1380,7 +1380,7 @@ fn on_discard_usd_document(
     active_id: Res<ActiveCommandId>,
     pending_request: Option<Res<PendingApiRequest>>,
 ) {
-    let doc = trigger.event().doc;
+    let doc = trigger.event().doc_id;
     let command_id = active_id.get();
     let correlation_id = pending_request
         .map(|request| request.correlation_id)
@@ -1415,7 +1415,7 @@ fn on_discard_usd_document(
                     Ok(Ack::with_data(
                         OpId::new(),
                         serde_json::json!({
-                            "doc": doc,
+                            "doc_id": doc,
                             "action": "closed",
                             "generation": generation,
                             "diagnostics": [],
@@ -1539,7 +1539,7 @@ fn drain_pending_usd_discards(world: &mut World) {
                                 Ok(Ack::with_data(
                                     OpId::new(),
                                     serde_json::json!({
-                                        "doc": doc,
+                                        "doc_id": doc,
                                         "action": "discarded",
                                         "generation": generation,
                                         "target_layer": LayerId::root().as_str(),
@@ -1605,7 +1605,7 @@ const DEFAULT_USDA_SCAFFOLD: &str =
 
 #[on_command(SaveDocument)]
 fn on_save_document(trigger: On<SaveDocument>, mut commands: Commands) {
-    let doc_id = trigger.event().doc;
+    let doc_id = trigger.event().doc_id;
     commands.queue(move |world: &mut World| {
         let registry = world.resource::<DocumentRegistry<UsdDocument>>();
         let Some(host) = registry.host(doc_id) else {
@@ -1677,7 +1677,7 @@ fn on_save_as_document(
     #[cfg(feature = "ui")] workspace: Option<Res<WorkspaceResource>>,
     mut commands: Commands,
 ) {
-    let doc_id = trigger.event().doc;
+    let doc_id = trigger.event().doc_id;
     let target_path = trigger.event().path.clone();
     let Some(host) = registry.host(doc_id) else {
         bevy::log::warn!("[SaveAsUsd] unknown document {doc_id}");
@@ -1781,7 +1781,7 @@ fn on_save_as_document(
 #[Command]
 pub struct CreateUsdProposal {
     /// Document that owns the authored target.
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
     /// Explicit source-asset, assembly, or instance-override scope.
     pub scope: UsdEditScope,
     /// Human-readable intent and eventual journal change-set label.
@@ -1838,7 +1838,7 @@ fn proposal_ack(
         OpId::new(),
         serde_json::json!({
             "proposal": proposal,
-            "doc": doc,
+            "doc_id": doc,
             "action": action,
             "generation": generation,
             "state": state.as_str(),
@@ -1882,13 +1882,13 @@ fn on_create_usd_proposal(
         .map(|request| request.correlation_id)
         .filter(|id| *id != 0);
     commands.queue(move |world: &mut World| {
-        refresh_authoring_recipe(world, command.doc);
+        refresh_authoring_recipe(world, command.doc_id);
         let outcome = match world
             .resource::<DocumentRegistry<UsdDocument>>()
-            .host(command.doc)
+            .host(command.doc_id)
             .map(|host| host.document())
         {
-            None => Err(format!("unknown USD document {}", command.doc)),
+            None => Err(format!("unknown USD document {}", command.doc_id)),
             Some(document) => {
                 let validation =
                     validate_proposal(document, command.scope, command.parent_gen, &command.ops);
@@ -1899,7 +1899,7 @@ fn on_create_usd_proposal(
                     ))
                 } else {
                     let id = world.resource_mut::<UsdEditSessions>().insert(
-                        command.doc,
+                        command.doc_id,
                         command.scope,
                         command.label,
                         command.parent_gen,
@@ -1908,12 +1908,12 @@ fn on_create_usd_proposal(
                     );
                     let generation = world
                         .resource::<DocumentRegistry<UsdDocument>>()
-                        .host(command.doc)
+                        .host(command.doc_id)
                         .map(|host| host.generation())
                         .unwrap_or_default();
                     Ok(proposal_ack(
                         id,
-                        command.doc,
+                        command.doc_id,
                         "created",
                         generation,
                         UsdProposalState::Pending,
@@ -2113,7 +2113,7 @@ fn on_commit_usd_proposal(
                             world.resource_mut::<UsdEditSessions>().remove(proposal.id);
                             ack.data = Some(serde_json::json!({
                                 "proposal": proposal.id,
-                                "doc": proposal.doc,
+                                "doc_id": proposal.doc,
                                 "action": "committed",
                                 "edit": edit,
                                 "diagnostics": [],
@@ -2156,7 +2156,7 @@ fn on_commit_usd_proposal(
 #[Command(default)]
 pub struct ApplyUsdOp {
     /// Target document.
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
     /// Generation the caller edited from. When present, the operation is
     /// rejected if the document advanced before it arrived.
     pub parent_gen: Option<u64>,
@@ -2173,7 +2173,7 @@ pub struct ApplyUsdOp {
 #[Command(default)]
 pub struct ApplyUsdOps {
     /// Target document.
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
     /// Generation the caller edited from. When present, the complete compound
     /// edit is rejected if the document advanced before it arrived.
     pub parent_gen: Option<u64>,
@@ -2199,23 +2199,23 @@ fn on_apply_usd_ops(
         let total = command.ops.len();
         let outcome = match apply_ops_as_change_set_result(
             world,
-            command.doc,
+            command.doc_id,
             command.label,
             command.ops,
             command.parent_gen,
         ) {
             Ok((ack, applied)) if applied == total => {
-                claim_user_document_if_projected(world, command.doc);
+                claim_user_document_if_projected(world, command.doc_id);
                 Ok(ack)
             }
             Ok((_, applied)) => Err(format!(
                 "USD document {} applied {applied}/{total} operations",
-                command.doc
+                command.doc_id
             )),
             Err(error) => Err(error),
         };
         if let Err(error) = &outcome {
-            bevy::log::warn!("[ApplyUsdOps] {} rejected: {error}", command.doc);
+            bevy::log::warn!("[ApplyUsdOps] {} rejected: {error}", command.doc_id);
         }
         finish_command_result(
             world,
@@ -2234,7 +2234,7 @@ fn on_apply_usd_op(
     active_id: Res<ActiveCommandId>,
     pending_request: Option<Res<PendingApiRequest>>,
 ) {
-    let doc = trigger.event().doc;
+    let doc = trigger.event().doc_id;
     let parent_gen = trigger.event().parent_gen;
     let op = trigger.event().op.clone();
     let target = op.edit_target().clone();
@@ -2330,7 +2330,7 @@ pub fn on_undo_usd_document(
     mut commands: Commands,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
 ) {
-    let doc = trigger.event().doc;
+    let doc = trigger.event().doc_id;
     if registry.host(doc).is_none() {
         return;
     }
@@ -2367,7 +2367,7 @@ pub fn on_redo_usd_document(
     mut commands: Commands,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
 ) {
-    let doc = trigger.event().doc;
+    let doc = trigger.event().doc_id;
     if registry.host(doc).is_none() {
         return;
     }
@@ -2433,7 +2433,7 @@ fn usd_ack_data(
         })
     });
     serde_json::json!({
-        "doc": doc,
+        "doc_id": doc,
         "target_layer": target_layers.first(),
         "target_layers": target_layers,
         "paths": paths,
@@ -2991,7 +2991,7 @@ fn validate_attach_component(
 #[Command(default)]
 pub struct AttachComponent {
     /// Target document.
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
     /// The attachment to perform.
     pub spec: crate::attach::AttachSpec,
 }
@@ -3002,7 +3002,7 @@ fn on_attach_component(
     mut commands: Commands,
     active_id: Option<Res<ActiveCommandId>>,
 ) {
-    let doc = trigger.event().doc;
+    let doc = trigger.event().doc_id;
     let spec = trigger.event().spec.clone();
     let command_id = active_id.as_ref().and_then(|id| id.get());
     commands.queue(move |world: &mut World| {
@@ -3050,7 +3050,7 @@ fn on_attach_component(
 #[Command(default)]
 pub struct DetachComponent {
     /// Target document.
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
     /// Exact component attachment to remove.
     pub spec: crate::attach::DetachSpec,
 }
@@ -3064,12 +3064,12 @@ fn on_detach_component(
     let command = trigger.event().clone();
     let command_id = active_id.as_ref().and_then(|id| id.get());
     commands.queue(move |world: &mut World| {
-        let outcome = match validate_detach_component(world, command.doc, &command.spec) {
+        let outcome = match validate_detach_component(world, command.doc_id, &command.spec) {
             Err(error) => Err(error),
             Ok(()) => {
                 let ops = crate::attach::detach_component_ops(&command.spec);
                 let label = format!("Detach {}", command.spec.component_path);
-                let (applied, total) = apply_ops_as_change_set(world, command.doc, label, ops);
+                let (applied, total) = apply_ops_as_change_set(world, command.doc_id, label, ops);
                 if applied != total {
                     Err(format!(
                         "detach {} applied {applied}/{total} operations",
@@ -3078,7 +3078,7 @@ fn on_detach_component(
                 } else {
                     bevy::log::info!(
                         "[DetachComponent] {}: removed `{}` and `{}` ({total} ops, one change set)",
-                        command.doc,
+                        command.doc_id,
                         command.spec.component_path,
                         command.spec.joint_path
                     );
@@ -3121,7 +3121,7 @@ fn on_detach_component(
 #[Command(default)]
 pub struct AttachProgram {
     /// Target USD document.
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
     /// Complete program attachment intent.
     pub spec: crate::program::ProgramAttachSpec,
 }
@@ -3135,7 +3135,7 @@ fn on_attach_program(trigger: On<AttachProgram>, mut commands: Commands) {
             Err(error) => {
                 bevy::log::warn!(
                     "[AttachProgram] {} rejected before authoring: {}",
-                    command.doc,
+                    command.doc_id,
                     error
                 );
                 return;
@@ -3145,18 +3145,18 @@ fn on_attach_program(trigger: On<AttachProgram>, mut commands: Commands) {
             "Attach program {} to {}",
             command.spec.name, command.spec.host_path
         );
-        let (applied, total) = apply_ops_as_change_set(world, command.doc, label, ops);
+        let (applied, total) = apply_ops_as_change_set(world, command.doc_id, label, ops);
         if applied == total {
             bevy::log::info!(
                 "[AttachProgram] {}: attached `{}` to `{}` ({total} ops, one change set)",
-                command.doc,
+                command.doc_id,
                 command.spec.name,
                 command.spec.host_path
             );
         } else {
             bevy::log::warn!(
                 "[AttachProgram] {} rejected during authoring: {applied}/{total} ops applied",
-                command.doc
+                command.doc_id
             );
         }
     });
@@ -3184,7 +3184,7 @@ fn on_attach_program(trigger: On<AttachProgram>, mut commands: Commands) {
 #[Command(default)]
 pub struct SetDomeLight {
     /// Document to author into. `None` = the workspace's active document.
-    pub doc: Option<DocumentId>,
+    pub doc_id: Option<DocumentId>,
     /// Prim path of the dome. `None` = `/World/Sky`.
     ///
     /// It must live **under the stage's `defaultPrim` subtree** (`/World` in
@@ -3240,7 +3240,7 @@ fn on_set_dome_light(
         }
     };
 
-    let doc = match cmd.doc {
+    let doc = match cmd.doc_id {
         Some(doc) => doc,
         None => {
             let Some(doc) = backed.as_ref().and_then(|b| {
@@ -3776,7 +3776,7 @@ mod tests {
             .proposal(proposal)
             .is_none());
 
-        app.world_mut().trigger(UndoDocument { doc });
+        app.world_mut().trigger(UndoDocument { doc_id: doc });
         app.update();
         assert!(!app
             .world()
@@ -3938,7 +3938,7 @@ mod tests {
             1
         );
 
-        app.world_mut().trigger(DiscardDocument { doc });
+        app.world_mut().trigger(DiscardDocument { doc_id: doc });
         app.update();
         assert_eq!(
             app.world()
@@ -3969,7 +3969,7 @@ mod tests {
         app.update();
 
         app.world_mut().trigger(ForkDocument {
-            source,
+            source_doc_id: source,
             name: "Fork.usda".to_owned(),
         });
         app.update();
@@ -3996,7 +3996,7 @@ mod tests {
             .origin()
             .is_untitled());
 
-        app.world_mut().trigger(DiscardDocument { doc: fork });
+        app.world_mut().trigger(DiscardDocument { doc_id: fork });
         app.update();
         assert!(!app
             .world()
@@ -4031,12 +4031,12 @@ mod tests {
         let inspected = lunco_api::queries::ApiQueryProvider::execute(
             &provider,
             &world,
-            &serde_json::json!({ "doc": doc.raw(), "path": "/Rig/Chassis" }),
+            &serde_json::json!({ "doc_id": doc.raw(), "path": "/Rig/Chassis" }),
         );
         let lunco_api::schema::ApiResponse::Ok { data: Some(data) } = inspected else {
             panic!("inspection query must return structured data");
         };
-        assert_eq!(data["doc"], serde_json::json!(doc));
+        assert_eq!(data["doc_id"], serde_json::json!(doc));
         assert_eq!(data["prim"]["exists"], serde_json::json!(true));
         assert_eq!(data["prim"]["type"], serde_json::json!("Xform"));
     }
@@ -4070,11 +4070,11 @@ mod tests {
         world.insert_resource(sessions);
 
         let response = crate::assembly_api::InspectUsdEditSessionProvider
-            .execute(&world, &serde_json::json!({ "doc": doc.raw() }));
+            .execute(&world, &serde_json::json!({ "doc_id": doc.raw() }));
         let lunco_api::schema::ApiResponse::Ok { data: Some(data) } = response else {
             panic!("edit-session query must return structured data");
         };
-        assert_eq!(data["doc"], serde_json::json!(doc));
+        assert_eq!(data["doc_id"], serde_json::json!(doc));
         assert_eq!(data["generation"], serde_json::json!(0));
         assert_eq!(data["proposals"][0]["id"], serde_json::json!(proposal));
         assert_eq!(data["proposals"][0]["scope"], serde_json::json!("assembly"));
@@ -4109,7 +4109,7 @@ mod tests {
         let resolved = crate::assembly_api::ResolveUsdTargetProvider.execute(
             &world,
             &serde_json::json!({
-                "doc": doc.raw(),
+                "doc_id": doc.raw(),
                 "path": "/Rig/Wheel",
                 "edit_target": "@runtime@"
             }),
@@ -4123,7 +4123,7 @@ mod tests {
 
         let future = crate::assembly_api::SyncUsdDocumentProvider.execute(
             &world,
-            &serde_json::json!({ "doc": doc.raw(), "since_generation": 99 }),
+            &serde_json::json!({ "doc_id": doc.raw(), "since_generation": 99 }),
         );
         assert!(matches!(
             future,
@@ -4132,7 +4132,7 @@ mod tests {
 
         let delta = crate::assembly_api::SyncUsdDocumentProvider.execute(
             &world,
-            &serde_json::json!({ "doc": doc.raw(), "since_generation": 0 }),
+            &serde_json::json!({ "doc_id": doc.raw(), "since_generation": 0 }),
         );
         let lunco_api::schema::ApiResponse::Ok { data: Some(delta) } = delta else {
             panic!("sync cursor must return an op delta");
@@ -4170,7 +4170,7 @@ mod tests {
 
         let response = crate::assembly_api::SyncUsdDocumentProvider.execute(
             &world,
-            &serde_json::json!({ "doc": doc.raw(), "since_generation": 0 }),
+            &serde_json::json!({ "doc_id": doc.raw(), "since_generation": 0 }),
         );
         let lunco_api::schema::ApiResponse::Ok {
             data: Some(snapshot),
@@ -4339,7 +4339,7 @@ mod tests {
         ];
         for op in ops {
             app.world_mut().trigger(ApplyUsdOp {
-                doc: doc_id,
+                doc_id: doc_id,
                 parent_gen: None,
                 op,
             });
@@ -4429,7 +4429,7 @@ mod tests {
         ];
         for op in forward_ops.clone() {
             app.world_mut().trigger(ApplyUsdOp {
-                doc: doc_id,
+                doc_id: doc_id,
                 parent_gen: None,
                 op,
             });
@@ -4728,7 +4728,7 @@ mod tests {
             )
         };
         app.world_mut().trigger(lunco_doc_bevy::SaveAsDocument {
-            doc,
+            doc_id: doc,
             path: target.display().to_string(),
         });
         app.update();

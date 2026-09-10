@@ -13,7 +13,7 @@ use lunco_doc::DocumentId;
 #[Command(default)]
 pub struct AutoArrangeDiagram {
     /// Document to arrange; unassigned (`0` over the API) = active.
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
 }
 
 /// Focus the first open tab whose title contains `pattern` — the way an agent
@@ -30,7 +30,7 @@ pub struct FocusDocumentByName {
 #[Command(default)]
 pub struct SetViewMode {
     /// Document to switch; unassigned (`0` over the API) = active.
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
     /// One of `"text"`, `"diagram"`, `"icon"`, or `"docs"`. Anything else
     /// leaves the mode unchanged.
     pub mode: String,
@@ -41,7 +41,7 @@ pub struct SetViewMode {
 #[Command(default)]
 pub struct SetZoom {
     /// Document whose canvas to zoom; unassigned (`0` over the API) = active.
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
     /// Zoom factor, `1.0` = 100%.
     pub zoom: f32,
 }
@@ -50,7 +50,7 @@ pub struct SetZoom {
 #[Command(default)]
 pub struct FitCanvas {
     /// Document to fit; unassigned (`0` over the API) = active.
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
 }
 
 /// Centre the canvas on one named component — how a screenshot or a review
@@ -58,7 +58,7 @@ pub struct FitCanvas {
 #[Command(default)]
 pub struct FocusComponent {
     /// Document to focus in; unassigned (`0` over the API) = active.
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
     /// Component instance name as it appears in the diagram.
     pub name: String,
     /// Margin in canvas units to leave around the component.
@@ -69,7 +69,7 @@ pub struct FocusComponent {
 #[Command(default)]
 pub struct PanCanvas {
     /// Document to pan; unassigned (`0` over the API) = active.
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
     /// Horizontal offset in canvas units.
     pub x: f32,
     /// Vertical offset in canvas units.
@@ -131,7 +131,7 @@ pub fn on_focus_document_by_name(trigger: On<FocusDocumentByName>, mut commands:
 
 #[on_command(SetViewMode)]
 pub fn on_set_view_mode(trigger: On<SetViewMode>, mut commands: Commands) {
-    let raw = trigger.event().doc;
+    let raw = trigger.event().doc_id;
     let mode_str = trigger.event().mode.clone();
     commands.queue(move |world: &mut World| {
         let Some(doc) = (if raw.is_unassigned() {
@@ -167,7 +167,7 @@ pub fn on_set_view_mode(trigger: On<SetViewMode>, mut commands: Commands) {
 
 #[on_command(SetZoom)]
 pub fn on_set_zoom(trigger: On<SetZoom>, mut commands: Commands) {
-    let raw = trigger.event().doc;
+    let raw = trigger.event().doc_id;
     let zoom = trigger.event().zoom;
     commands.queue(move |world: &mut World| {
         let doc = if raw.is_unassigned() {
@@ -200,7 +200,7 @@ pub fn on_set_zoom(trigger: On<SetZoom>, mut commands: Commands) {
 
 #[on_command(FocusComponent)]
 pub fn on_focus_component(trigger: On<FocusComponent>, mut commands: Commands) {
-    let raw = trigger.event().doc;
+    let raw = trigger.event().doc_id;
     let name = trigger.event().name.clone();
     let padding = if trigger.event().padding > 0.0 {
         trigger.event().padding
@@ -246,7 +246,7 @@ pub fn on_focus_component(trigger: On<FocusComponent>, mut commands: Commands) {
 
 #[on_command(FitCanvas)]
 pub fn on_fit_canvas(trigger: On<FitCanvas>, mut commands: Commands) {
-    let raw = trigger.event().doc;
+    let raw = trigger.event().doc_id;
     commands.queue(move |world: &mut World| {
         let doc = if raw.is_unassigned() {
             super::resolve_active_doc(world)
@@ -269,10 +269,10 @@ pub fn on_fit_canvas(trigger: On<FitCanvas>, mut commands: Commands) {
 pub fn on_pan_canvas(trigger: On<PanCanvas>, mut commands: Commands) {
     let ev = trigger.event().clone();
     commands.queue(move |world: &mut World| {
-        let doc = if ev.doc.is_unassigned() {
+        let doc = if ev.doc_id.is_unassigned() {
             super::resolve_active_doc(world)
         } else {
-            Some(ev.doc)
+            Some(ev.doc_id)
         };
         let Some(doc) = doc else { return };
         let Some(tab_id) = visible_tab_for_doc(world, doc) else {

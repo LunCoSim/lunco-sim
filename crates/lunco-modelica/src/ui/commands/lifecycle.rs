@@ -35,11 +35,11 @@ pub struct CreateNewScratchModel {
 }
 
 /// Duplicate a read-only (library) model into a new editable Untitled
-/// document. Unassigned `source_doc` (`0` over the API) means the active
+/// document. Unassigned `source_doc_id` (`0` over the API) means the active
 /// document.
 #[Command(default)]
 pub struct DuplicateModelFromReadOnly {
-    pub source_doc: DocumentId,
+    pub source_doc_id: DocumentId,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Default, bevy::reflect::Reflect)]
@@ -69,7 +69,7 @@ pub struct OpenClass {
 /// Open the same document in a new tab (split / sibling view).
 #[Command(default)]
 pub struct OpenInNewView {
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
 }
 
 /// Unified open command — dispatches on the URI scheme.
@@ -471,7 +471,7 @@ pub fn on_duplicate_model_from_read_only(
 ) {
     // Unassigned ⇒ the active document, so one verb serves the tab context
     // menu and the API.
-    let source_doc = match trigger.event().source_doc {
+    let source_doc = match trigger.event().source_doc_id {
         raw if raw.is_unassigned() => {
             let Some(active) = workspace.and_then(|ws| ws.active_document) else {
                 console.error("Duplicate failed: no active document");
@@ -745,7 +745,7 @@ pub fn spawn_duplicate_class_task(world: &mut World, qualified: String, name_hin
 
 #[on_command(OpenInNewView)]
 pub fn on_open_in_new_view(trigger: On<OpenInNewView>, mut commands: Commands) {
-    let doc = trigger.event().doc;
+    let doc = trigger.event().doc_id;
     commands.queue(move |world: &mut World| {
         let drilled = world
             .get_resource::<ModelTabs>()
@@ -1014,7 +1014,7 @@ pub fn on_close_document(
     mut registry: ResMut<ModelicaDocumentRegistry>,
     mut commands: Commands,
 ) {
-    let doc = trigger.event().doc;
+    let doc = trigger.event().doc_id;
     if registry.host(doc).is_none() {
         return;
     }
@@ -1045,7 +1045,7 @@ pub fn on_document_closed_cleanup(
     mut canvas_state: Option<ResMut<crate::ui::panels::canvas_diagram::CanvasDiagramState>>,
     mut bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
 ) {
-    let doc = trigger.event().doc;
+    let doc = trigger.event().doc_id;
     model_tabs.close(doc);
     cache.in_memory_models.retain(|e| e.doc != doc);
     // Drop the per-doc canvas entry (viewport, selection, in-flight
@@ -1102,7 +1102,7 @@ pub fn finish_close_after_save(
         }
         let last_gone = world.resource::<ModelTabs>().count_for_doc(doc) == 0;
         if last_gone {
-            world.commands().trigger(CloseDocument { doc });
+            world.commands().trigger(CloseDocument { doc_id: doc });
         }
     });
 }
@@ -1219,7 +1219,7 @@ pub fn drain_pending_tab_closes(
                 }
             });
             if model_tabs.count_for_doc(doc) == 0 {
-                commands.trigger(CloseDocument { doc });
+                commands.trigger(CloseDocument { doc_id: doc });
             }
         }
     }
@@ -1321,7 +1321,7 @@ pub fn render_close_dialogs(
                 if let Some(q) = pending_save_close.as_mut() {
                     q.queue(doc, originating_tab);
                 }
-                commands.trigger(lunco_doc_bevy::SaveDocument { doc });
+                commands.trigger(lunco_doc_bevy::SaveDocument { doc_id: doc });
             }
             DialogAction::DontSave => {
                 let tab = originating_tab;
@@ -1329,7 +1329,7 @@ pub fn render_close_dialogs(
                     close_model_tab(world, tab);
                     let last_gone = world.resource::<ModelTabs>().count_for_doc(doc) == 0;
                     if last_gone {
-                        world.commands().trigger(CloseDocument { doc });
+                        world.commands().trigger(CloseDocument { doc_id: doc });
                     }
                 });
             }

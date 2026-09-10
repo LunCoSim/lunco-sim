@@ -19,7 +19,7 @@ fn query_ok(record) {
 
 fn prim_exists(doc, path) {
     let record = query("QueryUsdPrim", #{
-        doc: doc,
+        doc_id: doc,
         path: path,
         children: false,
     });
@@ -57,7 +57,7 @@ fn find_document() {
     for item in docs.open_documents {
         if item.kind == "usd" {
             let root = query("QueryUsdPrim", #{
-                doc: item.doc_id,
+                doc_id: item.doc_id,
                 path: ROOT,
                 children: false,
             });
@@ -78,7 +78,7 @@ fn variants() {
 
 fn wheel_record(doc, path) {
     query("QueryUsdPrim", #{
-        doc: doc,
+        doc_id: doc,
         path: path,
         attrs: [
             "physxVehicleWheelAttachment:index",
@@ -188,7 +188,7 @@ fn on_tick(me) {
     }
 
     let vehicle = query("QueryUsdPrim", #{
-        doc: this.doc,
+        doc_id: this.doc,
         path: FLIP,
         children: true,
     });
@@ -243,12 +243,12 @@ fn on_tick(me) {
     }
 
     let root = query("QueryUsdPrim", #{
-        doc: this.doc,
+        doc_id: this.doc,
         path: ASSEMBLY,
         children: true,
     });
     vehicle = query("QueryUsdPrim", #{
-        doc: this.doc,
+        doc_id: this.doc,
         path: FLIP,
         children: true,
     });

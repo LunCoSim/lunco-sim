@@ -20,7 +20,7 @@ fn spawn_robot(entry_id, position) {
 
 fn modelica_apply(doc, ops) {
     if doc == () { return __missing_document("Modelica"); }
-    cmd("ApplyModelicaOps", #{ doc: doc, ops: ops })
+    cmd("ApplyModelicaOps", #{ doc_id: doc, ops: ops })
 }
 
 fn modelica_placement(x, y, width, height) {
@@ -67,7 +67,7 @@ fn mission_checkpoint(me, doc, edit_target, key, value) {
     let path = usd_path(me);
     if path == () || doc == () { return false; }
     let result = cmd("ApplyUsdOp", #{
-        doc: doc,
+        doc_id: doc,
         op: #{ SetAttribute: #{
             edit_target: edit_target,
             path: path,

@@ -780,12 +780,12 @@ pub(super) fn apply_ops(
 /// the user sees. Each op is separately undo-able via Ctrl+Z.
 #[lunco_core::on_command(AutoArrangeDiagram)]
 pub fn on_auto_arrange_diagram(trigger: On<AutoArrangeDiagram>, mut commands: Commands) {
-    let raw = trigger.event().doc;
+    let raw = trigger.event().doc_id;
     // Observers can't take `&mut World` in Bevy 0.18. Defer the real
     // work to an exclusive command — same mutations, just queued to
     // run at the next command-flush boundary.
     commands.queue(move |world: &mut World| {
-        // `doc = 0` = API / script default = "the tab the user is
+        // `doc_id = 0` = API / script default = "the tab the user is
         // looking at right now". Resolve from the registry-by-doc lookup
         // so the LunCo API can fire the command without tracking ids.
         let doc_id = if raw.is_unassigned() {

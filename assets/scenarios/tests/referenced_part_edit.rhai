@@ -66,8 +66,8 @@ fn on_tick(me) {
     if this.phase == 2 {
         let generation = assembly_edit::describe(this.doc).generation;
         if generation <= this.initial_generation || !ready(this.doc, generation) { return; }
-        let frame = query("QueryUsdPrim", #{ doc: this.doc, path: RENAMED + "/PanelFrame" });
-        let cells = query("QueryUsdPrim", #{ doc: this.doc, path: RENAMED + "/PanelSurface" });
+        let frame = query("QueryUsdPrim", #{ doc_id: this.doc, path: RENAMED + "/PanelFrame" });
+        let cells = query("QueryUsdPrim", #{ doc_id: this.doc, path: RENAMED + "/PanelSurface" });
         this.checks.push(t_true(frame.attrs["xformOp:translate"][1] == 0.5,
             "referenced frame translation projects"));
         this.checks.push(t_true(frame.attrs["xformOp:scale"][0] > 6.19,
@@ -76,14 +76,14 @@ fn on_tick(me) {
             && cells.attrs["xformOp:scale"][0] == 2.0,
             "referenced rotation and scale project"));
         this.changed_generation = generation;
-        cmd("UndoDocument", #{ doc: this.doc });
+        cmd("UndoDocument", #{ doc_id: this.doc });
         this.phase = 3;
         return;
     }
     if this.phase == 3 {
         let generation = assembly_edit::describe(this.doc).generation;
         if generation <= this.changed_generation || !ready(this.doc, generation) { return; }
-        let frame = query("QueryUsdPrim", #{ doc: this.doc, path: PANEL + "/PanelFrame" });
+        let frame = query("QueryUsdPrim", #{ doc_id: this.doc, path: PANEL + "/PanelFrame" });
         this.checks.push(t_true(abs(frame.attrs["xformOp:translate"][1] + 0.005) < 0.000001,
             "group undo restores original namespace and inherited frame pose"));
         assembly_edit::preview_close(15401);

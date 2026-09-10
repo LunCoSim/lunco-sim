@@ -587,7 +587,7 @@ pub fn on_scene_click_waypoint(
         doc, mission
     );
     commands.trigger(ApplyUsdOps {
-        doc,
+        doc_id: doc,
         parent_gen: None,
         label: "Create waypoint mission edit".to_string(),
         ops,
@@ -711,7 +711,7 @@ pub fn on_scene_click_place_waypoint(
     if mode == PlacementMode::Move {
         info!("[waypoint] Move → {} to {:?}", coord_key, world);
         commands.trigger(ApplyUsdOp {
-            doc,
+            doc_id: doc,
             parent_gen: None,
             op: UsdOp::SetTranslate {
                 edit_target: LayerId::root(),
@@ -767,7 +767,7 @@ pub fn on_scene_click_place_waypoint(
                 value: new_xml,
             });
             commands.trigger(ApplyUsdOps {
-                doc,
+                doc_id: doc,
                 parent_gen: None,
                 label: "Insert waypoint".to_string(),
                 ops,
@@ -960,7 +960,7 @@ pub fn draw_waypoint_context_menu(
 
     if let Some(value) = edited {
         commands.trigger(ApplyUsdOp {
-            doc,
+            doc_id: doc,
             parent_gen: None,
             op: UsdOp::SetAttribute {
                 edit_target: LayerId::root(),
@@ -988,7 +988,7 @@ pub fn draw_waypoint_context_menu(
     if let Some(marker_path) = deleted_marker {
         info!("[waypoint] deactivating marker prim {marker_path}");
         commands.trigger(ApplyUsdOp {
-            doc,
+            doc_id: doc,
             parent_gen: None,
             op: UsdOp::SetActive {
                 edit_target: LayerId::root(),

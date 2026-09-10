@@ -86,7 +86,7 @@ pub(crate) fn on_write_mission_requested(
         };
         let mission = format!("{prim_path}/Mission");
         world.trigger(ApplyUsdOps {
-            doc,
+            doc_id: doc,
             parent_gen: None,
             label: "Update autopilot mission".to_string(),
             ops: lunco_usd::program::inline_program_source_ops(
@@ -147,7 +147,7 @@ pub(crate) fn on_create_mission_requested(
             xml,
         ));
         world.trigger(ApplyUsdOps {
-            doc,
+            doc_id: doc,
             parent_gen: None,
             label: "Create autopilot program".to_string(),
             ops,

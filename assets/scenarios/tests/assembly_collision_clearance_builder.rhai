@@ -75,7 +75,7 @@ fn on_tick(me) {
             return;
         }
         let moving = query("QueryUsdPrim", #{
-            doc: this.doc,
+            doc_id: this.doc,
             path: MOVING,
             attrs: ["xformOp:translate"],
             collision_bounds: true,
@@ -122,12 +122,12 @@ fn on_tick(me) {
     }
 
     let moving_record = query("QueryUsdPrim", #{
-        doc: this.doc,
+        doc_id: this.doc,
         path: MOVING,
         collision_bounds: true,
     });
     let blocker_record = query("QueryUsdPrim", #{
-        doc: this.doc,
+        doc_id: this.doc,
         path: BLOCKER,
         collision_bounds: true,
     });

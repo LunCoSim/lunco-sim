@@ -10,7 +10,7 @@ use lunco_doc::DocumentId;
 /// Rename a top-level class within an open Modelica document.
 #[Command(default)]
 pub struct RenameModelicaClass {
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
     pub old_name: String,
     pub new_name: String,
 }
@@ -19,8 +19,8 @@ pub struct RenameModelicaClass {
 pub fn on_rename_modelica_class(trigger: On<RenameModelicaClass>, mut commands: Commands) {
     let ev = trigger.event().clone();
     commands.queue(move |world: &mut World| {
-        let Some(doc) = resolve_doc(world, ev.doc) else {
-            bevy::log::warn!("[RenameModelicaClass] no doc for id {}", ev.doc);
+        let Some(doc) = resolve_doc(world, ev.doc_id) else {
+            bevy::log::warn!("[RenameModelicaClass] no doc for id {}", ev.doc_id);
             return;
         };
         if ev.old_name.is_empty() || ev.new_name.is_empty() {
@@ -277,7 +277,7 @@ pub fn on_file_renamed_chain_to_modelica(
         new_stem
     );
     commands.trigger(RenameModelicaClass {
-        doc: doc_id,
+        doc_id,
         old_name: old_stem,
         new_name: new_stem,
     });
@@ -286,5 +286,5 @@ pub fn on_file_renamed_chain_to_modelica(
     // style "rename = single user-visible operation". Without this,
     // the doc would carry the renamed class only in-memory; closing
     // without save would drop the rename.
-    commands.trigger(lunco_doc_bevy::SaveDocument { doc: doc_id });
+    commands.trigger(lunco_doc_bevy::SaveDocument { doc_id });
 }

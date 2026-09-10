@@ -82,7 +82,7 @@ fn add_prim_projects_live_via_sink_no_reload() {
     // CanonicalStage built. Tick until the scene root projects.
     app.world_mut().trigger(OpenUsdPreview {
         preview: UsdPreviewId(1),
-        doc,
+        doc_id: doc,
         edit_target: LayerId::root(),
     });
     for _ in 0..40 {
@@ -104,7 +104,7 @@ fn add_prim_projects_live_via_sink_no_reload() {
     // rides `sync_twin_overlays` → typed live authoring (Plain) → the live
     // stage's sink → `project_stage_changes`, spawning the entity in place.
     app.world_mut().trigger(ApplyUsdOp {
-        doc,
+        doc_id: doc,
         parent_gen: None,
         op: UsdOp::AddPrim {
             edit_target: LayerId::runtime(),
@@ -153,7 +153,7 @@ fn referenced_spawn_projects_live_via_fetch_inject_author() {
 
     app.world_mut().trigger(OpenUsdPreview {
         preview: UsdPreviewId(1),
-        doc,
+        doc_id: doc,
         edit_target: LayerId::root(),
     });
     for _ in 0..40 {
@@ -171,7 +171,7 @@ fn referenced_spawn_projects_live_via_fetch_inject_author() {
     // source (→ `<workspace>/assets/vessels/rovers/skid_rover.usda`), so it
     // resolves regardless of the viewport twin or the cargo-test manifest dir.
     app.world_mut().trigger(ApplyUsdOp {
-        doc,
+        doc_id: doc,
         parent_gen: None,
         op: UsdOp::AddPrim {
             edit_target: LayerId::runtime(),
@@ -230,7 +230,7 @@ fn simultaneous_assembly_previews_keep_identical_paths_isolated() {
 
     app.world_mut().trigger(OpenUsdPreview {
         preview: UsdPreviewId(1),
-        doc: first_doc,
+        doc_id: first_doc,
         edit_target: LayerId::root(),
     });
     support::settle_visual_projection(&mut app);
@@ -272,7 +272,7 @@ fn simultaneous_assembly_previews_keep_identical_paths_isolated() {
 
     app.world_mut().trigger(OpenUsdPreview {
         preview: UsdPreviewId(2),
-        doc: second_doc,
+        doc_id: second_doc,
         edit_target: LayerId::runtime(),
     });
     support::settle_visual_projection(&mut app);

@@ -41,7 +41,7 @@ app.add_plugins((
 ));
 
 // Request an undo on a specific document
-commands.trigger(UndoDocument { doc: my_doc_id });
+commands.trigger(UndoDocument { doc_id: my_doc_id });
 ```
 
 ## See Also

@@ -10,7 +10,7 @@ use lunco_doc::DocumentId;
 /// Add a sub-component to a class.
 #[Command(default)]
 pub struct AddModelicaComponent {
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
     pub class: String,
     pub type_name: String,
     pub name: String,
@@ -26,8 +26,8 @@ pub struct AddModelicaComponent {
 pub fn on_add_modelica_component(trigger: On<AddModelicaComponent>, mut commands: Commands) {
     let ev = trigger.event().clone();
     commands.queue(move |world: &mut World| {
-        let Some(doc) = resolve_doc(world, ev.doc) else {
-            bevy::log::warn!("[AddModelicaComponent] no doc {}", ev.doc);
+        let Some(doc) = resolve_doc(world, ev.doc_id) else {
+            bevy::log::warn!("[AddModelicaComponent] no doc {}", ev.doc_id);
             return;
         };
         if ev.class.is_empty() || ev.type_name.is_empty() || ev.name.is_empty() {
@@ -107,7 +107,7 @@ pub fn on_add_modelica_component(trigger: On<AddModelicaComponent>, mut commands
 #[Command(default)]
 pub struct RemoveModelicaComponent {
     /// Document to edit; unassigned (`0` over the API) = active.
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
     /// Class within the document that declares the component.
     pub class: String,
     /// Component instance name to remove.
@@ -118,7 +118,7 @@ pub struct RemoveModelicaComponent {
 pub fn on_remove_modelica_component(trigger: On<RemoveModelicaComponent>, mut commands: Commands) {
     let ev = trigger.event().clone();
     commands.queue(move |world: &mut World| {
-        let Some(doc) = resolve_doc(world, ev.doc) else {
+        let Some(doc) = resolve_doc(world, ev.doc_id) else {
             return;
         };
         if ev.class.is_empty() || ev.name.is_empty() {

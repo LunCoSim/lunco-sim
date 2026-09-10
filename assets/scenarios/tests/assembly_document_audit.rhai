@@ -53,7 +53,7 @@ fn on_tick(me) {
             }
         }
         if this.fork < 0 { return; }
-        let unmapped = query("QueryUsdPrim", #{ doc: this.fork, path: HINGE });
+        let unmapped = query("QueryUsdPrim", #{ doc_id: this.fork, path: HINGE });
         this.checks.push(t_true(unmapped.ok == false,
             "open document without a projection cannot read the live stage"));
         let before = assembly_edit::describe(this.fork);
@@ -69,7 +69,7 @@ fn on_tick(me) {
         for record in docs.open_documents {
             if record.doc_id == this.fork { return; }
         }
-        let closed = query("QueryUsdPrim", #{ doc: this.fork, path: HINGE });
+        let closed = query("QueryUsdPrim", #{ doc_id: this.fork, path: HINGE });
         this.checks.push(t_true(closed.ok == false,
             "closed document cannot read a cached preview or the live stage"));
         let original = assembly_audit::joint_frame_report(this.original,
@@ -81,7 +81,7 @@ fn on_tick(me) {
         return;
     }
     if this.phase == 3 {
-        let fork = query("QueryUsdPrim", #{ doc: this.fork, path: HINGE, attrs: ["physics:axis"] });
+        let fork = query("QueryUsdPrim", #{ doc_id: this.fork, path: HINGE, attrs: ["physics:axis"] });
         if fork.ok == false { return; }
         this.checks.push(t_true(fork.attrs["physics:axis"] == "Z",
             "document query resumes with the newly synchronized generation"));
@@ -100,10 +100,10 @@ fn on_tick(me) {
     let open_docs = query("ListOpenDocuments");
     this.checks.push(t_true(open_docs.open_documents.len() == this.initial_docs.len() + 1,
         "opening previews does not execute their copied scenario and create more forks"));
-    let original = query("QueryUsdPrim", #{ doc: this.original, path: HINGE, attrs: ["physics:axis"] });
-    let fork = query("QueryUsdPrim", #{ doc: this.fork, path: HINGE, attrs: ["physics:axis"] });
+    let original = query("QueryUsdPrim", #{ doc_id: this.original, path: HINGE, attrs: ["physics:axis"] });
+    let fork = query("QueryUsdPrim", #{ doc_id: this.fork, path: HINGE, attrs: ["physics:axis"] });
     let live = query("QueryUsdPrim", #{ path: HINGE, attrs: ["physics:axis"] });
-    let missing = query("QueryUsdPrim", #{ doc: 999999999, path: HINGE });
+    let missing = query("QueryUsdPrim", #{ doc_id: 999999999, path: HINGE });
     let checks = [
         t_true(original.ok != false && original.attrs["physics:axis"] == "X", "original document is X"),
         t_true(fork.ok != false && fork.attrs["physics:axis"] == "Y", "fork document is Y despite identical prim path"),
@@ -129,12 +129,12 @@ fn on_tick(me) {
     let position = assembly_audit::world_position(this.fork, ROOT + "/Part");
     this.checks.push(t_true(assembly_audit::close_vec(position, [11.0, 2.0, 3.0], 0.001),
         "preview position composes authored ancestors without a physics pose"));
-    let malformed = query("QueryUsdPrim", #{ doc: "not-a-document", path: HINGE });
+    let malformed = query("QueryUsdPrim", #{ doc_id: "not-a-document", path: HINGE });
     this.checks.push(t_true(malformed.ok == false, "malformed document identity is rejected"));
     let before = assembly_edit::describe(this.fork);
     let edit = assembly_edit::attribute(this.fork, "@root@", HINGE,
         "physics:axis", "token", "\"Z\"", before.generation);
-    let stale = query("QueryUsdPrim", #{ doc: this.fork, path: HINGE });
+    let stale = query("QueryUsdPrim", #{ doc_id: this.fork, path: HINGE });
     this.checks.push(t_true(edit.ok && stale.ok == false,
         "an edit invalidates the document query until canonical synchronization"));
     this.phase = 3;

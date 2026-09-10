@@ -61,7 +61,7 @@ fn document_snapshot(
         "kind": "snapshot",
         "reason": reason,
         "from_generation": from_generation,
-        "doc": doc,
+        "doc_id": doc,
         "generation": document.generation(),
         "origin": document.origin(),
         "dirty": document.is_dirty(),
@@ -200,7 +200,7 @@ fn composed_attribute_inspection(
 /// Parameters:
 ///
 /// ```json
-/// { "doc": 3, "path": "/Rover" }
+/// { "doc_id": 3, "path": "/Rover" }
 /// ```
 ///
 /// `path` is optional. Without it, the response describes document identity,
@@ -218,10 +218,10 @@ impl ApiQueryProvider for InspectUsdDocumentProvider {
     }
 
     fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        let Some(raw_doc) = params.get("doc").and_then(serde_json::Value::as_u64) else {
+        let Some(raw_doc) = params.get("doc_id").and_then(serde_json::Value::as_u64) else {
             return ApiResponse::error(
                 ApiErrorCode::DeserializationError,
-                "InspectUsdDocument requires an explicit numeric `doc`",
+                "InspectUsdDocument requires an explicit numeric `doc_id`",
             );
         };
         let doc = DocumentId::new(raw_doc);
@@ -252,7 +252,7 @@ impl ApiQueryProvider for InspectUsdDocumentProvider {
         let journal = journal_position(world, doc);
 
         let mut response = serde_json::json!({
-            "doc": doc,
+            "doc_id": doc,
             "generation": document.generation(),
             "origin": document.origin(),
             "dirty": document.is_dirty(),
@@ -314,10 +314,10 @@ impl ApiQueryProvider for InspectUsdEditSessionProvider {
     }
 
     fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        let Some(raw_doc) = params.get("doc").and_then(serde_json::Value::as_u64) else {
+        let Some(raw_doc) = params.get("doc_id").and_then(serde_json::Value::as_u64) else {
             return ApiResponse::error(
                 ApiErrorCode::DeserializationError,
-                "InspectUsdEditSession requires an explicit numeric `doc`",
+                "InspectUsdEditSession requires an explicit numeric `doc_id`",
             );
         };
         let doc = DocumentId::new(raw_doc);
@@ -369,7 +369,7 @@ impl ApiQueryProvider for InspectUsdEditSessionProvider {
         });
 
         ApiResponse::ok(serde_json::json!({
-            "doc": doc,
+            "doc_id": doc,
             "generation": document.generation(),
             "base_revision": document.base_revision(),
             "dirty": document.is_dirty(),
@@ -386,7 +386,7 @@ impl ApiQueryProvider for InspectUsdEditSessionProvider {
 /// Parameters:
 ///
 /// ```json
-/// { "doc": 3, "since_generation": 17 }
+/// { "doc_id": 3, "since_generation": 17 }
 /// ```
 ///
 /// Omitting `since_generation` asks for a complete snapshot. A generation
@@ -400,10 +400,10 @@ impl ApiQueryProvider for SyncUsdDocumentProvider {
     }
 
     fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        let Some(raw_doc) = params.get("doc").and_then(serde_json::Value::as_u64) else {
+        let Some(raw_doc) = params.get("doc_id").and_then(serde_json::Value::as_u64) else {
             return ApiResponse::error(
                 ApiErrorCode::DeserializationError,
-                "SyncUsdDocument requires an explicit numeric `doc`",
+                "SyncUsdDocument requires an explicit numeric `doc_id`",
             );
         };
         let doc = DocumentId::new(raw_doc);
@@ -447,7 +447,7 @@ impl ApiQueryProvider for SyncUsdDocumentProvider {
         match document.ops_since(since) {
             Some(ops) => ApiResponse::ok(serde_json::json!({
                 "kind": "delta",
-                "doc": doc,
+                "doc_id": doc,
                 "from_generation": since,
                 "to_generation": generation,
                 "ops": ops,
@@ -473,7 +473,7 @@ impl ApiQueryProvider for SyncUsdDocumentProvider {
 /// Parameters:
 ///
 /// ```json
-/// { "doc": 3, "path": "/Rover/Wheel", "edit_target": "@runtime@" }
+/// { "doc_id": 3, "path": "/Rover/Wheel", "edit_target": "@runtime@" }
 /// ```
 ///
 /// Referenced and payloaded paths are never guessed from the authored layer.
@@ -487,10 +487,10 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
     }
 
     fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        let Some(raw_doc) = params.get("doc").and_then(serde_json::Value::as_u64) else {
+        let Some(raw_doc) = params.get("doc_id").and_then(serde_json::Value::as_u64) else {
             return ApiResponse::error(
                 ApiErrorCode::DeserializationError,
-                "ResolveUsdTarget requires an explicit numeric `doc`",
+                "ResolveUsdTarget requires an explicit numeric `doc_id`",
             );
         };
         let Some(raw_path) = params.get("path").and_then(serde_json::Value::as_str) else {
@@ -573,7 +573,7 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
                     );
                 };
                 return ApiResponse::ok(serde_json::json!({
-                    "doc": doc,
+                    "doc_id": doc,
                     "path": raw_path,
                     "edit_target": edit_target,
                     "status": "resolved",
@@ -617,7 +617,7 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
             .is_some_and(|spec| spec.ty == openusd::sdf::SpecType::Prim)
             || authored_in_document;
         ApiResponse::ok(serde_json::json!({
-            "doc": doc,
+            "doc_id": doc,
             "path": raw_path,
             "edit_target": edit_target,
             "status": if composed_exists { "resolved" } else { "missing" },

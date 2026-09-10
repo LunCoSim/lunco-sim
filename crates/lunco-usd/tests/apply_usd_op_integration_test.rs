@@ -89,7 +89,7 @@ def Xform "World"
     // 5. Open an explicit editor preview lease for the document.
     app.world_mut().trigger(OpenUsdPreview {
         preview: UsdPreviewId(1),
-        doc: doc_id,
+        doc_id: doc_id,
         edit_target: LayerId::root(),
     });
 
@@ -135,7 +135,7 @@ def Xform "World"
         value: "(0.0, 0.0, 1.0)".to_string(),
     };
     app.world_mut().trigger(ApplyUsdOp {
-        doc: doc_id,
+        doc_id: doc_id,
         parent_gen: None,
         op: color_op,
     });
@@ -148,7 +148,7 @@ def Xform "World"
         value: "0.1".to_string(),
     };
     app.world_mut().trigger(ApplyUsdOp {
-        doc: doc_id,
+        doc_id: doc_id,
         parent_gen: None,
         op: roughness_op,
     });
@@ -188,7 +188,7 @@ def Xform "World"
     // (Overwrites of an *existing* attribute now invert to a typed `SetAttribute`
     // instead — see `document::set_attribute_overwrite_inverts_to_typed_op`.)
     app.world_mut().trigger(ApplyUsdOp {
-        doc: doc_id,
+        doc_id: doc_id,
         parent_gen: None,
         op: UsdOp::ReplaceSource {
             edit_target: LayerId::root(),

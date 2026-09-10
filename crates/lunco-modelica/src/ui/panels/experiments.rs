@@ -82,7 +82,7 @@ pub(crate) fn on_rerun_experiment_requested(
             world
                 .commands()
                 .trigger(crate::ui::commands::FastRunActiveModel {
-                    doc,
+                    doc_id: doc,
                     class: None,
                     t_end: None,
                     dt: None,
@@ -863,7 +863,7 @@ impl Panel for ExperimentsPanel {
             // mutates the registry inline (R3) or duplicates the purge.
             ctx.trigger(crate::ui::commands::compile::DeleteExperiment {
                 experiment_id: Some(id.0.to_string()),
-                doc: None,
+                doc_id: None,
                 all: false,
             });
         }
@@ -1429,7 +1429,7 @@ impl ExperimentsPanel {
             // target. Setup (bounds/inputs/overrides) is already in the draft.
             let class = model_name.clone();
             ctx.trigger(crate::ui::commands::FastRunActiveModel {
-                doc,
+                doc_id: doc,
                 class: Some(class),
                 t_end: None,
                 dt: None,

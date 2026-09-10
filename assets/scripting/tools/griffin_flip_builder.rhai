@@ -65,7 +65,7 @@ fn griffin_ramp_pair_plan(doc, edit_target, lander_path, joint_parent, axis,
         }
         let joint_path = joint_parent + "/" + ramp.joint_name;
         let existing_joint = query("QueryUsdPrim", #{
-            doc: doc,
+            doc_id: doc,
             path: joint_path,
             children: false,
         });
@@ -139,7 +139,7 @@ fn flip_four_wheel_layout_plan(doc, edit_target, root_path, stations) {
         }
 
         let station_prim = query("QueryUsdPrim", #{
-            doc: doc,
+            doc_id: doc,
             path: station.path,
             children: false,
         });
@@ -147,7 +147,7 @@ fn flip_four_wheel_layout_plan(doc, edit_target, root_path, stations) {
             return plan_error(station.path + ": FLIP wheel station must be an existing Xform");
         }
         let wheel = query("QueryUsdPrim", #{
-            doc: doc,
+            doc_id: doc,
             path: station.wheel,
             attrs: [
                 "physxVehicleWheelAttachment:index",
@@ -223,17 +223,17 @@ fn griffin_mission_plan(doc, edit_target, manifest) {
     }
 
     let root = query("QueryUsdPrim", #{
-        doc: doc,
+        doc_id: doc,
         path: manifest.root_path,
         children: true,
     });
     let lander = query("QueryUsdPrim", #{
-        doc: doc,
+        doc_id: doc,
         path: manifest.lander_path,
         children: false,
     });
     let flip = query("QueryUsdPrim", #{
-        doc: doc,
+        doc_id: doc,
         path: manifest.flip_path,
         children: false,
     });
@@ -248,7 +248,7 @@ fn griffin_mission_plan(doc, edit_target, manifest) {
     }
 
     let adapter = query("QueryUsdPrim", #{
-        doc: doc,
+        doc_id: doc,
         path: manifest.adapter_joint_path,
         attrs: [
             "physics:localPos0", "physics:localPos1",
@@ -414,7 +414,7 @@ fn flip_rover_asset_detail_plan(doc, edit_target, root_path, wheels) {
         return plan_error("flip_rover_asset_detail_plan requires a document, edit target, root, and four wheel records");
     }
     let root = query("QueryUsdPrim", #{
-        doc: doc,
+        doc_id: doc,
         path: root_path,
         children: true,
     });
@@ -424,7 +424,7 @@ fn flip_rover_asset_detail_plan(doc, edit_target, root_path, wheels) {
     }
     let chassis_path = root_path + "/Chassis";
     let chassis = query("QueryUsdPrim", #{
-        doc: doc,
+        doc_id: doc,
         path: chassis_path,
         children: false,
     });
@@ -433,7 +433,7 @@ fn flip_rover_asset_detail_plan(doc, edit_target, root_path, wheels) {
     }
     let solar_path = root_path + "/SolarPanel";
     let solar = query("QueryUsdPrim", #{
-        doc: doc,
+        doc_id: doc,
         path: solar_path,
         children: false,
     });
@@ -460,12 +460,12 @@ fn flip_rover_asset_detail_plan(doc, edit_target, root_path, wheels) {
             return plan_error("FLIP wheel records require indexes 0..3 and positive dimensions");
         }
         let station = query("QueryUsdPrim", #{
-            doc: doc,
+            doc_id: doc,
             path: wheel.station,
             children: false,
         });
         let wheel_prim = query("QueryUsdPrim", #{
-            doc: doc,
+            doc_id: doc,
             path: wheel.wheel,
             children: false,
         });
@@ -613,7 +613,7 @@ fn griffin_mission_assembly_plan(doc, edit_target, manifest) {
     }
 
     let root = query("QueryUsdPrim", #{
-        doc: doc,
+        doc_id: doc,
         path: manifest.root_path,
         children: true,
     });
@@ -622,7 +622,7 @@ fn griffin_mission_assembly_plan(doc, edit_target, manifest) {
     }
     for path in [manifest.lander_path, manifest.flip_path, manifest.adapter_path] {
         let existing = query("QueryUsdPrim", #{
-            doc: doc,
+            doc_id: doc,
             path: path,
             children: false,
         });
@@ -686,12 +686,12 @@ fn griffin_mission_adapter_plan(doc, edit_target, manifest) {
         return plan_error("Griffin mission adapter must be a distinct direct child of the mission root");
     }
     let lander = query("QueryUsdPrim", #{
-        doc: doc,
+        doc_id: doc,
         path: manifest.lander_path,
         children: true,
     });
     let flip = query("QueryUsdPrim", #{
-        doc: doc,
+        doc_id: doc,
         path: manifest.flip_path,
         children: true,
     });
@@ -702,7 +702,7 @@ fn griffin_mission_adapter_plan(doc, edit_target, manifest) {
         return plan_error("Griffin mission adapter requires materialized lander and FLIP reference bodies");
     }
     let existing = query("QueryUsdPrim", #{
-        doc: doc,
+        doc_id: doc,
         path: manifest.adapter_path,
         children: false,
     });

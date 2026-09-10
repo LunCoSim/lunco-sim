@@ -113,7 +113,7 @@ pub(crate) fn on_fast_run_setup_requested(
             }
         } else {
             world.trigger(crate::ui::commands::FastRunActiveModel {
-                doc,
+                doc_id: doc,
                 class: None,
                 t_end: None,
                 dt: None,
@@ -262,7 +262,7 @@ impl InstancePanel for ModelViewPanel {
                     });
                 });
             if banner_duplicate_clicked {
-                ctx.trigger(crate::ui::commands::DuplicateModelFromReadOnly { source_doc: doc });
+                ctx.trigger(crate::ui::commands::DuplicateModelFromReadOnly { source_doc_id: doc });
             }
         }
 
@@ -682,13 +682,13 @@ fn render_unified_toolbar(
         });
     }
     if undo_clicked {
-        ctx.trigger(lunco_doc_bevy::UndoDocument { doc });
+        ctx.trigger(lunco_doc_bevy::UndoDocument { doc_id: doc });
     }
     if redo_clicked {
-        ctx.trigger(lunco_doc_bevy::RedoDocument { doc });
+        ctx.trigger(lunco_doc_bevy::RedoDocument { doc_id: doc });
     }
     if duplicate_clicked {
-        ctx.trigger(crate::ui::commands::DuplicateModelFromReadOnly { source_doc: doc });
+                ctx.trigger(crate::ui::commands::DuplicateModelFromReadOnly { source_doc_id: doc });
     }
     if run_pause_clicked {
         // Run = compile-if-stale then play (RunActiveModel); Pause just
@@ -698,19 +698,19 @@ fn render_unified_toolbar(
         // compile (it unpauses directly when already compiled & clean).
         let realtime_running = sim_state.map(|(p, _)| !p).unwrap_or(false);
         if realtime_running {
-            ctx.trigger(crate::ui::commands::PauseActiveModel { doc });
+        ctx.trigger(crate::ui::commands::PauseActiveModel { doc_id: doc });
         } else {
-            ctx.trigger(crate::ui::commands::RunActiveModel { doc, class: None });
+            ctx.trigger(crate::ui::commands::RunActiveModel { doc_id: doc, class: None });
         }
     }
     if reset_clicked {
-        ctx.trigger(crate::ui::commands::ResetActiveModel { doc });
+        ctx.trigger(crate::ui::commands::ResetActiveModel { doc_id: doc });
     }
     if restart_clicked {
-        ctx.trigger(crate::ui::commands::RestartActiveModel { doc });
+        ctx.trigger(crate::ui::commands::RestartActiveModel { doc_id: doc });
     }
     if auto_arrange_clicked {
-        ctx.trigger(crate::ui::commands::AutoArrangeDiagram { doc });
+        ctx.trigger(crate::ui::commands::AutoArrangeDiagram { doc_id: doc });
     }
     if fast_run_clicked {
         // The whole setup-resolution path is owned by the typed observer and
@@ -812,7 +812,7 @@ fn render_unified_toolbar(
     }
     if compile_clicked {
         ctx.trigger(crate::ui::commands::CompileModel {
-            doc,
+            doc_id: doc,
             class: None,
             force: false,
             resume_after_compile: false,

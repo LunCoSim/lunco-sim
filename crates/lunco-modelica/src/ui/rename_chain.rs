@@ -31,7 +31,7 @@ pub fn on_rename_open_document_chain_to_modelica(
 ) {
     use lunco_doc::DocumentOrigin;
     let ev = trigger.event();
-    let Some(entry) = workspace.document(ev.doc) else {
+    let Some(entry) = workspace.document(ev.doc_id) else {
         return;
     };
     // Only handle Untitled drafts; saved files go through the
@@ -40,7 +40,7 @@ pub fn on_rename_open_document_chain_to_modelica(
         return;
     };
     // Confirm the doc is actually Modelica before firing RenameModelicaClass.
-    if registry.host(ev.doc).is_none() {
+    if registry.host(ev.doc_id).is_none() {
         return;
     }
     let old_name = name.clone();
@@ -50,12 +50,12 @@ pub fn on_rename_open_document_chain_to_modelica(
     }
     bevy::log::info!(
         "[RenameOpenDocument→Modelica] Untitled doc={} {} → {}",
-        ev.doc,
+        ev.doc_id,
         old_name,
         new_name
     );
     commands.trigger(RenameModelicaClass {
-        doc: ev.doc,
+        doc_id: ev.doc_id,
         old_name,
         new_name,
     });

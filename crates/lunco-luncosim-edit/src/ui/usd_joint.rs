@@ -381,7 +381,7 @@ fn apply_attribute(
         return;
     };
     ctx.trigger(lunco_usd::commands::ApplyUsdOp {
-        doc,
+        doc_id: doc,
         parent_gen: Some(view.generation),
         op: UsdOp::SetAttribute {
             edit_target,
@@ -403,7 +403,7 @@ fn apply_relationship(
         return;
     };
     ctx.trigger(lunco_usd::commands::ApplyUsdOp {
-        doc,
+        doc_id: doc,
         parent_gen: Some(view.generation),
         op: UsdOp::SetRelationship {
             edit_target,

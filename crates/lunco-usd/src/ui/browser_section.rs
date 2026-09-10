@@ -224,7 +224,7 @@ impl BrowserSection for UsdSceneSection {
                 .unwrap_or_else(|| UsdPreviewId::for_document(doc));
             ctx.trigger(OpenUsdPreview {
                 preview,
-                doc,
+                doc_id: doc,
                 edit_target: LayerId::root(),
             });
         }

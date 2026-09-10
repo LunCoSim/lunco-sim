@@ -10,7 +10,7 @@ use lunco_doc::DocumentId;
 /// Add a `connect(a.p, b.q)` equation to a class.
 #[Command(default)]
 pub struct ConnectComponents {
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
     pub class: String,
     pub from: String,
     pub to: String,
@@ -22,7 +22,7 @@ pub struct ConnectComponents {
 pub fn on_connect_components(trigger: On<ConnectComponents>, mut commands: Commands) {
     let ev = trigger.event().clone();
     commands.queue(move |world: &mut World| {
-        let Some(doc) = resolve_doc(world, ev.doc) else {
+        let Some(doc) = resolve_doc(world, ev.doc_id) else {
             return;
         };
         let Some(from) = parse_port_ref(&ev.from) else {
@@ -97,7 +97,7 @@ pub fn on_connect_components(trigger: On<ConnectComponents>, mut commands: Comma
 #[Command(default)]
 pub struct DisconnectComponents {
     /// Document to edit; unassigned (`0` over the API) = active.
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
     /// Class within the document that owns the connection.
     pub class: String,
     /// Source port, `"<component>.<port>"`.
@@ -110,7 +110,7 @@ pub struct DisconnectComponents {
 pub fn on_disconnect_components(trigger: On<DisconnectComponents>, mut commands: Commands) {
     let ev = trigger.event().clone();
     commands.queue(move |world: &mut World| {
-        let Some(doc) = resolve_doc(world, ev.doc) else {
+        let Some(doc) = resolve_doc(world, ev.doc_id) else {
             return;
         };
         let Some(from) = parse_port_ref(&ev.from) else {
