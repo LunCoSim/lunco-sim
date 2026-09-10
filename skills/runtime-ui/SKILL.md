@@ -195,8 +195,10 @@ Only a `window` surface may set `draggable: true`. The primary-button drag
 stores a finite logical top-left override by stable surface id, clamps it to
 the live target after resize/DPI changes, and persists it in the active Twin's
 existing workbench workspace state. A primary-button double click removes the
-override and restores the authored anchor. Manifest reconciliation prunes
-unknown surface ids, and `TwinClosed` clears the in-memory layout scope.
+override and restores the authored anchor. Fixed controls such as the shipped
+`view-mode` switcher leave `draggable` false so a persisted layout cannot move
+them away from their authored anchor after reload. Manifest reconciliation
+prunes unknown surface ids, and `TwinClosed` clears the in-memory layout scope.
 
 `interactive: true` enables input ownership for visible HUI controls that carry
 an authored `on_press` action. The runtime feeds each control's computed Bevy UI
