@@ -670,6 +670,33 @@ pub(crate) fn update_physics_support_cache(
         mut removed_spherical,
         mut removed_distance,
     } = queries;
+
+    // The support index is event-driven. Keep the topology rebuild latch alive,
+    // but do not walk any filtered query or rebuild the per-frame changed set
+    // when no producer changed and no removal event is waiting to be consumed.
+    // Removal readers are checked without consuming them so the full path below
+    // remains responsible for applying every lifecycle event.
+    if !cache.topology_dirty
+        && bodies.is_empty()
+        && colliders.is_empty()
+        && revolute_joints.is_empty()
+        && fixed_joints.is_empty()
+        && prismatic_joints.is_empty()
+        && spherical_joints.is_empty()
+        && distance_joints.is_empty()
+        && removed_bodies.is_empty()
+        && removed_colliders.is_empty()
+        && removed_footprints.is_empty()
+        && removed_collider_owners.is_empty()
+        && removed_revolute.is_empty()
+        && removed_fixed.is_empty()
+        && removed_prismatic.is_empty()
+        && removed_spherical.is_empty()
+        && removed_distance.is_empty()
+    {
+        return;
+    }
+
     changed_bodies.clear();
     let mut topology_dirty = cache.topology_dirty;
 

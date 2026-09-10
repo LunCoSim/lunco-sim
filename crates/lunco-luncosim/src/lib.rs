@@ -809,6 +809,62 @@ fn low_precision_propagation_due(
         || removed_global_transforms.read().next().is_some()
 }
 
+/// Keep BigSpace's debug hierarchy validator authoritative while avoiding a
+/// full-tree walk on every settled frame. Hierarchy validity can change only
+/// when the spatial component set or parent/child topology changes; transform
+/// value changes do not alter which node kind an entity is.
+#[cfg(debug_assertions)]
+fn gate_big_space_hierarchy_validation(app: &mut App) {
+    let removed = app
+        .remove_systems_in_set(
+            PostUpdate,
+            big_space::validation::validate_hierarchy::<big_space::validation::SpatialHierarchyRoot>,
+            bevy::ecs::schedule::ScheduleCleanupPolicy::RemoveSystemsOnly,
+        )
+        .expect("BigSpace hierarchy validator must be installed by BigSpaceDefaultPlugins");
+    assert_eq!(removed, 1, "BigSpace hierarchy validator must be installed once");
+    app.add_systems(
+        PostUpdate,
+        big_space::validation::validate_hierarchy::<big_space::validation::SpatialHierarchyRoot>
+            .run_if(big_space_hierarchy_validation_due)
+            .after(TransformSystems::Propagate),
+    );
+}
+
+#[cfg(debug_assertions)]
+fn big_space_hierarchy_validation_due(
+    changed_components: Query<
+        (),
+        Or<(
+            Added<CellCoord>,
+            Added<Transform>,
+            Added<GlobalTransform>,
+            Added<BigSpace>,
+            Added<Grid>,
+            Added<FloatingOrigin>,
+            Added<ChildOf>,
+            Changed<ChildOf>,
+            Changed<Children>,
+        )>,
+    >,
+    mut removed_cell: RemovedComponents<CellCoord>,
+    mut removed_transform: RemovedComponents<Transform>,
+    mut removed_global_transform: RemovedComponents<GlobalTransform>,
+    mut removed_big_space: RemovedComponents<BigSpace>,
+    mut removed_grid: RemovedComponents<Grid>,
+    mut removed_floating_origin: RemovedComponents<FloatingOrigin>,
+    mut removed_child: RemovedComponents<ChildOf>,
+) -> bool {
+    !changed_components.is_empty()
+        || removed_cell.read().next().is_some()
+        || removed_transform.read().next().is_some()
+        || removed_global_transform.read().next().is_some()
+        || removed_big_space.read().next().is_some()
+        || removed_grid.read().next().is_some()
+        || removed_floating_origin.read().next().is_some()
+        || removed_child.read().next().is_some()
+}
+
 fn build_sim_app_with_profile(
     headless: bool,
     offscreen: bool,
@@ -2867,7 +2923,10 @@ impl Plugin for SandboxCorePlugin {
             // things the root `Transform` was load-bearing for (avian's GT
             // sync and its root-anchored ColliderTransform propagation). The
             // validator is the guard that keeps new spawn paths canonical.
-            .add_plugins(BigSpaceDefaultPlugins)
+            .add_plugins(BigSpaceDefaultPlugins);
+        #[cfg(debug_assertions)]
+        gate_big_space_hierarchy_validation(app);
+        app
             // EntityCount is cheap and useful any time we look at perf.
             .add_plugins(bevy::diagnostic::EntityCountDiagnosticsPlugin::default())
             // `with_collision_hooks` installs the ONE pair filter avian allows per
