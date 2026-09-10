@@ -3712,7 +3712,7 @@ mod tests {
         let (mut app, doc) = proposal_test_app();
         let op = proposal_test_op("Chassis");
         app.world_mut().trigger(CreateUsdProposal {
-            doc,
+            doc_id: doc,
             scope: UsdEditScope::Assembly,
             label: "Add chassis".to_owned(),
             parent_gen: 0,
@@ -3792,7 +3792,7 @@ mod tests {
     fn proposal_commit_marks_a_stale_plan_as_conflict_without_overwriting_edits() {
         let (mut app, doc) = proposal_test_app();
         app.world_mut().trigger(CreateUsdProposal {
-            doc,
+            doc_id: doc,
             scope: UsdEditScope::Assembly,
             label: "Add stale chassis".to_owned(),
             parent_gen: 0,
@@ -3836,7 +3836,7 @@ mod tests {
     fn rejecting_a_proposal_removes_only_review_state() {
         let (mut app, doc) = proposal_test_app();
         app.world_mut().trigger(CreateUsdProposal {
-            doc,
+            doc_id: doc,
             scope: UsdEditScope::Assembly,
             label: "Reject chassis".to_owned(),
             parent_gen: 0,
@@ -3876,7 +3876,7 @@ mod tests {
     fn closing_a_document_drops_its_review_session() {
         let (mut app, doc) = proposal_test_app();
         app.world_mut().trigger(CreateUsdProposal {
-            doc,
+            doc_id: doc,
             scope: UsdEditScope::Assembly,
             label: "Close chassis review".to_owned(),
             parent_gen: 0,
@@ -3923,7 +3923,7 @@ mod tests {
         app.update();
 
         app.world_mut().trigger(CreateUsdProposal {
-            doc,
+            doc_id: doc,
             scope: UsdEditScope::Assembly,
             label: "Discard chassis review".to_owned(),
             parent_gen: 0,

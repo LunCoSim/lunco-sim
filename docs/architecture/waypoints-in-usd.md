@@ -222,14 +222,24 @@ The active controller remains a fixed-step Rust hot path, so preparation is
 change-gated and asynchronous work never becomes per-tick scripting or a full scene
 reload.
 
+Adding a waypoint may resync the USD ancestors of the new marker or mission prim.
+Those ancestor paths are structural context, not physics changes: the live bridge
+reprojects an ancestor only when its composed physics schema has not yet reached the
+matching ECS admission marker. An already admitted rover therefore keeps its body,
+wheels, Modelica sessions, pose, velocity, and possession while the new child lands.
+When an editor changes a file-backed BT mission into inline XML, it uses the standard
+`info:implementationSource = "sourceCode"` arm and clears the other source arms in
+the same journaled transaction, so a selected `sourceAsset` can never conflict with
+the edited `info:sourceCode`.
+
 ## Interaction — document-backed and runtime-only routes
 
 For a rover mounted in an authored USD document, **no new command verbs** are
 needed. The `PlaceWaypoint` intent paired with the primary pointer action
 (Alt+LMB in the bundled keymap) lowers to `ApplyUsdOps`: ordered
 `AddPrim`/`SetTranslate` operations for the marker, optional mission-program
-construction (`AddPrim` + `SetApiSchemas`), and `SetAttribute` for
-`info:sourceCode`. The document journals it as one undo unit and the live projector
+construction (`AddPrim` + `SetApiSchemas`), and the standard inline-program source
+arm for `info:sourceCode`. The document journals it as one undo unit and the live projector
 sees the complete authored shape after the change set, so no ECS component is
 patched directly by the editor.
 

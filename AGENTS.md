@@ -153,16 +153,19 @@ it with this one.
 - Choose the smallest targeted check or test that covers the changed owner;
   crate-wide and workspace-wide suites are slow and should be reserved for
   changes that cross those broader boundaries.
-- During implementation, use a single smallest sufficient validation command
-  for the current change: prefer `cargo check` for compile/API-only edits and
-  one named test or authored scenario for a behavior change. Do not run several
-  overlapping package suites, repeat a passing command after unchanged inputs,
-  or run a production build merely to replace a focused compile check. Before
-  commit, run one bounded integration pass that combines only the changed
-  owners' tests and the required production/runtime evidence; expand beyond
-  that set only when the diff crosses the additional owner or a failure gives
-  concrete reason. The pre-commit pass is broader than the edit loop, but it is
-  still minimal and must not default to the workspace-wide suite.
+- Minimize validation deliberately. For each focused change, use one smallest
+  sufficient command: prefer `cargo check` for compile/API-only edits and one
+  named test or authored scenario for a behavior change. Do not run multiple
+  filtered tests that rebuild the same package, repeat a passing command after
+  unchanged inputs, or run a production build merely to replace a focused
+  compile check. Reuse one built test binary when several assertions are
+  needed, and run one bounded integration pass before commit that covers only
+  the changed owners plus required production/runtime evidence.
+- Tests must assert only the current authoritative contract. Never add or keep
+  a test for retired, obsolete, compatibility, or old behavior; replace the
+  assertion with the new contract or remove it. Add a regression test only
+  when it proves a real current failure and is the smallest sufficient coverage
+  for the changed owner.
 - For CPU performance profiling, use the adjacent `../tracy` checkout: build
   the production binary with its opt-in `tracy` feature, start
   `../tracy/capture/build/tracy-capture` before the app, and inspect the

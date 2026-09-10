@@ -4188,7 +4188,7 @@ mod tests {
     ) -> ExplodeUsdPreview {
         ExplodeUsdPreview {
             preview,
-            doc,
+            doc_id: doc,
             assembly: assembly.into(),
             parts: parts.iter().map(|part| (*part).into()).collect(),
             action,
@@ -4374,7 +4374,7 @@ mod tests {
             .expect("explode command is registered by the viewport plugin");
         assert!(!command.defaulted);
         for field in [
-            "preview", "doc", "assembly", "parts", "action", "axis", "spacing",
+            "preview", "doc_id", "assembly", "parts", "action", "axis", "spacing",
         ] {
             assert!(
                 command
@@ -4655,10 +4655,7 @@ mod tests {
         let state = app.world().resource::<UsdViewportState>();
         assert_eq!(state.session_count(), 1);
         assert_eq!(state.focused_doc(), Some(doc));
-        assert_eq!(
-            state.session(preview).unwrap().scene_root(),
-            first_root
-        );
+        assert_eq!(state.session(preview).unwrap().scene_root(), first_root);
 
         let _ = std::fs::remove_file(path);
     }
@@ -4981,7 +4978,7 @@ mod tests {
         assert_eq!(data["focused_view"], serde_json::json!(2));
         assert_eq!(data["preview_count"], serde_json::json!(1));
         assert_eq!(data["view_count"], serde_json::json!(2));
-        assert_eq!(data["previews"][0]["doc"], serde_json::json!(7));
+        assert_eq!(data["previews"][0]["doc_id"], serde_json::json!(7));
         assert_eq!(
             data["previews"][0]["views"][0]["view"],
             serde_json::json!(1)
