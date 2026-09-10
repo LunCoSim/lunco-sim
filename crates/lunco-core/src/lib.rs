@@ -1103,6 +1103,7 @@ pub(crate) fn register_core_resources(app: &mut App) {
         // above — see the AppliedInputSeq fix).
         .init_resource::<CommandResults>()
         .init_resource::<ActiveCommandId>()
+        .init_resource::<CausalTrace>()
         .init_resource::<exposure::EngineExposures>()
         .init_resource::<exposure::ExposureRefresh>()
         .init_resource::<RuntimeFaults>()
@@ -1121,6 +1122,7 @@ fn reset_scene_simulation_state(
     mut buffered: ResMut<session::BufferedClientInputs>,
     mut local_drive: ResMut<session::LocalDriveInput>,
     mut applied: ResMut<session::AppliedInputSeq>,
+    mut causal_trace: ResMut<CausalTrace>,
 ) {
     rollback.0 = false;
     owned.0.clear();
@@ -1129,6 +1131,7 @@ fn reset_scene_simulation_state(
     buffered.last_writes.clear();
     local_drive.0.clear();
     applied.retain_gids(|_| false);
+    causal_trace.clear();
 }
 
 /// HOST: re-key the input-ack watermarks against the authoritative ownership
@@ -1312,6 +1315,7 @@ mod ph1_identity_tests {
         // explicitly so a regression names them.
         assert!(w.get_resource::<session::OwnedInputLog>().is_some());
         assert!(w.get_resource::<session::AppliedInputSeq>().is_some());
+        assert!(w.get_resource::<CausalTrace>().is_some());
     }
 
     #[test]

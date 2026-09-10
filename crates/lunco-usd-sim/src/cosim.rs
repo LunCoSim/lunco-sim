@@ -3451,6 +3451,313 @@ impl lunco_api::ApiQueryProvider for GetPortProvider {
     }
 }
 
+fn causal_binding_status(binding: Option<&ConnectionBinding>) -> &'static str {
+    match binding {
+        None => "unobserved",
+        Some(ConnectionBinding::Pending) => "pending",
+        Some(ConnectionBinding::Bound) => "bound",
+        Some(ConnectionBinding::Failed) => "failed",
+    }
+}
+
+fn causal_port_owner_json(owner: &lunco_core::ports::PortOwnerInfo) -> serde_json::Value {
+    serde_json::json!({
+        "precedence": owner.precedence,
+        "direction": port_dir_str(owner.direction),
+        "metadata": {
+            "type": owner.metadata.value_type,
+            "unit": owner.metadata.unit,
+            "range": {
+                "min": owner.metadata.min,
+                "max": owner.metadata.max,
+            },
+            "source": owner.metadata.source,
+            "authority": owner.metadata.authority,
+            "writable": owner.metadata.writable,
+        },
+    })
+}
+
+fn causal_endpoint_json(world: &World, entity: Entity) -> serde_json::Value {
+    serde_json::json!({
+        "entity": entity.to_bits(),
+        "api_id": world.get::<lunco_core::GlobalEntityId>(entity).map(|gid| gid.get()),
+        "name": world.get::<Name>(entity).map(|name| name.as_str()),
+        "usd_path": world.get::<UsdPrimPath>(entity).map(|path| path.path.as_str()),
+    })
+}
+
+/// Read-only causal explanation for one semantic action.
+///
+/// The semantic edge is the bounded record keyed by `target` and
+/// `correlation_id`. Every downstream field is a live composition of the
+/// existing binding, port, USD/Avian admission, and signal registries. A
+/// missing field is therefore a real incomplete path, not a synthetic success.
+///
+/// `target` accepts the stable API id. `correlation_id` selects one recorded
+/// edge; when omitted, the newest edge for the target is selected for a useful
+/// operator default. The response includes the selected `correlation_id` so a
+/// caller can repeat the exact inspection.
+pub struct CausalTraceProvider;
+
+impl lunco_api::ApiQueryProvider for CausalTraceProvider {
+    fn name(&self) -> &'static str {
+        "CausalTrace"
+    }
+
+    fn execute(&self, world: &World, params: &serde_json::Value) -> lunco_api::ApiResponse {
+        let Some(raw_target) = params
+            .get("target")
+            .or_else(|| params.get("api_id"))
+            .and_then(serde_json::Value::as_u64)
+        else {
+            return lunco_api::ApiResponse::error(
+                lunco_api::ApiErrorCode::DeserializationError,
+                "CausalTrace requires a numeric `target` API id",
+            );
+        };
+        let target_gid = lunco_core::GlobalEntityId::from_raw(raw_target);
+        let Some(trace) = world.get_resource::<lunco_core::CausalTrace>() else {
+            return lunco_api::ApiResponse::error(
+                lunco_api::ApiErrorCode::InternalError,
+                "CausalTrace ledger is unavailable",
+            );
+        };
+        let record = match params
+            .get("correlation_id")
+            .and_then(serde_json::Value::as_u64)
+        {
+            Some(correlation_id) => trace.find(target_gid, correlation_id),
+            None => trace.latest_for_target(target_gid),
+        };
+        let Some(record) = record else {
+            return lunco_api::ApiResponse::error(
+                lunco_api::ApiErrorCode::EntityNotFound,
+                format!(
+                    "no semantic edge trace for target {}{}",
+                    raw_target,
+                    params
+                        .get("correlation_id")
+                        .and_then(serde_json::Value::as_u64)
+                        .map(|id| format!(" and correlation_id {}", id))
+                        .unwrap_or_default()
+                ),
+            );
+        };
+
+        let target = world
+            .get::<lunco_core::GlobalEntityId>(record.target)
+            .is_some()
+            .then_some(record.target);
+        let target_json = target
+            .map(|entity| causal_endpoint_json(world, entity))
+            .unwrap_or_else(|| {
+                serde_json::json!({
+                    "api_id": raw_target,
+                    "lifecycle": "despawned",
+                })
+            });
+
+        let (binding_entries, port_surface) = if let Some(entity) = target {
+            let binding = world.get::<lunco_controller::ControlBinding>(entity);
+            let binding_entries = binding
+                .map(|binding| {
+                    binding
+                        .binds
+                        .iter()
+                        .filter(|(intent, _, _)| *intent == record.intent)
+                        .map(|(_, port, scale)| serde_json::json!({ "port": port, "scale": scale }))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let ports = world.resource::<lunco_core::ports::PortRegistry>().clone();
+            let owners = ports.entity_port_owners(world, entity);
+            let mut names = binding_entries
+                .iter()
+                .filter_map(|entry| entry.get("port").and_then(serde_json::Value::as_str))
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            names.sort();
+            names.dedup();
+            let port_surface = names
+                .into_iter()
+                .map(|name| {
+                    let candidates = owners
+                        .iter()
+                        .filter(|owner| owner.name == name)
+                        .collect::<Vec<_>>();
+                    let selected = candidates
+                        .iter()
+                        .find(|owner| {
+                            matches!(
+                                owner.direction,
+                                lunco_core::ports::PortDirection::In
+                                    | lunco_core::ports::PortDirection::InOut
+                            )
+                        })
+                        .map(|owner| causal_port_owner_json(owner));
+                    serde_json::json!({
+                        "name": name,
+                        "current_input": ports.read_input_port(world, entity, &name),
+                        "selected_owner": selected,
+                        "owners": candidates
+                            .into_iter()
+                            .map(causal_port_owner_json)
+                            .collect::<Vec<_>>(),
+                    })
+                })
+                .collect::<Vec<_>>();
+            (binding_entries, port_surface)
+        } else {
+            (Vec::new(), Vec::new())
+        };
+
+        let connection_edges = if let Some(entity) = target {
+            let Some(mut query) = QueryState::<
+                (
+                    Entity,
+                    &SimConnection,
+                    Option<&ConnectionBinding>,
+                    Has<lunco_cosim::BoundConnection>,
+                ),
+                With<SimConnection>,
+            >::try_new(world) else {
+                return lunco_api::ApiResponse::error(
+                    lunco_api::ApiErrorCode::InternalError,
+                    "CausalTrace: connection query is unavailable",
+                );
+            };
+            query
+                .iter(world)
+                .filter(|(_, connection, _, _)| {
+                    connection.start_element == entity || connection.end_element == entity
+                })
+                .map(|(edge, connection, binding, bound)| {
+                    serde_json::json!({
+                        "edge": edge.to_bits(),
+                        "source": causal_endpoint_json(world, connection.start_element),
+                        "source_port": connection.start_connector,
+                        "source_is_input": connection.start_is_input,
+                        "sink": causal_endpoint_json(world, connection.end_element),
+                        "sink_port": connection.end_connector,
+                        "scale": connection.scale,
+                        "offset": connection.offset,
+                        "binding": causal_binding_status(binding),
+                        "bound": bound,
+                    })
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+
+        let joint_admission = if let Some(entity) = target {
+            let Some(mut query) = QueryState::<(
+                Entity,
+                Option<&UsdPrimPath>,
+                Option<&lunco_physics::PhysicsJointLink>,
+                Option<&lunco_usd_avian::PendingJointAdmission>,
+                Has<avian3d::prelude::RevoluteJoint>,
+                Has<avian3d::prelude::PrismaticJoint>,
+                Has<avian3d::prelude::FixedJoint>,
+                Has<avian3d::prelude::SphericalJoint>,
+                Has<avian3d::prelude::DistanceJoint>,
+            )>::try_new(world) else {
+                return lunco_api::ApiResponse::error(
+                    lunco_api::ApiErrorCode::InternalError,
+                    "CausalTrace: joint admission query is unavailable",
+                );
+            };
+            query
+                .iter(world)
+                .filter_map(
+                    |(
+                        joint,
+                        path,
+                        link,
+                        pending,
+                        revolute,
+                        prismatic,
+                        fixed,
+                        spherical,
+                        distance,
+                    )| {
+                        let link = link?;
+                        if link.body0 != entity && link.body1 != entity {
+                            return None;
+                        }
+                        let native_type = revolute
+                            .then_some("revolute")
+                            .or(prismatic.then_some("prismatic"))
+                            .or(fixed.then_some("fixed"))
+                            .or(spherical.then_some("spherical"))
+                            .or(distance.then_some("distance"));
+                        Some(serde_json::json!({
+                            "joint": joint.to_bits(),
+                            "path": path.map(|path| path.path.as_str()),
+                            "body0": link.body0.to_bits(),
+                            "body1": link.body1.to_bits(),
+                            "state": if pending.is_some() {
+                                "pending"
+                            } else if native_type.is_some() {
+                                "admitted"
+                            } else {
+                                "not_admitted"
+                            },
+                            "native_type": native_type,
+                        }))
+                    },
+                )
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+
+        let measured_channels = world
+            .get_resource::<lunco_signal::SignalRegistry>()
+            .map(|signals| {
+                signals
+                    .iter_signals()
+                    .filter(|(signal, _)| {
+                        signal.entity == record.target
+                            || signals.global_owner(signal) == Some(target_gid)
+                    })
+                    .filter_map(|(signal, _)| {
+                        let history = signals.scalar_history(signal)?;
+                        let latest = history.samples.back()?;
+                        let meta = signals.meta(signal);
+                        Some(serde_json::json!({
+                            "channel": signal.path,
+                            "owner_entity": signal.entity.to_bits(),
+                            "active": signals.is_active(signal),
+                            "latest": {
+                                "time": latest.time,
+                                "value": latest.value,
+                            },
+                            "metadata": meta,
+                        }))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        lunco_api::ApiResponse::ok(serde_json::json!({
+            "target": target_json,
+            "correlation_id": record.correlation_id,
+            "intent": record.intent.canonical_name(),
+            "edge": record.kind.as_str(),
+            "control_binding": {
+                "matched_intent": !binding_entries.is_empty(),
+                "ports": binding_entries,
+            },
+            "port_surface": port_surface,
+            "connection_edges": connection_edges,
+            "joint_admission": joint_admission,
+            "measured_channels": measured_channels,
+        }))
+    }
+}
+
 /// API query provider: `curl … {"type":"ExecuteCommand","command":"CosimStatus","params":{}}`
 /// returns one row per USD-driven cosim entity with position, model
 /// state, and propagated cosim values. The response also includes the
@@ -5138,6 +5445,7 @@ pub(crate) fn install(app: &mut App) {
                 // `lunco_cosim::SetPorts` command).
                 reg.register(ListPortsProvider);
                 reg.register(GetPortProvider);
+                reg.register(CausalTraceProvider);
                 // Richer per-entity cosim introspection (not an alias of the above).
                 reg.register(CosimStatusProvider);
                 reg.register(BindingStatusProvider);

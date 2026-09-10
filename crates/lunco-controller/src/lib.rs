@@ -136,6 +136,7 @@ fn parse_intent_edge(name: &str) -> Option<lunco_core::SemanticIntentEdgeKind> {
 #[on_command(SimulateIntentEdge)]
 fn on_simulate_intent_edge(
     _trigger: On<SimulateIntentEdge>,
+    active_command: Res<lunco_core::ActiveCommandId>,
     mut commands: Commands,
 ) -> Result<Ack, String> {
     let Some(intent) = lunco_core::parse_user_intent(&cmd.intent) else {
@@ -154,6 +155,7 @@ fn on_simulate_intent_edge(
         target: cmd.target,
         intent,
         kind,
+        correlation_id: active_command.get().unwrap_or_else(|| OpId::new().0),
     });
     Ok(Ack::with_data(
         OpId::new(),
@@ -171,12 +173,15 @@ fn on_simulate_intent_edge(
 fn project_intent_edge(
     trigger: On<lunco_core::SemanticIntentEdge>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
+    mut causal_trace: ResMut<lunco_core::CausalTrace>,
     mut commands: Commands,
 ) {
     use lunco_core::telemetry::TelemetryValue;
     use std::collections::BTreeMap;
 
     let edge = trigger.event();
+    let target_gid = q_gid.get(edge.target).ok().copied();
+    causal_trace.record(edge, target_gid);
     let mut data = BTreeMap::new();
     data.insert(
         "intent".to_string(),
@@ -188,11 +193,15 @@ fn project_intent_edge(
     );
     data.insert(
         "target_gid".to_string(),
-        TelemetryValue::I64(q_gid.get(edge.target).map_or(0, |gid| gid.get() as i64)),
+        TelemetryValue::I64(target_gid.map_or(0, |gid| gid.get() as i64)),
+    );
+    data.insert(
+        "correlation_id".to_string(),
+        TelemetryValue::I64(edge.correlation_id as i64),
     );
     commands.trigger(lunco_core::TelemetryEvent {
         name: "intent.edge".to_string(),
-        source: q_gid.get(edge.target).map_or(0, |gid| gid.get()),
+        source: target_gid.map_or(0, |gid| gid.get()),
         severity: lunco_core::Severity::Info,
         data: TelemetryValue::Map(data),
         timestamp: 0.0,
@@ -657,6 +666,7 @@ fn emit_intent_edges(
                 } else {
                     lunco_core::SemanticIntentEdgeKind::Released
                 },
+                correlation_id: OpId::new().0,
             });
         }
     }
@@ -1279,6 +1289,7 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<lunco_core::CommandResults>()
             .init_resource::<lunco_core::ActiveCommandId>()
+            .init_resource::<lunco_core::CausalTrace>()
             .init_resource::<SimulatedIntents>()
             .init_resource::<lunco_core::session::CommandPolicyRegistry>()
             .add_observer(observe_semantic_edge)
@@ -1317,14 +1328,14 @@ mod tests {
         app.update();
 
         let observed = app.world().resource::<SemanticEdgeObserved>();
+        assert_eq!(observed.typed.len(), 1);
+        assert_eq!(observed.typed[0].target, target);
+        assert_eq!(observed.typed[0].intent, UserIntent::Release);
         assert_eq!(
-            observed.typed,
-            vec![lunco_core::SemanticIntentEdge {
-                target,
-                intent: UserIntent::Release,
-                kind: lunco_core::SemanticIntentEdgeKind::Pulse,
-            }]
+            observed.typed[0].kind,
+            lunco_core::SemanticIntentEdgeKind::Pulse
         );
+        assert_ne!(observed.typed[0].correlation_id, 0);
         assert_eq!(observed.typed[0].target, target);
         assert_ne!(observed.typed[0].target, other);
         assert_eq!(observed.telemetry.len(), 1);
@@ -1341,6 +1352,18 @@ mod tests {
             lunco_core::TelemetryValue::String("pulse".into())
         );
         assert_eq!(data["target_gid"], lunco_core::TelemetryValue::I64(0x11));
+        assert_eq!(
+            data["correlation_id"],
+            lunco_core::TelemetryValue::I64(observed.typed[0].correlation_id as i64)
+        );
+        let trace = app.world().resource::<lunco_core::CausalTrace>();
+        assert_eq!(trace.len(), 1);
+        assert!(trace
+            .find(
+                lunco_core::GlobalEntityId::from_raw(0x11),
+                observed.typed[0].correlation_id
+            )
+            .is_some());
 
         app.world_mut().trigger(SimulateIntentEdge {
             target,

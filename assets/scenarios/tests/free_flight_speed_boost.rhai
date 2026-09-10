@@ -36,6 +36,7 @@ fn on_start(me) {
     this.boost_down_distance = 0.0;
     this.boost_up_distance = 0.0;
     this.edge_seen = false;
+    this.edge_correlation = 0;
     this.done = false;
 
     if this.avatar < 0 {
@@ -50,6 +51,7 @@ fn on_start(me) {
         fail("could not emit atomic semantic intent edge: " + edge.error);
         return;
     }
+    this.edge_correlation = edge.id;
 
     let result = cmd("SimulateIntent", #{
         intent: "forward",
@@ -172,6 +174,19 @@ fn on_tick(me) {
             "Shift+E control frame did not produce the expected tenfold ascent"));
         checks.push(t_true(this.edge_seen,
             "atomic semantic intent edge was not delivered to the Rhai event bus"));
+        let trace = query("CausalTrace", #{
+            target: this.avatar,
+            correlation_id: this.edge_correlation,
+        });
+        checks.push(t_true(trace != () && trace.ok != false &&
+                           trace.correlation_id == this.edge_correlation,
+            "causal trace did not correlate the semantic edge"));
+        let missing_trace = query("CausalTrace", #{
+            target: this.avatar,
+            correlation_id: this.edge_correlation + 1,
+        });
+        checks.push(t_true(missing_trace != () && missing_trace.ok == false,
+            "causal trace did not expose an incomplete correlation"));
         checks.push(t_bounded(world_pos(this.avatar), 1000.0,
             "free-flight avatar left the bounded acceptance fixture"));
         print("[free-flight-speed-boost] base=" + r4(this.base_speed) +

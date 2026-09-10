@@ -91,9 +91,22 @@ one `SimulateIntentEdge` command; do not model a pulse as two API requests:
 }
 ```
 
-The accepted response includes the canonical `intent` and `edge`. Confirm
-delivery through the `intent.edge` telemetry event (`source` and
-`value.target_gid` identify the same target). A target-scoped command still
+The accepted response includes the canonical `intent`, `edge`, and command
+`id`. Confirm delivery through the `intent.edge` telemetry event (`source`,
+`value.target_gid`, and `value.correlation_id` identify the same target/action).
+Then inspect the downstream path without log scraping:
+
+```json
+{
+  "type": "ExecuteCommand",
+  "command": "CausalTrace",
+  "params": {"target": 1234, "correlation_id": 5678}
+}
+```
+
+The response composes the authored binding, selected `PortRegistry` owner,
+USD connection/native-joint admission, and current retained measurements. An
+empty/pending stage is a real incomplete path. A target-scoped command still
 passes the normal ownership/authority gate; an acknowledgement alone does not
 prove that a consuming Twin policy acted on the edge.
 

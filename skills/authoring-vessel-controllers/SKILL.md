@@ -260,6 +260,12 @@ publishes one target-scoped `intent.edge` event for `pressed`, `released`, or
 the appropriate Modelica/port behavior. Do not emulate a pulse with two
 ordered held commands, and do not add a vehicle-specific Rust action path.
 
+The helper returns the edge command `id`. Use it with
+`query("CausalTrace", #{target: target, correlation_id: edge.id})` to inspect
+the current authored binding, selected public port owner, connection/native
+joint admission, and measured channels. This is a diagnostic snapshot; an
+empty or pending stage means the path is incomplete.
+
 ## The recipe (checklist)
 
 0. Complete the exemplar audit above and identify the actual controller,

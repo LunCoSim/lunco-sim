@@ -46,8 +46,10 @@
 //! The API layer discovers all registered commands via `AppTypeRegistry`
 //! reflection — zero hardcoding.
 
+use crate::GlobalEntityId;
 use bevy::prelude::*;
 use leafwing_input_manager::prelude::*;
+use std::collections::VecDeque;
 
 // ── User Intent (Input Abstraction) ───────────────────────────────────────────
 
@@ -222,6 +224,90 @@ pub struct SemanticIntentEdge {
     pub intent: UserIntent,
     /// The discrete transition delivered to the target.
     pub kind: SemanticIntentEdgeKind,
+    /// The command/operation id that identifies this edge for read-only causal
+    /// inspection. Physical input edges mint an id locally; API/Rhai dispatch
+    /// reuses the active command id.
+    pub correlation_id: u64,
+}
+
+/// One bounded semantic edge retained for causal inspection.
+///
+/// This is deliberately only the immutable input-side record. Downstream
+/// observations (port owner, connection, admission, and measurements) belong
+/// to their existing owners and are composed by the `CausalTrace` API query;
+/// keeping them out of this ledger avoids a second routing or telemetry store.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CausalTraceRecord {
+    /// The command/operation id that identifies this action.
+    pub correlation_id: u64,
+    /// The session-local entity that received the edge.
+    pub target: Entity,
+    /// Stable target identity captured when the edge was emitted.
+    pub target_gid: Option<GlobalEntityId>,
+    /// The shared semantic intent.
+    pub intent: UserIntent,
+    /// The delivered edge kind.
+    pub kind: SemanticIntentEdgeKind,
+}
+
+/// Bounded, scene-scoped semantic edge ledger used by the causal trace query.
+///
+/// The ledger is not a second command path and does not retain per-frame
+/// control traffic. It keeps only the most recent discrete actions so an
+/// operator can correlate one semantic edge with the live topology and
+/// measurements exposed by the owning domains.
+#[derive(Resource, Debug, Default)]
+pub struct CausalTrace {
+    records: VecDeque<CausalTraceRecord>,
+}
+
+impl CausalTrace {
+    /// Maximum number of discrete semantic edges retained for inspection.
+    pub const MAX_RECORDS: usize = 256;
+
+    /// Retain one semantic edge, evicting the oldest record at the documented
+    /// bound. Zero is accepted for direct in-process event producers.
+    pub fn record(&mut self, edge: &SemanticIntentEdge, target_gid: Option<GlobalEntityId>) {
+        self.records.push_back(CausalTraceRecord {
+            correlation_id: edge.correlation_id,
+            target: edge.target,
+            target_gid,
+            intent: edge.intent,
+            kind: edge.kind,
+        });
+        while self.records.len() > Self::MAX_RECORDS {
+            self.records.pop_front();
+        }
+    }
+
+    /// Find one action for a stable target and correlation id.
+    pub fn find(
+        &self,
+        target_gid: GlobalEntityId,
+        correlation_id: u64,
+    ) -> Option<&CausalTraceRecord> {
+        self.records.iter().rev().find(|record| {
+            record.target_gid == Some(target_gid) && record.correlation_id == correlation_id
+        })
+    }
+
+    /// Return the newest recorded action for a stable target.
+    pub fn latest_for_target(&self, target_gid: GlobalEntityId) -> Option<&CausalTraceRecord> {
+        self.records
+            .iter()
+            .rev()
+            .find(|record| record.target_gid == Some(target_gid))
+    }
+
+    /// Number of retained semantic edge records.
+    pub fn len(&self) -> usize {
+        self.records.len()
+    }
+
+    /// Remove all scene-scoped records at the scene teardown boundary.
+    pub fn clear(&mut self) {
+        self.records.clear();
+    }
 }
 
 /// A component that stores the current high-resolution analog values of user intents.

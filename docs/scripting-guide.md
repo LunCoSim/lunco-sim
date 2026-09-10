@@ -33,6 +33,24 @@ prelude. This emits one target-scoped semantic edge and the `intent.edge` event;
 the Twin's Rhai/Modelica policy decides whether to latch, release, toggle, or
 actuate it. Keep `SimulateIntent`/`SetPorts` for held and continuous values.
 
+The command result's `id` is also the edge's causal correlation id. Inspect the
+current downstream path with:
+
+```rhai
+let edge = intent_pulse(target, "release");
+let trace = query("CausalTrace", #{
+    target: target,
+    correlation_id: edge.id,
+});
+```
+
+`trace.control_binding` shows the authored intent-to-port mapping,
+`trace.port_surface` shows the `PortRegistry`-selected owner and current input,
+`trace.connection_edges` and `trace.joint_admission` show topology/admission,
+and `trace.measured_channels` shows current retained signal samples. An absent
+or pending stage is an incomplete path; it is not treated as successful
+actuation. Omitting `correlation_id` selects the newest trace for `target`.
+
 A script touches the world through exactly the same **command/query API** the HTTP
 API, MCP, and UI use — so it inherits [every command](./commands-reference.md) for
 free and stays decoupled from physics. Scripts are **host-authoritative**
@@ -211,7 +229,7 @@ You'll use these constantly (the complete table is in
 | Verb | Purpose |
 |---|---|
 | `cmd(name, #{params})` | **WRITE** — fire any command by name (spawn, possess, set input…). Returns `#{ id, ok, data, error }`. |
-| `query(name, #{params})` | **READ** — call a read-only query provider (Raycast, Nearest, GroundHeight…). Successful data is returned directly; no-data is `()`; failures return `#{ok:false,error}`. |
+| `query(name, #{params})` | **READ** — call a read-only query provider (Raycast, Nearest, GroundHeight, `CausalTrace`…). Successful data is returned directly; no-data is `()`; failures return `#{ok:false,error}`. |
 | `query("ListSpawnCatalog", #{})` | **READ** — discover the authoritative `entry_id`, name, category, default transform, source, and `origin` (`builtin` or named `twin`) for assets accepted by `cmd("SpawnEntity", ...)`. |
 | `query("ValidateTwin", #{path: "/work/rover-twin", policy: "warn"})` | **READ** — inspect Twin-wide Modelica, USD, Rhai tool, shader, and asset resolver namespaces; collisions are warnings by default and become errors with `policy: "error"`. |
 | `get(id, "Comp.field")` / `set(id, "Comp.field", v)` | reflected component read/write (vectors → `[x,y,z]`); scalar co-simulation names use the canonical `PortRegistry` surface. |
@@ -264,7 +282,7 @@ The host exposes a minimal, generic bridge. Everything else is prelude policy.
 | Verb | Returns | Purpose |
 |---|---|---|
 | `cmd(name, #{params})` | `#{ id, ok, data, error }` | **WRITE** — fire any `#[Command]` by name (synchronous; `data` carries command-specific result data such as a spawned gid). The full list is the [command reference](./commands-reference.md). |
-| `query(name, #{params})` | value \| `()` \| error map | **READ** — call any query provider (Raycast, Nearest, GroundHeight, …); successful data is direct, successful no-data is `()`, and failures are `#{ok:false,error}` |
+| `query(name, #{params})` | value \| `()` \| error map | **READ** — call any query provider (Raycast, Nearest, GroundHeight, `CausalTrace`, …); successful data is direct, successful no-data is `()`, and failures are `#{ok:false,error}` |
 | `query("ListSpawnCatalog", #{})` | map | discover the spawn catalog used to validate `SpawnEntity.entry_id`, including each asset's source and authored `origin` |
 | `query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"})` | map | pre-flight one explicit Twin folder with the same `lint.twin` policy used by `RunLint { scope: "twin" }` |
 | `get(id, "Comp.field")` | value \| `()` | reflected component **read** (vectors → `[x,y,z]`, quats → `[x,y,z,w]`, structs → maps) |
@@ -288,7 +306,7 @@ The host exposes a minimal, generic bridge. Everything else is prelude policy.
 | `remove(id, "Comp")` | bool | **structural** — strip a reflected component |
 | `despawn(id)` | bool | **structural** — despawn an entity (+children); replicates on a host. *Spawn:* use `cmd("SpawnEntity", #{entry_id, position})` (no generic spawn — clients reconstruct from the catalog) |
 | `emit(name, value?)` | bool | fire a `TelemetryEvent` (delivered to `on_event` on the next scenario pass) |
-| `intent_edge(target, intent, edge)` / `intent_pulse(target, intent)` | command result | emit one target-scoped semantic edge; the runtime publishes it as `intent.edge` |
+| `intent_edge(target, intent, edge)` / `intent_pulse(target, intent)` | command result | emit one target-scoped semantic edge; the runtime publishes it as `intent.edge` with a correlation id usable by `CausalTrace` |
 | `sim_tick()` / `dt()` / `elapsed_seconds()` | i64 / f64 / f64 | the fixed simulation clock |
 | `rand()` / `rand_range(lo,hi)` / `rand_int(lo,hi)` | f64 / f64 / i64 | **deterministic** RNG — seeded per hook from `(entity, tick, hook)`, identical on every peer and replay |
 | `param(id, key, default)` | any | read a `lunco:param:<key>` attribute from a prim (`custom float lunco:param:wmax = 1.05`); returns `default` if it is absent |
@@ -321,6 +339,7 @@ verbs — read the topic files for the full, authoritative list. Highlights:
 - **Vector math:** `vsub`/`vadd`/`vlen`/`vdot`/`vcross`/`vnorm`/`vscale`/`clamp`, `distance`, `arrived`.
 - **Navigation:** `drive(rover, fwd, steer)`, `brake(rover)`, `steer_to`, `nav_to(entity, target, speed, radius)`.
 - **Discrete controls:** `intent_edge(target, intent, edge)` and `intent_pulse(target, intent)` emit one atomic `pressed`, `released`, or `pulse` edge; handle `intent.edge` in `on_event`.
+- **Causal control inspection:** `query("CausalTrace", #{target: id, correlation_id: edge.id})` joins one semantic edge to its binding, selected port owner, USD/Avian admission state, and current measurements.
 - **Sensing:** `velocity`/`speed`, `raycast`, `obstacle_ahead`, `ground_height`, `nearest`, `entities_in_radius`.
 - **Connectivity / routing** ([`links.rhai`](../assets/scripting/prelude/links.rhai)): `links()` (the live link graph — `#{nodes, adj, edges, groups}` from `query("Links")`), `reachable(from, to)`, `link_path(from, to)`, `link_path_names(from, to)`, `can_reach(rover, station)`. The Rust kernel computes only link GEOMETRY at a tunable cadence and publishes the graph; **routing is pure rhai policy** — call it at decision time (e.g. in `on_event` on `link.los`), not every tick. Nodes are identified by **GID** — the same id `find()` returns — and every helper takes either a GID (that node) or a `lunco:link:class` string (the GROUP with that role), so `can_reach(find("…/Comms"), "earth")` means "any Earth station" while each station stays separately addressable. A class is a shared role, never an identity: three DSN complexes all author `class = "earth"`. See [doc 49](./architecture/49-connectivity-link-kernel.md).
 - **Collision events:** `collision_pair`/`collision_other`/`entered`/`exited` (parse `COLLISION_START`/`COLLISION_END`).

@@ -96,7 +96,7 @@ fn on_stop(me)        { brake(me); }                       // hot-reload / detac
 | Verb | Purpose |
 |---|---|
 | `cmd(name, #{params})` | **WRITE** — fire any `#[Command]` by name; returns `#{id,ok,data,error}` (`data` carries e.g. a spawned gid) |
-| `query(name, #{params})` | **READ** — any read-only query provider (Raycast, Nearest, GroundHeight, …) |
+| `query(name, #{params})` | **READ** — any read-only query provider (Raycast, Nearest, GroundHeight, `CausalTrace`, …) |
 | `get(id,"Comp.field")` / `set(id,"Comp.field",v)` | reflected component read / write |
 | `world_pos(id)` / `world_forward(id)` | float-origin-correct pose (use these, never raw `Transform`) |
 | `find(name)` / `name(id)` / `usd_path(id)` / `parent`/`children` | entity lookup + hierarchy; `name` is presentation, `usd_path` is canonical USD topology |
@@ -385,9 +385,16 @@ severity; threshold and hysteresis equations remain in Modelica.
 Discrete vessel actions have a dedicated atomic edge surface:
 `intent_edge(target, intent, "pressed"|"released"|"pulse")` or the shorter
 `intent_pulse(target, intent)` helper. It emits `intent.edge` with
-`value.target_gid`, `value.intent`, and `value.edge`; the consuming Twin decides
+`value.target_gid`, `value.correlation_id`, `value.intent`, and `value.edge`; the consuming Twin decides
 what the edge means and whether to write a port. Use `SimulateIntent`/`SetPorts`
 for held or continuous values, and never build a pulse from two ordered writes.
+
+The helper result's `id` correlates the edge with the read-only
+`query("CausalTrace", #{target: target, correlation_id: edge.id})` snapshot.
+That snapshot exposes the authored mapping, selected port owner, connection
+and native-joint admission, and current measured channels. Missing or pending
+stages remain visible as incomplete; they are not inferred as successful
+actuation.
 
 ## 6. Running & debugging
 

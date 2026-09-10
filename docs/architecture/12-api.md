@@ -93,6 +93,7 @@ Queries return structured data from the simulation. They use the same `POST /api
 | `GetShareLink` | `{"doc_id": u64?}` | Generate a sharing URL for the document source. |
 | `CosimStatus` | `{}` | List all USD-driven cosim entities with live telemetry. |
 | `ReadPorts` | `{"api_id": u64}` | Read every exposed scalar port and its owner-supplied type, unit, range, source, authority, and write contract. |
+| `CausalTrace` | `{"target": u64, "correlation_id": u64?}` | Explain one semantic edge through its authored binding, selected port owner, USD connection/admission state, and current measured channels. |
 
 `ListOpenDocuments`, `ListRecentFiles`, and `ListTwin` are owned by
 `lunco-workspace`, so they are available in windowed, headless, and offscreen
@@ -106,6 +107,31 @@ optional inclusive `range` bounds, the owning `source`, the current control
 `authority`, and `writable`. Consumers must use `writable` and the declared
 bounds before sending `SetPorts`; the command path remains authoritative and
 rejects undeclared inputs rather than creating them.
+
+`CausalTrace` is the read-only diagnostic path for answering “what happened to
+this action?” after a semantic edge. Its bounded edge ledger is keyed by the
+target API id and the edge's `correlation_id`; omit the id to select the newest
+edge for that target. The response composes the existing owners:
+
+- `control_binding.ports` shows the authored intent-to-port mapping.
+- `port_surface[].selected_owner` is the first writable input owner selected
+  by `PortRegistry`; `current_input` is a live snapshot, not a claim about a
+  historical write.
+- `connection_edges` reports the USD-derived edge and `pending`/`bound`/
+  `failed` state.
+- `joint_admission` reports target-related native joint admission, while
+  `measured_channels` reports the latest retained `SignalRegistry` samples and
+  provenance metadata.
+
+An absent edge returns an API error. An edge with an incomplete downstream path
+returns an empty or explicitly pending/failed stage, so a trace never turns a
+missing actuator or measurement into a false success:
+
+```bash
+curl -X POST http://127.0.0.1:4101/api/commands \
+  -H "Content-Type: application/json" \
+  -d '{"type":"ExecuteCommand","command":"CausalTrace","params":{"target":1234,"correlation_id":5678}}' | jq
+```
 
 ---
 

@@ -101,6 +101,7 @@ not part of the production mission contract.
 |------|---------|---------|
 | `cmd(name, #{params})` | write | fire ANY registered `#[Command]` by name (reflect dispatch via `ApiCommandEvent`); behind networking RBAC; host-authoritative |
 | `query(name, #{params})` | read | invoke a read-only structured provider; data is direct, no-data is `()`, errors are `#{ok:false,error}` |
+| `query("CausalTrace", #{target: gid, correlation_id: id})` | read | inspect one semantic edge through its authored binding, selected port owner, USD/Avian admission, and current measured channels |
 | `world_pos(id)` → `[x,y,z]` | read | float-origin-correct world position |
 | `world_forward(id)` → `[x,y,z]` | read | world heading (only read rhai can't derive itself) |
 | `get(id, "Comp.field")` | read | generic reflected component-field read |
@@ -190,7 +191,7 @@ Representative commands already covering the user's surface:
 | Modelica/cosim | `CompileModel`, `SetModelInput`, run/step commands (`lunco-modelica/...`) |
 | Celestial | `TeleportToSurface`, `LeaveSurface` (`lunco-celestial/src/commands.rs`) |
 | Scripting | `RunRhai`, `RunRhaiTool`, `RunPython` (`lunco-scripting/src/commands.rs`) |
-| Reads | `ListEntities`, `DiscoverSchema`, `ReadPorts`, `ReadExposures`, `GetReadiness`, and domain query providers (all use the tagged `ExecuteCommand` envelope where applicable) |
+| Reads | `ListEntities`, `DiscoverSchema`, `ReadPorts`, `CausalTrace`, `ReadExposures`, `GetReadiness`, and domain query providers (all use the tagged `ExecuteCommand` envelope where applicable) |
 
 ---
 

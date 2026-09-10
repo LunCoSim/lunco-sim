@@ -217,6 +217,14 @@ rebinds the camera and controller to the vehicle. Standalone non-avatar input
 surfaces remain direct click targets. Render markers such as `SceneCamera` do
 not participate in this control decision.
 
+For a discrete control investigation, `SimulateIntentEdge` returns the command
+correlation id and publishes the same id in `intent.edge.value.correlation_id`.
+Pass that id with the target to the read-only `CausalTrace` query. The query
+joins the semantic edge to the authored control binding, selected
+`PortRegistry` owner, USD connection/native-joint admission, and current
+`SignalRegistry` measurements; it is diagnostic composition, not another
+control or telemetry path.
+
 Possession and release are single-owner transactions in `lunco-avatar`: the command
 validates the writable endpoint and requested local binding before changing the
 Twin-scoped `SessionRegistry` or `ControllerLink`. A handoff releases all prior claims
