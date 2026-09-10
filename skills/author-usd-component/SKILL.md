@@ -13,8 +13,13 @@ description: >
 
 # Author a USD component
 
-USD is the **source of truth**, projected to Bevy ECS. You build a thing by
-writing a `.usda` file; the engine reads it. Nothing here is a Rust change.
+USD is the **source of truth**, projected to Bevy ECS. For a live Editor task,
+you build a thing through a Rhai typed-operation plan and the document command
+owner; the engine then projects the authored stage. Do not hand-edit USDA text,
+patch a file behind the open document, or mutate ECS state to force a result.
+The resulting component is still a normal `.usda` asset, but its persistent
+file is written by the Editor's save operation. Nothing here is a Rust change
+unless the typed owner is missing a generic USD capability.
 
 Frame is fixed: **Y-up, right-handed, −Z-forward, SI metres** (`docs/architecture/41-axes-and-units.md`).
 Author in that frame. `upAxis = "Z"` / `metersPerUnit != 1` are converted once at
@@ -65,6 +70,12 @@ geometry as a substitute.
 
 **One file = one spawnable thing.** The catalog keys off the file, and
 `lunco:spawnable` must sit on the stage's `defaultPrim`.
+
+For live authoring, the skeleton below describes the authored result; it is
+not permission to paste or rewrite USDA source. Use `assembly_edit::new_document`
+or open the exact component document, call the component's Rhai builder, apply
+its reviewed typed ops, inspect the projected result, and save through the
+document lifecycle.
 
 ```usda
 #usda 1.0
