@@ -36,7 +36,7 @@ use lunco_behavior::{
 };
 use lunco_core::coords::{GridPos, GridRot, VehicleFrame};
 use lunco_core::session::{AuthorityRole, SessionRbac, UserSession};
-pub use lunco_core::{nav_setpoint, steering_command, NavigationCommand, NavigationState};
+pub use lunco_core::{nav_setpoint, steering_command, NavigationCommand};
 use lunco_core::{on_command, register_commands, Ack, Command, OpId};
 
 /// BehaviorTree.CPP v4 XML ⇄ tree-JSON codec (Groot2 / ROS interop).
@@ -893,7 +893,6 @@ fn leaf_drive_to_arming(
     radius: f32,
     arm: Option<Arc<AtomicBool>>,
 ) -> BoxNode<DriveCtx> {
-    let mut navigation_state = NavigationState::Uninitialized;
     Box::new(Action::new(move |ctx: &mut DriveCtx| {
         let Some(command) = nav_setpoint(
             ctx.pos,
@@ -902,7 +901,6 @@ fn leaf_drive_to_arming(
             speed,
             radius,
             ctx.steering_geometry,
-            &mut navigation_state,
         ) else {
             ctx.out = NavigationCommand::brake().into_tuple();
             return Status::Running;
@@ -1020,7 +1018,7 @@ fn leaf_steer_clear(speed: f64) -> BoxNode<DriveCtx> {
         };
         let to = Quat::from_rotation_y(open) * fwd;
         let cy = fwd.z * to.x - fwd.x * to.z;
-        let steer = steering_command(cy, 1.0, 1.0, ctx.steering_geometry);
+        let steer = steering_command(cy, 1.0, ctx.steering_geometry);
         // Ease throttle with how much room is ahead (never below a crawl).
         let throttle = speed * (ahead / range).clamp(0.2, 1.0) as f64;
         ctx.out = (throttle, steer, 0.0);
@@ -1054,7 +1052,6 @@ fn leaf_facing(target: GridPos, tolerance_deg: f64) -> BoxNode<DriveCtx> {
 /// while the target resolves and returns `Failure` (braking) if it drops out of the
 /// map (despawned / out of scope), letting a fallback branch take the wheel.
 fn leaf_follow(target_gid: u64, speed: f64, radius: f32) -> BoxNode<DriveCtx> {
-    let mut navigation_state = NavigationState::Uninitialized;
     Box::new(Action::new(move |ctx: &mut DriveCtx| {
         match ctx.targets.get(&target_gid) {
             Some(st) => {
@@ -1067,7 +1064,6 @@ fn leaf_follow(target_gid: u64, speed: f64, radius: f32) -> BoxNode<DriveCtx> {
                     speed,
                     radius,
                     ctx.steering_geometry,
-                    &mut navigation_state,
                 ) else {
                     ctx.out = NavigationCommand::brake().into_tuple();
                     return Status::Running;
@@ -1089,20 +1085,13 @@ fn leaf_follow(target_gid: u64, speed: f64, radius: f32) -> BoxNode<DriveCtx> {
 /// `radius` of the target's *actual* position — a catch-it pursuit that finishes,
 /// unlike open-ended [`leaf_follow`]); `Failure` (braking) if the target vanishes.
 fn leaf_intercept(target_gid: u64, speed: f64, radius: f32, lead: f64) -> BoxNode<DriveCtx> {
-    let mut navigation_state = NavigationState::Uninitialized;
     Box::new(Action::new(move |ctx: &mut DriveCtx| {
         match ctx.targets.get(&target_gid) {
             Some(st) => {
                 let aim = st.pos + st.vel * lead; // predicted lead point (GridPos + DVec3)
-                let Some(command) = nav_setpoint(
-                    ctx.pos,
-                    ctx.fwd,
-                    aim,
-                    speed,
-                    radius,
-                    ctx.steering_geometry,
-                    &mut navigation_state,
-                ) else {
+                let Some(command) =
+                    nav_setpoint(ctx.pos, ctx.fwd, aim, speed, radius, ctx.steering_geometry)
+                else {
                     ctx.out = NavigationCommand::brake().into_tuple();
                     return Status::Running;
                 };
@@ -1145,7 +1134,7 @@ fn leaf_face(target: GridPos, tolerance_deg: f64) -> BoxNode<DriveCtx> {
             return Status::Success;
         }
         let cy = fwd.z * to.x - fwd.x * to.z;
-        let steer = steering_command(cy, 1.0, dist, ctx.steering_geometry);
+        let steer = steering_command(cy, dist, ctx.steering_geometry);
         ctx.out = (0.0, steer, 0.0); // steer only; the active drive law owns the response
         Status::Running
     }))
@@ -2454,7 +2443,7 @@ mod tests {
     }
 
     #[test]
-    fn drive_to_rear_goal_uses_shared_reverse_travel() {
+    fn drive_to_rear_goal_turns_before_forward_travel() {
         let (throttle, steer, brake, arrived) = nav_setpoint_once(
             GridPos(DVec3::ZERO),
             Vec3::NEG_Z,
@@ -2463,14 +2452,13 @@ mod tests {
             2.0,
             lunco_core::SteeringGeometry::Differential,
         );
-        assert!(throttle < 0.0);
+        assert_eq!(throttle, 0.0);
         assert!(steer.abs() > 0.8);
         assert_eq!(brake, 0.0);
         assert!(!arrived);
 
         // The exact 180-degree case has no cross-product sign. It still needs
-        // a deterministic straight reverse command; otherwise the route would
-        // have no progress when the goal is directly behind.
+        // a deterministic turn command so the route can recover its heading.
         let (throttle, steer, _, _) = nav_setpoint_once(
             GridPos(DVec3::ZERO),
             Vec3::NEG_Z,
@@ -2479,8 +2467,8 @@ mod tests {
             2.0,
             lunco_core::SteeringGeometry::Differential,
         );
-        assert!(throttle < 0.0);
-        assert!(steer.abs() < 0.01);
+        assert_eq!(throttle, 0.0);
+        assert_eq!(steer, -1.0);
 
         let (throttle, steer, brake, arrived) = nav_setpoint_once(
             GridPos(DVec3::ZERO),
@@ -2497,7 +2485,7 @@ mod tests {
     }
 
     #[test]
-    fn drive_to_ackermann_rolls_when_goal_is_behind() {
+    fn drive_to_ackermann_turns_when_goal_is_behind() {
         let (throttle, steer, brake, arrived) = nav_setpoint_once(
             GridPos(DVec3::ZERO),
             Vec3::NEG_Z,
@@ -2506,8 +2494,8 @@ mod tests {
             2.0,
             lunco_core::SteeringGeometry::Ackermann,
         );
-        assert!(throttle < 0.0);
-        assert!(steer.abs() < 0.01);
+        assert_eq!(throttle, 0.0);
+        assert_eq!(steer, -1.0);
         assert_eq!(brake, 0.0);
         assert!(!arrived);
     }
@@ -2536,8 +2524,7 @@ mod tests {
         radius: f32,
         geometry: lunco_core::SteeringGeometry,
     ) -> (f64, f64, f64, bool) {
-        let mut state = NavigationState::Uninitialized;
-        let command = nav_setpoint(pos, fwd, target, speed, radius, geometry, &mut state)
+        let command = nav_setpoint(pos, fwd, target, speed, radius, geometry)
             .expect("test pose and navigation parameters are valid");
         (
             command.throttle,

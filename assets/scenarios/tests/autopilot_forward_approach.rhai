@@ -1,6 +1,6 @@
 // Production acceptance for a goal initially behind a rover.
-// The shared navigation law must select signed rolling reverse travel, keep the
-// command surface stable, and make measurable progress toward the goal.
+// The shared navigation law must turn first, never command reverse travel, and
+// then make measurable forward progress toward the goal.
 
 const SETTLE_S = 3.0;
 const TIMEOUT_S = 60.0;
@@ -21,6 +21,7 @@ fn on_start(me) {
     this.initial_forward = ();
     this.min_throttle = ();
     this.max_steer = 0.0;
+    this.forward_drive_samples = 0;
     this.max_goal_alignment = -1.0;
     this.max_goal_progress = 0.0;
     this.samples = 0;
@@ -79,6 +80,9 @@ fn on_tick(me) {
         if alignment > this.max_goal_alignment {
             this.max_goal_alignment = alignment;
         }
+        if throttle != () && throttle > 0.05 && alignment > 0.7 {
+            this.forward_drive_samples += 1;
+        }
     }
     this.samples += 1;
     let goal_progress = vdot(vsub(p, this.start), [0.0, 0.0, 1.0]);
@@ -87,10 +91,9 @@ fn on_tick(me) {
     }
     if vlen(vsub(p, this.start)) > 0.25 { this.moved_samples += 1; }
 
-    // Stop as soon as the observable reverse-approach contract is established.
+    // Stop as soon as the observable turn-first approach contract is established.
     // The timeout below is only a dead-run guard; it is not a qualification time.
-    if (this.min_throttle != () && this.min_throttle < -0.05 &&
-        this.max_goal_progress > 3.0) ||
+    if (this.forward_drive_samples > 20 && this.max_goal_progress > 3.0) ||
        this.t >= SETTLE_S + TIMEOUT_S {
         brake(this.rover);
         let final_forward = world_forward(this.rover);
@@ -101,22 +104,25 @@ fn on_tick(me) {
                    vdot(vnorm(this.initial_forward), [0.0, 0.0, 1.0]) < -0.8,
                 "fixture goal was not initially behind the rover"),
             t_present(this.min_throttle, "autopilot throttle samples"),
-            t_true(this.min_throttle < -0.05,
-                "autopilot did not select signed rolling reverse for a rear goal"),
-            t_true(this.max_steer < 0.05,
-                "a directly rearward goal produced an unstable steering command"),
+            t_true(this.min_throttle >= -0.001,
+                "autopilot commanded reverse travel for a rear goal"),
+            t_true(this.max_steer > 0.8,
+                "a directly rearward goal did not produce a decisive turn command"),
             t_true(this.samples > 100, "rear approach produced too few control samples"),
+            t_true(this.forward_drive_samples > 20,
+                "rear approach did not resume positive forward drive"),
             t_true(this.moved_samples > 20, "rear approach rover did not move"),
             t_true(this.max_goal_progress > 3.0,
                 "rover did not make measurable forward progress toward the rear waypoint"),
             t_present(final_alignment, "final travel heading"),
-            t_true(final_alignment != () && final_alignment < -0.7,
-                "rover heading changed while executing straight reverse travel; alignment=" +
+            t_true(final_alignment != () && final_alignment > 0.7,
+                "rover did not finish aligned with its forward waypoint; alignment=" +
                     final_alignment),
         ];
         print("[autopilot-forward] samples=" + this.samples +
               " min_throttle=" + r2(this.min_throttle) +
               " max_steer=" + r2(this.max_steer) +
+              " forward_drive_samples=" + this.forward_drive_samples +
               " goal_progress=" + r2(this.max_goal_progress) +
               " max_goal_alignment=" + r2(this.max_goal_alignment) +
               " final_alignment=" + r2(final_alignment));

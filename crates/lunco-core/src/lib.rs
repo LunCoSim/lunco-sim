@@ -81,9 +81,7 @@ pub use faults::{
 pub use markers::NoSelectionBounds;
 pub use mobility::Mobility;
 pub use mocks::*;
-pub use navigation::{
-    approach_factor, nav_setpoint, steering_command, NavigationCommand, NavigationState,
-};
+pub use navigation::{approach_factor, nav_setpoint, steering_command, NavigationCommand};
 pub use pacing::{
     KeepAwake, SimulationBarrier, SimulationBarrierParticipants, SimulationExecutionMode,
 };

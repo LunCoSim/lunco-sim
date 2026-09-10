@@ -2,7 +2,7 @@
 //
 // Rhai owns mission composition, while the language-neutral navigation bridge
 // owns pose selection, authored steering capability, heading recovery,
-// Ackermann travel state, arrival braking, and invalid-input handling. Keeping
+// forward-only travel, arrival braking, and invalid-input handling. Keeping
 // that law out of this prelude means native behaviour trees and every scripted
 // mission cannot drift into different steering conventions.
 

@@ -37,7 +37,7 @@ use bevy::prelude::*;
 use big_space::prelude::*;
 use std::{
     cell::{Cell, RefCell},
-    collections::{HashMap, HashSet},
+    collections::HashSet,
 };
 
 use lunco_api::discovery::find_api_command;
@@ -50,8 +50,8 @@ use lunco_api::schema::ApiResponse;
 use lunco_core::session::{authorize, CommandPolicyRegistry, SessionRbac, SessionRegistry};
 use lunco_core::{
     coords::{GridPos, VehicleFrame},
-    CelestialBody, CommandResults, GlobalEntityId, NavigationCommand, NavigationState, OpId,
-    SessionId, Severity, SimTick, SteeringGeometry, TelemetryEvent, TelemetryValue, SECS_PER_TICK,
+    CelestialBody, CommandResults, GlobalEntityId, NavigationCommand, OpId, SessionId, Severity,
+    SimTick, SteeringGeometry, TelemetryEvent, TelemetryValue, SECS_PER_TICK,
 };
 
 // ── Native value construction ──────────────────────────────────────────────
@@ -824,29 +824,6 @@ pub fn world_forward(gid: u64) -> Option<DVec3> {
     .flatten()
 }
 
-/// Stateful navigation owned by the script lifecycle, not by a Rhai helper.
-/// The key includes the script actor so two missions driving the same vessel
-/// cannot inherit each other's Ackermann travel mode, and a mission restart can
-/// clear exactly its own state.
-#[derive(Resource, Default)]
-pub struct ScriptNavigationStates {
-    entries: HashMap<(u64, u64), ScriptNavigationEntry>,
-}
-
-struct ScriptNavigationEntry {
-    target: GridPos,
-    state: NavigationState,
-}
-
-/// Forget all navigation legs owned by one script actor.
-pub fn clear_script_navigation(actor_gid: u64) {
-    let _ = with_world(|world| {
-        if let Some(mut states) = world.get_resource_mut::<ScriptNavigationStates>() {
-            states.entries.retain(|(actor, _), _| *actor != actor_gid);
-        }
-    });
-}
-
 /// Compute one navigation command through the shared core law for a live vessel.
 /// This is the language-neutral scripting seam: Rhai and any future backend
 /// pass the same target/speed/radius contract and receive the same authored
@@ -858,7 +835,6 @@ pub fn navigation_command(
     speed: f64,
     radius: f32,
 ) -> Option<NavigationCommand> {
-    let actor_gid = current_self();
     with_world(|world| {
         let entity = resolve_entity(world, vessel_gid)?;
         let geometry = *world.get::<SteeringGeometry>(entity)?;
@@ -868,22 +844,7 @@ pub fn navigation_command(
         };
         let target = GridPos(target);
         let fwd = VehicleFrame::forward(rotation).as_vec3();
-        let mut states = world.get_resource_mut::<ScriptNavigationStates>()?;
-        let key = (actor_gid, vessel_gid);
-        let entry = states.entries.entry(key).or_insert(ScriptNavigationEntry {
-            target,
-            state: NavigationState::Uninitialized,
-        });
-        if entry.target != target {
-            entry.target = target;
-            entry.state = NavigationState::Uninitialized;
-        }
-        let command =
-            lunco_core::nav_setpoint(pos, fwd, target, speed, radius, geometry, &mut entry.state)?;
-        if command.arrived {
-            states.entries.remove(&key);
-        }
-        Some(command)
+        lunco_core::nav_setpoint(pos, fwd, target, speed, radius, geometry)
     })
     .flatten()
 }

@@ -48,8 +48,8 @@ def Xform "AckermannRover" (
     }
 
     uniform bool lunco:spawnable = true
-    # Autopilot heading recovery must keep a signed rolling command: this
-    # vehicle's front-steered geometry cannot pivot with zero wheel drive.
+    # Autopilot navigation is forward-only; this authored capability identifies
+    # the front-steered geometry used by its shared heading-recovery command.
     uniform token lunco:steeringGeometry = "ackermann"
 
     float physics:mass = 1000.0

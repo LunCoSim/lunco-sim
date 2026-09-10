@@ -47,7 +47,7 @@ const HOLD_TOL_M = 1.0;
 const LEG_M = 12.0;
 
 // The hot-swap route reaches its first point, then samples the second leg
-// part-way through it. A reset-to-zero implementation has to reverse toward
+// part-way through it. A reset-to-zero implementation has to turn back toward
 // HOT_FIRST_M; a resumed implementation continues toward HOT_SECOND_M.
 const HOT_FIRST_M = 6.0;
 const HOT_SECOND_M = 18.0;
@@ -260,7 +260,7 @@ fn verdict(s) {
     f.push(t_present(hot_progress,
         "the hot-swap rover has no post-update position sample"));
     f.push(t_true(hot_progress > 0.5,
-        "the rover reversed toward leg 0 after a mid-route update: forward z progress was " +
+        "the rover turned back toward leg 0 after a mid-route update: forward z progress was " +
         hot_progress + " m; the current leg must be resumed"));
 
     print("[hold] ── results ──────────────────────────────────────────────");

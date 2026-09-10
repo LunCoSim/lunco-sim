@@ -268,7 +268,7 @@ pub fn parse_camera_follow(s: &str) -> Option<CameraFollow> {
 /// Steering geometry exposed by a vessel's authored command surface.
 ///
 /// Navigation uses this authored capability to select physical steering
-/// authority while keeping one command law and one signed rolling recovery
+/// authority while keeping one command law and one forward heading-recovery
 /// contract for every rover. This is a capability of the vehicle, not a
 /// Rust-side asset-name heuristic.
 #[derive(Component, Reflect, Clone, Copy, Debug, PartialEq, Eq)]

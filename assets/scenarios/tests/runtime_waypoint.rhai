@@ -158,10 +158,10 @@ fn on_tick(me) {
         return;
     }
 
-    // The route intentionally includes a reverse approach. At the authored
-    // 0.6 m/s setpoint this is a route-liveness budget, not a physics-substep
-    // budget; the rover's authored differential drive can pivot and converge
-    // without masking solver instability.
+    // The route intentionally includes a heading-recovery approach. At the
+    // authored 0.6 m/s setpoint this is a route-liveness budget, not a
+    // physics-substep budget; the rover's authored differential drive can pivot
+    // and converge without masking solver instability.
     if this.elapsed > 180.0 {
         this.done = true;
         let detail = "RuntimeWaypointStatus query unavailable";

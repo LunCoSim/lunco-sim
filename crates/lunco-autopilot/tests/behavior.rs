@@ -5,11 +5,11 @@
 
 use bevy::math::{DQuat, DVec3, Vec3};
 use lunco_autopilot::{
-    AutopilotBehavior, AutopilotExecutionState, Clearance, DriveCtx, TargetState, TargetStates,
-    nav_setpoint,
+    nav_setpoint, AutopilotBehavior, AutopilotExecutionState, Clearance, DriveCtx, TargetState,
+    TargetStates,
 };
 use lunco_core::coords::{GridPos, GridRot, VehicleFrame};
-use lunco_core::{NavigationState, SteeringGeometry};
+use lunco_core::SteeringGeometry;
 use std::sync::Arc;
 
 fn nav_setpoint_once(
@@ -20,8 +20,7 @@ fn nav_setpoint_once(
     radius: f32,
     geometry: SteeringGeometry,
 ) -> (f64, f64, f64, bool) {
-    let mut state = NavigationState::Uninitialized;
-    let command = nav_setpoint(pos, fwd, target, speed, radius, geometry, &mut state)
+    let command = nav_setpoint(pos, fwd, target, speed, radius, geometry)
         .expect("test pose and navigation parameters are valid");
     (
         command.throttle,
@@ -130,7 +129,7 @@ fn nav_setpoint_arrival_uses_ground_distance_not_body_height() {
 }
 
 #[test]
-fn nav_setpoint_uses_shared_rolling_heading_recovery() {
+fn nav_setpoint_turns_before_forward_heading_recovery() {
     let (throttle, steer, brake, arrived) = nav_setpoint_once(
         GridPos(DVec3::ZERO),
         Vec3::NEG_Z,
@@ -140,10 +139,8 @@ fn nav_setpoint_uses_shared_rolling_heading_recovery() {
         SteeringGeometry::Differential,
     );
 
-    assert!(
-        throttle < -0.59 && steer.abs() < 1e-6,
-        "directly rearward recovery must use shared straight reverse travel, got throttle={throttle}, steer={steer}"
-    );
+    assert_eq!(throttle, 0.0, "rear goal must not command reverse travel");
+    assert_eq!(steer, -1.0, "rear goal needs a deterministic turn");
     assert_eq!(brake, 0.0);
     assert!(!arrived);
 
@@ -155,14 +152,8 @@ fn nav_setpoint_uses_shared_rolling_heading_recovery() {
         2.0,
         SteeringGeometry::Ackermann,
     );
-    assert!(
-        throttle < -0.59,
-        "Ackermann must use rolling reverse, got {throttle}"
-    );
-    assert!(
-        steer.abs() < 1e-6,
-        "straight reverse needs no steer, got {steer}"
-    );
+    assert_eq!(throttle, 0.0, "Ackermann must not command reverse travel");
+    assert_eq!(steer, -1.0, "Ackermann needs the same deterministic turn");
     assert_eq!(brake, 0.0);
     assert!(!arrived);
 }
