@@ -75,6 +75,7 @@ impl ApiQueryProvider for SpawnCatalogProvider {
                     "name": entry.display_name,
                     "category": entry.category,
                     "route_marker": entry.is_route_marker(),
+                    "origin": entry.origin.as_api_value(),
                     "default_transform": {
                         "position": [
                             entry.default_transform.translation.x,
@@ -198,6 +199,13 @@ pub struct SpawnableEntry {
     pub category: String,
     /// How this entry is spawned.
     pub source: SpawnSource,
+    /// The authoritative owner of the asset discovered by the catalog.
+    ///
+    /// This is captured from [`AssetFile::twin`] while discovery still knows
+    /// whether the file came from the engine library or an open Twin. It is
+    /// deliberately separate from the display name and source path so callers
+    /// cannot accidentally infer provenance from presentation strings.
+    pub origin: SpawnOrigin,
     /// Default transform applied at spawn (overridden by click position).
     pub default_transform: Transform,
 }
@@ -223,6 +231,40 @@ pub enum SpawnSource {
     /// every spawnable, including props once built procedurally in Rust, is
     /// now authored as USD and constructed by the USD→Bevy loader.
     UsdFile(String),
+}
+
+/// Authored provenance for a catalog entry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SpawnOrigin {
+    /// An asset shipped in LunCo's engine library.
+    BuiltIn,
+    /// An asset authored by the named open Twin.
+    Twin(String),
+}
+
+impl SpawnOrigin {
+    /// Human-readable provenance used by the Spawn palette.
+    pub fn label(&self) -> String {
+        match self {
+            Self::BuiltIn => "Built-in LunCo".to_string(),
+            Self::Twin(name) => format!("Active Twin: {name}"),
+        }
+    }
+
+    /// Stable machine-readable provenance for API consumers.
+    pub fn as_api_value(&self) -> serde_json::Value {
+        match self {
+            Self::BuiltIn => serde_json::json!({
+                "kind": "builtin",
+                "label": "Built-in LunCo",
+            }),
+            Self::Twin(name) => serde_json::json!({
+                "kind": "twin",
+                "name": name,
+                "label": format!("Active Twin: {name}"),
+            }),
+        }
+    }
 }
 
 /// Result of spawning an entry. Contains the root entity/entities created.
@@ -752,6 +794,11 @@ pub fn entry_for(asset: &AssetFile, _meta: &SpawnMeta) -> SpawnableEntry {
         display_name: title_case(&asset.stem),
         category: categorize(&asset.rel),
         source: SpawnSource::UsdFile(asset.asset_path.clone()),
+        origin: asset
+            .twin
+            .as_deref()
+            .map(|name| SpawnOrigin::Twin(name.to_string()))
+            .unwrap_or(SpawnOrigin::BuiltIn),
         default_transform: Transform::default(),
     }
 }
@@ -853,6 +900,7 @@ mod spawn_anchor_tests {
                 display_name: "Modelica Balloon".into(),
                 category: "Vessels".into(),
                 source: SpawnSource::UsdFile("vessels/balloons/modelica_balloon.usda".into()),
+                origin: SpawnOrigin::BuiltIn,
                 default_transform: Transform::default(),
             },
             scene_root,
@@ -922,6 +970,37 @@ mod tests {
     }
 
     #[test]
+    fn entry_for_preserves_discovery_provenance() {
+        let asset = |asset_path: &str, twin: Option<&str>| AssetFile {
+            asset_path: asset_path.into(),
+            stem: "rover".into(),
+            rel: "vessels/rovers/rover.usda".into(),
+            abs_path: asset_path.into(),
+            twin: twin.map(str::to_string),
+        };
+
+        assert_eq!(
+            entry_for(
+                &asset("vessels/rovers/rover.usda", None),
+                &SpawnMeta::default()
+            )
+            .origin,
+            SpawnOrigin::BuiltIn
+        );
+        assert_eq!(
+            entry_for(
+                &asset(
+                    "twin://summer-space-school/vessels/rovers/rover.usda",
+                    Some("summer-space-school")
+                ),
+                &SpawnMeta::default()
+            )
+            .origin,
+            SpawnOrigin::Twin("summer-space-school".into())
+        );
+    }
+
+    #[test]
     fn test_add_unique_dedups() {
         let mut c = SpawnCatalog {
             entries: Vec::new(),
@@ -931,6 +1010,7 @@ mod tests {
             display_name: id.into(),
             category: "Structures".into(),
             source: SpawnSource::UsdFile("x.usda".into()),
+            origin: SpawnOrigin::BuiltIn,
             default_transform: Transform::default(),
         };
         assert!(c.add_unique(mk("a")));
@@ -948,6 +1028,11 @@ mod tests {
             display_name: "Rover".into(),
             category: "Rovers".into(),
             source: SpawnSource::UsdFile(source.into()),
+            origin: if source.starts_with("twin://") {
+                SpawnOrigin::Twin("moonbase".into())
+            } else {
+                SpawnOrigin::BuiltIn
+            },
             default_transform: Transform::default(),
         };
 
@@ -972,7 +1057,10 @@ mod tests {
                 stem: "rover".into(),
                 rel: "vessels/rovers/rover.usda".into(),
                 abs_path: source.into(),
-                twin: None,
+                twin: source
+                    .strip_prefix("twin://")
+                    .and_then(|path| path.split_once('/'))
+                    .map(|(name, _)| name.to_string()),
             },
             meta: SpawnMeta {
                 spawnable: true,
@@ -1022,6 +1110,7 @@ mod tests {
             display_name: "Waypoint".into(),
             category: "Markers".into(),
             source: SpawnSource::UsdFile("vessels/markers/waypoint.usda".into()),
+            origin: SpawnOrigin::BuiltIn,
             default_transform: Transform::default(),
         };
         let rover = SpawnableEntry {
@@ -1043,6 +1132,7 @@ mod tests {
                     display_name: "Last".into(),
                     category: "Other".into(),
                     source: SpawnSource::UsdFile("z.usda".into()),
+                    origin: SpawnOrigin::Twin("summer-space-school".into()),
                     default_transform: Transform::from_xyz(1.0, 2.0, 3.0),
                 },
                 SpawnableEntry {
@@ -1050,6 +1140,7 @@ mod tests {
                     display_name: "First".into(),
                     category: "Other".into(),
                     source: SpawnSource::UsdFile("a.usda".into()),
+                    origin: SpawnOrigin::BuiltIn,
                     default_transform: Transform::default(),
                 },
             ],
@@ -1064,6 +1155,10 @@ mod tests {
         assert_eq!(data["entries"][0]["entry_id"], "a-first");
         assert_eq!(data["entries"][1]["entry_id"], "z-last");
         assert_eq!(data["entries"][0]["source"]["kind"], "usd_file");
+        assert_eq!(data["entries"][0]["origin"]["kind"], "builtin");
+        assert_eq!(data["entries"][0]["origin"]["label"], "Built-in LunCo");
+        assert_eq!(data["entries"][1]["origin"]["kind"], "twin");
+        assert_eq!(data["entries"][1]["origin"]["name"], "summer-space-school");
         assert_eq!(data["entries"][0]["route_marker"], false);
     }
 
@@ -1077,6 +1172,7 @@ mod tests {
             display_name: id.into(),
             category: cat.into(),
             source: SpawnSource::UsdFile("x.usda".into()),
+            origin: SpawnOrigin::BuiltIn,
             default_transform: Transform::default(),
         };
         c.add_unique(mk("a", "Rovers"));

@@ -126,7 +126,7 @@ fn spawn_palette_content(
                         .unwrap_or(false)
                         || (route_waypoint && is_placing_waypoint);
 
-                    let btn_text = entry.display_name.clone();
+                    let btn_text = format!("{} · {}", entry.display_name, entry.origin.label());
 
                     let btn = egui::Button::new(&btn_text);
                     let btn = if selected {

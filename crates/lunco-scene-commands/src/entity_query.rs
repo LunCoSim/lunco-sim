@@ -9,6 +9,7 @@
 //! The command uses the canonical API envelope:
 //! `{"type":"ExecuteCommand","command":"QueryEntity","params":{"id":…}}`.
 
+use crate::catalog::SpawnCatalog;
 use bevy::ecs::query::QueryState;
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
@@ -69,6 +70,13 @@ impl ApiQueryProvider for QueryEntityProvider {
                 .get(world, entity)
                 .unwrap_or((None, None, false, None, None, None, None, None));
         let kind = usd_kind.map(|kind| kind.0.as_str()).unwrap_or("untyped");
+        let origin = catalog_id
+            .and_then(|id| {
+                world
+                    .get_resource::<SpawnCatalog>()
+                    .and_then(|catalog| catalog.get(id.0.as_str()))
+            })
+            .map(|entry| entry.origin.as_api_value());
 
         let Some((pos, rot)) = poses.pose(world, entity) else {
             return ApiResponse::error(
@@ -91,6 +99,7 @@ impl ApiQueryProvider for QueryEntityProvider {
             "control_bound": accepts_commands,
             "celestial_body": body.is_some(),
             "catalog_id": catalog_id.map(|id| id.0.as_str()),
+            "origin": origin,
             "usd_prim_path": prim_path.map(|path| path.path.as_str()),
             "position": [pos.x, pos.y, pos.z],
             // The frame `position` is in, named on the wire: a client holding a
@@ -129,6 +138,7 @@ pub fn register(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog::{SpawnOrigin, SpawnSource, SpawnableEntry};
     use big_space::prelude::{CellCoord, Grid};
 
     fn query_test_app() -> App {
@@ -198,6 +208,16 @@ mod tests {
         app.world_mut()
             .resource_mut::<ApiEntityRegistry>()
             .assign(prim, gid);
+        app.insert_resource(SpawnCatalog {
+            entries: vec![SpawnableEntry {
+                id: "rocker_bogie".into(),
+                display_name: "Rocker Bogie".into(),
+                category: "Rovers".into(),
+                source: SpawnSource::UsdFile("vessels/rovers/rocker_bogie.usda".into()),
+                origin: SpawnOrigin::BuiltIn,
+                default_transform: Transform::default(),
+            }],
+        });
 
         let response = QueryEntityProvider.execute(app.world(), &serde_json::json!({ "id": 42 }));
         let ApiResponse::Ok {
@@ -218,6 +238,7 @@ mod tests {
         );
         assert_eq!(data["position_frame"], "active_physics");
         assert_eq!(data["name"], "Rocker Bogie");
+        assert_eq!(data["origin"]["kind"], "builtin");
     }
 
     #[test]

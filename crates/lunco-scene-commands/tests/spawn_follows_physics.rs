@@ -10,7 +10,9 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
-use lunco_scene_commands::catalog::{spawn_usd_entry, SpawnAnchor, SpawnSource, SpawnableEntry};
+use lunco_scene_commands::catalog::{
+    spawn_usd_entry, SpawnAnchor, SpawnOrigin, SpawnSource, SpawnableEntry,
+};
 use lunco_usd_bevy::{UsdInstanceRoot, UsdStageAsset};
 use std::time::Duration;
 
@@ -42,6 +44,7 @@ fn balloon_entry() -> SpawnableEntry {
         display_name: "Modelica Balloon".into(),
         category: "Vessels".into(),
         source: SpawnSource::UsdFile("vessels/balloons/modelica_balloon.usda".into()),
+        origin: SpawnOrigin::BuiltIn,
         default_transform: Transform::default(),
     }
 }

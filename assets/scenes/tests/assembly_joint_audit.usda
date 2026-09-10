@@ -26,8 +26,13 @@ def Xform "JointAudit"
         quatf physics:localRot0 = (0, 1, 0, 0)
         quatf physics:localRot1 = (1, 0, 0, 0)
     }
-    def Xform "Host" {}
-    def Xform "Part" { float physics:mass = 1 }
+    def Xform "Host" ( prepend apiSchemas = ["PhysicsRigidBodyAPI"] ) {}
+    def Xform "Part" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI"]
+    )
+    {
+        float physics:mass = 1
+    }
     def Scope "QuaternionValues"
     {
         quatd doubleRotation = (0, 0, 1, 0)

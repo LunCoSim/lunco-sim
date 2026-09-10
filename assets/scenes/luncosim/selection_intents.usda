@@ -11,6 +11,7 @@
 # render-free host and requires an authored Rhai verdict for every test scene.
 # The two static rigid bodies remain independently selectable in the editor.
 def Xform "SelectionIntentReview" (
+    doc = "Review authored selection intents in the editor."
     kind = "assembly"
 )
 {
