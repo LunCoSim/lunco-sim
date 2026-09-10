@@ -31,6 +31,12 @@
 //! `lunco_usd_bevy::collision_aabb` reader, so compound ownership, standard
 //! shape dimensions, purpose filtering, transforms, and malformed-data errors
 //! have one owner for API, Rhai, and other consumers.
+//! A request with `topology: true` adds one scoped, read-only record containing
+//! visual/collision parts, body ownership, per-part geometry bounds, local and
+//! world transforms, source-layer stack heads, material/shader bindings,
+//! joints, and the selected prim's projection/binding state. It is intentionally
+//! opt-in because a topology walk is O(number of composed prims) and existing
+//! callers do not need the extra payload.
 //!
 //! ## Request
 //!
@@ -39,6 +45,7 @@
 //! {"type":"ExecuteCommand","command": "QueryUsdPrim", "params": {"path": "…", "attrs": ["radius", "points"]}}
 //! {"type":"ExecuteCommand","command": "QueryUsdPrim", "params": {"path": "…", "rels": ["lunco:mount:attachmentJoint"]}}
 //! {"type":"ExecuteCommand","command": "QueryUsdPrim", "params": {"doc_id": 7, "path": "…", "collision_bounds": true}}
+//! {"type":"ExecuteCommand","command": "QueryUsdPrim", "params": {"path": "…", "topology": true}}
 //! ```
 //!
 //! Omitting `attrs` returns every authored attribute on the prim. Naming them is
@@ -130,9 +137,288 @@ fn attr_json(view: &StageView<'_>, prim: &SdfPath, name: &str) -> serde_json::Va
     }
 }
 
-/// `QueryUsdPrim { doc_id?, path, attrs?, rels?, children?, collision_bounds? }`
+fn purpose_name(purpose: lunco_usd_bevy::Purpose) -> &'static str {
+    match purpose {
+        lunco_usd_bevy::Purpose::Default => "default",
+        lunco_usd_bevy::Purpose::Render => "render",
+        lunco_usd_bevy::Purpose::Proxy => "proxy",
+        lunco_usd_bevy::Purpose::Guide => "guide",
+    }
+}
+
+fn is_visual_geometry(type_name: &str) -> bool {
+    matches!(
+        type_name,
+        "Mesh"
+            | "NurbsPatch"
+            | "BasisCurves"
+            | "NurbsCurves"
+            | "Cube"
+            | "Sphere"
+            | "Cylinder"
+            | "Cone"
+            | "Capsule"
+            | "Plane"
+    )
+}
+
+fn nearest_rigid_body(view: &StageView<'_>, path: &SdfPath) -> Option<SdfPath> {
+    let mut current = Some(path.clone());
+    while let Some(candidate) = current {
+        if view.has_api_schema(
+            &candidate,
+            openusd::schemas::physics::tokens::API_RIGID_BODY,
+        ) {
+            return Some(candidate);
+        }
+        current = candidate.parent();
+    }
+    None
+}
+
+fn aabb_json(aabb: lunco_usd_bevy::ObjectAabb) -> serde_json::Value {
+    serde_json::json!({
+        "min": [aabb.min.x, aabb.min.y, aabb.min.z],
+        "max": [aabb.max.x, aabb.max.y, aabb.max.z],
+        "center": [
+            (aabb.min.x + aabb.max.x) * 0.5,
+            (aabb.min.y + aabb.max.y) * 0.5,
+            (aabb.min.z + aabb.max.z) * 0.5,
+        ],
+        "half_extents": [
+            (aabb.max.x - aabb.min.x) * 0.5,
+            (aabb.max.y - aabb.min.y) * 0.5,
+            (aabb.max.z - aabb.min.z) * 0.5,
+        ],
+        "frame": "canonical_stage",
+    })
+}
+
+fn transform_json(transform: Option<Transform>) -> serde_json::Value {
+    transform.map_or(serde_json::Value::Null, |transform| {
+        serde_json::json!({
+            "translation": [
+                transform.translation.x,
+                transform.translation.y,
+                transform.translation.z,
+            ],
+            "rotation": [
+                transform.rotation.w,
+                transform.rotation.x,
+                transform.rotation.y,
+                transform.rotation.z,
+            ],
+            "scale": [transform.scale.x, transform.scale.y, transform.scale.z],
+        })
+    })
+}
+
+fn source_layer_json(view: &StageView<'_>, path: &SdfPath) -> serde_json::Value {
+    let Ok(stack) = view.stage().prim(path.clone()).prim_stack() else {
+        return serde_json::Value::Null;
+    };
+    let Some((layer, authored_path)) = stack.first() else {
+        return serde_json::Value::Null;
+    };
+    serde_json::json!({
+        "layer": layer.to_string(),
+        "path": authored_path.to_string(),
+        "stack_depth": stack.len(),
+    })
+}
+
+fn topology_for_stage(view: &StageView<'_>, selected: &SdfPath) -> serde_json::Value {
+    let mut diagnostics = Vec::new();
+    let body_owner = nearest_rigid_body(view, selected);
+    let root = body_owner.clone().unwrap_or_else(|| selected.clone());
+    let paths = view.prim_paths();
+    let mut parts = Vec::new();
+
+    for candidate in paths.iter().filter(|candidate| {
+        lunco_usd_bevy::is_descendant_or_self(candidate, root.as_str()) && view.is_active(candidate)
+    }) {
+        let Some(type_name) = view.type_name(candidate) else {
+            continue;
+        };
+        let collider =
+            view.has_api_schema(candidate, openusd::schemas::physics::tokens::API_COLLISION);
+        let visual = is_visual_geometry(&type_name) && !view.is_invisible_or_guide(candidate);
+        if !collider && !visual {
+            continue;
+        }
+
+        let collision_enabled = match view.boolean(candidate, "physics:collisionEnabled") {
+            Some(value) => Some(value),
+            None if view.has_authored_attribute(candidate, "physics:collisionEnabled") => {
+                diagnostics.push(format!(
+                    "{candidate}: physics:collisionEnabled has an unsupported value type"
+                ));
+                None
+            }
+            None if collider => Some(true),
+            None => None,
+        };
+        let bounds = match lunco_usd_bevy::prim_geometry_aabb(view, candidate.as_str()) {
+            Ok(Some(aabb)) => aabb_json(aabb),
+            Ok(None) => {
+                diagnostics.push(format!(
+                    "{candidate}: geometry bounds are unavailable for {type_name}"
+                ));
+                serde_json::Value::Null
+            }
+            Err(error) => {
+                diagnostics.push(format!("{candidate}: geometry bounds failed: {error}"));
+                serde_json::Value::Null
+            }
+        };
+
+        let local = match view.local_transform_at(candidate, 0.0) {
+            Ok(value) => transform_json(value),
+            Err(error) => {
+                diagnostics.push(format!("{candidate}: local transform failed: {error}"));
+                serde_json::Value::Null
+            }
+        };
+        let world = match lunco_usd_avian::world_transform(view, candidate) {
+            Ok(value) => transform_json(Some(value)),
+            Err(error) => {
+                diagnostics.push(format!("{candidate}: world transform failed: {error}"));
+                serde_json::Value::Null
+            }
+        };
+        let render_material =
+            view.bound_material(candidate, lunco_usd_bevy::MaterialPurpose::Render);
+        let physics_material =
+            view.bound_material(candidate, lunco_usd_bevy::MaterialPurpose::Physics);
+        let shader = lunco_usd_bevy::resolve_bound_shader(view, candidate)
+            .map(|path| path.as_str().to_string());
+
+        parts.push(serde_json::json!({
+            "path": candidate.as_str(),
+            "type_name": type_name,
+            "purpose": purpose_name(lunco_usd_bevy::effective_purpose(view, candidate)),
+            "visual": visual,
+            "collider": collider,
+            "collision_enabled": collision_enabled,
+            "body_owner": nearest_rigid_body(view, candidate)
+                .map(|path| path.as_str().to_string()),
+            "bounds": bounds,
+            "transform": {
+                "local_frame": "canonical_stage_parent",
+                "local": local,
+                "world_frame": "canonical_stage",
+                "world": world,
+            },
+            "materials": {
+                "render": render_material,
+                "physics": physics_material,
+                "shader": shader,
+            },
+            "source": source_layer_json(view, candidate),
+        }));
+    }
+
+    let mut joints = Vec::new();
+    for candidate in paths.iter().filter(|candidate| {
+        lunco_usd_bevy::is_descendant_or_self(candidate, root.as_str()) && view.is_active(candidate)
+    }) {
+        let Some(type_name) = view.type_name(candidate) else {
+            continue;
+        };
+        if !(type_name.ends_with("Joint")
+            && (type_name.starts_with("Physics") || type_name.starts_with("Physx")))
+        {
+            continue;
+        }
+        let body0 = view
+            .rel_targets(candidate, "physics:body0")
+            .into_iter()
+            .next()
+            .map(|path| path.as_str().to_string());
+        let body1 = view
+            .rel_targets(candidate, "physics:body1")
+            .into_iter()
+            .next()
+            .map(|path| path.as_str().to_string());
+        if body0.is_none() || body1.is_none() {
+            diagnostics.push(format!(
+                "{candidate}: joint is missing physics:body0 or physics:body1"
+            ));
+        }
+        joints.push(serde_json::json!({
+            "path": candidate.as_str(),
+            "type_name": type_name,
+            "body0": body0,
+            "body1": body1,
+            "source": source_layer_json(view, candidate),
+        }));
+    }
+
+    serde_json::json!({
+        "selection": {
+            "path": selected.as_str(),
+            "scope": root.as_str(),
+            "body_owner": body_owner.map(|path| path.as_str().to_string()),
+        },
+        "parts": parts,
+        "joints": joints,
+        "diagnostics": diagnostics,
+    })
+}
+
+fn runtime_binding_json(world: &World, entity: Option<Entity>) -> serde_json::Value {
+    let Some(entity) = entity else {
+        return serde_json::json!({ "state": "not_projected" });
+    };
+    let visual_synced = world
+        .get::<lunco_usd_bevy::UsdVisualSynced>(entity)
+        .is_some();
+    let visual_sync_failed = world.get::<lunco_usd_bevy::UsdVisualSyncFailed>(entity);
+    let awaiting_stage = world
+        .get::<lunco_usd_bevy::UsdAwaitingStage>(entity)
+        .is_some();
+    let state = if visual_sync_failed.is_some() {
+        "visual_sync_failed"
+    } else if awaiting_stage {
+        "awaiting_stage"
+    } else if visual_synced {
+        "visual_synced"
+    } else {
+        "projected_without_visual_sync"
+    };
+    let joint_link = world
+        .get::<lunco_physics::PhysicsJointLink>(entity)
+        .map(|link| {
+            serde_json::json!({
+                "body0": link.body0.to_bits(),
+                "body1": link.body1.to_bits(),
+            })
+        });
+    serde_json::json!({
+        "state": state,
+        "entity": entity.to_bits(),
+        "visual_synced": visual_synced,
+        "visual_mesh_pending": world
+            .get::<lunco_usd_bevy::UsdVisualMeshPending>(entity)
+            .is_some(),
+        "visual_sync_error": visual_sync_failed.map(|error| error.0.clone()),
+        "awaiting_stage": awaiting_stage,
+        "rigid_body": world.get::<avian3d::prelude::RigidBody>(entity).is_some(),
+        "collider": world.get::<avian3d::prelude::Collider>(entity).is_some(),
+        "pending_joint": world
+            .get::<lunco_usd_avian::PendingUsdJoint>(entity)
+            .is_some(),
+        "physics_joint_pending": world
+            .get::<lunco_physics::PhysicsJointPending>(entity)
+            .is_some(),
+        "physics_joint_link": joint_link,
+    })
+}
+
+/// `QueryUsdPrim { doc_id?, path, attrs?, rels?, children?, collision_bounds?, topology? }`
 /// → composed attributes, requested relationships, optional direct children,
-/// optional aggregate collision bounds, and world pose.
+/// optional aggregate collision bounds, optional scoped topology facts, and
+/// world pose.
 pub struct QueryUsdPrimProvider;
 
 impl ApiQueryProvider for QueryUsdPrimProvider {
@@ -177,6 +463,10 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
             .unwrap_or(false);
         let include_collision_bounds = params
             .get("collision_bounds")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let include_topology = params
+            .get("topology")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
 
@@ -264,6 +554,7 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
             serde_json::Map<String, serde_json::Value>,
             serde_json::Map<String, serde_json::Value>,
             Vec<String>,
+            Option<serde_json::Value>,
             Option<serde_json::Value>,
         )> = {
             let Some(stages) = world.get_non_send::<CanonicalStages>() else {
@@ -359,11 +650,13 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
                     relationships,
                     children,
                     collision_bounds.clone(),
+                    include_topology.then(|| topology_for_stage(&view, &prim)),
                 )
             })
         };
 
-        let Some((type_name, attrs, relationships, children, collision_bounds)) = read else {
+        let Some((type_name, attrs, relationships, children, collision_bounds, topology)) = read
+        else {
             return ApiResponse::error(
                 ApiErrorCode::EntityNotFound,
                 format!(
@@ -396,6 +689,25 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
         }
         if include_collision_bounds {
             out["collision_bounds"] = collision_bounds.unwrap_or(serde_json::Value::Null);
+        }
+        if include_topology {
+            let mut topology = topology.unwrap_or(serde_json::Value::Null);
+            if let Some(object) = topology.as_object_mut() {
+                object.insert(
+                    "projection".to_string(),
+                    serde_json::json!({
+                        "source": if doc.is_some() { "document" } else { "live_stage" },
+                        "composed": true,
+                        "document_generation": generation,
+                        "projected_generation": generation,
+                    }),
+                );
+                object.insert(
+                    "binding".to_string(),
+                    runtime_binding_json(world, spawned.as_ref().map(|(entity, _)| *entity)),
+                );
+            }
+            out["topology"] = topology;
         }
 
         if let Some((entity, _)) = spawned {

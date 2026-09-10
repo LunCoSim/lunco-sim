@@ -5350,6 +5350,51 @@ pub fn collision_aabb(
     Ok(acc.map(|(min, max)| ObjectAabb { min, max }))
 }
 
+/// Derive the composed geometry AABB of one USD shape prim in canonical stage
+/// coordinates.
+///
+/// This is the per-shape counterpart to [`collision_aabb`]. It deliberately
+/// shares the same primitive dimensions, mesh-point reader, transforms, and
+/// malformed-data errors. A non-shape prim (for example an `Xform` or a curve
+/// whose bounds are not available from authored control data) returns
+/// `Ok(None)`; a recognized shape with invalid authored geometry returns an
+/// error instead of an invented envelope.
+pub fn prim_geometry_aabb(
+    reader: &StageView<'_>,
+    prim_path: &str,
+) -> Result<Option<ObjectAabb>, CollisionAabbError> {
+    let path = SdfPath::new(prim_path)
+        .map_err(|_| CollisionAabbError::InvalidRootPath(prim_path.to_owned()))?;
+    let Some(type_name) = reader.type_name(&path) else {
+        return Ok(None);
+    };
+    if !matches!(
+        type_name.as_str(),
+        "Mesh" | "Cube" | "Sphere" | "Cylinder" | "Cone" | "Capsule" | "Plane"
+    ) {
+        return Ok(None);
+    }
+    let transform = geometry_world_transform(reader, &path)?;
+    let corners = local_shape_corners(reader, &path, &type_name).ok_or_else(|| {
+        CollisionAabbError::MalformedPrimitive {
+            prim: path.as_str().to_owned(),
+            type_name: type_name.clone(),
+        }
+    })?;
+    let mut acc: Option<(bevy::math::DVec3, bevy::math::DVec3)> = None;
+    for corner in corners {
+        let world = transform.transform_point(corner.as_vec3()).as_dvec3();
+        match acc.as_mut() {
+            Some((min, max)) => {
+                *min = min.min(world);
+                *max = max.max(world);
+            }
+            None => acc = Some((world, world)),
+        }
+    }
+    Ok(acc.map(|(min, max)| ObjectAabb { min, max }))
+}
+
 /// Read a collision-tree transform while distinguishing USD's identity for an
 /// unauthored xform stack from a malformed authored stack. The latter must not
 /// become identity: doing so changes the computed rest depth and can bury a
@@ -5365,6 +5410,35 @@ fn collision_local_transform(
             prim: path.as_str().to_owned(),
         }),
     }
+}
+
+/// Fold the local transforms from the stage root to one shape. This stays next
+/// to [`local_shape_corners`] so per-shape inspection and aggregate collision
+/// placement use the same canonical transform semantics without depending on
+/// the Avian crate.
+fn geometry_world_transform(
+    reader: &StageView<'_>,
+    path: &SdfPath,
+) -> Result<Transform, CollisionAabbError> {
+    if !reader.has_prim(path) {
+        return Err(CollisionAabbError::InvalidRootPath(
+            path.as_str().to_owned(),
+        ));
+    }
+    let mut chain = Vec::new();
+    let mut current = Some(path.clone());
+    while let Some(prim) = current {
+        if prim.is_abs_root() {
+            break;
+        }
+        chain.push(prim.clone());
+        current = prim.parent();
+    }
+    let mut transform = Transform::IDENTITY;
+    for prim in chain.iter().rev() {
+        transform = transform.mul_transform(collision_local_transform(reader, prim)?);
+    }
+    Ok(transform)
 }
 
 /// An authored empty `xformOpOrder` is the valid USD identity stack. It must be

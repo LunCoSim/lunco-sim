@@ -577,6 +577,17 @@ Use the smallest existing typed intent that expresses the change:
   duplicated collision envelopes before proposal. This is the preferred
   dynamic Rhai path for general assembly placement; it does not duplicate
   primitive dimensions or write USD directly.
+- For one selected prim's complete read-only visual/physics explanation, use
+  `QueryUsdPrim { topology: true }`. The result scopes to the nearest
+  `PhysicsRigidBodyAPI` ancestor (or the selected prim), then returns one
+  `topology.parts` list with visual/collider flags, inherited purpose,
+  collision state, body owner, per-shape canonical bounds, local/world frames,
+  source-layer head, and render/physics material plus resolved shader paths.
+  `topology.joints` reports standard joint body targets in the same scope;
+  `topology.diagnostics` is authoritative for malformed or unavailable facts.
+  `topology.projection` and `topology.binding` expose composed generation and
+  the existing USD projection markers. This query is opt-in, read-only, and
+  does not replace selection or create a second scene graph.
 - For general-body snap editing, use
   `assembly_builder::align_collision_centers_plan` or
   `assembly_builder::align_collision_edges_plan`. They align aggregate

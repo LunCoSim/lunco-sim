@@ -21,6 +21,16 @@ fn on_tick(me) {
         path: ROOT + "/UncollidableBody",
         attrs: ["physics:collisionEnabled"],
     });
+    let body_topology = query("QueryUsdPrim", #{
+        path: ROOT + "/UncollidableBody",
+        topology: true,
+    });
+    let disabled_part = ();
+    if body_topology != () && body_topology.ok != false && body_topology.topology != () {
+        for part in body_topology.topology.parts {
+            if part.path == ROOT + "/UncollidableBody" { disabled_part = part; }
+        }
+    }
     let ray = query("Raycast", #{
         origin: [0.0, 10.0, 0.0],
         dir: [0.0, -1.0, 0.0],
@@ -34,6 +44,11 @@ fn on_tick(me) {
         t_true(body != () && body.ok != false
             && body.attrs["physics:collisionEnabled"] == false,
             "disabled authored collision was not visible through QueryUsdPrim"),
+        t_true(disabled_part != ()
+            && disabled_part.collider == false
+            && disabled_part.collision_enabled == false
+            && disabled_part.bounds.frame == "canonical_stage",
+            "topology hid the disabled collider fact or its geometry envelope"),
         t_true(ray != () && ray.hit == false,
             "raycast reported a collider for the disabled-only fixture"),
     ], "AUTHORED RUNTIME CONTRACTS NEGATIVE", "AUTHORED_RUNTIME_CONTRACTS_NEGATIVE");

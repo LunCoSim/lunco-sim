@@ -42,6 +42,26 @@ fn on_tick(me) {
         path: ROOT + "/Ramp",
         attrs: ["xformOp:scale", "physics:collisionEnabled"],
     });
+    let topology = query("QueryUsdPrim", #{
+        path: ROOT,
+        topology: true,
+    });
+    let payload_part = ();
+    let ramp_part = ();
+    let payload_joint = false;
+    if query_ok(topology) && topology.topology != () {
+        for part in topology.topology.parts {
+            if part.path == ROOT + "/Payload" { payload_part = part; }
+            if part.path == ROOT + "/Ramp" { ramp_part = part; }
+        }
+        for item in topology.topology.joints {
+            if item.path == ROOT + "/PayloadJoint"
+                && item.body0 == ROOT + "/Anchor"
+                && item.body1 == ROOT + "/Payload" {
+                payload_joint = true;
+            }
+        }
+    }
     let ray = query("Raycast", #{
         origin: [0.0, 10.0, 0.0],
         dir: [0.0, -1.0, 0.0],
@@ -81,6 +101,28 @@ fn on_tick(me) {
         && ramp.attrs["xformOp:scale"] == [4.0, 1.0, 2.0]
         && ramp.attrs["physics:collisionEnabled"] == true,
         "authored clearance obstacle is missing or its collision shape changed"));
+    checks.push(t_true(query_ok(topology)
+        && topology.topology.selection.scope == ROOT
+        && topology.topology.projection.composed == true
+        && topology.topology.projection.source == "live_stage",
+        "selected USD topology did not expose its composed/live projection scope"));
+    checks.push(t_true(payload_part != ()
+        && payload_part.visual == true
+        && payload_part.collider == true
+        && payload_part.collision_enabled == true
+        && payload_part.body_owner == ROOT + "/Payload"
+        && payload_part.bounds.frame == "canonical_stage"
+        && payload_part.transform.local_frame == "canonical_stage_parent"
+        && payload_part.transform.world_frame == "canonical_stage"
+        && payload_part.source.layer != (),
+        "topology did not expose the payload visual/collider, owner, bounds, frames, and source"));
+    checks.push(t_true(ramp_part != ()
+        && ramp_part.collider == true
+        && ramp_part.collision_enabled == true
+        && ramp_part.bounds.half_extents[0] == 2.0,
+        "topology did not expose the ramp collision shape envelope"));
+    checks.push(t_true(payload_joint,
+        "topology did not expose the authored payload joint body ownership"));
     checks.push(t_true(ray != () && ray.hit == true,
         "production raycast did not observe the authored ground collider"));
     checks.push(t_true(ground_height != () && ground_height.hit == true

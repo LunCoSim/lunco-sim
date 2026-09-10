@@ -563,6 +563,20 @@ names. `collision_bounds: true` exposes the shared composed aggregate envelope
 for placement and inspection; a null envelope means visual-only geometry,
 whereas malformed collision data is an error. Raycast wheels are not listed as
 rigid bodies: only actual movable bodies are checked for joint coverage.
+For a selected prim that needs one explainable record, add `topology: true` to
+the same `QueryUsdPrim` request. The result is scoped to the nearest composed
+`PhysicsRigidBodyAPI` ancestor (or the selected prim when there is none) and
+contains one `parts` list with `visual`, `collider`, `collision_enabled`,
+`body_owner`, purpose, per-part geometry `bounds`, canonical local/world
+transforms, the strongest source-layer stack head, and render/physics
+material plus resolved shader paths. `joints` reports standard `*Physics*Joint`
+and `Physx*Joint` body targets in that scope. `diagnostics` keeps malformed
+collision/material/topology facts visible; a missing bounds value is not
+silently replaced with a guessed box. The top-level `projection` and
+`binding` objects show composed document/live-stage generation and the same
+USD visual/physics projection markers used by the existing `BindingStatus`
+surface. The walk is opt-in because it scans the composed prim inventory; it
+does not create a second scene graph or selection store.
 For a single asset-level physicality decision, `physicality_report` accepts an
 explicit manifest whose entries choose `physical` or `visual-only`. Physical
 entries delegate to the existing body/joint and collider/mass reports; a

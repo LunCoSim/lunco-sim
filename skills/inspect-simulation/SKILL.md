@@ -31,7 +31,7 @@ switch to it silently when a visual check is requested.
 |---|---|
 | `list_entities` (`ListEntities`) | every registered entity → `{api_id, name, type, pos}`. **Start here** — most reads need an `api_id`. |
 | `query_entity` (`QueryEntity {id}`) | one entity's pose/name/type blob. |
-| `QueryUsdPrim` | composed USD attributes and the resolved world position for a prim; use it to verify `xformOpOrder`, placement heading and mounted-part dimensions. |
+| `QueryUsdPrim` | composed USD attributes and the resolved world position for a prim; use it to verify `xformOpOrder`, placement heading and mounted-part dimensions. Add `topology:true` for one scoped visual/collider/material/joint/bounds/projection record. |
 | `InspectUsdViewport` | the explicit focused USD preview/view handles, document IDs, edit targets, projection generations, and `projection_ready` state; use this to identify the exact editor item visible in a screenshot and wait for a ready preview before editing. |
 | `read_ports` | **live telemetry.** With `api_id`: that entity's ports `[{name,value,direction,kind}]`. Without: EVERY port-bearing entity (large — pass `name_filter` substring and/or `ports:[…]` to narrow). One-shot. |
 | `read_port` `{api_id, port}` | a single named port value. |
@@ -95,6 +95,16 @@ For a placed rover, pair the live pose with `QueryUsdPrim` on the composed rover
 prim. Confirm the local forward-axis contract, the effective rotation op and
 its `xformOpOrder`; do not infer orientation from a screenshot chosen on a
 symmetry axis.
+
+For a selected Editor prim, use `QueryUsdPrim { topology: true }` when the
+question is why a part is visible, collidable, or not attached as expected.
+Inspect `topology.parts` for the visual/collider flags, inherited purpose,
+collision state, per-shape canonical bounds, local/world transforms,
+source-layer/material/shader bindings, and `topology.joints` for body targets.
+Treat non-empty `topology.diagnostics` as an authored-data or projection issue;
+do not fill a null bound with a guessed box. `topology.projection` reports the
+document/live-stage generation, while `topology.binding` reports the existing
+visual-sync and physics markers for the selected runtime entity.
 
 ## Example (curl)
 

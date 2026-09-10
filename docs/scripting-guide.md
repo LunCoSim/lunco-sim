@@ -569,6 +569,29 @@ The resulting operation is still
 reviewed and committed through `assembly_edit`, so replacing this Rhai policy
 does not create a second USD writer.
 
+For Editor selection diagnostics, add `topology: true` to `QueryUsdPrim`:
+
+```rhai
+let selected = query("QueryUsdPrim", #{
+    doc_id: doc,
+    path: selected_path,
+    topology: true,
+});
+```
+
+`selected.topology` is one read-only record. Its `selection.scope` is the
+nearest rigid-body ancestor, or the selected prim when no body owns it.
+`parts` combines visual and collision facts instead of making callers join two
+inventories: each row has `visual`, `collider`, `collision_enabled`,
+`body_owner`, inherited `purpose`, canonical local/world `transform`, per-shape
+`bounds`, source-layer information, and render/physics material plus resolved
+shader paths. `joints` contains standard physics joint body targets in the same
+scope. Read `diagnostics` before treating a null bounds/material value as
+meaningful; unsupported or malformed authored data remains visible there.
+`projection` reports composed document/live-stage generation and `binding`
+reports the selected prim's existing visual/physics projection markers. The
+topology walk is opt-in and does not mutate selection, USD, or ECS state.
+
 `find_compatible_socket` and `mount_component` are the referenced-part path:
 they select a unique authored socket, derive its typed fixed/revolute/prismatic
 joint from mount metadata, and delegate plug-frame placement, reference
