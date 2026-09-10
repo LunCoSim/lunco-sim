@@ -20,10 +20,12 @@ preview lease; a USD path is never resolved globally across the live scene and
 open documents.
 
 The workbench separates assembly authoring from live base composition. Editor
-opens one explicit USD document at a time, such as a rover or lander, and its
-prim tree is the document's authored hierarchy. Build owns the mounted Twin's
-general composition tools; a USD compound rigid-body root is one selectable
-assembly element there, while its internal parts are edited in Editor.
+opens one explicit USD document at a time, such as a rover or lander, and
+foregrounds its full-width prim tree in the upper-left navigation surface. The
+Twin Browser remains available in the lower-left pane for choosing another
+document. Build owns the mounted Twin's general composition tools; a USD
+compound rigid-body root is one selectable assembly element there, while its
+internal parts are edited in Editor.
 
 The live selection is also readable through the public `InspectSelection` query:
 it returns stable API ids in selection order and the current primary id. This is

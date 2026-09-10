@@ -26,8 +26,8 @@ use bevy_egui::egui;
 use lunco_render::SceneCamera;
 use lunco_usd::ui::viewport::{UsdPreviewId, UsdViewportState};
 use lunco_usd_bevy::{
-    CanonicalStages, SdfPath, UsdPrimPath, UsdRead, UsdStageAsset,
-    camera_switch::camera_display_labels,
+    camera_switch::camera_display_labels, CanonicalStages, SdfPath, UsdPrimPath, UsdRead,
+    UsdStageAsset,
 };
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
 
@@ -351,11 +351,12 @@ fn prim_tree_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
             ui.label(egui::RichText::new("No USD scene loaded.").weak());
             return;
         }
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            for root in &view.roots {
-                render_prim_node(ui, root, view, &selected, &mut to_select, 0);
-            }
-        });
+        // The workbench already owns the panel's full-width vertical scroll
+        // body. A nested auto-shrinking scroll area made the tree's content
+        // width track its longest label instead of the dock width.
+        for root in &view.roots {
+            render_prim_node(ui, root, view, &selected, &mut to_select, 0);
+        }
     }
 
     // Route selection through the shared `apply_selection` (keyed by Entity).
@@ -393,15 +394,30 @@ fn render_prim_node(
     // The document path is stable and already scoped by this panel's active
     // document, so it is sufficient for collapse-state identity.
     let id = ui.make_persistent_id(("usd_prim_tree", key));
-    egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, default_open)
-        .show_header(ui, |ui| {
-            prim_select_label(ui, node, &label, selected, to_select);
-        })
-        .body(|ui| {
+    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
+        ui.ctx(),
+        id,
+        default_open,
+    );
+    // Keep the tree structural rather than animated. egui's animated
+    // collapsing body paints the full child subtree into a temporary clipped
+    // region while its height changes, which produces transient stale outlines
+    // over neighbouring rows in a dense editor tree.
+    ui.horizontal(|ui| {
+        let item_spacing = ui.spacing().item_spacing;
+        ui.spacing_mut().item_spacing.x = 0.0;
+        let _toggle = state.show_toggle_button(ui, egui::collapsing_header::paint_default_icon);
+        ui.spacing_mut().item_spacing = item_spacing;
+        prim_select_label(ui, node, &label, selected, to_select);
+    });
+    if state.is_open() {
+        ui.indent(id, |ui| {
             for child in &node.children {
                 render_prim_node(ui, child, view, selected, to_select, depth + 1);
             }
         });
+    }
+    state.store(ui.ctx());
 }
 
 /// The row for one prim: selectable when it has an entity, otherwise a dim inert
@@ -426,14 +442,20 @@ fn prim_select_label(
                 .map(|identity| format!("{identity}  ·  {hint}"))
                 .unwrap_or(hint);
             let resp = ui
-                .selectable_label(selected.entities.contains(&entity), label)
+                .add_sized(
+                    [ui.available_width(), ui.spacing().interact_size.y],
+                    egui::Button::selectable(selected.entities.contains(&entity), label),
+                )
                 .on_hover_text(hint);
             if resp.clicked() {
                 *to_select = Some(entity);
             }
         }
         None => {
-            ui.add(egui::Label::new(egui::RichText::new(label).weak()));
+            ui.add_sized(
+                [ui.available_width(), ui.spacing().interact_size.y],
+                egui::Label::new(egui::RichText::new(label).weak()),
+            );
         }
     }
 }

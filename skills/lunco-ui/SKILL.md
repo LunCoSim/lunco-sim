@@ -123,6 +123,12 @@ and only an unavoidable normalized collision gets an ordinal.
 Document-scoped editor panels use the existing `UsdPreviewId` session as their
 view-model key. Keep each open session's tree, canvas, authored Inspector data,
 joint/animation state, authored layer, and projection generation isolated;
+the Editor perspective opens the prim tree in the upper-left pane and keeps the
+Twin Browser in the separate lower-left pane, so document choice and authored
+hierarchy remain visible together. The prim tree consumes the full width of its
+pane and uses immediate structural collapse rendering; do not add a nested
+auto-shrinking scroll region or animated body that can paint stale outlines
+over neighbouring rows.
 paint the session selected by the focused `UsdPreviewViewId`. Views share that
 session projection while keeping independent camera/render-target state. The
 viewport applies `UsdPreviewRenderBudget` to visible view targets (2048 px per

@@ -173,8 +173,11 @@ The existing implementation provides the substrate the perspective composes:
 | Component attach | Reference an asset, place it, and author the joint as one typed command |
 | Program attach | Discover `.mo`/`.py` sources and lower source, ports, defaults, and wires through `AttachProgram` |
 
-The perspective must remain a composition of these surfaces. The Twin Browser
-opens an explicit preview session for the selected document; the USD preview, prim
+The perspective must remain a composition of these surfaces. The Editor
+perspective opens with the USD prim tree in the upper-left pane so the authored
+hierarchy is the first navigation surface, and keeps the Twin Browser in a
+separate lower-left pane for choosing another document. The Twin Browser opens
+an explicit preview session for the selected document; the USD preview, prim
 tree, Connections graph, Inspector, and command handlers consume that same
 explicit document binding. The Connections graph and native USD panels are
 empty until their focused session has a projected stage; they never infer an
