@@ -1987,7 +1987,6 @@ pub(crate) fn rebuild_waypoint_route_projection(
     active_frame: Res<lunco_core::ActivePhysicsFrame>,
     q_grids: Query<&big_space::prelude::Grid>,
     q_spatial: Query<(Option<&big_space::grid::cell::CellCoord>, &Transform)>,
-    q_visuals: Query<(), With<lunco_usd_bevy::UsdVisualSynced>>,
     surface: lunco_terrain_surface::GridSurfaceQuery,
     mut request: ResMut<RouteProjectionRebuildRequested>,
     mut projection: ResMut<RouteVisualProjection>,
@@ -2018,7 +2017,16 @@ pub(crate) fn rebuild_waypoint_route_projection(
         .iter()
         .map(|(entity, binding)| ((binding.vessel, binding.index), entity))
         .collect();
-    let mut routes = std::collections::HashMap::new();
+    // Keep the last committed route view while a replacement target is still
+    // being projected. The scene and controller use the same transactional
+    // rule: a pending candidate must not publish an empty route and make the
+    // connector disappear between edits.
+    let mut routes = if projection.frame == Some(frame_entity) {
+        std::mem::take(&mut projection.routes)
+    } else {
+        std::collections::HashMap::new()
+    };
+    routes.retain(|vessel, _| vessel_entities.contains(vessel));
 
     for (vessel, xml, spec, bindings, reached) in q_vessels.iter() {
         let (targets, points, smooth, closed, entities) = if let Some(xml) = xml {
@@ -2026,11 +2034,13 @@ pub(crate) fn rebuild_waypoint_route_projection(
             // metadata remains authoritative even while a derived runtime spec
             // is present, and malformed XML is an explicit no-route state.
             let Ok(metadata) = lunco_autopilot::usd_tree::authored_route_metadata(&xml.0) else {
+                routes.remove(&vessel);
                 continue;
             };
             let targets = metadata.targets;
             let Some(bindings) = bindings else { continue };
             if targets.is_empty() {
+                routes.remove(&vessel);
                 continue;
             }
             let Some(target_entities) = targets
@@ -2043,7 +2053,6 @@ pub(crate) fn rebuild_waypoint_route_projection(
             let Some(resolved) = resolve_route_target_positions(
                 target_entities,
                 frame_entity,
-                &q_visuals,
                 &q_parents,
                 &q_grids,
                 &q_spatial,
@@ -2062,6 +2071,7 @@ pub(crate) fn rebuild_waypoint_route_projection(
             )
         } else if let Some(spec) = spec {
             let Some(waypoints) = spec.patrol_waypoints() else {
+                routes.remove(&vessel);
                 continue;
             };
             // Runtime waypoint roots are the presentation projection of the same
@@ -2076,7 +2086,6 @@ pub(crate) fn rebuild_waypoint_route_projection(
             let Some(resolved) = resolve_route_target_positions(
                 runtime_entities,
                 frame_entity,
-                &q_visuals,
                 &q_parents,
                 &q_grids,
                 &q_spatial,
@@ -2108,10 +2117,22 @@ pub(crate) fn rebuild_waypoint_route_projection(
         let (green_control, blue_control) =
             route_ribbon_points(&points_with_state, progress.active_index);
         let closed = closed && points.len() > 2;
-        let green = route_geometry(&green_control, smooth, closed, &surface, surface_present)
-            .unwrap_or_default();
-        let blue = route_geometry(&blue_control, false, false, &surface, surface_present)
-            .unwrap_or_default();
+        let green = match route_geometry(&green_control, smooth, closed, &surface, surface_present)
+        {
+            Some(green) => green,
+            None if green_control.len() < 2 || !surface_present => Vec::new(),
+            None => {
+                // A failed surface projection for a real segment is a pending
+                // candidate; preserve the previous committed route instead of
+                // replacing it with an empty mesh.
+                continue;
+            }
+        };
+        let blue = match route_geometry(&blue_control, false, false, &surface, surface_present) {
+            Some(blue) => blue,
+            None if blue_control.len() < 2 || !surface_present => Vec::new(),
+            None => continue,
+        };
         let targets = targets
             .into_iter()
             .enumerate()
@@ -2139,14 +2160,13 @@ pub(crate) fn rebuild_waypoint_route_projection(
     projection.revision = projection.revision.wrapping_add(1);
 }
 
-/// Resolve route targets only after their USD visual projection has committed.
-/// A route target can have a binding and an ECS transform while its composed USD
-/// prim is still awaiting projection; using that provisional transform would
-/// publish a route mesh before the target has a valid scene pose.
+/// Resolve route targets from their active-frame transforms. Marker mesh readiness
+/// is presentation state, not route geometry readiness: a route candidate can be
+/// drawn as soon as its authoritative target transform exists, while a referenced
+/// target that has not spawned yet leaves the previous committed route intact.
 fn resolve_route_target_positions(
     entities: impl IntoIterator<Item = Entity>,
     frame_entity: Entity,
-    q_visuals: &Query<(), With<lunco_usd_bevy::UsdVisualSynced>>,
     q_parents: &Query<&ChildOf>,
     q_grids: &Query<&big_space::prelude::Grid>,
     q_spatial: &Query<(Option<&big_space::grid::cell::CellCoord>, &Transform)>,
@@ -2154,7 +2174,6 @@ fn resolve_route_target_positions(
     entities
         .into_iter()
         .map(|entity| {
-            q_visuals.get(entity).ok()?;
             let (position, _) = lunco_core::coords::grid_relative_pose(
                 entity,
                 frame_entity,
