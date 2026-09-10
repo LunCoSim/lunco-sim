@@ -33,9 +33,12 @@ use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::schema::ApiResponse;
 use lunco_core::{on_command, Command};
+use lunco_doc::{Document, DocumentId};
+use lunco_doc_bevy::DocumentRegistry;
 use lunco_hooks::HookValue as H;
 use lunco_usd_bevy::{CanonicalStages, UsdStageAsset};
 use serde_json::json;
+use std::collections::HashMap;
 
 /// Build the complete USD lint fact map from every owner of a USD simulation
 /// projection. Standard `Physics*Joint` facts come from `lunco-usd-avian`;
@@ -70,6 +73,32 @@ pub struct RunLint {
     /// can produce facts for. Named rather than enumerated so a domain added
     /// later needs no change to this verb.
     pub domain: String,
+    /// When present, lint exactly this open Editor document after its projected
+    /// stage reaches the document generation. Omitted keeps the loaded-scene
+    /// behavior for live simulation callers.
+    #[serde(default)]
+    pub doc_id: Option<u64>,
+}
+
+/// The latest live lint result for each open Editor document.
+///
+/// This is separate from the loaded-scene report because a preview document is
+/// not the mounted live stage and must never replace or pollute its findings.
+#[derive(Resource, Default)]
+pub struct DocumentLintReports {
+    reports: HashMap<DocumentId, DocumentLintReport>,
+}
+
+#[derive(Default)]
+struct DocumentLintReport {
+    generation: Option<u64>,
+    projection_ready: bool,
+    findings: Vec<lunco_lint::LintFinding>,
+}
+
+/// Clear document-scoped lint state with the scene lifecycle.
+pub fn clear_document_reports(mut reports: ResMut<DocumentLintReports>) {
+    reports.reports.clear();
 }
 
 /// Observer for [`RunLint`].
@@ -81,6 +110,10 @@ pub fn on_run_lint(
     // `on_spawn_entity_command`.
     mut canonical: NonSendMut<CanonicalStages>,
     mut report: ResMut<lunco_lint::LintReport>,
+    mut document_reports: ResMut<DocumentLintReports>,
+    asset_server: Option<Res<AssetServer>>,
+    documents: Option<Res<DocumentRegistry<lunco_usd::document::UsdDocument>>>,
+    backed: Option<Res<lunco_usd::twin_projection::DocBackedTwinScenes>>,
 ) {
     let domain = trigger.event().domain.trim().to_string();
     if !domain.is_empty() && domain != lunco_usd_avian::USD_LINT_DOMAIN {
@@ -89,6 +122,78 @@ pub fn on_run_lint(
              the USD domain is the one a live stage can supply facts for; \
              ValidateAsset covers .mo/.rhai/.wgsl files"
         );
+        return;
+    }
+
+    if let Some(raw_doc) = trigger.event().doc_id {
+        let doc = DocumentId::new(raw_doc);
+        let Some(host) = documents.as_deref().and_then(|registry| registry.host(doc)) else {
+            document_reports
+                .reports
+                .insert(doc, DocumentLintReport::default());
+            warn!("[lint] RunLint: document {doc} is not open");
+            return;
+        };
+        let generation = host.document().generation();
+        let ready = backed
+            .as_deref()
+            .and_then(|scenes| scenes.synced_generation(doc))
+            == Some(generation);
+        if !ready {
+            document_reports.reports.insert(
+                doc,
+                DocumentLintReport {
+                    generation: Some(generation),
+                    projection_ready: false,
+                    findings: Vec::new(),
+                },
+            );
+            warn!(
+                "[lint] RunLint: document {doc} projection is not current (generation {generation})"
+            );
+            return;
+        }
+
+        let stage = asset_server
+            .as_deref()
+            .and_then(|server| {
+                backed
+                    .as_deref()
+                    .and_then(|scenes| scenes.coords_of(doc))
+                    .map(|(name, rel)| lunco_assets::twin_uri(&name, &rel))
+                    .and_then(|path| server.get_handle::<UsdStageAsset>(path))
+            })
+            .and_then(|handle| canonical.get(handle.id()));
+        let Some(stage) = stage else {
+            document_reports.reports.insert(
+                doc,
+                DocumentLintReport {
+                    generation: Some(generation),
+                    projection_ready: false,
+                    findings: Vec::new(),
+                },
+            );
+            warn!("[lint] RunLint: document {doc} has no projected canonical stage");
+            return;
+        };
+        let findings = lint_stage(&stage.view());
+        let errors = findings
+            .iter()
+            .filter(|finding| finding.severity == lunco_lint::LintSeverity::Error)
+            .count();
+        let warnings = findings
+            .iter()
+            .filter(|finding| finding.severity == lunco_lint::LintSeverity::Warn)
+            .count();
+        document_reports.reports.insert(
+            doc,
+            DocumentLintReport {
+                generation: Some(generation),
+                projection_ready: true,
+                findings,
+            },
+        );
+        info!("[lint] RunLint: document {doc} — {errors} error(s), {warnings} warning(s)");
         return;
     }
 
@@ -135,6 +240,67 @@ impl ApiQueryProvider for LintReportQuery {
     }
 
     fn execute(&self, world: &World, _params: &serde_json::Value) -> ApiResponse {
+        let requested_doc = match _params.get("doc_id") {
+            None => None,
+            Some(value) => match value.as_u64() {
+                Some(raw) => Some(DocumentId::new(raw)),
+                None => {
+                    return lunco_api::schema::ApiResponse::error(
+                        lunco_api::schema::ApiErrorCode::DeserializationError,
+                        "LintReport: doc_id must be an explicit numeric document id",
+                    )
+                }
+            },
+        };
+        if let Some(doc) = requested_doc {
+            let scoped = world
+                .get_resource::<DocumentLintReports>()
+                .and_then(|reports| reports.reports.get(&doc));
+            let findings = scoped
+                .map(|report| {
+                    report
+                        .findings
+                        .iter()
+                        .map(|f| {
+                            json!({
+                                "domain": f.domain,
+                                "rule": f.rule,
+                                "severity": f.severity.as_str(),
+                                "subject": f.subject,
+                                "message": f.message,
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let errors = scoped
+                .map(|report| {
+                    report
+                        .findings
+                        .iter()
+                        .filter(|finding| finding.severity == lunco_lint::LintSeverity::Error)
+                        .count()
+                })
+                .unwrap_or(0);
+            let warnings = scoped
+                .map(|report| {
+                    report
+                        .findings
+                        .iter()
+                        .filter(|finding| finding.severity == lunco_lint::LintSeverity::Warn)
+                        .count()
+                })
+                .unwrap_or(0);
+            return ApiResponse::ok(json!({
+                "scope": "document",
+                "doc_id": doc.raw(),
+                "generation": scoped.and_then(|report| report.generation),
+                "projection_ready": scoped.is_some_and(|report| report.projection_ready),
+                "errors": errors,
+                "warnings": warnings,
+                "findings": findings,
+            }));
+        }
         let report = world.get_resource::<lunco_lint::LintReport>();
         let findings: Vec<serde_json::Value> = report
             .map(|r| {
@@ -155,6 +321,7 @@ impl ApiQueryProvider for LintReportQuery {
         let errors = report.map(|r| r.errors()).unwrap_or(0);
         let warnings = report.map(|r| r.warnings()).unwrap_or(0);
         ApiResponse::ok(json!({
+            "scope": "loaded_stages",
             "errors": errors,
             "warnings": warnings,
             "findings": findings,
@@ -204,9 +371,11 @@ impl ApiQueryProvider for RuntimeDiagnosticsQuery {
 /// the rest of this crate's verbs).
 pub fn register(app: &mut App) {
     app.init_resource::<lunco_lint::LintReport>();
+    app.init_resource::<DocumentLintReports>();
     // Findings belong to the loaded scene. A replacement must not leave the
     // previous scene's errors highlighted as if they were current.
     app.add_systems(lunco_core::SceneTeardown, lunco_lint::clear_report);
+    app.add_systems(lunco_core::SceneTeardown, clear_document_reports);
     app.init_resource::<ApiQueryRegistry>();
     let mut registry = app.world_mut().resource_mut::<ApiQueryRegistry>();
     registry.register(LintReportQuery);

@@ -50,6 +50,14 @@ name convention, or ECS-only grouping state is introduced.
   bind the snapshot to a filesystem path.
 - `UsdOp` plus `ApplyUsdOp`/`ApplyUsdOps` is the only write path. It supplies journaling,
   inverse operations, save, undo, and live projection.
+- Reusable editor policy is authored as Rhai tool libraries. Direct
+  `name::function(...)` calls remain available to hooks, while dependencies use
+  Rhai's normal `import "name" as name` resolver and load from the registered
+  tool source on demand. Registration validates the source against the
+  production Rhai engine before Twin persistence, so missing dependencies and
+  cycles fail visibly without a second dependency graph. Tool inspection and
+  registration acknowledgements expose callable status rather than treating a
+  function list as proof of readiness.
 - The editor operates on an explicitly opened USD document. The existing
   `OpenFile`/`NewDocument`/`SaveAsDocument` commands provide the file lifecycle;
   the Editor preview is opened with `OpenUsdPreview`, which carries an

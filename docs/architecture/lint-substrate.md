@@ -26,7 +26,7 @@ situation; a lint catches it by reading what was written.
 |---|---|---|
 | **Facts** | Rust, in the crate that owns the subject (`lunco_usd_avian` for standard joints, `lunco_usd_sim` for gear drives) | Only something holding the composed stage can answer "is this prim inside a body", "does any joint name it", "is there a collider in its subtree". Each projection owner supplies the fields its runtime reader actually consumes, and the command layer composes them into one USD fact map |
 | **Rules** | rhai policy, `assets/scripting/policy/lint_<domain>.rhai` | A rule that needs a rebuild is a rule nobody writes, tunes, or silences. These are editable against a **running** sim |
-| **Findings** | `lunco_lint::LintReport` | One report, one shape, every domain |
+| **Findings** | `lunco_lint::LintReport` for mounted stages; `lunco_scene_commands::DocumentLintReports` for explicit Editor documents | Reports stay scoped to the stage/document that was actually linted |
 
 `lunco-lint` is substrate: it knows what a finding is and how a domain asks
 policy for one. It knows nothing about USD, rhai or Modelica.
@@ -129,6 +129,8 @@ reader to scroll past it and taxes play with an opinion about authoring. So:
 ```rhai
 cmd("RunLint", #{});             // lints every loaded stage
 query("LintReport");             // { errors, warnings, findings[] }
+cmd("RunLint", #{domain: "usd", doc_id: 7});
+query("LintReport", #{doc_id: 7}); // includes generation and projection_ready
 ```
 
 …and the same verb over HTTP/MCP (`{"type":"ExecuteCommand","command":"RunLint"}`).
@@ -150,7 +152,7 @@ unregister_hook("lint.usd");                              // back to no USD rule
 
 | | Subject | Reached by |
 |---|---|---|
-| `RunLint` | every **loaded** stage — including runtime spawns and edits no file describes | `cmd`/HTTP/MCP |
+| `RunLint` | every **loaded** stage — including runtime spawns and edits no file describes; with `doc_id`, one synchronized Editor document | `cmd`/HTTP/MCP |
 | `ValidateAsset` | one **file**, composed pre-flight | `luncosim --validate <path>`, HTTP query |
 
 Both hand the policy the **same facts in the same shape**. `ValidateAsset` merges

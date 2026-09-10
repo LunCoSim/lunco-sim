@@ -322,6 +322,12 @@ real namespaced call after the tool-generation maintenance pass, and keep the
 same headful process for the edit, readback, screenshot, and test. A tool
 registry listing is not proof that its module is callable.
 
+For a document-scoped authoring check, use `cmd("RunLint", #{domain: "usd",
+doc_id: doc})` only after the document projection is current, then read
+`query("LintReport", #{doc_id: doc})`. The response is scoped to that document
+and reports the generation and `projection_ready`; an unprojected document is
+reported as not ready rather than linting a stale stage.
+
 For semantic component construction, use `assembly_builder::find_compatible_socket`
 and `assembly_builder::mount_component`. The builder selects the exact
 authored socket and derives the reflected joint contract; the existing typed

@@ -20,6 +20,14 @@ anywhere — including task closures and event/lifecycle hooks.
   runtime builds a fresh engine when the registry generation changes, and this
   binding runs during construction because static modules cannot be removed from
   an existing Rhai engine.
+- **`ToolModuleResolver`** — the ordinary Rhai `import` resolver for registered
+  tools. A tool can use `import "other_tool" as other;` and the dependency is
+  compiled on demand, with bounded cycle and missing-tool errors; it never reads
+  from the filesystem.
+- **`validate_rhai_tool(name, source)`** — preflight used by the registration
+  command before it writes a Twin file or publishes the replacement.
+- **`inspect_tool_with_engine(...)`** — reports `callable` and diagnostics from
+  the same module builder used by runtime binding.
 - **`register_rhai_tool(name, source)` / `register_native_tool(...)`** —
   convenience registration into the global `lunco-tools` registry.
 

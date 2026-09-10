@@ -393,7 +393,9 @@ leaves and `mission(me)` declaration.
 ## E. Tools (shared libraries)
 
 A **tool library** is a named bundle of reusable policy, callable as
-`libname::fn(...)` from any hook (no `import` — they bind as static modules).
+`libname::fn(...)` from any hook. A library may also lazily import another
+registered tool with ordinary Rhai syntax (`import "other_tool" as other_tool`);
+the tool resolver uses the registry and does not read dependency files.
 
 - Author one: drop a `.rhai` in [`assets/scripting/tools/`](../assets/scripting/tools), or `RegisterToolLibrary { name, source }` at runtime (hot-reloadable).
 - Examples: [`assembly_builder.rhai`](../assets/scripting/tools/assembly_builder.rhai) (semantic frame/shape construction, placement, alignment, composed collision-clearance, geometry, retrofit bodies, and socket mating plans), [`griffin_flip_builder.rhai`](../assets/scripting/tools/griffin_flip_builder.rhai) (paired Griffin ramps, validated FLIP wheel layouts, complete mission manifests, and Rhai-owned FLIP asset construction), [`assembly_edit.rhai`](../assets/scripting/tools/assembly_edit.rhai) (explicit USD assembly sessions), [`assembly_ui.rhai`](../assets/scripting/tools/assembly_ui.rhai) (Editor presentation workflows), [`formation.rhai`](../assets/scripting/tools/formation.rhai) (formation flying), [`survey.rhai`](../assets/scripting/tools/survey.rhai) (lawnmower survey pattern).

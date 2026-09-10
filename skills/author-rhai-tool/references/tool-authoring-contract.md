@@ -92,20 +92,23 @@ process-global but its ownership is scoped so closing a Twin restores the
 previous definitions.
 
 Use `ListToolLibraries` to see the current registry and `GetToolLibrary` to
-inspect one source-defined library. Then call a tiny function in the same
-execution path that will consume it. A listed library can still be absent from
-an already-created Rhai engine until its tool-generation maintenance rebuilds
-the static module set.
+inspect one library's source, scope, generation, callable status, and
+diagnostics. Then call a tiny function in the same execution path that will
+consume it. A successful registration is preflighted against the production
+Rhai engine, while an already-created engine can still need its normal
+tool-generation maintenance rebuild for a replacement.
 
 For live work, this registration plus a real namespaced call is the tool's
 compile/callability check. Do not launch a separate binary in `--validate` mode
 and call that runtime evidence; parse-only validation can miss module binding,
 active-Twin scope, world access, or typed-command behavior.
 
-Do not use `import` for a registered tool library. Registered tools are static
-module namespaces and are called as `name::function(...)`. `import` is for
-source assets resolved by the scoped asset resolver and is a different
-mechanism.
+Registered tools are available as static module namespaces and are called as
+`name::function(...)`. A tool may also use Rhai's normal lazy import for a
+registered dependency: `import "other_tool" as other_tool;`. The resolver only
+looks up the tool registry; it never reads tool dependencies from the
+filesystem. `import` of ordinary source assets remains handled by the scoped
+asset resolver.
 
 ## Live edit transaction
 

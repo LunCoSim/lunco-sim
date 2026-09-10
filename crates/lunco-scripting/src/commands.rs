@@ -456,6 +456,9 @@ fn on_register_tool_library(
     // persist the library to the active Twin's `tools/` dir. `None` (headless /
     // no-twin) just keeps the in-memory registration.
     ws: Option<Res<lunco_workspace::WorkspaceResource>>,
+    // The same asset-backed import registry used by the persistent world
+    // engine. Validation below builds that production engine before publish.
+    sources: Option<Res<lunco_assets::script_source::ScriptSources>>,
     // Journal handle (present once wired). Records the registration as a
     // `DomainKind::ToolLibrary` op so it syncs to peers + persists cross-platform.
     // The command isn't on the command bus, so this only fires for LOCAL
@@ -465,6 +468,12 @@ fn on_register_tool_library(
 ) -> Result<Ack, String> {
     crate::names::validate_file_stem(&cmd.name)
         .map_err(|error| format!("RegisterToolLibrary: {error}"))?;
+    let functions = crate::world_bridge::validate_tool_library(
+        &cmd.name,
+        &cmd.source,
+        sources.as_deref().cloned().unwrap_or_default(),
+    )
+    .map_err(|error| format!("RegisterToolLibrary: invalid Rhai library: {error}"))?;
     let active_twin = match ws.as_deref() {
         Some(workspace) => {
             let id = workspace
@@ -503,10 +512,29 @@ fn on_register_tool_library(
     if let Some(journal) = journal.as_ref() {
         crate::registration_journal::record_tool_library(journal, &cmd.name, &cmd.source);
     }
+    let function_details = functions
+        .iter()
+        .map(|signature| {
+            let (name, arity) = signature
+                .rsplit_once('/')
+                .map(|(name, arity)| (name, arity.parse::<usize>().unwrap_or_default()))
+                .unwrap_or((signature.as_str(), 0));
+            serde_json::json!({ "name": name, "arity": arity })
+        })
+        .collect::<Vec<_>>();
+    let scope = active_twin
+        .map(|twin| serde_json::json!({ "kind": "twin", "id": twin.raw() }))
+        .unwrap_or_else(|| serde_json::json!({ "kind": "session" }));
     Ok(Ack::with_data(
         OpId::new(),
         serde_json::json!({
             "name": cmd.name,
+            "active_twin": active_twin.map(|twin| twin.raw()),
+            "scope": scope,
+            "registry_generation": crate::tool_libs::generation(),
+            "functions": function_details,
+            "callable": true,
+            "diagnostics": [],
             "libraries": crate::tool_libs::library_names(),
         }),
     ))

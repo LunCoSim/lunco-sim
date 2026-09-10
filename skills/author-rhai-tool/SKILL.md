@@ -107,6 +107,17 @@ publishes the named module. On the next normal engine-maintenance pass the
 module is callable as `component_builder::function(...)`; no Rust rebuild is
 needed for Rhai source changes.
 
+Tool dependencies use Rhai's normal import syntax and load when referenced:
+
+```rhai
+import "assembly_edit" as assembly_edit;
+```
+
+The registration command validates the candidate against the production Rhai
+engine (prelude, host verbs, asset imports, and current tool registry) before
+persistence. Missing tools and import cycles are reported as registration
+errors; do not copy a dependency into another library or add a Rust dispatcher.
+
 Verify all three layers, in order:
 
 1. `RegisterToolLibrary` acknowledged the exact name and source.

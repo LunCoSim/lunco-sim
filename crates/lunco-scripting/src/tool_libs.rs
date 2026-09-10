@@ -321,15 +321,16 @@ impl ApiQueryProvider for ListToolLibrariesProvider {
     }
 }
 
-/// `GetToolLibrary` `{ name }` → `{ name, backend, source }` (`source` null for
-/// native tools, which have no textual source).
+/// `GetToolLibrary` `{ name }` → source, discovery, and live binding readiness
+/// for one tool. (`source` is null for native tools, which have no textual
+/// source.)
 struct GetToolLibraryProvider;
 impl ApiQueryProvider for GetToolLibraryProvider {
     fn name(&self) -> &'static str {
         "GetToolLibrary"
     }
 
-    fn execute(&self, _world: &World, params: &serde_json::Value) -> ApiResponse {
+    fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
         let Some(name) = params.get("name").and_then(serde_json::Value::as_str) else {
             return ApiResponse::error(
                 ApiErrorCode::DeserializationError,
@@ -337,11 +338,33 @@ impl ApiQueryProvider for GetToolLibraryProvider {
             );
         };
         match lunco_tools::get(name) {
-            Some(tool) => ApiResponse::ok(serde_json::json!({
-                "name": name,
-                "backend": tool.backend(),
-                "source": tool.source(),
-            })),
+            Some(tool) => {
+                let sources = world
+                    .get_resource::<lunco_assets::script_source::ScriptSources>()
+                    .cloned()
+                    .unwrap_or_default();
+                let engine = crate::world_bridge::build_world_engine(sources);
+                let binding = lunco_tools_rhai::inspect_tool_with_engine(&tool, &engine);
+                let scope = world
+                    .get_resource::<TwinToolLibraries>()
+                    .and_then(TwinToolLibraries::owner)
+                    .map(|twin| serde_json::json!({ "kind": "twin", "id": twin.raw() }))
+                    .unwrap_or_else(|| serde_json::json!({ "kind": "session" }));
+                ApiResponse::ok(serde_json::json!({
+                    "name": name,
+                    "backend": tool.backend(),
+                    "source": tool.source(),
+                    "active_twin": world
+                        .get_resource::<TwinToolLibraries>()
+                        .and_then(TwinToolLibraries::owner)
+                        .map(|twin| twin.raw()),
+                    "scope": scope,
+                    "registry_generation": generation(),
+                    "functions": binding.functions,
+                    "callable": binding.callable,
+                    "diagnostics": binding.diagnostics,
+                }))
+            }
             None => ApiResponse::error(
                 ApiErrorCode::EntityNotFound,
                 format!("tool library '{name}' not found"),

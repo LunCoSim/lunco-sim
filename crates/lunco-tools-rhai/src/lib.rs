@@ -13,10 +13,12 @@
 //! every backend funnels through one of those two paths.
 
 use std::any::Any;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::sync::RwLock;
 
 use lunco_tools::Tool;
-use rhai::{Engine, Module, Scope};
+use rhai::{Engine, EvalAltResult, Module, ModuleResolver, Position, Scope, Shared};
 
 /// A tool authored in **rhai source**. Its functions become a compiled rhai
 /// module, so they run with full rhai semantics (closures, the prelude, host
@@ -148,6 +150,162 @@ fn build_module(tool: &Arc<dyn Tool>, engine: &Engine) -> Result<Option<Module>,
     Ok(None)
 }
 
+/// The result of checking one registered tool against a configured Rhai
+/// engine. `callable` is based on the actual module build, not on discovery
+/// metadata alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolBindingReport {
+    pub functions: Vec<String>,
+    pub callable: bool,
+    pub diagnostics: Vec<String>,
+}
+
+/// Inspect a registered tool with the same module builder used by runtime
+/// binding. Non-Rhai tools remain discoverable but are reported as not
+/// callable through Rhai.
+pub fn inspect_tool_with_engine(tool: &Arc<dyn Tool>, engine: &Engine) -> ToolBindingReport {
+    let functions = tool.functions();
+    match build_module(tool, engine) {
+        Ok(Some(_)) => ToolBindingReport {
+            functions,
+            callable: true,
+            diagnostics: Vec::new(),
+        },
+        Ok(None) => ToolBindingReport {
+            functions,
+            callable: false,
+            diagnostics: vec!["tool has no Rhai module surface".into()],
+        },
+        Err(error) => ToolBindingReport {
+            functions,
+            callable: false,
+            diagnostics: vec![error],
+        },
+    }
+}
+
+/// Resolve registered tools through Rhai's ordinary `import` mechanism.
+///
+/// Direct calls such as `assembly_edit::inspect(...)` remain available for
+/// existing scripts. A tool that depends on another tool can additionally use
+/// `import "assembly_edit" as assembly_edit;`; the dependency is compiled only
+/// when Rhai resolves that import. The resolver deliberately accepts registry
+/// names only, so it cannot turn tool imports into filesystem reads.
+#[derive(Clone, Default)]
+pub struct ToolModuleResolver {
+    cache: Arc<RwLock<HashMap<String, (String, Shared<Module>)>>>,
+    resolving: Arc<RwLock<HashSet<String>>>,
+}
+
+impl ToolModuleResolver {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn tool_name(path: &str) -> &str {
+        path.strip_suffix(".rhai").unwrap_or(path)
+    }
+}
+
+impl ModuleResolver for ToolModuleResolver {
+    fn resolve(
+        &self,
+        engine: &Engine,
+        _source: Option<&str>,
+        path: &str,
+        pos: Position,
+    ) -> Result<Shared<Module>, Box<EvalAltResult>> {
+        let name = Self::tool_name(path);
+        let Some(tool) = lunco_tools::get(name) else {
+            return Err(Box::new(EvalAltResult::ErrorModuleNotFound(
+                path.into(),
+                pos,
+            )));
+        };
+        let source = tool.source().map(str::to_string);
+
+        if let Some(source) = source.as_deref() {
+            if let Some((cached_source, module)) = self
+                .cache
+                .read()
+                .ok()
+                .and_then(|cache| cache.get(name).cloned())
+            {
+                if cached_source == source {
+                    return Ok(module);
+                }
+            }
+        }
+
+        if let Ok(mut resolving) = self.resolving.write() {
+            if !resolving.insert(name.to_string()) {
+                return Err(Box::new(EvalAltResult::ErrorInModule(
+                    name.into(),
+                    Box::new(EvalAltResult::ErrorRuntime(
+                        "tool import cycle detected".into(),
+                        pos,
+                    )),
+                    pos,
+                )));
+            }
+        }
+
+        let result = build_module(&tool, engine)
+            .map_err(|error| {
+                Box::new(EvalAltResult::ErrorInModule(
+                    name.into(),
+                    Box::new(EvalAltResult::ErrorRuntime(error.into(), pos)),
+                    pos,
+                ))
+            })
+            .and_then(|module| {
+                module.ok_or_else(|| Box::new(EvalAltResult::ErrorModuleNotFound(path.into(), pos)))
+            });
+
+        if let Ok(mut resolving) = self.resolving.write() {
+            resolving.remove(name);
+        }
+        let module = result?;
+        let shared: Shared<Module> = module.into();
+        if let Some(source) = source {
+            if let Ok(mut cache) = self.cache.write() {
+                cache.insert(name.to_string(), (source, shared.clone()));
+            }
+        }
+        Ok(shared)
+    }
+}
+
+/// Validate a source-defined tool before it is persisted or published.
+///
+/// Validation uses the same bounded Rhai parser and registry-backed import
+/// mechanism as runtime tool binding. It is intentionally a preflight seam;
+/// the production world engine still owns the actual world/prelude bindings.
+pub fn validate_rhai_tool(name: &str, source: &str) -> Result<Vec<String>, String> {
+    let mut engine = Engine::new();
+    lunco_hooks_rhai::rhai_limits::apply(&mut engine);
+    engine.set_module_resolver(ToolModuleResolver::new());
+    validate_rhai_tool_with_engine(name, source, &engine)
+}
+
+/// Validate a source-defined tool against an already configured runtime
+/// engine. The caller supplies the production prelude, host verbs, asset
+/// resolver, and current registered tools; this function only checks the
+/// candidate module without publishing it.
+pub fn validate_rhai_tool_with_engine(
+    name: &str,
+    source: &str,
+    engine: &Engine,
+) -> Result<Vec<String>, String> {
+    let tool = RhaiTool::new(name, source);
+    let functions = tool.functions();
+    let tool: Arc<dyn Tool> = Arc::new(tool);
+    let module = build_module(&tool, &engine)?
+        .ok_or_else(|| format!("tool '{name}' does not expose a Rhai module"))?;
+    let _ = module;
+    Ok(functions)
+}
+
 /// Bind every tool in the global registry into `engine` as a static module
 /// (`name::fn(...)`). Returns `(tool_name, error)` for any tool that failed to
 /// bind — one bad tool never blocks the others. Call AFTER the prelude global
@@ -252,5 +410,32 @@ mod tests {
         );
         // It is still discoverable — skipping the rhai binding is not deregistering.
         assert!(lunco_tools::index().iter().any(|i| i.name == "bt_only"));
+    }
+
+    #[test]
+    fn tool_imports_are_loaded_on_demand_through_rhai() {
+        register_rhai_tool("lazy_child", "fn value() { 21 }");
+        register_rhai_tool(
+            "lazy_parent",
+            r#"import "lazy_child" as child; fn answer() { child::value() * 2 }"#,
+        );
+
+        let mut engine = Engine::new();
+        lunco_hooks_rhai::rhai_limits::apply(&mut engine);
+        engine.set_module_resolver(ToolModuleResolver::new());
+        let answer: i64 = engine
+            .eval(r#"import "lazy_parent" as parent; parent::answer()"#)
+            .unwrap();
+        assert_eq!(answer, 42);
+    }
+
+    #[test]
+    fn tool_validation_rejects_missing_dynamic_dependencies() {
+        let error = validate_rhai_tool(
+            "invalid_tool",
+            r#"import "missing_tool" as missing; fn run() { missing::run() }"#,
+        )
+        .unwrap_err();
+        assert!(error.contains("missing_tool"), "unexpected error: {error}");
     }
 }

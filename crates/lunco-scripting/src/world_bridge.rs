@@ -556,7 +556,15 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
     engine.register_fn(TASK_INVOKER_FN, invoke_task);
 
     // Replace rhai's default file-reading resolver before anything can import.
-    engine.set_module_resolver(crate::module_resolver::AssetModuleResolver::new(sources));
+    // Keep normal asset imports and add registry-backed tool imports as two
+    // regular Rhai resolvers. Tool imports come first so a successful registry
+    // import is not logged as a missing asset before the second resolver sees it.
+    // Dependencies are loaded only when a tool executes an `import`, rather than
+    // precomputed in a second dependency graph.
+    let mut resolvers = rhai::module_resolvers::ModuleResolversCollection::new();
+    resolvers.push(lunco_tools_rhai::ToolModuleResolver::new());
+    resolvers.push(crate::module_resolver::AssetModuleResolver::new(sources));
+    engine.set_module_resolver(resolvers);
 
     crate::rhai_limits::apply(&mut engine);
 
@@ -1454,6 +1462,19 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
     crate::tool_libs::bind_registered_tools(&mut engine);
 
     engine
+}
+
+/// Validate a candidate tool against a production world engine without
+/// registering it. This keeps registration preflight on the same Rhai
+/// prelude, host verbs, asset imports, and current tool registry as runtime
+/// execution.
+pub fn validate_tool_library(
+    name: &str,
+    source: &str,
+    sources: lunco_assets::script_source::ScriptSources,
+) -> Result<Vec<String>, String> {
+    let engine = build_world_engine(sources);
+    lunco_tools_rhai::validate_rhai_tool_with_engine(name, source, &engine)
 }
 
 // ── Persistent per-entity scenario runtime (rhai backend) ──────────────────

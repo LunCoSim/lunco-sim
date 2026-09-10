@@ -903,6 +903,72 @@ fn registered_tool_library_callable_from_a_hook() {
 }
 
 #[test]
+fn registered_tool_dependencies_use_rhai_imports_and_reject_bad_replacements() {
+    use lunco_api::executor::ApiCommandEvent;
+    let mut app = build_app();
+    let _rover = spawn_rover(&mut app);
+
+    for (name, source) in [
+        ("lazy_child_live", "fn scale(value) { value * 2.0 }"),
+        (
+            "lazy_parent_live",
+            "import \"lazy_child_live\" as child; fn drive_at(me, f) { cmd(\"SetPorts\", #{ target: me, writes: [[\"throttle\", child::scale(f)], [\"steer\", 0.0]], seq: 0, tick: 0 }); }",
+        ),
+    ] {
+        app.world_mut().trigger(ApiCommandEvent {
+            command: "RegisterToolLibrary".to_string(),
+            params: serde_json::json!({ "name": name, "source": source }),
+            id: 1,
+            correlation_id: None,
+        });
+        app.world_mut().flush();
+    }
+
+    run_scenario(
+        &mut app,
+        ROVER_GID,
+        "fn on_tick(me) { lazy_parent_live::drive_at(me, 0.7); }",
+        2,
+    );
+    tick(&mut app);
+    let before_rejection = app.world().resource::<DriveLog>().0.len();
+    assert!(
+        app.world()
+            .resource::<DriveLog>()
+            .0
+            .iter()
+            .any(|(throttle, _)| (*throttle - 1.4).abs() < 1e-9),
+        "a tool dependency imported through Rhai should be callable; got {:?}",
+        app.world().resource::<DriveLog>().0
+    );
+
+    app.world_mut().trigger(ApiCommandEvent {
+        command: "RegisterToolLibrary".to_string(),
+        params: serde_json::json!({
+            "name": "lazy_parent_live",
+            "source": "import \"missing_live_tool\" as missing; fn drive_at(me, f) { missing::drive(me, f); }",
+        }),
+        id: 2,
+        correlation_id: None,
+    });
+    app.world_mut().flush();
+
+    run_scenario(
+        &mut app,
+        ROVER_GID,
+        "fn on_tick(me) { lazy_parent_live::drive_at(me, 0.7); }",
+        3,
+    );
+    tick(&mut app);
+    let drives = &app.world().resource::<DriveLog>().0;
+    assert!(
+        drives.len() > before_rejection
+            && (drives.last().expect("drive after rejected replacement").0 - 1.4).abs() < 1e-9,
+        "a rejected replacement must leave the previous callable tool intact; got {drives:?}"
+    );
+}
+
+#[test]
 fn builtin_formation_tool_library_drives_a_follower() {
     // The shipped `formation` tool library (formation::nearest_rover +
     // formation::hold_line) must work end-to-end: a follower scenario finds the
