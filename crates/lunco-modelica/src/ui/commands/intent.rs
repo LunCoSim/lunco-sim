@@ -22,11 +22,11 @@ pub fn resolve_editor_intent(
     }
 
     match *trigger.event() {
-        EditorIntent::Undo => commands.trigger(UndoDocument { doc }),
-        EditorIntent::Redo => commands.trigger(RedoDocument { doc }),
-        EditorIntent::Save => commands.trigger(SaveDocument { doc }),
+        EditorIntent::Undo => commands.trigger(UndoDocument { doc_id: doc }),
+        EditorIntent::Redo => commands.trigger(RedoDocument { doc_id: doc }),
+        EditorIntent::Save => commands.trigger(SaveDocument { doc_id: doc }),
         EditorIntent::SaveAs => commands.trigger(SaveAsDocument {
-            doc,
+            doc_id: doc,
             path: String::new(),
         }),
         EditorIntent::Close => {
@@ -48,7 +48,7 @@ pub fn resolve_editor_intent(
         }
         EditorIntent::Compile => {
             commands.trigger(super::compile::CompileModel {
-                doc,
+                doc_id: doc,
                 class: None,
                 force: false,
                 resume_after_compile: false,

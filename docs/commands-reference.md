@@ -648,7 +648,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |  Target document. |
+| `doc_id` | `DocumentId` |  Target document. |
 | `parent_gen` | `Option < u64 >` |  Generation the caller edited from. When present, the operation is  rejected if the document advanced before it arrived. |
 | `op` | `UsdOp` |  Operation to apply. |
 
@@ -665,7 +665,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |  Target document. |
+| `doc_id` | `DocumentId` |  Target document. |
 | `parent_gen` | `Option < u64 >` |  Generation the caller edited from. When present, the complete compound  edit is rejected if the document advanced before it arrived. |
 | `label` | `String` |  Human-readable undo/journal label. |
 | `ops` | `Vec < UsdOp >` |  Ordered primitive USD operations comprising the one intent. |
@@ -682,7 +682,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |  Target document. |
+| `doc_id` | `DocumentId` |  Target document. |
 | `spec` | `crate :: attach :: AttachSpec` |  The attachment to perform. |
 
 #### `AttachProgram`
@@ -702,7 +702,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |  Target USD document. |
+| `doc_id` | `DocumentId` |  Target USD document. |
 | `spec` | `crate :: program :: ProgramAttachSpec` |  Complete program attachment intent. |
 
 #### `CloseUsdPreview`
@@ -754,7 +754,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |  Document that owns the authored target. |
+| `doc_id` | `DocumentId` |  Document that owns the authored target. |
 | `scope` | `UsdEditScope` |  Explicit source-asset, assembly, or instance-override scope. |
 | `label` | `String` |  Human-readable intent and eventual journal change-set label. |
 | `parent_gen` | `u64` |  Generation read by the proposal author. |
@@ -770,7 +770,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |  Target document. |
+| `doc_id` | `DocumentId` |  Target document. |
 | `spec` | `crate :: attach :: DetachSpec` |  Exact component attachment to remove. |
 
 #### `ExplodeUsdPreview`
@@ -784,7 +784,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `preview` | `UsdPreviewId` |   |
-| `doc` | `DocumentId` |   |
+| `doc_id` | `DocumentId` |   |
 | `assembly` | `String` |  Exact composed `kind = "assembly"` prim path. |
 | `parts` | `Vec < String >` |  Exact composed prim paths below `assembly`. Rust sorts these paths for  stable offsets, so repeated calls do not depend on caller ordering. |
 | `action` | `UsdPreviewExplodeAction` |   |
@@ -834,7 +834,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `preview` | `UsdPreviewId` |  Stable caller-owned identity of the preview session. |
-| `doc` | `DocumentId` |  The USD document to render. |
+| `doc_id` | `DocumentId` |  The USD document to render. |
 | `edit_target` | `LayerId` |  The authored layer to use for editor mutations made from this preview. |
 
 #### `OpenUsdPreviewView`
@@ -906,7 +906,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `Option < DocumentId >` |  Document to author into. `None` = the workspace's active document. |
+| `doc_id` | `Option < DocumentId >` |  Document to author into. `None` = the workspace's active document. |
 | `path` | `Option < String >` |  Prim path of the dome. `None` = `/World/Sky`.   It must live **under the stage's `defaultPrim` subtree** (`/World` in  every scene here) — a prim authored outside it composes into the layer  but is never mounted, so the sky would silently not appear. |
 | `texture` | `Option < String >` |  `inputs:texture:file` — the HDRI, resolved relative to the stage layer  (e.g. `../hdri/lunar_horizon_2k.hdr`). Equirectangular (`.hdr`, `.png`)  or a `.ktx2` cubemap. |
 | `intensity` | `Option < f32 >` |  `inputs:intensity` — multiplier on the image (1.0 = as authored). |
@@ -1145,7 +1145,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |   |
+| `doc_id` | `DocumentId` |   |
 | `class` | `String` |   |
 | `type_name` | `String` |   |
 | `name` | `String` |   |
@@ -1179,7 +1179,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |  Document to edit; unassigned (`0` over the API) = active. |
+| `doc_id` | `DocumentId` |  Document to edit; unassigned (`0` over the API) = active. |
 | `ops` | `Vec < ApiOp >` |  Ops to apply, in order. |
 
 #### `AutoArrangeDiagram`
@@ -1193,7 +1193,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |  Document to arrange; unassigned (`0` over the API) = active. |
+| `doc_id` | `DocumentId` |  Document to arrange; unassigned (`0` over the API) = active. |
 
 #### `CancelExperiment`
 
@@ -1219,7 +1219,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |  The document to compile. Unassigned (`0` over the API) means the  **active** document, which is what a toolbar click and a headless  `cmd("CompileModel", #{})` both want. |
+| `doc_id` | `DocumentId` |  The document to compile. Unassigned (`0` over the API) means the  **active** document, which is what a toolbar click and a headless  `cmd("CompileModel", #{})` both want. |
 | `class` | `Option < String >` |  Optional explicit target class. When `Some`, bypass both the  drilled-in pin and the picker — compile this exact class.  Used by API callers that need deterministic behaviour without  a GUI (cf. spec 033 User Story 1.5). |
 | `force` | `bool` |  Force a recompile even if the model is already compiled and  clean (same document generation). Defaults to `false` so a  Compile on an up-to-date model is an idempotent no-op. |
 | `resume_after_compile` | `bool` |  When `true`, the post-compile success handler unpauses the model  so it starts live-stepping the instant the stepper is installed.  Set by `RunActiveModel` ("Run live") so a single click compiles  *and* plays — crucially including the first-ever compile, where  no model entity yet exists to carry the resume intent. Defaults  to `false`: a plain Compile leaves the model paused/ready. |
@@ -1252,7 +1252,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |   |
+| `doc_id` | `DocumentId` |   |
 | `class` | `String` |   |
 | `from` | `String` |   |
 | `to` | `String` |   |
@@ -1279,14 +1279,14 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Remove experiment record(s) from the registry. Terminal runs only —
  in-flight runs (via id / `all`) are skipped; cancel them first. Scope by
- `experiment_id`, `doc` (every run for that doc's twin), or `all`.
+ `experiment_id`, `doc_id` (every run for that doc's twin), or `all`.
 
 - *defined in:* `crates/lunco-modelica/src/ui/commands/compile.rs`
 
 | Field | Type | Description |
 |---|---|---|
 | `experiment_id` | `Option < String >` |   |
-| `doc` | `Option < DocumentId >` |   |
+| `doc_id` | `Option < DocumentId >` |   |
 | `all` | `bool` |   |
 
 #### `DisconnectComponents`
@@ -1299,7 +1299,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |  Document to edit; unassigned (`0` over the API) = active. |
+| `doc_id` | `DocumentId` |  Document to edit; unassigned (`0` over the API) = active. |
 | `class` | `String` |  Class within the document that owns the connection. |
 | `from` | `String` |  Source port, `"<component>.<port>"`. |
 | `to` | `String` |  Target port, `"<component>.<port>"`. |
@@ -1307,14 +1307,14 @@ actually call, with the fields the deserializer actually accepts. See the
 #### `DuplicateModelFromReadOnly`
 
  Duplicate a read-only (library) model into a new editable Untitled
- document. Unassigned `source_doc` (`0` over the API) means the active
+ document. Unassigned `source_doc_id` (`0` over the API) means the active
  document.
 
 - *defined in:* `crates/lunco-modelica/src/ui/commands/lifecycle.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `source_doc` | `DocumentId` |   |
+| `source_doc_id` | `DocumentId` |   |
 
 #### `FastRunActiveModel`
 
@@ -1327,7 +1327,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |   |
+| `doc_id` | `DocumentId` |   |
 | `class` | `Option < String >` |  Target class. When `None`, resolves via drilled-in class or picker. |
 | `t_end` | `Option < f64 >` |  Override experiment StopTime (seconds). `None` = use annotation or fallback. |
 | `dt` | `Option < f64 >` |  Override output interval / step (seconds, Modelica `Interval`). `None`  = use annotation or fallback. Mutually exclusive with `n_intervals`. |
@@ -1344,7 +1344,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |  Document to fit; unassigned (`0` over the API) = active. |
+| `doc_id` | `DocumentId` |  Document to fit; unassigned (`0` over the API) = active. |
 
 #### `FocusComponent`
 
@@ -1355,7 +1355,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |  Document to focus in; unassigned (`0` over the API) = active. |
+| `doc_id` | `DocumentId` |  Document to focus in; unassigned (`0` over the API) = active. |
 | `name` | `String` |  Component instance name as it appears in the diagram. |
 | `padding` | `f32` |  Margin in canvas units to leave around the component. |
 
@@ -1379,7 +1379,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |   |
+| `doc_id` | `DocumentId` |   |
 
 #### `GetFile`
 
@@ -1464,7 +1464,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |   |
+| `doc_id` | `DocumentId` |   |
 
 #### `PanCanvas`
 
@@ -1474,13 +1474,13 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |  Document to pan; unassigned (`0` over the API) = active. |
+| `doc_id` | `DocumentId` |  Document to pan; unassigned (`0` over the API) = active. |
 | `x` | `f32` |  Horizontal offset in canvas units. |
 | `y` | `f32` |  Vertical offset in canvas units. |
 
 #### `PauseActiveModel`
 
- Run-control events — fire against `doc=0` to target the active
+ Run-control events — fire against `doc_id=0` to target the active
  document, or a specific `DocumentId.raw()` for automation.
 
  Simulation already ticks automatically once a model is compiled
@@ -1503,7 +1503,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |   |
+| `doc_id` | `DocumentId` |   |
 
 #### `Redo`
 
@@ -1513,7 +1513,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |   |
+| `doc_id` | `DocumentId` |   |
 
 #### `RemoveModelicaComponent`
 
@@ -1530,7 +1530,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |  Document to edit; unassigned (`0` over the API) = active. |
+| `doc_id` | `DocumentId` |  Document to edit; unassigned (`0` over the API) = active. |
 | `class` | `String` |  Class within the document that declares the component. |
 | `name` | `String` |  Component instance name to remove. |
 
@@ -1555,7 +1555,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |   |
+| `doc_id` | `DocumentId` |   |
 | `old_name` | `String` |   |
 | `new_name` | `String` |   |
 
@@ -1567,7 +1567,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |   |
+| `doc_id` | `DocumentId` |   |
 
 #### `RestartActiveModel`
 
@@ -1578,7 +1578,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |   |
+| `doc_id` | `DocumentId` |   |
 
 #### `ResumeActiveModel`
 
@@ -1588,7 +1588,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |   |
+| `doc_id` | `DocumentId` |   |
 
 #### `RunActiveModel`
 
@@ -1606,7 +1606,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |   |
+| `doc_id` | `DocumentId` |   |
 | `class` | `Option < String >` |  Optional explicit target class, forwarded to the compile. |
 
 #### `RunExperiment`
@@ -1622,7 +1622,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |  Target document. Unassigned → the active document. |
+| `doc_id` | `DocumentId` |  Target document. Unassigned → the active document. |
 | `class` | `Option < String >` |  Target class. `None` → drilled-in class or sole non-package class. |
 | `overrides` | `Vec < crate :: api :: ApiModification >` |  Parameter overrides `[{name, value}]` (e.g. `{name:"Isp", value:"300"}`). |
 | `inputs` | `Vec < crate :: api :: ApiModification >` |  Runtime input overrides `[{name, value}]`. |
@@ -1638,23 +1638,23 @@ actually call, with the fields the deserializer actually accepts. See the
 #### `SaveActiveDocument`
 
  Save the document — the one save verb, in-process and over the API alike.
- Unassigned `doc` (`0` over the API) means the active document.
+ Unassigned `doc_id` (`0` over the API) means the active document.
 
 - *defined in:* `crates/lunco-modelica/src/ui/commands/doc.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |   |
+| `doc_id` | `DocumentId` |   |
 
 #### `SaveActiveDocumentAs`
 
- Save the document to `path`. Unassigned `doc` means the active document.
+ Save the document to `path`. Unassigned `doc_id` means the active document.
 
 - *defined in:* `crates/lunco-modelica/src/ui/commands/doc.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |   |
+| `doc_id` | `DocumentId` |   |
 | `path` | `String` |   |
 
 #### `SetDocumentSource`
@@ -1665,7 +1665,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |   |
+| `doc_id` | `DocumentId` |   |
 | `source` | `String` |   |
 
 #### `SetModelInput`
@@ -1681,7 +1681,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |  Document id; zero selects the documented active-document default. |
+| `doc_id` | `DocumentId` |  Document id; zero selects the documented active-document default. |
 | `name` | `String` |  Declared Modelica input name. |
 | `value` | `f64` |  Runtime input value. |
 
@@ -1694,7 +1694,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |  Document to switch; unassigned (`0` over the API) = active. |
+| `doc_id` | `DocumentId` |  Document to switch; unassigned (`0` over the API) = active. |
 | `mode` | `String` |  One of `"text"`, `"diagram"`, `"icon"`, or `"docs"`. Anything else  leaves the mode unchanged. |
 
 #### `SetZoom`
@@ -1706,7 +1706,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |  Document whose canvas to zoom; unassigned (`0` over the API) = active. |
+| `doc_id` | `DocumentId` |  Document whose canvas to zoom; unassigned (`0` over the API) = active. |
 | `zoom` | `f32` |  Zoom factor, `1.0` = 100%. |
 
 #### `Undo`
@@ -1717,7 +1717,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |   |
+| `doc_id` | `DocumentId` |   |
 
 ## Co-simulation
 
@@ -2272,7 +2272,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `lunco_doc :: DocumentId` |  The document to rename. |
+| `doc_id` | `lunco_doc :: DocumentId` |  The document to rename. |
 | `new_name` | `String` |  New filename / class identifier — no path separators allowed. |
 
 #### `RenameTwinEntry`
@@ -2737,7 +2737,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |  The document to close. |
+| `doc_id` | `DocumentId` |  The document to close. |
 
 #### `DiscardDocument`
 
@@ -2752,7 +2752,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |  The document whose local edits should be discarded. |
+| `doc_id` | `DocumentId` |  The document whose local edits should be discarded. |
 
 #### `ForkDocument`
 
@@ -2832,7 +2832,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |  The document whose most recent undone history group should be re-applied. |
+| `doc_id` | `DocumentId` |  The document whose most recent undone history group should be re-applied. |
 
 #### `SaveAsDocument`
 
@@ -2851,13 +2851,13 @@ actually call, with the fields the deserializer actually accepts. See the
 
  This single shape covers UI dialogs, recents, drag-drop, HTTP
  automation, and the Untitled-promotion path (Ctrl+S on a draft
- routes to `SaveAsDocument { doc, path: "" }`).
+ routes to `SaveAsDocument { doc_id, path: "" }`).
 
 - *defined in:* `crates/lunco-doc-bevy/src/lib.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |  The document to persist. |
+| `doc_id` | `DocumentId` |  The document to persist. |
 | `path` | `String` |  Target path. Empty triggers the picker. |
 
 #### `SaveDocument`
@@ -2878,7 +2878,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |  The document to persist. |
+| `doc_id` | `DocumentId` |  The document to persist. |
 
 #### `UndoDocument`
 
@@ -2895,7 +2895,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc` | `DocumentId` |  The document whose most recent history group should be undone. |
+| `doc_id` | `DocumentId` |  The document whose most recent history group should be undone. |
 
 ## Time & clock
 

@@ -61,7 +61,7 @@ fn panel_template(role, preview, doc, edit_target) {
         role: role,
         kind: surface_kind(role),
         preview: preview,
-        doc: doc,
+        doc_id: doc,
         edit_target: edit_target,
         capabilities: surface_capabilities(role),
     };
@@ -107,7 +107,7 @@ fn focus(role, preview, doc, edit_target) {
     } else {
         cmd("FocusPanel", #{ id: panel })
     };
-    #{ ok: result.ok, role: role, panel: panel, preview: preview, doc: doc, edit_target: edit_target, command: result }
+    #{ ok: result.ok, role: role, panel: panel, preview: preview, doc_id: doc, edit_target: edit_target, command: result }
 }
 
 // Open one complete Editor workspace. Repeating this with another preview id
@@ -124,7 +124,7 @@ fn open_session(preview, doc, edit_target) {
     }
     let viewport = focus("preview", preview, doc, edit_target);
     #{ ok: viewport.ok,
-       preview: preview, doc: doc, edit_target: edit_target,
+       preview: preview, doc_id: doc, edit_target: edit_target,
        perspective: perspective,
        viewport: viewport, templates: panel_templates(preview, doc, edit_target),
        note: "Preview admission is complete; panel view-models populate from the explicit session." }

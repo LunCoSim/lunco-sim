@@ -52,7 +52,7 @@ the timeline as data.
 | Clip span per prim | `animated_time_range(reader, path) -> (f64,f64)` (`usd-bevy/src/lib.rs:1733`) | |
 | Seconds ↔ timecode | `stage_time_codes_per_second` (`usd-bevy/src/lib.rs:1691`) | |
 | **Typed reversible keyframe write** | `UsdOp::SetTimeSample` / `RemoveTimeSample` (`lunco-usd/src/document.rs`) — each the other's inverse, with first-xform `xformOpOrder` authoring | Editor Inspector and `assembly_edit` use the existing operations; the full timeline remains future work |
-| Journaled/undoable apply | `ApplyUsdOp { doc, parent_gen, op }` → `wire_usd_journal_recorders` records lossless (fwd,inv) pair | shared undo (UI+CLI+agent) |
+| Journaled/undoable apply | `ApplyUsdOp { doc_id, parent_gen, op }` → `wire_usd_journal_recorders` records lossless (fwd,inv) pair | shared undo (UI+CLI+agent) |
 | Attribute literal → typed value | `parse_attribute_value` (`usd-bevy/src/author.rs:186`) | UI only supplies a string |
 | Camera switch (single target) | explicit selection (`SetActiveCamera` for the director, `SetUserCamera`/`ObserveAvatar` for the operator) → `ActivateCamera` → `SceneViewport::active_camera`, reconciled each frame (`usd-bevy/src/camera_switch.rs`) | one viewport authority |
 | Mounted follower cameras | `def Camera` under a body → `MountedCamera`, re-aimed each frame via `lunco:cameraLookAt` (`camera_mount.rs`) | |

@@ -623,7 +623,7 @@ impl Panel for UsdCanvasPanel {
                 return;
             }
             ctx.trigger(lunco_usd::commands::ApplyUsdOps {
-                doc,
+                doc_id: doc,
                 parent_gen: Some(state.generation),
                 label: "Edit USD connections".to_string(),
                 ops,

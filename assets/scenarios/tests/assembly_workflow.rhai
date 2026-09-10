@@ -259,7 +259,7 @@ fn on_tick(me) {
         }
 
         let save = cmd("SaveAsDocument", #{
-            doc: this.doc,
+            doc_id: this.doc,
             path: SAVED_PATH,
         });
         if !save.ok {

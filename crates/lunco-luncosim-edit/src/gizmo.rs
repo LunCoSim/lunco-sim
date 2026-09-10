@@ -817,7 +817,7 @@ pub fn restore_gizmo_dynamic(
                     }
                     if !ops.is_empty() {
                         commands.trigger(lunco_usd::commands::ApplyUsdOps {
-                            doc: *doc,
+                            doc_id: *doc,
                             parent_gen: (*generation != 0).then_some(*generation),
                             label: "Edit USD transform".to_string(),
                             ops,

@@ -418,7 +418,7 @@ impl ApiLinePattern {
 #[Command(default)]
 pub struct ApplyModelicaOps {
     /// Document to edit; unassigned (`0` over the API) = active.
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
     /// Ops to apply, in order.
     pub ops: Vec<ApiOp>,
 }
@@ -428,7 +428,7 @@ pub fn on_apply_modelica_ops(
     trigger: On<ApplyModelicaOps>,
     mut commands: Commands,
 ) -> Result<Ack, String> {
-    let raw = trigger.event().doc;
+    let raw = trigger.event().doc_id;
     let api_ops = trigger.event().ops.clone();
     let mut internal = Vec::with_capacity(api_ops.len());
     let mut invalid = Vec::new();
@@ -1352,5 +1352,5 @@ pub fn trigger_apply_ops(world: &mut World, doc: lunco_doc::DocumentId, ops: Vec
     }
     world
         .commands()
-        .trigger(ApplyModelicaOps { doc, ops: api_ops });
+        .trigger(ApplyModelicaOps { doc_id: doc, ops: api_ops });
 }

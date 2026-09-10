@@ -5551,41 +5551,52 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
         // we don't show stale zeroes; toggled via `TogglePerfHud` or
         // the Settings menu.
         if perf_enabled {
-            let perf_text = {
-                let phys = perf_stats
-                    .physics_ms
-                    .map(|ms| format!(" · phys {:>4.1}ms", ms))
-                    .unwrap_or_default();
-                let p99 = perf_hud::frame_ms_stats(&frame_history)
-                    .map(|(_, _, p99)| format!(" · p99 {:>5.1}ms", p99))
-                    .unwrap_or_default();
-                // Fixed-width fields so the HUD doesn't shift when
-                // FPS crosses 99→100 or frame_ms crosses 9→10. Values
-                // are right-justified inside their fields by the
-                // padding spec; monospace alone isn't enough because
-                // the *number of characters* changes.
-                format!(
-                    "FPS {:>5.1} · {:>5.1}ms{}{}",
-                    perf_stats.fps, perf_stats.frame_ms, p99, phys,
-                )
-            };
-            ui.allocate_ui_with_layout(
-                egui::vec2(right_widths.perf, 18.0),
-                egui::Layout::right_to_left(egui::Align::Center),
-                |ui| {
-                    let sparkline_width = if frame_history.is_empty() { 0.0 } else { 120.0 };
-                    let label_width =
-                        (ui.available_width() - sparkline_width - ui.spacing().item_spacing.x)
-                            .max(1.0);
-                    ui.add_sized(
-                        [label_width, 18.0],
-                        egui::Label::new(egui::RichText::new(&perf_text).small().monospace())
-                            .truncate(),
+            let perf_width = status_bar_perf_width(ui.available_width(), right_widths.perf);
+            if perf_width > 0.0 {
+                let perf_text = {
+                    let phys = perf_stats
+                        .physics_ms
+                        .map(|ms| format!(" · phys {:>4.1}ms", ms))
+                        .unwrap_or_default();
+                    let p99 = perf_hud::frame_ms_stats(&frame_history)
+                        .map(|(_, _, p99)| format!(" · p99 {:>5.1}ms", p99))
+                        .unwrap_or_default();
+                    // Fixed-width fields so the HUD doesn't shift when
+                    // FPS crosses 99→100 or frame_ms crosses 9→10. Values
+                    // are right-justified inside their fields by the
+                    // padding spec; monospace alone isn't enough because
+                    // the *number of characters* changes.
+                    format!(
+                        "FPS {:>5.1} · {:>5.1}ms{}{}",
+                        perf_stats.fps, perf_stats.frame_ms, p99, phys,
                     )
-                    .on_hover_text(&perf_text);
-                    draw_frame_time_sparkline(ui, &frame_history, theme);
-                },
-            );
+                };
+                ui.allocate_ui_with_layout(
+                    egui::vec2(perf_width, 18.0),
+                    egui::Layout::right_to_left(egui::Align::Center),
+                    |ui| {
+                        let sparkline_width = if frame_history.is_empty() {
+                            0.0
+                        } else {
+                            120.0_f32.min(perf_width)
+                        };
+                        let label_width =
+                            (ui.available_width() - sparkline_width - ui.spacing().item_spacing.x)
+                                .max(1.0);
+                        let displayed_perf_text =
+                            truncate_perf_text_to_width(ui, &perf_text, label_width);
+                        ui.add_sized(
+                            [label_width, 18.0],
+                            egui::Label::new(
+                                egui::RichText::new(displayed_perf_text).small().monospace(),
+                            )
+                            .truncate(),
+                        )
+                        .on_hover_text(&perf_text);
+                        draw_frame_time_sparkline(ui, &frame_history, theme, sparkline_width);
+                    },
+                );
+            }
         }
 
         // egui::Popup is the post-0.31 API. `open_memory(None)` ties
@@ -5978,6 +5989,7 @@ const STATUS_BAR_TUTORIAL_MAX_WIDTH: f32 = 190.0;
 const STATUS_BAR_SCENE_MAX_WIDTH: f32 = 150.0;
 const STATUS_BAR_NET_MAX_WIDTH: f32 = 220.0;
 const STATUS_BAR_PERF_MAX_WIDTH: f32 = 480.0;
+const STATUS_BAR_PERF_EDGE_INSET: f32 = 8.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct StatusBarRightWidths {
@@ -5992,6 +6004,49 @@ impl StatusBarRightWidths {
     fn total(self) -> f32 {
         self.tutorial + self.scene + self.net + self.perf + self.overhead
     }
+}
+
+fn status_bar_segment_width(available_width: f32, requested_width: f32) -> f32 {
+    available_width.max(0.0).min(requested_width.max(0.0))
+}
+
+fn status_bar_perf_width(available_width: f32, requested_width: f32) -> f32 {
+    status_bar_segment_width(
+        (available_width - STATUS_BAR_PERF_EDGE_INSET).max(0.0),
+        requested_width,
+    )
+}
+
+fn truncate_perf_text_to_width(ui: &egui::Ui, text: &str, max_width: f32) -> String {
+    if max_width <= 0.0 {
+        return String::new();
+    }
+    let font = egui::FontId::monospace(egui::TextStyle::Small.resolve(ui.style()).size);
+    let color = ui.visuals().text_color();
+    let width = |value: &str| {
+        ui.painter()
+            .layout_no_wrap(value.to_owned(), font.clone(), color)
+            .size()
+            .x
+    };
+    if width(text) <= max_width {
+        return text.to_owned();
+    }
+    let ellipsis = "…";
+    let ellipsis_width = width(ellipsis);
+    if ellipsis_width > max_width {
+        return String::new();
+    }
+    let mut chars: Vec<char> = text.chars().collect();
+    while !chars.is_empty() {
+        chars.pop();
+        let mut candidate: String = chars.iter().collect();
+        candidate.push_str(ellipsis);
+        if width(&candidate) <= max_width {
+            return candidate;
+        }
+    }
+    String::new()
 }
 
 /// Give the latest-event notification a compact, stable footprint while
@@ -6113,13 +6168,18 @@ fn render_net_chip(ui: &mut egui::Ui, world: &mut World, theme: &lunco_theme::Th
 /// the smoothed `FPS` number hides become visible. Y axis auto-
 /// scales to whatever the worst recent sample was; a faint reference
 /// line at 16.67 ms (60 FPS) anchors the eye.
-fn draw_frame_time_sparkline(ui: &mut egui::Ui, frame_history: &[f32], theme: &lunco_theme::Theme) {
+fn draw_frame_time_sparkline(
+    ui: &mut egui::Ui,
+    frame_history: &[f32],
+    theme: &lunco_theme::Theme,
+    width: f32,
+) {
     if frame_history.is_empty() {
         return;
     }
     // Plot dimensions chosen to fit the 18 px-tall status bar with
     // a few px of breathing room.
-    let size = egui::vec2(120.0, 14.0);
+    let size = egui::vec2(width, 14.0);
     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
     let painter = ui.painter().with_clip_rect(rect);
 
@@ -7199,6 +7259,20 @@ mod tests {
         assert_eq!(wide.scene, STATUS_BAR_SCENE_MAX_WIDTH);
         assert_eq!(wide.net, STATUS_BAR_NET_MAX_WIDTH);
         assert_eq!(wide.perf, STATUS_BAR_PERF_MAX_WIDTH);
+    }
+
+    #[test]
+    fn status_bar_segment_never_exceeds_remaining_width() {
+        assert_eq!(status_bar_segment_width(472.0, 480.0), 472.0);
+        assert_eq!(status_bar_segment_width(640.0, 480.0), 480.0);
+        assert_eq!(status_bar_segment_width(-1.0, 480.0), 0.0);
+    }
+
+    #[test]
+    fn status_bar_perf_segment_keeps_a_right_edge_inset() {
+        assert_eq!(status_bar_perf_width(472.0, 480.0), 464.0);
+        assert_eq!(status_bar_perf_width(640.0, 480.0), 480.0);
+        assert_eq!(status_bar_perf_width(4.0, 480.0), 0.0);
     }
 
     #[test]

@@ -13,32 +13,32 @@ use crate::ui::panels::code_editor::EditorBufferState;
 /// Undo the most recent edit on the active document.
 #[Command(default)]
 pub struct Undo {
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
 }
 
 /// Redo the most recently undone edit.
 #[Command(default)]
 pub struct Redo {
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
 }
 
 /// Run rumoca-tool-fmt on the active document.
 #[Command(default)]
 pub struct FormatDocument {
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
 }
 
 /// Save the document — the one save verb, in-process and over the API alike.
-/// Unassigned `doc` (`0` over the API) means the active document.
+/// Unassigned `doc_id` (`0` over the API) means the active document.
 #[Command(default)]
 pub struct SaveActiveDocument {
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
 }
 
-/// Save the document to `path`. Unassigned `doc` means the active document.
+/// Save the document to `path`. Unassigned `doc_id` means the active document.
 #[Command(default)]
 pub struct SaveActiveDocumentAs {
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
     pub path: String,
 }
 
@@ -46,7 +46,7 @@ pub struct SaveActiveDocumentAs {
 
 #[on_command(Undo)]
 pub fn on_undo(trigger: On<Undo>, mut commands: Commands) {
-    let raw = trigger.event().doc;
+    let raw = trigger.event().doc_id;
     commands.queue(move |world: &mut World| {
         let Some(doc) = (if raw.is_unassigned() {
             super::resolve_active_doc(world)
@@ -56,13 +56,13 @@ pub fn on_undo(trigger: On<Undo>, mut commands: Commands) {
             bevy::log::warn!("[Undo] no active document");
             return;
         };
-        world.commands().trigger(UndoDocument { doc });
+        world.commands().trigger(UndoDocument { doc_id: doc });
     });
 }
 
 #[on_command(Redo)]
 pub fn on_redo(trigger: On<Redo>, mut commands: Commands) {
-    let raw = trigger.event().doc;
+    let raw = trigger.event().doc_id;
     commands.queue(move |world: &mut World| {
         let Some(doc) = (if raw.is_unassigned() {
             super::resolve_active_doc(world)
@@ -72,7 +72,7 @@ pub fn on_redo(trigger: On<Redo>, mut commands: Commands) {
             bevy::log::warn!("[Redo] no active document");
             return;
         };
-        world.commands().trigger(RedoDocument { doc });
+        world.commands().trigger(RedoDocument { doc_id: doc });
     });
 }
 
@@ -83,7 +83,7 @@ pub fn on_undo_document(
     mut editor: ResMut<EditorBufferState>,
     mut workbench: ResMut<WorkbenchState>,
 ) {
-    let doc = trigger.event().doc;
+    let doc = trigger.event().doc_id;
     apply_undo_or_redo(doc, true, &mut registry, &mut editor, &mut workbench);
 }
 
@@ -95,7 +95,7 @@ pub fn on_redo_document(
     mut workbench: ResMut<WorkbenchState>,
 ) {
     apply_undo_or_redo(
-        trigger.event().doc,
+        trigger.event().doc_id,
         false,
         &mut registry,
         &mut editor,
@@ -160,7 +160,7 @@ pub fn on_save_document(
     mut console: ResMut<crate::ui::panels::console::ConsoleLog>,
     mut commands: Commands,
 ) {
-    let doc = trigger.event().doc;
+    let doc = trigger.event().doc_id;
 
     // No writable filesystem in the browser — every save is a
     // download. Delegate to Save-As, which picks a sensible file name
@@ -169,7 +169,7 @@ pub fn on_save_document(
     {
         let _ = (&registry, &console);
         commands.trigger(SaveAsDocument {
-            doc,
+            doc_id: doc,
             path: String::new(),
         });
         return;
@@ -184,7 +184,7 @@ pub fn on_save_document(
             let document = host.document();
             if document.origin().is_untitled() {
                 commands.trigger(SaveAsDocument {
-                    doc,
+                    doc_id: doc,
                     path: String::new(),
                 });
                 return;
@@ -236,7 +236,7 @@ pub fn on_save_as_document(
     mut console: ResMut<crate::ui::panels::console::ConsoleLog>,
     mut commands: Commands,
 ) {
-    let doc = trigger.event().doc;
+    let doc = trigger.event().doc_id;
     let target_path = trigger.event().path.clone();
 
     // wasm: no filesystem, and the browser's save flow can't hand back
@@ -347,7 +347,7 @@ pub fn on_save_as_document(
 
 #[on_command(FormatDocument)]
 pub fn on_format_document(trigger: On<FormatDocument>, mut commands: Commands) {
-    let raw = trigger.event().doc;
+    let raw = trigger.event().doc_id;
     commands.queue(move |world: &mut World| {
         use crate::document::ModelicaOp;
         let doc = if raw.is_unassigned() {
@@ -394,7 +394,7 @@ pub fn on_format_document(trigger: On<FormatDocument>, mut commands: Commands) {
 
 #[on_command(SaveActiveDocument)]
 pub fn on_save_active_document(trigger: On<SaveActiveDocument>, mut commands: Commands) {
-    let raw = trigger.event().doc;
+    let raw = trigger.event().doc_id;
     commands.queue(move |world: &mut World| {
         let doc = if raw.is_unassigned() {
             super::resolve_active_doc(world)
@@ -405,7 +405,7 @@ pub fn on_save_active_document(trigger: On<SaveActiveDocument>, mut commands: Co
             bevy::log::warn!("[SaveActiveDocument] no active document");
             return;
         };
-        world.commands().trigger(SaveDocument { doc });
+        world.commands().trigger(SaveDocument { doc_id: doc });
     });
 }
 
@@ -413,10 +413,10 @@ pub fn on_save_active_document(trigger: On<SaveActiveDocument>, mut commands: Co
 pub fn on_save_active_document_as(trigger: On<SaveActiveDocumentAs>, mut commands: Commands) {
     let ev = trigger.event().clone();
     commands.queue(move |world: &mut World| {
-        let doc = if ev.doc.is_unassigned() {
+        let doc = if ev.doc_id.is_unassigned() {
             super::resolve_active_doc(world)
         } else {
-            Some(ev.doc)
+            Some(ev.doc_id)
         };
         let Some(doc) = doc else {
             bevy::log::warn!("[SaveActiveDocumentAs] no active document");

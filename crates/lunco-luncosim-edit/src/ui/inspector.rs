@@ -388,7 +388,7 @@ pub(crate) fn on_mount_detach_requested(trigger: On<MountDetachRequested>, mut c
             return;
         };
         world.trigger(lunco_usd::commands::DetachComponent {
-            doc,
+            doc_id: doc,
             spec: lunco_usd::attach::DetachSpec {
                 edit_target,
                 component_path: request.component_path,
@@ -584,7 +584,7 @@ pub(crate) fn on_shader_parameters_requested(
         }
         if !ops.is_empty() {
             world.trigger(ApplyUsdOps {
-                doc,
+                doc_id: doc,
                 parent_gen: (generation != 0).then_some(generation),
                 label: "Edit shader parameters".to_owned(),
                 ops,
@@ -694,7 +694,7 @@ pub(crate) fn on_pbr_material_requested(trigger: On<PbrMaterialRequested>, mut c
             set("inputs:ior", "float", format!("{:.3}", request.ior));
         }
         world.trigger(lunco_usd::commands::ApplyUsdOps {
-            doc,
+            doc_id: doc,
             parent_gen: (generation != 0).then_some(generation),
             label: "Edit material".to_string(),
             ops,
@@ -1530,7 +1530,7 @@ fn usd_preview_transform_section(
         });
     }
     ctx.trigger(lunco_usd::commands::ApplyUsdOps {
-        doc: preview.doc,
+        doc_id: preview.doc,
         parent_gen: (preview.generation != 0).then_some(preview.generation),
         label: "Edit USD transform".to_string(),
         ops,
@@ -2327,7 +2327,7 @@ fn attach_component_at_socket(
             return;
         }
     };
-    world.trigger(lunco_usd::commands::AttachComponent { doc, spec });
+    world.trigger(lunco_usd::commands::AttachComponent { doc_id: doc, spec });
 }
 
 /// [`SetEnvironmentLight`](lunco_environment::SetEnvironmentLight) command
@@ -3082,7 +3082,7 @@ fn swap_shader_on_entity(world: &mut World, part: Entity, path: &str) {
     // name: an `asset` reads back as `Value::AssetPath`, and a loader asking for a
     // `String` gets `None`.
     world.trigger(ApplyUsdOp {
-        doc,
+        doc_id: doc,
         parent_gen: (generation != 0).then_some(generation),
         op: UsdOp::SetAttribute {
             edit_target,
@@ -3752,7 +3752,7 @@ fn apply_usd_path_attribute_change(
             value,
         };
         world.trigger(ApplyUsdOp {
-            doc,
+            doc_id: doc,
             parent_gen: (generation != 0).then_some(generation),
             op,
         });
@@ -3783,7 +3783,7 @@ fn apply_usd_variant_selection(
             variant,
         };
         world.trigger(ApplyUsdOp {
-            doc,
+            doc_id: doc,
             parent_gen: (generation != 0).then_some(generation),
             op,
         });

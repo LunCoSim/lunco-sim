@@ -260,8 +260,8 @@ impl ApiQueryProvider for ListCompileCandidatesProvider {
     }
 
     fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        let Some(doc_id) = parse_doc_id(params, "doc") else {
-            return err_missing_field("doc");
+        let Some(doc_id) = parse_doc_id(params, "doc_id") else {
+            return err_missing_field("doc_id");
         };
         let registry = world.resource::<ModelicaDocumentRegistry>();
         let Some(host) = registry.host(doc_id) else {
@@ -305,7 +305,7 @@ impl ApiQueryProvider for ListCompileCandidatesProvider {
 /// `experiment(...)` annotation (or one missing `StopTime`) resolves to the
 /// 10 s fallback, while an annotated class surfaces its authored `StopTime`.
 ///
-/// Params: `{doc}` (required), `{class}` (optional — short or qualified
+/// Params: `{doc_id}` (required), `{class}` (optional — short or qualified
 /// name; default = every non-package class).
 struct QueryExperimentBoundsProvider;
 
@@ -315,8 +315,8 @@ impl ApiQueryProvider for QueryExperimentBoundsProvider {
     }
 
     fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        let Some(doc_id) = parse_doc_id(params, "doc") else {
-            return err_missing_field("doc");
+        let Some(doc_id) = parse_doc_id(params, "doc_id") else {
+            return err_missing_field("doc_id");
         };
         let class_filter = params
             .get("class")
@@ -425,8 +425,8 @@ impl ApiQueryProvider for CompileStatusProvider {
     }
 
     fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        let Some(doc_id) = parse_doc_id(params, "doc") else {
-            return err_missing_field("doc");
+        let Some(doc_id) = parse_doc_id(params, "doc_id") else {
+            return err_missing_field("doc_id");
         };
         // Pull each piece of state in turn — `world.resource::<...>` borrows
         // are scoped to the line, so successive `let`s are fine even though
@@ -586,9 +586,9 @@ impl ApiQueryProvider for ListRunsProvider {
     }
 
     fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        // Optional `doc` filter — when absent, list every run in the
+        // Optional `doc_id` filter — when absent, list every run in the
         // registry (across docs/twins).
-        let filter_doc = parse_doc_id(params, "doc");
+        let filter_doc = parse_doc_id(params, "doc_id");
         // Snapshot the sources map into an id→doc table we can reuse
         // per row without re-borrowing the resource.
         let id_to_doc: std::collections::HashMap<ExperimentId, u64> = world
@@ -768,7 +768,7 @@ fn latest_experiment_id_for_doc(world: &World, doc_id: DocumentId) -> Option<Exp
 //
 // Params:
 //   - `experiment_id` (string)  — run to read; OR
-//   - `doc` (u64)               — read the doc's latest run (convenience).
+//   - `doc_id` (u64)            — read the doc's latest run (convenience).
 //   - `variables` (string[])    — optional filter; default = all series.
 //   - `max_points` (u64)        — optional cap; strided downsample, last
 //                                 sample always kept. Default = uncapped.
@@ -780,10 +780,10 @@ impl ApiQueryProvider for GetExperimentResultProvider {
     }
 
     fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        // Resolve target run: explicit id wins, else latest for `doc`.
+        // Resolve target run: explicit id wins, else latest for `doc_id`.
         let id = match parse_experiment_id(params, "experiment_id") {
             Some(id) => id,
-            None => match parse_doc_id(params, "doc") {
+            None => match parse_doc_id(params, "doc_id") {
                 Some(doc) => match latest_experiment_id_for_doc(world, doc) {
                     Some(id) => id,
                     None => {
@@ -796,7 +796,7 @@ impl ApiQueryProvider for GetExperimentResultProvider {
                 None => {
                     return ApiResponse::error(
                         ApiErrorCode::DeserializationError,
-                        "provide `experiment_id` or `doc`".to_string(),
+                        "provide `experiment_id` or `doc_id`".to_string(),
                     );
                 }
             },
@@ -908,8 +908,8 @@ impl ApiQueryProvider for GetDocumentSourceProvider {
     }
 
     fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        let Some(doc_id) = parse_doc_id(params, "doc") else {
-            return err_missing_field("doc");
+        let Some(doc_id) = parse_doc_id(params, "doc_id") else {
+            return err_missing_field("doc_id");
         };
 
         // Modelica docs are the only kind in the `ModelicaDocumentRegistry`
@@ -979,7 +979,7 @@ impl ApiQueryProvider for GetDocumentSourceProvider {
 // `CopyShareLink` is the interactive command: it copies the active model's
 // URL to the clipboard. The API's read operation has its own name so the
 // command and query namespaces cannot collide; it returns the URL without
-// requiring a clipboard. Optional `doc` param; defaults to the active
+// requiring a clipboard. Optional `doc_id` param; defaults to the active
 // document. Both paths share the wire format + URL builder
 // (`crate::model_share::share_url`), so they can't drift.
 
@@ -991,12 +991,12 @@ impl ApiQueryProvider for GetShareLinkProvider {
     }
 
     fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        let doc_id = parse_doc_id(params, "doc")
+        let doc_id = parse_doc_id(params, "doc_id")
             .or_else(|| world.resource::<WorkspaceResource>().active_document);
         let Some(doc_id) = doc_id else {
             return ApiResponse::error(
                 ApiErrorCode::EntityNotFound,
-                "GetShareLink: no `doc` given and no active document".to_string(),
+                "GetShareLink: no `doc_id` given and no active document".to_string(),
             );
         };
         let registry = world.resource::<ModelicaDocumentRegistry>();
@@ -1030,8 +1030,8 @@ impl ApiQueryProvider for DescribeModelProvider {
     }
 
     fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        let Some(doc_id) = parse_doc_id(params, "doc") else {
-            return err_missing_field("doc");
+        let Some(doc_id) = parse_doc_id(params, "doc_id") else {
+            return err_missing_field("doc_id");
         };
         let class_param = params
             .get("class")
@@ -1205,8 +1205,8 @@ impl ApiQueryProvider for SnapshotVariablesProvider {
     }
 
     fn execute(&self, world: &World, params: &serde_json::Value) -> ApiResponse {
-        let Some(doc_id) = parse_doc_id(params, "doc") else {
-            return err_missing_field("doc");
+        let Some(doc_id) = parse_doc_id(params, "doc_id") else {
+            return err_missing_field("doc_id");
         };
         // Optional `names` filter — when absent, return everything.
         // Accepts either an array of strings or null/missing.

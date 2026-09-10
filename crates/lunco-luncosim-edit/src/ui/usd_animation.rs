@@ -259,7 +259,7 @@ fn apply_animation_ops(
         return;
     };
     ctx.trigger(lunco_usd::commands::ApplyUsdOps {
-        doc,
+        doc_id: doc,
         parent_gen: Some(view.generation),
         label: label.to_owned(),
         ops,

@@ -161,6 +161,6 @@ pub fn drop_diagnostics_on_close(
     diagnostics: Option<ResMut<DocumentDiagnostics>>,
 ) {
     if let Some(mut d) = diagnostics {
-        d.clear(trigger.event().doc);
+        d.clear(trigger.event().doc_id);
     }
 }

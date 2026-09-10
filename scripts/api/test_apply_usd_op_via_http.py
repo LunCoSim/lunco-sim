@@ -62,7 +62,7 @@ def Xform "World"
                         "type": "ExecuteCommand",
                         "command": "ApplyUsdOp",
                         "params": {
-                            "doc": doc_id,
+                            "doc_id": doc_id,
                             "op": {
                                 "AddPrim": {
                                     "edit_target": "@root@",
@@ -82,7 +82,7 @@ def Xform "World"
                         "type": "ExecuteCommand",
                         "command": "ApplyUsdOp",
                         "params": {
-                            "doc": doc_id,
+                            "doc_id": doc_id,
                             "op": {
                                 "SetAttribute": {
                                     "edit_target": "@root@",
@@ -102,7 +102,7 @@ def Xform "World"
                     {
                         "type": "ExecuteCommand",
                         "command": "SaveDocument",
-                        "params": {"doc": doc_id},
+                        "params": {"doc_id": doc_id},
                     }
                 ),
                 "SaveDocument",

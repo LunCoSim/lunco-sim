@@ -94,7 +94,7 @@ curl -s -X POST http://127.0.0.1:4101/api/commands \
 
 ### Attach a Modelica source to a USD body
 
-For a multi-domain run, use the shared `AttachProgram { doc, spec }` command
+For a multi-domain run, use the shared `AttachProgram { doc_id, spec }` command
 instead of writing marker components or maintaining a separate binding table.
 The spec authors the `LunCoProgramAPI` child, explicit scalar inputs and
 outputs, and native USD connections in one journaled change set. In Rhai the
@@ -219,7 +219,7 @@ Two kinds of `command` share this envelope:
   invoked with the same tagged `ExecuteCommand` form. Built-in discovery and
   entity listing use their own explicit `type` values.
 
-`doc: 0` always means "the active document/tab".
+`doc_id: 0` always means "the active document/tab".
 
 ## 2. Two run modes — pick the right one
 
@@ -244,22 +244,22 @@ post '{"type":"ExecuteCommand","command":"Open","params":{"uri":"bundled://Sprin
 #    List embedded examples first: {"type":"ExecuteCommand","command":"ListBundled","params":{}}
 
 # 2. Wait for the AST parse (background). Poll CompileStatus until ast_parsed:true:
-post '{"type":"ExecuteCommand","command":"CompileStatus","params":{"doc":0}}'   # -> {state, ast_parsed, candidates, picker_pending, ...}
+post '{"type":"ExecuteCommand","command":"CompileStatus","params":{"doc_id":0}}'   # -> {state, ast_parsed, candidates, picker_pending, ...}
 
 # 3. Compile + play. class REQUIRED if the file has >1 non-package class
 #    (the GUI picker can't be shown over the API). Discover choices:
-post '{"type":"ExecuteCommand","command":"ListCompileCandidates","params":{"doc":0}}'   # -> {candidates:[{qualified,short}]}
-post '{"type":"ExecuteCommand","command":"RunActiveModel","params":{"doc":0,"class":"SpringMass"}}'
+post '{"type":"ExecuteCommand","command":"ListCompileCandidates","params":{"doc_id":0}}'   # -> {candidates:[{qualified,short}]}
+post '{"type":"ExecuteCommand","command":"RunActiveModel","params":{"doc_id":0,"class":"SpringMass"}}'
 
 # 4. Read live values (t + parameters + inputs + variables). Filter with names:
-post '{"type":"ExecuteCommand","command":"SnapshotVariables","params":{"doc":0,"names":["x","v"]}}'
+post '{"type":"ExecuteCommand","command":"SnapshotVariables","params":{"doc_id":0,"names":["x","v"]}}'
 
 # 5. Poke a runtime input live (no recompile, applies next step):
-post '{"type":"ExecuteCommand","command":"SetModelInput","params":{"doc":0,"name":"F","value":10.0}}'
+post '{"type":"ExecuteCommand","command":"SetModelInput","params":{"doc_id":0,"name":"F","value":10.0}}'
 
 # 6. Pause / Resume / Reset / Restart:
-post '{"type":"ExecuteCommand","command":"PauseActiveModel","params":{"doc":0}}'
-post '{"type":"ExecuteCommand","command":"RestartActiveModel","params":{"doc":0}}'   # reset t=0 then run
+post '{"type":"ExecuteCommand","command":"PauseActiveModel","params":{"doc_id":0}}'
+post '{"type":"ExecuteCommand","command":"RestartActiveModel","params":{"doc_id":0}}'   # reset t=0 then run
 ```
 
 `RunActiveModel` = compile-if-stale then play. If already compiled & clean it
@@ -276,7 +276,7 @@ Each run is stored as an `Experiment`; read its trajectory back with
 ```bash
 # One run with a parameter override + custom bounds + a label:
 post '{"type":"ExecuteCommand","command":"RunExperiment","params":{
-  "doc":0, "class":"RocketStage",
+  "doc_id":0, "class":"RocketStage",
   "overrides":[{"name":"Isp","value":"300"}],
   "inputs":[{"name":"throttle","value":"1.0"}],
   "t_start":0, "t_end":120, "n_intervals":600,
@@ -289,7 +289,7 @@ Sweep = loop the same call with different overrides + labels (one run each):
 
 ```bash
 for isp in 280 300 320 340; do
-  post "{\"type\":\"ExecuteCommand\",\"command\":\"RunExperiment\",\"params\":{\"doc\":0,\"class\":\"RocketStage\",
+  post "{\"type\":\"ExecuteCommand\",\"command\":\"RunExperiment\",\"params\":{\"doc_id\":0,\"class\":\"RocketStage\",
     \"overrides\":[{\"name\":\"Isp\",\"value\":\"$isp\"}],
     \"t_end\":120,\"n_intervals\":600,\"label\":\"Isp=$isp\"}}"
 done
@@ -318,7 +318,7 @@ scripted/agent runs so everything is explicit.
 ## 5. Recipe C — read experiment results
 
 ```bash
-# List runs (newest first). Optional {"doc":N} filter. Each row is self-describing:
+# List runs (newest first). Optional {"doc_id":N} filter. Each row is self-describing:
 # experiment_id, name, state (Pending|Queued|Running|Done|Failed|Cancelled),
 # wall_time_ms, the overrides that produced it, and the bounds it ran under.
 post '{"type":"ExecuteCommand","command":"ListRuns","params":{}}'
@@ -326,7 +326,7 @@ post '{"type":"ExecuteCommand","command":"ListRuns","params":{}}'
 # Pull a full trajectory: times + series (dotted Modelica path -> samples).
 # Target by experiment_id, OR by doc (its latest run). Filter + downsample:
 post '{"type":"ExecuteCommand","command":"GetExperimentResult","params":{
-  "doc":0, "variables":["altitude","velocity"], "max_points":500
+  "doc_id":0, "variables":["altitude","velocity"], "max_points":500
 }}'
 # max_points = strided downsample, final sample always kept. Omit = uncapped.
 # Returns {state:"Done", times:[...], series:{"altitude":[...], ...}} or an

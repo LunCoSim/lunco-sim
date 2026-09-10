@@ -61,7 +61,7 @@ optional `reference_prim_path` and `author_reference`. An omitted target uses
 the referenced layer's `defaultPrim`; an explicit absolute target preserves a
 named source prim when the asset's composition or variants depend on it.
 Programmatic and UI edits go through the
-**`ApplyUsdOp { doc, parent_gen, op }`** or **`ApplyUsdOps { doc, parent_gen, label, ops }`** command
+**`ApplyUsdOp { doc_id, parent_gen, op }`** or **`ApplyUsdOps { doc_id, parent_gen, label, ops }`** command
 (`commands.rs`), which returns a generation-ack; direct source mutation is out.
 Multi-op intents use one change set. `AttachProgram` is the typed source-backed
 program authoring intent and lowers its complete source/port/wire contract to
@@ -242,8 +242,8 @@ section.
 | **Open a Twin** | Open a folder → designated stage becomes active → Grid renders it | existing `OpenFolder`/`OpenTwin` + folder picker |
 | **Open a loose scene** | Open a `.usda` → owning-folder scan → folder Twin → doc-first `twin://…` scene becomes active → Grid | `OpenFile` (USD owns root resolution, document open, and the typed scene transition) |
 | **Built-in demo** | implicit Twin opened at startup | startup |
-| **Add object / import** | author into the explicit document: `ApplyUsdOp { doc, parent_gen, op: AddPrim { reference: Some(...) } }` (primitives use `reference: None`); recompose into Grid; save with `SaveDocument` | existing `ApplyUsdOp` |
-| **Attach a simulation program** | `AttachProgram { doc, spec }`; author a `LunCoProgramAPI` child, declared scalar ports, defaults, and USD connections as one change set | `lunco-usd::program` + normal USD projection |
+| **Add object / import** | author into the explicit document: `ApplyUsdOp { doc_id, parent_gen, op: AddPrim { reference: Some(...) } }` (primitives use `reference: None`); recompose into Grid; save with `SaveDocument` | existing `ApplyUsdOp` |
+| **Attach a simulation program** | `AttachProgram { doc_id, spec }`; author a `LunCoProgramAPI` child, declared scalar ports, defaults, and USD connections as one change set | `lunco-usd::program` + normal USD projection |
 | **Promote loose → Twin** | `SaveAsTwin` | existing |
 | **Run / server** | `TwinCommand`s | existing `--api` surface (spec 14 "Headless + remote") |
 

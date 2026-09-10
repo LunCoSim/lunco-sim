@@ -325,7 +325,7 @@ pub fn relay_compile_requests(
 ) {
     for r in requests.read() {
         commands.trigger(crate::ui::commands::CompileModel {
-            doc: r.doc,
+            doc_id: r.doc,
             class: r.class.clone(),
             force: r.force,
             resume_after_compile: r.resume_after_compile,

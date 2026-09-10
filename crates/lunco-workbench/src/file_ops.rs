@@ -108,7 +108,7 @@ pub struct CopyShareLink {}
 #[Command(default)]
 pub struct RenameOpenDocument {
     /// The document to rename.
-    pub doc: lunco_doc::DocumentId,
+    pub doc_id: lunco_doc::DocumentId,
     /// New filename / class identifier — no path separators allowed.
     pub new_name: String,
 }
@@ -318,8 +318,8 @@ fn on_rename_open_document(
         warn!("[RenameOpenDocument] empty new_name");
         return;
     }
-    let Some(entry) = workspace.document(ev.doc) else {
-        warn!("[RenameOpenDocument] no Workspace doc with id {}", ev.doc);
+    let Some(entry) = workspace.document(ev.doc_id) else {
+        warn!("[RenameOpenDocument] no Workspace doc with id {}", ev.doc_id);
         return;
     };
     match &entry.origin {
@@ -342,7 +342,7 @@ fn on_rename_open_document(
                 warn!(
                     "[RenameOpenDocument] doc {} path {} not under any open \
                      Twin — standalone file rename not yet supported",
-                    ev.doc,
+                    ev.doc_id,
                     path.display()
                 );
                 return;
@@ -366,7 +366,7 @@ fn on_rename_open_document(
             writable: false, ..
         }
         | DocumentOrigin::Bundled { .. } => {
-            warn!("[RenameOpenDocument] doc {} is read-only", ev.doc);
+            warn!("[RenameOpenDocument] doc {} is read-only", ev.doc_id);
         }
     }
 }
@@ -545,17 +545,17 @@ fn on_save_all(
             if let Some(root) = &active_root {
                 let path = promoted_document_path(root, &entry, &mut used);
                 commands.trigger(SaveAsDocument {
-                    doc: entry.id,
+                    doc_id: entry.id,
                     path: path.display().to_string(),
                 });
             } else {
                 // The domain SaveDocument observer opens its normal Save-As
                 // picker. This keeps Save All useful for a loose draft while
                 // leaving path selection with the document owner.
-                commands.trigger(lunco_doc_bevy::SaveDocument { doc: entry.id });
+                commands.trigger(lunco_doc_bevy::SaveDocument { doc_id: entry.id });
             }
         } else {
-            commands.trigger(lunco_doc_bevy::SaveDocument { doc: entry.id });
+            commands.trigger(lunco_doc_bevy::SaveDocument { doc_id: entry.id });
         }
     }
 }
@@ -630,7 +630,7 @@ fn on_save_as_twin(
     });
     for (doc, path) in saves {
         commands.trigger(SaveAsDocument {
-            doc,
+            doc_id: doc,
             path: path.display().to_string(),
         });
     }
@@ -754,7 +754,7 @@ fn on_pick_resolved(trigger: On<PickResolved>, mut commands: Commands) {
             commands.trigger(AddTwin { path });
         }
         PickFollowUp::SaveAs(doc) => {
-            commands.trigger(SaveAsDocument { doc: *doc, path });
+            commands.trigger(SaveAsDocument { doc_id: *doc, path });
         }
         PickFollowUp::SaveAsTwin => {
             commands.trigger(SaveAsTwin { folder: path });

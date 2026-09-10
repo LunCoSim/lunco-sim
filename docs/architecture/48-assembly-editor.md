@@ -209,13 +209,13 @@ different document.
 
 `ApplyUsdOp` and `ApplyUsdOps` accept an optional `parent_gen`. When supplied,
 the registry rejects a stale request before authoring or journaling. Successful
-acks identify the document, target layer, affected paths, new generation,
+acks identify the document id, target layer, affected paths, new generation,
 canonical journal cursor, and change-set id for compound edits; the API response
 is sent after the document mutation has committed. Callers that do not have a
 causal predecessor pass `null`; they do not use a second edit path.
 
 `InspectUsdDocument` is the read-only agent/human inspection query. It requires
-an explicit `doc` and can accept a USD `path`; it reports the document's
+an explicit `doc_id` and can accept a USD `path`; it reports the document's
 authored layers and revisions, local composed prim topology, dependency arcs
 from `lunco-usd-compose`, diagnostics, and journal cursor. It never infers an
 active document or constructs another resolver/cache.
@@ -306,14 +306,14 @@ focused preview surface. No second USD gizmo, cursor transform, or
 panel-local input gate is introduced.
 
 `InspectUsdEditSession` is the read-only proposal review query. It requires an
-explicit `doc` and returns each typed proposal, its explicit scope, generation
+explicit `doc_id` and returns each typed proposal, its explicit scope, generation
 and layer-revision preconditions, affected paths, diagnostics, review state,
 and external-file staleness. `CreateUsdProposal`, `ReviewUsdProposal`, and
 `CommitUsdProposal` are the corresponding typed plan, review, and commit
 commands. The browser exposes the same review actions for humans; agents use
 the query and commands through the shared Rhai library.
 
-`ResolveUsdTarget` requires `doc`, a prim `path`, and an explicit `edit_target`
+`ResolveUsdTarget` requires `doc_id`, a prim `path`, and an explicit `edit_target`
 (`@root@` or `@runtime@`). Local authored and runtime opinions are resolved by
 `UsdDocument`; referenced or payloaded paths are resolved by the already-mounted
 `CanonicalStage`, and the returned OpenUSD prim stack identifies the actual
@@ -504,10 +504,10 @@ and study metadata as a second reviewed plan. The
 construction, negative cases, and `TESTS_OK 10` verdict are authored in Rhai.
 
 The companion `assembly_audit` library is the authored diagnostic surface for
-assembly contracts. Every stage-reading helper takes `doc` first; `()` explicitly
-selects the mounted live scene. `QueryUsdPrim { doc, path, ... }` resolves the
+assembly contracts. Every stage-reading helper takes the document id first; `()` explicitly
+selects the mounted live scene. `QueryUsdPrim { doc_id, path, ... }` resolves the
 document through `DocBackedTwinScenes` and rejects closed, unmapped, or stale
-document projections. Queries without `doc` require one mounted live stage;
+document projections. Queries without `doc_id` require one mounted live stage;
 preview copies and detached cached stages cannot satisfy them. Preview focus
 does not select a query's document. It reads explicit composed paths and
 returns structured reports for topology/relationship expectations, reciprocal

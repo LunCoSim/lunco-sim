@@ -79,19 +79,19 @@ fn on_tick(me) {
     }
     if this.phase == 1 {
         let part = query("QueryUsdPrim", #{
-            doc: this.doc,
+            doc_id: this.doc,
             path: PART,
             attrs: ["xformOp:translate", "xformOp:rotateXYZ"],
             rels: ["lunco:mount:frame", "lunco:mount:attachmentJoint"],
         });
         let joint = query("QueryUsdPrim", #{
-            doc: this.doc,
+            doc_id: this.doc,
             path: JOINT,
             attrs: ["physics:localPos0", "physics:localPos1"],
             rels: ["physics:body0", "physics:body1"],
         });
         let socket = query("QueryUsdPrim", #{
-            doc: this.doc,
+            doc_id: this.doc,
             path: SOCKET,
             rels: ["lunco:mount:part"],
         });
@@ -145,17 +145,17 @@ fn on_tick(me) {
         return;
     }
     let part_before = query("QueryUsdPrim", #{
-        doc: this.doc,
+        doc_id: this.doc,
         path: PART,
         rels: ["lunco:mount:frame", "lunco:mount:attachmentJoint"],
     });
     let joint_before = query("QueryUsdPrim", #{
-        doc: this.doc,
+        doc_id: this.doc,
         path: JOINT,
         rels: ["physics:body0", "physics:body1"],
     });
     let socket_before = query("QueryUsdPrim", #{
-        doc: this.doc,
+        doc_id: this.doc,
         path: SOCKET,
         rels: ["lunco:mount:part"],
     });

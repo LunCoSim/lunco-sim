@@ -5,7 +5,7 @@
 //!
 //! * `CompileModel` — kick off a rumoca compile + DAE + simulator
 //!   setup. One verb for the toolbar and the API alike: an unassigned
-//!   `doc` means the active document.
+//!   `doc_id` means the active document.
 //! * Run-control trio `PauseActiveModel` / `ResumeActiveModel` /
 //!   `ResetActiveModel` — pause/resume/reset the per-doc Modelica
 //!   simulation worker without recompiling.
@@ -53,7 +53,7 @@ pub struct CompileModel {
     /// The document to compile. Unassigned (`0` over the API) means the
     /// **active** document, which is what a toolbar click and a headless
     /// `cmd("CompileModel", #{})` both want.
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
     /// Optional explicit target class. When `Some`, bypass both the
     /// drilled-in pin and the picker — compile this exact class.
     /// Used by API callers that need deterministic behaviour without
@@ -80,10 +80,10 @@ pub struct CompileModel {
 // this to lay out an imported model cleanly in one click.
 //
 // Exposed to the LunCo API: `POST /api/commands` with
-// `{"type":"ExecuteCommand","command": "AutoArrangeDiagram", "params": {"doc": 0}}` where
-// `doc = 0` targets the currently-active tab. Kept as a raw `u64`
-// (not `DocumentId`) so the generic `lunco-doc` crate stays free of
-// the bevy-reflect dependency required to cross the API boundary.
+// `{"type":"ExecuteCommand","command": "AutoArrangeDiagram", "params": {"doc_id": 0}}` where
+// `doc_id = 0` targets the currently-active tab. The reflected
+// `DocumentId` remains numeric on the wire, while keeping the command's
+// in-process target typed at the document boundary.
 
 // ─── Compile-class picker + Fast-Run setup modal types & renderers ───────
 
@@ -499,7 +499,7 @@ pub(crate) fn render_fast_run_setup(
         // Pass the chosen class explicitly so dispatch skips the
         // disambiguation modal — the dropdown above already resolved it.
         commands.trigger(FastRunActiveModel {
-            doc: entry.doc,
+            doc_id: entry.doc,
             class: Some(entry.model_ref.0),
             t_end: None,
             dt: None,
@@ -603,7 +603,7 @@ pub(crate) fn render_compile_class_picker(
         match purpose {
             PickerPurpose::Compile => {
                 commands.trigger(CompileModel {
-                    doc,
+                    doc_id: doc,
                     class: None,
                     force: false,
                     resume_after_compile: false,
@@ -613,7 +613,7 @@ pub(crate) fn render_compile_class_picker(
                 // Re-dispatch — second-time-around the drilled-class
                 // pin is set so resolution skips the picker.
                 commands.trigger(FastRunActiveModel {
-                    doc,
+                    doc_id: doc,
                     class: None,
                     t_end: None,
                     dt: None,
@@ -690,7 +690,7 @@ pub fn on_compile_model(
     // Unassigned ⇒ the active document. Resolving here is what lets ONE compile
     // verb serve the toolbar and the API; the wrapper command that used to do
     // this is gone.
-    let doc = match trigger.event().doc {
+    let doc = match trigger.event().doc_id {
         raw if raw.is_unassigned() => {
             let Some(active) = workspace.and_then(|ws| ws.active_document) else {
                 bevy::log::warn!("[CompileModel] no active document");
@@ -1303,7 +1303,7 @@ fn fail_compile_dispatch(
 
 // ─── Run-control + FastRun typed commands & observers ────────────────────
 
-/// Run-control events — fire against `doc=0` to target the active
+/// Run-control events — fire against `doc_id=0` to target the active
 /// document, or a specific `DocumentId.raw()` for automation.
 ///
 /// Simulation already ticks automatically once a model is compiled
@@ -1323,19 +1323,19 @@ fn fail_compile_dispatch(
 /// for a "force one step" flag is better designed alongside that.
 #[Command(default)]
 pub struct PauseActiveModel {
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
 }
 
 /// See [`PauseActiveModel`].
 #[Command(default)]
 pub struct ResumeActiveModel {
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
 }
 
 /// See [`PauseActiveModel`].
 #[Command(default)]
 pub struct ResetActiveModel {
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
 }
 
 /// Start a live realtime simulation: compile-if-stale, then play.
@@ -1349,7 +1349,7 @@ pub struct ResetActiveModel {
 /// starts) and [`ResumeActiveModel`] (unpause only, never compiles).
 #[Command(default)]
 pub struct RunActiveModel {
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
     /// Optional explicit target class, forwarded to the compile.
     pub class: Option<String>,
 }
@@ -1358,12 +1358,12 @@ pub struct RunActiveModel {
 /// followed by [`RunActiveModel`].
 #[Command(default)]
 pub struct RestartActiveModel {
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
 }
 
 #[on_command(PauseActiveModel)]
 pub fn on_pause_active_model(trigger: On<PauseActiveModel>, mut commands: Commands) {
-    let raw = trigger.event().doc;
+    let raw = trigger.event().doc_id;
     commands.queue(move |world: &mut World| {
         let Some(doc) = resolve_doc_or_active(world, raw) else {
             return;
@@ -1378,7 +1378,7 @@ pub fn on_pause_active_model(trigger: On<PauseActiveModel>, mut commands: Comman
 
 #[on_command(ResumeActiveModel)]
 pub fn on_resume_active_model(trigger: On<ResumeActiveModel>, mut commands: Commands) {
-    let raw = trigger.event().doc;
+    let raw = trigger.event().doc_id;
     commands.queue(move |world: &mut World| {
         let Some(doc) = resolve_doc_or_active(world, raw) else {
             return;
@@ -1393,7 +1393,7 @@ pub fn on_resume_active_model(trigger: On<ResumeActiveModel>, mut commands: Comm
 
 #[on_command(RunActiveModel)]
 pub fn on_run_active_model(trigger: On<RunActiveModel>, mut commands: Commands) {
-    let raw = trigger.event().doc;
+    let raw = trigger.event().doc_id;
     let class = trigger.event().class.clone();
     commands.queue(move |world: &mut World| {
         let Some(doc) = resolve_doc_or_active(world, raw) else {
@@ -1406,7 +1406,7 @@ pub fn on_run_active_model(trigger: On<RunActiveModel>, mut commands: Commands) 
             // begins immediately. (Previously this needed a second click:
             // there was no entity to pre-arm before the deferred spawn.)
             world.commands().trigger(CompileModel {
-                doc,
+                doc_id: doc,
                 class,
                 force: false,
                 resume_after_compile: true,
@@ -1439,7 +1439,7 @@ pub fn on_run_active_model(trigger: On<RunActiveModel>, mut commands: Commands) 
             model.resume_after_compile = true;
         }
         world.commands().trigger(CompileModel {
-            doc,
+            doc_id: doc,
             class,
             force: false,
             resume_after_compile: true,
@@ -1449,17 +1449,17 @@ pub fn on_run_active_model(trigger: On<RunActiveModel>, mut commands: Commands) 
 
 #[on_command(RestartActiveModel)]
 pub fn on_restart_active_model(trigger: On<RestartActiveModel>, mut commands: Commands) {
-    let raw = trigger.event().doc;
+    let raw = trigger.event().doc_id;
     commands.queue(move |world: &mut World| {
         let Some(doc) = resolve_doc_or_active(world, raw) else {
             return;
         };
         // Reset to t=0, then run. Mirrors the toolbar's Reset+Run
         // composition; the two triggers run in dispatch order.
-        world.commands().trigger(ResetActiveModel { doc });
+        world.commands().trigger(ResetActiveModel { doc_id: doc });
         world
             .commands()
-            .trigger(RunActiveModel { doc, class: None });
+            .trigger(RunActiveModel { doc_id: doc, class: None });
     });
 }
 
@@ -1469,7 +1469,7 @@ pub fn on_restart_active_model(trigger: On<RestartActiveModel>, mut commands: Co
 /// `docs/architecture/25-experiments.md`.
 #[Command(default)]
 pub struct FastRunActiveModel {
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
     /// Target class. When `None`, resolves via drilled-in class or picker.
     pub class: Option<String>,
     /// Override experiment StopTime (seconds). `None` = use annotation or fallback.
@@ -1955,7 +1955,7 @@ fn refuse_run(who: &str, why: String, commands: &mut Commands) {
 
 #[on_command(FastRunActiveModel)]
 pub fn on_fast_run_active_model(trigger: On<FastRunActiveModel>, mut commands: Commands) {
-    let raw = trigger.event().doc;
+    let raw = trigger.event().doc_id;
     let explicit_class = trigger.event().class.clone();
     let solver = match parse_solver_arg(trigger.event().solver.as_deref()) {
         Ok(s) => s,
@@ -2055,7 +2055,7 @@ pub fn on_confirm_class_picker(trigger: On<ConfirmClassPicker>, mut commands: Co
         match entry.purpose {
             PickerPurpose::Compile => {
                 world.commands().trigger(CompileModel {
-                    doc,
+                    doc_id: doc,
                     class: None,
                     force: false,
                     resume_after_compile: false,
@@ -2063,7 +2063,7 @@ pub fn on_confirm_class_picker(trigger: On<ConfirmClassPicker>, mut commands: Co
             }
             PickerPurpose::FastRun => {
                 world.commands().trigger(FastRunActiveModel {
-                    doc,
+                    doc_id: doc,
                     class: None,
                     t_end: None,
                     dt: None,
@@ -2086,7 +2086,7 @@ pub fn on_confirm_class_picker(trigger: On<ConfirmClassPicker>, mut commands: Co
 #[Command(default)]
 pub struct RunExperiment {
     /// Target document. Unassigned → the active document.
-    pub doc: DocumentId,
+    pub doc_id: DocumentId,
     /// Target class. `None` → drilled-in class or sole non-package class.
     pub class: Option<String>,
     /// Parameter overrides `[{name, value}]` (e.g. `{name:"Isp", value:"300"}`).
@@ -2119,7 +2119,7 @@ pub struct RunExperiment {
 #[on_command(RunExperiment)]
 pub fn on_run_experiment(trigger: On<RunExperiment>, mut commands: Commands) {
     let ev = trigger.event();
-    let raw = ev.doc;
+    let raw = ev.doc_id;
     let explicit_class = ev.class.clone();
     let overrides = param_map_from_mods(&ev.overrides);
     let inputs = param_map_from_mods(&ev.inputs);
@@ -2187,7 +2187,7 @@ pub fn on_cancel_experiment(trigger: On<CancelExperiment>, mut commands: Command
 #[Command(default)]
 pub struct DeleteExperiment {
     pub experiment_id: Option<String>,
-    pub doc: Option<DocumentId>,
+    pub doc_id: Option<DocumentId>,
     pub all: bool,
 }
 
@@ -2224,7 +2224,7 @@ pub(crate) fn purge_experiment_side_state(
 #[on_command(DeleteExperiment)]
 pub fn on_delete_experiment(trigger: On<DeleteExperiment>, mut commands: Commands) {
     let target = trigger.event().experiment_id.clone();
-    let doc = trigger.event().doc;
+    let doc = trigger.event().doc_id;
     let all = trigger.event().all;
     commands.queue(move |world: &mut World| {
         let journal = world
@@ -2273,7 +2273,7 @@ pub fn on_delete_experiment(trigger: On<DeleteExperiment>, mut commands: Command
         }
         crate::ui::commands::compile::purge_experiment_side_state(world, &purged);
         bevy::log::info!(
-            "[DeleteExperiment] removed {removed} run(s) (all={all}, id={target:?}, doc={doc:?})"
+            "[DeleteExperiment] removed {removed} run(s) (all={all}, id={target:?}, doc_id={doc:?})"
         );
     });
 }
@@ -2319,7 +2319,7 @@ pub fn on_rename_experiment(trigger: On<RenameExperiment>, mut commands: Command
 
 #[on_command(ResetActiveModel)]
 pub fn on_reset_active_model(trigger: On<ResetActiveModel>, mut commands: Commands) {
-    let raw = trigger.event().doc;
+    let raw = trigger.event().doc_id;
     commands.queue(move |world: &mut World| {
         let Some(doc) = resolve_doc_or_active(world, raw) else {
             return;

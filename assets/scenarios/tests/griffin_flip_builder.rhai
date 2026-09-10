@@ -24,7 +24,7 @@ fn find_document() {
     for item in docs.open_documents {
         if item.kind == "usd" {
             let root = query("QueryUsdPrim", #{
-                doc: item.doc_id,
+                doc_id: item.doc_id,
                 path: ROOT,
                 children: false,
             });
@@ -221,22 +221,22 @@ fn on_tick(me) {
     }
 
     let fl = query("QueryUsdPrim", #{
-        doc: this.doc,
+        doc_id: this.doc,
         path: FLIP + "/Suspension_FL",
         attrs: ["xformOp:translate"],
     });
     let fr = query("QueryUsdPrim", #{
-        doc: this.doc,
+        doc_id: this.doc,
         path: FLIP + "/Suspension_FR",
         attrs: ["xformOp:translate"],
     });
     let rl = query("QueryUsdPrim", #{
-        doc: this.doc,
+        doc_id: this.doc,
         path: FLIP + "/Suspension_RL",
         attrs: ["xformOp:translate"],
     });
     let rr = query("QueryUsdPrim", #{
-        doc: this.doc,
+        doc_id: this.doc,
         path: FLIP + "/Suspension_RR",
         attrs: ["xformOp:translate"],
     });

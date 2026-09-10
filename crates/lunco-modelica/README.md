@@ -50,7 +50,7 @@ Key rules:
 | `FastRunActiveModel` | Batch run of the active model → Experiment (annotation + UI draft). Orthogonal to live run-state |
 | `RunExperiment` | Batch run with **explicit** parameter `overrides` / `inputs` / bounds / `label` — the API path for parameter sweeps (no source mutation, no UI draft) |
 | `CancelExperiment` | Cancel in-flight run(s) (`experiment_id` or `all`) → ends `cancelled` |
-| `DeleteExperiment` | Remove run record(s) from the registry (`experiment_id` / `doc` / `all`) |
+| `DeleteExperiment` | Remove run record(s) from the registry (`experiment_id` / `doc_id` / `all`) |
 
 `FastRunActiveModel` / `RunExperiment` results are read back
 programmatically via the `GetExperimentResult` query (`times` + `series`,
