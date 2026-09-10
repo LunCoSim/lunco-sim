@@ -34,18 +34,18 @@
 
 use bevy::prelude::*;
 #[cfg(feature = "ui")]
-use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
+use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 use lunco_core::subsystems::SubsystemToggles;
 use lunco_core::{
-    Command, Severity, TelemetryEvent, TelemetryValue, on_command, register_commands,
+    on_command, register_commands, Command, Severity, TelemetryEvent, TelemetryValue,
 };
 use lunco_doc_bevy::EditorIntent;
 use lunco_settings::AppSettingsExt;
 #[cfg(feature = "ui")]
 use lunco_workbench::tutorial_overlay::{
-    TUTORIAL_OVERLAY_ORDER, TUTORIAL_SCRIM_ORDER, TutorialHud, TutorialNext, TutorialRecovery,
-    TutorialRecoveryContinueRequested, TutorialRecoveryRetryRequested, TutorialStopRequested,
-    TutorialTargetUnavailable,
+    TutorialHud, TutorialNext, TutorialRecovery, TutorialRecoveryContinueRequested,
+    TutorialRecoveryRetryRequested, TutorialStopRequested, TutorialTargetUnavailable,
+    TUTORIAL_OVERLAY_ORDER, TUTORIAL_SCRIM_ORDER,
 };
 #[cfg(feature = "ui")]
 use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchAppExt, WorkbenchLayout};
@@ -1811,14 +1811,18 @@ fn register_tutorials_menu(world: &mut World) {
                         for meta in metas {
                             let done = progress.is_completed(&meta.id);
                             let clicked = ui
-                                .horizontal(|ui| {
+                                .horizontal_centered(|ui| {
                                     paint_completion_status(ui, done, &theme);
-                                    ui.add_sized(
-                                        [ui.available_width(), 0.0],
+                                    let button_width = ui.available_width();
+                                    ui.add(
                                         egui::Button::new(format!(
                                             "{} · {}",
                                             meta.title,
                                             meta.format.label()
+                                        ))
+                                        .min_size(egui::vec2(
+                                            button_width,
+                                            ui.spacing().interact_size.y,
                                         ))
                                         .wrap(),
                                     )
@@ -1946,7 +1950,7 @@ impl Panel for TutorialsPanel {
             for meta in registry.ordered() {
                 let done = progress.is_completed(&meta.id);
                 egui::Frame::group(ui.style()).show(ui, |ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_centered(|ui| {
                         paint_completion_status(ui, done, &theme);
                         ui.label(egui::RichText::new(meta.title.as_str()).strong());
                         ui.label(egui::RichText::new(meta.format.label()).weak().small());
@@ -2173,14 +2177,12 @@ mod tests {
             app: "sandbox".into(),
         });
 
-        assert!(
-            app.world()
-                .contains_resource::<lunco_workbench::WorkbenchLayout>()
-        );
-        assert!(
-            app.world()
-                .contains_resource::<lunco_workbench::HelpAnchors>()
-        );
+        assert!(app
+            .world()
+            .contains_resource::<lunco_workbench::WorkbenchLayout>());
+        assert!(app
+            .world()
+            .contains_resource::<lunco_workbench::HelpAnchors>());
         assert!(app.is_plugin_added::<lunco_workbench::WorkbenchPlugin>());
     }
 
