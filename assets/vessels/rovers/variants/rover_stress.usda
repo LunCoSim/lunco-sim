@@ -1,0 +1,35 @@
+#usda 1.0
+(
+    defaultPrim = "RoverStress"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Stress-matrix wrapper over the maintained easy rover. Communications hardware
+# is not part of the mobility/count experiment, so the authored wrapper removes
+# its articulated dynamics and Earth-tracker participant while retaining the
+# complete physical rover assembly and its real drive ports.
+def Xform "RoverStress" (
+    doc = "Stress-matrix rover: maintained easy mobility assembly with non-experimental antenna articulation disabled."
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+    prepend references = @lunco://vessels/rovers/variants/rover_easy.usda@</RoverEasy>
+)
+{
+    uniform bool lunco:spawnable = true
+
+    over "Antenna"
+    {
+        over "YawHead"
+        {
+            bool physics:rigidBodyEnabled = false
+
+            over "DishGimbal"
+            {
+                bool physics:rigidBodyEnabled = false
+            }
+        }
+        over "EarthTrackerController" (active = false) { }
+        over "YawJoint" (active = false) { }
+        over "ElevationJoint" (active = false) { }
+    }
+}
