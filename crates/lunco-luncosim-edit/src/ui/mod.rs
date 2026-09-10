@@ -13,7 +13,7 @@ use lunco_usd_bevy::UsdPrimPath;
 use lunco_workbench::twin_browser::TWIN_BROWSER_PANEL_ID;
 use lunco_workbench::{
     HelpMouse, HelpShortcut, LiveHelpSection, LiveHelpSections, PanelId, Perspective,
-    PerspectiveId, VIEWPORT_PANEL_ID, ViewportPanel, WorkbenchAppExt, WorkbenchLayout,
+    PerspectiveId, ViewportPanel, WorkbenchAppExt, WorkbenchLayout, VIEWPORT_PANEL_ID,
 };
 
 pub mod asset_visibility;
@@ -1191,16 +1191,24 @@ impl Perspective for EditorPerspective {
     fn scene_interaction_mode(&self) -> lunco_core::SceneInteractionMode {
         lunco_core::SceneInteractionMode::Editor
     }
+    fn layout_revision(&self) -> u32 {
+        // The editor now opens directly on the prim tree. Invalidate the
+        // previous Twin-first preset once so persisted editor layouts adopt
+        // the new authored default.
+        1
+    }
     fn apply(&self, layout: &mut WorkbenchLayout) {
         layout.set_activity_bar(false);
         // Structure first: the USD prim tree is the assembly's authoring
-        // hierarchy. The live Entity list and spawn palette belong to Build and
-        // are intentionally absent so an Editor session cannot mix a mounted
+        // hierarchy. Keep document selection available in the lower side pane
+        // while the authored structure remains the primary upper pane. The
+        // live Entity list and spawn palette belong to Build and are
+        // intentionally absent so an Editor session cannot mix a mounted
         // scene entity with the selected document.
-        layout.set_side_browser_tabs(vec![
-            TWIN_BROWSER_PANEL_ID,
-            usd_prim_tree::USD_PRIM_TREE_PANEL_ID,
-        ]);
+        layout.set_side_browser_stacked(
+            vec![usd_prim_tree::USD_PRIM_TREE_PANEL_ID],
+            vec![TWIN_BROWSER_PANEL_ID],
+        );
         // Central tabs: the isolated USD document preview and the Rhai
         // behaviour editor. The
         // USD connection graph is opened from the Connections entry in the
@@ -1299,5 +1307,19 @@ mod tests {
         assert_eq!(perspective.id(), PerspectiveId("editor"));
         assert_eq!(perspective.title(), "✎ Editor");
         assert!(perspective.show_in_switcher());
+    }
+
+    #[test]
+    fn editor_perspective_stacks_prims_above_twin_browser() {
+        let mut layout = WorkbenchLayout::default();
+        layout.register(usd_prim_tree::UsdPrimTreePanel);
+        layout.register(lunco_workbench::TwinBrowserPanel::default());
+        layout.register(lunco_usd::ui::UsdViewportPanel);
+
+        EditorPerspective.apply(&mut layout);
+
+        assert!(layout.is_panel_docked(usd_prim_tree::USD_PRIM_TREE_PANEL_ID));
+        assert!(layout.is_panel_docked(TWIN_BROWSER_PANEL_ID));
+        assert_eq!(EditorPerspective.layout_revision(), 1);
     }
 }
