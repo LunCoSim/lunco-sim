@@ -15,6 +15,13 @@ app must be running with `--api` (default port **4101**; launch per
 [`test-via-api`](../test-via-api/SKILL.md)). Drive from curl `POST /api/commands`,
 or the `mcp__lunco__*` tools if wired.
 
+For scene, motion, Editor, or viewport inspection, require the visible
+headful production window and keep it open while reading state. Pair typed
+queries with `CaptureScreenshot` and inspect the resulting image so the user
+can see the same state being diagnosed. A headless session is acceptable only
+for telemetry-only inspection with no visual or user-observation claim; never
+switch to it silently when a visual check is requested.
+
 > **Read the ports, not the log.** A telemetry port snapshot is the authoritative
 > current value. `tail -f`/`sleep`-polling a log for a number is the anti-pattern.
 

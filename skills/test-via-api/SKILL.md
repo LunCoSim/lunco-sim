@@ -23,6 +23,21 @@ visual checks; use another explicit free port if 4101 is occupied. UI verificati
 drill-ins, simulations, file ops — should be driven from this API
 rather than asking the user to click.
 
+## Mode policy
+
+Use a **headful windowed `luncosim` session by default** whenever the work
+concerns a scene, Editor, viewport, UI, motion, layout, or any result the user
+needs to watch. Start the production binary with `--api PORT` and a graphical
+display; do not add `--no-ui`, `--offscreen`, or another windowless flag. Keep
+that window alive while iterating so the user can see each coherent change.
+
+Use `--no-ui`/`luncosim-server` only for explicitly numeric or API-only checks
+where there is no visual acceptance claim. Use `--offscreen` only when the user
+specifically requests an offscreen recording or a graphics test that is meant
+to run without a visible window. If a requested visual check cannot run
+headfully, stop and report the display/session blocker instead of silently
+falling back to headless mode.
+
 ## Live shader iteration
 
 Shader source edits are a live-test path. Keep the production luncosim running, edit the

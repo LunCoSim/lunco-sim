@@ -5354,6 +5354,8 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
         .map(|s| s.0.clone())
         .unwrap_or_default();
     let scene_popup_id = ui.make_persistent_id("lunco_workbench_loaded_scene_popup");
+    let recent_events_width = status_popup_width(ui.ctx().content_rect().width());
+    let popup_width = recent_events_width;
 
     ui.horizontal(|ui| {
         let bar_width = ui.available_width();
@@ -5369,7 +5371,8 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
         );
         let right_reserve = right_widths.total();
 
-        let status_width = status_bar_notification_width(bar_width, right_reserve);
+        let status_width =
+            status_bar_notification_width(bar_width, right_reserve, recent_events_width);
 
         // The status message scope on the left
         let latest_attention = latest
@@ -5416,23 +5419,23 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
                             let (rect, _) = ui
                                 .allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
                             ui.painter().circle_filled(rect.center(), 4.0, dot_color);
-                            if matches!(l.level, StatusLevel::Warn | StatusLevel::Error) {
-                                ui.label(
-                                    egui::RichText::new(status_level_label(l.level))
-                                        .small()
-                                        .strong()
-                                        .color(dot_color),
-                                );
-                            }
-                            ui.label(egui::RichText::new(l.source).small().strong());
-                            let text = egui::RichText::new(display_message).small();
-                            let message_width = status_bar_message_width(
+                            let notification = status_notification_layout_job(
+                                ui.style(),
+                                l.level,
+                                &l.source,
+                                display_message,
+                                dot_color,
+                            );
+                            let notification_width = status_bar_message_width(
                                 ui.available_width(),
                                 l.progress_pct.is_some(),
                                 ui.spacing().item_spacing.x,
                             );
-                            ui.add_sized([message_width, 18.0], egui::Label::new(text).truncate())
-                                .on_hover_text(&l.message);
+                            ui.add_sized(
+                                [notification_width, 18.0],
+                                egui::Label::new(notification).truncate(),
+                            )
+                            .on_hover_text(&l.message);
                             if l.level == StatusLevel::Progress {
                                 if let Some(pct) = l.progress_pct {
                                     ui.add(
@@ -5453,11 +5456,12 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
             .response;
 
         // Keep the notification compact without pulling the right-hand
-        // controls away from the edge of the status bar. The spacer absorbs
-        // the remaining width after the bounded notification and reserved
-        // controls have been laid out.
+        // controls away from the edge of the status bar. Mark the end of the
+        // clickable notification before the spacer so the alignment gap
+        // cannot be mistaken for part of the recent-event surface.
         let spacer_width = (bar_width - status_width - right_reserve).max(0.0);
         if spacer_width > 0.0 {
+            ui.separator();
             ui.add_space(spacer_width);
         }
 
@@ -5587,7 +5591,6 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
         // egui::Popup is the post-0.31 API. `open_memory(None)` ties
         // the open state to egui's memory keyed by `popup_id`, so the
         // `toggle_popup` call above flips it.
-        let popup_width = status_popup_width(ui.ctx().content_rect().width());
         egui::Popup::from_response(&response)
             .id(popup_id)
             .width(popup_width)
@@ -5853,6 +5856,46 @@ fn status_event_rich_text(text: impl Into<String>) -> egui::RichText {
     egui::RichText::new(text).family(egui::FontFamily::Proportional)
 }
 
+fn status_notification_layout_job(
+    style: &egui::Style,
+    level: status_bus::StatusLevel,
+    source: &str,
+    message: &str,
+    level_color: egui::Color32,
+) -> egui::text::LayoutJob {
+    let font_id = egui::TextStyle::Small.resolve(style);
+    let normal = egui::TextFormat {
+        font_id: font_id.clone(),
+        color: style.visuals.text_color(),
+        ..Default::default()
+    };
+    let source_format = egui::TextFormat {
+        font_id: font_id.clone(),
+        color: style.visuals.strong_text_color(),
+        ..Default::default()
+    };
+    let level_format = egui::TextFormat {
+        font_id,
+        color: level_color,
+        ..Default::default()
+    };
+    let mut job = egui::text::LayoutJob::default();
+    job.append(status_level_label(level), 0.0, level_format);
+    if !source.is_empty() {
+        job.append(" ", 0.0, normal.clone());
+        job.append(source, 0.0, source_format);
+    }
+    if !message.is_empty() {
+        job.append(
+            if source.is_empty() { " " } else { ": " },
+            0.0,
+            normal.clone(),
+        );
+        job.append(message, 0.0, normal);
+    }
+    job
+}
+
 fn status_level_label(level: status_bus::StatusLevel) -> &'static str {
     match level {
         status_bus::StatusLevel::Info => "INFO",
@@ -5926,7 +5969,9 @@ fn settings_submenu_max_width(content_width: f32) -> f32 {
 }
 
 const STATUS_BAR_MIN_SCOPE_WIDTH: f32 = 160.0;
-const STATUS_BAR_NOTIFICATION_MAX_WIDTH: f32 = 320.0;
+const STATUS_BAR_NOTIFICATION_MAX_WIDTH: f32 = 280.0;
+const STATUS_BAR_NOTIFICATION_POPUP_RATIO: f32 = 0.30;
+const STATUS_BAR_NOTIFICATION_MIN_WIDTH: f32 = 140.0;
 const STATUS_BAR_SEPARATOR_RESERVE: f32 = 12.0;
 const STATUS_BAR_BASE_OVERHEAD: f32 = 16.0;
 const STATUS_BAR_TUTORIAL_MAX_WIDTH: f32 = 190.0;
@@ -5950,12 +5995,17 @@ impl StatusBarRightWidths {
 }
 
 /// Give the latest-event notification a compact, stable footprint while
-/// preserving enough room for its source and a readable message. The full
-/// event remains available through the strip tooltip and history popup.
-fn status_bar_notification_width(available_width: f32, right_reserve: f32) -> f32 {
-    (available_width - right_reserve)
-        .max(1.0)
-        .min(STATUS_BAR_NOTIFICATION_MAX_WIDTH)
+/// preserving enough room for a readable single-line summary. The full event
+/// remains available through the strip tooltip and history popup.
+fn status_bar_notification_width(
+    available_width: f32,
+    right_reserve: f32,
+    recent_events_width: f32,
+) -> f32 {
+    let available = (available_width - right_reserve).max(1.0);
+    let proportional = (recent_events_width * STATUS_BAR_NOTIFICATION_POPUP_RATIO)
+        .max(STATUS_BAR_NOTIFICATION_MIN_WIDTH);
+    available.min(proportional.min(STATUS_BAR_NOTIFICATION_MAX_WIDTH))
 }
 
 /// Keep every right-hand status control inside the width reserved from the
@@ -5968,7 +6018,7 @@ fn status_bar_right_widths(
     tutorial_visible: bool,
     scene_visible: bool,
 ) -> StatusBarRightWidths {
-    let separator_count = 1.0
+    let separator_count = 2.0
         + if tutorial_visible { 1.0 } else { 0.0 }
         + if scene_visible { 1.0 } else { 0.0 }
         + if net_active { 1.0 } else { 0.0 };
@@ -7112,14 +7162,27 @@ mod tests {
     }
 
     #[test]
-    fn latest_status_notification_stays_compact_and_yields_to_right_controls() {
+    fn latest_status_notification_tracks_popup_and_yields_to_right_controls() {
         assert_eq!(
-            status_bar_notification_width(1600.0, 120.0),
+            status_bar_notification_width(1600.0, 120.0, 960.0),
             STATUS_BAR_NOTIFICATION_MAX_WIDTH
         );
-        assert_eq!(status_bar_notification_width(520.0, 120.0), 320.0);
-        assert_eq!(status_bar_notification_width(400.0, 120.0), 280.0);
-        assert_eq!(status_bar_notification_width(120.0, 160.0), 1.0);
+        assert_eq!(status_bar_notification_width(520.0, 120.0, 960.0), 280.0);
+        assert_eq!(status_bar_notification_width(400.0, 120.0, 420.0), 140.0);
+        assert_eq!(status_bar_notification_width(120.0, 160.0, 420.0), 1.0);
+    }
+
+    #[test]
+    fn latest_status_notification_is_one_flowing_string() {
+        let job = status_notification_layout_job(
+            &egui::Style::default(),
+            status_bus::StatusLevel::Warn,
+            "updates",
+            "updates unavailable",
+            egui::Color32::YELLOW,
+        );
+
+        assert_eq!(job.text, "WARN updates: updates unavailable");
     }
 
     #[test]

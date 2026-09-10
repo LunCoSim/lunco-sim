@@ -31,6 +31,12 @@ assembly itself, switch to the [interactive Assembly Editor runbook](../edit-usd
 which keeps a headful preview visible and routes every edit through the
 document/journal command boundary.
 
+When placement, framing, contacts, terrain fit, or other scene appearance is
+under review, use the headful production window and leave it visible to the
+user. Headless/API-only runs can confirm typed state, but cannot establish
+that the scene looks correct; do not use them as a substitute for viewport
+review.
+
 Before assembling a scene, choose its world/time contract. The complete option
 matrix is in [`assets/tutorials/README.md`](../../assets/tutorials/README.md);
 the short version is below.
