@@ -602,16 +602,38 @@ fn branch_has_gap(
     resident_coverage: &HashSet<TileCoord>,
     face: u8,
 ) -> bool {
-    desired.iter().filter(|tile| tile.face == face).any(|leaf| {
-        let mut ancestor = Some(*leaf);
-        let covered_by_ancestor = std::iter::from_fn(|| {
-            let current = ancestor?;
-            ancestor = tile_parent(current);
-            Some(current)
-        })
-        .any(|ancestor| resident.contains_key(&ancestor));
-        !covered_by_ancestor && !resident_coverage.contains(leaf)
-    })
+    let max_resident_level = resident.keys().map(|tile| tile.level).max().unwrap_or(0);
+    desired
+        .iter()
+        .filter(|tile| tile.face == face)
+        .any(|leaf| !resident_covers(*leaf, resident, resident_coverage, max_resident_level))
+}
+
+/// Return whether resident tiles cover the complete area of `coord`.
+///
+/// An ancestor covers the whole node, while descendants cover only their own
+/// quadrants. A node without a resident ancestor is complete only when its
+/// coverage entry exists and every recursive child is covered, keeping the
+/// coarse fallback visible while refinement is incomplete.
+fn resident_covers(
+    coord: TileCoord,
+    resident: &HashMap<TileCoord, Entity>,
+    resident_coverage: &HashSet<TileCoord>,
+    max_resident_level: u32,
+) -> bool {
+    let mut ancestor = Some(coord);
+    while let Some(current) = ancestor {
+        if resident.contains_key(&current) {
+            return true;
+        }
+        ancestor = tile_parent(current);
+    }
+    if coord.level >= max_resident_level || !resident_coverage.contains(&coord) {
+        return false;
+    }
+    tile_children(coord)
+        .into_iter()
+        .all(|child| resident_covers(child, resident, resident_coverage, max_resident_level))
 }
 
 /// Index every resident tile and its ancestors once, so coverage checks do not
@@ -1504,16 +1526,13 @@ mod tests {
         assert!(!branch_has_gap(&desired, &resident, &coverage, 3));
 
         resident.clear();
-        resident.insert(
-            TileCoord {
-                body,
-                face: 3,
-                level: 3,
-                i: 2,
-                j: 4,
-            },
-            Entity::PLACEHOLDER,
-        );
+        resident.insert(tile_children(leaf)[0], Entity::PLACEHOLDER);
+        let coverage = resident_coverage(&resident);
+        assert!(branch_has_gap(&desired, &resident, &coverage, 3));
+
+        for child in tile_children(leaf).into_iter().skip(1) {
+            resident.insert(child, Entity::PLACEHOLDER);
+        }
         let coverage = resident_coverage(&resident);
         assert!(!branch_has_gap(&desired, &resident, &coverage, 3));
     }
