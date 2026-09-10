@@ -97,6 +97,11 @@ execution path that will consume it. A listed library can still be absent from
 an already-created Rhai engine until its tool-generation maintenance rebuilds
 the static module set.
 
+For live work, this registration plus a real namespaced call is the tool's
+compile/callability check. Do not launch a separate binary in `--validate` mode
+and call that runtime evidence; parse-only validation can miss module binding,
+active-Twin scope, world access, or typed-command behavior.
+
 Do not use `import` for a registered tool library. Registered tools are static
 module namespaces and are called as `name::function(...)`. `import` is for
 source assets resolved by the scoped asset resolver and is a different
@@ -139,7 +144,9 @@ Rejected workaround: the fake or unsafe alternative not used
 In the current editor surface, known examples include creating variant sets
 and variant blocks, replacing/clearing a USD reference list, authoring
 `kind`/`defaultPrim` metadata through a typed op, and deleting an inherited
-prim rather than an authored prim in the target layer. Use the capability
-report when one of these blocks a real workflow; do not simulate it with
-duplicate hidden parts, raw USDA text, or a second authoring API.
-
+prim rather than an authored prim in the target layer. The tool bridge also
+needs an atomic runtime compile/check result: registration should not leave a
+persisted library with an empty discovery surface and no compile diagnostic.
+Use the capability report when one of these blocks a real workflow; do not
+simulate it with duplicate hidden parts, raw USDA text, or a second authoring
+API.

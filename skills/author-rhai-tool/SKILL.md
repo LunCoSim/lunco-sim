@@ -150,7 +150,9 @@ proof. Keep these evidence classes separate in the handover.
 
 Before handing off a library, verify:
 
-- it parses with the repository's skill/tool validation path;
+- it compiles and is callable after `RegisterToolLibrary` in the already-running
+  production process; a separate `luncosim --validate` invocation is not
+  runtime evidence for a live tool;
 - its public functions have explicit inputs, units, return shapes, and `()` or
   structured error behavior for unavailable data;
 - repeated calls are deterministic and either idempotent or explicitly reject
@@ -166,3 +168,6 @@ Before handing off a library, verify:
 - any missing Rust capability is documented with evidence, impact, and the
   proper generic owner.
 
+If registration can persist a source while compilation/callability is still
+unknown, treat that as a Rust UX gap: the command should fail atomically or
+return structured compile diagnostics and a callable-engine readiness state.
