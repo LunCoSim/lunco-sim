@@ -433,7 +433,7 @@ struct RoverRow {
 /// `is_empty`/scalar checks; the scans only run on a relevant change.
 pub fn populate_mission_control_view(
     mut view: ResMut<MissionControlView>,
-    local_avatar: Res<lunco_core::TheLocalAvatar>,
+    local_avatar: Option<Res<lunco_core::TheLocalAvatar>>,
     bodies: Query<(Entity, &Name, &CelestialBody)>,
     spacecraft: Query<(Entity, &Name), With<Spacecraft>>,
     // The local avatar carries a `ControlBinding` too (it's a controllable), so
@@ -463,7 +463,7 @@ pub fn populate_mission_control_view(
     mut removed_sc: RemovedComponents<Spacecraft>,
     mut removed_rover: RemovedComponents<ControlBinding>,
 ) {
-    let avatar_ent = local_avatar.0;
+    let avatar_ent = local_avatar.as_deref().and_then(|avatar| avatar.0);
     let on_surface = !surface.is_empty();
     let gravity_body = gravity.and_then(|g| g.body_entity);
 
