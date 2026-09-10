@@ -3685,14 +3685,15 @@ fn on_add_usd_sim_prim(
 ///
 /// Prim-path → entity resolution is USD's job, which is why it lives HERE and not in
 /// `lunco-autopilot` — that crate stays USD-free and merely compiles the bindings it
-/// is handed.
+/// is handed. A replacement binding set is published only when every target is
+/// present; until then the last complete set remains the active route snapshot.
 ///
 /// Runs when a tree's XML or the USD identity projection changes. Target paths
 /// are derived once per entity/XML change and cached in this resolver; the
-/// compiler owns the separate active-frame pose bake. Unresolved paths produce
-/// an explicitly empty binding set: the compiler then refuses the tree with a
-/// dangling target rather than driving to a guessed origin. A pending route is
-/// re-evaluated when the authoritative prim or identity publication changes.
+/// compiler owns the separate active-frame pose bake. Unresolved paths do not
+/// replace an already-complete binding set: a pending route is re-evaluated when
+/// the authoritative prim or identity publication changes, while a first route
+/// with no complete binding remains unresolved rather than driving to origin.
 fn resolve_behavior_targets(
     q_trees: Query<(
         Entity,
@@ -3805,15 +3806,13 @@ fn resolve_behavior_targets(
         }
         if !missing {
             commands.entity(vessel).try_insert(bindings);
-        } else if !current_bindings.is_some_and(|bindings| bindings.0.is_empty()) {
-            // Empty is an explicit pending state, not a guessed route. This
-            // change wakes the autopilot compiler, which refuses the route
-            // until the resolver can publish the complete binding set.
-            commands
-                .entity(vessel)
-                .try_insert(lunco_autopilot::usd_tree::TargetBindings::default());
+        } else if current_bindings.is_some_and(|bindings| !bindings.0.is_empty()) {
+            // Keep the last complete binding set authoritative while a newly
+            // authored/referenced target is still being projected. Publishing an
+            // empty set here would make a transient asset wait look like a
+            // deleted route and reset the running autopilot.
             warn_once!(
-                "[resolve_behavior_targets] vessel {:?} has unresolved route targets; waiting for composed prim projection",
+                "[resolve_behavior_targets] vessel {:?} has unresolved route targets; retaining the previous binding set while composed prim projection completes",
                 vessel
             );
         } else {

@@ -201,6 +201,27 @@ the XML/JSON intermediate and is gone by the time a tree is built.
 A tree naming a deleted waypoint **refuses to compile** and keeps its last good route
 — it must never silently bake `[0,0,0]` and drive the rover into the world origin.
 
+### Live edits are prepare/commit transactions
+
+Changing a route is not a scene reset. The USD resolver, autopilot compiler, and
+route visualizer use the same two-phase rule:
+
+1. **Prepare** a candidate from the newest authored XML, exact composed target
+   bindings, active-frame poses, and terrain samples. Missing bindings, pending
+   referenced prims, invalid XML, and failed surface projection are incomplete
+   candidates; they do not publish an empty route.
+2. **Commit** the candidate atomically at the normal ECS command boundary. Until
+   then, the last complete binding set, compiled tree, controller state, and route
+   ribbon remain authoritative.
+
+The commit never changes the rover's pose, velocity, physics state, or possession.
+An append preserves the current leg; a valid replan selects the next valid leg from
+the current route state; an explicit empty route is a visible hold/clear operation.
+Only an explicit engage, disengage, clear, or mission policy may reset execution.
+The active controller remains a fixed-step Rust hot path, so preparation is
+change-gated and asynchronous work never becomes per-tick scripting or a full scene
+reload.
+
 ## Interaction — document-backed and runtime-only routes
 
 For a rover mounted in an authored USD document, **no new command verbs** are
@@ -252,6 +273,15 @@ routes. The autopilot owns the compiled behavior and runtime control state. The
 Command Deck and generic billboard renderer are read-only projections of those
 authoritative sources; they do not maintain a second waypoint list or draw a second
 route annotation.
+
+Rhai owns mission policy: runtime route construction, sequencing, arrival actions,
+and the explicit decision to append, replan, hold, or clear. Rust keeps only the
+generic mechanisms that must be authoritative and fast: typed command dispatch,
+USD identity/binding resolution, active-frame pose conversion, collision-backed
+arrival events, candidate compilation/commit, route-mesh projection, and the
+fixed-step controller. A future unified route-edit API should pass stable waypoint
+identities plus an explicit update policy from Rhai; it must not move geometry,
+projection, or per-frame steering into the VM.
 
 ## What correctly stays in ECS
 

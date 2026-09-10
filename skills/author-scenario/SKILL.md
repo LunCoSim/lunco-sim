@@ -16,6 +16,16 @@ reserved for authored tests under `assets/scenarios/tests/` to sample live
 telemetry and publish a bounded verdict. Continuous rover dynamics remain in
 fixed-step physics/Modelica.
 
+For live waypoint edits, Rhai owns the mission decision (`append`, `replan`,
+`hold`, or `clear`) and sends the typed command that expresses it. The engine
+prepares and commits the route snapshot transactionally: an incomplete target,
+pending referenced asset, or failed projection keeps the last complete route and
+does not reset the rover. A committed append preserves the active leg; an
+explicit clear is the only route operation that intentionally stops and removes
+the route. Do not implement this policy with a polling `on_tick` loop or move USD
+identity resolution, terrain sampling, collision events, or fixed-step steering
+into Rhai.
+
 > **Host = mechanism, script = policy.** A scenario touches the world only
 > through the same command/query API the HTTP API, MCP, and UI use — so it
 > inherits every command for free and stays decoupled from physics.
