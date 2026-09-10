@@ -4462,7 +4462,7 @@ mod tests {
             .expect("explode command is registered by the viewport plugin");
         assert!(!command.defaulted);
         for field in [
-            "preview", "doc", "assembly", "parts", "action", "axis", "spacing",
+            "preview", "doc_id", "assembly", "parts", "action", "axis", "spacing",
         ] {
             assert!(
                 command
@@ -5066,7 +5066,7 @@ mod tests {
         assert_eq!(data["focused_view"], serde_json::json!(2));
         assert_eq!(data["preview_count"], serde_json::json!(1));
         assert_eq!(data["view_count"], serde_json::json!(2));
-        assert_eq!(data["previews"][0]["doc"], serde_json::json!(7));
+        assert_eq!(data["previews"][0]["doc_id"], serde_json::json!(7));
         assert_eq!(
             data["previews"][0]["views"][0]["view"],
             serde_json::json!(1)

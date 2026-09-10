@@ -175,22 +175,31 @@ pub(crate) fn reproject_physics_if_needed(
     let Ok(sdf_path) = SdfPath::new(path) else {
         return false;
     };
-    let needs_reprojection = world
+    let (has_rigid_body_api, has_vehicle_context_api) = world
         .get_non_send::<lunco_usd_bevy::CanonicalStages>()
         .and_then(|stages| stages.get(stage_id))
-        .is_some_and(|stage| {
-            stage
-                .view()
-                .has_api_schema(&sdf_path, openusd::schemas::physics::tokens::API_RIGID_BODY)
-        });
-    if !needs_reprojection {
-        return false;
-    }
+        .map(|stage| {
+            let view = stage.view();
+            (
+                view.has_api_schema(&sdf_path, openusd::schemas::physics::tokens::API_RIGID_BODY),
+                view.has_api_schema(&sdf_path, "PhysxVehicleContextAPI"),
+            )
+        })
+        .unwrap_or_default();
     let Some(entity) = find_live_entity(world, stage_id, path) else {
         return false;
     };
-    let physics_invalidated = lunco_usd_avian::invalidate_usd_physics_projection(world, entity);
-    let sim_invalidated = lunco_usd_sim::invalidate_usd_sim_projection(world, entity);
+
+    // OpenUSD reports a descendant AddPrim as a resync of already-existing
+    // ancestors. That is structural context, not a schema transition. The
+    // one-shot markers are therefore invalidated only when the corresponding
+    // projection is actually missing: Avian owns the rigid-body admission,
+    // while the sim owner identifies a vehicle context by MobilityRoot.
+    let physics_invalidated =
+        has_rigid_body_api && lunco_usd_avian::invalidate_usd_physics_projection(world, entity);
+    let sim_invalidated = has_vehicle_context_api
+        && world.get::<lunco_core::MobilityRoot>(entity).is_none()
+        && lunco_usd_sim::invalidate_usd_sim_projection(world, entity);
     if !physics_invalidated && !sim_invalidated {
         return false;
     }
@@ -951,16 +960,10 @@ pub(crate) fn reconcile_structural_live(
             // A descendant edit (for example adding `/Rover/Mission`) can report
             // `/Rover` as resynced even though no transform was authored. The
             // typed transform hint was applied above, so this structural pass
-            // never overwrites a moving body with its authored spawn pose.
+            // never overwrites a moving body with its authored spawn pose. The
+            // physics bridge below likewise refreshes only a missing schema
+            // projection, never an already admitted vehicle.
             (true, Some(_entity)) => {
-                // A reference/variant resync can add the body schema to a
-                // prim after its visual entity was first projected. The
-                // structural bridge sees the prim as already live and would
-                // otherwise skip it forever, leaving Avian's one-shot marker
-                // in place with no RigidBody. Ask the owning physics adapter
-                // to consume the newly composed contract, then refresh this
-                // prim so its existing visual observer emits the projection
-                // trigger again.
                 reproject_physics_if_needed(world, id, path);
             }
             _ => {}
@@ -1216,6 +1219,62 @@ mod tests {
             app.world().get::<Transform>(rover).unwrap().translation,
             Vec3::new(0.0, -1900.0, 0.0),
             "an explicit SetTranslate resync must still seat the authored pose"
+        );
+    }
+
+    /// A structural notice for a child can include its already-admitted vehicle
+    /// ancestor. That ancestor must keep the live simulation projection: clearing
+    /// `UsdSimProcessed` here would refresh the rover and restart its wheels and
+    /// Modelica participants even though no vehicle schema changed.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn descendant_resync_does_not_reproject_an_admitted_vehicle() {
+        use bevy::asset::AssetApp;
+        use bevy::prelude::*;
+        use lunco_usd_bevy::{CanonicalStages, StageRecipe};
+
+        const SCENE: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n    def Xform \"Rover\" (\n        prepend apiSchemas = [\"PhysicsRigidBodyAPI\", \"PhysxVehicleContextAPI\"]\n    )\n    {\n    }\n}\n";
+
+        let mut app = App::new();
+        app.add_plugins(bevy::asset::AssetPlugin::default())
+            .init_asset::<UsdStageAsset>()
+            .init_non_send::<CanonicalStages>();
+        let recipe = StageRecipe::from_source("vehicle.usda", SCENE);
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<UsdStageAsset>>()
+            .add(UsdStageAsset::from_recipe(recipe.clone()).expect("prepare stage asset"));
+        let id = handle.id();
+        app.world_mut()
+            .non_send_mut::<CanonicalStages>()
+            .get_or_build(id, &recipe)
+            .expect("stage builds");
+        app.world_mut()
+            .non_send_mut::<CanonicalStages>()
+            .drain_all_changes();
+
+        let rover = app
+            .world_mut()
+            .spawn((
+                UsdPrimPath {
+                    stage_handle: handle,
+                    path: "/World/Rover".into(),
+                },
+                avian3d::prelude::RigidBody::Dynamic,
+                lunco_core::MobilityRoot,
+                lunco_usd_sim::UsdSimProcessed,
+            ))
+            .id();
+
+        assert!(
+            !reproject_physics_if_needed(app.world_mut(), id, "/World/Rover"),
+            "a descendant-only resync must not refresh an admitted vehicle"
+        );
+        assert!(
+            app.world()
+                .get::<lunco_usd_sim::UsdSimProcessed>(rover)
+                .is_some(),
+            "the admitted sim projection marker must remain live"
         );
     }
 

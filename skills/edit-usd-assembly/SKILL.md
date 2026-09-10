@@ -5,8 +5,10 @@ description: >
   payload, or sensor mount through the live headful Assembly Editor. Use when
   the user must see each change in the running window, give feedback between
   edits, and the agent must inspect the result with screenshots. Use the
-  existing `assembly_edit` Rhai tools and typed USD commands; do not edit USDA
-  text or ECS state directly.
+  existing `assembly_edit` Rhai tools and typed USD commands; decompose
+  reusable or articulated parts into separately testable USD components and
+  compose them through typed references, datums, joints, and variants. Do not
+  edit USDA text or ECS state directly.
 ---
 
 # Interactive USD Assembly Editor
@@ -132,6 +134,86 @@ field that is still active. The controller then receives the normal
 path. Do not bypass this boundary with raw-key reads or a second vehicle input
 path.
 
+## Decompose the assembly like a lightweight CAD product
+
+Before changing geometry, write the design intent as contracts. Separate facts
+supported by public or global references from Twin study assumptions, and give
+each independently reusable, articulated, or domain-owning part an explicit
+owner. A useful split is:
+
+- the assembly file owns the vehicle datum, placement, references, collection
+  membership, host-facing joints, and cross-component connections;
+- a component file owns one reusable part's local geometry, mass/collision
+  envelope, mount datums, parameters, and internal mechanism;
+- a Modelica scope owns domain equations, while a Rhai scenario owns mission
+  sequencing and limiters;
+- Rust owns only generic typed USD, physics, projection, and solver seams.
+
+Do not split merely to create ceremony. Keep a part in the assembly when it is
+only a one-off visual detail with no independent mount, mechanism, runtime
+contract, or useful test. For an articulated or reusable part, use a separate
+file under the Twin's `components/` tree with one explicit root and one clear
+composition boundary. The component should be usable without the final
+assembly, while the assembly should be understandable from its manifest and
+references without opening every implementation detail.
+
+For every component, create the smallest useful contract before detailed
+geometry: required prim names/types, local frame and mount datum, dimensions or
+envelope, mass/inertia ownership, collision policy, public parameters and their
+units, and any known limits. Put the component's read-only requirement report
+and boundary cases beside its Rhai authoring tool. The assembly gets a second
+contract that checks counts, placement, symmetry, clearances, references,
+joint endpoints, and cross-component wiring. A component passing alone does
+not prove the assembled vehicle is correct.
+
+Use this live loop for each component and then for the assembly:
+
+1. Open or create the exact USD document in the headful Editor and inspect its
+   document id, authored layer, target, and generation.
+2. Build a pure Rhai typed-op plan. Use `AddPrim`, standard schemas,
+   `SetAttribute`, `SetTranslate`/`SetRotate`/`SetScale`, relationships, and
+   connections. Let the document owner maintain `xformOpOrder`; never inject
+   that property manually.
+3. Review and commit one coherent component change, wait for projection, query
+   the affected composed prims, and capture/inspect a screenshot.
+4. Run that component's requirement test in the same live process. Repeat the
+   same session for the assembly integration, then run the cross-component
+   suite against the composed root. Do not use a second simulator launch just
+   to run a component or assembly test.
+5. Save each component and the assembly only after the visual and typed
+   checkpoints are acceptable. Record the exact files and known gaps.
+
+When a component is deliberately a global reference, validate the referenced
+asset's contract and keep local opinions limited to its instance transform,
+mount metadata, variants, and host wiring. When a new Twin-owned component is
+needed, author it through the live Editor and save it as a separate file; do
+not paste a flattened copy of a reference or import a private CAD/FreeCAD
+file as an undocumented authority.
+
+## Variants and levels of detail
+
+Use a USD variant set at the component or assembly boundary for real
+configuration choices such as `stowed`/`deployed`, `payload_class`, or an
+alternate equipment package. Keep the base contract common and place only the
+opinions that differ inside the variant. Select variants with the typed
+`SetVariantSelection` path after the referenced subtree is materialized, then
+rerun the component and assembly checks for every supported selection.
+
+Do not emulate a variant with duplicate top-level parts, name suffixes, or a
+permanent invisible placeholder. If the live typed surface can select existing
+variants but cannot create a variant set or author variant blocks, report that
+as a Rust/typed-editor capability gap; do not fake canonical USD composition
+with visibility flags. Likewise, if reference-list replacement or authored
+metadata such as `kind`/`defaultPrim` is required but unavailable, record the
+gap and keep the missing operation explicit.
+
+Model at contract fidelity, not manufacturing detail. Use standard primitive
+geometry for the silhouette, mounting envelopes, collision surfaces, and
+visual features that the requirements actually inspect. Add meshes or
+parametric detail only when it changes a requirement, a mating interface, a
+physics envelope, or the visible identity of the vehicle. This keeps the live
+CAD loop fast without making the component a placeholder.
+
 ## Open the exact document and preview
 
 The document registry and OpenUSD composition system are authoritative. Never
@@ -230,6 +312,15 @@ hidden open preview without changing the user's visible focus. The response
 marks no-selection, multi-selection, stale entries, and duplicate projected
 paths explicitly. Never use the returned display `name` as an edit key; pass
 the returned exact path and document/edit target to the existing typed helper.
+
+When the existing libraries do not express a reusable policy, create a
+Twin-scoped or shared library following
+[`author-rhai-tool`](../author-rhai-tool/SKILL.md). Keep the new function a
+pure `*_plan` when it authors USD, and use a separate read-only `*_report` or
+`*_lint` for requirements. Register it with `RegisterToolLibrary`, verify a
+real namespaced call after the tool-generation maintenance pass, and keep the
+same headful process for the edit, readback, screenshot, and test. A tool
+registry listing is not proof that its module is callable.
 
 For semantic component construction, use `assembly_builder::find_compatible_socket`
 and `assembly_builder::mount_component`. The builder selects the exact

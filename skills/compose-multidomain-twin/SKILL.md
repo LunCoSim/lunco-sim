@@ -143,9 +143,38 @@ This skill is the *assembly* layer over the single-domain skills:
 [`author-scenario`](../author-scenario/SKILL.md) (behaviour),
 [`run-modelica`](../run-modelica/SKILL.md) (the `.mo` models),
 [`inspect-simulation`](../inspect-simulation/SKILL.md) (verify the chain).
+For reusable builders, component lints, and live typed-operation helpers, use
+[`author-rhai-tool`](../author-rhai-tool/SKILL.md).
 For architecture decisions and standard-schema checks, read
 [`luncosim-architecture`](../luncosim-architecture/SKILL.md). It is the gate
 against special-case Rust, duplicate USD vocabulary, and compatibility paths.
+
+## Componentized vehicle workflow
+
+Build a vehicle as a small set of contracts, not one monolithic USD file. Put
+each independently reusable, articulated, or domain-owning subsystem in its
+own component boundary when it has a local frame, mount interface, mass or
+collision owner, parameters, or a useful independent test. Typical boundaries
+are an egress mechanism, landing leg, solar array, avionics package, payload
+adapter, and propulsion/attitude network. Keep one-off visual trim in the
+assembly when splitting it would add no reusable contract.
+
+For each component, define its topology, frame/datum, known requirements and
+limits, and Rhai requirement test before composing it. Use the live headful
+Editor to author the component with typed USD operations, inspect and
+screenshot it, and run its boundary tests in the same runtime session. Then
+assemble through explicit references, host joints, collections, and native
+connections, and run a second integration suite for counts, placement,
+clearance, reference targets, joint endpoints, and cross-domain wires. A
+component pass is not an assembly pass.
+
+Keep the detail level at contract fidelity: standard USD primitives are enough
+for silhouettes, mounting envelopes, colliders, and tested interfaces. Add
+meshes or parametric detail only when it changes a requirement or the visible
+identity. Never flatten a referenced component into the assembly merely to
+avoid authoring its own contract. If a typed USD gap prevents creating a
+variant set, replacing a reference list, or authoring required metadata,
+report the Rust/typed-editor gap instead of using duplicate hidden geometry.
 
 ## The Twin (on-disk mission unit)
 
@@ -372,6 +401,12 @@ wrapper is assembly state, not a missing-port fallback, and live values still co
 When passing a composed Twin to another agent, record the target checkout and
 revision, reused exemplar paths, authored files, network roots and boundaries,
 assumption status, exact checks, runtime/API evidence, visual evidence, and the
-next blocker. State explicitly which claims are source inspection only. Keep the
-handoff factual and scoped; do not promote mission-specific assumptions into
-general skill rules.
+next blocker. State explicitly which claims are source inspection only. Include
+the active branch/worktree, preserved dirty changes, production binary and API
+port, open document/preview ids, registered tool libraries, exact public
+sources, component-to-assembly ownership, the last successful generation, and
+the next safe command. Separate preflight, typed projection, runtime, and
+visual evidence. Keep the handoff factual and scoped; do not promote
+mission-specific assumptions into general skill rules. The handover is not
+complete until a new agent can resume without guessing which document, layer,
+tool scope, or test runner is authoritative.

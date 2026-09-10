@@ -41,8 +41,10 @@ use lunco_core::{on_command, register_commands, Ack, Command, OpId};
 
 /// BehaviorTree.CPP v4 XML ⇄ tree-JSON codec (Groot2 / ROS interop).
 pub mod btcpp_xml;
-/// Behaviour trees authored as USD prims (one prim per node) — the source of truth
-/// for a mission. `AutopilotBehaviorSpec` is derived from them, never authored.
+/// Missions select their BehaviorTree.CPP source from a USD `LunCoProgramAPI`
+/// prim; waypoint geometry and identity remain ordinary USD prims. The
+/// `AutopilotBehaviorSpec` is derived from the selected XML source and its exact
+/// composed target bindings.
 pub mod usd_tree;
 use lunco_core::{GlobalEntityId, NetworkRole, SessionId, SessionRegistry};
 use lunco_cosim::SetPorts;

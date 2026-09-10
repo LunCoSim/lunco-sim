@@ -87,15 +87,18 @@ The marker has one authored USD identity and one runtime arrival path:
   terrain while the overlap volume remains useful on slopes.
 - **Arrival is one runtime fact** — `CollisionStart` on that Sensor updates the
   vessel's live `ReachedWaypoints` set and emits `waypoint.reached` with a typed
-  `{ path, state, index }` payload. The shared Rhai prelude consumes that event, reads
-  `lunco:waypoint:inactiveColor` from composed USD, and applies the inactive
-  material opinion through the runtime layer. Route projection may identify the
-  active leg, but it does not own waypoint colors.
+  `{ path, state, index }` payload. The USD simulation projection reads the
+  authored `lunco:waypoint:inactiveColor` once and stores active/inactive
+  render intents on the projected marker. Its change-gated presentation system
+  switches that intent from the live reached set without authoring a USD edit.
+  The shared Rhai prelude validates and exposes the event for mission policy; it
+  does not poll distance or mutate marker materials.
 
 This keeps USD as the source of truth for identity, geometry, placement, sensor size,
-and inactive look parameters. Rust owns collision and event mechanics; Rhai consumes
-the structured event and sequences mission policy. It does not poll a duplicate
-distance tolerance.
+and inactive look parameters. Rust owns collision, identity projection, and the
+runtime look transition; Rhai consumes the structured event and sequences mission
+policy. It does not poll a duplicate distance tolerance or author a live material
+opinion.
 
 The authored graphics companion at `assets/scenes/tests/waypoint_visual.usda`
 reuses the six-wheel rover and places this marker at the rover's terrain anchor.
@@ -158,8 +161,9 @@ def Sphere "Trigger" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
 transform, visibility, material, and collision are standard USD/UsdPhysics data.
 `lunco-usd-bevy::read_shape_dims` projects both spheres from their authored
 radius, while only `Trigger` is projected into the Avian overlap sensor. The
-visual dome remains present after arrival; the shared Rhai waypoint helper reads
-the authored inactive color and applies it through the USD runtime layer.
+visual dome remains present after arrival; the USD simulation projection reads
+the authored inactive color into a render intent and switches it from session
+state without changing the authored stage.
 
 The derived route is intentionally quieter than the marker annotation: it is a
 surface-separated, unlit triangle strip with a narrow total width (14 cm), a
@@ -177,10 +181,10 @@ paths, reinterpret a path relative to another prim, or rely on ECS query order.
 Runtime-only targets use their explicit `RuntimeWaypointBinding` instead. If an authored binding is
 unavailable, the route keeps its authored geometry and no visited state is
 inferred. The gray/green material transition is therefore driven by the
-structured arrival event and the marker's own USD metadata, while the route
-visualizer remains responsible only for active-leg presentation.
-identity that drives the behavior tree, so a waypoint cannot oscillate because
-two unrelated path representations happen to match.
+structured arrival event and the marker's own USD metadata; the route visualizer
+remains responsible only for active-leg presentation. The same exact path-to-entity
+identity drives the behavior tree and the arrival state, so a waypoint cannot
+oscillate because two unrelated path representations happen to match.
 
 ### Waypoints are not children of the vessel
 
@@ -222,14 +226,24 @@ The active controller remains a fixed-step Rust hot path, so preparation is
 change-gated and asynchronous work never becomes per-tick scripting or a full scene
 reload.
 
+Adding a waypoint may resync the USD ancestors of the new marker or mission prim.
+Those ancestor paths are structural context, not physics changes: the live bridge
+reprojects an ancestor only when its composed physics schema has not yet reached the
+matching ECS admission marker. An already admitted rover therefore keeps its body,
+wheels, Modelica sessions, pose, velocity, and possession while the new child lands.
+When an editor changes a file-backed BT mission into inline XML, it uses the standard
+`info:implementationSource = "sourceCode"` arm and clears the other source arms in
+the same journaled transaction, so a selected `sourceAsset` can never conflict with
+the edited `info:sourceCode`.
+
 ## Interaction — document-backed and runtime-only routes
 
 For a rover mounted in an authored USD document, **no new command verbs** are
 needed. The `PlaceWaypoint` intent paired with the primary pointer action
 (Alt+LMB in the bundled keymap) lowers to `ApplyUsdOps`: ordered
 `AddPrim`/`SetTranslate` operations for the marker, optional mission-program
-construction (`AddPrim` + `SetApiSchemas`), and `SetAttribute` for
-`info:sourceCode`. The document journals it as one undo unit and the live projector
+construction (`AddPrim` + `SetApiSchemas`), and the standard inline-program source
+arm for `info:sourceCode`. The document journals it as one undo unit and the live projector
 sees the complete authored shape after the change set, so no ECS component is
 patched directly by the editor.
 
@@ -278,10 +292,20 @@ Rhai owns mission policy: runtime route construction, sequencing, arrival action
 and the explicit decision to append, replan, hold, or clear. Rust keeps only the
 generic mechanisms that must be authoritative and fast: typed command dispatch,
 USD identity/binding resolution, active-frame pose conversion, collision-backed
-arrival events, candidate compilation/commit, route-mesh projection, and the
-fixed-step controller. A future unified route-edit API should pass stable waypoint
-identities plus an explicit update policy from Rhai; it must not move geometry,
-projection, or per-frame steering into the VM.
+arrival events, candidate compilation/commit, route-mesh projection, runtime look
+projection, and the fixed-step controller. A future unified route-edit API should
+pass stable waypoint identities plus an explicit update policy from Rhai; it must
+not move pointer raycasts, `DocumentId` resolution, USD transactions, collision
+events, geometry projection, or per-frame steering into the VM.
+
+This is the deliberate “waypoint as a tool” boundary. A Rhai tool may inspect
+composed USD facts and request a typed route operation, while the engine remains
+the single owner that validates the document, applies the journaled USD change,
+resolves exact prim identities, and publishes a complete route snapshot. The
+editor's pointer handler is therefore a thin semantic authoring adapter, not a
+second mission implementation. Moving the whole click path into Rhai would
+duplicate active-frame picking and document transaction rules, add a script-host
+ordering dependency, and weaken the current atomic prepare/commit contract.
 
 ## What correctly stays in ECS
 

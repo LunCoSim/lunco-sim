@@ -68,6 +68,13 @@ which calls `RunRhai` on the existing production session. Editing and rerunning
 the test does not restart the app. Use `./scripts/api/run_scenario.sh`
 when the assertion should remain attached as a persistent observer.
 
+When a test depends on a Twin-scoped Rhai tool, register or reload that library
+in the same session first, confirm it with `ListToolLibraries`/`GetToolLibrary`,
+and make a minimal namespaced call before running the real observer. Discovery
+does not prove that the current Rhai engine has rebuilt its static module set.
+For a user-requested same-session workflow, use `RunRhai` or an attached
+`RunScenario`; do not substitute the multi-process scene-test runner.
+
 For an interactive tour, keep one production session and use `StartTutorial`
 through `/api/commands`, then inspect the HUD and event stream. `RunScenario`
 is the live hot-reload path for a script attached to an existing host. Restart

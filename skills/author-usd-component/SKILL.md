@@ -5,15 +5,21 @@ description: >
   physics, behavior, parameters, or spawn-catalog metadata. Use for new
   habitats, landers, rover parts, shaders, colliders, or parametric assets.
   `xformOpOrder`, standard USD schemas, array display colors, collider
-  approximation, and schema generation are the key contracts. Use build-usd-scene
+  approximation, component requirements, and component tests are the key
+  contracts. Use build-usd-scene
   for assembling existing assets, use-asset-library for placement/discovery, and
   validate-assets for pre-flight checks.
 ---
 
 # Author a USD component
 
-USD is the **source of truth**, projected to Bevy ECS. You build a thing by
-writing a `.usda` file; the engine reads it. Nothing here is a Rust change.
+USD is the **source of truth**, projected to Bevy ECS. For a live Editor task,
+you build a thing through a Rhai typed-operation plan and the document command
+owner; the engine then projects the authored stage. Do not hand-edit USDA text,
+patch a file behind the open document, or mutate ECS state to force a result.
+The resulting component is still a normal `.usda` asset, but its persistent
+file is written by the Editor's save operation. Nothing here is a Rust change
+unless the typed owner is missing a generic USD capability.
 
 Frame is fixed: **Y-up, right-handed, −Z-forward, SI metres** (`docs/architecture/41-axes-and-units.md`).
 Author in that frame. `upAxis = "Z"` / `metersPerUnit != 1` are converted once at
@@ -34,11 +40,50 @@ file goes, how it is discovered, the `lunco://` scheme),
 assembly authoring with screenshot/user-feedback checkpoints),
 [`validate-assets`](../validate-assets/SKILL.md) (pre-flight it),
 [`test-via-api`](../test-via-api/SKILL.md) (verify), [`compose-multidomain-twin`](../compose-multidomain-twin/SKILL.md).
+For creating or hot-registering reusable Rhai builders, lints, and component
+tests, read [`author-rhai-tool`](../author-rhai-tool/SKILL.md).
+
+## Component contract before geometry
+
+Treat a component as a lightweight CAD deliverable rather than an isolated
+mesh. Before authoring, state its local frame, mount datum, required
+topology/types, dimensional envelope, mass/inertia owner, collision policy,
+parameters/units, public provenance, and any deployment or operating limits.
+Keep public/reference-backed facts separate from Twin study assumptions.
+
+One independently reusable or articulated part gets one explicit component
+root and its own USD file under the Twin's `components/` tree. The component's
+Rhai tool creates typed USD operations and its requirement/test Rhai reads the
+composed stage and checks both normal and boundary cases. The parent assembly
+must separately test reference identity, placement, symmetry/clearance, joint
+endpoints, variant selection, and cross-component wiring. Do not rely on the
+assembly test to prove the component's internal contract, or on a component
+test to prove it is correctly mounted.
+
+For live Editor work, create/open the component document, apply the typed
+Rhai plan, wait for projection, inspect the exact prims, capture a screenshot,
+and only then save. Do not hand-edit or flatten USDA text to accelerate a
+component change. Use standard USD variants for genuine configurations; if
+the typed editor cannot create the needed variant set/blocks or reference-list
+opinion, report the Rust capability gap instead of using hidden duplicate
+geometry as a substitute.
+
+Keep the component's Rhai source reviewable: pure plan functions,
+read-only requirement reports, and runtime test observers are separate
+responsibilities. Register Twin-scoped libraries through `RegisterToolLibrary`
+and verify a real namespaced call in the same process; `ListToolLibraries` alone
+is not invocation proof. See [`author-rhai-tool`](../author-rhai-tool/SKILL.md).
 
 ## Skeleton
 
 **One file = one spawnable thing.** The catalog keys off the file, and
 `lunco:spawnable` must sit on the stage's `defaultPrim`.
+
+For live authoring, the skeleton below describes the authored result; it is
+not permission to paste or rewrite USDA source. Use `assembly_edit::new_document`
+or open the exact component document, call the component's Rhai builder, apply
+its reviewed typed ops, inspect the projected result, and save through the
+document lifecycle.
 
 ```usda
 #usda 1.0
