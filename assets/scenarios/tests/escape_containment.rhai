@@ -1,10 +1,10 @@
 // Negative production fixture for the scene-scoped physics escape boundary.
 //
-// The scene deliberately starts Escapee below the static world. The expected
-// result is a structured terminal fault plus a physics hold, with the process
-// still alive so the host can report the fault and be rebooted cleanly. The
-// luncosim test harness owns the terminal verdict because RuntimeFaults is an
-// engine boundary, not a mutable scenario blackboard.
+// The scene deliberately starts Escapee outside the static world's footprint.
+// The expected result is a structured terminal fault plus a physics hold, with
+// the process still alive so the host can report the fault and be rebooted
+// cleanly. The luncosim test harness owns the terminal verdict because
+// RuntimeFaults is an engine boundary, not a mutable scenario blackboard.
 
 fn on_start(me) {
     expect_runtime_fault("physics-body-escaped");
