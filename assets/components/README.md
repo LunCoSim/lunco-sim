@@ -14,6 +14,12 @@ A part owns its intrinsic model, ports, geometry, and mount frames. It does not
 name a battery, host vehicle, or mission. The parent USD assembly owns those
 connections.
 
+For a new reusable parametric part, the live Editor can use
+`assembly_builder::component_bundle_facts` and `component_bundle_plan` to
+author its standard geometry, collision/material bindings, mass, dimensions,
+frames, and actuator endpoints through one reviewed Rhai plan. Articulation
+and socket attachment remain explicit assembly contracts.
+
 Before adding a component, search by domain API, connector, and Modelica class:
 
 ```sh

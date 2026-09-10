@@ -57,14 +57,18 @@ mutating the document.
 
 For higher-level construction, use the dynamically reloadable
 `assembly_builder` Rhai library. Its `frame_plan`, `cube_plan`,
-`cylinder_shape_plan`, `movable_cube_plan`, `existing_rigid_body_plan`, and
-`hinge_plan` compose the same explicit standard
+`cylinder_shape_plan`, `movable_cube_plan`,
+`component_bundle_facts`/`component_bundle_plan`,
+`existing_rigid_body_plan`, and `hinge_plan` compose the same explicit standard
 USD facts for new or referenced parts; it does not promote a completed body or
 reuse an occupied standard joint identity, while its placement and cube
 edge-alignment plans reject ambiguous parent/frame assumptions before the
 proposal reaches the USD owner. Keep the generated plan in one reviewed
-change set; a successful Rhai plan is not permission to omit the explicit
-joint, frame, collider, mass, or generation contract.
+change set. A component bundle may author `PhysicsMassAPI` on its root and
+collision APIs on its geometry, but it does not infer a rigid body or joint;
+use the explicit body/joint/mount planners when the part is movable. A
+successful Rhai plan is not permission to omit the frame, collider, mass, or
+generation contract.
 
 For physical placement, use `assembly_builder::place_with_clearance_plan` with
 explicit Cube envelopes, or

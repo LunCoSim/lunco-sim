@@ -332,14 +332,17 @@ owner's USD path and registry precedence. Resolve that at the authoring
 boundary by giving separate semantic owners distinct names; do not hide it with
 a runtime write retry or fallback.
 
-For semantic component construction, use `assembly_builder::find_compatible_socket`
-and `assembly_builder::mount_component`. The builder selects the exact
-authored socket and derives the reflected joint contract; the existing typed
-attach owner still performs plug-frame resolution and the atomic reference,
-occupancy, and joint edit. Do not hand-author a reference plus guessed
-transform when a component advertises a mount plug. This Rhai library is
-dynamic, so a Twin or workspace can replace the policy without a Rust-core
-change while retaining the same authoritative attach validator.
+For semantic component construction, use
+`assembly_builder::component_bundle_facts` and
+`assembly_builder::component_bundle_plan` for reusable geometry, collision,
+mass, dimensions, frames, and actuator endpoint contracts. Validate the facts,
+append the returned `.ops` to one reviewed proposal, then query the composed
+root and children. The bundle is Rhai policy over existing typed USD
+operations; it does not create a material, infer a rigid body/joint, or hide a
+missing mount relationship. Use the explicit body/joint planners for
+articulation and `find_compatible_socket`/`mount_component` for an authored
+socket attachment. Do not hand-author a reference plus guessed transform when
+a component advertises a mount plug.
 
 For the current Griffin/FLIP study package, the dynamic
 `griffin_flip_builder` library composes the same generic surface into paired

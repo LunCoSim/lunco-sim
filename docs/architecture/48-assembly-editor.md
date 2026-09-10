@@ -502,6 +502,28 @@ while missing or ambiguous authored relationships still fail before proposal.
 A completed body/joint identity is likewise rejected by a construction recipe
 until the caller chooses an explicit update plan.
 
+#### Generic component bundles
+
+For a recurring parametric part, `assembly_builder::component_bundle_facts`
+normalizes one caller-authored contract and
+`component_bundle_plan` lowers it to the existing reviewed USD operations.
+The bundle may contain standard Cube/Cylinder/Cone geometry with independent
+visual and collision roles, an optional existing material relationship, SI
+dimensions, `PhysicsMassAPI` facts, named datum/attachment/actuator frames,
+actuator endpoints with units and limits, and optional deployment state. The
+builder validates names, dimensions, frame ownership, finite values, and
+duplicate geometry/frame/actuator identities before a proposal is created.
+
+This is a reusable data contract, not a vehicle schema: panels, plates, feet,
+rails, struts, and actuator bodies are represented by the same bundle and
+remain authored in Rhai/USD. The root receives the component metadata and
+mass facts; each geometry child receives its standard shape, transform,
+collision, visibility, and material-binding opinions. The builder does not
+infer a rigid body, joint, socket occupancy, or material asset. Add an
+explicit `assembly_edit::rigid_body_plan` or joint/mount plan when the part
+must participate in articulated physics, and ensure any material relationship
+target already exists in the composed stage.
+
 Referenced construction has one additional sequencing rule. Use
 `assembly_builder::referenced_instance_plan` or
 `referenced_instance_targeted_plan` to author the identity, reference, and

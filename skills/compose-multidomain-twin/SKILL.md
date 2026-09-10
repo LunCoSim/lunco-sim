@@ -184,6 +184,15 @@ connections, and run a second integration suite for counts, placement,
 clearance, reference targets, joint endpoints, and cross-domain wires. A
 component pass is not an assembly pass.
 
+For a repeated parametric component, use the dynamic
+`assembly_builder::component_bundle_facts`/`component_bundle_plan` pair to
+keep visual geometry, collision ownership, mass/inertia, dimensions, mount
+frames, and actuator endpoints in one validated contract. Keep deployment
+policy and mission values in Twin-owned Rhai/USD; the bundle does not create a
+Modelica participant, guess a physics joint, or add a vehicle-specific Rust
+schema. Add explicit typed body/joint or socket plans at the assembly boundary,
+then verify both the component contract and the composed Twin.
+
 Keep the detail level at contract fidelity: standard USD primitives are enough
 for silhouettes, mounting envelopes, colliders, and tested interfaces. Add
 meshes or parametric detail only when it changes a requirement or the visible

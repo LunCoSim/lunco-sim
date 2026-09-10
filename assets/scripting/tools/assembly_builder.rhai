@@ -464,6 +464,521 @@ fn cylinder_shape_plan(edit_target, parent, name, radius, height,
     #{ ok: true, kind: "cylinder_shape", path: path, ops: ops }
 }
 
+// ── Generic component bundles ──────────────────────────────────────────────
+
+fn bundle_plan_error(message) {
+    #{ ok: false, error: message, ops: [] }
+}
+
+fn bundle_identifier(value, label) {
+    if value == () || value == "" || value.contains("/") || value.contains(":") {
+        return bundle_plan_error(label + " must be one USD identifier without `/` or `:`");
+    }
+    #{ ok: true, value: value }
+}
+
+fn bundle_vector3(value, label, positive) {
+    if value == () || value.len() != 3 {
+        return bundle_plan_error(label + " must have three components");
+    }
+    for component in value {
+        if !component.is_finite() || positive && component <= 0.0 {
+            let rule = if positive { " finite positive" } else { " finite" };
+            return bundle_plan_error(label + " must contain" + rule + " components");
+        }
+    }
+    #{ ok: true, value: value }
+}
+
+fn bundle_vector2(value, label, ordered) {
+    if value == () || value.len() != 2 {
+        return bundle_plan_error(label + " must have two components");
+    }
+    for component in value {
+        if !component.is_finite() {
+            return bundle_plan_error(label + " must contain finite components");
+        }
+    }
+    if ordered && value[0] > value[1] {
+        return bundle_plan_error(label + " must be ordered from lower to upper");
+    }
+    #{ ok: true, value: value }
+}
+
+fn bundle_tuple2_literal(value) {
+    if value == () || value.len() != 2 { return (); }
+    "(" + value[0].to_string() + ", " + value[1].to_string() + ")"
+}
+
+fn bundle_token_literal(value) {
+    "\"" + value + "\""
+}
+
+fn bundle_optional_transform(spec, path) {
+    let translation = if spec.translation == () { () } else { spec.translation };
+    let rotation = if spec.rotation == () { () } else { spec.rotation };
+    let scale = if spec.scale == () { () } else { spec.scale };
+    if translation != () {
+        let valid = bundle_vector3(translation, path + " translation", false);
+        if !valid.ok { return valid; }
+    }
+    if rotation != () {
+        let valid = bundle_vector3(rotation, path + " rotation", false);
+        if !valid.ok { return valid; }
+    }
+    if scale != () {
+        let valid = bundle_vector3(scale, path + " scale", true);
+        if !valid.ok { return valid; }
+    }
+    #{ ok: true, translation: translation, rotation: rotation, scale: scale }
+}
+
+/// Normalize one reusable component contract before any USD operation is
+/// proposed. Dimensions are SI metres. `geometry` is one list so a shape can
+/// explicitly be visual, collision-only, or both without duplicating a path.
+/// `frames` and `actuators` are named contracts, not vehicle-specific schemas.
+fn component_bundle_facts(bundle) {
+    if bundle == () {
+        return bundle_plan_error("component_bundle_facts requires a bundle map");
+    }
+    if bundle.units != "m" {
+        return bundle_plan_error("component bundle units must be explicit SI metres (`m`)");
+    }
+    let dimensions = bundle_vector3(bundle.dimensions,
+        "component bundle dimensions", true);
+    if !dimensions.ok { return dimensions; }
+    if bundle.geometry == () || bundle.geometry.len() == 0 {
+        return bundle_plan_error("component bundle requires at least one geometry entry");
+    }
+
+    let names = [];
+    let geometry = [];
+    let visual = [];
+    let collision = [];
+    for spec in bundle.geometry {
+        let identity = bundle_identifier(spec.name, "geometry name");
+        if !identity.ok { return identity; }
+        if names.contains(spec.name) {
+            return bundle_plan_error("component bundle identity is duplicated: " + spec.name);
+        }
+        names.push(spec.name);
+        if spec.kind != "Cube" && spec.kind != "Cylinder" && spec.kind != "Cone" {
+            return bundle_plan_error(spec.name + ": geometry kind must be Cube, Cylinder, or Cone");
+        }
+        let render = if spec.render == () { true } else { spec.render };
+        let collide = if spec.collision == () { false } else { spec.collision };
+        if !render && !collide {
+            return bundle_plan_error(spec.name + ": geometry must render, collide, or both");
+        }
+        let transform = bundle_optional_transform(spec, spec.name);
+        if !transform.ok { return transform; }
+        let shape = #{
+            name: spec.name,
+            kind: spec.kind,
+            render: render,
+            collision: collide,
+            translation: transform.translation,
+            rotation: transform.rotation,
+            scale: transform.scale,
+            material: if spec.material == () { () } else { spec.material },
+        };
+        if spec.kind == "Cube" {
+            let size = if spec.size == () { () } else { spec.size };
+            if size == () || !size.is_finite() || size <= 0.0 {
+                return bundle_plan_error(spec.name + ": Cube requires a finite positive size");
+            }
+            shape.size = size;
+        } else {
+            let radius = if spec.radius == () { () } else { spec.radius };
+            let height = if spec.height == () { () } else { spec.height };
+            if radius == () || height == () || !radius.is_finite() || !height.is_finite()
+                || radius <= 0.0 || height <= 0.0 {
+                return bundle_plan_error(spec.name + ": " + spec.kind + " requires finite positive radius and height");
+            }
+            shape.radius = radius;
+            shape.height = height;
+        }
+        if spec.axis != () && !cardinal_axis(spec.axis) {
+            return bundle_plan_error(spec.name + ": axis must be X, Y, or Z");
+        }
+        shape.axis = if spec.axis == () { () } else { spec.axis };
+        if shape.material != () && (!shape.material.starts_with("/") || shape.material.ends_with("/")) {
+            return bundle_plan_error(spec.name + ": material must be an absolute USD prim path");
+        }
+        geometry.push(shape);
+        if render { visual.push(spec.name); }
+        if collide { collision.push(spec.name); }
+    }
+
+    let frames = [];
+    let mount = ();
+    if bundle.frames != () {
+        for spec in bundle.frames {
+            let identity = bundle_identifier(spec.name, "frame name");
+            if !identity.ok { return identity; }
+            if names.contains(spec.name) {
+                return bundle_plan_error("component bundle identity is duplicated: " + spec.name);
+            }
+            names.push(spec.name);
+            if spec.role != "datum" && spec.role != "attachment" && spec.role != "actuator" {
+                return bundle_plan_error(spec.name + ": frame role must be datum, attachment, or actuator");
+            }
+            let transform = bundle_optional_transform(spec, spec.name);
+            if !transform.ok { return transform; }
+            let frame = #{
+                name: spec.name,
+                role: spec.role,
+                translation: transform.translation,
+                rotation: transform.rotation,
+                scale: transform.scale,
+                mount_kind: if spec.mount_kind == () { () } else { spec.mount_kind },
+            };
+            if frame.mount_kind != () {
+                if spec.role != "attachment" || frame.mount_kind == "" {
+                    return bundle_plan_error(spec.name + ": mount_kind is only valid on a named attachment frame");
+                }
+                let mount_identity = bundle_identifier(frame.mount_kind, "mount kind");
+                if !mount_identity.ok { return mount_identity; }
+                if mount != () {
+                    return bundle_plan_error("component bundle may advertise only one standard mount plug");
+                }
+                mount = frame;
+            }
+            frames.push(frame);
+        }
+    }
+
+    let actuators = [];
+    if bundle.actuators != () {
+        let actuator_names = [];
+        for spec in bundle.actuators {
+            let identity = bundle_identifier(spec.name, "actuator name");
+            if !identity.ok { return identity; }
+            if actuator_names.contains(spec.name) {
+                return bundle_plan_error("component actuator is duplicated: " + spec.name);
+            }
+            actuator_names.push(spec.name);
+            if spec.direction != "input" && spec.direction != "output" {
+                return bundle_plan_error(spec.name + ": actuator direction must be input or output");
+            }
+            if spec.unit == () || spec.unit == "" {
+                return bundle_plan_error(spec.name + ": actuator unit is required");
+            }
+            if spec.frame == () || spec.frame == "" {
+                return bundle_plan_error(spec.name + ": actuator requires an explicit frame");
+            }
+            let frame_found = false;
+            for frame in frames {
+                if frame.name == spec.frame {
+                    frame_found = true;
+                    if frame.role != "actuator" {
+                        return bundle_plan_error(spec.name + ": actuator frame must have role actuator");
+                    }
+                }
+            }
+            if !frame_found {
+                return bundle_plan_error(spec.name + ": actuator frame is not declared");
+            }
+            let default_value = if spec.default_value == () { 0.0 } else { spec.default_value };
+            if !default_value.is_finite() {
+                return bundle_plan_error(spec.name + ": actuator default_value must be finite");
+            }
+            let limits = ();
+            if spec.limits != () {
+                limits = bundle_vector2(spec.limits, spec.name + " limits", true);
+                if !limits.ok { return limits; }
+                limits = limits.value;
+            }
+            actuators.push(#{
+                name: spec.name,
+                direction: spec.direction,
+                unit: spec.unit,
+                frame: spec.frame,
+                default_value: default_value,
+                limits: limits,
+            });
+        }
+    }
+
+    let mass = ();
+    if bundle.mass != () {
+        if bundle.mass.value == () || !bundle.mass.value.is_finite() || bundle.mass.value <= 0.0 {
+            return bundle_plan_error("component mass requires a finite positive value");
+        }
+        let center_of_mass = bundle_vector3(bundle.mass.center_of_mass,
+            "component centre of mass", false);
+        if !center_of_mass.ok { return center_of_mass; }
+        let diagonal_inertia = bundle_vector3(bundle.mass.diagonal_inertia,
+            "component diagonal inertia", true);
+        if !diagonal_inertia.ok { return diagonal_inertia; }
+        mass = #{
+            value: bundle.mass.value,
+            center_of_mass: center_of_mass.value,
+            diagonal_inertia: diagonal_inertia.value,
+        };
+    }
+
+    let deployment = ();
+    if bundle.deployment != () {
+        if bundle.deployment.state == () || bundle.deployment.state == ""
+            || bundle.deployment.units == () || bundle.deployment.units == "" {
+            return bundle_plan_error("deployment requires explicit state and units");
+        }
+        let limits = bundle_vector2(bundle.deployment.limits,
+            "deployment limits", true);
+        if !limits.ok { return limits; }
+        deployment = #{
+            state: bundle.deployment.state,
+            units: bundle.deployment.units,
+            limits: limits.value,
+        };
+    }
+
+    #{
+        ok: true,
+        units: bundle.units,
+        dimensions: dimensions.value,
+        geometry: geometry,
+        visual: visual,
+        collision: collision,
+        frames: frames,
+        mount: mount,
+        actuators: actuators,
+        mass: mass,
+        deployment: deployment,
+        spawnable: if bundle.spawnable == () { false } else { bundle.spawnable },
+    }
+}
+
+fn bundle_geometry_plan(edit_target, parent, shape) {
+    let path = parent + "/" + shape.name;
+    let transform = place_plan(edit_target, path, shape.translation,
+        shape.rotation, shape.scale);
+    if !transform.ok && (shape.translation != () || shape.rotation != () || shape.scale != ()) {
+        return transform;
+    }
+    let ops = [#{ AddPrim: #{
+        edit_target: edit_target,
+        parent_path: parent,
+        name: shape.name,
+        type_name: shape.kind,
+        reference: (),
+        reference_prim_path: "",
+    }}];
+    if transform.ok {
+        for op in transform.ops { ops.push(op); }
+    }
+    if shape.kind == "Cube" {
+        ops.push(#{ SetAttribute: #{
+            edit_target: edit_target, path: path, name: "size",
+            type_name: "double", value: shape.size.to_string(),
+        }});
+    } else {
+        ops.push(#{ SetAttribute: #{
+            edit_target: edit_target, path: path, name: "radius",
+            type_name: "double", value: shape.radius.to_string(),
+        }});
+        ops.push(#{ SetAttribute: #{
+            edit_target: edit_target, path: path, name: "height",
+            type_name: "double", value: shape.height.to_string(),
+        }});
+    }
+    if shape.axis != () {
+        ops.push(#{ SetAttribute: #{
+            edit_target: edit_target, path: path, name: "axis",
+            type_name: "token", value: bundle_token_literal(shape.axis),
+        }});
+    }
+    if shape.collision {
+        ops.push(#{ SetApiSchemas: #{
+            edit_target: edit_target, path: path,
+            schemas: ["PhysicsCollisionAPI"],
+        }});
+        ops.push(#{ SetAttribute: #{
+            edit_target: edit_target, path: path,
+            name: "physics:collisionEnabled", type_name: "bool", value: "true",
+        }});
+    }
+    if !shape.render {
+        ops.push(#{ SetAttribute: #{
+            edit_target: edit_target, path: path,
+            name: "visibility", type_name: "token", value: "\"invisible\"",
+        }});
+    }
+    if shape.material != () {
+        ops.push(#{ SetApiSchemas: #{
+            edit_target: edit_target, path: path,
+            schemas: ["MaterialBindingAPI"],
+        }});
+        ops.push(#{ SetRelationship: #{
+            edit_target: edit_target, path: path,
+            name: "material:binding", targets: [shape.material],
+        }});
+    }
+    #{ ok: true, path: path, ops: ops }
+}
+
+/// Build one generic parametric component bundle as a pure typed USD plan.
+/// The root owns standard component/mass facts; child geometry owns its
+/// visual and collision roles; named frames own mount/actuator endpoints; and
+/// deployment/dimensional data stays explicit on the component root. The
+/// caller submits the returned `.ops` through one reviewed `assembly_edit`
+/// proposal or batch. No vehicle identity is encoded here.
+fn component_bundle_plan(edit_target, parent, name, bundle) {
+    if edit_target == () || parent == () || name == () {
+        return bundle_plan_error("component_bundle_plan requires edit target, parent path, name, and bundle");
+    }
+    if !parent.starts_with("/") || parent.ends_with("/") && parent != "/" {
+        return bundle_plan_error("component_bundle_plan parent must be an absolute USD path");
+    }
+    let identity = bundle_identifier(name, "component bundle name");
+    if !identity.ok { return identity; }
+    let facts = component_bundle_facts(bundle);
+    if !facts.ok { return facts; }
+    let path = if parent == "/" { "/" + name } else { parent + "/" + name };
+    let schemas = ["LunCoCatalogAPI"];
+    if facts.mass != () { schemas.push("PhysicsMassAPI"); }
+    if facts.mount != () { schemas.push("LunCoMountPlugAPI"); }
+    let ops = [#{ AddPrim: #{
+        edit_target: edit_target,
+        parent_path: parent,
+        name: name,
+        type_name: "Xform",
+        reference: (),
+        reference_prim_path: "",
+    }}];
+    ops.push(#{ SetPrimKind: #{ edit_target: edit_target, path: path, kind: "component" }});
+    ops.push(#{ SetApiSchemas: #{ edit_target: edit_target, path: path, schemas: schemas }});
+    ops.push(#{ SetAttribute: #{
+        edit_target: edit_target, path: path, name: "lunco:component:units",
+        type_name: "token", value: bundle_token_literal(facts.units),
+    }});
+    ops.push(#{ SetAttribute: #{
+        edit_target: edit_target, path: path, name: "lunco:component:dimensions",
+        type_name: "double3", value: assembly_edit::tuple3_literal(facts.dimensions),
+    }});
+    if facts.spawnable {
+        ops.push(#{ SetAttribute: #{
+            edit_target: edit_target, path: path, name: "lunco:spawnable",
+            type_name: "bool", value: "true",
+        }});
+    }
+    if facts.mass != () {
+        ops.push(#{ SetAttribute: #{
+            edit_target: edit_target, path: path, name: "physics:mass",
+            type_name: "float", value: facts.mass.value.to_string(),
+        }});
+        ops.push(#{ SetAttribute: #{
+            edit_target: edit_target, path: path, name: "physics:centerOfMass",
+            type_name: "point3f", value: assembly_edit::tuple3_literal(facts.mass.center_of_mass),
+        }});
+        ops.push(#{ SetAttribute: #{
+            edit_target: edit_target, path: path, name: "physics:diagonalInertia",
+            type_name: "float3", value: assembly_edit::tuple3_literal(facts.mass.diagonal_inertia),
+        }});
+    }
+    if facts.mount != () {
+        ops.push(#{ SetAttribute: #{
+            edit_target: edit_target, path: path, name: "lunco:mount:plug",
+            type_name: "token", value: bundle_token_literal(facts.mount.mount_kind),
+        }});
+        ops.push(#{ SetRelationship: #{
+            edit_target: edit_target, path: path, name: "lunco:mount:frame",
+            targets: [path + "/" + facts.mount.name],
+        }});
+    }
+    if facts.deployment != () {
+        ops.push(#{ SetAttribute: #{
+            edit_target: edit_target, path: path, name: "lunco:deployment:state",
+            type_name: "token", value: bundle_token_literal(facts.deployment.state),
+        }});
+        ops.push(#{ SetAttribute: #{
+            edit_target: edit_target, path: path, name: "lunco:deployment:units",
+            type_name: "token", value: bundle_token_literal(facts.deployment.units),
+        }});
+        ops.push(#{ SetAttribute: #{
+            edit_target: edit_target, path: path, name: "lunco:deployment:limits",
+            type_name: "double2", value: bundle_tuple2_literal(facts.deployment.limits),
+        }});
+    }
+    let frame_paths = [];
+    let actuator_frame_paths = [];
+    for frame in facts.frames {
+        let planned = frame_plan(edit_target, path, frame.name,
+            frame.translation, frame.rotation, frame.scale);
+        if !planned.ok { return planned; }
+        for op in planned.ops { ops.push(op); }
+        let frame_path = path + "/" + frame.name;
+        frame_paths.push(frame_path);
+        ops.push(#{ SetAttribute: #{
+            edit_target: edit_target, path: frame_path, name: "lunco:component:frameRole",
+            type_name: "token", value: bundle_token_literal(frame.role),
+        }});
+        if frame.role == "actuator" { actuator_frame_paths.push(frame_path); }
+    }
+    if frame_paths.len() > 0 {
+        ops.push(#{ SetRelationship: #{
+            edit_target: edit_target, path: path, name: "lunco:component:frames",
+            targets: frame_paths,
+        }});
+    }
+    if actuator_frame_paths.len() > 0 {
+        ops.push(#{ SetRelationship: #{
+            edit_target: edit_target, path: path, name: "lunco:component:actuatorFrames",
+            targets: actuator_frame_paths,
+        }});
+    }
+    for actuator in facts.actuators {
+        let port_name = actuator.direction + ":" + actuator.name;
+        ops.push(#{ SetAttribute: #{
+            edit_target: edit_target, path: path, name: port_name,
+            type_name: "float", value: actuator.default_value.to_string(),
+        }});
+        let frame_path = path + "/" + actuator.frame;
+        ops.push(#{ SetAttribute: #{
+            edit_target: edit_target, path: frame_path, name: "lunco:component:actuatorName",
+            type_name: "token", value: bundle_token_literal(actuator.name),
+        }});
+        ops.push(#{ SetAttribute: #{
+            edit_target: edit_target, path: frame_path, name: "lunco:component:actuatorDirection",
+            type_name: "token", value: bundle_token_literal(actuator.direction),
+        }});
+        ops.push(#{ SetAttribute: #{
+            edit_target: edit_target, path: frame_path, name: "lunco:component:actuatorUnit",
+            type_name: "token", value: bundle_token_literal(actuator.unit),
+        }});
+        if actuator.limits != () {
+            ops.push(#{ SetAttribute: #{
+                edit_target: edit_target, path: frame_path,
+                name: "lunco:component:actuatorLimits", type_name: "double2",
+                value: bundle_tuple2_literal(actuator.limits),
+            }});
+        }
+        ops.push(#{ SetRelationship: #{
+            edit_target: edit_target, path: frame_path, name: "lunco:component:port",
+            targets: [path + "." + port_name],
+        }});
+    }
+    let visual_paths = [];
+    let collision_paths = [];
+    for shape in facts.geometry {
+        let planned = bundle_geometry_plan(edit_target, path, shape);
+        if !planned.ok { return planned; }
+        for op in planned.ops { ops.push(op); }
+        if shape.render { visual_paths.push(planned.path); }
+        if shape.collision { collision_paths.push(planned.path); }
+    }
+    #{
+        ok: true,
+        kind: "component_bundle",
+        path: path,
+        contract: facts,
+        visual_paths: visual_paths,
+        collision_paths: collision_paths,
+        ops: ops,
+    }
+}
+
 /// Build a standard Cube part with an explicit local placement and collider.
 /// This is the common visual/collision construction unit used by higher-level
 /// assembly policies; it does not silently create a rigid body.

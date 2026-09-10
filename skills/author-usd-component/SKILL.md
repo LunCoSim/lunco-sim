@@ -74,6 +74,18 @@ responsibilities. Register Twin-scoped libraries through `RegisterToolLibrary`
 and verify a real namespaced call in the same process; `ListToolLibraries` alone
 is not invocation proof. See [`author-rhai-tool`](../author-rhai-tool/SKILL.md).
 
+For recurring parametric parts, use the generic
+`assembly_builder::component_bundle_facts` and
+`assembly_builder::component_bundle_plan` contract instead of adding a
+vehicle-specific schema or Rust type. Supply SI-metre dimensions, standard
+Cube/Cylinder/Cone geometry, explicit visual/collision roles, existing
+material targets, mass/inertia, named attachment or actuator frames, and any
+limits. The facts call is the validation boundary; the plan returns typed USD
+operations for the normal proposal/review/commit flow. It does not invent a
+body, joint, socket occupancy, or material asset. Add those contracts through
+their existing explicit builders and test the component's normalized facts
+and composed result in Rhai.
+
 ## Skeleton
 
 **One file = one spawnable thing.** The catalog keys off the file, and

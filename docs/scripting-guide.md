@@ -517,6 +517,52 @@ let proposal = assembly_edit::propose(
 );
 ```
 
+For a reusable parametric component, bundle its geometry and interfaces before
+building the reviewed plan. Geometry roles are explicit: `render` controls
+visual realization, `collision` controls the standard collision API, and
+`material` names an already-authored/composed USD material target.
+
+```rhai
+let bundle = #{
+    units: "m",
+    dimensions: [1.2, 0.8, 0.05],
+    geometry: [
+        #{ name: "Panel", kind: "Cube", size: 1.0,
+           render: true, collision: true,
+           material: "/Assembly/Looks/Panel" },
+        #{ name: "Drive", kind: "Cylinder", radius: 0.08,
+           height: 0.3, axis: "Z", render: true, collision: false },
+    ],
+    mass: #{ value: 2.0, center_of_mass: [0.0, 0.0, 0.0],
+             diagonal_inertia: [0.2, 0.3, 0.4] },
+    frames: [
+        #{ name: "Mount", role: "attachment", mount_kind: "panel" },
+        #{ name: "DriveEnd", role: "actuator" },
+    ],
+    actuators: [
+        #{ name: "deployment", direction: "input", unit: "rad",
+           frame: "DriveEnd", default_value: 0.0, limits: [0.0, 1.57] },
+    ],
+    deployment: #{ state: "stowed", units: "rad", limits: [0.0, 1.57] },
+};
+let facts = assembly_builder::component_bundle_facts(bundle);
+let plan = assembly_builder::component_bundle_plan(
+    "@root@", "/Assembly", "Panel", bundle,
+);
+let proposal = assembly_edit::propose(
+    doc, #{ Assembly: () }, "Create panel", plan.ops, generation,
+);
+```
+
+`component_bundle_facts` is the validation boundary; use its normalized
+`contract` for requirement reports. `component_bundle_plan` emits the root,
+standard geometry, collision/material bindings, frames, mass facts, and
+namespaced actuator properties as one typed plan. Units are currently SI
+metres, geometry dimensions must be positive, and attachment/actuator frame
+names must be unique. The plan does not guess a body or joint and does not
+create a material, so add an explicit reviewed joint/mount plan and author the
+material target separately when those contracts are required.
+
 `place_plan` handles local translation, Euler XYZ rotation, and scale;
 `frame_plan` handles a validated empty Xform frame;
 `cube_plan` and `cylinder_shape_plan` handle standard geometry and explicit
@@ -899,7 +945,7 @@ produces the same sequence — no explicit seeding needed.
 | [`multi_robot_mission_coordinator.rhai`](../assets/scripting/examples/multi_robot_mission_coordinator.rhai) | single-authority event-driven assignment coordinator |
 | [`multi_robot_mission_worker.rhai`](../assets/scripting/examples/multi_robot_mission_worker.rhai) | identity-scoped worker that installs a native task tree |
 | [`avoid.rhai`](../assets/scripting/examples/avoid.rhai) | sensing + obstacle avoidance |
-| [`tools/assembly_builder.rhai`](../assets/scripting/tools/assembly_builder.rhai) | semantic placement, Cube and composed collision alignment/clearance, referenced component instances, staged variant selection, geometry, socket mating, retrofit, and body/joint plans |
+| [`tools/assembly_builder.rhai`](../assets/scripting/tools/assembly_builder.rhai) | semantic placement, generic component bundles, Cube and composed collision alignment/clearance, referenced component instances, staged variant selection, geometry, socket mating, retrofit, and body/joint plans |
 | [`tools/griffin_flip_builder.rhai`](../assets/scripting/tools/griffin_flip_builder.rhai) | paired Griffin ramps, validated FLIP wheel layout, complete mission-manifest plans, and Rhai-owned FLIP asset construction |
 | [`tools/formation.rhai`](../assets/scripting/tools/formation.rhai) | a tool library (formation flying) |
 | [`tools/survey.rhai`](../assets/scripting/tools/survey.rhai) | a custom tool library (survey pattern) |
