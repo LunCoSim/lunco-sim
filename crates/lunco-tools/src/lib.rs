@@ -143,8 +143,8 @@ pub fn index() -> Vec<ToolInfo> {
 }
 
 /// The function a tool must expose to become a CLICK TOOL in the editor's Tools
-/// palette: `on_click(entity_id)`, called with the id of the vessel/prim under
-/// the cursor when the tool is armed and the user clicks the scene.
+/// palette: `on_click(context)`, called with the structured scene context when
+/// the tool is armed and the user clicks the scene.
 ///
 /// Declared as a signature rather than a separate registration call so a tool
 /// opts into the UI by *being usable from it* — write the handler and the button
@@ -162,7 +162,7 @@ pub const UI_HINT_FN: &str = "ui_hint/0";
 /// [`UI_CLICK_FN`] — sorted by name.
 ///
 /// This is the palette's whole source of truth. Dropping a `.rhai` into
-/// `assets/scripting/tools/` with an `on_click(id)` puts a button in the editor,
+/// `assets/scripting/tools/` with an `on_click(context)` puts a button in the editor,
 /// with no Rust involved on either side.
 pub fn ui_click_tools() -> Vec<ToolInfo> {
     index()

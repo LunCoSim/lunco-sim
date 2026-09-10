@@ -310,6 +310,7 @@ pub(crate) fn project_stage_changes(world: &mut World) {
     }
 
     let mut projected_anything = false;
+    let mut connection_paths_changed = false;
     for (id, changes) in batches {
         let authored_transform_edits = world
             .get_resource_mut::<LiveTransformEditHints>()
@@ -319,6 +320,7 @@ pub(crate) fn project_stage_changes(world: &mut World) {
         let mut resynced: Vec<String> = Vec::new();
         let mut info_only: Vec<String> = Vec::new();
         for c in changes {
+            connection_paths_changed |= c.connection_paths_changed;
             resynced.extend(c.resynced.iter().map(|p| p.to_string()));
             info_only.extend(c.info_only.iter().map(|p| p.to_string()));
         }
@@ -363,10 +365,10 @@ pub(crate) fn project_stage_changes(world: &mut World) {
     // Connections are derived from native `connectionPaths` by
     // `lunco_usd_sim::cosim::rewire_usd_connections`. Prim spawn/despawn triggers
     // that system directly (change-detection); a `connectionPaths` **edit** on an
-    // already-spawned prim is neither — so mark the wiring dirty whenever a drain
-    // occurred, letting the rewire re-derive off the live stage. This is the
-    // op-driven, journaled, distributed path for live connection edits.
-    if projected_anything {
+    // already-spawned prim is neither — use the typed native-field notice to
+    // re-derive off the live stage. Ordinary visual or mission-prim edits do not
+    // invalidate the wiring cache.
+    if connection_paths_changed {
         if let Some(mut dirty) = world.get_resource_mut::<lunco_usd_sim::cosim::WiringDirty>() {
             dirty.0 = true;
         }

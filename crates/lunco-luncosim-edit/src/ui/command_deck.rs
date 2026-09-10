@@ -243,7 +243,10 @@ impl Panel for CommandDeck {
                     // Disengage: brake the tree but KEEP the patrol data
                     // (distinct from ClearPatrol, which wipes it). A later
                     // re-engage restores the route.
-                    ctx.trigger(lunco_autopilot::DisengageAutopilot { vessel: v });
+                    ctx.trigger(lunco_autopilot::DisengageAutopilot {
+                        vessel: v,
+                        reclaim_local: false,
+                    });
                 }
             } else {
                 if ui.button("Engage autopilot").clicked() {

@@ -404,9 +404,8 @@ impl Plugin for LunCoScriptingPlugin {
             );
         }
 
-        // World-bound rhai: a queue of (internal_id, code, authority,
-        // correlation_id) drained by an
-        // exclusive system so scripts can `cmd()`/read the live `&mut World`.
+        // World-bound rhai: typed source/tool requests drained by an exclusive
+        // system so scripts can `cmd()`/read the live `&mut World`.
         // `RunRhai` enqueues here instead of evaluating inline (an observer
         // can't hold `&mut World`); the drain records real stdout afterwards.
         #[cfg(feature = "rhai")]
@@ -431,6 +430,7 @@ impl Plugin for LunCoScriptingPlugin {
             // RunRhai needs full World access, so its API response is resolved
             // by the Update drain after evaluation completes.
             app.register_deferred_command::<commands::RunRhai>();
+            app.register_deferred_command::<commands::RunRhaiTool>();
             // The rhai scenario backend, wrapped in the language-neutral driver
             // (owns the on_start/on_tick/on_event/on_stop + hot-reload + pause +
             // teardown lifecycle; rhai supplies only the mechanics).

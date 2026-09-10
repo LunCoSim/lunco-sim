@@ -71,6 +71,10 @@ A scenario is a `.rhai` program with lifecycle hooks. Attach it to any entity:
   (bumps `ScriptDocument.generation`).
 - **One-shot eval (no attach):** the `RunRhai { code }` command — runs once with
   full World access; stdout is returned in the original deferred response.
+- **Structured tool invocation:** `RunRhaiTool { tool, args }` queues a registered
+  `on_click(context)` tool. `args` uses the shared typed `TelemetryValue` model
+  and is converted directly to a native Rhai value at the backend boundary;
+  scene adapters never build source snippets or JSON literals for tool arguments.
 - **Direct (code/tests):** insert a `ScriptDocument` into `ScriptRegistry` +
   attach `ScriptedModel { language: Rhai, document_id }`.
 
@@ -185,7 +189,7 @@ Representative commands already covering the user's surface:
 | USD geometry editing | `SetUsdAttribute` (`lunco-scene-commands`) — standard USD attributes such as `point3f[] points`; the `gizmo` and `nurbs` Rhai tools are policy libraries over this command |
 | Modelica/cosim | `CompileModel`, `SetModelInput`, run/step commands (`lunco-modelica/...`) |
 | Celestial | `TeleportToSurface`, `LeaveSurface` (`lunco-celestial/src/commands.rs`) |
-| Scripting | `RunRhai`, `RunPython` (`lunco-scripting/src/commands.rs`) |
+| Scripting | `RunRhai`, `RunRhaiTool`, `RunPython` (`lunco-scripting/src/commands.rs`) |
 | Reads | `ListEntities`, `DiscoverSchema`, `ReadPorts`, `ReadExposures`, `GetReadiness`, and domain query providers (all use the tagged `ExecuteCommand` envelope where applicable) |
 
 ---
