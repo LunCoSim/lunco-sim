@@ -18,7 +18,10 @@
 
 #runtime-view-mode-root {
   display: flex;
-  align-items: flex-start;
+  /* The map is an absolute child; keep the switcher in normal flow above it. */
+  position: relative;
+  flex-direction: column;
+  align-items: center;
   justify-content: flex-start;
 }
 

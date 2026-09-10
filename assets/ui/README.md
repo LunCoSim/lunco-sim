@@ -68,6 +68,11 @@ workspace state owns the draggable window override per Twin and clears it on
 complete lunar surface pose, the exposure deliberately hides the marker and
 reports the authored no-fix state.
 
+The view switcher keeps its button card in the root's normal vertical flow and
+anchors the map below it. The map is absolutely positioned inside the fixed
+surface rectangle, so centering both children would let the later map panel
+paint over the switcher controls.
+
 ## Performance and placement
 
 The exposure registry is reactive: identical values do not advance its revision,
