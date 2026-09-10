@@ -137,8 +137,21 @@ default) and leaves hidden cameras inactive. The generic ECS selection is a
 focused-session projection and must be restored from editor-owned session
 selection on focus changes. Dispatch edits with the session's explicit
 document, authored layer, and generation through the typed USD command surface.
+The full-width Prims tree owns a single vertical scroll surface; a newly
+selected primary row opens its ancestors and scrolls into view, while a stable
+selection leaves manual scrolling untouched.
 For path-based editor selection, use `SelectUsdPrim` with the focused preview;
 never resolve a USD path globally across live and preview projections.
+
+The USD visual preview is an egui image over an offscreen camera, so its
+selection surface must publish image-local primary clicks with Shift/Ctrl
+modifier state. The editor selection owner maps that position through the
+focused camera and ray-casts only the preview's composed hierarchy, selecting
+the nearest non-empty `UsdPrimPath` ancestor. The viewport's exact image rect
+is also the sole geometry source for render-target sizing and gizmo handle
+mapping; do not use the surrounding toolbar-bearing panel rect. When a gizmo
+handle owns a primary drag, the preview camera's competing pan path is
+suppressed so the pointer remains in gizmo mode.
 
 Scene click ownership is perspective-scoped. Read the shared
 `lunco_core::SceneInteractionMode` contract: View/simulation owns unmodified

@@ -539,7 +539,11 @@ The `lunco-luncosim-edit` crate provides the interactive layer (palette, gizmo, 
   a deep glTF sub-mesh resolves *up* (via `find_selectable`, depth cap 32) to the
   placed model root rather than the clicked leaf. This keeps the transform gizmo on
   the object's authored placement transform instead of dropping it at the world
-  origin (a glb leaf carries a ~identity parent-local transform).
+  origin (a glb leaf carries a ~identity parent-local transform). Editor preview
+  clicks are a separate offscreen-image input surface: the preview-local camera
+  ray is cast against its composed hierarchy and selects the nearest non-empty
+  `UsdPrimPath` ancestor, so clicking an authored part stays within the preview
+  document without crossing into the live scene.
 - **Manipulation**: `transform-gizmo-bevy` is a render-space frontend on an
   unparented proxy. `capture_gizmo_start` reads the authoritative
   `SimulationPoseQuery`; the editor converts the proxy pose through the active
@@ -550,10 +554,14 @@ The `lunco-luncosim-edit` crate provides the interactive layer (palette, gizmo, 
   targets use the same transaction boundary for canonical translation,
   rotation, and unitless scale through `UsdOp::SetScale`; live simulation
   targets keep scale unavailable until an authored physics topology/solver
-  contract exists. Since the
-  gizmo library writes its final proxy pose in `Last` while the normal
-  interaction transfer runs in `PostUpdate`, a Last-stage final-pose snapshot
-  runs before release cleanup consumes the transaction. The default
+  contract exists. The USD preview stores the exact egui image rectangle
+  measured by the viewport and shares that rectangle with preview ray
+  selection, render-target sizing, and gizmo picking; toolbar coordinates are
+  not treated as scene coordinates. A primary drag captured by a gizmo is
+  removed from preview camera panning. Since the gizmo library writes its final
+  proxy pose in `Last` while the normal interaction transfer runs in
+  `PostUpdate`, a Last-stage final-pose snapshot runs before release cleanup
+  consumes the transaction. The default
   `mouse_interaction` driver is disabled (Cargo `default-features = false`, only
   `gizmo_picking_backend` kept); `drive_gizmo_drag` remains gated to focused
   handles, unclaimed egui pointer capture, and no selection modifier.

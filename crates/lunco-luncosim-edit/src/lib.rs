@@ -148,6 +148,10 @@ impl Plugin for SceneEditPlugin {
         // observe the same `Pointer<Click>` and stand down when another tool
         // owns the click.
         app.add_observer(selection::on_scene_click_select);
+        // The isolated USD preview is an egui image over an offscreen camera,
+        // so its part clicks use the preview-local ray bridge rather than the
+        // main window picking backend.
+        app.add_observer(selection::on_usd_viewport_click);
         app.add_observer(spawn::on_scene_click_spawn);
         app.add_observer(terrain_tools::on_scene_click_terrain);
         app.add_observer(script_tools::on_scene_click_script_tool);

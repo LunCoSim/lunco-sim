@@ -89,6 +89,9 @@ name convention, or ECS-only grouping state is introduced.
   focused `UsdPreviewId` and resolves the path only against that session's
   stage handle and preview-root hierarchy, so identical paths in the live
   scene or another open document cannot cross the editor boundary.
+- The Prims tree owns one full-width vertical scroll surface. When a new
+  selection arrives, it opens the selected prim's ancestors and centers the
+  primary selected row; unchanged selections do not override manual scrolling.
 - Preview navigation is owned by `UsdPreviewView`. Primary/left-drag pan,
   secondary/right-drag orbit, middle-drag pan, and wheel zoom update that
   view's camera state
@@ -298,15 +301,19 @@ restore, and `TransformEntity` path; live scale remains unavailable until a
 separate authored physics contract defines its topology and solver consequences.
 
 The presentation binding is shared with the standard workbench contracts. A
-visible focused preview camera is the sole `GizmoCamera`, and the workbench's
-measured `PanelRects` is converted once into the gizmo frontend's logical
-`viewport_rect`. The maintained gizmo picking backend consumes that same
-rectangle before testing handles, keeping the rendered and interactive
-coordinates identical. The singleton and separate preview-tab renderers both
-record `SceneTarget::Offscreen` ownership in `ScenePickGate`; this preserves
-the global live-scene egui guard while allowing only a handle drag inside the
-focused preview surface. No second USD gizmo, cursor transform, or
-panel-local input gate is introduced.
+visible focused preview camera is the sole `GizmoCamera`, and the viewport
+records the exact egui image rectangle (not its toolbar-bearing panel rect) in
+physical pixels. That rectangle is converted once into the gizmo frontend's
+logical `viewport_rect`, sizes the render target, and maps preview image clicks
+through the same camera. The maintained gizmo picking backend consumes it
+before testing handles, keeping rendered and interactive coordinates identical.
+The singleton and separate preview-tab renderers both record
+`SceneTarget::Offscreen` ownership in `ScenePickGate`; this preserves the
+global live-scene egui guard while allowing part selection and handle drags
+inside the focused preview surface. While a focused gizmo handle owns a
+primary drag, the same gate suppresses the preview camera's competing primary
+pan path, leaving the drag in gizmo mode. No second USD gizmo, cursor
+transform, or panel-local input gate is introduced.
 
 `InspectUsdEditSession` is the read-only proposal review query. It requires an
 explicit `doc_id` and returns each typed proposal, its explicit scope, generation

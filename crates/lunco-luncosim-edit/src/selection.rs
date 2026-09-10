@@ -5,16 +5,17 @@
 //! editor panels all route through the same selection mutation owner.
 
 use bevy::picking::events::{Click, Pointer};
+use bevy::picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings, RayCastVisibility};
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 
 use bevy::camera::primitives::Aabb;
-use bevy::math::Isometry3d;
 use bevy::math::primitives::Cuboid;
+use bevy::math::Isometry3d;
 
 use crate::SpawnState;
 use lunco_controller::ControllerLink;
-use lunco_core::{Avatar, Command, LocalAvatar, on_command, register_commands};
+use lunco_core::{on_command, register_commands, Avatar, Command, LocalAvatar};
 use lunco_scene_commands::SelectedEntities;
 use lunco_usd::ui::viewport::{UsdPreviewId, UsdViewportState};
 use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset};
@@ -139,6 +140,123 @@ pub(crate) fn on_select_entity_target(
     );
     inspector_target.part = None;
     commands.trigger(lunco_core::command_telemetry_event("SelectEntity"));
+}
+
+/// Select a prim under the pointer in the isolated USD preview.
+///
+/// A preview is rendered into an egui image, so its meshes do not participate
+/// in the window's normal picking ray. The USD panel supplies image-local
+/// coordinates; this observer maps them into the preview camera's viewport and
+/// uses Bevy's mesh ray caster against only that preview's composed hierarchy.
+/// The nearest prim-backed ancestor is the selection target, which keeps a
+/// generated visual mesh attached to the authored USD prim it represents.
+pub(crate) fn on_usd_viewport_click(
+    trigger: On<lunco_usd::ui::viewport::UsdViewportClick>,
+    viewport: Res<UsdViewportState>,
+    q_cameras: Query<(&Camera, &GlobalTransform)>,
+    q_paths: Query<&UsdPrimPath>,
+    q_parents: Query<&ChildOf>,
+    mut ray_cast: MeshRayCast,
+    mut commands: Commands,
+) {
+    let click = trigger.event();
+    let Some(view) = viewport.view(click.view) else {
+        return;
+    };
+    let Some(session) = viewport.session(view.preview()) else {
+        return;
+    };
+    let Some(_image_rect) = view.interactive_rect() else {
+        // The event is emitted by the same paint pass that records this rect,
+        // but reject a stale or synthetic event if the view is not visible.
+        return;
+    };
+    let Ok((camera, camera_transform)) = q_cameras.get(view.camera()) else {
+        return;
+    };
+    let Some(camera_viewport) = camera.logical_viewport_rect() else {
+        return;
+    };
+    let Some(pointer) =
+        preview_click_position(click.position, click.viewport_size, camera_viewport)
+    else {
+        return;
+    };
+    let Ok(ray) = camera.viewport_to_world(camera_transform, pointer) else {
+        return;
+    };
+
+    let root = session.scene_root();
+    let stage_id = session.stage_handle().id();
+    let filter = |entity: Entity| crate::ui::is_editor_preview_entity(entity, root, &q_parents);
+    let settings = MeshRayCastSettings {
+        // Preview projection visibility can lag the egui paint by one schedule;
+        // the explicit stage/root filter is the authoritative scope here.
+        visibility: RayCastVisibility::Any,
+        filter: &filter,
+        early_exit_test: &|_| false,
+    };
+    let target = ray_cast
+        .cast_ray(ray, &settings)
+        .iter()
+        .find_map(|(hit, _)| find_preview_prim(*hit, root, stage_id, &q_paths, &q_parents));
+    let Some(target) = target else {
+        return;
+    };
+
+    commands.trigger(SelectEntityTarget {
+        target,
+        intent: selection_intent(click.shift, click.ctrl),
+    });
+}
+
+/// Map an image-local click into the preview camera's logical viewport.
+///
+/// The render target may be capped by the preview budget, so this uses the
+/// camera's actual viewport size instead of assuming it equals the egui image.
+fn preview_click_position(position: Vec2, image_size: Vec2, camera_viewport: Rect) -> Option<Vec2> {
+    if !position.is_finite()
+        || !image_size.is_finite()
+        || image_size.x <= 0.0
+        || image_size.y <= 0.0
+        || !camera_viewport.min.is_finite()
+        || !camera_viewport.size().is_finite()
+        || camera_viewport.size().x <= 0.0
+        || camera_viewport.size().y <= 0.0
+        || position.x < 0.0
+        || position.y < 0.0
+        || position.x > image_size.x
+        || position.y > image_size.y
+    {
+        return None;
+    }
+    Some(camera_viewport.min + position / image_size * camera_viewport.size())
+}
+
+/// Resolve the nearest authored USD prim on a preview mesh's hierarchy.
+fn find_preview_prim(
+    hit: Entity,
+    root: Entity,
+    stage_id: bevy::asset::AssetId<UsdStageAsset>,
+    q_paths: &Query<&UsdPrimPath>,
+    q_parents: &Query<&ChildOf>,
+) -> Option<Entity> {
+    const MAX_DEPTH: usize = 32;
+    let mut entity = hit;
+    for _ in 0..MAX_DEPTH {
+        if entity != root
+            && q_paths
+                .get(entity)
+                .is_ok_and(|path| path.stage_handle.id() == stage_id && !path.path.is_empty())
+        {
+            return Some(entity);
+        }
+        if entity == root {
+            return None;
+        }
+        entity = q_parents.get(entity).ok()?.parent();
+    }
+    None
 }
 
 /// Select an entity by API id — the headless/scriptable equivalent of a
@@ -758,7 +876,11 @@ pub fn compute_selection_aabb(
         }
     }
 
-    if has_aabb { Some((min, max)) } else { None }
+    if has_aabb {
+        Some((min, max))
+    } else {
+        None
+    }
 }
 
 /// Draws body-frame bounds for objects explicitly selected for gizmo editing.
@@ -838,6 +960,68 @@ mod tests {
         assert_eq!(selection_intent(true, false), SelectionIntent::Extend);
         assert_eq!(selection_intent(false, true), SelectionIntent::Remove);
         assert_eq!(selection_intent(true, true), SelectionIntent::Remove);
+    }
+
+    #[test]
+    fn preview_click_maps_image_coordinates_to_camera_viewport() {
+        let camera_viewport = Rect::from_corners(Vec2::ZERO, Vec2::new(800.0, 600.0));
+
+        assert_eq!(
+            preview_click_position(
+                Vec2::new(150.0, 75.0),
+                Vec2::new(300.0, 150.0),
+                camera_viewport,
+            ),
+            Some(Vec2::new(400.0, 300.0))
+        );
+        assert_eq!(
+            preview_click_position(
+                Vec2::new(-1.0, 75.0),
+                Vec2::new(300.0, 150.0),
+                camera_viewport,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn preview_mesh_hit_resolves_to_nearest_authored_prim() {
+        let mut app = App::new();
+        app.add_plugins(bevy::asset::AssetPlugin::default())
+            .init_asset::<UsdStageAsset>();
+        let stage = app.world_mut().resource_mut::<Assets<UsdStageAsset>>().add(
+            UsdStageAsset::from_recipe(lunco_usd_bevy::StageRecipe::from_source(
+                "preview-hit.usda",
+                MINIMAL_USD,
+            ))
+            .expect("preview hit stage"),
+        );
+        let stage_id = stage.id();
+        let root = app.world_mut().spawn_empty().id();
+        let part = app
+            .world_mut()
+            .spawn((
+                UsdPrimPath {
+                    stage_handle: stage,
+                    path: "/World/Chassis".into(),
+                },
+                ChildOf(root),
+            ))
+            .id();
+        let visual = app.world_mut().spawn(ChildOf(part)).id();
+        let mut q_paths = app.world_mut().query::<&UsdPrimPath>();
+        let mut q_parents = app.world_mut().query::<&ChildOf>();
+
+        assert_eq!(
+            find_preview_prim(
+                visual,
+                root,
+                stage_id,
+                &q_paths.query(app.world()),
+                &q_parents.query(app.world()),
+            ),
+            Some(part)
+        );
     }
 
     #[test]
@@ -1123,11 +1307,10 @@ mod tests {
             vec![first]
         );
         assert!(app.world().get::<Selected>(first).is_some());
-        assert!(
-            app.world()
-                .get::<crate::gizmo::GizmoSelected>(first)
-                .is_some()
-        );
+        assert!(app
+            .world()
+            .get::<crate::gizmo::GizmoSelected>(first)
+            .is_some());
 
         app.world_mut()
             .resource_mut::<crate::InspectorTarget>()
@@ -1143,12 +1326,11 @@ mod tests {
             vec![first, second]
         );
         assert!(app.world().get::<Selected>(second).is_some());
-        assert!(
-            app.world()
-                .resource::<crate::InspectorTarget>()
-                .part
-                .is_none()
-        );
+        assert!(app
+            .world()
+            .resource::<crate::InspectorTarget>()
+            .part
+            .is_none());
 
         app.world_mut().trigger(SelectEntityTarget {
             target: first,
@@ -1160,11 +1342,10 @@ mod tests {
             vec![second]
         );
         assert!(app.world().get::<Selected>(first).is_none());
-        assert!(
-            app.world()
-                .get::<crate::gizmo::GizmoSelected>(first)
-                .is_none()
-        );
+        assert!(app
+            .world()
+            .get::<crate::gizmo::GizmoSelected>(first)
+            .is_none());
         assert!(!app.world().resource::<lunco_core::DragModeActive>().active);
     }
 

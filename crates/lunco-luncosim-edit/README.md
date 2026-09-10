@@ -6,6 +6,8 @@ In-scene editing tools for the LunCoSim luncosim: spawn, selection, transform gi
 
 - **Spawn System** — click-to-place rovers, props, and terrain with ghost preview
 - **Entity Selection** — Left-click replaces, Shift+Left-click extends, and Ctrl+Left-click removes from the selection; each uses the transform gizmo selection owner
+- **USD Preview Picking** — clicks in the isolated Editor image map through its focused offscreen camera and select the nearest authored prim-backed part
+- **Prims Navigation** — a newly selected prim opens its ancestors and scrolls into view; unchanged selections leave manual tree scrolling alone
 - **Transform Gizmo** — translate/rotate via `transform-gizmo-bevy`; live entities use BigSpace and the scene command, while USD previews use parent-local projection and `ApplyUsdOps`
 - **Inspector Panel** — EGUI sliders for transform, mass, damping, and wheel parameters
 - **Undo** — Ctrl+Z to revert spawns and transform changes
@@ -58,9 +60,12 @@ Release gizmo handle → live: TransformEntity; USD: one ApplyUsdOps change set
                      → owner state restored or projected, then the session ends
 ```
 
+While a focused gizmo handle owns a primary drag, the preview camera does not
+consume that same drag as a pan gesture.
+
 The presentation owner is selected by `UsdViewportState` and the workbench's
-measured `PanelRects`: a visible focused USD preview camera receives the
-standard `GizmoCamera` marker and its logical `GizmoOptions::viewport_rect`.
+measured preview image rectangle: a visible focused USD preview camera receives
+the standard `GizmoCamera` marker and its logical `GizmoOptions::viewport_rect`.
 The maintained gizmo picking backend applies that same rectangle before
 testing handles, so rendered and interactive coordinates stay in one space.
 When no preview owns the editor, `SceneViewport::active_camera` remains the

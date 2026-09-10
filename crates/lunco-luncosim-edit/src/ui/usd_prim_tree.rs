@@ -336,9 +336,13 @@ fn prim_tree_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     }
 
     let mut to_select: Option<Entity> = None;
+    let primary = selected.primary();
 
     {
         let Some(viewport) = ctx.resource::<UsdViewportState>() else {
+            return;
+        };
+        let Some(focused_preview) = viewport.focused_preview_id() else {
             return;
         };
         let Some(view) = ctx
@@ -351,12 +355,40 @@ fn prim_tree_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
             ui.label(egui::RichText::new("No USD scene loaded.").weak());
             return;
         }
-        // The workbench already owns the panel's full-width vertical scroll
-        // body. A nested auto-shrinking scroll area made the tree's content
-        // width track its longest label instead of the dock width.
-        for root in &view.roots {
-            render_prim_node(ui, root, view, &selected, &mut to_select, 0);
-        }
+        let scroll_id = ui.make_persistent_id(("usd_prim_tree_scroll", focused_preview.0));
+        let selection_id = ui.make_persistent_id(("usd_prim_tree_selection", focused_preview.0));
+        let selection_changed = ui
+            .ctx()
+            .data(|data| data.get_temp::<Vec<Entity>>(selection_id))
+            .as_ref()
+            != Some(&selected.entities);
+        let reveal_path =
+            primary.and_then(|entity| ctx.get::<UsdPrimPath>(entity).map(|path| path.path.clone()));
+
+        // The dock deliberately disables its generic tab scroll wrapper, so
+        // this panel owns one full-width scroll area. On a new selection, open
+        // the selected path's ancestors and ask the selected row to reveal
+        // itself; stable selections do not fight the user's manual scrolling.
+        egui::ScrollArea::vertical()
+            .id_salt(scroll_id)
+            .auto_shrink([false; 2])
+            .show(ui, |ui| {
+                for root in &view.roots {
+                    render_prim_node(
+                        ui,
+                        root,
+                        view,
+                        &selected,
+                        primary,
+                        reveal_path.as_deref(),
+                        selection_changed,
+                        &mut to_select,
+                        0,
+                    );
+                }
+            });
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(selection_id, selected.entities.clone()));
     }
 
     // Route selection through the shared `apply_selection` (keyed by Entity).
@@ -376,6 +408,9 @@ fn render_prim_node(
     key: &NodeKey,
     view: &UsdPrimTreeSessionView,
     selected: &lunco_scene_commands::SelectedEntities,
+    primary: Option<Entity>,
+    reveal_path: Option<&str>,
+    selection_changed: bool,
     to_select: &mut Option<Entity>,
     depth: usize,
 ) {
@@ -385,7 +420,15 @@ fn render_prim_node(
     let label = prim_label(node);
 
     if node.children.is_empty() {
-        prim_select_label(ui, node, &label, selected, to_select);
+        prim_select_label(
+            ui,
+            node,
+            &label,
+            selected,
+            primary,
+            selection_changed,
+            to_select,
+        );
         return;
     }
     // Top two levels open by default so the scene structure is visible without
@@ -399,6 +442,9 @@ fn render_prim_node(
         id,
         default_open,
     );
+    if reveal_path.is_some_and(|path| is_path_or_descendant(path, key)) {
+        state.set_open(true);
+    }
     // Keep the tree structural rather than animated. egui's animated
     // collapsing body paints the full child subtree into a temporary clipped
     // region while its height changes, which produces transient stale outlines
@@ -408,12 +454,30 @@ fn render_prim_node(
         ui.spacing_mut().item_spacing.x = 0.0;
         let _toggle = state.show_toggle_button(ui, egui::collapsing_header::paint_default_icon);
         ui.spacing_mut().item_spacing = item_spacing;
-        prim_select_label(ui, node, &label, selected, to_select);
+        prim_select_label(
+            ui,
+            node,
+            &label,
+            selected,
+            primary,
+            selection_changed,
+            to_select,
+        );
     });
     if state.is_open() {
         ui.indent(id, |ui| {
             for child in &node.children {
-                render_prim_node(ui, child, view, selected, to_select, depth + 1);
+                render_prim_node(
+                    ui,
+                    child,
+                    view,
+                    selected,
+                    primary,
+                    reveal_path,
+                    selection_changed,
+                    to_select,
+                    depth + 1,
+                );
             }
         });
     }
@@ -427,6 +491,8 @@ fn prim_select_label(
     node: &PrimTreeNode,
     label: &str,
     selected: &lunco_scene_commands::SelectedEntities,
+    primary: Option<Entity>,
+    selection_changed: bool,
     to_select: &mut Option<Entity>,
 ) {
     match node.entity {
@@ -447,6 +513,9 @@ fn prim_select_label(
                     egui::Button::selectable(selected.entities.contains(&entity), label),
                 )
                 .on_hover_text(hint);
+            if selection_changed && primary == Some(entity) {
+                resp.scroll_to_me(Some(egui::Align::Center));
+            }
             if resp.clicked() {
                 *to_select = Some(entity);
             }
@@ -458,6 +527,14 @@ fn prim_select_label(
             );
         }
     }
+}
+
+/// Return whether `path` is the node or a descendant of `node`.
+fn is_path_or_descendant(path: &str, node: &str) -> bool {
+    path == node
+        || path
+            .strip_prefix(node)
+            .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
 /// `<marker> <name>` — a body marker for a rigid body, else a folder/dot.

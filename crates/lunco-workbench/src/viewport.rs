@@ -78,7 +78,7 @@ use bevy::prelude::*;
 // exists when the `bevy_render` feature is on, which wasm strips.
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::{ClearColorConfig, Hdr, RenderTarget};
-use bevy_egui::{EguiGlobalSettings, PrimaryEguiContext, egui};
+use bevy_egui::{egui, EguiGlobalSettings, PrimaryEguiContext};
 
 use crate::{Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlot};
 use lunco_core::SceneViewport;
@@ -185,6 +185,9 @@ pub struct ScenePickGate {
     /// Resolved scene under the pointer — the single source of truth read by
     /// [`egui_viewport_aware_picking`] and [`track_egui_focus`]. `None` = chrome.
     resolved: Option<SceneTarget>,
+    /// True while the editor gizmo owns a primary drag inside an offscreen
+    /// preview. The USD preview uses this to suppress its competing pan path.
+    gizmo_pointer_capture: bool,
     /// True while a pointer button has been held since the press that produced
     /// `resolved`. Drives the press-latch (see [`PressLatch`]).
     latched: bool,
@@ -360,6 +363,13 @@ impl ScenePickGate {
         self.scene_viewport_rect = rect;
     }
 
+    /// Record that an editor gizmo handle owns the current primary drag.
+    /// This does not change scene-vs-chrome ownership; it only prevents the
+    /// preview camera from consuming the same drag.
+    pub fn set_gizmo_pointer_capture(&mut self, captured: bool) {
+        self.gizmo_pointer_capture = captured;
+    }
+
     /// Mark that the egui pass ran this frame (so the gate's inputs are real).
     pub fn mark_rendered(&mut self) {
         self.rendered = true;
@@ -372,6 +382,7 @@ impl ScenePickGate {
         self.chrome_cards.clear();
         self.dock_rect = None;
         self.scene_viewport_rect = None;
+        self.gizmo_pointer_capture = false;
     }
 
     /// The scene the pointer is over right now, or `None` for chrome. The single
@@ -386,6 +397,11 @@ impl ScenePickGate {
     /// the main camera.
     pub fn over_main_scene(&self) -> bool {
         self.resolved == Some(SceneTarget::MainViewport)
+    }
+
+    /// Whether the editor gizmo owns the primary drag in an offscreen preview.
+    pub fn gizmo_pointer_capture(&self) -> bool {
+        self.gizmo_pointer_capture
     }
 
     /// Fold this frame's inputs + egui's geometry into the resolved target,
@@ -1162,7 +1178,7 @@ impl Plugin for WorkbenchViewportPlugin {
 mod tests {
     use super::*;
     use bevy::camera::CameraOutputMode;
-    use egui::{Rect, pos2};
+    use egui::{pos2, Rect};
 
     const USD_PREVIEW: PanelId = PanelId("usd::viewport");
 
@@ -1399,7 +1415,7 @@ mod tests {
     fn collapsed_viewport_leaf_rect_is_scene() {
         let dock = rect((0.0, 30.0), (800.0, 400.0));
         let vp = rect((200.0, 30.0), (800.0, 400.0)); // the viewport leaf's rect
-        // No scene_leaf (panel didn't render), no chrome card over the centre.
+                                                      // No scene_leaf (panel didn't render), no chrome card over the centre.
         let out = resolve_scene_target(hovering((400.0, 200.0)), None, &[], Some(dock), Some(vp));
         assert_eq!(out, Some(SceneTarget::MainViewport));
     }

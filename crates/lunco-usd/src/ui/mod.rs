@@ -51,8 +51,8 @@ pub use viewport::{
     OpenUsdPreview, OpenUsdPreviewView, SetUsdPreviewTextLayer, SetUsdPreviewViewMode,
     UsdPreviewExplodeAction, UsdPreviewExplodeAxis, UsdPreviewId, UsdPreviewRenderBudget,
     UsdPreviewSession, UsdPreviewTextLayer, UsdPreviewView, UsdPreviewViewId, UsdPreviewViewMode,
-    UsdPreviewViewPanel, UsdViewportPanel, UsdViewportPlugin, UsdViewportState, EDITOR_PREVIEW_ID,
-    USD_PREVIEW_VIEW_PANEL_ID, USD_VIEWPORT_PANEL_ID,
+    UsdPreviewViewPanel, UsdViewportClick, UsdViewportPanel, UsdViewportPlugin, UsdViewportState,
+    EDITOR_PREVIEW_ID, USD_PREVIEW_VIEW_PANEL_ID, USD_VIEWPORT_PANEL_ID,
 };
 
 /// Plugin that installs the USD Twin-browser section and the lifecycle

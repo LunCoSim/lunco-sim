@@ -80,8 +80,9 @@ use lunco_usd_bevy::{
     UsdVisualSynced,
 };
 use lunco_workbench::{
-    CloseTab, InstancePanel, OpenTab, Panel, PanelCtx, PanelId, PanelRects, PanelScrollPolicy,
-    PanelSlot, PendingTabCloses, ScenePickGate, SceneTarget, TabId, WorkbenchAppExt,
+    CloseTab, InstancePanel, OpenTab, Panel, PanelCtx, PanelId, PanelRect, PanelRects,
+    PanelScrollPolicy, PanelSlot, PendingTabCloses, ScenePickGate, SceneTarget, TabId,
+    WorkbenchAppExt,
 };
 use lunco_workspace::{document_belongs_to_twin_root, TwinClosed, WorkspaceResource};
 
@@ -919,6 +920,13 @@ pub struct UsdPreviewView {
     auto_frame: bool,
     mode: UsdPreviewViewMode,
     text_layer: UsdPreviewTextLayer,
+    /// The exact egui image rectangle from the last visible paint pass.
+    ///
+    /// The preview camera renders to an image that is then placed inside a
+    /// panel with controls above it. Keeping the image rect, rather than the
+    /// whole panel rect, gives input consumers one authoritative mapping for
+    /// preview picking and gizmo handles.
+    interactive_rect: Option<PanelRect>,
 }
 
 impl UsdPreviewView {
@@ -964,6 +972,10 @@ impl UsdPreviewView {
 
     pub fn text_layer(&self) -> UsdPreviewTextLayer {
         self.text_layer
+    }
+
+    pub fn interactive_rect(&self) -> Option<PanelRect> {
+        self.interactive_rect
     }
 }
 
@@ -1217,6 +1229,7 @@ struct UsdViewportMeasured {
     view: UsdPreviewViewId,
     over_scene: bool,
     visible: bool,
+    image_rect: Option<PanelRect>,
 }
 
 /// Measurement emitted by an instance preview panel. The workbench owns the
@@ -1227,6 +1240,22 @@ struct UsdPreviewViewMeasured {
     view: UsdPreviewViewId,
     over_scene: bool,
     visible: bool,
+    image_rect: Option<PanelRect>,
+}
+
+/// A primary click in one visible USD preview image.
+///
+/// The image is an egui surface over an offscreen camera, so it cannot travel
+/// through the main window's Bevy picking ray. The event carries image-local
+/// coordinates and the modifier intent across that presentation boundary;
+/// editor selection owns the corresponding preview ray cast.
+#[derive(Event, Clone, Copy, Debug)]
+pub struct UsdViewportClick {
+    pub view: UsdPreviewViewId,
+    pub position: Vec2,
+    pub viewport_size: Vec2,
+    pub shift: bool,
+    pub ctrl: bool,
 }
 
 /// Return true when a preview's authoritative USD projection inputs changed.
@@ -1397,15 +1426,17 @@ struct UsdViewportOrbitInput {
 }
 
 /// Resolve the preview's pointer buttons into the shared View interaction
-/// contract: left/middle drag pans and right drag orbits. Shift keeps the
+/// contract: left/middle drag pans and right drag orbits. A captured primary
+/// drag belongs to the editor gizmo, not the preview camera. Shift keeps the
 /// explicit pan chord available when the secondary button is used.
 fn preview_drag_channels(
     primary: bool,
     middle: bool,
     secondary: bool,
     shift: bool,
+    gizmo_pointer_capture: bool,
 ) -> (bool, bool) {
-    let pan = primary || middle || (secondary && shift);
+    let pan = (primary && !gizmo_pointer_capture) || middle || (secondary && shift);
     let orbit = secondary && !pan;
     (orbit, pan)
 }
@@ -1414,7 +1445,7 @@ fn on_viewport_measured(
     trigger: On<UsdViewportMeasured>,
     rects: Res<PanelRects>,
     mut gate: ResMut<ScenePickGate>,
-    state: Res<UsdViewportState>,
+    mut state: ResMut<UsdViewportState>,
     mut visibility: ResMut<UsdPreviewFrameVisibility>,
     budget: Res<UsdPreviewRenderBudget>,
     mut cameras: Query<&mut Camera>,
@@ -1424,8 +1455,14 @@ fn on_viewport_measured(
         SceneTarget::Offscreen(USD_VIEWPORT_PANEL_ID),
         event.over_scene,
     );
+    if let Some(view) = state.view_mut(event.view) {
+        view.interactive_rect = event.visible.then_some(event.image_rect).flatten();
+    }
     if event.visible {
-        if let Some(rect) = rects.get(USD_VIEWPORT_PANEL_ID) {
+        if let Some(rect) = event
+            .image_rect
+            .or_else(|| rects.get(USD_VIEWPORT_PANEL_ID))
+        {
             mark_view_visible(
                 &state,
                 event.view,
@@ -1441,7 +1478,7 @@ fn on_viewport_measured(
 fn on_preview_view_measured(
     trigger: On<UsdPreviewViewMeasured>,
     rects: Res<PanelRects>,
-    state: Res<UsdViewportState>,
+    mut state: ResMut<UsdViewportState>,
     mut gate: ResMut<ScenePickGate>,
     mut visibility: ResMut<UsdPreviewFrameVisibility>,
     budget: Res<UsdPreviewRenderBudget>,
@@ -1452,8 +1489,14 @@ fn on_preview_view_measured(
         SceneTarget::Offscreen(USD_VIEWPORT_PANEL_ID),
         event.over_scene,
     );
+    if let Some(view) = state.view_mut(event.view) {
+        view.interactive_rect = event.visible.then_some(event.image_rect).flatten();
+    }
     if event.visible {
-        if let Some(rect) = rects.get_instance(USD_PREVIEW_VIEW_PANEL_ID, event.view.0) {
+        if let Some(rect) = event
+            .image_rect
+            .or_else(|| rects.get_instance(USD_PREVIEW_VIEW_PANEL_ID, event.view.0))
+        {
             mark_view_visible(
                 &state,
                 event.view,
@@ -1685,6 +1728,7 @@ fn create_preview_view(
         auto_frame: true,
         mode: UsdPreviewViewMode::default(),
         text_layer: UsdPreviewTextLayer::default(),
+        interactive_rect: None,
     })
 }
 
@@ -1911,7 +1955,7 @@ fn resize_viewport_image(
         } else {
             rects.get_instance(USD_PREVIEW_VIEW_PANEL_ID, view.id().0)
         };
-        let Some(requested) = rect.map(|rect| rect.size) else {
+        let Some(requested) = view.interactive_rect.or(rect).map(|rect| rect.size) else {
             continue;
         };
         let Some(target) = bounded_view_size(requested, &budget) else {
@@ -3732,7 +3776,7 @@ fn render_preview_view(
         }
     });
     if mode == UsdPreviewViewMode::Visual {
-        ui.small("L-drag pan · R-drag orbit · M-drag pan · wheel zoom");
+        ui.small("L-drag pan · gizmo handles edit · R-drag orbit · M-drag pan · wheel zoom");
     }
     ui.separator();
 
@@ -3742,12 +3786,14 @@ fn render_preview_view(
                 view: view_id,
                 over_scene: false,
                 visible: false,
+                image_rect: None,
             });
         } else {
             ctx.trigger(UsdPreviewViewMeasured {
                 view: view_id,
                 over_scene: false,
                 visible: false,
+                image_rect: None,
             });
         }
         render_preview_text(ui, ctx, view_id, focused_doc, text_layer);
@@ -3770,18 +3816,21 @@ fn render_preview_view(
         egui::Image::new(egui::load::SizedTexture::new(tex_id, size))
             .sense(egui::Sense::click_and_drag()),
     );
+    let image_rect = panel_rect_from_egui(response.rect, ui.ctx());
     let over_scene = ui.rect_contains_pointer(response.rect);
     if singleton {
         ctx.trigger(UsdViewportMeasured {
             view: view_id,
             over_scene,
             visible: true,
+            image_rect: Some(image_rect),
         });
     } else {
         ctx.trigger(UsdPreviewViewMeasured {
             view: view_id,
             over_scene,
             visible: true,
+            image_rect: Some(image_rect),
         });
         // Selecting a dock tab is a view-focus action. The instance renderer
         // publishes that choice so all native editor panels follow the same
@@ -3794,6 +3843,25 @@ fn render_preview_view(
         }
     }
 
+    if response.clicked_by(egui::PointerButton::Primary) {
+        if let Some(pointer) = response.interact_pointer_pos() {
+            let modifiers = ui.ctx().input(|input| input.modifiers);
+            ctx.trigger(UsdViewportClick {
+                view: view_id,
+                position: Vec2::new(
+                    pointer.x - response.rect.min.x,
+                    pointer.y - response.rect.min.y,
+                ),
+                viewport_size: Vec2::new(response.rect.width(), response.rect.height()),
+                shift: modifiers.shift,
+                ctrl: modifiers.ctrl,
+            });
+        }
+    }
+
+    let gizmo_pointer_capture = ctx
+        .resource::<ScenePickGate>()
+        .is_some_and(ScenePickGate::gizmo_pointer_capture);
     let (drag, pan) = if response.dragged() {
         let shift = ui.ctx().input(|input| input.modifiers.shift);
         let (orbit, pan) = preview_drag_channels(
@@ -3801,6 +3869,7 @@ fn render_preview_view(
             response.dragged_by(egui::PointerButton::Middle),
             response.dragged_by(egui::PointerButton::Secondary),
             shift,
+            gizmo_pointer_capture,
         );
         let delta = response.drag_delta();
         (
@@ -3823,6 +3892,25 @@ fn render_preview_view(
             viewport_size: response.rect.size(),
             scroll_y,
         });
+    }
+}
+
+/// Convert the exact image rectangle painted by egui to the physical-pixel
+/// rectangle used by the preview camera and the gizmo frontend.
+fn panel_rect_from_egui(rect: egui::Rect, ctx: &egui::Context) -> PanelRect {
+    let ppp = ctx.pixels_per_point().max(f32::EPSILON);
+    let min = rect.min * ppp;
+    let max = rect.max * ppp;
+    let min_x = min.x.max(0.0).floor() as u32;
+    let min_y = min.y.max(0.0).floor() as u32;
+    let max_x = max.x.max(min.x).ceil() as u32;
+    let max_y = max.y.max(min.y).ceil() as u32;
+    PanelRect {
+        origin: UVec2::new(min_x, min_y),
+        size: UVec2::new(
+            max_x.saturating_sub(min_x).max(1),
+            max_y.saturating_sub(min_y).max(1),
+        ),
     }
 }
 
@@ -4188,7 +4276,7 @@ mod tests {
     ) -> ExplodeUsdPreview {
         ExplodeUsdPreview {
             preview,
-            doc,
+            doc_id: doc,
             assembly: assembly.into(),
             parts: parts.iter().map(|part| (*part).into()).collect(),
             action,
@@ -4655,10 +4743,7 @@ mod tests {
         let state = app.world().resource::<UsdViewportState>();
         assert_eq!(state.session_count(), 1);
         assert_eq!(state.focused_doc(), Some(doc));
-        assert_eq!(
-            state.session(preview).unwrap().scene_root(),
-            first_root
-        );
+        assert_eq!(state.session(preview).unwrap().scene_root(), first_root);
 
         let _ = std::fs::remove_file(path);
     }
@@ -5107,24 +5192,29 @@ mod tests {
     #[test]
     fn preview_pointer_buttons_match_view_navigation_contract() {
         assert_eq!(
-            preview_drag_channels(true, false, false, false),
+            preview_drag_channels(true, false, false, false, false),
             (false, true)
         );
         assert_eq!(
-            preview_drag_channels(false, true, false, false),
+            preview_drag_channels(false, true, false, false, false),
             (false, true)
         );
         assert_eq!(
-            preview_drag_channels(false, false, true, false),
+            preview_drag_channels(false, false, true, false, false),
             (true, false)
         );
         assert_eq!(
-            preview_drag_channels(false, false, true, true),
+            preview_drag_channels(false, false, true, true, false),
             (false, true)
         );
         assert_eq!(
-            preview_drag_channels(true, false, false, true),
+            preview_drag_channels(true, false, false, true, false),
             (false, true)
+        );
+        assert_eq!(
+            preview_drag_channels(true, false, false, false, true),
+            (false, false),
+            "a primary drag captured by a gizmo must not pan the preview"
         );
     }
 

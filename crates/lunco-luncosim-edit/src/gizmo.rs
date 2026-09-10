@@ -28,7 +28,7 @@ use lunco_core::SceneViewport;
 use lunco_doc::DocumentId;
 use lunco_usd::document::LayerId;
 use lunco_usd::ui::viewport::{
-    USD_PREVIEW_VIEW_PANEL_ID, USD_VIEWPORT_PANEL_ID, UsdPreviewId, UsdViewportState,
+    UsdPreviewId, UsdViewportState, USD_PREVIEW_VIEW_PANEL_ID, USD_VIEWPORT_PANEL_ID,
 };
 use lunco_usd_bevy::UsdPrimPath;
 use lunco_workbench::{PanelRect, PanelRects, ScenePickGate, SceneTarget};
@@ -998,7 +998,7 @@ pub fn drive_gizmo_drag(
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     egui_focus: Res<lunco_core::EguiFocus>,
-    gate: Option<Res<ScenePickGate>>,
+    mut gate: Option<ResMut<ScenePickGate>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     viewport: Option<Res<UsdViewportState>>,
     panel_rects: Option<Res<PanelRects>>,
@@ -1020,15 +1020,23 @@ pub fn drive_gizmo_drag(
             .as_deref()
             .and_then(ScenePickGate::resolved)
             .is_some_and(|target| matches!(target, SceneTarget::Offscreen(_)));
+    let modifier_held = keys.any_pressed([
+        KeyCode::ShiftLeft,
+        KeyCode::ShiftRight,
+        KeyCode::ControlLeft,
+        KeyCode::ControlRight,
+    ]);
+    let gizmo_pointer_capture = preview_owns_pointer
+        && mouse.pressed(MouseButton::Left)
+        && !modifier_held
+        && q_targets.iter().any(|target| target.is_focused());
+    if let Some(gate) = gate.as_deref_mut() {
+        gate.set_gizmo_pointer_capture(gizmo_pointer_capture);
+    }
     let live_owns_pointer = !egui_focus.wants_pointer && !preview_pointer;
 
     if (!live_owns_pointer && !preview_owns_pointer)
-        || keys.any_pressed([
-            KeyCode::ShiftLeft,
-            KeyCode::ShiftRight,
-            KeyCode::ControlLeft,
-            KeyCode::ControlRight,
-        ])
+        || modifier_held
         || !q_targets.iter().any(|target| target.is_focused())
     {
         // Selection and gizmo interaction are two edges: the first click
@@ -1131,21 +1139,23 @@ pub(crate) fn sync_gizmo_camera(
     }
 }
 
-/// Return the focused preview's panel footprint in physical pixels.
+/// Return the focused preview's exact image footprint in physical pixels.
 ///
 /// `PanelRects` is cleared and repopulated by the active workbench pass, so a
 /// rectangle exists only while the focused singleton or an opened view tab is
-/// actually visible. The singleton is preferred when both render the focused
-/// view; otherwise the focused instance supplies the footprint.
+/// actually visible. The USD view stores the image rect measured inside that
+/// panel; the panel rect remains a first-frame fallback until the image has
+/// painted once.
 fn focused_preview_rect(
     viewport: Option<&UsdViewportState>,
     panel_rects: Option<&PanelRects>,
 ) -> Option<PanelRect> {
     let view = viewport?.focused_view()?;
     let rects = panel_rects?;
-    rects
+    let panel_rect = rects
         .get(USD_VIEWPORT_PANEL_ID)
-        .or_else(|| rects.get_instance(USD_PREVIEW_VIEW_PANEL_ID, view.id().0))
+        .or_else(|| rects.get_instance(USD_PREVIEW_VIEW_PANEL_ID, view.id().0))?;
+    Some(view.interactive_rect().unwrap_or(panel_rect))
 }
 
 fn focused_preview_camera(
@@ -1383,11 +1393,9 @@ mod tests {
             ..Transform::IDENTITY
         };
 
-        assert!(
-            preview_global_to_local_transform(&proxy, None)
-                .and_then(|local| local_transform_pose(&local))
-                .is_none()
-        );
+        assert!(preview_global_to_local_transform(&proxy, None)
+            .and_then(|local| local_transform_pose(&local))
+            .is_none());
     }
 
     #[test]
@@ -1455,20 +1463,18 @@ mod tests {
             Some(&RigidBody::Dynamic)
         );
         assert!(app.world().get::<GizmoDragState>(vessel).is_none());
-        assert!(
-            app.world()
-                .get::<lunco_physics::KinematicDrive>(vessel)
-                .is_none()
-        );
+        assert!(app
+            .world()
+            .get::<lunco_physics::KinematicDrive>(vessel)
+            .is_none());
         assert_eq!(
             app.world().get::<LinearVelocity>(vessel).unwrap().0,
             DVec3::ZERO
         );
-        assert!(
-            app.world()
-                .get::<CustomPositionIntegration>(vessel)
-                .is_none()
-        );
+        assert!(app
+            .world()
+            .get::<CustomPositionIntegration>(vessel)
+            .is_none());
     }
 
     /// Dragging a prop that was never a rigid body must not MAKE it one.
@@ -1545,11 +1551,10 @@ mod tests {
              log 'has no mass or inertia' forever"
         );
         assert!(app.world().get::<GizmoDragState>(prop).is_none());
-        assert!(
-            app.world()
-                .get::<lunco_physics::KinematicDrive>(prop)
-                .is_none()
-        );
+        assert!(app
+            .world()
+            .get::<lunco_physics::KinematicDrive>(prop)
+            .is_none());
         assert!(app.world().get::<CustomPositionIntegration>(prop).is_none());
     }
 }
