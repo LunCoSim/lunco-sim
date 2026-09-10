@@ -109,8 +109,8 @@ pub use lint::{physics_facts, USD_LINT_DOMAIN};
 
 pub mod filtered_pairs;
 pub use filtered_pairs::{
-    enable_shared_tire_contact_hooks, FilteredPairs, PendingFilteredPairs, SharedTireContact,
-    UsdCollisionFilter,
+    enable_shared_tire_contact_hooks, FilteredPairs, JointCollisionPair, JointFilteredPairs,
+    PendingFilteredPairs, SharedTireContact, UsdCollisionFilter,
 };
 
 pub mod collision_groups;
@@ -3830,8 +3830,9 @@ pub fn attach_joint<J: Component + Clone>(
     // never reach the narrow phase, and a contact formed during the wait cannot
     // be cleaned up afterwards without corrupting avian's island bookkeeping.
     // See `filtered_pairs::filter_pair`.
-    filtered_pairs::filter_pair(commands, body0, body1);
+    filtered_pairs::filter_pair(commands, joint_entity, body0, body1);
     commands.entity(joint_entity).try_insert((
+        filtered_pairs::JointCollisionPair { body0, body1 },
         PendingJoint {
             body0,
             body1,
@@ -3869,6 +3870,7 @@ pub struct JointAdmission;
 
 impl Plugin for JointAttachPlugin {
     fn build(&self, app: &mut App) {
+        app.add_observer(filtered_pairs::on_remove_joint_collision_pair);
         // One registration per joint type: the ticket is generic over the
         // constraint it carries, so a new joint kind is one line HERE and
         // nothing else anywhere.
