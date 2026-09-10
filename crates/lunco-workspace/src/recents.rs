@@ -5,7 +5,7 @@
 //! head so re-opening a project doesn't grow the list. Caps keep the
 //! UI tidy and the session file small.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// Upper bound on tracked recent Twin folders.
 pub const MAX_RECENT_TWINS: usize = 10;
@@ -14,9 +14,10 @@ pub const MAX_RECENT_FILES: usize = 20;
 
 /// Recently-opened items. Most-recent first.
 ///
-/// Paths are stored as absolute `PathBuf`s; canonicalisation is a
-/// consumer concern because it hits the filesystem and Workspace
-/// operations want to stay pure.
+/// Paths are stored as canonical `PathBuf`s when the entry exists. Missing
+/// entries retain a lexical absolute/relative spelling with `.` and `..`
+/// resolved, so cleanup remains deterministic without inventing a filesystem
+/// identity for a file that is no longer present.
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Recents {
     /// Recent Twin folders. Capped at [`MAX_RECENT_TWINS`].
@@ -43,6 +44,17 @@ impl Recents {
     pub fn clear(&mut self) {
         self.twin_paths.clear();
         self.loose_paths.clear();
+    }
+
+    /// Canonicalize and deduplicate entries loaded from an older session.
+    ///
+    /// The first occurrence wins because recents are ordered most-recent
+    /// first. Returns whether the in-memory representation changed; the
+    /// persistence owner uses that result to rewrite the session file once.
+    pub fn deduplicate(&mut self) -> bool {
+        let twin_paths = deduplicate_paths(&mut self.twin_paths, MAX_RECENT_TWINS);
+        let loose_paths = deduplicate_paths(&mut self.loose_paths, MAX_RECENT_FILES);
+        twin_paths || loose_paths
     }
 
     /// Load recents from a JSON file. Returns [`Default`] on any error
@@ -83,11 +95,60 @@ impl Recents {
 }
 
 fn push_front_dedupe(list: &mut Vec<PathBuf>, path: PathBuf, cap: usize) {
-    list.retain(|p| p != &path);
-    list.insert(0, path);
-    if list.len() > cap {
-        list.truncate(cap);
+    let mut paths = std::mem::take(list);
+    paths.insert(0, path);
+    deduplicate_paths(&mut paths, cap);
+    *list = paths;
+}
+
+fn deduplicate_paths(list: &mut Vec<PathBuf>, cap: usize) -> bool {
+    let original = list.clone();
+    let mut unique = Vec::with_capacity(list.len().min(cap));
+    let mut identities = Vec::with_capacity(list.len().min(cap));
+
+    for path in list.drain(..) {
+        let canonical = canonical_identity(&path);
+        if identities.iter().any(|identity| identity == &canonical) {
+            continue;
+        }
+        identities.push(canonical.clone());
+        unique.push(canonical);
+        if unique.len() == cap {
+            break;
+        }
     }
+
+    *list = unique;
+    *list != original
+}
+
+/// Resolve one recent entry to the identity used for deduplication and
+/// reopening. Existing files use the filesystem's canonical path, resolving
+/// symlinks and `.`/`..`; missing entries use a lexical normalization so
+/// aliases still collapse without pretending two different missing files are
+/// the same.
+fn canonical_identity(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| lexical_normalize(path))
+}
+
+fn lexical_normalize(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => match normalized.components().next_back() {
+                Some(Component::Normal(_)) => {
+                    normalized.pop();
+                }
+                Some(Component::RootDir | Component::Prefix(_)) => {}
+                _ => normalized.push(component.as_os_str()),
+            },
+            Component::Normal(_) | Component::RootDir | Component::Prefix(_) => {
+                normalized.push(component.as_os_str());
+            }
+        }
+    }
+    normalized
 }
 
 // Test fixtures on disk, native-only — see the note on `lib.rs`'s test module.
@@ -103,6 +164,57 @@ mod tests {
         r.push_twin("/b".into());
         r.push_twin("/a".into());
         assert_eq!(r.twin_paths, vec![PathBuf::from("/a"), PathBuf::from("/b")]);
+    }
+
+    #[test]
+    fn missing_paths_deduplicate_after_lexical_normalization() {
+        let mut r = Recents::default();
+        r.push_loose("/tmp/lunco-recent/./models/../Rover.mo".into());
+        r.push_loose("/tmp/lunco-recent/Rover.mo".into());
+        assert_eq!(
+            r.loose_paths,
+            vec![PathBuf::from("/tmp/lunco-recent/Rover.mo")]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn existing_symlink_aliases_deduplicate_and_reopen_canonical_file() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("Rover.mo");
+        let alias = dir.path().join("alias.mo");
+        std::fs::write(&real, "model Rover end Rover;").unwrap();
+        symlink(&real, &alias).unwrap();
+
+        let mut r = Recents::default();
+        r.push_loose(real.clone());
+        r.push_loose(alias);
+
+        assert_eq!(r.loose_paths.len(), 1);
+        assert_eq!(r.loose_paths[0], std::fs::canonicalize(real).unwrap());
+        assert!(r.loose_paths[0].is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn loaded_alias_cleanup_preserves_most_recent_entry() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("Rover.mo");
+        let alias = dir.path().join("alias.mo");
+        std::fs::write(&real, "model Rover end Rover;").unwrap();
+        symlink(&real, &alias).unwrap();
+
+        let mut r = Recents {
+            twin_paths: Vec::new(),
+            loose_paths: vec![alias, real.clone()],
+        };
+        assert!(r.deduplicate());
+        assert_eq!(r.loose_paths, vec![std::fs::canonicalize(real).unwrap()]);
+        assert!(!r.deduplicate());
     }
 
     #[test]
