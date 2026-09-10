@@ -122,6 +122,13 @@ list. Highlights:
 
 Add helpers freely — edit the prelude, no rebuild.
 
+For a reusable helper rather than mission-local policy, use a named Rhai tool
+library under `assets/scripting/tools/` or the active Twin's `tools/` directory.
+Follow [`author-rhai-tool`](../author-rhai-tool/SKILL.md): registered tools are
+called as `name::function(...)`, do not use dynamic `import` for them, and a
+tool used to author USD must return typed operations to the document owner
+instead of writing USDA or mutating ECS.
+
 ## 3a. Writing a scene TEST
 
 A test scenario is an ordinary scenario whose last act is a verdict. Take the

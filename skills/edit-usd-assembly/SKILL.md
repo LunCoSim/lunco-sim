@@ -313,6 +313,15 @@ marks no-selection, multi-selection, stale entries, and duplicate projected
 paths explicitly. Never use the returned display `name` as an edit key; pass
 the returned exact path and document/edit target to the existing typed helper.
 
+When the existing libraries do not express a reusable policy, create a
+Twin-scoped or shared library following
+[`author-rhai-tool`](../author-rhai-tool/SKILL.md). Keep the new function a
+pure `*_plan` when it authors USD, and use a separate read-only `*_report` or
+`*_lint` for requirements. Register it with `RegisterToolLibrary`, verify a
+real namespaced call after the tool-generation maintenance pass, and keep the
+same headful process for the edit, readback, screenshot, and test. A tool
+registry listing is not proof that its module is callable.
+
 For semantic component construction, use `assembly_builder::find_compatible_socket`
 and `assembly_builder::mount_component`. The builder selects the exact
 authored socket and derives the reflected joint contract; the existing typed

@@ -40,6 +40,8 @@ file goes, how it is discovered, the `lunco://` scheme),
 assembly authoring with screenshot/user-feedback checkpoints),
 [`validate-assets`](../validate-assets/SKILL.md) (pre-flight it),
 [`test-via-api`](../test-via-api/SKILL.md) (verify), [`compose-multidomain-twin`](../compose-multidomain-twin/SKILL.md).
+For creating or hot-registering reusable Rhai builders, lints, and component
+tests, read [`author-rhai-tool`](../author-rhai-tool/SKILL.md).
 
 ## Component contract before geometry
 
@@ -65,6 +67,12 @@ component change. Use standard USD variants for genuine configurations; if
 the typed editor cannot create the needed variant set/blocks or reference-list
 opinion, report the Rust capability gap instead of using hidden duplicate
 geometry as a substitute.
+
+Keep the component's Rhai source reviewable: pure plan functions,
+read-only requirement reports, and runtime test observers are separate
+responsibilities. Register Twin-scoped libraries through `RegisterToolLibrary`
+and verify a real namespaced call in the same process; `ListToolLibraries` alone
+is not invocation proof. See [`author-rhai-tool`](../author-rhai-tool/SKILL.md).
 
 ## Skeleton
 

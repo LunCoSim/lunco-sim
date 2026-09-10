@@ -143,6 +143,8 @@ This skill is the *assembly* layer over the single-domain skills:
 [`author-scenario`](../author-scenario/SKILL.md) (behaviour),
 [`run-modelica`](../run-modelica/SKILL.md) (the `.mo` models),
 [`inspect-simulation`](../inspect-simulation/SKILL.md) (verify the chain).
+For reusable builders, component lints, and live typed-operation helpers, use
+[`author-rhai-tool`](../author-rhai-tool/SKILL.md).
 For architecture decisions and standard-schema checks, read
 [`luncosim-architecture`](../luncosim-architecture/SKILL.md). It is the gate
 against special-case Rust, duplicate USD vocabulary, and compatibility paths.
@@ -399,6 +401,12 @@ wrapper is assembly state, not a missing-port fallback, and live values still co
 When passing a composed Twin to another agent, record the target checkout and
 revision, reused exemplar paths, authored files, network roots and boundaries,
 assumption status, exact checks, runtime/API evidence, visual evidence, and the
-next blocker. State explicitly which claims are source inspection only. Keep the
-handoff factual and scoped; do not promote mission-specific assumptions into
-general skill rules.
+next blocker. State explicitly which claims are source inspection only. Include
+the active branch/worktree, preserved dirty changes, production binary and API
+port, open document/preview ids, registered tool libraries, exact public
+sources, component-to-assembly ownership, the last successful generation, and
+the next safe command. Separate preflight, typed projection, runtime, and
+visual evidence. Keep the handoff factual and scoped; do not promote
+mission-specific assumptions into general skill rules. The handover is not
+complete until a new agent can resume without guessing which document, layer,
+tool scope, or test runner is authoritative.
