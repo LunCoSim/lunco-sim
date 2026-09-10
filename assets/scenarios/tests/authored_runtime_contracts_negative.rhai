@@ -36,6 +36,17 @@ fn on_tick(me) {
         dir: [0.0, -1.0, 0.0],
         max: 20.0,
     });
+    let unrepresentable_ray = query("Raycast", #{
+        origin: [1e308, 10.0, 0.0],
+        dir: [0.0, -1.0, 0.0],
+        max: 20.0,
+    });
+    let unrepresentable_ground = query("GroundHeight", #{
+        x: 1e308,
+        z: 0.0,
+        from: 10.0,
+        max: 20.0,
+    });
 
     this.done = true;
     report_verdict([
@@ -51,6 +62,12 @@ fn on_tick(me) {
             "topology hid the disabled collider fact or its geometry envelope"),
         t_true(ray != () && ray.hit == false,
             "raycast reported a collider for the disabled-only fixture"),
+        t_true(unrepresentable_ray != () && unrepresentable_ray.ok != false
+            && unrepresentable_ray.hit == false,
+            "raycast admitted an origin the Avian spatial backend cannot represent"),
+        t_true(unrepresentable_ground != () && unrepresentable_ground.ok != false
+            && unrepresentable_ground.hit == false,
+            "ground query admitted an origin the Avian spatial backend cannot represent"),
     ], "AUTHORED RUNTIME CONTRACTS NEGATIVE", "AUTHORED_RUNTIME_CONTRACTS_NEGATIVE");
 }
 

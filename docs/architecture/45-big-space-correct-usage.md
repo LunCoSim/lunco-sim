@@ -206,6 +206,19 @@ lint-only warnings. During scene replacement, the existing `SceneMountState`
 and runtime-fault gates also prevent outgoing entities from producing new ray
 observations.
 
+There are three intentionally distinct rejection layers. The USD projection
+plan rejects malformed composed transforms before ECS materialization; the
+bridge validator covers finite-but-unrepresentable or newly changed runtime
+poses and collider bounds; and the public `Raycast`/`GroundHeight` adapters
+return no hit for an invalid query point rather than passing it to OBVHS.
+Query-input rejection is not a simulation fault: only invalid engine state
+raises `RuntimeFaults` and the safety hold. The bridge regression
+`backend_validation_holds_unrepresentable_body_before_avian` proves the
+runtime-state path, while the production
+`authored_runtime_contracts_negative` scene proves the public query path.
+Scene teardown clears the fault and safety hold together, so a valid
+replacement scene can be admitted by the existing lifecycle owner.
+
 The local avatar is a kinematic camera embodiment, not an authored rigid body.
 Its keyboard and wheel movement uses Avian's `MoveAndSlide` with one capsule
 shape against the standard colliders projected from the composed USD stage.

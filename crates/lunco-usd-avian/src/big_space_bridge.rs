@@ -1620,6 +1620,68 @@ mod tests {
     }
 
     #[test]
+    fn backend_validation_holds_unrepresentable_body_before_avian() {
+        let mut world = World::new();
+        world.insert_resource(NarrowPhaseConfig::default());
+        world.insert_resource(PhysicsLengthUnit(1.0));
+        world.init_resource::<lunco_core::RuntimeFaults>();
+        world.init_resource::<lunco_physics::PhysicsHolds>();
+        let entity = world
+            .spawn((
+                RigidBody::Dynamic,
+                Position(DVec3::new(f64::MAX, 0.0, 0.0)),
+                Rotation(DQuat::IDENTITY),
+            ))
+            .id();
+
+        world
+            .run_system_once(validate_physics_backend_state)
+            .expect("backend validation system runs");
+
+        let fault = world
+            .resource::<lunco_core::RuntimeFaults>()
+            .first
+            .as_ref()
+            .expect("unrepresentable body raises a terminal fault");
+        assert_eq!(fault.kind, "avian-backend-pose-invalid");
+        assert_eq!(fault.entity, Some(entity));
+        assert!(world
+            .resource::<lunco_physics::PhysicsHolds>()
+            .holds(lunco_physics::PhysicsHolds::SAFETY_FAILURE));
+    }
+
+    #[test]
+    fn backend_validation_holds_unrepresentable_standalone_collider() {
+        let mut world = World::new();
+        world.insert_resource(NarrowPhaseConfig::default());
+        world.insert_resource(PhysicsLengthUnit(1.0));
+        world.init_resource::<lunco_core::RuntimeFaults>();
+        world.init_resource::<lunco_physics::PhysicsHolds>();
+        let entity = world
+            .spawn((
+                Collider::cuboid(1.0, 1.0, 1.0),
+                Position(DVec3::new(f64::MAX, 0.0, 0.0)),
+                Rotation(DQuat::IDENTITY),
+            ))
+            .id();
+
+        world
+            .run_system_once(validate_physics_backend_state)
+            .expect("backend validation system runs");
+
+        let fault = world
+            .resource::<lunco_core::RuntimeFaults>()
+            .first
+            .as_ref()
+            .expect("unrepresentable collider raises a terminal fault");
+        assert_eq!(fault.kind, "avian-collider-aabb-invalid");
+        assert_eq!(fault.entity, Some(entity));
+        assert!(world
+            .resource::<lunco_physics::PhysicsHolds>()
+            .holds(lunco_physics::PhysicsHolds::SAFETY_FAILURE));
+    }
+
+    #[test]
     fn world_pose_round_trips_through_cell_remainder() {
         let mut world = World::new();
         // Parent grid at a large heliocentric offset (cell (150_000_000, 0, 0)

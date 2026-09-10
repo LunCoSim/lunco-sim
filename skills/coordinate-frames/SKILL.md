@@ -69,7 +69,13 @@ through the same atomic migration helper. For a physical entity, keep it under
 bridge owns lifecycle admission and raises the runtime fault when changed poses
 or collider AABBs are invalid. It gates the nested physics phases before Avian
 grows AABBs or runs a query; `GridSpatialQuery` reuses the same point check
-after conversion. For a trajectory
+after conversion. Keep the evidence layers separate: malformed composed USD
+transforms fail during projection, mutable runtime pose/AABB failures raise
+`RuntimeFaults` plus `PhysicsHolds::SAFETY_FAILURE`, and invalid public query
+origins return no hit without becoming a simulation fault. Use the existing
+bridge and scene-teardown tests for the first two, and a production Rhai scene
+test for the public query contract; do not add a second per-producer filter.
+For a trajectory
 or connection line, convert both endpoints into one semantic frame before
 generating cell-local geometry. Treat trajectory visibility as a work boundary:
 sample ephemeris and rebuild cell-local mesh only for an active trajectory view,

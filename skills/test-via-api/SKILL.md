@@ -61,6 +61,17 @@ Rust core for a script-only change. The observer must verify public `cmd:*`
 events plus the resulting live state and emit a real verdict. Parsing or
 `--validate` is only preflight evidence.
 
+For spatial safety coverage, keep malformed authored transforms in the USD
+projection layer: that layer must reject them before ECS materialization. Test
+runtime-state admission at the `lunco-usd-avian` bridge owner, where a finite
+but f32-unrepresentable pose must raise a named `RuntimeFaults` record and
+`PhysicsHolds::SAFETY_FAILURE` before Avian runs. Test public `Raycast` and
+`GroundHeight` with a finite but unrepresentable query origin through an
+authored production scene; the expected result is `{hit:false}`, not a
+terminal simulation fault. This distinction keeps query-input validation from
+masking an engine-state failure and avoids duplicating guards in sensors,
+terrain, and vehicle callers.
+
 For a one-shot assertion that needs the currently loaded USD stage, use
 `./scripts/api/run_rhai_test.sh <port> <test.rhai> [probe-prim]`. It prepends
 the test libraries and delegates to the native `luncosim rhai --stdout` client,
