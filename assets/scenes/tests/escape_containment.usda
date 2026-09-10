@@ -7,9 +7,11 @@
 
 # Negative production fixture for the physics escape boundary.
 #
-# The dynamic body is authored far below the only static collider. A production
-# luncosim session must keep running, raise the structured terminal fault, and
-# hold physics without rewriting the body's pose.
+# The dynamic body is authored outside the only static collider's footprint. A
+# production luncosim session must keep running, raise the structured terminal
+# fault, and hold physics without rewriting the body's pose. Keeping the body
+# laterally outside the support avoids the authored-initial-pose penetration
+# gate while still exercising the world-exit boundary.
 def Xform "EscapeContainmentTest" (
     kind = "assembly"
     doc = "Negative fixture: a dynamic body begins outside the static world bounds."
@@ -44,7 +46,7 @@ def Xform "EscapeContainmentTest" (
     )
     {
         double size = 1.0
-        double3 xformOp:translate = (0, -1510.0, 0)
+        double3 xformOp:translate = (1510.0, 0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         float physics:mass = 1.0
         bool physics:collisionEnabled = true
