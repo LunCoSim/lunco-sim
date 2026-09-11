@@ -100,12 +100,11 @@ use lunco_usd_bevy::SPAWN_GROUND_CLEARANCE;
 /// Cached, real-time-derived spawn footprints per catalog entry.
 ///
 /// The footprint is computed once — when the entry's USD stage finishes loading
-/// during `SpawnState::Selecting` — by taking the asset's collision-geometry AABB
-/// in its own frame (see [`lunco_usd_bevy::collision_aabb`]). It reads the same
-/// composed data that `sync_usd_visuals` instantiates and that the avian compound
-/// collider is built from, so the placement solver and the live physics body can
-/// never disagree — the object rests on its lowest collider point for ANY asset
-/// (lander, rover, prop), no wheels and no per-asset table required. Cached so the
+/// during `SpawnState::Selecting` — by taking the asset's whole-assembly collision
+/// envelope in its own frame (see [`lunco_usd_bevy::collision_aabb`]). It
+/// reads the same composed data that `sync_usd_visuals` instantiates and that the
+/// physics bodies are built from, so the placement solver accounts for nested
+/// articulated parts instead of burying them below the terrain. Cached so the
 /// per-frame ghost and the click observer read a pre-computed value
 /// (frame-discipline: never recomputed every frame). The strong `Handle` keeps the
 /// stage resident while the entry is selected so the asset doesn't unload between

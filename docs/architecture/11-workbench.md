@@ -651,7 +651,7 @@ and `InputOverlaySettings` resources and the active Twin's generic
 `ui.camera_status` value. It also removes the `celestial-view` entry from the
 existing `RuntimeSurfaceLayouts` resource when the user requests a position
 reset; it does not add a parallel visibility or layout store. HUDs whose
-visibility is inherently automatic — driven-vessel/rover, authored lander
+visibility is inherently automatic — authored subject-scoped surfaces,
 controls, terrain or download progress, tutorials, notifications, and blackout
 state — are listed with their owner but remain lifecycle-controlled.
 
