@@ -49,7 +49,7 @@ use lunco_workbench::twin_browser::BrowserQuery;
 use lunco_workbench::twin_browser::BrowserScope;
 use lunco_workbench::{BrowserAction, BrowserCtx, BrowserSection};
 
-use lunco_usd::document::UsdDocument;
+use lunco_usd_core::document::UsdDocument;
 
 /// What kind of file a row is — decides its group and its click action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

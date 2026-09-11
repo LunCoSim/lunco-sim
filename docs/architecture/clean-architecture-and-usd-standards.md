@@ -50,7 +50,7 @@ configuration, and domain-specific vehicle authoring where no standard vehicle
 schema exists. They must be narrow and must not repeat a standard property.
 
 The source of the LunCo schema registry is
-`crates/lunco-usd/schema/schema.usda`. `generatedSchema.usda` and `plugInfo.json`
+`crates/lunco-usd-core/schema/schema.usda`. `generatedSchema.usda` and `plugInfo.json`
 are generated artifacts. Edit the source, run `scripts/gen_schema.py`, and test
 the generated result. Never hand-edit generated schema files.
 

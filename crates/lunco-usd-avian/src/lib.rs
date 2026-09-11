@@ -5302,7 +5302,7 @@ def PhysicsPrismaticJoint "FixtureSpring" (
 }
 "#;
         let stage = lunco_usd_bevy::CanonicalStage::from_recipe(
-            &lunco_usd_bevy::StageRecipe::from_source("lint_only.usda", source),
+            &lunco_usd_core::StageRecipe::from_source("lint_only.usda", source),
         )
         .expect("compose lint-only fixture");
         let view = stage.view();
@@ -5785,7 +5785,8 @@ def Xform \"Host\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
 #[cfg(test)]
 mod collider_ownership_tests {
     use super::*;
-    use lunco_usd_bevy::{CanonicalStage, StageRecipe};
+    use lunco_usd_bevy::CanonicalStage;
+    use lunco_usd_core::StageRecipe;
     use std::collections::HashMap;
 
     #[test]

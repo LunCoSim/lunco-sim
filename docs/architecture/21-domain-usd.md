@@ -5,14 +5,17 @@
 > USD (Pixar Universal Scene Description) is the scene-graph and asset format
 > LunCoSim uses for the 3D world. Bases, rovers, habitats, terrain — everything
 > physical — lives as USD prims in USD stages. See
-> [`../../crates/lunco-usd/`](../../crates/lunco-usd/) and companion crates
-> `lunco-usd-avian`, `lunco-usd-bevy` (which also owns composition/flattening), `lunco-usd-sim`.
+> [`../../crates/lunco-usd-core/`](../../crates/lunco-usd-core/), [`../../crates/lunco-usd/`](../../crates/lunco-usd/) and companion crates
+> `lunco-usd-geometry`, `lunco-usd-avian`, `lunco-usd-bevy` (which also owns
+> composition/flattening), `lunco-usd-sim`.
 
-Package ownership follows the same boundary: `lunco-usd` contains the
-document/authoring surface and its lightweight probes, `lunco-usd-bevy` owns
-visual projection, and `lunco-usd-sim` owns USD-to-Avian/simulation examples
-and integration tests. This keeps simulation-only dev dependencies out of the
-authoring crate without introducing a test-only package.
+Package ownership follows the same boundary: `lunco-usd-core` contains the
+headless document/authoring surface, schemas, and pure probes; `lunco-usd`
+contains runtime orchestration and document commands; `lunco-usd-geometry`
+owns the reusable render-free NURBS, trim, and curve-sweep substrate;
+`lunco-usd-bevy` owns stage/visual projection; and `lunco-usd-sim` owns USD-to-Avian/simulation examples
+and integration tests. This keeps runtime and simulation dependencies out of
+the authoring crate without introducing a test-only package.
 
 ## Scope
 
@@ -43,7 +46,7 @@ view produces a **typed `UsdOp`** that applies to the document; every other view
 updates. The op is the single description of the delta — never a diff re-derived
 by reading state back (the *author-once coherence* invariant, below).
 
-Current `UsdOp` set (`lunco-usd/src/document.rs`), each carrying an
+Current `UsdOp` set (`lunco-usd-core/src/document.rs`), each carrying an
 `edit_target: LayerId` naming which layer receives the opinion:
 
 ```rust
@@ -88,7 +91,7 @@ Views observing a `UsdDocument`:
 A running scene is held in **two** forms, and neither absorbs the other — this is
 USD's own `SdfLayer` (authored opinions you save) vs `UsdStage` (the composition) split:
 
-- **`UsdDocument`** (`lunco-usd/src/document.rs`) — the authored `sdf::Data` **layers**:
+- **`UsdDocument`** (`lunco-usd-core/src/document.rs`) — the authored `sdf::Data` **layers**:
   `base` (persisted root layer, written on Save) **⊕** `runtime` (ephemeral overlay —
   spawns, moves, obstacle fields — *not* saved). `LayerId::root()` vs `LayerId::runtime()`
   route each op. Plain, `Send`, serializable: this is what Save writes, the journal

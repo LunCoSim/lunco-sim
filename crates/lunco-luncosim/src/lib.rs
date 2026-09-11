@@ -1282,7 +1282,7 @@ fn replay_scenario_journal(
     // Host-side only (inserted by `setup_host`) — the manifest this host serves.
     local_scenario: Option<Res<lunco_networking::scenario::ScenarioManifestResource>>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
-    mut registry: ResMut<lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>>,
+    mut registry: ResMut<lunco_doc_bevy::DocumentRegistry<lunco_usd_core::document::UsdDocument>>,
     // Entry ids already projected onto the scene (once-per-entry guard).
     mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
     // The host's replay base, latched the first frame its manifest exists.
@@ -2317,7 +2317,8 @@ lunco_core::register_commands!(on_set_rhai_policy);
 #[cfg(all(test, feature = "networking", not(target_arch = "wasm32")))]
 mod policy_projection_tests {
     use super::{append_usd_policies, AuthoredPolicy};
-    use lunco_usd_bevy::{CanonicalStage, CanonicalStages, StageRecipe};
+    use lunco_usd_bevy::{CanonicalStage, CanonicalStages};
+    use lunco_usd_core::StageRecipe;
 
     fn extract_usd_policies(canonical: &CanonicalStages) -> Vec<AuthoredPolicy> {
         let mut out = Vec::new();
@@ -2435,7 +2436,7 @@ mod policy_projection_tests {
             .into_iter()
             .find(|p| p.to_string() == "/World/drive")
             .expect("policy prim present");
-        let new_src = lunco_usd_bevy::author::parse_attribute_value("string", "\"fn drive(c){2}\"")
+        let new_src = lunco_usd_core::author::parse_attribute_value("string", "\"fn drive(c){2}\"")
             .expect("parse");
         stages
             .get(id)

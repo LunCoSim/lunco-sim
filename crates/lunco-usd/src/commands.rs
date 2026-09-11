@@ -26,7 +26,7 @@
 //! so File menus, picker dialogs, and `twin.toml` parsers see USD
 //! without any central edit.
 
-use crate::document::UsdDocument;
+use lunco_usd_core::document::UsdDocument;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -44,17 +44,17 @@ use lunco_doc_bevy::{
 };
 use lunco_storage::Storage; // brings `write_sync` / `read_sync` into scope
 use lunco_twin::{DocumentKindId, DocumentKindMeta, DocumentKindRegistry};
-use lunco_usd_bevy::usd_data::UsdDataExt;
 use lunco_usd_bevy::{UsdPrimPath, UsdRead, UsdSceneRoot};
+use lunco_usd_core::UsdDataExt;
 use lunco_workspace::open::{spawn_twin_scan, PendingTwinOpens, TwinOpenMode};
 use lunco_workspace::{TwinClosed, WorkspaceResource};
 
-use crate::document::{LayerId, UsdOp};
-use crate::edit_session::{
-    validate_proposal, UsdEditScope, UsdEditSessions, UsdProposalId, UsdProposalState,
-};
 use lunco_doc::OpenOutcome;
 use lunco_doc_bevy::DocumentRegistry;
+use lunco_usd_core::document::{LayerId, UsdOp};
+use lunco_usd_core::edit_session::{
+    validate_proposal, UsdEditScope, UsdEditSessions, UsdProposalId, UsdProposalState,
+};
 use lunco_usd_sim::cosim::{
     clear_scene_entities, resolve_root_prim, spawn_scene_root_world, validate_scene_address,
     ClearScene, LoadScene, SceneEntities, SceneLoadInFlight,
@@ -1697,7 +1697,7 @@ fn proposal_diagnostics(diagnostics: &[String]) -> String {
 /// recipe root with its current opinions for each synchronous operation.
 fn refresh_authoring_recipe(world: &mut World, doc: DocumentId) {
     let recipe = crate::assembly_api::canonical_stage_for_document(world, doc).map(|stage| {
-        lunco_usd_bevy::StageRecipe {
+        lunco_usd_core::StageRecipe {
             root_id: stage.scene_layer.clone(),
             bytes: stage.layer_bytes_snapshot(),
         }
@@ -2626,7 +2626,7 @@ pub fn apply_ops_as_change_set(
 
 /// Attach a component asset to a host body as a jointed child, deriving the
 /// joint anchor from the placement so it is authored once, not twice. Lowers to
-/// the primitive [`UsdOp`]s in [`crate::attach::attach_component_ops`].
+/// the primitive [`UsdOp`]s in [`lunco_usd_core::attach::attach_component_ops`].
 ///
 /// The whole lowering is applied inside **one journal change set**
 /// ([`apply_ops_as_change_set`]), so the attach is **one undo unit**: undo removes
@@ -2696,7 +2696,7 @@ fn target_layer_authors_prim(
 fn validate_detach_component(
     world: &World,
     doc: DocumentId,
-    spec: &crate::attach::DetachSpec,
+    spec: &lunco_usd_core::attach::DetachSpec,
 ) -> Result<(), String> {
     let component = openusd::sdf::Path::new(&spec.component_path)
         .map_err(|error| format!("invalid component path {}: {error}", spec.component_path))?;
@@ -2873,7 +2873,7 @@ fn validate_detach_component(
 fn validate_attach_component(
     world: &World,
     doc: DocumentId,
-    spec: &crate::attach::AttachSpec,
+    spec: &lunco_usd_core::attach::AttachSpec,
 ) -> Result<(), String> {
     if spec.placement.iter().any(|value| !value.is_finite())
         || spec.rotate_deg.iter().any(|value| !value.is_finite())
@@ -2958,9 +2958,9 @@ fn validate_attach_component(
         .filter(|value| !value.is_empty())
         .ok_or_else(|| format!("socket {socket_path} has no accepted plug kind"))?;
     let expected_joint = match &spec.joint {
-        crate::attach::AttachJoint::Fixed => "fixed",
-        crate::attach::AttachJoint::Revolute { .. } => "revolute",
-        crate::attach::AttachJoint::Prismatic { .. } => "prismatic",
+        lunco_usd_core::attach::AttachJoint::Fixed => "fixed",
+        lunco_usd_core::attach::AttachJoint::Revolute { .. } => "revolute",
+        lunco_usd_core::attach::AttachJoint::Prismatic { .. } => "prismatic",
     };
     let actual_joint = authored_text(&composed, &socket, "lunco:mount:joint")
         .filter(|value| !value.is_empty())
@@ -2971,12 +2971,12 @@ fn validate_attach_component(
         ));
     }
     let requested_axis = match &spec.joint {
-        crate::attach::AttachJoint::Fixed => None,
-        crate::attach::AttachJoint::Revolute { axis }
-        | crate::attach::AttachJoint::Prismatic { axis } => Some(match axis {
-            crate::attach::Axis::X => "X",
-            crate::attach::Axis::Y => "Y",
-            crate::attach::Axis::Z => "Z",
+        lunco_usd_core::attach::AttachJoint::Fixed => None,
+        lunco_usd_core::attach::AttachJoint::Revolute { axis }
+        | lunco_usd_core::attach::AttachJoint::Prismatic { axis } => Some(match axis {
+            lunco_usd_core::attach::Axis::X => "X",
+            lunco_usd_core::attach::Axis::Y => "Y",
+            lunco_usd_core::attach::Axis::Z => "Z",
         }),
     };
     let authored_axis =
@@ -3050,7 +3050,7 @@ pub struct AttachComponent {
     /// Target document.
     pub doc_id: DocumentId,
     /// The attachment to perform.
-    pub spec: crate::attach::AttachSpec,
+    pub spec: lunco_usd_core::attach::AttachSpec,
 }
 
 #[on_command(AttachComponent)]
@@ -3066,7 +3066,7 @@ fn on_attach_component(
         let outcome = match validate_attach_component(world, doc, &spec) {
             Err(error) => Err(error),
             Ok(()) => {
-                let ops = crate::attach::attach_component_ops(&spec);
+                let ops = lunco_usd_core::attach::attach_component_ops(&spec);
                 let label = format!("Attach {} to {}", spec.name, spec.host_path);
                 let (applied, total) = apply_ops_as_change_set(world, doc, label, ops);
                 if applied != total {
@@ -3109,7 +3109,7 @@ pub struct DetachComponent {
     /// Target document.
     pub doc_id: DocumentId,
     /// Exact component attachment to remove.
-    pub spec: crate::attach::DetachSpec,
+    pub spec: lunco_usd_core::attach::DetachSpec,
 }
 
 #[on_command(DetachComponent)]
@@ -3124,7 +3124,7 @@ fn on_detach_component(
         let outcome = match validate_detach_component(world, command.doc_id, &command.spec) {
             Err(error) => Err(error),
             Ok(()) => {
-                let ops = crate::attach::detach_component_ops(&command.spec);
+                let ops = lunco_usd_core::attach::detach_component_ops(&command.spec);
                 let label = format!("Detach {}", command.spec.component_path);
                 let (applied, total) = apply_ops_as_change_set(world, command.doc_id, label, ops);
                 if applied != total {
@@ -3180,14 +3180,14 @@ pub struct AttachProgram {
     /// Target USD document.
     pub doc_id: DocumentId,
     /// Complete program attachment intent.
-    pub spec: crate::program::ProgramAttachSpec,
+    pub spec: lunco_usd_core::program::ProgramAttachSpec,
 }
 
 #[on_command(AttachProgram)]
 fn on_attach_program(trigger: On<AttachProgram>, mut commands: Commands) {
     let command = trigger.event().clone();
     commands.queue(move |world: &mut World| {
-        let ops = match crate::program::program_attach_ops(&command.spec) {
+        let ops = match lunco_usd_core::program::program_attach_ops(&command.spec) {
             Ok(ops) => ops,
             Err(error) => {
                 bevy::log::warn!(
@@ -3466,10 +3466,10 @@ mod change_set_tests {
     //! lossless `(forward, inverse)` entry, while the change-set ID makes the
     //! complete attach one undo unit.
     use super::*;
-    use crate::attach::{attach_component_ops, AttachJoint, AttachSpec, Axis};
-    use crate::document::LayerId;
     use lunco_doc_bevy::JournalResource;
     use lunco_twin_journal::{AuthorTag, UndoManager, UndoScope};
+    use lunco_usd_core::attach::{attach_component_ops, AttachJoint, AttachSpec, Axis};
+    use lunco_usd_core::document::LayerId;
 
     const RIG: &str =
         "#usda 1.0\ndef Xform \"Rig\"\n{\n    def Xform \"Chassis\"\n    {\n    }\n}\n";
@@ -4101,7 +4101,7 @@ mod tests {
         );
         let operation = proposal_test_op("Chassis");
         let document = registry.host(doc).expect("document").document();
-        let validation = crate::edit_session::validate_proposal(
+        let validation = lunco_usd_core::edit_session::validate_proposal(
             document,
             UsdEditScope::Assembly,
             0,
@@ -4333,8 +4333,8 @@ mod tests {
 
     #[test]
     fn apply_usd_op_builds_a_rover_through_typed_command_bus() {
-        use crate::document::{LayerId, UsdOp};
         use lunco_doc::Document;
+        use lunco_usd_core::document::{LayerId, UsdOp};
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -4398,7 +4398,7 @@ mod tests {
         // One more tick to flush any final queued world commands.
         app.update();
 
-        use lunco_usd_bevy::usd_data::UsdDataExt;
+        use lunco_usd_core::UsdDataExt;
         use openusd::sdf::Path as SdfPath;
         let reg = app.world().resource::<DocumentRegistry<UsdDocument>>();
         let host = reg.host(doc_id).expect("doc still alive");
@@ -4439,8 +4439,8 @@ mod tests {
     /// real `UsdOp` inverse rides alongside it.
     #[test]
     fn apply_usd_op_records_lossless_journal_entries() {
-        use crate::document::{LayerId, UsdOp};
         use lunco_twin_journal::{DomainKind, EntryKind};
+        use lunco_usd_core::document::{LayerId, UsdOp};
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);

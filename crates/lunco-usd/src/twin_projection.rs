@@ -17,7 +17,7 @@
 //!    success or failure event.
 //! 2. [`drain_pending_twin_docs`] — once the source asset emits its terminal
 //!    event, allocate a
-//!    [`UsdDocument`](crate::document) for it (origin = the on-disk path, so Save
+//!    [`UsdDocument`](lunco_usd_core::document::UsdDocument) for it (origin = the on-disk path, so Save
 //!    and dedup work), restore its persisted `.lunco/runtime` overlay, publish
 //!    the composed source as the twin overlay, record it in
 //!    [`DocBackedTwinScenes`] (synced at the current generation), and only then
@@ -45,7 +45,7 @@
 //! that same doc-first mount. Files inside the active Twin remain document-only;
 //! scheme-qualified scene sources enter the typed `LoadScene` path directly.
 
-use crate::document::UsdDocument;
+use lunco_usd_core::document::UsdDocument;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -61,9 +61,9 @@ use lunco_usd_bevy::{
 use lunco_usd_sim::cosim::LoadScene;
 
 use crate::commands::{EmptyViewportReason, TWIN_SCENE_LOAD_FAILED};
-use crate::document::UsdOp;
 use lunco_doc::OpenOutcome;
 use lunco_doc_bevy::{DocumentChanged, DocumentRegistry};
+use lunco_usd_core::document::UsdOp;
 
 /// A USD document transitioned from a Twin-only scene lease to a user-facing
 /// session lease. The UI uses this to expose a document only after the user
@@ -1333,7 +1333,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
             let v = if is_string {
                 openusd::sdf::Value::String(value.clone())
             } else {
-                match lunco_usd_bevy::author::parse_attribute_value(type_name, value) {
+                match lunco_usd_core::author::parse_attribute_value(type_name, value) {
                     Ok(v) => v,
                     Err(e) => {
                         warn!("[twin] parse attribute {path}.{name} ({type_name}): {e}");
@@ -1393,7 +1393,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                         .and_then(|stages| stages.get(scene_id))
                         .map(|stage| {
                             let view = stage.view();
-                            crate::program::selected_behavior_source_values(&view, &sp)
+                            crate::live_consume::selected_behavior_source_values(&view, &sp)
                                 .unwrap_or_default()
                         });
                     if let Some(owner) = behavior_owner_entity(world, scene_id, &sp) {
@@ -1523,7 +1523,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
             let Ok(sp) = openusd::sdf::Path::new(path) else {
                 return;
             };
-            let v = match lunco_usd_bevy::author::parse_attribute_value(type_name, value) {
+            let v = match lunco_usd_core::author::parse_attribute_value(type_name, value) {
                 Ok(v) => v,
                 Err(e) => {
                     warn!("[twin] parse keyframe {path}.{name} ({type_name}) @ {time}: {e}");
@@ -1951,7 +1951,8 @@ fn rebuild_scene_from_composed(
     scene_id: AssetId<UsdStageAsset>,
     composed_source: &str,
 ) {
-    use lunco_usd_bevy::{CanonicalStages, StageRecipe};
+    use lunco_usd_bevy::CanonicalStages;
+    use lunco_usd_core::StageRecipe;
     // Recipe = the edited composed source as the root layer + every referenced
     // `.usda` the current stage already loaded (keyed by the same canonical ids).
     let (scene_layer, mut bytes) = {
@@ -2182,8 +2183,8 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document::{LayerId, UsdOp};
     use lunco_usd_bevy::UsdVisualSynced;
+    use lunco_usd_core::document::{LayerId, UsdOp};
 
     const TINY: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n";
 

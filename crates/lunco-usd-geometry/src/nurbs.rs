@@ -19,9 +19,9 @@
 //!
 //! What is NOT delegated is the **sweep**: no crate implements
 //! rotation-minimizing frames (`curvo` ships a `FrenetFrame`, which degenerates
-//! on exactly the straight runs a habitat is full of), so [`crate::curve_sweep`]
-//! stays hand-written. That is the honest split — buy the solved problem, write
-//! the unsolved one.
+//! on exactly the straight runs a habitat is full of), so the hand-written
+//! `curve_sweep` module stays separate. That is the honest split — buy the
+//! solved problem, write the unsolved one.
 //!
 //! ## USD → truck
 //!
@@ -36,7 +36,7 @@
 // traits that carry `subs` / `range_tuple`) alongside `nurbs::*`. Naming the
 // sub-paths individually does NOT work — the traits must be in scope for their
 // methods to resolve, and `truck_geotrait` is not a direct dependency.
-use bevy::log::warn;
+use bevy_log::warn;
 use truck_geometry::prelude::*;
 
 /// Sample a `UsdGeomNurbsCurves` curve into a polyline of `steps + 1` points.

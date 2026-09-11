@@ -49,7 +49,7 @@ Only the real file can.
 ## Why they're here
 
 A property's **type**, its **variability** (`uniform`/`varying`) and whether it is
-`custom` are declared by its *schema*, not by whoever authors it. `lunco_usd::schema`
+`custom` are declared by its *schema*, not by whoever authors it. `lunco_usd_core::schema`
 is the one place that knows, and it must know core USD too — otherwise a core `uniform`
 property it hasn't been told about gets written `varying`, with no error.
 

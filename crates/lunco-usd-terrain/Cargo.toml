@@ -19,6 +19,7 @@ openusd = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-usd = { path = "../lunco-usd", default-features = false }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-obstacle-field = { path = "../lunco-obstacle-field" }
 lunco-assets = { workspace = true }

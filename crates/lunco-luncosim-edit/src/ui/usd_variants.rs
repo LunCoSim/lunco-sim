@@ -4,7 +4,7 @@
 //! A variantSet is how one asset ships several configurations: a rover's
 //! `drivetrain` (raycast | physical), a scenario scene's `terrain` (which real
 //! lunar site it composes with). Selecting one is a first-class journaled op
-//! ([`UsdOp::SetVariantSelection`](lunco_usd::document::UsdOp)) — networked,
+//! ([`UsdOp::SetVariantSelection`](lunco_usd_core::document::UsdOp)) — networked,
 //! undoable, and replayed from the journal like every other edit — so a picker
 //! here is a real authoring control, not a debug toggle.
 //!
@@ -48,7 +48,7 @@ pub struct UsdVariantSet {
 pub struct UsdVariantSessionView {
     pub preview: UsdPreviewId,
     pub doc: lunco_doc::DocumentId,
-    pub edit_target: lunco_usd::document::LayerId,
+    pub edit_target: lunco_usd_core::document::LayerId,
     pub generation: u64,
     pub entity: Option<Entity>,
     /// USD path of the prim the rows belong to — the op's `path`.

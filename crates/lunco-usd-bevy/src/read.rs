@@ -5,7 +5,7 @@
 //! This is the **composed-read plane**: every read resolves through PCP, so an
 //! extractor sees the values usdview would. Its counterpart is the *authoring*
 //! plane — the Document's authored `sdf::Data` layers, read through
-//! [`UsdDataExt`](crate::usd_data::UsdDataExt), deliberately pre-composition
+//! [`UsdDataExt`](lunco_usd_core::UsdDataExt), deliberately pre-composition
 //! because "which layer holds this opinion" is a question only it can answer.
 //! Two planes, two traits; do not conflate them.
 //!
@@ -22,6 +22,7 @@ use openusd::usd::Stage;
 use std::collections::HashSet;
 
 use crate::view::StageView;
+use lunco_usd_core::AttrUiHint;
 
 /// Read binary asset arcs from one authored prim spec in the live stage.
 ///
@@ -65,52 +66,6 @@ fn binary_assets_in_spec(stage: &Stage, layer_id: &str, path: &SdfPath) -> Vec<S
         .filter(|asset_path| lunco_usd_compose::is_binary_asset(asset_path))
         .map(|asset_path| lunco_usd_compose::canonicalize_at(&asset_path, Some(&anchor)))
         .collect()
-}
-
-/// Parsed `customData` UI hint for a scalar attribute — the bounds + unit a
-/// data-driven parameter slider derives from an asset. All fields optional; a
-/// caller typically requires `min`+`max` to render a bounded control and falls
-/// back otherwise. Plain-Rust so consumers need no `openusd` dependency.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct AttrUiHint {
-    pub min: Option<f64>,
-    pub max: Option<f64>,
-    pub unit: Option<String>,
-    /// Value type for write-back `SetAttribute` (`customData.type`), e.g.
-    /// `"float"` / `"double"` / `"int"`.
-    pub type_name: Option<String>,
-}
-
-impl AttrUiHint {
-    /// Parse the hint fields out of a `customData` dictionary — the ONE
-    /// decoder, shared by the composed-stage read (`attr_ui_hint`, authored
-    /// per-asset opinions) and the schema registry (schema-declared hints, so
-    /// every asset composing the schema inherits its sliders). `None` when the
-    /// dictionary carries no hint field at all — an unrelated `customData`
-    /// (e.g. only `lunco:unit`) is not a hint.
-    pub fn from_dict(dict: &openusd::sdf::Dictionary) -> Option<AttrUiHint> {
-        let hint = AttrUiHint {
-            min: dict_f64(dict, "min"),
-            max: dict_f64(dict, "max"),
-            unit: dict_string(dict, "unit"),
-            type_name: dict_string(dict, "type"),
-        };
-        (hint != AttrUiHint::default()).then_some(hint)
-    }
-}
-
-/// A numeric `customData` field, tolerant of `double`/`float`/`int` authoring.
-fn dict_f64(dict: &openusd::sdf::Dictionary, key: &str) -> Option<f64> {
-    let v = dict.get(key)?;
-    v.clone()
-        .get::<f64>()
-        .or_else(|| v.clone().get::<f32>().map(f64::from))
-        .or_else(|| v.clone().get::<i32>().map(|i| i as f64))
-}
-
-/// A string `customData` field.
-fn dict_string(dict: &openusd::sdf::Dictionary, key: &str) -> Option<String> {
-    dict.get(key).and_then(|v| v.clone().get::<String>())
 }
 
 fn numeric_value_as_f64(value: &Value) -> Option<f64> {
@@ -569,7 +524,7 @@ pub trait UsdRead {
 
     /// The composed pseudo-root metadata value for `name`, or `None` when the
     /// metadata is unauthored. Stage convention metadata is interpreted in one
-    /// place by [`StageMetrics::from_reader`](crate::units::StageMetrics::from_reader),
+    /// place by [`StageMetrics::from_reader`](lunco_usd_core::StageMetrics::from_reader),
     /// which must distinguish an omitted USD default from an authored value of
     /// the wrong type.
     fn stage_metadata_value(&self, name: &str) -> Option<Value>;
@@ -1427,7 +1382,8 @@ mod real_reader_tests {
     //! strict scalar reads match only one USD type and silently drop the rest.
 
     use super::UsdRead;
-    use crate::canonical::{CanonicalStage, StageRecipe};
+    use crate::canonical::CanonicalStage;
+    use lunco_usd_core::StageRecipe;
     use openusd::sdf::{Path as SdfPath, Value};
 
     const SCENE: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n";

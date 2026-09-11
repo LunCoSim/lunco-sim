@@ -49,10 +49,6 @@ use lunco_usd_compose::parse_usda;
 use lunco_materials::ProceduralSkybox;
 use lunco_render::{PbrLook, PbrTextures, SurfaceAlpha};
 pub use openusd::sdf::Path as SdfPath;
-// `UsdData` remains the Send-safe authored-layer representation used by document
-// authoring helpers. Initial runtime projection reads the prepared plan; live
-// scene reads use `StageView` after an authored generation exists.
-pub use openusd::sdf::Data as UsdData;
 use openusd::sdf::Value;
 use std::sync::Arc;
 
@@ -100,29 +96,24 @@ pub mod scene_ports;
 pub use camera::{read_camera_exposure_ev100, CameraExposureError, UsdCameraPose, UsdSensorCamera};
 pub use camera_switch::SetActiveCamera;
 pub use light::{read_dome_intensity, read_intensity_with_exposure, DomeIntensity, LightReadError};
-pub mod author;
 pub mod camera_path;
 pub mod canonical;
-pub mod curve_sweep;
 pub mod lathe;
 pub mod mount;
-pub mod nurbs;
 pub mod program;
 mod projection_plan;
 pub mod read;
-pub mod trim;
 pub mod units;
-pub mod usd_data;
 pub mod variants;
 pub mod view;
-pub use canonical::{CanonicalStage, CanonicalStages, RawStageChange, StageProjector, StageRecipe};
+pub use canonical::{CanonicalStage, CanonicalStages, RawStageChange, StageProjector};
 #[cfg(not(target_arch = "wasm32"))]
 pub use compose::{compose_file_to_stage, compose_file_to_stage_with_assets};
 pub use light::UsdAuthoredLight;
+use lunco_usd_core::UsdDataExt;
 pub use projection_plan::{UsdPrimProjectionPlan, UsdStageProjectionPlan};
-pub use read::{AttrUiHint, UsdRead};
-pub use units::{stage_convention, ConventionTransform, StageMetrics, UpAxis};
-use usd_data::UsdDataExt;
+pub use read::UsdRead;
+pub use units::stage_convention;
 pub use view::StageView;
 // The ambient-fill solve. Uniform ambient is spelled as an untextured `DomeLight`
 // and composed as a SUM, so a command that wants to set the composed TOTAL (the
@@ -554,7 +545,7 @@ pub struct UsdStageAsset {
     /// The `Send` layer-closure recipe shared by the prepared initial projection
     /// and the live canonical stage. It is absent only for an externally
     /// composed stage whose live canonical owner was supplied separately.
-    pub recipe: Option<StageRecipe>,
+    pub recipe: Option<lunco_usd_core::StageRecipe>,
     /// Structural hierarchy prepared from the composed stage at the async
     /// boundary. Every valid asset carries a plan, including externally composed
     /// stages created by [`Self::from_composed_stage`].
@@ -566,7 +557,7 @@ impl UsdStageAsset {
     /// the asynchronous loader. Tests and live-document adapters use this
     /// constructor so they cannot accidentally create a loaded-looking asset
     /// without the data required by initial visual materialisation.
-    pub fn from_recipe(recipe: StageRecipe) -> anyhow::Result<Self> {
+    pub fn from_recipe(recipe: lunco_usd_core::StageRecipe) -> anyhow::Result<Self> {
         let projection_plan = UsdStageProjectionPlan::from_recipe(&recipe)?;
         projection_plan.validate()?;
         Ok(Self {
@@ -3202,7 +3193,7 @@ fn read_standard_material(
     // their materials the moment they were opened anywhere else.
     //
     // Now there is exactly ONE way to have a material — bind one
-    // (`lunco_usd::material::ensure_preview_surface_ops` builds it) — and exactly
+    // (`lunco_usd_core::material::ensure_preview_surface_ops` builds it) — and exactly
     // one place these values come from: the bound `UsdPreviewSurface` below.
     // Deleting the fallback is the point: with it, nothing forces the correct
     // form; without it, the wrong form visibly does nothing.
@@ -3567,7 +3558,7 @@ fn apply_standard_material_intent(
 /// mount?" when authoring into it — no references need resolving to answer that,
 /// and the two must not be conflated: runtime reads the composed stage, while
 /// authoring asks the root layer directly.
-pub fn layer_default_prim(layer: &UsdData) -> Option<String> {
+pub fn layer_default_prim(layer: &lunco_usd_core::UsdData) -> Option<String> {
     let name = layer.field(&SdfPath::abs_root(), "defaultPrim")?.as_str()?;
     (!name.is_empty()).then(|| name.to_string())
 }
@@ -3695,7 +3686,7 @@ impl DefaultPrim {
 ///
 /// Handles every form `apiSchemas` can take: a single `Token`/`String`,
 /// a `TokenVec`, or a `TokenListOp` (explicit/prepended/appended/added).
-pub fn has_api_schema(reader: &UsdData, path: &SdfPath, schema_name: &str) -> bool {
+pub fn has_api_schema(reader: &lunco_usd_core::UsdData, path: &SdfPath, schema_name: &str) -> bool {
     let Some(val) = reader.field(path, "apiSchemas") else {
         return false;
     };
@@ -3728,7 +3719,11 @@ pub fn is_descendant_or_self(path: &SdfPath, root: &str) -> bool {
 /// string (`None` if the relationship is absent/empty). Canonical
 /// shared helper — replaces the byte-identical copies that lived in
 /// `lunco-usd-avian` and `lunco-usd-sim`.
-pub fn read_rel_target(reader: &UsdData, prim_path: &SdfPath, rel_name: &str) -> Option<String> {
+pub fn read_rel_target(
+    reader: &lunco_usd_core::UsdData,
+    prim_path: &SdfPath,
+    rel_name: &str,
+) -> Option<String> {
     let rel_path_str = format!("{}.{}", prim_path.as_str(), rel_name);
     let Ok(rel_sdf) = SdfPath::new(&rel_path_str) else {
         return None;
@@ -5466,8 +5461,11 @@ mod collision_aabb_tests {
     use super::*;
 
     fn parse(source: &str) -> CanonicalStage {
-        CanonicalStage::from_recipe(&StageRecipe::from_source("collision.usda", source))
-            .expect("build collision stage")
+        CanonicalStage::from_recipe(&lunco_usd_core::StageRecipe::from_source(
+            "collision.usda",
+            source,
+        ))
+        .expect("build collision stage")
     }
 
     #[test]
@@ -5950,8 +5948,11 @@ mod curve_mesh_quality_tests {
     use super::*;
 
     fn stage(source: &str) -> CanonicalStage {
-        CanonicalStage::from_recipe(&StageRecipe::from_source("curve.usda", source))
-            .expect("build curve stage")
+        CanonicalStage::from_recipe(&lunco_usd_core::StageRecipe::from_source(
+            "curve.usda",
+            source,
+        ))
+        .expect("build curve stage")
     }
 
     #[test]
@@ -6101,8 +6102,11 @@ mod primitive_attribute_tests {
     use super::*;
 
     fn parse(source: &str) -> CanonicalStage {
-        CanonicalStage::from_recipe(&StageRecipe::from_source("primitive.usda", source))
-            .expect("build primitive stage")
+        CanonicalStage::from_recipe(&lunco_usd_core::StageRecipe::from_source(
+            "primitive.usda",
+            source,
+        ))
+        .expect("build primitive stage")
     }
 
     #[test]
@@ -6366,7 +6370,7 @@ fn read_mesh_normals(
 ///
 /// A curve prim with `widths` is a **tube**, not a line: `widths` is a diameter in
 /// object space, so the curve is a centerline and the profile is a circle. See
-/// [`crate::curve_sweep`] for why the frames are rotation-minimizing rather than
+/// [`lunco_usd_geometry::curve_sweep`] for why the frames are rotation-minimizing rather than
 /// Frenet (short version: Frenet is undefined on straight runs, and flips as it
 /// approaches them — a habitat is mostly straight pipe).
 ///
@@ -6384,7 +6388,7 @@ fn build_usd_curve_mesh(
     quality: lunco_render::RenderQualityProfile,
 ) -> Option<Mesh> {
     use crate::camera_path::CurveBasis;
-    use crate::curve_sweep::sweep_tube;
+    use lunco_usd_geometry::curve_sweep::sweep_tube;
 
     // Canonical-frame points — same conversion the mesh path takes.
     let points = read_mesh_points(reader, path)?;
@@ -6665,7 +6669,8 @@ fn build_usd_curve_mesh(
             };
             let steps = (n.saturating_sub(1)).max(1) * quality.curve_samples_per_segment;
             let pts: Vec<[f32; 3]> = cvs.iter().map(|p| p.to_array()).collect();
-            let sampled = crate::nurbs::sample_nurbs_curve(&pts, &w, order, &knots, steps);
+            let sampled =
+                lunco_usd_geometry::nurbs::sample_nurbs_curve(&pts, &w, order, &knots, steps);
             if sampled.is_empty() {
                 error!(
                     "[usd-bevy] {} has a NurbsCurves segment that cannot be evaluated",
@@ -6747,7 +6752,7 @@ fn build_usd_curve_mesh(
 /// Normals are analytic (`uder × vder`), not face-averaged — exact at the poles
 /// and seams where averaging creases, which is precisely the dome apex.
 ///
-/// **`trimCurve:*` IS honoured** — see [`crate::trim`]. A trimmed patch gets an
+/// **`trimCurve:*` IS honoured** — see [`lunco_usd_geometry::trim`]. A trimmed patch gets an
 /// irregular triangulation of its surviving domain instead of a lattice, which is
 /// what puts a genuine arched doorway in a wall.
 ///
@@ -6879,7 +6884,7 @@ mod parametric_surface_tests {
 
     #[test]
     fn lathe_api_owns_surface_even_when_profile_is_invalid() {
-        let recipe = canonical::StageRecipe::from_source(
+        let recipe = lunco_usd_core::StageRecipe::from_source(
             "lathe.usda",
             r#"#usda 1.0
 def NurbsPatch "Nozzle" (
@@ -6905,7 +6910,7 @@ def NurbsPatch "Nozzle" (
 
     #[test]
     fn lathe_api_rejects_invalid_profile_parameters_without_clamping_them() {
-        let recipe = canonical::StageRecipe::from_source(
+        let recipe = lunco_usd_core::StageRecipe::from_source(
             "lathe.usda",
             r#"#usda 1.0
 def NurbsPatch "Nozzle" (
@@ -6932,7 +6937,7 @@ def NurbsPatch "Nozzle" (
 
     #[test]
     fn lathe_api_requires_standard_sampling_fields() {
-        let recipe = canonical::StageRecipe::from_source(
+        let recipe = lunco_usd_core::StageRecipe::from_source(
             "lathe.usda",
             r#"#usda 1.0
 def NurbsPatch "Nozzle" (
@@ -7001,7 +7006,7 @@ def NurbsPatch "Nozzle" (
 
     #[test]
     fn authored_patch_requires_standard_sampling_fields() {
-        let recipe = canonical::StageRecipe::from_source(
+        let recipe = lunco_usd_core::StageRecipe::from_source(
             "patch.usda",
             r#"#usda 1.0
 def NurbsPatch "Patch"
@@ -7020,7 +7025,7 @@ def NurbsPatch "Patch"
 
     #[test]
     fn authored_patch_requires_authored_knot_vectors() {
-        let recipe = canonical::StageRecipe::from_source(
+        let recipe = lunco_usd_core::StageRecipe::from_source(
             "patch.usda",
             r#"#usda 1.0
 def NurbsPatch "Patch"
@@ -7043,7 +7048,7 @@ def NurbsPatch "Patch"
 
     #[test]
     fn authored_trim_data_cannot_fall_back_to_an_untrimmed_patch() {
-        let recipe = canonical::StageRecipe::from_source(
+        let recipe = lunco_usd_core::StageRecipe::from_source(
             "patch.usda",
             r#"#usda 1.0
 def NurbsPatch "Patch"
@@ -7100,13 +7105,14 @@ fn build_usd_nurbs_patch_mesh(
     let v_knots = surface.v_knots.clone();
 
     // ── Trim curves ─────────────────────────────────────────────────────────
-    // `trimCurve:*` IS applied — see `crate::trim`. A trimmed patch gets an
+    // `trimCurve:*` IS applied — see `lunco_usd_geometry::trim`. A trimmed patch gets an
     // irregular triangulation of its surviving domain instead of a lattice.
     //
     // Two things that used to block this are handled there rather than guessed:
     // USD never states the keep/discard winding rule, so classification is
     // even-odd with the domain rectangle as an implicit outer loop
-    // (orientation-independent); and `spade` panics when constraints cross, so
+    // (orientation-independent); and the geometry crate handles constraint
+    // crossings without panicking, so
     // loops are inserted with `add_constraint_and_split` rather than gated with
     // `can_add_constraint` — gating would silently drop part of a loop and leave
     // the hole with a missing side.
@@ -7176,7 +7182,7 @@ fn build_usd_nurbs_patch_mesh(
 
         let u_span = [u_knots[u_order - 1], u_knots[u_count]];
         let v_span = [v_knots[v_order - 1], v_knots[v_count]];
-        let loops = crate::trim::assemble_loops(
+        let loops = lunco_usd_geometry::trim::assemble_loops(
             &counts,
             &orders,
             &vertex_counts,
@@ -7205,7 +7211,7 @@ fn build_usd_nurbs_patch_mesh(
             loops.loops.len(),
             grid
         );
-        let Some(domain) = crate::trim::triangulate_trimmed(&loops, grid) else {
+        let Some(domain) = lunco_usd_geometry::trim::triangulate_trimmed(&loops, grid) else {
             error!(
                 "[usd-bevy] {} authored trim could not be triangulated; refusing the patch",
                 path.as_str()
@@ -7218,7 +7224,7 @@ fn build_usd_nurbs_patch_mesh(
             domain.uvs.len(),
             domain.indices.len() / 3
         );
-        let samples = crate::nurbs::sample_nurbs_patch_at(
+        let samples = lunco_usd_geometry::nurbs::sample_nurbs_patch_at(
             &points,
             &weights,
             u_count,
@@ -7261,7 +7267,7 @@ fn build_usd_nurbs_patch_mesh(
     // The untrimmed build now lives on `NurbsSurface` itself, because it is
     // EXACTLY the operation the regeneration system has to perform when a parameter
     // changes. Keeping a second copy here would be two tessellators that can
-    // disagree — the same trap `crate::nurbs`' module doc describes for evaluators.
+    // disagree — the same trap `lunco_usd_geometry::nurbs`' module doc describes for evaluators.
     let Some(mesh) = surface.mesh(quality) else {
         // `sample_nurbs_patch_at` has already warned WHICH guard fired; this
         // adds the prim path, which it has no way to know.
@@ -8262,7 +8268,7 @@ mod mesh_tests {
     /// live, PCP-composed stage — which is the ONLY read path now that the
     /// Runtime reads come from the live canonical stage. Tests read what the app reads.
     fn parse(usda: &str) -> CanonicalStage {
-        CanonicalStage::from_recipe(&StageRecipe::from_source("t.usda", usda))
+        CanonicalStage::from_recipe(&lunco_usd_core::StageRecipe::from_source("t.usda", usda))
             .expect("build canonical stage")
     }
 
@@ -8468,7 +8474,7 @@ mod animation_tests {
     /// live, PCP-composed stage — which is the ONLY read path now that the
     /// Runtime reads come from the live canonical stage. Tests read what the app reads.
     fn parse(usda: &str) -> CanonicalStage {
-        CanonicalStage::from_recipe(&StageRecipe::from_source("t.usda", usda))
+        CanonicalStage::from_recipe(&lunco_usd_core::StageRecipe::from_source("t.usda", usda))
             .expect("build canonical stage")
     }
 
@@ -8839,7 +8845,7 @@ mod stage_metrics_import_tests {
     /// live, PCP-composed stage — which is the ONLY read path now that the
     /// Runtime reads come from the live canonical stage. Tests read what the app reads.
     fn parse(usda: &str) -> CanonicalStage {
-        CanonicalStage::from_recipe(&StageRecipe::from_source("t.usda", usda))
+        CanonicalStage::from_recipe(&lunco_usd_core::StageRecipe::from_source("t.usda", usda))
             .expect("build canonical stage")
     }
 

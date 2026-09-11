@@ -16,8 +16,8 @@ use lunco_canvas::{
     Scene, VisualRegistry,
 };
 use lunco_usd::commands::ApplyUsdOps;
-use lunco_usd::document::{LayerId, UsdOp};
 use lunco_usd_bevy::UsdPrimPath;
+use lunco_usd_core::document::{LayerId, UsdOp};
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlot};
 
 use lunco_scene_commands::SelectedEntities;
@@ -89,7 +89,7 @@ pub(crate) fn on_write_mission_requested(
             doc_id: doc,
             parent_gen: None,
             label: "Update autopilot mission".to_string(),
-            ops: lunco_usd::program::inline_program_source_ops(
+            ops: lunco_usd_core::program::inline_program_source_ops(
                 LayerId::root(),
                 mission,
                 request.xml,
@@ -141,7 +141,7 @@ pub(crate) fn on_create_mission_requested(
                 schemas: vec!["LunCoProgramAPI".to_string()],
             },
         ];
-        ops.extend(lunco_usd::program::inline_program_source_ops(
+        ops.extend(lunco_usd_core::program::inline_program_source_ops(
             LayerId::root(),
             mission,
             xml,

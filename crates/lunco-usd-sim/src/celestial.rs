@@ -940,7 +940,8 @@ fn read_occluder_box(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lunco_usd_bevy::{CanonicalStage, StageRecipe};
+    use lunco_usd_bevy::CanonicalStage;
+    use lunco_usd_core::StageRecipe;
 
     fn view(source: &str) -> (CanonicalStage, SdfPath) {
         let stage = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", source))

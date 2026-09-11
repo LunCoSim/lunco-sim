@@ -36,9 +36,9 @@ use lunco_usd::commands::{
     ApplyUsdOp, ApplyUsdOps, CommitUsdProposal, CreateUsdProposal, ReviewUsdProposal,
     UsdProposalReviewAction,
 };
-use lunco_usd::document::{LayerId, UsdOp};
-use lunco_usd::edit_session::{UsdEditScope, UsdProposalId, UsdProposalState};
 use lunco_usd_bevy::UsdPrimPath;
+use lunco_usd_core::document::{LayerId, UsdOp};
+use lunco_usd_core::edit_session::{UsdEditScope, UsdProposalId, UsdProposalState};
 
 fn report_inspector_error(world: &mut World, message: impl Into<String>) {
     let message = message.into();
@@ -138,7 +138,7 @@ pub(crate) struct AttachAtSocketRequested {
     joint_name: String,
     asset: String,
     accepts: String,
-    joint: lunco_usd::attach::AttachJoint,
+    joint: lunco_usd_core::attach::AttachJoint,
     socket_frame: Transform,
 }
 
@@ -377,7 +377,7 @@ pub(crate) fn on_mount_snap_requested(trigger: On<MountSnapRequested>, mut comma
             return;
         };
         let label = format!("Snap mount {}", request.part);
-        let ops = lunco_usd::attach::realign_component_ops(
+        let ops = lunco_usd_core::attach::realign_component_ops(
             edit_target,
             request.part,
             request.joint,
@@ -409,7 +409,7 @@ pub(crate) fn on_mount_detach_requested(trigger: On<MountDetachRequested>, mut c
         };
         world.trigger(lunco_usd::commands::DetachComponent {
             doc_id: doc,
-            spec: lunco_usd::attach::DetachSpec {
+            spec: lunco_usd_core::attach::DetachSpec {
                 edit_target,
                 component_path: request.component_path,
                 joint_path: request.joint_path,
@@ -431,7 +431,7 @@ fn mount_attachment_edit_target(
     joint_path: &str,
 ) -> Option<LayerId> {
     let registry =
-        world.resource::<lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>>();
+        world.resource::<lunco_doc_bevy::DocumentRegistry<lunco_usd_core::document::UsdDocument>>();
     let document = registry.host(doc)?.document();
     let paths = [
         lunco_usd_bevy::SdfPath::new(component_path).ok()?,
@@ -655,7 +655,7 @@ pub(crate) fn on_pbr_material_requested(trigger: On<PbrMaterialRequested>, mut c
             Some(path) => (Vec::new(), path.clone()),
             None => {
                 let schemas = geom_api_schemas(world, &prim);
-                let Some((ops, shader)) = lunco_usd::material::ensure_preview_surface_ops(
+                let Some((ops, shader)) = lunco_usd_core::material::ensure_preview_surface_ops(
                     edit_target.clone(),
                     &prim.path,
                     &schemas,
@@ -1301,7 +1301,7 @@ fn usd_editor_session_context(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         return;
     };
     let document_state = ctx
-        .resource::<lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>>()
+        .resource::<lunco_doc_bevy::DocumentRegistry<lunco_usd_core::document::UsdDocument>>()
         .and_then(|registry| registry.host(doc))
         .map(|host| {
             let document = host.document();
@@ -1312,7 +1312,7 @@ fn usd_editor_session_context(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
             )
         });
     let proposals = ctx
-        .resource::<lunco_usd::edit_session::UsdEditSessions>()
+        .resource::<lunco_usd_core::edit_session::UsdEditSessions>()
         .map(|sessions| {
             sessions
                 .for_document(doc)
@@ -1965,7 +1965,7 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
     };
     let is_component = kind.as_deref() == Some("component");
     let proposals = if is_component {
-        ctx.resource::<lunco_usd::edit_session::UsdEditSessions>()
+        ctx.resource::<lunco_usd_core::edit_session::UsdEditSessions>()
             .map(|sessions| {
                 sessions
                     .for_document(doc)
@@ -2265,7 +2265,7 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
 /// The ⎇ Variants section — one row per variant set the selected prim ships,
 /// from the [`UsdVariantView`](crate::ui::usd_variants::UsdVariantView)
 /// view-model. Picking an option dispatches
-/// [`UsdOp::SetVariantSelection`](lunco_usd::document::UsdOp), so it journals,
+/// [`UsdOp::SetVariantSelection`](lunco_usd_core::document::UsdOp), so it journals,
 /// replicates and undoes like every other authoring edit.
 ///
 /// This is how a scenario scene switches which real lunar site it composes
@@ -2313,12 +2313,15 @@ fn usd_variants_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
 }
 
 /// Map a socket's `lunco:mount:joint` token (+ optional axis) to the typed
-/// [`AttachJoint`](lunco_usd::attach::AttachJoint) the attach lowering wants.
+/// [`AttachJoint`](lunco_usd_core::attach::AttachJoint) the attach lowering wants.
 /// Unknown tokens are rejected; mount metadata must not silently become a
 /// different joint.
 #[cfg(not(target_arch = "wasm32"))]
-fn attach_joint_from(joint: &str, axis: Option<&str>) -> Option<lunco_usd::attach::AttachJoint> {
-    use lunco_usd::attach::{AttachJoint, Axis};
+fn attach_joint_from(
+    joint: &str,
+    axis: Option<&str>,
+) -> Option<lunco_usd_core::attach::AttachJoint> {
+    use lunco_usd_core::attach::{AttachJoint, Axis};
     match joint {
         "fixed" if axis.is_none() => Some(AttachJoint::Fixed),
         "revolute" => Some(AttachJoint::Revolute {
@@ -2542,10 +2545,10 @@ fn attach_component_at_socket(
     joint_name: String,
     asset: String,
     accepts: String,
-    joint: lunco_usd::attach::AttachJoint,
+    joint: lunco_usd_core::attach::AttachJoint,
     socket_frame: Transform,
 ) {
-    use lunco_usd::attach::AttachSpec;
+    use lunco_usd_core::attach::AttachSpec;
     // Ask `lunco-assets` where the reference lives — do NOT assume the shipped
     // library. A component authored by an open Twin is `twin://<name>/…`, which
     // has no path under `assets/` at all; joining one produced a path that never

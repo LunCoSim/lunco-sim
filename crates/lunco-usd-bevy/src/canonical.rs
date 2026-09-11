@@ -20,38 +20,13 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use lunco_usd_core::StageRecipe;
 use openusd::sdf::Path as SdfPath;
 use openusd::usd::{CommittedChange, Stage, StageSinkId};
 
 use crate::read::UsdReadSource;
 use crate::view::StageView;
 use crate::{UsdRead, UsdStageAsset};
-
-/// A `Send` in-memory recipe for composing a USD asset: the resolved root layer
-/// identifier plus the full transitive `.usda` layer-closure bytes (from
-/// [`fetch_layer_closure`](crate::compose)). The loader uses it to prepare the
-/// initial projection plan; the canonical owner uses the same recipe to open
-/// the live `!Send` stage for authoring and incremental re-projection.
-#[derive(Debug, Clone)]
-pub struct StageRecipe {
-    pub root_id: String,
-    pub bytes: HashMap<String, Vec<u8>>,
-}
-
-impl StageRecipe {
-    /// A **single-layer** recipe from an in-memory `source` string — for scenes
-    /// authored / composed in memory that carry no external file references
-    /// (live documents, viewport preview, tests). `root_id` is a synthetic layer
-    /// identifier (also the sole key in `bytes`), so `build_stage_from_closure`
-    /// opens it straight from the byte map with no filesystem access. Sources
-    /// with on-disk `references`/`payloads` need the full closure instead (they
-    /// won't resolve from a lone in-memory layer).
-    pub fn from_source(root_id: impl Into<String>, source: &str) -> Self {
-        let root_id = root_id.into();
-        let bytes = HashMap::from([(root_id.clone(), source.as_bytes().to_vec())]);
-        Self { root_id, bytes }
-    }
-}
 
 /// One committed change, owned + `Send`, as drained from the stage sink.
 /// (`CommittedChange` borrows the stage; we copy the paths out so the inbox can
@@ -905,7 +880,7 @@ impl CanonicalStages {
     pub fn rebuild(
         &mut self,
         asset: bevy::asset::AssetId<crate::UsdStageAsset>,
-        recipe: &crate::StageRecipe,
+        recipe: &lunco_usd_core::StageRecipe,
     ) -> bool {
         match CanonicalStage::from_recipe(recipe) {
             Ok(mut cs) => {
@@ -928,7 +903,7 @@ impl CanonicalStages {
     pub fn get_or_build(
         &mut self,
         asset: bevy::asset::AssetId<crate::UsdStageAsset>,
-        recipe: &crate::StageRecipe,
+        recipe: &lunco_usd_core::StageRecipe,
     ) -> Option<&CanonicalStage> {
         if let std::collections::hash_map::Entry::Vacant(entry) = self.by_asset.entry(asset) {
             match CanonicalStage::from_recipe(recipe) {
@@ -1284,7 +1259,7 @@ mod authoring_tests {
         let _ = cs.drain_changes();
 
         let rover = SdfPath::new("/World/Rover").unwrap();
-        let v = crate::author::parse_attribute_value("double3", "(1, 2, 3)").unwrap();
+        let v = lunco_usd_core::author::parse_attribute_value("double3", "(1, 2, 3)").unwrap();
         cs.author_time_sample(&rover, "xformOp:translate", "double3", 12.0, v)
             .expect("author keyframe");
         assert!(
@@ -1533,6 +1508,6 @@ mod authoring_tests {
     // `LunCoProgramAPI` metadata case). `SetActive` has a live author
     // (`author_active`) but is only routed incrementally for purely-visual
     // waypoint-marker prims; any other `SetActive` rebuilds. Their document-level
-    // authoring + inverse are covered in `lunco_usd::document::tests`, and their
+    // authoring + inverse are covered in `lunco_usd_core::document::tests`, and their
     // rebuild routing in `lunco_usd::twin_projection::tests`.
 }

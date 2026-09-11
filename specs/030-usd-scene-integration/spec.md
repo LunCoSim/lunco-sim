@@ -46,10 +46,10 @@ As a developer, I want to add new simulation-specific mapping logic (e.g., for a
 
 | Planned (spec) | Implemented | Notes |
 |---|---|---|
-| `lunco-usd-core` | `lunco-usd` | Core parser, DOM, stage, and `UsdAdapter` trait |
+| `lunco-usd-core` | `lunco-usd-core` | Core parser, document, authoring, operation, schema, and unit substrate |
 | `lunco-usd-physx` | (folded into `lunco-usd`) | PhysX-specific USD attrs handled inline |
 | `lunco-usd-avian` | `lunco-usd-avian` | Avian3D physics implementation — as planned |
-| `lunco-usd-mapping` | (folded into `lunco-usd`) | `lunco:` namespace mapping lives in `lunco-usd` core |
+| `lunco-usd-mapping` | (folded into `lunco-usd-core` / runtime owners) | `lunco:` schema and pure mapping facts live in the core; runtime projection stays with its owning bridge |
 | `lunco-usd-bevy` | `lunco-usd-bevy` | Bevy `AssetLoader` and entity spawning — as planned |
 | — | `lunco-usd-sim` | Simulation-specific USD integration (cosim wiring) |
 | — | `lunco-materials` | PBR material parameter projection |
@@ -68,4 +68,4 @@ As a developer, I want to add new simulation-specific mapping logic (e.g., for a
 ## Assumptions
 - **Assumption 1**: Focus on ASCII (`.usda`) initially; binary support is out of scope.
 - **Assumption 2**: Standard `PhysX` vehicle schemas are the primary target for rover compatibility.
-- **Assumption 3**: Coordinate system (`upAxis`) and unit (`metersPerUnit`) handling is **baked into the shared decoders** (`lunco-usd-bevy/src/units.rs` — `StageMetrics` → `ConventionTransform`), **not applied at the root entity level**. A root-only rotation/scale is explicitly rejected: avian colliders, `big_space`, and the f64 frame tree all assume canonical SI Y-up, so a non-SI value must never flow downstream — it would *look* right in the viewport and be wrong everywhere else. Each prim's local transform is **conjugated** (`L' = S·L·S⁻¹`) and the leaf geometry converted (`p' = S·p`); both, not either. See [`docs/architecture/41-axes-and-units.md`](../../docs/architecture/41-axes-and-units.md).
+- **Assumption 3**: Coordinate system (`upAxis`) and unit (`metersPerUnit`) handling is **baked into the shared decoders** (`lunco-usd-core/src/units.rs` — `StageMetrics` → `ConventionTransform`; `lunco-usd-bevy` supplies only the live-stage reader adapter), **not applied at the root entity level**. A root-only rotation/scale is explicitly rejected: avian colliders, `big_space`, and the f64 frame tree all assume canonical SI Y-up, so a non-SI value must never flow downstream — it would *look* right in the viewport and be wrong everywhere else. Each prim's local transform is **conjugated** (`L' = S·L·S⁻¹`) and the leaf geometry converted (`p' = S·p`); both, not either. See [`docs/architecture/41-axes-and-units.md`](../../docs/architecture/41-axes-and-units.md).

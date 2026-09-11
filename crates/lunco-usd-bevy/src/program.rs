@@ -649,7 +649,7 @@ mod tests {
     use super::*;
 
     fn program_stage(source: &str) -> crate::CanonicalStage {
-        crate::CanonicalStage::from_recipe(&crate::StageRecipe::from_source(
+        crate::CanonicalStage::from_recipe(&lunco_usd_core::StageRecipe::from_source(
             "programs.usda",
             source,
         ))

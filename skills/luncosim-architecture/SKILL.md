@@ -236,7 +236,7 @@ their own deferred-path handling or permanently mark an unresolved root.
 
 Before creating `LunCo*API` or a `lunco:*` property:
 
-1. Inspect the vendored OpenUSD schemas in `crates/lunco-usd/schema/core/` and
+1. Inspect the vendored OpenUSD schemas in `crates/lunco-usd-core/schema/core/` and
    the maintained USD/PhysX schema that actually owns the concept.
 2. Use the standard field when it exists: `UsdGeom` for transforms, geometry,
    cameras, visibility and purpose; `UsdShade` for connectable graphs and
@@ -462,7 +462,7 @@ Run the smallest relevant checks first, then the production binary:
 ```bash
 python3 scripts/gen_schema.py
 RUSTC_WRAPPER= cargo fmt --all -- --check
-RUSTC_WRAPPER= cargo test -p lunco-usd --test schema_generation -j 4
+RUSTC_WRAPPER= cargo test -p lunco-usd-core --test schema_generation -j 4
 target/debug/luncosim test --scene scenes/tests/sensor.usda
 RUSTC_WRAPPER= cargo test -p lunco-usd-sim --test usd_connection_mechanics -j 4
 CARGO_INCREMENTAL=1 RUSTC_WRAPPER= cargo build -p lunco-luncosim --bin luncosim -j 4

@@ -12,11 +12,11 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_doc::DocumentId;
-use lunco_usd::document::{LayerId, UsdOp};
 use lunco_usd_bevy::{
     author::normalize_value_literal, stage_convention, CanonicalStages, SdfPath, UsdPrimPath,
     UsdRead, UsdStageAsset,
 };
+use lunco_usd_core::document::{LayerId, UsdOp};
 use lunco_usd_ui::viewport::{UsdPreviewId, UsdViewportState};
 
 const JOINT_TYPES: &[&str] = &[
@@ -117,7 +117,7 @@ fn is_joint(type_name: &str) -> bool {
 }
 
 fn schema_type(name: &str, fallback: &str) -> String {
-    lunco_usd::schema::SchemaRegistry::global()
+    lunco_usd_core::schema::SchemaRegistry::global()
         .read()
         .ok()
         .and_then(|registry| {
@@ -132,7 +132,7 @@ fn canonical_position<R: UsdRead>(
     stage: &R,
     path: &SdfPath,
     name: &str,
-    convention: &lunco_usd_bevy::ConventionTransform,
+    convention: &lunco_usd_core::ConventionTransform,
 ) -> Option<[f64; 3]> {
     stage
         .vec3_f64(path, name)
@@ -144,7 +144,7 @@ fn canonical_rotation<R: UsdRead>(
     stage: &R,
     path: &SdfPath,
     name: &str,
-    convention: &lunco_usd_bevy::ConventionTransform,
+    convention: &lunco_usd_core::ConventionTransform,
 ) -> Option<[f64; 4]> {
     stage
         .quat_d(path, name)

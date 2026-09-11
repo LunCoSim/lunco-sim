@@ -413,7 +413,7 @@ fn validate_usda(reference: &str, path: &Path, text: &str) -> ValidationReport {
 
     // The layer's own syntax first: a compose error on a referenced layer
     // should not mask a typo in THIS file.
-    if let Err(e) = lunco_usd_bevy::author::usda_to_data(text) {
+    if let Err(e) = lunco_usd_core::author::usda_to_data(text) {
         return report.error(format!("usda parse: {e}"));
     }
 

@@ -16,7 +16,7 @@
 //! composition: references, payloads, and sublayer opinions survive verbatim,
 //! so the document still round-trips losslessly with external USD tools
 //! (Omniverse, USDView, Blender). Edits route through openusd's authoring
-//! engine: [`lunco_usd_bevy::author`] opens the data as a transient `Stage`,
+//! engine: [`crate::author`] opens the data as a transient `Stage`,
 //! authors the op **by SDF path** (which cannot touch a sibling/nested prim
 //! that shares a name), and extracts the updated root layer back out.
 //!
@@ -82,17 +82,18 @@
 
 use std::collections::VecDeque;
 
+use crate::author::{
+    self, extract_root_layer_data, open_doc_stage, parse_attribute_value, usda_to_data,
+};
+use crate::recipe::StageRecipe;
+use crate::units::{ConventionTransform, StageMetrics};
+use crate::usd_data::UsdDataExt;
 use bevy::log::warn;
 use bevy::math::DVec3;
 use bevy::reflect::Reflect;
 use lunco_doc::{
     Document, DocumentError, DocumentId, DocumentOp, DocumentOrigin, ForkableDocument,
 };
-use lunco_usd_bevy::author::{
-    self, extract_root_layer_data, open_doc_stage, parse_attribute_value, usda_to_data,
-};
-use lunco_usd_bevy::units::{ConventionTransform, StageMetrics};
-use lunco_usd_bevy::usd_data::UsdDataExt;
 use openusd::sdf::{self, Path as SdfPath, SpecType};
 
 /// How many recent changes to keep in the per-document ring buffer.
@@ -289,7 +290,7 @@ pub enum UsdChange {
 /// [`LayerId::runtime`] (ephemeral, non-persisted overlay); `apply` routes to
 /// each. Unknown identifiers are rejected.
 ///
-/// Forward application routes through [`lunco_usd_bevy::author`] — the op is
+/// Forward application routes through [`crate::author`] — the op is
 /// authored by SDF path into a transient `Stage` and the updated root layer
 /// is extracted back as [`sdf::Data`]. Inverses are typed where it is cheap
 /// and exact — structural pairs (`AddPrim` ↔ `RemovePrim`, `MovePrim`) and
@@ -727,7 +728,7 @@ pub struct UsdDocument {
     id: DocumentId,
     /// Loaded dependencies for synchronous composed authoring reads. Current
     /// root opinions always come from this document, including earlier group ops.
-    authoring_recipe: Option<std::sync::Arc<lunco_usd_bevy::StageRecipe>>,
+    authoring_recipe: Option<std::sync::Arc<StageRecipe>>,
     /// The **base** layer: the authored scene's specs (references intact). This
     /// is the canonical content [`source`](Self::source) serializes and Save
     /// writes to disk. Root-targeted ops edit this layer.
@@ -877,7 +878,7 @@ impl UsdDocument {
     }
 
     /// The authored **base** layer data (references intact). Query it with the
-    /// [`UsdDataExt`](lunco_usd_bevy::usd_data::UsdDataExt) helpers. The runtime
+    /// [`UsdDataExt`](crate::usd_data::UsdDataExt) helpers. The runtime
     /// overlay is not folded in here — read it separately via
     /// [`runtime_data`](Self::runtime_data) until a consumer needs a composed
     /// view (deferred with the runtime-producer wiring).
@@ -892,7 +893,11 @@ impl UsdDocument {
         &self.runtime
     }
 
-    pub(crate) fn set_authoring_recipe(&mut self, recipe: Option<lunco_usd_bevy::StageRecipe>) {
+    /// Attach the send-safe layer closure used to rebuild the live stage.
+    ///
+    /// The document owns authored and runtime data; the runtime USD crate owns
+    /// the non-sendable composed stage built from this recipe.
+    pub fn set_authoring_recipe(&mut self, recipe: Option<StageRecipe>) {
         self.authoring_recipe = recipe.map(std::sync::Arc::new);
     }
 
@@ -1822,7 +1827,7 @@ impl Document for UsdDocument {
                     ));
                 }
                 if let Some(asset_path) = &reference {
-                    lunco_usd_bevy::author::author_reference(
+                    author::author_reference(
                         &mut new_data,
                         &prim_sdf,
                         asset_path,
@@ -3251,7 +3256,7 @@ mod tests {
         // proves the whole sequence actually APPLIES in order onto a real document —
         // the joint prim is defined before its relationships target it, the point3f
         // anchors author, and the result composes into a jointed assembly.
-        use crate::attach::{AttachJoint, AttachSpec, Axis, attach_component_ops};
+        use crate::attach::{attach_component_ops, AttachJoint, AttachSpec, Axis};
 
         let scene = "#usda 1.0\n(\n    metersPerUnit = 1\n)\ndef Xform \"Rig\"\n{\n    def Xform \"Chassis\"\n    {\n    }\n}\n";
         let mut doc = UsdDocument::with_origin(
@@ -3483,23 +3488,18 @@ mod tests {
             reference_prim_path: None,
         })
         .unwrap();
-        assert!(
-            left.runtime_data()
-                .spec(&SdfPath::new("/RuntimeOnly").unwrap())
-                .is_some()
-        );
-        assert!(
-            right
-                .runtime_data()
-                .spec(&SdfPath::new("/RuntimeOnly").unwrap())
-                .is_none()
-        );
-        assert!(
-            source
-                .runtime_data()
-                .spec(&SdfPath::new("/RuntimeOnly").unwrap())
-                .is_none()
-        );
+        assert!(left
+            .runtime_data()
+            .spec(&SdfPath::new("/RuntimeOnly").unwrap())
+            .is_some());
+        assert!(right
+            .runtime_data()
+            .spec(&SdfPath::new("/RuntimeOnly").unwrap())
+            .is_none());
+        assert!(source
+            .runtime_data()
+            .spec(&SdfPath::new("/RuntimeOnly").unwrap())
+            .is_none());
 
         left.mark_saved();
         assert!(!left.is_dirty());
@@ -4975,15 +4975,14 @@ def Xform \"World\" (\n\
             value: "(0, 0, 0)".into(),
         })
         .unwrap();
-        assert!(
-            doc.apply(UsdOp::RemoveTimeSample {
+        assert!(doc
+            .apply(UsdOp::RemoveTimeSample {
                 edit_target: LayerId::root(),
                 path: "/Mover".into(),
                 name: "xformOp:translate".into(),
                 time: 99.0,
             })
-            .is_err()
-        );
+            .is_err());
         // Removing the right time succeeds and clears the curve.
         doc.apply(UsdOp::RemoveTimeSample {
             edit_target: LayerId::root(),

@@ -27,8 +27,8 @@ use lunco_usd_bevy::UsdPrimPath;
 use lunco_workbench::{BrowserSectionRegistry, ViewportPlaceholder};
 use lunco_workbench_core::PanelId;
 
-use lunco_usd::document::UsdDocument;
 use lunco_usd::twin_projection::UsdDocumentUserOwned;
+use lunco_usd_core::document::UsdDocument;
 use lunco_workspace::WorkspaceResource;
 
 pub mod browser_dispatch;

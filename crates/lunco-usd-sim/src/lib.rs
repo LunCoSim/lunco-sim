@@ -1105,7 +1105,8 @@ fn read_gear_drive_type(
 #[cfg(test)]
 mod gear_drive_tests {
     use super::{read_gear_drive_type, read_gear_drive_values, DifferentialDriveType};
-    use lunco_usd_bevy::{CanonicalStage, StageRecipe};
+    use lunco_usd_bevy::CanonicalStage;
+    use lunco_usd_core::StageRecipe;
     use openusd::sdf::Path as SdfPath;
 
     const FIXTURE: &str = r#"#usda 1.0
@@ -1248,7 +1249,8 @@ fn push_usd_sim_diagnostic(
 #[cfg(test)]
 mod raycast_tests {
     use super::read_raycast_observation;
-    use lunco_usd_bevy::{CanonicalStage, StageRecipe};
+    use lunco_usd_bevy::CanonicalStage;
+    use lunco_usd_core::StageRecipe;
     use openusd::sdf::Path as SdfPath;
 
     fn read(source: &str) -> Result<lunco_cosim::avian_queries::RaycastObservation, ()> {
@@ -4093,7 +4095,8 @@ fn activate_dynamic_bodies(
 #[cfg(test)]
 mod topology_index_tests {
     use super::*;
-    use lunco_usd_bevy::{CanonicalStage, StageRecipe};
+    use lunco_usd_bevy::CanonicalStage;
+    use lunco_usd_core::StageRecipe;
 
     const WHEEL_STAGE: &str = r#"#usda 1.0
 def Xform "Rover" {
@@ -4717,7 +4720,8 @@ mod proxy_wheel_tests {
 #[cfg(test)]
 mod authored_camera_tests {
     use super::*;
-    use lunco_usd_bevy::{CanonicalStage, StageRecipe};
+    use lunco_usd_bevy::CanonicalStage;
+    use lunco_usd_core::StageRecipe;
 
     fn stage_view(source: &str) -> (CanonicalStage, SdfPath) {
         let stage = CanonicalStage::from_recipe(&StageRecipe::from_source("camera.usda", source))

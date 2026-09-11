@@ -36,8 +36,8 @@ use openusd::usd::Stage;
 
 use lunco_assets::asset_path::canonicalize_root;
 
-use crate::canonical::StageRecipe;
 use lunco_usd_compose::{child_layer_ids, LuncoUsdResolver, SharedLayerBytes};
+use lunco_usd_core::StageRecipe;
 
 /// Async BFS that fetches the full transitive `.usda` layer closure into an
 /// in-memory, `Send` [`StageRecipe`]. The loader composes this recipe and builds
@@ -165,9 +165,11 @@ mod inherits_compose_tests {
         let usda = "#usda 1.0\n\
 class \"_RoverControl\"\n{\n    def \"Controls\"\n    {\n        def \"forward\"\n        {\n            uniform string lunco:port = \"throttle\"\n            uniform double lunco:factor = 1\n        }\n    }\n}\n\
 def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
-        let stage =
-            build_stage_from_closure(&crate::StageRecipe::from_source("inherits.usda", usda))
-                .expect("compose");
+        let stage = build_stage_from_closure(&lunco_usd_core::StageRecipe::from_source(
+            "inherits.usda",
+            usda,
+        ))
+        .expect("compose");
         let view = StageView::new(&stage);
         let fwd = SdfPath::new("/Rover/Controls/forward").unwrap();
         assert_eq!(
@@ -276,7 +278,7 @@ def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
             (root_id.clone(), scene.as_bytes().to_vec()),
             (wrapper_id, wrapper.as_bytes().to_vec()),
         ]);
-        let stage = build_stage_from_closure(&crate::StageRecipe { root_id, bytes })
+        let stage = build_stage_from_closure(&lunco_usd_core::StageRecipe { root_id, bytes })
             .expect("compose scene→wrapper→glb");
         let cs = CanonicalStage::from_stage(stage, "scene.usda");
 
@@ -300,9 +302,11 @@ def Xform \"Visual\" (\n\
 )\n\
 {\n\
 }\n";
-        let stage =
-            build_stage_from_closure(&crate::StageRecipe::from_source("scene.usda", source))
-                .expect("compose binary arcs");
+        let stage = build_stage_from_closure(&lunco_usd_core::StageRecipe::from_source(
+            "scene.usda",
+            source,
+        ))
+        .expect("compose binary arcs");
         let view = StageView::new(&stage);
         let visual = SdfPath::new("/Visual").unwrap();
 
@@ -315,7 +319,7 @@ def Xform \"Visual\" (\n\
     #[test]
     fn binary_asset_uri_tracks_live_reference_authoring() {
         let source = "#usda 1.0\ndef Xform \"Visual\" {}\n";
-        let recipe = crate::StageRecipe::from_source("scene.usda", source);
+        let recipe = lunco_usd_core::StageRecipe::from_source("scene.usda", source);
         let stage = CanonicalStage::from_recipe(&recipe).expect("compose live binary-arc fixture");
         let visual = SdfPath::new("/Visual").unwrap();
         let referenced_asset = "#usda 1.0\n(defaultPrim = \"Model\")\ndef Xform \"Model\" {}\n";

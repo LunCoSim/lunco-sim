@@ -136,7 +136,7 @@ pub fn untextured_dome_intensity_sum(
     data: &openusd::sdf::Data,
     exclude: Option<&SdfPath>,
 ) -> Result<f32, LightReadError> {
-    use crate::usd_data::UsdDataExt;
+    use lunco_usd_core::UsdDataExt;
 
     // Collect paths first: `prim_type_name`/`field` re-borrow `data` immutably,
     // which is fine, but iterating while calling them keeps two borrows alive
@@ -909,7 +909,7 @@ pub(crate) fn instantiate_light_prim(
 
             // ── `inputs:radius` + `inputs:normalize` (UsdLux area semantics) ──────
             //
-            // The spec (`crates/lunco-usd/schema/core/usdLux.usda`):
+            // The spec (`crates/lunco-usd-core/schema/core/usdLux.usda`):
             //   * `LightAPI.inputs:intensity` — "scales the brightness of the light
             //     linearly"; `inputs:exposure` — "scales ... exponentially" (2^e).
             //   * `LightAPI.inputs:normalize` (default `0`) — "Controls if the light
@@ -1457,8 +1457,9 @@ def DomeLight "Scalar"
 #[cfg(test)]
 mod photometry_tests {
     use super::*;
-    use crate::canonical::{CanonicalStage, StageRecipe};
+    use crate::canonical::CanonicalStage;
     use crate::read::UsdRead;
+    use lunco_usd_core::StageRecipe;
 
     #[test]
     fn preview_scope_excludes_only_dominant_authored_lights() {

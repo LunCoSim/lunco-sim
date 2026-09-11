@@ -12,10 +12,10 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_doc::DocumentId;
 use lunco_time::{AnimationPreview, Playback};
-use lunco_usd::document::{LayerId, UsdOp};
 use lunco_usd_bevy::{
     author::normalize_value_literal, CanonicalStages, SdfPath, UsdPrimPath, UsdRead, UsdStageAsset,
 };
+use lunco_usd_core::document::{LayerId, UsdOp};
 use lunco_usd_ui::viewport::{UsdPreviewId, UsdViewportState};
 
 #[derive(Clone, Copy)]

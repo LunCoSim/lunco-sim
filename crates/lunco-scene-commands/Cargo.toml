@@ -43,6 +43,7 @@ lunco-api = { path = "../lunco-api", default-features = false }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-usd = { path = "../lunco-usd", default-features = false }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+lunco-usd-core = { path = "../lunco-usd-core" }
 # `QueryUsdPrim` addresses prims by `sdf::Path`, so the read side needs the same
 # path type the stage is keyed on — no conversion layer in between.
 openusd = { workspace = true }

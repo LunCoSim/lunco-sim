@@ -321,7 +321,7 @@ pub fn on_run_lint(
     mut report: ResMut<lunco_lint::LintReport>,
     mut document_reports: ResMut<DocumentLintReports>,
     asset_server: Option<Res<AssetServer>>,
-    documents: Option<Res<DocumentRegistry<lunco_usd::document::UsdDocument>>>,
+    documents: Option<Res<DocumentRegistry<lunco_usd_core::document::UsdDocument>>>,
     backed: Option<Res<lunco_usd::twin_projection::DocBackedTwinScenes>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
 ) {
@@ -587,7 +587,7 @@ impl ApiQueryProvider for LintReportQuery {
                 .get_resource::<DocumentLintReports>()
                 .and_then(|reports| reports.reports.get(&doc));
             let current_generation = world
-                .get_resource::<DocumentRegistry<lunco_usd::document::UsdDocument>>()
+                .get_resource::<DocumentRegistry<lunco_usd_core::document::UsdDocument>>()
                 .and_then(|registry| registry.host(doc))
                 .map(|host| host.document().generation());
             let report_generation = scoped.and_then(|report| report.generation);
@@ -734,7 +734,8 @@ mod tests {
     use bevy::asset::Handle;
     use bevy::prelude::*;
     use lunco_core::ports::{PortBackend, PortDirection, PortMetadata, PortRef, PortRegistry};
-    use lunco_usd_bevy::{CanonicalStage, StageRecipe, UsdPrimPath, UsdRead, UsdStageAsset};
+    use lunco_usd_bevy::{CanonicalStage, UsdPrimPath, UsdRead, UsdStageAsset};
+    use lunco_usd_core::StageRecipe;
 
     #[derive(Component)]
     struct ModelicaInput;

@@ -21,7 +21,7 @@
 
     TODO: replace this reconstructed file with a verbatim copy of
     `extsPhysics/omni.physx/schema.usda` from a Kit/Isaac-Sim install when one
-    is available. The drift test in `crates/lunco-usd/src/schema.rs`
+    is available. The drift test in `crates/lunco-usd-core/src/schema.rs`
     (`physx_vehicle_schemas_register_canonical_properties`) pins the canonical
     property names, so a verbatim swap is a verified replacement, not a guess.
 

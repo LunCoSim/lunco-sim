@@ -608,7 +608,8 @@ mod tests {
     //! `scenes/tests/filtered_pairs.usda`, which needs a stepping solver.
 
     use super::*;
-    use lunco_usd_bevy::{CanonicalStage, StageRecipe};
+    use lunco_usd_bevy::CanonicalStage;
+    use lunco_usd_core::StageRecipe;
 
     /// Two overlapping bodies, one filtering the other by naming its COLLIDER
     /// child — the form that must resolve to the body.

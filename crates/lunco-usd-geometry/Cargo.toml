@@ -1,0 +1,20 @@
+[package]
+name = "lunco-usd-geometry"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Reusable geometry evaluators and mesh builders for OpenUSD projections"
+
+[dependencies]
+# Geometry owns the mesh-data boundary but not a renderer. These Bevy leaf
+# crates provide POD math, mesh containers, and asset usage flags without
+# enabling bevy_render, wgpu, or a window backend.
+bevy_asset = { workspace = true }
+bevy_log = "0.19.1"
+bevy_math = "0.19.1"
+bevy_mesh = { workspace = true }
+spade = "2.15.1"
+truck-geometry = "0.5.0"
+
+[lints]
+workspace = true

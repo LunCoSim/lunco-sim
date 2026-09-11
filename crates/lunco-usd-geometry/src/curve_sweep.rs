@@ -38,12 +38,12 @@
 //! (`curvo`, `truck`) do either: `curvo` ships a `FrenetFrame`, which has exactly
 //! the degeneracy described above. So this is written rather than pulled in, and it
 //! is deliberately independent of *which* evaluator produced the centerline — the
-//! same sweep serves `BasisCurves` (via [`crate::camera_path::eval_curve`]) and
-//! NURBS curves later.
+//! the same sweep serves USD basis/NURBS curve consumers without depending on
+//! their stage-reader or projection implementation.
 
-use bevy::asset::RenderAssetUsages;
-use bevy::math::{Vec2, Vec3};
-// `bevy_mesh`, NOT `bevy::render::render_resource` — the latter is a re-export
+use bevy_asset::RenderAssetUsages;
+use bevy_math::{Vec2, Vec3};
+// `bevy_mesh`, NOT `bevy_render::render_resource` — the latter is a re-export
 // through `bevy_render` (wgpu + naga). `bevy_mesh` depends only on `wgpu-types`,
 // so naming these here costs no GPU stack.
 // See docs/architecture/render-decoupling.md.

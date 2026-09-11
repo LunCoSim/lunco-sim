@@ -14,7 +14,8 @@ use bevy::prelude::Transform;
 use openusd::sdf::{Path as SdfPath, Value};
 use openusd::usd::Stage;
 
-use crate::{AttrUiHint, MaterialPurpose, StageRecipe, StageView, UsdRead};
+use crate::{MaterialPurpose, StageView, UsdRead};
+use lunco_usd_core::{AttrUiHint, StageRecipe};
 
 /// One composed prim's owned facts needed by the initial visual projection.
 #[derive(Clone, Debug)]

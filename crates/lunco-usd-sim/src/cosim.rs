@@ -5033,7 +5033,7 @@ pub fn spawn_scene_root_world(
 /// The handle-supplying sibling of [`spawn_scene_root_world`]: instead of
 /// loading the stage from disk via the `AssetServer`, the caller hands in a
 /// `Handle<UsdStageAsset>` it built itself. This is the seam E1 uses — lunco-usd
-/// passes a handle holding a [`UsdDocument`](../../lunco_usd/document)'s
+/// passes a handle holding a [`UsdDocument`](../../lunco_usd_core/document)'s
 /// *composed* (`base ⊕ runtime`) stage, so the live world projects the editable
 /// document (with its persisted runtime spawns/moves) rather than the raw file.
 ///

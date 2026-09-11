@@ -6,7 +6,7 @@
     after editing `schema.usda`, which is the authoritative source.
 
     This is the file a USD runtime actually registers (via `plugInfo.json`), and
-    the file `lunco_usd::schema` parses to answer "what does this property's
+    the file `lunco_usd_core::schema` parses to answer "what does this property's
     schema declare?" — its type, its variability, its UI hint, and whether it is
     `custom`.
     """

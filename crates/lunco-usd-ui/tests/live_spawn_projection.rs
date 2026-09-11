@@ -8,10 +8,10 @@
 
 use bevy::prelude::*;
 use lunco_doc_bevy::DocumentRegistry;
-use lunco_usd::document::UsdDocument;
 use lunco_usd::{ApplyUsdOp, LayerId, UsdCommandsPlugin, UsdOp};
-use lunco_usd_bevy::usd_data::UsdDataExt;
 use lunco_usd_bevy::*;
+use lunco_usd_core::document::UsdDocument;
+use lunco_usd_core::UsdDataExt;
 use lunco_usd_ui::{
     CloseUsdPreview, FocusUsdPreview, OpenUsdPreview, OpenUsdPreviewView, UsdPreviewId,
     UsdPreviewViewId, UsdViewportPlugin,

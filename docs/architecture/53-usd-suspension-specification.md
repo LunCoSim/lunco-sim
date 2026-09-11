@@ -134,7 +134,7 @@ In the NVIDIA Omniverse / PhysX 5 Vehicle SDK, a wheel assembly is represented b
 
 ### LunCo extension APIs
 The concepts the vehicle schemas do not model live in `luncoSchema`
-(`crates/lunco-usd/schema/schema.usda`), each as an applied API on its owning
+(`crates/lunco-usd-core/schema/schema.usda`), each as an applied API on its owning
 prim:
 
 | API | Property | Applied to | Why it is not PhysX |
@@ -243,7 +243,7 @@ reported as `usd-physics-joint-invalid` and raises the shared physics safety
 hold. It is not silently omitted and therefore cannot become an unconstrained
 mechanism.
 
-**Attribute names read:** `physxVehicleSuspension:springStrength`, `physxVehicleSuspension:springDamperRate` (NVIDIA canonical), and `lunco:suspension:restLength` (LunCo extension — PhysX has no equivalent). The canonical names are defined in the reconstructed `crates/lunco-usd/schema/core/physxSchema.usda` and pinned by the `physx_vehicle_schemas_register_canonical_properties` drift test.
+**Attribute names read:** `physxVehicleSuspension:springStrength`, `physxVehicleSuspension:springDamperRate` (NVIDIA canonical), and `lunco:suspension:restLength` (LunCo extension — PhysX has no equivalent). The canonical names are defined in the reconstructed `crates/lunco-usd-core/schema/core/physxSchema.usda` and pinned by the `physx_vehicle_schemas_register_canonical_properties` drift test.
 
 ### 3.2.1. Generic support and activation transaction
 

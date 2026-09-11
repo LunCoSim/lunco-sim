@@ -11,11 +11,12 @@ use lunco_api::queries::ApiQueryProvider;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
 use lunco_doc::{Document, DocumentId};
 use lunco_doc_bevy::{DocumentRegistry, JournalResource};
-use lunco_usd_bevy::{usd_data::UsdDataExt, UsdRead};
+use lunco_usd_bevy::UsdRead;
+use lunco_usd_core::UsdDataExt;
 use openusd::sdf::{Path as SdfPath, Value as SdfValue};
 
-use crate::document::UsdDocument;
-use crate::edit_session::UsdEditSessions;
+use lunco_usd_core::document::UsdDocument;
+use lunco_usd_core::edit_session::UsdEditSessions;
 
 fn journal_position(world: &World, doc: DocumentId) -> serde_json::Value {
     world
@@ -33,7 +34,7 @@ fn journal_position(world: &World, doc: DocumentId) -> serde_json::Value {
 }
 
 fn runtime_source(document: &UsdDocument) -> Result<String, String> {
-    lunco_usd_bevy::author::data_to_usda(document.runtime_data())
+    lunco_usd_core::author::data_to_usda(document.runtime_data())
         .map_err(|error| format!("could not serialize runtime layer: {error}"))
 }
 
@@ -139,7 +140,7 @@ fn composed_attribute_inspection(
                 let value = spec
                     .get("default")
                     .cloned()
-                    .and_then(|value| lunco_usd_bevy::author::value_to_literal(&type_name, value));
+                    .and_then(|value| lunco_usd_core::author::value_to_literal(&type_name, value));
                 Some(serde_json::json!({
                     "name": property.name(),
                     "type": type_name,
@@ -171,7 +172,7 @@ fn composed_attribute_inspection(
                 let type_name = reader.attr_type_name(path, &name)?;
                 let value = reader
                     .attr_value(path, &name)
-                    .and_then(|value| lunco_usd_bevy::author::value_to_literal(&type_name, value));
+                    .and_then(|value| lunco_usd_core::author::value_to_literal(&type_name, value));
                 Some(serde_json::json!({
                     "name": name,
                     "type": type_name,
@@ -440,7 +441,7 @@ impl ApiQueryProvider for InspectUsdDocumentProvider {
         };
         let document = host.document();
         let source = document.source();
-        let runtime_bytes = lunco_usd_bevy::author::data_to_usda(document.runtime_data())
+        let runtime_bytes = lunco_usd_core::author::data_to_usda(document.runtime_data())
             .map_or(0, |source| source.len());
         let mut diagnostics = Vec::new();
         if let Some(error) = document.parse_error() {
@@ -745,7 +746,7 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
                 "ResolveUsdTarget requires an explicit `edit_target`",
             );
         };
-        let edit_target = crate::LayerId::new(raw_target);
+        let edit_target = lunco_usd_core::LayerId::new(raw_target);
         if !edit_target.is_root() && !edit_target.is_runtime() {
             return ApiResponse::error(
                 ApiErrorCode::DeserializationError,
@@ -776,8 +777,8 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
             }
         };
         let authored_in_document = match (
-            document.authored_prim_exists(&crate::LayerId::root(), raw_path),
-            document.authored_prim_exists(&crate::LayerId::runtime(), raw_path),
+            document.authored_prim_exists(&lunco_usd_core::LayerId::root(), raw_path),
+            document.authored_prim_exists(&lunco_usd_core::LayerId::runtime(), raw_path),
         ) {
             (Ok(root), Ok(runtime)) => root || runtime,
             (Err(error), _) | (_, Err(error)) => {

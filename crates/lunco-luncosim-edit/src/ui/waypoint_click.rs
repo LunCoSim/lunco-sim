@@ -2185,7 +2185,7 @@ mod tests {
     use lunco_autopilot::{
         btcpp_xml::value_to_xml, AutopilotBehaviorSpec, BehaviorSpec, PatrolWaypoint,
     };
-    use lunco_usd::document::WAYPOINT_MARKER_ASSET;
+    use lunco_usd_core::document::WAYPOINT_MARKER_ASSET;
 
     #[test]
     fn analytic_surface_remains_authoritative_when_streamed_terrain_hit_is_removed() {

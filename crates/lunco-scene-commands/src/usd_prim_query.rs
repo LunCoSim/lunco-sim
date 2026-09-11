@@ -58,10 +58,11 @@ use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
 use lunco_doc::{Document, DocumentId};
 use lunco_doc_bevy::DocumentRegistry;
-use lunco_usd::{document::UsdDocument, twin_projection::DocBackedTwinScenes};
+use lunco_usd::twin_projection::DocBackedTwinScenes;
 use lunco_usd_bevy::read::UsdRead;
 use lunco_usd_bevy::view::StageView;
 use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdSceneRoot};
+use lunco_usd_core::document::UsdDocument;
 use openusd::sdf::{Path as SdfPath, Value};
 
 /// One attribute, converted to JSON by probing the typed readers in turn.

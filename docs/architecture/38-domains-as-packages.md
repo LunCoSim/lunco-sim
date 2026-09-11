@@ -895,7 +895,7 @@ attenuation-cutoff concept at all: `inputs:radius` is the emitter's physical SIZ
 penumbra), not a falloff bound, and a UsdLux light falls off physically and forever. That is correct
 for a path tracer and unusable for a real-time renderer, which must bound each light's influence
 volume. Nothing to promote to, so it is now declared properly as `LunCoLightAPI`
-(`crates/lunco-usd/schema/`) instead of being authored as a bare `custom` attribute.
+(`crates/lunco-usd-core/schema/`) instead of being authored as a bare `custom` attribute.
 
 **`lunco:` glue that *stays* (tiers 2–3 — USD has no schema):** `lunco:light:range`, `lunco:link:*`, `lunco:celestial:*`,
 `lunco:ephemeris_id` (SPICE metadata, §11), `lunco:net:*` (replication), `lunco:scenario`/

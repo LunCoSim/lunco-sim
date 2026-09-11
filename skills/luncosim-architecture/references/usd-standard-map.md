@@ -26,7 +26,7 @@ semantic owner.
 - Do not create a schema only to make a reader's `if` branch convenient.
 - Prefer a generic applied schema plus authored role/token data over a schema for
   every component role.
-- Keep the schema source in `crates/lunco-usd/schema/schema.usda`; regenerate
+- Keep the schema source in `crates/lunco-usd-core/schema/schema.usda`; regenerate
   `generatedSchema.usda` and `plugInfo.json` with `scripts/gen_schema.py`.
 - Add a composition test proving the authored property is present and a runtime
   test proving a real reader consumes it.

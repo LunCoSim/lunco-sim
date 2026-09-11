@@ -13,7 +13,7 @@ use openusd::usd::{compute_included_paths, Collection, PrimPredicate, Stage};
 /// A borrow of a live composed [`Stage`] offering [`UsdDataExt`]-equivalent typed
 /// reads. `!Send` — construct per-system from a `NonSend` `CanonicalStage`.
 ///
-/// [`UsdDataExt`]: crate::usd_data::UsdDataExt
+/// [`UsdDataExt`]: lunco_usd_core::UsdDataExt
 pub struct StageView<'a> {
     stage: &'a Stage,
 }
@@ -29,7 +29,7 @@ impl<'a> StageView<'a> {
     }
 
     /// A prim's composed `typeName` (e.g. `"Xform"`, `"Mesh"`), if any.
-    /// Mirrors [`UsdDataExt::prim_type_name`](crate::usd_data::UsdDataExt::prim_type_name).
+    /// Mirrors [`UsdDataExt::prim_type_name`](lunco_usd_core::UsdDataExt::prim_type_name).
     pub fn prim_type_name(&self, prim: &SdfPath) -> Option<String> {
         self.stage
             .prim(prim.clone())
@@ -41,7 +41,7 @@ impl<'a> StageView<'a> {
 
     /// The default-time composed value of attribute `name` on `prim`, typed as
     /// `T`. Mirrors
-    /// [`UsdDataExt::prim_attribute_value`](crate::usd_data::UsdDataExt::prim_attribute_value).
+    /// [`UsdDataExt::prim_attribute_value`](lunco_usd_core::UsdDataExt::prim_attribute_value).
     pub fn value<T>(&self, prim: &SdfPath, name: &str) -> Option<T>
     where
         T: TryFrom<Value>,

@@ -15,8 +15,9 @@ use bevy::prelude::*;
 use lunco_materials::ProceduralSkybox;
 use lunco_render::PbrLook;
 use lunco_usd_bevy::{
-    CanonicalStage, CanonicalStages, StageRecipe, UsdPrimPath, UsdStageAsset, UsdVisualSyncFailed,
+    CanonicalStage, CanonicalStages, UsdPrimPath, UsdStageAsset, UsdVisualSyncFailed,
 };
+use lunco_usd_core::StageRecipe;
 
 const SCENE: &str = r#"#usda 1.0
 ( defaultPrim = "World", metersPerUnit = 1 )

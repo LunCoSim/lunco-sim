@@ -19,6 +19,22 @@ use lunco_usd_bevy::{UsdPrimPath, UsdRead, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
 use std::collections::HashMap;
 
+/// Resolve the authored behavior source selected by the USD program schema.
+///
+/// The source-selection rules belong to the USD program reader in
+/// `lunco-usd-bevy`; this runtime crate only turns the result into the pair
+/// consumed by the entity projector.
+pub(crate) fn selected_behavior_source_values(
+    view: &lunco_usd_bevy::StageView<'_>,
+    prim: &SdfPath,
+) -> Result<(Option<String>, Option<String>), lunco_usd_bevy::program::ProgramSourceIssue> {
+    match lunco_usd_bevy::program::resolve_behavior_tree_source(view, prim)? {
+        Some(lunco_usd_bevy::program::BehaviorTreeSource::Code(source)) => Ok((Some(source), None)),
+        Some(lunco_usd_bevy::program::BehaviorTreeSource::Asset(asset)) => Ok((None, Some(asset))),
+        None => Ok((None, None)),
+    }
+}
+
 /// The attribute a move edit (`UsdOp::SetTranslate`) records as `InfoOnly`.
 const TRANSLATE_ATTR: &str = "xformOp:translate";
 
@@ -794,7 +810,7 @@ pub(crate) fn refresh_edited_prims_live(
                 .and_then(|cs| {
                     let view = cs.view();
                     let sp = SdfPath::new(prim).ok()?;
-                    crate::program::selected_behavior_source_values(&view, &sp).ok()
+                    selected_behavior_source_values(&view, &sp).ok()
                 });
             // The tree is authored on the `LunCoProgramAPI` child, but the
             // vehicle owns it — never stamp the XML onto the program prim.
@@ -1065,7 +1081,8 @@ mod tests {
     fn authoring_a_translate_moves_an_already_live_entity() {
         use bevy::asset::AssetApp;
         use bevy::prelude::*;
-        use lunco_usd_bevy::{CanonicalStages, StageRecipe};
+        use lunco_usd_bevy::CanonicalStages;
+        use lunco_usd_core::StageRecipe;
 
         let mut app = App::new();
         app.add_plugins(bevy::asset::AssetPlugin::default())
@@ -1141,7 +1158,8 @@ mod tests {
     fn authoring_a_scale_updates_an_already_live_preview_entity() {
         use bevy::asset::AssetApp;
         use bevy::prelude::*;
-        use lunco_usd_bevy::{CanonicalStages, StageRecipe, UsdPreviewOnly};
+        use lunco_usd_bevy::{CanonicalStages, UsdPreviewOnly};
+        use lunco_usd_core::StageRecipe;
 
         let mut app = App::new();
         app.add_plugins(bevy::asset::AssetPlugin::default())
@@ -1214,7 +1232,8 @@ mod tests {
     fn unrelated_resync_preserves_an_already_live_pose() {
         use bevy::asset::AssetApp;
         use bevy::prelude::*;
-        use lunco_usd_bevy::{CanonicalStages, StageRecipe};
+        use lunco_usd_bevy::CanonicalStages;
+        use lunco_usd_core::StageRecipe;
 
         const SCENE: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n    metersPerUnit = 1.0\n    upAxis = \"Y\"\n)\ndef Xform \"World\"\n{\n    def Xform \"Rover\"\n    {\n        double3 xformOp:translate = (0, -1900, 0)\n        uniform token[] xformOpOrder = [\"xformOp:translate\"]\n    }\n}\n";
 
@@ -1276,7 +1295,8 @@ mod tests {
     fn descendant_resync_does_not_reproject_an_admitted_vehicle() {
         use bevy::asset::AssetApp;
         use bevy::prelude::*;
-        use lunco_usd_bevy::{CanonicalStages, StageRecipe};
+        use lunco_usd_bevy::CanonicalStages;
+        use lunco_usd_core::StageRecipe;
 
         const SCENE: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n    def Xform \"Rover\" (\n        prepend apiSchemas = [\"PhysicsRigidBodyAPI\", \"PhysxVehicleContextAPI\"]\n    )\n    {\n    }\n}\n";
 
@@ -1333,7 +1353,8 @@ mod tests {
     fn sink_drain_projects_spawn_and_despawn() {
         use bevy::asset::AssetApp;
         use bevy::prelude::*;
-        use lunco_usd_bevy::{CanonicalStages, StageRecipe};
+        use lunco_usd_bevy::CanonicalStages;
+        use lunco_usd_core::StageRecipe;
 
         const SCENE: &str =
             "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n";
@@ -1425,7 +1446,8 @@ mod tests {
     fn info_only_reports_both_prim_and_property_paths() {
         use bevy::asset::AssetApp;
         use bevy::prelude::*;
-        use lunco_usd_bevy::{CanonicalStages, StageRecipe};
+        use lunco_usd_bevy::CanonicalStages;
+        use lunco_usd_core::StageRecipe;
 
         let mut app = App::new();
         app.add_plugins(bevy::asset::AssetPlugin::default())

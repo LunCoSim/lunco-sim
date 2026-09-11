@@ -4638,7 +4638,7 @@ mod tests {
     #[test]
     fn authored_member_telemetry_owns_the_public_output_identity() {
         let stage =
-            lunco_usd_bevy::CanonicalStage::from_recipe(&lunco_usd_bevy::StageRecipe::from_source(
+            lunco_usd_bevy::CanonicalStage::from_recipe(&lunco_usd_core::StageRecipe::from_source(
                 "telemetry-owner.usda",
                 r#"#usda 1.0
 def Scope "Rig"

@@ -89,7 +89,7 @@ use lunco_workbench_core::{
 use lunco_workspace::{document_belongs_to_twin_root, TwinClosed, WorkspaceResource};
 
 use lunco_doc_bevy::DocumentRegistry;
-use lunco_usd::document::{LayerId, UsdDocument};
+use lunco_usd_core::document::{LayerId, UsdDocument};
 
 use std::collections::{HashMap, HashSet};
 
@@ -4124,7 +4124,7 @@ impl InstancePanel for UsdPreviewViewPanel {
 mod tests {
     use super::*;
     use lunco_usd::commands::UsdCommandsPlugin;
-    use lunco_usd::document::UsdOp;
+    use lunco_usd_core::document::UsdOp;
     use lunco_workbench::{BrowserAction, BrowserActions};
 
     #[derive(Resource, Default)]

@@ -12,15 +12,15 @@
 //! The producer runs on the main thread (the composed stage is `!Send`) and stores
 //! only render-ready data; it is never authoritative — the stage is.
 //!
-//! [`resolve_mount_placement`]: lunco_usd::attach::resolve_mount_placement
-//! [`realign_component_ops`]: lunco_usd::attach::realign_component_ops
+//! [`resolve_mount_placement`]: lunco_usd_core::attach::resolve_mount_placement
+//! [`realign_component_ops`]: lunco_usd_core::attach::realign_component_ops
 
 use std::collections::HashMap;
 
 use bevy::prelude::*;
-use lunco_usd::attach::resolve_mount_placement;
 use lunco_usd_bevy::mount::{read_attachment_joint, read_plug, read_sockets, MountDiagnostic};
 use lunco_usd_bevy::{CanonicalStages, SdfPath, UsdPrimPath, UsdStageAsset};
+use lunco_usd_core::attach::resolve_mount_placement;
 use lunco_usd_ui::viewport::{UsdPreviewId, UsdViewportState};
 
 /// Position and orientation tolerance for the editor's no-op Snap state.
@@ -73,7 +73,7 @@ pub struct MountItem {
 pub struct UsdMountSessionView {
     pub preview: UsdPreviewId,
     pub doc: lunco_doc::DocumentId,
-    pub edit_target: lunco_usd::document::LayerId,
+    pub edit_target: lunco_usd_core::document::LayerId,
     pub generation: u64,
     pub entity: Option<Entity>,
     pub host_path: String,

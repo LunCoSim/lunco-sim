@@ -456,7 +456,7 @@ pub fn triangulate_trimmed(loops: &TrimLoops, grid: usize) -> Option<TrimmedDoma
             }
         }
         if !ok || handles.len() < 4 {
-            bevy::log::warn!(
+            bevy_log::warn!(
                 "[usd-bevy] trim loop could not be inserted: {} of {} vertices",
                 handles.len(),
                 l.len()

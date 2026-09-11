@@ -14,8 +14,8 @@ use bevy::prelude::*;
 use lunco_doc::DocumentOrigin;
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_materials::ParamValue;
-use lunco_usd::document::UsdDocument;
 use lunco_usd_bevy::{resolve_bound_shader, SdfPath, UsdPrimPath, UsdRead};
+use lunco_usd_core::document::UsdDocument;
 
 /// The exact USD destination and literal for one dynamic shader parameter.
 ///
@@ -108,7 +108,7 @@ fn canonical_shader_parameter_literal(
         } else {
             candidate
         };
-        if lunco_usd_bevy::author::parse_attribute_value(type_name, &literal).is_ok() {
+        if lunco_usd_core::author::parse_attribute_value(type_name, &literal).is_ok() {
             return Ok(literal);
         }
     }

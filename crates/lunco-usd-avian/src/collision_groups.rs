@@ -376,7 +376,8 @@ impl CollisionGroupTables {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lunco_usd_bevy::{CanonicalStage, StageRecipe};
+    use lunco_usd_bevy::CanonicalStage;
+    use lunco_usd_core::StageRecipe;
 
     /// Wheels and chassis in two groups that filter each other, plus a body in no
     /// group at all.

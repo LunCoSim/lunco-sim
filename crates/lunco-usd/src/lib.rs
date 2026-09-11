@@ -23,41 +23,29 @@ use bevy::prelude::*;
 // twin-scene resolver). The browser and viewport presentation lives in
 // `lunco-usd-ui`; `document` is the USD document model and the shared
 // `DocumentRegistry<UsdDocument>` owns document identity. Edits author through
-// OpenUSD's Stage by SDF path (`lunco_usd_bevy::author`).
+// OpenUSD's Stage by SDF path (`lunco_usd_core::author`).
 pub mod assembly_api;
-pub mod attach;
 pub mod commands;
-pub mod document;
-pub mod edit_session;
 pub mod live_consume;
 /// Lowering a material edit into a real UsdShade network (`Material` +
 /// `UsdPreviewSurface` + `material:binding`). Crate-agnostic op builder — the
 /// Inspector, the command API and scripting all author materials through it, so
 /// none of them can reinvent the non-standard "shader inputs on a geom prim"
 /// spelling.
-pub mod material;
-pub mod program;
 pub mod registry;
 pub mod runtime_persistence;
-pub mod schema;
 pub mod twin_projection;
 
 pub use commands::{
     ApplyUsdOp, ApplyUsdOps, AttachProgram, CommitUsdProposal, CreateUsdProposal,
     ReviewUsdProposal, UsdCommandsPlugin, UsdProposalReviewAction, USD_DOCUMENT_KIND,
 };
-pub use document::{LayerId, UsdChange, UsdDocument, UsdOp, UsdReferenceArc, UsdReferenceListOp};
-pub use edit_session::{
-    UsdEditScope, UsdEditSessions, UsdProposal, UsdProposalId, UsdProposalState, UsdProposalSummary,
-};
-pub use program::{ProgramAttachSpec, ProgramInput, ProgramOutput};
-// Registry: use `lunco_doc_bevy::DocumentRegistry<UsdDocument>` — no USD-specific type.
+// The document and operation model is owned by `lunco-usd-core`; this crate
+// exposes runtime integration and command/plugin APIs.
 pub use lunco_usd_avian::{
     BigSpacePhysicsBridgePlugin, ShouldBeDynamic, UsdAvianPlugin, UsdCollisionFilter,
 };
-pub use lunco_usd_bevy::{
-    usd_data::UsdDataExt, UsdAuthoredLight, UsdData, UsdPrimPath, UsdStageAsset,
-};
+pub use lunco_usd_bevy::{UsdAuthoredLight, UsdPrimPath, UsdStageAsset};
 /// Asset-backed OpenUSD assembly. This is the public composition boundary:
 /// `lunco-assets` supplies canonical identities and bytes, while this crate
 /// interprets USD sublayers, references, payloads, and variants into a stage.

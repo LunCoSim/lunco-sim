@@ -704,7 +704,7 @@ mod tests {
 
     #[test]
     fn malformed_textured_dome_format_is_not_treated_as_automatic() {
-        let recipe = crate::canonical::StageRecipe::from_source(
+        let recipe = lunco_usd_core::StageRecipe::from_source(
             "dome.usda",
             r#"#usda 1.0
 def DomeLight "Dome"

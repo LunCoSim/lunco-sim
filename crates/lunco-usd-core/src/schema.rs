@@ -55,6 +55,8 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
+use crate::author::usda_to_data;
+use crate::metadata::AttrUiHint;
 use openusd::sdf::{self, SpecType};
 
 /// The generated `luncoSchema` definitions — the file a USD runtime registers.
@@ -314,7 +316,7 @@ pub struct PropertySpec {
     /// schema-level default for every asset that composes the schema; a
     /// per-asset authored `customData` still overrides it
     /// (`produce_usd_param_view` asks the composed attribute first).
-    pub ui_hint: Option<lunco_usd_bevy::AttrUiHint>,
+    pub ui_hint: Option<AttrUiHint>,
 }
 
 /// The parsed `luncoSchema` plus the core `uniform` table.
@@ -449,7 +451,7 @@ impl SchemaRegistry {
     /// prim types and API schemas as *ours* (see [`load`](Self::load)).
     fn ingest(&mut self, src: &str, own: bool) {
         let reg = self;
-        let Ok(data) = lunco_usd_bevy::author::usda_to_data(src) else {
+        let Ok(data) = usda_to_data(src) else {
             return;
         };
 
@@ -518,7 +520,7 @@ impl SchemaRegistry {
                             // Schema-declared slider bounds — the ONE decoder
                             // (`AttrUiHint::from_dict`) shared with the composed-
                             // stage per-asset read.
-                            (linear, lunco_usd_bevy::AttrUiHint::from_dict(d))
+                            (linear, AttrUiHint::from_dict(d))
                         }
                         _ => (LinearUnit::None, None),
                     };
@@ -641,7 +643,7 @@ impl SchemaRegistry {
     /// lookup, same rule as [`property`](Self::property)). Per-asset authored
     /// `customData` still overrides — callers ask the composed attribute first
     /// and fall back here.
-    pub fn ui_hint(&self, name: &str) -> Option<lunco_usd_bevy::AttrUiHint> {
+    pub fn ui_hint(&self, name: &str) -> Option<AttrUiHint> {
         self.property(name).and_then(|p| p.ui_hint.clone())
     }
 
@@ -686,7 +688,7 @@ pub fn is_custom(name: &str) -> bool {
 /// Schema-declared slider hint for `name`. Convenience over
 /// [`SchemaRegistry::global`] — see [`variability_of`] for the locking note.
 /// A poisoned lock degrades to `None` (no derived slider), never a panic.
-pub fn ui_hint_of(name: &str) -> Option<lunco_usd_bevy::AttrUiHint> {
+pub fn ui_hint_of(name: &str) -> Option<AttrUiHint> {
     SchemaRegistry::global()
         .read()
         .ok()
@@ -776,8 +778,7 @@ mod tests {
     /// and surfacing later as a subsystem panic.
     #[test]
     fn generated_schema_is_parseable() {
-        lunco_usd_bevy::author::usda_to_data(GENERATED_SCHEMA)
-            .expect("generated luncoSchema must be valid USDA");
+        usda_to_data(GENERATED_SCHEMA).expect("generated luncoSchema must be valid USDA");
     }
 
     /// Schema-declared UI hints must survive regeneration: the hints are

@@ -96,8 +96,8 @@ fn on_save_scenario(
         doc_id: scene_doc,
         parent_gen: None,
         label: "Save scenario source".into(),
-        ops: lunco_usd::program::inline_program_source_ops(
-            lunco_usd::LayerId::root(),
+        ops: lunco_usd_core::program::inline_program_source_ops(
+            lunco_usd_core::LayerId::root(),
             program.0.clone(),
             source,
         ),

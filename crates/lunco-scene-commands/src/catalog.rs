@@ -218,7 +218,9 @@ impl SpawnableEntry {
         match &self.source {
             SpawnSource::UsdFile(path) => {
                 lunco_assets::engine_asset_rel(path)
-                    == lunco_assets::engine_asset_rel(lunco_usd::document::WAYPOINT_MARKER_ASSET)
+                    == lunco_assets::engine_asset_rel(
+                        lunco_usd_core::document::WAYPOINT_MARKER_ASSET,
+                    )
             }
         }
     }

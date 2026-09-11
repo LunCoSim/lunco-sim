@@ -31,6 +31,7 @@ lunco-storage = { path = "../lunco-storage" }
 lunco-theme = { path = "../lunco-theme" }
 lunco-usd = { path = "../lunco-usd", default-features = false }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-compose = { path = "../lunco-usd-compose" }
 lunco-workbench = { path = "../lunco-workbench" }
 lunco-workbench-core = { path = "../lunco-workbench-core" }

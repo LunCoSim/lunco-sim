@@ -72,7 +72,7 @@ document ownership available to the asset differs.
 - Editable **`UsdDocument`** held in **`UsdDocumentRegistry`**, with **base + runtime
   layers** (`LayerId::root()` / `LayerId::runtime()`), a **`generation`** counter, and a
   **journal** (undo/redo).
-- `UsdOp::SetAttribute` (`lunco-usd/src/document.rs:735`) mutates the in-memory layer
+- `UsdOp::SetAttribute` (`lunco-usd-core/src/document.rs`) mutates the in-memory layer
   `sdf::Data`, `commit`s (bumps `generation`), and **returns an inverse op** → undo for
   free.
 - Projected into ECS by `lunco-usd/src/twin_projection.rs` and
@@ -144,7 +144,7 @@ namespace.
   (`lunco-usd-bevy/src/lib.rs:244`) is the per-entity link back to its prim.
 - Reverse lookup (prim path → entity) exists only as an **ad-hoc, per-call HashMap**
   (`lunco-usd-sim/src/cosim.rs:483`), not a maintained index.
-- Reading composed attrs: `UsdDataExt` (`lunco-usd-bevy/src/usd_data.rs`) —
+- Reading composed attrs: `UsdDataExt` (`lunco-usd-core/src/usd_data.rs`) —
   `prim_children`, `prim_attribute_value::<T>`, `field`, `prim_type_name`.
 - Shader projection reads authored `inputs:*` from the composed bound Shader;
   connected inputs remain graph-owned and are not treated as local parameter
@@ -289,12 +289,12 @@ prim→entity.
 
 - `lunco-scene-commands/src/commands.rs` — `SetObjectProperty` struct and observers
 - `lunco-scene-commands/src/commands.rs` — `on_set_object_property`
-- `lunco-usd/src/document.rs` — `UsdOp::SetAttribute` apply (commit + inverse)
+- `lunco-usd-core/src/document.rs` — `UsdOp::SetAttribute` apply (commit + inverse)
 - `lunco-usd/src/twin_projection.rs` — `sync_twin_overlays` and document-backed mounts
 - `lunco-usd/src/live_consume.rs` — `project_stage_changes` (E1/E2 consumer)
 - `lunco-usd/src/commands.rs` — scene command admission and document registration
 - `lunco-usd-bevy/src/lib.rs` — `UsdStageAsset`, `UsdPrimPath`
-- `lunco-usd-bevy/src/usd_data.rs` — `UsdDataExt` (read composed attrs)
+- `lunco-usd-core/src/usd_data.rs` — `UsdDataExt` (read composed attrs)
 - `lunco-usd-sim/src/cosim.rs` — `LoadScene` / `spawn_scene_root_with_stage`; ad-hoc prim→entity index
 - `lunco-luncosim/src/lib.rs:621` — `refresh_layered_terrain_layers` (per-domain
   projection-on-`Modified` precedent)
