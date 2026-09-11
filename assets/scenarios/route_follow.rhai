@@ -53,15 +53,15 @@ fn route_enabled_from_usd(me) {
     value == () || value > 0.5
 }
 
-fn current_point(me) {
+fn current_point(me, state) {
     let points = route_children(me);
-    if this.route_index == () { this.route_index = 0; }
-    if this.route_index < 0 || this.route_index >= points.len() { return (); }
-    points[this.route_index]
+    if state.route_index == () { state.route_index = 0; }
+    if state.route_index < 0 || state.route_index >= points.len() { return (); }
+    points[state.route_index]
 }
 
-fn current_zone(me) {
-    let point = current_point(me);
+fn current_zone(me, state) {
+    let point = current_point(me, state);
     if point == () { return (); }
     let result = query("QueryUsdPrim", #{
         path: point + "/Trigger",
@@ -73,13 +73,13 @@ fn current_zone(me) {
     result.attrs["lunco:triggerZone"]
 }
 
-fn drive_current_point(me) {
+fn drive_current_point(me, state) {
     let subject = route_subject(me);
-    if !this.enabled {
+    if !state.enabled {
         if subject >= 0 { brake(subject); }
         return;
     }
-    let point = current_point(me);
+    let point = current_point(me, state);
     if subject < 0 || point == () {
         if subject >= 0 { brake(subject); }
         return;
@@ -98,23 +98,23 @@ fn drive_current_point(me) {
     drive(subject, command.throttle, command.steer);
 }
 
-fn advance_on_sensor(me, evt) {
+fn advance_on_sensor(me, evt, state) {
     if evt.name == "route_start" {
-        this.enabled = true;
+        state.enabled = true;
         return;
     }
-    if !this.enabled { return; }
+    if !state.enabled { return; }
     if !evt.name.starts_with("enter:") { return; }
     let subject = route_subject(me);
     if subject < 0 || evt.value != subject { return; }
-    let point = current_point(me);
+    let point = current_point(me, state);
     if point == () { return; }
-    let zone = current_zone(me);
+    let zone = current_zone(me, state);
     if zone == () || zone == "" { return; }
     let expected = "enter:" + zone;
     if evt.name == expected {
-        emit("route_point_reached", this.route_index);
-        this.route_index += 1;
+        emit("route_point_reached", state.route_index);
+        state.route_index += 1;
     }
 }
 
@@ -124,12 +124,12 @@ fn on_start(me) {
 }
 
 fn on_event(me, evt) {
-    advance_on_sensor(me, evt);
+    advance_on_sensor(me, evt, this);
 }
 
 // The action stays live so route edits are visible without rebuilding the
 // subject. The point list and relationship are queried on each action pass;
 // sensor events are the sole progression authority.
 fn task(me) {
-    forever(step(|m| drive_current_point(m), |m| false))
+    forever(step(|m| drive_current_point(m, this), |m| false))
 }
