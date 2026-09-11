@@ -746,10 +746,12 @@ pub struct UsdDocument {
     /// Revision of the runtime overlay layer.
     runtime_revision: u64,
     origin: DocumentOrigin,
-    /// Generation at which the document was last persisted to disk.
-    /// `None` = never saved (freshly created in-memory); `Some(g)` =
-    /// last saved at generation `g`. Drives `is_dirty`.
-    last_saved_generation: Option<u64>,
+    /// Authored-base revision at which the document was last persisted to disk.
+    /// `None` = never saved (freshly created in-memory); `Some(r)` = last
+    /// saved base revision. Runtime-overlay revisions do not affect this
+    /// authored dirty flag because the runtime layer is never written to the
+    /// authored USDA file.
+    last_saved_base_revision: Option<u64>,
     /// Ring buffer of `(generation_after_change, change)` for catch-up
     /// reads. See [`changes_since`](Self::changes_since).
     changes: VecDeque<(u64, UsdChange)>,
@@ -792,7 +794,7 @@ impl Clone for UsdDocument {
             base_revision: self.base_revision,
             runtime_revision: self.runtime_revision,
             origin: self.origin.clone(),
-            last_saved_generation: self.last_saved_generation,
+            last_saved_base_revision: self.last_saved_base_revision,
             changes: self.changes.clone(),
             op_log: self.op_log.clone(),
             composed_cache: std::sync::Mutex::new(None),
@@ -831,7 +833,7 @@ impl UsdDocument {
                 (usda_to_data(EMPTY_USDA).unwrap_or_default(), Some(source))
             }
         };
-        let last_saved_generation = match &origin {
+        let last_saved_base_revision = match &origin {
             DocumentOrigin::File { .. } => Some(0),
             DocumentOrigin::Untitled { .. } | DocumentOrigin::Bundled { .. } => None,
         };
@@ -845,7 +847,7 @@ impl UsdDocument {
             base_revision: 0,
             runtime_revision: 0,
             origin,
-            last_saved_generation,
+            last_saved_base_revision,
             changes: VecDeque::with_capacity(CHANGE_HISTORY_CAPACITY),
             op_log: VecDeque::with_capacity(CHANGE_HISTORY_CAPACITY),
             composed_cache: std::sync::Mutex::new(None),
@@ -1057,7 +1059,7 @@ impl UsdDocument {
         let mut fork = self.clone();
         fork.id = id;
         fork.origin = DocumentOrigin::untitled(name);
-        fork.last_saved_generation = None;
+        fork.last_saved_base_revision = None;
         Ok(fork)
     }
 
@@ -1066,10 +1068,9 @@ impl UsdDocument {
     /// generation and records a [`UsdChange::FullReload`] so the viewport
     /// rebuilds, but routes through neither the op layer nor the journal: it
     /// *reconstructs* runtime state that was authored (and journaled) in a prior
-    /// session, rather than authoring it anew. Preserves the base dirty flag, so
-    /// reloading runtime state never makes a clean scene look unsaved.
+    /// session, rather than authoring it anew. Runtime state does not affect the
+    /// authored dirty flag because that flag tracks the base layer only.
     pub fn restore_runtime(&mut self, data: sdf::Data) {
-        let was_dirty = self.is_dirty();
         self.commit(TargetLayer::Runtime, data, UsdChange::FullReload);
         // Not a typed op, but it did bump the generation — push a synthetic
         // whole-source marker so the op-replay projector accounts for this
@@ -1078,9 +1079,6 @@ impl UsdDocument {
             edit_target: LayerId::runtime(),
             text: String::new(),
         });
-        if !was_dirty {
-            self.last_saved_generation = Some(self.generation);
-        }
     }
 
     /// Replace the **base** layer with `source` re-read from disk — a RE-OPEN of
@@ -1119,7 +1117,7 @@ impl UsdDocument {
                 });
                 self.parse_error = None;
                 // Matches disk as of this generation ⇒ clean.
-                self.last_saved_generation = Some(self.generation);
+                self.last_saved_base_revision = Some(self.base_revision);
                 true
             }
             Err(e) => {
@@ -1160,7 +1158,7 @@ impl UsdDocument {
             text: String::new(),
         });
         self.parse_error = None;
-        self.last_saved_generation = Some(self.generation);
+        self.last_saved_base_revision = Some(self.base_revision);
         true
     }
 
@@ -1171,25 +1169,23 @@ impl UsdDocument {
     }
 
     /// Replace the origin in-place. Used by Save-As to rebind an
-    /// Untitled document to a fresh on-disk path; bumps the
-    /// last-saved-generation marker so the dirty flag clears.
+    /// Untitled document to a fresh on-disk path; establishes the current
+    /// authored-base revision as the saved baseline.
     pub fn set_origin(&mut self, origin: DocumentOrigin) {
         self.origin = origin;
-        self.last_saved_generation = Some(self.generation);
+        self.last_saved_base_revision = Some(self.base_revision);
     }
 
     /// Whether the document has unsaved changes.
     pub fn is_dirty(&self) -> bool {
-        match self.last_saved_generation {
-            None => true,
-            Some(g) => self.generation > g,
-        }
+        self.last_saved_base_revision
+            .is_none_or(|saved| self.base_revision > saved)
     }
 
     /// Mark the current state as the last-saved baseline. Called by
     /// the Save command after a successful disk write.
     pub fn mark_saved(&mut self) {
-        self.last_saved_generation = Some(self.generation);
+        self.last_saved_base_revision = Some(self.base_revision);
     }
 
     /// Suffix of the change ring strictly after `since_generation`.

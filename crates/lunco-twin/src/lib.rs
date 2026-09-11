@@ -141,6 +141,18 @@ pub enum TwinMode {
 /// disposable cache rather than a durable record.
 pub const RUNTIME_SUBDIR: &str = ".lunco/runtime";
 
+/// Environment marker used by throwaway scene, render, and editor acceptance
+/// runs. Those processes use a fresh in-memory workspace and must never read or
+/// write runtime overlays from a developer Twin. The production test launchers
+/// set this marker; normal interactive runs leave it unset so their explicit
+/// Twin persistence policy remains authoritative.
+pub const ISOLATED_RUN_ENV: &str = "LUNCOSIM_ISOLATED_RUN";
+
+/// Whether the current process is an isolated acceptance run.
+pub fn isolated_run_requested() -> bool {
+    std::env::var_os(ISOLATED_RUN_ENV).is_some()
+}
+
 /// Is this twin-relative path **session state** rather than twin CONTENT?
 ///
 /// One definition, because every consumer that gets this wrong gets it wrong in

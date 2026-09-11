@@ -146,6 +146,7 @@ use bevy::time::TimeUpdateStrategy;
 use crate::SandboxHeadlessPlugin;
 use lunco_core::telemetry::{TelemetryEvent, TelemetryValue};
 use lunco_modelica::ModelicaModel;
+use lunco_usd::document::UsdDocument;
 use lunco_usd_sim::cosim::{PendingModelicaSource, UsdSourcedCosim};
 
 /// Safety bound on the manual step loop. 20 000 ticks ≈ 333 s of simulated time
@@ -731,10 +732,54 @@ fn log_scene_readiness_blockers(world: &mut World) {
     );
 }
 
+fn dirty_authored_scene_document(world: &World) -> Option<String> {
+    let registry = world.get_resource::<lunco_doc_bevy::DocumentRegistry<UsdDocument>>()?;
+    registry.ids().find_map(|doc| {
+        let host = registry.host(doc)?;
+        let document = host.document();
+        if !document.is_dirty() {
+            return None;
+        }
+        let origin = document.origin().canonical_path()?;
+        Some(format!(
+            "doc={} origin={} generation={} base_revision={} runtime_revision={}",
+            doc.raw(),
+            origin.display(),
+            host.generation(),
+            document.base_revision(),
+            document.runtime_revision(),
+        ))
+    })
+}
+
+/// Keep the runner-owned lifecycle closed while asynchronous scene participants
+/// warm up. The normal runtime opens scenarios automatically when readiness
+/// clears; a scene test must inspect its clean authored baseline before its
+/// scenario can submit an edit.
+fn hold_scenarios_closed(app: &mut App) {
+    if let Some(mut gate) = app
+        .world_mut()
+        .get_resource_mut::<lunco_scripting::scenario::ScenarioExecutionGate>()
+    {
+        gate.enabled = false;
+    }
+    if let Some(mut arm) = app
+        .world_mut()
+        .get_resource_mut::<lunco_scripting::scenario::ScenarioReadinessArm>()
+    {
+        arm.0 = false;
+    }
+}
+
 pub fn run() -> u8 {
     if std::env::args().any(|argument| argument == "--list") {
         return list_scene_tests();
     }
+
+    // Every production scene-test process is throwaway by design. Set this
+    // before app construction so runtime persistence owners cannot restore or
+    // write a developer's Twin overlay during the run.
+    unsafe { std::env::set_var(lunco_twin::ISOLATED_RUN_ENV, "1") };
 
     // BEFORE the `App` exists, because building it registers settings sections and
     // that is what loads (and installs the flush for) `settings.json`.
@@ -817,12 +862,7 @@ pub fn run() -> u8 {
     // A scene test starts its scenario only after the scene's asynchronous
     // participants are live. The scripting plugin owns this lifecycle gate;
     // the runner only sets its explicit test-time policy.
-    if let Some(mut gate) = app
-        .world_mut()
-        .get_resource_mut::<lunco_scripting::scenario::ScenarioExecutionGate>()
-    {
-        gate.enabled = false;
-    }
+    hold_scenarios_closed(&mut app);
     // A scene test is allowed to contain deliberate negative Modelica fixtures
     // (the linter self-test does). Use the readiness system's explicit policy
     // input for that test contract; otherwise a terminal compile error correctly
@@ -876,6 +916,7 @@ pub fn run() -> u8 {
     let load_waits = {
         let mut waits = 0u32;
         while readiness_started.elapsed() < cli.readiness_timeout {
+            hold_scenarios_closed(&mut app);
             app.update();
             waits += 1;
             std::thread::yield_now();
@@ -970,6 +1011,7 @@ pub fn run() -> u8 {
             if participants_ready(app.world_mut()) {
                 break;
             }
+            hold_scenarios_closed(&mut app);
             app.update();
             waits += 1;
             std::thread::yield_now();
@@ -993,6 +1035,14 @@ pub fn run() -> u8 {
             cli.readiness_timeout.as_secs_f64()
         );
         return 2;
+    }
+
+    if let Some(dirty) = dirty_authored_scene_document(app.world()) {
+        println!(
+            "luncosim test FAIL scene={} — authored document was dirty before scenario start: {dirty}",
+            cli.scene
+        );
+        return 1;
     }
 
     // The scene and its asynchronous participants are ready now. Install the

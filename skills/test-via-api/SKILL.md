@@ -89,6 +89,13 @@ loads the replacement, and checks the new scene's admission/status. Do not add
 an automatic repair, retry, process restart, or fault-clearing fallback to make
 the invalid scene continue.
 
+Scene, render, and editor acceptance runs are isolated by default and use a
+fresh production process. Their launchers keep settings in memory and disable
+runtime-overlay reads and writes regardless of Twin policy. The production
+scene runner fails before scenario start if a file-backed authored USD
+document is already dirty; runtime setup must not turn a clean fixture into
+unsaved authored work.
+
 For a one-shot assertion that needs the currently loaded USD stage, use
 `./scripts/api/run_rhai_test.sh <port> <test.rhai> [probe-prim]`. It prepends
 the test libraries and delegates to the native `luncosim rhai --stdout` client,

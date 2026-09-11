@@ -845,6 +845,10 @@ No data loss from crashes. Matches VS Code's `Backups` behavior.
   `[settings] usd.editor_autosave = true`; an omitted or false value leaves the
   authored document dirty for explicit Save and does not enable runtime
   persistence.
+  Scene, render, and editor acceptance runs are isolated by default: their
+  launchers keep settings in memory and disable runtime-overlay reads and
+  writes regardless of the Twin setting. The production scene runner rejects a
+  file-backed authored USD document that is already dirty before scenario start.
 - **Orphan:** autosave only after the first explicit save (so the user
   controls initial location). After that, same ~5 s idle rule.
 

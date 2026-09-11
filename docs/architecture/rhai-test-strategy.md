@@ -132,11 +132,13 @@ recipes and their acceptance scenes stay in the owning Twin.
    does not change the deterministic test contract. Graphics scenes remain a
    separate serial GPU/offscreen pass.
    Each gate process owns a fresh Bevy app, document registry, workspace, and
-   Rhai state. Runtime setup may restore an explicitly enabled runtime overlay,
-   but it must never mark the authored document dirty. Fixtures that edit
-   documents resolve their own scene document and assert `dirty == false` before
-   the first authored operation; they do not select an arbitrary open-document
-   slot.
+   Rhai state. Isolation is the default contract for scene, render, and editor
+   acceptance runs: launchers keep settings in memory and runtime overlays are
+   neither restored nor written, regardless of Twin policy. The production
+   scene runner also fails before scenario start if a file-backed authored USD
+   document is already dirty. Fixtures that edit documents resolve their own
+   scene document and assert `dirty == false` before the first authored
+   operation; they do not select an arbitrary open-document slot.
    Use `--exact <scene-name>` for the smallest edit-loop run; an unqualified
    argument remains a substring group selector (for example, `joint` also
    matches `g7_joints`).
