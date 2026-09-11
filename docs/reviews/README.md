@@ -14,9 +14,10 @@ lesson, which belongs in the architecture doc for that subsystem.
 
 ## Standing issues
 
-- [`open-usd-preview-readiness-handover.md`](open-usd-preview-readiness-handover.md) —
-  Asset Editor 05 implementation handoff, runtime evidence, and the pending
-  official Trello Review mutation.
+- [`open-2026-09-10-general-live-modeling-capability-audit.md`](open-2026-09-10-general-live-modeling-capability-audit.md) —
+  the single current audit for generic Editor/AI authoring. It records the
+  implemented substrate and the remaining human component workflow, candidate
+  preview, diagnostic navigation, and conditional recipe-freshness gaps.
 - [`open-200fps-performance-handover.md`](open-200fps-performance-handover.md) —
   the Apollo High-quality frame loop is below the stable 200 FPS target; the
   handover records the Tracy evidence and owner-first optimization plan.
@@ -28,3 +29,11 @@ lesson, which belongs in the architecture doc for that subsystem.
   untrusted network.
 - [`open-2026-07-27-sandbox-windows-nightly.md`](open-2026-07-27-sandbox-windows-nightly.md) —
   defects found in the `sandbox-windows-x86_64` nightly during a tester session.
+
+## Report hygiene
+
+The superseded live-modeling handover, FLIP capability, roadmap, parametric
+component design/plan, rover-authoring, and focused Editor-efficiency reports
+were removed after their findings were reconciled into the current audit.
+Closed implementation history remains in git; it is not kept as an open
+problem list.
