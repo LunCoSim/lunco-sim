@@ -66,7 +66,7 @@ class NightlyReleaseContractTests(unittest.TestCase):
 
     def test_application_reads_the_machine_only_repository(self) -> None:
         updater = (
-            ROOT / "crates/lunco-luncosim/src/ui/update.rs"
+            ROOT / "crates/lunco-luncosim-ui/src/ui/update.rs"
         ).read_text(encoding="utf-8")
 
         self.assertIn(
@@ -102,7 +102,7 @@ class NightlyReleaseContractTests(unittest.TestCase):
 
     def test_native_package_passes_the_platform_icon_to_velopack(self) -> None:
         package_builder = (ROOT / "scripts/build_native.sh").read_text(encoding="utf-8")
-        icon_builder = (ROOT / "crates/lunco-luncosim/build.rs").read_text(encoding="utf-8")
+        icon_builder = (ROOT / "crates/lunco-luncosim-ui/build.rs").read_text(encoding="utf-8")
 
         self.assertIn('LUNCOSIM_ICON_OUTPUT_DIR="$ICON_OUTPUT_DIR"', package_builder)
         self.assertIn("cargo build", package_builder)

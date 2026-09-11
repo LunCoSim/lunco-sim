@@ -637,10 +637,9 @@ fn run_with_mode(headless: bool) -> AppExit {
 
     #[cfg(feature = "ui")]
     if !headless && !offscreen {
-        app.insert_resource(lunco_luncosim_ui::WindowIconBytes(include_bytes!(concat!(
-            env!("OUT_DIR"),
-            "/luncosim-icon.rgba"
-        ))));
+        app.insert_resource(lunco_luncosim_ui::WindowIconBytes(
+            lunco_luncosim_ui::window_icon_bytes(),
+        ));
         app.add_plugins(lunco_luncosim_ui::LunCoSimUiPlugin {
             config: lunco_luncosim_ui::LunCoSimUiConfig {
                 product_version: PRODUCT_VERSION,

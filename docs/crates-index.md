@@ -336,6 +336,9 @@ Bevy dispatch adapter for `lunco-tools` — the **behaviour-tree execution** hal
 **`lunco-luncosim`**
 The LunCoSim application — ground mobility + physics, loaded from USD (binary `luncosim`). A composition root rather than a UI host: `LunCoSimCorePlugin` (headless-safe sim/physics/cosim/USD/networking/API) plus an optional `LunCoSimUiPlugin` from `lunco-luncosim-ui` (egui workbench, windowed) or `LunCoSimHeadlessPlugin`. Assembles the USD scene, Avian physics, and the in-scene edit tools, and is the single shared entry point for both the `luncosim` GUI and `luncosim-server` headless binaries.
 
+**`lunco-luncosim-ui`**
+Windowed LunCoSim presentation and packaging boundary: egui workbench, interactive editor composition, native window icon generation, and the UI-owned `window_icon_bytes()` API. The headless application core and `luncosim-server` do not compile its GUI/build-time graphics dependencies.
+
 **`lunco-luncosim-exposures`**
 Production integration crate for the renderer-independent runtime exposure projection. `RuntimeExposuresPlugin` registers the single shared path from authoritative ECS/domain state and authored telemetry to `lunco_core::exposure::EngineExposures`; HTML, egui, API, telemetry, and remote clients consume that registry. It owns no UI, renderer, or tutorial policy, so changing exposure derivation does not recompile the application composition root.
 

@@ -3433,7 +3433,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  presentation fixture and leaves every Twin/scene resource untouched. The
  default `false` state has no effect on ordinary production runs.
 
-- *defined in:* `crates/lunco-luncosim/src/ui/scenario_fixture.rs`
+- *defined in:* `crates/lunco-luncosim-ui/src/ui/scenario_fixture.rs`
 
 | Field | Type | Description |
 |---|---|---|

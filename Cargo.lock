@@ -7366,7 +7366,6 @@ dependencies = [
  "big_space",
  "console_error_panic_hook",
  "getrandom 0.3.4",
- "image",
  "js-sys",
  "lunco-api",
  "lunco-assets",
@@ -7413,15 +7412,12 @@ dependencies = [
  "lunco-workbench",
  "lunco-workspace",
  "mimalloc",
- "resvg 0.47.0",
  "serde_json",
  "ureq",
- "usvg 0.47.0",
  "velopack",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "winresource",
 ]
 
 [[package]]
@@ -7511,6 +7507,7 @@ dependencies = [
  "bevy_flair",
  "bevy_hui",
  "bevy_winit",
+ "image",
  "js-sys",
  "lunco-api",
  "lunco-assets",
@@ -7541,13 +7538,16 @@ dependencies = [
  "lunco-workbench",
  "lunco-workbench-core",
  "lunco-workspace",
+ "resvg 0.47.0",
  "serde",
  "serde_json",
  "ureq",
+ "usvg 0.47.0",
  "velopack",
  "wasm-bindgen-futures",
  "web-sys",
  "winit",
+ "winresource",
 ]
 
 [[package]]

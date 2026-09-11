@@ -13,6 +13,11 @@ pub use ui::{
     add_runtime_ui_layer, InitialScenePath, LunCoSimUiConfig, LunCoSimUiPlugin, WindowIconBytes,
 };
 
+/// Rasterized 64x64 RGBA bytes for the native LunCoSim window icon.
+pub fn window_icon_bytes() -> &'static [u8] {
+    include_bytes!(concat!(env!("OUT_DIR"), "/luncosim-icon.rgba"))
+}
+
 pub(crate) fn register_save_scenario_command(app: &mut bevy::prelude::App) {
     save_scenario::register_all_commands(app);
 }
