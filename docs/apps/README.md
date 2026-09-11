@@ -5,7 +5,7 @@ is the index — each primary app has its own page under `docs/apps/<app>/` with
 full CLI flags, controls, and workflows.
 
 > **`cargo run` needs a target.** The workspace `default-members` are
-> `lunco-luncosim` and `lunco-modelica`, so a bare `cargo run` is
+> `lunco-luncosim` and `lunco-modelica-ui`, so a bare `cargo run` is
 > ambiguous. Always pass `-p <crate>` and/or `--bin <name>`.
 
 ## Build from source
@@ -34,20 +34,21 @@ Modelica application, use the `lunica` target in the table below.
 |---|---|---|---|
 | `luncosim` | `lunco-luncosim` | `cargo build -p lunco-luncosim --bin luncosim`, then `target/debug/luncosim` | **Ground-physics simulator.** USD scenes, Avian physics, rover/mobility tools, and the embedded Modelica workbench. Windowed or headless (`--no-ui`). See [luncosim](luncosim/README.md). |
 | `luncosim-server` | `lunco-luncosim-server` | `cargo build -p lunco-luncosim-server --bin luncosim-server`, then `target/debug/luncosim-server` | **Headless server.** Same sim as `luncosim` via `run_headless()`, but the GUI stack (winit/egui) is never linked — for multiplayer hosting and automation. Deploy guide: [luncosim/OPS.md](luncosim/OPS.md). |
-| `lunica` | `lunco-modelica` | `cargo build -p lunco-modelica --bin lunica`, then `target/debug/lunica` | **Modelica engineering workbench.** Author, compile (rumoca), and simulate Modelica models; MSL browser. Windowed, headless (`--no-ui`), or web. See [lunica](lunica/README.md). |
+| `lunica` | `lunco-modelica-ui` | `cargo build -p lunco-modelica-ui --bin lunica`, then `target/debug/lunica` | **Modelica engineering workbench.** Author, compile (rumoca), and simulate Modelica models; MSL browser. Windowed, headless (`--no-ui`), or web. See [lunica](lunica/README.md). |
 | `lunco-assets` | `lunco-assets` | `cargo run -p lunco-assets --bin lunco-assets -- <download\|list\|process>` | **Assets Manager.** Download / verify (SHA-256) / process external assets (textures, MSL, models). See [assets-manager](assets-manager/README.md). |
 
 ## Utility & dev binaries
 
 | Binary | Crate | Launch | What it is |
 |---|---|---|---|
-| `modelica_run` | `lunco-modelica` | `cargo run -p lunco-modelica --bin modelica_run` | Headless Modelica CLI — compile a model, step it for a fixed duration, optionally dump per-step variables to CSV. |
-| `msl_indexer` | `lunco-modelica` | `cargo run -p lunco-modelica --bin msl_indexer` | Builds the Modelica Standard Library search index. Same entry the workbench drives in-process. Re-run after an MSL rebuild. |
-| `lunica_worker` | `lunco-modelica` | (wasm only) | Off-thread rumoca compile worker for the web build. Not run directly — bundled by `scripts/build_web.sh`. |
+| `modelica_run` | `lunco-modelica-core` | `cargo run -p lunco-modelica-core --bin modelica_run` | Headless Modelica CLI — compile a model, step it for a fixed duration, optionally dump per-step variables to CSV. |
+| `msl_indexer` | `lunco-modelica-core` | `cargo run -p lunco-modelica-core --bin msl_indexer` | Builds the Modelica Standard Library search index. Same entry the workbench drives in-process. Re-run after an MSL rebuild. |
+| `lunica_worker` | `lunco-modelica-core` | (wasm only) | Off-thread rumoca compile worker for the web build. Not run directly — bundled by `scripts/build_web.sh`. |
 | `build_msl_assets` | `lunco-assets` | `cargo run -p lunco-assets --bin build_msl_assets` | Bundles the MSL into shippable assets. |
 | `net_smoke` | `lunco-networking` | `scripts/net_smoke.sh` | Networking transport smoke test. |
 
-`lunco-modelica` also carries bench/test bins (`modelica_tester`, `msl_parse_bench`, `test_within`) used during development.
+`lunco-modelica-core` also carries the headless tester and parse benchmark
+utilities used during development.
 
 ## Web (wasm) builds
 

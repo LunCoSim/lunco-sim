@@ -1,0 +1,47 @@
+#usda 1.0
+(
+    defaultPrim = "RocketEngineObservables"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# The shipped RocketEngine is exercised through the production USD program
+# boundary. USD owns the flat interface; the Rhai scenario owns stimulus and
+# the runtime verdict.
+def Xform "RocketEngineObservables" (
+    doc = "Runtime acceptance for the bundled RocketEngine observables."
+)
+{
+    def DistantLight "Sun"
+    {
+        float intensity = 1.0
+    }
+
+    def Scope "Engine" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://models/RocketEngine.mo@
+        float inputs:throttle = 0.0
+        float outputs:m_prop
+        float outputs:impulse
+        float outputs:m_dot
+        float outputs:thrust
+        float outputs:p_chamber
+        float outputs:isp
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "rocket-engine-observables"
+
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/rocket_engine_observables.rhai@
+        }
+    }
+}

@@ -30,7 +30,7 @@ pool is `unsafe impl Send + Sync` to live in a static `Mutex`.
 
 ## Used by
 
-- **`lunco-modelica::worker_transport`** — the Modelica Fast-Run pool; composes
+- **`lunco-modelica-core::worker_transport`** — the Modelica Fast-Run pool; composes
   `WorkerPool` and layers MSL-readiness + per-run demux on top.
 - **`lunco-terrain-bake::worker_client`** — the DEM bake worker; composes the same
   pool for a one-shot "bytes in → heightfield out" job.

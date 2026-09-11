@@ -170,8 +170,7 @@ matches and reported a singular system. The physical equations were not
 underdetermined; our state/output boundary was structurally ambiguous.
 
 `PositionPID3D` also consumes the public saturated `PIDAxis.command` output.
-It does not read `raw_command` or add a second lateral limiter. The regression
-in `crates/lunco-modelica/tests/gnc_position_pid.rs` compiles and advances both
-the reusable axis and the complete sensor-driven three-axis controller, so this
-failure is guarded at the Modelica boundary rather than hidden by a solver
-relaxation.
+It does not read `raw_command` or add a second lateral limiter. The authored
+`assets/scenarios/tests/descent_lander_runtime.rhai` scenario exercises the
+production lander composition, so this failure is guarded at the Modelica/USD
+boundary rather than hidden by a Rust-only solver fixture.

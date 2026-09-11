@@ -1,20 +1,19 @@
 //! Runtime subsystem toggles — the "progressive fidelity" substrate.
 //!
-//! A tutorial (spec 011, Story 2) ramps simulation fidelity one concept at a
-//! time: start with kinematic driving, then switch on thermal, then comms
-//! degradation, etc. Rather than each subsystem inventing its own runtime flag,
-//! they share ONE resource ([`SubsystemToggles`]) flipped by ONE command
-//! (`SetSubsystemEnabled`, defined in `lunco-tutorial` — the `#[Command]` derive
-//! can't expand inside `lunco-core` itself) that a rhai step can call:
+//! An authored scenario can ramp simulation fidelity one concept at a time:
+//! start with kinematic driving, then switch on thermal, then comms degradation,
+//! etc. Rather than each subsystem inventing its own runtime flag, they share
+//! ONE resource ([`SubsystemToggles`]) flipped by ONE generic command that a
+//! Rhai step can call:
 //!
 //! The command accepts a name registered by the owning subsystem plugin.
 //!
 //! **Opt-in gating.** A subsystem registers its own toggle name when its plugin
 //! is added, then honours [`SubsystemToggles::enabled`] in its systems. An
 //! unset registered toggle defaults to `true`, so adding the substrate changes
-//! nothing until a subsystem opts in. The resource lives here (every crate
-//! depends on `lunco-core`); the command that flips it lives in
-//! `lunco-tutorial`.
+//! nothing until a subsystem opts in. Both the resource and its command live in
+//! this owner so the command is available to every host without a tutorial
+//! dependency.
 
 use bevy::prelude::*;
 use std::collections::{BTreeSet, HashMap};
@@ -26,6 +25,53 @@ pub struct SubsystemToggles {
     enabled: HashMap<String, bool>,
     registered: BTreeSet<String>,
 }
+
+/// Enable or disable a runtime subsystem registered by its owning plugin.
+///
+/// The command is intentionally generic: authored scenarios may use it for a
+/// progressive-fidelity flow, while the core only validates the registered
+/// subsystem name and publishes the resulting state.
+#[crate::Command(default)]
+pub struct SetSubsystemEnabled {
+    /// Registered subsystem key.
+    pub name: String,
+    /// `true` enables, `false` disables.
+    pub on: bool,
+}
+
+#[crate::on_command(SetSubsystemEnabled)]
+fn on_set_subsystem_enabled(
+    trigger: On<SetSubsystemEnabled>,
+    mut toggles: ResMut<SubsystemToggles>,
+    mut commands: Commands,
+) {
+    let ev = trigger.event();
+    if !toggles.is_registered(&ev.name) {
+        warn!(
+            "[subsystem] unknown subsystem '{}' (registered: {:?}) — ignored",
+            ev.name,
+            toggles.registered_names()
+        );
+        return;
+    }
+    if !toggles.set(ev.name.clone(), ev.on) {
+        warn!(
+            "[subsystem] '{}' was unregistered before its state could be set",
+            ev.name
+        );
+        return;
+    }
+    info!("[subsystem] {} = {}", ev.name, ev.on);
+    commands.trigger(crate::TelemetryEvent {
+        name: format!("subsystem:{}", ev.name),
+        source: 0,
+        severity: crate::Severity::Info,
+        data: crate::TelemetryValue::Bool(ev.on),
+        timestamp: 0.0,
+    });
+}
+
+crate::register_commands!(on_set_subsystem_enabled);
 
 impl SubsystemToggles {
     /// Register the toggle owned by a subsystem plugin.
@@ -69,10 +115,10 @@ impl SubsystemToggles {
 }
 
 /// Init [`SubsystemToggles`]. Called from [`LunCoCorePlugin`](crate::LunCoCorePlugin)
-/// so every build has the substrate; the `SetSubsystemEnabled` command that
-/// mutates it is registered by `lunco-tutorial`.
+/// so every build has the substrate and its generic toggle command.
 pub(crate) fn build_subsystems(app: &mut App) {
     app.init_resource::<SubsystemToggles>();
+    register_all_commands(app);
 }
 
 #[cfg(test)]

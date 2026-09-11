@@ -121,7 +121,7 @@ that need mapping to schematic colours, **define an extension trait on
 sites.
 
 ```rust
-// lunco-modelica/src/ui/theme.rs
+// lunco-modelica-ui/src/ui/theme.rs
 use lunco_theme::Theme;
 use bevy_egui::egui::Color32;
 

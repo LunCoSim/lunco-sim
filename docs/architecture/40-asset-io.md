@@ -102,7 +102,7 @@ different loading/saving sequences.
 | Loader | Asset type | Where | Extensions |
 |---|---|---|---|
 | `UsdLoader` | `UsdStageAsset` | `lunco-usd-bevy` | `.usda` |
-| `ModelicaSourceLoader` | `ModelicaSource` | `lunco-modelica` | `.mo` |
+| `ModelicaSourceLoader` | `ModelicaSource` | `lunco-modelica-core` | `.mo` |
 | `PythonSourceLoader` | `PythonSource` | `lunco-scripting` (`python` feature) | `.py` |
 | `RhaiSourceLoader` | `RhaiSource` | `lunco-scripting` | `.rhai` |
 
@@ -163,7 +163,7 @@ trail.
 > - **`std::time::Instant::now`** — worse. `web_time` supplies its native impl via
 >   `pub use std::time::*`, so on native `web_time::Instant` **is**
 >   `std::time::Instant` — the same DefId. Clippy resolves straight through the
->   re-export and flags every *correct* caller: **73 hits in `lunco-modelica`
+>   re-export and flags every *correct* caller: **73 hits in `lunco-modelica-core`
 >   alone, all false, not one true.**
 >
 > **A lint that is wrong every single time it fires is a lint people silence** —
@@ -173,7 +173,7 @@ trail.
 >
 > **Do not move these entries back into the root `clippy.toml`.**
 
-**Known debt, counted rather than hidden:** `lunco-modelica` has ~16 `std::fs`
+**Known debt, counted rather than hidden:** `lunco-modelica-core` has ~16 `std::fs`
 calls that *are* reachable on wasm (the MSL indexer, the package browser, the icon
 loader) — the long-standing "MSL missing on the web" symptom. They are **not**
 `#[allow]`ed: a non-fatal CI step prints the count and the sites every run, and it
@@ -194,8 +194,8 @@ no manual hunt.
 | `lunco-usd-sim/cosim.rs` modelica/python source reads | ✅ migrated to AssetServer (see `ModelicaSource` / feature-gated `PythonSource`) |
 | `lunco-usd/src/ui/browser_dispatch.rs` twin browser open | ✅ routed to spawn_usd_load domain command |
 | `lunco-usd/src/commands.rs` usd document load | ✅ reads through the storage abstraction |
-| `lunco-modelica/msl_remote.rs` bundled MSL fetch | ⚠️ uses bespoke `web_sys::fetch`; folding into `EmbeddedAssetSource` / `HttpAssetSource` is a follow-up |
-| `lunco-modelica::models::bundled_models()` `include_str!` | ⚠️ candidate for `EmbeddedAssetSource` registration so it looks like every other asset path |
+| `lunco-modelica-core/msl_remote.rs` bundled MSL fetch | ⚠️ uses bespoke `web_sys::fetch`; folding into `EmbeddedAssetSource` / `HttpAssetSource` is a follow-up |
+| `lunco-modelica-core::models::bundled_models()` `include_str!` | ⚠️ candidate for `EmbeddedAssetSource` registration so it looks like every other asset path |
 
 ## Related foot-guns (same rule applies)
 

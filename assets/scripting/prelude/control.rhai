@@ -66,6 +66,15 @@ fn clear_scene()               { cmd("ClearScene") }
 // Reload the CURRENTLY-active scene from disk (LoadScene no-ops on the live one).
 // Picks up .usda edits; pair with pause() for "reload then freeze".
 fn restart_scene()             { cmd("RestartScene") }
+// Attach a file-backed scenario through the asset graph. `scene_asset` may be
+// empty for a UI-only scenario; otherwise the USD scene owner receives a
+// generic transition intent before the scenario is allowed to run.
+// `reload_policy` is
+// `"retain"` for a stable orchestrator or `"restart"` to run `on_start` again
+// after the next scene replacement.
+fn run_scenario_asset(target, source_asset, params, scene_asset, reload_policy) {
+    cmd("RunScenarioAsset", #{ target: target, source_asset: source_asset, params: params, scene_asset: scene_asset, reload_policy: reload_policy })
+}
 fn set_property(id, key, val)  { cmd("SetObjectProperty", #{ entity_id: id, property: key, value: val }) }
 
 // ── Pose writing — the write half of `world_pos` / `world_rotation` ──────────

@@ -82,7 +82,7 @@ use lunco_doc_bevy::{NewDocument, OpenFile};
 ///
 /// Like [`OpenFile`], this is a typed shell command whose behaviour is
 /// domain-specific and lives in the domain crate
-/// (`lunco-modelica` encodes the active model's source into a URL
+/// (`lunco-modelica-core` encodes the active model's source into a URL
 /// fragment). The headless HTTP API exposes the read-only `GetShareLink`
 /// query separately; it returns the URL in its `data` payload instead of
 /// touching a clipboard.
@@ -783,7 +783,7 @@ fn on_pick_resolved(trigger: On<PickResolved>, mut commands: Commands) {
 // through this list. `on_pick_resolved` is *not* in it — it observes a
 // non-Command event (`PickResolved`) and is added directly in the
 // plugin's `build`. `OpenFile` is also absent: the observer that
-// loads `.mo` content lives in `lunco-modelica` and registers itself
+// loads `.mo` content lives in `lunco-modelica-core` and registers itself
 // there; the workbench owns only the picker entry point.
 register_commands!(
     on_add_folder_to_workspace_pick,
@@ -814,7 +814,7 @@ impl Plugin for FileOpsPlugin {
         // are read here; domain plugins own the observers.
         app.register_type::<OpenFile>();
         // CopyShareLink: workbench owns the typed struct so HTTP-API
-        // introspection sees it; the observer lives in lunco-modelica.
+        // introspection sees it; the observer lives in lunco-modelica-core.
         app.register_type::<CopyShareLink>();
         // USD scene-root resolution is owned by `lunco-usd` so GUI and
         // headless launches use the same doc-first world-mount path.

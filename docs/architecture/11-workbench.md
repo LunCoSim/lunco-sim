@@ -20,7 +20,7 @@
 > busy widgets and headless diagnostics. `lunco-workbench-core` is the stable
 > workbench contract crate and `lunco-workbench` is the concrete shell. Together
 > they are depended on by ~10 crates
-> (luncosim, lunco-luncosim, lunco-luncosim-edit, lunco-usd, lunco-modelica,
+> (luncosim, lunco-luncosim, lunco-luncosim-edit, lunco-usd, lunco-modelica-ui,
 > lunco-celestial, lunco-avatar, lunco-networking, …).
 
 ## Contents
@@ -202,10 +202,10 @@ inventing per-window screen offsets. Non-interactive overlays do not become
 input owners; modal behavior belongs to the shared modal host.
 
 Tutorial presentation uses the shared
-`lunco_workbench::tutorial_overlay::TUTORIAL_OVERLAY_ORDER`
+`lunco_workbench::guided_overlay::GUIDED_OVERLAY_ORDER`
 (`egui::Order::Middle`) for its HUD, ring, coach/recovery card, and completion
 prompt. Its painter/input scrims use the shared
-`TUTORIAL_SCRIM_ORDER` (`egui::Order::Background`). Workbench menus and window
+`GUIDED_SCRIM_ORDER` (`egui::Order::Background`). Workbench menus and window
 controls use egui's `Foreground` order, so opening a menu has deterministic
 visual and input precedence over both tutorial layers. The tutorial content region
 still starts
@@ -229,11 +229,11 @@ deferred layout requests before deferred tab requests so a request that changes
 both the perspective and the active tab is applied in authored order.
 
 UI projection plugins that read shell-owned workbench resources install
-`WorkbenchPlugin` when it is not already present. In particular,
-`lunco_tutorial::TutorialPlugin` owns the launcher projection but relies on
-the concrete Workbench shell for `HelpAnchors` and on `WorkbenchSnapshot` for
-published layout facts; its composition contract is valid both standalone and
-inside an existing workbench host.
+`WorkbenchPlugin` when it is not already present. The application tutorial menu
+is one such projection: it reads authored catalog data, publishes generic
+`RunScenarioAsset` commands, and relies on `WorkbenchSnapshot` only for normal
+shell geometry. Lesson lifecycle and scene composition remain outside the
+workbench.
 
 Panel landmarks use the registered panel id as their canonical anchor:
 `panel.<id>`. The Workbench publishes that exact rect for both docked and
@@ -337,7 +337,7 @@ turning the scene camera off.
 
 ### Guided presentation ownership
 
-A guided tutorial may author a required perspective on its curriculum track.
+A guided lesson may author a required perspective on its catalog track.
 While that tutorial is active, the concrete workbench shell temporarily owns that
 presentation: every perspective entry point is constrained to the required
 registered perspective. This includes the title-bar switcher, the typed
@@ -714,12 +714,12 @@ crates):
 | KEY | Owner crate | Purpose |
 |-----|-------------|---------|
 | `ui` | `lunco-workbench` | Tab styling (italic for unsaved/Untitled, dirty-dot glyph), font sizes |
-| `modelica.naming` | `lunco-modelica` | Class↔file rename behaviour (`Always`/`Ask`/`Never`), default-filename-from-class, tab-title source (class vs filename) |
-| `modelica.canvas` | `lunco-modelica` | Diagram defaults (grid snap, default port side, auto-layout) |
-| `modelica.canvas.animation` | `lunco-modelica` | Tween/pulse durations, ease curve, per-origin animation policy (Local / Api / Remote — see `20-domain-modelica.md` § 9c) |
-| `modelica.canvas.add` | `lunco-modelica` | Auto-focus behaviour on AddComponent (None / Center / FitVisible), batch debounce window |
-| `modelica.canvas.collab` | `lunco-modelica` | Remote cursor + selection visibility, user color, follow-user camera (multi-user precursor; deferred) |
-| `modelica.editor` | `lunco-modelica` | Source editor word-wrap, tab width, auto-format-on-save |
+| `modelica.naming` | `lunco-modelica-ui` | Class↔file rename behaviour (`Always`/`Ask`/`Never`), default-filename-from-class, tab-title source (class vs filename) |
+| `modelica.canvas` | `lunco-modelica-ui` | Diagram defaults (grid snap, default port side, auto-layout) |
+| `modelica.canvas.animation` | `lunco-modelica-ui` | Tween/pulse durations, ease curve, per-origin animation policy (Local / Api / Remote — see `20-domain-modelica.md` § 9c) |
+| `modelica.canvas.add` | `lunco-modelica-ui` | Auto-focus behaviour on AddComponent (None / Center / FitVisible), batch debounce window |
+| `modelica.canvas.collab` | `lunco-modelica-ui` | Remote cursor + selection visibility, user color, follow-user camera (multi-user precursor; deferred) |
+| `modelica.editor` | `lunco-modelica-ui` | Source editor word-wrap, tab width, auto-format-on-save |
 | `perf_hud` | `lunco-workbench` | Performance HUD visibility and live status-bar diagnostics |
 | `input_overlay` | `lunco-workbench` | Input HUD visibility for recording and observation |
 | `download` | `lunco-settings` | Shared download concurrency, attempt budget, exponential backoff, and delay cap |
@@ -820,7 +820,7 @@ simulation default.
 ```
   Apps
    ├── Panel crates (domain-specific UI)
-   │    lunco-modelica/ui   lunco-luncosim-edit/ui   lunco-mission/ui
+   │    lunco-modelica-ui/src/ui   lunco-luncosim-edit/ui   lunco-mission/ui
    │         │                     │                       │
    │         ▼                     ▼                       ▼
    ├── lunco-status-core  (cross-cutting status/lifecycle contract)
@@ -937,7 +937,7 @@ refs, external anchors) without reinventing the wheel.
 
 - `UriRegistry` (Bevy `Resource`) holds scheme handlers. Each domain
   plugin registers its own on `build()`:
-  - `lunco-modelica` → `modelica://Modelica.Blocks.Examples.PID` → drill-in.
+  - `lunco-modelica-ui` → `modelica://Modelica.Blocks.Examples.PID` → drill-in.
   - Future `lunco-usd` → `usd://stage.usd@</World/Rover>`.
   - Future `lunco-sysml` → `sysml://package::Element`.
 - `UriClicked` event carries `{ uri, resolution }`; domain observers

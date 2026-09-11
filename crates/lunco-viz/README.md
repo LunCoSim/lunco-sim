@@ -173,7 +173,7 @@ These are the boundaries we do **not** cross:
 ## Dependency direction
 
 ```
-lunco-modelica     lunco-cosim (Avian bridge)      future: lunco-usd, ...
+lunco-modelica-core     lunco-cosim (Avian bridge)      future: lunco-usd, ...
        │                   │                              │
        └───────────────────┴──────────────────────────────┘
                            │

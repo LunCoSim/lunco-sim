@@ -1,11 +1,11 @@
 # Numeric experiments — solver / model integration
 
 This is the living solver/numerics reference: working configurations,
-known-failing models, and the ranked rumoca / `lunco-modelica` backlog. Durable
+known-failing models, and the ranked rumoca / `lunco-modelica-core` backlog. Durable
 solver findings belong here; the related rumoca workarounds are indexed in
 [`architecture/29-rumoca-workarounds.md`](../architecture/29-rumoca-workarounds.md).
 
-## Solver tuning reference — known configs, known-failing models, and the rumoca/lunco-modelica backlog
+## Solver tuning reference — known configs, known-failing models, and the rumoca/lunco-modelica-core backlog
 
 ### Known working solver configurations
 
@@ -19,7 +19,7 @@ solver findings belong here; the related rumoca workarounds are indexed in
   thermal models, while the diffsol 0.13 SDIRK tableaus (TR-BDF2 / ESDIRK34)
   hit "nonlinear solver failures (50)" within the first lunar hour on the same
   models. SDIRK stays opt-in. (Source of truth:
-  `crates/lunco-modelica/src/experiments_runner.rs` default-solver comment.)
+  `crates/lunco-modelica-core/src/experiments_runner.rs` default-solver comment.)
 
 ### Known-failing models — don't waste time tuning solvers
 
@@ -74,7 +74,7 @@ Priority ranking; each links back to the originating experiment report.
    span-relative (`span/5_000_000`) and silently clamped by BDF/SDIRK
    anyway; only useful once Tsit45 works on DAEs.
 
-### Outstanding tasks (lunco-modelica)
+### Outstanding tasks (lunco-modelica-core)
 
 10. **Honor `experiment(Solver=, Tolerance=, Interval=)` annotations**
     at FastRun dispatch time. Half-wired today.

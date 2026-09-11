@@ -35,7 +35,7 @@ between independently valid parts belong in the USD assembly that uses them.
 | `behaviors/` | reusable behavior trees |
 | `scripting/lib/` | importable Rhai helpers |
 | `scripting/policy/` | policy hooks |
-| `tutorials/` | USD curricula, lesson Rhai, and optional lesson worlds |
+| `tutorials/` | lesson Rhai, optional lesson worlds, and authored lesson data |
 | `missions/` | mission data and orchestration entrypoints |
 | `shaders/` | WGSL materials |
 | `lighting/` | global lighting rigs |
@@ -85,9 +85,9 @@ stays in the asset and its `defaultPrim`.
   controller mount when the controller needs vehicle-frame direction.
 - One prim has one defining spec per layer/variant. Extend it inside that spec;
   do not create a sibling `def` and `over` with competing opinions.
-- A tutorial is declared in a USD curriculum. Its payload is the world and its
-  `info:sourceAsset` is the Rhai lesson. First-run lessons that need a viewport
-  must explicitly declare a payload.
+- A lesson is selected from `tutorials/catalog.json`. Its Rhai source and
+  optional USD scene are passed to the generic scenario launcher; the scene is
+  ordinary USD composition and does not require a tutorial schema.
 
 ## Validation
 

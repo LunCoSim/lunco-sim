@@ -42,10 +42,12 @@
 def Cylinder "Wheel" (
     doc = "Reusable motorized rover wheel hub with authored radius, traction, braking, and spin parameters."
     kind = "component"
-    # The reusable hub owns its rigid-body and LunCo wheel contracts. A vehicle
-    # applies the standard PhysX wheel/attachment APIs at the instance, where
-    # its suspension, tire, and attachment index are all authored together.
-    prepend apiSchemas = ["PhysicsRigidBodyAPI", "LunCoCatalogAPI", "LunCoWheelAPI"]
+    # The reusable hub owns the wheel dynamics contract. A physical vehicle
+    # realization applies `PhysicsRigidBodyAPI` and `PhysicsCollisionAPI` at the
+    # wheel instance; a raycast realization remains a query-only wheel. Keeping
+    # those schemas out of the shared hub prevents a raycast wheel from becoming
+    # an accidental rigid body or collider.
+    prepend apiSchemas = ["LunCoCatalogAPI", "LunCoWheelAPI"]
     prepend variantSets = ["tire"]
     variants = {
         string tire = "regolith"
@@ -63,10 +65,10 @@ def Cylinder "Wheel" (
     uniform token[] xformOpOrder = ["xformOp:translate"]
 
     # --- Physics ---
-    bool physics:rigidBodyEnabled = true
     # Standard PhysX wheel mass is the single source for both wheel
-    # realizations; the old raycast/physical Rust fork is gone. The rigid-wheel
-    # projection uses the same value to derive collider density and inertia.
+    # realizations; the old raycast/physical Rust fork is gone. The physical
+    # projection applies this mass directly, independently of authored collision
+    # geometry, while the wheel MOI remains the separate rotational contract.
     float physxVehicleWheel:mass = 25.0 (
         customData = {
             double min = 1
@@ -74,8 +76,6 @@ def Cylinder "Wheel" (
             string unit = "kg"
         }
     )
-    bool physics:collisionEnabled = true
-
     # --- Wheel dynamics (Omniverse PhysX vehicle schema) ---
     # The spin integrator (lunco_mobility::update_wheel_spin) reads these so the
     # visible rotation is grounded in authored data:

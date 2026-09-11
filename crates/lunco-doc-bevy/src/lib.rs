@@ -364,7 +364,7 @@ pub struct NewDocument {
 /// recents, drag-drop, and headless / server callers reach the same code
 /// path without any UI.
 ///
-/// The actual loading is domain-specific: `lunco-modelica` observes this
+/// The actual loading is domain-specific: `lunco-modelica-core` observes this
 /// and reads `.mo` files; `lunco-usd` observes it for `.usd*`. Each
 /// domain's observer ignores paths it doesn't own, so they coexist.
 ///
@@ -423,11 +423,6 @@ pub enum EditorIntent {
     /// resolvers handle this without any active-doc ownership check —
     /// "new" by definition has no existing target.
     NewDocument,
-    /// Open the app's guided tutorial / product tour (default: `F1`). Like
-    /// [`NewDocument`](Self::NewDocument), it targets no document — a
-    /// domain resolver (e.g. lunica's tutorial launcher) turns it into a
-    /// concrete launch command. Apps with no tutorial simply ignore it.
-    ShowTutorial,
 }
 
 /// A key chord (modifier + key) that triggers an [`EditorIntent`].
@@ -500,7 +495,6 @@ impl Default for Keybindings {
         map.insert(KeyChord::ctrl(KeyCode::KeyW), EditorIntent::Close);
         map.insert(KeyChord::ctrl(KeyCode::KeyN), EditorIntent::NewDocument);
         map.insert(KeyChord::plain(KeyCode::F5), EditorIntent::Compile);
-        map.insert(KeyChord::plain(KeyCode::F1), EditorIntent::ShowTutorial);
         Self { map }
     }
 }
@@ -1464,7 +1458,7 @@ fn file_mtime(path: &std::path::Path) -> Option<std::time::SystemTime> {
 /// close-time [`DocumentDiagnostics`] cleanup shared by every document
 /// domain.
 ///
-/// Domain crates (lunco-modelica, lunco-usd, …) add this plugin once
+/// Domain crates (lunco-modelica-core, lunco-usd, …) add this plugin once
 /// per app. Events from any domain's registry flow into one canonical
 /// journal.
 ///
@@ -1485,7 +1479,7 @@ impl Plugin for TwinJournalPlugin {
             .add_observer(diagnostics::drop_diagnostics_on_close);
         // DocumentChanged is observed by the canonical journal indirectly:
         // structural `Op` entries are recorded by the domain mutation
-        // path (e.g. lunco-modelica `apply_ops_public`) before this event
+        // path (e.g. lunco-modelica-core `apply_ops_public`) before this event
         // fires for view fan-out. No observer needed here.
     }
 }

@@ -25,7 +25,7 @@ use crate::doc::ScriptLanguage;
 use crate::world_bridge::{PendingWorldScript, PendingWorldScripts};
 #[cfg(feature = "rhai")]
 use crate::{
-    doc::{ScriptDocument, ScriptedModel},
+    doc::{ScenarioReloadPolicy, ScriptDocument, ScriptedModel},
     ScriptRegistry,
 };
 #[cfg(any(feature = "rhai", feature = "python"))]
@@ -165,7 +165,55 @@ pub struct RunScenario {
     /// Optional scenario parameters as a JSON object string (e.g.
     /// `{"speed":1.5,"target":"rover_b"}`), readable in the script as the
     /// `params` constant. Omitted → none.
+    #[serde(default)]
+    #[reflect(default)]
     pub params: String,
+    /// Behavior of this scenario when the active scene is replaced. `retain`
+    /// keeps a stable orchestration host alive; `restart` runs `on_start` again
+    /// after the replacement is ready.
+    #[serde(default)]
+    #[reflect(default)]
+    pub reload_policy: ScenarioReloadPolicy,
+}
+
+/// Attach a file-backed Rhai scenario to an entity. The asset is loaded through
+/// the normal Bevy asset graph, so imports, Twin ownership, wasm, and hot reload
+/// use the same path as USD-authored scenarios. This is the generic launch seam
+/// for authored flows; no domain-specific catalog or host is required.
+#[cfg(feature = "rhai")]
+#[Command(reflect_default)]
+pub struct RunScenarioAsset {
+    #[authz_target]
+    pub target: Entity,
+    /// Root-qualified script asset (`lunco://...` or `twin://...`).
+    pub source_asset: String,
+    /// Optional scenario parameters as a JSON object string.
+    #[serde(default)]
+    #[reflect(default)]
+    pub params: String,
+    /// Optional scene asset to request before the scenario starts. The scene
+    /// transition remains owned by the USD scene command layer; this field
+    /// only composes the generic scenario-launch request with that lifecycle.
+    #[serde(default)]
+    #[reflect(default)]
+    pub scene_asset: String,
+    /// Lifecycle behavior when the active scene is replaced.
+    #[serde(default)]
+    #[reflect(default)]
+    pub reload_policy: ScenarioReloadPolicy,
+}
+
+#[cfg(feature = "rhai")]
+impl Default for RunScenarioAsset {
+    fn default() -> Self {
+        Self {
+            target: Entity::PLACEHOLDER,
+            source_asset: String::new(),
+            params: String::new(),
+            scene_asset: String::new(),
+            reload_policy: ScenarioReloadPolicy::Retain,
+        }
+    }
 }
 
 #[cfg(feature = "rhai")]
@@ -175,6 +223,7 @@ impl Default for RunScenario {
             target: Entity::PLACEHOLDER,
             source: String::new(),
             params: String::new(),
+            reload_policy: ScenarioReloadPolicy::Retain,
         }
     }
 }
@@ -183,19 +232,23 @@ impl Default for RunScenario {
 #[on_command(RunScenario)]
 fn on_run_scenario(
     _t: On<RunScenario>,
+    entities: Query<Entity>,
+    world_root: Query<Entity, With<lunco_core::WorldRoot>>,
     mut registry: ResMut<ScriptRegistry>,
     q_existing: Query<&ScriptedModel>,
     guard: Option<Res<lunco_core::session::SyncApplyGuard>>,
     mut commands: Commands,
 ) -> Result<Ack, String> {
+    let target = resolve_scenario_target(cmd.target, &entities, &world_root)?;
     let (doc_id_raw, generation) = attach_rhai_scenario(
-        cmd.target,
+        target,
         cmd.source.clone(),
         cmd.params.clone(),
         // A `RunScenario` carries SOURCE TEXT, not a location — there is no asset
         // id to anchor a relative import against.
         None,
         false,
+        cmd.reload_policy,
         guard.and_then(|g| g.0),
         &mut registry,
         &q_existing,
@@ -205,6 +258,68 @@ fn on_run_scenario(
         OpId::new(),
         serde_json::json!({ "document_id": doc_id_raw, "generation": generation }),
     ))
+}
+
+#[cfg(feature = "rhai")]
+#[on_command(RunScenarioAsset)]
+fn on_run_scenario_asset(
+    trigger: On<RunScenarioAsset>,
+    entities: Query<Entity>,
+    world_root: Query<Entity, With<lunco_core::WorldRoot>>,
+    asset_server: Res<AssetServer>,
+    guard: Option<Res<lunco_core::session::SyncApplyGuard>>,
+    mut commands: Commands,
+) -> Result<Ack, String> {
+    let cmd = trigger.event();
+    let path = lunco_assets::engine_asset_uri(&cmd.source_asset);
+    if path.is_empty() {
+        return Err("RunScenarioAsset: source_asset must not be empty".to_string());
+    }
+    let target = resolve_scenario_target(cmd.target, &entities, &world_root)?;
+    let scene = if cmd.scene_asset.trim().is_empty() {
+        None
+    } else {
+        let scene = lunco_assets::engine_asset_uri(&cmd.scene_asset);
+        if scene.is_empty() {
+            return Err("RunScenarioAsset: scene_asset is not a valid asset path".to_string());
+        }
+        Some(scene)
+    };
+    let handle = asset_server.load::<crate::source_asset::RhaiSource>(path);
+    commands.entity(target).insert(PendingScenarioAsset {
+        handle,
+        params: cmd.params.clone(),
+        reload_policy: cmd.reload_policy,
+        authority: guard.and_then(|g| g.0),
+    });
+    if let Some(scene) = scene {
+        // This is an intent, not a direct USD load. The USD scene owner still
+        // resolves/composes the stage and publishes the completion edge that
+        // opens scenario execution.
+        commands.trigger(lunco_core::SceneTransitionIntent::load(scene, ""));
+    }
+    Ok(Ack::with_data(
+        OpId::new(),
+        serde_json::json!({ "status": "queued" }),
+    ))
+}
+
+#[cfg(feature = "rhai")]
+fn resolve_scenario_target(
+    requested: Entity,
+    entities: &Query<Entity>,
+    world_root: &Query<Entity, With<lunco_core::WorldRoot>>,
+) -> Result<Entity, String> {
+    if requested != Entity::PLACEHOLDER {
+        if entities.get(requested).is_ok() {
+            return Ok(requested);
+        }
+        return Err(format!("scenario target {requested:?} does not exist"));
+    }
+    world_root
+        .iter()
+        .next()
+        .ok_or_else(|| "RunScenarioAsset: no WorldRoot exists for the default host".to_string())
 }
 
 /// Register a rhai source as a `ScriptDocument` and attach a `ScriptedModel` to
@@ -225,6 +340,7 @@ pub(crate) fn attach_rhai_scenario(
     // Whether the source was authored on a prim in the currently loaded USD
     // scene. API and timeline scenarios have their own explicit lifecycle.
     scene_owned: bool,
+    reload_policy: ScenarioReloadPolicy,
     authority: Option<lunco_core::SessionId>,
     registry: &mut ScriptRegistry,
     q_existing: &Query<&ScriptedModel>,
@@ -277,6 +393,7 @@ pub(crate) fn attach_rhai_scenario(
         ScriptedModel {
             document_id: Some(doc_id_raw),
             language: Some(ScriptLanguage::Rhai),
+            reload_policy,
             ..default()
         },
         // §3.4: the session this scenario's cmd()s are gated against. Always
@@ -293,6 +410,77 @@ pub(crate) fn attach_rhai_scenario(
     }
 
     (doc_id_raw, generation)
+}
+
+/// A generic file-backed scenario waiting for its root asset and import graph
+/// to finish loading. It is deliberately a component on the target entity, so
+/// the request follows the same lifecycle and ownership boundary as the
+/// scenario it will replace.
+#[cfg(feature = "rhai")]
+#[derive(Component, Debug, Clone)]
+pub struct PendingScenarioAsset {
+    pub handle: Handle<crate::source_asset::RhaiSource>,
+    pub params: String,
+    pub reload_policy: ScenarioReloadPolicy,
+    pub authority: Option<lunco_core::SessionId>,
+}
+
+/// Resolve [`RunScenarioAsset`] requests once the root and all imported source
+/// assets are ready, then use the same attach funnel as inline/API scenarios.
+#[cfg(feature = "rhai")]
+pub fn attach_requested_scenarios(
+    q: Query<(Entity, &PendingScenarioAsset)>,
+    assets: Res<Assets<crate::source_asset::RhaiSource>>,
+    asset_server: Res<AssetServer>,
+    mut registry: ResMut<ScriptRegistry>,
+    q_existing: Query<&ScriptedModel>,
+    mut commands: Commands,
+) {
+    for (entity, request) in q.iter() {
+        let root_failed = asset_server.load_state(&request.handle).is_failed();
+        let dependencies_failed = asset_server
+            .recursive_dependency_load_state(&request.handle)
+            .is_failed();
+        if root_failed || dependencies_failed {
+            error!(
+                "[rhai] failed to load requested scenario asset for {entity:?}; \
+                 root_failed={root_failed}, dependencies_failed={dependencies_failed}"
+            );
+            commands.entity(entity).remove::<PendingScenarioAsset>();
+            continue;
+        }
+        if !asset_server.is_loaded_with_dependencies(&request.handle) {
+            continue;
+        }
+        let Some(source) = assets.get(&request.handle) else {
+            continue;
+        };
+        let Some(asset_id) = asset_server
+            .get_path(&request.handle)
+            .map(|path| lunco_assets::asset_path::anchor_of(&path))
+        else {
+            error!("[rhai] requested scenario asset for {entity:?} has no resolved identity");
+            commands.entity(entity).remove::<PendingScenarioAsset>();
+            continue;
+        };
+        let request = request.clone();
+        attach_rhai_scenario(
+            entity,
+            source.text.clone(),
+            request.params,
+            Some(asset_id),
+            false,
+            request.reload_policy,
+            request.authority,
+            &mut registry,
+            &q_existing,
+            &mut commands,
+        );
+        commands
+            .entity(entity)
+            .insert(ScenarioAssetHandle(request.handle))
+            .remove::<PendingScenarioAsset>();
+    }
 }
 
 /// LOAD half of USD-embedded scenario persistence: drain entities the USD loader
@@ -324,6 +512,7 @@ pub fn attach_embedded_scenarios(
             // authored straight into USD legitimately has no asset id.
             asset_id.map(|id| id.0.clone()),
             true,
+            ScenarioReloadPolicy::Retain,
             // Scene-authored (loaded by the host from USD) → host-trusted, ungated.
             None,
             &mut registry,
@@ -821,6 +1010,7 @@ fn on_run_timeline(
         // Generated source — no file, no id, no relative imports.
         None,
         false,
+        ScenarioReloadPolicy::Retain,
         guard.and_then(|g| g.0),
         &mut registry,
         &q_existing,
@@ -940,6 +1130,7 @@ fn on_run_stored_timeline(
         // Generated source — no file, no id, no relative imports.
         None,
         false,
+        ScenarioReloadPolicy::Retain,
         guard.and_then(|g| g.0),
         &mut registry,
         &q_existing,
@@ -1070,6 +1261,7 @@ pub(crate) fn register_command_policies(app: &mut App) {
         reg.register("RunRhai", EXEC);
         reg.register("RunRhaiTool", EXEC);
         reg.register("RunScenario", EXEC);
+        reg.register("RunScenarioAsset", EXEC);
         reg.register("RunTimeline", EXEC);
         reg.register("RegisterTimeline", EXEC);
         reg.register("RunStoredTimeline", EXEC);
@@ -1125,6 +1317,7 @@ register_commands!(
     on_run_rhai,
     on_run_rhai_tool,
     on_run_scenario,
+    on_run_scenario_asset,
     on_run_timeline,
     on_register_timeline,
     on_run_stored_timeline,
@@ -1138,6 +1331,7 @@ register_commands!(
     on_run_rhai,
     on_run_rhai_tool,
     on_run_scenario,
+    on_run_scenario_asset,
     on_run_timeline,
     on_register_timeline,
     on_run_stored_timeline,

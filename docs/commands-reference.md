@@ -34,7 +34,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 **Modelica modeling & simulation**
 
-- [`lunco-modelica`](#lunco-modelica) (43 commands)
+- [Modelica modeling and simulation](#modelica-modeling-and-simulation) (43 commands)
 
 **Co-simulation**
 
@@ -53,10 +53,6 @@ actually call, with the fields the deserializer actually accepts. See the
 
 - [`lunco-ui`](#lunco-ui) (1 command)
 - [`lunco-workbench`](#lunco-workbench) (35 commands)
-
-**Tutorials & HUD**
-
-- [`lunco-tutorial`](#lunco-tutorial) (4 commands)
 
 **Scripting & scenarios**
 
@@ -642,7 +638,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Apply a [`UsdOp`] to the named document via the typed-command bus.
 
- Same shape as `lunco-modelica`'s op-dispatch commands: UI clicks,
+ Same shape as the Modelica op-dispatch commands: UI clicks,
  HTTP API calls, and scripts all dispatch this; the observer
  routes it through [`DocumentRegistry::<UsdDocument>::apply`] so undo/redo,
  change notification, and read-only enforcement stay in one place.
@@ -1124,13 +1120,13 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
 ## Modelica modeling & simulation
 
-### `lunco-modelica` <a id="lunco-modelica"></a>
+### Modelica modeling and simulation <a id="modelica-modeling-and-simulation"></a>
 
 #### `AddCanvasPlot`
 
  Drop a "Scope" plot onto the active canvas.
 
-- *defined in:* `crates/lunco-modelica/src/ui/commands/diagram.rs`
+- *defined in:* `crates/lunco-modelica-ui/src/ui/commands/diagram.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1144,7 +1140,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Add a sub-component to a class.
 
-- *defined in:* `crates/lunco-modelica/src/api/component.rs`
+- *defined in:* `crates/lunco-modelica-core/src/api/component.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1162,7 +1158,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Add one signal to an existing plot panel.
 
-- *defined in:* `crates/lunco-modelica/src/ui/commands/plot.rs`
+- *defined in:* `crates/lunco-modelica-ui/src/ui/commands/plot.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1178,7 +1174,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  only re-parsed once at the end. This is the structural authoring surface
  for the Modelica document; it does not attach a simulation program to USD.
 
-- *defined in:* `crates/lunco-modelica/src/api/mod.rs`
+- *defined in:* `crates/lunco-modelica-core/src/api/mod.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1192,7 +1188,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  **Edit → Auto Arrange**. The passive open-time fallback stacks components at
  the origin, so this is how an imported model gets a readable diagram.
 
-- *defined in:* `crates/lunco-modelica/src/ui/commands/nav.rs`
+- *defined in:* `crates/lunco-modelica-ui/src/ui/commands/nav.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1204,7 +1200,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  honored at compile boundaries and on every solver step; the run then ends
  `Cancelled`. Target a specific run by `experiment_id`, or set `all`.
 
-- *defined in:* `crates/lunco-modelica/src/ui/commands/compile.rs`
+- *defined in:* `crates/lunco-modelica-ui/src/ui/commands/compile.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1218,7 +1214,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  `force`. Never changes `paused`; type/parse/DAE errors land in
  `WorkbenchState.compilation_error` and surface in the Diagnostics panel.
 
-- *defined in:* `crates/lunco-modelica/src/ui/commands/compile.rs`
+- *defined in:* `crates/lunco-modelica-ui/src/ui/commands/compile.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1240,7 +1236,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  - `qualified` set    → pick that class (must be one of the candidates).
  - `cancel` `true`    → just close the dialog without running.
 
-- *defined in:* `crates/lunco-modelica/src/ui/commands/compile.rs`
+- *defined in:* `crates/lunco-modelica-ui/src/ui/commands/compile.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1251,7 +1247,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Add a `connect(a.p, b.q)` equation to a class.
 
-- *defined in:* `crates/lunco-modelica/src/api/diagram.rs`
+- *defined in:* `crates/lunco-modelica-core/src/api/diagram.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1271,7 +1267,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  populated so a shared model reuses this exact creation + tab-open
  path instead of duplicating it.
 
-- *defined in:* `crates/lunco-modelica/src/ui/commands/lifecycle.rs`
+- *defined in:* `crates/lunco-modelica-ui/src/ui/commands/lifecycle.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1284,7 +1280,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  in-flight runs (via id / `all`) are skipped; cancel them first. Scope by
  `experiment_id`, `doc_id` (every run for that doc's twin), or `all`.
 
-- *defined in:* `crates/lunco-modelica/src/ui/commands/compile.rs`
+- *defined in:* `crates/lunco-modelica-ui/src/ui/commands/compile.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1298,7 +1294,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  inverse of `ConnectComponents`; a connection that isn't there is a logged
  no-op.
 
-- *defined in:* `crates/lunco-modelica/src/api/diagram.rs`
+- *defined in:* `crates/lunco-modelica-core/src/api/diagram.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1313,7 +1309,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  document. Unassigned `source_doc_id` (`0` over the API) means the active
  document.
 
-- *defined in:* `crates/lunco-modelica/src/ui/commands/lifecycle.rs`
+- *defined in:* `crates/lunco-modelica-ui/src/ui/commands/lifecycle.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1326,7 +1322,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  in [`lunco_experiments::ExperimentRegistry`]. See
  `docs/architecture/25-experiments.md`.
 
-- *defined in:* `crates/lunco-modelica/src/ui/commands/compile.rs`
+- *defined in:* `crates/lunco-modelica-ui/src/ui/commands/compile.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1343,7 +1339,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Zoom and pan the canvas so the whole diagram fits the viewport.
 
-- *defined in:* `crates/lunco-modelica/src/ui/commands/nav.rs`
+- *defined in:* `crates/lunco-modelica-ui/src/ui/commands/nav.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1354,7 +1350,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  Centre the canvas on one named component — how a screenshot or a review
  walkthrough targets a specific part of a large diagram.
 
-- *defined in:* `crates/lunco-modelica/src/ui/commands/nav.rs`
+- *defined in:* `crates/lunco-modelica-ui/src/ui/commands/nav.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1368,7 +1364,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  says "switch to the rocket model" without knowing document ids. No match is
  a logged no-op, not an error.
 
-- *defined in:* `crates/lunco-modelica/src/ui/commands/nav.rs`
+- *defined in:* `crates/lunco-modelica-ui/src/ui/commands/nav.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1378,7 +1374,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Run rumoca-tool-fmt on the active document.
 
-- *defined in:* `crates/lunco-modelica/src/ui/commands/doc.rs`
+- *defined in:* `crates/lunco-modelica-ui/src/ui/commands/doc.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1391,7 +1387,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  filesystem — it does NOT open a document (use `Open` for that). Goes through
  `lunco-storage`, so it works in the browser build too.
 
-- *defined in:* `crates/lunco-modelica/src/ui/commands/lifecycle.rs`
+- *defined in:* `crates/lunco-modelica-ui/src/ui/commands/lifecycle.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1404,14 +1400,14 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  actually think is open?", taking no parameters because it always targets
  whatever the user is looking at.
 
-- *defined in:* `crates/lunco-modelica/src/ui/commands/inspect.rs`
+- *defined in:* `crates/lunco-modelica-ui/src/ui/commands/inspect.rs`
 - *fields:* none — call with `InspectActiveDoc` (no params)
 
 #### `MoveComponent`
 
  Move a component instance in the diagram.
 
-- *defined in:* `crates/lunco-modelica/src/ui/commands/diagram.rs`
+- *defined in:* `crates/lunco-modelica-ui/src/ui/commands/diagram.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1428,7 +1424,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  bindings and picked series — "open another view of this, then diverge" —
  otherwise it starts from `signals`.
 
-- *defined in:* `crates/lunco-modelica/src/ui/commands/plot.rs`
+- *defined in:* `crates/lunco-modelica-ui/src/ui/commands/plot.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1440,7 +1436,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Unified open command — dispatches on the URI scheme.
 
-- *defined in:* `crates/lunco-modelica/src/ui/commands/lifecycle.rs`
+- *defined in:* `crates/lunco-modelica-ui/src/ui/commands/lifecycle.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1452,7 +1448,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  a library model without the caller knowing document ids. `action` decides
  whether it is drilled into for viewing or copied into an editable document.
 
-- *defined in:* `crates/lunco-modelica/src/ui/commands/lifecycle.rs`
+- *defined in:* `crates/lunco-modelica-ui/src/ui/commands/lifecycle.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1463,7 +1459,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Open the same document in a new tab (split / sibling view).
 
-- *defined in:* `crates/lunco-modelica/src/ui/commands/lifecycle.rs`
+- *defined in:* `crates/lunco-modelica-ui/src/ui/commands/lifecycle.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1473,7 +1469,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Pan the diagram canvas by an offset, leaving zoom alone.
 
-- *defined in:* `crates/lunco-modelica/src/ui/commands/nav.rs`
+- *defined in:* `crates/lunco-modelica-ui/src/ui/commands/nav.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1502,7 +1498,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  #59 (named experiments / Runs panel) lands — the infrastructure
  for a "force one step" flag is better designed alongside that.
 
-- *defined in:* `crates/lunco-modelica/src/ui/commands/compile.rs`
+- *defined in:* `crates/lunco-modelica-ui/src/ui/commands/compile.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1512,7 +1508,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Redo the most recently undone edit.
 
-- *defined in:* `crates/lunco-modelica/src/ui/commands/doc.rs`
+- *defined in:* `crates/lunco-modelica-ui/src/ui/commands/doc.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1529,7 +1525,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  the connect spans). Batch both through `ApplyModelicaOps` to keep them in
  one undo group.
 
-- *defined in:* `crates/lunco-modelica/src/api/component.rs`
+- *defined in:* `crates/lunco-modelica-core/src/api/component.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1543,7 +1539,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  `DeleteExperiment`'s id-as-string addressing so the same value the UI
  holds (and API callers pass) resolves the run.
 
-- *defined in:* `crates/lunco-modelica/src/ui/commands/compile.rs`
+- *defined in:* `crates/lunco-modelica-ui/src/ui/commands/compile.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1554,7 +1550,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Rename a top-level class within an open Modelica document.
 
-- *defined in:* `crates/lunco-modelica/src/api/class.rs`
+- *defined in:* `crates/lunco-modelica-core/src/api/class.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1566,7 +1562,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  See [`PauseActiveModel`].
 
-- *defined in:* `crates/lunco-modelica/src/ui/commands/compile.rs`
+- *defined in:* `crates/lunco-modelica-ui/src/ui/commands/compile.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1577,7 +1573,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  Reset to `t=0` and run again. Composition of [`ResetActiveModel`]
  followed by [`RunActiveModel`].
 
-- *defined in:* `crates/lunco-modelica/src/ui/commands/compile.rs`
+- *defined in:* `crates/lunco-modelica-ui/src/ui/commands/compile.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1587,7 +1583,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  See [`PauseActiveModel`].
 
-- *defined in:* `crates/lunco-modelica/src/ui/commands/compile.rs`
+- *defined in:* `crates/lunco-modelica-ui/src/ui/commands/compile.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1605,7 +1601,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  installed. Contrast with [`CompileModel`] (compile only, never auto-
  starts) and [`ResumeActiveModel`] (unpause only, never compiles).
 
-- *defined in:* `crates/lunco-modelica/src/ui/commands/compile.rs`
+- *defined in:* `crates/lunco-modelica-ui/src/ui/commands/compile.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1621,7 +1617,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  Discover the resulting `experiment_id` via `ListRuns` (newest, or by
  `label`); read the trajectory with `GetExperimentResult`.
 
-- *defined in:* `crates/lunco-modelica/src/ui/commands/compile.rs`
+- *defined in:* `crates/lunco-modelica-ui/src/ui/commands/compile.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1643,7 +1639,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  Save the document — the one save verb, in-process and over the API alike.
  Unassigned `doc_id` (`0` over the API) means the active document.
 
-- *defined in:* `crates/lunco-modelica/src/ui/commands/doc.rs`
+- *defined in:* `crates/lunco-modelica-ui/src/ui/commands/doc.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1653,7 +1649,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Save the document to `path`. Unassigned `doc_id` means the active document.
 
-- *defined in:* `crates/lunco-modelica/src/ui/commands/doc.rs`
+- *defined in:* `crates/lunco-modelica-ui/src/ui/commands/doc.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1664,7 +1660,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Replace an open document's entire source text.
 
-- *defined in:* `crates/lunco-modelica/src/api/doc.rs`
+- *defined in:* `crates/lunco-modelica-core/src/api/doc.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1680,7 +1676,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  future transport. Its observer queues the exclusive port/model write using
  the same helper as the canvas path and reports the actual apply result.
 
-- *defined in:* `crates/lunco-modelica/src/model_commands.rs`
+- *defined in:* `crates/lunco-modelica-core/src/model_commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1693,7 +1689,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  Switch how a document is rendered — source text, diagram canvas, icon, or
  documentation.
 
-- *defined in:* `crates/lunco-modelica/src/ui/commands/nav.rs`
+- *defined in:* `crates/lunco-modelica-ui/src/ui/commands/nav.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1705,7 +1701,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  Set the diagram canvas zoom factor directly, bypassing scroll-wheel steps —
  for scripted captures that need a repeatable framing.
 
-- *defined in:* `crates/lunco-modelica/src/ui/commands/nav.rs`
+- *defined in:* `crates/lunco-modelica-ui/src/ui/commands/nav.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1716,7 +1712,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Undo the most recent edit on the active document.
 
-- *defined in:* `crates/lunco-modelica/src/ui/commands/doc.rs`
+- *defined in:* `crates/lunco-modelica-ui/src/ui/commands/doc.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -2154,14 +2150,14 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Clear any active spotlight. Rhai: `clear_spotlight()`.
 
-- *defined in:* `crates/lunco-workbench/src/tutorial_overlay.rs`
+- *defined in:* `crates/lunco-workbench/src/guided_overlay.rs`
 - *fields:* none — call with `ClearSpotlight` (no params)
 
 #### `ClearTour`
 
  End the guided tour (hide the coach card + scrim). Rhai: `end_tour()`.
 
-- *defined in:* `crates/lunco-workbench/src/tutorial_overlay.rs`
+- *defined in:* `crates/lunco-workbench/src/guided_overlay.rs`
 - *fields:* none — call with `ClearTour` (no params)
 
 #### `CloseWindow`
@@ -2178,7 +2174,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Like [`OpenFile`], this is a typed shell command whose behaviour is
  domain-specific and lives in the domain crate
- (`lunco-modelica` encodes the active model's source into a URL
+ (`lunco-modelica-core` encodes the active model's source into a URL
  fragment). The headless HTTP API exposes the read-only `GetShareLink`
  query separately; it returns the URL in its `data` payload instead of
  touching a clipboard.
@@ -2378,7 +2374,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  Set the persistent one-line hint. Empty `text` clears it. Rhai: `hint(msg)`
  / `clear_hint()`.
 
-- *defined in:* `crates/lunco-workbench/src/tutorial_overlay.rs`
+- *defined in:* `crates/lunco-workbench/src/guided_overlay.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -2391,7 +2387,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  the prelude formats the list into this block and also auto-publishes it from
  declarative `mission(me)` state.
 
-- *defined in:* `crates/lunco-workbench/src/tutorial_overlay.rs`
+- *defined in:* `crates/lunco-workbench/src/guided_overlay.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -2413,11 +2409,11 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  Show a guided-tour coach step: spotlight `anchor`, and draw a coach card with
  `title`/`body`, progress dots (`index`/`total`), and Back/Next/Skip controls.
  Rhai: `coach(index, total, anchor, title, body)`. The controls emit
- `cmd:TutorialNext` / `cmd:TutorialBack` / `cmd:TutorialSkip` on the event bus,
+ `cmd:GuidedNext` / `cmd:GuidedBack` / `cmd:GuidedSkip` on the event bus,
  which the tour script advances on (a script can simulate a click with
- `emit("cmd:TutorialNext", 0)`).
+ `emit("cmd:GuidedNext", 0)`).
 
-- *defined in:* `crates/lunco-workbench/src/tutorial_overlay.rs`
+- *defined in:* `crates/lunco-workbench/src/guided_overlay.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -2483,7 +2479,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  Spotlight a workbench widget by its [`HelpAnchors`](crate::HelpAnchors) key,
  dimming everything else. Rhai: `spotlight(anchor, caption)`.
 
-- *defined in:* `crates/lunco-workbench/src/tutorial_overlay.rs`
+- *defined in:* `crates/lunco-workbench/src/guided_overlay.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -2528,77 +2524,28 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 |---|---|---|
 | `enabled` | `bool` |  `true` enables the HUD; `false` hides it. |
 
-#### `TutorialBack`
+#### `GuidedBack`
 
- Return to the previous guided tutorial step.
+ Return to the previous guided step.
 
-- *defined in:* `crates/lunco-workbench/src/tutorial_overlay.rs`
-- *fields:* none — call with `TutorialBack` (no params)
+- *defined in:* `crates/lunco-workbench/src/guided_overlay.rs`
+- *fields:* none — call with `GuidedBack` (no params)
 
-#### `TutorialNext`
+#### `GuidedNext`
 
- Advance a guided tutorial step through the shared typed-command bus.
- The command projector supplies the established `cmd:TutorialNext` event
+ Advance a guided step through the shared typed-command bus.
+ The command projector supplies the established `cmd:GuidedNext` event
  consumed by authored Rhai tours.
 
-- *defined in:* `crates/lunco-workbench/src/tutorial_overlay.rs`
-- *fields:* none — call with `TutorialNext` (no params)
+- *defined in:* `crates/lunco-workbench/src/guided_overlay.rs`
+- *fields:* none — call with `GuidedNext` (no params)
 
-#### `TutorialSkip`
+#### `GuidedSkip`
 
- Stop the current guided tutorial tour.
+ Stop the current guided tour.
 
-- *defined in:* `crates/lunco-workbench/src/tutorial_overlay.rs`
-- *fields:* none — call with `TutorialSkip` (no params)
-
-## Tutorials & HUD
-
-### `lunco-tutorial` <a id="lunco-tutorial"></a>
-
-#### `ResetTutorialProgress`
-
- Clear persisted completion and first-run state without changing the loaded
- scene. This is the explicit recovery path for a shared settings file whose
- tutorial history no longer matches the user's current installation.
-
-- *defined in:* `crates/lunco-tutorial/src/lib.rs`
-- *fields:* none — call with `ResetTutorialProgress` (no params)
-
-#### `SetSubsystemEnabled`
-
- Enable/disable a simulation subsystem at runtime (progressive fidelity).
- `name` must be registered by the owning subsystem plugin. Rhai:
- `set_subsystem(name, on)`.
-
-- *defined in:* `crates/lunco-tutorial/src/lib.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `name` | `String` |  Registered subsystem key. |
-| `on` | `bool` |  `true` enables, `false` disables. |
-
-#### `SkipTutorial`
-
- Stop the current tutorial: clear the HUD, synchronously stop its host, and
- clear a world declared by that lesson through the normal scene lifecycle.
- A UI-only lesson has no scene of its own to clear.
- `cmd("SkipTutorial")`.
-
-- *defined in:* `crates/lunco-tutorial/src/lib.rs`
-- *fields:* none — call with `SkipTutorial` (no params)
-
-#### `StartTutorial`
-
- Start a tutorial by id: resolve its authored scenario, mount its declared
- world if any, and run it on the host after the scene transaction completes.
- The single launch path — menu, F1, HTTP API, MCP, and other scripts
- (`cmd("StartTutorial", #{ id })`) all route here.
-
-- *defined in:* `crates/lunco-tutorial/src/lib.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `id` | `String` |  The [`TutorialMeta::id`] to start. |
+- *defined in:* `crates/lunco-workbench/src/guided_overlay.rs`
+- *fields:* none — call with `GuidedSkip` (no params)
 
 ## Scripting & scenarios
 
@@ -2686,6 +2633,23 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 | `target` | `Entity` |   |
 | `source` | `String` |   |
 | `params` | `String` |  Optional scenario parameters as a JSON object string (e.g.  `{"speed":1.5,"target":"rover_b"}`), readable in the script as the  `params` constant. Omitted → none. |
+
+#### `RunScenarioAsset`
+
+ Attach a file-backed Rhai scenario through the normal asset graph. An
+ optional `scene_asset` submits a generic scene-transition intent; USD owns
+ resolution/composition and the scenario driver starts after readiness. The
+ application lesson menu uses this command with `restart` for a fresh start.
+
+- *defined in:* `crates/lunco-scripting/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `target` | `Entity` |  Scenario host; `Entity::PLACEHOLDER` selects the stable `WorldRoot`. |
+| `source_asset` | `String` |  Root-qualified Rhai asset id. |
+| `params` | `String` |  Optional scenario parameters as a JSON object string. |
+| `scene_asset` | `String` |  Optional USD scene asset to request before scenario start. |
+| `reload_policy` | `ScenarioReloadPolicy` |  `retain` (default) or `restart`. |
 
 #### `RunStoredTimeline`
 
@@ -2841,7 +2805,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  recents, drag-drop, and headless / server callers reach the same code
  path without any UI.
 
- The actual loading is domain-specific: `lunco-modelica` observes this
+ The actual loading is domain-specific: `lunco-modelica-core` observes this
  and reads `.mo` files; `lunco-usd` observes it for `.usd*`. Each
  domain's observer ignores paths it doesn't own, so they coexist.
 
@@ -3306,7 +3270,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  `force = false`: close the way a user would — route through the interactive
  dirty-document save prompt, which a windowed host installs an observer for
- (`lunco_modelica::ui::commands::util`). **On a host with no window there is
+ (`lunco_modelica_ui::ui::commands::util`). **On a host with no window there is
  nobody to answer that prompt**, so this exits directly rather than waiting
  forever for a modal that will never be drawn.
 
@@ -3363,6 +3327,19 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 | `entry_id` | `String` |  The independent catalog entry ID (e.g. "ball_dynamic", "skid_rover"). |
 | `position` | `[f64 ; 3]` |  Position in the active physics frame, in metres. Kept as f64 through  command transport and frame conversion; narrowing occurs only at the  final scene-root-local Bevy `Transform` boundary. |
 | `rotation` | `Option < [f64 ; 4] >` |  Rotation in the active physics frame as an `(x, y, z, w)` unit  quaternion (optional; omitted → identity). Kept as f64 across the  command boundary for the same reason as `position`; Bevy's f32  [`bevy::prelude::Quat`] is a render/local-transform representation, not a  simulation-frame interchange type. |
+
+#### `SetSubsystemEnabled`
+
+ Enable or disable a subsystem registered by its owning plugin. This generic
+ fidelity control is available to authored scenarios and other application
+ policy; unset subsystem names are rejected visibly.
+
+- *defined in:* `crates/lunco-core/src/subsystems.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | `String` |  Registered subsystem key. |
+| `on` | `bool` |  `true` enables, `false` disables. |
 
 ## Other (source location unknown)
 

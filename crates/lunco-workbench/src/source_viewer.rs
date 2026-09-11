@@ -143,9 +143,7 @@ impl InstancePanel for SourceEditorPanel {
                         .auto_shrink([false; 2])
                         .show(ui, |ui| {
                             ui.add(
-                                egui::TextEdit::multiline(&mut source.text)
-                                    .font(egui::TextStyle::Monospace)
-                                    .code_editor()
+                                crate::text_editor::code(&mut source.text)
                                     .desired_width(f32::INFINITY),
                             )
                         })
@@ -156,9 +154,7 @@ impl InstancePanel for SourceEditorPanel {
                         .auto_shrink([false; 2])
                         .show(ui, |ui| {
                             ui.add(
-                                egui::TextEdit::multiline(&mut source.text.as_str())
-                                    .font(egui::TextStyle::Monospace)
-                                    .code_editor()
+                                crate::text_editor::code(&mut source.text.as_str())
                                     .desired_width(f32::INFINITY)
                                     .interactive(false),
                             );
@@ -809,11 +805,11 @@ mod tests {
     #[test]
     fn only_twin_owned_source_tabs_are_retired_on_close() {
         let state = SourceTabState {
-            path: PathBuf::from("/tmp/alpha/scripts/boot.rhai"),
+            path: PathBuf::from("/tmp/alpha/scripts/entry.rhai"),
             text: String::new(),
             origin: Some(TwinSourceOrigin {
                 twin_root: PathBuf::from("/tmp/alpha"),
-                relative_path: PathBuf::from("scripts/boot.rhai"),
+                relative_path: PathBuf::from("scripts/entry.rhai"),
             }),
             dirty: false,
             loading: false,

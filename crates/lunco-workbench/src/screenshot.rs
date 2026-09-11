@@ -6,7 +6,7 @@
 //! which live in `bevy_render` → wgpu. That dependency used to sit inside `lunco-api`, behind
 //! a `render` feature that was **on by default** — so staying render-free was the *non-default*
 //! path, every consumer had to remember `default-features = false`, and **three forgot**
-//! (`lunco-doc-bevy`, `lunco-celestial`/`lunco-tutorial`, `lunco-telemetry`). Each silently
+//! (`lunco-doc-bevy`, `lunco-celestial`/`lunco-guided`, `lunco-telemetry`). Each silently
 //! re-linked a GPU stack into the `--no-ui` server. Cargo's feature unification makes that
 //! invisible to code review; only `cargo tree` sees it. A feature you can forget is a trap
 //! that fires forever, so `lunco-api` no longer has one: it **cannot** link a renderer.
@@ -787,7 +787,7 @@ use bevy::time::TimeUpdateStrategy;
 //   `drive_offline_clock`. Exactly `1/fps` per captured frame, so the output is
 //   locked to `fps` no matter how fast or slow the machine renders.
 // * **Whether the app may sleep** — `WinitSettings`, written only by the pacer
-//   (`lunco-modelica`'s `sim_focus_pace`). Recording states intent by holding a
+//   (`lunco-modelica-core`'s `sim_focus_pace`). Recording states intent by holding a
 //   `lunco_core::KeepAwake` token; it never writes the setting itself.
 // * **How fast frames present** — `Window::present_mode`, written only here.
 //   Uncapped while recording so rendering runs at max speed.

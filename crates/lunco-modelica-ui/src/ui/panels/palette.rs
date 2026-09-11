@@ -1,0 +1,829 @@
+//! Component Palette — search-first flat list of instantiable MSL components.
+//!
+//! Solves the research-flagged pain with the Libraries browser: users
+//! don't want to navigate `Modelica > Electrical > Analog > Basic >
+//! Resistor` every time they need a resistor — they want to type
+//! "resis", see results, and drop one onto the canvas. Figma / UE
+//! asset-browser style.
+//!
+//! **What's in the palette**: every *leaf* component from
+//! [`crate::visual_diagram::msl_class_library`] — interfaces and
+//! package nodes are excluded. One row per component. Click a row to
+//! instantiate on the active Diagram tab (placement cycles through a
+//! 3-column grid to avoid overlap).
+//!
+//! **Search**: case-insensitive substring match against the component's
+//! display name, full MSL path, category, and description. Top-100
+//! matches rendered; typing narrows quickly. No fuzzy-matching
+//! library is pulled in yet — substring + simple scoring is enough
+//! for ~1-5k components.
+
+use bevy::prelude::*;
+use bevy_egui::egui;
+use lunco_theme::ColorAlpha;
+use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
+
+use crate::visual_diagram::msl_class_library;
+
+/// Panel id — registered as a singleton panel, slotted RightInspector.
+pub const PALETTE_PANEL_ID: PanelId = PanelId("modelica_component_palette");
+
+/// Drag-and-drop payload for palette → canvas. Set by the palette
+/// when a row's drag begins; consumed by the canvas drop handler on
+/// pointer release. Cleared on miss (release outside any canvas) so
+/// stale payloads don't leak between gestures.
+#[derive(Resource, Default)]
+pub struct ComponentDragPayload {
+    pub def: Option<crate::index::ClassEntry>,
+}
+
+/// Clear the palette drag payload after a canvas drop/miss.
+#[derive(Event, Clone, Copy, Default)]
+pub(crate) struct ClearComponentDragPayload;
+
+pub(crate) fn on_clear_component_drag_payload(
+    _trigger: On<ClearComponentDragPayload>,
+    mut payload: ResMut<ComponentDragPayload>,
+) {
+    payload.def = None;
+}
+
+/// Request a component insertion from the palette. The observer owns the
+/// document/op pipeline; the panel only supplies the selected class and the
+/// optional placement coordinates.
+#[derive(Event)]
+pub(crate) struct PlaceComponentRequested {
+    pub(crate) def: crate::index::ClassEntry,
+    pub(crate) target_doc: Option<lunco_doc::DocumentId>,
+    pub(crate) placement: Option<(f32, f32)>,
+}
+
+pub(crate) fn on_place_component_requested(
+    trigger: On<PlaceComponentRequested>,
+    mut commands: Commands,
+) {
+    let def = trigger.def.clone();
+    let target_doc = trigger.target_doc;
+    let placement = trigger.placement;
+    commands.queue(move |world: &mut World| {
+        place_component(world, &def, target_doc, placement);
+    });
+}
+
+/// Per-frame UI state for the palette. Holds the search query + the
+/// active category filter chip.
+///
+/// Everything else (the component catalog) is static, owned by
+/// `msl_class_library()`; we just filter over its slice.
+#[derive(Resource, Default)]
+pub struct PaletteState {
+    /// Current search query — normalized on compare (lowercase).
+    pub query: String,
+    /// Selected top-level category chip (`None` = "All"). Derived
+    /// from the MSL path's first segment after `Modelica.` — e.g.
+    /// `Modelica.Electrical.…` → `Some("Electrical")`.
+    pub category: Option<&'static str>,
+}
+
+/// The categories we surface as filter chips, in display order.
+/// Derived from Modelica's top-level packages; anything that doesn't
+/// match one of these falls under `"Other"`.
+///
+/// The MSL top-level packages we surface as category chips, in
+/// display order. Chip colours come from the schematic-token set in
+/// `lunco-theme` (see [`category_color`]) — this file no longer
+/// hardcodes palette picks. If you need a new category, add its
+/// name here and add the Modelica-side → schematic-token mapping
+/// in [`category_color`].
+const CATEGORIES: &[&str] = &[
+    "Electrical",
+    "Mechanical",
+    "Thermal",
+    "Fluid",
+    "Media",
+    "Magnetic",
+    "Blocks",
+    "Math",
+    "StateGraph",
+    "Other",
+];
+
+/// Map a category name to its chip colour via the current theme's
+/// schematic tokens. Mapping choices track domain intent —
+/// `Electrical → wire_electrical`, `Mechanical → wire_mechanical`,
+/// etc. — so a theme override of `wire_electrical` propagates to
+/// the palette automatically.
+///
+/// For categories with no obvious wire-domain cognate (`Blocks`,
+/// `Math`, `StateGraph`) we land on signal/integer/boolean tokens —
+/// they're generic "processing" colours that don't carry a physical
+/// domain meaning, which matches how those categories feel.
+fn category_color(name: &str, theme: &lunco_theme::Theme) -> egui::Color32 {
+    let s = &theme.schematic;
+    match name {
+        "Electrical" => s.wire_electrical,
+        "Mechanical" => s.wire_mechanical,
+        "Thermal" => s.wire_thermal,
+        "Fluid" => s.wire_fluid,
+        "Media" => s.wire_fluid,
+        "Magnetic" => s.wire_multibody,
+        "Blocks" => s.wire_signal,
+        "Math" => s.wire_integer,
+        "StateGraph" => s.wire_boolean,
+        _ => s.wire_unknown,
+    }
+}
+
+/// Should this entry be shown in the instantiable palette?
+///
+/// Two formal exclusions, both grounded in the Modelica language
+/// (not in MSL folder-naming conventions):
+///
+/// - **Connectors** are ports, not standalone components — dragging
+///   one onto a canvas is a category error.
+/// - **`partial` classes** can't be instantiated directly per
+///   MLS §4.4; they only exist to be inherited via `extends`. This
+///   replaces the old `.Interfaces.` path heuristic.
+///
+/// `.Internal.` (library-private convention) is not filtered — it's
+/// MSL author lore with no formal language marker, and users with a
+/// search box don't typically hit them by accident.
+pub(crate) fn is_instantiable(c: &crate::index::ClassEntry) -> bool {
+    if c.partial {
+        return false;
+    }
+    !matches!(
+        c.kind,
+        crate::index::ClassKind::Connector | crate::index::ClassKind::ExpandableConnector
+    )
+}
+
+/// Memoized, instantiable subset of the MSL library plus the
+/// no-query per-category tally. The MSL library is immutable once
+/// loaded ([`msl_class_library`] is a `&'static` cache), so the
+/// instantiable filter + the default chip counts — previously rebuilt
+/// **every frame** over the whole ~700-class library just to render the
+/// palette header and chips (CQ-208) — run once and are read thereafter.
+/// Only the *query-filtered* counts stay per-frame, and only while the
+/// user is actually typing a search.
+struct PaletteCatalog {
+    /// Instantiable classes (connectors/partials dropped), in library order.
+    lib: Vec<&'static crate::index::ClassEntry>,
+    /// Per-category counts with no search query active (the default chips).
+    cat_counts_all: std::collections::HashMap<&'static str, usize>,
+    /// `lib.len()` — total instantiable component count.
+    total: usize,
+}
+
+fn palette_catalog() -> &'static PaletteCatalog {
+    static CACHE: std::sync::OnceLock<PaletteCatalog> = std::sync::OnceLock::new();
+    static EMPTY: std::sync::OnceLock<PaletteCatalog> = std::sync::OnceLock::new();
+    let empty = || {
+        EMPTY.get_or_init(|| PaletteCatalog {
+            lib: Vec::new(),
+            cat_counts_all: std::collections::HashMap::new(),
+            total: 0,
+        })
+    };
+    if let Some(c) = CACHE.get() {
+        return c;
+    }
+    let lib_all = msl_class_library();
+    if lib_all.is_empty() {
+        // MSL not loaded yet — return the shared empty catalog and retry
+        // next call (mirrors `msl_class_library`'s own load retry).
+        return empty();
+    }
+    let lib: Vec<&'static crate::index::ClassEntry> =
+        lib_all.iter().filter(|c| is_instantiable(c)).collect();
+    let mut cat_counts_all: std::collections::HashMap<&'static str, usize> =
+        std::collections::HashMap::new();
+    for c in &lib {
+        *cat_counts_all.entry(category_of(&c.name)).or_insert(0) += 1;
+    }
+    let total = lib.len();
+    let _ = CACHE.set(PaletteCatalog {
+        lib,
+        cat_counts_all,
+        total,
+    });
+    CACHE.get().unwrap_or_else(|| empty())
+}
+
+/// Match a component's MSL path to one of our display categories.
+fn category_of(msl_path: &str) -> &'static str {
+    // Strip "Modelica." prefix if present, then take the first
+    // segment before the next dot. Non-Modelica libraries land in
+    // "Other" for now.
+    let after_modelica = msl_path.strip_prefix("Modelica.").unwrap_or(msl_path);
+    let first = after_modelica.split('.').next().unwrap_or("Other");
+    for &c in CATEGORIES {
+        if c == first {
+            return c;
+        }
+    }
+    "Other"
+}
+
+/// The panel. Zero-sized; state lives in [`PaletteState`].
+pub struct ComponentPalettePanel;
+
+impl Panel for ComponentPalettePanel {
+    fn id(&self) -> PanelId {
+        PALETTE_PANEL_ID
+    }
+
+    fn title(&self) -> String {
+        "Components".into()
+    }
+
+    fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
+        lunco_workbench_core::PanelMenuGroup::Design
+    }
+
+    fn default_slot(&self) -> PanelSlot {
+        PanelSlot::RightInspector
+    }
+
+    fn closable(&self) -> bool {
+        true
+    }
+
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+        // Snapshot the theme at the top so every chip / row pulls
+        // its colour from the same source. Category tints map to
+        // schematic-wire tokens; secondary text uses `text_subdued`.
+        let theme = ctx
+            .resource::<lunco_theme::Theme>()
+            .cloned()
+            .unwrap_or_else(lunco_theme::Theme::dark);
+        let all_chip_color = theme.tokens.text_subdued;
+        let muted_text = theme.tokens.text_subdued;
+
+        // Snapshot the query + selected category up front.
+        let state = ctx.resource::<PaletteState>();
+        let query = state.map(|s| s.query.clone()).unwrap_or_default();
+        let query_lc = query.to_lowercase();
+        let selected_category: Option<&'static str> = state.and_then(|s| s.category);
+
+        // Render the search box; capture any edit.
+        let mut new_query = query.clone();
+        let mut new_category = selected_category;
+        let mut clear_all = false;
+
+        ui.horizontal(|ui| {
+            ui.label("Search");
+            let response = ui.add(
+                lunco_workbench::text_editor::singleline(&mut new_query)
+                    .hint_text("Search components…")
+                    .desired_width(f32::INFINITY),
+            );
+            // Escape clears the query.
+            if response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                new_query.clear();
+            }
+        });
+
+        // Precompute per-category counts for the chip labels (filtered
+        // by the current search, so a chip says "Electrical (7)" = 7
+        // matches in this category given the current query).
+        // Pre-filter: drop connectors / Interfaces / Internal entries
+        // before any scoring or counting so they don't pollute totals,
+        // chip counts, or the search results.
+        // Instantiable base list + default chip counts come from the
+        // memoized catalog (immutable MSL — built once, not per frame).
+        let catalog = palette_catalog();
+        let lib = &catalog.lib;
+        let pre_filter_total = catalog.total;
+        // With no query the chip counts are the static per-category totals;
+        // only an active search needs a per-frame re-tally (and only while
+        // the search box is non-empty).
+        let (cat_counts, pre_filter_matches): (
+            std::collections::HashMap<&'static str, usize>,
+            usize,
+        ) = if query_lc.is_empty() {
+            (catalog.cat_counts_all.clone(), pre_filter_total)
+        } else {
+            let mut counts: std::collections::HashMap<&'static str, usize> =
+                std::collections::HashMap::new();
+            let mut matches = 0usize;
+            for c in lib.iter() {
+                if score_component(c, &query_lc) > 0.0 {
+                    matches += 1;
+                    *counts.entry(category_of(&c.name)).or_insert(0) += 1;
+                }
+            }
+            (counts, matches)
+        };
+
+        // ── Category chips ──
+        // `All` + one chip per known category. Chips with zero matches
+        // are dimmed but still clickable (they'll just show an empty
+        // list). Scroll horizontally on narrow docks.
+        egui::ScrollArea::horizontal()
+            .id_salt("palette_categories")
+            .max_height(26.0)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let all_count = pre_filter_matches;
+                    if chip(
+                        ui,
+                        "All",
+                        all_chip_color,
+                        all_count,
+                        selected_category.is_none(),
+                    ) {
+                        new_category = None;
+                    }
+                    for &cat in CATEGORIES {
+                        let count = cat_counts.get(cat).copied().unwrap_or(0);
+                        if chip(
+                            ui,
+                            cat,
+                            category_color(cat, &theme),
+                            count,
+                            selected_category == Some(cat),
+                        ) {
+                            new_category = Some(cat);
+                        }
+                    }
+                });
+            });
+
+        // Header row: summary + clear-filter.
+        ui.horizontal(|ui| {
+            let visible = if let Some(cat) = selected_category {
+                cat_counts.get(cat).copied().unwrap_or(0)
+            } else {
+                pre_filter_matches
+            };
+            ui.label(
+                egui::RichText::new(if query_lc.is_empty() && selected_category.is_none() {
+                    format!("{} components", pre_filter_total)
+                } else {
+                    format!("{} of {} matching", visible, pre_filter_total)
+                })
+                .size(10.0)
+                .color(muted_text),
+            );
+            if (!query_lc.is_empty() || selected_category.is_some())
+                && lunco_workbench::icon_text_button(
+                    ui,
+                    lunco_workbench::UiIcon::Close,
+                    "Clear",
+                    "Clear the palette filter",
+                )
+                .clicked()
+            {
+                clear_all = true;
+            }
+        });
+        ui.separator();
+
+        // Write back state changes.
+        if clear_all {
+            ctx.resource_scope::<PaletteState, _>(|_, state| {
+                state.query.clear();
+                state.category = None;
+            });
+            // Skip subsequent rendering with stale query.
+            return;
+        }
+        if new_query != query || new_category != selected_category {
+            ctx.resource_scope::<PaletteState, _>(|_, state| {
+                state.query = new_query.clone();
+                state.category = new_category;
+            });
+        }
+        let query_lc = new_query.to_lowercase();
+        let selected_category = new_category;
+
+        // ── Filter + rank ──
+        // Score higher for:
+        //   +10 exact name match
+        //   +5 name starts with query
+        //   +3 name contains query
+        //   +1.5 path contains query
+        //   +1 category contains query
+        //   +0.5 description contains query
+        // Plus: category filter acts as a hard gate.
+        let mut scored: Vec<(&crate::index::ClassEntry, f32)> = lib
+            .iter()
+            .filter_map(|c| {
+                if let Some(cat) = selected_category {
+                    if category_of(&c.name) != cat {
+                        return None;
+                    }
+                }
+                let score = if query_lc.is_empty() {
+                    0.0
+                } else {
+                    score_component(c, &query_lc)
+                };
+                if query_lc.is_empty() || score > 0.0 {
+                    Some((*c, score))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        // Sort: higher score first, then by name for stable ordering.
+        scored.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0.short_name().cmp(b.0.short_name()))
+        });
+
+        let shown_cap = 100;
+        let shown = scored.len().min(shown_cap);
+
+        // ── Result list ──
+        // When the user is searching or filtered to a single category,
+        // render a flat (score-sorted) list — matches VS Code's
+        // search-results behaviour. With no filter, group by category
+        // into collapsible sections (Figma Assets style, OMEdit's
+        // component-tree style). Each section is closed by default
+        // except the first, keeping long category chains scannable.
+        let mut clicked: Option<crate::index::ClassEntry> = None;
+        let mut drag_started_def: Option<crate::index::ClassEntry> = None;
+        // Snapshot the currently-dragged def name so render_component_row
+        // can dim the source row.
+        let dragging_path: Option<String> = ctx
+            .resource::<ComponentDragPayload>()
+            .and_then(|p| p.def.as_ref().map(|d| d.name.clone()));
+        let is_searching = !query_lc.is_empty() || selected_category.is_some();
+
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                if is_searching {
+                    // Flat list (top-100 matches, score-ordered).
+                    for (comp, _score) in scored.iter().take(shown) {
+                        let being_dragged = dragging_path
+                            .as_deref()
+                            .map(|p| p == comp.name.as_str())
+                            .unwrap_or(false);
+                        let action = render_component_row(ui, comp, &theme, being_dragged);
+                        if action.clicked {
+                            clicked = Some((*comp).clone());
+                        }
+                        if action.drag_started {
+                            drag_started_def = Some((*comp).clone());
+                        }
+                    }
+                    if scored.len() > shown_cap {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "+ {} more — refine the search",
+                                scored.len() - shown_cap
+                            ))
+                            .size(10.0)
+                            .italics()
+                            .color(muted_text),
+                        );
+                    }
+                } else {
+                    // Grouped by top-level category — collapsible. First
+                    // group (highest-count Electrical usually) is
+                    // expanded by default so users see something
+                    // immediately.
+                    let mut groups: std::collections::BTreeMap<
+                        &'static str,
+                        Vec<&crate::index::ClassEntry>,
+                    > = std::collections::BTreeMap::new();
+                    for (comp, _score) in scored.iter() {
+                        let cat = category_of(&comp.name);
+                        groups.entry(cat).or_default().push(*comp);
+                    }
+                    // Render in CATEGORIES order so the color story is
+                    // consistent across sessions.
+                    let mut first = true;
+                    for &cat in CATEGORIES {
+                        let Some(list) = groups.get(cat) else {
+                            continue;
+                        };
+                        let header = egui::CollapsingHeader::new(
+                            egui::RichText::new(format!("{} ({})", cat, list.len()))
+                                .color(category_color(cat, &theme))
+                                .strong(),
+                        )
+                        .default_open(first)
+                        .id_salt(("palette_cat", cat));
+                        header.show(ui, |ui| {
+                            for comp in list {
+                                let being_dragged = dragging_path
+                                    .as_deref()
+                                    .map(|p| p == comp.name.as_str())
+                                    .unwrap_or(false);
+                                let action = render_component_row(ui, comp, &theme, being_dragged);
+                                if action.clicked {
+                                    clicked = Some((*comp).clone());
+                                }
+                                if action.drag_started {
+                                    drag_started_def = Some((*comp).clone());
+                                }
+                            }
+                        });
+                        first = false;
+                    }
+                }
+            });
+
+        // ── Side-effect: instantiate clicked component ──
+        //
+        // Fires `AddModelicaComponent` against the active doc + its
+        // drilled-in / detected class. The Reflect observer in
+        // `crate::api_edits` does the actual AST-level insertion via
+        // `ModelicaOp::AddComponent`, so the path is identical to what
+        // an external API caller would trigger (per AGENTS.md §4.1).
+        //
+        // Placement: simple modulo grid in Modelica diagram coords
+        // (-100..100). Cycles `(placement_counter % 3, /3)` so
+        // successive clicks don't all land on top of each other. The
+        // canvas's auto-arrange button lets users tidy after.
+        if let Some(def) = clicked {
+            ctx.trigger(PlaceComponentRequested {
+                def,
+                target_doc: None,
+                placement: None,
+            });
+        }
+
+        // Stash drag payload for the canvas drop handler. Overwrites
+        // any previous payload — only one drag can be active at a
+        // time. The canvas clears it on drop (hit or miss).
+        if let Some(def) = drag_started_def {
+            ctx.resource_scope::<ComponentDragPayload, _>(|_, payload| {
+                payload.def = Some(def);
+            });
+        }
+    }
+}
+
+/// Persistent counter for palette-driven placement so successive
+/// clicks step across a 3×N grid instead of stacking.
+#[derive(Resource, Default)]
+struct PalettePlacementCounter(u32);
+
+/// Shared insertion path. `target_doc = None` resolves to the active
+/// document (palette click). `placement = None` uses the persistent
+/// 3×N grid counter; `Some((mx, my))` drops at explicit Modelica
+/// coords (drag-and-drop drop point). Both call sites converge here
+/// so naming + class resolution + the actual `AddModelicaComponent`
+/// trigger live in one place.
+pub(crate) fn place_component(
+    world: &mut World,
+    def: &crate::index::ClassEntry,
+    target_doc: Option<lunco_doc::DocumentId>,
+    placement: Option<(f32, f32)>,
+) {
+    // Resolve target doc — explicit override (drop site) wins,
+    // otherwise fall back to the active editor tab. No active doc →
+    // no class to add into; we silently no-op.
+    let active_doc = target_doc.or_else(|| {
+        world
+            .get_resource::<lunco_workspace::WorkspaceResource>()
+            .and_then(|ws| ws.active_document)
+    });
+    let Some(doc_id) = active_doc else {
+        bevy::log::info!(
+            "[Palette] insert of `{}` ignored — no active document",
+            def.name
+        );
+        return;
+    };
+    // Note: no pre-check for read-only here. The document layer
+    // (`ModelicaDocument::apply`) rejects ops on read-only origins
+    // and `apply_ops` surfaces a one-shot banner. Pre-checking in
+    // panels would duplicate the policy and inevitably drift.
+
+    // Resolve target class — MUST match the class the canvas is actually
+    // projecting, or the component lands in a different class than the one
+    // on screen (added comps "don't appear", and the diagram's placement /
+    // move ops then target the wrong class → "component `x` not found in
+    // class `y`"). The projection resolves its target via
+    // `default_simulation_class` (drilled pin → run-target override →
+    // tier-ranked sim candidate); route through the SAME helper so add and
+    // view never disagree. First-non-package is only a last resort for docs
+    // with no simulatable candidate (where the canvas shows nothing anyway).
+    let class = crate::sim_default::default_simulation_class(world, doc_id)
+        .or_else(|| {
+            // Fallback to the document's first non-package class, read
+            // via the per-doc Index (sees optimistic structural patches
+            // and avoids walking the AST every palette click).
+            let registry = world.resource::<crate::state::ModelicaDocumentRegistry>();
+            let host = registry.host(doc_id)?;
+            host.document()
+                .index()
+                .classes
+                .values()
+                .find(|c| !matches!(c.kind, crate::index::ClassKind::Package))
+                .map(|c| c.name.clone())
+        })
+        .unwrap_or_default();
+    if class.is_empty() {
+        bevy::log::info!(
+            "[Palette] click on `{}` ignored — could not resolve target class on doc {}",
+            def.name,
+            doc_id.raw()
+        );
+        return;
+    }
+
+    // Increment grid counter (always — also used as the name suffix
+    // so dropped components get distinct names too) and resolve
+    // placement: explicit drop-site wins, else step the grid.
+    let counter_val = {
+        let mut counter =
+            world.get_resource_or_insert_with::<PalettePlacementCounter>(Default::default);
+        counter.0 = counter.0.saturating_add(1);
+        counter.0
+    };
+    let (x, y) = match placement {
+        Some(xy) => xy,
+        None => {
+            let n = counter_val;
+            (
+                -50.0 + ((n % 3) as f32) * 30.0,
+                50.0 - ((n / 3) as f32) * 30.0,
+            )
+        }
+    };
+
+    // Synthesise a unique-ish instance name. Modelica allows letters,
+    // digits, underscore — start lower-case. The user can rename via
+    // the inspector after placement.
+    let short = def.name.split('.').next_back().unwrap_or(&def.name);
+    let mut base = String::with_capacity(short.len());
+    for (i, ch) in short.chars().enumerate() {
+        if i == 0 {
+            base.push(ch.to_ascii_lowercase());
+        } else if ch.is_ascii_alphanumeric() || ch == '_' {
+            base.push(ch);
+        }
+    }
+    if base.is_empty() {
+        base.push_str("inst");
+    }
+    let name = format!("{base}{counter_val}");
+
+    world
+        .commands()
+        .trigger(crate::api::component::AddModelicaComponent {
+            doc_id,
+            class,
+            type_name: def.name.clone(),
+            name,
+            x,
+            y,
+            width: 20.0,
+            height: 20.0,
+            // Local mouse-drag from the palette: zero means
+            // "use default" inside the observer, which animates.
+            // Drag-add is a *Local* origin in our model; default
+            // animation gives the user feedback on what landed
+            // even though they initiated the action.
+            animation_ms: 0,
+        });
+}
+
+/// Per-row interaction outcome from [`render_component_row`].
+#[derive(Default, Clone, Copy)]
+struct RowAction {
+    /// User completed a click (press + release without drag motion).
+    /// Triggers grid-placement insertion via [`place_component`].
+    clicked: bool,
+    /// User just started dragging this row this frame. The caller
+    /// stashes a [`ComponentDragPayload`] so the canvas can preview
+    /// + drop.
+    drag_started: bool,
+}
+
+/// Draw one component row (category dot + name + subtitle). Reacts
+/// to both click (immediate grid-placement) and drag (stash payload
+/// for canvas drop). Used by both the flat-search list and the
+/// grouped-by-category list.
+fn render_component_row(
+    ui: &mut egui::Ui,
+    comp: &crate::index::ClassEntry,
+    theme: &lunco_theme::Theme,
+    is_being_dragged: bool,
+) -> RowAction {
+    let cat_name = category_of(&comp.name);
+    let cat_color = category_color(cat_name, theme);
+    let muted = theme.tokens.text_subdued;
+
+    // Dim the row while it's the active drag source so the user has
+    // a clear "this is the thing I'm dragging" signal alongside the
+    // canvas ghost preview.
+    if is_being_dragged {
+        ui.set_opacity(0.4);
+    }
+
+    let resp = ui
+        .horizontal(|ui| {
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+            ui.painter().circle_filled(rect.center(), 4.0, cat_color);
+
+            ui.vertical(|ui| {
+                // `selectable(false)` is critical: by default egui
+                // Labels react to click+drag with text-selection,
+                // which steals the row's drag gesture and the user
+                // ends up highlighting characters instead of starting
+                // a palette → canvas drag.
+                ui.add(
+                    egui::Label::new(egui::RichText::new(comp.short_name()).size(12.0))
+                        .selectable(false),
+                );
+                ui.add(
+                    egui::Label::new(egui::RichText::new(&comp.category).size(9.0).color(muted))
+                        .selectable(false),
+                );
+            });
+        })
+        .response
+        .interact(egui::Sense::click_and_drag());
+
+    if is_being_dragged {
+        ui.set_opacity(1.0);
+    }
+
+    let tooltip = if comp.description.is_empty() {
+        comp.name.as_str()
+    } else {
+        comp.description.as_str()
+    };
+    let resp = resp.on_hover_text(format!(
+        "{}\n\n{}\n\nClick to add at grid · drag onto canvas to place at cursor.",
+        comp.name, tooltip
+    ));
+
+    RowAction {
+        clicked: resp.clicked(),
+        drag_started: resp.drag_started(),
+    }
+}
+
+/// Draw one category chip. Returns `true` if the user just clicked
+/// it. Selected chips render with a tinted background; non-selected
+/// chips are outlined. Count is suffixed in parentheses.
+fn chip(ui: &mut egui::Ui, name: &str, color: egui::Color32, count: usize, selected: bool) -> bool {
+    // Tone down the fill for non-selected chips.
+    let fill = if selected {
+        color.linear_multiply(0.30)
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    let stroke_color = if count == 0 { color.alpha(90) } else { color };
+    let label = if count > 0 {
+        format!("{} ({})", name, count)
+    } else {
+        name.to_string()
+    };
+    // Selected chips paint white-on-dark regardless of theme mode:
+    // the fill above is `color.linear_multiply(0.30)` — multiplying
+    // any palette entry by 0.3 always lands in the "very dark"
+    // quadrant, so a white glyph stays readable in both Mocha and
+    // Latte. Non-selected chips inherit the category `color` itself,
+    // which is already a schematic-token value.
+    let resp = ui.add(
+        egui::Button::new(egui::RichText::new(label).size(11.0).color(if selected {
+            egui::Color32::WHITE
+        } else {
+            color
+        }))
+        .fill(fill)
+        .stroke(egui::Stroke::new(1.0, stroke_color)),
+    );
+    resp.clicked()
+}
+
+/// Score a component against a lowercased query. Higher = better.
+/// Returns 0 for no match.
+fn score_component(c: &crate::index::ClassEntry, query_lc: &str) -> f32 {
+    let name_lc = c.short_name().to_lowercase();
+    let path_lc = c.name.to_lowercase();
+    let cat_lc = c.category.to_lowercase();
+    let desc_lc = c.description.to_lowercase();
+
+    if name_lc == query_lc {
+        return 10.0;
+    }
+    let mut score = 0.0;
+    if name_lc.starts_with(query_lc) {
+        score += 5.0;
+    }
+    if name_lc.contains(query_lc) {
+        score += 3.0;
+    }
+    if path_lc.contains(query_lc) {
+        score += 1.5;
+    }
+    if cat_lc.contains(query_lc) {
+        score += 1.0;
+    }
+    if desc_lc.contains(query_lc) {
+        score += 0.5;
+    }
+    score
+}

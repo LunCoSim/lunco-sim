@@ -172,7 +172,7 @@ recipes and their acceptance scenes stay in the owning Twin.
    to select that target without typing the Cargo target name:
 
    ```bash
-   ./scripts/run_rust_tests.sh -p lunco-modelica --module ast_mut_topology -- --nocapture
+   ./scripts/run_rust_tests.sh -p lunco-modelica-core --module ast_mut_topology -- --nocapture
    ./scripts/run_rust_tests.sh -p lunco-usd-sim --filter usd_connection_mechanics::rewire_derives_at_load_and_clears
    ```
 
@@ -286,7 +286,7 @@ exist:
   boundary validation; Rust owns the ABI firewall, while policy-specific
   generated topology checks can move only when a live inspectable result is
   available;
-- `lunco-cosim` and `lunco-modelica` tests that construct participants directly;
+- `lunco-cosim` and `lunco-modelica-core` tests that construct participants directly;
   these protect generic coupling, parser and solver mechanisms, not authored
   mission policy;
 - avatar teleport/grid tests, render-to-physics writeback tests, and USD

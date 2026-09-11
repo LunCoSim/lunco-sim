@@ -16,7 +16,7 @@
 #
 # Failure modes this gate has caught historically:
 #   * lunco-api dep dragging axum/tokio/mio into the wasm build
-#   * lunco-modelica MSL preloader binding to std::thread
+#   * lunco-modelica-core MSL preloader binding to std::thread
 #   * UsdComposer's sublayer reads through std::fs::read_to_string
 #   * crossbeam-channel unconditionally pulled into lunco-scripting
 #
@@ -65,12 +65,12 @@ build_one() {
 }
 
 # Build both wasm binaries. Failure short-circuits via `set -e`.
-build_one lunica        lunco-modelica
+build_one lunica        lunco-modelica-ui
 build_one luncosim       lunco-luncosim
 # The companion worker bundle for lunica. Off-thread Modelica compile
 # can break in different ways than the main UI bundle (different deps
 # active, different cfg gates), so build it explicitly.
-build_one lunica_worker lunco-modelica
+build_one lunica_worker lunco-modelica-core
 
 echo
 echo "── wasm build gate passed ──"

@@ -20,13 +20,11 @@ lunco-usd-avian = { path = "../lunco-usd-avian" }
 # dep GRAPH no longer reaches wgpu either. Keep it that way.
 lunco-materials = { path = "../lunco-materials" }
 lunco-render = { path = "../lunco-render" }
-lunco-settings = { path = "../lunco-settings" }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-core = { path = "../lunco-core" }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-time = { path = "../lunco-time" }
 lunco-environment = { path = "../lunco-environment" }
-lunco-hardware = { path = "../lunco-hardware" }
 # Only the camera components (FreeFlightCamera/OrbitCamera/…) — egui-free.
 # `default-features = false` keeps avatar's egui UI (+ workbench shell) out of a
 # headless server build.
@@ -51,9 +49,9 @@ lunco-physics = { path = "../lunco-physics" }
 lunco-signal = { path = "../lunco-signal" }
 lunco-telemetry = { path = "../lunco-telemetry" }
 # Modelica runtime bridge. Pure parse/AST extraction is kept in the smaller
-# `lunco-modelica-ast` package below; the remaining dependency is the solver
-# worker and Bevy runtime integration.
-lunco-modelica = { path = "../lunco-modelica", default-features = false }
+# `lunco-modelica-ast` package below; this dependency is the headless solver
+# worker and Bevy runtime integration, not the workbench UI facade.
+lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 lunco-scripting = { path = "../lunco-scripting" }
 lunco-doc = { path = "../lunco-doc" }

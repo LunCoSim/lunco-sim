@@ -1,0 +1,33 @@
+[package]
+name = "lunco-luncosim-exposures"
+version = "0.1.0-dev"
+edition = "2021"
+license.workspace = true
+description = "Headless runtime exposure projection for the LunCoSim application"
+
+[dependencies]
+avian3d = { workspace = true }
+bevy = { workspace = true }
+big_space = { workspace = true }
+lunco-autopilot = { path = "../lunco-autopilot" }
+lunco-celestial = { path = "../lunco-celestial", default-features = false }
+lunco-controller = { path = "../lunco-controller" }
+lunco-core = { path = "../lunco-core" }
+lunco-cosim = { path = "../lunco-cosim" }
+lunco-hooks = { path = "../lunco-hooks" }
+lunco-mobility = { path = "../lunco-mobility" }
+lunco-networking = { path = "../lunco-networking", default-features = false, optional = true }
+lunco-scene-commands = { path = "../lunco-scene-commands" }
+lunco-signal = { path = "../lunco-signal" }
+lunco-terrain-surface = { path = "../lunco-terrain-surface" }
+lunco-twin = { path = "../lunco-twin" }
+lunco-usd = { path = "../lunco-usd", default-features = false }
+lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+lunco-workspace = { path = "../lunco-workspace" }
+
+[features]
+default = []
+networking = ["dep:lunco-networking"]
+
+[lints]
+workspace = true

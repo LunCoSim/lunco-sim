@@ -13,7 +13,7 @@
 //! ## Why a registry instead of a hard-coded list
 //!
 //! `lunco-workbench` cannot depend on the domain crates without
-//! inverting the dependency graph (`lunco-modelica` already depends on
+//! inverting the dependency graph (`lunco-modelica-core` already depends on
 //! us). So domain crates push their section impls into the registry
 //! at plugin-build time:
 //!
@@ -34,7 +34,7 @@
 //! ## What's *not* here
 //!
 //! - The Modelica-specific class-tree section — that ships in
-//!   `lunco-modelica` as `ModelicaSection`, registered by its plugin.
+//!   `lunco-modelica-core` as `ModelicaSection`, registered by its plugin.
 
 use bevy::prelude::*;
 use bevy_egui::egui;
@@ -88,7 +88,7 @@ pub fn render_search_bar(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("Find").strong());
         ui.add(
-            egui::TextEdit::singleline(&mut query.text)
+            crate::text_editor::singleline(&mut query.text)
                 .hint_text("names, paths, or types")
                 .desired_width(160.0),
         );
@@ -171,7 +171,7 @@ impl BrowserScope {
 /// in-memory. Surfaced in the Files section so the workspace
 /// view stays stable across Save (a Save shouldn't make the
 /// document vanish from the list). Populated by domain plugins
-/// (e.g. lunco-modelica scans its document registry).
+/// (e.g. lunco-modelica-core scans its document registry).
 #[derive(Debug, Clone)]
 pub struct UnsavedDocEntry {
     /// Document identity. Used by the Files section to dispatch

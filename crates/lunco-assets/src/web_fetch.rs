@@ -1,10 +1,10 @@
 //! Generic browser fetch + Cache-Storage primitives (`target_arch = "wasm32"`).
 //!
-//! Extracted from lunco-modelica's MSL fetcher so **every** bundle distributor
+//! Extracted from lunco-modelica-core's MSL fetcher so **every** bundle distributor
 //! shares one implementation of "download a content-hashed blob over HTTP, cache
 //! it in the browser's Cache Storage, and unpack it". Consumers today:
 //!
-//! - **MSL** (`lunco-modelica`) — the Modelica Standard Library bundle.
+//! - **MSL** (`lunco-modelica-core`) — the Modelica Standard Library bundle.
 //! - **Twin terrain assets** (`lunco-terrain-surface`) — the server serves its
 //!   `twins/` directory over HTTP (staged under `assets/twins/…` next to the
 //!   wasm) and the browser client fetches the DEM heightmap/metadata from it —

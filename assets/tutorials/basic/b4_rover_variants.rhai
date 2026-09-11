@@ -23,9 +23,9 @@ fn show(s, i) {
 }
 
 fn on_start(me) {
-    // The world this lesson teaches in is DECLARED in the curriculum layer
-    // (a `payload` arc) and mounted by the launcher before this runs.
-    // All three profile references are composed by the curriculum payload before
+    // The optional world is selected by the catalog and mounted by the generic
+    // launcher before this runs.
+    // All three profile references are composed by the scene before
     // this script starts. The script owns lesson state only; scene composition
     // stays in USD and cannot be lost to catalog-load timing.
     this.i = 0;
@@ -35,9 +35,9 @@ fn on_start(me) {
 
 fn on_event(me, evt) {
     let s = steps();
-    if evt.name == "cmd:TutorialNext" { this.i += 1; }
-    else if evt.name == "cmd:TutorialBack" { if this.i > 0 { this.i -= 1; } }
-    else if evt.name == "cmd:TutorialSkip" { this.i = s.len(); }
+    if evt.name == "cmd:GuidedNext" { this.i += 1; }
+    else if evt.name == "cmd:GuidedBack" { if this.i > 0 { this.i -= 1; } }
+    else if evt.name == "cmd:GuidedSkip" { this.i = s.len(); }
     else { return; }
 
     if this.i >= s.len() {

@@ -408,7 +408,7 @@ fn modelica_roots(twin: &lunco_workspace::Twin) -> Vec<PathBuf> {
         .and_then(|manifest| manifest.modelica.as_ref())
         .map(|modelica| modelica.paths.clone());
     let paths = declared
-        .unwrap_or_else(|| lunco_modelica::source_roots::discover_twin_modelica_paths(twin));
+        .unwrap_or_else(|| lunco_modelica_core::source_roots::discover_twin_modelica_paths(twin));
     paths
         .into_iter()
         .filter(|path| lunco_twin::is_safe_relative_path(path))

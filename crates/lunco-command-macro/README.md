@@ -83,4 +83,4 @@ pub struct Foo { pub doc_id: u64 }   // use DocumentId
 
 - [lunco-core](../lunco-core/) — re-exports the macros
 - [AGENTS.md §4.2](../../AGENTS.md) — canonical pattern + when NOT to use `#[Command]`
-- [lunco-mobility](../lunco-mobility/), [lunco-modelica](../lunco-modelica/) — every typed command in those crates uses this triad
+- [lunco-mobility](../lunco-mobility/), [lunco-modelica-core](../lunco-modelica-core/) — every typed command in those crates uses this triad

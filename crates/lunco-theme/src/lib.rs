@@ -26,8 +26,8 @@
 //! **optional and behind their existing `ui` feature** — which is already how
 //! `lunco-networking` gates egui
 //! (`ui = ["networking", "dep:bevy_egui", "workbench"]`, CQ-601).
-//! `lunco-tutorial` keeps this dependency optional and hangs it from its `ui`
-//! feature, so headless tutorial execution does not pull the render stack.
+//! The application lesson menu keeps this dependency on its UI path, so
+//! headless scenario execution does not pull the render stack.
 //!
 //! ## The split, when it is worth doing
 //!

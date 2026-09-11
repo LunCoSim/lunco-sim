@@ -31,7 +31,7 @@
 //! the student got there — click it or use the authored handoff path.
 
 fn on_start(me) {
-    // The curriculum payload is mounted before this script starts. The scene's
+    // The catalog-selected scene is mounted before this script starts. The scene's
     // embedded scenarios do the flying; mission() coaches over their events.
     hint("Watch the lander touch down. Then take the rover and drive through the gates.");
     notify_kind("Tutorial: Lander & Rover Mission", "info");

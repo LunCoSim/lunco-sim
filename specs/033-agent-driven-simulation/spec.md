@@ -193,7 +193,7 @@ So that I can write the workflow as a script and run it under CI without the UI 
 
 ### Key Entities
 
-- **`FindModelProvider` (new)**: An `ApiQueryProvider` that aggregates the four sources, applies fuzzy-match scoring, and emits a unified ranked list. Implementation should live in `lunco-modelica` initially (reuses the bundled + MSL indexes) but extension points allow other domains (USD, SysML) to contribute search results in the future.
+- **`FindModelProvider` (new)**: An `ApiQueryProvider` that aggregates the four sources, applies fuzzy-match scoring, and emits a unified ranked list. Implementation should live in `lunco-modelica-core` initially (reuses the bundled + MSL indexes) but extension points allow other domains (USD, SysML) to contribute search results in the future.
 - **`DescribeModelProvider` (new)**: An `ApiQueryProvider` that takes a `doc_id`, looks up the `ModelicaDocument`, runs the AST extractors that already exist (`collect_inputs_with_defaults_from_classes`, `collect_parameter_bounds_from_classes`, `collect_descriptions_from_classes`), and projects the result to JSON.
 - **`SetInputCommand` (new Reflect Event)**: A fire-and-forget command in the existing typed-command style. Forwards to the simulation worker's `UpdateInputs` channel, reusing the squashing logic the worker already implements for live parameter updates.
 - **`SnapshotVariablesProvider` (new `ApiQueryProvider`)**: Reads the current state vector held by the worker thread for `doc_id`, projects the requested names to JSON. Returns an empty payload (with `t: null`) if the doc has no compiled stepper yet.
@@ -219,7 +219,7 @@ So that I can write the workflow as a script and run it under CI without the UI 
 
 ## Assumptions
 
-- The simulation worker already supports between-step input updates (verified — `UpdateParameters` exists in `crates/lunco-modelica/src/lib.rs` and the worker squashes them).
+- The simulation worker already supports between-step input updates (verified — `UpdateParameters` exists in `crates/lunco-modelica-core/src/lib.rs` and the worker squashes them).
 - AST input/parameter extraction already returns enough metadata (verified — `ast_extract::collect_*` functions return name, default, bounds, description).
 - MSL search is acceptable as a substring match initially; better ranking (token-overlap, classname-prefix preference) is an iteration on `FindModelProvider`, not a re-architecture.
 

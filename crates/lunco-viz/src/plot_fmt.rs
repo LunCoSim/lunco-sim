@@ -1,6 +1,6 @@
 //! Shared `egui_plot` formatting helpers used by every plot surface
 //! (the live `LinePlot` here in lunco-viz and the experiments overlay
-//! in lunco-modelica). Keeping them in one place means hover-readout
+//! in lunco-modelica-core). Keeping them in one place means hover-readout
 //! and log-scale behave identically across both.
 
 use egui_plot::PlotPoint;

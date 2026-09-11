@@ -179,6 +179,6 @@ lunco-doc            ← this crate (deps: lunco-core, bevy_reflect, serde)
    │ used by
    ├── lunco-twin    ← Twin container, DocumentRegistry, manifest
    ├── lunco-ui      ← DocumentView<D> trait + widgets
-   └── domain crates (lunco-modelica, lunco-usd, ...) — each defines
+   └── domain crates (lunco-modelica-core, lunco-usd, ...) — each defines
                      its own Document + Op types
 ```

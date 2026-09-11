@@ -46,15 +46,15 @@ fn on_tick(me) {
     // Events arrive on the next tick. One event per tick makes the expected
     // card transitions deterministic and keeps the wrong-event assertion
     // visible in the authored sequence.
-    if this.step == 0 { emit("cmd:TutorialNext", 0); }
-    else if this.step == 1 { emit("cmd:TutorialNext", 0); }
-    else if this.step == 2 { emit("cmd:TutorialNext", 0); }
+    if this.step == 0 { emit("cmd:GuidedNext", 0); }
+    else if this.step == 1 { emit("cmd:GuidedNext", 0); }
+    else if this.step == 2 { emit("cmd:GuidedNext", 0); }
     else if this.step == 3 { emit("cmd:SelectEntity", 0); }
     else if this.step == 4 { emit("cmd:SpawnEntity", 0); }
     else if this.step == 5 { emit("cmd:PossessVessel", 0); }
     else if this.step == 6 { emit("cmd:ReleaseVessel", 0); }
-    else if this.step == 7 { emit("cmd:TutorialNext", 0); }
-    else if this.step == 8 { emit("cmd:TutorialNext", 0); }
+    else if this.step == 7 { emit("cmd:GuidedNext", 0); }
+    else if this.step == 8 { emit("cmd:GuidedNext", 0); }
     else if this.step > 9 && this.elapsed > 5.0 {
         this.done = true;
         verdict(false, "Sandbox onboarding did not complete");

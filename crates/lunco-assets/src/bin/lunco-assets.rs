@@ -465,7 +465,7 @@ fn print_usage() {
     println!("  kind = \"normalmap\" derive a world-space normal-map PNG from a DTM crop");
     println!();
     println!("Examples:");
-    println!("  cargo run -p lunco-assets -- download -p lunco-modelica");
+    println!("  cargo run -p lunco-assets -- download -p lunco-modelica-core");
     println!("  cargo run -p lunco-assets -- download -a dejavu_sans");
     println!("  cargo run -p lunco-assets -- download -t /path/to/my_twin");
     println!("  cargo run -p lunco-assets -- process  -t /path/to/my_twin");

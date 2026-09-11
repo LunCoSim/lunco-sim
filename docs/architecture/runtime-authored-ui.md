@@ -68,8 +68,9 @@ The shipped luncosim surfaces live in [`assets/ui/`](../../assets/ui/):
   reference.
 
 The runtime bridge is in `crates/lunco-luncosim/src/ui/runtime_exposure.rs`.
-Runtime snapshot projection is in `runtime_exposures.rs`; it is intentionally
-independent of domain calculations. Modelica and Rhai own domain values and
+Runtime snapshot projection is in
+`crates/lunco-luncosim-exposures/src/lib.rs`; it is intentionally independent
+of domain calculations. Modelica and Rhai own domain values and
 policy, while `lunco-workbench` supplies the
 egui host camera, dock rectangles, and scene-pick ownership.
 

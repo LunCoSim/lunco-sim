@@ -15,7 +15,7 @@
 //! the response back to the originating client.
 //!
 //! Why types live in `lunco-core` and not `lunco-networking`: domain
-//! crates (`lunco-doc`, `lunco-modelica`, `lunco-mobility`) need to
+//! crates (`lunco-doc`, `lunco-modelica-core`, `lunco-mobility`) need to
 //! talk about mutations even when the networking crate isn't in the
 //! build. `lunco-networking` will add transport on top, not the
 //! envelope itself.

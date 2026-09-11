@@ -68,7 +68,7 @@ variant; consumer code flips one line.
 - **`lunco-workspace`**: Session state references documents and twins
   by `StorageHandle`, so a session can mix native files, remote twins,
   and OPFS-backed scratch docs in one window.
-- **`lunco-modelica::ui::commands::on_save_as_document`**: Invokes
+- **`lunco-modelica-ui::ui::commands::on_save_as_document`**: Invokes
   `FileStorage::pick_save` + `FileStorage::write`; the only native-ish
   code is the backend choice.
 

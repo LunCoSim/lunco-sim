@@ -2,9 +2,10 @@
 
 > Status: Design · Audience: contributors on terrain streaming, LOD, and bakes
 >
-> The measurement steps are live tests:
-> `lunco-terrain-surface/tests/precompute_sparse_set.rs` (step 1) and
-> `precompute_bake_time.rs` (step 2).
+> The measurements below are historical design evidence, not a runtime or CI test. They were
+> deliberately removed from the Rust test suite because they depended on a private DEM checkout
+> and benchmarked implementation internals. Re-run this investigation as an explicit benchmark
+> when terrain data or the bake pipeline changes.
 
 Target architecture for the streamed terrain. It replaces the current
 runtime-bake selection path with a coarse resident cover and progressive
@@ -111,7 +112,7 @@ All of it exists only to hide bake latency, and none of it survives having no la
 
 ## Measured: there is no sparsity
 
-`tests/precompute_sparse_set.rs`, against the real moonbase DEM (3200², ±8000 m, 5.00 m
+The original sparse-set measurement, against the real moonbase DEM (3200², ±8000 m, 5.00 m
 posting), error floor 0.05 m, max depth 8:
 
 ```
@@ -161,7 +162,7 @@ deep tile degrades to blurry (MSFS's "best currently available data") instead of
 
 ## Measured: bake the coarse base at scene open, async
 
-`tests/precompute_bake_time.rs`, real DEM, real `bake_tile_mesh`, single-threaded:
+The original bake-time measurement used the real DEM and `bake_tile_mesh` single-threaded:
 
 ```
  depth    tiles     total ms      ms/tile

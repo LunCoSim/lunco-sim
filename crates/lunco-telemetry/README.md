@@ -12,7 +12,7 @@ This crate implements the simulation's **"Optical Fibers"**—a generic, "No-Cod
 - **Headless Monitoring** — Provides the primary "eyes-and-ears" for simulations running without a GPU.
 - **Mission Control Bridge** — Facilitates broadcasting data to external Mission Control systems (YAMCS, XTCE).
 
-Modelica runtime variables are retained by `lunco-modelica` in the same `SignalRegistry` using
+Modelica runtime variables are retained by `lunco-modelica-core` in the same `SignalRegistry` using
 these settings. This crate owns the generic authored/reflection channel sampler; it does not
 create per-variable tags or require a plotting panel for solver state to be inspectable.
 

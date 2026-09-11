@@ -23,10 +23,10 @@ fn on_start(me) {
 
 fn on_event(me, evt) {
     let s = steps();
-    if evt.name == "cmd:TutorialNext"      { this.i += 1; }
-    else if evt.name == "cmd:TutorialBack" { if this.i > 0 { this.i -= 1; } }
-    else if evt.name == "cmd:TutorialSkip" { this.i = s.len(); }
-    else if evt.name == "cmd:TutorialGoto" { this.i = evt.value; }
+    if evt.name == "cmd:GuidedNext"      { this.i += 1; }
+    else if evt.name == "cmd:GuidedBack" { if this.i > 0 { this.i -= 1; } }
+    else if evt.name == "cmd:GuidedSkip" { this.i = s.len(); }
+    else if evt.name == "cmd:GuidedGoto" { this.i = evt.value; }
     else { return; }
 
     if this.i >= s.len() {

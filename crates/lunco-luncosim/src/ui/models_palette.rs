@@ -33,6 +33,7 @@ impl ProgramChoice {
         }
     }
 
+    #[cfg(not(feature = "python"))]
     fn is_python(&self) -> bool {
         self.extension == "py"
     }
@@ -272,15 +273,22 @@ fn models_palette_content(
 
     for choice in &entries {
         let selected = pending.as_ref() == Some(choice);
-        let mut label = format!("{}  ({})", choice.label, choice.language_label());
-        let mut enabled = true;
-        if choice.is_python() {
-            #[cfg(not(feature = "python"))]
-            {
+        #[cfg(feature = "python")]
+        let (label, enabled) = (
+            format!("{}  ({})", choice.label, choice.language_label()),
+            true,
+        );
+        #[cfg(not(feature = "python"))]
+        let (label, enabled) = {
+            let mut label = format!("{}  ({})", choice.label, choice.language_label());
+            let enabled = if choice.is_python() {
                 label.push_str(" [requires Python backend]");
-                enabled = false;
-            }
-        }
+                false
+            } else {
+                true
+            };
+            (label, enabled)
+        };
         let button = egui::Button::new(label)
             .selected(selected)
             .min_size(egui::vec2(ui.available_width(), 24.0));

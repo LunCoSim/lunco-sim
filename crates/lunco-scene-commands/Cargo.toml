@@ -41,7 +41,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 lunco-api = { path = "../lunco-api", default-features = false }
 lunco-mobility = { path = "../lunco-mobility" }
-lunco-obstacle-field = { path = "../lunco-obstacle-field" }
 lunco-usd = { path = "../lunco-usd", default-features = false }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 lunco-usd-compose = { path = "../lunco-usd-compose" }
@@ -61,7 +60,6 @@ lunco-hooks = { path = "../lunco-hooks" }
 lunco-hooks-rhai = { path = "../lunco-hooks-rhai" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-materials = { path = "../lunco-materials" }
-lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-physics = { path = "../lunco-physics" }
 lunco-avatar = { path = "../lunco-avatar", default-features = false }
 lunco-autopilot = { path = "../lunco-autopilot", default-features = false }
@@ -70,11 +68,11 @@ lunco-settings = { path = "../lunco-settings" }
 lunco-storage = { path = "../lunco-storage" }
 # `ValidateAsset` (validate.rs) — the parse-only pre-flight. The small
 # `lunco-modelica-ast` package owns the SAME AST extraction and normalized parse
-# boundary the cosim dispatcher runs; `lunco-modelica` remains for source-root
+# boundary the cosim dispatcher runs; `lunco-modelica-core` remains for source-root
 # discovery; `rhai` for compile-only script checks. Both are already in this
 # crate's tree via
 # `lunco-usd-sim`/`lunco-scripting` — no new leaves.
-lunco-modelica = { path = "../lunco-modelica", default-features = false }
+lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 rhai = { workspace = true }
 # The catalogue scan is async (reading a shipped asset on the web is an HTTP

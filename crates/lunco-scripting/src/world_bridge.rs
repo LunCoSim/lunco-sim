@@ -439,8 +439,8 @@ fn compile_with_script_consts(engine: &Engine, source: &str) -> Result<AST, rhai
 /// [`compile_with_script_consts`] is the other half: it folds bare `X`. Neither
 /// subsumes the other, and both apply to EVERY script — scenario, lesson, inline
 /// `info:sourceCode` — because they sit on the single compile path in
-/// [`ScriptRuntime::compile`]. Tutorials are not special: `StartTutorial` triggers
-/// `RunScenario`, which lands here like anything else.
+/// [`ScriptRuntime::compile`]. Authored lessons are not special: the application
+/// menu submits `RunScenarioAsset`, which lands here like any other scenario.
 ///
 /// ⚠ COST: a hoisted `const` re-evaluates on every hook call. That is free for the
 /// literals this is meant for and wrong for `const X = expensive();` — but such a
@@ -3304,7 +3304,7 @@ mod tests {
 
     /// The end-to-end contract: a top-level `const` read as `global::X` inside a
     /// `fn` resolves. This is what every Space School lesson depends on, and it is
-    /// the SAME path scenarios use — `StartTutorial` triggers `RunScenario`.
+    /// the SAME path scenarios use — `RunScenarioAsset` attaches the source.
     #[test]
     fn a_fn_can_read_a_top_level_const_via_global() {
         let engine = rhai::Engine::new();

@@ -616,7 +616,6 @@ impl Plugin for SceneEditUiPlugin {
                             description: "Zoom in / out",
                         },
                     ],
-                    has_tour: false,
                 },
             )
             .register_perspective(BuildPerspective)
@@ -659,7 +658,6 @@ impl Plugin for SceneEditUiPlugin {
                             description: "Zoom in / out",
                         },
                     ],
-                    has_tour: false,
                 },
             )
             .register_perspective(TerrainPerspective)
@@ -705,7 +703,6 @@ impl Plugin for SceneEditUiPlugin {
                             description: "Orbit / rotate the camera",
                         },
                     ],
-                    has_tour: false,
                 },
             )
             .register_perspective(EditorPerspective)
@@ -753,7 +750,6 @@ impl Plugin for SceneEditUiPlugin {
                             description: "Orbit / rotate the camera",
                         },
                     ],
-                    has_tour: false,
                 },
             );
 
@@ -1166,8 +1162,8 @@ impl Perspective for BuildPerspective {
             ..Default::default()
         }
         .open_instance(
-            lunco_modelica::ui::panels::graphs::MODELICA_PLOT_KIND,
-            lunco_modelica::ui::viz::DEFAULT_MODELICA_GRAPH.0,
+            lunco_modelica_ui::ui::panels::graphs::MODELICA_PLOT_KIND,
+            lunco_modelica_ui::ui::viz::DEFAULT_MODELICA_GRAPH.0,
             PanelSlot::Bottom,
         )
     }
@@ -1302,11 +1298,11 @@ mod tests {
         assert_eq!(plan.instance_tabs.len(), 1);
         assert_eq!(
             plan.instance_tabs[0].kind,
-            lunco_modelica::ui::panels::graphs::MODELICA_PLOT_KIND
+            lunco_modelica_ui::ui::panels::graphs::MODELICA_PLOT_KIND
         );
         assert_eq!(
             plan.instance_tabs[0].instance,
-            lunco_modelica::ui::viz::DEFAULT_MODELICA_GRAPH.0
+            lunco_modelica_ui::ui::viz::DEFAULT_MODELICA_GRAPH.0
         );
         assert_eq!(plan.instance_tabs[0].slot, PanelSlot::Bottom);
     }

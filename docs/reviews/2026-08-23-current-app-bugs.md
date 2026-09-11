@@ -29,7 +29,7 @@ when its source was an external boundary output (for example
 the mobility path move while the generated electrical motor demand stayed at
 zero.
 
-The runtime HUD projector (`lunco-luncosim/src/runtime_exposures.rs`) therefore no
+The runtime HUD projector (`lunco-luncosim-exposures/src/lib.rs`) therefore no
 longer performs a domain-specific power lookup.
 
 **Implementation:** the reusable Battery component now authors SOC,
@@ -228,16 +228,15 @@ net flow, SOC, and live discharge/use power while driving.
 
 ### APP-12 — a presentation contract error is treated as tutorial termination
 
-`TutorialTargetUnavailable` is raised when an authored help anchor is absent.
-`lunco-tutorial` converts it to `TUTORIAL_FAILED` and immediately triggers
-`SkipTutorial`, which clears the host, overlays, and owned scene. A missing panel
-is recoverable presentation state, not evidence that the lesson simulation is
-invalid.
+`GuidedTargetUnavailable` is raised when an authored help anchor is absent.
+The application lesson host must not convert it into scenario termination or
+clear the owned scene. A missing panel is recoverable presentation state, not
+evidence that the lesson simulation is invalid.
 
 **Implementation:** the lesson host and scene remain alive. The workbench now
 shows a topmost recovery surface with Continue/Retry/Stop actions, while the
 tutorial owner clears only the invalid target. Continue reuses the existing
-registered typed `TutorialNext` command for an active tour; Stop remains the
+registered typed `GuidedNext` command for an active tour; Stop remains the
 explicit lifecycle command. The regression
 `missing_anchor_keeps_lesson_running_and_advances_on_continue` passes, and the
 change is committed in `a863b48b2` and `517a6853e`.

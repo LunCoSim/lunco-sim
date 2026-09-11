@@ -461,10 +461,12 @@ body arrives through a reference or a prepared runtime-instance projection.
 
 `physics:collisionEnabled=true` is an opt-in on an already-declared collider;
 it does not apply `PhysicsCollisionAPI` by itself. Ordinary vehicle geometry
-must carry both. `LunCoTerrainAPI` and `PhysxVehicleWheelAPI` are the explicit
-owner-level exceptions because their terrain and vehicle projectors construct
-those shapes through their own contracts. `collision-enabled-without-api` is
-an error, not a runtime fallback.
+must carry both. `LunCoTerrainAPI` is the owner-level projector exception.
+Raycast `PhysxVehicleWheelAPI` wheels are query-only and must not carry
+`PhysicsRigidBodyAPI` or `PhysicsCollisionAPI`; physical wheels are the other
+standard realization and must author both APIs on their collision geometry.
+The `collision-enabled-without-api`, `raycast-wheel-collision-contract`, and
+`physical-wheel-collision-contract` rules are errors, not runtime fallbacks.
 
 Terrain collider ownership is mode-specific: `lunco:assetMode="mesh"` waits for
 the USD-to-Avian mesh bridge, while `"dem"` and `"layered"` use the native
@@ -473,8 +475,10 @@ second mesh collider over DEM-backed terrain.
 
 Every renderable gprim under a composed `kind = "assembly"` vehicle must also
 state who owns its collision contract. A supported enabled
-`PhysicsCollisionAPI` shape is the ordinary owner; `PhysxVehicleWheelAPI` is the
-wheel-projector owner. Intentional decoration must explicitly author
+`PhysicsCollisionAPI` shape is the ordinary owner. A raycast
+`PhysxVehicleWheelAPI` prim owns a support query, not a collision shape;
+physical wheel realization is selected by a standard revolute joint targeting
+the wheel and requires the authored body/collision pair. Intentional decoration must explicitly author
 `physics:collisionEnabled = false` or an inherited `purpose = "guide"`. When a
 body has a `purpose = "proxy"` shape, its `purpose = "render"` geometry is the
 visual description and is excluded from collision. Leaving visible vehicle

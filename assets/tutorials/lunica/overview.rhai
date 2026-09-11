@@ -5,7 +5,7 @@
 //! Back/Next/Skip/dot events — the SAME shared engine every tutorial uses.
 //! Because a tutorial is just a script, you can edit this file and re-run it live
 //! from the Tutorials menu (native reads it fresh; `RunScenario` hot-reloads).
-//! On a first run the boot policy (`policy/boot.rhai`) starts this automatically.
+//! The application starts this through the authored lesson catalog.
 //!
 //! `steps()` is a FUNCTION (rhai named fns can't see script-level consts); `this`
 //! is bound only in the hook the engine calls, not in helpers it calls.
@@ -31,10 +31,10 @@ fn on_start(me) {
 
 fn on_event(me, evt) {
     let s = steps();
-    if evt.name == "cmd:TutorialNext"      { this.i += 1; }
-    else if evt.name == "cmd:TutorialBack" { if this.i > 0 { this.i -= 1; } }
-    else if evt.name == "cmd:TutorialSkip" { this.i = s.len(); }
-    else if evt.name == "cmd:TutorialGoto" { this.i = evt.value; }
+    if evt.name == "cmd:GuidedNext"      { this.i += 1; }
+    else if evt.name == "cmd:GuidedBack" { if this.i > 0 { this.i -= 1; } }
+    else if evt.name == "cmd:GuidedSkip" { this.i = s.len(); }
+    else if evt.name == "cmd:GuidedGoto" { this.i = evt.value; }
     else { return; }
 
     if this.i >= s.len() {

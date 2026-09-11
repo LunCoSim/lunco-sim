@@ -50,11 +50,11 @@ homes instead of copying long sections.
   instructions; do not preserve a second “legacy” procedure unless the runtime
   still supports it as a deliberate contract.
 
-For USD, distinguish authored-layer facts from composed runtime behavior. For a
-tutorial, document the curriculum prim, script, payload, lifecycle owner, and
-whether the lesson uses a fixed-light world, an explicit ephemeris, an existing
-world, or no payload. Do not make Rust or a script own a scene fact that USD
-already authors.
+For USD, distinguish authored-layer facts from composed runtime behavior. For an
+authored lesson, document its catalog entry, Rhai source, optional scene asset,
+lifecycle owner, and whether the scene uses a fixed-light world, an explicit
+ephemeris, an existing world, or no scene asset. Do not make Rust or a script
+own a scene fact that USD already authors.
 
 ## Write a useful skill
 

@@ -160,7 +160,7 @@ I/O-only; the CAS *policy* lives here.
   so pre-existing cache entries stay valid.
 - **Landed:** `lunco-celestial/horizon_bake.rs` — horizon profiling/shadow bakes
   (`HorizonBake`, `NAMESPACE="celestial/horizon"`, 64KB lookup texture).
-- **Landed:** `lunco-modelica` worker DAE cache — one immutable compiled artifact
+- **Landed:** `lunco-modelica-core` worker DAE cache — one immutable compiled artifact
   per structural source set, shared across USD instances while live steppers
   remain entity-local. Generated wrapper identities are excluded from the
   structural key; authored source identity and library generation remain

@@ -15,7 +15,7 @@
 //!
 //! This module deliberately exposes ONLY raw file access. Domain interpretation
 //! — Modelica `// tagline:` header parsing, the `BundledModel` view — stays in
-//! `lunco-modelica`, the crate that understands `.mo`.
+//! `lunco-modelica-core`, the crate that understands `.mo`.
 
 use include_dir::{include_dir, Dir};
 #[cfg(not(target_arch = "wasm32"))]

@@ -181,6 +181,30 @@ fn t_report_surfaces_a_failure() {
     );
 }
 
+/// Modelica lint policy tests stay authored. Rust supplies only the tiny
+/// harness that concatenates the replaceable policy with its Rhai self-test;
+/// no shipped Modelica file is opened by this target.
+#[test]
+fn modelica_lint_policy_selftest_passes() {
+    let policy = tests_dir()
+        .parent()
+        .expect("tests directory has a scripting parent")
+        .join("policy/lint_modelica.rhai");
+    let script = format!(
+        "{}\n{}",
+        std::fs::read_to_string(&policy).expect("Modelica lint policy must exist"),
+        std::fs::read_to_string(tests_dir().join("test_modelica_lint.rhai"))
+            .expect("Modelica lint self-test must exist")
+    );
+    let printed = run_capturing_print(&script);
+    assert_eq!(
+        printed.last().map(String::as_str),
+        Some("MODELICA_LINT_SELFTEST PASS"),
+        "Modelica lint policy self-test did not pass:\n{}",
+        printed.join("\n")
+    );
+}
+
 #[test]
 fn rhai_lint_rejects_production_tick_and_allows_test_tick() {
     let policy = std::fs::read_to_string(
@@ -221,4 +245,81 @@ fn rhai_lint_rejects_production_tick_and_allows_test_tick() {
         .eval::<rhai::Array>(&format!("{policy}\n{test}"))
         .expect("test lint result");
     assert!(findings.is_empty());
+
+    let policy_source = r#"
+        let facts = #{
+            path: "assets/scripting/policy/lint_rhai.rhai",
+            kind: "rhai",
+            source: "fn production_on_tick(facts) { if facts.source.contains(\"fn on_tick(\") { return []; } }"
+        };
+        lint_rhai(facts)
+    "#;
+    let findings = engine
+        .eval::<rhai::Array>(&format!("{policy}\n{policy_source}"))
+        .expect("policy lint result");
+    assert!(
+        findings.is_empty(),
+        "the Rhai policy must not self-lint its detector string: {findings:?}"
+    );
+}
+
+#[test]
+fn usd_lint_enforces_authored_wheel_realizations() {
+    let policy = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/scripting/policy/lint_usd.rhai"),
+    )
+    .expect("usd lint policy");
+    let engine = runtime_engine();
+    let script = r#"
+        let facts = #{
+            vehicle_parts: [
+                #{
+                    path: "/Vehicle/PhysicalWheel",
+                    wheel_projector: true,
+                    physical_wheel: true,
+                    rigid_body_api: true,
+                    collision_api: false,
+                    collision_state: "missing",
+                    shape_valid: true,
+                    contract: "physical-missing-collider-api"
+                },
+                #{
+                    path: "/Vehicle/RaycastWheel",
+                    wheel_projector: true,
+                    physical_wheel: false,
+                    rigid_body_api: false,
+                    collision_api: true,
+                    collision_state: "enabled",
+                    shape_valid: true,
+                    contract: "raycast-collider"
+                }
+            ]
+        };
+        wheel_realization_collision_contract(facts)
+    "#;
+    let findings = engine
+        .eval::<rhai::Array>(&format!("{policy}\n{script}"))
+        .expect("wheel realization lint result");
+    assert_eq!(
+        findings.len(),
+        2,
+        "both wheel realization faults must be reported"
+    );
+    let rules: Vec<String> = findings
+        .iter()
+        .map(|finding| {
+            finding.clone().cast::<rhai::Map>()["rule"]
+                .clone()
+                .into_string()
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(
+        rules,
+        vec![
+            "physical-wheel-collision-contract".to_owned(),
+            "raycast-wheel-collision-contract".to_owned(),
+        ]
+    );
 }

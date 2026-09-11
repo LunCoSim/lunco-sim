@@ -112,7 +112,7 @@ impl Panel for TwinSettingsPanel {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Find").strong());
                 ui.add(
-                    egui::TextEdit::singleline(&mut self.query)
+                    crate::text_editor::singleline(&mut self.query)
                         .hint_text("key or namespace")
                         .desired_width(150.0),
                 );
@@ -190,7 +190,7 @@ fn render_setting_row(ui: &mut egui::Ui, ctx: &mut PanelCtx, row: &TwinSettingRo
             TwinSettingValue::Text(current) => {
                 let mut value = current.clone();
                 if ui
-                    .add(egui::TextEdit::singleline(&mut value).desired_width(150.0))
+                    .add(crate::text_editor::singleline(&mut value).desired_width(150.0))
                     .changed()
                 {
                     changed = Some(TwinSettingInput::Text(value));

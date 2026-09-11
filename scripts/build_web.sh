@@ -60,7 +60,7 @@ get_binary_config() {
     local binary="$1"
     case "$binary" in
         lunica)
-            echo "lunco-modelica"
+            echo "lunco-modelica-ui"
             ;;
         luncosim)
             echo "lunco-luncosim"
@@ -222,7 +222,7 @@ check_prerequisites() {
 
 # Should we rebuild the off-thread worker bundle?
 #
-# The worker bin pulls all of `lunco-modelica` (lib + UI), so most
+# The worker bin is owned by `lunco-modelica-core`, so it does not pull the
 # inner-loop UI edits invalidate it. But you DO want to skip it when
 # only HTML/JS/asset/build-script files changed, or — crucially —
 # when nothing under `crates/` changed since the last successful
@@ -389,11 +389,10 @@ build_wasm() {
             local worker_wasm="$base_target_dir/wasm32-unknown-unknown/$profile/lunica_worker.wasm"
             if should_rebuild_worker "$worker_wasm"; then
                 info "Building companion worker bundle: lunica_worker"
-                # Worker always builds out of lunco-modelica (that's where the
-                # Modelica compile + step pipeline lives) regardless of which
+                # The worker is a headless core binary, regardless of which
                 # main bundle is asking for it.
                 RUSTFLAGS="${RUSTFLAGS:-} --cfg=web_sys_unstable_apis --cfg=getrandom_backend=\"wasm_js\"" \
-                    cargo build --profile "$profile" --target wasm32-unknown-unknown --bin lunica_worker -p lunco-modelica --no-default-features
+                    cargo build --profile "$profile" --target wasm32-unknown-unknown --bin lunica_worker -p lunco-modelica-core --no-default-features
             else
                 # See should_rebuild_worker rustdoc — finding "newer" .rs
                 # under crates/ forces a rebuild even when the diff was in a
@@ -775,9 +774,9 @@ generate_bindings() {
         # but doesn't run it; this tiny module imports + calls it so the
         # `#[wasm_bindgen(start)]` worker entry actually fires.
         # The worker bootstrap shim always lives next to the worker
-        # source (in `lunco-modelica`), regardless of which main bundle
+        # source (in `lunco-modelica-ui`), regardless of which main bundle
         # is consuming it. Same file for lunica and luncosim.
-        local worker_bootstrap="$PROJECT_DIR/crates/lunco-modelica/web/worker_bootstrap.js"
+        local worker_bootstrap="$PROJECT_DIR/crates/lunco-modelica-ui/web/worker_bootstrap.js"
         if [ -f "$worker_bootstrap" ]; then
             cp "$worker_bootstrap" "$worker_dist_dir/worker_bootstrap.js"
         else
@@ -921,7 +920,7 @@ build_msl_index() {
         return 0
     fi
     info "Reindexing MSL + extras → msl_index.json (set MSL_REINDEX=force to always run)..."
-    cargo run --release -q -p lunco-modelica --bin msl_indexer -- -v
+    cargo run --release -q -p lunco-modelica-core --bin msl_indexer -- -v
     if [ $? -ne 0 ]; then
         error "MSL indexing failed"
         exit 1

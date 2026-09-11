@@ -75,7 +75,7 @@ Queries return structured data from the simulation. They use the same `POST /api
 
 | Query | Parameters | Description |
 |---|---|---|
-| `ListBundled` | `{}` | List embedded example models (`bundled://`). |
+| `ListBundled` | `{}` | List embedded example models (`bundled://`) and the complete source inventory (`sources[]`) used by authored validation. |
 | `ListOpenDocuments` | `{}` | List all documents currently open in the workspace, including origin and dirty state. |
 | `ListRecentFiles` | `{}` | List recently opened files and Twins from `recents.json`. |
 | `ListTwin` | `{"offset": u64, "limit": u64}` | List files in the currently active Twin folder. |
@@ -637,7 +637,7 @@ executor differentiates internally.
 `ApiQueryProvider` in the domain crate that owns the data, register
 it in your plugin's `build` via
 `app.world_mut().resource_mut::<ApiQueryRegistry>().register(...)`.
-See `crates/lunco-modelica/src/api_queries.rs` for examples and
+See `crates/lunco-modelica-core/src/api_queries.rs` for examples and
 spec [`032-model-source-listing`](../../specs/032-model-source-listing/spec.md)
 for the design.
 

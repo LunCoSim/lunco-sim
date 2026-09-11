@@ -1,13 +1,14 @@
-//! Tutorial curriculum data — files under `assets/tutorials/`.
+//! Authored tutorial content — files under `assets/tutorials/`.
 //!
 //! Why this lives HERE: `lunco-assets` owns every asset interaction, INCLUDING
 //! the native-disk-vs-wasm-embed policy. Consumers ask this crate for a
 //! tutorial's text and never touch `include_str!`/the filesystem themselves.
 //!
 //! Two access shapes, by how the data is used:
-//! - [`learning_paths_json`] — compile-time constant (parsed once into a
-//!   registry); always embedded.
-//! - [`lunica_tutorial_source`] — a rhai orchestrator that a user may want to
+//! - [`tutorial_catalog_json`] — the menu's presentation catalog. Native builds
+//!   reread it so menu edits do not require a Rust rebuild; wasm uses the
+//!   embedded copy.
+//! - [`tutorial_source`] — a rhai orchestrator that a user may want to
 //!   **edit and replay live**. Native reads it fresh from disk each call (so an
 //!   edit lands on the next launch with no rebuild); wasm (no fs) serves the
 //!   embedded copy. This split is the whole reason source loading is centralised
@@ -21,14 +22,25 @@ use include_dir::{include_dir, Dir};
 /// covers per-app subdirs (`lunica/…`, `first_drive/…`, …).
 static TUTORIALS: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../assets/tutorials");
 
-/// The learning-paths curriculum as raw JSON (`assets/tutorials/learning_paths.json`).
-/// The lunica Welcome panel parses this into its `LearningPathRegistry`. Edit the
-/// JSON and rebuild to change the curriculum — no code edit here.
-pub fn learning_paths_json() -> &'static str {
+/// Read the menu catalog for authored tutorials.
+///
+/// The catalog contains only presentation and launch references. It is not a
+/// runtime state store and is not used for change detection. Native builds
+/// prefer the adjacent file so a menu edit is visible after restarting the app;
+/// packaged and wasm builds use the embedded copy.
+pub fn tutorial_catalog_json() -> String {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let path = crate::assets_dir().join("tutorials/catalog.json");
+        if let Ok(text) = std::fs::read_to_string(path) {
+            return text;
+        }
+    }
     include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../assets/tutorials/learning_paths.json"
+        "/../../assets/tutorials/catalog.json"
     ))
+    .to_string()
 }
 
 /// Load a tutorial orchestrator's rhai source by its path **relative to
@@ -97,13 +109,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn learning_paths_parse_as_json() {
-        let v: serde_json::Value = serde_json::from_str(learning_paths_json())
-            .expect("learning_paths.json must be valid JSON");
-        assert!(v
-            .get("paths")
-            .and_then(|p| p.as_array())
-            .is_some_and(|a| !a.is_empty()));
+    fn tutorial_catalog_is_valid_and_references_authored_scripts() {
+        let value: serde_json::Value = serde_json::from_str(&tutorial_catalog_json())
+            .expect("tutorial catalog must be valid JSON");
+        let entries = value
+            .get("tutorials")
+            .and_then(serde_json::Value::as_array)
+            .expect("tutorial catalog must contain a tutorials array");
+        assert!(!entries.is_empty());
+        for entry in entries {
+            let source = entry
+                .get("source_asset")
+                .and_then(serde_json::Value::as_str)
+                .expect("every tutorial needs a source_asset");
+            assert!(source.starts_with("lunco://tutorials/"));
+            let relative = source.trim_start_matches("lunco://tutorials/");
+            assert!(tutorial_source(relative).is_some(), "missing {source}");
+        }
     }
 
     #[test]

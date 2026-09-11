@@ -480,8 +480,8 @@ When adding a new domain (Modelica, USD, SysML, Mission):
 6. **Build views.** Each panel is a `DocumentView<D>` — observes the
    document, renders a projection, emits ops.
 
-Keep the *core document and ops in the domain crate* (`lunco-modelica`,
-`lunco-usd`, etc.). Keep *views in UI sub-modules* (`lunco-modelica/ui`,
+Keep the *core document and ops in the domain crate* (`lunco-modelica-core`,
+`lunco-usd`, etc.). Keep *views in UI sub-modules* (`lunco-modelica-ui/src/ui`,
 `lunco-luncosim-edit/ui`).
 
 ## 10. Design principles

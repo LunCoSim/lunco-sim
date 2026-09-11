@@ -809,13 +809,13 @@ fn rhai_event_reaches_on_event_while_simulation_is_paused() {
         fn on_start(me) { emit("STARTED", 1); }
         fn on_tick(me) { emit("TICKED", 1); }
         fn on_event(me, evt) {
-            if evt.name == "cmd:TutorialNext" { emit("ADVANCED", 1); }
+            if evt.name == "cmd:GuidedNext" { emit("ADVANCED", 1); }
         }
     "#;
     let (mut app, _rover) = setup(source);
     app.world_mut().resource_mut::<Time<Virtual>>().pause();
     app.world_mut()
-        .trigger(command_telemetry_event("TutorialNext"));
+        .trigger(command_telemetry_event("GuidedNext"));
 
     app.world_mut().run_schedule(Update);
     app.world_mut().flush();
@@ -827,7 +827,7 @@ fn rhai_event_reaches_on_event_while_simulation_is_paused() {
     );
     assert!(
         events.iter().any(|name| name == "ADVANCED"),
-        "paused pass should deliver TutorialNext to on_event; got {events:?}"
+        "paused pass should deliver GuidedNext to on_event; got {events:?}"
     );
     assert!(
         !events.iter().any(|name| name == "TICKED"),

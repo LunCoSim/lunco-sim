@@ -69,7 +69,6 @@ lunco-physics = { workspace = true }
 # The sky-clock panel drives the celestial `TimeDomain` (`SetClock`) directly.
 lunco-time = { path = "../lunco-time" }
 big_space = { workspace = true }
-leafwing-input-manager = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-hardware = { path = "../lunco-hardware" }
 # The PRODUCER of `SampledParameter`. Its consumer (`lunco-api`'s
@@ -77,7 +76,6 @@ lunco-hardware = { path = "../lunco-hardware" }
 # wired, so leaving this out meant the API advertised parameter telemetry that could
 # never arrive. Render-free: it is the eyes-and-ears of a `--no-ui` run.
 lunco-telemetry = { path = "../lunco-telemetry" }
-lunco-signal = { path = "../lunco-signal" }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-controller = { path = "../lunco-controller" }
 lunco-autopilot = { path = "../lunco-autopilot" }
@@ -116,7 +114,9 @@ lunco-celestial-ephemeris = { path = "../lunco-celestial-ephemeris" }
 lunco-terrain-globe = { path = "../lunco-terrain-globe" }
 lunco-obstacle-field = { path = "../lunco-obstacle-field" }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
-lunco-modelica = { path = "../lunco-modelica", default-features = false }
+lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
+lunco-modelica-ui = { path = "../lunco-modelica-ui", default-features = false, optional = true }
+lunco-luncosim-exposures = { path = "../lunco-luncosim-exposures", default-features = false }
 # Experiment registry types — used by the experiment-journal replay leg AND the
 # all-platform result-artifact persistence (write/load). Unconditional: result
 # persistence is a core (not networking) feature, and experiments is a pure crate.
@@ -128,9 +128,6 @@ lunco-readiness = { workspace = true }
 lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-scripting = { path = "../lunco-scripting" }
-# Tutorial execution is scenario runtime, so it stays available to headless
-# hosts. Its menu/HUD projection is enabled by `lunco-tutorial/ui` below.
-lunco-tutorial = { path = "../lunco-tutorial", default-features = false }
 # USD core (scene load + collider build) is always needed; its Twin-browser /
 # viewport egui UI rides `lunco-usd/ui`, re-enabled below by the `ui` feature.
 lunco-usd = { path = "../lunco-usd", default-features = false }
@@ -148,7 +145,6 @@ lunco-usd-sim = { path = "../lunco-usd-sim" }
 # hand edits back onto the document's runtime layer. Render-free, so the headless
 # server gets its terrain collider without linking any UI.
 lunco-usd-terrain = { path = "../lunco-usd-terrain" }
-openusd = { workspace = true }
 # The scene/document COMMAND LAYER — NOT optional: the headless server needs its
 # `commands::SpawnCommandPlugin` (runtime spawn/move + `NetReplicate` tagging) and
 # the journaled shader domain. Render-free, UI-free.
@@ -176,7 +172,6 @@ lunco-twin-journal = { path = "../lunco-twin-journal", optional = true }
 # these entirely: the egui workbench, the blueprint/shader material editors,
 # the doc/theme/general-UI crates. luncosim.rs cfg-gates every use behind
 # `feature = "ui"`.
-lunco-materials = { path = "../lunco-materials", optional = true }
 # Not optional/ui-gated: the doc subsystem (DocumentId, edit authoring) is a core,
 # headless-safe concern — not a UI feature. Already compiled transitively via
 # lunco-doc-bevy, so naming it directly adds no build cost. Was under `ui` only because
@@ -218,14 +213,6 @@ mimalloc = "0.1"
 velopack = { version = "=1.2.110-ge826545", optional = true, features = ["public-utils"] }
 ureq = { workspace = true, optional = true }
 
-[dev-dependencies]
-# The cross-engine Modelica→Rhai→Avian regression is an application-level
-# integration test. Keep its diagnostics with the existing application package
-# rather than making the leaf co-simulation crate compile the full UI/runtime
-# stack just to host one cross-domain target.
-lunco-modelica-ast = { path = "../lunco-modelica-ast" }
-env_logger = "0.11"
-
 [features]
 # `ui` + `lunco-api` are on by default so native `cargo run --bin luncosim`
 # starts a local windowed simulation. Networking is deliberately opt-in: a normal
@@ -262,8 +249,9 @@ ui = [
     "lunco-usd/ui",
     "dep:lunco-luncosim-edit",
     "lunco-luncosim-edit/ui",
-    "lunco-modelica/ui",
-    # egui presence/tutorial overlays + Network menu bridge — only when networking
+    "dep:lunco-modelica-ui",
+    "lunco-modelica-ui/ui",
+    # egui presence/guided overlays + Network menu bridge — only when networking
     # is also enabled (`?`); the headless server's `server` feature omits this.
     "lunco-networking?/ui",
     "lunco-api?/winit",
@@ -271,8 +259,6 @@ ui = [
     "dep:lunco-workbench-core",
     "dep:lunco-status-core",
     "dep:lunco-ui",
-    "lunco-tutorial/ui",
-    "dep:lunco-materials",
     "dep:lunco-theme",
     "dep:lunco-settings",
     "dep:serde",
@@ -320,7 +306,8 @@ luncosim = []
 # `window.lunco_api` JS bridge automatically via `cfg(target_arch="wasm32")`.
 lunco-api = [
     "dep:lunco-api",
-    "lunco-modelica/lunco-api",
+    "lunco-modelica-core/lunco-api",
+    "lunco-modelica-ui?/lunco-api",
 ]
 # Native HTTP API transport (axum/TcpListener) — also the gate for the in-app
 # rhai REPL panel, which needs `lunco_api::ApiBridge` (present under this feature
@@ -329,11 +316,11 @@ lunco-api = [
 transport-http = ["lunco-api/transport-http", "lunco-networking?/transport-http"]
 # Multiplayer over WebTransport (lightyear). Pulls in the real networking
 # adapter; the wire substrate (lunco-api) is required.
-networking = ["dep:lunco-networking", "lunco-networking/networking", "lunco-api", "dep:lunco-twin-journal"]
+networking = ["dep:lunco-networking", "lunco-networking/networking", "lunco-luncosim-exposures/networking", "lunco-api", "dep:lunco-twin-journal"]
 # Netcode jitter diagnostics — off by default (not in normal builds). Build with
 # `--features networking,net-diag` when debugging; see lunco-networking/diagnostics.rs.
 net-diag = ["networking", "lunco-networking/net-diag"]
-python = ["lunco-scripting/python"]
+python = ["lunco-scripting/python", "lunco-usd-sim/python"]
 # Tracy profiler. Enable with `--features tracy` and connect a Tracy
 # GUI to see per-system flame graphs. Match the GUI version to the
 # tracy-client version pulled in by Bevy 0.18 (check `cargo tree -p

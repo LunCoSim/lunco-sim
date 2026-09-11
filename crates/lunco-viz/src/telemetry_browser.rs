@@ -1226,7 +1226,7 @@ impl Panel for TelemetryBrowserPanel {
 
         // ── Filter box ───────────────────────────────────────────
         ui.add(
-            egui::TextEdit::singleline(&mut self.filter)
+            lunco_workbench::text_editor::singleline(&mut self.filter)
                 .hint_text("Filter channels…")
                 .desired_width(f32::INFINITY),
         );

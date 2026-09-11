@@ -373,8 +373,8 @@ library-specific installer or root-name branch.
   `@bundled:msl` is already owned by the standard-library inventory. Every admitted root
   is sent through the existing `LoadSourceRoot { Disk }` worker command, which recursively
   reads standard `package.mo`/`package.order` trees and uses the same input-default
-  normalization as other disk roots. **Why in `lunco-modelica`, not at the USD twin-mount
-  site?** Because `lunco-usd` has no dependency on `lunco-modelica` and should not gain one
+  normalization as other disk roots. **Why in `lunco-modelica-core`, not at the USD twin-mount
+  site?** Because `lunco-usd` has no dependency on `lunco-modelica-core` and should not gain one
   just to poke the worker; the crate that *owns* the Modelica worker is the right owner of
   "load a Twin's Modelica," and it already sees the shared Twin asset authority.
 

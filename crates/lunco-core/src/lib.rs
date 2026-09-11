@@ -103,8 +103,8 @@ pub use labels::{entity_display_name, humanize_identifier};
 pub use log::*;
 pub use markers::{
     CatalogEntryId, CinematicCameraLock, EmbeddedScenarioPath, EmbeddedScenarioSource, GridAnchor,
-    HorizonShadowTerrain, NextScene, PhysicsPoseAuthoritative, ScenarioProgramPrim, ScriptParams,
-    SoiMigrant, SunAngularDiameter, TriggerZone, UsdPrimKind, CELESTIAL_COLLISION_LAYER,
+    HorizonShadowTerrain, PhysicsPoseAuthoritative, ScenarioProgramPrim, ScriptParams, SoiMigrant,
+    SunAngularDiameter, TriggerZone, UsdPrimKind, CELESTIAL_COLLISION_LAYER,
     NON_PHYSICAL_QUERY_LAYERS, SOLAR_ANGULAR_DIAMETER_DEG, TRIGGER_COLLISION_LAYER,
 };
 pub use reconcile::{reconcile_decision, ReconcileParams, Reconciliation};

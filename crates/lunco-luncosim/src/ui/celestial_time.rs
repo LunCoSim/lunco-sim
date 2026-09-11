@@ -70,7 +70,7 @@ fn sky_clock_ui(
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("Go to").weak().size(11.0));
         let parsed = lunco_time::utc_string_to_tdb_jd(&buf);
-        let field = egui::TextEdit::singleline(&mut buf)
+        let field = lunco_workbench::text_editor::singleline(&mut buf)
             .desired_width(172.0)
             .font(egui::TextStyle::Monospace)
             // Invalid text is marked, never silently ignored: a seek that does

@@ -124,10 +124,10 @@ So that I do not need to know whether the target is bundled, MSL, on disk, or al
 
 ### Key Entities
 
-- **`ApiQueryProvider` (new trait, `lunco-api`)**: A registered query provider that answers a typed request for a list of items. Domain crates (`lunco-modelica`, `lunco-workspace`) register implementations for bundled, twin, MSL, and open-documents queries. Keeps lunco-api free of domain knowledge.
+- **`ApiQueryProvider` (new trait, `lunco-api`)**: A registered query provider that answers a typed request for a list of items. Domain crates (`lunco-modelica-core`, `lunco-workspace`) register implementations for bundled, twin, MSL, and open-documents queries. Keeps lunco-api free of domain knowledge.
 - **`ListBundledRequest` / `ListTwinRequest` / `ListMslRequest` / `ListOpenDocumentsRequest` / `MslStatusRequest` / `OpenRequest` (new `ApiRequest` variants)**: Transport-agnostic enum variants. The transport layer parses them from the same `command` field used today; the executor routes them to the registered query providers.
 - **`PaginationCursor` (new, `lunco-api`)**: Opaque base64-encoded JSON `{offset: u32, filter_hash: u64}`. Filter hash invalidates cursors when filter parameters change between calls — caller must restart pagination if they swap the filter.
-- **`MslLoadFlag` (new, `lunco-modelica`)**: `AtomicBool` set true at the end of `prewarm_msl_library`. Read by `msl_status` and consulted by `list_msl` to decide whether to log a "blocking on prewarm" warning.
+- **`MslLoadFlag` (new, `lunco-modelica-core`)**: `AtomicBool` set true at the end of `prewarm_msl_library`. Read by `msl_status` and consulted by `list_msl` to decide whether to log a "blocking on prewarm" warning.
 
 ---
 
@@ -136,7 +136,7 @@ So that I do not need to know whether the target is bundled, MSL, on disk, or al
 - **SC-001**: An agent can answer "what can I open right now?" with a single round trip per source (4 calls maximum: `list_bundled`, `list_twin`, `list_msl`, `list_open_documents`).
 - **SC-002**: An agent can open any of the four source kinds with a single `open(uri)` call, regardless of source.
 - **SC-003**: `list_msl` with `limit:200` returns in <50 ms after prewarm completes; `msl_status` returns in <1 ms regardless of prewarm state.
-- **SC-004**: `lunco-api` keeps zero direct dependencies on `lunco-modelica` — domain knowledge is plugged in via `ApiQueryProvider`.
+- **SC-004**: `lunco-api` keeps zero direct dependencies on `lunco-modelica-core` — domain knowledge is plugged in via `ApiQueryProvider`.
 - **SC-005**: Bundled examples are openable via API on `wasm32` builds (no absolute path reachable, only `bundled://`).
 - **SC-006**: Existing `OpenFile`/`OpenClass`/`OpenExample` commands remain functional and unchanged in behaviour for callers that already use them.
 

@@ -8,7 +8,7 @@
 //! and no Rust.
 
 fn on_start(me) {
-    // The curriculum payload is mounted before this script starts. This script
+    // The catalog-selected scene is mounted before this script starts. This script
     // only teaches and verifies the rover actions in that world.
     hint("Select the rover. Click Possess in Inspector or Command Deck.");
     notify_kind("Tutorial: First Drive", "info");

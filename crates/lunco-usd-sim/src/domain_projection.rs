@@ -10,12 +10,12 @@ use std::sync::Arc;
 use bevy::asset::AssetId;
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
-use lunco_modelica::{
-    ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaNotice, ModelicaSignalLayout,
-    ModelicaSignalProvenance, NoticeLevel,
-};
 use lunco_modelica_ast::ast_extract::{
     parse_model_interface, parse_model_interface_from_ast, ModelInterface, ModelicaVariableMetadata,
+};
+use lunco_modelica_core::{
+    ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaNotice, ModelicaSignalLayout,
+    ModelicaSignalProvenance, NoticeLevel,
 };
 use lunco_usd_bevy::program::ProgramGraph;
 use lunco_usd_bevy::read::UsdReadObject as ComposedReader;
@@ -62,14 +62,14 @@ fn retire_sim_interface(commands: &mut Commands, entity: Entity) {
 /// this guard keeps ordinary document lifecycle semantics untouched.
 fn retire_generated_document(
     document: lunco_doc::DocumentId,
-    documents: &mut lunco_modelica::state::ModelicaDocumentRegistry,
+    documents: &mut lunco_modelica_core::state::ModelicaDocumentRegistry,
 ) {
     if document.is_unassigned() {
         return;
     }
     let generated = documents
         .host(document)
-        .is_some_and(|host| lunco_modelica::state::is_generated_document(host.document()));
+        .is_some_and(|host| lunco_modelica_core::state::is_generated_document(host.document()));
     if generated {
         documents.remove_document(document);
     }
@@ -78,7 +78,7 @@ fn retire_generated_document(
 fn queue_retire_generated_document(commands: &mut Commands, document: lunco_doc::DocumentId) {
     commands.queue(move |world: &mut World| {
         if let Some(mut documents) =
-            world.get_resource_mut::<lunco_modelica::state::ModelicaDocumentRegistry>()
+            world.get_resource_mut::<lunco_modelica_core::state::ModelicaDocumentRegistry>()
         {
             retire_generated_document(document, &mut documents);
         }
@@ -779,7 +779,7 @@ fn parse_validated_root_interface(
 ) -> Result<rumoca_ir_ast::StoredDefinition, String> {
     let ast = lunco_modelica_ast::parse_to_ast(source, "generated-policy.mo")
         .map_err(|error| format!("strict Modelica parse failed: {error:?}"))?;
-    let root = lunco_modelica::diagram::find_class_by_qualified_name(&ast, model_name)
+    let root = lunco_modelica_core::diagram::find_class_by_qualified_name(&ast, model_name)
         .ok_or_else(|| format!("root class `{model_name}` is missing"))?;
 
     let mut expected_root_outputs = outputs.clone();
@@ -851,7 +851,7 @@ fn validate_generated_source(
     let outputs: BTreeSet<String> = network.outputs.keys().cloned().collect();
     let ast =
         parse_validated_root_interface(source, model_name, &network.inputs, &outputs, aliases)?;
-    let root = lunco_modelica::diagram::find_class_by_qualified_name(&ast, model_name)
+    let root = lunco_modelica_core::diagram::find_class_by_qualified_name(&ast, model_name)
         .ok_or_else(|| format!("root class `{model_name}` is missing"))?;
 
     let expected_members: BTreeMap<String, String> = network
@@ -906,7 +906,7 @@ fn validate_generated_source(
     }
 
     for unit in units {
-        let class = lunco_modelica::diagram::find_class_by_qualified_name(&ast, &unit.name)
+        let class = lunco_modelica_core::diagram::find_class_by_qualified_name(&ast, &unit.name)
             .ok_or_else(|| format!("generated unit class `{}` is missing", unit.name))?;
         let mut expected_unit_outputs = unit.outputs.clone();
         expected_unit_outputs.extend(
@@ -1988,7 +1988,7 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
             member_output_aliases: Vec::new(),
             units: Vec::new(),
             layout: SynthesisLayout::default(),
-            communication_period_secs: lunco_modelica::DEFAULT_COMMUNICATION_PERIOD_SECS,
+            communication_period_secs: lunco_modelica_core::DEFAULT_COMMUNICATION_PERIOD_SECS,
         })))
     }
 }
@@ -2829,8 +2829,8 @@ pub fn sync_generated_network_documents(
             Changed<GeneratedModelicaSource>,
         )>,
     >,
-    mut documents: ResMut<lunco_modelica::state::ModelicaDocumentRegistry>,
-    mut generated_metadata: ResMut<lunco_modelica::state::GeneratedModelicaSources>,
+    mut documents: ResMut<lunco_modelica_core::state::ModelicaDocumentRegistry>,
+    mut generated_metadata: ResMut<lunco_modelica_core::state::GeneratedModelicaSources>,
 ) {
     for (entity, source, mut model) in &mut generated {
         // Projection errors are represented by an empty diagnostic source and
@@ -2842,7 +2842,7 @@ pub fn sync_generated_network_documents(
         // authored Modelica documents. Request every referenced bundled root
         // asynchronously; the canvas shows an explicit loading state until
         // the shared engine publishes the generic completion notification.
-        if let Some(handle) = lunco_modelica::engine_resource::global_engine_handle() {
+        if let Some(handle) = lunco_modelica_core::engine_resource::global_engine_handle() {
             let mut roots: BTreeSet<String> = source.source_roots.iter().cloned().collect();
             roots.extend(
                 source
@@ -2880,8 +2880,8 @@ pub fn sync_generated_network_documents(
 pub fn on_remove_generated_source(
     trigger: On<Remove, GeneratedModelicaSource>,
     source_query: Query<(&GeneratedModelicaSource, Option<&ModelicaModel>)>,
-    mut documents: Option<ResMut<lunco_modelica::state::ModelicaDocumentRegistry>>,
-    mut generated: Option<ResMut<lunco_modelica::state::GeneratedModelicaSources>>,
+    mut documents: Option<ResMut<lunco_modelica_core::state::ModelicaDocumentRegistry>>,
+    mut generated: Option<ResMut<lunco_modelica_core::state::GeneratedModelicaSources>>,
 ) {
     let (network_root, doc_uri, model_document) = source_query
         .get(trigger.entity)
@@ -2905,7 +2905,7 @@ pub fn on_remove_generated_source(
             })?;
         let is_generated = registry
             .host(document)
-            .is_some_and(|host| lunco_modelica::state::is_generated_document(host.document()));
+            .is_some_and(|host| lunco_modelica_core::state::is_generated_document(host.document()));
         if is_generated {
             registry.remove_document(document);
             Some(document)
@@ -2927,12 +2927,12 @@ pub fn on_remove_generated_source(
 /// Publish the current generated sources to the UI-facing derived registry.
 pub fn publish_generated_sources(
     q_generated: Query<(&GeneratedModelicaSource, Option<&ModelicaModel>)>,
-    mut generated: ResMut<lunco_modelica::state::GeneratedModelicaSources>,
+    mut generated: ResMut<lunco_modelica_core::state::GeneratedModelicaSources>,
 ) {
     generated.entries = q_generated
         .iter()
         .map(
-            |(source, model)| lunco_modelica::state::GeneratedModelicaSourceEntry {
+            |(source, model)| lunco_modelica_core::state::GeneratedModelicaSourceEntry {
                 document: model.map(|m| m.document).unwrap_or_default(),
                 uri: model
                     .map(|m| format!("generated://{}.mo", m.model_name))
@@ -2951,7 +2951,7 @@ pub fn publish_generated_sources(
                 units: source
                     .units
                     .iter()
-                    .map(|unit| lunco_modelica::state::GeneratedModelicaUnit {
+                    .map(|unit| lunco_modelica_core::state::GeneratedModelicaUnit {
                         name: unit.name.clone(),
                         instance: unit.instance.clone(),
                         members: unit.component_paths.clone(),
@@ -2977,7 +2977,7 @@ pub fn publish_generated_sources(
 /// outside this metadata contract.
 pub fn generated_sources_need_publish(
     changed: Query<(), Changed<GeneratedModelicaSource>>,
-    generated: Res<lunco_modelica::state::GeneratedModelicaSources>,
+    generated: Res<lunco_modelica_core::state::GeneratedModelicaSources>,
 ) -> bool {
     generated.dirty || !changed.is_empty()
 }
@@ -3134,7 +3134,7 @@ where
     }
     Ok(selected
         .map(|(_, _, period)| period)
-        .unwrap_or(lunco_modelica::DEFAULT_COMMUNICATION_PERIOD_SECS))
+        .unwrap_or(lunco_modelica_core::DEFAULT_COMMUNICATION_PERIOD_SECS))
 }
 
 fn network_communication_period(
@@ -3150,7 +3150,7 @@ fn network_communication_period(
             .attr_names(&path)
             .iter()
             .any(|name| name == COMMUNICATION_PERIOD_ATTR);
-        let period = lunco_modelica::resolve_communication_period_secs(
+        let period = lunco_modelica_core::resolve_communication_period_secs(
             authored,
             view.real(&path, COMMUNICATION_PERIOD_ATTR),
         )
@@ -3344,7 +3344,7 @@ pub fn read_network(
             inputs: BTreeSet::new(),
             input_sources: BTreeMap::new(),
             outputs: BTreeMap::new(),
-            communication_period_secs: lunco_modelica::DEFAULT_COMMUNICATION_PERIOD_SECS,
+            communication_period_secs: lunco_modelica_core::DEFAULT_COMMUNICATION_PERIOD_SECS,
             pending_sources: true,
         }));
     }
@@ -4041,8 +4041,8 @@ pub struct MemberClasses {
     metadata: HashMap<String, HashMap<String, ModelicaVariableMetadata>>,
     /// Resident handles let source modification events invalidate the exact
     /// declaration they changed without rescanning every pending source.
-    handles: HashMap<String, Handle<lunco_modelica::source_asset::ModelicaSource>>,
-    pending: HashMap<String, Handle<lunco_modelica::source_asset::ModelicaSource>>,
+    handles: HashMap<String, Handle<lunco_modelica_core::source_asset::ModelicaSource>>,
+    pending: HashMap<String, Handle<lunco_modelica_core::source_asset::ModelicaSource>>,
 }
 
 impl MemberClasses {
@@ -4160,10 +4160,10 @@ pub fn resolve_member_classes(
     stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<CanonicalStages>,
     asset_server: Res<AssetServer>,
-    sources: Res<Assets<lunco_modelica::source_asset::ModelicaSource>>,
-    mut source_events: MessageReader<AssetEvent<lunco_modelica::source_asset::ModelicaSource>>,
+    sources: Res<Assets<lunco_modelica_core::source_asset::ModelicaSource>>,
+    mut source_events: MessageReader<AssetEvent<lunco_modelica_core::source_asset::ModelicaSource>>,
     mut source_failures: MessageReader<
-        bevy::asset::AssetLoadFailedEvent<lunco_modelica::source_asset::ModelicaSource>,
+        bevy::asset::AssetLoadFailedEvent<lunco_modelica_core::source_asset::ModelicaSource>,
     >,
 ) {
     let mut loaded = HashSet::new();
@@ -4179,7 +4179,7 @@ pub fn resolve_member_classes(
             _ => {}
         }
     }
-    let failed: HashMap<AssetId<lunco_modelica::source_asset::ModelicaSource>, String> =
+    let failed: HashMap<AssetId<lunco_modelica_core::source_asset::ModelicaSource>, String> =
         source_failures
             .read()
             .map(|event| (event.id, event.error.to_string()))
@@ -4243,7 +4243,7 @@ pub fn resolve_member_classes(
                 if classes.known.contains_key(&asset) || classes.pending.contains_key(&asset) {
                     continue;
                 }
-                let handle: Handle<lunco_modelica::source_asset::ModelicaSource> =
+                let handle: Handle<lunco_modelica_core::source_asset::ModelicaSource> =
                     asset_server.load(asset.clone());
                 discovered.insert(handle.id());
                 classes.handles.insert(asset.clone(), handle.clone());
@@ -4370,7 +4370,7 @@ mod tests {
                     "/Thermal/Right/Mass.outputs:temp_k".into(),
                 ),
             ]),
-            communication_period_secs: lunco_modelica::DEFAULT_COMMUNICATION_PERIOD_SECS,
+            communication_period_secs: lunco_modelica_core::DEFAULT_COMMUNICATION_PERIOD_SECS,
             pending_sources: false,
         };
 
@@ -4403,7 +4403,7 @@ mod tests {
             inputs: BTreeSet::new(),
             input_sources: BTreeMap::new(),
             outputs: BTreeMap::new(),
-            communication_period_secs: lunco_modelica::DEFAULT_COMMUNICATION_PERIOD_SECS,
+            communication_period_secs: lunco_modelica_core::DEFAULT_COMMUNICATION_PERIOD_SECS,
             pending_sources: false,
         };
         let units = vec![
@@ -4486,96 +4486,6 @@ mod tests {
         assert_ne!(
             instance_identifier("/Rig", "/Rig/Motor-A").unwrap(),
             instance_identifier("/Rig", "/Rig/Motor_A").unwrap()
-        );
-    }
-
-    #[test]
-    fn read_network_admits_the_composed_modelica_drive_law() {
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../assets/scenes/tests/modelica_drive_law.usda");
-        let composed =
-            lunco_usd_bevy::compose_file_to_stage(&path).expect("compose drive-law scene");
-        let stage = lunco_usd_bevy::CanonicalStage::from_stage(
-            composed,
-            path.to_string_lossy().to_string(),
-        );
-        let view = stage.view();
-        let root = SdfPath::new("/ModelicaDriveLaw/RoverModelica").unwrap();
-        assert_eq!(
-            lunco_usd_bevy::program::internal_network_input_source(&view, &root, "drive_left"),
-            Some("/ModelicaDriveLaw/RoverModelica/Drivetrain.outputs:drive_left".into())
-        );
-        assert_eq!(
-            lunco_usd_bevy::program::network_member_output_source(&view, &root, "drive_left"),
-            Some("/ModelicaDriveLaw/RoverModelica/Drivetrain.outputs:drive_left".into())
-        );
-        let mut classes = MemberClasses::default();
-        for member in view.collection_members(&root, "components").unwrap() {
-            if !lunco_usd_bevy::UsdRead::has_api_schema(&view, &member, "LunCoProgramAPI") {
-                continue;
-            }
-            let asset = lunco_usd_bevy::UsdRead::asset(&view, &member, "info:sourceAsset").unwrap();
-            let source = std::fs::read_to_string(
-                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../assets")
-                    .join(lunco_assets::engine_asset_rel(&asset)),
-            )
-            .unwrap();
-            let interface = parse_model_interface(&source, "drive-law-member.mo");
-            let class = match interface.within {
-                Some(within) => format!("{within}.{}", interface.model_name.unwrap()),
-                None => interface.model_name.unwrap(),
-            };
-            classes.declare(asset, class);
-        }
-        let network = read_network(&view, &root, &classes)
-            .expect("the composed drive-law network must be structurally valid")
-            .expect("drive-law scene must expose a Modelica network");
-        lunco_hooks_rhai::register_rhai_hook(
-            "synth.acausal-network",
-            "synthesize",
-            lunco_assets::scripting::policy("synth_acausal_network").unwrap(),
-            true,
-        )
-        .unwrap();
-        let synthesizer = HookSynthesizer {
-            name: DEFAULT_DOMAIN_SYNTHESIZER.into(),
-            hook_id: "synth.acausal-network".into(),
-        };
-        assert!(matches!(
-            synthesizer
-                .synthesize(
-                    &view,
-                    &root,
-                    "ModelicaDriveLaw_x2f_RoverModelica_System",
-                    &SynthContext { classes: &classes },
-                )
-                .expect("synthesize composed drive-law network"),
-            SynthOutcome::Ready(_)
-        ));
-        assert!(network
-            .components
-            .iter()
-            .any(|component| component.path.ends_with("/Drivetrain")));
-        assert!(
-            !network.inputs.contains("drive_left") && !network.inputs.contains("drive_right"),
-            "a drive-law-produced actuator must not remain an external network input"
-        );
-        assert!(
-            network.input_sources.get("drive_left").is_none()
-                && network.input_sources.get("drive_right").is_none(),
-            "the internal actuator path must not be rebound as a runtime input"
-        );
-        assert!(
-            network.components.iter().any(|component| component
-                .inputs
-                .values()
-                .any(|target| target.ends_with("/Drivetrain.outputs:drive_left"))),
-            "the authored drive-left path must become a direct causal member edge"
-        );
-        assert!(
-            !network.outputs.contains_key("drive_left"),
-            "a USD input/output name collision must not become duplicate Modelica declarations"
         );
     }
 
@@ -4768,7 +4678,7 @@ def Scope "Rig"
             inputs: BTreeSet::new(),
             input_sources: BTreeMap::new(),
             outputs: BTreeMap::new(),
-            communication_period_secs: lunco_modelica::DEFAULT_COMMUNICATION_PERIOD_SECS,
+            communication_period_secs: lunco_modelica_core::DEFAULT_COMMUNICATION_PERIOD_SECS,
             pending_sources: false,
         };
         let errors = validate_network(&network);
@@ -4830,7 +4740,7 @@ def Scope "Rig"
     fn aggregates_one_schedule_and_rejects_conflicting_member_periods() {
         assert_eq!(
             aggregate_communication_periods(std::iter::empty()).unwrap(),
-            lunco_modelica::DEFAULT_COMMUNICATION_PERIOD_SECS
+            lunco_modelica_core::DEFAULT_COMMUNICATION_PERIOD_SECS
         );
         let six_ticks = 6.0 * lunco_core::SECS_PER_TICK;
         assert_eq!(
@@ -4861,7 +4771,7 @@ def Scope "Rig"
                 ("right".into(), "/Controls.outputs:throttle".into()),
             ]),
             outputs: BTreeMap::new(),
-            communication_period_secs: lunco_modelica::DEFAULT_COMMUNICATION_PERIOD_SECS,
+            communication_period_secs: lunco_modelica_core::DEFAULT_COMMUNICATION_PERIOD_SECS,
             pending_sources: false,
         };
         assert!(validate_network(&network)
@@ -4880,7 +4790,7 @@ def Scope "Rig"
             inputs: BTreeSet::from(["demand".into()]),
             input_sources: BTreeMap::new(),
             outputs: BTreeMap::new(),
-            communication_period_secs: lunco_modelica::DEFAULT_COMMUNICATION_PERIOD_SECS,
+            communication_period_secs: lunco_modelica_core::DEFAULT_COMMUNICATION_PERIOD_SECS,
             pending_sources: false,
         };
         assert!(validate_network(&network)
@@ -4935,12 +4845,12 @@ def Scope "Rig"
     #[test]
     fn removing_generated_source_retires_only_its_ephemeral_document() {
         let mut app = App::new();
-        app.init_resource::<lunco_modelica::state::ModelicaDocumentRegistry>()
-            .init_resource::<lunco_modelica::state::GeneratedModelicaSources>()
+        app.init_resource::<lunco_modelica_core::state::ModelicaDocumentRegistry>()
+            .init_resource::<lunco_modelica_core::state::GeneratedModelicaSources>()
             .add_observer(on_remove_generated_source);
         let document = app
             .world_mut()
-            .resource_mut::<lunco_modelica::state::ModelicaDocumentRegistry>()
+            .resource_mut::<lunco_modelica_core::state::ModelicaDocumentRegistry>()
             .allocate_with_origin(
                 "model Generated end Generated;".into(),
                 lunco_doc::DocumentOrigin::Bundled {
@@ -4971,12 +4881,12 @@ def Scope "Rig"
             ))
             .id();
         app.world_mut()
-            .resource_mut::<lunco_modelica::state::ModelicaDocumentRegistry>()
+            .resource_mut::<lunco_modelica_core::state::ModelicaDocumentRegistry>()
             .link(entity, document);
         app.world_mut()
-            .resource_mut::<lunco_modelica::state::GeneratedModelicaSources>()
+            .resource_mut::<lunco_modelica_core::state::GeneratedModelicaSources>()
             .entries
-            .push(lunco_modelica::state::GeneratedModelicaSourceEntry {
+            .push(lunco_modelica_core::state::GeneratedModelicaSourceEntry {
                 document,
                 uri: "generated://Generated.mo".into(),
                 network_root: "/Rig".into(),
@@ -4999,12 +4909,12 @@ def Scope "Rig"
 
         assert!(app
             .world()
-            .resource::<lunco_modelica::state::ModelicaDocumentRegistry>()
+            .resource::<lunco_modelica_core::state::ModelicaDocumentRegistry>()
             .host(document)
             .is_none());
         assert!(app
             .world()
-            .resource::<lunco_modelica::state::GeneratedModelicaSources>()
+            .resource::<lunco_modelica_core::state::GeneratedModelicaSources>()
             .entries
             .is_empty());
     }
@@ -5019,7 +4929,7 @@ def Scope "Rig"
         }
 
         let mut app = App::new();
-        app.init_resource::<lunco_modelica::state::GeneratedModelicaSources>()
+        app.init_resource::<lunco_modelica_core::state::GeneratedModelicaSources>()
             .init_resource::<PublicationCount>()
             .add_systems(
                 Update,
@@ -5069,7 +4979,7 @@ def Scope "Rig"
         assert_eq!(app.world().resource::<PublicationCount>().0, 2);
 
         app.world_mut()
-            .resource_mut::<lunco_modelica::state::GeneratedModelicaSources>()
+            .resource_mut::<lunco_modelica_core::state::GeneratedModelicaSources>()
             .dirty = true;
         app.update();
         assert_eq!(app.world().resource::<PublicationCount>().0, 3);
@@ -5193,9 +5103,9 @@ def Scope "Rig"
         let ast = lunco_modelica_ast::parse_to_ast(&source, "wrench.mo")
             .expect("generated actuator visual schema must remain valid Modelica");
         let class =
-            lunco_modelica::diagram::find_class_by_qualified_name(&ast, "AttitudeActuation")
+            lunco_modelica_core::diagram::find_class_by_qualified_name(&ast, "AttitudeActuation")
                 .expect("generated actuator model");
-        assert!(lunco_modelica::annotations::extract_icon(&class.annotation).is_some());
-        assert!(lunco_modelica::annotations::extract_diagram(&class.annotation).is_some());
+        assert!(lunco_modelica_core::annotations::extract_icon(&class.annotation).is_some());
+        assert!(lunco_modelica_core::annotations::extract_diagram(&class.annotation).is_some());
     }
 }

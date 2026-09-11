@@ -3,7 +3,7 @@
 // Unlike notify() toasts (which fade after a few seconds), these stay on screen
 // until changed or cleared — so a tutorial can hold a hint up while the user
 // acts, show a live objectives checklist, and point at a workbench widget.
-// Rendered by lunco-workbench's tutorial_overlay (sandbox + lunica both load it).
+// Rendered by lunco-workbench's guided_overlay (sandbox + lunica both load it).
 
 /// Set the persistent one-line hint at the top of the HUD.
 fn hint(msg)                   { cmd("SetHint", #{ text: msg }) }
@@ -25,8 +25,8 @@ fn clear_spotlight()           { cmd("ClearSpotlight") }
 
 // Guided TOUR (lunica-style coach marks). `coach(...)` shows one step — spotlight
 // `anchor` + a card with title/body, progress dots (index/total), and Back/Next/
-// Skip controls. The controls emit `cmd:TutorialNext`/`cmd:TutorialBack`/
-// `cmd:TutorialSkip` on the bus; a tour reacts in `on_event` (see the
+// Skip controls. The controls emit `cmd:GuidedNext`/`cmd:GuidedBack`/
+// `cmd:GuidedSkip` on the bus; a tour reacts in `on_event` (see the
 // tutorials/*/tour.rhai step-cursor pattern). Action policy belongs in that
 // Rhai event handler, not in this presentation command. `end_tour()` hides
 // the coach.

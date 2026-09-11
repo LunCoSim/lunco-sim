@@ -243,7 +243,7 @@ pub fn line_col_to_offset(source: &str, line: u32, col: u32) -> usize {
 /// 1. UI gesture → typed [`Self::Op`].
 /// 2. Engine `apply`s op: optimistically patches the Index, returns inverse.
 /// 3. Op-driven path: `apply` mutates engine state directly. **No reparse
-///    on the hot path** — see `FreshAst::Mutated` in lunco-modelica.
+///    on the hot path** — see `FreshAst::Mutated` in lunco-modelica-core.
 /// 4. Free-form text-edit path (code editor only): a separate driver
 ///    parses source off-thread, then hands the resulting
 ///    [`Self::ParsedInput`] back to the engine via [`Self::open`] (or
@@ -264,7 +264,7 @@ pub fn line_col_to_offset(source: &str, line: u32, col: u32) -> usize {
 /// `SyntaxTree` for SysML, etc. Source → ParsedInput parsing is the
 /// caller's responsibility; the engine consumes only the parsed form.
 ///
-/// On the producer side, `lunco-modelica`'s `FreshAst::Mutated` /
+/// On the producer side, `lunco-modelica-core`'s `FreshAst::Mutated` /
 /// `FreshAst::TextEdit` split mirrors this contract: structured ops
 /// produce a fresh AST inline; free-form text edits mark the AST stale
 /// and let an async parse driver land a new tree later. The engine

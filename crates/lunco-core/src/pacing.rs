@@ -1,7 +1,7 @@
 //! Frame-pacing intent, shared across crates.
 //!
 //! Winit's `unfocused_mode` is a single global knob that several subsystems have
-//! an opinion about, and the last writer each frame wins. `lunco-modelica`'s
+//! an opinion about, and the last writer each frame wins. `lunco-modelica-core`'s
 //! `sim_focus_pace` re-pegs it every frame (Continuous while a Modelica sim runs,
 //! the binary's idle policy otherwise), so any other crate that merely *sets*
 //! `WinitSettings` has its choice silently reverted on the next frame.
@@ -12,7 +12,7 @@
 //! it when done.
 //!
 //! It lives in `lunco-core` because both the requester (`lunco-workbench`'s offline
-//! recorder) and the pacer (`lunco-modelica`) depend on core, and neither depends on
+//! recorder) and the pacer (`lunco-modelica-core`) depend on core, and neither depends on
 //! the other.
 
 use bevy::ecs::entity::EntityHashSet;

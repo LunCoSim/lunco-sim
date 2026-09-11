@@ -1,0 +1,179 @@
+{
+  "tutorials": [
+    {
+      "track": "LunCoSim",
+      "title": "Read the Sim UI",
+      "blurb": "Find the scene, live state, controls, and simulation time.",
+      "difficulty": "beginner",
+      "source_asset": "lunco://tutorials/luncosim/welcome.rhai",
+      "scene_asset": "lunco://tutorials/sandbox/first_drive.usda"
+    },
+    {
+      "track": "LunCoSim",
+      "title": "Authority Handoff",
+      "blurb": "Take control of a rover, confirm the status, and release it.",
+      "difficulty": "beginner",
+      "source_asset": "lunco://tutorials/luncosim/controls.rhai",
+      "scene_asset": "lunco://tutorials/sandbox/first_drive.usda"
+    },
+    {
+      "track": "Navigation",
+      "title": "View, Build & Lunica",
+      "blurb": "Choose the right workbench perspective for the job.",
+      "difficulty": "beginner",
+      "source_asset": "lunco://tutorials/perspectives/overview.rhai"
+    },
+    {
+      "track": "Sandbox",
+      "title": "Sandbox Intro",
+      "blurb": "Learn the camera, selection, spawning, and control handoff.",
+      "difficulty": "beginner",
+      "source_asset": "lunco://tutorials/sandbox/sandbox_intro.rhai",
+      "scene_asset": "lunco://tutorials/sandbox/sandbox_intro.usda"
+    },
+    {
+      "track": "Sandbox",
+      "title": "First Drive",
+      "blurb": "Take control of a rover and drive it to a lunar flag.",
+      "difficulty": "beginner",
+      "source_asset": "lunco://tutorials/sandbox/first_drive.rhai",
+      "scene_asset": "lunco://tutorials/sandbox/first_drive.usda"
+    },
+    {
+      "track": "Sandbox",
+      "title": "Lander & Rover Mission",
+      "blurb": "Watch a powered landing, take the rover, and drive through the gates.",
+      "difficulty": "intermediate",
+      "source_asset": "lunco://tutorials/sandbox/lander_mission.rhai",
+      "scene_asset": "lunco://scenes/luncosim/lander_ops.usda"
+    },
+    {
+      "track": "Sandbox",
+      "title": "Build a Scene",
+      "blurb": "Place an object, edit it, and save the USD-backed scene.",
+      "difficulty": "beginner",
+      "source_asset": "lunco://tutorials/sandbox/build_scene.rhai",
+      "scene_asset": "lunco://tutorials/sandbox/first_drive.usda"
+    },
+    {
+      "track": "Sandbox",
+      "title": "Build a Lunar Base",
+      "blurb": "Place power, habitat, comms, ISRU, and a landing pad.",
+      "difficulty": "beginner",
+      "source_asset": "lunco://tutorials/sandbox/build_base.rhai",
+      "scene_asset": "lunco://tutorials/sandbox/build_base.usda"
+    },
+    {
+      "track": "Sandbox",
+      "title": "Script a Rover",
+      "blurb": "Attach a Rhai scenario, run it, and reload it without rebuilding.",
+      "difficulty": "intermediate",
+      "source_asset": "lunco://tutorials/sandbox/script_a_rover.rhai",
+      "scene_asset": "lunco://tutorials/sandbox/first_drive.usda"
+    },
+    {
+      "track": "Sandbox",
+      "title": "Rhai Editor & REPL",
+      "blurb": "Edit a scenario and run typed commands in the live REPL.",
+      "difficulty": "beginner",
+      "source_asset": "lunco://tutorials/sandbox/rhai_repl.rhai",
+      "scene_asset": "lunco://tutorials/sandbox/first_drive.usda"
+    },
+    {
+      "track": "Sandbox",
+      "title": "Inspect the Simulation",
+      "blurb": "Select an entity and read its state, ports, and Modelica links.",
+      "difficulty": "beginner",
+      "source_asset": "lunco://tutorials/sandbox/inspect_sim.rhai",
+      "scene_asset": "lunco://tutorials/sandbox/first_drive.usda"
+    },
+    {
+      "track": "Sandbox",
+      "title": "Cosim — Model meets Physics",
+      "blurb": "Trace the Modelica-to-physics loop and verify its live connections.",
+      "difficulty": "intermediate",
+      "source_asset": "lunco://tutorials/sandbox/cosim.rhai",
+      "scene_asset": "lunco://scenes/luncosim/lander_ops.usda"
+    },
+    {
+      "track": "Rover Driving",
+      "title": "Moon Driving Basics",
+      "blurb": "Take control of a rover and climb a gentle lunar ramp.",
+      "difficulty": "beginner",
+      "source_asset": "lunco://tutorials/basic/b1_driving_basics.rhai",
+      "scene_asset": "lunco://tutorials/basic/driving_basics.usda"
+    },
+    {
+      "track": "Rover Driving",
+      "title": "Slopes & Tip-Over",
+      "blurb": "Tip a top-heavy rover across a slope, recover it, then climb the fall-line.",
+      "difficulty": "beginner",
+      "source_asset": "lunco://tutorials/basic/b3_slopes_tipover.rhai",
+      "scene_asset": "lunco://tutorials/basic/slope_test.usda"
+    },
+    {
+      "track": "Rover Driving",
+      "title": "Rover Variants",
+      "blurb": "Compare Explorer LT, Standard, and Hauler on the same practice yard.",
+      "difficulty": "beginner",
+      "source_asset": "lunco://tutorials/basic/b4_rover_variants.rhai",
+      "scene_asset": "lunco://tutorials/basic/rover_variants.usda"
+    },
+    {
+      "track": "Rover Driving",
+      "title": "Join a Team Session",
+      "blurb": "Connect to a server, find your rover, and read its live telemetry.",
+      "difficulty": "beginner",
+      "source_asset": "lunco://tutorials/basic/b5_join_team.rhai"
+    },
+    {
+      "track": "Modelica",
+      "title": "Lunica Overview",
+      "blurb": "Learn the Lunica workbench in a short guided tour.",
+      "difficulty": "beginner",
+      "source_asset": "lunco://tutorials/lunica/overview.rhai"
+    },
+    {
+      "track": "Modelica",
+      "title": "Your Workspace",
+      "blurb": "Find Twins, models, read-only libraries, and learning paths.",
+      "difficulty": "beginner",
+      "source_asset": "lunco://tutorials/lunica/workspace.rhai"
+    },
+    {
+      "track": "Modelica",
+      "title": "Open & View a Model",
+      "blurb": "Open a model, switch views, and add a connected component.",
+      "difficulty": "beginner",
+      "source_asset": "lunco://tutorials/lunica/model.rhai"
+    },
+    {
+      "track": "Modelica",
+      "title": "Compile & Run",
+      "blurb": "Compile a model, choose a run mode, and change a live input.",
+      "difficulty": "beginner",
+      "source_asset": "lunco://tutorials/lunica/run.rhai"
+    },
+    {
+      "track": "Modelica",
+      "title": "Experiments & Sweeps",
+      "blurb": "Override parameters and compare several runs without editing source.",
+      "difficulty": "intermediate",
+      "source_asset": "lunco://tutorials/lunica/experiments.rhai"
+    },
+    {
+      "track": "Modelica",
+      "title": "Plots & Results",
+      "blurb": "Read graphs, diagnostics, and solver messages.",
+      "difficulty": "beginner",
+      "source_asset": "lunco://tutorials/lunica/plots.rhai"
+    },
+    {
+      "track": "Modelica",
+      "title": "Automate with API + MCP",
+      "blurb": "Drive the workbench from scripts, the HTTP API, or MCP.",
+      "difficulty": "intermediate",
+      "source_asset": "lunco://tutorials/lunica/scripting.rhai"
+    }
+  ]
+}

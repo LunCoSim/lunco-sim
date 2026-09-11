@@ -35,8 +35,9 @@
 //!                host_body, jointed, collider_min, collider_max } ],
 //!   joints: [ #{ path, type, bodies: [path, …], missing: [path, …] } ],
 //!   vehicle_parts: [ #{ path, type, vehicle, body, purpose, collision_api,
-//!                        collision_state, wheel_projector, visual_only,
-//!                        shape_valid, contract } ],
+//!                        collision_state, wheel_projector, physical_wheel,
+//!                        rigid_body_api, collision_attribute_authored,
+//!                        visual_only, shape_valid, contract } ],
 //!   telemetry_declarations: [ #{ path, targets[], target_exists,
 //!                                direct_surface, source_valid } ],
 //!   prims: [ #{ path, type, parent, schemas[], attributes[],
@@ -336,15 +337,15 @@ fn body_has_proxy(
 
 /// Composed collision coverage facts for every renderable part below a
 /// vehicle assembly. The runtime has two legitimate owners beyond an ordinary
-/// PhysicsCollisionAPI: a wheel projector and standard purpose metadata. All
-/// other geometry must either have a usable collider or explicitly author its
-/// visual-only status with physics:collisionEnabled = false or purpose.
+/// PhysicsCollisionAPI: a raycast wheel projector and standard purpose metadata.
+/// Physical wheels still require their explicit USD body and collision contract.
 fn vehicle_part_facts(
     reader: &StageView<'_>,
     paths: &[SdfPath],
     bodies: &HashSet<String>,
     vehicle_roots: &HashSet<String>,
     proxy_bodies: &HashSet<String>,
+    physical_wheels: &HashSet<String>,
 ) -> Vec<H> {
     paths
         .iter()
@@ -357,6 +358,10 @@ fn vehicle_part_facts(
             let body = nearest_path_in_set(bodies, path).unwrap_or_default();
             let collision_api = reader.has_api_schema(path, ptok::API_COLLISION);
             let wheel_projector = reader.has_api_schema(path, "PhysxVehicleWheelAPI");
+            let physical_wheel = physical_wheels.contains(path.as_str());
+            let rigid_body_api = reader.has_api_schema(path, ptok::API_RIGID_BODY);
+            let collision_attribute_authored =
+                reader.has_authored_attribute(path, ptok::A_COLLISION_ENABLED);
             let collision_state = if collision_api {
                 match super::read_authored_bool_or_default(
                     reader,
@@ -391,7 +396,23 @@ fn vehicle_part_facts(
             } else {
                 true
             };
-            let contract = if wheel_projector {
+            let contract = if physical_wheel {
+                if !rigid_body_api {
+                    "physical-missing-rigid-body"
+                } else if !collision_api {
+                    "physical-missing-collider-api"
+                } else if collision_state != "enabled" {
+                    "physical-invalid-collision"
+                } else if !shape_valid {
+                    "physical-unsupported-collider"
+                } else {
+                    "physical-collider"
+                }
+            } else if wheel_projector && rigid_body_api {
+                "raycast-rigid-body"
+            } else if wheel_projector && (collision_api || collision_attribute_authored) {
+                "raycast-collider"
+            } else if wheel_projector {
                 "projector"
             } else if visual_only {
                 "visual-only"
@@ -421,6 +442,12 @@ fn vehicle_part_facts(
                 ("collision_api", H::Bool(collision_api)),
                 ("collision_state", H::str(collision_state)),
                 ("wheel_projector", H::Bool(wheel_projector)),
+                ("physical_wheel", H::Bool(physical_wheel)),
+                ("rigid_body_api", H::Bool(rigid_body_api)),
+                (
+                    "collision_attribute_authored",
+                    H::Bool(collision_attribute_authored),
+                ),
                 (
                     "render_excluded_by_proxy",
                     H::Bool(render_excluded_by_proxy),
@@ -539,12 +566,13 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
     let telemetry_declarations = telemetry_declaration_facts(reader, &paths);
 
     // `physics:collisionEnabled = true` is only meaningful on a prim that
-    // applies PhysicsCollisionAPI. Terrain and PhysX wheels are the two
-    // deliberate exceptions: their owning projectors admit geometry through
-    // LunCoTerrainAPI and PhysxVehicleWheelAPI respectively. Catch the
-    // ordinary-geometry case here because the Avian compound reader otherwise
-    // ignores the prim without any indication that the authored intent was
-    // dropped.
+    // applies PhysicsCollisionAPI. Terrain is the deliberate projector
+    // exception: its owning LunCoTerrainAPI admits the terrain surface. Wheels
+    // are not an exception. Their dedicated wheel-realization rule owns the
+    // diagnostic because the correct repair differs by realization: raycast
+    // wheels must remove collision authoring, while physical wheels must add
+    // PhysicsCollisionAPI. Catching wheels in both rules would suggest the
+    // wrong repair and duplicate one authored mistake.
     let collision_enabled_without_api: Vec<H> = paths
         .iter()
         .filter(|p| {
@@ -624,6 +652,17 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
             ("missing", H::Array(missing.map(H::str).collect())),
         ]));
     }
+
+    // A wheel becomes the physical realization only when a standard revolute
+    // joint names it as body1. Keep this derived set identical to the runtime
+    // discriminator; a wheel's parent or a name such as `Wheel_FL` is not enough.
+    let physical_wheels: HashSet<String> = joint_paths
+        .iter()
+        .filter(|jp| reader.prim_type_name(jp).as_deref() == Some("PhysicsRevoluteJoint"))
+        .flat_map(|jp| reader.rel_targets(jp, "physics:body1"))
+        .filter(|target| reader.has_api_schema(target, "PhysxVehicleWheelAPI"))
+        .map(|target| target.to_string())
+        .collect();
 
     // Authored never-collide pairs. The rel is a promise the loader keeps at
     // RUNTIME, where a target that never spawns is a warning 10 seconds into a
@@ -753,7 +792,14 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
         .filter(|body| body_has_proxy(reader, &sorted, &bodies, body))
         .cloned()
         .collect();
-    let vehicle_parts = vehicle_part_facts(reader, &paths, &bodies, &vehicle_roots, &proxy_bodies);
+    let vehicle_parts = vehicle_part_facts(
+        reader,
+        &paths,
+        &bodies,
+        &vehicle_roots,
+        &proxy_bodies,
+        &physical_wheels,
+    );
 
     let mut body_facts: Vec<H> = Vec::new();
     let mut unsupported_program_prims: Vec<H> = Vec::new();
@@ -1284,7 +1330,7 @@ mod tests {
     }
 
     #[test]
-    fn collision_enabled_without_api_is_reported_except_for_owned_projectors() {
+    fn collision_enabled_without_api_is_reported_for_non_terrain_non_wheel_prims() {
         let f = facts(
             r#"#usda 1.0
 def Scope "Root"
@@ -1332,6 +1378,15 @@ def Xform "Vehicle" (
     {
         bool physics:collisionEnabled = true
     }
+    def Cylinder "PhysicalWheel" (prepend apiSchemas = ["PhysxVehicleWheelAPI", "PhysicsRigidBodyAPI", "PhysicsCollisionAPI"])
+    {
+        bool physics:collisionEnabled = true
+    }
+    def PhysicsRevoluteJoint "PhysicalWheelJoint"
+    {
+        rel physics:body0 = </Vehicle>
+        rel physics:body1 = </Vehicle/PhysicalWheel>
+    }
 }
 "#,
         );
@@ -1352,7 +1407,18 @@ def Xform "Vehicle" (
             ),
             &H::Bool(true)
         );
-        assert_eq!(contract("/Vehicle/Wheel"), &H::str("projector"));
+        assert_eq!(contract("/Vehicle/Wheel"), &H::str("raycast-collider"));
+        assert_eq!(
+            contract("/Vehicle/PhysicalWheel"),
+            &H::str("physical-collider")
+        );
+        assert_eq!(
+            field(
+                vehicle_part(&parts, "/Vehicle/PhysicalWheel"),
+                "physical_wheel"
+            ),
+            &H::Bool(true)
+        );
     }
 
     #[test]

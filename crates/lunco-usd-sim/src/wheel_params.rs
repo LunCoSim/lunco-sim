@@ -43,11 +43,11 @@
 //! `components/mobility/wheel.usda`, which every wheel composes — one authored
 //! set is what makes "same defaults for both variants" true.
 
-use avian3d::prelude::{Collider, ColliderDensity, Friction, Position, RevoluteJoint, Rotation};
+use avian3d::prelude::{Collider, Friction, RevoluteJoint};
 use bevy::asset::AssetId;
 use bevy::log::{error, info};
 use bevy::math::DVec3;
-use bevy::prelude::{Entity, Quat, World};
+use bevy::prelude::{Entity, World};
 use lunco_mobility::{JointedWheelTire, Suspension, TireLateralStiffnessGraph, WheelRaycast};
 use lunco_usd_bevy::read::UsdReadObject;
 use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdStageAsset};
@@ -283,8 +283,9 @@ fn attachment_endpoint(
 pub struct WheelParams {
     /// Wheel radius, m (`physxVehicleWheel:radius`).
     pub radius: f64,
-    /// Wheel width along its authored cylinder axis, m (`physxVehicleWheel:width`).
-    /// This standard wheel value drives the collider in both realizations.
+    /// Wheel width along its authored axle axis, m (`physxVehicleWheel:width`).
+    /// This is a vehicle-dynamics value; a physical wheel's collision shape is
+    /// authored independently through USD `PhysicsCollisionAPI` geometry.
     pub width: f64,
     /// Authored cylinder/axle axis (`axis` token).  Avian's primitive cylinder
     /// uses local +Y, so the physical projection rotates that primitive onto this
@@ -543,9 +544,9 @@ impl WheelParams {
     /// authors its tire plus attached drivetrain inertia here because Avian owns
     /// the wheel's rotational state at the co-simulation boundary.
     ///
-    /// The same authored value applies on the raycast side. The physical wheel's
-    /// collider density still derives its mass independently; it must not replace
-    /// an authored assembly inertia with a collider-only estimate.
+    /// The same authored value applies on the raycast side. The physical wheel
+    /// applies its mass independently of the authored collision shape; it must
+    /// not replace this assembly inertia with a collider-only estimate.
     pub fn axle_inertia(&self) -> f64 {
         let tire = if self.moment_of_inertia > 0.0 {
             self.moment_of_inertia
@@ -553,20 +554,6 @@ impl WheelParams {
             0.5 * self.mass * self.radius * self.radius
         };
         tire
-    }
-
-    /// Collider density realising `physxVehicleWheel:mass` on the physical wheel's
-    /// cylinder collider (`cylinder(r, h = physxVehicleWheel:width)` ⇒ volume
-    /// = π·r²·width).
-    ///
-    /// Mass goes in via DENSITY, not a forced `Mass`: avian derives
-    /// `AngularInertia` from the collider at `ColliderDensity` even when `Mass`
-    /// is set, and a forced mass desyncs mass from angular inertia — the
-    /// contact+joint solver then can't build enough support impulse and the
-    /// rover sinks through the one-sided terrain heightfield.
-    pub fn wheel_density(&self) -> f32 {
-        let volume = std::f64::consts::PI * self.radius.powi(2) * self.width;
-        (self.mass / volume) as f32
     }
 }
 
@@ -849,6 +836,7 @@ struct WheelUpdate {
     entity: Entity,
     physical: bool,
     params: WheelParams,
+    collider: Option<Collider>,
 }
 
 /// Re-derive every spawned wheel of `stage` from
@@ -919,10 +907,38 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
                 .and_then(|s| SdfPath::new(s).ok());
             match WheelParams::read(&view, &sp, susp.as_ref(), tire.as_ref()) {
                 Ok(params) => {
+                    let collider = if *physical {
+                        if !view
+                            .has_api_schema(&sp, openusd::schemas::physics::tokens::API_RIGID_BODY)
+                        {
+                            failures.push((
+                                Some(*entity),
+                                path.clone(),
+                                "missing authored PhysicsRigidBodyAPI".to_owned(),
+                            ));
+                            continue;
+                        }
+                        match lunco_usd_avian::authored_collider_from_usd(&view, &sp) {
+                            Ok(collider) => {
+                                Some(crate::oriented_wheel_collider(collider, params.axle_axis))
+                            }
+                            Err(error) => {
+                                failures.push((
+                                    Some(*entity),
+                                    path.clone(),
+                                    format!("invalid authored collision geometry: {error}"),
+                                ));
+                                continue;
+                            }
+                        }
+                    } else {
+                        None
+                    };
                     updates.push(WheelUpdate {
                         entity: *entity,
                         physical: *physical,
                         params,
+                        collider,
                     });
                 }
                 Err(missing) => failures.push((
@@ -985,8 +1001,8 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
             pw.wheel_radius = u.params.radius as f32;
             pw.wheel_width = u.params.width as f32;
         }
-        if let Some(mut density) = world.get_mut::<ColliderDensity>(u.entity) {
-            density.0 = u.params.wheel_density();
+        if let Some(mut mass) = world.get_mut::<avian3d::prelude::Mass>(u.entity) {
+            mass.0 = u.params.mass as f32;
         }
         if let Some(mut friction) = world.get_mut::<Friction>(u.entity) {
             friction.dynamic_coefficient = u.params.friction_mu;
@@ -1009,24 +1025,17 @@ pub fn resync_wheels_for_stage(world: &mut World, id: AssetId<UsdStageAsset>) {
             crate::physical_wheel_angular_inertia(&u.params, axis_rot),
             avian3d::prelude::NoAutoAngularInertia,
         ));
-        // …the collider only when radius or width actually moved (a swap
-        // mid-contact can pop the rover; accept as an editing-time artifact,
-        // don't pay it for unrelated edits).
+        // Reproject the authored collision geometry whenever the wheel's
+        // authored dimensions change. There is no parameter-derived collider
+        // fallback: a malformed or missing USD collision shape was recorded as
+        // a terminal resync failure above, so stale geometry is never retained.
         if (old_radius as f64 - u.params.radius).abs() > 1e-6
             || (old_width as f64 - u.params.width).abs() > 1e-6
         {
-            let radius = u.params.radius;
-            let cyl = Collider::cylinder(radius, u.params.width);
-            let collider = if axis_rot.abs_diff_eq(Quat::IDENTITY, 1e-5) {
-                cyl
-            } else {
-                Collider::compound(vec![(
-                    Position(DVec3::ZERO),
-                    Rotation(axis_rot.as_dquat()),
-                    cyl,
-                )])
+            let Some(collider) = u.collider.as_ref() else {
+                continue;
             };
-            world.entity_mut(u.entity).insert(collider);
+            world.entity_mut(u.entity).insert(collider.clone());
         }
         // Update the synthesized wheel-joint torque boundary. Heading joints
         // are independent authored revolute joints and are not part of this

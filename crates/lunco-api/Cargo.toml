@@ -11,7 +11,7 @@ description = "Transport-agnostic API layer for LunCoSim — HTTP, ROS2, IPC, et
 # It existed only for `CaptureScreenshot` (`Screenshot` / `ScreenshotCaptured` live in
 # bevy_render). It was ON BY DEFAULT, so staying render-free was the *non-default* path and
 # every consumer had to remember `default-features = false`. Three forgot — `lunco-doc-bevy`,
-# `lunco-celestial`/`lunco-tutorial`, `lunco-telemetry` — and each silently re-linked wgpu
+# `lunco-celestial`/the application lesson menu, `lunco-telemetry` — and each silently re-linked wgpu
 # into the `--no-ui` server. Feature unification makes that invisible to code review; only
 # `cargo tree` sees it.
 #

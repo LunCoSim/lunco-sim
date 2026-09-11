@@ -48,7 +48,7 @@ use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
 /// Type-erased per-node payload. Domain crates box their own typed
-/// struct (e.g. `IconNodeData` in lunco-modelica) and visuals
+/// struct (e.g. `IconNodeData` in lunco-modelica-core) and visuals
 /// downcast at draw time via `data.downcast_ref::<MyType>()`. `Arc`
 /// makes Node/Edge cloneable without forcing payloads to implement
 /// custom clone-boxing.
@@ -293,7 +293,7 @@ pub struct Node {
     pub kind: SmolStr,
     /// Type-erased per-kind payload. The visual's factory downcasts
     /// to its concrete payload struct (e.g.
-    /// `IconNodeData` in lunco-modelica). `#[serde(skip)]` because
+    /// `IconNodeData` in lunco-modelica-core). `#[serde(skip)]` because
     /// `dyn Any` can't round-trip through serde — Scene save/restore
     /// is a future feature that will need a per-domain
     /// serializer registry.

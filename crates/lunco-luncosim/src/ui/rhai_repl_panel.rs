@@ -95,8 +95,7 @@ impl Panel for RhaiReplPanel {
         // Ctrl/Cmd+Enter or the Run button submits; a bare Enter inserts a newline
         // (multiline editor) so multi-statement snippets are easy.
         let editor = ui.add(
-            egui::TextEdit::multiline(&mut self.input)
-                .code_editor()
+            lunco_workbench::text_editor::code(&mut self.input)
                 .desired_rows(2)
                 .desired_width(f32::INFINITY)
                 .hint_text("restart_scene(); pause()"),

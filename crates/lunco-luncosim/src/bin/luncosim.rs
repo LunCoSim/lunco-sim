@@ -1,6 +1,11 @@
 //! The windowed LunCoSim GUI. All application logic lives in [`lunco_luncosim::run`]
 //! so the headless `luncosim-server` binary shares the same composition root.
 //! Built with the default `ui` feature.
+
+#[cfg(not(target_family = "wasm"))]
+#[path = "../luncosim_repl.rs"]
+mod rhai_repl;
+
 fn main() -> lunco_luncosim::AppExit {
     // Velopack must see the original process before CLI dispatch. It handles
     // install/update hooks and applies a package that was downloaded during a
@@ -17,7 +22,7 @@ fn main() -> lunco_luncosim::AppExit {
     // `luncosim rhai [...]` is a client mode: talk to an already-running
     // instance over its `--api` port instead of opening a second window.
     #[cfg(not(target_family = "wasm"))]
-    if let Some(code) = lunco_luncosim::rhai_repl::run_if_requested() {
+    if let Some(code) = rhai_repl::run_if_requested() {
         std::process::exit(code);
     }
 

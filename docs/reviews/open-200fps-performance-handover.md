@@ -341,7 +341,7 @@ No duplicate propagation path or compatibility API was added.
 The focused checks passed:
 
 - `cargo test -p lunco-autopilot --lib -j 4`: **30/30**.
-- `cargo test -p lunco-modelica --lib -j 4`: **282 passed, 1 ignored**.
+- `cargo test -p lunco-modelica-core --lib -j 4`: **282 passed, 1 ignored**.
 - `cargo test -p lunco-usd-sim --lib -j 4`: **124/124**.
 - `cargo test -p lunco-celestial --lib -j 4`: **119/119**.
 - `cargo check -p lunco-usd-sim -j 4`: passed.
@@ -487,7 +487,8 @@ known per-extraction work at its owning render acknowledgement boundary.
 #### Current exposure publisher cadence and invalidation gating
 
 Tracy attributed approximately **0.93 ms** of mean work to
-`runtime_exposures::publish_exposure`. The cadence is an existing Bevy scheduler
+`lunco-luncosim-exposures::publish_exposure`. The cadence is an existing Bevy
+scheduler
 condition, and `ExposureRefresh` retains changes between cadence ticks. Its
 invalidation domains are separate for the driven vessel, authored controls,
 schema, celestial capability, and overlays; stable frames skip the publisher
@@ -616,7 +617,7 @@ after all compile results and visual participants are ready.
 Evidence from the USD checkout's `target/` with an empty prepared-solve-v4
 directory and no overlapping luncosim session:
 
-- `cargo test -p lunco-modelica --lib -j4`: **294 passed, 1 ignored**.
+- `cargo test -p lunco-modelica-core --lib -j4`: **294 passed, 1 ignored**.
 - `cargo build -p lunco-luncosim --bin luncosim -j4`: passed.
 - Production `target/debug/luncosim --api 4194 --no-vsync --no-throttle
   --log-diag --render-quality high --scene
@@ -768,7 +769,7 @@ remain on the Modelica runtime owner.
 Verification in the USD checkout used the normal `target/debug/luncosim`:
 
 - The focused owner suites passed: `lunco-usd-sim` 129/129,
-  `lunco-modelica` 289 passed/1 ignored, and `lunco-luncosim-edit` 59/59.
+  `lunco-modelica-core` 289 passed/1 ignored, and `lunco-luncosim-edit` 59/59.
 - USD integration suites passed: `lunco-usd` 175 unit tests plus all
   integration targets; `lunco-usd-sim` 129 unit tests plus 6 reader, 6
   drivetrain, 15 Rhai hook, and 20 connection tests; `lunco-usd-bevy` 250

@@ -122,9 +122,9 @@ fn every_bundled_tutorial_starts_and_navigates_without_a_rhai_runtime_error() {
             // its Rhai production observer, not by a Rust branch naming one
             // tutorial or reverse-engineering its step table here.
             for (name, value) in [
-                ("cmd:TutorialBack", 0),
-                ("cmd:TutorialGoto", 0),
-                ("cmd:TutorialSkip", 0),
+                ("cmd:GuidedBack", 0),
+                ("cmd:GuidedGoto", 0),
+                ("cmd:GuidedSkip", 0),
             ] {
                 let _ = call_hook(
                     &engine,

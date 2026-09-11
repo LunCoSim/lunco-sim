@@ -116,7 +116,7 @@ input Real height = 0;   // runtime-settable, default 0
 input Real velocity = 0;
 ```
 
-The default value (`= 0`) is stripped by `lunco-modelica` at compile time
+The default value (`= 0`) is stripped by `lunco-modelica-core` at compile time
 (`strip_input_defaults`) so the variable becomes a true runtime slot
 settable via `stepper.set_input("height", ...)`. Without the `input` keyword
 at all, the variable would vanish like the algebraics did.
@@ -127,10 +127,12 @@ at all, the variable would vanish like the algebraics did.
 2. Mark every wire-source as `output Real name;`.
 3. States can stay bare (`Real x(start = ...);`) — rumoca always keeps them.
 4. Parameters stay as `parameter Real foo = 1.0;`.
-5. Run [`balloon_stepper_test.rs`](../lunco-modelica/tests/balloon_stepper_test.rs)
-   pattern against your model: compile with rumoca, assert
-   `stepper.get("<your_variable>").is_some()` for every variable you plan
-   to wire. If it fails, you forgot an `output` somewhere.
+5. Add or extend an authored scene under `assets/scenes/tests/` and a Rhai
+   scenario under `assets/scenarios/tests/`. Run it through the production
+   `target/debug/luncosim test --scene ...` command and assert every variable
+   that the USD boundary actually wires. If a value is absent, the authored
+   Modelica class is missing an `output` declaration or the USD interface is
+   incomplete.
 
 ## Tests
 
@@ -141,25 +143,25 @@ at all, the variable would vanish like the algebraics did.
   application with mocked `SimComponent.outputs`. Fast; no Modelica worker
   involved.
 
-- The application-level **Modelica → Python → Avian** chain lives in
-  [`lunco-luncosim/tests/cosim_chain.rs`](../lunco-luncosim/tests/cosim_chain.rs).
-  It is hosted by the existing application package because it crosses the
-  worker, scripting, and physics composition boundary; this leaf package keeps
-  only co-simulation mechanism tests.
+- The application-level **Modelica → Python → Avian** chain lives in the
+  authored [`assets/scenes/tests/cosim_chain.usda`](../../assets/scenes/tests/cosim_chain.usda)
+  scene and its Rhai scenario. It crosses the worker, scripting, USD projection,
+  and physics composition boundary through the production runner; this leaf
+  package keeps only co-simulation mechanism tests.
 
-- **`lunco-modelica/tests/balloon_stepper_test.rs`** — isolates rumoca itself.
-  Compiles `balloon.mo` directly and asserts that `stepper.get("netForce")`
-  returns `Some`. This is the regression test for the "algebraics eliminated"
-  bug — if it fails, the `output` workaround has stopped working and we need
-  to revisit the [upstream fix](#upstream-rumoca-workaround).
+- **`assets/scenes/tests/modelica_balloon_earth.usda`** plus its Rhai scenario —
+  exercises the shipped Balloon source through the production USD/Modelica
+  path and asserts the published `netForce` and physical rise. Rust keeps only
+  generic compiler/solver seams whose behavior cannot be observed through the
+  public scene surface.
 
 Run with:
 
 ```bash
 scripts/run_rust_tests.sh -p lunco-cosim --module cosim_test
 scripts/run_rust_tests.sh -p lunco-cosim --module balloon_e2e_test
-scripts/run_rust_tests.sh -p lunco-luncosim --features python --module cosim_chain
-scripts/run_rust_tests.sh -p lunco-modelica --module balloon_stepper_test
+target/debug/luncosim test --scene scenes/tests/cosim_chain.usda
+target/debug/luncosim test --scene scenes/tests/modelica_balloon_earth.usda
 ```
 
 `lunco-cosim`'s dep graph is small, so these tests recompile in a few seconds

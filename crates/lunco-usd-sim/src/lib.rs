@@ -79,6 +79,7 @@ use lunco_mobility::{
     SuspensionSpring, WheelRaycast,
 };
 use lunco_render::{GraphicsCameraDefaults, PbrLook, SceneCamera};
+use openusd::schemas::physics::tokens as ptok;
 use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::{HashMap, HashSet};
 
@@ -2397,6 +2398,37 @@ fn process_usd_sim_prim_read(
                 return;
             }
         };
+        // A physical wheel is a separate body only in the physical realization. Its
+        // collision shape is an authored USD geometry prim, not a collider synthesized
+        // from wheel dynamics. Validate it before creating any synthesized ports so an
+        // invalid authored body leaves no partial runtime projection behind.
+        let is_physical = topology.joint_targets.contains_key(&prim_path.path);
+        let authored_collider = if is_physical {
+            if !reader.has_api_schema(&sdf_path, ptok::API_RIGID_BODY) {
+                error!(
+                    "USD physical wheel {} has no authored PhysicsRigidBodyAPI — refusing to spawn",
+                    sdf_path.as_str()
+                );
+                commands.entity(entity).try_insert(UsdSimProcessed);
+                return;
+            }
+            let collider = match lunco_usd_avian::authored_collider_from_usd(reader, &sdf_path) {
+                Ok(collider) => collider,
+                Err(error) => {
+                    error!(
+                        "USD physical wheel {} has invalid authored collision geometry — refusing to spawn: {}",
+                        sdf_path.as_str(),
+                        error
+                    );
+                    commands.entity(entity).try_insert(UsdSimProcessed);
+                    return;
+                }
+            };
+            Some(oriented_wheel_collider(collider, params.axle_axis))
+        } else {
+            None
+        };
+
         // Create the actuator-side ports for drive and heading. Owned by the wheel via
         // `ChildOf` so the single recursive scene-clear reclaims them with the
         // wheel — synthesized backing entities are never left detached at the root
@@ -2474,7 +2506,6 @@ fn process_usd_sim_prim_read(
         // A wheel receives only the scalar signals explicitly authored on its
         // own inputs. A connected `inputs:heading` is the final wheel heading;
         // no vehicle class or wheel index is consulted.
-        let is_physical = topology.joint_targets.contains_key(&prim_path.path);
         let physical_body_path = if is_physical {
             let Some(path) = topology.physical_wheel_bodies.get(&prim_path.path) else {
                 error!(
@@ -2503,6 +2534,14 @@ fn process_usd_sim_prim_read(
             return;
         };
         if is_physical {
+            let Some(authored_collider) = authored_collider else {
+                error!(
+                    "USD physical wheel {} lost its validated authored collider — refusing to spawn",
+                    sdf_path.as_str()
+                );
+                commands.entity(entity).try_insert(UsdSimProcessed);
+                return;
+            };
             let Some(vehicle_mount) = vehicle_mount_transform(reader, &sdf_path) else {
                 error!(
                     "USD physical wheel {} has no resolved PhysxVehicleContextAPI owner — refusing to spawn",
@@ -2538,6 +2577,7 @@ fn process_usd_sim_prim_read(
                 vehicle_mount,
                 p_drive,
                 p_speed,
+                authored_collider,
             );
         } else {
             // Strict validation (doc 53 §4): a raycast wheel uses an
@@ -2996,6 +3036,7 @@ fn setup_physical_wheel(
     vehicle_mount: Transform,
     p_drive: Entity,
     p_speed: Entity,
+    authored_collider: Collider,
 ) {
     info!("Setting up PHYSICAL wheel {}", prim_path.path);
     let radius = params.radius as f32;
@@ -3024,19 +3065,11 @@ fn setup_physical_wheel(
         scale: existing_tf.scale,
     };
 
-    // Keep the rigid collider identical to the authored cylinder that produced
-    // the visual mesh. `Collider::cylinder` takes the full height; deriving a
-    // width from radius made the collider wider/narrower than the tire.
-    let cyl = Collider::cylinder(params.radius, params.width);
-    let collider = if wheel_axis_rot.abs_diff_eq(Quat::IDENTITY, 1e-5) {
-        cyl
-    } else {
-        Collider::compound(vec![(
-            Position(DVec3::ZERO),
-            Rotation(wheel_axis_rot.as_dquat()),
-            cyl,
-        )])
-    };
+    // The specialized wheel owns the rigid-body/joint realization, but the
+    // collision shape remains the one authored on the USD wheel prim. Avian
+    // receives this projection from `lunco-usd-avian`; dynamics parameters never
+    // become an implicit collision fallback.
+    let collider = authored_collider;
     // Visual mesh child id, captured so the client-proxy animator
     // (`animate_proxy_physical_wheels`) can author its rotation directly.
     let visual_id = spawn_wheel_visual(
@@ -3057,11 +3090,6 @@ fn setup_physical_wheel(
         .remove::<RayCaster>()
         .remove::<RayHits>();
 
-    // Wheel mass via DENSITY, not a forced `Mass` — see
-    // `WheelParams::wheel_density` for why a forced mass desyncs mass from
-    // angular inertia and sinks the rover through the terrain.
-    let wheel_density = params.wheel_density();
-
     commands.entity(entity).try_insert((
         PhysicalWheel {
             visual_entity: visual_id,
@@ -3075,13 +3103,19 @@ fn setup_physical_wheel(
             mount_local: vehicle_mount.translation,
         },
         body_mount,
+        // The standard wheel mass is a body mass, independent of the authored
+        // collision shape. `NoAutoMass` prevents child/shape changes from
+        // silently replacing the USD value during Avian recomputation.
+        avian3d::prelude::Mass(params.mass as f32),
+        avian3d::prelude::NoAutoMass,
+        // Publish the complete authored wheel inertia before the rigid-body
+        // observer runs, so Avian never derives a transient tensor from the
+        // collision shape.
+        physical_wheel_angular_inertia(params, wheel_axis_rot),
+        avian3d::prelude::NoAutoAngularInertia,
         RigidBody::Kinematic,
         ShouldBeDynamic,
         collider,
-        // The authored wheel mass is applied through density so mass AND angular
-        // inertia stay consistent (see the `wheel_density` note above). A forced
-        // `Mass` desynced them and the rover sank through the terrain.
-        avian3d::prelude::ColliderDensity(wheel_density),
         // The shared tire model owns tangential wheel-ground force. The Avian
         // collision hook removes its generic tangent impulse for this body;
         // Avian still owns the normal contact constraint and the wheel joint.
@@ -3119,17 +3153,6 @@ fn setup_physical_wheel(
         // anti-tunneling guard stays.)
         avian3d::prelude::SweptCcd::default(),
         wheel_tf,
-    ));
-
-    // The authored complete wheel-assembly MOI is the rotational contract for
-    // BOTH realizations. Collider density derives the physical mass, but it
-    // cannot express an authored non-solid-cylinder MOI. Stamp the complete
-    // tensor even on undriven wheels; otherwise they silently use a
-    // collider-derived inertia and diverge from the same wheel on the raycast
-    // path.  The transverse terms remain the geometric cylinder tensor.
-    commands.entity(entity).try_insert((
-        physical_wheel_angular_inertia(params, wheel_axis_rot),
-        avian3d::prelude::NoAutoAngularInertia,
     ));
 
     // Spawn the avian joint. Anchors + axis are derived from the wheel's
@@ -3236,6 +3259,24 @@ fn setup_physical_wheel(
     // The wheel's `WheelBodyMount` is the canonical physics ownership boundary.
     // `ChildOf` remains the authored transform/despawn hierarchy; it is not used
     // to infer which body receives wheel torque, suspension, or mass.
+}
+
+/// Put an authored wheel shape into Avian's conventional +Y cylinder frame.
+/// USD's `Cylinder.axis` is read from the same wheel parameter record that
+/// drives the revolute joint and the visual projection. The shape itself still
+/// comes exclusively from `PhysicsCollisionAPI` geometry.
+pub(crate) fn oriented_wheel_collider(collider: Collider, axle_axis: DVec3) -> Collider {
+    let axis = axle_axis.normalize_or_zero();
+    let axis_rotation = Quat::from_rotation_arc(Vec3::Y, axis.as_vec3());
+    if axis_rotation.abs_diff_eq(Quat::IDENTITY, 1e-5) {
+        collider
+    } else {
+        Collider::compound(vec![(
+            Position(DVec3::ZERO),
+            Rotation(axis_rotation.as_dquat()),
+            collider,
+        )])
+    }
 }
 
 /// Build the physical wheel's authored inertia tensor in the entity's local

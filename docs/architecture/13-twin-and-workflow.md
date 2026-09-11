@@ -409,7 +409,7 @@ contains; the journal is *what happened to it*.
 | `twin.toml`, document set, file references, paths | `lunco-twin` |
 | Append-only event log: storage, schema, query, replay | `lunco-twin-journal` |
 | Per-domain ops (`ModelicaOp`, `UsdOp`, …) | domain crates |
-| UI panel that *displays* the journal | `lunco-modelica` (and per-domain UI) |
+| UI panel that *displays* the journal | `lunco-modelica-ui` (and per-domain UI) |
 
 Splitting the journal out keeps `lunco-twin` focused on file-set
 management and lets headless tooling (CLI exporters, CI pipelines,

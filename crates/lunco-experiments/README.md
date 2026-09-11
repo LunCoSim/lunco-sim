@@ -27,7 +27,7 @@ See `docs/architecture/25-experiments.md` for the design rationale.
 
 This crate has **no rumoca / Modelica dependency**. The simulation backend
 plugs in via the `ExperimentRunner` trait; the Modelica binding lives in
-`lunco-modelica` (`experiments_runner.rs`). Future backends (FMU, codegen,
+`lunco-modelica-core` (`experiments_runner.rs`). Future backends (FMU, codegen,
 remote) plug in the same way.
 
 ## Features

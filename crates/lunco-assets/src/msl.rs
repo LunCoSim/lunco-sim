@@ -2,12 +2,12 @@
 //!
 //! The desktop build reads MSL from disk via [`crate::msl_source_root_path`].
 //! The web build fetches a versioned bundle (`dist/<bin>/msl/`) and unpacks
-//! it into memory. Consumers in `lunco-modelica` (the rumoca compile path,
+//! it into memory. Consumers in `lunco-modelica-core` (the rumoca compile path,
 //! the `modelica://` image loader, etc.) read through [`MslAssetSource`]
 //! instead of touching `std::fs` directly.
 //!
 //! This module owns the *types* — the actual web fetch lives in
-//! `lunco-modelica/src/msl_remote.rs` because that's where the
+//! `lunco-modelica-core/src/msl_remote.rs` because that's where the
 //! `web-sys`/`wasm-bindgen-futures` deps already are. Keeping
 //! `lunco-assets` web-sys-free keeps it cheap to depend on from
 //! everywhere else.

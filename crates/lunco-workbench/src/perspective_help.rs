@@ -73,11 +73,6 @@ pub struct PerspectiveHelp {
     pub shortcuts: Vec<HelpShortcut>,
     /// Primary mouse interactions.
     pub mouse: Vec<HelpMouse>,
-    /// Whether this perspective has a guided tour. When set, the popup
-    /// shows a "🎓 Show Tour" button that publishes a [`HelpTourRequest`]
-    /// for this perspective; the owning domain observes it and starts
-    /// its tour (the workbench has no tour of its own).
-    pub has_tour: bool,
 }
 
 /// Registry of help content for all perspectives in the app.
@@ -102,13 +97,6 @@ impl PerspectiveHelpRegistry {
 #[derive(Resource, Default)]
 pub struct HelpPopup(pub Option<PerspectiveId>);
 
-/// Set by the popup's "Show Tour" button to the perspective whose tour
-/// was requested. The domain that owns the tour drains it (sets it back
-/// to `None`) when it starts. Decouples the workbench-level popup from
-/// domain-specific tour code.
-#[derive(Resource, Default)]
-pub struct HelpTourRequest(pub Option<PerspectiveId>);
-
 /// Plugin that adds the perspective help system, registry, and popup.
 pub struct PerspectiveHelpPlugin;
 
@@ -116,7 +104,6 @@ impl Plugin for PerspectiveHelpPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PerspectiveHelpRegistry>();
         app.init_resource::<HelpPopup>();
-        app.init_resource::<HelpTourRequest>();
         app.init_resource::<LiveHelpSections>();
         app.add_systems(
             EguiPrimaryContextPass,
@@ -177,7 +164,6 @@ fn help_row(ui: &mut egui::Ui, left: egui::RichText, right: &str, right_color: e
 fn render_help_popup(
     mut egui_ctx: EguiContexts,
     mut popup: ResMut<HelpPopup>,
-    mut tour_req: ResMut<HelpTourRequest>,
     registry: Res<PerspectiveHelpRegistry>,
     layout: Res<WorkbenchLayout>,
     live_sections: Res<LiveHelpSections>,
@@ -318,23 +304,6 @@ fn render_help_popup(
                                 ui.label(egui::RichText::new("No shortcuts listed.").weak());
                             }
                         });
-
-                    // Guided-tour launcher — only for perspectives that
-                    // declared one. Lives below the scroll area so it's
-                    // always reachable.
-                    if help.has_tour {
-                        ui.add_space(12.0);
-                        ui.separator();
-                        ui.add_space(8.0);
-                        if ui
-                            .button(egui::RichText::new("Show Tour").strong())
-                            .on_hover_text("Replay the guided interactive tour")
-                            .clicked()
-                        {
-                            tour_req.0 = Some(id);
-                            close = true;
-                        }
-                    }
                 });
         });
 
