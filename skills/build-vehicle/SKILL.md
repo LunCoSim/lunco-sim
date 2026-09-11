@@ -33,6 +33,13 @@ are queryable. Parameter edits use `parameter_plan` and the same typed
 `ApplyUsdOps` boundary as the Editor; the planner is generic and does not know
 vehicle names or paths.
 
+When iterating a referenced component in Editor, use
+`component_editor::selected_update_context` to preserve the exact preview,
+document, path, and generation, then use `component_editor::update_plan` with
+the component recipe from the owning Twin. Review and commit its one typed
+change set before checking the composed rover; do not put vehicle-specific
+recipes or a component registry in Rust.
+
 Mission-specific recipes and study assets belong in the Twin that owns them,
 rather than in the core asset library. A Twin tool may compose these generic
 helpers and supply its own explicit paths and study values, but it must remain

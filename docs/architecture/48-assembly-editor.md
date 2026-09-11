@@ -632,6 +632,22 @@ explicit `assembly_edit::rigid_body_plan` or joint/mount plan when the part
 must participate in articulated physics, and ensure any material relationship
 target already exists in the composed stage.
 
+The `component_editor` Rhai tool library is the shared Editor/AI facade for
+updating an existing component. `update_context(doc, edit_target, path,
+requested)` composes the exact authoring context and schema-driven property
+catalog; `selected_update_context(preview, requested)` obtains the same input
+from the current unambiguous Editor selection. `update_plan` delegates to the
+existing `component_bundle_update_plan` and returns a dry
+`component_update_plan` with the typed `.ops`. The caller must provide the
+component bundle recipe and optional explicit bindings, then submit the ops
+through the ordinary proposal/review/commit journal path. The facade is
+recipe-driven: it never derives a recipe from child names and does not create
+a component registry, expression language, or second USD writer. The
+selected-context operation is advertised only for an authored `Xform`
+component; an explicit context still requires an existing `Xform` root. It
+preserves existing topology, material bindings, and unowned children while
+rejecting drift and true no-op updates.
+
 Referenced construction has one additional sequencing rule. Use
 `assembly_builder::referenced_instance_plan` or
 `referenced_instance_targeted_plan` to author the identity, reference, and

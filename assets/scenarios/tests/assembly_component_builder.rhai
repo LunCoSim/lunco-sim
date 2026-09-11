@@ -262,6 +262,9 @@ fn on_tick(me) {
             let context = assembly_builder::authoring_context(
                 this.doc, BUNDLE, "@root@",
             );
+            let component_context = component_editor::update_context(
+                this.doc, "@root@", BUNDLE, (),
+            );
             let invalid_dispatch = assembly_builder::place_or_attach_plan(
                 this.doc, "@root@", #{ mode: "unsupported" },
             );
@@ -306,6 +309,17 @@ fn on_tick(me) {
                     && !context.actions.contains("plan_component_attachment")
                     && !context.actions.contains("plan_existing_mount_realignment"),
                 "authoring context exposes exact identity, generation, and available actions"));
+            this.checks.push(t_true(query_ok(component_context)
+                    && component_context.kind == "component_update_context"
+                    && component_context.doc_id == this.doc
+                    && component_context.path == BUNDLE
+                    && component_context.generation == before.generation
+                    && component_context.operation.planner == "component_editor::update_plan"
+                    && component_context.operation.implementation
+                        == "assembly_builder::component_bundle_update_plan"
+                    && component_context.operation.topology_preserved
+                    && component_context.properties.ok,
+                "component editor exposes one exact, recipe-driven update workflow"));
             this.checks.push(t_true(query_ok(frame_catalog)
                     && frame_catalog.kind == "functional_frame_catalog"
                     && frame_catalog.edit_target == "@root@"
@@ -386,16 +400,17 @@ fn on_tick(me) {
                 value: 1.6,
                 expected: 1.6,
             }];
-            let update = assembly_builder::component_bundle_update_plan(
+            let update = component_editor::update_plan(
                 this.doc, "@root@", BUNDLE, updated, bindings,
             );
             let invalid_update = updated;
             invalid_update.geometry[0].kind = "Cylinder";
-            let invalid = assembly_builder::component_bundle_update_plan(
+            let invalid = component_editor::update_plan(
                 this.doc, "@root@", BUNDLE, invalid_update, bindings,
             );
             invalid_update.geometry[0].kind = "Cube";
-            if !query_ok(update) || update.kind != "component_bundle_update"
+            if !query_ok(update) || update.kind != "component_update_plan"
+                || update.planner != "assembly_builder::component_bundle_update_plan"
                 || update.no_op || update.ops.len() < 10 || query_ok(invalid) {
                 fail(this, "generic component regeneration did not preserve topology and produce owned updates");
                 return;
@@ -465,7 +480,7 @@ fn on_tick(me) {
                 }
                 return;
             }
-            let same = assembly_builder::component_bundle_update_plan(
+            let same = component_editor::update_plan(
                 this.doc, "@root@", BUNDLE, this.updated_bundle, bindings,
             );
             let standard_manifest = #{

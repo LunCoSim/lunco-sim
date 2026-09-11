@@ -423,6 +423,29 @@ one generation-checked `ApplyUsdOps` edit. AI callers use
 `assembly_builder::parameter_plan` and the same `assembly_edit::batch` or
 proposal flow; do not make one command per slider or create a vehicle-specific
 parameter writer.
+
+For a component-level update that must keep geometry, frames, mass, and
+explicit bindings coherent, use the generic `component_editor` Rhai facade:
+
+```rhai
+let context = component_editor::selected_update_context(preview, ());
+let plan = component_editor::update_plan(
+    context.doc_id, context.edit_target, context.path, bundle, bindings,
+);
+```
+
+The bundle is an explicit Twin/model-package recipe, not something inferred
+from a selected prim. The facade delegates to
+`assembly_builder::component_bundle_update_plan`, so the result is dry and
+topology-preserving. It updates existing standard `UsdGeom`/`UsdPhysics`
+values and explicit bindings, while rejecting missing children, kind or role
+drift, changed material ownership, stale generations, and no-op journals.
+Review `plan.ops` through `assembly_edit::propose`, `review_session`, and
+`commit_proposal`. Use `update_context(doc, edit_target, path, requested)` when
+the path is already known; use `selected_update_context` when starting from the
+Editor selection. Both preserve the exact document, edit target, path, and
+generation checkpoint for human and AI workflows.
+
 When editing a primitive's standard `axis`, compare the visible result after
 reprojection with the composed attribute. Repeated axis edits must apply the
 axis correction once to the authored pose, including identity rotation. A

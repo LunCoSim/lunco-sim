@@ -101,18 +101,11 @@ fn enrich_selection(
     Some(selection)
 }
 
-fn selection_item(
-    view: &impl UsdRead,
-    selection: &SelectionEntity,
-    doc: lunco_doc::DocumentId,
-    preview: UsdPreviewId,
-    edit_target: &str,
+fn supported_operations(
+    type_name: &str,
+    kind: Option<&str>,
     variant_sets: bool,
-) -> Option<serde_json::Value> {
-    let sdf = SdfPath::new(&selection.path).ok()?;
-    let type_name = view.type_name(&sdf)?;
-    let kind = view.kind(&sdf);
-
+) -> Vec<serde_json::Value> {
     // These are the existing typed public edit surfaces. The path is always
     // supplied separately by the caller; no operation is addressed by a
     // display name or an inferred entity.
@@ -134,12 +127,40 @@ fn selection_item(
             "rhai": "assembly_edit::attribute",
         }),
     ];
+    if type_name == "Xform" && kind.is_some_and(|kind| kind.eq_ignore_ascii_case("component")) {
+        supported_operations.push(serde_json::json!({
+            "operation": "UpdateComponent",
+            "rhai": "component_editor::update_plan",
+            "planner": "assembly_builder::component_bundle_update_plan",
+            "mode": "dry_plan",
+            "requires": ["explicit component bundle recipe", "optional bindings"],
+            "preserves": ["component topology", "existing material bindings", "unowned children"],
+            "commit": "assembly_edit::propose -> review_session -> commit_proposal",
+        }));
+    }
     if variant_sets {
         supported_operations.push(serde_json::json!({
             "command": "ApplyUsdOp",
             "rhai": "assembly_edit::variant",
         }));
     }
+    supported_operations
+}
+
+fn selection_item(
+    view: &impl UsdRead,
+    selection: &SelectionEntity,
+    doc: lunco_doc::DocumentId,
+    preview: UsdPreviewId,
+    edit_target: &str,
+    variant_sets: bool,
+) -> Option<serde_json::Value> {
+    let sdf = SdfPath::new(&selection.path).ok()?;
+    let type_name = view.type_name(&sdf)?;
+    let kind = view.kind(&sdf);
+
+    let supported_operations =
+        supported_operations(type_name.as_str(), kind.as_deref(), variant_sets);
 
     Some(serde_json::json!({
         "identity": {

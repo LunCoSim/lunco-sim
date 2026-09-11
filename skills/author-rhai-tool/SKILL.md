@@ -119,6 +119,14 @@ source-frame-to-target-frame placement. Keep the same-parent and rigid-stack
 constraints visible in the tool result, and send only the returned typed ops
 through the existing review/journal path.
 
+For a reusable component recipe, compose the existing libraries with ordinary
+Rhai imports through `component_editor::update_context` or
+`component_editor::selected_update_context`. Its `update_plan` is a thin
+facade over `assembly_builder::component_bundle_update_plan`; keep the bundle
+recipe in the owning Twin/model package, return a dry plan, and let
+`assembly_edit` own proposal, review, commit, generation checks, and journalling.
+Do not add a Rust component registry or infer a recipe from USD child names.
+
 ## Use an existing tool first
 
 Before creating a library, query the live surface with `DiscoverSchema`,

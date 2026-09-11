@@ -658,6 +658,15 @@ command/Rhai operation families. `selection_mode` is `none`, `single`, or
 `ambiguous_paths` make invalid targeting visible. It never exposes a display
 name as identity and never mutates selection or authored USD.
 
+When the selected prim is an authored `Xform` with `kind = "component"`, its
+operation families additionally advertise the recipe-driven `UpdateComponent`
+workflow. The descriptor points to the Rhai `component_editor::update_plan`
+facade, identifies the underlying
+`assembly_builder::component_bundle_update_plan`, and states that the caller
+must supply an explicit bundle recipe before proposing the returned typed
+operations. Assemblies and geometry children do not receive this capability
+by inference.
+
 The built-in `ReadExposures` query reads the domain-neutral
 `EngineExposures` registry used by runtime HTML/CSS surfaces and other
 clients. Its `revision` is the change-detection boundary; callers can poll
