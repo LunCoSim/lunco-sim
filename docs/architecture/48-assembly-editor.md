@@ -546,6 +546,31 @@ send the reviewed component `.spec` to `assembly_edit::attach_component`.
 Neither helper mutates USD, so generated plans and human previews share the
 same exact-path contract and generation checkpoint.
 
+### Schema-driven property editing
+
+For a selected prim's editable facts, use
+`assembly_builder::editable_property_catalog(doc, path, edit_target, requested)`.
+Pass an explicit array of field names for a focused Inspector/agent view, or
+`()` to discover supported standard attributes, `kind`, variant selections,
+and common USD relationships. Each returned property carries its USD owner,
+`type_name`, units, composed value, USDA literal, authored/editable status,
+edit scope, and source path. `xformOpOrder` and `extent` remain visible but are
+read-only because they describe structure or derived geometry. Unknown or
+`lunco:`-specific names are rejected; the catalog does not guess a schema.
+
+Use `assembly_builder::editable_property_patch_plan` to turn a list of
+`{ name, value, type_name }` edits into a dry, generation-checked plan. It
+reuses the typed transform, attribute, relationship, kind, and variant
+operations already owned by `assembly_edit`; it does not mutate USD. The plan
+rejects composed read-only targets, wrong USD types, invalid relationship paths,
+structural fields, and stale generations, and reports a true `no_op` with no
+operations when all requested values already match. Review and commit
+`plan.ops` through the normal `assembly_edit::propose`/`review_session`/
+`commit_proposal` flow. `InspectUsdDocument` exposes the underlying standard
+variant selection metadata at `prim.metadata.variantSelections`, so a human
+Inspector and an AI tool can display the same authored/root, runtime, and
+composed state.
+
 When the Editor already has one unambiguous prim selected, use
 `assembly_builder::selected_authoring_context(preview)` instead of copying a
 path from a tab label or display name. With `preview == ()` it reads the

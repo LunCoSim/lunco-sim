@@ -36,6 +36,14 @@ placements; use `referenced_instance_mirror_plan` for a local-axis reflected
 translation. Both reuse the generic reference planner and preserve standard
 USD identities and transforms.
 
+For a human or AI editing an existing component, use
+`assembly_builder::editable_property_catalog` to expose its standard USD
+properties, exact types, units, composed values, edit scope, and source path.
+Use `editable_property_patch_plan` for a generation-checked dry change set,
+then review and commit its `.ops` through `assembly_edit`. Structural or
+derived fields remain read-only, and unregistered `lunco:` properties are not
+invented as a second component schema.
+
 Before adding a component, search by domain API, connector, and Modelica class:
 
 ```sh

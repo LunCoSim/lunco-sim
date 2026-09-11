@@ -318,6 +318,59 @@ fn token_metadata_json(
     }
 }
 
+fn variant_selection_metadata_json(
+    data: &dyn openusd::sdf::AbstractData,
+    path: &SdfPath,
+    source: &str,
+) -> serde_json::Value {
+    let Some(value) = data
+        .try_field(path, openusd::sdf::FieldKey::VariantSelection.as_str())
+        .ok()
+        .flatten()
+    else {
+        return serde_json::json!({
+            "present": false,
+            "value": serde_json::Value::Null,
+            "source": source,
+        });
+    };
+    match value.as_ref() {
+        SdfValue::VariantSelectionMap(map) => {
+            let selections = map
+                .iter()
+                .map(|(set, variant)| (set.to_string(), serde_json::json!(variant.to_string())))
+                .collect::<serde_json::Map<_, _>>();
+            serde_json::json!({
+                "present": true,
+                "value": selections,
+                "source": source,
+            })
+        }
+        _ => serde_json::json!({
+            "present": true,
+            "value": serde_json::Value::Null,
+            "source": source,
+            "error": "metadata is not a USD variant-selection map",
+        }),
+    }
+}
+
+fn variant_selection_stack_json(document: &UsdDocument, path: &SdfPath) -> serde_json::Value {
+    serde_json::json!({
+        "authored": {
+            "root": variant_selection_metadata_json(
+                document.data(), path, "@root@",
+            ),
+            "runtime": variant_selection_metadata_json(
+                document.runtime_data(), path, "@runtime@",
+            ),
+        },
+        "composed": variant_selection_metadata_json(
+            document.composed_arc().as_ref(), path, "document_composed",
+        ),
+    })
+}
+
 fn metadata_stack_json(
     document: &UsdDocument,
     path: &SdfPath,
@@ -475,6 +528,7 @@ impl ApiQueryProvider for InspectUsdDocumentProvider {
                         openusd::sdf::FieldKey::Kind.as_str(),
                         canonical_kind,
                     ),
+                    "variantSelections": variant_selection_stack_json(document, &path),
                 },
                 "references": references,
             });
