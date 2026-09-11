@@ -16,7 +16,8 @@ members = [
     "crates/lunco-celestial-ephemeris",
     "crates/lunco-hardware",
     "crates/lunco-mobility",
-    "crates/lunco-modelica",
+    "crates/lunco-modelica-ui",
+    "crates/lunco-modelica-core",
     "crates/lunco-modelica-ast",
     "crates/lunco-usd-avian",
     "crates/lunco-usd-bevy",
@@ -68,7 +69,6 @@ members = [
     "crates/lunco-worker-transport",
     "crates/lunco-terrain-bake",
     "crates/lunco-terrain-surface",
-    "crates/lunco-tutorial",
     # Doc generator, covered by `cargo clippy --workspace` and
     # `cargo test --workspace`.
     "tools/gen-command-docs"
@@ -90,7 +90,7 @@ exclude = ["vendor/mitchty-transform-gizmo"]
 # the linked `ui` feature.) `cargo run -p lunco-luncosim-server`.
 default-members = [
     "crates/lunco-luncosim",
-    "crates/lunco-modelica",
+    "crates/lunco-modelica-ui",
 ]
 resolver = "2"
 
@@ -184,7 +184,7 @@ bevy = { version = "0.19.1", default-features = false, features = [
     # NOTE: `trace_tracy` is intentionally NOT in the workspace default features
     # because tracy-client-sys requires a C++ compile that doesn't work
     # targeting wasm32-unknown-unknown *or* Windows MSVC 2019. It is re-enabled
-    # on native via the opt-in `tracy` feature on `lunco-modelica`
+    # on native via the opt-in `tracy` feature on `lunco-modelica-ui`
     # (see that crate's [features] section and target-cfg dependency).
     "serialize",                   # serde Serialize/Deserialize for Entity, Vec3, Quat, Handle, etc.
                                    # Enables `#[Command]` to always derive serde without per-field worry.

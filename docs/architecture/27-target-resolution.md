@@ -22,7 +22,7 @@ Initial fixes were **point fixes** (swap `first_non_pkg` → `simulation_candida
 
 ## 2. Current system inventory
 
-File references in `crates/lunco-modelica` and `crates/lunco-experiments`:
+File references in `crates/lunco-modelica-core` and `crates/lunco-experiments`:
 
 ### 2.1 Class candidates & ranking — `index.rs`
 - `ClassKind::is_simulatable()` (`index.rs`) → `true` only for `Model | Block | Class`.
@@ -41,7 +41,7 @@ File references in `crates/lunco-modelica` and `crates/lunco-experiments`:
 - `bounds_from_annotation() -> Option<RunBounds>` (`compile.rs`): looks up class by qualified **or** leaf name; requires `experiment.stop_time = Some(_)`; maps `start_time → t_start` (default 0.0), `stop_time → t_end`, `interval(>0) → dt`, `tolerance → tolerance`; `solver`/`h0` always `None`.
 
 ### 2.4 Types — `lunco-experiments/src/lib.rs`
-- `ModelRef(String)` (`lib.rs`) — opaque qualified class name; the crate does **not** depend on `lunco-modelica`.
+- `ModelRef(String)` (`lib.rs`) — opaque qualified class name; the crate does **not** depend on `lunco-modelica-core`.
 - `RunBounds { t_start, t_end, dt: Option, tolerance: Option, solver: Option<String>, h0: Option }` (`lib.rs`).
 - `ExperimentRunner { run_fast(&Experiment) -> RunHandle; default_bounds(&ModelRef) -> Option<RunBounds> }` (`lib.rs`) — already backend-agnostic; one impl (`ModelicaRunner`, `experiments_runner.rs`).
 - `ExperimentRegistry` — keyed `(TwinId, ModelRef)`; Modelica-specific in usage.
@@ -207,8 +207,8 @@ Prioritized by value.
 
 Three layers (consistent with the S2005 plan, with one correction).
 
-1. **Pure core — in `lunco-experiments`** (NOT `lunco-modelica`). Correction to the earlier plan: USD cannot depend on `lunco-modelica`, so the shared types must live in the backend-agnostic crate that already owns `ExperimentRunner`/`ModelRef`/`RunBounds`. Put here: `SimTarget`, `Resolution`, `Provenance`, `QualifiedClass`, `ClassQuery` + the one matcher, `RunBounds::default()`, `resolve_bounds` fold, the `TargetSource` trait, and the generic `resolve()`. No Bevy/egui/`&World`. **Unit-tested in isolation.**
-2. **Backend resolvers:** `impl TargetSource for ModelicaSource` in `lunco-modelica`; `impl TargetSource for UsdSource` in a usd crate.
+1. **Pure core — in `lunco-experiments`** (NOT `lunco-modelica-core`). The shared types live in the backend-agnostic crate that already owns `ExperimentRunner`/`ModelRef`/`RunBounds`. Put here: `SimTarget`, `Resolution`, `Provenance`, `QualifiedClass`, `ClassQuery` + the one matcher, `RunBounds::default()`, `resolve_bounds` fold, the `TargetSource` trait, and the generic `resolve()`. No Bevy/egui/`&World`. **Unit-tested in isolation.**
+2. **Backend resolvers:** `impl TargetSource for ModelicaSource` in `lunco-modelica-core`; `impl TargetSource for UsdSource` in a usd crate.
 3. **Bevy adapter** (per crate): reads index/drafts/cache/drilled from `World`, builds `ResolveCtx`, calls `resolve()`, writes a derived `ExperimentTargets` resource (runtime state, not UI state).
 4. **UI:** read-only consumer of `ExperimentTargets`; renders the picker on `Ambiguous`; never computes.
 

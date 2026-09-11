@@ -869,12 +869,6 @@ same id) — so behavior that used to be hardcoded is data, no rebuild.
 - [`control_authority.rhai`](../assets/scripting/policy/control_authority.rhai)
   (`control.authority.take`) — may `taker` take a vessel from its current owner?
   (spec 034). Returns `bool`.
-- [`boot.rhai`](../assets/scripting/policy/boot.rhai) (`boot.entry`) — what does an
-  app do at **startup**? `ctx = #{ onboarded, first_start_id, has_scene_arg,
-  automated }` → `#{ command, params }` (the seam dispatches it — e.g.
-  `StartTutorial` to onboard) or `()` (the app loads its default). This is where
-  "first run → show the tutorial, not the default scene" lives.
-
 The seam supplies context Rust alone can see (argv, roles, first-run flag); the
 *decision* is entirely the policy's. Consulted via `lunco_hooks::invoke(id, &[ctx])`.
 

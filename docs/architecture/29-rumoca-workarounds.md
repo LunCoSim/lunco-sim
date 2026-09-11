@@ -68,7 +68,7 @@ returns the defaults separately, to be re-seeded via `set_input`.
 binding as its default value (MLS §4.4.1 reading), or expose a parameter/input
 override API on the compiled DAE so no source rewriting is needed.
 
-**Chokepoint.** `ModelicaCompiler::seat_user_source` (`lunco-modelica/src/lib.rs`)
+**Chokepoint.** `ModelicaCompiler::seat_user_source` (`lunco-modelica-core/src/lib.rs`)
 — the single place user model text enters the compile session. Both
 `compile_str` and `compile_str_multi` go through it, so **the strip happens
 inside the compiler and no caller can forget it**.
@@ -130,7 +130,7 @@ shared copy, would break every compile.
 
 **Workaround.** Every compile is made hermetic: `ModelicaCompiler::compile_str`
 evicts all other user docs from the shared session first
-(`evict_user_docs_except` + `seated_user_uris`, `lunco-modelica/src/lib.rs`).
+(`evict_user_docs_except` + `seated_user_uris`, `lunco-modelica-core/src/lib.rs`).
 
 **Ideal upstream fix.** Compare class definitions structurally (ignoring spans /
 source ids), and accept an identical redefinition instead of erroring.
@@ -314,6 +314,6 @@ On every rumoca bump, in this order:
    `StoredDefinition` layout is version-sensitive and a stale bundle decodes to
    garbage.
 4. `rm .cache/msl/parsed-msl.bin && cargo run --release --bin msl_indexer -- --warm`.
-5. `cargo test --workspace` **and** `cargo test -p lunco-modelica -- --ignored`
+5. `cargo test --workspace` **and** `cargo test -p lunco-modelica-ui -- --ignored`
    (the ignored set is where the upstream-bug pins live — that's how the 0.9.20
    bump revealed 7 fixed bugs).

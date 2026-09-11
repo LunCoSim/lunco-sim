@@ -334,7 +334,7 @@ crates/lunco-luncosim-edit/src/ui/
 ├── inspector.rs             # Panel impl
 └── entity_list.rs           # Panel impl
 
-crates/lunco-modelica/src/ui/
+crates/lunco-modelica-ui/src/ui/
 ├── mod.rs                   # ModelicaUiPlugin
 ├── workbench.rs             # Panel impl
 ├── code_editor.rs           # Panel impl

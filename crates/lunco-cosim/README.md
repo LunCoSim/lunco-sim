@@ -116,7 +116,7 @@ input Real height = 0;   // runtime-settable, default 0
 input Real velocity = 0;
 ```
 
-The default value (`= 0`) is stripped by `lunco-modelica` at compile time
+The default value (`= 0`) is stripped by `lunco-modelica-core` at compile time
 (`strip_input_defaults`) so the variable becomes a true runtime slot
 settable via `stepper.set_input("height", ...)`. Without the `input` keyword
 at all, the variable would vanish like the algebraics did.
@@ -127,7 +127,7 @@ at all, the variable would vanish like the algebraics did.
 2. Mark every wire-source as `output Real name;`.
 3. States can stay bare (`Real x(start = ...);`) — rumoca always keeps them.
 4. Parameters stay as `parameter Real foo = 1.0;`.
-5. Run [`balloon_stepper_test.rs`](../lunco-modelica/tests/balloon_stepper_test.rs)
+5. Run [`balloon_stepper_test.rs`](../lunco-modelica-core/tests/balloon_stepper_test.rs)
    pattern against your model: compile with rumoca, assert
    `stepper.get("<your_variable>").is_some()` for every variable you plan
    to wire. If it fails, you forgot an `output` somewhere.
@@ -147,7 +147,7 @@ at all, the variable would vanish like the algebraics did.
   worker, scripting, and physics composition boundary; this leaf package keeps
   only co-simulation mechanism tests.
 
-- **`lunco-modelica/tests/balloon_stepper_test.rs`** — isolates rumoca itself.
+- **`lunco-modelica-core/tests/balloon_stepper_test.rs`** — isolates rumoca itself.
   Compiles `balloon.mo` directly and asserts that `stepper.get("netForce")`
   returns `Some`. This is the regression test for the "algebraics eliminated"
   bug — if it fails, the `output` workaround has stopped working and we need
@@ -159,7 +159,7 @@ Run with:
 scripts/run_rust_tests.sh -p lunco-cosim --module cosim_test
 scripts/run_rust_tests.sh -p lunco-cosim --module balloon_e2e_test
 scripts/run_rust_tests.sh -p lunco-luncosim --features python --module cosim_chain
-scripts/run_rust_tests.sh -p lunco-modelica --module balloon_stepper_test
+scripts/run_rust_tests.sh -p lunco-modelica-core --module balloon_stepper_test
 ```
 
 `lunco-cosim`'s dep graph is small, so these tests recompile in a few seconds

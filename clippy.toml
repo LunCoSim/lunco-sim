@@ -24,12 +24,12 @@
 #     `pub use std::time::*`, so on native `web_time::Instant` IS
 #     `std::time::Instant` (same DefId). Clippy resolves through the re-export
 #     and flags every *correct* `web_time` caller. That was 73 hits in
-#     lunco-modelica alone, all false, none true.
+#     lunco-modelica-core alone, all false, none true.
 #
 # On the wasm target all three become exact: `cfg` strips the native-only code
 # before clippy sees it, and `web_time::Instant` is a distinct type. The ban then
 # fires only on code that will actually break in a browser — which is how
-# `lunco-modelica/src/indexer.rs` was caught importing `std::time::Instant` into
+# `lunco-modelica-core/src/indexer.rs` was caught importing `std::time::Instant` into
 # an unconditional `pub mod` that ships to the web.
 #
 # A lint that is wrong every time it fires is a lint people silence, and a
@@ -70,7 +70,7 @@ disallowed-methods = [
     # target. `web_time` provides its native impl via `pub use std::time::*`,
     # so on native `web_time::Instant` IS `std::time::Instant` (same DefId)
     # and clippy resolves straight through the re-export. Listing it here
-    # produced **73 hits in lunco-modelica alone, every one of them a false
+# produced **73 hits in lunco-modelica-core alone, every one of them a false
     # positive on code that already does the right thing**, and zero true
     # positives. A lint that is wrong every single time is a lint people
     # silence — which is exactly how it went unnoticed that `indexer.rs` was

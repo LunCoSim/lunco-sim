@@ -7438,8 +7438,9 @@ dependencies = [
  "lunco-luncosim-edit",
  "lunco-materials",
  "lunco-mobility",
- "lunco-modelica",
  "lunco-modelica-ast",
+ "lunco-modelica-core",
+ "lunco-modelica-ui",
  "lunco-networking",
  "lunco-obstacle-field",
  "lunco-physics",
@@ -7457,7 +7458,6 @@ dependencies = [
  "lunco-terrain-surface",
  "lunco-theme",
  "lunco-time",
- "lunco-tutorial",
  "lunco-twin",
  "lunco-twin-journal",
  "lunco-ui",
@@ -7508,8 +7508,8 @@ dependencies = [
  "lunco-environment",
  "lunco-materials",
  "lunco-mobility",
- "lunco-modelica",
  "lunco-modelica-ast",
+ "lunco-modelica-ui",
  "lunco-obstacle-field",
  "lunco-physics",
  "lunco-render",
@@ -7562,7 +7562,73 @@ dependencies = [
 ]
 
 [[package]]
-name = "lunco-modelica"
+name = "lunco-modelica-ast"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "lunco-hooks",
+ "rumoca-core",
+ "rumoca-ir-ast",
+ "rumoca-phase-parse",
+]
+
+[[package]]
+name = "lunco-modelica-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "bevy",
+ "bincode 2.0.1",
+ "console_error_panic_hook",
+ "crossbeam-channel",
+ "futures-lite",
+ "getrandom 0.3.4",
+ "indexmap",
+ "js-sys",
+ "log",
+ "lunco-api",
+ "lunco-assets",
+ "lunco-core",
+ "lunco-doc",
+ "lunco-doc-bevy",
+ "lunco-experiments",
+ "lunco-hooks",
+ "lunco-modelica-ast",
+ "lunco-settings",
+ "lunco-signal",
+ "lunco-storage",
+ "lunco-telemetry",
+ "lunco-time",
+ "lunco-twin",
+ "lunco-twin-journal",
+ "lunco-web",
+ "lunco-worker-transport",
+ "lunco-workspace",
+ "lunco-workspace-api",
+ "rayon",
+ "regex",
+ "rumoca-compile",
+ "rumoca-eval-solve",
+ "rumoca-ir-solve",
+ "rumoca-phase-parse",
+ "rumoca-sim",
+ "rumoca-solver-rk45",
+ "ruzstd 0.7.3",
+ "serde",
+ "serde_json",
+ "tar",
+ "tempfile",
+ "uuid",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "web-time",
+ "zstd",
+]
+
+[[package]]
+name = "lunco-modelica-ui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -7592,6 +7658,7 @@ dependencies = [
  "lunco-experiments",
  "lunco-hooks",
  "lunco-modelica-ast",
+ "lunco-modelica-core",
  "lunco-scripting",
  "lunco-settings",
  "lunco-signal",
@@ -7600,7 +7667,6 @@ dependencies = [
  "lunco-telemetry",
  "lunco-theme",
  "lunco-time",
- "lunco-tutorial",
  "lunco-twin",
  "lunco-twin-journal",
  "lunco-ui",
@@ -7635,17 +7701,6 @@ dependencies = [
  "web-sys",
  "web-time",
  "zstd",
-]
-
-[[package]]
-name = "lunco-modelica-ast"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "lunco-hooks",
- "rumoca-core",
- "rumoca-ir-ast",
- "rumoca-phase-parse",
 ]
 
 [[package]]
@@ -7794,8 +7849,8 @@ dependencies = [
  "lunco-lint",
  "lunco-materials",
  "lunco-mobility",
- "lunco-modelica",
  "lunco-modelica-ast",
+ "lunco-modelica-core",
  "lunco-obstacle-field",
  "lunco-physics",
  "lunco-render",
@@ -8030,30 +8085,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lunco-tutorial"
-version = "0.1.0-dev"
-dependencies = [
- "bevy",
- "bevy_egui",
- "lunco-api",
- "lunco-assets",
- "lunco-core",
- "lunco-doc-bevy",
- "lunco-hooks",
- "lunco-scripting",
- "lunco-settings",
- "lunco-theme",
- "lunco-usd-bevy",
- "lunco-usd-compose",
- "lunco-workbench",
- "lunco-workbench-core",
- "lunco-workspace",
- "openusd",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "lunco-twin"
 version = "0.1.0"
 dependencies = [
@@ -8212,8 +8243,8 @@ dependencies = [
  "lunco-hooks-rhai",
  "lunco-materials",
  "lunco-mobility",
- "lunco-modelica",
  "lunco-modelica-ast",
+ "lunco-modelica-core",
  "lunco-physics",
  "lunco-readiness",
  "lunco-render",

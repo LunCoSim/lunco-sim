@@ -103,10 +103,11 @@ does not prove that the current Rhai engine has rebuilt its static module set.
 For a user-requested same-session workflow, use `RunRhai` or an attached
 `RunScenario`; do not substitute the multi-process scene-test runner.
 
-For an interactive tour, keep one production session and use `StartTutorial`
-through `/api/commands`, then inspect the HUD and event stream. `RunScenario`
-is the live hot-reload path for a script attached to an existing host. Restart
-only when changing Rust or when a clean scene lifecycle is itself under test.
+For an interactive lesson, keep one production session and use
+`RunScenarioAsset` through `/api/commands`, then inspect the HUD and event
+stream. `RunScenario` is the live hot-reload path for a script attached to an
+existing host. Restart only when changing Rust or when a clean scene lifecycle
+is itself under test.
 
 To exercise a discrete semantic action, address the target's `api_id` and send
 one `SimulateIntentEdge` command; do not model a pulse as two API requests:
@@ -389,12 +390,12 @@ scene tree or a fire-and-forget command acknowledgement as a running model.
      `panels/canvas_projection.rs`, the `local_classes_by_short`
      registration); connector types need to be in
      `msl_index.json` (regenerate via
-     `cargo run -p lunco-modelica --bin msl_indexer`).
+     `cargo run -p lunco-modelica-core --bin msl_indexer`).
 - **"Command 'X' not found or not API-accessible"**: the Event isn't
   reflect-registered. Give the struct the `#[Command]` attribute, mark
   its observer with `#[on_command(X)]`, and list that observer in the
   `register_commands!(...)` block in
-  `crates/lunco-modelica/src/ui/commands/mod.rs` (see [§ Add a command](#add-a-command)).
+  `crates/lunco-modelica-ui/src/ui/commands/mod.rs` (see [§ Add a command](#add-a-command)).
 - **API returns 500 / silent no-op**: check `params` includes the
   empty object `{}` even for parameterless commands.
 - **Projection deadline exceeded (60s)**: rumoca parse stall, usually
@@ -409,7 +410,7 @@ scene tree or a fire-and-forget command acknowledgement as a running model.
 When testing reveals a missing API surface, add the command immediately
 rather than asking the user:
 
-1. In the matching file under `crates/lunco-modelica/src/ui/commands/`,
+1. In the matching file under `crates/lunco-modelica-ui/src/ui/commands/`,
    define the struct with the `#[Command]` attribute and the observer
    with `#[on_command(...)]` (both from `lunco_core`):
    ```rust
@@ -428,7 +429,7 @@ rather than asking the user:
    `#[on_command]` generates the `register_type` + `add_observer` wiring —
    you don't write them by hand.
 2. Add the observer fn to the `register_commands!(...)` list in
-   `crates/lunco-modelica/src/ui/commands/mod.rs` (use the
+   `crates/lunco-modelica-ui/src/ui/commands/mod.rs` (use the
    `module::fn` path form, e.g. `inspect::on_my_command`).
 3. Build, restart workbench, curl it.
 

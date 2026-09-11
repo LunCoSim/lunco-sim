@@ -1,0 +1,32 @@
+#usda 1.0
+(
+    defaultPrim = "AnnotatedRocketStageValidation"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# The scenario exercises the shipped Modelica asset through the public
+# ValidateAsset query. It does not open or read the asset file itself.
+def Xform "AnnotatedRocketStageValidation"
+(
+    doc = "Preflight acceptance for the bundled AnnotatedRocketStage model."
+)
+{
+    def DistantLight "Sun"
+    {
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "annotated-rocket-stage"
+
+        def Scope "AssetValidation"
+        (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/annotated_rocket_stage.rhai@
+        }
+    }
+}

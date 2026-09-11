@@ -186,7 +186,7 @@ Screenshots do **not** live there either.
 `CaptureScreenshot` needs `bevy_render`, and that dependency sat inside **`lunco-api`** behind a
 `render` feature that was **on by default**. So render-free was the *non-default* path, every consumer
 had to remember `default-features = false`, and **three forgot** (`lunco-doc-bevy`,
-`lunco-celestial`/`lunco-tutorial`, `lunco-telemetry`) — each silently re-linking wgpu into the
+`lunco-celestial`/the application lesson menu, `lunco-telemetry`) — each silently re-linking wgpu into the
 `--no-ui` server. **An unsafe default is a trap that fires forever.**
 
 The GPU half now lives in **`lunco-workbench::screenshot`**, and `lunco-api` has no `render` feature at

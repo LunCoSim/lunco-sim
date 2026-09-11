@@ -67,7 +67,7 @@ pub mod timelines;
 pub mod tool_libs;
 pub mod world_bridge;
 
-use doc::{ScriptDocument, ScriptedModel};
+pub use doc::{ScenarioReloadPolicy, ScriptDocument, ScriptedModel};
 #[cfg(feature = "rhai")]
 use lunco_api::executor::DeferredCommandAppExt;
 #[cfg(any(feature = "rhai", feature = "python"))]
@@ -156,7 +156,7 @@ impl ScriptRegistry {
 impl ScriptRegistry {
     /// Apply a **journal op** to `doc` for replay (journal→document projection —
     /// the networked-edit consume path) **without recording it**. Mirror of
-    /// [`ModelicaDocumentRegistry::replay_op`](lunco_modelica::state::ModelicaDocumentRegistry::replay_op).
+    /// [`ModelicaDocumentRegistry::replay_op`](lunco_modelica_core::state::ModelicaDocumentRegistry::replay_op).
     /// The op is already in the journal (arrived via `append_remote`), so applying
     /// straight to the document bypasses the recorder to avoid a duplicate entry.
     /// `op` is the entry's serialized [`doc::ScriptOp`]. Returns `false` (logged,
@@ -222,9 +222,6 @@ pub fn register_builtin_policies() -> Result<(), String> {
             lunco_core::session::CONTROL_AUTHORITY_HOOK,
             "may_take_control",
         ),
-        // Boot-entry policy: what does the app do at startup? (onboard / load /
-        // resume / nothing). Consulted by `lunco_tutorial::consult_boot`.
-        ("boot", lunco_core::session::BOOT_HOOK, "boot_entry"),
         // Readiness policy: does a pending compile / scene load freeze the
         // world, freeze one object, or cost nothing? Consulted every frame by
         // `lunco_readiness::evaluate_readiness`.
@@ -345,6 +342,7 @@ impl Plugin for LunCoScriptingPlugin {
         #[cfg(any(feature = "rhai", feature = "python"))]
         app.init_resource::<scenario::ScenarioExecutionGate>()
             .init_resource::<scenario::ScenarioReadinessArm>()
+            .init_resource::<scenario::ScenarioSceneGeneration>()
             .add_observer(scenario::close_scenarios_for_scene_transition)
             .add_observer(scenario::arm_scenarios_after_scene_composition)
             .add_systems(
@@ -527,6 +525,9 @@ impl Plugin for LunCoScriptingPlugin {
                     // Runs before attach so the loaded source attaches in this
                     // pre-fixed-step boundary once the asset is ready.
                     commands::resolve_embedded_scenario_paths,
+                    // API/UI/scripted launches use the same asset graph but do not
+                    // need a USD prim as an intermediate marker.
+                    commands::attach_requested_scenarios,
                     // USD-embedded scenarios: attach any the loader stamped with
                     // EmbeddedScenarioSource (`info:sourceCode` on the prim) so scene-
                     // authored scenarios run on spawn.

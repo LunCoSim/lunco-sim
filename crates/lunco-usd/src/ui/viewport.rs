@@ -4041,9 +4041,7 @@ fn render_preview_text(
             .auto_shrink([false; 2])
             .show(ui, |ui| {
                 ui.add(
-                    egui::TextEdit::multiline(&mut text)
-                        .font(egui::TextStyle::Monospace)
-                        .code_editor()
+                    lunco_workbench::text_editor::code(&mut text)
                         .desired_width(f32::INFINITY)
                         .interactive(false),
                 );

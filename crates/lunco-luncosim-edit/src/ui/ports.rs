@@ -182,7 +182,7 @@ impl Panel for PortPanel {
             ui.horizontal(|ui| {
                 ui.label("Filter");
                 ui.add(
-                    egui::TextEdit::singleline(&mut self.filter)
+                    lunco_workbench::text_editor::singleline(&mut self.filter)
                         .hint_text("entity, port, source, or authority")
                         .desired_width(ui.available_width()),
                 );
@@ -290,7 +290,7 @@ impl PortPanel {
             .map_err(|_| "enter a number".to_owned())
             .and_then(|value| info.metadata.validate(value).map(|()| value));
         ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(draft).desired_width(82.0));
+            ui.add(lunco_workbench::text_editor::singleline(draft).desired_width(82.0));
             if ui
                 .add_enabled(validation.is_ok(), egui::Button::new("Apply"))
                 .clicked()

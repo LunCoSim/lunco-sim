@@ -5,15 +5,13 @@
     metersPerUnit = 1
 )
 
-# ── Tutorial: Sandbox Intro (guided coach-mark TOUR) ─────────────────────────
-# A UI walkthrough of the workspace — the "guided tour" kind of tutorial (vs. the
-# interactive First Drive). All logic is in sandbox_intro.rhai (a step-cursor coach tour);
+# ── Guided scenario: Sandbox Intro ──────────────────────────────────────────
+# A UI walkthrough of the workspace. All progression is in sandbox_intro.rhai;
 # this scene is just a light backdrop so the viewport step has something to show.
-# On completion the curriculum's `lunco:tutorial:next` relationship can chain to
-# First Drive.
+# The application catalog supplies lesson ordering.
 #
 #   target/debug/luncosim --scene tutorials/sandbox/sandbox_intro.usda
-# or start it from the Tutorials panel.
+# or start it from the application Tutorials menu.
 
 def Xform "SandboxIntro" (
     kind = "assembly"
@@ -86,7 +84,7 @@ def Xform "SandboxIntro" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 
-    # Environment only — the curriculum declares this backdrop as the lesson
-    # payload and the launcher mounts it before the script runs. The chain
-    # (→ First Drive) lives in the curriculum layer (`next`).
+    # Environment only — the catalog selects this scene for the lesson and the
+    # generic launcher mounts it before the script runs. Lesson sequencing lives
+    # in the authored Rhai scenarios, not in a USD flow schema.
 }

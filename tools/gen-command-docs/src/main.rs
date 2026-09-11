@@ -263,14 +263,13 @@ fn domain_title(crate_name: &str) -> (&'static str, u32) {
         "lunco-scene-commands" | "lunco-luncosim-edit" => ("Scene editing & authoring", 10),
         "lunco-usd" => ("USD / scenes", 11),
         "lunco-usd-bevy" | "lunco-usd-sim" | "lunco-usd-avian" => ("USD / scenes", 12),
-        "lunco-modelica" => ("Modelica modeling & simulation", 20),
+        "lunco-modelica-core" | "lunco-modelica-ui" => ("Modelica modeling & simulation", 20),
         "lunco-cosim" => ("Co-simulation", 21),
         "lunco-mobility" | "lunco-hardware" | "lunco-controller" | "lunco-autopilot" => {
             ("Vessels, mobility & control", 30)
         }
         "lunco-avatar" => ("Avatar & possession", 31),
         "lunco-workbench" | "lunco-ui" => ("Workbench UI & panels", 40),
-        "lunco-tutorial" => ("Tutorials & HUD", 41),
         "lunco-scripting" | "lunco-tools-rhai" => ("Scripting & scenarios", 50),
         "lunco-doc-bevy" | "lunco-doc" | "lunco-twin" | "lunco-twin-journal" => {
             ("Documents & twins", 60)
@@ -325,7 +324,7 @@ usage: cargo run -p gen-command-docs -- --schema <a.json> [--schema <b.json> ...
       curl -s http://127.0.0.1:4101/api/commands/schema > /tmp/schema-gui.json
 
       # Any host with plugins the sandbox lacks — union it in:
-      #   cargo run -p lunco-modelica --bin lunica -- --api 3001 &   (same wait)
+      #   cargo run -p lunco-modelica-ui --bin lunica -- --api 3001 &   (same wait)
 
       cargo run -p gen-command-docs -- --schema /tmp/schema-gui.json [--schema ...]
 

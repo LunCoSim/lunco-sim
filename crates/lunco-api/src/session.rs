@@ -16,7 +16,7 @@ use lunco_core::{on_command, register_commands, Command};
 ///
 /// `force = false`: close the way a user would — route through the interactive
 /// dirty-document save prompt, which a windowed host installs an observer for
-/// (`lunco_modelica::ui::commands::util`). **On a host with no window there is
+/// (`lunco_modelica_ui::ui::commands::util`). **On a host with no window there is
 /// nobody to answer that prompt**, so this exits directly rather than waiting
 /// forever for a modal that will never be drawn.
 ///

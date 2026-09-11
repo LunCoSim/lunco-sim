@@ -81,7 +81,7 @@ usage() {
 # ── Map binary → cargo crate ──────────────────────────────────────────────
 get_crate() {
     case "$1" in
-        lunica)   echo "lunco-modelica" ;;
+        lunica)   echo "lunco-modelica-ui" ;;
         luncosim) echo "lunco-luncosim" ;;
         *) error "Unknown binary: $1"; error "Available: lunica, luncosim"; exit 1 ;;
     esac

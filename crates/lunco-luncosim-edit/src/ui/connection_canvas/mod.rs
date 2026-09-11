@@ -39,7 +39,7 @@ use lunco_canvas::{Canvas, EdgeId, NodeId, PortRef, Scene, SceneEvent, VisualReg
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlot};
 
 use lunco_doc::DocumentId;
-use lunco_modelica::ui::commands::FocusDocumentByName;
+use lunco_modelica_ui::ui::commands::FocusDocumentByName;
 use lunco_usd::document::{LayerId, UsdOp};
 use lunco_usd::ui::viewport::{UsdPreviewId, UsdPreviewSession, UsdViewportState};
 use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdStageAsset};
@@ -482,7 +482,7 @@ impl Panel for UsdCanvasPanel {
                             "The executable topology is generated from the composed USD network and is available in the standard Modelica diagram.",
                         );
                         let entries = ctx
-                            .resource::<lunco_modelica::state::GeneratedModelicaSources>()
+                            .resource::<lunco_modelica_ui::state::GeneratedModelicaSources>()
                             .map(|sources| sources.entries.clone())
                             .unwrap_or_default();
                         if entries.is_empty() {

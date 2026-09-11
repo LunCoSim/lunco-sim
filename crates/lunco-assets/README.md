@@ -56,7 +56,7 @@ output = "textures/moon.png"
 ```
 
 ```toml
-# crates/lunco-modelica/Assets.toml
+# crates/lunco-modelica-ui/Assets.toml
 
 [msl]
 name = "Modelica Standard Library"

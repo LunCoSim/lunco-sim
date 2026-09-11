@@ -186,25 +186,19 @@ permanent divergence from the tracked `mxpv/openusd` upstream, and atomics on
 every composition operation. That is a product decision about the fork, not a
 refactor, and should be taken explicitly rather than arrived at.
 
-### Modelica compile-core split
+### Modelica compile-core split — completed
 
-**What:** Continue the remaining compile-core split out of `lunco-modelica` so
-`lunco-usd-sim` depends only on what it uses.
+`lunco-modelica-core` now owns the headless Modelica document, compiler, worker,
+simulation, API, and CLI/indexing seams. `lunco-modelica-ui` owns only the
+workbench presentation and `lunica` facade. USD simulation and scene commands
+depend on core directly, so they do not inherit egui/workbench or tutorial
+dependencies. The existing `lunco-modelica-ast` package remains the smaller
+parse/projection boundary for consumers that need source facts only.
 
-The parse/AST boundary is already extracted as `lunco-modelica-ast`; this item
-is only the heavier Rumoca session/compiler/worker boundary and must not pull
-document or UI policy into the reusable parser crate.
-
-**Why:** `lunco-usd-sim → lunco-modelica` drags modelica's full heavy closure
-(parol/rumoca and friends) into consumers that never compile a model. Build
-time is a tax on every iteration loop.
-
-**Scope:** medium. Crate split along the existing compile/runtime seam;
-`cargo tree` before/after is the acceptance test.
 
 ### Re-home active-document clearing
 
-**What:** Move the generic active-document clearing out of `lunco-modelica`'s
+**What:** Move the generic active-document clearing out of `lunco-modelica-core`'s
 `CloseDocument` handler into a `lunco-workspace` observer.
 
 **Why:** Clearing "the active document" is workspace policy, not a Modelica

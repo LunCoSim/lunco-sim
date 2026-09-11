@@ -68,8 +68,8 @@ coalesces consecutive identical discrete snapshots before this shared reader;
 do not hide producer floods in a renderer-specific filter.
 
 Tutorial HUDs, rings, coach/recovery cards, and completion prompts use
-`lunco_workbench::tutorial_overlay::TUTORIAL_OVERLAY_ORDER` (`egui::Order::Middle`);
-their scrims use the shared `TUTORIAL_SCRIM_ORDER` (`egui::Order::Background`).
+`lunco_workbench::guided_overlay::GUIDED_OVERLAY_ORDER` (`egui::Order::Middle`);
+their scrims use the shared `GUIDED_SCRIM_ORDER` (`egui::Order::Background`).
 Workbench menus and window controls are egui `Foreground` surfaces and therefore
 remain above both tutorial layers visually and for input. The workbench measures
 the live menu row and right-side control group; on compact widths it keeps File

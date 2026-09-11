@@ -39,7 +39,7 @@ a transport layer that bridges the channels to the worker over
 ```
 
 1. **Page boot.** Main wasm runs `lunica`'s `wasm_bindgen(start) run()`.
-   `ModelicaPlugin::build` creates two crossbeam channels (cmd, res), stores
+   The Modelica UI facade adds the core plugin, which creates two crossbeam channels (cmd, res), stores
    them on `ModelicaChannels`, and registers the `tx_res` / `tx_cmd` handles
    with `worker_transport::register_result_sender` /
    `register_command_sender` so JS-side bridges can reach them.
@@ -250,11 +250,9 @@ step runs on the page thread.
   `SharedWorker` but YAGNI.
 - **Cancel mid-compile.** No way to interrupt a compile in flight. Same
   as native today.
-- **Worker bundle size.** 28 MB wasm is unnecessarily large because the
-  worker pulls all of `lunco-modelica` (incl. UI code it never uses).
-  Splitting the worker logic into its own crate would cut this in half;
-  not done because the bundle is loaded in parallel with the main wasm
-  and doesn't show up as a startup-time bottleneck.
+- **Worker bundle size.** The worker is built from `lunco-modelica-core`, so
+  it does not link the workbench UI graph. Further size work should target the
+  core's actual Rumoca/MSL closure rather than recreating a worker-only crate.
 
 ## Prerequisites
 
@@ -317,7 +315,7 @@ wasm-bindgen target/wasm32-unknown-unknown/release/lunica.wasm \
 ```
 
 `./scripts/build_web.sh` is the supported path. There is no committed
-`crates/lunco-modelica/web/pkg/`.
+`crates/lunco-modelica-ui/web/pkg/`.
 
 **Browser requirements:** Chrome/Edge 113+ or Safari 16.4+ with WebGPU
 (`chrome://gpu`); falls back to WebGL2. Must be served over HTTP —
@@ -384,7 +382,7 @@ bottom egui bar).
 The fork lives at `LunCoSim/rumoca`; the web build pulls branch
 `wasm-asset-loader` (adds `Session::load_source_root_in_memory` on top of
 `main`). Local dev typically uses a sibling worktree at `../rumoca/` with
-`path = …` deps in `lunco-modelica/Cargo.toml` / `lunco-assets/Cargo.toml`.
+`path = …` deps in `lunco-modelica-core/Cargo.toml` / `lunco-assets/Cargo.toml`.
 To update:
 
 ```bash

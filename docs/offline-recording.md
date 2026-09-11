@@ -112,7 +112,7 @@ with the last one each frame silently winning:
 | Knob | Sole writer | Purpose |
 |---|---|---|
 | `TimeUpdateStrategy` | `drive_offline_clock` (in `Last`) | advance virtual time exactly `1/fps` per captured frame |
-| `WinitSettings` | `sim_focus_pace` (`lunco-modelica`) | whether the app may sleep |
+| `WinitSettings` | `sim_focus_pace` (`lunco-modelica-core`) | whether the app may sleep |
 | `Window::present_mode` | the recorder, on start/stop | uncapped (`AutoNoVsync`) while recording |
 
 `drive_offline_clock` runs in `Last`, so the strategy it writes is the one Bevy's

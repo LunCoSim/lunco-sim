@@ -12,6 +12,20 @@ pub enum ScriptLanguage {
     Python,
 }
 
+/// Defines how an independently hosted scenario behaves when the active scene
+/// is replaced. The policy is attached to the scenario launch, so scene
+/// transitions stay generic and other authored flows can reuse the same
+/// lifecycle contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Reflect, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ScenarioReloadPolicy {
+    /// Keep the scenario's host, state, and compiled program alive.
+    #[default]
+    Retain,
+    /// Re-run the scenario's `on_start` after the replacement scene is ready.
+    Restart,
+}
+
 /// A canonical document representing a script in the Digital Twin.
 ///
 /// Mirroring Modelica models, ScriptDocuments are mutable, reversible,
@@ -316,6 +330,8 @@ impl Document for ScriptDocument {
 pub struct ScriptedModel {
     pub document_id: Option<u64>,
     pub language: Option<ScriptLanguage>,
+    /// Scene replacement policy for this scenario's lifecycle host.
+    pub reload_policy: ScenarioReloadPolicy,
     pub paused: bool,
     /// Current input values synced from Bevy ECS to Script.
     pub inputs: HashMap<String, f64>,

@@ -155,7 +155,7 @@ fn sync_model_endpoint_lifecycle(world: &mut World) {
 /// app.add_plugins(CoSimPlugin);
 /// ```
 ///
-/// Engine plugins (e.g., `lunco-modelica`) depend on this crate and
+/// Engine plugins (e.g., `lunco-modelica-core`) depend on this crate and
 /// create [`crate::SimComponent`] instances when models compile.
 pub struct CoSimPlugin;
 

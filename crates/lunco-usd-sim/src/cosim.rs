@@ -37,9 +37,9 @@ use lunco_cosim::{ConnectionBinding, DeclaredOutputPorts, SimComponent, SimConne
 use lunco_doc::DocumentId;
 #[cfg(feature = "python")]
 use lunco_doc::DocumentOrigin;
-use lunco_modelica::source_asset::ModelicaSource;
-use lunco_modelica::{ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaSignalLayout};
 use lunco_modelica_ast::ast_extract::parse_model_interface;
+use lunco_modelica_core::source_asset::ModelicaSource;
+use lunco_modelica_core::{ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaSignalLayout};
 use lunco_render::SceneCamera;
 #[cfg(feature = "python")]
 use lunco_scripting::doc::{ScriptDocument, ScriptLanguage};
@@ -1306,7 +1306,7 @@ fn process_usd_cosim_prim_read(
                 .attr_names(sdf_path)
                 .iter()
                 .any(|name| name == "lunco:program:communicationPeriod");
-            lunco_modelica::resolve_communication_period_secs(
+            lunco_modelica_core::resolve_communication_period_secs(
                 authored,
                 reader.real(sdf_path, "lunco:program:communicationPeriod"),
             )
@@ -1601,7 +1601,7 @@ fn validate_usd_modelica_port_contracts(
         &mut ModelicaModel,
         Option<&ValidatedUsdModelicaPortContract>,
     )>,
-    mut notices: MessageWriter<lunco_modelica::ModelicaNotice>,
+    mut notices: MessageWriter<lunco_modelica_core::ModelicaNotice>,
 ) {
     for (entity, contract, mut model, validated) in &mut q {
         if model.is_compiling || !model.is_compiled {
@@ -1614,8 +1614,8 @@ fn validate_usd_modelica_port_contracts(
         if let Some(error) = modelica_port_contract_error(contract, &model) {
             model.paused = true;
             model.last_error = Some(error.clone());
-            notices.write(lunco_modelica::ModelicaNotice {
-                level: lunco_modelica::NoticeLevel::Error,
+            notices.write(lunco_modelica_core::ModelicaNotice {
+                level: lunco_modelica_core::NoticeLevel::Error,
                 text: format!(
                     "[{}] USD/Modelica port contract error: {error}",
                     model.model_name
@@ -1649,7 +1649,7 @@ pub(crate) fn dispatch_loaded_modelica_sources(
     sources: Res<Assets<ModelicaSource>>,
     asset_server: Res<AssetServer>,
     channels: Option<Res<ModelicaChannels>>,
-    mut notices: MessageWriter<lunco_modelica::ModelicaNotice>,
+    mut notices: MessageWriter<lunco_modelica_core::ModelicaNotice>,
     // The solver-selection input only carries the authored prediction contract.
     // Solver capability and Modelica lowering remain owned by the worker's
     // backend registry; they are never inferred from a DAE shape here.
@@ -1680,8 +1680,8 @@ pub(crate) fn dispatch_loaded_modelica_sources(
                 pending.asset_path
             );
             warn!("[usd-cosim] {error}");
-            notices.write(lunco_modelica::ModelicaNotice {
-                level: lunco_modelica::NoticeLevel::Error,
+            notices.write(lunco_modelica_core::ModelicaNotice {
+                level: lunco_modelica_core::NoticeLevel::Error,
                 text: format!("[{}] Asset load error: {error}", component.model_name),
             });
             component.status = SimStatus::Error(error);
@@ -1695,7 +1695,7 @@ pub(crate) fn dispatch_loaded_modelica_sources(
         };
 
         // ONE parse-and-extract, shared with the network projector
-        // (`lunco_modelica::parse_model_interface`): `ModelicaModel::inputs` is a
+        // (`lunco_modelica_core::parse_model_interface`): `ModelicaModel::inputs` is a
         // write buffer seeded from the authored interface, which
         // `wrap_modelica_into_simcomponent` copies into `SimComponent::inputs` —
         // the port surface a wire writes to.
@@ -1742,8 +1742,8 @@ pub(crate) fn dispatch_loaded_modelica_sources(
                 .entity(entity)
                 .try_remove::<PendingModelicaSource>();
             error!("[usd-cosim] {error}");
-            notices.write(lunco_modelica::ModelicaNotice {
-                level: lunco_modelica::NoticeLevel::Error,
+            notices.write(lunco_modelica_core::ModelicaNotice {
+                level: lunco_modelica_core::NoticeLevel::Error,
                 text: format!("[{}] {error}", component.model_name),
             });
             commands.trigger(lunco_core::TelemetryEvent {
@@ -1817,8 +1817,8 @@ pub(crate) fn dispatch_loaded_modelica_sources(
 
         if let Some(error) = dispatch_error {
             error!("[usd-cosim] {error}");
-            notices.write(lunco_modelica::ModelicaNotice {
-                level: lunco_modelica::NoticeLevel::Error,
+            notices.write(lunco_modelica_core::ModelicaNotice {
+                level: lunco_modelica_core::NoticeLevel::Error,
                 text: format!("[{model_name}] {error}"),
             });
             // Immediate verdict for this tick; `modelica_status` keeps it from
@@ -1860,7 +1860,7 @@ pub fn dispatch_loaded_python_sources(
     sources: Res<Assets<PythonSource>>,
     asset_server: Res<AssetServer>,
     mut registry: ResMut<ScriptRegistry>,
-    mut notices: MessageWriter<lunco_modelica::ModelicaNotice>,
+    mut notices: MessageWriter<lunco_modelica_core::ModelicaNotice>,
     // The `SimComponent` was published at BIND with the USD-declared interface;
     // dispatch reads it to seed the editor document and flips it live.
     mut sims: Query<&mut SimComponent>,
@@ -1876,8 +1876,8 @@ pub fn dispatch_loaded_python_sources(
                 format!("Python:{}", pending.asset_path)
             };
             warn!("[usd-cosim] {error}");
-            notices.write(lunco_modelica::ModelicaNotice {
-                level: lunco_modelica::NoticeLevel::Error,
+            notices.write(lunco_modelica_core::ModelicaNotice {
+                level: lunco_modelica_core::NoticeLevel::Error,
                 text: format!("[{model_name}] Asset load error: {error}"),
             });
             commands.trigger(lunco_core::TelemetryEvent {
@@ -4773,7 +4773,7 @@ fn stop_scene_owned_scripts(world: &mut World) {
 /// Under Bevy 0.19's relationship system, despawning the root entity recursively
 /// despawns all descendants. Component removal triggers (`On<Remove, T>`) fire automatically,
 /// freeing any worker-side state (such as Modelica steppers or Python script documents)
-/// via the reactive observers registered in `lunco-modelica` and `lunco-scripting`.
+/// via the reactive observers registered in `lunco-modelica-core` and `lunco-scripting`.
 pub fn despawn_usd_subtree(world: &mut World, root: Entity) {
     if let Ok(em) = world.get_entity_mut(root) {
         em.despawn();
@@ -5100,7 +5100,7 @@ pub(crate) fn install(app: &mut App) {
     use lunco_cosim::systems::{
         apply_forces::CosimSet as ApplyForcesCosimSet, propagate::CosimSet as PropagateCosimSet,
     };
-    use lunco_modelica::ModelicaSet;
+    use lunco_modelica_core::ModelicaSet;
 
     // Script execution is part of the fixed co-simulation transaction. Its
     // input snapshot is taken after propagation/actuation, its output becomes
@@ -5129,8 +5129,8 @@ pub(crate) fn install(app: &mut App) {
     // initializes them, but minimal USD/physics apps intentionally omit
     // that plugin; keeping the resources here makes the projection
     // plugin's system contract complete and idempotent.
-    app.init_resource::<lunco_modelica::state::ModelicaDocumentRegistry>()
-        .init_resource::<lunco_modelica::state::GeneratedModelicaSources>()
+    app.init_resource::<lunco_modelica_core::state::ModelicaDocumentRegistry>()
+        .init_resource::<lunco_modelica_core::state::GeneratedModelicaSources>()
         .init_resource::<lunco_cosim::BindingRevision>()
         .init_resource::<lunco_core::SimulationBarrierParticipants>()
         .init_resource::<lunco_scripting::ScriptRegistry>()
@@ -5176,7 +5176,7 @@ pub(crate) fn install(app: &mut App) {
     // the Modelica compiler, so the workbench console has one observable error
     // surface. `add_message` is idempotent when the Modelica plugin registered
     // it already.
-    app.add_message::<lunco_modelica::ModelicaNotice>();
+    app.add_message::<lunco_modelica_core::ModelicaNotice>();
     app.add_message::<SceneStageAssetOutcome>();
 
     // A scene that is still spawning, and an object whose model has not

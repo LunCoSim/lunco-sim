@@ -365,7 +365,7 @@ pub fn draw_collaborator_cursors(
         };
         draw_top_banner(
             ctx,
-            "tutorial_overlay",
+            "guided_overlay",
             screen_rect,
             egui::vec2(320.0, 36.0),
             // TODO(theme): migrate to lunco-theme once the token set covers this.

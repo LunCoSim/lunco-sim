@@ -236,7 +236,7 @@ fn badge_externally_changed_usd_docs(
 /// Observer: when *any* document opens, check whether it lives in the
 /// USD registry — if so, register a [`WorkspaceStage`] so the
 /// browser surfaces it. Modelica / SysML documents miss the gate and
-/// are ignored, exactly mirroring the `lunco-modelica` shape.
+/// are ignored, exactly mirroring the `lunco-modelica-core` shape.
 fn register_workspace_stage_on_doc_opened(
     trigger: On<DocumentOpened>,
     registry: Res<DocumentRegistry<UsdDocument>>,

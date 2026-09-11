@@ -15,7 +15,7 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
-use lunco_modelica::{ModelicaUiConfig, ModelicaWorkbenchPlugin};
+use lunco_modelica_ui::{ModelicaUiConfig, ModelicaWorkbenchPlugin};
 use lunco_usd_bevy::camera_switch::{
     CameraSelectionOwner, CameraSelectionStatus, ObserveAvatar, ResumeCameraDirector, SetUserCamera,
 };
@@ -41,6 +41,9 @@ mod rhai_repl_panel;
 mod runtime_exposure;
 /// Explicit production-harness injection for the Scenarios menu failure path.
 mod scenario_fixture;
+/// Application-owned tutorial catalog menu. Tutorial behavior itself remains
+/// authored Rhai and is launched through the generic scripting command.
+mod tutorial_menu;
 /// Native Velopack update checks and package installation. WASM has no native
 /// process/update helper and intentionally does not compile this module.
 #[cfg(not(target_arch = "wasm32"))]
@@ -270,12 +273,7 @@ impl Plugin for SandboxUiPlugin {
             // `lunco_render_bevy::LuncoRenderPlugin` — the one crate that may name
             // `bevy_pbr` — and adding it a second time panics Bevy.
             // See docs/architecture/render-decoupling.md.
-            // The shared tutorial launcher: registry + 🎓 menu + panel +
-            // Start/Skip/SetSubsystemEnabled + progress + onboarding + F1.
-            // Tutorials compose from assets/tutorials/luncosim.usda (data, not code).
-            .add_plugins(lunco_tutorial::TutorialPlugin {
-                app: "luncosim".into(),
-            })
+            .add_plugins(tutorial_menu::TutorialMenuPlugin)
             // Rover panels. ONE closure: Bevy keys plugin uniqueness by type-name,
             // and every `|app| {…}` in this `build` shares the name `{{closure}}` — a
             // second one panics ("plugin already added"). So all app-level panel
@@ -337,8 +335,7 @@ impl Plugin for SandboxUiPlugin {
                 |t: On<lunco_usd::LoadScene>,
                  current: Option<ResMut<CurrentScenePath>>,
                  current_name: Option<ResMut<CurrentSceneName>>,
-                 hud: Option<ResMut<lunco_workbench::tutorial_overlay::TutorialHud>>,
-                 pending: Option<ResMut<lunco_tutorial::PendingAdvance>>| {
+                 hud: Option<ResMut<lunco_workbench::guided_overlay::GuidedOverlay>>| {
                     if let Some(mut current) = current {
                         current.0 = t.event().path.clone();
                     }
@@ -367,9 +364,6 @@ impl Plugin for SandboxUiPlugin {
                         hud.objectives.clear();
                         hud.spotlight = None;
                         hud.tour = None;
-                    }
-                    if let Some(mut pending) = pending {
-                        pending.0 = None;
                     }
                 },
             )
@@ -400,13 +394,6 @@ impl Plugin for SandboxUiPlugin {
                 ),
             );
 
-        // Tutorial TRACKS come from the curriculum layer `TutorialCorePlugin`
-        // composes, not from here: a lesson is an executable scenario, so
-        // `StartTutorial { id }` must resolve on a headless/API host too.
-        // Registering tracks from the UI plugin once made the whole `basic`
-        // track exist only in the windowed build — over the API it answered
-        // `unknown id` and nothing loaded.
-
         // Embed the FULL lunica workbench as the "Design" workspace via the
         // shared bundle — same clipboard bridge, autosave, worker, and panels
         // as standalone lunica, so the Design tab can't drift from the real
@@ -416,7 +403,6 @@ impl Plugin for SandboxUiPlugin {
         // same landing page lunica uses for the Design tab.
         app.add_plugins(ModelicaWorkbenchPlugin {
             config: ModelicaUiConfig {
-                include_help_overlay: false,
                 include_welcome_panel: true,
             },
         });
@@ -914,7 +900,7 @@ fn sandbox_boot_from_url(
         if !ready {
             return;
         }
-        commands.trigger(lunco_modelica::ui::commands::OpenClass {
+        commands.trigger(lunco_modelica_ui::ui::commands::OpenClass {
             qualified: qual.clone(),
             ..Default::default()
         });
@@ -1259,11 +1245,9 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
         ui.set_min_width(SCENARIO_MENU_MIN_WIDTH);
         ui.set_max_width(SCENARIO_MENU_MAX_WIDTH);
         ui.label(
-            bevy_egui::egui::RichText::new(
-                "Scenarios load a world or demo. Tutorials are guided lessons layered on a world.",
-            )
-            .weak()
-            .small(),
+            bevy_egui::egui::RichText::new("Scenarios load a world or demo.")
+                .weak()
+                .small(),
         );
         ui.separator();
         let has_scene = ctx
@@ -1281,14 +1265,6 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
         });
 
         ui.separator();
-
-        // ── Tutorials submenu ────────────────────────────────────────────
-        // A dedicated entry so users can jump straight into any interactive
-        // lesson (same list the Tutorials panel shows). Each entry starts the
-        // tutorial by id via `StartTutorial`, which loads its scene + attaches
-        // the orchestrator script. Hovering an entry reveals its blurb — the
-        // plain-language "what does this teach" tip.
-        render_tutorials_submenu(ui, ctx);
 
         // ── Downloaded Twins (scenario-sync cache, G3) ───────────────────
         // Twins fetched from a server into the local cache — loadable offline
@@ -1560,67 +1536,6 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                 }
             });
         }
-    });
-}
-
-/// Render the "🎓 Tutorials" submenu inside the Scenarios menu. Lists every
-/// registered tutorial with a completion tick, a difficulty chip, and its blurb
-/// on hover; clicking starts it. Kept next to the scenes list so the menu is the
-/// single place to launch either a raw scene or a guided lesson.
-fn render_tutorials_submenu(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
-    use bevy_egui::egui;
-
-    let registry = ctx.resource::<lunco_tutorial::TutorialRegistry>().cloned();
-    let progress = ctx
-        .resource::<lunco_tutorial::TutorialProgress>()
-        .cloned()
-        .unwrap_or_default();
-
-    ui.menu_button("Tutorials", |ui| {
-        ui.set_min_width(SCENARIO_MENU_MIN_WIDTH);
-        ui.set_max_width(SCENARIO_MENU_MAX_WIDTH);
-        let Some(registry) = registry else {
-            ui.label(
-                egui::RichText::new("(tutorials unavailable)")
-                    .weak()
-                    .italics(),
-            );
-            return;
-        };
-        if registry.tutorials.is_empty() {
-            ui.label(
-                egui::RichText::new("(no tutorials registered)")
-                    .weak()
-                    .italics(),
-            );
-            return;
-        }
-
-        egui::ScrollArea::vertical()
-            .max_height(SCENARIO_MENU_HEIGHT)
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                for meta in registry.ordered() {
-                    let done = progress.completed.iter().any(|c| c == &meta.id);
-                    // Completed or fresh, then the title and a dim difficulty chip.
-                    let label = format!(
-                        "{} {}  ·  {}",
-                        if done { "[done]" } else { "[new]" },
-                        meta.title,
-                        meta.difficulty
-                    );
-                    let resp =
-                        ui.add_sized([ui.available_width(), 0.0], egui::Button::new(label).wrap());
-                    // Hover tip: the plain-language "what this teaches" blurb.
-                    let resp = resp.on_hover_text(meta.blurb.as_str());
-                    if resp.clicked() {
-                        ctx.trigger(lunco_tutorial::StartTutorial {
-                            id: meta.id.to_string(),
-                        });
-                        ui.close();
-                    }
-                }
-            });
     });
 }
 

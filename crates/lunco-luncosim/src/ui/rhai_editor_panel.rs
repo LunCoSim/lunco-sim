@@ -31,7 +31,7 @@ use lunco_doc_bevy::DocumentDiagnostics;
 use lunco_scene_commands::SelectedEntities;
 use lunco_scripting::commands::RunScenario;
 use lunco_scripting::doc::ScriptedModel;
-use lunco_scripting::ScriptRegistry;
+use lunco_scripting::{ScenarioReloadPolicy, ScriptRegistry};
 use lunco_workbench::UiIcon;
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
@@ -191,10 +191,8 @@ impl Panel for RhaiEditorPanel {
                 .auto_shrink([false; 2])
                 .show(ui, |ui| {
                     ui.add(
-                        egui::TextEdit::multiline(&mut vm.buffer)
+                        lunco_workbench::text_editor::code(&mut vm.buffer)
                             .id(text_id)
-                            .font(egui::TextStyle::Monospace)
-                            .code_editor()
                             .desired_width(f32::INFINITY)
                             .desired_rows(20),
                     )
@@ -265,7 +263,12 @@ impl Panel for RhaiEditorPanel {
                 // The producer resyncs to the new generation once RunScenario
                 // bumps it; clearing dirty lets that reload land.
                 vm.dirty = false;
-                ctx.trigger(RunScenario { target: entity, source, params });
+                ctx.trigger(RunScenario {
+                    target: entity,
+                    source,
+                    params,
+                    reload_policy: ScenarioReloadPolicy::Retain,
+                });
                 ctx.trigger(SaveScenario { target: entity });
             }
         });

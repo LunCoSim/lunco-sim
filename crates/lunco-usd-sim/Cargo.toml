@@ -51,9 +51,9 @@ lunco-physics = { path = "../lunco-physics" }
 lunco-signal = { path = "../lunco-signal" }
 lunco-telemetry = { path = "../lunco-telemetry" }
 # Modelica runtime bridge. Pure parse/AST extraction is kept in the smaller
-# `lunco-modelica-ast` package below; the remaining dependency is the solver
-# worker and Bevy runtime integration.
-lunco-modelica = { path = "../lunco-modelica", default-features = false }
+# `lunco-modelica-ast` package below; this dependency is the headless solver
+# worker and Bevy runtime integration, not the workbench UI facade.
+lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 lunco-scripting = { path = "../lunco-scripting" }
 lunco-doc = { path = "../lunco-doc" }

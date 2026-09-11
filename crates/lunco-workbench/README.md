@@ -124,7 +124,7 @@ cargo run --bin lunica      # Modelica workbench
   determines the insertion region and cached user layouts remain authoritative.
 - **Perspectives** (renamed from the earlier `Workspace` trait — the
   latter is now taken for the editor session concept). Register any
-  number; registered perspectives are API/tutorial-available, and those
+  number; registered perspectives are API/guided-available, and those
   opting into the default switcher appear in the transport bar. Clicking
   a visible tab applies its slot preset by rebuilding the dock.
 - First-registered perspective auto-activates.
@@ -167,7 +167,7 @@ See [`docs/architecture/11-workbench.md`](../../docs/architecture/11-workbench.m
 
 Authoring-only perspectives can override `Perspective::show_in_switcher()`
 to stay out of the everyday title-bar navigation while remaining available to
-`ActivatePerspective` and guided tutorials.
+`ActivatePerspective` and guided guideds.
 
 ### Why Perspective instead of "Workspace"?
 
@@ -196,5 +196,5 @@ bevy + bevy_egui
    │       └── lunco-workbench ← this crate (editor shell + WorkspaceResource)
    │              ▲
    │              │ shell-owned widgets, commands, and browser services
-   │              └── lunco-modelica, lunco-luncosim-edit, lunco-cosim, …
+   │              └── lunco-modelica-ui, lunco-luncosim-edit, lunco-cosim, …
 ```

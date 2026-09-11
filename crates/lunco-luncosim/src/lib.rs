@@ -75,7 +75,7 @@ use lunco_terrain_globe::TerrainPlugin;
 use lunco_terrain_surface::TerrainSurfacePlugin;
 // `ModelicaSet` orders the cosim pipeline (always). The egui workbench plugin is
 // added by `SandboxUiPlugin`; headless adds `ModelicaCorePlugin` instead.
-use lunco_modelica::ModelicaSet;
+use lunco_modelica_core::ModelicaSet;
 
 /// Chassis smoothness census (`LUNCO_JITTER_CSV`) — compares solver `Position`
 /// against the rendered `Transform`, so it only means anything in a `ui` build.
@@ -1382,7 +1382,7 @@ fn replay_scenario_journal_modelica(
     role: Res<lunco_core::NetworkRole>,
     remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
-    registry: Option<ResMut<lunco_modelica::state::ModelicaDocumentRegistry>>,
+    registry: Option<ResMut<lunco_modelica_core::state::ModelicaDocumentRegistry>>,
     // Modelica-domain entry ids already projected (its own once-per-entry guard,
     // independent of the USD driver's applied-set).
     mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
@@ -1505,7 +1505,7 @@ fn replay_scenario_journal_experiment(
         lunco_twin_journal::DomainKind::Experiment,
     );
     for (id, op) in pending {
-        lunco_modelica::experiment_journal::replay_experiment_op(&mut registry, &op);
+        lunco_modelica_core::experiment_journal::replay_experiment_op(&mut registry, &op);
         applied.insert(id);
     }
 }
@@ -3063,15 +3063,6 @@ impl Plugin for SandboxCorePlugin {
             .add_plugins(lunco_autopilot::AutopilotPlugin)
             .add_plugins(LunCoAvatarPlugin)
             .add_plugins(lunco_scripting::LunCoScriptingPlugin)
-            // Tutorials are executable scenario products, not a UI-only feature:
-            // headless hosts expose StartTutorial through the same command API.
-            // The menu/HUD projection is added separately by SandboxUiPlugin.
-            // Which TRACKS this resolves to is data: the app's curriculum layer
-            // `assets/tutorials/luncosim.usda` sublayers the tracks it offers
-            // (`basic` among them, despite not being named after this app).
-            .add_plugins(lunco_tutorial::TutorialCorePlugin {
-                app: "luncosim".into(),
-            })
             // Default scene-wide fill for scenes that author no lighting; a
             // scene-authored UsdLux light takes ambient over.
             .insert_resource(bevy::light::GlobalAmbientLight {
@@ -3079,6 +3070,7 @@ impl Plugin for SandboxCorePlugin {
                 ..Default::default()
             })
             .add_systems(Startup, setup_sandbox)
+            .add_systems(Startup, load_startup_scene_on_boot.after(setup_sandbox))
             // Fail loud if the requested `--scene` never loads (e.g. a wrong
             // path that resolves to a missing asset). Without this the app
             // silently boots a scene-less world (only procedural terrain /
@@ -4078,7 +4070,7 @@ fn report_dome_environment_status(
 #[cfg(feature = "ui")]
 fn report_modelica_status(
     pending_sources: Query<(), With<lunco_usd_sim::cosim::PendingModelicaSource>>,
-    models: Query<&lunco_modelica::ModelicaModel, With<lunco_usd_sim::cosim::UsdSourcedCosim>>,
+    models: Query<&lunco_modelica_core::ModelicaModel, With<lunco_usd_sim::cosim::UsdSourcedCosim>>,
     bus: Option<ResMut<lunco_status_core::status_bus::StatusBus>>,
     mut mirror: ResMut<ModelicaStatusMirrorState>,
 ) {
@@ -4158,8 +4150,8 @@ fn reset_modelica_status_mirror_on_scene_teardown(
 mod modelica_status_tests {
     use super::*;
 
-    fn ready_model(name: &str) -> lunco_modelica::ModelicaModel {
-        let mut model = lunco_modelica::ModelicaModel::default();
+    fn ready_model(name: &str) -> lunco_modelica_core::ModelicaModel {
+        let mut model = lunco_modelica_core::ModelicaModel::default();
         model.model_name = name.to_owned();
         model.is_compiled = true;
         model
@@ -4191,7 +4183,7 @@ mod modelica_status_tests {
 
         app.world_mut()
             .entity_mut(first)
-            .get_mut::<lunco_modelica::ModelicaModel>()
+            .get_mut::<lunco_modelica_core::ModelicaModel>()
             .expect("Modelica model")
             .is_compiling = true;
         app.update();
@@ -4203,7 +4195,7 @@ mod modelica_status_tests {
 
         app.world_mut()
             .entity_mut(first)
-            .get_mut::<lunco_modelica::ModelicaModel>()
+            .get_mut::<lunco_modelica_core::ModelicaModel>()
             .expect("Modelica model")
             .is_compiling = false;
         app.update();
@@ -4243,7 +4235,7 @@ impl Plugin for SandboxOffscreenPlugin {
         // Same non-UI cores the headless server needs (see the twin comments in
         // `SandboxHeadlessPlugin`): the Modelica compile channels and the
         // spawn-command registry both normally arrive via UI plugins.
-        app.add_plugins(lunco_modelica::ModelicaCorePlugin);
+        app.add_plugins(lunco_modelica_core::ModelicaCorePlugin);
         app.add_plugins(lunco_scene_commands::commands::SpawnCommandPlugin);
         // The trail has no egui or picking dependency, but it is still part of
         // the rendered presentation and must be present in offscreen captures.
@@ -5117,7 +5109,7 @@ impl Plugin for SandboxHeadlessPlugin {
         // must add it directly or the cosim `on_load_scene` observer panics on a
         // missing `Res<ModelicaChannels>`. The server runs Modelica cosim models
         // authoritatively, so it needs the real compile path, not a stub.
-        app.add_plugins(lunco_modelica::ModelicaCorePlugin);
+        app.add_plugins(lunco_modelica_core::ModelicaCorePlugin);
 
         // Spawn-command CORE (runtime spawn/move/property commands + the
         // `apply_net_replication` system that tags dynamic scene bodies with
@@ -5164,8 +5156,6 @@ pub struct ScenePath(pub Option<String>);
 // apply. Locally allowed.
 #[allow(clippy::disallowed_methods)]
 fn setup_sandbox(world: &mut World) {
-    let scene_path = world.resource::<ScenePath>().0.clone();
-
     // The persistent world shell (BigSpace root + `WorldGrid` + the single
     // `FloatingOrigin`) is owned by `WorldShellPlugin`. `ensure_world_root` is a
     // defensive create-or-get so the shell exists before any scene loads.
@@ -5183,25 +5173,11 @@ fn setup_sandbox(world: &mut World) {
     // Scene mounts replace this binding with their authored site frame when
     // celestial placement completes.
     world.insert_resource(lunco_core::ActivePhysicsFrame(grid));
+}
 
-    // ── Boot-entry policy (GUI only) ─────────────────────────────────────────
-    // Before loading a startup scene, consult the shared boot policy
-    // (`boot.rhai`, via `lunco_tutorial::consult_boot`). On a first interactive
-    // run it TAKES OVER — onboards with a tutorial whose declared world is
-    // mounted by the shared scene lifecycle — so we skip the default load and
-    // there is no load-then-replace race. Explicit `--scene` / `--api` → the policy stands down. With no
-    // scene, headless/API runs remain an empty world shell; GUI boot policy may
-    // still choose an onboarding scene for an interactive first run.
-    // The world shell above is set up regardless, so a taking-over tutorial scene
-    // still has it.
-    #[cfg(feature = "ui")]
-    {
-        let has_scene_arg = std::env::args().any(|a| a == "--scene");
-        let automated = std::env::args().any(|a| a == "--api" || a == "--no-ui");
-        if lunco_tutorial::consult_boot(world, has_scene_arg, automated) {
-            return;
-        }
-    }
+/// Load the explicitly requested startup scene.
+fn load_startup_scene_on_boot(world: &mut World) {
+    let scene_path = world.resource::<ScenePath>().0.clone();
 
     // WEB: do NOT load a startup scene here. The generated page's autoload hook
     // (index.html → a `LoadScene` command) loads the deployment's default twin

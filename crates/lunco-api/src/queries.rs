@@ -7,7 +7,7 @@
 //! `lunco-api` already has built-in query variants (`ListEntities` and
 //! `DiscoverSchema`) that read ECS state and return JSON
 //! synchronously. Adding bundled-model / Twin / MSL listing the same way
-//! would require `lunco-api` to depend on `lunco-modelica` and
+//! would require `lunco-api` to depend on `lunco-modelica-core` and
 //! `lunco-workspace` — a layering inversion (those crates already depend
 //! on `lunco-api` for the executor plugin).
 //!
@@ -38,7 +38,7 @@
 //! impl ApiQueryProvider for ListBundledProvider {
 //!     fn name(&self) -> &'static str { "ListBundled" }
 //!     fn execute(&self, _world: &World, _params: &serde_json::Value) -> ApiResponse {
-//!         let bundled = lunco_modelica::bundled_models();
+//!         let bundled = lunco_modelica_core::bundled_models();
 //!         ApiResponse::ok(serde_json::json!({ "bundled": bundled }))
 //!     }
 //! }

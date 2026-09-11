@@ -927,7 +927,7 @@ fn short_name(path: &str) -> &str {
 pub fn register(reg: &mut lunco_canvas::VisualRegistry) {
     reg.register_node_kind(PLOT_NODE_KIND, |data: &lunco_canvas::NodeData| {
         // Downcast to the typed payload boxed by callers (e.g.
-        // lunco-modelica's plot creator). Empty/wrong-type → render
+        // lunco-modelica-core's plot creator). Empty/wrong-type → render
         // a default plot stub.
         let payload = data
             .downcast_ref::<PlotNodeData>()

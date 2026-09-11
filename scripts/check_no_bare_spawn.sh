@@ -43,23 +43,23 @@ crates/lunco-workbench/src/picker.rs
 # the binding-insert site (DrillInBinding._busy / DuplicateBinding._busy
 # / OpeningState::FileLoad._busy) so the bus is busy for the full
 # parse stage — the spawn itself does not own the handle.
-crates/lunco-modelica/src/ui/commands/lifecycle.rs
-crates/lunco-modelica/src/ui/panels/canvas_diagram/loads.rs
-crates/lunco-modelica/src/ui/panels/package_browser/mod.rs
+crates/lunco-modelica-ui/src/ui/commands/lifecycle.rs
+crates/lunco-modelica-ui/src/ui/panels/canvas_diagram/loads.rs
+crates/lunco-modelica-ui/src/ui/panels/package_browser/mod.rs
 
 # Background image (port icon) decode. Result lands in an asset cache;
 # no overlay state depends on the spawn completing within a frame.
 # Sweep into spawn_tracked with BusyScope::Global if a future
 # UI surface starts to care about decode progress.
-crates/lunco-modelica/src/ui/image_loader.rs
+crates/lunco-modelica-ui/src/ui/image_loader.rs
 
 # Diagnostics panel background work — populates a sidebar list that
 # is itself displayed only when non-empty; no "loading" affordance
 # yet to keep honest. Migrate when the panel grows one.
-crates/lunco-modelica/src/ui/panels/diagnostics.rs:308
+crates/lunco-modelica-ui/src/ui/panels/diagnostics.rs:308
 
 # Doc comment / example, not a real spawn.
-crates/lunco-modelica/src/engine_resource.rs:98
+crates/lunco-modelica-core/src/engine_resource.rs:98
 EOF
 )
 

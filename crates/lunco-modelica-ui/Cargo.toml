@@ -1,0 +1,334 @@
+[package]
+name = "lunco-modelica-ui"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Modelica workbench UI and lunica application facade for LunCoSim"
+
+[features]
+# `lunco-api` is on by default so `cargo run --bin lunica --
+# --api` Just Works for screenshot-driven debugging. Building without it
+# (`cargo build --no-default-features`) drops the axum/tokio web stack,
+# which matters for the wasm32 binary.
+default = ["lunco-api", "lunco-api/transport-http", "ui", "scripting"]
+# The egui Modelica IDE: panels, diagram canvas, plots, docs viewer. OFF ⇒ the
+# compile core (ModelicaCorePlugin) builds headless — no egui/winit, no lyon,
+# no workbench shell. Consumers that need only the compiler (lunco-usd-sim on a
+# server) build with `default-features = false`.
+ui = [
+    # Screenshot backend — workbench-only, and NOT on `lunco-api` (a server build enables that).
+    "lunco-workbench/api",
+    "dep:bevy_egui", "dep:lunco-theme", "dep:lunco-workbench", "dep:lunco-workbench-core", "dep:lunco-status-core", "dep:lunco-ui",
+    "dep:lunco-viz", "dep:lunco-canvas", "dep:egui_plot", "dep:egui_commonmark",
+    "dep:egui_extras", "dep:htmd", "dep:lyon_tessellation", "dep:lyon_path",
+    "dep:lyon_geom", "lunco-doc-bevy/ui",
+    "dep:rumoca-tool-fmt", "dep:rumoca-tool-lint", "dep:image", "dep:arboard",
+    # bevy_egui pulls bevy_render + bevy_window; the lunica WINDOW additionally
+    # needs the winit backend (no longer in the workspace bevy default).
+    "bevy/bevy_winit", "bevy/bevy_window", "bevy/x11", "bevy/wayland",
+    # wasm GPU backend for the egui render pass. Since the workspace made render
+    # opt-in (bevy default no longer bundles a wgpu backend), the web build linked
+    # bevy_render with NO backend and panicked at startup ("No wgpu backend
+    # feature ... was enabled"). WebGL2 matches the sandbox web build; native is
+    # unaffected (it uses vulkan/metal/dx12).
+    "bevy/webgl2",
+]
+# Compile the API in. Transport is chosen automatically: the native HTTP
+# server comes from `lunco-api/transport-http` (added to `default` above);
+# the wasm build (`build_web.sh --features lunco-api`) gets the
+# `window.lunco_api` JS bridge automatically via `cfg(target_arch="wasm32")`.
+lunco-api = ["dep:lunco-api", "dep:lunco-workspace-api", "lunco-modelica-core/lunco-api"]
+# Headless Modelica compile/run server: the HTTP API, no `ui`. Build the lunica
+# bin with `--no-default-features --features server`. No screenshot backend (`lunco-workbench/api`; the
+# server captures no screenshots) and no winit/egui.
+server = ["lunco-api", "lunco-api/transport-http"]
+# In-app rhai scripting: run/hot-reload scenarios and drive the workbench from
+# scripts used by authored scenarios. INDEPENDENT of the API
+# feature — `lunco-scripting` self-supplies the transport-free command core, so
+# `cmd()` works with no HTTP server. On `default` so the GUI ships with it; drop
+# it (`--no-default-features`) for a scripting-free compile-core build.
+scripting = ["dep:lunco-scripting"]
+# Opt-in Tracy profiler hook. Off by default because tracy-client-sys needs a
+# C++ compile that breaks on wasm32 and on Windows MSVC 2019 (missing
+# `RelationProcessorDie` enumerant in pre-2004 Win10 SDKs). Enable with
+# `cargo run --features tracy --bin lunica` when you actually want a Tracy
+# session.
+tracy = ["bevy/trace_tracy"]
+
+# Single source for desktop AND web. `scripts/build_web.sh build lunica`
+# builds this bin with `--target wasm32` — the wasm-specific entry /
+# window / worker wiring is gated behind `#[cfg(target_arch = "wasm32")]`
+# inside `lunica.rs`, mirroring how `sandbox` unifies its desktop+web
+# entry. No separate `_web` bin.
+[[bin]]
+name = "lunica"
+path = "src/bin/lunica.rs"
+# ONE source, two shapes (like `sandbox`): the default `ui` build is the egui
+# workbench window; `--no-default-features --features server` (or `--no-ui` at
+# runtime) builds the same bin as a HEADLESS Modelica compile/run server (HTTP
+# API, no egui/winit). `lunica.rs` cfg-gates the UI paths, so no required-features.
+
+[dependencies]
+bevy.workspace = true
+lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
+# The whole egui IDE stack is UI-only. Optional behind `ui` so the Modelica
+# COMPILE CORE (ModelicaCorePlugin: channels + worker + .mo loader + dispatch)
+# builds headless (`default-features = false`) for a server running cosim — no
+# egui→winit. The GUI/lunica build keeps `default = [..., "ui"]`.
+bevy_egui = { workspace = true, optional = true }
+lunco-assets = { workspace = true }
+lunco-core = { path = "../lunco-core" }
+lunco-time = { path = "../lunco-time" }
+lunco-theme = { path = "../lunco-theme", optional = true }
+lunco-doc = { path = "../lunco-doc" }
+# Core document-lifecycle events; its egui systems come back via `ui` below.
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
+lunco-twin-journal = { path = "../lunco-twin-journal" }
+lunco-settings = { path = "../lunco-settings" }
+lunco-signal = { path = "../lunco-signal" }
+lunco-telemetry = { path = "../lunco-telemetry" }
+lunco-workbench = { path = "../lunco-workbench", optional = true }
+lunco-workbench-core = { path = "../lunco-workbench-core", optional = true }
+lunco-status-core = { path = "../lunco-status-core", optional = true }
+lunco-web = { workspace = true }
+lunco-ui = { path = "../lunco-ui", optional = true }
+lunco-viz = { path = "../lunco-viz", features = ["ui"], optional = true }
+lunco-canvas = { path = "../lunco-canvas", features = ["ui"], optional = true }
+lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
+lunco-workspace = { path = "../lunco-workspace" }
+lunco-workspace-api = { path = "../lunco-workspace-api", optional = true }
+lunco-storage = { path = "../lunco-storage" }
+egui_plot = { workspace = true, optional = true }
+# base64url encode/decode for shareable model links (see `model_share.rs`).
+# Already resolved transitively (0.22.x) — no new download.
+base64 = { workspace = true }
+# Docs view (ModelViewMode::Docs): HTML → Markdown → egui render.
+# `egui_commonmark` pulls the right `egui` version transitively to
+# match bevy_egui 0.40 (→ egui 0.34). Syntax highlighting is enabled
+# so `<pre><code>` blocks in Modelica docs render with colour.
+egui_commonmark = { version = "0.24", features = ["better_syntax_highlighting"], optional = true }
+# `all_loaders` wires up every shipped image source (file://, http://,
+# bytes://, raw paths) so images in Documentation HTML render. We add
+# a custom `modelica://` loader on top to resolve MSL-internal URIs
+# against the on-disk MSL tree.
+egui_extras = { version = "0.35", features = ["all_loaders"], optional = true }
+# Pure-Rust HTML → Markdown converter. Used once per Documentation
+# annotation to normalise into the shape commonmark expects.
+htmd = { version = "0.5", optional = true }
+# Polygon tessellator with EvenOdd fill-rule support — matches the
+# de-facto Modelica standard (Qt's QPainterPath default that OMEdit
+# and Dymola rely on). egui's built-in `Shape::convex_polygon` only
+# triangulates convex shapes; concave or self-intersecting polygons
+# (PartialValve's bowtie, sensor Y-marks, gauge X-shapes) need a real
+# tessellator. lyon does this in pure Rust with vertex/index buffer
+# output that drops straight into `egui::Mesh`. ~150 KB compiled.
+lyon_tessellation = { version = "1", optional = true }
+lyon_path = { version = "1", optional = true }
+lyon_geom = { version = "1", optional = true }
+# Direct rayon dependency for the indexer's own DEDICATED, bounded parse
+# pool (`indexer::parse_native_msl_bundle`), which deliberately does not
+# touch the global pool.
+#
+# It is NO LONGER used to race rumoca for the global pool: an unconfigured
+# pool grabbing `num_cpus - 1` threads saturates all-but-one core on every
+# parse-on-Add and starves bevy_render (the `Last` schedule blocks waiting
+# on the previous frame). `lunica` now states that budget through
+# `rumoca_compile::parallelism::set_compiler_parallelism()` instead, so
+# rumoca builds its pool with our thread count — and its own 16 MB stacks,
+# which deep MSL class hierarchies need.
+rayon = { workspace = true }
+# Wasm-safe replacement for `std::time::Instant`. On native it's an alias
+# for `std::time::Instant`; on wasm32 it's backed by `performance.now()`.
+# Required because `std::time::Instant::now()` panics with
+# "time not implemented on this platform" on wasm32-unknown-unknown.
+web-time = { workspace = true }
+# Pre-parsed MSL bundle deserialiser. Same encoding as rumoca's
+# on-disk artifact cache — the wasm fetcher decodes a Vec of
+# (uri, StoredDefinition) shipped at build time, skipping a ~27-min
+# per-file parse on the page.
+bincode = { workspace = true }
+# Raster decoders used by egui_extras' `all_loaders`. Only the formats
+# actually present in MSL Resources/Images are enabled to keep the
+# compile surface small.
+image = { workspace = true, optional = true }
+# LunCoSim/rumoca, `main` (see the workspace Cargo.toml for the pin). It
+# carries the wasm32 `Instant` fix (std::time::Instant panics on
+# wasm32-unknown-unknown), reconstruction of algebraic/output variables via the
+# retained `EliminationResult` (so `state()`/`get()` return every variable, not
+# just solver-vector entries), and `Session::load_source_root_in_memory(...)`,
+# which lets the wasm runtime hand pre-fetched MSL bytes to the compile session
+# with no filesystem.
+#
+# The interactive stepper is `SimulationSession` (rumoca ≥0.9.20; it replaced
+# `SimStepper`). NOTE: it clamps every advance at `SimOptions::t_end`, so build
+# it through `experiments_runner::stepper_options_from_bounds`, never from
+# `SimOptions::default()` — see the docs there.
+rumoca-sim = { workspace = true }
+rumoca-solver-rk45 = { workspace = true }
+rumoca-eval-solve = { workspace = true }
+lunco-experiments = { path = "../lunco-experiments" }
+# FACTS for the `modelica` lint domain (`../lunco-modelica-ast/src/lint_facts.rs`) are `HookValue`, the same
+# typed shape every other domain hands its authored rules.
+lunco-hooks = { path = "../lunco-hooks" }
+lunco-modelica-ast = { path = "../lunco-modelica-ast" }
+rumoca-compile = { workspace = true }
+rumoca-ir-solve = { workspace = true }
+rumoca-phase-parse = { workspace = true }
+# Modelica formatter — surfaced as a "Format" toolbar button +
+# Ctrl+Shift+F binding. Rewrites the active editor buffer with
+# the canonical layout rumoca-tool-fmt produces.
+rumoca-tool-fmt = { workspace = true, optional = true }
+# Modelica linter — surfaced into the Diagnostics panel alongside
+# parse errors. Wraps `rumoca_tool_lint::lint(source, name, opts)`
+# which returns a `Vec<LintMessage>` we map to `LogEntry`s.
+rumoca-tool-lint = { workspace = true, optional = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+regex = "1.10"
+# rumoca's AST uses `indexmap::IndexMap` for class collections; we
+# reference the type directly in `ast_extract` helpers so our
+# hot-path extractors can walk the cached AST without any clone.
+indexmap = { workspace = true }
+futures-lite = "2.3"
+crossbeam-channel = { workspace = true }
+# `default-features = false`: the `lunco-api` (native) and `web` features pick
+# the transport — `transport-http` vs. `transport-wasm`.
+lunco-api = { path = "../lunco-api", optional = true, default-features = false }
+# In-app rhai scripting runtime (RunScenario/hot-reload + the `cmd()`/prelude
+# world-bridge). Optional behind the `scripting` feature. Its default `rhai`
+# backend is wasm-clean, and it pulls `lunco-api` only default-features=false
+# (the transport-free command core) — no HTTP transport, keeping scripting
+# independent of the API server.
+lunco-scripting = { path = "../lunco-scripting", optional = true }
+# PERF-CRITICAL: compile-time static max level for the `log` facade.
+#
+# Why: parol_runtime (rumoca's parser engine) calls `log::trace!` in its
+# hottest loops — e.g. it Display-formats the WHOLE token stream on every
+# lookahead and every parse-tree push. Those calls are ~free when nobody
+# enables trace, BUT the app installs Bevy's `LogPlugin`, whose tracing-log
+# bridge forces the `log` facade's max level to TRACE (so all log records
+# reach `tracing` for filtering). That makes every `log::trace!` CONSTRUCT
+# and format its record before tracing drops it at info-level — the cost is
+# paid millions of times. Measured: a cold MSL parse went from <2 s
+# (standalone, no logger) to 5+ minutes in-app. Same parser, same machine —
+# the only difference was the installed logger. (Repro: set log max level to
+# TRACE in a standalone bin → identical blow-up.) Per-target filtering can't
+# help: the record is built before any per-crate filter runs.
+#
+# These features bake `log`'s STATIC_MAX_LEVEL at COMPILE time, so the
+# affected macros become no-ops with zero runtime cost regardless of what
+# the logger sets at runtime. Features are additive and unify across the
+# whole dependency graph, so this also neutralises parol_runtime's trace.
+#
+# What this drops:  `log::trace!` (dev + release), `log::debug!` (release only).
+# What this KEEPS:  `log::info!/warn!/error!` everywhere, `log::debug!` in dev,
+#                   and ALL `tracing`/`bevy::log` macros (separate crate,
+#                   unaffected) at every level. So normal logging is intact;
+#                   only the trace flood (≈ exclusively parol's) is removed.
+# To keep `log::debug!` in release too, swap `release_max_level_info` →
+# `release_max_level_debug` (still kills the trace flood).
+log = { version = "0.4", features = ["max_level_debug", "release_max_level_info"] }
+uuid = { workspace = true }
+
+# Tracy profiler is wired via the `tracy` feature above
+# (`tracy = ["bevy/trace_tracy"]`). Off by default because tracy-client-sys
+# needs a C++ compile that breaks on wasm32 and on Windows MSVC 2019
+# (missing `RelationProcessorDie` enumerant in pre-2004 Win10 SDKs).
+# Enable with `cargo run --features tracy --bin lunica` when profiling.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# OS clipboard for the code editor's menu / toolbar / right-click Paste
+# buttons on native. Ctrl/Cmd+V already works through bevy_egui's own
+# arboard plumbing, but the buttons go through
+# `ui/wasm_clipboard.rs::request_paste_from_clipboard()` which was
+# wasm-only; the native branch reads via arboard so the buttons match
+# the keyboard path. Already transitively present via bevy_egui's
+# `manage_clipboard` feature — no new compile.
+arboard = { version = "3", optional = true }
+
+# zstd codec for the native pre-parsed MSL bundle (`.cache/msl/parsed-msl.bin`).
+# The bundle is now zstd-compressed bincode (~10× smaller on disk than the raw
+# bincode it replaced — matters because the cache is large and disk has filled
+# up before). C-backed, but native already links it via `build_msl_assets`, and
+# it's target-gated so wasm keeps using the pure-Rust `ruzstd` decoder below.
+zstd = { workspace = true }
+
+# Web-specific: wasm32-unknown-unknown needs JS interop for console output,
+# panic hooks, and RNG (std::time is unavailable).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# The generic Web Worker pool (spawn / boot handshake / byte + Transferable post
+# / crash respawn), shared with the DEM bake worker. `worker_transport` composes
+# it and keeps the Modelica-specific MSL/run state on top.
+lunco-worker-transport = { path = "../lunco-worker-transport" }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+# bevy_math → rand pulls getrandom 0.3, which on wasm needs an explicit backend.
+# The lunica_worker bundle builds out of this crate, so the browser-crypto
+# (`wasm_js`) feature must be enabled here too; build_web.sh sets the matching
+# `--cfg getrandom_backend="wasm_js"` (cfg + feature are both required).
+getrandom = { version = "0.3", features = ["wasm_js"] }
+# `Response`, `Request`, `RequestInit`, `Headers` for the MSL fetcher
+# (see `src/msl_remote.rs`); the rest predate this work.
+web-sys = { workspace = true, features = [
+    "console",
+    "Document",
+    "Element",
+    "HtmlElement",
+    "HtmlInputElement",
+    "CssStyleDeclaration",
+    "Window",
+    "Cache",
+    "CacheStorage",
+    "File",
+    "FileList",
+    "FileReader",
+    "Blob",
+    "Request",
+    "RequestInit",
+    "RequestMode",
+    "Response",
+    "Headers",
+    "Storage",
+    # `?example=…` URL parameter parsing in lunica.rs.
+    "Location",
+    "UrlSearchParams",
+    # Web Worker bindings — used by `worker_transport` to offload the
+    # blocking compile/step pipeline off the main thread.
+    "Worker",
+    "WorkerType",
+    "WorkerOptions",
+    "DedicatedWorkerGlobalScope",
+    "MessageEvent",
+    # `ErrorEvent` for the worker `onerror` crash handler — lets a worker
+    # OOM/panic surface as a graceful run failure + respawn instead of
+    # hanging the main thread (see `worker_transport::handle_worker_error`).
+    "ErrorEvent",
+    # Clipboard wiring for the wasm code editor.
+    # `Navigator` + `Clipboard` for the menu's async paste fallback;
+    # `ClipboardEvent` + `DataTransfer` for the synchronous paste-event
+    # interception (Ctrl/Cmd+V); `KeyboardEvent` +
+    # `AddEventListenerOptions` for the capture-phase keydown
+    # interception that lets the browser fire the native paste event
+    # at all.  See `ui/wasm_clipboard.rs`.
+    "Navigator",
+    "Clipboard",
+    "ClipboardEvent",
+    "DataTransfer",
+    "KeyboardEvent",
+    "AddEventListenerOptions",
+] }
+js-sys = { workspace = true }
+console_error_panic_hook = { workspace = true }
+# Pure-Rust zstd decoder for the MSL bundle. Smaller than the
+# `zstd` crate (which uses a C dep) and the encoder side already runs
+# on native (see `lunco-assets/src/bin/build_msl_assets.rs`).
+ruzstd = "0.7"
+# Tar reader to walk the decompressed MSL bundle. The `tar` crate is
+# fs-free if you only call `Archive::entries()`; works on wasm.
+tar = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile = { workspace = true }

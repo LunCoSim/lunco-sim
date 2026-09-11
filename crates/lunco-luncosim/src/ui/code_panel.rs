@@ -1,7 +1,7 @@
 //! Code panel — shows the source for the currently-selected entity.
 //!
 //! Reads `SelectedEntities`, then queries:
-//!   - `lunco_modelica::ui::ModelicaDocumentRegistry` for `.mo` source
+//!   - `lunco_modelica_ui::ui::ModelicaDocumentRegistry` for `.mo` source
 //!     attached to a `ModelicaModel` entity (e.g. the Red Balloon).
 //!   - `lunco_scripting::ScriptRegistry` + `ScriptedModel` component for
 //!     scripted source (e.g. the Green Balloon).
@@ -13,7 +13,7 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_doc::DocumentId;
-use lunco_modelica::state::ModelicaDocumentRegistry;
+use lunco_modelica_core::state::ModelicaDocumentRegistry;
 use lunco_scene_commands::SelectedEntities;
 use lunco_scripting::doc::{ScriptLanguage, ScriptedModel};
 use lunco_scripting::ScriptRegistry;
@@ -108,9 +108,7 @@ fn render_source(ui: &mut egui::Ui, source: &str) {
             // mutating the buffer locally has no effect on the doc.
             let mut buf = source.to_string();
             ui.add(
-                egui::TextEdit::multiline(&mut buf)
-                    .font(egui::TextStyle::Monospace)
-                    .code_editor()
+                lunco_workbench::text_editor::code(&mut buf)
                     .desired_width(f32::INFINITY)
                     .desired_rows(20)
                     .interactive(true), // selectable but not editable due to clone

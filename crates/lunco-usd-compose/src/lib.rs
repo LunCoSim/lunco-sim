@@ -249,10 +249,10 @@ mod tests {
 
         assert_eq!(
             child_layer_ids(
-                "twin://SummerSpaceSchool/sim/tutorials/curriculum.usda",
+                "twin://SummerSpaceSchool/sim/scenes/entry.usda",
                 source.as_bytes()
             )
-            .expect("valid curriculum layer"),
+            .expect("valid scene layer"),
             vec!["twin://SummerSpaceSchool/sim/scenes/traverse.usda"]
         );
     }
@@ -261,14 +261,14 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     fn compose_reads_a_windows_authored_twin_sublayer_on_every_native_os() {
         let temp = tempfile::tempdir().expect("temporary Twin root");
-        let curriculum = temp.path().join("sim/tutorials/curriculum.usda");
+        let scene = temp.path().join("sim/scenes/entry.usda");
         let world = temp.path().join("sim/scenes/traverse.usda");
-        std::fs::create_dir_all(curriculum.parent().expect("curriculum parent"))
-            .expect("create curriculum parent");
+        std::fs::create_dir_all(scene.parent().expect("scene parent"))
+            .expect("create scene parent");
         std::fs::create_dir_all(world.parent().expect("world parent"))
             .expect("create world parent");
         std::fs::write(
-            &curriculum,
+            &scene,
             r#"#usda 1.0
 (
     subLayers = [
@@ -277,10 +277,10 @@ mod tests {
 )
 "#,
         )
-        .expect("write curriculum");
+        .expect("write scene");
         std::fs::write(&world, "#usda 1.0\ndef Scope \"Traverse\" {}\n").expect("write world");
 
-        compose_file_to_stage_with_roots(&curriculum, None, Some(temp.path()))
+        compose_file_to_stage_with_roots(&scene, None, Some(temp.path()))
             .expect("a Windows-authored Twin URI composes on this OS");
     }
 

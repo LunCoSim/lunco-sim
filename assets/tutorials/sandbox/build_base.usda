@@ -14,7 +14,7 @@
 # ALL lesson logic is data: this scene just sets the stage (flat ground, a raking
 # polar sun, a fly-cam), and the orchestrator `build_base.rhai` runs the mission
 # — it advances on REAL spawns (an entity of each kind appearing in the world),
-# never on a timer. See crates/lunco-tutorial and the tutorial_overlay HUD.
+# never on a timer. See the authored Rhai scenario and the guided_overlay HUD.
 #
 #   target/debug/luncosim --scene tutorials/sandbox/build_base.usda
 # or start it from the Tutorials panel.

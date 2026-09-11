@@ -9,8 +9,8 @@
 //! discussion, not a hidden geometric pass condition.
 //!
 //! ## One source, event-driven
-//! The lesson IS this script. Its curriculum payload provides the empty build
-//! plot (`build_base.usda`); the declarative `mission(me)` below advances on
+//! The lesson IS this script. Its catalog-selected scene provides the empty
+//! build plot (`build_base.usda`); the declarative `mission(me)` below advances on
 //! REAL spawns — an entity of each kind actually appearing in the world — never
 //! on a timer. The engine auto-publishes the checklist to the HUD and emits
 //! `MISSION_COMPLETE` when every objective is done.
@@ -73,8 +73,8 @@ fn pad_placed(me) {
 }
 
 fn on_start(me) {
-    // The world this lesson teaches in is DECLARED in the curriculum layer
-    // (a `payload` arc) and mounted by the launcher before this runs.
+    // The optional world is selected by the catalog and mounted by the generic
+    // launcher before this runs.
     notify_kind("Tutorial: Build a Lunar Base", "info");
     hint("Open Spawn in the right dock. Open Structures and add the requested part.\n\nDrag its gizmo to place it; use " + input_hint("look_button") + " to look around.");
     focus_panel("spawn_palette");

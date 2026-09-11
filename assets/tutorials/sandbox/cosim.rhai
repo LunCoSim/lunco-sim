@@ -6,7 +6,7 @@
 //! velocity back in. This tour walks that loop — the one pattern behind every
 //! LunCoSim vessel that "thinks" in Modelica and "moves" in physics.
 //!
-//! Coach-mark tour (advances on Next / Back / Skip). Its curriculum payload mounts
+//! Coach-mark tour (advances on Next / Back / Skip). Its catalog-selected scene mounts
 //! the lander scene so the ideas have a live example to point at. It does NOT
 //! re-fly the mission — see the *Lander & Rover Mission* lesson for that. For the prose version, see
 //! `docs/tutorials/03-cosim.md`.
@@ -44,7 +44,7 @@ fn steps() {
 }
 
 fn on_start(me) {
-    // The curriculum payload is mounted before this script starts, so the tour
+    // The catalog-selected scene is mounted before this script starts, so the tour
     // points at a live cosim-flown lander without opening a scene itself.
     this.i = 0;
     coach_step(steps(), 0);
@@ -53,10 +53,10 @@ fn on_start(me) {
 
 fn on_event(me, evt) {
     let s = steps();
-    if evt.name == "cmd:TutorialNext"      { this.i += 1; }
-    else if evt.name == "cmd:TutorialBack" { if this.i > 0 { this.i -= 1; } }
-    else if evt.name == "cmd:TutorialSkip" { this.i = s.len(); }
-    else if evt.name == "cmd:TutorialGoto" { this.i = evt.value; }
+    if evt.name == "cmd:GuidedNext"      { this.i += 1; }
+    else if evt.name == "cmd:GuidedBack" { if this.i > 0 { this.i -= 1; } }
+    else if evt.name == "cmd:GuidedSkip" { this.i = s.len(); }
+    else if evt.name == "cmd:GuidedGoto" { this.i = evt.value; }
     else { return; }
 
     if this.i >= s.len() {

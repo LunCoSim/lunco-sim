@@ -1,44 +1,33 @@
-# LunCoSim Tutorials
+# LunCoSim tutorials
 
-Two things share this name — don't confuse them:
+This directory contains authoring walkthroughs and links to the authored
+lessons shipped under `assets/tutorials/`. A lesson is an ordinary Rhai
+scenario with optional USD scene content. The application menu is the only
+Rust-owned tutorial surface; the simulator, Modelica packages, and USD reader
+remain tutorial-agnostic.
 
-- **In-app tutorials** — the interactive lessons that ship *inside* each app
-  (the **🎓 Tutorials** menu and its configured tutorial entry point). Coach-mark tours that spotlight widgets and
-  advance as you act. See [§ The in-app tutorial system](#the-in-app-tutorial-system).
-- **Authoring walkthroughs** — these docs: build-something-real guides where you
-  edit data files under `assets/` (`.usda` / `.mo` / `.rhai`), reload, and watch
-  it work. See the table below.
+## In-app lessons
 
-## The in-app tutorial system
+The app menu reads `assets/tutorials/catalog.json`. A selected entry submits the
+generic `RunScenarioAsset` command with a script, optional scene, parameters,
+and `ScenarioReloadPolicy::Restart`. The command does not open a layer itself:
+it submits a `SceneTransitionIntent`, USD composes the requested scene, and the
+generic scenario driver starts after the scene/readiness lifecycle completes.
 
-**One catalog, one launcher.** A lesson is declared by a USD curriculum prim:
-its script is `info:sourceAsset` and its optional world is a `payload`. The
-shared launcher (`crates/lunco-tutorial`) mounts that world through the typed
-scene lifecycle, waits for the completion edge, and only then starts the script
-on a host entity. The coach card / spotlight / objectives come from the shared
-HUD (`lunco-workbench::tutorial_overlay`) + the `hud.rhai` prelude.
+The shared `lunco-workbench::guided_overlay` and Rhai prelude provide hints,
+spotlights, coach cards, and objectives. They are reusable presentation and
+scenario mechanisms, not tutorial ownership. Native asset loading rereads
+authored files where supported, so Rhai and catalog edits can be replayed
+without rebuilding the Rust core; wasm uses the embedded asset copy.
 
-- **Where they live**: `assets/tutorials/<app>/<name>.rhai` (`lunica/…`,
-  `luncosim/…`). Native reads them fresh from disk each launch (edit → replay, no
-  rebuild); wasm serves an embedded copy. Loader:
-  `lunco_assets::tutorials::tutorial_source`.
-- **Launch**: every entry point (🎓 menu, the configured tutorial intent, the
-  HTTP API, MCP, and other scripts) funnels through one `StartTutorial{id}` command.
-- **Onboarding is a policy, not Rust**: on a first interactive run, the boot hook
-  (`assets/scripting/policy/boot.rhai`, id `boot.entry`) decides to show the
-  onboarding tutorial instead of loading the default — one load, no race. Rewrite
-  it (or hot-replace by id) to change startup behavior with no rebuild.
-- **Shipped lessons** span the LunCoSim, Basic rover, Sandbox, and Lunica tracks. Each lesson authors `lunco:tutorial:format`: a **tour** is guided reference content whose Rhai policy may require coach navigation or a documented user action; an **exercise** may complete only from observed simulator objectives. A source-level curriculum gate rejects exercise scripts that advance from `cmd:TutorialNext`, and production scene gates cover the runtime mechanics. The Welcome-panel [learning paths](../../assets/tutorials/learning_paths.json) remain a separate navigation aid.
-- The luncosim app's **Workbench Navigation** track includes the UI-only *View, Build & Lunica* tour. It has no payload or required perspective, so the learner can switch between all three layouts while it is active.
-- Tutorial copy follows a one-idea-per-card flow: name the exact action, state what the learner should see, then explain why it matters. Long bodies use short paragraphs; tours keep Next/Back/Skip available, while exercises advance only on an observed action or state change.
-- **The catalog is a USD layer**: a TRACK is a prim applying `LunCoTutorialTrackAPI` in `assets/tutorials/<track>/curriculum.usda`; each child applying `LunCoTutorialAPI` is a LESSON, whose script is `info:sourceAsset` and whose world is a `payload` arc. An APP offers tracks by sublayering them from `assets/tutorials/<app>.usda` — that layer stack is the whole answer to "which tracks, in what order".
-- **A lesson's world is DECLARED**: the launcher mounts the `payload` through the scene lifecycle before running the script. A lesson with no payload is intentionally UI-only; when it follows a world lesson, the launcher clears the outgoing scene and shows the normal empty-viewport presentation.
-- **Presentation is authored**: a track may set `lunco:track:perspective` to the identifier registered by the host. The launcher resolves it through the normal perspective registry; there is no app-specific tutorial hook, and an unknown identifier fails the launch.
-- Tutorial HUDs and coach cards use the shared workbench middle layer; application menus and window controls remain in the higher menu layer, so opening Scenarios/Tutorials stays visually and interactively available during a lesson.
-- The Tutorials menu and launcher panel are content-sized within responsive viewport bounds. Completion uses the shared vector check/pending icons with accessible status text, while lesson format remains explicit as tour or exercise.
-- **Dynamic Twin-scoped lessons**: a Twin contributes on exactly the same terms — one `sim/tutorials/curriculum.usda` (the *Space School Seminar* track, SS1–SS4), composed when the Twin opens and dropped when it closes. No twin-specific manifest, no second parse.
-- **Resolved input labels**: tutorial copy uses the controller-owned `input_bindings` settings section through Rhai `input_binding(...)` / `input_hint(...)`; lessons do not embed physical key names. Progression listens to semantic commands or authoritative state, not raw key events.
-- **Add one — data, not Rust**: drop `assets/tutorials/<track>/<name>.rhai` and declare a prim for it in that track's `curriculum.usda`. No rebuild. Full recipe in [`../../assets/tutorials/README.md`](../../assets/tutorials/README.md) and the [`author-tutorial`](../../skills/author-tutorial/SKILL.md) skill.
+The catalog is ordinary JSON presentation data, not a USD curriculum. Lesson
+worlds remain ordinary USD scenes using standard composition (`subLayers`,
+`references`, `payloads`), `UsdPhysics`, and `UsdLux`. Generic `LunCoProgramAPI`
+is used only where a scene embeds a program; no tutorial-specific USD schema is
+required.
+
+For the complete authoring recipe, see [`../../assets/tutorials/README.md`](../../assets/tutorials/README.md)
+and the [`author-tutorial`](../../skills/author-tutorial/SKILL.md) skill.
 
 ### Runtime tutorial tests
 

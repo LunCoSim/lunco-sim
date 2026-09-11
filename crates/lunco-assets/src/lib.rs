@@ -57,6 +57,7 @@ pub mod font;
 /// file naming the cache. See `docs/architecture/56-asset-resolution-and-cache.md`.
 pub mod lunco_source;
 pub mod missions;
+pub mod modelica;
 pub mod models;
 pub mod msl;
 /// PDS3 `.IMG` raster decode (attached or detached label) — lets the `dem`/

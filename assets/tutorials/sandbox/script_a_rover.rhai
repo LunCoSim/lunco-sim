@@ -17,8 +17,8 @@ fn steps() {
 fn show(s, i) { let step = s[i]; coach(i, s.len(), step.anchor, step.title, step.body); }
 
 fn on_start(me) {
-    // The world this lesson teaches in is DECLARED in the curriculum layer
-    // (a `payload` arc) and mounted by the launcher before this runs.
+    // The optional world is selected by the catalog and mounted by the generic
+    // launcher before this runs.
     this.i = 0;
     show(steps(), 0);
     notify_kind("Tutorial: Script a Rover", "info");
@@ -26,9 +26,9 @@ fn on_start(me) {
 
 fn on_event(me, evt) {
     let s = steps();
-    if evt.name == "cmd:TutorialNext" { this.i += 1; }
-    else if evt.name == "cmd:TutorialBack" { if this.i > 0 { this.i -= 1; } }
-    else if evt.name == "cmd:TutorialSkip" { this.i = s.len(); }
+    if evt.name == "cmd:GuidedNext" { this.i += 1; }
+    else if evt.name == "cmd:GuidedBack" { if this.i > 0 { this.i -= 1; } }
+    else if evt.name == "cmd:GuidedSkip" { this.i = s.len(); }
     else { return; }
 
     if this.i >= s.len() {

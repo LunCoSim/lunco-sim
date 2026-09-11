@@ -38,7 +38,7 @@ Lunica needs the Modelica Standard Library (MSL) on hand. On first use (desktop)
 1. **Download MSL**: Ensure MSL sources are in `~/.cache/lunco/msl/`.
 2. **Index MSL**: Run the indexer to produce the pre-parsed cache:
    ```bash
-   cargo run --release -p lunco-modelica --bin msl_indexer
+   cargo run --release -p lunco-modelica-core --bin msl_indexer
    ```
 
 ### 2. Modeling & Simulation

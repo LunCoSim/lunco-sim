@@ -7,7 +7,8 @@
 > a background worker thread.
 >
 > Engineering docs live in
-> [`../../crates/lunco-modelica/`](../../crates/lunco-modelica/) and
+> [`../../crates/lunco-modelica-core/`](../../crates/lunco-modelica-core/) and
+> [`../../crates/lunco-modelica-ui/`](../../crates/lunco-modelica-ui/) and
 > [`../../crates/lunco-cosim/README.md`](../../crates/lunco-cosim/README.md).
 
 ## Contents
@@ -42,7 +43,9 @@ The Modelica runtime is **rumoca**, our fork:
 The reusable parse boundary is [`lunco-modelica-ast`](../../crates/lunco-modelica-ast/).
 It owns BOM-preserving normalization, strict/recovering Rumoca parse wrappers,
 AST interface projections, and parse-time lint facts. It has no Bevy, document,
-worker, UI, or solver state; `lunco-modelica` owns those heavier runtime seams.
+worker, UI, or solver state. `lunco-modelica-core` owns the headless document,
+compiler, worker, and simulation seams; `lunco-modelica-ui` owns workbench
+presentation and the `lunica` application facade.
 
 ## 2. Architecture in layers
 
@@ -69,10 +72,10 @@ worker, UI, or solver state; `lunco-modelica` owns those heavier runtime seams.
     - PackageBrowser / LibraryBrowser (MSL + project models)
 ```
 
-Consumers that need only source facts use `lunco-modelica-ast`; they do not
-reimplement parsing or import the workbench. The current compiler/session split
-remains a separate follow-up because compile workers and document lifecycle still
-belong to `lunco-modelica`.
+Consumers that need only source facts use `lunco-modelica-ast`; consumers that
+compile or simulate use `lunco-modelica-core`; only workbench hosts use
+`lunco-modelica-ui`. No consumer imports the UI package merely to access the
+compiler or worker.
 
 ### 2a. Generated network schemas
 
@@ -614,9 +617,9 @@ rules:
   spec means by name resolution.
 
 See
-[`../../crates/lunco-modelica/src/ui/panels/canvas_projection.rs`](../../crates/lunco-modelica/src/ui/panels/canvas_projection.rs)
+[`../../crates/lunco-modelica-ui/src/ui/panels/canvas_projection.rs`](../../crates/lunco-modelica-ui/src/ui/panels/canvas_projection.rs)
 (`import_model_to_diagram`) for the call site, and
-[`../../crates/lunco-modelica/src/document/core.rs`](../../crates/lunco-modelica/src/document/core.rs)
+[`../../crates/lunco-modelica-core/src/document/core.rs`](../../crates/lunco-modelica-core/src/document/core.rs)
 (`resolve_class`) for the class-path resolver used by AST ops.
 
 ## 6. The `output` convention (rumoca workaround)
@@ -776,7 +779,7 @@ same `ModelicaDocument`/operation pipeline:
 
 ## 9. The Modelica diagram editor
 
-The diagram panel (`crates/lunco-modelica/src/ui/panels/canvas_diagram/`)
+The diagram panel (`crates/lunco-modelica-ui/src/ui/panels/canvas_diagram/`)
 renders on top of `lunco-canvas` — the workbench's own canvas
 substrate. The panel is a thin *view* over a `ModelicaDocument`: the
 document is the authoritative state, the canvas scene is a rendered
@@ -1204,12 +1207,12 @@ finishing the acausal-connector visuals on `lunco-canvas`.
 
 ### Source
 
-- [`../../crates/lunco-modelica/`](../../crates/lunco-modelica/) — crate root
+- [`../../crates/lunco-modelica-core/`](../../crates/lunco-modelica-core/) — crate root
 - [`../../crates/lunco-modelica-ast/`](../../crates/lunco-modelica-ast/) — normalized Rumoca parse boundary, AST projections, and Modelica lint facts
-- [`../../crates/lunco-modelica/src/document/core.rs`](../../crates/lunco-modelica/src/document/core.rs) — `ModelicaDocument`, op set, apply pipeline, span-based patch helpers, qualified-path `resolve_class`
-- [`../../crates/lunco-modelica/src/pretty.rs`](../../crates/lunco-modelica/src/pretty.rs) — subset pretty-printer, `PrettyOptions`
-- [`../../crates/lunco-modelica/src/ui/panels/canvas_projection.rs`](../../crates/lunco-modelica/src/ui/panels/canvas_projection.rs) — diagram panel, sync-from-document, wire/position diffing, scope-aware type lookup
-- [`../../crates/lunco-modelica/src/ui/panels/code_editor.rs`](../../crates/lunco-modelica/src/ui/panels/code_editor.rs) — code editor, debounced commit (`EDIT_DEBOUNCE_SEC`), word-wrap toggle
+- [`../../crates/lunco-modelica-core/src/document/core.rs`](../../crates/lunco-modelica-core/src/document/core.rs) — `ModelicaDocument`, op set, apply pipeline, span-based patch helpers, qualified-path `resolve_class`
+- [`../../crates/lunco-modelica-core/src/pretty.rs`](../../crates/lunco-modelica-core/src/pretty.rs) — subset pretty-printer, `PrettyOptions`
+- [`../../crates/lunco-modelica-ui/src/ui/panels/canvas_projection.rs`](../../crates/lunco-modelica-ui/src/ui/panels/canvas_projection.rs) — diagram panel, sync-from-document, wire/position diffing, scope-aware type lookup
+- [`../../crates/lunco-modelica-ui/src/ui/panels/code_editor.rs`](../../crates/lunco-modelica-ui/src/ui/panels/code_editor.rs) — code editor, debounced commit (`EDIT_DEBOUNCE_SEC`), word-wrap toggle
 
 ### Adjacent docs
 

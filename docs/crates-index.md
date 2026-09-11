@@ -111,7 +111,8 @@ Logic engines for dynamic simulation behavior, the tool registry, and industrial
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-modelica`** | Modelica integration: document editing, compilation via Rumoca, diagram visualization, and the Modelica workbench + worker pool. The compile/session and UI boundary stays here; reusable parse-time projections live in `lunco-modelica-ast`. |
+| **`lunco-modelica-core`** | Headless Modelica domain runtime: document editing, Rumoca compilation, simulation sessions, worker transport, MSL indexing, and API-facing commands/queries. It has no workbench, egui, tutorial, or UI dependency. |
+| **`lunco-modelica-ui`** | Modelica workbench UI and `lunica` application facade. It adapts core state to workbench contexts and owns Modelica panels, diagrams, plots, onboarding, and editor presentation; it has no tutorial catalog or lifecycle. |
 | **`lunco-modelica-ast`** | Pure Modelica source boundary: BOM normalization, strict/recovering Rumoca parse wrappers, AST interface/component extraction, shared expression/description display projections, and Modelica lint facts. It has no Bevy, UI, worker, storage, or solver ownership; authored lint policy remains in `assets/scripting/policy/lint_modelica.rhai`. |
 | **`lunco-scripting`** | Runtime-agnostic, language-neutral world bridge with **rhai** as the default (browser-capable) backend; Python is an optional one-shot-eval backend, Lua a reserved (unimplemented) backend id; logic providers cover scenarios and sequencing. Rhai can read/write generic active-Twin settings and read named engine exposures without per-setting bindings. |
 | **`lunco-tools`** | Backend-agnostic, dependency-free tool trait + registry: a *tool* is a named, reusable bundle of callable functions whose implementation is pluggable (rhai/native/future). Owns the bevy-free `Tool` trait (discovery + `as_any` downcast) + global registry + discovery. Behaviour-tree execution lives in `lunco-tools-bevy`. |
@@ -121,7 +122,6 @@ Logic engines for dynamic simulation behavior, the tool registry, and industrial
 | **`lunco-hooks-rhai`** | rhai backend for `lunco-hooks`: compiles a rhai `source` + `entry` fn and registers it under a hook id (`register_rhai_hook`), so any hook point can be authored in rhai and hot-replaced. |
 | **`lunco-lint`** | Universal lint substrate: `LintFinding`/`LintReport` and `run_lint(domain, facts)`, which asks the `lint.<domain>` hook what is wrong with a domain's FACTS. Rules are authored (`assets/scripting/policy/lint_<domain>.rhai`), never compiled here — this crate names no domain and knows nothing about USD, rhai or Modelica. Nothing lints on load; `RunLint` (lunco-scene-commands) and `ValidateAsset` are the two entry points. See `docs/architecture/lint-substrate.md`. |
 | **`lunco-behavior`** | Dependency-free behaviour-tree kernel (mechanism, no bevy/avian/rhai): `Ctx`-driven tick-tree — composites (`Sequence`/`Selector`/`Parallel`), reactive composites (`ReactiveSequence`/`ReactiveSelector`, guards re-checked every tick), loops (`Repeat`/`Retry`), and decorators (`Invert`/`Force`). Consumed by `lunco-autopilot`, which authors trees as data (`BehaviorSpec`) and adds clock/pose leaves. Node catalogue: [docs/behaviour-trees.md](./behaviour-trees.md). |
-| **`lunco-tutorial`** | The **unified tutorial launcher** for every workbench app. Curriculum USD prims declare a lesson script (`info:sourceAsset`) and optional world (`payload`); the launcher mounts the world through the typed scene lifecycle and starts the script after completion. Adds the registry + 🎓 menu + launcher panel, `StartTutorial`/`SkipTutorial`/`ResetTutorialProgress`, progress + `next` chain, the host-configured tutorial entry point, the `SubsystemToggles` fidelity switch, and `consult_boot` (the startup decision, driven by the `boot.entry` rhai hook — onboarding is policy, not Rust). Apps register their own lessons via `TutorialAppExt::register_tutorial`. UI-gated; holds no sim state (spec 011). |
 
 ---
 
@@ -130,9 +130,10 @@ Primary entry points and simulation assembly targets.
 
 | Crate | Binary | Responsibility |
 | :--- | :--- | :--- |
-| **`lunco-luncosim`** | `luncosim` | Ground-physics simulator (ground mobility + physics, loaded from USD): USD scene + Avian physics, luncosim edit tools, and the embedded Modelica workbench. The production `luncosim test` command executes authored USD + Rhai scenario assertions headlessly through the same composition root. |
+| **`lunco-luncosim`** | `luncosim` | Ground-physics simulator (ground mobility + physics, loaded from USD): USD scene + Avian physics, luncosim edit tools, the embedded Modelica workbench, and the application-owned authored lesson menu. The production `luncosim test` command executes authored USD + Rhai scenario assertions headlessly through the same composition root. |
 | **`lunco-luncosim-server`** | `luncosim-server` | Headless launcher for LunCoSim (no winit/egui) with the API + networking host. Its own crate purely so it can default to headless. |
-| **`lunco-modelica`** | `lunica`, `lunica_worker`, `msl_indexer` | The Modelica workbench app + its wasm worker and MSL index builder. |
+| **`lunco-modelica-ui`** | `lunica` | The Modelica workbench application and UI facade. |
+| **`lunco-modelica-core`** | `lunica_worker`, `modelica_run`, `modelica_tester`, `msl_indexer`, `msl_parse_bench` | Headless Modelica worker and CLI/indexing tools; none link the workbench UI. |
 
 > Other binaries: `build_msl_assets` (`lunco-assets`), `net_smoke` (`lunco-networking`), `dem_worker` (`lunco-terrain-bake`, the off-thread DEM bake Web Worker — staged next to the wasm by `build_web.sh`).
 
@@ -184,7 +185,7 @@ Bevy ECS integration for the Document System. Provides lifecycle events (Opened,
 Canonical, append-only, Twin-scoped record of every change. Immutable entries keyed by `(author, lamport)` (yrs-compatible), DAG parent links, optional `change_set` grouping for atomic undo, and `EntryKind::{Op, TextEdit, Snapshot, Lifecycle}`. Higher-level: `Stream` + `Composition`, `Branch`, `Marker`, and `UndoManager` with `UndoScope::{Document, Twin}`. Pure Rust, headless, no Bevy dep.
 
 **`lunco-worker-transport`**
-The generic Web Worker pool transport (wasm-only; `#![cfg(target_arch = "wasm32")]`). wasm32 has no OS threads, so multi-second companion work (a Modelica compile, a DEM decode + crater stamp) would freeze the page; each pool member is a JS `Worker` running a *second* wasm instance with its own linear memory. `WorkerPool` owns only the payload-agnostic plumbing — spawn / lazy-grow, the boot wire-id handshake (stale-worker guard), byte + Transferable-`ArrayBuffer` post, and crash respawn — driven by caller-supplied `Callbacks` (`on_message`/`on_ready`/`on_error`/`on_wire_mismatch`). Message framing, readiness gating, and result routing stay with the caller. `lunco-modelica::worker_transport` composes it for the Fast-Run pool (MSL/run state on top); `lunco-terrain-bake::worker_client` composes it for the DEM bake — so the transport is written once and reused, not duplicated.
+The generic Web Worker pool transport (wasm-only; `#![cfg(target_arch = "wasm32")]`). wasm32 has no OS threads, so multi-second companion work (a Modelica compile, a DEM decode + crater stamp) would freeze the page; each pool member is a JS `Worker` running a *second* wasm instance with its own linear memory. `WorkerPool` owns only the payload-agnostic plumbing — spawn / lazy-grow, the boot wire-id handshake (stale-worker guard), byte + Transferable-`ArrayBuffer` post, and crash respawn — driven by caller-supplied `Callbacks` (`on_message`/`on_ready`/`on_error`/`on_wire_mismatch`). Message framing, readiness gating, and result routing stay with the caller. `lunco-modelica-core::worker_transport` composes it for the Fast-Run pool (MSL/run state on top); `lunco-terrain-bake::worker_client` composes it for the DEM bake — so the transport is written once and reused, not duplicated.
 
 ---
 
@@ -309,7 +310,7 @@ Shared web frontend for the wasm apps. Provides the streaming loader (`web/lunco
 
 ### Scripting & Modeling
 
-**`lunco-modelica`**
+**`lunco-modelica-core`**
 Modelica language integration. Provides AST-based editing, compilation via Rumoca, and interactive diagramming, allowing complex industrial models to drive simulation entities and vessel subsystems. On wasm, compiles/Fast-Runs are dispatched off the main thread to the `lunica_worker` companion binary; its `worker_transport` composes the generic `lunco-worker-transport::WorkerPool` (spawn/handshake/post/respawn) and layers the Modelica-specific MSL-readiness and per-run routing on top.
 
 **`lunco-scripting`**

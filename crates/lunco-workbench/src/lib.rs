@@ -72,6 +72,7 @@ use std::sync::Arc;
 
 pub mod icons;
 pub use icons::{icon_button, icon_button_sized, icon_text_button, paint_icon, UiIcon};
+pub mod text_editor;
 pub mod tree;
 
 mod editor_tabs;
@@ -86,6 +87,7 @@ mod viewport;
 pub mod control_status;
 pub mod file_ops;
 pub mod files_panel;
+pub mod guided_overlay;
 pub mod input_overlay;
 pub mod perf_hud;
 pub mod perspective_command;
@@ -96,7 +98,6 @@ pub mod picker;
 #[cfg(feature = "api")]
 pub mod screenshot;
 pub mod theme_command;
-pub mod tutorial_overlay;
 pub mod twin_browser;
 pub mod uri;
 pub mod window_command;
@@ -105,8 +106,8 @@ pub mod window_placement;
 pub mod workspace_state;
 
 pub use perspective_help::{
-    HelpMouse, HelpPopup, HelpShortcut, HelpTourRequest, LiveHelpSection, LiveHelpSections,
-    PerspectiveHelp, PerspectiveHelpPlugin, PerspectiveHelpRegistry,
+    HelpMouse, HelpPopup, HelpShortcut, LiveHelpSection, LiveHelpSections, PerspectiveHelp,
+    PerspectiveHelpPlugin, PerspectiveHelpRegistry,
 };
 pub use render_robustness::{
     RenderGaveUp, RenderHealth, RenderHealthHandle, RenderWarning, RenderWarningKind,
@@ -608,7 +609,7 @@ fn focus_panel_now(layout: &mut WorkbenchLayout, want: &str) {
         let ok = layout.focus_singleton(pid);
         bevy::log::info!("[FocusPanel] id={:?} focus_singleton -> {}", want, ok);
     } else {
-        // A tutorial's named anchor is an actionable request, not a promise
+        // A guided's named anchor is an actionable request, not a promise
         // that the user already opened the panel. Mount the registered panel
         // in its authored default slot, then foreground it. Panels omitted
         // from presets use the side browser when explicitly opened.
@@ -953,8 +954,8 @@ impl Plugin for WorkbenchPlugin {
         // Perf HUD (FPS / frame ms / optional physics ms) wired into
         // the right end of the status bar. Off by default; flip via
         // the `TogglePerfHud` typed command.
-        if !app.is_plugin_added::<tutorial_overlay::TutorialOverlayPlugin>() {
-            app.add_plugins(tutorial_overlay::TutorialOverlayPlugin);
+        if !app.is_plugin_added::<guided_overlay::GuidedOverlayPlugin>() {
+            app.add_plugins(guided_overlay::GuidedOverlayPlugin);
         }
         // The blackout badge — "commands are not reaching this vessel". Reads the
         // same `ControlPathRegistry` the authorization gate refuses on, so the
@@ -964,9 +965,9 @@ impl Plugin for WorkbenchPlugin {
             app.add_plugins(control_status::ControlStatusPlugin);
         }
         // NOTE: guided tours are now driven by rhai scenarios (the coach card is
-        // rendered by `tutorial_overlay` and advanced by the running scenario's
+        // rendered by `guided_overlay` and advanced by the running scenario's
         // `on_event`). The old data-driven `tour_driver` (`TourCatalog`/`TourDef`)
-        // had zero registrants once lunica moved to rhai tutorials and was removed.
+        // had zero registrants once lunica moved to rhai guideds and was removed.
         if !app.is_plugin_added::<perf_hud::PerfHudPlugin>() {
             app.add_plugins(perf_hud::PerfHudPlugin);
         }
@@ -1055,7 +1056,7 @@ impl Plugin for WorkbenchPlugin {
             .init_resource::<source_viewer::PendingSourceReads>()
             .init_resource::<source_viewer::PendingSourceWrites>()
             // Cross-domain URI registry. Starts empty; each domain
-            // plugin (lunco-modelica, a future lunco-usd, …) pushes
+            // plugin (lunco-modelica-core, a future lunco-usd, …) pushes
             // its own handler on build. See `uri.rs` for the trait.
             .init_resource::<UriRegistry>()
             .init_resource::<CurrentSceneName>()
@@ -1171,10 +1172,10 @@ pub(crate) struct WorkbenchLayout {
     pub(crate) active_perspective: Option<PerspectiveId>,
     /// Presentation-owned perspective required by an active guided flow.
     ///
-    /// A tutorial may point at view-local `HelpAnchors`. While that flow is
+    /// A guided may point at view-local `HelpAnchors`. While that flow is
     /// active, switching to a perspective that cannot publish those anchors
-    /// would turn an ordinary user action into a tutorial failure. The
-    /// tutorial sets this at its launch boundary and clears it when the flow
+    /// would turn an ordinary user action into a guided failure. The
+    /// guided sets this at its launch boundary and clears it when the flow
     /// ends; every perspective entry point is then constrained in one place.
     required_perspective: Option<String>,
     pub(crate) activity_bar: bool,
@@ -1767,7 +1768,7 @@ impl WorkbenchLayout {
 
     /// Reset the entire workbench presentation to its first-registered
     /// perspective and its authored slot preset. This is stronger than
-    /// [`Self::reset_to_default_layout`]: opening a guided tutorial must not
+    /// [`Self::reset_to_default_layout`]: opening a guided guided must not
     /// inherit the user's current perspective or any cached per-perspective
     /// tabs and splits.
     pub(crate) fn reset_to_default_perspective(&mut self) {
@@ -2965,7 +2966,7 @@ fn first_leaf(surface: &mut egui_dock::Tree<TabId>) -> Option<NodeIndex> {
 }
 
 /// Return the screen rect occupied by the dock leaves containing any panel in
-/// each requested group. Generic tutorial anchors describe authored
+/// each requested group. Generic guided anchors describe authored
 /// workbench slots, not particular tabs, so a stacked slot is represented by
 /// the union of its leaves. The dock tree is walked once for all three groups;
 /// anchor publication must not turn one layout pass into three full scans.
@@ -3511,7 +3512,7 @@ fn render_network_menu(ui: &mut egui::Ui, world: &mut World) {
             ui.horizontal(|ui| {
                 ui.label("Cert digest:");
                 ui.add(
-                    egui::TextEdit::singleline(&mut digest)
+                    crate::text_editor::singleline(&mut digest)
                         .hint_text("optional — self-signed host"),
                 );
             });
@@ -4920,7 +4921,7 @@ fn render_layout(
             // Publish generic slot anchors from the laid-out dock tree. The
             // alternate explicit-panel renderer below publishes these from
             // egui::Panel responses; docked perspectives need the same
-            // contract or a tutorial would fail merely because its authored
+            // contract or a guided would fail merely because its authored
             // perspective uses egui_dock.
             if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
                 a.set("panel.center", screen);
@@ -5168,8 +5169,8 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
         .get_resource::<CurrentSceneName>()
         .map(|s| s.0.clone())
         .unwrap_or_default();
-    let tutorial_title = world
-        .get_resource::<crate::tutorial_overlay::TutorialHud>()
+    let guided_title = world
+        .get_resource::<crate::guided_overlay::GuidedOverlay>()
         .map(|hud| hud.title.clone())
         .unwrap_or_default();
     let scene_path = world
@@ -5189,7 +5190,7 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
             bar_width,
             perf_enabled,
             net_active,
-            !tutorial_title.is_empty(),
+            !guided_title.is_empty(),
             !scene_name.is_empty(),
         );
         let right_reserve = right_widths.total();
@@ -5307,22 +5308,22 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
             egui::Popup::toggle_id(ui.ctx(), popup_id);
         }
 
-        if !tutorial_title.is_empty() {
+        if !guided_title.is_empty() {
             ui.separator();
             ui.allocate_ui_with_layout(
-                egui::vec2(right_widths.tutorial, 18.0),
+                egui::vec2(right_widths.guided, 18.0),
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
                     ui.add_sized(
-                        [right_widths.tutorial, 18.0],
+                        [right_widths.guided, 18.0],
                         egui::Label::new(
-                            egui::RichText::new(format!("Tutorial: {tutorial_title}"))
+                            egui::RichText::new(format!("Guide: {guided_title}"))
                                 .small()
                                 .strong(),
                         )
                         .truncate(),
                     )
-                    .on_hover_text(format!("Tutorial: {tutorial_title}"));
+                    .on_hover_text(format!("Guide: {guided_title}"));
                 },
             );
         }
@@ -5818,7 +5819,7 @@ const STATUS_BAR_NOTIFICATION_POPUP_RATIO: f32 = 0.30;
 const STATUS_BAR_NOTIFICATION_MIN_WIDTH: f32 = 140.0;
 const STATUS_BAR_SEPARATOR_RESERVE: f32 = 12.0;
 const STATUS_BAR_BASE_OVERHEAD: f32 = 16.0;
-const STATUS_BAR_TUTORIAL_MAX_WIDTH: f32 = 190.0;
+const STATUS_BAR_GUIDED_MAX_WIDTH: f32 = 190.0;
 const STATUS_BAR_SCENE_MAX_WIDTH: f32 = 150.0;
 const STATUS_BAR_NET_MAX_WIDTH: f32 = 220.0;
 const STATUS_BAR_PERF_MAX_WIDTH: f32 = 480.0;
@@ -5826,7 +5827,7 @@ const STATUS_BAR_PERF_EDGE_INSET: f32 = 8.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct StatusBarRightWidths {
-    tutorial: f32,
+    guided: f32,
     scene: f32,
     net: f32,
     perf: f32,
@@ -5835,7 +5836,7 @@ struct StatusBarRightWidths {
 
 impl StatusBarRightWidths {
     fn total(self) -> f32 {
-        self.tutorial + self.scene + self.net + self.perf + self.overhead
+        self.guided + self.scene + self.net + self.perf + self.overhead
     }
 }
 
@@ -5903,16 +5904,16 @@ fn status_bar_right_widths(
     available_width: f32,
     perf_enabled: bool,
     net_active: bool,
-    tutorial_visible: bool,
+    guided_visible: bool,
     scene_visible: bool,
 ) -> StatusBarRightWidths {
     let separator_count = 2.0
-        + if tutorial_visible { 1.0 } else { 0.0 }
+        + if guided_visible { 1.0 } else { 0.0 }
         + if scene_visible { 1.0 } else { 0.0 }
         + if net_active { 1.0 } else { 0.0 };
     let overhead = STATUS_BAR_BASE_OVERHEAD + separator_count * STATUS_BAR_SEPARATOR_RESERVE;
-    let tutorial = if tutorial_visible {
-        STATUS_BAR_TUTORIAL_MAX_WIDTH
+    let guided = if guided_visible {
+        STATUS_BAR_GUIDED_MAX_WIDTH
     } else {
         0.0
     };
@@ -5931,7 +5932,7 @@ fn status_bar_right_widths(
     } else {
         0.0
     };
-    let max_controls = tutorial + scene + net + perf;
+    let max_controls = guided + scene + net + perf;
     let budget = (available_width - STATUS_BAR_MIN_SCOPE_WIDTH).max(1.0);
     let scale = if max_controls > 0.0 {
         ((budget - overhead).max(1.0) / max_controls).min(1.0)
@@ -5940,7 +5941,7 @@ fn status_bar_right_widths(
     };
 
     StatusBarRightWidths {
-        tutorial: tutorial * scale,
+        guided: guided * scale,
         scene: scene * scale,
         net: net * scale,
         perf: perf * scale,
@@ -7081,13 +7082,13 @@ mod tests {
     fn status_bar_right_controls_fit_the_reserved_compact_width() {
         let compact = status_bar_right_widths(960.0, true, true, true, true);
         assert!(compact.total() <= 800.0);
-        assert!(compact.tutorial <= STATUS_BAR_TUTORIAL_MAX_WIDTH);
+        assert!(compact.guided <= STATUS_BAR_GUIDED_MAX_WIDTH);
         assert!(compact.scene <= STATUS_BAR_SCENE_MAX_WIDTH);
         assert!(compact.net <= STATUS_BAR_NET_MAX_WIDTH);
         assert!(compact.perf <= STATUS_BAR_PERF_MAX_WIDTH);
 
         let wide = status_bar_right_widths(1600.0, true, true, true, true);
-        assert_eq!(wide.tutorial, STATUS_BAR_TUTORIAL_MAX_WIDTH);
+        assert_eq!(wide.guided, STATUS_BAR_GUIDED_MAX_WIDTH);
         assert_eq!(wide.scene, STATUS_BAR_SCENE_MAX_WIDTH);
         assert_eq!(wide.net, STATUS_BAR_NET_MAX_WIDTH);
         assert_eq!(wide.perf, STATUS_BAR_PERF_MAX_WIDTH);

@@ -176,7 +176,7 @@ fn main() {
     } else {
         eprintln!(
             "error: {} is required for the web editor bundle. \
-             Run `cargo run -p lunco-modelica --bin msl_indexer` first.",
+             Run `cargo run -p lunco-modelica-core --bin msl_indexer` first.",
             index_path.display()
         );
         std::process::exit(1);

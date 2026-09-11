@@ -70,7 +70,7 @@ Apps (luncosim, luncosim-server, lunica)
    ├── Networking (lunco-networking, replication, auth) ← Native Layer 2b
    │
    ├── Domain crates (Documents + Co-Simulation)
-   │     lunco-modelica   lunco-usd   lunco-cosim   lunco-celestial
+   │     lunco-modelica-core   lunco-usd   lunco-cosim   lunco-celestial
    │     lunco-environment   lunco-avatar   lunco-controller   ...
    │     lunco-scripting   ← rhai world-bridge + op-graph generators
    │          │

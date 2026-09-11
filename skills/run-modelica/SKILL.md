@@ -67,7 +67,7 @@ For a one-shot compile→step→CSV with **no server at all** (CI, quick numeric
 check), skip the API entirely:
 
 ```bash
-cargo run -p lunco-modelica --bin modelica_run -- \
+cargo run -p lunco-modelica-core --bin modelica_run -- \
   assets/models/AnnotatedRocketStage.mo AnnotatedRocketStage.RocketStage \
   --duration 30 --dt 0.001 --input valve_command=0.7 \
   --record altitude,velocity --output /tmp/run.csv

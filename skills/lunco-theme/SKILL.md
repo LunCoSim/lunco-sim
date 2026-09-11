@@ -132,7 +132,7 @@ to **tier 2 fields**. **Zero palette reads** in the trait body —
 if the intent isn't in tier 2 yet, go add it there first.
 
 ```rust
-// crates/lunco-modelica/src/ui/theme.rs
+// crates/lunco-modelica-ui/src/ui/theme.rs
 pub trait ModelicaThemeExt {
     fn wire_color(&self, connector_type: &str) -> Color32;
     fn class_badge_bg(&self, kind: &ClassType) -> Color32;

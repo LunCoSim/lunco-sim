@@ -29,17 +29,17 @@ use std::time::Duration;
 use avian3d::prelude::*;
 use lunco_cosim::{CoSimPlugin, SimComponent, SimConnection, SimStatus};
 use lunco_doc::{DocumentHost, DocumentId, DocumentOrigin};
-use lunco_modelica::{ModelicaChannels, ModelicaCommand, ModelicaCorePlugin, ModelicaModel};
+use lunco_modelica_core::{ModelicaChannels, ModelicaCommand, ModelicaCorePlugin, ModelicaModel};
 use lunco_scripting::{
     doc::{ScriptDocument, ScriptLanguage, ScriptedModel},
     LunCoScriptingPlugin, ScriptRegistry,
 };
 
 fn oscillator_mo() -> &'static str {
-    lunco_modelica::models::get_model("Oscillator.mo").expect("bundled Oscillator.mo")
+    lunco_modelica_core::models::get_model("Oscillator.mo").expect("bundled Oscillator.mo")
 }
 fn amplifier_py() -> &'static str {
-    lunco_modelica::models::get_model("Amplifier.py").expect("bundled Amplifier.py")
+    lunco_modelica_core::models::get_model("Amplifier.py").expect("bundled Amplifier.py")
 }
 
 fn wrap_modelica_into_simcomponent(

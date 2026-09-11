@@ -2149,7 +2149,7 @@ fn on_commit_usd_proposal(
 
 /// Apply a [`UsdOp`] to the named document via the typed-command bus.
 ///
-/// Same shape as `lunco-modelica`'s op-dispatch commands: UI clicks,
+/// Same shape as `lunco-modelica-core`'s op-dispatch commands: UI clicks,
 /// HTTP API calls, and scripts all dispatch this; the observer
 /// routes it through [`DocumentRegistry::<UsdDocument>::apply`] so undo/redo,
 /// change notification, and read-only enforcement stay in one place.
@@ -2299,7 +2299,7 @@ fn on_apply_usd_op(
 //
 // The VERB is generic and lives in `lunco-doc-bevy`; each domain observes it and acts
 // only on documents its own registry owns (a Modelica document is handled by Modelica's
-// observer in `lunco-modelica/src/ui/commands/doc.rs`). These are USD's half, and they
+// observer in `lunco-modelica-ui/src/ui/commands/doc.rs`). These are USD's half, and they
 // live HERE — in the crate that owns `DocumentRegistry<UsdDocument>` — not in the editor, so a
 // headless binary with documents but no 3D editor can still undo.
 //
@@ -3363,7 +3363,7 @@ fn wire_usd_journal_handle(
 /// Each frame, drain the registry's pending-event rings into the
 /// canonical [`lunco_doc_bevy`] notification triggers.
 ///
-/// Mirrors the publish-events system in `lunco-modelica`. Cheap
+/// Mirrors the publish-events system in `lunco-modelica-core`. Cheap
 /// no-op when nothing is pending; gated implicitly by the
 /// `Vec::is_empty` checks inside `drain_pending`.
 fn drain_usd_pending_events(

@@ -10,7 +10,7 @@
 //!
 //! The simulation backend is plugged in via the [`ExperimentRunner`]
 //! trait. This crate has no rumoca / modelica dependency; the binding
-//! lives in `lunco-modelica`. Future backends (FMU, codegen, remote)
+//! lives in `lunco-modelica-core`. Future backends (FMU, codegen, remote)
 //! plug in the same way.
 
 pub mod solver;
@@ -86,7 +86,7 @@ impl Default for ExperimentId {
 pub struct TwinId(pub String);
 
 /// Opaque reference to a model. The runner crate interprets this; the
-/// experiments crate does not. For lunco-modelica, this is typically a
+/// experiments crate does not. For lunco-modelica-core, this is typically a
 /// fully-qualified Modelica class name plus the source/document
 /// identity needed to recompile.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -532,7 +532,7 @@ impl ExperimentRegistry {
     //
     // Explicit setters for the parts of an experiment that make up its
     // *definition* (name, bounds, params). These exist so a definition edit is a
-    // single funnelled call — the journaling layer (`lunco-modelica`'s
+    // single funnelled call — the journaling layer (`lunco-modelica-core`'s
     // `experiment_journal`) records an `ExperimentOp` and then applies it through
     // exactly these methods, and cross-peer replay applies the same op the same
     // way. Direct `get_mut(...).field = ...` poking bypasses journaling, so
@@ -640,7 +640,7 @@ pub trait ExperimentRunner: Send + Sync {
     /// the actual work happens off-thread (native: std::thread; wasm:
     /// Web Worker). Concurrency: at most one fast run per runner
     /// instance is in flight at any time; a second call while another
-    /// is active is implementation-defined (lunco-modelica queues).
+    /// is active is implementation-defined (lunco-modelica-core queues).
     fn run_fast(&self, exp: &Experiment) -> RunHandle;
 
     /// Read default bounds from the model's `experiment(...)`
@@ -686,7 +686,7 @@ pub struct RunCancelled {
 
 /// Plugin that registers the registry resource + run lifecycle events.
 /// Runners are NOT registered here; the binding crate
-/// (`lunco-modelica`) inserts its own `ExperimentRunner` resource.
+/// (`lunco-modelica-core`) inserts its own `ExperimentRunner` resource.
 #[cfg(feature = "bevy")]
 pub struct ExperimentsPlugin;
 

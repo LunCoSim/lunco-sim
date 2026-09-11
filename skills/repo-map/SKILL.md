@@ -53,11 +53,11 @@ target/debug/luncosim
 target/debug/luncosim --api 4101
 cargo build -p lunco-luncosim-server --bin luncosim-server
 target/debug/luncosim-server --api 4101
-cargo build -p lunco-modelica --bin lunica
+cargo build -p lunco-modelica-ui --bin lunica
 target/debug/lunica --api 4101
 ```
 
-**Utility / dev bins** (all in `lunco-modelica` unless noted): `modelica_run`
+**Utility / dev bins** (all in `lunco-modelica-core` unless noted): `modelica_run`
 (headless Modelica CLI → CSV), `msl_indexer` (rebuild the MSL search index — re-run
 after an MSL change), `lunica_worker` (wasm compile worker, bundled not run),
 `build_msl_assets` (`lunco-assets`), `net_smoke` (`lunco-networking`, transport smoke
@@ -102,7 +102,7 @@ Use this to jump to the right one; read the index for the full responsibility.
 | **USD integration** | OpenUSD↔Bevy: visuals, physics, sim schemas, materials | `lunco-usd`, `lunco-usd-bevy`, `lunco-usd-avian`, `lunco-materials` |
 | **Networking & API** | replication, HTTP API, telemetry, attributes | `lunco-networking`, `lunco-api`, `lunco-telemetry` |
 | **Workbench & UI** | IDE shell, widgets, viz, 2D canvas, edit tools, render, web boot | `lunco-workbench`, `lunco-ui`, `lunco-viz`, `lunco-canvas`, `lunco-luncosim-edit` |
-| **Scripting & modeling** | Modelica, event-driven Rhai, tools, hooks, behavior trees, tutorials | `lunco-modelica`, `lunco-scripting`, `lunco-tools`, `lunco-hooks`, `lunco-behavior`, `lunco-tutorial` |
+| **Scripting & modeling** | Modelica, event-driven Rhai, tools, hooks, behavior trees, authored lessons | `lunco-modelica-core`, `lunco-modelica-ui`, `lunco-scripting`, `lunco-tools`, `lunco-hooks`, `lunco-behavior`, `lunco-luncosim` |
 | **Applications** | the entry-point binaries above | `luncosim`, `luncosim-server`, `lunica` |
 
 ## Where does X live? (routing)
@@ -123,10 +123,10 @@ Use this to jump to the right one; read the index for the full responsibility.
 ## Gotchas / naming traps
 
 - **No `apps/` directory** — every binary lives in a `crates/<crate>/src/{main.rs,bin/}`.
-- **`lunica` ≠ the main sim.** It is the Modelica workbench (crate `lunco-modelica`); `luncosim` is the ground-physics simulator and `luncosim-server` is its headless launcher.
+- **`lunica` ≠ the main sim.** It is the Modelica workbench (crates `lunco-modelica-ui` (workbench) and `lunco-modelica-core` (compiler/worker)); `luncosim` is the ground-physics simulator and `luncosim-server` is its headless launcher.
 - **Do not launch LunCoSim through `cargo run`.** Build the named package/bin,
   then execute `target/debug/luncosim` directly. Bare `cargo run` is also
-  ambiguous because the default members are `lunco-luncosim` and `lunco-modelica`.
+  ambiguous because the default members are `lunco-luncosim` and `lunco-modelica-ui`.
 - **`lunco-luncosim` produces the `luncosim` binary** (crate name ≠ binary name); `luncosim-server` is a *separate crate* (`lunco-luncosim-server`) that exists only to default to headless.
 - **API port is 4101** by default; always pass an explicit free port when another
   session owns it.

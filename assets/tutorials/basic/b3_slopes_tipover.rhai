@@ -10,8 +10,8 @@
 //! `tilt_deg` (prelude, off `world_rotation`).
 
 fn on_start(me) {
-    // The world this lesson teaches in is DECLARED in the curriculum layer
-    // (a `payload` arc) and mounted by the launcher before this runs.
+    // The optional world is selected by the catalog and mounted by the generic
+    // launcher before this runs.
     focus_panel("sandbox_inspector");
     spotlight("panel.sandbox_inspector", "Select the Hauler and read its mass and centre of mass.");
     notify_kind("Tutorial: Slopes & Tip-Over", "info");

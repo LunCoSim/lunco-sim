@@ -1,4 +1,4 @@
-# lunco-modelica Assets
+# lunco-modelica-core Assets
 #
 # External assets required by this crate.
 # Mirrors Cargo.toml — each crate owns its own asset dependencies.

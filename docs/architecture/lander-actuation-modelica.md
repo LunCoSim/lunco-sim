@@ -171,7 +171,7 @@ underdetermined; our state/output boundary was structurally ambiguous.
 
 `PositionPID3D` also consumes the public saturated `PIDAxis.command` output.
 It does not read `raw_command` or add a second lateral limiter. The regression
-in `crates/lunco-modelica/tests/gnc_position_pid.rs` compiles and advances both
+in `crates/lunco-modelica-core/tests/gnc_position_pid.rs` compiles and advances both
 the reusable axis and the complete sensor-driven three-axis controller, so this
 failure is guarded at the Modelica boundary rather than hidden by a solver
 relaxation.

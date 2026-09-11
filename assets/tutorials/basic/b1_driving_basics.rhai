@@ -7,11 +7,9 @@
 //! follows).
 
 fn on_start(me) {
-    // The world this lesson teaches in is DECLARED in the curriculum layer
-    // (a `payload` arc) and mounted by the launcher before this runs.
-    // No ordinal: position is the `lunco:tutorial:next` chain in the curriculum
-    // layer alone. Ordinals duplicated into scripts are how this track ended up
-    // titled "2 ·" while toasting "S3".
+    // The application catalog selects the scene before this scenario starts.
+    // Ordering belongs to the catalog; this script owns only its observable
+    // driving objectives.
     focus_panel("command_deck");
     spotlight("panel.command_deck", "Check Command Deck before you drive.");
     notify_kind("Tutorial: Moon Driving Basics", "info");

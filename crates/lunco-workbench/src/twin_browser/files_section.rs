@@ -405,7 +405,8 @@ impl BrowserSection for FilesSection {
                         .as_mut()
                         .expect("in_rename ⇒ rename_doc Some");
                     let resp = ui.add(
-                        egui::TextEdit::singleline(&mut state.buffer).desired_width(f32::INFINITY),
+                        crate::text_editor::singleline(&mut state.buffer)
+                            .desired_width(f32::INFINITY),
                     );
                     if state.needs_focus {
                         resp.request_focus();
@@ -1027,7 +1028,8 @@ fn render_inline_rename(
     if state.target_abs != target_abs {
         return;
     }
-    let resp = ui.add(egui::TextEdit::singleline(&mut state.buffer).desired_width(f32::INFINITY));
+    let resp =
+        ui.add(crate::text_editor::singleline(&mut state.buffer).desired_width(f32::INFINITY));
     if state.needs_focus {
         resp.request_focus();
         state.needs_focus = false;

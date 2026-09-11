@@ -6,10 +6,10 @@
 # This wrapper keeps that fast edit-loop behavior while removing the need to
 # remember the target name. It also uses sccache when it is installed.
 #
-#   ./scripts/run_rust_tests.sh -p lunco-modelica --module rumoca_api_coverage
+#   ./scripts/run_rust_tests.sh -p lunco-modelica-core --module rumoca_api_coverage
 #   ./scripts/run_rust_tests.sh -p lunco-usd --filter integration_asset_loading::test_sandbox_scene_composes
 #   ./scripts/run_rust_tests.sh -p lunco-scripting --check --module rhai_test_harness
-#   ./scripts/run_rust_tests.sh -p lunco-modelica --lib --filter runtime_telemetry::tests
+#   ./scripts/run_rust_tests.sh -p lunco-modelica-core --lib --filter runtime_telemetry::tests
 
 set -euo pipefail
 

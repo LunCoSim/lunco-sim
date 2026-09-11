@@ -1,6 +1,6 @@
 //! Script source assets as Bevy `Asset`s.
 //!
-//! Symmetric to `lunco_modelica::source_asset::ModelicaSource`. Domain
+//! Symmetric to `lunco_modelica_core::source_asset::ModelicaSource`. Domain
 //! code must route `.py` reads through `AssetServer::load(...)` rather
 //! than `std::fs::read_to_string` — that path doesn't exist on wasm32.
 //! See `docs/architecture/40-asset-io.md`.

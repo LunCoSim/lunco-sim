@@ -815,7 +815,7 @@ pub const TELEMETRY_SOURCE: &str = "Telemetry";
 ///
 /// **This is the bridge every emitting crate assumes exists.** Domain
 /// crates (`lunco-terrain-surface`, `lunco-assets`, `lunco-celestial`,
-/// `lunco-tutorial`, `lunco-workspace`, `lunco-usd-bevy`) deliberately do
+/// the application lesson menu, `lunco-workspace`, `lunco-usd-bevy`) deliberately do
 /// not depend on the workbench — they raise a `lunco_core::TelemetryEvent`
 /// and document that "the status bar surfaces it". Nothing did: before
 /// this observer the only `StatusLevel::Error` pushes in the workspace

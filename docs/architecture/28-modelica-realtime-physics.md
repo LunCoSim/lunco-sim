@@ -132,7 +132,7 @@ public surface in two ways worth stating plainly:
   registered backend (the registered id is `"rk45"`). An API caller or saved
   `RunBounds` carrying a pre-registry name gets an `Unknown` error naming every
   valid id. There is no compatibility shim: one form, discoverable.
-- **`ListSolvers` is how you discover them** (`lunco-modelica/src/api_queries.rs`)
+- **`ListSolvers` is how you discover them** (`lunco-modelica-core/src/api_queries.rs`)
   — id, label, rank and every capability flag, straight from the registry. It
   exists so that "what may I pass?" has an answer that cannot drift from what
   `resolve` accepts.
@@ -365,7 +365,7 @@ The way to make predicted physics describable in Modelica is **not** to make rum
 general adaptive solver deterministic. It is to use a **restricted profile** — a
 fixed-step deterministic solver **plus limitations on the model**, with the model
 still authored in plain Modelica code. The current profile is implemented by
-`lunco_modelica::fixed_step::FixedStepSession`; it is a deliberately small first
+`lunco_modelica_core::fixed_step::FixedStepSession`; it is a deliberately small first
 profile, not a claim that every Modelica construct is prediction-safe. A model is
 admitted only when the backend can establish this profile at construction and is
 rejected with a diagnostic otherwise.

@@ -20,7 +20,7 @@ pub struct DeclaredOutputPorts {
 
 /// A co-simulation model on an entity.
 ///
-/// Created by engine plugins (e.g., `lunco-modelica`) when a model is loaded/compiled.
+/// Created by engine plugins (e.g., `lunco-modelica-core`) when a model is loaded/compiled.
 /// The co-simulation bridge reads from `inputs`, writes to `outputs`, and never
 /// cares which engine produces the values.
 ///

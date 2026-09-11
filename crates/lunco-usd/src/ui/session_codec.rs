@@ -1,5 +1,5 @@
 //! USD side of workbench document hot-exit (VSCode-style session
-//! restore) — the mirror of `lunco-modelica`'s `session_codec`.
+//! restore) — the mirror of `lunco-modelica-core`'s `session_codec`.
 //!
 //! Registers a [`DocumentSessionCodec`] so `lunco-workbench` captures
 //! every open USD document's **live buffer** into the per-Twin

@@ -8,11 +8,11 @@
 fn steps() {
     [
         // 0
-        #{ anchor: "",                      focus: (),             title: "Welcome to LunCoSim",   body: "This is the Sandbox: a live 3D world.\n\nYou will learn the camera, selection, spawning, and control handoff. Click Next to begin.", require: "cmd:TutorialNext" },
+        #{ anchor: "",                      focus: (),             title: "Welcome to LunCoSim",   body: "This is the Sandbox: a live 3D world.\n\nYou will learn the camera, selection, spawning, and control handoff. Click Next to begin.", require: "cmd:GuidedNext" },
         // 1
-        #{ anchor: "panel.center",          focus: (),             title: "Look around",            body: "Hold " + input_hint("look_button") + " and drag to look around. Use the mouse wheel to move along your view. Click Next after trying both.", require: "cmd:TutorialNext" },
+        #{ anchor: "panel.center",          focus: (),             title: "Look around",            body: "Hold " + input_hint("look_button") + " and drag to look around. Use the mouse wheel to move along your view. Click Next after trying both.", require: "cmd:GuidedNext" },
         // 2
-        #{ anchor: "panel.center",          focus: (),             title: "Move around",            body: "Move with " + input_hint("forward") + "/" + input_hint("backward") + ". Strafe with " + input_hint("left") + "/" + input_hint("right") + ". Adjust height with " + input_hint("yaw_left") + "/" + input_hint("yaw_right") + ". Click Next after moving around the rover.", require: "cmd:TutorialNext" },
+        #{ anchor: "panel.center",          focus: (),             title: "Move around",            body: "Move with " + input_hint("forward") + "/" + input_hint("backward") + ". Strafe with " + input_hint("left") + "/" + input_hint("right") + ". Adjust height with " + input_hint("yaw_left") + "/" + input_hint("yaw_right") + ". Click Next after moving around the rover.", require: "cmd:GuidedNext" },
         // 3
         #{ anchor: "panel.entity_list",     focus: "entity_list",     title: "Select an object",       body: "In Entities, click the Rover. The selected object becomes the subject of Inspector.", require: "cmd:SelectEntity" },
         // 4
@@ -22,9 +22,9 @@ fn steps() {
         // 6
         #{ anchor: "panel.command_deck",    focus: "command_deck",    title: "Release control",        body: "Press " + input_hint("cancel") + " to release the rover and return to free flight.", require: "cmd:ReleaseVessel" },
         // 7
-        #{ anchor: "",                      focus: (),             title: "Find command help",       body: "Open Help to find command and automation guidance. Rhai, the HTTP API, MCP clients, and the UI use the same typed commands.", require: "cmd:TutorialNext" },
+        #{ anchor: "",                      focus: (),             title: "Find command help",       body: "Open Help to find command and automation guidance. Rhai, the HTTP API, MCP clients, and the UI use the same typed commands.", require: "cmd:GuidedNext" },
         // 8
-        #{ anchor: "",                      focus: (),             title: "Choose a lesson",         body: "You know the basic controls. Open Tutorials and choose First Drive or Moon Driving Basics to practise rover driving.", require: "cmd:TutorialNext" },
+        #{ anchor: "",                      focus: (),             title: "Choose a lesson",         body: "You know the basic controls. Open Tutorials and choose First Drive or Moon Driving Basics to practise rover driving.", require: "cmd:GuidedNext" },
     ]
 }
 
@@ -33,16 +33,16 @@ fn show(s, i) {
 }
 
 fn on_start(me) {
-    // The world this lesson teaches in is DECLARED in the curriculum layer
-    // (a `payload` arc) and mounted by the launcher before this runs.
+    // The optional world is selected by the catalog and mounted by the generic
+    // launcher before this runs.
     this.i = 0;
     show(steps(), 0);
 }
 
 fn on_event(me, evt) {
     let s = steps();
-    if evt.name == "cmd:TutorialBack" { if this.i > 0 { this.i -= 1; } }
-    else if evt.name == "cmd:TutorialSkip" { this.i = s.len(); }
+    if evt.name == "cmd:GuidedBack" { if this.i > 0 { this.i -= 1; } }
+    else if evt.name == "cmd:GuidedSkip" { this.i = s.len(); }
     else if this.i >= s.len() { return; }
     else {
         let required = s[this.i].require;

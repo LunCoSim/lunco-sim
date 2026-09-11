@@ -68,6 +68,13 @@ impl Default for ScenarioExecutionGate {
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ScenarioReadinessArm(pub bool);
 
+/// Monotonic scene replacement generation observed by scenario drivers. A
+/// scenario with [`ScenarioReloadPolicy::Restart`] compares its last started
+/// generation with this value and re-enters `on_start` after the new scene is
+/// ready. The scene owner remains unaware of scripting-specific behavior.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ScenarioSceneGeneration(pub u64);
+
 pub fn close_scenarios_for_scene_transition(
     _trigger: On<lunco_core::SceneTransitionStarted>,
     mut gate: ResMut<ScenarioExecutionGate>,
@@ -80,8 +87,10 @@ pub fn close_scenarios_for_scene_transition(
 pub fn arm_scenarios_after_scene_composition(
     _trigger: On<lunco_core::SceneTransitionCompleted>,
     mut arm: ResMut<ScenarioReadinessArm>,
+    mut generation: ResMut<ScenarioSceneGeneration>,
 ) {
     arm.0 = true;
+    generation.0 = generation.0.saturating_add(1);
 }
 
 /// Open scenario lifecycle only after the completed scene's readiness policy
@@ -454,6 +463,8 @@ struct Fsm {
     /// source. A local script host has no GlobalEntityId, so `-1` would leak
     /// `u64::MAX` into emitted events.
     gid: i64,
+    /// Scene generation at which this scenario last entered `on_start`.
+    scene_generation: u64,
 }
 
 /// Generic scenario runtime resource: a language backend `R` + the neutral FSM.
@@ -543,6 +554,8 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             u64,
             Option<CompileInput>,
             Option<SessionId>,
+            crate::doc::ScenarioReloadPolicy,
+            u64,
         )> = Vec::new();
         // A predicting client only ticks scenarios scoped to run there
         // (`Client`/`Both`); the host ticks `Host`/`Both`. Read once — constant
@@ -551,6 +564,11 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             world.get_resource::<lunco_core::NetworkRole>(),
             Some(lunco_core::NetworkRole::Client)
         );
+        let scene_generation = world
+            .get_resource::<ScenarioSceneGeneration>()
+            .copied()
+            .unwrap_or_default()
+            .0;
         let live: HashSet<Entity>;
         {
             let mut q = world.query::<(
@@ -566,6 +584,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 Option<u64>,
                 Option<SessionId>,
                 ScriptScope,
+                crate::doc::ScenarioReloadPolicy,
             )> = q
                 .iter(world)
                 .map(|(e, m, auth, scope)| {
@@ -576,16 +595,17 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                         m.document_id,
                         auth.and_then(|a| a.0),
                         scope.copied().unwrap_or_default(),
+                        m.reload_policy,
                     )
                 })
                 .collect();
             live = models
                 .iter()
-                .filter(|(_, _, l, _, _, _)| *l == Some(language))
+                .filter(|(_, _, l, _, _, _, _)| *l == Some(language))
                 .map(|(e, ..)| *e)
                 .collect();
 
-            for (entity, paused, lang, doc_id, authority, scope) in models {
+            for (entity, paused, lang, doc_id, authority, scope, reload_policy) in models {
                 if paused || lang != Some(language) {
                     continue;
                 }
@@ -615,7 +635,12 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     let needs_recompile = world
                         .get_resource::<ScenarioDriver<R>>()
                         .and_then(|d| d.fsm.get(&entity))
-                        .is_none_or(|st| st.attempted_generation != Some(generation));
+                        .is_none_or(|st| {
+                            st.attempted_generation != Some(generation)
+                                || (reload_policy == crate::doc::ScenarioReloadPolicy::Restart
+                                    && st.started
+                                    && st.scene_generation != scene_generation)
+                        });
                     let maybe_src = needs_recompile
                         .then(|| (doc.source.clone(), doc.params.clone(), doc.asset_id.clone()));
                     (generation, maybe_src)
@@ -625,7 +650,16 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     .api_id_for(entity)
                     .map(|g| g.get() as i64)
                     .unwrap_or(0);
-                work.push((entity, raw, gid, generation, maybe_src, authority));
+                work.push((
+                    entity,
+                    raw,
+                    gid,
+                    generation,
+                    maybe_src,
+                    authority,
+                    reload_policy,
+                    scene_generation,
+                ));
             }
         }
 
@@ -663,7 +697,17 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
             // leaves the filter off.
             bridge_core::set_script_client_local(is_client);
 
-            for (entity, raw, gid, generation, maybe_src, authority) in work {
+            for (
+                entity,
+                raw,
+                gid,
+                generation,
+                maybe_src,
+                authority,
+                reload_policy,
+                scene_generation,
+            ) in work
+            {
                 // Gate this entity's hook `cmd()`s against the launching session
                 // (§3.4). `None` for a host-trusted launch → ungated. Covers the
                 // hot-reload `on_stop` below too (still inside this iteration).
@@ -672,6 +716,10 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                 st.gid = gid;
                 let mut recompiled = false;
                 let mut compile_diag: Option<Diagnostic> = None;
+                let scene_restart = reload_policy
+                    == crate::doc::ScenarioReloadPolicy::Restart
+                    && st.started
+                    && st.scene_generation != scene_generation;
 
                 // (Re)compile on first sight or generation bump. Phase 1 provides
                 // `maybe_src` exactly when this is due (Some ⟺ recompile), so the
@@ -680,10 +728,17 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     recompiled = true;
                     st.attempted_generation = Some(generation);
                     // Hot-reload teardown: the OUTGOING program cleans up first.
-                    if st.started && st.compiled {
+                    if scene_restart {
+                        // The old scene is already gone. Discard the backend
+                        // state directly instead of calling the outgoing
+                        // program's cleanup against the replacement scene.
+                        runtime.forget(entity);
+                        st.compiled = false;
+                    } else if st.started && st.compiled {
                         let _ = runtime.call_hook(entity, ScenarioHook::Stop, gid);
                     }
                     st.started = false;
+                    st.scene_generation = scene_generation;
                     match runtime.compile(entity, source, params, asset_id.as_deref()) {
                         CompileOutcome::Failed(diag) => {
                             let program = world

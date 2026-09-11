@@ -637,7 +637,7 @@ executor differentiates internally.
 `ApiQueryProvider` in the domain crate that owns the data, register
 it in your plugin's `build` via
 `app.world_mut().resource_mut::<ApiQueryRegistry>().register(...)`.
-See `crates/lunco-modelica/src/api_queries.rs` for examples and
+See `crates/lunco-modelica-core/src/api_queries.rs` for examples and
 spec [`032-model-source-listing`](../../specs/032-model-source-listing/spec.md)
 for the design.
 

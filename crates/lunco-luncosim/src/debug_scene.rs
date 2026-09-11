@@ -145,7 +145,7 @@ use bevy::time::TimeUpdateStrategy;
 
 use crate::SandboxHeadlessPlugin;
 use lunco_core::telemetry::{TelemetryEvent, TelemetryValue};
-use lunco_modelica::ModelicaModel;
+use lunco_modelica_core::ModelicaModel;
 use lunco_usd_sim::cosim::{PendingModelicaSource, UsdSourcedCosim};
 
 /// Safety bound on the manual step loop. 20 000 ticks ≈ 333 s of simulated time

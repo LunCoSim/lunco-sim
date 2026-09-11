@@ -724,10 +724,10 @@ pub(crate) fn on_modelica_parameter_requested(
 ) {
     let request = trigger.event().clone();
     commands.queue(move |world: &mut World| {
-        use lunco_modelica::document::ModelicaOp;
-        use lunco_modelica::state::ModelicaDocumentRegistry;
-        use lunco_modelica::ui::panels::canvas_diagram::apply_ops_public;
-        use lunco_modelica::{ModelicaChannels, ModelicaCommand, ModelicaModel};
+        use lunco_modelica_ui::document::ModelicaOp;
+        use lunco_modelica_ui::state::ModelicaDocumentRegistry;
+        use lunco_modelica_ui::ui::panels::canvas_diagram::apply_ops_public;
+        use lunco_modelica_ui::{ModelicaChannels, ModelicaCommand, ModelicaModel};
 
         let mut session_id = 0u64;
         let mut model_name = String::new();
@@ -1808,7 +1808,9 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
     }
 
     // ── Modelica parameters component ───────────────────────────
-    let has_modelica = ctx.get::<lunco_modelica::ModelicaModel>(entity).is_some();
+    let has_modelica = ctx
+        .get::<lunco_modelica_ui::ModelicaModel>(entity)
+        .is_some();
     if has_modelica {
         egui::CollapsingHeader::new("Modelica Parameters")
             .default_open(true)
@@ -3199,7 +3201,7 @@ fn shader_tools_ui(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
             ui.label("New shader from template:");
             ui.horizontal(|ui| {
                 ui.add(
-                    egui::TextEdit::singleline(&mut st.name)
+                    lunco_workbench::text_editor::singleline(&mut st.name)
                         .hint_text("name")
                         .desired_width(110.0),
                 );
@@ -3240,7 +3242,7 @@ fn shader_tools_ui(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
             // ── Import from disk ──
             ui.label("Import .wgsl from disk:");
             ui.add(
-                egui::TextEdit::singleline(&mut st.import)
+                lunco_workbench::text_editor::singleline(&mut st.import)
                     .hint_text("/path/to/shader.wgsl")
                     .desired_width(220.0),
             );
@@ -3655,7 +3657,7 @@ fn shader_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Enti
 /// entity's Modelica model. Reads params via [`PanelCtx::get`]; the op
 /// dispatch + recompile signal run in the typed request observer.
 fn modelica_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
-    use lunco_modelica::ModelicaModel;
+    use lunco_modelica_ui::ModelicaModel;
 
     // Snapshot the current params so we can render stable sliders.
     let params = match ctx.get::<ModelicaModel>(entity) {

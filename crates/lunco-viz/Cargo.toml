@@ -46,7 +46,7 @@ lunco-settings = { path = "../lunco-settings", optional = true }
 # Used by `kinds::canvas_plot_node` to implement
 # `lunco_canvas::NodeVisual` so plots can live as first-class nodes
 # inside any `lunco_canvas::Scene` (Simulink-style scope blocks,
-# future dashboard widgets, etc.). Domain crates (lunco-modelica
+# future dashboard widgets, etc.). Domain crates (lunco-modelica-core
 # today) register the kind with the canvas's `VisualRegistry`.
 lunco-canvas = { path = "../lunco-canvas", features = ["ui"], optional = true }
 serde = { workspace = true, optional = true }

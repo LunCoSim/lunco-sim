@@ -116,7 +116,8 @@ lunco-celestial-ephemeris = { path = "../lunco-celestial-ephemeris" }
 lunco-terrain-globe = { path = "../lunco-terrain-globe" }
 lunco-obstacle-field = { path = "../lunco-obstacle-field" }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
-lunco-modelica = { path = "../lunco-modelica", default-features = false }
+lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
+lunco-modelica-ui = { path = "../lunco-modelica-ui", default-features = false, optional = true }
 # Experiment registry types — used by the experiment-journal replay leg AND the
 # all-platform result-artifact persistence (write/load). Unconditional: result
 # persistence is a core (not networking) feature, and experiments is a pure crate.
@@ -128,9 +129,6 @@ lunco-readiness = { workspace = true }
 lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-scripting = { path = "../lunco-scripting" }
-# Tutorial execution is scenario runtime, so it stays available to headless
-# hosts. Its menu/HUD projection is enabled by `lunco-tutorial/ui` below.
-lunco-tutorial = { path = "../lunco-tutorial", default-features = false }
 # USD core (scene load + collider build) is always needed; its Twin-browser /
 # viewport egui UI rides `lunco-usd/ui`, re-enabled below by the `ui` feature.
 lunco-usd = { path = "../lunco-usd", default-features = false }
@@ -262,8 +260,9 @@ ui = [
     "lunco-usd/ui",
     "dep:lunco-luncosim-edit",
     "lunco-luncosim-edit/ui",
-    "lunco-modelica/ui",
-    # egui presence/tutorial overlays + Network menu bridge — only when networking
+    "dep:lunco-modelica-ui",
+    "lunco-modelica-ui/ui",
+    # egui presence/guided overlays + Network menu bridge — only when networking
     # is also enabled (`?`); the headless server's `server` feature omits this.
     "lunco-networking?/ui",
     "lunco-api?/winit",
@@ -271,7 +270,6 @@ ui = [
     "dep:lunco-workbench-core",
     "dep:lunco-status-core",
     "dep:lunco-ui",
-    "lunco-tutorial/ui",
     "dep:lunco-materials",
     "dep:lunco-theme",
     "dep:lunco-settings",
@@ -320,7 +318,8 @@ luncosim = []
 # `window.lunco_api` JS bridge automatically via `cfg(target_arch="wasm32")`.
 lunco-api = [
     "dep:lunco-api",
-    "lunco-modelica/lunco-api",
+    "lunco-modelica-core/lunco-api",
+    "lunco-modelica-ui?/lunco-api",
 ]
 # Native HTTP API transport (axum/TcpListener) — also the gate for the in-app
 # rhai REPL panel, which needs `lunco_api::ApiBridge` (present under this feature

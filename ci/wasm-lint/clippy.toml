@@ -10,13 +10,13 @@
 # native*. `web_time` provides its native impl via `pub use std::time::*`, so on
 # native `web_time::Instant` IS `std::time::Instant` — same DefId — and clippy
 # resolves through the re-export, flagging every correct `web_time` caller. In the
-# root config that produced 73 false positives in lunco-modelica alone and zero
+# root config that produced 73 false positives in lunco-modelica-core alone and zero
 # true positives, so the entry has been removed from there.
 #
 # On `wasm32-unknown-unknown` the two are genuinely distinct types. The ban then
 # fires ONLY on code that literally reaches for `std::time::Instant` in a
 # wasm-shipped module — i.e. code that will PANIC in the browser. That is a real
-# bug class (it caught `lunco-modelica/src/indexer.rs`, which is an unconditional
+# bug class (it caught `lunco-modelica-core/src/indexer.rs`, which is an unconditional
 # `pub mod` and therefore ships to the web), and here it reports it with no noise.
 #
 # Keep this list in sync with the root `clippy.toml`; this file is the root list

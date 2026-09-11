@@ -13,7 +13,7 @@
 # progress. It advances on REAL user actions — possession is verified from the
 # rover's live controller and arrival is verified by distance to this scene's
 # named flag, never by a generic event or scripted timer. See
-# crates/lunco-tutorial and the tutorial_overlay HUD.
+# the authored Rhai scenario and the guided_overlay HUD.
 #
 #   target/debug/luncosim --scene tutorials/sandbox/first_drive.usda
 # or start it from the Tutorials panel.

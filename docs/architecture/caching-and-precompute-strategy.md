@@ -67,7 +67,7 @@ schedule ordering encodes a data dependency. Those look cacheable and are not
 | **OPFS web blob backend** | `lunco-storage/src/opfs_storage.rs` | Working async `read`/`write`/`exists` on wasm via `createWritable` (main-thread-legal). Path-keyed on `StorageHandle::File`. |
 | **Single asset-resolution owner** | `lunco-assets/src/asset_sources.rs` `register_lunco_asset_sources` | The `lunco://` and `twin://` schemes are registered in ONE place before `AssetPlugin`, with every URI-to-location mapping exported from this crate so no consumer re-derives one. |
 | **Shared material cache** | `lunco-render-bevy/src/look_cache.rs` `LookCache<L: CachedLook>` | Content-key → one `Handle<Material>` (the batching property), an `unshared` bypass for animated looks, and ONE `sweep_look_cache` for eviction. Serves both `PbrLook` and `ShaderLook` — they were the same code twice, and had already drifted (the shader cache swept at 1024; the PBR cache never swept and grew unbounded). |
-| **One invalidation signal for source-derived memos** | `lunco-modelica/src/icon_memo.rs` `SourceMemo<V>` + `invalidate_source_memos()` | A `name → Option<V>` memo, **negatives included**, that self-drops on a source/library change. One atomic bump reaches every memo — including ones added later, which the invalidation site never has to name. |
+| **One invalidation signal for source-derived memos** | `lunco-modelica-core/src/icon_memo.rs` `SourceMemo<V>` + `invalidate_source_memos()` | A `name → Option<V>` memo, **negatives included**, that self-drops on a source/library change. One atomic bump reaches every memo — including ones added later, which the invalidation site never has to name. |
 
 > **Non-adoption: no generic `lunco-cache`.** The workspace uses ECS task
 > components for entity-keyed async deduplication, content-addressed
@@ -331,7 +331,7 @@ the integrator state.
 1. **Compiled connection table** — compiles connection topology into a flat index table rebuilt only on connection change (in `lunco-cosim/src/systems/propagate.rs`). Replaces per-tick string cloning and map accumulation with direct index offsets.
 2. **Avian port resolution index** — resolves name-based ports once during compile (`lunco-core/src/ports.rs:180` `ResolvedPort`) instead of scanning const tables on every tick read/write.
 3. **`sync_collider` volume-dirty gate** — gates `Collider::sphere` rebuilds on volume change (`Changed<>`), eliminating per-frame allocations during steady-state.
-4. **Compiled DAE and prepared solve-IR caches** — `lunco-modelica/src/worker.rs`
+4. **Compiled DAE and prepared solve-IR caches** — `lunco-modelica-core/src/worker.rs`
    keeps the per-entity `CachedModel` for instant Reset and a worker-owned
    structural artifact cache that shares immutable DAE compilation across
    scene instances. The prepared live solve IR is reused by structural source

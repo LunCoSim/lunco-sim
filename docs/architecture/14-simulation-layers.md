@@ -238,7 +238,7 @@ Simulation backends **self-register** at app build time. Each domain crate
 ships a Bevy plugin that adds itself to the registry:
 
 ```rust
-// in lunco-modelica
+// in lunco-modelica-core
 pub struct ModelicaBackendPlugin;
 impl Plugin for ModelicaBackendPlugin {
     fn build(&self, app: &mut App) {

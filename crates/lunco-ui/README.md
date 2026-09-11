@@ -4,14 +4,14 @@ Reusable UI mechanisms for LunCoSim domain crates.
 
 ## What This Crate Does
 
-`lunco-ui` provides the **infrastructure** that domain crates use to build panels. It does **not** contain panel implementations — those live in `src/ui/` of each domain crate (`lunco-modelica`, `lunco-luncosim-edit`, etc.).
+`lunco-ui` provides the **infrastructure** that domain crates use to build panels. It does **not** contain panel implementations — those live in `src/ui/` of each UI-facing domain crate (`lunco-modelica-ui`, `lunco-luncosim-edit`, etc.).
 
 ### Architecture: Entity Viewers
 
 All panels are **entity viewers** — they watch a selected entity and render its data. The same panel works in a standalone workbench, a 3D overlay, or a mission dashboard.
 
 ```
-   Domain crate (lunco-modelica, lunco-mobility, etc.)
+   Domain crate (lunco-modelica-ui, lunco-mobility, etc.)
      ├── Defines entity component (ModelicaModel, FswConfig, etc.)
      ├── Defines viewer panel (DiagramPanel, CodeEditor, etc.)
      └── Panel watches WorkbenchState.selected_entity

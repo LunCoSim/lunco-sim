@@ -1,7 +1,7 @@
 //! Diagram widgets — reusable chart rendering.
 //!
 //! Time-series plotting only at this level. Node-graph / block-diagram
-//! rendering lives in domain crates (e.g. `lunco-modelica`'s
+//! rendering lives in domain crates (e.g. `lunco-modelica-core`'s
 //! `canvas_diagram`) on top of `lunco-canvas` — the workbench's own
 //! canvas substrate.
 //!

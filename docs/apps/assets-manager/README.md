@@ -28,7 +28,7 @@ cargo run -p lunco-assets -- <ACTION> [FLAGS]
 
 | Flag | Description |
 |---|---|
-| `-p, --package <NAME>` | Target a specific crate (e.g., `lunco-modelica`). |
+| `-p, --package <NAME>` | Target a specific crate (e.g., `lunco-modelica-core`). |
 | `-a, --asset <KEY>` | Download/Process a single asset by its key. |
 | `--workspace-root <PATH>` | Override the workspace root directory. |
 
