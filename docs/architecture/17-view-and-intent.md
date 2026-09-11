@@ -265,6 +265,16 @@ surrenders retained egui editor focus before publishing `EguiFocus`, so a
 possessed vessel receives the shared input map immediately after the scene click.
 Text fields retain keyboard ownership until that explicit scene press.
 
+### 6.8 Editor keyboard input
+
+The workbench host owns one app-level semantic input surface in addition to the
+local avatar's input surface. Both use the same `InputBindingsSettings` map and
+publish `UserIntent`; editor-only views therefore do not need an avatar merely
+to receive `Cancel`. `CancelIntent` reads the app-level surface when present and
+still reads the local avatar for simulation camera/possession behavior. Egui
+text focus remains the single suppression gate, so Escape/Backspace is ignored
+by scene/editor consumers while a text field owns the keyboard.
+
 ---
 
 ## Technical Reference

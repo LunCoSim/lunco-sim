@@ -637,6 +637,13 @@ pub struct EguiFocus {
     pub wants_pointer: bool,
 }
 
+/// Marks the app-level input surface that resolves the local user's semantic
+/// intents when no avatar owns the keyboard. The workbench carries one such
+/// surface so editor-only views can use the same rebindable intent vocabulary
+/// as simulation control without inventing a raw-key path.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct LocalIntentSurface;
+
 /// Which subsystem owns primary scene clicks for the active workbench mode.
 ///
 /// This is a cross-crate interaction contract rather than a workbench UI detail:
@@ -684,6 +691,51 @@ mod scene_interaction_mode_tests {
         assert!(SceneInteractionMode::Editor.selection_owns_click(false));
         assert!(!SceneInteractionMode::Editor.possession_owns_click(false));
         assert!(!SceneInteractionMode::Editor.possession_owns_click(true));
+    }
+}
+
+#[cfg(test)]
+mod cancel_intent_tests {
+    use super::{CancelIntent, EguiFocus, LocalIntentSurface, UserIntent};
+    use bevy::prelude::*;
+    use leafwing_input_manager::prelude::{ActionState, InputManagerPlugin, InputMap};
+
+    #[derive(Resource, Default)]
+    struct ObservedCancel(bool);
+
+    fn observe_cancel(cancel: CancelIntent, mut observed: ResMut<ObservedCancel>) {
+        observed.0 = cancel.just_pressed();
+    }
+
+    #[test]
+    fn editor_cancel_works_without_a_local_avatar() {
+        let mut app = App::new();
+        app.add_plugins((
+            bevy::time::TimePlugin,
+            bevy::input::InputPlugin,
+            InputManagerPlugin::<UserIntent>::default(),
+        ))
+        .init_resource::<EguiFocus>()
+        .init_resource::<ObservedCancel>()
+        .add_systems(Update, observe_cancel);
+
+        let mut input_map = InputMap::default();
+        input_map.insert(UserIntent::Cancel, KeyCode::Escape);
+        app.world_mut().spawn((
+            LocalIntentSurface,
+            ActionState::<UserIntent>::default(),
+            input_map,
+        ));
+
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Escape);
+        app.update();
+
+        assert!(
+            app.world().resource::<ObservedCancel>().0,
+            "the shared cancel intent must read the app-level editor input surface"
+        );
     }
 }
 
@@ -804,11 +856,14 @@ impl CursorModeActive<'_> {
 ///
 /// Read this instead of sniffing `KeyCode::Escape`/`Backspace`: the bindings are DATA
 /// (`assets/config/keybindings.json`), so a rebind works everywhere at once and every
-/// mode agrees on what cancelling means. Suppressed while an egui field has keyboard
-/// focus, so Backspace typed into a text box edits text rather than backing out.
+/// mode agrees on what cancelling means. It reads both the local avatar and the
+/// workbench's app-level intent surface, so editor-only previews do not require an
+/// avatar. Suppressed while an egui field has keyboard focus, so Backspace typed into
+/// a text box edits text rather than backing out.
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct CancelIntent<'w, 's> {
     avatars: Query<'w, 's, &'static IntentState, (With<Avatar>, With<LocalAvatar>)>,
+    global_surface: Query<'w, 's, &'static IntentState, With<LocalIntentSurface>>,
     egui_focus: Res<'w, EguiFocus>,
 }
 
@@ -821,6 +876,10 @@ impl CancelIntent<'_, '_> {
         self.avatars
             .iter()
             .any(|i| i.just_pressed(&UserIntent::Cancel))
+            || self
+                .global_surface
+                .iter()
+                .any(|i| i.just_pressed(&UserIntent::Cancel))
     }
 }
 

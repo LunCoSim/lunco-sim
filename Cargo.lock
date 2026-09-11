@@ -8252,6 +8252,7 @@ dependencies = [
  "egui_dock",
  "image",
  "js-sys",
+ "leafwing-input-manager",
  "lunco-api",
  "lunco-assets",
  "lunco-controller",

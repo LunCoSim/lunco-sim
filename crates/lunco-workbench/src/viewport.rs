@@ -79,9 +79,11 @@ use bevy::prelude::*;
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::{ClearColorConfig, Hdr, RenderTarget};
 use bevy_egui::{egui, EguiGlobalSettings, PrimaryEguiContext};
+use leafwing_input_manager::prelude::{ActionState, InputManagerPlugin};
 
 use crate::{Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlot};
-use lunco_core::SceneViewport;
+use lunco_controller::InputBindingsSettings;
+use lunco_core::{SceneViewport, UserIntent};
 use lunco_render::SceneCamera;
 
 /// Stable id for [`ViewportPanel`]. Use this in `Workspace::apply` to
@@ -746,9 +748,13 @@ pub(crate) fn ensure_egui_host(
     mut commands: Commands,
     mut egui_global: ResMut<EguiGlobalSettings>,
     existing: Query<(), With<PrimaryEguiContext>>,
+    bindings: Res<InputBindingsSettings>,
 ) {
     egui_global.auto_create_primary_context = false;
     if existing.iter().next().is_none() {
+        let input_map = bindings
+            .input_map()
+            .expect("registered input bindings must satisfy their settings contract");
         commands.spawn((
             Camera2d,
             // `order = 1` places egui strictly after the scene Camera3d.
@@ -764,6 +770,9 @@ pub(crate) fn ensure_egui_host(
             RenderLayers::none(),
             PrimaryEguiContext,
             WorkbenchEguiHost,
+            lunco_core::LocalIntentSurface,
+            ActionState::<UserIntent>::default(),
+            input_map,
             Name::new("WorkbenchEguiHost"),
         ));
     }
@@ -1118,6 +1127,9 @@ fn apply_viewport_panel_measurement(
 
 impl Plugin for WorkbenchViewportPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<InputManagerPlugin<UserIntent>>() {
+            app.add_plugins(InputManagerPlugin::<UserIntent>::default());
+        }
         app.init_resource::<PanelRects>()
             .init_resource::<ScenePickGate>()
             .init_resource::<ViewportPlaceholder>()
