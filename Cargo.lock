@@ -8257,8 +8257,6 @@ dependencies = [
  "lunco-usd-bevy",
  "lunco-usd-compose",
  "openusd",
- "rumoca-core",
- "rumoca-ir-ast",
  "serde_json",
  "web-time",
 ]

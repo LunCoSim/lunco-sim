@@ -57,8 +57,6 @@ lunco-scripting = { path = "../lunco-scripting" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-api = { path = "../lunco-api", default-features = false }
 lunco-assets = { workspace = true }
-rumoca-core = { workspace = true }
-rumoca-ir-ast = { workspace = true }
 avian3d = { workspace = true }
 big_space = { workspace = true }
 leafwing-input-manager = { workspace = true }

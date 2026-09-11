@@ -12,6 +12,14 @@
 pub mod ast_extract;
 pub mod lint_facts;
 
+/// Rumoca's causality classification, re-exported from the Modelica AST
+/// boundary so downstream domain projections do not depend on Rumoca's core
+/// crate just to inspect parsed Modelica members.
+pub use rumoca_core::Causality;
+/// Rumoca's parsed definition tree, the value returned by this crate's parse
+/// functions and consumed by AST/fact extractors.
+pub use rumoca_ir_ast::StoredDefinition;
+
 use std::borrow::Cow;
 
 /// Normalize text accepted at the Modelica source boundary.
@@ -42,17 +50,14 @@ pub fn parse_to_syntax(source: &str, file_label: &str) -> rumoca_phase_parse::Sy
 }
 
 /// Parse Modelica source strictly through the same normalized boundary.
-pub fn parse_to_ast(
-    source: &str,
-    file_label: &str,
-) -> anyhow::Result<rumoca_ir_ast::StoredDefinition> {
+pub fn parse_to_ast(source: &str, file_label: &str) -> anyhow::Result<StoredDefinition> {
     let normalized = normalize_modelica_source(source);
     rumoca_phase_parse::parse_to_ast(&normalized, file_label)
 }
 
 /// Parse Modelica source with Rumoca's recovery parser through the normalized
 /// source boundary.
-pub fn parse_to_recovered_ast(source: &str, file_label: &str) -> rumoca_ir_ast::StoredDefinition {
+pub fn parse_to_recovered_ast(source: &str, file_label: &str) -> StoredDefinition {
     let normalized = normalize_modelica_source(source);
     rumoca_phase_parse::parse_to_recovered_ast(&normalized, file_label)
 }
