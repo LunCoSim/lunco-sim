@@ -427,7 +427,7 @@ registered tool with ordinary Rhai syntax (`import "other_tool" as other_tool`);
 the tool resolver uses the registry and does not read dependency files.
 
 - Author one: drop a `.rhai` in [`assets/scripting/tools/`](../assets/scripting/tools), or `RegisterToolLibrary { name, source }` at runtime (hot-reloadable).
-- Examples: [`assembly_builder.rhai`](../assets/scripting/tools/assembly_builder.rhai) (semantic frame/shape construction, placement, alignment, composed collision-clearance, geometry, retrofit bodies, and socket mating plans), [`griffin_flip_builder.rhai`](../assets/scripting/tools/griffin_flip_builder.rhai) (paired Griffin ramps, validated FLIP wheel layouts, complete mission manifests, and Rhai-owned FLIP asset construction), [`assembly_edit.rhai`](../assets/scripting/tools/assembly_edit.rhai) (explicit USD assembly sessions), [`assembly_ui.rhai`](../assets/scripting/tools/assembly_ui.rhai) (Editor presentation workflows), [`formation.rhai`](../assets/scripting/tools/formation.rhai) (formation flying), [`survey.rhai`](../assets/scripting/tools/survey.rhai) (lawnmower survey pattern).
+- Examples: [`assembly_builder.rhai`](../assets/scripting/tools/assembly_builder.rhai) (generic frame/shape construction, placement, alignment, composed collision-clearance, geometry, parameter, retrofit, and socket mating plans), [`assembly_edit.rhai`](../assets/scripting/tools/assembly_edit.rhai) (explicit USD assembly sessions), [`assembly_ui.rhai`](../assets/scripting/tools/assembly_ui.rhai) (Editor presentation workflows), [`formation.rhai`](../assets/scripting/tools/formation.rhai) (formation flying), [`survey.rhai`](../assets/scripting/tools/survey.rhai) (lawnmower survey pattern).
 - Discover: `ListToolLibraries`, `GetToolLibrary { name }`.
 - **Persistence:** registered libraries are mirrored to `<twin>/tools/*.rhai` and reloaded when the Twin opens.
 
@@ -608,21 +608,13 @@ registered at runtime without adding a Rust command or a second USD writer.
 For reusable referenced models, `referenced_instance_plan` authors one
 explicit identity, asset URI, parent, and local placement using the source
 layer's `defaultPrim`. `referenced_instance_targeted_plan` accepts an explicit
-absolute source prim such as `/SkidRover` when the composition asset requires
-that identity. The convenience `flip_rover_instance_plan` validates four
-unique wheel descendants for an already-maintained FLIP wrapper. First-use
-reference loading and variant reconfiguration are separate reviewed plans:
-wait until the composed instance children are queryable, then use
-`select_variants_plan`.
-
-For building the FLIP asset rather than instancing the finished wrapper, use
-`griffin_flip_builder::flip_rover_asset_plan` to compose the maintained
-skid-rover reference plus local payload-deck, mast, and solar-proxy shapes.
-After the targeted reference is queryable, use
-`flip_rover_asset_detail_plan` for the explicit FLIP metadata and wheel/solar
-facts. The `flip_rover_asset_builder` production scenario is wholly Rhai and
-its USDA fixture is only an empty frame; it verifies both the positive
-composition and the pre-proposal rejection cases.
+absolute source prim when the composition asset requires that identity.
+First-use reference loading and variant reconfiguration are separate reviewed
+plans: wait until the composed instance children are queryable, then use
+`select_variants_plan`. Parameter edits use `parameter_plan`, which returns
+typed `SetAttribute` operations for the same `ApplyUsdOps`/proposal boundary
+used by the Editor. The core tool has no model-specific paths; a Twin-local
+recipe supplies those paths and facts.
 
 `place_with_clearance_plan` is the conservative placement path for parts that
 must stay clear of authored geometry. It takes exact moving/blocker frame and
@@ -672,9 +664,9 @@ they select a unique authored socket, derive its typed fixed/revolute/prismatic
 joint from mount metadata, and delegate plug-frame placement, reference
 lowering, occupancy, joint creation, and journalling to the existing
 `AttachComponent` owner. They reject missing, occupied, incompatible, and
-ambiguous sockets before submission. This is how a Griffin or FLIP assembly
-script can build from reusable USD components without reproducing USD syntax
-or frame math in every scenario.
+ambiguous sockets before submission. This lets any assembly script build from
+reusable USD components without reproducing USD syntax or frame math in every
+scenario.
 
 For an already attached part, use
 `assembly_builder::mount_frame_realignment_plan(doc, edit_target, host_path,
@@ -691,27 +683,27 @@ the inspected generation, then send the returned `.ops` through the normal
 test in Rhai, including nested rotation, topology preservation, and negative
 plans; changing this policy does not require a Rust-core rebuild.
 
-The [`griffin_flip_builder`](../assets/scripting/tools/griffin_flip_builder.rhai)
-library shows how a mission package stays Rhai-owned: `griffin_ramp_pair_plan`
-requires both named ramp sides and composes the generic referenced-body and
-hinge plans, while `flip_four_wheel_layout_plan` validates the four exact wheel
-stations, authored vehicle indexes, and wheel dimensions before emitting
-placement intents. The caller supplies study values and paths explicitly; the
-recipe does not turn assumptions into flight facts. `griffin_mission_plan`
-composes those two plans only after checking an already-authored root, lander,
-FLIP, and fixed payload-adapter relationship. For a build from maintained
-references, `griffin_mission_assembly_plan` creates the lander and the
-dedicated `assets/vessels/rovers/flip_rover.usda` instance with explicit
-placements; after their composed children are queryable,
-`griffin_mission_adapter_plan` creates the explicit fixed adapter. The FLIP
-asset is a thin composition over shared rover components and is labelled a
-study proxy; the authored payload deck, sensor mast, and fixed solar proxy do
-not imply as-built CAD or articulated solar deployment.
-The `griffin_flip_production_builder` scene test exercises the complete
-reference/placement/joint lifecycle, including negative manifests and the
-reviewed commit, in Rhai. Its USDA fixture is only an empty mission frame, so
-the observable test does not embed a scene-specific Rust asset or hand-write
-the production assembly topology.
+For AI-friendly discovery before any edit, use
+`assembly_builder::authoring_context(doc, path, edit_target)`. The result keeps
+the exact path, parent, document generation, resolved target, composed prim
+record, topology/collision facts, authored sockets and occupancy, plug-frame
+relationships, and an explicit `actions` affordance list together. It is
+read-only and never guesses a target from a name.
+
+Use `assembly_builder::place_or_attach_plan(doc, edit_target, request)` for a
+reviewable placement/attachment intent. An `attach_component` request returns
+an explicit `spec` for `assembly_edit::attach_component` after selecting one
+compatible empty socket; a `realign_existing_mount` request returns the typed
+`.ops` from the existing frame planner with `moved` and `fixed` paths. Apply
+the reviewed result through the existing typed owner: proposal/review/commit
+for `.ops`, or `assembly_edit::attach_component(doc, plan.spec)` for a new
+component. This keeps generated authoring and human editing on the same USD
+paths and validation boundary without adding a Rust policy layer.
+
+Mission-specific builders stay in the owning Twin. They should compose the
+generic `assembly_builder` plans, keep all paths and study facts explicit, and
+submit only typed operations through `assembly_edit`; they do not belong in the
+core tool library or require a model-specific Rust writer.
 
 Structural authoring uses the same typed operation surface: `add_prim`,
 `remove_prim`, `move_prim`, `payload`, and `active` expose the existing
@@ -973,7 +965,6 @@ produces the same sequence — no explicit seeding needed.
 | [`multi_robot_mission_worker.rhai`](../assets/scripting/examples/multi_robot_mission_worker.rhai) | identity-scoped worker that installs a native task tree |
 | [`avoid.rhai`](../assets/scripting/examples/avoid.rhai) | sensing + obstacle avoidance |
 | [`tools/assembly_builder.rhai`](../assets/scripting/tools/assembly_builder.rhai) | semantic placement, generic component bundles, Cube and composed collision alignment/clearance, referenced component instances, staged variant selection, geometry, socket mating, retrofit, and body/joint plans |
-| [`tools/griffin_flip_builder.rhai`](../assets/scripting/tools/griffin_flip_builder.rhai) | paired Griffin ramps, validated FLIP wheel layout, complete mission-manifest plans, and Rhai-owned FLIP asset construction |
 | [`tools/formation.rhai`](../assets/scripting/tools/formation.rhai) | a tool library (formation flying) |
 | [`tools/survey.rhai`](../assets/scripting/tools/survey.rhai) | a custom tool library (survey pattern) |
 

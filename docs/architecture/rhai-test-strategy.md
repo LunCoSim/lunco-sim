@@ -72,13 +72,13 @@ headless selection observer. Its owning Rust tests exercise the shared
 selection observer, replace/extend/remove semantics, and highlight state
 without entering the separate active-gizmo drag mode.
 
-Dynamic asset construction follows the same boundary. The
-`flip_rover_asset_builder` scene starts from an empty USDA frame and builds the
-FLIP composition through `assembly_builder` and `griffin_flip_builder` plans.
-The complete positive topology/metadata checks and invalid base, parent, shape,
-duplicate, and wheel-detail cases are authored in Rhai. Rust retains only the
-generic typed-op and live reference-materialization mechanisms that Rhai calls;
-there is no scene-specific Rust writer or `include_str!` fixture test.
+Dynamic asset construction follows the same boundary. The generic
+`assembly_component_builder` scene starts from an empty USDA frame and checks
+component-bundle facts, typed parameter plans, generic reference composition,
+and duplicate/invalid identities in Rhai. Rust retains only the generic typed-op
+and live reference-materialization mechanisms that Rhai calls; there is no
+scene-specific Rust writer or `include_str!` fixture test. Twin-specific model
+recipes and their acceptance scenes stay in the owning Twin.
 
 ## Test tiers
 
@@ -183,7 +183,7 @@ separate scenes.
 | Composed battery/solar envelopes | `battery_mounts` | `battery_mounts_negative` | `QueryUsdPrim` and world poses |
 | Component socket, plug-kind, and joint rejection | `socket_attach_rejection` | same fixture's rejected command cases | public `AttachComponent` |
 | Existing-mount nested-frame snap, joint-anchor update, and invalid-frame rejection | `assembly_mount_frame_realign` | same fixture's rejected Rhai plans | dynamic `assembly_builder` plan plus `QueryUsdPrim` |
-| Dynamic production-shaped Griffin/FLIP references, dedicated FLIP identity/topology, placement, fixed adapter, wheel identities, and negative manifests | `griffin_flip_production_builder` | same Rhai scenario's wrong-asset, overlap, duplicate-wheel, and identity cases | dynamic `griffin_flip_builder`/`assembly_edit` plans, proposal/review/commit, and composed `QueryUsdPrim` |
+| Generic component/reference construction, typed parameter plans, AI-readable authoring context, and dry placement/attachment planning | `assembly_component_builder`, `assembly_mount_frame_realign` | same Rhai scenarios' invalid asset, missing parent, duplicate parameter, unsupported mode, missing socket, and invalid frame cases | dynamic `assembly_builder`/`assembly_edit` plans, proposal/review/commit, and composed `QueryUsdPrim` |
 | Reload/reset and event-gated authored policy | `component_detach`, `rhai_event_delivery` | `rhai_event_delivery_negative` | public commands and telemetry |
 | Wheel contact, steering, ramp/leg clearance, and vehicle assembly | `drivetrain_parity`, `ackermann_parity`, `sandbox_ramp_placement`, `landing_legs`, `lander_rover_stack` | `rocker_bogie_*_nodiff`, `escape_containment` | authored verdicts over production physics |
 | Supported multi-rover stress cardinalities and shared-command motion | `multi_rover_stress_4`, `multi_rover_stress_8`, `multi_rover_stress_20` | `multi_rover_stress_negative` (three-rover unsupported cardinality) | discovered roster, production patrol command, world poses, and terminal Rhai verdict |

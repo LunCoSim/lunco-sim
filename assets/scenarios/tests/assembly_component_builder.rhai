@@ -1,18 +1,11 @@
-// TEST-ONLY. Builds a four-wheel rover reference into an empty authored
-// assembly through the dynamic Rhai builder and the normal review/journal
-// boundary, then checks the composed vehicle contract.
+// TEST-ONLY. Builds generic authored component and reference plans into an
+// empty assembly through the normal review/journal boundary.
 
 const ROOT = "/AssemblyComponentBuilderTest";
 const ASSEMBLY = ROOT + "/Assembly";
 const BUNDLE = ASSEMBLY + "/PanelBundle";
-const FLIP = ASSEMBLY + "/FLIP";
-const ASSET = "lunco://vessels/rovers/skid_rover.usda";
-const WHEELS = [
-    FLIP + "/Suspension_FL/Wheel_FL",
-    FLIP + "/Suspension_FR/Wheel_FR",
-    FLIP + "/Suspension_RL/Wheel_RL",
-    FLIP + "/Suspension_RR/Wheel_RR",
-];
+const INSTANCE = ASSEMBLY + "/Ramp";
+const ASSET = "lunco://props/ramp.usda";
 
 fn query_ok(record) {
     record != () && record.ok != false
@@ -25,16 +18,6 @@ fn prim_exists(doc, path) {
         children: false,
     });
     query_ok(record)
-}
-
-fn variants_authored(doc) {
-    let snapshot = assembly_edit::sync_document(doc, ());
-    if !query_ok(snapshot) || snapshot.layers == () || snapshot.layers.root == () {
-        return false;
-    }
-    let source = snapshot.layers.root.source;
-    source.contains("drivetrain") && source.contains("raycast")
-        && source.contains("generation") && source.contains("thermal")
 }
 
 fn array_has(values, expected) {
@@ -68,29 +51,6 @@ fn find_document() {
     -1
 }
 
-fn variants() {
-    [
-        #{ variant_set: "drivetrain", variant: "raycast" },
-        #{ variant_set: "power", variant: "infinite" },
-        #{ variant_set: "generation", variant: "none" },
-        #{ variant_set: "thermal", variant: "none" },
-    ]
-}
-
-fn wheel_record(doc, path) {
-    query("QueryUsdPrim", #{
-        doc_id: doc,
-        path: path,
-        attrs: [
-            "physxVehicleWheelAttachment:index",
-            "physxVehicleWheel:radius",
-            "physxVehicleWheel:width",
-            "lunco:suspension:restLength",
-        ],
-        children: false,
-    })
-}
-
 fn on_start(me) {
     this.doc = -1;
     this.phase = 0;
@@ -98,7 +58,6 @@ fn on_start(me) {
     this.wait_generation = -1;
     this.bundle_wait_generation = -1;
     this.bundle_checked = false;
-    this.variant_ops = 0;
     this.checks = [];
     this.done = false;
 }
@@ -121,6 +80,29 @@ fn on_tick(me) {
     }
 
     if this.phase == 0 {
+        let parameter_plan = assembly_builder::parameter_plan(
+            "root", BUNDLE,
+            [
+                #{ name: "primvars:width", type_name: "float", value: "1.2" },
+                #{ name: "primvars:length", type_name: "float", value: "0.8" },
+            ],
+        );
+        if !query_ok(parameter_plan) || parameter_plan.kind != "parameter_edit"
+            || parameter_plan.ops == () || parameter_plan.ops.len() != 2 {
+            fail(this, "generic parameter planner did not return two typed operations");
+            return;
+        }
+        let duplicate_parameter = assembly_builder::parameter_plan(
+            "root", BUNDLE,
+            [
+                #{ name: "primvars:width", type_name: "float", value: "1.2" },
+                #{ name: "primvars:width", type_name: "float", value: "0.8" },
+            ],
+        );
+        if query_ok(duplicate_parameter) {
+            fail(this, "generic parameter planner accepted duplicate properties");
+            return;
+        }
         if !this.bundle_checked {
             if !prim_exists(this.doc, BUNDLE) {
                 let bundle = #{
@@ -266,6 +248,23 @@ fn on_tick(me) {
                 path: BUNDLE + "/Mount",
                 attrs: ["lunco:component:frameRole"],
             });
+            let context = assembly_builder::authoring_context(
+                this.doc, BUNDLE, "@root@",
+            );
+            let invalid_dispatch = assembly_builder::place_or_attach_plan(
+                this.doc, "@root@", #{ mode: "unsupported" },
+            );
+            let invalid_component_plan = assembly_builder::place_or_attach_plan(
+                this.doc, "@root@", #{
+                    mode: "attach_component",
+                    host_path: ASSEMBLY,
+                    socket_kind: "panel",
+                    joint_kind: "fixed",
+                    asset: ASSET,
+                    name: "MissingPanel",
+                    joint_name: "MissingPanelJoint",
+                },
+            );
             this.checks.push(t_true(query_ok(bundle_root)
                     && bundle_root.attrs["lunco:component:units"] == "m"
                     && bundle_root.attrs["physics:mass"] == 2.0
@@ -287,35 +286,36 @@ fn on_tick(me) {
                     && actuator.attrs["lunco:component:actuatorName"] == "deployment"
                     && actuator.attrs["lunco:component:actuatorLimits"] != (),
                 "component bundle exposes explicit attachment and actuator endpoint frames"));
+            this.checks.push(t_true(query_ok(context)
+                    && context.kind == "authoring_context"
+                    && context.path == BUNDLE
+                    && context.parent_path == ASSEMBLY
+                    && context.edit_target == "@root@"
+                    && context.generation == before.generation
+                    && context.prim.type_name == "Xform"
+                    && context.sockets.len() == 0
+                    && context.plug != ()
+                    && context.actions.contains("inspect")
+                    && context.actions.contains("transform")
+                    && !context.actions.contains("plan_component_attachment")
+                    && !context.actions.contains("plan_existing_mount_realignment"),
+                "authoring context exposes exact identity, generation, and available actions"));
+            this.checks.push(t_true(!invalid_dispatch.ok && !invalid_component_plan.ok,
+                "unified placement/attachment planner rejects unsupported modes and missing sockets"));
             this.bundle_checked = true;
         }
         // Applying the reviewed reference reprojects the document and can
         // reload this authored scenario. Preserve the one real commit by
         // continuing from the composed instance instead of proposing it a
         // second time; the source fixture itself remains empty.
-        if prim_exists(this.doc, FLIP) {
+        if prim_exists(this.doc, INSTANCE) {
             this.wait_generation = before.generation - 1;
-            if variants_authored(this.doc) {
-                this.variant_ops = 4;
-                this.phase = 2;
-            } else {
-                this.phase = 1;
-            }
+            this.phase = 1;
             return;
         }
-        let plan = assembly_builder::flip_rover_instance_plan(
-            this.doc, "@root@", ASSEMBLY, "FLIP", ASSET,
-            [0.0, 1.0, 0.0], [0.0, 0.0, 0.0], WHEELS,
-        );
-        let duplicate_wheel = assembly_builder::flip_rover_instance_plan(
-            this.doc, "@root@", ASSEMBLY, "Duplicate", ASSET,
-            [0.0, 1.0, 0.0], [0.0, 0.0, 0.0],
-            [WHEELS[0], WHEELS[0], WHEELS[2], WHEELS[3]],
-        );
-        let outside_wheel = assembly_builder::flip_rover_instance_plan(
-            this.doc, "@root@", ASSEMBLY, "Outside", ASSET,
-            [0.0, 1.0, 0.0], [0.0, 0.0, 0.0],
-            [WHEELS[0], ROOT + "/NotAWheel", WHEELS[2], WHEELS[3]],
+        let plan = assembly_builder::referenced_instance_plan(
+            this.doc, "@root@", ASSEMBLY, "Ramp", "Xform", ASSET,
+            [0.0, 1.0, 0.0], [0.0, 0.0, 0.0], (), (), (),
         );
         let missing_parent = assembly_builder::referenced_instance_plan(
             this.doc, "@root@", ASSEMBLY + "/Missing", "Bad", "Xform", ASSET,
@@ -325,18 +325,14 @@ fn on_tick(me) {
             this.doc, "@root@", ASSEMBLY, "BadAsset", "Xform",
             "components/mobility/wheel.usda", (), (), (), (), (),
         );
-        let missing_variant_target = assembly_builder::select_variants_plan(
-            this.doc, "@root@", ASSEMBLY + "/Missing", variants(),
-        );
-        if !plan.ok || plan.kind != "flip_rover_instance" || plan.ops.len() != 3
-            || duplicate_wheel.ok || outside_wheel.ok || missing_parent.ok
-            || invalid_asset.ok || missing_variant_target.ok {
+        if !plan.ok || plan.kind != "referenced_instance" || plan.ops.len() != 3
+            || missing_parent.ok || invalid_asset.ok {
             fail(this, "component-instance plan did not build or reject its explicit contract");
             return;
         }
 
         let proposal = assembly_edit::propose(
-            this.doc, #{ Assembly: () }, "Build FLIP component instance",
+            this.doc, #{ Assembly: () }, "Build generic component instance",
             plan.ops, before.generation,
         );
         if !query_ok(proposal) {
@@ -359,9 +355,9 @@ fn on_tick(me) {
         return;
     }
 
-    let vehicle = query("QueryUsdPrim", #{
+    let instance = query("QueryUsdPrim", #{
         doc_id: this.doc,
-        path: FLIP,
+        path: INSTANCE,
         children: true,
     });
 
@@ -370,105 +366,35 @@ fn on_tick(me) {
             if this.elapsed > 10.0 { fail(this, "component reference did not reach its committed generation"); }
             return;
         }
-        if !query_ok(vehicle) || vehicle.children == () || vehicle.children.len() == 0 {
+        if !query_ok(instance) || instance.children == () || instance.children.len() == 0 {
             if this.elapsed > 10.0 {
-                fail(this, "referenced vehicle root never received its composed children");
+                fail(this, "referenced component root never received its composed children");
             }
             return;
         }
-        let variant_plan = assembly_builder::select_variants_plan(
-            this.doc, "@root@", FLIP, variants(),
+        let duplicate_identity = assembly_builder::referenced_instance_plan(
+            this.doc, "@root@", ASSEMBLY, "Ramp", "Xform", ASSET,
+            (), (), (), (), (),
         );
-        if !variant_plan.ok || variant_plan.kind != "variant_selection"
-            || variant_plan.ops.len() != 4 {
-            fail(this, "second-phase rover variant plan was not constructible");
+        if duplicate_identity.ok {
+            fail(this, "duplicate component identity was not rejected");
             return;
         }
-        let proposal = assembly_edit::propose(
-            this.doc, #{ Assembly: () }, "Configure FLIP component variants",
-            variant_plan.ops, before.generation,
-        );
-        if !query_ok(proposal) {
-            fail(this, "variant-selection proposal was rejected: " + proposal.error);
-            return;
-        }
-        let review = assembly_edit::review_session(this.doc);
-        if !query_ok(review) || review.proposals.len() != 1
-            || review.proposals[0].diagnostics.len() != 0 {
-            fail(this, "variant-selection proposal did not validate cleanly");
-            return;
-        }
-        let committed = assembly_edit::commit_proposal(review.proposals[0].id);
-        if !query_ok(committed) {
-            fail(this, "variant-selection proposal could not be committed: " + committed.error);
-            return;
-        }
-        this.variant_ops = variant_plan.ops.len();
-        this.wait_generation = before.generation;
-        this.phase = 2;
-        return;
-    }
+        let root = query("QueryUsdPrim", #{
+            doc_id: this.doc,
+            path: ASSEMBLY,
+            children: true,
+        });
 
-    if before.generation <= this.wait_generation {
-        if this.elapsed > 10.0 { fail(this, "variant-selection commit did not reproject"); }
-        return;
+        this.done = true;
+        this.checks.push(t_true(query_ok(root) && root.children != () && array_has(root.children, INSTANCE),
+            "empty authored assembly gained the requested generic component"));
+        this.checks.push(t_true(query_ok(instance) && instance.type_name == "Xform",
+            "referenced component root remains a composed Xform"));
+        this.checks.push(t_true(instance.children.len() > 0,
+            "reference composition exposes the component children"));
+        this.checks.push(t_true(!duplicate_identity.ok,
+            "duplicate component identity is rejected before a second proposal"));
+        report_verdict(this.checks, "ASSEMBLY COMPONENT BUILDER", "ASSEMBLY_COMPONENT_BUILDER");
     }
-
-    let root = query("QueryUsdPrim", #{
-        doc_id: this.doc,
-        path: ASSEMBLY,
-        children: true,
-    });
-    vehicle = query("QueryUsdPrim", #{
-        doc_id: this.doc,
-        path: FLIP,
-        children: true,
-    });
-    if !query_ok(vehicle) || vehicle.children == () || vehicle.children.len() == 0 {
-        if this.elapsed > 10.0 {
-            fail(this, "variant-selected vehicle lost its composed children");
-        }
-        return;
-    }
-    let wheels = [];
-    for wheel_path in WHEELS {
-        wheels.push(wheel_record(this.doc, wheel_path));
-    }
-    let duplicate_identity = assembly_builder::referenced_instance_plan(
-        this.doc, "@root@", ASSEMBLY, "FLIP", "Xform", ASSET,
-        (), (), (), (), (),
-    );
-    let wheel_contract = true;
-    for i in 0..4 {
-        let wheel = wheels[i];
-        if !query_ok(wheel) {
-            wheel_contract = false;
-            continue;
-        }
-        if wheel.attrs == () {
-            wheel_contract = false;
-            continue;
-        }
-        if wheel.type_name != "Cylinder"
-            || wheel.attrs == ()
-            || wheel.attrs["physxVehicleWheelAttachment:index"] != i
-            || (wheel.attrs["physxVehicleWheel:radius"] - 0.4).abs() > 0.0001
-            || (wheel.attrs["physxVehicleWheel:width"] - 0.3).abs() > 0.0001
-            || wheel.attrs["lunco:suspension:restLength"] == () {
-            wheel_contract = false;
-        }
-    }
-
-    this.done = true;
-    this.checks.push(t_true(query_ok(root) && root.children != () && array_has(root.children, FLIP),
-        "empty authored assembly gained the requested FLIP instance"));
-    this.checks.push(t_true(query_ok(vehicle) && vehicle.type_name == "Xform",
-        "referenced vehicle root remains a composed Xform"));
-    this.checks.push(t_true(this.variant_ops == 4,
-        "variant choices are applied through a second reviewed typed plan"));
-    this.checks.push(t_true(wheel_contract,
-        "all four composed wheel components expose type, index, dimensions, and suspension"));
-    this.checks.push(t_true(!duplicate_identity.ok,
-        "duplicate component identity is rejected before a second proposal"));
-    report_verdict(this.checks, "ASSEMBLY COMPONENT BUILDER", "ASSEMBLY_COMPONENT_BUILDER");
 }

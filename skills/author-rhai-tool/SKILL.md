@@ -32,10 +32,10 @@ Read the focused contract when implementing one:
   [`author-scenario`](../author-scenario/SKILL.md).
 - Put continuous control equations in Modelica and generic substrate in Rust.
   A missing generic typed USD, physics, projection, or solver capability is a
-  capability report, not permission to add a Griffin-specific Rust path.
+  capability report, not permission to add a model-specific Rust path.
 
 Name the library after its reusable boundary (`assembly_builder`,
-`egress_ramp`, `griffin_requirements`), and name functions by intent:
+`component_requirements`), and name functions by intent:
 `*_plan`, `*_report`, `*_lint`, `*_test`, or `*_query`. Avoid names that encode
 an implementation detail or a temporary failure.
 
@@ -72,6 +72,40 @@ inspect exact target and generation
   -> assembly integration test
   -> save through the document owner
 ```
+
+### Generic parameter edits
+
+Use `assembly_builder::parameter_plan(edit_target, path, parameters)` for a
+vehicle-independent parameter update. Each entry is
+`{ name, type_name, value }`, where `value` is the canonical USD literal. The
+function only validates the exact path and unique typed fields and returns
+`SetAttribute` operations. Submit those operations with
+`assembly_edit::batch` or the proposal/review/commit flow.
+
+The Inspector's Apply action lowers to the same `ApplyUsdOps` boundary. Rhai
+may choose which parameters to expose and validate cross-field relationships,
+but it must not add a second writer, infer targets by name, or encode vehicle
+policy in a reusable core tool. Modelica parameter meaning and lifecycle stay
+with the Modelica declaration/compiler; an instance override remains a USD
+`inputs:` edit.
+
+### AI-readable assembly authoring
+
+For an exact composed prim, call
+`assembly_builder::authoring_context(doc, path, edit_target)` before planning.
+It returns the document generation and resolved edit target together with the
+prim, topology, collision envelope, exact mount sockets/occupancy, plug frames,
+and a small authored-affordance list. Treat every returned path and generation
+as a checkpoint; do not infer a socket, component, or parent from a leaf name.
+
+Use `assembly_builder::place_or_attach_plan` to keep generated intent dry:
+`attach_component` returns a reviewed AttachSpec for the existing generic
+owner, while `realign_existing_mount` returns ordinary typed USD operations.
+After the user or agent reviews the plan, submit `.spec` through
+`assembly_edit::attach_component` or `.ops` through
+`assembly_edit::propose`/`review_session`/`commit_proposal`. Do not put this
+workflow in Rust or create an AI-only writer; Rhai supplies the policy and the
+existing USD owners supply validation and journalling.
 
 ## Use an existing tool first
 

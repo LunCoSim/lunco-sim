@@ -105,6 +105,48 @@ fn place_plan(edit_target, path, translation, rotation, scale) {
     #{ ok: true, kind: "placement", path: path, ops: ops }
 }
 
+/// Build a generic multi-parameter edit for one exact prim.
+///
+/// `parameters` is an array of `{ name, type_name, value }` maps. `value` is
+/// the canonical USD literal string, so this helper supports scalar and
+/// structured properties without inventing a second value codec. The helper
+/// only validates the plan and returns typed `SetAttribute` operations; callers
+/// submit them through `assembly_edit::batch` or `assembly_edit::propose`, the
+/// same compound document boundary used by the Inspector and API.
+fn parameter_plan(edit_target, path, parameters) {
+    if edit_target == () || path == () || parameters == () {
+        return plan_error("parameter_plan requires an edit target, exact prim path, and parameter list");
+    }
+    if !path.starts_with("/") || path.ends_with("/") && path != "/" {
+        return plan_error("parameter_plan path must be an absolute USD prim path");
+    }
+    if parameters.len() == 0 {
+        return plan_error("parameter_plan requires at least one parameter");
+    }
+
+    let names = [];
+    let ops = [];
+    for parameter in parameters {
+        if parameter == () || parameter.name == () || parameter.type_name == ()
+            || parameter.value == () || parameter.name == ""
+            || parameter.type_name == "" {
+            return plan_error(path + ": parameters require name, type_name, and value");
+        }
+        if names.contains(parameter.name) {
+            return plan_error(path + ": parameter names must be unique");
+        }
+        names.push(parameter.name);
+        ops.push(#{ SetAttribute: #{
+            edit_target: edit_target,
+            path: path,
+            name: parameter.name,
+            type_name: parameter.type_name,
+            value: parameter.value,
+        }});
+    }
+    #{ ok: true, kind: "parameter_edit", path: path, parameters: names, ops: ops }
+}
+
 /// Build one referenced component instance without writing USDA source.
 ///
 /// The reference is the component's identity and composition boundary; local
@@ -309,38 +351,6 @@ fn frame_plan(edit_target, parent, name, translation, rotation, scale) {
         for op in placement.ops { ops.push(op); }
     }
     #{ ok: true, kind: "frame", path: path, ops: ops }
-}
-
-/// Instantiate a complete four-wheel rover assembly from one maintained USD
-/// vehicle asset. The asset owns its chassis, wheel, suspension, drivetrain,
-/// and controller composition; this recipe owns only the explicit instance
-/// identity, placement, and expected wheel paths. Variant choices are applied
-/// afterward through `select_variants_plan` once the reference closure is
-/// materialized. The paths are checked before proposal for uniqueness and
-/// containment, then the production scenario inspects their composed
-/// Cylinder/index/dimension contract after the reference is committed.
-fn flip_rover_instance_plan(doc, edit_target, parent, name, asset,
-    translation, rotation, wheel_paths) {
-    if wheel_paths == () || wheel_paths.len() != 4 {
-        return plan_error("flip_rover_instance_plan requires exactly four explicit wheel paths");
-    }
-    let path = if parent == "/" { "/" + name } else { parent + "/" + name };
-    let seen = [];
-    for wheel_path in wheel_paths {
-        if wheel_path == () || !wheel_path.starts_with(path + "/")
-            || seen.contains(wheel_path) {
-            return plan_error("flip_rover_instance_plan wheel paths must be unique descendants of the instance");
-        }
-        seen.push(wheel_path);
-    }
-    let plan = referenced_instance_plan(
-        doc, edit_target, parent, name, "Xform", asset,
-        translation, rotation, (), (), (),
-    );
-    if !plan.ok { return plan; }
-    plan.kind = "flip_rover_instance";
-    plan.wheel_paths = seen;
-    plan
 }
 
 /// Build a standard Cube shape under an existing frame with an explicit scale
@@ -1200,6 +1210,115 @@ fn query_ok(record) {
     record != () && record.ok != false
 }
 
+/// Return one structured authoring record for an exact composed prim.
+///
+/// This is the discovery surface for both an Editor assistant and a human
+/// tool: it keeps the document handle, generation, legal edit target, exact
+/// prim facts, topology, collision envelope, and authored mount affordances
+/// together. It never infers a component from a name and never mutates USD.
+/// Callers use the returned paths to build one of the typed plans below.
+fn authoring_context(doc, path, edit_target) {
+    if doc == () || path == () || edit_target == () {
+        return plan_error("authoring_context requires document, exact prim path, and edit target");
+    }
+    if !path.starts_with("/") || path.ends_with("/") && path != "/" {
+        return plan_error("authoring_context path must be an absolute USD prim path");
+    }
+
+    let document = assembly_edit::describe(doc);
+    if !query_ok(document) || document.generation == () {
+        return plan_error("authoring_context could not read the document generation");
+    }
+    let target = assembly_edit::resolve_target(doc, path, edit_target);
+    if !query_ok(target) {
+        return plan_error(path + ": authored edit target is unavailable");
+    }
+    let prim = query("QueryUsdPrim", #{
+        doc_id: doc,
+        path: path,
+        attrs: [
+            "xformOp:translate",
+            "xformOp:rotateXYZ",
+            "xformOp:scale",
+            "xformOpOrder",
+            "lunco:mount:plug",
+            "lunco:component:units",
+            "lunco:component:dimensions",
+            "physics:mass",
+            "physics:collisionEnabled",
+        ],
+        rels: [
+            "lunco:mount:sockets",
+            "lunco:mount:frame",
+            "lunco:mount:attachmentJoint",
+            "lunco:mount:part",
+        ],
+        topology: true,
+        collision_bounds: true,
+        children: false,
+    });
+    if !query_ok(prim) {
+        return plan_error(path + ": composed prim is unavailable");
+    }
+
+    let sockets = [];
+    let socket_paths = mount_relationship_targets(prim, "lunco:mount:sockets");
+    for socket_path in socket_paths {
+        let socket = query("QueryUsdPrim", #{
+            doc_id: doc,
+            path: socket_path,
+            attrs: [
+                "lunco:mount:socket",
+                "lunco:mount:joint",
+                "lunco:mount:axis",
+                "lunco:mount:asset",
+            ],
+            rels: ["lunco:mount:part"],
+        });
+        let socket_available = query_ok(socket) && socket.attrs != ();
+        let occupied = mount_relationship_targets(socket, "lunco:mount:part");
+        sockets.push(#{
+            path: socket_path,
+            available: socket_available,
+            kind: if socket_available { socket.attrs["lunco:mount:socket"] } else { () },
+            joint: if socket_available { socket.attrs["lunco:mount:joint"] } else { () },
+            axis: if socket_available { socket.attrs["lunco:mount:axis"] } else { () },
+            asset: if socket_available { socket.attrs["lunco:mount:asset"] } else { () },
+            occupied_by: occupied,
+            empty: occupied.len() == 0,
+        });
+    }
+
+    let frame_paths = mount_relationship_targets(prim, "lunco:mount:frame");
+    let joint_paths = mount_relationship_targets(prim, "lunco:mount:attachmentJoint");
+    let plug_kind = if prim.attrs == () { () } else { prim.attrs["lunco:mount:plug"] };
+    let plug = if plug_kind == () && frame_paths.len() == 0 && joint_paths.len() == 0 {
+        ()
+    } else {
+        #{ kind: plug_kind, frame_paths: frame_paths, joint_paths: joint_paths }
+    };
+    let can_realign = plug_kind != () && frame_paths.len() == 1 && joint_paths.len() == 1;
+    let actions = ["inspect", "transform"];
+    if socket_paths.len() != 0 { actions.push("plan_component_attachment"); }
+    if can_realign { actions.push("plan_existing_mount_realignment"); }
+    #{
+        ok: true,
+        kind: "authoring_context",
+        doc_id: doc,
+        path: path,
+        parent_path: parent_path(path),
+        edit_target: edit_target,
+        generation: document.generation,
+        target: target,
+        prim: prim,
+        topology: prim.topology,
+        collision_bounds: prim.collision_bounds,
+        sockets: sockets,
+        plug: plug,
+        actions: actions,
+    }
+}
+
 /// Resolve exactly one empty, authored socket for a reusable component.
 ///
 /// The host's `lunco:mount:sockets` relationship is the source of truth. This
@@ -1279,24 +1398,20 @@ fn find_compatible_socket(doc, host_path, socket_kind, joint_kind, asset,
     }
 }
 
-/// Attach a reusable component by its authored host/socket contract.
-///
-/// The command owner performs plug-frame resolution, reference lowering,
-/// joint creation, occupancy, and one-change-set journalling. This wrapper
-/// supplies only semantic intent: select the unique socket, derive the typed
-/// joint from its metadata, and ask the existing owner to snap the component
-/// into place. Neutral placement/rotation values are required by the public
-/// AttachSpec but are not used to guess the socket frame.
-fn mount_component(doc, edit_target, host_path, socket_kind, joint_kind,
+/// Build a dry component-attachment plan from explicit authored socket facts.
+/// The returned `spec` is consumed by `assembly_edit::attach_component` only
+/// after review; this function never creates a prim, reference, joint, or
+/// occupancy relationship.
+fn mount_component_plan(doc, edit_target, host_path, socket_kind, joint_kind,
     asset, name, joint_name) {
-    if edit_target == () || name == () || joint_name == () {
-        return plan_error("mount_component requires edit target, component name, and joint name");
+    if doc == () || edit_target == () || name == () || joint_name == () {
+        return plan_error("mount_component_plan requires document, edit target, component name, and joint name");
     }
     let selected = find_compatible_socket(doc, host_path, socket_kind,
         joint_kind, asset, true);
     if !selected.ok { return selected; }
 
-    let result = assembly_edit::attach_component(doc, #{
+    let spec = #{
         edit_target: edit_target,
         socket_path: selected.socket_path,
         host_path: host_path,
@@ -1306,10 +1421,35 @@ fn mount_component(doc, edit_target, host_path, socket_kind, joint_kind,
         placement: [0.0, 0.0, 0.0],
         rotate_deg: [0.0, 0.0, 0.0],
         joint: selected.joint,
-    });
+    };
+    #{
+        ok: true,
+        kind: "component_attachment_plan",
+        mode: "attach_component",
+        host_path: host_path,
+        socket_path: selected.socket_path,
+        asset: asset,
+        moved: [if host_path == "/" { "/" + name } else { host_path + "/" + name }],
+        fixed: [host_path, selected.socket_path],
+        mutation: "assembly_edit::attach_component",
+        spec: spec,
+        ops: [],
+    }
+}
+
+/// Attach a reusable component after its explicit dry plan has been reviewed.
+/// All lowering, frame resolution, validation, occupancy, and journalling
+/// remain in the existing generic AttachComponent owner.
+fn mount_component(doc, edit_target, host_path, socket_kind, joint_kind,
+    asset, name, joint_name) {
+    let plan = mount_component_plan(doc, edit_target, host_path, socket_kind,
+        joint_kind, asset, name, joint_name);
+    if !plan.ok { return plan; }
+
+    let result = assembly_edit::attach_component(doc, plan.spec);
     if result.ok {
         result.kind = "socket_mount";
-        result.socket_path = selected.socket_path;
+        result.socket_path = plan.socket_path;
     }
     result
 }
@@ -1687,6 +1827,49 @@ fn mount_frame_realignment_plan(doc, edit_target, host_path, socket_path,
             }},
         ],
     }
+}
+
+/// Plan either side of the generic placement/attachment workflow.
+///
+/// `request.mode == "attach_component"` returns an explicit AttachSpec for a
+/// new referenced component. `request.mode == "realign_existing_mount"`
+/// returns the reviewed USD operations for an already attached part. The
+/// request must carry exact paths and authored identities in both cases; this
+/// dispatcher only makes the two safe, dry planning surfaces discoverable to
+/// an AI or a small human-facing tool.
+fn place_or_attach_plan(doc, edit_target, request) {
+    if doc == () || edit_target == () || request == () || request.mode == () {
+        return plan_error("place_or_attach_plan requires document, edit target, and explicit mode");
+    }
+    if request.mode == "attach_component" {
+        if request.host_path == () || request.socket_kind == ()
+            || request.joint_kind == () || request.asset == ()
+            || request.name == () || request.joint_name == () {
+            return plan_error("attach_component planning requires host, socket kind, joint kind, asset, name, and joint name");
+        }
+        return mount_component_plan(
+            doc, edit_target, request.host_path, request.socket_kind,
+            request.joint_kind, request.asset, request.name, request.joint_name,
+        );
+    }
+    if request.mode == "realign_existing_mount" {
+        if request.host_path == () || request.socket_path == ()
+            || request.part_path == () || request.joint_path == () {
+            return plan_error("existing-mount planning requires host, socket, part, and joint paths");
+        }
+        let plan = mount_frame_realignment_plan(
+            doc, edit_target, request.host_path, request.socket_path,
+            request.part_path, request.joint_path,
+        );
+        if !plan.ok { return plan; }
+        plan.kind = "placement_attachment_plan";
+        plan.mode = request.mode;
+        plan.moved = [request.part_path];
+        plan.fixed = [request.host_path, request.socket_path, request.joint_path];
+        plan.mutation = "assembly_edit::propose";
+        return plan;
+    }
+    plan_error("place_or_attach_plan mode must be attach_component or realign_existing_mount")
 }
 
 /// Read a local translation while rejecting transforms this simple alignment

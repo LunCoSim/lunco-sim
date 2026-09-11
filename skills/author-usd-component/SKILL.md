@@ -464,6 +464,13 @@ double radius = 7.345 (
 - `type` drives write-back and **defaults to `"float"`** — set it for a `double`.
 - Only scalars readable as `f64`.
 
+The Inspector keeps these values as a local draft while the user edits. Apply
+commits all changed properties on the selected prim as one generation-checked
+`ApplyUsdOps` journal/undo unit; Cancel does not touch USD. AI/Rhai edits use
+`assembly_builder::parameter_plan` plus `assembly_edit::batch` or proposal
+review, which reaches the same typed document boundary. Parameter hints describe
+the control surface only; they do not replace USD or Modelica validation.
+
 USD has **no expressions**. A measured quantity and the transform encoding it are
 two authored numbers you must keep consistent by hand. Author both, and write the
 invariant in a comment — the measurement is the durable record, the transform is

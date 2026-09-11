@@ -94,6 +94,12 @@ pub(crate) struct UsdAttributeEditRequested {
 }
 
 #[derive(Event, Clone, Debug)]
+pub(crate) struct UsdAttributeBatchEditRequested {
+    entity: Entity,
+    edits: Vec<(String, String, String)>,
+}
+
+#[derive(Event, Clone, Debug)]
 pub(crate) struct UsdVariantEditRequested {
     entity: Entity,
     prim_path: String,
@@ -318,6 +324,16 @@ pub(crate) fn on_usd_attribute_edit_requested(
             &request.type_name,
             request.value,
         );
+    });
+}
+
+pub(crate) fn on_usd_attribute_batch_edit_requested(
+    trigger: On<UsdAttributeBatchEditRequested>,
+    mut commands: Commands,
+) {
+    let request = trigger.event().clone();
+    commands.queue(move |world: &mut World| {
+        apply_usd_attribute_batch_change(world, request.entity, request.edits);
     });
 }
 
@@ -1872,9 +1888,9 @@ fn camera_projection_section(
 /// snapshot and dispatches every edit through a single
 /// Bounded sliders for the selected prim's `customData`-ranged attributes,
 /// from the [`UsdParamView`](crate::ui::usd_params::UsdParamView) view-model. An
-/// asset that authors `customData {min,max,unit}` on a scalar gets a clamped
-/// slider here without any hand-coded range; edits write back through the same
-/// `ApplyUsdOp(SetAttribute)` path as every other Inspector control.
+/// asset that authors `customData {min,max,unit}` on a scalar gets a slider
+/// here without any hand-coded range; several edits are drafted together and
+/// written through one `ApplyUsdOps` change set.
 /// Grid-absolute translation of `entity` — `cell × edge + local`, the frame USD
 /// authors `xformOp:translate` in and the frame `MoveEntity` takes.
 ///
@@ -1904,7 +1920,13 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
     let part = ctx
         .resource::<crate::InspectorTarget>()
         .and_then(|t| t.part);
-    let (target, params): (Entity, Vec<crate::ui::usd_params::UsdParam>) = match ctx
+    let (preview, target, path, generation, params): (
+        lunco_usd::ui::viewport::UsdPreviewId,
+        Entity,
+        String,
+        u64,
+        Vec<crate::ui::usd_params::UsdParam>,
+    ) = match ctx
         .resource::<lunco_usd::ui::viewport::UsdViewportState>()
         .and_then(|viewport| {
             ctx.resource::<crate::ui::usd_params::UsdParamView>()
@@ -1914,7 +1936,13 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
             if !v.params.is_empty()
                 && (v.entity == Some(entity) || (v.entity.is_some() && v.entity == part)) =>
         {
-            (v.entity.unwrap(), v.params.clone())
+            (
+                v.preview,
+                v.entity.unwrap(),
+                v.path.clone(),
+                v.generation,
+                v.params.clone(),
+            )
         }
         _ => return,
     };
@@ -1944,27 +1972,72 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
                 });
                 ui.separator();
             }
-            let mut edits: Vec<(String, String, String)> = Vec::new();
-            for p in &params {
-                let mut v = p.value;
-                let text = if p.unit.is_empty() {
-                    p.label.clone()
-                } else {
-                    format!("{} ({})", p.label, p.unit)
-                };
-                if ui
-                    .add(egui::Slider::new(&mut v, p.min..=p.max).text(text))
-                    .changed()
-                {
-                    edits.push((p.name.clone(), p.type_name.clone(), format!("{v}")));
+            let draft_key = (preview, path);
+            let mut apply_values: Option<std::collections::HashMap<String, f64>> = None;
+            let mut cancel = false;
+            ctx.resource_scope::<crate::ui::usd_params::UsdParamDrafts, _>(|_, drafts| {
+                let draft = drafts.entries.entry(draft_key.clone()).or_insert_with(|| {
+                    crate::ui::usd_params::UsdParamDraft {
+                        generation,
+                        values: params.iter().map(|p| (p.name.clone(), p.value)).collect(),
+                    }
+                });
+                if draft.generation != generation {
+                    draft.generation = generation;
+                    draft.values = params.iter().map(|p| (p.name.clone(), p.value)).collect();
                 }
-            }
-            for (name, type_name, value) in edits {
-                ctx.trigger(UsdAttributeEditRequested {
-                    entity: target,
-                    name,
-                    type_name,
-                    value,
+
+                for p in &params {
+                    let value = draft.values.entry(p.name.clone()).or_insert(p.value);
+                    let text = if p.unit.is_empty() {
+                        p.label.clone()
+                    } else {
+                        format!("{} ({})", p.label, p.unit)
+                    };
+                    ui.add(egui::Slider::new(value, p.min..=p.max).text(text));
+                }
+
+                let has_changes = params
+                    .iter()
+                    .any(|p| draft.values.get(&p.name).copied().unwrap_or(p.value) != p.value);
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(has_changes, egui::Button::new("Apply parameters"))
+                        .clicked()
+                    {
+                        apply_values = Some(draft.values.clone());
+                    }
+                    if ui
+                        .add_enabled(has_changes, egui::Button::new("Cancel"))
+                        .clicked()
+                    {
+                        cancel = true;
+                    }
+                });
+            });
+
+            if let Some(values) = apply_values {
+                let edits = params
+                    .iter()
+                    .filter_map(|p| {
+                        let value = values.get(&p.name).copied().unwrap_or(p.value);
+                        (value != p.value)
+                            .then(|| (p.name.clone(), p.type_name.clone(), value.to_string()))
+                    })
+                    .collect::<Vec<_>>();
+                if !edits.is_empty() {
+                    ctx.trigger(UsdAttributeBatchEditRequested {
+                        entity: target,
+                        edits,
+                    });
+                }
+                ctx.resource_scope::<crate::ui::usd_params::UsdParamDrafts, _>(|_, drafts| {
+                    drafts.entries.remove(&draft_key);
+                });
+            } else if cancel {
+                ctx.resource_scope::<crate::ui::usd_params::UsdParamDrafts, _>(|_, drafts| {
+                    drafts.entries.remove(&draft_key);
                 });
             }
         });
@@ -3757,6 +3830,44 @@ fn apply_usd_path_attribute_change(
             op,
         });
     }
+}
+
+/// Lower a staged attribute edit to the same generic compound command used by
+/// Rhai and API callers. The Inspector adds no parameter-specific USD write
+/// path; it only supplies the selected entity and explicit typed values.
+fn apply_usd_attribute_batch_change(
+    world: &mut World,
+    entity: Entity,
+    edits: Vec<(String, String, String)>,
+) {
+    let Some((doc, edit_target, generation)) = authoring_context(world, entity) else {
+        return;
+    };
+    let Some(prim_path) = world
+        .get::<UsdPrimPath>(entity)
+        .map(|prim| prim.path.clone())
+    else {
+        return;
+    };
+    if edits.is_empty() {
+        return;
+    }
+    let ops = edits
+        .into_iter()
+        .map(|(name, type_name, value)| UsdOp::SetAttribute {
+            edit_target: edit_target.clone(),
+            path: prim_path.clone(),
+            name,
+            type_name,
+            value,
+        })
+        .collect();
+    world.trigger(lunco_usd::commands::ApplyUsdOps {
+        doc_id: doc,
+        parent_gen: (generation != 0).then_some(generation),
+        label: "Edit component parameters".to_string(),
+        ops,
+    });
 }
 
 /// Dispatch a `UsdOp::SetVariantSelection` — choose which variant of `set` the

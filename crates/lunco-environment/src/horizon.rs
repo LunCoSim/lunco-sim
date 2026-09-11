@@ -67,9 +67,9 @@
 //!     `shadow_cache_on` uniform) instead of the loop — dropping fragment
 //!     cost to near zero. See [`start_shadow_cache_bake`].
 //! 3. **Object shadows**: Bevy's native directional-light shadow pass handles
-//!    all dynamic PBR objects. Streamed terrain tiles are CSM casters by
-//!    default, so the same Sun shadow map that shades terrain occludes wheels,
-//!    hulls, and instruments.
+//!    all dynamic PBR objects. Streamed terrain tiles are CSM receivers, so the
+//!    same Sun shadow map carries rover, rock, and equipment shadows onto the
+//!    ground; the DEM horizon cache remains the terrain self-shadow owner.
 //!
 //! ## Limits (v1)
 //!
