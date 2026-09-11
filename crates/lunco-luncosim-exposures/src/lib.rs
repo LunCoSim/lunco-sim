@@ -1090,10 +1090,10 @@ mod exposure_tests {
 
     #[test]
     fn camera_exposure_projects_authoritative_fact_and_compact_label() {
-        let status = lunco_usd_bevy::camera_switch::CameraSelectionStatus {
+        let status = lunco_usd_bevy_camera::camera_switch::CameraSelectionStatus {
             cameras: vec!["/World/Wide".into(), "/World/Close".into()],
             active_name: Some("/World/Close".into()),
-            owner: lunco_usd_bevy::camera_switch::CameraSelectionOwner::User,
+            owner: lunco_usd_bevy_camera::camera_switch::CameraSelectionOwner::User,
             avatar_available: true,
             director_available: true,
             last_error: None,
@@ -1117,14 +1117,16 @@ mod exposure_tests {
     fn camera_status_event_updates_the_retained_exposure() {
         let mut app = App::new();
         app.init_resource::<EngineExposures>()
-            .insert_resource(lunco_usd_bevy::camera_switch::CameraSelectionStatus {
-                active_name: Some("/World/Close".into()),
-                ..default()
-            })
+            .insert_resource(
+                lunco_usd_bevy_camera::camera_switch::CameraSelectionStatus {
+                    active_name: Some("/World/Close".into()),
+                    ..default()
+                },
+            )
             .add_observer(on_camera_selection_status_changed);
 
         app.world_mut()
-            .trigger(lunco_usd_bevy::camera_switch::CameraSelectionStatusChanged);
+            .trigger(lunco_usd_bevy_camera::camera_switch::CameraSelectionStatusChanged);
 
         let exposures = app.world().resource::<EngineExposures>();
         assert_eq!(
@@ -2312,8 +2314,8 @@ fn publish_runtime_overlay_exposures(
 /// This observer is deliberately separate from the continuous vessel exposure
 /// cadence: a camera switch must not be rediscovered by a per-tick poll.
 pub(crate) fn on_camera_selection_status_changed(
-    _trigger: On<lunco_usd_bevy::camera_switch::CameraSelectionStatusChanged>,
-    status: Res<lunco_usd_bevy::camera_switch::CameraSelectionStatus>,
+    _trigger: On<lunco_usd_bevy_camera::camera_switch::CameraSelectionStatusChanged>,
+    status: Res<lunco_usd_bevy_camera::camera_switch::CameraSelectionStatus>,
     mut exposures: ResMut<EngineExposures>,
 ) {
     publish_camera_exposure(&mut exposures, &status);
@@ -2322,7 +2324,7 @@ pub(crate) fn on_camera_selection_status_changed(
 /// Seed the retained camera surface once when the host starts. Subsequent
 /// updates arrive only through `CameraSelectionStatusChanged`.
 pub(crate) fn publish_initial_camera_exposure(
-    status: Res<lunco_usd_bevy::camera_switch::CameraSelectionStatus>,
+    status: Res<lunco_usd_bevy_camera::camera_switch::CameraSelectionStatus>,
     mut exposures: ResMut<EngineExposures>,
 ) {
     publish_camera_exposure(&mut exposures, &status);
@@ -2330,7 +2332,7 @@ pub(crate) fn publish_initial_camera_exposure(
 
 fn publish_camera_exposure(
     exposures: &mut EngineExposures,
-    status: &lunco_usd_bevy::camera_switch::CameraSelectionStatus,
+    status: &lunco_usd_bevy_camera::camera_switch::CameraSelectionStatus,
 ) {
     let mut ui = exposures.writer("camera-status");
     ui.visible(true);
@@ -2338,7 +2340,7 @@ fn publish_camera_exposure(
     // derive one deterministic identity label for compact status surfaces.
     // Selection policy remains in Rhai/the typed camera command path.
     let active_name = status.active_name.as_deref().unwrap_or("");
-    let labels = lunco_usd_bevy::camera_switch::camera_display_labels(&status.cameras);
+    let labels = lunco_usd_bevy_camera::camera_switch::camera_display_labels(&status.cameras);
     let active_label = status
         .active_name
         .as_ref()

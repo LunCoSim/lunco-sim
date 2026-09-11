@@ -132,7 +132,7 @@ to implement a panel or perspective.
    always the central region of the window. Not a panel, not a tile.
    Cannot be closed or docked-over. The workbench contributes only the
    viewport's *visibility* into `lunco_core::SceneViewport`; it never sets
-   camera `is_active` — the single-authority reconciler in `lunco-usd-bevy`
+   camera `is_active` — the single-authority reconciler in `lunco-usd-bevy-camera`
    actuates that (see [`17-view-and-intent.md §6`](17-view-and-intent.md)). A
    perspective with central content hides 3D when it has no viewport panel; a
    full-window presentation perspective may explicitly keep the scene visible

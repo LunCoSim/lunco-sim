@@ -7,7 +7,8 @@
 > physical — lives as USD prims in USD stages. See
 > [`../../crates/lunco-usd-core/`](../../crates/lunco-usd-core/), [`../../crates/lunco-usd/`](../../crates/lunco-usd/) and companion crates
 > `lunco-usd-geometry`, `lunco-usd-avian`, `lunco-usd-bevy-core`,
-> `lunco-usd-bevy-scene`, `lunco-usd-bevy` and `lunco-usd-sim`.
+> `lunco-usd-bevy-scene`, `lunco-usd-bevy-camera`, `lunco-usd-bevy` and
+> `lunco-usd-sim`.
 
 Package ownership follows the same boundary: `lunco-usd-core` contains the
 headless document/authoring surface, schemas, and pure probes; `lunco-usd`
@@ -15,7 +16,9 @@ contains runtime orchestration and document commands; `lunco-usd-geometry`
 owns the reusable render-free NURBS, trim, and curve-sweep substrate;
 `lunco-usd-bevy-core` owns prepared/composed stage data;
 `lunco-usd-bevy-scene` owns render-free ECS scene identity, lifecycle, ancestry,
-and shared geometry decoding; `lunco-usd-bevy` owns visual projection; and
+and shared geometry decoding; `lunco-usd-bevy-camera` owns render-free camera
+projection intent, camera paths, mounts, selection, and viewport reconciliation;
+`lunco-usd-bevy` owns visual projection; and
 `lunco-usd-sim` owns USD-to-Avian/simulation examples and integration tests. This
 keeps runtime and simulation dependencies out of the authoring crate without
 introducing a test-only package.
@@ -457,8 +460,8 @@ Modelica asset and its USD topology, not a Rust sensor registry.
 
 ### Cameras
 
-Scene cameras are **standard `def Camera` (`UsdGeomCamera`) prims** — `lunco-usd-bevy`
-projects each to render-free camera intent and `lunco-render-bevy` binds the
+Scene cameras are **standard `def Camera` (`UsdGeomCamera`) prims** —
+`lunco-usd-bevy-camera` projects each to render-free camera intent and `lunco-render-bevy` binds the
 complete inactive Bevy `Camera3d` pipeline (see [`17-view-and-intent.md §6`](17-view-and-intent.md)).
 
 | Attribute | Meaning |
@@ -692,6 +695,7 @@ All runtime acceptance tests load **real USD files** through the same pipeline
 as runtime. Ownership follows the narrowest production boundary:
 - `crates/lunco-usd-bevy-core/src/{asset,authoring,canonical,read,compose,view}.rs` — prepared asset, authored-layer, composed-stage, and live-stage substrate
 - `crates/lunco-usd-bevy-scene/src/{lib,geometry}.rs` — render-free ECS scene identity, lifecycle, ancestry, and shared USD geometry readers
+- `crates/lunco-usd-bevy-camera/src/{camera,camera_mount,camera_path,camera_switch,camera_track}.rs` — render-free camera projection, pose, path, selection, and track mechanisms
 - `crates/lunco-usd/tests/live_spawn_projection.rs` — document-backed USD authoring and raw asset composition facts
 - `crates/lunco-usd-sim/tests/usd_connection_mechanics.rs` — generic connection derivation and transform mechanics
 - `assets/scenarios/tests/*.rhai` through the production `luncosim test` gate — composed USD → Bevy → Avian → simulation outcomes, including rover structure, wheel realization, wiring, EPS, and link visibility

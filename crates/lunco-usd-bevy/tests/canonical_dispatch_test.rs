@@ -14,10 +14,9 @@
 use bevy::prelude::*;
 use lunco_materials::ProceduralSkybox;
 use lunco_render::PbrLook;
-use lunco_usd_bevy::UsdVisualSyncFailed;
 use lunco_usd_bevy_core::canonical::{CanonicalStage, CanonicalStages};
 use lunco_usd_bevy_core::UsdStageAsset;
-use lunco_usd_bevy_scene::UsdPrimPath;
+use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneProjectionFailed, UsdSceneProjectionQueued};
 use lunco_usd_core::StageRecipe;
 
 const SCENE: &str = r#"#usda 1.0
@@ -124,7 +123,6 @@ fn entity_at(app: &mut App, path: &str) -> Option<Entity> {
 
 #[test]
 fn authored_identity_pose_replaces_previous_primitive_projection() {
-    use lunco_usd_bevy::UsdVisualProjectionQueued;
     use lunco_usd_bevy_scene::UsdSceneProjected;
     use openusd::sdf::{Path, Value};
 
@@ -194,7 +192,7 @@ def Xform "Placement" {}
         app.world_mut()
             .entity_mut(entity)
             .remove::<UsdSceneProjected>()
-            .insert(UsdVisualProjectionQueued);
+            .insert(UsdSceneProjectionQueued);
         for _ in 0..256 {
             app.update();
             if app.world().get::<UsdSceneProjected>(entity).is_some() {
@@ -250,7 +248,7 @@ def Cylinder "Post" {
     app.world_mut()
         .entity_mut(entity)
         .remove::<UsdSceneProjected>()
-        .insert(UsdVisualProjectionQueued);
+        .insert(UsdSceneProjectionQueued);
     for _ in 0..256 {
         app.update();
         if app.world().get::<UsdSceneProjected>(entity).is_some() {
@@ -499,7 +497,7 @@ def Xform "World"
     app.update();
 
     assert!(
-        app.world().get::<UsdVisualSyncFailed>(sky_e).is_some(),
+        app.world().get::<UsdSceneProjectionFailed>(sky_e).is_some(),
         "a skybox flag on a gprim must fail the USD projection visibly"
     );
     assert!(

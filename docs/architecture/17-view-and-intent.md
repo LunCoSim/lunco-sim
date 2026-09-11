@@ -108,7 +108,7 @@ and USD standards rather than inventing bespoke types, and follows a strict
 ### 6.1 Cameras are standard USD + Bevy
 
 - A scene camera is a standard USD **`def Camera`** (`UsdGeomCamera`) prim.
-  `lunco-usd-bevy` (`camera.rs`) translates each to render-free camera intent;
+  `lunco-usd-bevy-camera` (`camera.rs`) translates each to render-free camera intent;
   `lunco-render-bevy` then creates the **inactive** Bevy `Camera3d` and its
   complete render graph atomically: `focalLength` / `verticalAperture` → vertical
   FOV, `clippingRange` → near/far, `projection` token → perspective/orthographic.
@@ -136,7 +136,7 @@ An authored selection is retained as `(stage, USD prim path)` and re-resolved
 after re-projection; the ECS entity is only the current realization. A command
 or camera track changes the selection intent, while exactly **one** system writes
 `SceneViewport::active_camera`, window-camera `is_active`, and `viewport`:
-`lunco-usd-bevy`'s **`reconcile_scene_viewport`**. It actuates the viewport
+`lunco-usd-bevy-camera`'s **`reconcile_scene_viewport`**. It actuates the viewport
 (`is_active = bound-camera && visible`) and relocates the big_space
 the persistent `OriginAnchor` to the active camera's f64 `WorldGrid` cell. A
 missing, stale, or projectionless explicit request produces no active camera
@@ -170,7 +170,8 @@ avatar presence into presentation policy.
 ### 6.4 Rover-mounted cameras
 
 An onboard camera explicitly applies `LunCoCameraAPI` with
-`lunco:cameraPose = "mounted"`. `resolve_camera_mounts` realises that declared
+`lunco:cameraPose = "mounted"`. `resolve_camera_mounts` in
+`lunco-usd-bevy-camera` realises that declared
 contract as a **grid-direct follower** (`MountedCamera { mount, offset }`), and
 `follow_mounted_cameras` writes `mount · offset` in double precision. This lets
 the persistent origin tracker follow the camera without changing its

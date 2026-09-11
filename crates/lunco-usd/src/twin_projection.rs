@@ -54,9 +54,11 @@ use bevy::asset::AssetId;
 use bevy::prelude::*;
 use lunco_assets::twin_source::TwinRoots;
 use lunco_doc::{Document, DocumentId};
-use lunco_usd_bevy::{UsdAwaitingStage, UsdSourceText, UsdVisualProjectionQueued};
+use lunco_usd_bevy::UsdSourceText;
 use lunco_usd_bevy_core::{UsdInstanceProjection, UsdRead, UsdStageAsset};
-use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneProjected, UsdSceneRoot};
+use lunco_usd_bevy_scene::{
+    UsdPrimPath, UsdSceneAwaitingStage, UsdSceneProjected, UsdSceneProjectionQueued, UsdSceneRoot,
+};
 use lunco_usd_sim::cosim::LoadScene;
 
 use crate::commands::{EmptyViewportReason, TWIN_SCENE_LOAD_FAILED};
@@ -1873,9 +1875,9 @@ fn reinstantiate_entity(world: &mut World, entity: Entity) {
         em.remove::<lunco_usd_sim::shader::UsdShaderResolved>();
         em.despawn_related::<Children>();
         if let Some(pp) = em.take::<UsdPrimPath>() {
-            em.insert((pp, UsdAwaitingStage));
+            em.insert((pp, UsdSceneAwaitingStage));
             if stage_ready {
-                em.insert(UsdVisualProjectionQueued);
+                em.insert(UsdSceneProjectionQueued);
             }
         }
     }

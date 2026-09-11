@@ -71,6 +71,7 @@ lunco-modelica-ui = { path = "../lunco-modelica-ui", default-features = false }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 lunco-usd = { path = "../lunco-usd", default-features = false }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+lunco-usd-bevy-camera = { path = "../lunco-usd-bevy-camera" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-core = { path = "../lunco-usd-core" }

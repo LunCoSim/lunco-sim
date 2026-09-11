@@ -54,8 +54,8 @@ the timeline as data.
 | **Typed reversible keyframe write** | `UsdOp::SetTimeSample` / `RemoveTimeSample` (`lunco-usd-core/src/document.rs`) — each the other's inverse, with first-xform `xformOpOrder` authoring | Editor Inspector and `assembly_edit` use the existing operations; the full timeline remains future work |
 | Journaled/undoable apply | `ApplyUsdOp { doc_id, parent_gen, op }` → `wire_usd_journal_recorders` records lossless (fwd,inv) pair | shared undo (UI+CLI+agent) |
 | Attribute literal → typed value | `parse_attribute_value` (`usd-core/src/author.rs:186`) | UI only supplies a string |
-| Camera switch (single target) | explicit selection (`SetActiveCamera` for the director, `SetUserCamera`/`ObserveAvatar` for the operator) → `ActivateCamera` → `SceneViewport::active_camera`, reconciled each frame (`usd-bevy/src/camera_switch.rs`) | one viewport authority |
-| Mounted follower cameras | `def Camera` under a body → `MountedCamera`, re-aimed each frame via `lunco:cameraLookAt` (`camera_mount.rs`) | |
+| Camera switch (single target) | explicit selection (`SetActiveCamera` for the director, `SetUserCamera`/`ObserveAvatar` for the operator) → `ActivateCamera` → `SceneViewport::active_camera`, reconciled each frame (`usd-bevy-camera/src/camera_switch.rs`) | one viewport authority |
+| Mounted follower cameras | `def Camera` under a body → `MountedCamera`, re-aimed each frame via `lunco:cameraLookAt` (`usd-bevy-camera/src/camera_mount.rs`) | |
 | Event bus (jump-target source) | `TelemetryEvent { name, source, … }` (XTCE/YAMCS-aligned); `emit()`/`wait_for()`; `TriggerZone`/`portEvents` authored markers | |
 | Declarative timeline data | JSON steps with exactly one operation word (`move_to`, `move_to_entity`, `possess`, `brake`, `cmd`, `emit`, `wait`, or `wait_event`) persisted in `<twin>/timelines/*.json`; `RunTimeline`/`Register`/`List`/`Get` (`lunco-scripting/commands.rs`) | |
 | 1-D transport widget (the seed) | `animation_transport_section` — play/pause/rewind + scrub slider + rate (`luncosim-edit/src/ui/inspector.rs:588`) | |
@@ -134,7 +134,7 @@ def Scope "CameraTrack" (
 }
 ```
 
-**Sampler** (`lunco-usd-bevy`, sibling to `sample_usd_animation`): a change-gated
+**Sampler** (`lunco-usd-bevy-camera`, sibling to `sample_usd_animation`): a change-gated
 system that, when the resolved domain time crosses a key boundary of an
 `activeCamera` channel, fires `ActivateCamera::director` (resolve name→entity
 once, cache). Reuses the single-authority `reconcile_scene_viewport` path — no

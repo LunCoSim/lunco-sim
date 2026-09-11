@@ -55,7 +55,7 @@ The "Brains and Brawn" — Flight Software (FSW), On-Board Computer (OBC), mobil
 | Crate | Responsibility |
 | :--- | :--- |
 | **`lunco-mobility`** | Parameterized surface-vehicle physics: contact-plane raycast wheels (incl. leaning bikes), suspension, drive mixing, rocker-bogie differential. |
-| **`lunco-avatar`** | Human-interaction layer: composable camera **rigs** (SpringArm, Orbit, FreeFlight, Surface) and control intents. (Camera *selection* / viewport lives in `lunco-usd-bevy` + `lunco-core::SceneViewport`.) |
+| **`lunco-avatar`** | Human-interaction layer: composable camera **rigs** (SpringArm, Orbit, FreeFlight, Surface) and control intents. (Camera *selection* / viewport lives in `lunco-usd-bevy-camera` + `lunco-core::SceneViewport`.) |
 | **`lunco-hardware`** | Concrete physical actuators and sensors bridging `Port` values to the `avian3d` physics engine. |
 | **`lunco-controller`** | Owns the persisted `InputBindingsSettings` keymap and translates resolved raw user input (Keyboard/Gamepad/Mouse) into typed `UserIntent` actions for FSW. Yields a vessel to its owning session (spec 034), so the human never fights an autopilot. |
 | **`lunco-autopilot`** | Headless autonomous driver as a first-class actor: an `AiAgent` session that possesses + drives a vessel via `SetPorts` (spec 034). Multi-actor (each vessel → one owning session, human or autopilot). Behaviour is a `lunco-behavior` tree authored as DATA (`BehaviorSpec`, rhai/JSON — hot-swappable via `SetAutopilotBehavior`) with Rust nav-math leaves. No avatar/UI dep. |
@@ -72,7 +72,8 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-usd-geometry`** | Render-free NURBS evaluators, trimmed-domain tessellation, and rotation-minimizing curve-sweep mesh data. Isolates heavy numeric geometry dependencies from the USD stage loader. |
 | **`lunco-usd-bevy-core`** | Headless composed-USD reader/view, stage composition, prepared stage assets, canonical live-stage ownership, authored-layer readers, instance identity, send-safe projection plans, program/variant resolution, material binding, transform decoding, and unit conversion. Uses Bevy's asset/ECS substrate but has no mesh, light, camera, renderer, window, or UI projection. |
 | **`lunco-usd-bevy-scene`** | Render-free Bevy scene contract shared by visual and domain projections: `UsdPrimPath`, scene/revision lifecycle markers, preview/ancestry ownership, and canonical USD primitive/mesh geometry readers. It depends on the core reader and has no visual adapter or renderer dependency. |
-| **`lunco-usd-bevy`** | Visual Bevy adapter (`UsdBevyPlugin`): projects USD hierarchy, shapes, transforms, materials, and `timeSamples` animation into Bevy entities/components on top of `lunco-usd-bevy-core`. Owns mesh/lathe/curve projection, lighting, USD cameras, camera mounts, and the viewport-camera switch. |
+| **`lunco-usd-bevy-camera`** | Render-free USD camera adapter: standard `UsdGeomCamera` projection intent, mounted/cinematic camera pose, camera-track selection, and the single-authority viewport-camera reconciler. It depends on the core reader and scene contract, not on visual projection. |
+| **`lunco-usd-bevy`** | Visual Bevy adapter (`UsdBevyPlugin`): projects USD hierarchy, shapes, transforms, materials, and `timeSamples` animation into Bevy entities/components on top of `lunco-usd-bevy-core`. Owns mesh/lathe/curve projection and lighting; installs the independent camera adapter but does not own camera mechanisms. |
 | **`lunco-usd-avian`** | Physics bridge (`UsdAvianPlugin`): maps `UsdPhysics` schemas (RigidBody, Colliders, all joint kinds + drive API) to Avian3D — the single home for joint construction. |
 | **`lunco-usd-sim`** | Simulation-schema bridge (`UsdSimPlugin`): intercepts specialized vehicle/cosim schemas (e.g., PhysX Vehicles) and maps them to LunCo models. Full USD→Bevy→Avian→simulation projection tests live here; direct Avian bridge mechanics stay in `lunco-usd-avian`. |
 | **`lunco-usd-terrain`** | Terrain bridge: projects authored terrain prims into `lunco-terrain-surface`'s `DemTerrainRequest` + composable `TerrainLayerStack` (craters / rocks / edits), and carries hand edits back as journaled, undoable USD ops on the document's **runtime** layer. Standard `UsdShade` owns terrain material intent. |
@@ -233,7 +234,7 @@ Backend-agnostic experiment / batch-run registry. Models a single Fast Run as a 
 Physics models for surface mobility and traction — the parameterized substrate (a vehicle is a USD file, not a Rust struct). Raycast wheel model with contact-plane traction (supports leaning single-track bikes), suspension (spring-damper), generic authored drive/heading output realization, and a soft rocker-bogie `DifferentialCoupling`.
 
 **`lunco-avatar`**
-Human-interaction layer. Provides composable camera **rigs** (SpringArm, Orbit, FreeFlight, Surface) with smooth jitter-free transitions and coordinate-grid awareness for avatar-based exploration of celestial bodies. The rigs decide *how* a camera moves; *which* camera the viewport shows is owned by the reconciler in `lunco-usd-bevy` (they compose — possession changes the avatar camera's rig without changing the active view).
+Human-interaction layer. Provides composable camera **rigs** (SpringArm, Orbit, FreeFlight, Surface) with smooth jitter-free transitions and coordinate-grid awareness for avatar-based exploration of celestial bodies. The rigs decide *how* a camera moves; *which* camera the viewport shows is owned by the reconciler in `lunco-usd-bevy-camera` (they compose — possession changes the avatar camera's rig without changing the active view).
 
 **`lunco-hardware`**
 Physical actuator and sensor implementations. Bridges `Port` values to the `avian3d` physics engine, providing concrete motor, brake, and sensor components that interact with the simulation world.
@@ -284,13 +285,19 @@ uses the same contract when it binds presentation components.
 **`lunco-usd-ui`**
 Interactive USD browser and preview presentation. Owns workbench sections, preview sessions/views, viewport queries, Save-As picker integration, and UI status/placeholder adapters while consuming the document and projection APIs from `lunco-usd`.
 
+**`lunco-usd-bevy-camera`**
+Render-free camera adapter built on `lunco-usd-bevy-core` and
+`lunco-usd-bevy-scene`. It maps standard USD `def Camera` prims to camera
+intent, handles rover-mounted and cinematic camera poses, and owns camera
+selection plus the single-authority viewport reconciler. It contains no visual
+projection and does not depend on the visual adapter.
+
 **`lunco-usd-bevy`**
 Visual OpenUSD bridge built on `lunco-usd-bevy-core`. It maps USD prim
 hierarchies and visual facts into Bevy entities/components, projects meshes,
-lights, render intent, cameras, and authored `timeSamples` animation. The
-camera intent bridge (USD `def Camera` → render-free intent), rover-mounted
-grid-direct followers, and the single-authority viewport-camera reconciler
-remain here; `lunco-render-bevy` supplies the concrete render pipeline. See
+lights, render intent, and authored `timeSamples` animation. It installs the
+camera adapter at the integration boundary; `lunco-render-bevy` supplies the
+concrete render pipeline. See
 [`17-view-and-intent.md §6`](architecture/17-view-and-intent.md).
 Headless consumers import the owning `lunco-usd-bevy-core` modules directly;
 this visual adapter is not a compatibility facade for the headless API.

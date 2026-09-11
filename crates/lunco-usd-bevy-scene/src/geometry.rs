@@ -1,6 +1,7 @@
 use bevy::prelude::{error, Quat, Vec3};
 use lunco_usd_bevy_core::read::UsdReadObject;
 use lunco_usd_bevy_core::stage_convention;
+use openusd::schemas::geom::tokens;
 use openusd::sdf::Path as SdfPath;
 use openusd::sdf::Value;
 
@@ -228,7 +229,7 @@ pub fn read_usd_mesh_indexed(
 }
 
 pub fn read_usd_mesh_points(reader: &dyn UsdReadObject, path: &SdfPath) -> Option<Vec<[f32; 3]>> {
-    let points = reader.points3(path, "points");
+    let points = reader.points3(path, tokens::A_POINTS);
     if points.is_empty()
         || points
             .iter()

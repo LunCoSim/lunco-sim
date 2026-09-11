@@ -130,7 +130,7 @@ path-remapped prepared plan and the canonical generation at which the
 reference was admitted. Descendants reuse that plan through the same queue;
 when the canonical generation advances, `reader_for_entity` selects the live
 composed stage so local authored opinions cannot be hidden by the snapshot.
-`UsdAwaitingStage` remains on queued prims, so the authoritative stage outcome
+`UsdSceneAwaitingStage` remains on queued prims, so the authoritative stage outcome
 is retained until the queue is empty. The workbench reports the indeterminate
 loading/projecting phase, and a clear transaction reports unloading, rather than
 presenting a partially projected scene as ready.

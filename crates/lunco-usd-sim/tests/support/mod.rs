@@ -2,8 +2,8 @@
 
 use avian3d::prelude::Collider;
 use bevy::prelude::{App, Children, Entity, Name, Or, With};
-use lunco_usd_bevy::{UsdAwaitingStage, UsdVisualProjectionQueued};
 use lunco_usd_bevy_core::{canonical::CanonicalStage, canonical::CanonicalStages, UsdStageAsset};
+use lunco_usd_bevy_scene::{UsdSceneAwaitingStage, UsdSceneProjectionQueued};
 use lunco_usd_core::StageRecipe;
 use std::collections::HashMap;
 use std::path::Path;
@@ -120,8 +120,8 @@ pub(crate) fn settle_visual_projection(app: &mut App) {
         let pending = {
             let world = app.world_mut();
             let mut query = world.query_filtered::<(), Or<(
-                With<UsdVisualProjectionQueued>,
-                With<UsdAwaitingStage>,
+                With<UsdSceneProjectionQueued>,
+                With<UsdSceneAwaitingStage>,
             )>>();
             query.iter(world).next().is_some()
         };

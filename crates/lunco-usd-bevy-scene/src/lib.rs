@@ -84,6 +84,29 @@ pub fn bump_usd_stage_revision(
 #[derive(Component, Debug, Clone, Copy)]
 pub struct UsdSceneProjected;
 
+/// Marks a scene prim whose stage has not finished loading.
+///
+/// This is a scene-lifecycle fact rather than a visual implementation detail:
+/// camera presentation, readiness, tools, and simulation use it to distinguish
+/// an incomplete scene from one that has no authored content.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct UsdSceneAwaitingStage;
+
+/// Marks a scene prim admitted to the bounded structural projection queue.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct UsdSceneProjectionQueued;
+
+/// Marks a scene prim whose detached geometry projection is still running.
+/// Structural scene projection is complete, but presentation readiness may
+/// still wait for the geometry and its bounds.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct UsdSceneGeometryPending;
+
+/// Terminal failure produced while projecting a composed USD prim.
+#[derive(Component, Reflect, Debug, Clone, PartialEq, Eq)]
+#[reflect(Component)]
+pub struct UsdSceneProjectionFailed(pub String);
+
 /// Marks an entity whose USD xform or appearance contains time-sampled data.
 ///
 /// The visual adapter plans and samples the channels, while physics and other

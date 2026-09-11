@@ -38,7 +38,7 @@ bases according to the `BasisCurves` shape.
 
 ## Runtime ownership
 
-`lunco-usd-bevy/src/camera_path.rs` resolves a valid path into a `CameraPath` and
+`lunco-usd-bevy-camera/src/camera_path.rs` resolves a valid path into a `CameraPath` and
 creates two domains:
 
 1. A gate domain starts held at creation. It is an engine-readiness hold, not a

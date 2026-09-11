@@ -943,7 +943,7 @@ pub fn populate_inspector_view(world: &mut World) {
         .iter()
         .map(|(_, identity)| identity.clone())
         .collect();
-    let camera_labels = lunco_usd_bevy::camera_switch::camera_display_labels(&camera_names);
+    let camera_labels = lunco_usd_bevy_camera::camera_switch::camera_display_labels(&camera_names);
     let selected_display_name = selected.and_then(|selected| {
         camera_identities
             .iter()

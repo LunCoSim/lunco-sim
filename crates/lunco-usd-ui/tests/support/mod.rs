@@ -1,7 +1,7 @@
 //! Shared helpers for document-level USD integration tests.
 
 use bevy::prelude::{App, Or, With};
-use lunco_usd_bevy::{UsdAwaitingStage, UsdVisualProjectionQueued};
+use lunco_usd_bevy_scene::{UsdSceneAwaitingStage, UsdSceneProjectionQueued};
 
 /// Advance the production projection pipeline until no USD prim is waiting for
 /// a stage or visual projection, including the dependent observer frame.
@@ -12,8 +12,8 @@ pub(crate) fn settle_visual_projection(app: &mut App) {
         let pending = {
             let world = app.world_mut();
             let mut query = world.query_filtered::<(), Or<(
-                With<UsdVisualProjectionQueued>,
-                With<UsdAwaitingStage>,
+                With<UsdSceneProjectionQueued>,
+                With<UsdSceneAwaitingStage>,
             )>>();
             query.iter(world).next().is_some()
         };

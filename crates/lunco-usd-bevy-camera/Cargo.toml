@@ -1,0 +1,23 @@
+[package]
+name = "lunco-usd-bevy-camera"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Render-free USD camera, path, selection, and presentation contracts for Bevy"
+
+[dependencies]
+bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh", "bevy_light", "bevy_window"] }
+big_space = { workspace = true }
+lunco-core = { path = "../lunco-core" }
+lunco-render = { path = "../lunco-render" }
+lunco-time = { path = "../lunco-time" }
+lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
+lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
+openusd = { workspace = true }
+
+[dev-dependencies]
+lunco-usd-core = { path = "../lunco-usd-core" }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

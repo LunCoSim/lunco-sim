@@ -19,7 +19,7 @@
 //! the world until the deadline.
 //!
 //! These systems instead derive the wait from state that is *already* the truth:
-//! `SceneLoadInFlight` and unresolved `UsdAwaitingStage` prims for the scene, a
+//! `SceneLoadInFlight` and unresolved `UsdSceneAwaitingStage` prims for the scene, a
 //! `ModelicaModel` whose interface has not compiled for a model. There is no
 //! path to miss, because there is no transition being watched — each frame the
 //! wait either still describes the world or it does not.
@@ -31,8 +31,7 @@ use lunco_readiness::{kinds, ReadinessRegistry, ReadinessTicket, Subject};
 use crate::cosim::{SceneLoadInFlight, UsdSourcedCosim};
 use lunco_cosim::SimComponent;
 use lunco_usd_avian::ShouldBeDynamic;
-use lunco_usd_bevy::UsdAwaitingStage;
-use lunco_usd_bevy_scene::UsdPrimPath;
+use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneAwaitingStage};
 
 /// The open world-scoped scene-load wait, if a scene is loading.
 #[derive(Resource)]
@@ -75,7 +74,7 @@ struct ModelCompileWait {
 /// would make a local physics gate prevent the whole world from becoming ready.
 fn track_scene_load(
     in_flight: Option<Res<SceneLoadInFlight>>,
-    awaiting: Query<(), With<UsdAwaitingStage>>,
+    awaiting: Query<(), With<UsdSceneAwaitingStage>>,
     wait: Option<Res<SceneLoadWait>>,
     mut registry: ResMut<ReadinessRegistry>,
     mut commands: Commands,

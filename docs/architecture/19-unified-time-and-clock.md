@@ -150,7 +150,7 @@ The production split is:
 |---|---|
 | master tick, transport, anchor, `WorldTime` | `lunco-time` / `lunco-core` |
 | domain tree, playheads, bindings, resolved samples | `lunco-time` |
-| USD value evaluation and visual projection | `lunco-usd-bevy` |
+| USD value evaluation and visual projection | `lunco-usd-bevy` and `lunco-usd-bevy-camera` |
 | Modelica stepping and communication points | Modelica/cosim owners |
 | physics stepping | Avian and the fixed simulation schedule |
 | avatar/camera/UI presentation cadence | `InteractionSchedule` |

@@ -383,9 +383,9 @@ fn runtime_binding_json(world: &World, entity: Option<Entity>) -> serde_json::Va
     let visual_synced = world
         .get::<lunco_usd_bevy_scene::UsdSceneProjected>(entity)
         .is_some();
-    let visual_sync_failed = world.get::<lunco_usd_bevy::UsdVisualSyncFailed>(entity);
+    let visual_sync_failed = world.get::<lunco_usd_bevy_scene::UsdSceneProjectionFailed>(entity);
     let awaiting_stage = world
-        .get::<lunco_usd_bevy::UsdAwaitingStage>(entity)
+        .get::<lunco_usd_bevy_scene::UsdSceneAwaitingStage>(entity)
         .is_some();
     let state = if visual_sync_failed.is_some() {
         "visual_sync_failed"
@@ -409,7 +409,7 @@ fn runtime_binding_json(world: &World, entity: Option<Entity>) -> serde_json::Va
         "entity": entity.to_bits(),
         "visual_synced": visual_synced,
         "visual_mesh_pending": world
-            .get::<lunco_usd_bevy::UsdVisualMeshPending>(entity)
+            .get::<lunco_usd_bevy_scene::UsdSceneGeometryPending>(entity)
             .is_some(),
         "visual_sync_error": visual_sync_failed.map(|error| error.0.clone()),
         "awaiting_stage": awaiting_stage,

@@ -78,7 +78,7 @@ pub struct UsdPrimKind(pub String);
 /// Marker: this camera's **pose is owned by an authored cinematic driver** (a
 /// USD camera path), not by the interactive camera stack.
 ///
-/// Inserted by `lunco_usd_bevy::camera_path::resolve_camera_paths` when a
+/// Inserted by `lunco_usd_bevy_camera::camera_path::resolve_camera_paths` when a
 /// `BasisCurves` path claims a camera, alongside its own `CameraPathDriven`
 /// component. The avatar's camera-mode systems (`freeflight_system`,
 /// `spring_arm_system`, `orbit_system`, …) each write `Transform` on whatever

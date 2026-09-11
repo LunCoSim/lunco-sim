@@ -50,24 +50,18 @@ use lunco_render::{PbrLook, PbrTextures, SurfaceAlpha};
 use openusd::sdf::Path as SdfPath;
 use openusd::sdf::Value;
 
-mod camera;
-pub mod camera_mount;
-pub mod camera_switch;
-pub mod camera_track;
 pub mod dome;
 mod light;
 /// Light and transform ports — the port backend for what `light`/`compose` spawn.
 pub mod scene_ports;
-pub use camera::{read_camera_exposure_ev100, CameraExposureError, UsdCameraPose, UsdSensorCamera};
-pub use camera_switch::SetActiveCamera;
 pub use light::{read_dome_intensity, read_intensity_with_exposure, DomeIntensity, LightReadError};
-pub mod camera_path;
 pub mod lathe;
 pub mod mount;
 pub use light::UsdAuthoredLight;
 use lunco_usd_bevy_core::read::{
-    read_authored_bool_strict, read_primvar_f32_strict, read_primvar_vec3_at,
-    read_primvar_vec3_strict, read_vec3_f64, read_vec3_f64_at,
+    attr_has_time_samples, read_authored_bool_strict, read_primvar_f32_strict,
+    read_primvar_vec3_at, read_primvar_vec3_strict, read_token_at, read_vec3_f64, read_vec3_f64_at,
+    stage_time_codes_per_second,
 };
 #[cfg(test)]
 use lunco_usd_bevy_core::DefaultPrim;
@@ -84,10 +78,12 @@ use lunco_usd_bevy_core::{
 use lunco_usd_bevy_scene::{
     bump_usd_stage_revision, is_preview_only, read_primitive_axis, read_shape_dims,
     read_usd_mesh_indexed, read_usd_mesh_points, read_usd_mesh_topology, scene_root_ancestor,
-    usd_axis_to_quat, ShapeDims, UsdAnimated, UsdPreviewOnly, UsdPrimPath, UsdSceneProjected,
+    usd_axis_to_quat, ShapeDims, UsdAnimated, UsdPreviewOnly, UsdPrimPath, UsdSceneAwaitingStage,
+    UsdSceneGeometryPending, UsdSceneProjected, UsdSceneProjectionFailed, UsdSceneProjectionQueued,
     UsdSceneRoot, UsdStageRevision,
 };
 use lunco_usd_core::UsdDataExt;
+use openusd::schemas::geom::tokens as gtok;
 // The ambient-fill solve. Uniform ambient is spelled as an untextured `DomeLight`
 // and composed as a SUM, so a command that wants to set the composed TOTAL (the
 // inspector's ambient slider) must solve for the one dome it owns. Exported
@@ -111,14 +107,6 @@ pub struct UsdBevyPlugin;
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
 pub struct UsdVisualProjectionSet;
 
-/// The authored camera pose and persistent origin projection are inserted into
-/// BigSpace's propagation pipeline before floating-origin recentering and
-/// high-precision propagation. Keeping these systems as sibling sets of
-/// BigSpace's propagation phases is necessary because
-/// `RecenterLargeTransforms` itself is a member of Bevy's `Propagate` set.
-#[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
-struct CameraPathSet;
-
 impl Plugin for UsdBevyPlugin {
     fn build(&self, app: &mut App) {
         // Failed-asset diagnostic labels load the shared fallback font on the
@@ -129,12 +117,11 @@ impl Plugin for UsdBevyPlugin {
         // settings. Initialise the documented default at this boundary so
         // projectors never invent a separate quality profile.
         app.init_resource::<lunco_render::RenderingQualitySettings>();
-
-        // `SetActiveCamera` (avatar-free camera switch). Registered here so a
-        // static/headless USD world can switch cameras via the command bus/rhai
-        // without pulling in the avatar plugin. The observer is generated +
-        // wired by the `register_commands!` invocation at module scope below.
-        register_all_commands(app);
+        app.add_plugins(lunco_usd_bevy_camera::UsdCameraPlugin)
+            .configure_sets(
+                Update,
+                lunco_usd_bevy_camera::UsdCameraProjectionSet.after(UsdVisualProjectionSet),
+            );
 
         // The mission-time spine provides `WorldTime` (the world animation clock)
         // for `sample_usd_animation`. Guarded so a context that also adds it via
@@ -202,7 +189,6 @@ impl Plugin for UsdBevyPlugin {
             .register_type::<lunco_core::UsdPrimKind>()
             .register_type::<UsdAnimated>()
             .register_type::<UsdResetXformStack>()
-            .register_type::<camera_track::CameraTrack>()
             // The retained NurbsPatch definition + its parametric layer. Registered
             // (not merely derived) because registration is what makes them reachable
             // from a script: `set(id, "UsdLathe.profile.exit_radius", 1.6)` resolves
@@ -214,20 +200,7 @@ impl Plugin for UsdBevyPlugin {
             .register_type::<lathe::LatheProfile>()
             .init_resource::<DiagnosticLabelFont>()
             .init_resource::<DiagnosticLabelConfig>()
-            // Guarantee the viewport substrate exists wherever these camera
-            // systems run: `cycle_active_camera`/`reconcile_scene_viewport`
-            // read `SceneViewport`, so a host that adds this plugin without
-            // lunco-core's `register_core_resources` (e.g. a focused test app)
-            // still has it. Idempotent — a no-op if core already registered it.
-            .init_resource::<lunco_core::SceneViewport>()
-            .init_resource::<lunco_core::SceneMountState>()
             .init_resource::<UsdVisualProjectionSettings>()
-            .init_resource::<lunco_core::TheLocalAvatar>()
-            .init_resource::<camera_switch::ViewportCameraSelection>()
-            .init_resource::<camera_switch::CameraSelectionStatus>()
-            .init_resource::<camera_switch::CameraContractStatus>()
-            .init_resource::<camera_switch::StandalonePresentationState>()
-            .init_resource::<camera_switch::StandalonePresentationSettings>()
             // The live canonical stages are main-thread `NonSend` resources
             // because OpenUSD `Stage` is `!Send`. Initial projection uses each
             // asset's worker-produced `UsdStageProjectionPlan`; this resource
@@ -244,43 +217,6 @@ impl Plugin for UsdBevyPlugin {
             .add_observer(on_usd_prim_added)
             .add_observer(on_cell_coord_added)
             .add_observer(light::on_usd_light_added)
-            // Active-camera switch (avatar-free): the `SetActiveCamera` command
-            // + `KeyC` cycle both fire the internal `ActivateCamera` trigger,
-            // which enforces the one-active-window-camera invariant and updates
-            // the persistent BigSpace origin tracker. Works in a static,
-            // input-less world (the command path needs neither).
-            .add_observer(camera_switch::on_activate_camera)
-            .add_observer(camera_switch::on_request_local_avatar_view)
-            // The viewport-camera reconciler: the SINGLE authority over
-            // window-camera `is_active` + `viewport`. Reads `SceneViewport`
-            // (bound camera + visibility + rect, written by the switch and the
-            // workbench) and actuates it. Runs every frame so an explicitly
-            // requested authored camera can be fulfilled after async projection.
-            .add_systems(Update, camera_switch::cycle_active_camera)
-            .configure_sets(
-                PostUpdate,
-                (
-                    lunco_core::SceneViewportSet::Publish,
-                    lunco_core::SceneViewportSet::Reconcile,
-                )
-                    .chain()
-                    .before(bevy::camera::CameraUpdateSystems),
-            )
-            .add_systems(
-                PostUpdate,
-                (
-                    camera_switch::reconcile_scene_viewport
-                        .in_set(lunco_core::SceneViewportSet::Reconcile)
-                        .before(camera_switch::update_camera_origin),
-                    camera_switch::update_camera_selection_status
-                        .after(camera_switch::reconcile_scene_viewport)
-                        .run_if(camera_switch::camera_selection_status_changed),
-                ),
-            )
-            .add_systems(
-                lunco_core::SceneTeardown,
-                camera_switch::reset_camera_selection,
-            )
             // Rover/vehicle-mounted cameras: a nested `def Camera` is realised
             // as a grid-direct follower. `resolve` rigs it once during load; `follow`
             // tracks the mount each frame, before transform propagation.
@@ -320,65 +256,6 @@ impl Plugin for UsdBevyPlugin {
                 Update,
                 retessellate_curve_meshes_on_quality_change
                     .after(retessellate_primitive_meshes_on_quality_change),
-            )
-            .add_systems(Update, camera_mount::resolve_camera_mounts)
-            .add_systems(
-                PostUpdate,
-                camera_mount::follow_mounted_cameras
-                    .before(bevy::transform::TransformSystems::Propagate),
-            )
-            // Camera paths (`UsdGeomBasisCurves` + `lunco:path:camera`). Sampled and
-            // written once per RENDER frame, chained, before transform propagation.
-            //
-            // NOT on the fixed cadence, which is where this used to live. The sample
-            // time comes from `ResolvedDomains`, which `lunco-time` fills in
-            // `PreUpdate` — once per render frame — so a `FixedPostUpdate` driver
-            // re-read the same `t` on multi-step frames and did not run at all on
-            // zero-step ones. The render-rate interpolation that papered over it keyed
-            // off `Time<Fixed>::overstep_fraction()`, a WALL-CLOCK residual, which made
-            // offline recordings differ run to run. A path is an analytic function of
-            // time and needs neither. See `camera_path`'s module doc.
-            //
-            // Ordering against `DomainResolveSet` is not spelled out because it cannot
-            // be: that set lives in `PreUpdate`, and an `.after()` naming a set from
-            // another schedule is silently vacuous — which is exactly how the old
-            // `FixedPostUpdate` registration looked correct while ordering nothing.
-            // `PostUpdate` runs after `PreUpdate` within the frame, so the sample sees
-            // this frame's resolved clock by schedule order.
-            .add_systems(
-                Update,
-                (
-                    camera_path::resolve_camera_paths,
-                    // After resolve, so an aim target that spawns on the very frame
-                    // its path resolves binds immediately rather than one frame late.
-                )
-                    .chain(),
-            )
-            .configure_sets(
-                PostUpdate,
-                CameraPathSet
-                    .in_set(bevy::transform::TransformSystems::Propagate)
-                    .before(big_space::prelude::BigSpaceSystems::RecenterLargeTransforms),
-            )
-            .add_systems(
-                PostUpdate,
-                (
-                    camera_path::drive_camera_paths,
-                    camera_path::apply_camera_paths,
-                )
-                    .chain()
-                    // The path is the complete pose owner. It runs after
-                    // generic interaction interpolation and before BigSpace's
-                    // recentering so the persistent origin tracker sees the
-                    // same cell-local pose in this frame.
-                    .in_set(CameraPathSet),
-            )
-            .add_systems(
-                PostUpdate,
-                camera_switch::update_camera_origin
-                    .in_set(bevy::transform::TransformSystems::Propagate)
-                    .after(CameraPathSet)
-                    .before(big_space::prelude::BigSpaceSystems::RecenterLargeTransforms),
             )
             // HDRI environment: project an authored `DomeLight`'s equirect into
             // a cubemap and bind it to the cameras (`dome.rs`).
@@ -464,47 +341,9 @@ impl Plugin for UsdBevyPlugin {
                         .after(lunco_time::DomainResolveSet),
                 )
                     .chain(),
-            )
-            // Editorial **camera track** (doc 35): a prim's `lunco:activeCamera`
-            // timeSamples drive `SetActiveCamera` cuts over time. Same shape as
-            // the animation funnel — bind to the preview domain, derive the key
-            // plan once (re-derive on hot-reload), then sample the held camera at
-            // `t` and fire a cut on change. Query empty for scenes with no track.
-            .add_systems(
-                Update,
-                (
-                    camera_switch::ensure_standalone_presentation,
-                    camera_track::bind_camera_tracks_to_preview,
-                    camera_track::clear_camera_track_plans_on_stage_reload.run_if(
-                        bevy::ecs::schedule::common_conditions::on_message::<
-                            AssetEvent<UsdStageAsset>,
-                        >,
-                    ),
-                    camera_track::plan_camera_tracks,
-                    camera_switch::validate_authored_camera_contract.run_if(
-                        lunco_core::gate::tracked(
-                            "usd::camera_contract",
-                            camera_switch::camera_contract_inputs_changed,
-                        ),
-                    ),
-                    camera_track::sample_camera_tracks.after(lunco_time::DomainResolveSet),
-                )
-                    .chain()
-                    .after(sync_usd_visuals)
-                    .after(UsdVisualProjectionSet),
             );
     }
 }
-
-// Generates `register_all_commands(app)` (register_type + add_observer for the
-// listed command handlers). Called from `UsdBevyPlugin::build`.
-lunco_core::register_commands!(
-    camera_switch::on_set_active_camera,
-    camera_switch::on_set_user_camera,
-    camera_switch::on_observe_avatar,
-    camera_switch::on_resume_camera_director,
-    camera_path::camera_path_transport,
-);
 
 /// A USD layer's **raw source text**, read through the `AssetServer` without
 /// composition.
@@ -546,16 +385,6 @@ impl AssetLoader for UsdSourceTextLoader {
     }
 }
 
-/// A NURBS visual whose CPU tessellation is running on Bevy's async compute
-/// pool. Structural USD projection and physics may proceed while the mesh is
-/// being built; the marker is removed when the render asset is committed.
-///
-/// This is an explicit loading phase, not a placeholder or a second loader:
-/// the request is extracted from the live canonical stage once, and the task
-/// only evaluates the already-owned [`lathe::NurbsSurface`] definition.
-#[derive(Component, Debug, Clone, Copy)]
-pub struct UsdVisualMeshPending;
-
 /// Main-thread handle for one asynchronous CPU-generated USD mesh build.
 ///
 /// The task owns only Send-safe extracted data. The live OpenUSD stage remains
@@ -583,13 +412,6 @@ pub struct UsdVisualMeshTarget(pub Entity);
 /// second appearance intent without depending on the shader crate.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct UsdVisualShaderBound;
-
-/// The composed USD prim had malformed authored data and was intentionally not
-/// projected into the visual/physics pipeline. Keeping this explicit failure
-/// state prevents an identity/stale-transform retry from looking successful.
-#[derive(Component, Reflect, Debug, Clone, PartialEq, Eq)]
-#[reflect(Component)]
-pub struct UsdVisualSyncFailed(pub String);
 
 /// Marker: this prim's `xformOpOrder` begins with the `!resetXformStack!`
 /// sentinel, so UsdGeomXformable defines its local-to-world as its OWN op stack
@@ -651,24 +473,6 @@ pub struct MaterialPlan {
     /// Shader `inputs:opacity` is animated.
     pub opacity: bool,
 }
-
-/// Marker placed on an entity whose `UsdPrimPath` was added before the
-/// referenced `UsdStageAsset` finished loading. `sync_usd_visuals` moves it
-/// into the bounded projection queue once the asset becomes available.
-#[derive(Component, Debug, Clone, Copy)]
-pub struct UsdAwaitingStage;
-
-/// Marker for a prim whose USD stage is available but whose visual projection
-/// is waiting for the bounded projection pass.
-///
-/// Keeping [`UsdAwaitingStage`] until structural projection is committed makes
-/// the scene transaction complete only after the canonical hierarchy exists.
-/// CPU-generated geometry has its own [`UsdVisualMeshPending`] phase and is
-/// reported separately while it streams. The marker is also the queue
-/// ownership fence; a replacement can discard the entity without a late
-/// observer trying to project it.
-#[derive(Component, Debug, Clone, Copy)]
-pub struct UsdVisualProjectionQueued;
 
 /// Main-thread budget for USD structural projection.
 ///
@@ -839,9 +643,10 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
             error!(
                 "[usd-bevy] stage has invalid convention metadata: {error}; refusing visual projection"
             );
-            commands
-                .entity(entity)
-                .try_insert((UsdVisualSyncFailed(error.to_string()), Visibility::Hidden));
+            commands.entity(entity).try_insert((
+                UsdSceneProjectionFailed(error.to_string()),
+                Visibility::Hidden,
+            ));
             return;
         }
     };
@@ -868,9 +673,10 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                     prim_path.stage_handle.id()
                 );
                 error!("[usd] {message}");
-                commands
-                    .entity(entity)
-                    .try_insert((UsdVisualSyncFailed(message.clone()), Visibility::Hidden));
+                commands.entity(entity).try_insert((
+                    UsdSceneProjectionFailed(message.clone()),
+                    Visibility::Hidden,
+                ));
                 lunco_core::trigger_error(commands, "usd-visual-sync-failed", message);
                 return;
             }
@@ -953,9 +759,10 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                         sdf_path.as_str()
                     );
                     error!("[usd-bevy] {message}");
-                    commands
-                        .entity(entity)
-                        .try_insert((UsdVisualSyncFailed(message.clone()), Visibility::Hidden));
+                    commands.entity(entity).try_insert((
+                        UsdSceneProjectionFailed(message.clone()),
+                        Visibility::Hidden,
+                    ));
                     lunco_core::trigger_error(commands, "usd-visual-sync-failed", message);
                     return;
                 }
@@ -967,9 +774,10 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                 prim_type.as_deref().unwrap_or("untyped prim")
             );
             error!("[usd-bevy] {message}");
-            commands
-                .entity(entity)
-                .try_insert((UsdVisualSyncFailed(message.clone()), Visibility::Hidden));
+            commands.entity(entity).try_insert((
+                UsdSceneProjectionFailed(message.clone()),
+                Visibility::Hidden,
+            ));
             lunco_core::trigger_error(commands, "usd-visual-sync-failed", message);
             return;
         }
@@ -1011,7 +819,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
         // an authored preview camera here would register a live SceneCamera
         // and let the avatar arbiter switch the main window to it on reload.
         if !preview_only {
-            camera::instantiate_camera_prim(
+            lunco_usd_bevy_camera::camera::instantiate_camera_prim(
                 reader,
                 &sdf_path,
                 prim_type.as_deref(),
@@ -1186,7 +994,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                             stage_generation,
                             profile: quality,
                         },
-                        UsdVisualMeshPending,
+                        UsdSceneGeometryPending,
                     ));
                     mesh_pending = true;
                     if let Some(l) = lathe_params {
@@ -1235,7 +1043,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                             stage_generation,
                             profile: quality,
                         },
-                        UsdVisualMeshPending,
+                        UsdSceneGeometryPending,
                     ));
                     mesh_pending = true;
                     None
@@ -1253,7 +1061,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                 .remove::<UsdPrimitiveMesh>()
                 .remove::<UsdCurveMesh>()
                 .remove::<PendingUsdMesh>()
-                .remove::<UsdVisualMeshPending>();
+                .remove::<UsdSceneGeometryPending>();
         }
 
         // Author the PBR appearance intent (`PbrLook`) with the USD
@@ -1479,9 +1287,10 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                     sdf_path.as_str(),
                     error
                 );
-                commands
-                    .entity(entity)
-                    .try_insert((UsdVisualSyncFailed(error.to_string()), Visibility::Hidden));
+                commands.entity(entity).try_insert((
+                    UsdSceneProjectionFailed(error.to_string()),
+                    Visibility::Hidden,
+                ));
                 return;
             }
         };
@@ -1592,10 +1401,10 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
         // camera track (doc 35): its keys drive `SetActiveCamera` cuts over time.
         // `bind_camera_tracks_to_preview` then binds it to the animation-preview
         // domain so the transport scrubs the cuts.
-        if camera_track::prim_is_camera_track(reader, &sdf_path) {
+        if lunco_usd_bevy_camera::camera_track::prim_is_camera_track(reader, &sdf_path) {
             commands
                 .entity(entity)
-                .try_insert(camera_track::CameraTrack);
+                .try_insert(lunco_usd_bevy_camera::camera_track::CameraTrack);
         }
 
         // Commit the direct-child portion of the hierarchy plan prepared by
@@ -1703,9 +1512,10 @@ fn commit_usd_children<R: UsdRead>(
                     child_path.as_str(),
                     error
                 );
-                commands
-                    .entity(parent)
-                    .try_insert((UsdVisualSyncFailed(error.to_string()), Visibility::Hidden));
+                commands.entity(parent).try_insert((
+                    UsdSceneProjectionFailed(error.to_string()),
+                    Visibility::Hidden,
+                ));
                 return;
             }
         };
@@ -1721,8 +1531,8 @@ fn commit_usd_children<R: UsdRead>(
             Visibility::Visible,
             InheritedVisibility::VISIBLE,
             ViewVisibility::default(),
-            UsdAwaitingStage,
-            UsdVisualProjectionQueued,
+            UsdSceneAwaitingStage,
+            UsdSceneProjectionQueued,
         );
         let is_low_precision_root_target = is_high_precision_parent && !is_grid_entity;
         let child_entity = match child_member {
@@ -1841,7 +1651,7 @@ fn scene_mount_entity_is_live(world: &World, entity: Entity) -> bool {
 
 /// Observer: fires the moment a new `UsdPrimPath` is added to an entity.
 /// If the referenced `UsdStageAsset` is already loaded, the prim is queued for
-/// bounded projection. Otherwise the entity is tagged `UsdAwaitingStage` and
+/// bounded projection. Otherwise the entity is tagged `UsdSceneAwaitingStage` and
 /// waits for `sync_usd_visuals` to move it once the asset becomes ready.
 ///
 /// This is the **happy path** in steady state — once a scene is loaded,
@@ -1850,7 +1660,13 @@ fn scene_mount_entity_is_live(world: &World, entity: Entity) -> bool {
 /// is dormant when no prim is waiting.
 fn on_usd_prim_added(
     trigger: On<Add, UsdPrimPath>,
-    q: Query<&UsdPrimPath, (Without<UsdSceneProjected>, Without<UsdVisualSyncFailed>)>,
+    q: Query<
+        &UsdPrimPath,
+        (
+            Without<UsdSceneProjected>,
+            Without<UsdSceneProjectionFailed>,
+        ),
+    >,
     mut commands: Commands,
     stages: Res<Assets<UsdStageAsset>>,
 ) {
@@ -1860,7 +1676,7 @@ fn on_usd_prim_added(
     };
 
     if stages.get(&prim_path.stage_handle).is_none() {
-        commands.entity(entity).try_insert(UsdAwaitingStage);
+        commands.entity(entity).try_insert(UsdSceneAwaitingStage);
         return;
     }
 
@@ -1872,7 +1688,7 @@ fn on_usd_prim_added(
     // scene children and runtime-added prims.
     commands
         .entity(entity)
-        .try_insert((UsdAwaitingStage, UsdVisualProjectionQueued));
+        .try_insert((UsdSceneAwaitingStage, UsdSceneProjectionQueued));
 }
 
 /// Observer: fires when `CellCoord` is added to an entity.
@@ -1905,7 +1721,7 @@ fn on_cell_coord_added(
     }
 }
 
-/// Moves the `UsdAwaitingStage` queue into bounded visual projection when a
+/// Moves the `UsdSceneAwaitingStage` queue into bounded visual projection when a
 /// stage finishes loading. Each matching entity remains marked as awaiting
 /// until `process_queued_usd_visuals` commits it.
 pub fn sync_usd_visuals(
@@ -1913,10 +1729,10 @@ pub fn sync_usd_visuals(
     q: Query<
         (Entity, &UsdPrimPath),
         (
-            With<UsdAwaitingStage>,
-            Without<UsdVisualProjectionQueued>,
+            With<UsdSceneAwaitingStage>,
+            Without<UsdSceneProjectionQueued>,
             Without<UsdSceneProjected>,
-            Without<UsdVisualSyncFailed>,
+            Without<UsdSceneProjectionFailed>,
         ),
     >,
     q_child_of: Query<&ChildOf>,
@@ -1961,13 +1777,11 @@ pub fn sync_usd_visuals(
         // Keep the stage marker until the bounded projection pass commits the
         // prim. This is what prevents the scene transaction from reporting
         // success while descendants are still waiting for a frame.
-        commands
-            .entity(entity)
-            .try_insert(UsdVisualProjectionQueued);
+        commands.entity(entity).try_insert(UsdSceneProjectionQueued);
     }
 }
 
-fn any_queued_usd_visuals(q: Query<(), With<UsdVisualProjectionQueued>>) -> bool {
+fn any_queued_usd_visuals(q: Query<(), With<UsdSceneProjectionQueued>>) -> bool {
     !q.is_empty()
 }
 
@@ -1996,9 +1810,9 @@ pub fn process_queued_usd_visuals(
             Option<&UsdInstanceProjection>,
         ),
         (
-            With<UsdVisualProjectionQueued>,
+            With<UsdSceneProjectionQueued>,
             Without<UsdSceneProjected>,
-            Without<UsdVisualSyncFailed>,
+            Without<UsdSceneProjectionFailed>,
             Without<PendingUsdMesh>,
         ),
     >,
@@ -2067,8 +1881,8 @@ pub fn process_queued_usd_visuals(
 
         commands
             .entity(entity)
-            .try_remove::<UsdVisualProjectionQueued>()
-            .try_remove::<UsdAwaitingStage>();
+            .try_remove::<UsdSceneProjectionQueued>()
+            .try_remove::<UsdSceneAwaitingStage>();
         let is_high_precision_parent = q_high_precision.contains(entity)
             || q_child_of
                 .get(entity)
@@ -2150,8 +1964,8 @@ fn poll_pending_usd_meshes(
             commands
                 .entity(entity)
                 .try_remove::<PendingUsdMesh>()
-                .try_remove::<UsdVisualMeshPending>()
-                .try_insert(UsdVisualProjectionQueued);
+                .try_remove::<UsdSceneGeometryPending>()
+                .try_insert(UsdSceneProjectionQueued);
             continue;
         }
 
@@ -2166,7 +1980,7 @@ fn poll_pending_usd_meshes(
             commands
                 .entity(entity)
                 .try_remove::<PendingUsdMesh>()
-                .try_remove::<UsdVisualMeshPending>()
+                .try_remove::<UsdSceneGeometryPending>()
                 .try_remove::<UsdPrimitiveMesh>()
                 .try_remove::<UsdCurveMesh>()
                 .try_remove::<lathe::NurbsSurface>()
@@ -2182,7 +1996,7 @@ fn poll_pending_usd_meshes(
         commands
             .entity(entity)
             .try_remove::<PendingUsdMesh>()
-            .try_remove::<UsdVisualMeshPending>();
+            .try_remove::<UsdSceneGeometryPending>();
     }
 }
 
@@ -2195,10 +2009,10 @@ fn retry_awaiting_usd_visuals_after_quality_change(
     q: Query<
         (Entity, &UsdPrimPath),
         (
-            With<UsdAwaitingStage>,
-            Without<UsdVisualProjectionQueued>,
+            With<UsdSceneAwaitingStage>,
+            Without<UsdSceneProjectionQueued>,
             Without<UsdSceneProjected>,
-            Without<UsdVisualSyncFailed>,
+            Without<UsdSceneProjectionFailed>,
         ),
     >,
     q_child_of: Query<&ChildOf>,
@@ -2234,9 +2048,7 @@ fn retry_awaiting_usd_visuals_after_quality_change(
 
         // Quality changes only release the queue. The bounded projection pass
         // remains the sole owner of USD reads and mesh/material generation.
-        commands
-            .entity(entity)
-            .try_insert(UsdVisualProjectionQueued);
+        commands.entity(entity).try_insert(UsdSceneProjectionQueued);
     }
 }
 
@@ -2252,7 +2064,7 @@ pub struct FailedSceneLoad {
 
 /// Makes a failed stage load TERMINAL for the prims parked on it.
 ///
-/// [`sync_usd_visuals`] drains `UsdAwaitingStage` on `LoadedWithDependencies`,
+/// [`sync_usd_visuals`] drains `UsdSceneAwaitingStage` on `LoadedWithDependencies`,
 /// which is the only outcome it models. A stage that fails to load never emits
 /// that event, so this boundary records the failure and closes the parked
 /// entities explicitly. The scene transaction can then publish its terminal
@@ -2265,7 +2077,7 @@ pub struct FailedSceneLoad {
 /// parked entities have been reclaimed.
 fn fail_awaiting_stage_prims(
     mut ev: MessageReader<bevy::asset::AssetLoadFailedEvent<UsdStageAsset>>,
-    q: Query<(Entity, &UsdPrimPath), With<UsdAwaitingStage>>,
+    q: Query<(Entity, &UsdPrimPath), With<UsdSceneAwaitingStage>>,
     mut commands: Commands,
 ) {
     for failure in ev.read() {
@@ -2780,7 +2592,7 @@ fn read_standard_material(
     // frame → it MUST NOT share a content-keyed material (that leaks one material
     // per distinct value, forever). `unshared` = a private material the binder
     // mutates in place.
-    let animated = attr_has_time_samples(reader, sdf_path, "primvars:displayColor")
+    let animated = read::attr_has_time_samples(reader, sdf_path, "primvars:displayColor")
         || attr_has_time_samples(reader, sdf_path, "primvars:displayOpacity")
         || resolve_bound_shader(reader, sdf_path).is_some_and(|shader| {
             ANIMATED_SHADER_INPUTS
@@ -2969,13 +2781,6 @@ pub fn read_rel_target(
     None
 }
 
-/// True iff `attr` on `path` actually carries `timeSamples` (not just a
-/// `default`). The sampler uses this per-channel so it writes **only** animated
-/// channels — a static `xformOp:rotateXYZ` is left exactly as instantiated.
-pub fn attr_has_time_samples(reader: &dyn read::UsdReadObject, path: &SdfPath, attr: &str) -> bool {
-    reader.has_time_samples(path, attr)
-}
-
 /// The xform ops the animation sampler drives, in compose order (T, R, S).
 pub const ANIMATED_XFORM_OPS: [&str; 3] =
     ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"];
@@ -3011,65 +2816,6 @@ pub fn prim_is_animated<R: UsdRead>(reader: &R, path: &SdfPath) -> bool {
             .iter()
             .any(|i| attr_has_time_samples(reader, &shader, i))
     })
-}
-
-/// The stage's `timeCodesPerSecond`, read as stage metadata off the
-/// pseudo-root. USD maps a time code `t` to wall-clock `t / tcps` seconds,
-/// so the samplers multiply their resolved time (seconds) by this to get the
-/// time code to evaluate. Defaults to 24.0 (USD spec) when unauthored or
-/// non-positive — the latter guards a malformed stage from freezing animation.
-pub fn stage_time_codes_per_second(reader: &dyn read::UsdReadObject) -> f64 {
-    // `UsdRead::time_codes_per_second` already defaults to 24 when unauthored;
-    // guard a malformed non-positive opinion (either source) so it can't freeze
-    // animation (division by a zero/negative rate).
-    let tcps = reader.time_codes_per_second();
-    if tcps > 0.0 {
-        tcps
-    } else {
-        24.0
-    }
-}
-
-/// Held-sampled `token`/`string` attribute at time code `time` (USD tokens hold,
-/// never interpolate) — the animated twin of [`UsdRead::text`], reading the same
-/// [`Value::as_str`] coercion at a time code. `None` when the attribute has no
-/// `timeSamples` or the held sample isn't textual. An `asset`-typed channel is
-/// deliberately NOT read here: an asset reference is a different thing from a
-/// token, and no animated channel we author is one.
-pub(crate) fn read_token_at(
-    reader: &dyn read::UsdReadObject,
-    path: &SdfPath,
-    attr: &str,
-    time: f64,
-) -> Option<String> {
-    // Gate on authored `timeSamples` (never fall back to `default`): a token
-    // channel with no samples isn't animated. `attr_value_at` evaluates the
-    // samples — for a non-lerpable token type openusd's Linear interpolation
-    // falls back to Held (the nearest previous sample).
-    if !reader.has_time_samples(path, attr) {
-        return None;
-    }
-    reader
-        .attr_value_at(path, attr, time)?
-        .as_str()
-        .map(str::to_string)
-}
-
-/// Enumerate a token/string channel's authored keys as `(time_code, value)`
-/// pairs, ascending. Reads the raw `timeSamples` key times, then resolves each
-/// held value through [`read_token_at`] — so it doesn't depend on the inner
-/// sample value type. `None`/empty when the attribute carries no token samples.
-/// Used to build the [`camera_track::CameraTrackPlan`] key list once.
-pub(crate) fn read_token_timesamples(
-    reader: &dyn read::UsdReadObject,
-    path: &SdfPath,
-    attr: &str,
-) -> Vec<(f64, String)> {
-    reader
-        .time_sample_times(path, attr)
-        .into_iter()
-        .filter_map(|t| read_token_at(reader, path, attr, t).map(|name| (t, name)))
-        .collect()
 }
 
 /// The authored time-code span `(first, last)` of one attribute's `timeSamples`
@@ -4940,7 +4686,7 @@ fn build_usd_curve_mesh(
     path: &SdfPath,
     quality: lunco_render::RenderQualityProfile,
 ) -> Option<Mesh> {
-    use crate::camera_path::CurveBasis;
+    use lunco_usd_bevy_camera::camera_path::CurveBasis;
     use lunco_usd_geometry::curve_sweep::sweep_tube;
 
     // Canonical-frame points — same conversion the mesh path takes.
@@ -4959,7 +4705,7 @@ fn build_usd_curve_mesh(
         return None;
     }
     // No `widths` ⇒ no surface. Deliberately not defaulted: see the doc above.
-    let widths = match read_curve_real_array(reader, path, "widths") {
+    let widths = match read::read_curve_real_array(reader, path, gtok::A_WIDTHS) {
         Ok(Some(widths)) if !widths.is_empty() => widths,
         Ok(Some(_)) | Ok(None) => return None,
         Err(()) => {
@@ -4991,8 +4737,12 @@ fn build_usd_curve_mesh(
     // `type`/`basis` token pair instead. Both are swept identically once each
     // curve is reduced to a centerline — the only difference is how that
     // centerline is produced.
-    let is_nurbs = reader.type_name(path).as_deref() == Some("NurbsCurves");
-    let counts = match read_curve_int_array(reader, path, "curveVertexCounts") {
+    let is_nurbs = reader.type_name(path).as_deref() == Some(gtok::T_NURBS_CURVES);
+    let counts = match read::read_curve_int_array(
+        reader,
+        path,
+        openusd::schemas::geom::tokens::A_CURVE_VERTEX_COUNTS,
+    ) {
         Ok(Some(counts)) if !counts.is_empty() => counts,
         Ok(Some(_)) | Ok(None) => {
             error!(
@@ -5032,23 +4782,25 @@ fn build_usd_curve_mesh(
     }
 
     let (basis, periodic, orders, all_knots, point_weights) = if is_nurbs {
-        let orders = match read_curve_int_array(reader, path, "order") {
-            Ok(Some(orders)) if !orders.is_empty() => orders,
-            Ok(Some(_)) | Ok(None) => {
-                error!(
-                    "[usd-bevy] {} has no usable authored NurbsCurves order",
-                    path.as_str()
-                );
-                return None;
-            }
-            Err(()) => {
-                error!(
+        let orders =
+            match read::read_curve_int_array(reader, path, openusd::schemas::geom::tokens::A_ORDER)
+            {
+                Ok(Some(orders)) if !orders.is_empty() => orders,
+                Ok(Some(_)) | Ok(None) => {
+                    error!(
+                        "[usd-bevy] {} has no usable authored NurbsCurves order",
+                        path.as_str()
+                    );
+                    return None;
+                }
+                Err(()) => {
+                    error!(
                     "[usd-bevy] {} has authored NurbsCurves order with an unsupported value type",
                     path.as_str()
                 );
-                return None;
-            }
-        };
+                    return None;
+                }
+            };
         if orders.len() != 1 && orders.len() != counts.len() {
             error!(
                 "[usd-bevy] {} has {} NurbsCurves orders for {} curves",
@@ -5058,7 +4810,11 @@ fn build_usd_curve_mesh(
             );
             return None;
         }
-        let all_knots = match read_curve_real_array(reader, path, "knots") {
+        let all_knots = match read::read_curve_real_array(
+            reader,
+            path,
+            openusd::schemas::geom::tokens::A_KNOTS,
+        ) {
             Ok(Some(knots)) if !knots.is_empty() => knots,
             Ok(Some(_)) | Ok(None) | Err(()) => {
                 error!(
@@ -5068,7 +4824,11 @@ fn build_usd_curve_mesh(
                 return None;
             }
         };
-        let point_weights = match read_curve_real_array(reader, path, "pointWeights") {
+        let point_weights = match read::read_curve_real_array(
+            reader,
+            path,
+            openusd::schemas::geom::tokens::A_POINT_WEIGHTS,
+        ) {
             Ok(Some(weights)) if weights.len() == points.len() => weights,
             Ok(Some(_)) => {
                 error!(
@@ -5088,23 +4848,35 @@ fn build_usd_curve_mesh(
         };
         (CurveBasis::Linear, false, orders, all_knots, point_weights)
     } else {
-        let ty = match read_curve_token(reader, path, "type", "cubic", &["linear", "cubic"]) {
+        let ty = match read::read_curve_token(
+            reader,
+            path,
+            openusd::schemas::geom::tokens::A_TYPE,
+            "cubic",
+            &["linear", "cubic"],
+        ) {
             Ok(token) => token,
             Err(()) => return None,
         };
         let basis = if ty == "linear" {
             CurveBasis::Linear
         } else {
-            match read_curve_token(reader, path, "basis", "bezier", &["bezier", "catmullRom"]) {
+            match read::read_curve_token(
+                reader,
+                path,
+                openusd::schemas::geom::tokens::A_BASIS,
+                "bezier",
+                &["bezier", "catmullRom"],
+            ) {
                 Ok(token) if token == "bezier" => CurveBasis::Bezier,
                 Ok(_) => CurveBasis::CatmullRom,
                 Err(()) => return None,
             }
         };
-        let wrap = match read_curve_token(
+        let wrap = match read::read_curve_token(
             reader,
             path,
-            "wrap",
+            openusd::schemas::geom::tokens::A_WRAP,
             "nonperiodic",
             &["nonperiodic", "periodic", "pinned"],
         ) {
@@ -5238,7 +5010,12 @@ fn build_usd_curve_mesh(
             let steps = (n.saturating_sub(1)).max(1) * quality.curve_samples_per_segment;
             let Some(samples) = (0..=steps)
                 .map(|i| {
-                    crate::camera_path::eval_curve(&cvs, basis, periodic, i as f32 / steps as f32)
+                    lunco_usd_bevy_camera::camera_path::eval_curve(
+                        &cvs,
+                        basis,
+                        periodic,
+                        i as f32 / steps as f32,
+                    )
                 })
                 .collect::<Option<Vec<_>>>()
             else {
@@ -5355,10 +5132,10 @@ fn read_patch_surface(
     }
 
     let points = read_usd_mesh_points(reader, path)?;
-    let u_count = lathe::read_required_nurbs_int(reader, path, "uVertexCount")?;
-    let v_count = lathe::read_required_nurbs_int(reader, path, "vVertexCount")?;
-    let u_order = lathe::read_required_nurbs_int(reader, path, "uOrder")?;
-    let v_order = lathe::read_required_nurbs_int(reader, path, "vOrder")?;
+    let u_count = lathe::read_required_nurbs_int(reader, path, gtok::A_U_VERTEX_COUNT)?;
+    let v_count = lathe::read_required_nurbs_int(reader, path, gtok::A_V_VERTEX_COUNT)?;
+    let u_order = lathe::read_required_nurbs_int(reader, path, gtok::A_U_ORDER)?;
+    let v_order = lathe::read_required_nurbs_int(reader, path, gtok::A_V_ORDER)?;
     if u_count < u_order || v_count < v_order {
         error!(
             "[usd-bevy] {} has NurbsPatch order/count mismatch: u {u_count}/{u_order}, v {v_count}/{v_order}",
@@ -5366,7 +5143,7 @@ fn read_patch_surface(
         );
         return None;
     }
-    let u_knots = match read_curve_real_array(reader, path, "uKnots") {
+    let u_knots = match read::read_curve_real_array(reader, path, gtok::A_U_KNOTS) {
         Ok(Some(knots)) if knots.len() == u_count + u_order => knots,
         Ok(Some(_)) | Ok(None) | Err(()) => {
             error!(
@@ -5376,7 +5153,7 @@ fn read_patch_surface(
             return None;
         }
     };
-    let v_knots = match read_curve_real_array(reader, path, "vKnots") {
+    let v_knots = match read::read_curve_real_array(reader, path, gtok::A_V_KNOTS) {
         Ok(Some(knots)) if knots.len() == v_count + v_order => knots,
         Ok(Some(_)) | Ok(None) | Err(()) => {
             error!(
@@ -5386,7 +5163,7 @@ fn read_patch_surface(
             return None;
         }
     };
-    let weights = match read_curve_real_array(reader, path, "pointWeights") {
+    let weights = match read::read_curve_real_array(reader, path, gtok::A_POINT_WEIGHTS) {
         Ok(Some(weights)) if weights.len() == points.len() => weights,
         Ok(Some(_)) => {
             error!(
@@ -5404,7 +5181,7 @@ fn read_patch_surface(
             return None;
         }
     };
-    let orientation = match read_curve_token(
+    let orientation = match read::read_curve_token(
         reader,
         path,
         "orientation",
@@ -5675,7 +5452,7 @@ fn build_usd_nurbs_patch_mesh(
     let trim_loops = if !trim_authored {
         None
     } else {
-        let counts = match read_curve_int_array(reader, path, "trimCurve:counts") {
+        let counts = match read::read_curve_int_array(reader, path, "trimCurve:counts") {
             Ok(Some(counts)) if !counts.is_empty() => counts,
             _ => {
                 error!(
@@ -5685,7 +5462,7 @@ fn build_usd_nurbs_patch_mesh(
                 return None;
             }
         };
-        let orders = match read_curve_int_array(reader, path, "trimCurve:orders") {
+        let orders = match read::read_curve_int_array(reader, path, "trimCurve:orders") {
             Ok(Some(orders)) => orders,
             _ => {
                 error!(
@@ -5695,7 +5472,8 @@ fn build_usd_nurbs_patch_mesh(
                 return None;
             }
         };
-        let vertex_counts = match read_curve_int_array(reader, path, "trimCurve:vertexCounts") {
+        let vertex_counts = match read::read_curve_int_array(reader, path, "trimCurve:vertexCounts")
+        {
             Ok(Some(vertex_counts)) => vertex_counts,
             _ => {
                 error!(
@@ -5705,7 +5483,7 @@ fn build_usd_nurbs_patch_mesh(
                 return None;
             }
         };
-        let tknots = match read_curve_real_array(reader, path, "trimCurve:knots") {
+        let tknots = match read::read_curve_real_array(reader, path, "trimCurve:knots") {
             Ok(Some(tknots)) if !tknots.is_empty() => tknots,
             _ => {
                 error!(
@@ -5723,7 +5501,7 @@ fn build_usd_nurbs_patch_mesh(
             );
             return None;
         }
-        let ranges = match read_double2_array_strict(reader, path, "trimCurve:ranges") {
+        let ranges = match read::read_double2_array_strict(reader, path, "trimCurve:ranges") {
             Ok(Some(ranges)) => ranges,
             Ok(None) => Vec::new(),
             Err(()) => {
@@ -5850,129 +5628,6 @@ fn build_usd_nurbs_patch_mesh(
         mesh.count_vertices()
     );
     Some((mesh, Some((surface, lathe_params))))
-}
-
-/// Read a curve integer array while preserving the distinction between an
-/// omitted optional value and an authored value of the wrong type. Curve
-/// topology is structural USD data; it must never be replaced by a guessed
-/// single-curve layout.
-fn read_curve_int_array(
-    reader: &impl UsdRead,
-    path: &SdfPath,
-    attr: &str,
-) -> Result<Option<Vec<i32>>, ()> {
-    match reader.attr_value(path, attr) {
-        Some(Value::IntVec(values)) => Ok(Some(values)),
-        Some(Value::Int64Vec(values)) => {
-            Ok(Some(values.iter().map(|value| *value as i32).collect()))
-        }
-        Some(_) => Err(()),
-        None if reader.has_authored_attribute(path, attr) => Err(()),
-        None => Ok(None),
-    }
-}
-
-/// Read a curve real array (`float[]` or `double[]`) without turning an
-/// authored type mismatch into an omitted attribute.
-fn read_curve_real_array(
-    reader: &impl UsdRead,
-    path: &SdfPath,
-    attr: &str,
-) -> Result<Option<Vec<f64>>, ()> {
-    match reader.attr_value(path, attr) {
-        Some(Value::DoubleVec(values)) => Ok(Some(values)),
-        Some(Value::FloatVec(values)) => Ok(Some(values.into_iter().map(f64::from).collect())),
-        Some(_) => Err(()),
-        None if reader.has_authored_attribute(path, attr) => Err(()),
-        None => Ok(None),
-    }
-}
-
-/// Read a schema-declared `token[]` array without treating an authored string
-/// array or malformed value as an empty optional list.
-fn read_curve_token_array(
-    reader: &impl UsdRead,
-    path: &SdfPath,
-    attr: &str,
-) -> Result<Option<Vec<String>>, ()> {
-    match reader.attr_value(path, attr) {
-        Some(Value::TokenVec(values)) => Ok(Some(
-            values.into_iter().map(|value| value.to_string()).collect(),
-        )),
-        Some(_) => Err(()),
-        None if reader.has_authored_attribute(path, attr) => Err(()),
-        None => Ok(None),
-    }
-}
-
-/// Read one standard USD token with its schema fallback. An authored token
-/// outside the schema's allowed set is malformed and is rejected, rather than
-/// being interpreted as a different curve basis or wrap mode.
-fn read_curve_token(
-    reader: &impl UsdRead,
-    path: &SdfPath,
-    attr: &str,
-    schema_default: &str,
-    allowed: &[&str],
-) -> Result<String, ()> {
-    match reader.attr_value(path, attr) {
-        Some(Value::Token(value)) => {
-            let value = value.to_string();
-            if allowed.contains(&value.as_str()) {
-                Ok(value)
-            } else {
-                error!(
-                    "[usd-bevy] {} has unsupported {} token `{}`",
-                    path.as_str(),
-                    attr,
-                    value
-                );
-                Err(())
-            }
-        }
-        Some(_) => {
-            error!(
-                "[usd-bevy] {} has authored {} with an unsupported value type",
-                path.as_str(),
-                attr
-            );
-            Err(())
-        }
-        None if reader.has_authored_attribute(path, attr) => {
-            error!(
-                "[usd-bevy] {} has authored {} with an unsupported value type",
-                path.as_str(),
-                attr
-            );
-            Err(())
-        }
-        None => Ok(schema_default.to_string()),
-    }
-}
-
-/// Reads a `double2[]` / `float2[]` array as `Vec<[f64; 2]>`.
-///
-/// Tolerant of authored precision on the same principle as
-/// [`points2`](read::UsdRead::points2), which this deliberately does NOT reuse:
-/// `points2` narrows to `f32` because its consumers are vertex attributes, whereas
-/// `trimCurve:ranges` is a pair of KNOT values. Those are compared against the
-/// `f64` knot vector to decide where each curve's span starts and ends, so
-/// round-tripping them through `f32` can move a span end just past a knot and drop
-/// or duplicate a segment of a trim loop.
-fn read_double2_array_strict(
-    reader: &impl UsdRead,
-    path: &SdfPath,
-    attr: &str,
-) -> Result<Option<Vec<[f64; 2]>>, ()> {
-    match reader.attr_value(path, attr) {
-        Some(Value::Vec2dVec(v)) => Ok(Some(v.iter().map(|p| [p[0], p[1]]).collect())),
-        Some(Value::Vec2fVec(v)) => {
-            Ok(Some(v.iter().map(|p| [p[0] as f64, p[1] as f64]).collect()))
-        }
-        Some(_) => Err(()),
-        None if reader.has_authored_attribute(path, attr) => Err(()),
-        None => Ok(None),
-    }
 }
 
 /// Build a Bevy [`Mesh`] from a native USD `Mesh` prim (UsdGeomMesh):
@@ -7580,7 +7235,7 @@ mod awaiting_stage_failure_tests {
     //!
     //! The regression these guard is the one that made an app unable to load any
     //! scene after a single bad path: `sync_usd_visuals` only ever drains
-    //! `UsdAwaitingStage` on success, so a failed load left its prims parked, and
+    //! `UsdSceneAwaitingStage` on success, so a failed load left its prims parked, and
     //! "a prim is still awaiting this stage" is what keeps `SceneLoadInFlight`
     //! set — which suppresses every subsequent `LoadScene`.
     use super::*;
@@ -7603,7 +7258,7 @@ mod awaiting_stage_failure_tests {
                     stage_handle: handle,
                     path: "/Scene".into(),
                 },
-                UsdAwaitingStage,
+                UsdSceneAwaitingStage,
             ))
             .id()
     }

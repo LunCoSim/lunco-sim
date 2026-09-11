@@ -231,7 +231,7 @@ pub fn ensure_world_root(world: &mut World) -> Entity {
         .id();
 
     // The persistent origin-tracking grid. Its `(CellCoord, Transform)` split
-    // is updated from the active viewport camera by lunco-usd-bevy; on a
+    // is updated from the active viewport camera by lunco-usd-bevy-camera; on a
     // headless server it stays at the world origin. It is a Grid itself because
     // BigSpace validation requires a FloatingOrigin holder to remain a valid
     // grid-frame archetype.

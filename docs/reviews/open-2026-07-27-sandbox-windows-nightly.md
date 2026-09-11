@@ -289,7 +289,7 @@ Two of the three are false positives *by construction*. `crates/lunco-sandbox-ed
                     have a render graph configured …            (also 1278v0, 1335v0, 1750v0)
 ```
 
-Downgraded from yesterday's Medium: this is a one-frame ordering artifact, not a functional fault. `crates/lunco-usd-bevy/src/camera.rs:130` inserts a bare `Camera { is_active: false }` + `SceneCamera` marker, and `lunco-render-bevy` promotes it to `Camera3d` afterwards — confirmed in this very log, where the same entities appear as `Camera3d 1277v0` at `08:36:37.301`. All four then mount cleanly as grid-direct followers. Nothing is broken.
+Downgraded from yesterday's Medium: this is a one-frame ordering artifact, not a functional fault. `crates/lunco-usd-bevy-camera/src/camera.rs:130` inserts a bare `Camera { is_active: false }` + `SceneCamera` marker, and `lunco-render-bevy` promotes it to `Camera3d` afterwards — confirmed in this very log, where the same entities appear as `Camera3d 1277v0` at `08:36:37.301`. All four then mount cleanly as grid-direct followers. Nothing is broken.
 
 It is still four scary WARNs per scene load, in a log where scary WARNs are how real problems get noticed.
 

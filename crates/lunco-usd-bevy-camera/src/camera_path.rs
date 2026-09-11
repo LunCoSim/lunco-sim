@@ -32,40 +32,10 @@
 //! the sim is paused — the same re-parent that runs the sky while paused. Pause is
 //! never a flag here; it is *where the clock hangs*.
 //!
-//! **The path is evaluated once per RENDER frame, on the render frame's own clock.**
+//! **The path is evaluated once per render frame, on its resolved domain time.**
 //! ([`drive_camera_paths`] samples, [`apply_camera_paths`] writes; both `PostUpdate`,
-//! chained.) This is deliberate and was NOT the original design — see below.
-//!
-//! **Why not the fixed cadence.** The curve used to be evaluated in `FixedPostUpdate`
-//! and the render pose interpolated between the two bracketing fixed samples by
-//! `Time<Fixed>::overstep_fraction()`. Two independent defects, both measured:
-//!
-//! 1. **The sample pair was not a fixed-step bracket.** The time a path is evaluated
-//!    at comes from [`ResolvedDomains`], which `advance_and_resolve_domains` fills in
-//!    `PreUpdate` — once per RENDER frame, not per fixed step (`lunco-time`,
-//!    `build_domain_tree`). So on a frame running two fixed steps the driver ran twice
-//!    against the *same* resolved `t` and produced `prev == target` (the camera froze
-//!    for that frame); on a frame running none it did not run at all while the
-//!    smoother kept interpolating a stale pair. Path motion was therefore quantised to
-//!    render-frame boundaries in a way that depended on frame timing. The
-//!    `.after(DomainResolveSet)` ordering on the `FixedPostUpdate` system could not
-//!    help — that set lives in `PreUpdate`, so the constraint was silently inert.
-//!
-//! 2. **`overstep_fraction()` is wall-clock derived.** It is the residual of the fixed
-//!    accumulator, fed from `Time<Virtual>`, which by default derives from
-//!    `Time<Real>`. Two runs of the same scene reach a given recorded frame index with
-//!    different residuals, so the captured camera transform differed between runs —
-//!    offline recording was not reproducible. It only *appeared* reproducible because
-//!    `lunco-workbench`'s recorder pins the frame delta with
-//!    `TimeUpdateStrategy::ManualDuration`, which happens to make the residual
-//!    constant. Nothing stated that coupling and nothing detected its violation.
-//!
-//! A camera path is an **analytic function of time** — there is no integrated state to
-//! advance, so there is nothing a fixed cadence buys it. Sampling it directly at the
-//! render frame's resolved `t` removes both defects at once and deletes the
-//! prev/target bracket entirely: the pose is a pure function of the domain clock, so
-//! it is reproducible by construction rather than by an undocumented invariant held up
-//! by a resource the recorder happens to set.
+//! chained.) A camera path is an analytic function of time, so the pose is a pure
+//! function of the path's `TimeDomain` and is deterministic for a given clock state.
 
 use bevy::math::cubic_splines::{
     CubicBezier, CubicCardinalSpline, CubicGenerator, CyclicCubicGenerator,
@@ -77,6 +47,12 @@ use lunco_core::{on_command, Command};
 use lunco_time::{Clocks, Playback, ResolvedDomains, TimeBinding, TimeDomain, TransportMode};
 use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdRead, UsdStageAsset};
 use lunco_usd_bevy_scene::UsdPrimPath;
+use openusd::schemas::geom::tokens;
+use openusd::sdf::Path as SdfPath;
+
+/// Ordering boundary for the analytic path sample and BigSpace write.
+#[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
+pub struct CameraPathSet;
 
 /// Which standard basis the curve interpolates with (`uniform token basis`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -171,8 +147,7 @@ impl CameraPath {
     }
 
     /// Return the preceding and current aim modes while an authored blend is
-    /// active. The result is a pure function of path time, so it cannot acquire
-    /// the frame-history dependence that caused the old camera interpolation.
+    /// active. The result is a pure function of path time.
     pub fn aim_transition_at(&self, t: f64) -> Option<(AimMode, AimMode, f32)> {
         let duration = self.aim_blend_duration?.max(0.0);
         if duration == 0.0 {
@@ -456,10 +431,12 @@ pub fn resolve_camera_paths(
         };
         let (reader, _generation) = canonical.reader_for(prim.stage_handle.id(), stage_asset);
         let reader = &reader;
-        let Ok(path) = crate::SdfPath::new(prim.path.as_str()) else {
+        let Ok(path) = SdfPath::new(prim.path.as_str()) else {
             continue;
         };
-        if reader.type_name(&path).as_deref() != Some("BasisCurves") {
+        if reader.type_name(&path).as_deref()
+            != Some(openusd::schemas::geom::tokens::T_BASIS_CURVES)
+        {
             // Permanent verdict — retire this prim from the scan. See
             // `NotACameraPath` for why `typeName` is the only safe key.
             commands.entity(entity).try_insert(NotACameraPath);
@@ -487,7 +464,11 @@ pub fn resolve_camera_paths(
         // Absent arrays use the authored whole-path relation, otherwise the
         // semantic tangent default. Authored arrays are read strictly so a type
         // mismatch cannot become an omitted track.
-        let times = match crate::read_curve_real_array(reader, &path, "lunco:path:aim:times") {
+        let times = match lunco_usd_bevy_core::read::read_curve_real_array(
+            reader,
+            &path,
+            "lunco:path:aim:times",
+        ) {
             Ok(Some(times)) => times,
             Ok(None) => Vec::new(),
             Err(()) => {
@@ -498,7 +479,11 @@ pub fn resolve_camera_paths(
                 continue;
             }
         };
-        let modes = match crate::read_curve_token_array(reader, &path, "lunco:path:aim:modes") {
+        let modes = match lunco_usd_bevy_core::read::read_curve_token_array(
+            reader,
+            &path,
+            "lunco:path:aim:modes",
+        ) {
             Ok(Some(modes)) => modes,
             Ok(None) => Vec::new(),
             Err(()) => {
@@ -634,15 +619,22 @@ pub fn resolve_camera_paths(
         // double precision is still a curve, and a strict `point3f[]` read reported
         // it as "no points", which is a misleading diagnostic for a type mismatch.
         let mut points: Vec<Vec3> = reader
-            .points3(&path, "points")
+            .points3(&path, tokens::A_POINTS)
             .into_iter()
             .map(Vec3::from)
             .collect();
         // `curveVertexCounts` partitions `points` into separate curves on one prim.
         // A camera rides ONE curve — the first — so slice it out rather than
         // interpolating across curve boundaries as if the batch were one polyline.
-        if reader.attr_value(&path, "curveVertexCounts").is_some() {
-            let counts = match crate::read_curve_int_array(reader, &path, "curveVertexCounts") {
+        if reader
+            .attr_value(&path, openusd::schemas::geom::tokens::A_CURVE_VERTEX_COUNTS)
+            .is_some()
+        {
+            let counts = match lunco_usd_bevy_core::read::read_curve_int_array(
+                reader,
+                &path,
+                openusd::schemas::geom::tokens::A_CURVE_VERTEX_COUNTS,
+            ) {
                 Ok(Some(counts)) if !counts.is_empty() => counts,
                 Ok(Some(_)) | Ok(None) | Err(()) => {
                     error!(
@@ -698,25 +690,26 @@ pub fn resolve_camera_paths(
             warn!("[camera-path] {} needs at least 2 points", prim.path);
             continue;
         }
-        // Captured before `points` moves into the component below. The log used to
-        // re-read the attribute with a strict `scalar::<Vec<[f32; 3]>>`, so a
-        // `point3d[]` curve — which `points3` reads perfectly well — was reported as
-        // "0 pts" while working correctly. A diagnostic that contradicts the thing it
-        // is diagnosing is worse than no diagnostic.
+        // Capture before `points` moves into the component below for diagnostics.
         let n_points = points.len();
 
-        let curve_type =
-            match crate::read_curve_token(reader, &path, "type", "cubic", &["linear", "cubic"]) {
-                Ok(value) => value,
-                Err(()) => continue,
-            };
+        let curve_type = match lunco_usd_bevy_core::read::read_curve_token(
+            reader,
+            &path,
+            openusd::schemas::geom::tokens::A_TYPE,
+            "cubic",
+            &["linear", "cubic"],
+        ) {
+            Ok(value) => value,
+            Err(()) => continue,
+        };
         let basis = if curve_type == "linear" {
             CurveBasis::Linear
         } else {
-            match crate::read_curve_token(
+            match lunco_usd_bevy_core::read::read_curve_token(
                 reader,
                 &path,
-                "basis",
+                openusd::schemas::geom::tokens::A_BASIS,
                 "bezier",
                 &["bezier", "catmullRom"],
             ) {
@@ -725,10 +718,10 @@ pub fn resolve_camera_paths(
                 Err(()) => continue,
             }
         };
-        let wrap = match crate::read_curve_token(
+        let wrap = match lunco_usd_bevy_core::read::read_curve_token(
             reader,
             &path,
-            "wrap",
+            openusd::schemas::geom::tokens::A_WRAP,
             "nonperiodic",
             &["nonperiodic", "periodic", "pinned"],
         ) {
@@ -796,7 +789,7 @@ pub fn resolve_camera_paths(
         // Pause is WHERE THE CLOCK HANGS, not a flag: "real" keeps the shot
         // running while the sim is paused, "sim" freezes with it (the default —
         // authored motion is part of the scene, doc 19 §11b).
-        let on_wall = match crate::read_curve_token(
+        let on_wall = match lunco_usd_bevy_core::read::read_curve_token(
             reader,
             &path,
             "lunco:path:clock",
@@ -1230,18 +1223,9 @@ pub fn drive_camera_paths(
 
 /// Write each path-driven camera's sampled pose into its `(CellCoord, Transform)`.
 ///
-/// **No interpolation, and deliberately so.** This used to lerp between two fixed-step
-/// samples by `Time<Fixed>::overstep_fraction()`. That fraction is a wall-clock
-/// residual (`Time<Fixed>` ← `Time<Virtual>` ← `Time<Real>`), which made the recorded
-/// transform at a given frame index differ run to run; and the pair it blended was
-/// never actually a fixed-step bracket, because the sample time comes from
-/// `ResolvedDomains`, which is filled once per render frame. See the module doc for
-/// the full measurement.
-///
-/// `drive_camera_paths` now samples the curve at exactly this frame's time, so the
-/// pose is already correct for this instant and there is nothing left to interpolate
-/// toward. Smoothness comes from the curve being continuous in `t` and `t` advancing
-/// every render frame — not from a filter.
+/// The pose is the curve's value at exactly this frame's resolved domain time.
+/// Since the path is analytic, smoothness comes from the curve and the clock
+/// advancing each render frame; no frame-history filter is needed.
 pub fn apply_camera_paths(
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,

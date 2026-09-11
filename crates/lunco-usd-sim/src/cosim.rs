@@ -51,14 +51,19 @@ use lunco_scripting::{
     doc::ScriptedModel, scenario::ScenarioDriver, world_bridge::RhaiScenarioRuntime,
     SceneOwnedScript, ScriptRegistry,
 };
-use lunco_usd_bevy::{UsdAwaitingStage, UsdVisualMeshPending, UsdVisualProjectionQueued};
+use lunco_usd_bevy_camera::camera_mount::MountedCamera;
+#[cfg(test)]
+use lunco_usd_bevy_camera::camera_switch::CameraContractStatus;
 use lunco_usd_bevy_core::read::read_authored_bool_strict;
 use lunco_usd_bevy_core::read::UsdReadObject;
 use lunco_usd_bevy_core::{
     canonical::CanonicalStages, UsdInstanceMember, UsdInstanceProjection, UsdInstanceRoot,
     UsdStageAsset,
 };
-use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneRoot};
+use lunco_usd_bevy_scene::{
+    UsdPrimPath, UsdSceneAwaitingStage, UsdSceneGeometryPending, UsdSceneProjectionQueued,
+    UsdSceneRoot,
+};
 use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::{BTreeSet, HashMap};
 
@@ -359,7 +364,7 @@ struct ValidatedUsdModelicaPortContract {
 ///
 /// The transaction is keyed by stage AssetId (not path string), so the clearing
 /// system can match it against UsdPrimPath::stage_handle.id() on draining
-/// UsdAwaitingStage entities.
+/// `UsdSceneAwaitingStage` entities.
 #[derive(Resource)]
 pub struct SceneLoadInFlight {
     /// Asset-relative path of the in-flight scene.
@@ -478,9 +483,9 @@ fn record_scene_load_terminal_outcome(
     mut outcomes: MessageReader<SceneStageAssetOutcome>,
     in_flight: Option<Res<SceneLoadInFlight>>,
     coordinator: Res<SceneTransitionCoordinator>,
-    q_awaiting: Query<&UsdPrimPath, With<UsdAwaitingStage>>,
-    q_projecting: Query<&UsdPrimPath, With<UsdVisualProjectionQueued>>,
-    q_pending_meshes: Query<&UsdPrimPath, With<UsdVisualMeshPending>>,
+    q_awaiting: Query<&UsdPrimPath, With<UsdSceneAwaitingStage>>,
+    q_projecting: Query<&UsdPrimPath, With<UsdSceneProjectionQueued>>,
+    q_pending_meshes: Query<&UsdPrimPath, With<UsdSceneGeometryPending>>,
     q_lights: Query<&bevy::light::DirectionalLight>,
     mut pending: ResMut<PendingSceneStageOutcome>,
     mut commands: Commands,
@@ -2481,7 +2486,7 @@ fn modelica_models_terminal<'a>(
 /// bodies and connections, so it retains the world hold until the stage is
 /// available.
 fn settle_binding_epoch(
-    awaiting: Query<(), With<lunco_usd_bevy::UsdAwaitingStage>>,
+    awaiting: Query<(), With<UsdSceneAwaitingStage>>,
     joints: Query<(), With<lunco_usd_avian::PendingUsdJoint>>,
     differentials: Query<(), With<crate::PendingDifferential>>,
     // `UsdSourcedCosim` marks the USD projection domain, not a solver.  It is
@@ -4021,7 +4026,7 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
 
     fn execute(&self, world: &World, _params: &serde_json::Value) -> lunco_api::ApiResponse {
         let Some(mut awaiting_query) =
-            QueryState::<&UsdPrimPath, With<UsdAwaitingStage>>::try_new(world)
+            QueryState::<&UsdPrimPath, With<UsdSceneAwaitingStage>>::try_new(world)
         else {
             return lunco_api::ApiResponse::error(
                 lunco_api::ApiErrorCode::InternalError,
@@ -4384,7 +4389,7 @@ impl lunco_api::ApiQueryProvider for SceneCameraAuditProvider {
                 Option<&bevy::camera::Camera>,
                 Option<&bevy::camera::RenderTarget>,
                 Has<SceneCamera>,
-                Has<lunco_usd_bevy::camera_mount::MountedCamera>,
+                Has<MountedCamera>,
                 Has<Avatar>,
                 Has<LocalAvatar>,
             ),
@@ -6358,7 +6363,7 @@ mod tests {
             .init_resource::<SceneTransitionCoordinator>()
             .init_resource::<PendingSceneStageOutcome>()
             .init_resource::<CompletedTransitions>()
-            .insert_resource(lunco_usd_bevy::camera_switch::CameraContractStatus {
+            .insert_resource(CameraContractStatus {
                 required: true,
                 ready: false,
                 errors: vec!["presentation is still being validated".to_owned()],
@@ -6443,8 +6448,8 @@ mod tests {
                     stage_handle: Handle::default(),
                     path: "/World/HeavyMesh".to_owned(),
                 },
-                UsdAwaitingStage,
-                UsdVisualProjectionQueued,
+                UsdSceneAwaitingStage,
+                UsdSceneProjectionQueued,
             ))
             .id();
         let pending_mesh = app
@@ -6454,7 +6459,7 @@ mod tests {
                     stage_handle: Handle::default(),
                     path: "/World/HeavyMeshMesh".to_owned(),
                 },
-                UsdVisualMeshPending,
+                UsdSceneGeometryPending,
             ))
             .id();
         app.insert_resource(SceneLoadInFlight {
@@ -6470,21 +6475,21 @@ mod tests {
 
         app.world_mut()
             .entity_mut(awaiting)
-            .remove::<UsdAwaitingStage>();
+            .remove::<UsdSceneAwaitingStage>();
         app.update();
         assert!(app.world().contains_resource::<SceneLoadInFlight>());
         assert!(app.world().resource::<CompletedTransitions>().0.is_empty());
 
         app.world_mut()
             .entity_mut(awaiting)
-            .remove::<UsdVisualProjectionQueued>();
+            .remove::<UsdSceneProjectionQueued>();
         app.update();
         assert!(app.world().contains_resource::<SceneLoadInFlight>());
         assert!(app.world().resource::<CompletedTransitions>().0.is_empty());
 
         app.world_mut()
             .entity_mut(pending_mesh)
-            .remove::<UsdVisualMeshPending>();
+            .remove::<UsdSceneGeometryPending>();
         app.update();
         assert!(!app.world().contains_resource::<SceneLoadInFlight>());
         assert_eq!(

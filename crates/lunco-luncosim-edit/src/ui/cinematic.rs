@@ -31,7 +31,7 @@ use lunco_doc_bevy::DocumentRegistry;
 use lunco_render::SceneCamera;
 use lunco_time::{ControlAnimation, Playback, TransportMode};
 use lunco_usd::commands::ApplyUsdOp;
-use lunco_usd_bevy::camera_path::{eval_curve, eval_curve_tangent, AimMode, CameraPath};
+use lunco_usd_bevy_camera::camera_path::{eval_curve, eval_curve_tangent, AimMode, CameraPath};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_core::document::UsdDocument;
 use lunco_usd_core::document::{LayerId, UsdOp};

@@ -21,7 +21,7 @@ use bevy_egui::egui;
 use lunco_render::SceneCamera;
 use lunco_settings::SettingsSection;
 use lunco_usd::runtime_persistence::{runtime_persistence_for_twin, RUNTIME_PERSISTENCE_SETTING};
-use lunco_usd_bevy::camera_switch::camera_display_labels;
+use lunco_usd_bevy_camera::camera_switch::camera_display_labels;
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 use lunco_workspace::{SetTwinSetting, TwinClosed, TwinSettingInput, WorkspaceResource};
 use serde::{Deserialize, Serialize};

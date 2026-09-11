@@ -52,12 +52,15 @@ use big_space::prelude::{CellCoord, Grid};
 use lunco_usd_avian::{
     AuthoredInitialVelocity, PendingJointAdmission, SharedTireContact, ShouldBeDynamic,
 };
+use lunco_usd_bevy_camera::camera::{read_camera_exposure_ev100, UsdCameraPose};
 use lunco_usd_bevy_core::read::{read_authored_bool_strict, read_vec3_f64};
 use lunco_usd_bevy_core::{
     canonical::CanonicalStages, resolve_stage_prim_path, UsdInstanceProjection, UsdInstanceRoot,
     UsdStageAsset,
 };
-use lunco_usd_bevy_scene::{instance_key, is_preview_only, UsdPreviewOnly, UsdPrimPath};
+use lunco_usd_bevy_scene::{
+    instance_key, is_preview_only, UsdPreviewOnly, UsdPrimPath, UsdSceneGeometryPending,
+};
 // Appearance + camera **intent** — this crate must never name `MeshMaterial3d`,
 // `StandardMaterial`, `ShaderMaterial` or `Camera3d` (all `bevy_pbr` /
 // `bevy_core_pipeline` → wgpu + naga). `lunco-render-bevy` binds these.
@@ -761,7 +764,7 @@ fn process_usd_sim_prims(
             Option<&PbrLook>,
             Option<&ShaderLook>,
             Option<&UsdInstanceProjection>,
-            Has<lunco_usd_bevy::UsdVisualMeshPending>,
+            Has<UsdSceneGeometryPending>,
             Has<lunco_usd_bevy::UsdVisualShaderBound>,
         ),
         (
@@ -1367,7 +1370,7 @@ fn process_usd_sim_prim_read(
         }
     };
     let avatar_exposure = if is_avatar {
-        match lunco_usd_bevy::read_camera_exposure_ev100(reader, &sdf_path) {
+        match read_camera_exposure_ev100(reader, &sdf_path) {
             Ok(exposure) => exposure,
             Err(_) => {
                 // An invalid authored exposure is a broken camera contract, not
@@ -2068,7 +2071,7 @@ fn process_usd_sim_prim_read(
         // follower must never claim it during an async reload.
         commands
             .entity(entity)
-            .try_insert((lunco_usd_bevy::UsdCameraPose::Avatar, flight_settings));
+            .try_insert((UsdCameraPose::Avatar, flight_settings));
         // Keep the camera in the scene's actual frame owner. The nearest Grid
         // was selected above from the authored parent chain, so this is not a
         // second celestial frame and does not detach the camera from the rover

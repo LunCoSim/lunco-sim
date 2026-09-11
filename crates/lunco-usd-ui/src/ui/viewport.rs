@@ -74,12 +74,12 @@ use lunco_render::{
     scene_camera_look_with_profile, GraphicsCameraDefaults, LightGraphicsDefaults,
     RenderQualityProfile, RenderingQualitySettings,
 };
-use lunco_usd_bevy::{
-    PendingUsdMesh, UsdAwaitingStage, UsdVisualMeshPending, UsdVisualProjectionQueued,
-    UsdVisualSyncFailed,
-};
+use lunco_usd_bevy::PendingUsdMesh;
 use lunco_usd_bevy_core::{is_descendant_or_self, UsdStageAsset};
-use lunco_usd_bevy_scene::{UsdPreviewOnly, UsdPrimPath, UsdSceneProjected, UsdStageRevision};
+use lunco_usd_bevy_scene::{
+    UsdPreviewOnly, UsdPrimPath, UsdSceneAwaitingStage, UsdSceneGeometryPending, UsdSceneProjected,
+    UsdSceneProjectionFailed, UsdSceneProjectionQueued, UsdStageRevision,
+};
 use lunco_workbench::{
     CloseTab, OpenTab, PanelRect, PanelRects, PendingTabCloses, ScenePickGate, SceneTarget,
     WorkbenchAppExt,
@@ -1290,21 +1290,21 @@ fn preview_projection_inputs_changed(
             Changed<UsdPrimPath>,
             Added<UsdSceneProjected>,
             Changed<UsdSceneProjected>,
-            Added<UsdAwaitingStage>,
-            Changed<UsdAwaitingStage>,
-            Added<UsdVisualProjectionQueued>,
-            Changed<UsdVisualProjectionQueued>,
-            Added<UsdVisualMeshPending>,
-            Changed<UsdVisualMeshPending>,
-            Added<UsdVisualSyncFailed>,
-            Changed<UsdVisualSyncFailed>,
+            Added<UsdSceneAwaitingStage>,
+            Changed<UsdSceneAwaitingStage>,
+            Added<UsdSceneProjectionQueued>,
+            Changed<UsdSceneProjectionQueued>,
+            Added<UsdSceneGeometryPending>,
+            Changed<UsdSceneGeometryPending>,
+            Added<UsdSceneProjectionFailed>,
+            Changed<UsdSceneProjectionFailed>,
         )>,
     >,
     mut removed_paths: RemovedComponents<UsdPrimPath>,
-    mut removed_awaiting: RemovedComponents<UsdAwaitingStage>,
-    mut removed_queued: RemovedComponents<UsdVisualProjectionQueued>,
-    mut removed_meshes: RemovedComponents<UsdVisualMeshPending>,
-    mut removed_failures: RemovedComponents<UsdVisualSyncFailed>,
+    mut removed_awaiting: RemovedComponents<UsdSceneAwaitingStage>,
+    mut removed_queued: RemovedComponents<UsdSceneProjectionQueued>,
+    mut removed_meshes: RemovedComponents<UsdSceneGeometryPending>,
+    mut removed_failures: RemovedComponents<UsdSceneProjectionFailed>,
 ) -> bool {
     // `UsdViewportState` also stores camera orbit/focus data. Its change tick
     // must not wake this structural scan when a user merely navigates a view.
@@ -1336,10 +1336,10 @@ fn reconcile_preview_projection_state(
             Entity,
             &UsdPrimPath,
             Has<UsdSceneProjected>,
-            Has<UsdVisualSyncFailed>,
-            Has<UsdAwaitingStage>,
-            Has<UsdVisualProjectionQueued>,
-            Has<UsdVisualMeshPending>,
+            Has<UsdSceneProjectionFailed>,
+            Has<UsdSceneAwaitingStage>,
+            Has<UsdSceneProjectionQueued>,
+            Has<UsdSceneGeometryPending>,
             Has<PendingUsdMesh>,
         ),
         With<UsdPreviewOnly>,
@@ -1348,11 +1348,11 @@ fn reconcile_preview_projection_state(
         Entity,
         &UsdPrimPath,
         Has<UsdSceneProjected>,
-        Has<UsdAwaitingStage>,
-        Has<UsdVisualProjectionQueued>,
-        Has<UsdVisualMeshPending>,
+        Has<UsdSceneAwaitingStage>,
+        Has<UsdSceneProjectionQueued>,
+        Has<UsdSceneGeometryPending>,
         Has<PendingUsdMesh>,
-        Has<UsdVisualSyncFailed>,
+        Has<UsdSceneProjectionFailed>,
     )>,
     parents: Query<&ChildOf>,
 ) {

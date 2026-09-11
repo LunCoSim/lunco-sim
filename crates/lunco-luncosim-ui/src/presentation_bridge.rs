@@ -247,7 +247,7 @@ fn project_env_settings(
 /// ordinary interactive session, where no recorder ever runs; those paths would
 /// otherwise stay held forever. That is now served by an EXPLICIT transport verb,
 /// the `CameraPath` command
-/// ([`camera_path_transport`](lunco_usd_bevy::camera_path::camera_path_transport)),
+/// ([`camera_path_transport`](lunco_usd_bevy_camera::camera_path::camera_path_transport)),
 /// addressed by the path prim's USD path. Still deliberately not a second
 /// *automatic* release: two things racing to start the same shot is the bug this
 /// replaced. One automatic start (the recorder, for capture) and one manual verb
@@ -255,10 +255,10 @@ fn project_env_settings(
 fn start_camera_paths_when_recording_starts(
     recording: Res<lunco_workbench::screenshot::OfflineRecordingState>,
     resolved: Res<lunco_time::ResolvedDomains>,
-    q_paths: Query<&lunco_usd_bevy::camera_path::CameraPath>,
-    q_driven: Query<&lunco_usd_bevy::camera_path::CameraPathDriven>,
+    q_paths: Query<&lunco_usd_bevy_camera::camera_path::CameraPath>,
+    q_driven: Query<&lunco_usd_bevy_camera::camera_path::CameraPathDriven>,
     mut gates: Query<(
-        &lunco_usd_bevy::camera_path::CameraPathGate,
+        &lunco_usd_bevy_camera::camera_path::CameraPathGate,
         &mut lunco_time::TimeDomain,
     )>,
     // Level-trigger until every authored camera path has produced a valid frame.
@@ -304,7 +304,7 @@ fn start_camera_paths_when_recording_starts(
         // already-running gate would mark it changed every frame. The release is
         // idempotent, but do not pay for it on a running shot.
         if domain.scale == 0.0 {
-            lunco_usd_bevy::camera_path::release_camera_path_gate(&mut domain, *parent_t);
+            lunco_usd_bevy_camera::camera_path::release_camera_path_gate(&mut domain, *parent_t);
             info!("[camera-path] recording started — rolling shot from its first frame");
         }
     }
@@ -653,10 +653,10 @@ fn report_terrain_generation_status(
 ///   `LoadScene` until every visual projection phase for that stage has drained.
 ///   This covers the gap BEFORE any prim entity exists, which an entity count
 ///   alone reads as "nothing to wait for".
-/// * `UsdAwaitingStage` entities — prims queued on a stage that has not resolved.
+/// * `UsdSceneAwaitingStage` entities — prims queued on a stage that has not resolved.
 ///   This covers spawns with no `LoadScene` guard behind them (deferred instance
 ///   and reference spawns), which the resource alone would miss.
-/// * `UsdVisualMeshPending` entities — structural projection is complete, but
+/// * `UsdSceneGeometryPending` entities — structural projection is complete, but
 ///   CPU-generated geometry is still being committed from the async mesh pool.
 ///   This is a separate visual-streaming phase, not a second scene load.
 ///
@@ -665,9 +665,9 @@ fn report_terrain_generation_status(
 /// `lunco-workbench`.
 fn report_scene_spawn_status(
     in_flight: Option<Res<lunco_usd_sim::cosim::SceneLoadInFlight>>,
-    awaiting: Query<(), With<lunco_usd_bevy::UsdAwaitingStage>>,
-    projecting: Query<(), With<lunco_usd_bevy::UsdVisualProjectionQueued>>,
-    pending_meshes: Query<(), With<lunco_usd_bevy::UsdVisualMeshPending>>,
+    awaiting: Query<(), With<lunco_usd_bevy_scene::UsdSceneAwaitingStage>>,
+    projecting: Query<(), With<lunco_usd_bevy_scene::UsdSceneProjectionQueued>>,
+    pending_meshes: Query<(), With<lunco_usd_bevy_scene::UsdSceneGeometryPending>>,
     coordinator: Res<lunco_core::SceneTransitionCoordinator>,
     // `Option` for the same reason as the terrain mirror: `--no-ui` is a RUNTIME
     // choice on a binary that still has the `ui` feature compiled in.

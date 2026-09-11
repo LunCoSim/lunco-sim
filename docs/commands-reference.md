@@ -994,7 +994,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  drive each independently. Nothing in the campaign does that yet — noted so
  whoever authors shots next knows they are no longer stuck with one long curve.
 
-- *defined in:* `crates/lunco-usd-bevy/src/camera_path.rs`
+- *defined in:* `crates/lunco-usd-bevy-camera/src/camera_path.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1005,14 +1005,14 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Explicitly show the local avatar camera.
 
-- *defined in:* `crates/lunco-usd-bevy/src/camera_switch.rs`
+- *defined in:* `crates/lunco-usd-bevy-camera/src/camera_switch.rs`
 - *fields:* none — call with `ObserveAvatar` (no params)
 
 #### `ResumeCameraDirector`
 
  Return presentation ownership to the authored camera director.
 
-- *defined in:* `crates/lunco-usd-bevy/src/camera_switch.rs`
+- *defined in:* `crates/lunco-usd-bevy-camera/src/camera_switch.rs`
 - *fields:* none — call with `ResumeCameraDirector` (no params)
 
 #### `SetActiveCamera`
@@ -1023,7 +1023,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  its leaf, so a cutscene can `set_camera("ChaseCam")` to reach
  `/World/Rover/ChaseCam`, or `set_camera("WideShot")` for a scene camera.
 
-- *defined in:* `crates/lunco-usd-bevy/src/camera_switch.rs`
+- *defined in:* `crates/lunco-usd-bevy-camera/src/camera_switch.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1036,7 +1036,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  Unlike [`SetActiveCamera`], this takes ownership from the authored director
  until [`ResumeCameraDirector`] is requested.
 
-- *defined in:* `crates/lunco-usd-bevy/src/camera_switch.rs`
+- *defined in:* `crates/lunco-usd-bevy-camera/src/camera_switch.rs`
 
 | Field | Type | Description |
 |---|---|---|

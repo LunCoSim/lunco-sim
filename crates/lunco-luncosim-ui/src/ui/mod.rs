@@ -9,7 +9,7 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
 use lunco_modelica_ui::{ModelicaUiConfig, ModelicaWorkbenchPlugin};
-use lunco_usd_bevy::camera_switch::{
+use lunco_usd_bevy_camera::camera_switch::{
     CameraSelectionOwner, CameraSelectionStatus, ObserveAvatar, ResumeCameraDirector, SetUserCamera,
 };
 use lunco_workbench::{CurrentSceneName, CurrentScenePath};
@@ -240,10 +240,10 @@ impl Plugin for LunCoSimUiPlugin {
         // one Twin-scoped presentation camera/light for a standalone assembly
         // that has neither authored initial presentation.
         app.world_mut()
-            .resource_mut::<lunco_usd_bevy::camera_switch::CameraContractStatus>()
+            .resource_mut::<lunco_usd_bevy_camera::camera_switch::CameraContractStatus>()
             .required = true;
         app.world_mut()
-            .resource_mut::<lunco_usd_bevy::camera_switch::StandalonePresentationState>()
+            .resource_mut::<lunco_usd_bevy_camera::camera_switch::StandalonePresentationState>()
             .enabled = true;
         app.init_resource::<CameraPickerState>()
             .add_systems(lunco_core::SceneTeardown, reset_camera_picker)
@@ -590,7 +590,7 @@ fn camera_option_list(ui: &mut egui::Ui, state: &CameraSelectionStatus) -> Optio
     }
 
     ui.label("Operator camera");
-    let labels = lunco_usd_bevy::camera_switch::camera_display_labels(&state.cameras);
+    let labels = lunco_usd_bevy_camera::camera_switch::camera_display_labels(&state.cameras);
     let mut selected = None;
     for (name, label) in state.cameras.iter().zip(labels) {
         let active = state.active_name.as_deref() == Some(name.as_str());
@@ -623,7 +623,7 @@ fn camera_picker_content_width(
     max_width: f32,
 ) -> f32 {
     let font = egui::TextStyle::Button.resolve(ui.style());
-    let mut widest = lunco_usd_bevy::camera_switch::camera_display_labels(&state.cameras)
+    let mut widest = lunco_usd_bevy_camera::camera_switch::camera_display_labels(&state.cameras)
         .iter()
         .map(|label| {
             ui.painter()
@@ -799,7 +799,7 @@ fn register_camera_menu(world: &mut World) {
                 ui.colored_label(bevy_egui::egui::Color32::from_rgb(235, 130, 130), error);
             }
             if let Some(contract) =
-                ctx.resource::<lunco_usd_bevy::camera_switch::CameraContractStatus>()
+                ctx.resource::<lunco_usd_bevy_camera::camera_switch::CameraContractStatus>()
             {
                 for error in &contract.errors {
                     ui.colored_label(bevy_egui::egui::Color32::from_rgb(255, 110, 110), error);
@@ -1615,7 +1615,7 @@ mod tests {
     use super::scenario_registry_diagnostic;
     use super::scenario_registry_status_message;
     use super::CameraPickerState;
-    use lunco_usd_bevy::camera_switch::camera_display_labels;
+    use lunco_usd_bevy_camera::camera_switch::camera_display_labels;
 
     #[test]
     fn camera_display_labels_disambiguate_duplicate_leaf_names() {

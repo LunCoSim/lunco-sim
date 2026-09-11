@@ -14,7 +14,7 @@
 //! one authored precision and silently drops a value authored in the other (see
 //! [`real`](UsdRead::real)).
 
-use bevy::log::warn;
+use bevy::log::{error, warn};
 use bevy::math::DQuat;
 use bevy::prelude::Transform;
 use openusd::ar::ResolvedPath;
@@ -804,6 +804,182 @@ pub fn read_vec3_f64_at(
         }
     }
     None
+}
+
+/// Read a USD integer array while preserving the distinction between an
+/// omitted optional value and an authored value of the wrong type.
+///
+/// Curve topology is structural USD data; callers must not replace an
+/// authored type mismatch with a guessed single-curve layout.
+pub fn read_curve_int_array(
+    reader: &impl UsdRead,
+    path: &SdfPath,
+    attr: &str,
+) -> Result<Option<Vec<i32>>, ()> {
+    match reader.attr_value(path, attr) {
+        Some(Value::IntVec(values)) => Ok(Some(values)),
+        Some(Value::Int64Vec(values)) => Ok(Some(
+            values
+                .iter()
+                .map(|value| i32::try_from(*value))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| ())?,
+        )),
+        Some(_) => Err(()),
+        None if reader.has_authored_attribute(path, attr) => Err(()),
+        None => Ok(None),
+    }
+}
+
+/// Read a USD real array (`float[]` or `double[]`) without turning an authored
+/// type mismatch into an omitted optional value.
+pub fn read_curve_real_array(
+    reader: &impl UsdRead,
+    path: &SdfPath,
+    attr: &str,
+) -> Result<Option<Vec<f64>>, ()> {
+    match reader.attr_value(path, attr) {
+        Some(Value::DoubleVec(values)) => Ok(Some(values)),
+        Some(Value::FloatVec(values)) => Ok(Some(values.into_iter().map(f64::from).collect())),
+        Some(_) => Err(()),
+        None if reader.has_authored_attribute(path, attr) => Err(()),
+        None => Ok(None),
+    }
+}
+
+/// Read a schema-declared textual array without treating an authored value of
+/// another type as an empty optional list.
+pub fn read_curve_token_array(
+    reader: &impl UsdRead,
+    path: &SdfPath,
+    attr: &str,
+) -> Result<Option<Vec<String>>, ()> {
+    match reader.attr_value(path, attr) {
+        Some(Value::TokenVec(values)) => Ok(Some(
+            values.into_iter().map(|value| value.to_string()).collect(),
+        )),
+        Some(_) => Err(()),
+        None if reader.has_authored_attribute(path, attr) => Err(()),
+        None => Ok(None),
+    }
+}
+
+/// Read one standard USD token with its schema fallback. An authored token
+/// outside the allowed set is malformed and is rejected rather than
+/// interpreted as a different curve basis or wrap mode.
+pub fn read_curve_token(
+    reader: &impl UsdRead,
+    path: &SdfPath,
+    attr: &str,
+    schema_default: &str,
+    allowed: &[&str],
+) -> Result<String, ()> {
+    match reader.attr_value(path, attr) {
+        Some(Value::Token(value)) => {
+            let value = value.to_string();
+            if allowed.contains(&value.as_str()) {
+                Ok(value)
+            } else {
+                error!(
+                    "[usd-read] {} has unsupported {} token `{}`",
+                    path.as_str(),
+                    attr,
+                    value
+                );
+                Err(())
+            }
+        }
+        Some(_) => {
+            error!(
+                "[usd-read] {} has authored {} with an unsupported value type",
+                path.as_str(),
+                attr
+            );
+            Err(())
+        }
+        None if reader.has_authored_attribute(path, attr) => {
+            error!(
+                "[usd-read] {} has authored {} with an unsupported value type",
+                path.as_str(),
+                attr
+            );
+            Err(())
+        }
+        None => Ok(schema_default.to_string()),
+    }
+}
+
+/// Read a `double2[]` / `float2[]` array as `Vec<[f64; 2]>` without narrowing
+/// knot values through `f32`. This is used for USD trim ranges, where preserving
+/// the authored knot precision determines whether a span is included.
+pub fn read_double2_array_strict(
+    reader: &impl UsdRead,
+    path: &SdfPath,
+    attr: &str,
+) -> Result<Option<Vec<[f64; 2]>>, ()> {
+    match reader.attr_value(path, attr) {
+        Some(Value::Vec2dVec(values)) => Ok(Some(
+            values.iter().map(|value| [value[0], value[1]]).collect(),
+        )),
+        Some(Value::Vec2fVec(values)) => Ok(Some(
+            values
+                .iter()
+                .map(|value| [value[0] as f64, value[1] as f64])
+                .collect(),
+        )),
+        Some(_) => Err(()),
+        None if reader.has_authored_attribute(path, attr) => Err(()),
+        None => Ok(None),
+    }
+}
+
+/// True iff an attribute carries authored USD `timeSamples`, rather than only
+/// a default value. Runtime samplers use this to avoid overwriting static
+/// channels with a repeated default.
+pub fn attr_has_time_samples(reader: &dyn UsdReadObject, path: &SdfPath, attr: &str) -> bool {
+    reader.has_time_samples(path, attr)
+}
+
+/// Read the stage `timeCodesPerSecond` metadata with USD's 24-code default.
+/// A malformed non-positive value is rejected into the same safe semantic
+/// default so an invalid stage cannot freeze a time-domain conversion.
+pub fn stage_time_codes_per_second(reader: &dyn UsdReadObject) -> f64 {
+    let tcps = reader.time_codes_per_second();
+    if tcps > 0.0 {
+        tcps
+    } else {
+        24.0
+    }
+}
+
+pub fn read_token_at(
+    reader: &dyn UsdReadObject,
+    path: &SdfPath,
+    attr: &str,
+    time: f64,
+) -> Option<String> {
+    if !reader.has_time_samples(path, attr) {
+        return None;
+    }
+    reader
+        .attr_value_at(path, attr, time)?
+        .as_str()
+        .map(str::to_string)
+}
+
+/// Enumerate a token/string channel's authored keys as `(time_code, value)`
+/// pairs in ascending time order. The resolved held value is read at each raw
+/// key, so the result is independent of the inner textual value representation.
+pub fn read_token_timesamples(
+    reader: &dyn UsdReadObject,
+    path: &SdfPath,
+    attr: &str,
+) -> Vec<(f64, String)> {
+    reader
+        .time_sample_times(path, attr)
+        .into_iter()
+        .filter_map(|time| read_token_at(reader, path, attr, time).map(|value| (time, value)))
+        .collect()
 }
 
 /// The authored provider schema that can publish runtime-discovered value ports.

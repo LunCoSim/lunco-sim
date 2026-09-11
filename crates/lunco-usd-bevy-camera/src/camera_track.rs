@@ -41,17 +41,20 @@ use crate::camera_switch::{
     resolve_named_camera, ActivateCamera, CameraSelectionOwner, CameraSelectionStatus,
     ViewportCameraSelection,
 };
-use crate::{
-    attr_has_time_samples, read_token_timesamples, stage_time_codes_per_second, CanonicalStages,
-    SdfPath, UsdPrimPath, UsdStageAsset,
+use lunco_usd_bevy_core::canonical::CanonicalStages;
+use lunco_usd_bevy_core::read::{
+    attr_has_time_samples, read_token_timesamples, stage_time_codes_per_second,
 };
+use lunco_usd_bevy_core::UsdStageAsset;
+use lunco_usd_bevy_scene::UsdPrimPath;
+use openusd::sdf::Path as SdfPath;
 
 /// The token channel a camera track keys: which camera is live over time.
 pub const ACTIVE_CAMERA_ATTR: &str = "lunco:activeCamera";
 
 /// True iff `path` authors `lunco:activeCamera` `timeSamples` — i.e. it is a
 /// camera track and its entity should get the [`CameraTrack`] marker at spawn.
-pub fn prim_is_camera_track(reader: &impl crate::UsdRead, path: &SdfPath) -> bool {
+pub fn prim_is_camera_track(reader: &impl lunco_usd_bevy_core::UsdRead, path: &SdfPath) -> bool {
     attr_has_time_samples(reader, path, ACTIVE_CAMERA_ATTR)
 }
 

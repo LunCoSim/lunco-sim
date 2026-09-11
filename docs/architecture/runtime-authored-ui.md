@@ -161,7 +161,7 @@ The native picker uses the measured HUI rectangle only as its anchor; it sizes
 the popup from the widest rendered option, clamps that width to egui's menu and
 viewport limits, and truncates only the display projection when a bound is
 reached. Full USD identities remain the selection and hover data.
-The shared `lunco-usd-bevy::camera_switch::camera_display_labels` policy is
+The shared `lunco-usd-bevy-camera::camera_switch::camera_display_labels` policy is
 used by the exposure, picker, Camera menu, USD prim tree, entity tree, and
 Inspector: unique authored leaves stand alone; duplicate leaves gain the
 nearest owner context and then additional ancestors; generated

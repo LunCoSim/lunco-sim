@@ -1342,7 +1342,7 @@ struct PendingShotStart {
 /// cannot name onto the bus: terrain by `report_terrain_stream_status` (from
 /// `lunco_terrain_surface::TerrainStreamStatus`) and scene by
 /// `report_scene_spawn_status` (from `lunco_usd_sim::cosim::SceneLoadInFlight` +
-/// `UsdAwaitingStage`), plus Modelica participant state. The entries are the SAME
+/// `UsdSceneAwaitingStage`), plus Modelica participant state. The entries are the SAME
 /// consts the publishers push under, not copies of their spelling — see
 /// [`TERRAIN_SOURCE`](lunco_status_core::status_bus::TERRAIN_SOURCE),
 /// [`SCENE_SOURCE`](lunco_status_core::status_bus::SCENE_SOURCE), and

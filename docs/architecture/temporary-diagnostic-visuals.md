@@ -47,7 +47,7 @@ contracts; they are not silently folded into a global visual registry.
 |---|---|---|
 | Target identity | `GlobalEntityId` / resolved USD prim identity in the active Twin | command resolver and `StageView`/ECS lookup |
 | Scene validity | `SceneMountState` and the active scene root | lease admission and snapshot invalidation |
-| Camera selection | `SceneViewport.active_camera`, reconciled by `lunco-usd-bevy::camera_switch` | camera diagnostic snapshot |
+| Camera selection | `SceneViewport.active_camera`, reconciled by `lunco-usd-bevy-camera::camera_switch` | camera diagnostic snapshot |
 | Camera intent | `lunco_render::SceneCamera` plus Bevy `Projection`/`Camera` | camera diagnostic snapshot |
 | Camera render pose | propagated `GlobalTransform` in the render frame | Gizmos draw pass only |
 | Physical frame | `ActivePhysicsFrame`, `GridAnchor`, and BigSpace attachment helpers | target pose conversion; never guessed from camera state |

@@ -9,7 +9,7 @@
 //! - the switch here rebinds the viewport's active camera;
 //! - the workbench sets visibility + rect from its layout perspective.
 //!
-//! This lives in `lunco-usd-bevy` (avatar-free, present in every windowed
+//! This lives in `lunco-usd-bevy-camera` (avatar-free, present in every windowed
 //! binary) so switching works in a static/headless world with no avatar and no
 //! input. Camera selection is an intent-level operation: a [`SceneCamera`] can
 //! be selected before a render host has attached its [`RenderTarget`] (as in a
@@ -991,8 +991,8 @@ pub(crate) struct StandalonePresentationQueries<'w, 's> {
         's,
         Entity,
         Or<(
-            With<crate::UsdAwaitingStage>,
-            With<crate::UsdVisualMeshPending>,
+            With<lunco_usd_bevy_scene::UsdSceneAwaitingStage>,
+            With<lunco_usd_bevy_scene::UsdSceneGeometryPending>,
         )>,
     >,
     bounds: Query<'w, 's, (Entity, &'static Aabb, &'static GlobalTransform)>,
@@ -1471,7 +1471,7 @@ pub(crate) struct CameraContractInputQueries<'w, 's> {
             )>,
         ),
     >,
-    pending_added: Query<'w, 's, (), Added<crate::UsdAwaitingStage>>,
+    pending_added: Query<'w, 's, (), Added<lunco_usd_bevy_scene::UsdSceneAwaitingStage>>,
     cameras: Query<
         'w,
         's,
@@ -1499,7 +1499,7 @@ pub(crate) struct CameraContractInputQueries<'w, 's> {
             )>,
         ),
     >,
-    removed_pending: RemovedComponents<'w, 's, crate::UsdAwaitingStage>,
+    removed_pending: RemovedComponents<'w, 's, lunco_usd_bevy_scene::UsdSceneAwaitingStage>,
     removed_cameras: RemovedComponents<'w, 's, SceneCamera>,
     removed_tracks: RemovedComponents<'w, 's, crate::camera_track::CameraTrack>,
     removed_plans: RemovedComponents<'w, 's, crate::camera_track::CameraTrackPlan>,
@@ -1581,7 +1581,7 @@ pub fn validate_authored_camera_contract(
         Has<lunco_usd_bevy_scene::UsdSceneProjected>,
         With<lunco_usd_bevy_scene::UsdSceneRoot>,
     >,
-    pending_projection: Query<Entity, With<crate::UsdAwaitingStage>>,
+    pending_projection: Query<Entity, With<lunco_usd_bevy_scene::UsdSceneAwaitingStage>>,
     q_scene_root: Query<(), With<lunco_usd_bevy_scene::UsdSceneRoot>>,
     q_child_of: Query<&ChildOf>,
     q_entities: Query<Entity>,
@@ -2177,7 +2177,7 @@ mod tests {
             .id();
         let _ = app
             .world_mut()
-            .spawn((crate::UsdAwaitingStage, ChildOf(root)))
+            .spawn((lunco_usd_bevy_scene::UsdSceneAwaitingStage, ChildOf(root)))
             .id();
         app.world_mut()
             .resource_mut::<lunco_core::SceneMountState>()

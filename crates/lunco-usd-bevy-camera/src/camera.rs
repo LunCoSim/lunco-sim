@@ -34,9 +34,10 @@
 //! follower; ordinary cameras retain their authored USD hierarchy.
 
 use bevy::prelude::*;
+use openusd::schemas::geom::{self, tokens};
 use openusd::sdf::{Path as SdfPath, Value};
 
-use crate::units::StageMetrics;
+use lunco_usd_bevy_core::units::StageMetrics;
 
 /// `UsdGeomCamera` spec defaults (Pixar), so an unauthored attribute matches a
 /// standard ~50 mm full-frame camera rather than Bevy's 45° default FOV.
@@ -83,15 +84,15 @@ pub enum CameraExposureError {
 }
 
 pub fn read_camera_exposure_ev100(
-    reader: &dyn crate::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     path: &SdfPath,
 ) -> Result<Option<f32>, CameraExposureError> {
     let authored = [
-        "exposure:iso",
-        "exposure:time",
-        "exposure:fStop",
-        "exposure:responsivity",
-        "exposure",
+        tokens::A_EXPOSURE_ISO,
+        tokens::A_EXPOSURE_TIME,
+        tokens::A_EXPOSURE_F_STOP,
+        tokens::A_EXPOSURE_RESPONSIVITY,
+        tokens::A_EXPOSURE,
     ]
     .iter()
     .any(|name| reader.has_authored_attribute(path, name));
@@ -102,11 +103,12 @@ pub fn read_camera_exposure_ev100(
         return Ok(None);
     }
 
-    let iso = read_camera_exposure_real(reader, path, "exposure:iso", 100.0, true)?;
-    let time = read_camera_exposure_real(reader, path, "exposure:time", 1.0, true)?;
-    let f_stop = read_camera_exposure_real(reader, path, "exposure:fStop", 1.0, true)?;
-    let responsivity = read_camera_exposure_real(reader, path, "exposure:responsivity", 1.0, true)?;
-    let compensation = read_camera_exposure_real(reader, path, "exposure", 0.0, false)?;
+    let iso = read_camera_exposure_real(reader, path, tokens::A_EXPOSURE_ISO, 100.0, true)?;
+    let time = read_camera_exposure_real(reader, path, tokens::A_EXPOSURE_TIME, 1.0, true)?;
+    let f_stop = read_camera_exposure_real(reader, path, tokens::A_EXPOSURE_F_STOP, 1.0, true)?;
+    let responsivity =
+        read_camera_exposure_real(reader, path, tokens::A_EXPOSURE_RESPONSIVITY, 1.0, true)?;
+    let compensation = read_camera_exposure_real(reader, path, tokens::A_EXPOSURE, 0.0, false)?;
     let ev100 = (f_stop * f_stop / time * (100.0 / iso) / responsivity).log2() - compensation;
     if !ev100.is_finite() {
         error!("[usd-bevy] {path} has an authored camera exposure that produces a non-finite EV");
@@ -116,7 +118,7 @@ pub fn read_camera_exposure_ev100(
 }
 
 fn read_camera_exposure_real(
-    reader: &dyn crate::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     path: &SdfPath,
     name: &str,
     schema_default: f32,
@@ -146,15 +148,15 @@ fn read_camera_exposure_real(
 /// `true`. The render binding later adds an **inactive** Bevy `Camera3d` with a
 /// complete render graph. Called from `instantiate_usd_prim`; the prim's
 /// transform and visibility are applied by the shared path there.
-pub(crate) fn instantiate_camera_prim(
-    reader: &impl crate::UsdRead,
+pub fn instantiate_camera_prim(
+    reader: &impl lunco_usd_bevy_core::UsdRead,
     sdf_path: &SdfPath,
     prim_type: Option<&str>,
     commands: &mut Commands,
     entity: Entity,
     quality: lunco_render::RenderQualityProfile,
 ) -> bool {
-    if prim_type != Some("Camera") {
+    if prim_type != Some(tokens::T_CAMERA) {
         return false;
     }
 
@@ -323,12 +325,12 @@ pub(crate) fn instantiate_camera_prim(
 /// genuinely unauthored; an invalid authored opinion is never converted into a
 /// guessed projection.
 fn read_projection(
-    reader: &dyn crate::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     path: &SdfPath,
 ) -> Option<(Projection, Option<f32>)> {
     // `clippingRange` is a `float2` (accept `double2` authoring too).
     let meters_per_unit = StageMetrics::from_reader(reader).ok()?.meters_per_unit as f32;
-    let clipping_value = reader.attr_value(path, "clippingRange");
+    let clipping_value = reader.attr_value(path, tokens::A_CLIPPING_RANGE);
     let resolved_clipping = clipping_value
         .clone()
         .and_then(|value| value.get::<[f32; 2]>())
@@ -338,7 +340,7 @@ fn read_projection(
         });
     let clipping = match resolved_clipping {
         Some(range) => Some(range),
-        None if reader.has_authored_attribute(path, "clippingRange") => {
+        None if reader.has_authored_attribute(path, tokens::A_CLIPPING_RANGE) => {
             error!(
                 "[usd-bevy] {} has an authored clippingRange with an unsupported value type",
                 path.as_str()
@@ -361,14 +363,8 @@ fn read_projection(
         return None;
     }
 
-    let projection_token = read_camera_token(
-        reader,
-        path,
-        "projection",
-        "perspective",
-        &["perspective", "orthographic"],
-    )?;
-    let is_ortho = projection_token == "orthographic";
+    let projection = read_usd_camera_projection(reader, path)?;
+    let is_ortho = projection == geom::Projection::Orthographic;
 
     if is_ortho {
         // Orthographic apertures are **tenths of scene units** (USD's aperture
@@ -378,13 +374,13 @@ fn read_projection(
         let h_aperture = read_positive_camera_real(
             reader,
             path,
-            "horizontalAperture",
+            tokens::A_HORIZONTAL_APERTURE,
             DEFAULT_HORIZONTAL_APERTURE_MM,
         )?;
         let v_aperture = read_positive_camera_real(
             reader,
             path,
-            "verticalAperture",
+            tokens::A_VERTICAL_APERTURE,
             DEFAULT_VERTICAL_APERTURE_MM,
         )?;
         Some((
@@ -397,18 +393,22 @@ fn read_projection(
             None,
         ))
     } else {
-        let focal =
-            read_positive_camera_real(reader, path, "focalLength", DEFAULT_FOCAL_LENGTH_MM)?;
+        let focal = read_positive_camera_real(
+            reader,
+            path,
+            tokens::A_FOCAL_LENGTH,
+            DEFAULT_FOCAL_LENGTH_MM,
+        )?;
         let v_aperture = read_positive_camera_real(
             reader,
             path,
-            "verticalAperture",
+            tokens::A_VERTICAL_APERTURE,
             DEFAULT_VERTICAL_APERTURE_MM,
         )?;
         let h_aperture = read_positive_camera_real(
             reader,
             path,
-            "horizontalAperture",
+            tokens::A_HORIZONTAL_APERTURE,
             DEFAULT_HORIZONTAL_APERTURE_MM,
         )?;
         // Bevy's `PerspectiveProjection::fov` is the **vertical** field of view.
@@ -426,10 +426,50 @@ fn read_projection(
     }
 }
 
+/// Read the standard USD camera projection token through OpenUSD's enum.
+///
+/// OpenUSD owns the token spelling and legal values; the Bevy adapter only
+/// maps the resulting schema value to Bevy's projection component.
+fn read_usd_camera_projection(
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
+    path: &SdfPath,
+) -> Option<geom::Projection> {
+    match reader.attr_value(path, tokens::A_PROJECTION) {
+        Some(Value::Token(value)) => match geom::Projection::from_token(value) {
+            Some(projection) => Some(projection),
+            None => {
+                error!(
+                    "[usd-bevy] {} has unsupported {} token",
+                    path.as_str(),
+                    tokens::A_PROJECTION
+                );
+                None
+            }
+        },
+        Some(_) => {
+            error!(
+                "[usd-bevy] {} has an authored {} with an unsupported value type",
+                path.as_str(),
+                tokens::A_PROJECTION
+            );
+            None
+        }
+        None if reader.has_authored_attribute(path, tokens::A_PROJECTION) => {
+            error!(
+                "[usd-bevy] {} has an authored {} with an unsupported value type",
+                path.as_str(),
+                tokens::A_PROJECTION
+            );
+            None
+        }
+        None => Some(geom::Projection::default()),
+    }
+}
+
 /// Read a positive USD camera scalar without mistaking an invalid authored
 /// opinion for an omitted schema default.
 fn read_positive_camera_real(
-    reader: &dyn crate::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     path: &SdfPath,
     name: &str,
     schema_default: f32,
@@ -461,7 +501,7 @@ fn read_positive_camera_real(
 /// data. Custom camera-role tokens are control-plane data, so falling through to
 /// another role would create a second pose/viewport owner by accident.
 fn read_camera_token(
-    reader: &dyn crate::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     path: &SdfPath,
     name: &str,
     schema_default: &str,
@@ -506,7 +546,7 @@ fn read_camera_token(
 /// `false`. The schema fallback remains available only when the attribute is
 /// genuinely omitted.
 fn read_camera_bool(
-    reader: &impl crate::UsdRead,
+    reader: &impl lunco_usd_bevy_core::UsdRead,
     path: &SdfPath,
     name: &str,
     schema_default: bool,
@@ -600,7 +640,8 @@ mod tests {
             "camera.usda",
             "#usda 1.0\n(\n    metersPerUnit = 0.01\n)\ndef Camera \"Camera\"\n{\n    float2 clippingRange = (10, 1000)\n}\n",
         );
-        let stage = crate::canonical::CanonicalStage::from_recipe(&recipe).expect("build camera");
+        let stage = lunco_usd_bevy_core::canonical::CanonicalStage::from_recipe(&recipe)
+            .expect("build camera");
         let path = SdfPath::new("/Camera").unwrap();
         let (projection, _) = read_projection(&stage.view(), &path).expect("valid camera");
         let Projection::Perspective(perspective) = projection else {
@@ -616,7 +657,8 @@ mod tests {
             "camera.usda",
             "#usda 1.0\n(\n    metersPerUnit = 0.01\n)\ndef Camera \"Camera\"\n{}\n",
         );
-        let stage = crate::canonical::CanonicalStage::from_recipe(&recipe).expect("build camera");
+        let stage = lunco_usd_bevy_core::canonical::CanonicalStage::from_recipe(&recipe)
+            .expect("build camera");
         let path = SdfPath::new("/Camera").unwrap();
         let (projection, _) = read_projection(&stage.view(), &path).expect("valid camera");
         let Projection::Perspective(perspective) = projection else {
@@ -632,7 +674,8 @@ mod tests {
             "camera.usda",
             "#usda 1.0\ndef Camera \"Camera\"\n{\n    float2 clippingRange = (0, 100)\n}\n",
         );
-        let stage = crate::canonical::CanonicalStage::from_recipe(&recipe).expect("build camera");
+        let stage = lunco_usd_bevy_core::canonical::CanonicalStage::from_recipe(&recipe)
+            .expect("build camera");
         let path = SdfPath::new("/Camera").unwrap();
         assert!(read_projection(&stage.view(), &path).is_none());
     }
@@ -643,7 +686,8 @@ mod tests {
             "camera.usda",
             "#usda 1.0\ndef Camera \"Camera\"\n{\n    float focalLength = 0\n}\n",
         );
-        let stage = crate::canonical::CanonicalStage::from_recipe(&recipe).expect("build camera");
+        let stage = lunco_usd_bevy_core::canonical::CanonicalStage::from_recipe(&recipe)
+            .expect("build camera");
         let path = SdfPath::new("/Camera").unwrap();
         assert!(read_projection(&stage.view(), &path).is_none());
     }
@@ -656,8 +700,8 @@ mod tests {
         ] {
             let source = format!("#usda 1.0\ndef Camera \"Camera\"\n{{\n    {projection}\n}}\n");
             let recipe = lunco_usd_core::StageRecipe::from_source("camera.usda", &source);
-            let stage =
-                crate::canonical::CanonicalStage::from_recipe(&recipe).expect("build camera");
+            let stage = lunco_usd_bevy_core::canonical::CanonicalStage::from_recipe(&recipe)
+                .expect("build camera");
             let path = SdfPath::new("/Camera").unwrap();
             assert!(read_projection(&stage.view(), &path).is_none());
         }
@@ -669,7 +713,8 @@ mod tests {
             "camera.usda",
             "#usda 1.0\ndef Camera \"Camera\"\n{\n}\n",
         );
-        let stage = crate::canonical::CanonicalStage::from_recipe(&recipe).expect("build camera");
+        let stage = lunco_usd_bevy_core::canonical::CanonicalStage::from_recipe(&recipe)
+            .expect("build camera");
         let path = SdfPath::new("/Camera").unwrap();
         assert_eq!(read_camera_exposure_ev100(&stage.view(), &path), Ok(None));
     }
@@ -680,7 +725,8 @@ mod tests {
             "camera.usda",
             "#usda 1.0\ndef Camera \"Camera\"\n{\n    float exposure:iso = 200\n    float exposure = 1\n}\n",
         );
-        let stage = crate::canonical::CanonicalStage::from_recipe(&recipe).expect("build camera");
+        let stage = lunco_usd_bevy_core::canonical::CanonicalStage::from_recipe(&recipe)
+            .expect("build camera");
         let path = SdfPath::new("/Camera").unwrap();
         let ev100 = read_camera_exposure_ev100(&stage.view(), &path)
             .expect("valid exposure")
@@ -694,7 +740,8 @@ mod tests {
             "camera.usda",
             "#usda 1.0\ndef Camera \"Camera\"\n{\n    float exposure:iso = 0\n}\n",
         );
-        let stage = crate::canonical::CanonicalStage::from_recipe(&recipe).expect("build camera");
+        let stage = lunco_usd_bevy_core::canonical::CanonicalStage::from_recipe(&recipe)
+            .expect("build camera");
         let path = SdfPath::new("/Camera").unwrap();
         assert_eq!(
             read_camera_exposure_ev100(&stage.view(), &path),
@@ -708,7 +755,8 @@ mod tests {
             "camera.usda",
             "#usda 1.0\ndef Camera \"Camera\"\n{\n    string exposure:iso = \"film\"\n}\n",
         );
-        let stage = crate::canonical::CanonicalStage::from_recipe(&recipe).expect("build camera");
+        let stage = lunco_usd_bevy_core::canonical::CanonicalStage::from_recipe(&recipe)
+            .expect("build camera");
         let path = SdfPath::new("/Camera").unwrap();
         assert_eq!(
             read_camera_exposure_ev100(&stage.view(), &path),
