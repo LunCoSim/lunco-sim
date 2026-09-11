@@ -301,8 +301,6 @@ rumoca-eval-solve  = { git = "https://github.com/LunCoSim/rumoca", branch = "mai
 rumoca-tool-fmt    = { git = "https://github.com/LunCoSim/rumoca", branch = "main" }
 rumoca-tool-lint   = { git = "https://github.com/LunCoSim/rumoca", branch = "main" }
 
-catppuccin-egui = "5.7.0"
-
 # Centralised here so version drift across crates is visible in one
 # place. Each crate opts in via `dep = { workspace = true }`.
 serde = { version = "1.0", features = ["derive"] }
