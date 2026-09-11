@@ -1799,6 +1799,32 @@ mod tests {
     }
 
     #[test]
+    fn terminal_runtime_fault_pauses_physics_until_cleared() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        world.insert_resource(PhysicsHolds::default());
+        world.insert_resource(Time::<Physics>::default());
+        world.insert_resource(Time::<Virtual>::default());
+
+        let mut faults = lunco_core::RuntimeFaults::default();
+        faults.raise("physics-body-escaped", None, "rover", "out of bounds");
+        world.insert_resource(faults);
+        world
+            .resource_mut::<Time<Physics>>()
+            .advance_by(Duration::from_millis(16));
+
+        world.run_system_once(apply_physics_holds).unwrap();
+        assert!(world.resource::<Time<Physics>>().is_paused());
+        assert_eq!(world.resource::<Time<Physics>>().delta(), Duration::ZERO);
+        assert!(!world.resource::<Time<Virtual>>().is_paused());
+
+        world.resource_mut::<lunco_core::RuntimeFaults>().clear();
+        world.run_system_once(apply_physics_holds).unwrap();
+        assert!(!world.resource::<Time<Physics>>().is_paused());
+    }
+
+    #[test]
     fn transport_pause_reaches_physics_before_the_solver_boundary() {
         use bevy::ecs::system::RunSystemOnce;
 

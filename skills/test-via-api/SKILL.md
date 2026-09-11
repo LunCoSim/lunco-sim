@@ -72,6 +72,23 @@ terminal simulation fault. This distinction keeps query-input validation from
 masking an engine-state failure and avoids duplicating guards in sensors,
 terrain, and vehicle callers.
 
+For terminal runtime-fault recovery, verify the two owners separately and then
+the lifecycle seam. `RuntimeFaults` must pause `Time<Physics>` with a zero delta
+while leaving `Time<Virtual>` available for diagnostics and teardown. The bad
+scene is not repaired or resumed. `SceneTeardown` clears only the outgoing
+scene's terminal fault and `PhysicsHolds::SAFETY_FAILURE`; the physics owner
+also resets scene-owned holds, deliberate-step debt, and the physics clock
+before replacement admission. The focused regression names are
+`terminal_runtime_fault_pauses_physics_until_cleared` in `lunco-physics` and
+`fault_then_scene_reload_can_admit_a_replacement_runtime` in `lunco-usd-sim`.
+
+The multi-process scene-test runner cannot prove same-process replacement: its
+expected terminal-fault process exits when the authored verdict is observed.
+Use a lifecycle test or a live API session that explicitly submits teardown,
+loads the replacement, and checks the new scene's admission/status. Do not add
+an automatic repair, retry, process restart, or fault-clearing fallback to make
+the invalid scene continue.
+
 For a one-shot assertion that needs the currently loaded USD stage, use
 `./scripts/api/run_rhai_test.sh <port> <test.rhai> [probe-prim]`. It prepends
 the test libraries and delegates to the native `luncosim rhai --stdout` client,

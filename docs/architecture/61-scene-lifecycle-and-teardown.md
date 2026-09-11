@@ -170,6 +170,16 @@ clears both in `SceneTeardown` before the replacement scene integrates. A bad
 scene therefore stops safely, but cannot become a process-wide load lock; there
 is no restart-process fallback or mutation-rejection shim in the scene commands.
 
+The safety sequence is intentionally one-way within a scene: a terminal fault
+pauses the physics clock with a zero delta, while the virtual clock remains
+available for diagnostics and lifecycle commands. The invalid scene is not
+repaired or resumed. `SceneTeardown` clears the fault and its safety hold, and
+the physics owner separately resets scene-owned holds, deliberate-step debt, and
+the physics clock before the replacement is admitted. This is recovery of the
+session boundary, not recovery of invalid runtime state. The contract is covered
+by `lunco-physics::terminal_runtime_fault_pauses_physics_until_cleared` and
+`lunco-usd-sim::fault_then_scene_reload_can_admit_a_replacement_runtime`.
+
 Possession claims follow the same identity boundary. `SessionRegistry` is keyed
 by stable `GlobalEntityId` values, so `lunco-avatar` clears claims for outgoing
 `UsdPrimPath` entities during `SceneTeardown`, before deferred despawn. The
