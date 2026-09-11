@@ -792,6 +792,7 @@ impl Plugin for SceneEditUiPlugin {
         app.add_observer(inspector::on_inspector_component_edit)
             .add_observer(inspector::on_projection_edit_requested)
             .add_observer(inspector::on_usd_attribute_edit_requested)
+            .add_observer(inspector::on_usd_attribute_batch_edit_requested)
             .add_observer(inspector::on_usd_variant_edit_requested)
             .add_observer(inspector::on_mount_snap_requested)
             .add_observer(inspector::on_mount_detach_requested)
@@ -846,6 +847,7 @@ impl Plugin for SceneEditUiPlugin {
         // the composed stage on every run, so it is gated on its three inputs
         // (`usd_selection_view_changed`) rather than run every frame.
         app.init_resource::<usd_params::UsdParamView>();
+        app.init_resource::<usd_params::UsdParamDrafts>();
         app.add_view_model(
             usd_params::produce_usd_param_view,
             usd_selection_view_changed,

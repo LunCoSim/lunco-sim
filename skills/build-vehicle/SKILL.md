@@ -27,44 +27,18 @@ For script-authored assembly edits, the dynamically reloadable
 `assets/scripting/tools/assembly_builder.rhai` library provides semantic
 frame/shape construction, placement, Cube and composed collision alignment/clearance,
 referenced-part mounting, existing-mount frame realignment, and body/joint
-plans. The
-mission-level `griffin_flip_builder.rhai` library composes those helpers into
-paired Griffin ramp, validated four-wheel FLIP layout, dynamic FLIP asset
-construction, and complete
-lander/adapter/rover manifest recipes. For a new reference assembly, use
-`griffin_mission_assembly_plan` for the maintained lander and four-wheel rover
-instances, wait for their composed children, then use
-`griffin_mission_adapter_plan` for the explicit fixed adapter. Use these plans
-with the existing proposal/journal boundary; keep wheel and suspension
-defaults in the mobility components and supply mission study values
-explicitly. The complete mission path rejects wrong assets, duplicate wheel
-identities, unsafe placement, and occupied identities before authoring, and a
-completed body/joint identity must be updated explicitly rather than rebuilt.
+plans. A referenced assembly uses `referenced_instance_plan` (or its targeted
+form), then applies `select_variants_plan` only after the reference children
+are queryable. Parameter edits use `parameter_plan` and the same typed
+`ApplyUsdOps` boundary as the Editor; the planner is generic and does not know
+vehicle names or paths.
 
-The maintained FLIP reference is
-`assets/vessels/rovers/flip_rover.usda`. It is a thin composition over
-`skid_rover.usda`, so shared mobility and power components remain authoritative;
-the FLIP layer supplies its identity, study envelope, wheel opinions, payload
-deck, sensor mast, and body-mounted solar proxy. Its metadata deliberately
-marks the asset as a study proxy. Do not turn that wrapper into copied geometry
-or claim articulated/as-built behavior that is not authored there.
-
-For a rover assembled from one reusable reference, use
-`assembly_builder::flip_rover_instance_plan` to validate the four explicit
-wheel descendants and author the identity, URI, and pose. Let the referenced
-asset finish composing before applying non-default drivetrain/power/generation
-or thermal choices with `assembly_builder::select_variants_plan`; variant
-selection is a subtree recompose and is intentionally a second reviewed plan.
-The recipe and its validation remain editable Rhai, so changing the vehicle
-authoring policy does not require a Rust-core rebuild.
-
-When the reusable FLIP asset itself must be built from the maintained
-skid-rover reference, use `griffin_flip_builder::flip_rover_asset_plan`, which
-adds the payload deck, sensor mast, and solar proxy through typed Rhai plans.
-After `/SkidRover` is queryable, apply `flip_rover_asset_detail_plan` for the
-explicit FLIP metadata and wheel/solar facts. The production
-`flip_rover_asset_builder` test starts from an empty frame and keeps both
-construction and negative validation in Rhai.
+Mission-specific recipes and study assets belong in the Twin that owns them,
+rather than in the core asset library. A Twin tool may compose these generic
+helpers and supply its own explicit paths and study values, but it must remain
+Rhai-owned and use the proposal/journal boundary. Keep component defaults in
+reusable USD components and author vehicle-specific choices in the Twin
+assembly.
 
 When a vehicle part is already attached and a socket or plug frame moves, use
 `assembly_builder::mount_frame_realignment_plan` with the exact authored paths.
@@ -73,8 +47,7 @@ part and its recorded joint anchor atomically through the review boundary, and
 rejects invalid topology or non-rigid frame data before any USD edit.
 
 Working exemplars, simplest first: `assets/vessels/rovers/skid_rover.usda`
-(4-wheel skid), `assets/vessels/rovers/flip_rover.usda` (dedicated FLIP study
-proxy), `ackermann_rover.usda` (steering), `six_wheel_rover.usda`
+(4-wheel skid), `ackermann_rover.usda` (steering), `six_wheel_rover.usda`
 (per-wheel port wiring + `driveLaw` variant), `six_wheel_independent.usda`
 (fully authored per-wheel mix), `rocker_bogie.usda` (linkage + gear-joint
 differential), `rucheyok/` (Z-forward, Modelica electrical).

@@ -32,10 +32,10 @@ Read the focused contract when implementing one:
   [`author-scenario`](../author-scenario/SKILL.md).
 - Put continuous control equations in Modelica and generic substrate in Rust.
   A missing generic typed USD, physics, projection, or solver capability is a
-  capability report, not permission to add a Griffin-specific Rust path.
+  capability report, not permission to add a model-specific Rust path.
 
 Name the library after its reusable boundary (`assembly_builder`,
-`egress_ramp`, `griffin_requirements`), and name functions by intent:
+`component_requirements`), and name functions by intent:
 `*_plan`, `*_report`, `*_lint`, `*_test`, or `*_query`. Avoid names that encode
 an implementation detail or a temporary failure.
 
@@ -72,6 +72,22 @@ inspect exact target and generation
   -> assembly integration test
   -> save through the document owner
 ```
+
+### Generic parameter edits
+
+Use `assembly_builder::parameter_plan(edit_target, path, parameters)` for a
+vehicle-independent parameter update. Each entry is
+`{ name, type_name, value }`, where `value` is the canonical USD literal. The
+function only validates the exact path and unique typed fields and returns
+`SetAttribute` operations. Submit those operations with
+`assembly_edit::batch` or the proposal/review/commit flow.
+
+The Inspector's Apply action lowers to the same `ApplyUsdOps` boundary. Rhai
+may choose which parameters to expose and validate cross-field relationships,
+but it must not add a second writer, infer targets by name, or encode vehicle
+policy in a reusable core tool. Modelica parameter meaning and lifecycle stay
+with the Modelica declaration/compiler; an instance override remains a USD
+`inputs:` edit.
 
 ## Use an existing tool first
 
