@@ -6,7 +6,7 @@ const DORMANT = "/DormantPreviewNetwork";
 fn on_start(me) {
     this.phase = 0; this.elapsed = 0.0; this.observed = 0.0;
     this.done = false; this.doc = -1; this.fork = -1;
-    this.ids = []; this.checks = []; this.leaked = false;
+    this.ids = []; this.checks = []; this.leaked = false; this.rejection_id = -1;
 }
 fn ready(preview, doc) {
     let generation = assembly_edit::describe(doc).generation;
@@ -64,6 +64,18 @@ fn on_tick(me) {
         this.phase = 2;
         return;
     }
+    if this.phase == 3 && this.rejection_id >= 0 {
+        let result = command_result(this.rejection_id);
+        if result.status == "pending" { return; }
+        this.checks.push(t_true(result.status == "failed" || result.status == "rejected",
+            "a connection to a missing source must be rejected before authoring"));
+        this.checks.push(t_true(result.error.contains("missing prim")
+            || result.error.contains("source"),
+            "the rejected connection must expose its source failure"));
+        this.rejection_id = -1;
+        this.observed = 0.0; this.leaked = false;
+        return;
+    }
     if this.phase == 2 || this.phase == 3 {
         if !ready(15502, this.fork) { return; }
         this.leaked = this.leaked || preview_has_solver();
@@ -77,7 +89,7 @@ fn on_tick(me) {
             let ack = assembly_edit::batch(this.fork, "Invalid preview connection remains inert",
                 [#{ SetConnection: #{ edit_target: "@root@", path: DORMANT + "/Network/Panel",
                     name: "inputs:sun_mount_x", type_name: "float", sources: ["/Absent.outputs:sun_x"] } }], g);
-            this.checks.push(t_true(ack.ok != false, "invalid network fact can be authored for inspection"));
+            this.rejection_id = ack.id;
             this.observed = 0.0; this.leaked = false; this.phase = 3;
             return;
         }

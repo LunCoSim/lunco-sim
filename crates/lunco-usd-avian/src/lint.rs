@@ -40,7 +40,7 @@
 //!   telemetry_declarations: [ #{ path, targets[], target_exists,
 //!                                direct_surface, source_valid } ],
 //!   prims: [ #{ path, type, parent, schemas[], attributes[],
-//!                connected_attributes[], epoch_jd } ],
+//!                connected_attributes[], connections[], epoch_jd } ],
 //! }
 //! ```
 //!
@@ -75,10 +75,11 @@ use std::collections::{HashMap, HashSet};
 use avian3d::prelude::MotorModel;
 use bevy::math::Vec3;
 use lunco_hooks::HookValue as H;
-use lunco_usd_bevy::{program::ProgramGraph, StageView, UsdRead};
+use lunco_usd_bevy::read::has_runtime_port_surface;
+use lunco_usd_bevy::{StageView, UsdRead, program::ProgramGraph};
 use openusd::schemas::physics::tokens as ptok;
 use openusd::sdf::Path as SdfPath;
-use openusd::usd::{compute_included_paths, Collection, PrimPredicate};
+use openusd::usd::{Collection, PrimPredicate, compute_included_paths};
 
 /// The lint domain these facts belong to: hook `lint.usd`, policy
 /// `assets/scripting/policy/lint_usd.rhai`.
@@ -1031,7 +1032,11 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
             ]));
         }
         let schemas = applied_schemas(reader, p);
-        if schemas.is_empty() {
+        let attributes = reader.attr_names(p);
+        let has_connections = attributes
+            .iter()
+            .any(|name| !reader.connections(p, name).is_empty());
+        if schemas.is_empty() && !has_connections {
             continue;
         }
         if schemas.iter().any(|schema| schema == "LunCoProgramAPI") {
@@ -1108,11 +1113,69 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
             ]));
         }
         let parent = p.parent().map(|x| x.to_string()).unwrap_or_default();
-        let attributes = reader.attr_names(p);
         let connected_attributes = attributes
             .iter()
             .filter(|name| !reader.connections(p, name).is_empty())
             .cloned();
+        // Connection provenance is a composed-stage fact.  Rhai policy can
+        // report the exact sink/source and type problem without holding an
+        // OpenUSD stage or rebuilding connection semantics itself.
+        let connections = attributes
+            .iter()
+            .filter_map(|name| {
+                let sources = reader.connections(p, name);
+                if sources.is_empty() {
+                    return None;
+                }
+                let target_type = reader.attr_type_name(p, name).unwrap_or_default();
+                let source_facts = sources
+                    .into_iter()
+                    .map(|source| {
+                        let parsed = SdfPath::new(&source);
+                        let (path_valid, source_prim, source_name) = match parsed {
+                            Ok(path) => match path.split_property() {
+                                Some((prim, name)) => (true, prim, name.to_string()),
+                                None => (false, path, String::new()),
+                            },
+                            Err(_) => (false, SdfPath::abs_root(), String::new()),
+                        };
+                        let prim_exists = path_valid && reader.has_prim(&source_prim);
+                        let property_exists = prim_exists
+                            && reader
+                                .attr_names(&source_prim)
+                                .iter()
+                                .any(|name| name == &source_name);
+                        let runtime_provider =
+                            prim_exists && has_runtime_port_surface(reader, &source_prim);
+                        let runtime_provider_name = prim_exists
+                            .then(|| {
+                                lunco_usd_bevy::read::runtime_port_provider(reader, &source_prim)
+                            })
+                            .flatten()
+                            .unwrap_or_default();
+                        let source_type = if property_exists {
+                            reader.attr_type_name(&source_prim, &source_name)
+                        } else {
+                            None
+                        };
+                        H::map([
+                            ("path", H::str(source)),
+                            ("path_valid", H::Bool(path_valid)),
+                            ("prim_exists", H::Bool(prim_exists)),
+                            ("property_exists", H::Bool(property_exists)),
+                            ("runtime_provider", H::Bool(runtime_provider)),
+                            ("runtime_provider_name", H::str(runtime_provider_name)),
+                            ("type", H::str(source_type.unwrap_or_default())),
+                        ])
+                    })
+                    .collect();
+                Some(H::map([
+                    ("name", H::str(name.clone())),
+                    ("target_type", H::str(target_type)),
+                    ("sources", H::Array(source_facts)),
+                ]))
+            })
+            .collect::<Vec<_>>();
         let epoch_jd = reader
             .value::<f64>(p, "lunco:time:epochJd")
             .map(H::Float)
@@ -1133,6 +1196,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                 "connected_attributes",
                 H::Array(connected_attributes.map(H::str).collect()),
             ),
+            ("connections", H::Array(connections)),
             ("epoch_jd", epoch_jd),
         ]));
     }

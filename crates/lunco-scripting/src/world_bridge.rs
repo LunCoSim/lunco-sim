@@ -58,7 +58,7 @@ fn first_set_failure(id: u64, path: &str) -> bool {
         .insert((id, path.to_string()))
 }
 
-use rhai::{Dynamic, Engine, FnPtr, ImmutableString, Map, NativeCallContext, AST};
+use rhai::{AST, Dynamic, Engine, FnPtr, ImmutableString, Map, NativeCallContext};
 
 use crate::bridge_core::{self, ValueBuilder};
 use crate::doc::ScriptLanguage;
@@ -568,18 +568,24 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
 
     crate::rhai_limits::apply(&mut engine);
 
-    // cmd(name, #{params}) -> #{ id, ok, data, error }. Routes through
+    // cmd(name, #{params}) -> #{ id, ok, status, data, error }. Routes through
     // ApiCommandEvent so it inherits macro-reflected dispatch, GlobalEntityId
-    // resolution, and result recording. The command runs SYNCHRONOUSLY (the
-    // bridge flushes), so `data` carries any command result data the handler returned — a
-    // spawned entity's gid, an allocated name — enabling create-then-manipulate
-    // in one tick. `ok=false` + `error` on a handler error/rejection.
+    // resolution, and result recording. Terminal results carry status
+    // applied/rejected/failed; genuinely deferred work remains pending until
+    // command_result(id) observes the owner's result.
     engine.register_fn("cmd", |name: ImmutableString, params: Map| -> Dynamic {
         bridge_core::cmd(&RhaiBuilder, name.as_str(), map_to_json(params))
     });
     // cmd(name) -> #{...} — convenience for unit/all-defaulted commands.
     engine.register_fn("cmd", |name: ImmutableString| -> Dynamic {
         bridge_core::cmd(&RhaiBuilder, name.as_str(), serde_json::json!({}))
+    });
+
+    // command_result(id) -> #{ id, ok, status, data, error }. A deferred
+    // command is not successful merely because it was accepted; scripts can
+    // check this shared result surface on a later pass.
+    engine.register_fn("command_result", |id: i64| -> Dynamic {
+        bridge_core::command_result(&RhaiBuilder, id as u64)
     });
 
     // to_json(map) -> string — serialize a rhai map to a JSON string. Lets a
@@ -1850,18 +1856,22 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                         // script's id and the prelude's absence of one does no harm.
                         let ast = self.prelude_ast.merge(&ast);
                         let mask = ProgramMask::from_ast(&ast);
-                        let imports_ast =
-                            match build_hoisted_ast(&self.engine, source, &ast, asset_id) {
-                                Ok(ast) => ast,
-                                Err(e) => {
-                                    error!(
+                        let imports_ast = match build_hoisted_ast(
+                            &self.engine,
+                            source,
+                            &ast,
+                            asset_id,
+                        ) {
+                            Ok(ast) => ast,
+                            Err(e) => {
+                                error!(
                                     "[rhai] entity {entity:?} generated import scope failed: {e}"
                                 );
-                                    let d = rhai_diagnostic(e.to_string(), e.position());
-                                    self.compiled.insert(key, CacheEntry::Err(d.clone()));
-                                    return CompileOutcome::Failed(d);
-                                }
-                            };
+                                let d = rhai_diagnostic(e.to_string(), e.position());
+                                self.compiled.insert(key, CacheEntry::Err(d.clone()));
+                                return CompileOutcome::Failed(d);
+                            }
+                        };
                         let task_ast = build_task_ast(&ast, imports_ast.as_ref(), asset_id);
                         let p = Arc::new(CompiledProgram {
                             ast,
@@ -3177,9 +3187,11 @@ mod tests {
         let engine = super::build_world_engine(Default::default());
         let src = "fn on_tick(me) { 1 }";
         let full = super::compile_with_script_consts(&engine, src).unwrap();
-        assert!(super::build_hoisted_ast(&engine, src, &full, None)
-            .unwrap()
-            .is_none());
+        assert!(
+            super::build_hoisted_ast(&engine, src, &full, None)
+                .unwrap()
+                .is_none()
+        );
     }
 
     /// The extractor takes only DEPTH-0 imports, and is not fooled by imports

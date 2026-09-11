@@ -42,16 +42,16 @@ use std::{
 
 use lunco_api::discovery::find_api_command;
 use lunco_api::executor::{
-    authz_target_gid, command_result_json, validate_command_params, ApiCommandEvent,
+    ApiCommandEvent, authz_target_gid, command_result_json, validate_command_params,
 };
 use lunco_api::queries::{ApiQueryRegistry, ApiVisibility};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::ApiResponse;
-use lunco_core::session::{authorize, CommandPolicyRegistry, SessionRbac, SessionRegistry};
+use lunco_core::session::{CommandPolicyRegistry, SessionRbac, SessionRegistry, authorize};
 use lunco_core::{
+    CelestialBody, CommandResults, GlobalEntityId, NavigationCommand, OpId, SECS_PER_TICK,
+    SessionId, Severity, SimTick, SteeringGeometry, TelemetryEvent, TelemetryValue,
     coords::{GridPos, VehicleFrame},
-    CelestialBody, CommandResults, GlobalEntityId, NavigationCommand, OpId, SessionId, Severity,
-    SimTick, SteeringGeometry, TelemetryEvent, TelemetryValue, SECS_PER_TICK,
 };
 
 // ── Native value construction ──────────────────────────────────────────────
@@ -515,9 +515,10 @@ pub fn controller_role(gid: u64) -> Option<String> {
 // ── Verbs: write (cmd) ──────────────────────────────────────────────────────
 
 /// Fire a command by name through `ApiCommandEvent` (the same entry point the
-/// HTTP API / MCP use) and return its `{ id, ok, data?, error? }` result as
-/// JSON. `params` is the JSON the API contract expects. Runs SYNCHRONOUSLY (the
-/// bridge flushes) so `data` carries any command result data the handler returned.
+/// HTTP API / MCP use) and return its `{ id, ok, status, data?, error? }` result
+/// as JSON. `params` is the JSON the API contract expects. The bridge drains a
+/// bounded number of command queues; genuinely asynchronous work returns
+/// `status = "pending"` and can be checked with [`command_result_raw`].
 pub fn cmd_raw(name: &str, mut params: serde_json::Value) -> serde_json::Value {
     let id = OpId::new().0;
     with_world(|world| {
@@ -525,7 +526,7 @@ pub fn cmd_raw(name: &str, mut params: serde_json::Value) -> serde_json::Value {
             .get_resource::<IgnoredScenarioCommands>()
             .is_some_and(|commands| commands.accepts(name))
         {
-            return serde_json::json!({ "id": id, "ok": true });
+            return serde_json::json!({ "id": id, "ok": true, "status": "applied" });
         }
 
         // Rhai is an in-process transport, but it still uses the same public
@@ -543,6 +544,7 @@ pub fn cmd_raw(name: &str, mut params: serde_json::Value) -> serde_json::Value {
                 return serde_json::json!({
                     "id": id,
                     "ok": false,
+                    "status": "rejected",
                     "error": error.message(name),
                 });
             }
@@ -551,13 +553,19 @@ pub fn cmd_raw(name: &str, mut params: serde_json::Value) -> serde_json::Value {
             return serde_json::json!({
                 "id": id,
                 "ok": false,
+                "status": "failed",
                 "error": "API entity registry is unavailable",
             });
         };
         if let Err(error) =
             validate_command_params(name, &params, registration, &type_reg, entity_registry)
         {
-            return serde_json::json!({ "id": id, "ok": false, "error": error });
+            return serde_json::json!({
+                "id": id,
+                "ok": false,
+                "status": "rejected",
+                "error": error,
+            });
         }
         drop(type_reg);
 
@@ -604,7 +612,7 @@ pub fn cmd_raw(name: &str, mut params: serde_json::Value) -> serde_json::Value {
                     }
                 });
                 return serde_json::json!({
-                    "id": id, "ok": false,
+                    "id": id, "ok": false, "status": "rejected",
                     "error": format!("`{name}` is not permitted from a client-scoped script"),
                 });
             }
@@ -646,7 +654,12 @@ pub fn cmd_raw(name: &str, mut params: serde_json::Value) -> serde_json::Value {
         if script_authority().is_some() {
             let target_gid = command_target_gid(world, name, &params);
             if let Err(error) = enforce_script_authority(world, name, target_gid) {
-                return serde_json::json!({ "id": id, "ok": false, "error": error });
+                return serde_json::json!({
+                    "id": id,
+                    "ok": false,
+                    "status": "rejected",
+                    "error": error,
+                });
             }
         }
         world.trigger(ApiCommandEvent {
@@ -655,21 +668,65 @@ pub fn cmd_raw(name: &str, mut params: serde_json::Value) -> serde_json::Value {
             id,
             correlation_id: None,
         });
-        // The dispatcher defers the real trigger via `commands.queue`; flush so
-        // it runs NOW and any result-reporting handler records its Ack under
-        // `id` before we read it back.
-        world.flush();
+        // The dispatcher and the typed handler both use `commands.queue`: the
+        // first flush runs the reflected command, while the handler's queued
+        // work is a second queue generation. Drain a small bounded number of
+        // generations so Rhai receives the terminal validation error instead
+        // of mistaking a queued-but-rejected edit for success. Truly async
+        // commands still return their id without blocking the simulation.
+        for _ in 0..4 {
+            world.flush();
+            if world
+                .get_resource::<CommandResults>()
+                .is_some_and(|results| results.get(id).is_some())
+            {
+                break;
+            }
+        }
         let outcome = world
             .get_resource::<CommandResults>()
             .and_then(|r| r.get(id).cloned());
         command_result_json(id, outcome.as_ref())
     })
-    .unwrap_or_else(|| serde_json::json!({ "id": -1, "ok": false, "error": "no world in scope" }))
+    .unwrap_or_else(|| {
+        serde_json::json!({
+            "id": -1,
+            "ok": false,
+            "status": "failed",
+            "error": "no world in scope",
+        })
+    })
 }
 
 /// `cmd` as a native value: fire, then convert the JSON result in one pass.
 pub fn cmd<B: ValueBuilder>(b: &B, name: &str, params: serde_json::Value) -> B::Value {
     build_from_json(b, &cmd_raw(name, params))
+}
+
+/// Read the terminal state of a command issued by `cmd()`. Deferred handlers
+/// may finish on a later world flush; exposing the shared command-result store
+/// lets Rhai tests and tools wait for that result without treating acceptance
+/// as success.
+pub fn command_result_raw(id: u64) -> serde_json::Value {
+    with_world(|world| {
+        let outcome = world
+            .get_resource::<CommandResults>()
+            .and_then(|results| results.get(id));
+        command_result_json(id, outcome)
+    })
+    .unwrap_or_else(|| {
+        serde_json::json!({
+            "id": id,
+            "ok": false,
+            "status": "failed",
+            "error": "no world in scope",
+        })
+    })
+}
+
+/// Native-value wrapper for [`command_result_raw`].
+pub fn command_result<B: ValueBuilder>(b: &B, id: u64) -> B::Value {
+    build_from_json(b, &command_result_raw(id))
 }
 
 // ── Verbs: query ────────────────────────────────────────────────────────────

@@ -34,11 +34,11 @@
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::schema::ApiResponse;
-use lunco_core::{on_command, Command};
+use lunco_core::{Command, on_command};
 use lunco_doc::{Document, DocumentId};
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_hooks::HookValue as H;
-use lunco_usd_bevy::{CanonicalStages, UsdStageAsset};
+use lunco_usd_bevy::{CanonicalStages, UsdRead, UsdStageAsset};
 use serde_json::json;
 use std::collections::{BTreeMap, HashMap};
 
@@ -52,6 +52,9 @@ pub(crate) fn usd_physics_facts(view: &lunco_usd_bevy::StageView<'_>) -> H {
     lunco_usd_sim::lint::append_network_synthesizer_facts(view, &mut facts);
     lunco_usd_sim::lint::append_gear_drive_facts(view, &mut facts);
     lunco_usd_sim::lint::append_wheel_attachment_facts(view, &mut facts);
+    if let H::Map(entries) = &mut facts {
+        entries.push(("runtime_connections".to_string(), H::Array(Vec::new())));
+    }
     facts
 }
 
@@ -157,6 +160,107 @@ fn live_port_collision_findings(
     findings
 }
 
+/// Validate source endpoints that are intentionally absent from authored USD
+/// because their provider publishes them at projection time. The authored lint
+/// can prove that the source prim exists and carries a known provider schema;
+/// only the live registry can prove that the requested dynamic port name and
+/// direction actually exist on the projected entity.
+fn live_runtime_connection_facts(
+    world: &World,
+    stage_id: bevy::asset::AssetId<UsdStageAsset>,
+    view: &lunco_usd_bevy::StageView<'_>,
+) -> Vec<H> {
+    let Some(registry) = world.get_resource::<lunco_core::ports::PortRegistry>() else {
+        return Vec::new();
+    };
+    let mut entities = BTreeMap::new();
+    for entity in world.iter_entities() {
+        let Some(prim) = entity.get::<lunco_usd_bevy::UsdPrimPath>() else {
+            continue;
+        };
+        if prim.stage_handle.id() == stage_id {
+            entities.entry(prim.path.clone()).or_insert(entity.id());
+        }
+    }
+
+    let mut facts = Vec::new();
+    for sink in view.prim_paths() {
+        for attribute in view.attr_names(&sink) {
+            for source in view.connections(&sink, &attribute) {
+                let Ok(source_path) = openusd::sdf::Path::new(&source) else {
+                    continue;
+                };
+                let Some((source_prim, source_property)) = source_path.split_property() else {
+                    continue;
+                };
+                if view.attr_type_name(&source_prim, source_property).is_some()
+                    || !lunco_usd_bevy::read::has_runtime_port_surface(view, &source_prim)
+                {
+                    continue;
+                }
+                let (direction, source_name) = source_property
+                    .strip_prefix("outputs:")
+                    .map(|name| ("output", name))
+                    .or_else(|| {
+                        source_property
+                            .strip_prefix("inputs:")
+                            .map(|name| ("input", name))
+                    })
+                    .unwrap_or(("", source_property));
+                let source_entity = entities.get(source_prim.as_str()).copied();
+                let has_port = source_entity.is_some_and(|entity| {
+                    if direction == "output" {
+                        registry.has_output_port(world, entity, source_name)
+                    } else {
+                        registry.has_input_port(world, entity, source_name)
+                    }
+                });
+                let pending = source_entity
+                    .and_then(|entity| world.get::<lunco_core::PortSurfacePending>(entity))
+                    .is_some();
+                let provider = lunco_usd_bevy::read::runtime_port_provider(view, &source_prim)
+                    .unwrap_or("runtime provider");
+                facts.push(H::map([
+                    ("subject", H::str(format!("{}.{}", sink, attribute))),
+                    ("source", H::str(source)),
+                    ("source_prim", H::str(source_prim.to_string())),
+                    ("source_property", H::str(source_property.to_string())),
+                    ("direction", H::str(direction)),
+                    ("port_name", H::str(source_name)),
+                    ("provider", H::str(provider)),
+                    ("projected", H::Bool(source_entity.is_some())),
+                    ("port_exists", H::Bool(has_port)),
+                    ("pending", H::Bool(pending)),
+                ]));
+            }
+        }
+    }
+    facts
+}
+
+/// Run the USD policy over authored facts plus the live runtime facts.
+///
+/// Rust supplies evidence; Rhai owns finding policy and user-facing wording.
+fn lint_stage_with_runtime(
+    world: &World,
+    stage_id: bevy::asset::AssetId<UsdStageAsset>,
+    view: &lunco_usd_bevy::StageView<'_>,
+) -> Vec<lunco_lint::LintFinding> {
+    let mut facts = usd_physics_facts(view);
+    if let H::Map(entries) = &mut facts {
+        let runtime = H::Array(live_runtime_connection_facts(world, stage_id, view));
+        if let Some((_, existing)) = entries
+            .iter_mut()
+            .find(|(key, _)| key == "runtime_connections")
+        {
+            *existing = runtime;
+        } else {
+            entries.push(("runtime_connections".to_string(), runtime));
+        }
+    }
+    lunco_lint::run_lint(lunco_usd_avian::USD_LINT_DOMAIN, facts)
+}
+
 /// Lint what is loaded now.
 ///
 /// Findings land in [`lunco_lint::LintReport`] (readable via the `LintReport`
@@ -196,6 +300,7 @@ pub struct DocumentLintReports {
 struct DocumentLintReport {
     generation: Option<u64>,
     projection_ready: bool,
+    lint_pending: bool,
     findings: Vec<lunco_lint::LintFinding>,
 }
 
@@ -341,6 +446,7 @@ pub fn on_run_lint(
                 DocumentLintReport {
                     generation: Some(generation),
                     projection_ready: false,
+                    lint_pending: false,
                     findings: Vec::new(),
                 },
             );
@@ -359,60 +465,64 @@ pub fn on_run_lint(
         });
         let stage_id = stage_handle.as_ref().map(|handle| handle.id());
         let stage = stage_handle.and_then(|handle| canonical.get(handle.id()));
-        let Some(stage) = stage else {
+        let Some(_stage) = stage else {
             document_reports.reports.insert(
                 doc,
                 DocumentLintReport {
                     generation: Some(generation),
                     projection_ready: false,
+                    lint_pending: false,
                     findings: Vec::new(),
                 },
             );
             warn!("[lint] RunLint: document {doc} has no projected canonical stage");
             return;
         };
-        let findings = lint_stage(&stage.view());
-        let errors = findings
-            .iter()
-            .filter(|finding| finding.severity == lunco_lint::LintSeverity::Error)
-            .count();
-        let warnings = findings
-            .iter()
-            .filter(|finding| finding.severity == lunco_lint::LintSeverity::Warn)
-            .count();
         document_reports.reports.insert(
             doc,
             DocumentLintReport {
                 generation: Some(generation),
                 projection_ready: true,
-                findings,
+                lint_pending: stage_id.is_some(),
+                findings: Vec::new(),
             },
         );
         if let Some(stage_id) = stage_id {
             commands.queue(move |world: &mut World| {
-                let findings = live_port_collision_findings(world, stage_id);
-                if findings.is_empty() {
-                    return;
-                }
+                let (findings, collisions) = world
+                    .get_non_send::<CanonicalStages>()
+                    .and_then(|canonical| canonical.get(stage_id))
+                    .map(|stage| {
+                        let view = stage.view();
+                        (
+                            lint_stage_with_runtime(world, stage_id, &view),
+                            live_port_collision_findings(world, stage_id),
+                        )
+                    })
+                    .unwrap_or_default();
+                let mut findings = findings;
+                findings.extend(collisions);
                 if let Some(mut reports) = world.get_resource_mut::<DocumentLintReports>() {
                     if let Some(report) = reports.reports.get_mut(&doc) {
-                        report.findings.extend(findings);
+                        report.findings = findings;
+                        report.lint_pending = false;
                     }
                 }
             });
         }
-        info!("[lint] RunLint: document {doc} — {errors} error(s), {warnings} warning(s)");
+        info!("[lint] RunLint: document {doc} — report queued after live projection check");
         return;
     }
 
     // Re-linting REPLACES this domain's findings: a rule that was fixed between
     // two runs must disappear, not accumulate a second copy.
     report.clear_domain(lunco_usd_avian::USD_LINT_DOMAIN);
+    report.pending = true;
 
     // Every loaded stage, composed. `get_or_build` is what the loader itself
     // calls, so this lints exactly what physics reads.
     let ids: Vec<_> = stages.ids().collect();
-    let mut linted = 0usize;
+    let mut linted_ids = Vec::new();
     for id in ids {
         if canonical.get(id).is_none() {
             let Some(recipe) = stages.get(id).and_then(|a| a.recipe.clone()) else {
@@ -420,25 +530,31 @@ pub fn on_run_lint(
             };
             canonical.get_or_build(id, &recipe);
         }
-        let Some(cs) = canonical.get(id) else {
+        let Some(_cs) = canonical.get(id) else {
             continue;
         };
-        let found = lint_stage(&cs.view());
-        report.extend_logged(found);
-        commands.queue(move |world: &mut World| {
-            let findings = live_port_collision_findings(world, id);
-            if let Some(mut report) = world.get_resource_mut::<lunco_lint::LintReport>() {
-                report.extend_logged(findings);
-            }
-        });
-        linted += 1;
+        linted_ids.push(id);
     }
+    let linted = linted_ids.len();
+    commands.queue(move |world: &mut World| {
+        let mut findings = Vec::new();
+        for id in linted_ids {
+            if let Some(stage) = world
+                .get_non_send::<CanonicalStages>()
+                .and_then(|canonical| canonical.get(id))
+            {
+                let view = stage.view();
+                findings.extend(lint_stage_with_runtime(world, id, &view));
+                findings.extend(live_port_collision_findings(world, id));
+            }
+        }
+        if let Some(mut report) = world.get_resource_mut::<lunco_lint::LintReport>() {
+            report.extend_logged(findings);
+            report.pending = false;
+        }
+    });
 
-    info!(
-        "[lint] RunLint: {linted} stage(s) — {} error(s), {} warning(s)",
-        report.errors(),
-        report.warnings()
-    );
+    info!("[lint] RunLint: queued {linted} stage(s) for composed and live checks");
 }
 
 /// `LintReport` — read the findings back.
@@ -462,7 +578,7 @@ impl ApiQueryProvider for LintReportQuery {
                     return lunco_api::schema::ApiResponse::error(
                         lunco_api::schema::ApiErrorCode::DeserializationError,
                         "LintReport: doc_id must be an explicit numeric document id",
-                    )
+                    );
                 }
             },
         };
@@ -470,6 +586,12 @@ impl ApiQueryProvider for LintReportQuery {
             let scoped = world
                 .get_resource::<DocumentLintReports>()
                 .and_then(|reports| reports.reports.get(&doc));
+            let current_generation = world
+                .get_resource::<DocumentRegistry<lunco_usd::document::UsdDocument>>()
+                .and_then(|registry| registry.host(doc))
+                .map(|host| host.document().generation());
+            let report_generation = scoped.and_then(|report| report.generation);
+            let stale = scoped.is_some_and(|_| report_generation != current_generation);
             let findings = scoped
                 .map(|report| {
                     report
@@ -508,8 +630,15 @@ impl ApiQueryProvider for LintReportQuery {
             return ApiResponse::ok(json!({
                 "scope": "document",
                 "doc_id": doc.raw(),
-                "generation": scoped.and_then(|report| report.generation),
+                "generation": report_generation,
+                "current_generation": current_generation,
                 "projection_ready": scoped.is_some_and(|report| report.projection_ready),
+                "pending": scoped.is_some_and(|report| report.lint_pending),
+                "stale": stale,
+                "ok": scoped.is_some_and(|report| report.projection_ready)
+                    && !scoped.is_some_and(|report| report.lint_pending)
+                    && !stale
+                    && errors == 0,
                 "errors": errors,
                 "warnings": warnings,
                 "findings": findings,
@@ -536,6 +665,9 @@ impl ApiQueryProvider for LintReportQuery {
         let warnings = report.map(|r| r.warnings()).unwrap_or(0);
         ApiResponse::ok(json!({
             "scope": "loaded_stages",
+            "ok": errors == 0
+                && !report.is_some_and(|report| report.pending),
+            "pending": report.is_some_and(|report| report.pending),
             "errors": errors,
             "warnings": warnings,
             "findings": findings,
@@ -703,11 +835,13 @@ mod tests {
     #[test]
     fn collision_report_contains_structured_winner_and_shadowed_owner_fields() {
         let stage = composed_fixture();
-        assert!(stage
-            .view()
-            .prim_paths()
-            .iter()
-            .any(|path| path.to_string() == "/Griffin1"));
+        assert!(
+            stage
+                .view()
+                .prim_paths()
+                .iter()
+                .any(|path| path.to_string() == "/Griffin1")
+        );
 
         let mut world = World::new();
         world.spawn((
@@ -729,18 +863,22 @@ mod tests {
         assert_eq!(finding.rule, "port-owner-collision");
         assert_eq!(finding.severity, lunco_lint::LintSeverity::Warn);
         assert_eq!(finding.subject, "/Griffin1");
-        assert!(finding
-            .message
-            .contains("PORT_OWNER_COLLISION: `release` has 2 input owners"));
+        assert!(
+            finding
+                .message
+                .contains("PORT_OWNER_COLLISION: `release` has 2 input owners")
+        );
         assert!(finding.message.contains("Modelica/OBC"));
         assert!(finding.message.contains("hardware port"));
         assert!(finding.message.contains("/Griffin1.inputs:release"));
         assert!(finding.message.contains("/Griffin1.inputs/outputs:release"));
         assert!(finding.message.contains("registry precedence 1"));
         assert!(finding.message.contains("registry precedence 2"));
-        assert!(finding
-            .message
-            .contains("writes may be routed to the winner"));
+        assert!(
+            finding
+                .message
+                .contains("writes may be routed to the winner")
+        );
     }
 
     #[test]
@@ -754,11 +892,13 @@ mod tests {
              }\n",
         ))
         .expect("clean port fixture composes");
-        assert!(stage
-            .view()
-            .prim_paths()
-            .iter()
-            .any(|path| path.to_string() == "/Griffin1"));
+        assert!(
+            stage
+                .view()
+                .prim_paths()
+                .iter()
+                .any(|path| path.to_string() == "/Griffin1")
+        );
 
         let mut world = World::new();
         world.spawn((

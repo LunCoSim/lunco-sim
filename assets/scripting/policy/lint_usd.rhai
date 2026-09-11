@@ -47,9 +47,19 @@
 //       two `missing_*` lists the targets that resolve to nothing.
 //
 //   facts.prims[]   #{ path, type, parent, schemas[], attributes[],
-//                      connected_attributes[] }
-//       EVERY prim applying any schema at all — the generic projection, so a new
-//       rule about a schema nobody has thought about yet needs no Rust change.
+//                      connected_attributes[], connections[] }
+//       connections[] = #{ name, target_type, sources[] }
+//       sources[] = #{ path, path_valid, prim_exists, property_exists,
+//                      runtime_provider, runtime_provider_name, type }
+//       every prim applying any schema or carrying a connection — the generic
+//       projection, so connection diagnostics do not depend on a custom API
+//       schema being applied to the sink.
+//
+//   facts.runtime_connections[] #{ subject, source, source_prim,
+//                                  source_property, direction, port_name,
+//                                  provider, projected, port_exists, pending }
+//       live-only evidence for runtime provider endpoints. File validation
+//       supplies an empty array because it cannot observe ECS projection.
 //
 //   facts.vehicle_parts[]  #{ path, type, vehicle, body, purpose, collision_api,
 //                              collision_state, wheel_projector,
@@ -203,6 +213,8 @@ fn lint_usd(facts) {
     let out = [];
     for f in stage_meters_per_unit_missing(facts) { out.push(f); }
     for f in epoch_api_requires_authored_time(facts) { out.push(f); }
+    for f in connection_contract(facts) { out.push(f); }
+    for f in runtime_connection_contract(facts) { out.push(f); }
     for f in collision_enabled_without_api(facts) { out.push(f); }
     for f in vehicle_part_collision_contract(facts) { out.push(f); }
     for f in unsupported_program_prim_type(facts) { out.push(f); }
@@ -228,6 +240,132 @@ fn lint_usd(facts) {
     for f in invalid_network_program_source(facts) { out.push(f); }
     for f in invalid_modelica_causal_cardinality(facts) { out.push(f); }
     for f in ambiguous_modelica_boundary(facts) { out.push(f); }
+    out
+}
+
+/// A USD connection is only useful when its source property survives composed
+/// resolution and has the same declared type as the consuming attribute. The
+/// fact producer does the authored/composed stage work; runtime-only providers
+/// are checked again against the live PortRegistry by RunLint. This policy
+/// keeps the finding actionable and points at the consuming property so an
+/// editor can focus it.
+fn connection_contract(facts) {
+    let out = [];
+    for prim in facts.prims {
+        for issue in connection_prim_contract(prim) { out.push(issue); }
+    }
+    out
+}
+
+fn connection_prim_contract(prim) {
+    let out = [];
+    for connection in prim.connections {
+        let subject = prim.path + "." + connection.name;
+        for source in connection.sources {
+            let issue = connection_source_issue(subject, connection.target_type, source);
+            if issue != () { out.push(issue); }
+        }
+    }
+    out
+}
+
+fn connection_source_issue(subject, target_type, source) {
+    if !source.path_valid { return connection_source_path_invalid(subject, source.path); }
+    if !source.prim_exists { return connection_source_prim_missing(subject, source.path); }
+    if !source.property_exists && !source.runtime_provider {
+        return connection_source_property_missing(subject, source.path);
+    }
+    if target_type != "" && source.type != "" && target_type != source.type {
+        return connection_source_type_mismatch(subject, source.path, source.type, target_type);
+    }
+    ()
+}
+
+fn connection_source_path_invalid(subject, source_path) {
+    let message = "connects to <";
+    message += source_path;
+    message += ">, which is not a valid USD property path. Author a source prim property such as /Controller.outputs:throttle.";
+    finding("connection-source-path-invalid", "error", subject, message)
+}
+
+fn connection_source_prim_missing(subject, source_path) {
+    let message = "connects to <";
+    message += source_path;
+    message += ">, but its source prim is absent from the composed stage. Fix the source path or add the referenced component before running the model.";
+    finding("connection-source-prim-missing", "error", subject, message)
+}
+
+fn connection_source_property_missing(subject, source_path) {
+    let message = "connects to <";
+    message += source_path;
+    message += ">, but that source property is not declared on the composed prim. Author the output/connector property or correct the connection path.";
+    finding("connection-source-property-missing", "error", subject, message)
+}
+
+fn connection_source_type_mismatch(subject, source_path, source_type, target_type) {
+    let message = "connects <";
+    message += source_path;
+    message += " (";
+    message += source_type;
+    message += ") to a ";
+    message += target_type;
+    message += " sink. Author matching USD attribute types on both ends.";
+    finding("connection-source-type-mismatch", "error", subject, message)
+}
+
+/// A runtime provider may expose a port only after projection. The fact
+/// producer checks the exact live direction/name; this policy decides whether
+/// the result is a warning while projection settles or an actionable error.
+fn runtime_connection_contract(facts) {
+    let out = [];
+    for connection in facts.runtime_connections {
+        if connection.direction == "" {
+            let message = "connects to <";
+            message += connection.source;
+            message += ">, but the runtime source property has no inputs:/outputs: namespace. Author the exact runtime port path.";
+            out.push(finding(
+                "connection-source-runtime-direction-invalid",
+                "error",
+                connection.subject,
+                message,
+            ));
+            continue;
+        }
+        if connection.port_exists { continue; }
+        if !connection.projected || connection.pending {
+            let message = "connects to <";
+            message += connection.source;
+            message += "> on ";
+            message += connection.provider;
+            message += ", but its projected ";
+            message += connection.direction;
+            message += " port ";
+            message += connection.port_name;
+            message += " is not published yet. Wait for projection and run lint again.";
+            out.push(finding(
+                "connection-source-runtime-port-pending",
+                "warn",
+                connection.subject,
+                message,
+            ));
+        } else {
+            let message = "connects to <";
+            message += connection.source;
+            message += "> on ";
+            message += connection.provider;
+            message += ", but the projected ";
+            message += connection.direction;
+            message += " port ";
+            message += connection.port_name;
+            message += " is unavailable. Fix the runtime port name/direction or attach the provider before running the model.";
+            out.push(finding(
+                "connection-source-runtime-port-missing",
+                "error",
+                connection.subject,
+                message,
+            ));
+        }
+    }
     out
 }
 

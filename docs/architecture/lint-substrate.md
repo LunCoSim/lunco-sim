@@ -82,7 +82,15 @@ facts.drives[]  #{ path, joint_type, body0, body1, realization,
                    frequency, damping_ratio }
 facts.gear_drives[] #{ path, valid, realization, ratio, rest_offset,
                        target_velocity, stiffness, damping, max_force }
-facts.prims[]   #{ path, type, parent, schemas[] }     ← the GENERIC projection
+facts.prims[]   #{ path, type, parent, schemas[], attributes[],
+                    connected_attributes[], connections[] }  ← the GENERIC projection
+facts.prims[].connections[] #{ name, target_type, sources[] }
+facts.prims[].connections[].sources[] #{ path, path_valid, prim_exists,
+                                         property_exists, runtime_provider,
+                                         runtime_provider_name, type }
+facts.runtime_connections[] #{ subject, source, source_prim, source_property,
+                               direction, port_name, provider, projected,
+                               port_exists, pending }  // loaded RunLint only
 facts.collision_enabled_without_api[]  paths authoring
                                           `physics:collisionEnabled=true` without
                                           `PhysicsCollisionAPI`; terrain and PhysX
@@ -125,6 +133,29 @@ render geometry excluded by a body's `purpose = "proxy"` shape. An ordinary
 renderable vehicle gprim with no one of those owners is an authoring error; the
 fact is composed from the same purpose, schema, and collider builder used by
 the Avian projection.
+
+### Connection preflight has two evidence planes
+
+The authored USD facts validate every source path that can be proven from the
+composed stage. A missing source prim, missing authored property, invalid USD
+property path, or declared type mismatch is an error at the consuming
+property. The sink property may be newly created by a typed `SetConnection`;
+the source must still resolve.
+
+Some runtime owners publish scalar ports only after projection. Avian
+body/joint/raycast state, environment probes, and compiled program surfaces are
+therefore marked with `runtime_provider` instead of being faked as authored USD
+attributes. On a loaded stage, `RunLint` performs the second check against the
+live `PortRegistry`: the exact source name and direction must exist, otherwise
+`connection-source-runtime-port-missing` is an error (or
+`connection-source-runtime-port-pending` while the owner explicitly advertises
+that its surface is still being installed). This catches a typo such as
+`outputs:positon_x` without rejecting a real `outputs:position_x` body port.
+
+`ValidateAsset` is intentionally file-only and cannot prove a dynamic runtime
+name; its composed USD result remains useful for authored topology, while the
+loaded-stage `RunLint` result is the acceptance gate before simulation. Both
+planes are explicit—lint is not run on load or every physics tick.
 
 ### Projected port-owner diagnostics
 
@@ -187,10 +218,10 @@ on every scene load, every physics tick, or on a background cadence trains its
 reader to scroll past it and taxes play with an opinion about authoring. So:
 
 ```rhai
-cmd("RunLint", #{});             // lints every loaded stage
-query("LintReport");             // { errors, warnings, findings[] }
+cmd("RunLint", #{});             // explicit; live checks are queued
+query("LintReport");             // { ok, pending, errors, warnings, findings[] }
 cmd("RunLint", #{domain: "usd", doc_id: 7});
-query("LintReport", #{doc_id: 7}); // includes generation and projection_ready
+query("LintReport", #{doc_id: 7}); // includes generation, pending, and projection_ready
 ```
 
 …and the same verb over HTTP/MCP (`{"type":"ExecuteCommand","command":"RunLint"}`).
@@ -198,7 +229,10 @@ After an authored change, the editor or launcher may issue the command again for
 that selected stage; it is still an explicit lint run. There is no cadence,
 background watcher, per-tick physics monitor, or emergency clamp. `ValidateAsset`
 applies the file-derived rules to one composed file; it cannot observe projected
-runtime port owners. Emergent contact/topology failures still require
+runtime port owners. `RunLint` reports `pending:true` until its composed and
+live evidence pass completes; only `ok:true` is a clean acceptance result.
+The runtime connection facts are produced in Rust, while direction, pending
+versus missing severity, and message text remain in the Rhai policy. Emergent contact/topology failures still require
 the relevant behavioral test; a static lint must report "conditionally stable"
 or "not certifiable" rather than claim a nonlinear assembled mechanism is safe.
 
@@ -249,6 +283,13 @@ merely **wrong** — `error` severities join `errors`, everything else joins
 | `invalid-gear-drive` | error | a `PhysxPhysicsGearJoint` angular drive has values the canonical USD-sim reader refuses to install |
 | `invalid-network-synthesizer` | error | the composed `CollectionAPI:components` members have incompatible domain roles and runtime cannot select an owner |
 | `port-owner-collision` | warn, live `RunLint` | one composed entity exposes the same public port name through multiple runtime owners; routing still follows registry precedence, so the owners need distinct names |
+| `connection-source-path-invalid` | error | a connection source is not a valid USD property path |
+| `connection-source-prim-missing` | error | the source prim is absent from the composed stage |
+| `connection-source-property-missing` | error | the source property is absent and no runtime provider owns the source prim |
+| `connection-source-type-mismatch` | error | authored source and sink attribute types differ, including role/array shape |
+| `connection-source-runtime-direction-invalid` | error, loaded `RunLint` | a runtime source omits the standard `inputs:` or `outputs:` namespace |
+| `connection-source-runtime-port-missing` | error, loaded `RunLint` | a known runtime provider exists, but the exact projected source name/direction does not |
+| `connection-source-runtime-port-pending` | warn, loaded `RunLint` | the provider has explicitly published a pending port surface; rerun after projection completes |
 
 Network ownership is derived from the same composed role classifier used by the
 runtime domain projection. A collection of `LunCoForceActuatorAPI` members is
@@ -309,6 +350,11 @@ of a link inside a link attached to nothing.
 - `assets/scenes/tests/lint_selftest.usda` + `scenarios/tests/lint_selftest.rhai` —
   the chain end to end (facts → hook → rules → report → query), including the
   false-positive guard that a correctly jointed nested body stays silent.
+- `assets/scenes/tests/connection_preflight.usda` +
+  `scenarios/tests/connection_preflight.rhai` — a small standard-USD fixture
+  proving terminal command rejection, authored source diagnostics, and the
+  exact live runtime-port/direction checks through the production scene-test
+  binary.
 - `assets/scenes/tests/parts_attached.usda` and
   `assets/scenes/tests/parts_attached_ackermann.usda` — the **behavioural**
   counterpart: each pair drives for 12 s, and no descendant may move more than

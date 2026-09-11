@@ -480,7 +480,10 @@ pub enum UsdOp {
     /// (explicit list-op, set-semantics — not append); an **empty** `sources`
     /// authors an explicitly-empty list, i.e. clears the connection. The
     /// inverse restores a prior explicit connection list as a typed op;
-    /// otherwise the prior full source.
+    /// otherwise the prior full source. The command boundary additionally
+    /// requires every non-empty source to resolve to a composed property of
+    /// the same declared type; compound plans may declare that source earlier
+    /// in the same batch.
     SetConnection {
         /// Layer to write to.
         edit_target: LayerId,
@@ -928,7 +931,7 @@ impl UsdDocument {
             Some(_) => {
                 return Err(DocumentError::ValidationFailed(format!(
                     "invalid xformOpOrder at `{path}`"
-                )))
+                )));
             }
         };
         let append = !order.iter().any(|token| token == op_name);
@@ -2516,14 +2519,16 @@ impl Document for UsdDocument {
                     Ok(_) => {
                         return Err(DocumentError::ValidationFailed(format!(
                             "SetPrimKind target {path} must name a prim, not a property"
-                        )))
+                        )));
                     }
-                    Err(_) if self.path_is_under_composed_arc_path(
-                        &parse_prim_path(&path).unwrap_or_else(|_| SdfPath::abs_root()),
-                    ) => {
+                    Err(_)
+                        if self.path_is_under_composed_arc_path(
+                            &parse_prim_path(&path).unwrap_or_else(|_| SdfPath::abs_root()),
+                        ) =>
+                    {
                         return Err(DocumentError::ValidationFailed(format!(
                             "SetPrimKind target {path} is composed/read-only; author the owning prim or a local override"
-                        )))
+                        )));
                     }
                     Err(error) => return Err(error),
                 };
@@ -2770,14 +2775,16 @@ impl Document for UsdDocument {
                     Ok(_) => {
                         return Err(DocumentError::ValidationFailed(format!(
                             "SetReferenceArcs target `{path}` must name a prim, not a property"
-                        )))
+                        )));
                     }
-                    Err(_) if self.path_is_under_composed_arc_path(
-                        &parse_prim_path(&path).unwrap_or_else(|_| SdfPath::abs_root()),
-                    ) => {
+                    Err(_)
+                        if self.path_is_under_composed_arc_path(
+                            &parse_prim_path(&path).unwrap_or_else(|_| SdfPath::abs_root()),
+                        ) =>
+                    {
                         return Err(DocumentError::ValidationFailed(format!(
                             "SetReferenceArcs target `{path}` is composed/read-only; author the owning prim or a local override"
-                        )))
+                        )));
                     }
                     Err(error) => return Err(error),
                 };
@@ -2881,8 +2888,7 @@ mod tests {
     // composition would resolve references/variants on top and hide precisely
     // the layer-targeting these tests exist to pin.
 
-    const TINY_USDA: &str =
-        "#usda 1.0\n(\n    defaultPrim = \"World\"\n    metersPerUnit = 1\n)\n\ndef Xform \"World\"\n{\n}\n";
+    const TINY_USDA: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n    metersPerUnit = 1\n)\n\ndef Xform \"World\"\n{\n}\n";
 
     fn prim_type(doc: &UsdDocument, path: &str) -> Option<String> {
         doc.data().prim_type_name(&SdfPath::new(path).unwrap())
@@ -3245,7 +3251,7 @@ mod tests {
         // proves the whole sequence actually APPLIES in order onto a real document —
         // the joint prim is defined before its relationships target it, the point3f
         // anchors author, and the result composes into a jointed assembly.
-        use crate::attach::{attach_component_ops, AttachJoint, AttachSpec, Axis};
+        use crate::attach::{AttachJoint, AttachSpec, Axis, attach_component_ops};
 
         let scene = "#usda 1.0\n(\n    metersPerUnit = 1\n)\ndef Xform \"Rig\"\n{\n    def Xform \"Chassis\"\n    {\n    }\n}\n";
         let mut doc = UsdDocument::with_origin(
@@ -3477,18 +3483,23 @@ mod tests {
             reference_prim_path: None,
         })
         .unwrap();
-        assert!(left
-            .runtime_data()
-            .spec(&SdfPath::new("/RuntimeOnly").unwrap())
-            .is_some());
-        assert!(right
-            .runtime_data()
-            .spec(&SdfPath::new("/RuntimeOnly").unwrap())
-            .is_none());
-        assert!(source
-            .runtime_data()
-            .spec(&SdfPath::new("/RuntimeOnly").unwrap())
-            .is_none());
+        assert!(
+            left.runtime_data()
+                .spec(&SdfPath::new("/RuntimeOnly").unwrap())
+                .is_some()
+        );
+        assert!(
+            right
+                .runtime_data()
+                .spec(&SdfPath::new("/RuntimeOnly").unwrap())
+                .is_none()
+        );
+        assert!(
+            source
+                .runtime_data()
+                .spec(&SdfPath::new("/RuntimeOnly").unwrap())
+                .is_none()
+        );
 
         left.mark_saved();
         assert!(!left.is_dirty());
@@ -4964,14 +4975,15 @@ def Xform \"World\" (\n\
             value: "(0, 0, 0)".into(),
         })
         .unwrap();
-        assert!(doc
-            .apply(UsdOp::RemoveTimeSample {
+        assert!(
+            doc.apply(UsdOp::RemoveTimeSample {
                 edit_target: LayerId::root(),
                 path: "/Mover".into(),
                 name: "xformOp:translate".into(),
                 time: 99.0,
             })
-            .is_err());
+            .is_err()
+        );
         // Removing the right time succeeds and clears the curve.
         doc.apply(UsdOp::RemoveTimeSample {
             edit_target: LayerId::root(),
