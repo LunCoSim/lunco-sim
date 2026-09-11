@@ -8,7 +8,7 @@ license.workspace = true
 default = ["ui"]
 # The egui inspector panels (`src/ui/`, CelestialUiPlugin). Off ⇒ no egui; the
 # GravityPlugin + celestial sim stay available (e.g. a headless server).
-ui = ["dep:bevy_egui", "dep:lunco-workbench", "dep:lunco-theme"]
+ui = ["dep:bevy_egui", "dep:lunco-workbench", "dep:lunco-workbench-core", "dep:lunco-theme"]
 # Bake Earth/Moon textures + Artemis 2 mission JSON + ephemeris CSV into the
 # binary via `include_bytes!`. Only needed by binaries that actually render
 # celestial bodies on wasm32 (e.g. sandbox). Off by default so the
@@ -49,6 +49,7 @@ bevy_mesh = { workspace = true }
 # egui shell used only by `src/ui/` (CelestialUiPlugin) — optional for headless.
 bevy_egui = { workspace = true, optional = true }
 lunco-workbench = { path = "../lunco-workbench", optional = true }
+lunco-workbench-core = { path = "../lunco-workbench-core", optional = true }
 lunco-theme = { path = "../lunco-theme", optional = true }
 big_space = { workspace = true }
 # Heavy VSOP2013/ELP/EOP integration lives in the sibling crate

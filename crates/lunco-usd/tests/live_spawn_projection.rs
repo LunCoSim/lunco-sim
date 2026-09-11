@@ -16,7 +16,9 @@ use lunco_usd::{
     },
     ApplyUsdOp, LayerId, UsdCommandsPlugin, UsdOp,
 };
+use lunco_usd_bevy::usd_data::UsdDataExt;
 use lunco_usd_bevy::*;
+use openusd::sdf::AbstractData;
 
 mod support;
 
@@ -112,6 +114,7 @@ fn add_prim_projects_live_via_sink_no_reload() {
             name: "Box".into(),
             type_name: Some("Cube".into()),
             reference: None,
+            reference_prim_path: None,
         },
     });
 
@@ -179,6 +182,7 @@ fn referenced_spawn_projects_live_via_fetch_inject_author() {
             name: "rover_1".into(),
             type_name: Some("Xform".into()),
             reference: Some("lunco://vessels/rovers/skid_rover.usda".into()),
+            reference_prim_path: None,
         },
     });
 
@@ -331,4 +335,43 @@ fn simultaneous_assembly_previews_keep_identical_paths_isolated() {
         .resource::<lunco_usd::twin_projection::DocBackedTwinScenes>()
         .coords_of(first_doc)
         .is_some());
+}
+
+#[test]
+fn rover_asset_roots_do_not_bake_runtime_positions() {
+    // This is a raw asset-authoring contract, not a simulation projection
+    // claim. Keep it with the USD document/composition tests so the simulation
+    // crate does not carry a second full integration target for it.
+    for (file, prim) in [
+        ("skid_rover.usda", "SkidRover"),
+        ("ackermann_rover.usda", "AckermannRover"),
+    ] {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/vessels/rovers")
+            .join(file);
+        let source = std::fs::read_to_string(&path).expect("read rover asset");
+        let data = openusd::usda::parse(&source).expect("parse rover asset");
+        let root = openusd::sdf::Path::new(&format!("/{prim}")).expect("root path");
+        assert!(data.has_spec(&root), "{file}: /{prim} must exist");
+        let position: Option<[f64; 3]> = data.prim_attribute_value(&root, "xformOp:translate");
+        assert!(
+            position.is_none(),
+            "{file}: /{prim} must leave placement to its scene instance, got {position:?}"
+        );
+    }
+}
+
+#[test]
+fn sandbox_instance_preserves_the_authored_chassis_livery() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../assets/scenes/luncosim/sandbox_scene.usda");
+    let stage = compose_file_to_stage(&path).expect("compose sandbox scene");
+    let view = StageView::new(&stage);
+    let chassis =
+        openusd::sdf::Path::new("/SandboxScene/Skid_Raycast_1/Chassis").expect("chassis path");
+    let color = lunco_usd_bevy::read_primvar_vec3(&view, &chassis, "primvars:displayColor")
+        .expect("sandbox chassis livery");
+    for (actual, expected) in color.into_iter().zip([0.85, 0.15, 0.12]) {
+        assert!((actual - expected).abs() < 1e-5);
+    }
 }

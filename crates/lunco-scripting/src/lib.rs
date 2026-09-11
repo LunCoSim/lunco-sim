@@ -247,6 +247,27 @@ pub fn register_builtin_policies() -> Result<(), String> {
             lunco_core::session::RENDER_SHADOW_QUALITY_HOOK,
             "shadow_quality",
         ),
+        // Runtime presentation is a typed Twin policy. The engine publishes
+        // generic subject facts; the policy owns visibility and scalar view
+        // model construction.
+        (
+            "runtime_ui_surface",
+            "runtime.ui.visibility",
+            "runtime_ui_surface",
+        ),
+        (
+            "runtime_ui_properties",
+            "runtime.ui.properties",
+            "runtime_ui_properties",
+        ),
+        // Capture selection is separate from live visibility. A Twin can ask
+        // the recorder to wait for any visible surface without putting a
+        // recording flag in the global UI manifest or engine core.
+        (
+            "runtime_ui_recording",
+            "runtime.ui.recording",
+            "runtime_ui_recording",
+        ),
         // Generated Modelica source, topology and diagram schema. The USD
         // projector supplies the complete composed graph as facts; this policy
         // owns the emitted model and its presentation without a Rust edit.

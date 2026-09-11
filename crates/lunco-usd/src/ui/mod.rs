@@ -20,7 +20,8 @@
 use bevy::prelude::*;
 use lunco_doc::DocumentId;
 use lunco_doc_bevy::{DocumentClosed, DocumentOpened, DocumentSaved};
-use lunco_workbench::{BrowserSectionRegistry, PanelId};
+use lunco_workbench::BrowserSectionRegistry;
+use lunco_workbench_core::PanelId;
 
 use crate::document::UsdDocument;
 use crate::twin_projection::UsdDocumentUserOwned;
@@ -207,7 +208,7 @@ fn sync_workspace_on_doc_closed(
 fn badge_externally_changed_usd_docs(
     time: Res<Time>,
     registry: Res<DocumentRegistry<UsdDocument>>,
-    mut bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
+    mut bus: Option<ResMut<lunco_status_core::status_bus::StatusBus>>,
     mut timer: Local<f32>,
     mut badged: Local<std::collections::HashSet<lunco_doc::DocumentId>>,
 ) {
@@ -225,7 +226,7 @@ fn badge_externally_changed_usd_docs(
         if badged.insert(*doc) {
             bus.push(
                 "usd",
-                lunco_workbench::status_bus::StatusLevel::Warn,
+                lunco_status_core::status_bus::StatusLevel::Warn,
                 format!("{doc} changed on disk — re-open to load the new version"),
             );
         }

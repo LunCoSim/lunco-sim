@@ -8,9 +8,9 @@
 //! and therefore no egui/workbench dependency.
 
 use bevy::prelude::*;
+use lunco_status_core::status_bus::{StatusBus, StatusLevel};
 use lunco_telemetry::TelemetrySettings;
 use lunco_viz::{SignalMeta, SignalRef, SignalRegistry, VisualizationRegistry};
-use lunco_workbench::status_bus::{StatusBus, StatusLevel};
 
 use lunco_assets::msl::{MslLoadPhase, MslLoadState};
 

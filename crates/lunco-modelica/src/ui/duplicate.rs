@@ -79,7 +79,7 @@ pub(crate) fn extract_class_spans_inline(
     source: &str,
     class_name: &str,
 ) -> Option<DuplicateExtract> {
-    let ast = rumoca_phase_parse::parse_to_ast(source, "duplicate-inline.mo").ok()?;
+    let ast = lunco_modelica_ast::parse_to_ast(source, "duplicate-inline.mo").ok()?;
     spans_from_ast(&ast, source, class_name)
 }
 
@@ -88,7 +88,7 @@ pub(crate) fn spans_from_ast(
     source: &str,
     class_name: &str,
 ) -> Option<DuplicateExtract> {
-    let class = crate::ast_extract::find_class_by_short_name(ast, class_name)?;
+    let class = lunco_modelica_ast::ast_extract::find_class_by_short_name(ast, class_name)?;
     let end_tok = class.end_name_token.as_ref()?;
     // rumoca's `ClassDef.location` spans only NAME → `end <Name>`, omitting
     // the prefix keyword and the trailing `;`. `class_full_text_span` widens
@@ -96,7 +96,8 @@ pub(crate) fn spans_from_ast(
     // `load_msl_class`). `rewrite_inject_in_one_pass` re-anchors these
     // absolute spans by `full_start`, so the caller must pass the matching
     // `source[full_start..full_end]` slice.
-    let (full_start, full_end) = crate::ast_extract::class_full_text_span(class, source);
+    let (full_start, full_end) =
+        lunco_modelica_ast::ast_extract::class_full_text_span(class, source);
     Some(DuplicateExtract {
         full_start,
         full_end,
@@ -107,7 +108,7 @@ pub(crate) fn spans_from_ast(
     })
 }
 
-// Class-by-short-name lookup lives in `crate::ast_extract::find_class_by_short_name`.
+// Class-by-short-name lookup lives in `lunco_modelica_ast::ast_extract::find_class_by_short_name`.
 // Previously duplicated here as `find_top_or_nested_class_by_short_name` +
 // `find_nested_by_short_name`; collapsed to the canonical helper so the
 // three short-name lookups can't silently disagree (same shape as the
@@ -375,7 +376,7 @@ pub(crate) fn build_duplicate_source(
     // a top-level lift would lose — `unresolved type reference: 'SI.Angle'`.
     // The cost is that the copy's real class name is `<origin_pkg>.<new_name>`,
     // so the run/compile path must dispatch that QUALIFIED name (see
-    // `within_package` + its use in `dispatch_experiment`); dispatching the bare
+    // `within_package_of_source` + its use in `dispatch_experiment`); dispatching the bare
     // leaf fails `model not found` in Instantiate.
     match origin_fqn {
         Some(fqn) => {
@@ -392,29 +393,6 @@ pub(crate) fn build_duplicate_source(
     }
 }
 
-/// Extract the package named in a leading `within <pkg>;` clause, if present.
-///
-/// A duplicated library class is emitted as `within P; <class>` (see
-/// [`build_duplicate_source`]), so rumoca compiles it as `P.<class>`. The
-/// run/compile dispatch must qualify the target class with `P` or instantiate
-/// fails `model not found`. Returns `None` for top-level sources (no `within`).
-pub(crate) fn within_package(source: &str) -> Option<String> {
-    for raw in source.lines() {
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with("//") {
-            continue;
-        }
-        let rest = line.strip_prefix("within")?;
-        // `within` must be followed by whitespace (not e.g. `withinFoo`).
-        if !rest.starts_with(char::is_whitespace) {
-            return None;
-        }
-        let pkg = rest.trim().trim_end_matches(';').trim();
-        return (!pkg.is_empty()).then(|| pkg.to_string());
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -423,7 +401,7 @@ mod tests {
     /// lenient parser's recovery error set. `parse_to_ast(..).is_ok()`
     /// would lie — rumoca recovers from errors and still returns a tree.
     fn parses_clean(src: &str) -> bool {
-        !rumoca_phase_parse::parse_to_syntax(src, "dup-test.mo").has_errors()
+        !lunco_modelica_ast::parse_to_syntax(src, "dup-test.mo").has_errors()
     }
 
     /// Mirror the read-only duplicate flow: extract spans from the full
@@ -488,7 +466,7 @@ end Foo;
         );
         // The qualified run name the dispatch must use (within + copy name).
         assert_eq!(
-            within_package(&out).as_deref(),
+            lunco_modelica_ast::ast_extract::within_package_of_source(&out).as_deref(),
             Some("AnnotatedRocketStage")
         );
     }
@@ -517,7 +495,7 @@ end Foo;
         assert!(out.contains("model RocketStageCopy"), "renamed:\n{out}");
         assert!(out.contains("end RocketStageCopy;"), "end renamed:\n{out}");
         assert_eq!(
-            within_package(&out).as_deref(),
+            lunco_modelica_ast::ast_extract::within_package_of_source(&out).as_deref(),
             Some("AnnotatedRocketStage")
         );
     }
@@ -540,7 +518,7 @@ end Foo;
         assert!(out.contains("model RocketStageCopy"), "renamed:\n{out}");
         assert!(out.contains("end RocketStageCopy;"), "end renamed:\n{out}");
         assert_eq!(
-            within_package(&out).as_deref(),
+            lunco_modelica_ast::ast_extract::within_package_of_source(&out).as_deref(),
             Some("AnnotatedRocketStage")
         );
     }
@@ -553,7 +531,7 @@ end Foo;
         // The lone leaf can't compile (`unresolved type reference: 'Tank'`)
         // unless the enclosing bundled package is re-seated as an extra source.
         // dispatch_experiment computes that extra as
-        // `bundled_source_for(within_package(dup))`; this asserts the pieces
+        // `bundled_source_for(within_package_of_source(dup))`; this asserts the pieces
         // line up — the dup names a within-package, and that package's bundled
         // source provides every sibling the leaf refers to.
         let src = crate::ui::class_source::bundled_source_for("AnnotatedRocketStage.RocketStage")
@@ -573,7 +551,8 @@ end Foo;
         }
         // …and the extra the compile path attaches (the bundled package keyed
         // by the within-package name) must define every one of them.
-        let pkg = within_package(&dup).expect("nested dup has a within-package");
+        let pkg = lunco_modelica_ast::ast_extract::within_package_of_source(&dup)
+            .expect("nested dup has a within-package");
         assert_eq!(pkg, "AnnotatedRocketStage");
         let extra = crate::ui::class_source::bundled_source_for(&pkg)
             .expect("within-package resolves to bundled source");

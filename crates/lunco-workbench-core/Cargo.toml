@@ -1,0 +1,15 @@
+[package]
+name = "lunco-workbench-core"
+version = "0.1.0-dev"
+edition = "2021"
+license.workspace = true
+description = "Renderer-independent contracts and read models for LunCoSim workbench panels and perspectives"
+
+[dependencies]
+bevy = { workspace = true }
+egui = "0.35"
+lunco-core = { path = "../lunco-core" }
+serde = { workspace = true }
+
+[lints]
+workspace = true

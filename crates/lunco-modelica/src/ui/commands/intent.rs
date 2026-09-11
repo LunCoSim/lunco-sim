@@ -38,7 +38,7 @@ pub fn resolve_editor_intent(
                     return;
                 };
                 if let Some(mut q) = world.get_resource_mut::<lunco_workbench::PendingTabCloses>() {
-                    q.push(lunco_workbench::TabId::Instance {
+                    q.push(lunco_workbench_core::TabId::Instance {
                         kind: crate::ui::MODEL_VIEW_KIND,
                         instance: tab_id,
                     });

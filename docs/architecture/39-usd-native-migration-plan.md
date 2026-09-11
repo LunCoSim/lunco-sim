@@ -121,8 +121,9 @@ live stage on the UI thread.
   `inputs:`>, scale, offset }` (fan-in → multiple rows; `propagate` sums). Self-loop (`A==B`) and cross-entity
   (`A≠B`) fall out of the same rule. Empty drain = zero work; the hot loop (`RebuildOnChange` → `CompiledWiring`
   → `propagate_connections` by-slot) and `SimConnection`'s shape are untouched — they are derived caches.
-  Covered by `usd_connection_derivation.rs`: derivation-at-load + clear, plus every asset reads back the exact
-  edges it authors.
+  Covered by `usd_connection_mechanics.rs`: derivation-at-load + clear and the
+  scalar factor/offset cases. Asset-specific authored edges are covered by the
+  production Rhai scenarios through `QueryUsdPrim` and `GeneratedModelicaSource`.
 - **P1.4 🟡 — Every asset authors its wiring as `connectionPaths`** (via `SetConnection`, so the authoring is
   journaled), and **no code path spawns a `SimConnection` outside the reconcile** (the bypass of requirement 3).
   One canonical form, no shim.

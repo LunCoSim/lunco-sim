@@ -86,7 +86,7 @@ pub(crate) fn visible_tab_for_doc(
     doc: DocumentId,
 ) -> Option<crate::model_tabs_types::TabId> {
     let active_instance = world
-        .get_resource::<lunco_workbench::WorkbenchLayout>()
+        .get_resource::<lunco_workbench_core::WorkbenchSnapshot>()
         .and_then(|layout| layout.active_tab_instance());
     let tabs = world.get_resource::<crate::model_tabs::ModelTabs>()?;
     if active_instance

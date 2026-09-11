@@ -49,6 +49,7 @@ See [`docs/architecture/11-workbench.md`](../../docs/architecture/11-workbench.m
 ```toml
 [dependencies]
 lunco-ui = { path = "../lunco-ui" }
+lunco-workbench-core = { path = "../lunco-workbench-core" }
 lunco-workbench = { path = "../lunco-workbench" }
 ```
 
@@ -57,7 +58,7 @@ lunco-workbench = { path = "../lunco-workbench" }
 ```rust
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
+use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 use lunco_ui::prelude::*;
 
 pub struct MyPanel;

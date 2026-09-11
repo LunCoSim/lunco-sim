@@ -234,7 +234,7 @@ pub fn peek_or_load_class_blocking(
             // the lock; the standalone `parse_to_ast` lets us
             // pay the parse cost off-lock and install via
             // `add_parsed_batch` (cheap) afterwards.
-            match rumoca_phase_parse::parse_to_ast(&source, &uri) {
+            match lunco_modelica_ast::parse_to_ast(&source, &uri) {
                 Ok(ast) => Some(ast),
                 Err(e) => {
                     bevy::log::warn!(

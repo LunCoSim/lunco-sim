@@ -2,7 +2,8 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_workbench::{icon_text_button, Panel, PanelCtx, PanelId, PanelSlot, UiIcon};
+use lunco_workbench::{icon_text_button, UiIcon};
+use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
 use lunco_avatar::{FocusTarget, PossessVessel, ReleaseVessel};
 use lunco_celestial::{CelestialBody, LeaveSurface, TeleportToSurface};
@@ -40,8 +41,8 @@ impl Panel for MissionControl {
     fn default_slot(&self) -> PanelSlot {
         PanelSlot::RightInspector
     }
-    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
-        lunco_workbench::PanelMenuGroup::Scene
+    fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
+        lunco_workbench_core::PanelMenuGroup::Scene
     }
     fn transparent_background(&self) -> bool {
         true

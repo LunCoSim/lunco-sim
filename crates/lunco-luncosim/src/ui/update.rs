@@ -15,8 +15,8 @@ use bevy::prelude::*;
 use bevy::tasks::{futures_lite::future, IoTaskPool, Task};
 use bevy_egui::egui;
 use lunco_settings::AppSettingsExt;
-use lunco_workbench::status_bus::{StatusBarAction, StatusBus, StatusLevel};
-use lunco_workbench::WorkbenchLayout;
+use lunco_status_core::status_bus::{StatusBarAction, StatusBus, StatusLevel};
+use lunco_workbench_core::WorkbenchMenuRegistry;
 use serde::{Deserialize, Serialize};
 use velopack::sources::UpdateSource;
 use velopack::{
@@ -509,10 +509,10 @@ fn queue_status_bar_action(source: &str, state: &UpdateState, actions: &mut Upda
 }
 
 fn register_update_settings_menu(world: &mut World) {
-    let Some(mut layout) = world.get_resource_mut::<WorkbenchLayout>() else {
+    let Some(mut menus) = world.get_resource_mut::<WorkbenchMenuRegistry>() else {
         return;
     };
-    layout.register_settings_submenu("Updates", |ui, ctx| {
+    menus.register_settings_submenu("Updates", |ui, ctx| {
         ui.label(egui::RichText::new("Velopack updates").weak().small());
         let identity = ctx.resource::<lunco_workbench::BuildIdentity>();
         egui::Grid::new("updates_build_identity")

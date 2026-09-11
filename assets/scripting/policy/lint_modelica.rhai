@@ -11,7 +11,7 @@
 //
 // ── WHAT A RULE MAY SEE ─────────────────────────────────────────────────────
 //
-// PARSE-phase facts only, built by `lunco-modelica/src/lint.rs`. A model's
+// PARSE-phase facts only, built by `lunco-modelica-ast/src/lint_facts.rs`. A model's
 // variables, its DAE and its solver do not exist until a COMPILE, so no rule
 // here can ask about them — `.mo` validation is deliberately a pre-flight, not a
 // simulation.
@@ -19,14 +19,11 @@
 //   facts.model            the class name, "" when extraction failed
 //   facts.params[]         #{ name, value }   declared `parameter`s
 //   facts.inputs[]         #{ name, default } declared `input`s
-//   facts.param_names[]    names alone, for cheap `in` tests
-//   facts.input_names[]    ditto
-//   facts.shadowed[]       names declared BOTH input and parameter
 //
-// Plus the SHAPE of the equation section — the equations are in the AST at parse
-// even though their values are not:
+// Plus the SHAPE of equation and algorithm sections — the constructs are in the
+// AST at parse even though their values are not:
 //
-//   facts.conditional_equations[]        #{ name, kind, form, line }
+//   facts.conditional_constructs[]        #{ name, kind, form, section, line }
 //        name  the variable the equation defines ("" if the LHS is not a
 //              component reference), `x` for `der(x) = …`
 //        kind  "algebraic" | "state" | "parameter" | "discrete" | "input" |
@@ -35,9 +32,10 @@
 //        form  "if-expression"  `x = if c then e else 0`   ← the silent zero
 //              "if-equation"    `if c then x = a; end if;`
 //              "when-equation"  a discrete event — a DIFFERENT defect
+//              "if-statement" / "when-statement" in an algorithm section
+//        section  "equation" | "initial-equation" | "algorithm" |
+//                 "initial-algorithm"
 //        line  1-based source line, 0 when the AST carried no location
-//   facts.conditional_algebraic_names[]  the `algebraic` × `if-expression`
-//                                        subset, precomputed
 //
 // Plus the validator's own facts, shared by every domain:
 //
@@ -69,16 +67,20 @@ fn finding(rule, severity, subject, message) {
 /// is overwriting every step.
 fn input_shadows_parameter(facts) {
     let out = [];
-    for name in facts.shadowed {
-        let msg = "`";
-        msg += name;
-        msg += "` is declared as both an `input` and a `parameter`. A cosim wire";
-        msg += " writes an input every step while a parameter override writes it";
-        msg += " once, so the two fight and the value shown in the experiments";
-        msg += " dialog is not the value the model integrates. Keep it an";
-        msg += " `input` if another model drives it, a `parameter` if the user";
-        msg += " sets it.";
-        out.push(finding("input-shadows-parameter", "error", name, msg));
+    for input in facts.inputs {
+        for parameter in facts.params {
+            if input.name != parameter.name { continue; }
+            let name = input.name;
+            let msg = "`";
+            msg += name;
+            msg += "` is declared as both an `input` and a `parameter`. A cosim wire";
+            msg += " writes an input every step while a parameter override writes it";
+            msg += " once, so the two fight and the value shown in the experiments";
+            msg += " dialog is not the value the model integrates. Keep it an";
+            msg += " `input` if another model drives it, a `parameter` if the user";
+            msg += " sets it.";
+            out.push(finding("input-shadows-parameter", "error", name, msg));
+        }
     }
     out
 }
@@ -98,7 +100,10 @@ fn input_shadows_parameter(facts) {
 /// branch.
 fn conditional_algebraic_observable(facts) {
     let out = [];
-    for name in facts.conditional_algebraic_names {
+    for eq in facts.conditional_constructs {
+        if eq.form != "if-expression" { continue; }
+        if eq.kind != "algebraic" { continue; }
+        let name = eq.name;
         let msg = "`";
         msg += name;
         msg += "` is an algebraic variable defined behind a conditional. rumoca's";
@@ -121,7 +126,7 @@ fn conditional_algebraic_observable(facts) {
 /// the author to look, and an error here would be a guess wearing certainty.
 fn conditional_equation_of_unknown_variable(facts) {
     let out = [];
-    for eq in facts.conditional_equations {
+    for eq in facts.conditional_constructs {
         if eq.form != "if-expression" { continue; }
         if eq.kind != "unknown" { continue; }
         let subject = eq.name;
@@ -143,10 +148,37 @@ fn conditional_equation_of_unknown_variable(facts) {
     out
 }
 
+/// **A branch construct is unsupported by the current Rumoca execution path.**
+///
+/// The AST projection stays neutral. This reloadable rule covers structural
+/// equation/algorithm branches and conditional expressions on other declared
+/// variable kinds; the specialized rules retain the actionable algebraic and
+/// unresolved cases.
+fn unsupported_conditional_construct(facts) {
+    let out = [];
+    for construct in facts.conditional_constructs {
+        if construct.form == "if-expression" {
+            if construct.kind == "algebraic" || construct.kind == "unknown" { continue; }
+        }
+        let subject = construct.name;
+        if subject == "" { subject = "equation"; }
+        let msg = "The `";
+        msg += construct.form;
+        msg += "` at line ";
+        msg += construct.line;
+        msg += " in the `";
+        msg += construct.section;
+        msg += "` section is not supported by rumoca's branch-free execution path. Rewrite the model with branch-free arithmetic such as `max()` or `min()`.";
+        out.push(finding("conditional-construct-unsupported", "error", subject, msg));
+    }
+    out
+}
+
 fn lint_modelica(facts) {
     let out = [];
     for f in input_shadows_parameter(facts) { out.push(f); }
     for f in conditional_algebraic_observable(facts) { out.push(f); }
     for f in conditional_equation_of_unknown_variable(facts) { out.push(f); }
+    for f in unsupported_conditional_construct(facts) { out.push(f); }
     out
 }

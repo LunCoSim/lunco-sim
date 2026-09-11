@@ -653,7 +653,7 @@ mod wasm {
                     // diagnostics in one round-trip — matching the single
                     // `SyntaxCache` shape the doc now uses.
                     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        let recovery = rumoca_phase_parse::parse_to_syntax(&source, &uri);
+                        let recovery = lunco_modelica_ast::parse_to_syntax(&source, &uri);
                         // Resolve byte spans → located diagnostics here, where
                         // the source is in hand, so the main thread receives
                         // clickable parse errors (not just debug strings).

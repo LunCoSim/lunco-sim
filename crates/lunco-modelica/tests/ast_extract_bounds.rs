@@ -16,7 +16,7 @@ fn src() -> &'static str {
 
 #[test]
 fn bounds_extraction_finds_valve_opening_min_max() {
-    let ast = rumoca_phase_parse::parse_to_ast(src(), "AnnotatedRocketStage.mo").expect("parses");
+    let ast = lunco_modelica_ast::parse_to_ast(src(), "AnnotatedRocketStage.mo").expect("parses");
     let mut index = lunco_modelica::index::ModelicaIndex::new();
     index.rebuild_from_ast(&ast, src());
     let entry = index

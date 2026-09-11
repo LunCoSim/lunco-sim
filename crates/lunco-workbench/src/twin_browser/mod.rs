@@ -39,7 +39,7 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 
-use crate::panel::{Panel, PanelCtx, PanelId, PanelSlot};
+use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
 pub mod files_section;
 /// LunCo Library section — the engine's bundled `assets/` listed as a
@@ -501,8 +501,8 @@ impl Panel for TwinBrowserPanel {
         "Twin".to_string()
     }
 
-    fn menu_group(&self) -> crate::PanelMenuGroup {
-        crate::PanelMenuGroup::Design
+    fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
+        lunco_workbench_core::PanelMenuGroup::Design
     }
 
     fn default_slot(&self) -> PanelSlot {

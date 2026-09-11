@@ -1,0 +1,174 @@
+@import "ui/runtime_fonts.css";
+@import "ui/runtime_theme.css";
+
+:root {
+  --ui-status-color: var(--accent-color);
+}
+
+#compact-control-root {
+  display: flex;
+  flex-direction: column;
+  row-gap: 4px;
+  width: 100%;
+  height: 100%;
+  padding: 7px 9px;
+  box-sizing: border-box;
+  border-width: 1px;
+  border-color: var(--panel-border);
+  border-radius: 8px;
+  background-color: var(--panel-background);
+  color: var(--text-color);
+  font-family: "LunCo UI";
+  overflow: hidden;
+}
+
+#compact-control-header,
+#compact-control-owner-row,
+#compact-control-angular-row,
+#compact-control-simulation-row,
+#compact-control-error-row,
+#compact-telemetry-row {
+  display: flex;
+  align-items: center;
+  min-width: 0px;
+  column-gap: 6px;
+}
+
+#compact-control-header {
+  justify-content: space-between;
+  min-height: 16px;
+  padding-bottom: 2px;
+  border-bottom-width: 1px;
+  border-bottom-color: rgba(169, 181, 205, 0.28);
+}
+
+#compact-control-vehicle {
+  min-width: 0px;
+  color: var(--text-color);
+  font-size: 12px;
+  font-weight: 700;
+  overflow: hidden;
+  -bevy-line-break: no-wrap;
+}
+
+#compact-control-status-chip {
+  display: flex;
+  align-items: center;
+  column-gap: 4px;
+  flex-shrink: 0;
+}
+
+#compact-control-status-marker {
+  width: 5px;
+  height: 5px;
+  flex-shrink: 0;
+  border-radius: 3px;
+  background-color: var(--ui-status-color);
+}
+
+#compact-control-status,
+#compact-control-owner,
+#compact-speed-value,
+#compact-position-value,
+#compact-control-angular,
+#compact-control-simulation,
+#compact-telemetry-value,
+#compact-control-error {
+  min-width: 0px;
+  overflow: hidden;
+  -bevy-line-break: no-wrap;
+}
+
+#compact-control-status,
+#compact-control-owner-label,
+#compact-speed-label,
+#compact-position-label,
+#compact-control-angular-label {
+  color: var(--muted-color);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+#compact-control-status,
+#compact-control-owner,
+#compact-control-angular,
+#compact-control-simulation {
+  color: var(--accent-color);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+#compact-control-owner-row {
+  justify-content: space-between;
+}
+
+#compact-control-motion-grid {
+  display: flex;
+  column-gap: 10px;
+  min-width: 0px;
+}
+
+#compact-speed,
+#compact-position {
+  display: flex;
+  align-items: baseline;
+  column-gap: 5px;
+  width: 50%;
+  min-width: 0px;
+}
+
+#compact-speed-value,
+#compact-position-value {
+  flex-grow: 1;
+  color: var(--text-color);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+#compact-control-angular-row {
+  justify-content: space-between;
+  padding-bottom: 2px;
+  border-bottom-width: 1px;
+  border-bottom-color: rgba(169, 181, 205, 0.16);
+}
+
+#compact-control-angular {
+  color: var(--text-color);
+  text-align: right;
+}
+
+#compact-control-simulation-row,
+#compact-telemetry-row,
+#compact-control-error-row {
+  align-items: flex-start;
+  width: 100%;
+  min-height: 11px;
+  padding-top: 2px;
+  border-top-width: 1px;
+  border-top-color: rgba(169, 181, 205, 0.16);
+}
+
+#compact-control-simulation,
+#compact-telemetry-value,
+#compact-control-error {
+  width: 100%;
+  flex-grow: 1;
+  flex-shrink: 1;
+  flex-basis: 0px;
+  font-size: 9px;
+  font-weight: 700;
+  -bevy-line-break: word-or-character;
+}
+
+#compact-control-simulation {
+  color: var(--accent-color);
+}
+
+#compact-telemetry-value {
+  color: var(--text-color);
+}
+
+#compact-control-error {
+  color: var(--danger-color);
+}

@@ -86,31 +86,31 @@ pub fn resolved_experiments_doc(world: &World) -> Option<DocumentId> {
 }
 
 /// `PanelCtx` sibling of [`active_doc`].
-pub fn active_doc_ctx(ctx: &lunco_workbench::PanelCtx) -> Option<DocumentId> {
+pub fn active_doc_ctx(ctx: &lunco_workbench_core::PanelCtx) -> Option<DocumentId> {
     ctx.resource::<lunco_workspace::WorkspaceResource>()?
         .active_document
 }
 
 /// `PanelCtx` sibling of [`resolved_telemetry_doc`].
-pub fn resolved_telemetry_doc_ctx(ctx: &lunco_workbench::PanelCtx) -> Option<DocumentId> {
+pub fn resolved_telemetry_doc_ctx(ctx: &lunco_workbench_core::PanelCtx) -> Option<DocumentId> {
     let pin = ctx.resource::<DocPinState>().and_then(|s| s.telemetry);
     pin.or_else(|| active_doc_ctx(ctx))
 }
 
 /// `PanelCtx` sibling of [`resolved_inspector_doc`].
-pub fn resolved_inspector_doc_ctx(ctx: &lunco_workbench::PanelCtx) -> Option<DocumentId> {
+pub fn resolved_inspector_doc_ctx(ctx: &lunco_workbench_core::PanelCtx) -> Option<DocumentId> {
     let pin = ctx.resource::<DocPinState>().and_then(|s| s.inspector);
     pin.or_else(|| active_doc_ctx(ctx))
 }
 
 /// `PanelCtx` sibling of [`resolved_experiments_doc`].
-pub fn resolved_experiments_doc_ctx(ctx: &lunco_workbench::PanelCtx) -> Option<DocumentId> {
+pub fn resolved_experiments_doc_ctx(ctx: &lunco_workbench_core::PanelCtx) -> Option<DocumentId> {
     let pin = ctx.resource::<DocPinState>().and_then(|s| s.experiments);
     pin.or_else(|| active_doc_ctx(ctx))
 }
 
 /// `PanelCtx` sibling of [`doc_display_name`].
-pub fn doc_display_name_ctx(ctx: &lunco_workbench::PanelCtx, doc: DocumentId) -> String {
+pub fn doc_display_name_ctx(ctx: &lunco_workbench_core::PanelCtx, doc: DocumentId) -> String {
     ctx.resource::<crate::state::ModelicaDocumentRegistry>()
         .and_then(|reg| reg.host(doc))
         .map(|host| host.document().origin().display_name())
@@ -130,7 +130,7 @@ pub enum PinKind {
 /// the panel onto the currently-active doc; click again to release.
 pub fn render_pin_header(
     ui: &mut bevy_egui::egui::Ui,
-    ctx: &mut lunco_workbench::PanelCtx,
+    ctx: &mut lunco_workbench_core::PanelCtx,
     kind: PinKind,
 ) {
     use bevy_egui::egui;

@@ -368,8 +368,12 @@ The singleton and separate preview-tab renderers both record
 global live-scene egui guard while allowing part selection and handle drags
 inside the focused preview surface. While a focused gizmo handle owns a
 primary drag, the same gate suppresses the preview camera's competing primary
-pan path, leaving the drag in gizmo mode. No second USD gizmo, cursor
-transform, or panel-local input gate is introduced.
+pan path, leaving the drag in gizmo mode. The resolved offscreen target remains
+stable even while the preview image reports an egui pointer gesture, so the
+gizmo stream is not interrupted on held-drag frames. The gizmo picking backend
+uses the fractional layer above its scene camera so the preview capture cannot
+mask the handle, while ordinary egui chrome still masks the scene. No second USD
+gizmo, cursor transform, or panel-local input gate is introduced.
 
 `InspectUsdEditSession` is the read-only proposal review query. It requires an
 explicit `doc_id` and returns each typed proposal, its explicit scope, generation
@@ -465,10 +469,11 @@ being converted into guessed bounds.
 
 For referenced, cylindrical, mesh, or compound parts, use
 `place_with_collision_clearance_plan`. It takes exact moving and blocker body
-paths and asks `QueryUsdPrim` for `collision_bounds: true`; that request is
-serialized from the shared `lunco_usd_bevy::collision_aabb` owner in the
-canonical stage frame. The tool only applies a candidate translation when all
-bodies share a translation-only parent chain, then checks the aggregate AABBs
+paths and asks `QueryUsdPrim` for `collision_bounds: true`; that request uses the
+shared `lunco_usd_bevy::collision_aabb` owner in the canonical stage
+frame, so nested rigid parts are included in an assembly envelope. The tool only
+applies a candidate translation when all bodies share a translation-only parent
+chain, then checks the aggregate AABBs
 against the caller's minimum gap. Missing collision geometry, malformed or
 unsupported collision data, overlap, duplicate paths, and rotated frames fail
 before a proposal is created. This keeps positioning policy hot-reloadable in
@@ -688,7 +693,7 @@ coverage, and mass/inertia plus explicit collider coverage. Its
 preview/transform boundary; it does not author transforms or create a second
 selection or journal. Callers supply the assembly manifest and expected
 targets, so missing metadata fails visibly instead of being inferred from
-names. `collision_bounds: true` exposes the shared composed aggregate envelope
+names. `collision_bounds: true` exposes the shared composed whole-assembly
 for placement and inspection; a null envelope means visual-only geometry,
 whereas malformed collision data is an error. Raycast wheels are not listed as
 rigid bodies: only actual movable bodies are checked for joint coverage.

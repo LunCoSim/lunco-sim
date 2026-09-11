@@ -29,7 +29,7 @@ use crate::signal::{
 use crate::view::{Panel2DCtx, ViewKind};
 use crate::viz::{RoleSpec, SignalBinding, Visualization, VisualizationConfig, VizKindId};
 use lunco_core::GlobalEntityId;
-use lunco_workbench::PanelCtx;
+use lunco_workbench_core::PanelCtx;
 
 /// A line-plot toolbar edit requested by the panel's read-only paint pass.
 #[derive(Event)]

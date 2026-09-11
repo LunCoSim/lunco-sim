@@ -28,9 +28,9 @@
 //! at authored precision promoted to f64, without a coordinate-basis change.
 //! A request with `collision_bounds: true` adds the aggregate composed
 //! collision AABB in canonical stage coordinates. It is derived by the shared
-//! `lunco_usd_bevy::collision_aabb` reader, so compound ownership, standard
-//! shape dimensions, purpose filtering, transforms, and malformed-data errors
-//! have one owner for API, Rhai, and other consumers.
+//! `lunco_usd_bevy::collision_aabb` reader, so nested compound
+//! ownership, standard shape dimensions, purpose filtering, transforms, and
+//! malformed-data errors have one owner for API, Rhai, and other consumers.
 //! A request with `topology: true` adds one scoped, read-only record containing
 //! visual/collision parts, body ownership, per-part geometry bounds, local and
 //! world transforms, source-layer stack heads, material/shader bindings,

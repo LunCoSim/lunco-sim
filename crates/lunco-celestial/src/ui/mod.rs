@@ -2,9 +2,8 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_workbench::{
-    icon_text_button, Panel, PanelCtx, PanelId, PanelSlot, UiIcon, WorkbenchAppExt,
-};
+use lunco_workbench::{icon_text_button, UiIcon, WorkbenchAppExt};
+use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
 use crate::commands::TeleportToSurface;
 use lunco_core::CelestialBody;
@@ -23,8 +22,8 @@ impl Panel for CelestialTimePanel {
     fn title(&self) -> String {
         "Time Control".into()
     }
-    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
-        lunco_workbench::PanelMenuGroup::Scene
+    fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
+        lunco_workbench_core::PanelMenuGroup::Scene
     }
     fn default_slot(&self) -> PanelSlot {
         PanelSlot::Bottom
@@ -92,8 +91,8 @@ impl Panel for CelestialBodiesPanel {
     fn title(&self) -> String {
         "Celestial Bodies".into()
     }
-    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
-        lunco_workbench::PanelMenuGroup::Scene
+    fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
+        lunco_workbench_core::PanelMenuGroup::Scene
     }
     fn default_slot(&self) -> PanelSlot {
         PanelSlot::SideBrowser

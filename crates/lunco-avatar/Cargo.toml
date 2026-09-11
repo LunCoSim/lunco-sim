@@ -22,6 +22,7 @@ lunco-render = { path = "../lunco-render" }
 # on a headless server) build with `default-features = false` → no egui→winit.
 bevy_egui = { workspace = true, optional = true }
 lunco-workbench = { path = "../lunco-workbench", optional = true }
+lunco-workbench-core = { path = "../lunco-workbench-core", optional = true }
 lunco-theme = { path = "../lunco-theme", optional = true }
 avian3d = { workspace = true }
 big_space = { workspace = true }
@@ -48,7 +49,7 @@ tempfile = { workspace = true }
 default = ["ui"]
 # The egui camera/inspector panels (`src/ui/`, AvatarUiPlugin). Off ⇒ no egui;
 # the possession observers + camera components stay available.
-ui = ["dep:bevy_egui", "dep:lunco-workbench", "dep:lunco-theme"]
+ui = ["dep:bevy_egui", "dep:lunco-workbench", "dep:lunco-workbench-core", "dep:lunco-theme"]
 
 [lints]
 workspace = true

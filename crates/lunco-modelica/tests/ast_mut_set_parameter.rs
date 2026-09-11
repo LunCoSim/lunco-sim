@@ -13,7 +13,7 @@
 //! rumoca, not us.
 
 use lunco_modelica::ast_mut::{self, AstMutError, Edit};
-use rumoca_phase_parse::parse_to_ast;
+use lunco_modelica_ast::parse_to_ast;
 
 /// End-to-end harness: parse `source`, run `op` on `class_name`, apply the
 /// splice, reparse, return the post-mutation `Component` of `component_name`.

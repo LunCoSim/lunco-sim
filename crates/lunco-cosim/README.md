@@ -141,10 +141,11 @@ at all, the variable would vanish like the algebraics did.
   application with mocked `SimComponent.outputs`. Fast; no Modelica worker
   involved.
 
-- **`tests/cross_entity_cosim_test.rs`** — optional Python-feature integration
-  chain: Modelica oscillator → Python amplifier → Avian force. This is the
-  worker-backed end-to-end regression and is intentionally separate from the
-  fast generic port tests.
+- The application-level **Modelica → Python → Avian** chain lives in
+  [`lunco-luncosim/tests/cosim_chain.rs`](../lunco-luncosim/tests/cosim_chain.rs).
+  It is hosted by the existing application package because it crosses the
+  worker, scripting, and physics composition boundary; this leaf package keeps
+  only co-simulation mechanism tests.
 
 - **`lunco-modelica/tests/balloon_stepper_test.rs`** — isolates rumoca itself.
   Compiles `balloon.mo` directly and asserts that `stepper.get("netForce")`
@@ -157,7 +158,7 @@ Run with:
 ```bash
 scripts/run_rust_tests.sh -p lunco-cosim --module cosim_test
 scripts/run_rust_tests.sh -p lunco-cosim --module balloon_e2e_test
-scripts/run_rust_tests.sh -p lunco-cosim --features python --module cross_entity_cosim_test
+scripts/run_rust_tests.sh -p lunco-luncosim --features python --module cosim_chain
 scripts/run_rust_tests.sh -p lunco-modelica --module balloon_stepper_test
 ```
 

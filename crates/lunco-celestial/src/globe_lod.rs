@@ -886,15 +886,15 @@ pub(crate) fn update_globe_lod(
                 completed_meshes,
                 ..
             } = &mut *tiles;
-            pending_meshes.retain(|coord, task| {
-                match block_on(future::poll_once(&mut *task)) {
+            pending_meshes.retain(
+                |coord, task| match block_on(future::poll_once(&mut *task)) {
                     Some(mesh) => {
                         completed_meshes.push((*coord, mesh));
                         false
                     }
                     None => true,
-                }
-            });
+                },
+            );
         }
         let mesh_completion_pending = !tiles.completed_meshes.is_empty();
         // A worker can finish many meshes between two render frames. Keep the
@@ -1037,7 +1037,9 @@ pub(crate) fn update_globe_lod(
         // started. Drop that work at the authoritative selection boundary so
         // stale globe detail cannot consume the worker pool or later enter the
         // mesh cache.
-        tiles.pending_meshes.retain(|coord, _| missing.contains(coord));
+        tiles
+            .pending_meshes
+            .retain(|coord, _| missing.contains(coord));
         let mut prioritized: Vec<(TileCoord, f64)> = missing
             .into_iter()
             .map(|coord| {

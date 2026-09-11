@@ -294,6 +294,16 @@ with `value.intent`, `value.edge`, and `value.target_gid`; the event source is
 also the target gid. The target remains subject to the normal command authority
 policy, so two spawned vehicles cannot receive one another's edge.
 
+### 6.9 Editor keyboard input
+
+The workbench host owns one app-level semantic input surface in addition to the
+local avatar's input surface. Both use the same `InputBindingsSettings` map and
+publish `UserIntent`; editor-only views therefore do not need an avatar merely
+to receive `Cancel`. `CancelIntent` reads the app-level surface when present and
+still reads the local avatar for simulation camera/possession behavior. Egui
+text focus remains the single suppression gate, so Escape/Backspace is ignored
+by scene/editor consumers while a text field owns the keyboard.
+
 ---
 
 ## Technical Reference

@@ -51,7 +51,7 @@ fn compile_str_keeps_bound_input_as_runtime_slot() {
 #[test]
 fn simulation_session_clamps_advance_at_t_end() {
     let source = lunco_modelica::models::get_model("Balloon.mo").expect("bundled Balloon.mo");
-    let (stripped, _) = lunco_modelica::ast_extract::strip_input_defaults(source);
+    let (stripped, _) = lunco_modelica_ast::ast_extract::strip_input_defaults(source);
     let mut compiler = lunco_modelica::ModelicaCompiler::new();
     let dae = compiler
         .compile_str("Balloon", &stripped, "balloon.mo")
@@ -81,7 +81,7 @@ fn simulation_session_clamps_advance_at_t_end() {
 /// AST-driven span splicing produces the expected renamed source.
 #[test]
 fn ast_class_rename_via_token_spans() {
-    use rumoca_phase_parse::parse_to_ast;
+    use lunco_modelica_ast::parse_to_ast;
     let src = "within Foo.Bar;\n\nmodel OldName \"a class\"\n  Real x;\nend OldName;\n";
     let ast = parse_to_ast(src, "t.mo").expect("parses");
     let class = ast

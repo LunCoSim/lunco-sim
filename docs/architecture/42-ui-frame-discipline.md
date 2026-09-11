@@ -79,7 +79,7 @@ it does not add an alternate lighting path.
 
 Panel view-models also gate on the Workbench's live dock state. A registered
 panel that is not docked has no visible consumer, so its producer must not
-rebuild a projection in the background. `WorkbenchLayout::is_panel_docked`
+rebuild a projection in the background. `WorkbenchSnapshot::is_panel_docked`
 is the shared visibility boundary for that decision; opening the panel makes
 its normal producer cadence eligible again.
 

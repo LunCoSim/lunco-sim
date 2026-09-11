@@ -402,15 +402,14 @@ fn setup_web_workbench(
     mut doc_registry: ResMut<lunco_modelica::state::ModelicaDocumentRegistry>,
     compile_states: ResMut<lunco_doc_bevy::DocumentDiagnostics>,
     mut model_tabs: ResMut<lunco_modelica::model_tabs::ModelTabs>,
-    mut layout: ResMut<lunco_workbench::WorkbenchLayout>,
     model_info: Res<BundledModelInfo>,
 ) {
     let model_path = PathBuf::from(&model_info.default_filename);
     let source = model_info.default_source.clone();
-    let model_name = lunco_modelica::ast_extract::extract_model_name(&source)
+    let model_name = lunco_modelica_ast::ast_extract::extract_model_name(&source)
         .unwrap_or_else(|| "Model".to_string());
-    let initial_params = lunco_modelica::ast_extract::extract_parameters(&source);
-    let initial_inputs = lunco_modelica::ast_extract::extract_inputs_with_defaults(&source);
+    let initial_params = lunco_modelica_ast::ast_extract::extract_parameters(&source);
+    let initial_inputs = lunco_modelica_ast::ast_extract::extract_inputs_with_defaults(&source);
 
     workbench_state.editor_buffer = source.clone();
 
@@ -444,7 +443,10 @@ fn setup_web_workbench(
 
     // Open the model tab so the user lands on the model view.
     let tab_id = model_tabs.ensure_for(doc_id, None);
-    layout.open_instance(lunco_modelica::ui::MODEL_VIEW_KIND, tab_id);
+    commands.trigger(lunco_workbench::OpenTab {
+        kind: lunco_modelica::ui::MODEL_VIEW_KIND,
+        instance: tab_id,
+    });
 
     // Select this entity so panels default to viewing it.
     workbench_state.selected_entity = Some(entity);

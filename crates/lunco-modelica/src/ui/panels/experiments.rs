@@ -18,7 +18,8 @@ use egui_plot::{Legend, Line, LineStyle, Plot, PlotPoints, VLine};
 use lunco_doc::DocumentId;
 use lunco_experiments::{ExperimentId, ExperimentRegistry, RunStatus};
 use lunco_viz::viz::VizId;
-use lunco_workbench::{icon_button, Panel, PanelCtx, PanelId, PanelSlot, UiIcon};
+use lunco_workbench::{icon_button, UiIcon};
+use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
 pub const EXPERIMENTS_PANEL_ID: PanelId = PanelId("modelica_experiments");
 
@@ -320,8 +321,8 @@ impl Panel for ExperimentsPanel {
         "⚗ Experiments".into()
     }
 
-    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
-        lunco_workbench::PanelMenuGroup::Design
+    fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
+        lunco_workbench_core::PanelMenuGroup::Design
     }
 
     fn default_slot(&self) -> PanelSlot {
@@ -957,9 +958,9 @@ impl ExperimentsPanel {
             .resource::<crate::state::ModelicaDocumentRegistry>()
             .and_then(|r| r.host(doc))
             .and_then(|h| {
-                crate::ast_extract::find_class_by_short_name(
+                lunco_modelica_ast::ast_extract::find_class_by_short_name(
                     h.document().syntax().ast(),
-                    crate::ast_extract::short_name(&model_name),
+                    lunco_modelica_ast::ast_extract::short_name(&model_name),
                 )
                 .map(crate::experiments_runner::detect_top_level_inputs)
             })
@@ -1477,9 +1478,9 @@ impl ExperimentsPanel {
 
         // Parameters come from the parsed AST of the resolved model class
         // (no per-frame source regex — WP-8 / CQ-205).
-        let detected = crate::ast_extract::find_class_by_short_name(
+        let detected = lunco_modelica_ast::ast_extract::find_class_by_short_name(
             document.syntax().ast(),
-            crate::ast_extract::short_name(&model_name),
+            lunco_modelica_ast::ast_extract::short_name(&model_name),
         )
         .map(crate::experiments_runner::detect_top_level_literal_parameters)
         .unwrap_or_default();
@@ -2714,7 +2715,7 @@ fn load_run_into_draft(world: &mut World, id: ExperimentId) {
 /// collisions across classes — same trade-off the rest of the UI
 /// already makes.
 fn active_doc_units(
-    ctx: &lunco_workbench::PanelCtx,
+    ctx: &lunco_workbench_core::PanelCtx,
     picked: &std::collections::BTreeSet<String>,
 ) -> std::collections::HashMap<String, String> {
     let mut out: std::collections::HashMap<String, String> = std::collections::HashMap::new();
@@ -2815,7 +2816,7 @@ pub fn all_experiment_variables_for_doc(
 
 /// `PanelCtx` sibling of [`all_experiment_variables_for_doc`].
 pub fn all_experiment_variables_for_doc_ctx(
-    ctx: &lunco_workbench::PanelCtx,
+    ctx: &lunco_workbench_core::PanelCtx,
     doc_id: DocumentId,
 ) -> std::collections::BTreeSet<String> {
     let mut out: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();

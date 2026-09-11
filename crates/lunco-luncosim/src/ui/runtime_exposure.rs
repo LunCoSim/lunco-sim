@@ -20,10 +20,10 @@ use bevy_hui::prelude::{
 };
 use lunco_core::exposure::EngineExposures;
 use lunco_core::SceneViewport;
+use lunco_hooks::HookValue;
 use lunco_render::SceneCamera;
-use lunco_workbench::{
-    PanelId, PanelRects, RuntimeSurfaceLayout, RuntimeSurfaceLayouts, ScenePickGate,
-};
+use lunco_workbench::{PanelRects, RuntimeSurfaceLayout, RuntimeSurfaceLayouts, ScenePickGate};
+use lunco_workbench_core::{PanelId, WorkbenchSnapshot};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -146,10 +146,6 @@ pub(crate) struct RuntimeUiSurfaceDefinition {
     pub template: String,
     pub stylesheet: String,
     pub namespace: String,
-    /// When true, offline capture waits until this authored surface is mounted,
-    /// styled, positioned, and visible before frame zero is accepted.
-    #[serde(default)]
-    pub required_for_recording: bool,
     #[serde(default)]
     pub bindings: HashMap<String, RuntimeUiBindingDefinition>,
     #[serde(default)]
@@ -393,6 +389,22 @@ pub(crate) struct RuntimeUiManifestState {
     rebuild_pending: bool,
 }
 
+/// Twin-authored capture contract for runtime surfaces.
+///
+/// The global UI manifest describes reusable presentation assets only. The
+/// active Twin's `runtime.ui.recording` policy returns stable surface IDs for
+/// the current capture. The recorder consumes the readiness status below; it
+/// does not know what a surface represents.
+#[derive(Resource, Debug, Default)]
+pub(crate) struct RuntimeUiRecordingContract {
+    required_namespaces: HashSet<String>,
+    manifest_id: Option<AssetId<RuntimeUiManifest>>,
+    exposure_revision: u64,
+    hook_generation: u64,
+    recording_active: bool,
+    error: Option<String>,
+}
+
 /// Acknowledgement from the render extraction boundary. Main-world layout is
 /// not enough to arm offline capture: the render world must have extracted at
 /// least one visible UI node for every required surface in the current
@@ -525,7 +537,6 @@ impl RuntimeUiSurfaceRects {
 pub(crate) struct RuntimeUiSurface {
     layout_id: String,
     namespace: String,
-    required_for_recording: bool,
     template: Handle<HtmlTemplate>,
     stylesheet: Handle<StyleSheet>,
     bindings: HashMap<String, RuntimeUiBindingDefinition>,
@@ -564,7 +575,6 @@ impl RuntimeUiSurface {
         Self {
             layout_id: definition.id.clone(),
             namespace: definition.namespace.clone(),
-            required_for_recording: definition.required_for_recording,
             template,
             stylesheet,
             bindings: definition.bindings.clone(),
@@ -585,9 +595,114 @@ impl RuntimeUiSurface {
     }
 }
 
-/// Mirror the authored recording contract onto the workbench status bus. This
-/// remains generic: a surface is required only when its namespace has a live
-/// exposure, so unrelated scenes do not wait for a HUD they do not author.
+/// Resolve the active Twin's typed capture contract once per exposure/policy
+/// revision. A normal interactive session has no contract; when the recorder
+/// becomes active the Twin policy may select any currently visible surfaces by
+/// stable authored ID.
+pub(crate) fn update_runtime_ui_recording_contract(
+    exposures: Res<EngineExposures>,
+    manifests: Res<Assets<RuntimeUiManifest>>,
+    manifest_state: Res<RuntimeUiManifestState>,
+    recording: Option<Res<lunco_workbench::screenshot::OfflineRecordingState>>,
+    mut contract: ResMut<RuntimeUiRecordingContract>,
+) {
+    let recording_active = recording.is_some_and(|state| state.active);
+    let manifest_id = manifest_state.applied;
+    let hook_generation = lunco_hooks::generation();
+    if contract.manifest_id == manifest_id
+        && contract.exposure_revision == exposures.revision
+        && contract.hook_generation == hook_generation
+        && contract.recording_active == recording_active
+    {
+        return;
+    }
+
+    contract.manifest_id = manifest_id;
+    contract.exposure_revision = exposures.revision;
+    contract.hook_generation = hook_generation;
+    contract.recording_active = recording_active;
+    contract.required_namespaces.clear();
+    contract.error = None;
+    if !recording_active {
+        return;
+    }
+
+    let Some(manifest) = manifests.get(&manifest_state.handle) else {
+        return;
+    };
+    let all_surface_ids = manifest
+        .surfaces
+        .iter()
+        .map(|surface| HookValue::str(surface.id.clone()))
+        .collect();
+    let visible_surface_ids = manifest
+        .surfaces
+        .iter()
+        .filter(|surface| {
+            exposures
+                .surfaces
+                .get(&surface.namespace)
+                .is_some_and(|exposure| exposure.visible)
+        })
+        .map(|surface| HookValue::str(surface.id.clone()))
+        .collect();
+    let facts = HookValue::map([
+        ("all_surface_ids", HookValue::Array(all_surface_ids)),
+        ("visible_surface_ids", HookValue::Array(visible_surface_ids)),
+        ("recording_active", HookValue::Bool(true)),
+    ]);
+
+    let result = lunco_hooks::invoke("runtime.ui.recording", &[facts]);
+    let Some(result) = result else {
+        return;
+    };
+    let ids = match result {
+        Ok(HookValue::Array(ids)) => ids,
+        Ok(value) => {
+            contract.error = Some(format!(
+                "recording policy returned {value:?}; expected an array of surface IDs"
+            ));
+            return;
+        }
+        Err(error) => {
+            contract.error = Some(format!("recording policy failed: {error}"));
+            return;
+        }
+    };
+
+    let mut selected = HashSet::new();
+    for id in ids {
+        let Some(id) = id.as_str() else {
+            contract.error = Some("recording policy returned a non-string surface ID".into());
+            contract.required_namespaces.clear();
+            return;
+        };
+        let Some(surface) = manifest.surfaces.iter().find(|surface| surface.id == id) else {
+            contract.error = Some(format!("recording policy selected unknown surface `{id}`"));
+            contract.required_namespaces.clear();
+            return;
+        };
+        if !exposures
+            .surfaces
+            .get(&surface.namespace)
+            .is_some_and(|exposure| exposure.visible)
+        {
+            contract.error = Some(format!("recording policy selected hidden surface `{id}`"));
+            contract.required_namespaces.clear();
+            return;
+        }
+        if !selected.insert(id.to_owned()) {
+            contract.error = Some(format!("recording policy selected `{id}` more than once"));
+            contract.required_namespaces.clear();
+            return;
+        }
+        contract
+            .required_namespaces
+            .insert(surface.namespace.clone());
+    }
+}
+
+/// Mirror the Twin-owned recording contract onto the workbench status bus.
 ///
 /// Readiness is evaluated at the end of Bevy's UI lifecycle. The root must have
 /// passed target-camera propagation and layout, and the retained presentation
@@ -596,6 +711,7 @@ impl RuntimeUiSurface {
 /// passes a retained UI needs.
 pub(crate) fn report_runtime_ui_readiness(
     exposures: Res<EngineExposures>,
+    contract: Res<RuntimeUiRecordingContract>,
     mut presentation_generation: ResMut<RuntimeUiPresentationGeneration>,
     mut roots: Query<(
         &mut RuntimeUiSurface,
@@ -607,9 +723,19 @@ pub(crate) fn report_runtime_ui_readiness(
         Option<&ComputedNode>,
     )>,
     render_state: Option<Res<RuntimeUiRenderState>>,
-    bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
+    bus: Option<ResMut<lunco_status_core::status_bus::StatusBus>>,
 ) {
     let Some(mut bus) = bus else { return };
+
+    if let Some(error) = &contract.error {
+        bus.push(
+            lunco_status_core::status_bus::RUNTIME_UI_SOURCE,
+            lunco_status_core::status_bus::StatusLevel::Error,
+            format!("runtime UI recording policy rejected: {error}"),
+        );
+        bus.remove_progress(lunco_status_core::status_bus::RUNTIME_UI_SOURCE);
+        return;
+    }
 
     let mut required = 0usize;
     let mut ready = 0usize;
@@ -628,7 +754,8 @@ pub(crate) fn report_runtime_ui_readiness(
             .surfaces
             .get(&surface.namespace)
             .is_some_and(|exposure| exposure.visible);
-        if !surface.required_for_recording || !exposure_visible {
+        let capture_required = contract.required_namespaces.contains(&surface.namespace);
+        if !capture_required || !exposure_visible {
             surface.presentation_ready = false;
             surface.presentation_visible = false;
             continue;
@@ -668,7 +795,7 @@ pub(crate) fn report_runtime_ui_readiness(
                 && state.extracted_surface_count == required as u32
         });
     if required == 0 || (ready == required && render_ready) {
-        bus.remove_progress(lunco_workbench::status_bus::RUNTIME_UI_SOURCE);
+        bus.remove_progress(lunco_status_core::status_bus::RUNTIME_UI_SOURCE);
     } else {
         let message = if ready < required {
             format!("mounting recorded UI surfaces {ready}/{required}")
@@ -676,7 +803,7 @@ pub(crate) fn report_runtime_ui_readiness(
             "waiting for recorded UI render extraction".to_string()
         };
         bus.set_progress(
-            lunco_workbench::status_bus::RUNTIME_UI_SOURCE,
+            lunco_status_core::status_bus::RUNTIME_UI_SOURCE,
             message,
             ready as u64,
             required as u64,
@@ -713,6 +840,10 @@ fn acknowledge_runtime_ui_render_extraction(
             .unwrap_or_default();
         render_ack.visible_exposure_revision = exposure_revision;
     }
+    let required_namespaces = main_world
+        .get_resource::<RuntimeUiRecordingContract>()
+        .map(|contract| contract.required_namespaces.clone())
+        .unwrap_or_default();
 
     let (required_roots, presentation_ready_roots, presentation_generation) = {
         let mut roots = main_world.query::<(Entity, &RuntimeUiSurface)>();
@@ -720,7 +851,7 @@ fn acknowledge_runtime_ui_render_extraction(
         let mut presentation_ready_roots = 0;
         let mut presentation_generation = 0;
         for (entity, surface) in roots.iter(&main_world) {
-            if surface.required_for_recording
+            if required_namespaces.contains(&surface.namespace)
                 && render_ack.visible_namespaces.contains(&surface.namespace)
             {
                 required_roots.insert(entity);
@@ -923,7 +1054,7 @@ pub(crate) fn mount_runtime_ui_surfaces(
     manifests: Res<Assets<RuntimeUiManifest>>,
     server: Res<AssetServer>,
     exposures: Res<EngineExposures>,
-    layout: Option<Res<lunco_workbench::WorkbenchLayout>>,
+    layout: Option<Res<WorkbenchSnapshot>>,
     gates: Option<Res<RuntimeUiGates>>,
     surface_layouts: Res<RuntimeSurfaceLayouts>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
@@ -996,7 +1127,7 @@ pub(crate) fn mount_runtime_ui_surfaces(
 
 fn runtime_ui_is_allowed(
     surface: &RuntimeUiSurface,
-    layout: Option<&lunco_workbench::WorkbenchLayout>,
+    layout: Option<&WorkbenchSnapshot>,
     gates: Option<&RuntimeUiGates>,
     workspace: Option<&lunco_workspace::WorkspaceResource>,
 ) -> bool {
@@ -1139,9 +1270,10 @@ pub(crate) fn apply_runtime_ui_exposures(
     mut commands: Commands,
     exposures: Res<EngineExposures>,
     mut manifest_state: ResMut<RuntimeUiManifestState>,
-    layout: Option<Res<lunco_workbench::WorkbenchLayout>>,
+    layout: Option<Res<WorkbenchSnapshot>>,
     gates: Option<Res<RuntimeUiGates>>,
     surface_layouts: Res<RuntimeSurfaceLayouts>,
+    recording_contract: Option<Res<RuntimeUiRecordingContract>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     rects: Option<Res<PanelRects>>,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -1210,8 +1342,11 @@ pub(crate) fn apply_runtime_ui_exposures(
         // the recording contract; applying it to every surface leaves normal
         // HUDs hidden forever because `report_runtime_ui_readiness` does not
         // arm non-recording surfaces.
+        let capture_required = recording_contract
+            .as_deref()
+            .is_some_and(|contract| contract.required_namespaces.contains(&surface.namespace));
         let presentation_visible =
-            should_be_visible && (!surface.required_for_recording || surface.presentation_ready);
+            should_be_visible && (!capture_required || surface.presentation_ready);
         // Scene teardown and HUI template rebuilds can reset the root's Bevy
         // visibility without changing the engine exposure revision. The
         // revision remains the property/style fast path, but visibility is a
@@ -2061,7 +2196,6 @@ mod tests {
                 RuntimeUiSurface {
                     layout_id: "hud".to_owned(),
                     namespace: "hud".to_owned(),
-                    required_for_recording: false,
                     template: Handle::default(),
                     stylesheet: Handle::default(),
                     bindings: HashMap::new(),
@@ -2142,7 +2276,6 @@ mod tests {
                 RuntimeUiSurface {
                     layout_id: "control-hud".to_owned(),
                     namespace: "control-hud".to_owned(),
-                    required_for_recording: false,
                     template: Handle::default(),
                     stylesheet: Handle::default(),
                     bindings: HashMap::new(),
@@ -2190,7 +2323,6 @@ mod tests {
         let mut surface = RuntimeUiSurface {
             layout_id: "recorded".to_owned(),
             namespace: "recorded".to_owned(),
-            required_for_recording: true,
             template: Handle::default(),
             stylesheet: Handle::default(),
             bindings: HashMap::new(),
@@ -2253,7 +2385,6 @@ mod tests {
                 RuntimeUiSurface {
                     layout_id: "terrain-progress".to_owned(),
                     namespace: "terrain-progress".to_owned(),
-                    required_for_recording: false,
                     template: Handle::default(),
                     stylesheet: Handle::default(),
                     bindings: HashMap::new(),
@@ -2316,7 +2447,6 @@ mod tests {
                 RuntimeUiSurface {
                     layout_id: "terrain-progress".to_owned(),
                     namespace: "terrain-progress".to_owned(),
-                    required_for_recording: false,
                     template: Handle::default(),
                     stylesheet: Handle::default(),
                     bindings: HashMap::new(),

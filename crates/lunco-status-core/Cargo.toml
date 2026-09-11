@@ -1,0 +1,16 @@
+[package]
+name = "lunco-status-core"
+version = "0.1.0-dev"
+edition = "2021"
+license.workspace = true
+description = "Renderer-independent lifecycle, progress, and telemetry status infrastructure for LunCoSim"
+
+[dependencies]
+bevy = { workspace = true }
+lunco-core = { path = "../lunco-core" }
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
+lunco-workspace = { path = "../lunco-workspace" }
+web-time = { workspace = true }
+
+[lints]
+workspace = true

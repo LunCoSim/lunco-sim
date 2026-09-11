@@ -14,10 +14,8 @@
 //! - **Expression-aware**: Extracts numeric values from AST expressions, not
 //!   just regex-captured number literals.
 
-use rumoca_compile::parsing::ast::AstIndexMap;
-use rumoca_compile::parsing::{
-    Causality, ClassDef, ClassType, Expression, StoredDefinition, TerminalType, Variability,
-};
+use rumoca_core::{Causality, ClassType, OpBinary, OpUnary, Variability};
+use rumoca_ir_ast::{AstIndexMap, ClassDef, Expression, StoredDefinition, TerminalType};
 use std::collections::{BTreeSet, HashMap};
 
 // ---------------------------------------------------------------------------
@@ -34,15 +32,13 @@ fn parse_recovered(source: &str, file_label: &str) -> StoredDefinition {
     // reference package imports or use recoverable Modelica constructs; that
     // made the input-default strip warn and silently demote every bound input
     // in those files even though Rumoca could compile them successfully.
-    let source = crate::source_asset::normalize_modelica_source(source);
-    rumoca_phase_parse::parse_to_syntax(&source, file_label)
+    crate::parse_to_syntax(source, file_label)
         .best_effort()
         .clone()
 }
 
 fn parse(source: &str) -> Option<StoredDefinition> {
-    let source = crate::source_asset::normalize_modelica_source(source);
-    let syntax = rumoca_phase_parse::parse_to_syntax(&source, "model.mo");
+    let syntax = crate::parse_to_syntax(source, "model.mo");
     (!syntax.has_errors()).then(|| syntax.best_effort().clone())
 }
 
@@ -82,7 +78,9 @@ pub struct ModelInterface {
 /// document state into the simulation path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelicaVariableMetadata {
+    /// Optional quoted-string description from the declaration.
     pub description: Option<String>,
+    /// Optional `unit` modification from the declaration.
     pub unit: Option<String>,
 }
 
@@ -96,30 +94,36 @@ pub fn variable_metadata(
     file_label: &str,
 ) -> HashMap<String, ModelicaVariableMetadata> {
     let ast = parse_recovered(source, file_label);
-    let mut index = crate::index::ModelicaIndex::new();
-    index.rebuild_from_ast(&ast, source);
-    variable_metadata_from_index(index)
+    variable_metadata_from_ast(&ast)
 }
 
-fn variable_metadata_from_index(
-    index: crate::index::ModelicaIndex,
-) -> HashMap<String, ModelicaVariableMetadata> {
-    index
-        .components
-        .into_iter()
-        .filter_map(|component| {
-            let description = (!component.description.is_empty()).then_some(component.description);
+fn variable_metadata_from_ast(ast: &StoredDefinition) -> HashMap<String, ModelicaVariableMetadata> {
+    fn collect(class: &ClassDef, output: &mut HashMap<String, ModelicaVariableMetadata>) {
+        for component in class.components.values() {
+            let description = description_from_tokens(&component.description);
             let unit = component
                 .modifications
                 .get("unit")
+                .map(expression_to_string)
                 .map(|unit| unit.trim_matches('"').to_string())
                 .filter(|unit| !unit.is_empty());
-            (description.is_some() || unit.is_some()).then_some((
-                component.name,
-                ModelicaVariableMetadata { description, unit },
-            ))
-        })
-        .collect()
+            if description.is_some() || unit.is_some() {
+                output.insert(
+                    component.name.clone(),
+                    ModelicaVariableMetadata { description, unit },
+                );
+            }
+        }
+        for nested in class.classes.values() {
+            collect(nested, output);
+        }
+    }
+
+    let mut output = HashMap::new();
+    for class in ast.classes.values() {
+        collect(class, &mut output);
+    }
+    output
 }
 
 /// Read a model's interface from source, in one lenient parse.
@@ -135,9 +139,16 @@ fn variable_metadata_from_index(
 /// gives the engine side.
 pub fn parse_model_interface(source: &str, file_label: &str) -> ModelInterface {
     let ast = parse_recovered(source, file_label);
+    parse_model_interface_from_ast(&ast)
+}
+
+/// Read a model's interface from an already recovered AST.
+///
+/// Callers that already parsed the source MUST use this variant so name,
+/// parameter, input, output, and metadata projections cannot silently drift
+/// through separate parses or recovery modes.
+pub fn parse_model_interface_from_ast(ast: &StoredDefinition) -> ModelInterface {
     let defaults = extract_inputs_with_defaults_from_ast(&ast);
-    let mut index = crate::index::ModelicaIndex::new();
-    index.rebuild_from_ast(&ast, source);
     ModelInterface {
         model_name: extract_model_name_from_ast(&ast),
         within: within_package(&ast),
@@ -150,7 +161,7 @@ pub fn parse_model_interface(source: &str, file_label: &str) -> ModelInterface {
             })
             .collect(),
         outputs: extract_output_names_from_ast(&ast),
-        variable_metadata: variable_metadata_from_index(index),
+        variable_metadata: variable_metadata_from_ast(&ast),
     }
 }
 
@@ -267,7 +278,7 @@ pub fn qualify(parent: &str, child: &str) -> String {
 /// are ignored rather than split on. Single source of truth shared
 /// with rumoca's own name handling.
 pub fn short_name(qualified: &str) -> &str {
-    rumoca_compile::parsing::ir_core::top_level_last_segment(qualified)
+    rumoca_core::top_level_last_segment(qualified)
 }
 
 /// Decode Modelica string-literal escape sequences. Replaces `\"`,
@@ -315,9 +326,9 @@ pub fn unescape_modelica_string(s: &str) -> String {
 /// Canonical entry point for decoding Modelica string terminals. All AST
 /// mutation and projection code uses this same decoder so stripping and escape
 /// handling stay identical at every call site.
-pub fn string_literal_value(e: &rumoca_compile::parsing::ast::Expression) -> Option<String> {
-    use rumoca_compile::parsing::ast::Expression;
-    use rumoca_compile::parsing::TerminalType;
+pub fn string_literal_value(e: &rumoca_ir_ast::Expression) -> Option<String> {
+    use rumoca_ir_ast::Expression;
+    use rumoca_ir_ast::TerminalType;
     let Expression::Terminal {
         terminal_type,
         token,
@@ -350,7 +361,7 @@ pub fn string_literal_value(e: &rumoca_compile::parsing::ast::Expression) -> Opt
 /// shared with rumoca); its `None` for single-segment names maps to
 /// the empty top-level scope `""`.
 pub fn parent_qualified(qualified: &str) -> &str {
-    rumoca_compile::parsing::ir_core::parent_scope(qualified).unwrap_or("")
+    rumoca_core::parent_scope(qualified).unwrap_or("")
 }
 
 /// Return ALL non-package classes (qualified) reachable from the
@@ -900,8 +911,10 @@ fn extract_numeric_binding(expr: &Option<Expression>) -> Option<f64> {
 /// minus — rumoca represents `-5` as `Unary(Minus, 5)`). Used for
 /// `min`/`max` modifier extraction where negative bounds are common,
 /// and shared with the annotation parser (`annotations::parsing`).
-pub(crate) fn numeric_of(expr: &Expression) -> Option<f64> {
-    use rumoca_compile::parsing::ir_core::OpUnary;
+/// Extract a numeric literal or unary-signed numeric literal from an AST
+/// expression. Non-numeric expressions are intentionally unresolved.
+pub fn numeric_of(expr: &Expression) -> Option<f64> {
+    use rumoca_core::OpUnary;
     match expr {
         Expression::Terminal {
             terminal_type: TerminalType::UnsignedReal | TerminalType::UnsignedInteger,
@@ -1043,6 +1056,16 @@ pub fn walk_class_type_names<F: FnMut(&str)>(class: &ClassDef, visit: &mut F) {
     }
 }
 
+/// Whether a type reference is handled by Modelica/Rumoca without an external
+/// source root. Keep this filter beside the shared type-name traversal so the
+/// source-root admission path and the icon warmer cannot diverge on built-ins.
+pub fn is_builtin_type_name(name: &str) -> bool {
+    matches!(
+        name,
+        "Real" | "Integer" | "Boolean" | "String" | "enumeration"
+    )
+}
+
 /// Lower-case Modelica class kind keyword: `model`, `block`, `connector`,
 /// `package`, `function`, `record`, `type`, `class`, `operator`. The same
 /// taxonomy the canvas's class-kind badge surfaces, kept consistent so
@@ -1084,12 +1107,17 @@ pub fn extract_extends_for_class(class: &ClassDef) -> Vec<String> {
 /// `unit="kg"`, …) projected to strings.
 #[derive(Debug, Clone)]
 pub struct ComponentInfo {
+    /// Instance name as authored in the class.
     pub name: String,
+    /// Declared Modelica type name.
     pub type_name: String,
+    /// Description string with surrounding Modelica quotes removed.
     pub description: String,
+    /// Literal component modifications keyed by their authored names.
     pub modifications: HashMap<String, String>,
 }
 
+/// Extract direct sub-component declarations from a class.
 pub fn extract_components_for_class(class: &ClassDef) -> Vec<ComponentInfo> {
     class
         .components
@@ -1097,7 +1125,7 @@ pub fn extract_components_for_class(class: &ClassDef) -> Vec<ComponentInfo> {
         .map(|c| ComponentInfo {
             name: c.name.clone(),
             type_name: c.type_name.to_string(),
-            description: tokens_to_description(&c.description),
+            description: description_from_tokens(&c.description).unwrap_or_default(),
             modifications: c
                 .modifications
                 .iter()
@@ -1113,7 +1141,7 @@ pub fn extract_components_for_class(class: &ClassDef) -> Vec<ComponentInfo> {
 /// here — the agent's structural picture is the wiring, not the
 /// constitutive equations.
 pub fn extract_connections_for_class(class: &ClassDef) -> Vec<(String, String)> {
-    use rumoca_compile::parsing::ast::Equation;
+    use rumoca_ir_ast::Equation;
     class
         .equations
         .iter()
@@ -1124,21 +1152,24 @@ pub fn extract_connections_for_class(class: &ClassDef) -> Vec<(String, String)> 
         .collect()
 }
 
-/// Collapse a description token sequence (Modelica string literal) to
-/// a single trimmed string. Strips surrounding quotes — the AST keeps
-/// them in the lexed token but the agent wants the value, not the
-/// quoting.
-fn tokens_to_description(tokens: &[rumoca_compile::parsing::Token]) -> String {
-    let raw = tokens
-        .iter()
-        .map(|t| t.text.as_ref())
-        .collect::<Vec<_>>()
-        .join(" ");
-    let trimmed = raw.trim();
-    trimmed
-        .trim_start_matches('"')
-        .trim_end_matches('"')
-        .to_string()
+/// Collapse Modelica description string tokens into the value shown to users.
+/// The AST stores each quoted token separately, so quote removal must happen
+/// before joining; otherwise a multi-token description retains embedded quote
+/// characters and each consumer renders it differently.
+pub fn description_from_tokens(tokens: &[rumoca_core::Token]) -> Option<String> {
+    let mut description = String::new();
+    for token in tokens {
+        let text = token.text.trim();
+        let text = text.strip_prefix('"').unwrap_or(text);
+        let text = text.strip_suffix('"').unwrap_or(text);
+        if !text.is_empty() {
+            if !description.is_empty() {
+                description.push(' ');
+            }
+            description.push_str(text);
+        }
+    }
+    (!description.is_empty()).then_some(description)
 }
 
 /// Cheap stringification of an Expression for the modifications map.
@@ -1162,20 +1193,106 @@ fn expression_to_string(expr: &Expression) -> String {
     }
 }
 
+/// Format the small expression subset used by Modelica parameter/icon labels.
+///
+/// This is deliberately a display projection, not a source serializer: values
+/// that cannot be rendered without misleading truncation return an empty
+/// string. Keeping it here makes the MSL indexer and diagram projection use the
+/// same representation for literals, references, arithmetic, and arrays.
+pub fn format_expression_for_display(expr: &Expression) -> String {
+    match expr {
+        Expression::Terminal {
+            terminal_type,
+            token,
+            ..
+        } => match terminal_type {
+            TerminalType::String => token.text.trim_matches('"').to_string(),
+            _ => token.text.to_string(),
+        },
+        Expression::ComponentReference(cref) => cref
+            .parts
+            .last()
+            .map(|part| part.ident.text.as_ref().to_string())
+            .unwrap_or_default(),
+        Expression::Unary { op, rhs, .. } => match (op, rhs.as_ref()) {
+            (OpUnary::Minus, inner) => {
+                let inner = format_expression_for_display(inner);
+                if inner.is_empty() {
+                    String::new()
+                } else {
+                    format!("-{inner}")
+                }
+            }
+            (OpUnary::Plus, inner) => {
+                let inner = format_expression_for_display(inner);
+                if inner.is_empty() {
+                    String::new()
+                } else {
+                    format!("+{inner}")
+                }
+            }
+            _ => String::new(),
+        },
+        Expression::Parenthesized { inner, .. } => {
+            let inner = format_expression_for_display(inner);
+            if inner.is_empty() {
+                String::new()
+            } else {
+                format!("({inner})")
+            }
+        }
+        Expression::Binary { op, lhs, rhs, .. } => {
+            let lhs = format_expression_for_display(lhs);
+            let rhs = format_expression_for_display(rhs);
+            let symbol = match op {
+                OpBinary::Add => "+",
+                OpBinary::Sub => "-",
+                OpBinary::Mul => "*",
+                OpBinary::Div => "/",
+                OpBinary::Exp => "^",
+                _ => return String::new(),
+            };
+            if lhs.is_empty() || rhs.is_empty() {
+                String::new()
+            } else {
+                format!("{lhs}{symbol}{rhs}")
+            }
+        }
+        Expression::Array { elements, .. } => {
+            let elements: Vec<String> =
+                elements.iter().map(format_expression_for_display).collect();
+            if elements.iter().any(String::is_empty) {
+                String::new()
+            } else {
+                format!("{{{}}}", elements.join(","))
+            }
+        }
+        _ => String::new(),
+    }
+}
+
 /// Extract every input-typed component for a class with rich metadata
 /// (name, type, unit, default if any, description). Companion to the
 /// existing `extract_input_names_from_ast` which only returns names.
 #[derive(Debug, Clone)]
 pub struct TypedComponent {
+    /// Component name as authored in the class.
     pub name: String,
+    /// Declared Modelica type name.
     pub type_name: String,
+    /// Optional `unit` modification.
     pub unit: Option<String>,
+    /// Numeric binding or start value, when one is available.
     pub default: Option<f64>,
+    /// Description string with surrounding Modelica quotes removed.
     pub description: String,
+    /// Optional lower bound from the declaration.
     pub min: Option<f64>,
+    /// Optional upper bound from the declaration.
     pub max: Option<f64>,
 }
 
+/// Extract direct input components with their authoring metadata.
 pub fn extract_typed_inputs_for_class(class: &ClassDef) -> Vec<TypedComponent> {
     typed_components_filtered(class, |c| {
         matches!(c.causality, Causality::Input(_))
@@ -1183,12 +1300,14 @@ pub fn extract_typed_inputs_for_class(class: &ClassDef) -> Vec<TypedComponent> {
     })
 }
 
+/// Extract direct parameter components with their authoring metadata.
 pub fn extract_typed_parameters_for_class(class: &ClassDef) -> Vec<TypedComponent> {
     typed_components_filtered(class, |c| {
         matches!(c.variability, Variability::Parameter(_))
     })
 }
 
+/// Extract direct output components with their authoring metadata.
 pub fn extract_typed_outputs_for_class(class: &ClassDef) -> Vec<TypedComponent> {
     typed_components_filtered(class, |c| {
         matches!(c.causality, Causality::Output(_))
@@ -1233,7 +1352,7 @@ fn is_output_connector_type(type_name: &str) -> bool {
 
 /// Pull the `unit="..."` modification for a component, if any. Returns
 /// the inner string with quotes stripped.
-fn unit_of_component(comp: &rumoca_compile::parsing::ast::Component) -> Option<String> {
+fn unit_of_component(comp: &rumoca_ir_ast::Component) -> Option<String> {
     comp.modifications.get("unit").and_then(|expr| match expr {
         Expression::Terminal {
             terminal_type: TerminalType::String,
@@ -1246,7 +1365,7 @@ fn unit_of_component(comp: &rumoca_compile::parsing::ast::Component) -> Option<S
 
 fn typed_components_filtered<F>(class: &ClassDef, want: F) -> Vec<TypedComponent>
 where
-    F: Fn(&rumoca_compile::parsing::ast::Component) -> bool,
+    F: Fn(&rumoca_ir_ast::Component) -> bool,
 {
     class
         .components
@@ -1261,7 +1380,7 @@ where
                 .as_ref()
                 .and_then(numeric_of)
                 .or_else(|| numeric_of(&c.start)),
-            description: tokens_to_description(&c.description),
+            description: description_from_tokens(&c.description).unwrap_or_default(),
             min: c.modifications.get("min").and_then(numeric_of),
             max: c.modifications.get("max").and_then(numeric_of),
         })

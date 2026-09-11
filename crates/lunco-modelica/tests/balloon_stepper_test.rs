@@ -20,7 +20,7 @@ fn balloon_mo() -> &'static str {
 #[test]
 fn balloon_stepper_variable_names_contain_states_only() {
     // Strip input defaults so `input Real height = 0` becomes a runtime slot.
-    let (stripped, _defaults) = lunco_modelica::ast_extract::strip_input_defaults(balloon_mo());
+    let (stripped, _defaults) = lunco_modelica_ast::ast_extract::strip_input_defaults(balloon_mo());
 
     let mut compiler = ModelicaCompiler::new();
     let dae_result = compiler
@@ -49,7 +49,7 @@ fn balloon_stepper_variable_names_contain_states_only() {
 
 #[test]
 fn balloon_stepper_get_recovers_algebraics() {
-    let (stripped, _defaults) = lunco_modelica::ast_extract::strip_input_defaults(balloon_mo());
+    let (stripped, _defaults) = lunco_modelica_ast::ast_extract::strip_input_defaults(balloon_mo());
 
     let mut compiler = ModelicaCompiler::new();
     let dae_result = compiler
@@ -95,7 +95,7 @@ fn balloon_stepper_get_recovers_algebraics() {
 #[test]
 fn balloon_stepper_initial_netforce_is_positive() {
     // If this passes, netForce > 0 at the initial condition (balloon wants to rise).
-    let (stripped, _defaults) = lunco_modelica::ast_extract::strip_input_defaults(balloon_mo());
+    let (stripped, _defaults) = lunco_modelica_ast::ast_extract::strip_input_defaults(balloon_mo());
 
     let mut compiler = ModelicaCompiler::new();
     let dae_result = compiler

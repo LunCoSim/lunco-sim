@@ -18,8 +18,9 @@ use bevy::prelude::*;
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use lunco_twin::TwinSettingValue;
 use lunco_workbench::{
-    input_overlay::InputOverlaySettings, perf_hud::PerfHudSettings, MenuCtx, RuntimeSurfaceLayouts,
+    input_overlay::InputOverlaySettings, perf_hud::PerfHudSettings, RuntimeSurfaceLayouts,
 };
+use lunco_workbench_core::{MenuCtx, WorkbenchMenuRegistry};
 use lunco_workspace::{ResetTwinSetting, SetTwinSetting, TwinSettingInput, WorkspaceResource};
 use serde::{Deserialize, Serialize};
 
@@ -55,10 +56,10 @@ pub(crate) fn sky_clock_visible(settings: Option<Res<OverlaySettings>>) -> bool 
 /// runs, `luncosim test`), which is why it takes `&mut World` and bails rather than
 /// requiring the resource.
 pub(crate) fn register_time_menu(world: &mut World) {
-    let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
+    let Some(mut menus) = world.get_resource_mut::<WorkbenchMenuRegistry>() else {
         return;
     };
-    layout.register_time_menu(|ui, ctx| {
+    menus.register_time_menu(|ui, ctx| {
         super::celestial_time::sky_clock_menu_ui(ui, ctx);
 
         ui.separator();
@@ -86,7 +87,10 @@ pub(crate) fn register_time_menu(world: &mut World) {
 }
 
 /// Contribute the view-switcher preference to the workbench Camera menu.
-pub(crate) fn camera_menu_ui(ui: &mut bevy_egui::egui::Ui, ctx: &mut lunco_workbench::MenuCtx) {
+pub(crate) fn camera_menu_ui(
+    ui: &mut bevy_egui::egui::Ui,
+    ctx: &mut lunco_workbench_core::MenuCtx,
+) {
     // Edit a COPY and write back only on a real change: `set_resource` applies
     // the replacement after the menu pass, so opening the menu does not mark
     // settings changed and rewrite settings.json.
@@ -207,10 +211,10 @@ fn render_twin_bool_setting(
 /// Automatic surfaces are shown as read-only inventory: possession, authored
 /// USD metadata, or transient lifecycle state remains their visibility owner.
 fn register_hud_settings_menu(world: &mut World) {
-    let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
+    let Some(mut menus) = world.get_resource_mut::<WorkbenchMenuRegistry>() else {
         return;
     };
-    layout.register_settings_submenu("HUD", |ui, ctx| {
+    menus.register_settings_submenu("HUD", |ui, ctx| {
         use bevy_egui::egui;
 
         ui.label(egui::RichText::new("User-controlled HUDs").weak().small());

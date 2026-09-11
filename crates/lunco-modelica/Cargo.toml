@@ -18,10 +18,11 @@ default = ["lunco-api", "lunco-api/transport-http", "ui", "scripting"]
 ui = [
     # Screenshot backend — workbench-only, and NOT on `lunco-api` (a server build enables that).
     "lunco-workbench/api",
-    "dep:bevy_egui", "dep:lunco-theme", "dep:lunco-workbench", "dep:lunco-ui",
+    "dep:bevy_egui", "dep:lunco-theme", "dep:lunco-workbench", "dep:lunco-workbench-core", "dep:lunco-status-core", "dep:lunco-ui",
     "dep:lunco-viz", "dep:lunco-canvas", "dep:egui_plot", "dep:egui_commonmark",
     "dep:egui_extras", "dep:htmd", "dep:lyon_tessellation", "dep:lyon_path",
     "dep:lyon_geom", "lunco-doc-bevy/ui",
+    "dep:rumoca-tool-fmt", "dep:rumoca-tool-lint", "dep:image", "dep:arboard",
     # bevy_egui pulls bevy_render + bevy_window; the lunica WINDOW additionally
     # needs the winit backend (no longer in the workspace bevy default).
     "bevy/bevy_winit", "bevy/bevy_window", "bevy/x11", "bevy/wayland",
@@ -98,6 +99,8 @@ lunco-settings = { path = "../lunco-settings" }
 lunco-signal = { path = "../lunco-signal" }
 lunco-telemetry = { path = "../lunco-telemetry" }
 lunco-workbench = { path = "../lunco-workbench", optional = true }
+lunco-workbench-core = { path = "../lunco-workbench-core", optional = true }
+lunco-status-core = { path = "../lunco-status-core", optional = true }
 lunco-web = { workspace = true }
 lunco-ui = { path = "../lunco-ui", optional = true }
 lunco-viz = { path = "../lunco-viz", features = ["ui"], optional = true }
@@ -158,7 +161,7 @@ bincode = { workspace = true }
 # Raster decoders used by egui_extras' `all_loaders`. Only the formats
 # actually present in MSL Resources/Images are enabled to keep the
 # compile surface small.
-image = { workspace = true }
+image = { workspace = true, optional = true }
 # LunCoSim/rumoca, `main` (see the workspace Cargo.toml for the pin). It
 # carries the wasm32 `Instant` fix (std::time::Instant panics on
 # wasm32-unknown-unknown), reconstruction of algebraic/output variables via the
@@ -175,20 +178,21 @@ rumoca-sim = { workspace = true }
 rumoca-solver-rk45 = { workspace = true }
 rumoca-eval-solve = { workspace = true }
 lunco-experiments = { path = "../lunco-experiments" }
-# FACTS for the `modelica` lint domain (`src/lint.rs`) are `HookValue`, the same
+# FACTS for the `modelica` lint domain (`../lunco-modelica-ast/src/lint_facts.rs`) are `HookValue`, the same
 # typed shape every other domain hands its authored rules.
 lunco-hooks = { path = "../lunco-hooks" }
+lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 rumoca-compile = { workspace = true }
 rumoca-ir-solve = { workspace = true }
 rumoca-phase-parse = { workspace = true }
 # Modelica formatter — surfaced as a "Format" toolbar button +
 # Ctrl+Shift+F binding. Rewrites the active editor buffer with
 # the canonical layout rumoca-tool-fmt produces.
-rumoca-tool-fmt = { workspace = true }
+rumoca-tool-fmt = { workspace = true, optional = true }
 # Modelica linter — surfaced into the Diagnostics panel alongside
 # parse errors. Wraps `rumoca_tool_lint::lint(source, name, opts)`
 # which returns a `Vec<LintMessage>` we map to `LogEntry`s.
-rumoca-tool-lint = { workspace = true }
+rumoca-tool-lint = { workspace = true, optional = true }
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -255,7 +259,7 @@ uuid = { workspace = true }
 # wasm-only; the native branch reads via arboard so the buttons match
 # the keyboard path. Already transitively present via bevy_egui's
 # `manage_clipboard` feature — no new compile.
-arboard = "3"
+arboard = { version = "3", optional = true }
 
 # zstd codec for the native pre-parsed MSL bundle (`.cache/msl/parsed-msl.bin`).
 # The bundle is now zstd-compressed bincode (~10× smaller on disk than the raw

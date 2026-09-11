@@ -8,6 +8,12 @@
 > [`../../crates/lunco-usd/`](../../crates/lunco-usd/) and companion crates
 > `lunco-usd-avian`, `lunco-usd-bevy` (which also owns composition/flattening), `lunco-usd-sim`.
 
+Package ownership follows the same boundary: `lunco-usd` contains the
+document/authoring surface and its lightweight probes, `lunco-usd-bevy` owns
+visual projection, and `lunco-usd-sim` owns USD-to-Avian/simulation examples
+and integration tests. This keeps simulation-only dev dependencies out of the
+authoring crate without introducing a test-only package.
+
 ## Scope
 
 A USD **stage** is the 3D scene. This doc is the canonical reference for how a
@@ -662,9 +668,12 @@ the `ControlAnimation` command (API/MCP) and the Inspector **Animation** section
 (T5/T7) for the clock model.
 
 ### Testing
-All tests load **real USD files** through the same pipeline as runtime:
-- `integration_asset_loading.rs` — verifies full pipeline (composition → Bevy → Avian → Sim)
-- `rover_structure.rs` — verifies wheel entity structure (identity rotation + visual child)
+All runtime acceptance tests load **real USD files** through the same pipeline
+as runtime. Ownership follows the narrowest production boundary:
+- `crates/lunco-usd-bevy/tests/migration_smoke.rs` — composed-stage reader and composition migration
+- `crates/lunco-usd/tests/live_spawn_projection.rs` — document-backed USD authoring and raw asset composition facts
+- `crates/lunco-usd-sim/tests/usd_connection_mechanics.rs` — generic connection derivation and transform mechanics
+- `assets/scenarios/tests/*.rhai` through the production `luncosim test` gate — composed USD → Bevy → Avian → simulation outcomes, including rover structure, wheel realization, wiring, EPS, and link visibility
 
 ---
 

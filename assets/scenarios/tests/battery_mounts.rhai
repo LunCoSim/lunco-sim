@@ -22,6 +22,12 @@ fn close_vec(actual, expected) {
     true
 }
 
+fn wheel_projection_ok(root_path, spec) {
+    let root = find(root_path);
+    if root == () || root < 0 { return false; }
+    vessel_wheels_match(root, spec[5], 0, spec[6], spec[7], spec[8], spec[9], 1.5)
+}
+
 fn query_ok(record) {
     record != () && record.ok != false
 }
@@ -131,16 +137,17 @@ fn battery_ok(spec) {
         && solar.children.contains(root_path + "/SolarPanel/PanelFrame")
         && solar.children.contains(root_path + "/SolarPanel/PanelSurface")
         && inside_body && solar_clear && deck_clear && electrical_surface
+        && wheel_projection_ok(root_path, spec)
 }
 
 fn on_start(me) {
     this.elapsed = 0.0;
     this.done = false;
     this.cases = [
-        ["Skid", [0.0, 0.0, 0.0], [1.2, 0.2, 2.0], "Chassis", ""],
-        ["SixWheel", [0.0, 0.0, 0.0], [1.2, 0.2, 2.0], "Chassis", ""],
-        ["RockerBogie", [0.0, 0.0, 0.0], [0.8, 0.3, 1.2], "Body", "SolarDeck"],
-        ["Rucheyok", [0.0, 2.0, 0.0], [4.0, 0.8, 6.0], "Chassis", ""],
+        ["Skid", [0.0, 0.0, 0.0], [1.2, 0.2, 2.0], "Chassis", "", 4, 0.4, 0.7, 15000.0, 3000.0],
+        ["SixWheel", [0.0, 0.0, 0.0], [1.2, 0.2, 2.0], "Chassis", "", 6, 0.4, 0.7, 15000.0, 3000.0],
+        ["RockerBogie", [0.0, 0.0, 0.0], [0.8, 0.3, 1.2], "Body", "SolarDeck", 6, 0.2625, 0.5, 12000.0, 2500.0],
+        ["Rucheyok", [0.0, 2.0, 0.0], [4.0, 0.8, 6.0], "Chassis", "", 4, 2.0, 0.0, 15000.0, 5000.0],
     ];
 }
 

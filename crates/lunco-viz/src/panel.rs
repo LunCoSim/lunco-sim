@@ -14,7 +14,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_workbench::{InstancePanel, PanelCtx, PanelId, PanelSlot};
+use lunco_workbench_core::{InstancePanel, PanelCtx, PanelId, PanelSlot};
 
 use crate::registry::{VisualizationRegistry, VizKindCatalog};
 use crate::view::{Panel2DCtx, ViewTarget};

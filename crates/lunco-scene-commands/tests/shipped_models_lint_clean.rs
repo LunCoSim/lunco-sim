@@ -11,7 +11,6 @@
 //! global, and a `cargo test` that needs a window is one nobody runs.
 
 use lunco_hooks::HookValue as H;
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 fn assets_dir() -> PathBuf {
@@ -28,9 +27,38 @@ fn register_modelica_lint_policy() {
 }
 
 fn facts(params: &[(&str, f64)], inputs: &[(&str, f64)]) -> H {
-    let p: BTreeMap<String, f64> = params.iter().map(|(n, v)| (n.to_string(), *v)).collect();
-    let i: BTreeMap<String, f64> = inputs.iter().map(|(n, v)| (n.to_string(), *v)).collect();
-    lunco_modelica::lint::modelica_facts("M", &p, &i, &Default::default())
+    H::map([
+        ("model", H::Str("M".to_string())),
+        (
+            "params",
+            H::Array(
+                params
+                    .iter()
+                    .map(|(name, value)| {
+                        H::map([
+                            ("name", H::Str((*name).to_string())),
+                            ("value", H::Float(*value)),
+                        ])
+                    })
+                    .collect(),
+            ),
+        ),
+        (
+            "inputs",
+            H::Array(
+                inputs
+                    .iter()
+                    .map(|(name, default)| {
+                        H::map([
+                            ("name", H::Str((*name).to_string())),
+                            ("default", H::Float(*default)),
+                        ])
+                    })
+                    .collect(),
+            ),
+        ),
+        ("conditional_constructs", H::Array(Vec::new())),
+    ])
 }
 
 /// Every `.mo` under `dir`, recursively.
@@ -56,7 +84,7 @@ fn a_name_declared_input_and_parameter_is_caught() {
     register_modelica_lint_policy();
 
     let findings = lunco_lint::run_lint(
-        lunco_modelica::lint::MODELICA_LINT_DOMAIN,
+        lunco_modelica_ast::lint_facts::MODELICA_LINT_DOMAIN,
         facts(&[("throttle", 1.0)], &[("throttle", 0.0)]),
     );
 
@@ -79,13 +107,11 @@ fn a_conditional_algebraic_observable_is_caught() {
     register_modelica_lint_policy();
 
     let src = "model M\n  Real f;\n  Real x;\nequation\n  f = if x > 0.0 then x else 0.0;\n  x = 1.0;\nend M;\n";
-    let syntax = rumoca_phase_parse::parse_to_syntax(src, "M.mo");
+    let syntax = lunco_modelica_ast::parse_to_syntax(src, "M.mo");
     let ast = syntax.best_effort();
-    let model = lunco_modelica::ast_extract::extract_model_name_from_ast(ast).unwrap_or_default();
-
     let findings = lunco_lint::run_lint(
-        lunco_modelica::lint::MODELICA_LINT_DOMAIN,
-        lunco_modelica::lint::modelica_facts(&model, &BTreeMap::new(), &BTreeMap::new(), ast),
+        lunco_modelica_ast::lint_facts::MODELICA_LINT_DOMAIN,
+        lunco_modelica_ast::lint_facts::modelica_facts(ast),
     );
 
     assert!(
@@ -104,13 +130,11 @@ fn a_when_equation_is_not_flagged_as_a_conditional_observable() {
     register_modelica_lint_policy();
 
     let src = "model M\n  Real x;\n  discrete Real n;\nequation\n  x = 1.0;\n  when x > 0.5 then\n    n = pre(n) + 1;\n  end when;\nend M;\n";
-    let syntax = rumoca_phase_parse::parse_to_syntax(src, "M.mo");
+    let syntax = lunco_modelica_ast::parse_to_syntax(src, "M.mo");
     let ast = syntax.best_effort();
-    let model = lunco_modelica::ast_extract::extract_model_name_from_ast(ast).unwrap_or_default();
-
     let findings = lunco_lint::run_lint(
-        lunco_modelica::lint::MODELICA_LINT_DOMAIN,
-        lunco_modelica::lint::modelica_facts(&model, &BTreeMap::new(), &BTreeMap::new(), ast),
+        lunco_modelica_ast::lint_facts::MODELICA_LINT_DOMAIN,
+        lunco_modelica_ast::lint_facts::modelica_facts(ast),
     );
 
     assert!(
@@ -118,6 +142,34 @@ fn a_when_equation_is_not_flagged_as_a_conditional_observable() {
             .iter()
             .any(|f| f.rule == "conditional-algebraic-observable"),
         "a `when` event must not trip the conditional-observable rule: {findings:?}"
+    );
+    assert!(
+        findings
+            .iter()
+            .any(|f| f.rule == "conditional-construct-unsupported"),
+        "the authored policy must own the unsupported `when` finding: {findings:?}"
+    );
+}
+
+/// Structural equation branches are facts from the Rumoca AST; the finding is
+/// still authored policy, not a second Rust-side scanner.
+#[test]
+fn a_structural_if_equation_is_caught_by_policy() {
+    register_modelica_lint_policy();
+
+    let src = "model M\n  Real x;\nequation\n  if x > 0.0 then\n    x = 1.0;\n  else\n    x = 0.0;\n  end if;\nend M;\n";
+    let syntax = lunco_modelica_ast::parse_to_syntax(src, "M.mo");
+    let ast = syntax.best_effort();
+    let findings = lunco_lint::run_lint(
+        lunco_modelica_ast::lint_facts::MODELICA_LINT_DOMAIN,
+        lunco_modelica_ast::lint_facts::modelica_facts(ast),
+    );
+
+    assert!(
+        findings
+            .iter()
+            .any(|f| f.rule == "conditional-construct-unsupported"),
+        "the authored policy must flag a structural `if` equation: {findings:?}"
     );
 }
 
@@ -128,7 +180,7 @@ fn a_model_with_disjoint_inputs_and_parameters_is_clean() {
     register_modelica_lint_policy();
 
     let findings = lunco_lint::run_lint(
-        lunco_modelica::lint::MODELICA_LINT_DOMAIN,
+        lunco_modelica_ast::lint_facts::MODELICA_LINT_DOMAIN,
         facts(&[("m_dry", 120.0)], &[("throttle", 0.0)]),
     );
 
@@ -164,22 +216,11 @@ fn every_shipped_model_lints_clean() {
             .unwrap_or("shipped.mo");
 
         // The same parse + extraction `validate_modelica` performs.
-        let syntax = rumoca_phase_parse::parse_to_syntax(&text, file_name);
+        let syntax = lunco_modelica_ast::parse_to_syntax(&text, file_name);
         let ast = syntax.best_effort();
-        let model =
-            lunco_modelica::ast_extract::extract_model_name_from_ast(ast).unwrap_or_default();
-        let params: BTreeMap<String, f64> =
-            lunco_modelica::ast_extract::extract_parameters_from_ast(ast)
-                .into_iter()
-                .collect();
-        let inputs: BTreeMap<String, f64> =
-            lunco_modelica::ast_extract::extract_inputs_with_defaults_from_ast(ast)
-                .into_iter()
-                .collect();
-
         let findings = lunco_lint::run_lint(
-            lunco_modelica::lint::MODELICA_LINT_DOMAIN,
-            lunco_modelica::lint::modelica_facts(&model, &params, &inputs, ast),
+            lunco_modelica_ast::lint_facts::MODELICA_LINT_DOMAIN,
+            lunco_modelica_ast::lint_facts::modelica_facts(ast),
         );
         for f in findings {
             offenders.push(format!("{}: {} — {}", path.display(), f.rule, f.message));

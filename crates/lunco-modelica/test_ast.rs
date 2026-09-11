@@ -1,4 +1,4 @@
-use rumoca_phase_parse::parse_to_ast;
+use lunco_modelica_ast::parse_to_ast;
 use rumoca_compile::parsing::ast::{ClassDef, Element};
 fn main() {
     let source = "model Resistor extends OnePort; end Resistor;";

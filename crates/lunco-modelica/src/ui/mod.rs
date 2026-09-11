@@ -58,8 +58,10 @@
 //! - **Graphs** (bottom dock) — time-series plots of simulation variables
 
 use bevy::prelude::*;
-use lunco_workbench::{
-    MenuCtx, PanelId, Perspective, PerspectiveId, UndoProbeCtx, WorkbenchAppExt, WorkbenchLayout,
+use lunco_workbench::WorkbenchAppExt;
+use lunco_workbench_core::{
+    MenuCtx, PanelId, Perspective, PerspectiveId, PerspectiveLayoutPlan, PerspectiveSlotPlan,
+    UndoProbeCtx, WorkbenchMenuRegistry,
 };
 // Core document/library/compile state moved out of `ui` into `crate::state`.
 use crate::state::{ModelicaDocumentRegistry, WorkbenchState};
@@ -498,8 +500,8 @@ impl Perspective for AnalyzePerspective {
         // Keep the accepted equation-wave glyph in the perspective title.
         "∿ Lunica".into()
     }
-    fn apply(&self, layout: &mut WorkbenchLayout) {
-        layout.set_activity_bar(false);
+    fn layout(&self) -> PerspectiveLayoutPlan {
+        let mut plan = PerspectiveLayoutPlan::new();
         // Side dock = Twin Browser only. Modelica contributes its library
         // section to that browser, so there is one authoritative browse
         // surface for workspace classes and standard libraries.
@@ -508,7 +510,7 @@ impl Perspective for AnalyzePerspective {
         // USD/SysML — matches Dymola/OMEdit's single-Package-Browser
         // pattern) and Files (raw FS). Twin is leftmost so it's the
         // default active tab on first launch.
-        layout.set_side_browser_tabs(vec![
+        plan.side_browser = PerspectiveSlotPlan::new().tabs([
             lunco_workbench::TWIN_BROWSER_PANEL_ID,
             lunco_workbench::FILES_PANEL_ID,
         ]);
@@ -516,24 +518,25 @@ impl Perspective for AnalyzePerspective {
         // multi-instance tabs opened dynamically by the Package Browser
         // (one tab per open document). An app that boots with a
         // default model can pre-open a tab after setup via
-        // `WorkbenchLayout::open_instance(MODEL_VIEW_KIND, doc.raw())`.
+        // The shell opens the instance through the `OpenTab` command using
+        // this panel kind and document id.
         //
         // Keep a placeholder center tab so the dock's cross layout
         // still builds on apps with nothing open yet. When the first
         // real model tab opens, the placeholder stays docked next
         // to it — users can close it.
         if self.seed_welcome {
-            layout.set_center(vec![PanelId("modelica_welcome")]);
-            layout.set_active_center_tab(0);
+            plan.center = PerspectiveSlotPlan::new().tabs([PanelId("modelica_welcome")]);
         } else {
-            layout.set_center(vec![]);
+            plan.center = PerspectiveSlotPlan::new();
         }
         // Start with the browse-and-open task only. Context panels and output
         // docks are opened by the operation that has content for them, or from
         // View; empty telemetry, inspector, plots, and log tabs should not take
         // half of a fresh workbench.
-        layout.set_right_inspector(None);
-        layout.set_bottom(None);
+        plan.right_inspector = PerspectiveSlotPlan::new();
+        plan.bottom = PerspectiveSlotPlan::new();
+        plan
     }
 }
 
@@ -843,7 +846,7 @@ impl Plugin for ModelicaUiPlugin {
                 seed_welcome: config.include_welcome_panel,
             })
             .register_perspective_help(
-                lunco_workbench::PerspectiveId("modelica_analyze"),
+                lunco_workbench_core::PerspectiveId("modelica_analyze"),
                 lunco_workbench::PerspectiveHelp {
                     description: "Modelica engineering workbench. Author models as \
                                   text or wired diagrams, then compile and simulate.",
@@ -897,10 +900,10 @@ impl Plugin for ModelicaUiPlugin {
 /// all prefs discoverable in one place.
 fn register_settings_submenu(world: &mut World) {
     use bevy_egui::egui;
-    let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
+    let Some(mut menus) = world.get_resource_mut::<WorkbenchMenuRegistry>() else {
         return;
     };
-    layout.register_settings_submenu("Modelica", |ui, ctx| {
+    menus.register_settings_submenu("Modelica", |ui, ctx| {
         ui.label(egui::RichText::new("Code Editor").weak().small());
         let Some((original_word_wrap, original_auto_indent)) = ctx
             .resource::<panels::code_editor::EditorBufferState>()
@@ -1031,7 +1034,7 @@ fn register_settings_submenu(world: &mut World) {
             });
         }
     });
-    layout.register_settings_submenu("Modelica", render_assets_settings);
+    menus.register_settings_submenu("Modelica", render_assets_settings);
 }
 
 /// Settings rows for the Modelica section — MSL readiness and local override.
@@ -1235,14 +1238,14 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
 /// flags the in-panel toolbar uses. Keeps clipboard/selection
 /// handling in one place while letting the menu drive it.
 fn register_edit_menu(world: &mut World) {
-    let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
+    let Some(mut menus) = world.get_resource_mut::<WorkbenchMenuRegistry>() else {
         return;
     };
     // Undo/redo availability for the workbench's global Edit menu —
     // answers only for documents this registry owns (same ownership
     // check as `resolve_editor_intent`), so Undo greys out with a
     // "Nothing to undo" hint instead of firing a no-op intent.
-    layout.register_undo_probe(|ctx: &UndoProbeCtx| {
+    menus.register_undo_probe(|ctx: &UndoProbeCtx| {
         let doc = ctx
             .resource::<lunco_workspace::WorkspaceResource>()
             .and_then(|workspace| workspace.0.active_document)?;
@@ -1251,7 +1254,7 @@ fn register_edit_menu(world: &mut World) {
             .host(doc)?;
         Some((host.can_undo(), host.can_redo()))
     });
-    layout.register_edit_menu(|ui, ctx| {
+    menus.register_edit_menu(|ui, ctx| {
         // TODO: promote Cut / Copy / Paste / Select All to typed
         // `#[Command]` events so the HTTP API can drive them too
         // (mirrors the existing `Undo` / `Redo` commands in
@@ -1315,7 +1318,7 @@ fn install_image_loaders_once(
     commands.insert_resource(ImageLoadersInstalled);
 }
 
-/// Forward newly-pushed [`lunco_workbench::status_bus::StatusBus`]
+/// Forward newly-pushed [`lunco_status_core::status_bus::StatusBus`]
 /// events to the [`panels::console::ConsoleLog`].
 ///
 /// We track how many *discrete* history entries we've already mirrored
@@ -1326,7 +1329,7 @@ fn install_image_loaders_once(
 /// make this early-return forever once the buffer filled, silently
 /// freezing the console audit trail (CQ-523).
 fn fan_status_bus_to_console(
-    bus: bevy::prelude::Res<lunco_workbench::status_bus::StatusBus>,
+    bus: bevy::prelude::Res<lunco_status_core::status_bus::StatusBus>,
     mut console: bevy::prelude::ResMut<panels::console::ConsoleLog>,
     mut last_total: bevy::prelude::Local<u64>,
 ) {
@@ -1349,15 +1352,17 @@ fn fan_status_bus_to_console(
         .rev()
     {
         let level = match ev.level {
-            lunco_workbench::status_bus::StatusLevel::Info => panels::console::ConsoleLevel::Info,
-            lunco_workbench::status_bus::StatusLevel::Warn => panels::console::ConsoleLevel::Warn,
-            lunco_workbench::status_bus::StatusLevel::Error => panels::console::ConsoleLevel::Error,
-            lunco_workbench::status_bus::StatusLevel::Attention => {
+            lunco_status_core::status_bus::StatusLevel::Info => panels::console::ConsoleLevel::Info,
+            lunco_status_core::status_bus::StatusLevel::Warn => panels::console::ConsoleLevel::Warn,
+            lunco_status_core::status_bus::StatusLevel::Error => {
+                panels::console::ConsoleLevel::Error
+            }
+            lunco_status_core::status_bus::StatusLevel::Attention => {
                 panels::console::ConsoleLevel::Info
             }
             // Progress events shouldn't be in `history` (they live in
             // active_progress), but if one ever sneaks in, surface as Info.
-            lunco_workbench::status_bus::StatusLevel::Progress => {
+            lunco_status_core::status_bus::StatusLevel::Progress => {
                 panels::console::ConsoleLevel::Info
             }
         };

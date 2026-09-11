@@ -113,7 +113,7 @@ independent of ECS state and is suitable for CI.
 
 | Ext | Checks | Can it FAIL? |
 |---|---|---|
-| `.mo` | rumoca `parse_to_syntax` + **branch-free lint** | yes |
+| `.mo` | rumoca `parse_to_syntax` + AST facts + authored `lint.modelica` policy | yes |
 | `.usda` | layer parse → **compose the reference closure** → strict `WheelParams::read` on every `PhysxVehicleWheelAPI` prim | yes |
 | `.wgsl` | `ParamSchema::parse` — reflect the `struct Material` uniform + `//!@` annotations | **no** — warnings only |
 | `.rhai` | `rhai::Engine::new().compile()`, nothing executed | yes |
@@ -122,26 +122,26 @@ independent of ECS state and is suitable for CI.
 Extension gate is literal: **`.usda` only** — `.usd` and `.usdc` are rejected as
 unsupported, not parsed.
 
-### `.mo` — the branch-free lint is the point
+### `.mo` — the branch-free policy is the point
 
-rumoca's solver path is branch-free, so `validate.rs` scans the source (after
-stripping comments) and emits **errors**, not warnings:
+Rumoca's solver path is branch-free. `ValidateAsset` parses once through the
+shared `lunco-modelica-ast` boundary, passes AST-derived declaration and
+conditional-construct facts to the reloadable `lint.modelica` Rhai policy, and
+returns its findings as errors. The policy covers conditional expressions,
+structural equation branches, and algorithm `if`/`when` constructs. An `if` in a
+binding or modifier is not an equation/algorithm construct and is not reported.
 
-- `when` / `elsewhen` — an error **anywhere in the file**.
-- `if` — an error **only inside** an `equation` / `initial equation` /
-  `algorithm` / `initial algorithm` section. An `if` in a binding or a modifier
-  is fine.
-
-Fix by rewriting as `der(x) = expr` with `max()`/`min()` clamps. Battery,
-network, and brownout equations belong in Modelica, not a tick script.
+Fix a reported branch by rewriting the model with branch-free arithmetic such
+as `max()`/`min()`. Battery, network, and brownout equations belong in Modelica,
+not a tick script.
 
 `info` carries `{model, params, inputs, outputs:null}`. `outputs` is always
 `null` — outputs are not knowable before a compile.
 
-> **Lint caveats (real false positives):** the scanner does not strip string
-> literals, so a `when`/`if` inside a description string or `annotation(...)`
-> is flagged. And `end if;` / `end when;` resets the "in an equation section"
-> flag, so `if`s after a nested block close stop being flagged.
+> **Lint boundary:** parse failures remain visible as parser errors. Recovered
+> AST facts are best-effort and carry `kind = "unknown"` when declaration
+> ownership cannot be proven; the policy reports that case as a warning rather
+> than guessing.
 
 ### `.usda` — this is the one that catches broken references
 

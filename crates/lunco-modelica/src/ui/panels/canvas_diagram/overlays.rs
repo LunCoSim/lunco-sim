@@ -7,7 +7,7 @@
 
 use bevy_egui::egui;
 use lunco_theme::ColorAlpha;
-use lunco_workbench::PanelCtx;
+use lunco_workbench_core::PanelCtx;
 
 use crate::state::ModelicaDocumentRegistry;
 use crate::ui::theme::ModelicaThemeExt;
@@ -121,7 +121,7 @@ pub(super) fn render_empty_diagram_overlay(
         .unwrap_or_else(lunco_theme::Theme::dark);
     let class_name = document
         .strict_ast()
-        .and_then(|ast| crate::ast_extract::extract_model_name_from_ast(&ast))
+        .and_then(|ast| lunco_modelica_ast::ast_extract::extract_model_name_from_ast(&ast))
         .unwrap_or_else(|| "(unnamed)".into());
 
     // Read counts from the per-doc Index. Falls back to all-zeros

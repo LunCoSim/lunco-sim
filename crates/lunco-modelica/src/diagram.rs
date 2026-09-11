@@ -12,7 +12,7 @@
 //! ## Usage
 //!
 //! ```ignore
-//! use rumoca_phase_parse::parse_to_ast;
+//! use lunco_modelica_ast::parse_to_ast;
 //! use lunco_modelica::diagram::ModelicaComponentBuilder;
 //!
 //! let ast = parse_to_ast(source, "model.mo").unwrap();
@@ -85,7 +85,7 @@ impl ModelicaComponentBuilder {
     /// practice `parse_to_syntax` always returns *something*, so the
     /// `None` branch is defensive.
     pub fn from_source(source: &str) -> Option<Self> {
-        let syntax = rumoca_phase_parse::parse_to_syntax(source, "model.mo");
+        let syntax = lunco_modelica_ast::parse_to_syntax(source, "model.mo");
         let ast: StoredDefinition = syntax.best_effort().clone();
         Some(Self::from_ast(std::sync::Arc::new(ast)))
     }
@@ -406,7 +406,7 @@ impl ModelicaComponentBuilder {
 
         // Create nodes
         for (qualified_name, class_type) in &all_classes {
-            let short_name = crate::ast_extract::short_name(qualified_name);
+            let short_name = lunco_modelica_ast::ast_extract::short_name(qualified_name);
             let _parent = qualified_name.rsplit_once('.').map(|(p, _)| p.to_string());
 
             let kind = match class_type {
@@ -511,7 +511,8 @@ pub fn resolve_primary_target(ast: &StoredDefinition) -> Option<String> {
         .as_ref()
         .map(|w| w.to_string())
         .unwrap_or_default();
-    let qualify = |short: &str| -> String { crate::ast_extract::qualify(&within_prefix, short) };
+    let qualify =
+        |short: &str| -> String { lunco_modelica_ast::ast_extract::qualify(&within_prefix, short) };
     // Models are the canonical "open this in the canvas" choice;
     // connectors and types alone have no diagram.
     let is_diagrammable =
@@ -527,7 +528,9 @@ pub fn resolve_primary_target(ast: &StoredDefinition) -> Option<String> {
         }
         for (inner_name, inner) in &pkg.classes {
             if is_diagrammable(inner.class_type.clone()) {
-                return Some(qualify(&crate::ast_extract::qualify(pkg_name, inner_name)));
+                return Some(qualify(&lunco_modelica_ast::ast_extract::qualify(
+                    pkg_name, inner_name,
+                )));
             }
         }
     }
@@ -1395,7 +1398,7 @@ package MyLib
   end C;
 end MyLib;
 "#;
-        let ast = rumoca_phase_parse::parse_to_ast(source, "test.mo").unwrap();
+        let ast = lunco_modelica_ast::parse_to_ast(source, "test.mo").unwrap();
         let names = list_class_names(&ast);
         assert!(names.contains(&"MyLib".to_string()));
         assert!(names.contains(&"MyLib.A".to_string()));

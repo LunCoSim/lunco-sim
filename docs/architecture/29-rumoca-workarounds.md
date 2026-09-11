@@ -60,7 +60,7 @@ algebraic variable, so it never appears in `SimulationSession::input_names()` an
 `set_input("g", …)` fails. rumoca offers no compile-time "runtime override" API,
 so the only lever is the source text.
 
-**Workaround.** `ast_extract::strip_input_defaults()` blanks the `= <expr>` bytes
+**Workaround.** `lunco-modelica-ast::ast_extract::strip_input_defaults()` blanks the `= <expr>` bytes
 (length-preserving, so diagnostic offsets still map to the editor buffer) and
 returns the defaults separately, to be re-seeded via `set_input`.
 

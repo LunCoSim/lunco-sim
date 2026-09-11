@@ -430,7 +430,7 @@ waits for both entities **and** the target's runtime contract; it never creates 
 edge merely to discover on a later fixed tick that the port surface was absent.
 
 The result: a multi-component, multi-language cosim is a USD edit, not
-a Rust edit. `cross_entity_cosim_test` exercises the canonical chain
+a Rust edit. `crates/lunco-luncosim/tests/cosim_chain.rs` exercises the canonical chain
 (Modelica oscillator → Python amplifier → Avian sphere) headlessly in
 ~1.3 s.
 

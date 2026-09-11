@@ -1,4 +1,4 @@
-use rumoca_phase_parse::{parse_to_ast, parse_to_syntax};
+use lunco_modelica_ast::{parse_to_ast, parse_to_syntax};
 
 fn main() {
     let src = r#"model Untitled1

@@ -1319,7 +1319,7 @@ mod parsed_bundle_tests {
 
     fn sample_docs() -> Vec<(String, rumoca_compile::parsing::StoredDefinition)> {
         let src = "model M Real x; equation der(x) = -x; end M;";
-        let def = rumoca_phase_parse::parse_to_ast(src, "M.mo").expect("parse sample model");
+        let def = lunco_modelica_ast::parse_to_ast(src, "M.mo").expect("parse sample model");
         vec![("M.mo".to_string(), def)]
     }
 

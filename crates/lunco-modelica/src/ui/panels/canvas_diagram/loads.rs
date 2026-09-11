@@ -48,13 +48,13 @@ pub struct DrillInBinding {
     /// containing file the engine session has already parsed
     /// installs in milliseconds. Driven by [`drive_drill_in_loads`].
     pub task: bevy::tasks::Task<Result<crate::document::ModelicaDocument, String>>,
-    /// RAII guard registered with [`lunco_workbench::status_bus::StatusBus`].
+    /// RAII guard registered with [`lunco_status_core::status_bus::StatusBus`].
     /// Dropped together with the binding (on install or on document
     /// removal) — the bus then clears the
     /// `(BusyScope::Document, "drill-in")` slot via `drain_busy_drops`.
     /// Kept as a field so any future work that wants to query
     /// "is this document loading?" goes through the bus.
-    pub busy: lunco_workbench::status_bus::BusyHandle,
+    pub busy: lunco_status_core::status_bus::BusyHandle,
 }
 
 /// Tab-to-task binding for duplicate-to-workspace operations whose
@@ -74,10 +74,10 @@ pub struct DuplicateBinding {
     pub display_name: String,
     pub origin_short: String,
     pub task: bevy::tasks::Task<crate::document::ModelicaDocument>,
-    /// RAII guard registered with [`lunco_workbench::status_bus::StatusBus`].
+    /// RAII guard registered with [`lunco_status_core::status_bus::StatusBus`].
     /// Same lifecycle as [`DrillInBinding::busy`] — clears the
     /// `(BusyScope::Document, "duplicate")` slot on Drop.
-    pub busy: lunco_workbench::status_bus::BusyHandle,
+    pub busy: lunco_status_core::status_bus::BusyHandle,
 }
 
 /// Bevy system: poll pending duplicate bg tasks; `install_prebuilt`
@@ -272,7 +272,7 @@ pub fn drive_drill_in_loads(
                 // LifecycleState::Failed(msg)` and renders the
                 // drill-in error overlay. No per-tab `load_error`
                 // plumbing needed.
-                busy.set_outcome(lunco_workbench::status_bus::BusyOutcome::Failed(msg));
+                busy.set_outcome(lunco_status_core::status_bus::BusyOutcome::Failed(msg));
                 drop(busy);
                 continue;
             }
@@ -325,8 +325,8 @@ pub fn drill_into_class(world: &mut World, qualified: &str) {
     // tab allocation. A generated network can be opened from the simulation
     // Build perspective; switch to the Modelica perspective before creating
     // the tab so the user lands on the diagram instead of the 3D viewport.
-    // WorkbenchLayout is extracted while egui panels render, so navigation
-    // must use the workbench's deferred command boundary rather than touching
+    // The concrete workbench shell is extracted while egui panels render, so
+    // navigation must use the workbench's deferred command boundary rather than touching
     // the resource directly. The workbench drains perspective requests before
     // tab requests, preserving this ordering even when the gesture originated
     // inside a panel render.
@@ -493,9 +493,9 @@ fn open_drill_in_tab(world: &mut World, qualified: &str, file_path: &std::path::
             )
         });
         let busy = {
-            let mut bus = world.resource_mut::<lunco_workbench::status_bus::StatusBus>();
+            let mut bus = world.resource_mut::<lunco_status_core::status_bus::StatusBus>();
             bus.begin(
-                lunco_workbench::status_bus::BusyScope::Document(doc_id.0),
+                lunco_status_core::status_bus::BusyScope::Document(doc_id.0),
                 "drill-in",
                 format!("Loading {qualified}"),
             )

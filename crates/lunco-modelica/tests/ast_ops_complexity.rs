@@ -17,7 +17,7 @@ fn doc(source: &str) -> DocumentHost<ModelicaDocument> {
 }
 
 fn reparse_ok(source: &str) -> bool {
-    rumoca_phase_parse::parse_to_ast(source, "test.mo").is_ok()
+    lunco_modelica_ast::parse_to_ast(source, "test.mo").is_ok()
 }
 
 /// Whitespace-insensitive `contains`. Structured ops regenerate a class via

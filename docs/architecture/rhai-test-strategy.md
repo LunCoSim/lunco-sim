@@ -171,7 +171,7 @@ recipes and their acceptance scenes stay in the owning Twin.
 
    ```bash
    ./scripts/run_rust_tests.sh -p lunco-modelica --module ast_mut_topology -- --nocapture
-   ./scripts/run_rust_tests.sh -p lunco-usd --filter integration_asset_loading::test_sandbox_scene_composes
+   ./scripts/run_rust_tests.sh -p lunco-usd-sim --filter usd_connection_mechanics::rewire_derives_at_load_and_clears
    ```
 
    The wrapper maps `--module`/`--file` to `--test <source-file>`, maps a
@@ -244,23 +244,34 @@ Rust harness. That still requires a rebuild and only changes the syntax. The
 Rhai test must be an authored asset or a live `RunRhai` source evaluated by the
 production binary.
 
-### Rover loader boundary
+Long USD fixtures and asset-specific setup do not belong in Rust string
+constants. Author those facts as `.usda` files beside the production assets and
+observe them with an authored Rhai scene. Rust mechanism tests may use the
+smallest programmatic stage needed to isolate a lower-level seam that has no
+production observation; they must not recreate a full asset or scenario.
 
-The rover loader tests follow the same split. The authored drivetrain and
-controller scenarios own public runtime outcomes: wheel-realization parity,
-authored output allocation, steering, and real motion. Adding another copy of
-those assertions would duplicate the acceptance gate.
+### USD simulation boundary
 
-The Rust tests in `crates/lunco-usd/tests/rover_structure.rs` and
-`integration_asset_loading.rs` therefore retain only the projection claims that
-the production Rhai surface cannot observe precisely: composed USD paths and
-schema edges, Avian compound-shape lowering, render-free physics projection,
-appearance intent (`Mesh3d`/`PbrLook`), and asynchronous observer ordering. They
-select wheel entities through the reflected `WheelRaycast` component and the
-canonical `UsdPrimPath`/`visual_entity` links; Bevy `Name` is presentation data,
-not an identity selector. If a future public query exposes one of these
-mechanism claims end-to-end, move that exact assertion to an authored scene and
-remove the Rust duplicate in the same change.
+The authored production scenarios own public USD simulation outcomes: composed
+rover topology, wheel realization and parameters, drivetrain parity, wiring,
+collision/appearance intent, and the resulting physics behavior. The former
+large `lunco-usd-sim` asset-loader, rover-structure, mobility, link-occlusion,
+and EPS integration targets were removed after their observable claims gained
+production query/telemetry coverage. Keeping those assertions in Rust would
+make every asset-policy edit relink a separate integration binary without
+adding a stronger boundary.
+
+Rust retains only mechanisms that the production surface cannot observe without
+inventing test-only APIs: the generic USD-to-`SimConnection` derived-cache
+system (`tests/usd_connection_mechanics.rs`), pure wheel-parameter validation in
+`src/wheel_params.rs`, and the lower-level USD document/projection
+tests in their owning crates. The separate wheel/tire/suspension target contract
+is now an authored `wheel_attachment_contract` USD + Rhai gate. Raw authoring
+facts that do not require Bevy or Avian stay with
+`lunco-usd/tests/live_spawn_projection.rs`, which already owns the document
+projection target. If a future public query exposes one of these mechanism
+claims end-to-end, move that exact assertion to an authored scene and remove
+the Rust duplicate in the same change.
 
 ## Remaining migration work
 

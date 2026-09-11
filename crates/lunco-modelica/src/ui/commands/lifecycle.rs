@@ -107,7 +107,7 @@ impl PendingCloseAfterSave {
 /// context menu. The anchor is the right-clicked tab; the scope picks
 /// which *other* tabs go with it. Resolved by
 /// [`resolve_tab_close_scopes`], which expands the scope into concrete
-/// instance ids (using dock order from [`lunco_workbench::WorkbenchLayout`])
+/// instance ids (using dock order from the published workbench snapshot)
 /// and feeds them through the existing [`lunco_workbench::PendingTabCloses`]
 /// pipeline — so each dirty tab still gets its Save / Don't-save prompt.
 #[derive(Clone, Copy, Debug)]
@@ -234,7 +234,7 @@ pub fn request_app_close(world: &mut World) {
     // enqueue Save/Don't save/Cancel modals through `render_close_dialogs`.
     if let Some(mut pending) = world.get_resource_mut::<lunco_workbench::PendingTabCloses>() {
         for (_doc, tab) in dirty_tabs {
-            pending.push(lunco_workbench::TabId::Instance {
+            pending.push(lunco_workbench_core::TabId::Instance {
                 kind: MODEL_VIEW_KIND,
                 instance: tab,
             });
@@ -425,7 +425,7 @@ pub fn on_create_new_scratch_model(
         .or_else(|| {
             req_source
                 .as_deref()
-                .and_then(crate::ast_extract::extract_model_name)
+                .and_then(lunco_modelica_ast::ast_extract::extract_model_name)
         })
         .unwrap_or_else(|| "Untitled".to_string());
     let name = unique_in_memory_name(&cache, &base);
@@ -463,7 +463,7 @@ pub fn on_duplicate_model_from_read_only(
     mut cache: ResMut<PackageTreeCache>,
     mut model_tabs: ResMut<ModelTabs>,
     mut openings: ResMut<crate::ui::document_openings::DocumentOpenings>,
-    mut bus: ResMut<lunco_workbench::status_bus::StatusBus>,
+    mut bus: ResMut<lunco_status_core::status_bus::StatusBus>,
     mut console: ResMut<crate::ui::panels::console::ConsoleLog>,
     mut commands: Commands,
     mut egui_q: Query<&mut bevy_egui::EguiContext>,
@@ -572,7 +572,7 @@ pub fn on_duplicate_model_from_read_only(
     });
 
     let busy = bus.begin(
-        lunco_workbench::status_bus::BusyScope::Document(doc_id.0),
+        lunco_status_core::status_bus::BusyScope::Document(doc_id.0),
         "duplicate",
         format!("Duplicating {origin_class_short} → {name}"),
     );
@@ -717,9 +717,9 @@ pub fn spawn_duplicate_class_task(world: &mut World, qualified: String, name_hin
     });
 
     let busy = world
-        .resource_mut::<lunco_workbench::status_bus::StatusBus>()
+        .resource_mut::<lunco_status_core::status_bus::StatusBus>()
         .begin(
-            lunco_workbench::status_bus::BusyScope::Document(doc_id.0),
+            lunco_status_core::status_bus::BusyScope::Document(doc_id.0),
             "duplicate",
             format!("Opening {qualified} → {name}"),
         );
@@ -1043,7 +1043,7 @@ pub fn on_document_closed_cleanup(
     mut experiments: Option<ResMut<lunco_experiments::ExperimentRegistry>>,
     mut drafts: Option<ResMut<crate::experiments_runner::ExperimentDrafts>>,
     mut canvas_state: Option<ResMut<crate::ui::panels::canvas_diagram::CanvasDiagramState>>,
-    mut bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
+    mut bus: Option<ResMut<lunco_status_core::status_bus::StatusBus>>,
 ) {
     let doc = trigger.event().doc_id;
     model_tabs.close(doc);
@@ -1056,7 +1056,7 @@ pub fn on_document_closed_cleanup(
     // Drop the bus's terminal-outcome cache for this doc so `last_outcome`
     // doesn't accumulate dead entries across long sessions.
     if let Some(b) = bus.as_mut() {
-        b.clear_outcomes_for(lunco_workbench::status_bus::BusyScope::Document(doc.0));
+        b.clear_outcomes_for(lunco_status_core::status_bus::BusyScope::Document(doc.0));
     }
     // TODO(backlog): this active_document reset is generic workspace behavior that
     // belongs in a lunco-workspace CloseDocument observer (the StatusBus and
@@ -1114,7 +1114,7 @@ pub fn finish_close_after_save(
 /// same dirty-check + Save-prompt pipeline a single × click uses.
 pub fn resolve_tab_close_scopes(
     mut scopes: ResMut<PendingTabCloseScopes>,
-    layout: Res<lunco_workbench::WorkbenchLayout>,
+    layout: Res<lunco_workbench_core::WorkbenchSnapshot>,
     registry: Res<ModelicaDocumentRegistry>,
     model_tabs: Res<ModelTabs>,
     mut pending: ResMut<lunco_workbench::PendingTabCloses>,
@@ -1147,7 +1147,7 @@ pub fn resolve_tab_close_scopes(
             TabCloseScope::Saved => ordered.iter().copied().filter(|&i| is_clean(i)).collect(),
         };
         for instance in targets {
-            pending.push(lunco_workbench::TabId::Instance {
+            pending.push(lunco_workbench_core::TabId::Instance {
                 kind: MODEL_VIEW_KIND,
                 instance,
             });
@@ -1164,7 +1164,7 @@ pub fn drain_pending_tab_closes(
 ) {
     let mut unclaimed = Vec::new();
     for tab in pending.drain() {
-        let lunco_workbench::TabId::Instance { kind, instance } = tab else {
+        let lunco_workbench_core::TabId::Instance { kind, instance } = tab else {
             unclaimed.push(tab);
             continue;
         };

@@ -16,6 +16,7 @@ ui = [
     "dep:bevy_egui",
     "dep:egui_plot",
     "dep:lunco-workbench",
+    "dep:lunco-workbench-core",
     "dep:lunco-theme",
     "dep:lunco-canvas",
     "dep:lunco-core",
@@ -30,6 +31,7 @@ bevy = { workspace = true, optional = true }
 bevy_egui = { workspace = true, optional = true }
 egui_plot = { workspace = true, optional = true }
 lunco-workbench = { path = "../lunco-workbench", optional = true }
+lunco-workbench-core = { path = "../lunco-workbench-core", optional = true }
 lunco-theme = { path = "../lunco-theme", optional = true }
 # The signal DATA model (SignalRegistry / SignalRef / ScalarHistory). Render-free, and
 # re-exported from `signal.rs` so existing `lunco_viz::SignalRegistry` callers are

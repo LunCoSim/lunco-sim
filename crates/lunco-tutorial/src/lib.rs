@@ -48,7 +48,13 @@ use lunco_workbench::tutorial_overlay::{
     TUTORIAL_OVERLAY_ORDER, TUTORIAL_SCRIM_ORDER,
 };
 #[cfg(feature = "ui")]
-use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchAppExt, WorkbenchLayout};
+use lunco_workbench::WorkbenchAppExt;
+#[cfg(feature = "ui")]
+use lunco_workbench_core::{
+    Panel, PanelCtx, PanelId, PanelSlot, WorkbenchMenuRegistry, WorkbenchSnapshot,
+};
+#[cfg(all(feature = "ui", test))]
+use lunco_workbench_core::{Perspective, PerspectiveId};
 use serde::{Deserialize, Serialize};
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
@@ -595,9 +601,41 @@ fn clear_tutorial_hud(world: &mut World) {
 #[cfg(feature = "ui")]
 fn clear_tutorial_presentation(world: &mut World) {
     clear_tutorial_hud(world);
-    if let Some(mut layout) = world.get_resource_mut::<WorkbenchLayout>() {
-        layout.set_required_perspective(None);
+    world.trigger(lunco_workbench::perspective_command::SetRequiredPerspective { id: None });
+}
+
+/// Prepare the optional workbench projection for a newly started lesson.
+///
+/// Tutorial execution does not depend on a workbench. When the UI projection
+/// is present, this is the single bridge that validates authored presentation
+/// metadata and resets the shell at the launch boundary.
+#[cfg(feature = "ui")]
+fn prepare_tutorial_presentation(world: &mut World, meta: &TutorialMeta) -> Result<(), String> {
+    let perspective = world
+        .resource::<TutorialRegistry>()
+        .tracks
+        .get(&meta.app)
+        .and_then(|track| track.perspective.clone());
+
+    if let Some(id) = perspective.as_deref() {
+        let Some(snapshot) = world.get_resource::<WorkbenchSnapshot>() else {
+            return Err(format!(
+                "tutorial '{}' declares perspective '{}' but the workbench layout is unavailable",
+                meta.id, id
+            ));
+        };
+        if !snapshot.has_perspective_named(id) {
+            return Err(format!(
+                "tutorial '{}' declares unknown workbench perspective '{}'",
+                meta.id, id
+            ));
+        }
     }
+
+    clear_tutorial_hud(world);
+    world.trigger(lunco_workbench::perspective_command::SetRequiredPerspective { id: perspective });
+    world.trigger(lunco_workbench::perspective_command::ResetToDefaultPerspective {});
+    Ok(())
 }
 
 /// WHAT "the overlay" is — the single field list, so the two callers cannot
@@ -743,56 +781,9 @@ fn on_start_tutorial(trigger: On<StartTutorial>, mut commands: Commands) {
                 .is_some_and(|mount| mount.active_root().is_some());
 
         #[cfg(feature = "ui")]
-        let perspective = world
-            .resource::<TutorialRegistry>()
-            .tracks
-            .get(&meta.app)
-            .and_then(|track| track.perspective.clone());
-        #[cfg(feature = "ui")]
-        if let Some(id) = perspective.as_deref() {
-            let Some(layout) = world.get_resource::<WorkbenchLayout>() else {
-                world.trigger(tutorial_failed(format!(
-                    "tutorial '{}' declares perspective '{}' but the workbench layout is unavailable",
-                    meta.id, id
-                )));
-                return;
-            };
-            if !layout.has_perspective(id) {
-                world.trigger(tutorial_failed(format!(
-                    "tutorial '{}' declares unknown workbench perspective '{}'",
-                    meta.id, id
-                )));
-                return;
-            }
-        }
-        // A tutorial is a guided presentation, not a continuation of the
-        // user's previous editor session. Reset the shared workbench owner at
-        // the canonical launch boundary so menu, panel, F1, API, and chained
-        // launches all get the same perspective and layout semantics. The
-        // authored id was validated above, before this mutating boundary.
-        #[cfg(feature = "ui")]
-        clear_tutorial_hud(world);
-        #[cfg(feature = "ui")]
-        if let Some(mut layout) = world.get_resource_mut::<WorkbenchLayout>() {
-            layout.set_required_perspective(perspective.as_deref());
-            layout.reset_to_default_perspective();
-        }
-        #[cfg(feature = "ui")]
-        if let Some(id) = perspective.as_deref() {
-            let Some(mut layout) = world.get_resource_mut::<WorkbenchLayout>() else {
-                world.trigger(tutorial_failed(format!(
-                    "tutorial '{}' declares perspective '{}' but the workbench layout is unavailable",
-                    meta.id, id
-                )));
-                return;
-            };
-            if !layout.activate_perspective_by_str(id) {
-                world.trigger(tutorial_failed(format!(
-                    "tutorial '{}' declares unknown workbench perspective '{}'",
-                    meta.id, id
-                )));
-                return;
-            }
+        if let Err(reason) = prepare_tutorial_presentation(world, &meta) {
+            world.trigger(tutorial_failed(reason));
+            return;
         }
         world.resource_mut::<PendingAdvance>().0 = None;
         stop_tutorial_host(world);
@@ -1696,10 +1687,10 @@ fn register_tutorials_menu(world: &mut World) {
     const MENU_MAX_WIDTH: f32 = 420.0;
     const MENU_MAX_HEIGHT: f32 = 360.0;
 
-    let Some(mut layout) = world.get_resource_mut::<WorkbenchLayout>() else {
+    let Some(mut menus) = world.get_resource_mut::<WorkbenchMenuRegistry>() else {
         return;
     };
-    layout.register_settings_submenu("Tutorials", |ui, ctx| {
+    menus.register_settings_submenu("Tutorials", |ui, ctx| {
         let Some(mut progress) = ctx.resource::<TutorialProgress>().cloned() else {
             return;
         };
@@ -1712,7 +1703,7 @@ fn register_tutorials_menu(world: &mut World) {
             ctx.set_resource(progress);
         }
     });
-    layout.register_custom_menu("Tutorials", |ui, ctx| {
+    menus.register_custom_menu("Tutorials", |ui, ctx| {
         let registry = ctx
             .resource::<TutorialRegistry>()
             .cloned()
@@ -1883,8 +1874,8 @@ impl Panel for TutorialsPanel {
     fn title(&self) -> String {
         "Tutorials".to_string()
     }
-    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
-        lunco_workbench::PanelMenuGroup::Tools
+    fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
+        lunco_workbench_core::PanelMenuGroup::Tools
     }
 
     fn default_slot(&self) -> PanelSlot {
@@ -2059,8 +2050,8 @@ pub struct TutorialPlugin {
 #[cfg(feature = "ui")]
 impl Plugin for TutorialPlugin {
     fn build(&self, app: &mut App) {
-        // The launcher and completion prompt render against WorkbenchLayout
-        // and HelpAnchors. Install their owner before registering any of the
+        // The launcher and completion prompt render against the workbench
+        // snapshot and HelpAnchors. Install their owner before registering any of the
         // UI projection systems so TutorialPlugin is safe to compose on its
         // own as well as inside a host that already has a workbench.
         if !app.is_plugin_added::<lunco_workbench::WorkbenchPlugin>() {
@@ -2092,17 +2083,21 @@ mod tests {
     }
 
     #[cfg(feature = "ui")]
-    impl lunco_workbench::Perspective for TutorialPerspective {
-        fn id(&self) -> lunco_workbench::PerspectiveId {
-            lunco_workbench::PerspectiveId(self.id)
+    impl Perspective for TutorialPerspective {
+        fn id(&self) -> PerspectiveId {
+            PerspectiveId(self.id)
         }
 
         fn title(&self) -> String {
             self.id.into()
         }
 
-        fn apply(&self, layout: &mut WorkbenchLayout) {
-            layout.set_side_browser(Some(PanelId(self.marker)));
+        fn layout(&self) -> lunco_workbench_core::PerspectiveLayoutPlan {
+            lunco_workbench_core::PerspectiveLayoutPlan {
+                side_browser: lunco_workbench_core::PerspectiveSlotPlan::new()
+                    .single(Some(PanelId(self.marker))),
+                ..Default::default()
+            }
         }
     }
 
@@ -2179,7 +2174,10 @@ mod tests {
 
         assert!(app
             .world()
-            .contains_resource::<lunco_workbench::WorkbenchLayout>());
+            .contains_resource::<lunco_workbench_core::WorkbenchSnapshot>());
+        assert!(app
+            .world()
+            .contains_resource::<lunco_workbench_core::WorkbenchMenuRegistry>());
         assert!(app
             .world()
             .contains_resource::<lunco_workbench::HelpAnchors>());
@@ -2194,22 +2192,18 @@ mod tests {
     fn guided_lesson_requires_and_releases_its_authored_perspective() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
+            .add_plugins(lunco_workbench::perspective_command::PerspectiveCommandPlugin)
             .add_plugins(TutorialCorePlugin {
                 app: "sandbox".into(),
-            })
-            .add_plugins(lunco_workbench::tutorial_overlay::TutorialOverlayPlugin);
-        app.init_resource::<WorkbenchLayout>();
-        {
-            let mut layout = app.world_mut().resource_mut::<WorkbenchLayout>();
-            layout.register_perspective(TutorialPerspective {
-                id: "view",
-                marker: "view_panel",
             });
-            layout.register_perspective(TutorialPerspective {
-                id: "build",
-                marker: "build_panel",
-            });
-        }
+        app.register_perspective(TutorialPerspective {
+            id: "view",
+            marker: "view_panel",
+        })
+        .register_perspective(TutorialPerspective {
+            id: "build",
+            marker: "build_panel",
+        });
         app.world_mut()
             .resource_mut::<TutorialRegistry>()
             .tracks
@@ -2241,31 +2235,35 @@ mod tests {
         app.update();
         assert_eq!(
             app.world()
-                .resource::<WorkbenchLayout>()
+                .resource::<WorkbenchSnapshot>()
                 .active_perspective(),
-            Some(lunco_workbench::PerspectiveId("build"))
+            Some(lunco_workbench_core::PerspectiveId("build"))
         );
 
         app.world_mut()
-            .resource_mut::<WorkbenchLayout>()
-            .activate_perspective_by_str("view");
+            .trigger(lunco_workbench::perspective_command::ActivatePerspective {
+                id: "view".into(),
+            });
+        app.update();
         assert_eq!(
             app.world()
-                .resource::<WorkbenchLayout>()
+                .resource::<WorkbenchSnapshot>()
                 .active_perspective(),
-            Some(lunco_workbench::PerspectiveId("build"))
+            Some(lunco_workbench_core::PerspectiveId("build"))
         );
 
         app.world_mut().trigger(SkipTutorial {});
         app.update();
         app.world_mut()
-            .resource_mut::<WorkbenchLayout>()
-            .activate_perspective_by_str("view");
+            .trigger(lunco_workbench::perspective_command::ActivatePerspective {
+                id: "view".into(),
+            });
+        app.update();
         assert_eq!(
             app.world()
-                .resource::<WorkbenchLayout>()
+                .resource::<WorkbenchSnapshot>()
                 .active_perspective(),
-            Some(lunco_workbench::PerspectiveId("view"))
+            Some(lunco_workbench_core::PerspectiveId("view"))
         );
     }
 

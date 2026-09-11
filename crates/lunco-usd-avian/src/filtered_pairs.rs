@@ -163,12 +163,7 @@ pub fn on_remove_joint_collision_pair(
     let Ok(pair) = pairs.get(trigger.entity) else {
         return;
     };
-    release_joint_pair(
-        &mut commands,
-        trigger.entity,
-        pair.body0,
-        pair.body1,
-    );
+    release_joint_pair(&mut commands, trigger.entity, pair.body0, pair.body1);
 }
 
 /// Add one Avian collision hook without erasing another hook already authored
@@ -531,9 +526,10 @@ impl CollisionHooks for UsdCollisionFilter<'_, '_> {
             self.filtered
                 .get(a)
                 .is_ok_and(|f| f.0.contains(&b) || f.0.contains(&b_body))
-                || self.joint_filtered.get(a).is_ok_and(|f| {
-                    f.0.contains_key(&b) || f.0.contains_key(&b_body)
-                })
+                || self
+                    .joint_filtered
+                    .get(a)
+                    .is_ok_and(|f| f.0.contains_key(&b) || f.0.contains_key(&b_body))
         };
 
         !(names(collider1, collider2, body2)

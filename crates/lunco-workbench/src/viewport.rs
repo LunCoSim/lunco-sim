@@ -79,9 +79,11 @@ use bevy::prelude::*;
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::{ClearColorConfig, Hdr, RenderTarget};
 use bevy_egui::{egui, EguiGlobalSettings, PrimaryEguiContext};
+use leafwing_input_manager::prelude::{ActionState, InputManagerPlugin};
 
 use crate::{Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlot};
-use lunco_core::SceneViewport;
+use lunco_controller::InputBindingsSettings;
+use lunco_core::{SceneViewport, UserIntent};
 use lunco_render::SceneCamera;
 
 /// Stable id for [`ViewportPanel`]. Use this in `Workspace::apply` to
@@ -476,8 +478,8 @@ impl PressLatch {
 /// Pure scene-vs-chrome decision — no ECS, no egui `Context`, no window.
 ///
 /// The pointer is over CHROME (`None`) when:
-///  • egui is dragging one of its own widgets (`using_pointer`) outside the
-///    occlusion-aware live scene leaf, or
+///  • egui is dragging one of its own widgets (`using_pointer`) and no
+///    occlusion-aware scene leaf owns the pointer, or
 ///  • `is_pointer_over_egui()` — a reserved egui panel / menu / status bar /
 ///    floating window / popup, or
 ///  • the pointer has left the window (`hover_pos == None`), or
@@ -509,14 +511,12 @@ pub(crate) fn resolve_scene_target(
     // the MAIN scene), and we want the precise target, not just "not the main
     // scene". The main viewport records its target here too when its panel renders.
     if let Some(target) = scene_leaf {
-        // The transparent main viewport is represented by an egui leaf, so
-        // egui may report `using_pointer` while a right-button orbit is in
-        // progress. Its occlusion-aware leaf hit-test is more precise than
-        // that broad state. Other scene targets remain behind their opaque
-        // preview chrome and therefore cannot claim the main scene pointer.
-        if target == SceneTarget::MainViewport || !egui_state.using_pointer {
-            return Some(target);
-        }
+        // The scene leaf is the occlusion-aware owner, including an offscreen
+        // preview whose egui::Image is also reporting `using_pointer` for the
+        // same gesture. Keep the precise target available to that panel's
+        // specialized consumers (notably the editor gizmo); `over_main_scene`
+        // still prevents an offscreen target from driving the main scene.
+        return Some(target);
     }
     // An egui widget drag owns the pointer unless the live main viewport leaf
     // claimed this exact position above. This keeps sliders, dock separators,
@@ -602,8 +602,8 @@ impl Panel for ViewportPanel {
 
     /// Never listed: it is the centre fixture (empty title, not closable), not
     /// something a user opens.
-    fn menu_group(&self) -> crate::PanelMenuGroup {
-        crate::PanelMenuGroup::Hidden
+    fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
+        lunco_workbench_core::PanelMenuGroup::Hidden
     }
 
     fn default_slot(&self) -> PanelSlot {
@@ -616,10 +616,10 @@ impl Panel for ViewportPanel {
         false
     }
 
-    fn scene_target(&self) -> Option<SceneTarget> {
+    fn scene_target(&self) -> Option<lunco_workbench_core::PanelRenderTarget> {
         // This IS the full-window scene — exempt from the pick gate's chrome-card
         // recording; the 3D camera paints through this transparent leaf.
-        Some(SceneTarget::MainViewport)
+        Some(lunco_workbench_core::PanelRenderTarget::MainViewport)
     }
 
     fn transparent_background(&self) -> bool {
@@ -746,9 +746,13 @@ pub(crate) fn ensure_egui_host(
     mut commands: Commands,
     mut egui_global: ResMut<EguiGlobalSettings>,
     existing: Query<(), With<PrimaryEguiContext>>,
+    bindings: Res<InputBindingsSettings>,
 ) {
     egui_global.auto_create_primary_context = false;
     if existing.iter().next().is_none() {
+        let input_map = bindings
+            .input_map()
+            .expect("registered input bindings must satisfy their settings contract");
         commands.spawn((
             Camera2d,
             // `order = 1` places egui strictly after the scene Camera3d.
@@ -764,6 +768,9 @@ pub(crate) fn ensure_egui_host(
             RenderLayers::none(),
             PrimaryEguiContext,
             WorkbenchEguiHost,
+            lunco_core::LocalIntentSurface,
+            ActionState::<UserIntent>::default(),
+            input_map,
             Name::new("WorkbenchEguiHost"),
         ));
     }
@@ -817,8 +824,7 @@ fn resolve_scene_viewport_layout(
 /// True iff `panel` appears in the active layout — either as a tab in
 /// the dock or in one of the four slot Vecs the perspectives populate.
 ///
-/// `dock.iter_all_tabs()` alone isn't enough: a perspective that calls
-/// `set_side_browser/set_center/set_right_inspector/set_bottom` writes
+/// `dock.iter_all_tabs()` alone isn't enough: a perspective plan writes
 /// to the slot Vecs first; the dock is *rebuilt from those slots* by
 /// `rebuild_dock`. In steady state both contain the same panels, but
 /// pinning the camera-active decision to layout membership (rather than
@@ -848,7 +854,7 @@ pub(crate) fn layout_is_empty(layout: &crate::WorkbenchLayout) -> bool {
         && !layout
             .dock
             .iter_all_tabs()
-            .any(|(_, t)| matches!(t, crate::TabId::Singleton(_)))
+            .any(|(_, t)| matches!(t, lunco_workbench_core::TabId::Singleton(_)))
 }
 
 pub(crate) fn layout_contains_panel(layout: &crate::WorkbenchLayout, panel: PanelId) -> bool {
@@ -864,7 +870,7 @@ pub(crate) fn layout_contains_panel(layout: &crate::WorkbenchLayout, panel: Pane
     layout
         .dock
         .iter_all_tabs()
-        .any(|(_, t)| matches!(t, crate::TabId::Singleton(id) if *id == panel))
+        .any(|(_, t)| matches!(t, lunco_workbench_core::TabId::Singleton(id) if *id == panel))
 }
 
 /// Sentinel — runs each frame on newly-added Camera3d entities and
@@ -1118,6 +1124,9 @@ fn apply_viewport_panel_measurement(
 
 impl Plugin for WorkbenchViewportPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<InputManagerPlugin<UserIntent>>() {
+            app.add_plugins(InputManagerPlugin::<UserIntent>::default());
+        }
         app.init_resource::<PanelRects>()
             .init_resource::<ScenePickGate>()
             .init_resource::<ViewportPlaceholder>()
@@ -1407,6 +1416,23 @@ mod tests {
         assert_ne!(out, Some(SceneTarget::MainViewport));
     }
 
+    /// An egui::Image reports `using_pointer` while its preview drag is held,
+    /// but that must not erase the preview scene leaf or interrupt a gizmo drag.
+    #[test]
+    fn offscreen_preview_remains_owner_during_egui_drag() {
+        let mut state = hovering((400.0, 200.0));
+        state.using_pointer = true;
+        state.any_down = true;
+        let out = resolve_scene_target(
+            state,
+            Some(SceneTarget::Offscreen(USD_PREVIEW)),
+            &[],
+            Some(rect((0.0, 30.0), (800.0, 400.0))),
+            None,
+        );
+        assert_eq!(out, Some(SceneTarget::Offscreen(USD_PREVIEW)));
+    }
+
     /// A COLLAPSED (or background-tab) viewport leaf records no `scene_leaf` — its
     /// `ViewportPanel::render` didn't run — but its dock-layout `rect` still covers
     /// the full-window 3D. The click MUST reach the scene, not die as chrome. This
@@ -1606,9 +1632,9 @@ mod tests {
 
     struct SceneBackedPerspective;
 
-    impl crate::Perspective for SceneBackedPerspective {
-        fn id(&self) -> crate::PerspectiveId {
-            crate::PerspectiveId("scene_backed")
+    impl lunco_workbench_core::Perspective for SceneBackedPerspective {
+        fn id(&self) -> lunco_workbench_core::PerspectiveId {
+            lunco_workbench_core::PerspectiveId("scene_backed")
         }
 
         fn title(&self) -> String {
@@ -1619,8 +1645,8 @@ mod tests {
             true
         }
 
-        fn apply(&self, layout: &mut crate::WorkbenchLayout) {
-            layout.set_center(vec![]);
+        fn layout(&self) -> lunco_workbench_core::PerspectiveLayoutPlan {
+            lunco_workbench_core::PerspectiveLayoutPlan::new()
         }
     }
 

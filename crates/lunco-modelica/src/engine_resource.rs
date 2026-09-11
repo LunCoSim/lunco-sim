@@ -177,7 +177,7 @@ impl ModelicaEngineHandle {
                 let mut parsed = Vec::with_capacity(files.len());
                 let mut diagnostics = Vec::new();
                 for (uri, source) in files {
-                    match rumoca_phase_parse::parse_to_ast(&source, &uri) {
+                    match lunco_modelica_ast::parse_to_ast(&source, &uri) {
                         Ok(ast) => parsed.push((uri, ast)),
                         Err(error) => diagnostics.push(format!("{uri}: {error:?}")),
                     }
@@ -292,7 +292,7 @@ impl ModelicaEngineHandle {
             let t_total = web_time::Instant::now();
             // Lenient parser: always produces a usable tree.
             let t_parse = web_time::Instant::now();
-            let recovery = rumoca_phase_parse::parse_to_syntax(&source, &uri);
+            let recovery = lunco_modelica_ast::parse_to_syntax(&source, &uri);
             let parse_ms = t_parse.elapsed().as_secs_f64() * 1000.0;
             let has_errors = recovery.has_errors();
             // Resolve the lenient parser's structured errors into located

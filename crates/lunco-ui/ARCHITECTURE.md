@@ -11,12 +11,19 @@ their view-model reads and typed actions local.
 
 ## What lunco-ui Provides
 
-> The workbench panel boundary is the in-house `lunco-workbench` `Panel` trait
-> with `PanelCtx` and `PanelId`; domain UI code should use that current API.
+> The renderer-independent panel boundary is the in-house
+> `lunco-workbench-core` `Panel` trait with `PanelCtx` and `PanelId`; domain UI
+> code should use that contract. The concrete `lunco-workbench` crate remains
+> the owner of docking, persistence, and shell-only widgets.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                   lunco-workbench (in-house)                 │
+│             lunco-workbench-core (contracts)                 │
+│  Panel · Perspective · Menu · Snapshot                       │
+└──────────────────────┬──────────────────────────────────────┘
+                       │ materialized by
+┌──────────────────────▼──────────────────────────────────────┐
+│                 lunco-workbench (concrete shell)             │
 │  Docking · Themes · Persistence · Inspector · Console        │
 └──────────────────────┬──────────────────────────────────────┘
                        │ Panel trait
@@ -155,6 +162,7 @@ crates/lunco-luncosim-edit/
 
 ```toml
 [dependencies]
+lunco-workbench-core = { path = "../lunco-workbench-core" }
 lunco-workbench = { path = "../lunco-workbench" }
 lunco-ui = { path = "../lunco-ui" }
 ```
@@ -162,7 +170,7 @@ lunco-ui = { path = "../lunco-ui" }
 ### 3. Implement a panel
 
 ```rust
-use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
+use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 use lunco_ui::prelude::*;
 
 pub struct Inspector;
@@ -298,7 +306,7 @@ In-process local UI triggers (`ctx.trigger` or `commands.trigger`) execute synch
 ```
 crates/lunco-ui/
 ├── ARCHITECTURE.md
-├── Cargo.toml               # deps include bevy, bevy_egui, lunco-workbench, big_space, lunco-core, lunco-avatar
+├── Cargo.toml               # deps include bevy, bevy_egui, workbench-core, lunco-workbench, big_space, lunco-core, lunco-avatar
 └── src/
     ├── lib.rs               # LuncoUiPlugin + theme
     ├── widget.rs            # WidgetSystem + WidgetId + caching
@@ -311,7 +319,8 @@ crates/lunco-ui/
     └── modal/              # modal-dialog host (mod.rs, host.rs)
 ```
 
-Domain crate UI layout (panels implement `lunco-workbench`'s `Panel` trait):
+Domain crate UI layout (panels implement `lunco-workbench-core`'s `Panel`
+trait and use `lunco-workbench` only for concrete shell services):
 
 ```
 crates/lunco-luncosim/src/ui/

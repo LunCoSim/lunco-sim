@@ -1,4 +1,4 @@
-//! Focused validation of the openusd 0.2 → 0.5 migration.
+//! Focused validation of the OpenUSD migration at the composed-stage reader boundary.
 //!
 //! Composes the REAL sandbox scene + rover assets through the live
 //! `compose_file_to_stage` path (read via a `StageView` over a `CanonicalStage`)

@@ -18,7 +18,7 @@ use lunco_canvas::{
 use lunco_usd::commands::ApplyUsdOps;
 use lunco_usd::document::{LayerId, UsdOp};
 use lunco_usd_bevy::UsdPrimPath;
-use lunco_workbench::{Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlot};
+use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlot};
 
 use lunco_scene_commands::SelectedEntities;
 
@@ -790,8 +790,8 @@ impl Panel for AutopilotCanvasPanel {
     fn title(&self) -> String {
         "Autopilot graph".into()
     }
-    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
-        lunco_workbench::PanelMenuGroup::Tools
+    fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
+        lunco_workbench_core::PanelMenuGroup::Tools
     }
     fn default_slot(&self) -> PanelSlot {
         PanelSlot::Center

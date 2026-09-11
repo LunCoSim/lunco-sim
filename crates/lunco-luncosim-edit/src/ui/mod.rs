@@ -12,8 +12,11 @@ use lunco_core::{Avatar, ControlBinding, InputPorts, SceneMountState, TheLocalAv
 use lunco_usd_bevy::UsdPrimPath;
 use lunco_workbench::twin_browser::TWIN_BROWSER_PANEL_ID;
 use lunco_workbench::{
-    HelpMouse, HelpShortcut, LiveHelpSection, LiveHelpSections, PanelId, Perspective,
-    PerspectiveId, ViewportPanel, WorkbenchAppExt, WorkbenchLayout, VIEWPORT_PANEL_ID,
+    HelpMouse, HelpShortcut, LiveHelpSection, LiveHelpSections, PerspectiveHelp, ViewportPanel,
+    WorkbenchAppExt, VIEWPORT_PANEL_ID,
+};
+use lunco_workbench_core::{
+    PanelId, PanelSlot, Perspective, PerspectiveId, PerspectiveLayoutPlan, PerspectiveSlotPlan,
 };
 
 pub mod asset_visibility;
@@ -589,7 +592,7 @@ impl Plugin for SceneEditUiPlugin {
             .register_perspective(ViewPerspective)
             .register_perspective_help(
                 PerspectiveId("sandbox_view"),
-                lunco_workbench::PerspectiveHelp {
+                PerspectiveHelp {
                     description: "Full-screen 3D observation & control mode. Fly the \
                                   camera around the scene and claim an endpoint's \
                                   public input ports. The live sections below show \
@@ -619,7 +622,7 @@ impl Plugin for SceneEditUiPlugin {
             .register_perspective(BuildPerspective)
             .register_perspective_help(
                 PerspectiveId("rover_build"),
-                lunco_workbench::PerspectiveHelp {
+                PerspectiveHelp {
                     description: "General Twin builder. Compose the live base from \
                                   complete USD assembly roots, select and transform them \
                                   as one element, and use Editor for a rover or lander's \
@@ -662,7 +665,7 @@ impl Plugin for SceneEditUiPlugin {
             .register_perspective(TerrainPerspective)
             .register_perspective_help(
                 PerspectiveId("terrain_sculpt"),
-                lunco_workbench::PerspectiveHelp {
+                PerspectiveHelp {
                     description: "Sculpt the surface. Arm a brush in the Tools palette, \
                                   then click the terrain to raise, dig, or flatten it. \
                                   Edits re-bake the visuals and the collider live.",
@@ -708,7 +711,7 @@ impl Plugin for SceneEditUiPlugin {
             .register_perspective(EditorPerspective)
             .register_perspective_help(
                 PerspectiveId("editor"),
-                lunco_workbench::PerspectiveHelp {
+                PerspectiveHelp {
                     description: "Assembly Editor. Open one rover, lander, or other \
                                   USD document in the Twin Browser, navigate its \
                                   authored structure, and edit the selected prim in the \
@@ -1025,10 +1028,11 @@ impl Plugin for SceneEditUiPlugin {
 /// persisted and is cleared at scene teardown.
 fn register_debug_viz_settings(world: &mut World) {
     use bevy_egui::egui;
-    let Some(mut layout) = world.get_resource_mut::<WorkbenchLayout>() else {
+    let Some(mut menus) = world.get_resource_mut::<lunco_workbench_core::WorkbenchMenuRegistry>()
+    else {
         return;
     };
-    layout.register_settings_submenu("Debug visualization", |ui, ctx| {
+    menus.register_settings_submenu("Debug visualization", |ui, ctx| {
         ui.label(egui::RichText::new("Debug Visualization").weak().small());
         let Some(mut store) = ctx
             .resource::<crate::diagnostic_visuals::DiagnosticVisualStore>()
@@ -1122,12 +1126,8 @@ impl Perspective for ViewPerspective {
     fn scene_interaction_mode(&self) -> lunco_core::SceneInteractionMode {
         lunco_core::SceneInteractionMode::Simulation
     }
-    fn apply(&self, layout: &mut WorkbenchLayout) {
-        layout.set_activity_bar(false);
-        layout.set_side_browser(None);
-        layout.set_right_inspector(None);
-        layout.set_bottom(None);
-        layout.set_center(vec![]);
+    fn layout(&self) -> PerspectiveLayoutPlan {
+        PerspectiveLayoutPlan::new()
     }
 }
 
@@ -1154,26 +1154,22 @@ impl Perspective for BuildPerspective {
         // the instance, so cached layouts from it must be rebuilt once.
         3
     }
-    fn apply(&self, layout: &mut WorkbenchLayout) {
-        layout.set_activity_bar(false);
-        layout.set_side_browser_stacked(
-            vec![PanelId("entity_list"), PanelId("port_inspector")],
-            vec![PanelId("telemetry_browser")],
-        );
-        layout.set_center(vec![VIEWPORT_PANEL_ID]);
-        layout.set_right_inspector_stacked(
-            vec![PanelId("sandbox_inspector")],
-            vec![PanelId("spawn_palette")],
-        );
-        layout.set_bottom(None);
-        // Graphs is a multi-instance panel, so it cannot be declared through
-        // the singleton bottom-slot setter. The existing insertion path uses
-        // its authoritative PanelSlot::Bottom and splits beneath the exclusive
-        // viewport leaf, keeping the scene interactive and the graph bounded.
-        layout.open_instance(
+    fn layout(&self) -> PerspectiveLayoutPlan {
+        PerspectiveLayoutPlan {
+            side_browser: PerspectiveSlotPlan::new().stacked(
+                [PanelId("entity_list"), PanelId("port_inspector")],
+                [PanelId("telemetry_browser")],
+            ),
+            center: PerspectiveSlotPlan::new().tabs([VIEWPORT_PANEL_ID]),
+            right_inspector: PerspectiveSlotPlan::new()
+                .stacked([PanelId("sandbox_inspector")], [PanelId("spawn_palette")]),
+            ..Default::default()
+        }
+        .open_instance(
             lunco_modelica::ui::panels::graphs::MODELICA_PLOT_KIND,
             lunco_modelica::ui::viz::DEFAULT_MODELICA_GRAPH.0,
-        );
+            PanelSlot::Bottom,
+        )
     }
 }
 
@@ -1211,32 +1207,31 @@ impl Perspective for EditorPerspective {
         // the new authored default.
         1
     }
-    fn apply(&self, layout: &mut WorkbenchLayout) {
-        layout.set_activity_bar(false);
+    fn layout(&self) -> PerspectiveLayoutPlan {
         // Structure first: the USD prim tree is the assembly's authoring
         // hierarchy. Keep document selection available in the lower side pane
         // while the authored structure remains the primary upper pane. The
         // live Entity list and spawn palette belong to Build and are
         // intentionally absent so an Editor session cannot mix a mounted
         // scene entity with the selected document.
-        layout.set_side_browser_stacked(
-            vec![usd_prim_tree::USD_PRIM_TREE_PANEL_ID],
-            vec![TWIN_BROWSER_PANEL_ID],
-        );
-        // Central tabs: the isolated USD document preview and the Rhai
-        // behaviour editor. The
-        // USD connection graph is opened from the Connections entry in the
-        // Lunica/Twin navigation, so it is not a second Build workflow.
-        layout.set_center(vec![
-            lunco_usd::ui::USD_VIEWPORT_PANEL_ID,
-            PanelId("rhai_editor"),
-        ]);
-        // The Inspector alone on the right — parameter editing is the point here.
-        layout.set_right_inspector_tabs(vec![
-            PanelId("sandbox_inspector"),
-            PanelId("sandbox_environment"),
-        ]);
-        layout.set_bottom(None);
+        let mut plan = PerspectiveLayoutPlan {
+            side_browser: PerspectiveSlotPlan::new().stacked(
+                [usd_prim_tree::USD_PRIM_TREE_PANEL_ID],
+                [TWIN_BROWSER_PANEL_ID],
+            ),
+            // Central tabs: the isolated USD document preview and the Rhai
+            // behaviour editor. The
+            // USD connection graph is opened from the Connections entry in the
+            // Lunica/Twin navigation, so it is not a second Build workflow.
+            center: PerspectiveSlotPlan::new()
+                .tabs([lunco_usd::ui::USD_VIEWPORT_PANEL_ID, PanelId("rhai_editor")]),
+            // The Inspector alone on the right — parameter editing is the point here.
+            right_inspector: PerspectiveSlotPlan::new()
+                .tabs([PanelId("sandbox_inspector"), PanelId("sandbox_environment")]),
+            ..Default::default()
+        };
+        plan.active_center_tab = Some(0);
+        plan
     }
 }
 
@@ -1258,16 +1253,17 @@ impl Perspective for TerrainPerspective {
     fn scene_interaction_mode(&self) -> lunco_core::SceneInteractionMode {
         lunco_core::SceneInteractionMode::Editor
     }
-    fn apply(&self, layout: &mut WorkbenchLayout) {
-        layout.set_activity_bar(false);
-        layout.set_side_browser_tabs(vec![PanelId("tools_palette")]);
-        layout.set_center(vec![VIEWPORT_PANEL_ID]);
-        layout.set_right_inspector_tabs(vec![
-            PanelId("sandbox_inspector"),
-            PanelId("sandbox_environment"),
-            PanelId("entity_list"),
-        ]);
-        layout.set_bottom(None);
+    fn layout(&self) -> PerspectiveLayoutPlan {
+        PerspectiveLayoutPlan {
+            side_browser: PerspectiveSlotPlan::new().tabs([PanelId("tools_palette")]),
+            center: PerspectiveSlotPlan::new().tabs([VIEWPORT_PANEL_ID]),
+            right_inspector: PerspectiveSlotPlan::new().tabs([
+                PanelId("sandbox_inspector"),
+                PanelId("sandbox_environment"),
+                PanelId("entity_list"),
+            ]),
+            ..Default::default()
+        }
     }
 }
 
@@ -1302,16 +1298,17 @@ mod tests {
 
     #[test]
     fn build_perspective_seeds_the_canonical_graph_instance() {
-        let mut layout = WorkbenchLayout::default();
-        layout.register(ViewportPanel);
-        layout.register_instance_panel(lunco_modelica::ui::panels::graphs::ModelicaPlotPanel);
-
-        BuildPerspective.apply(&mut layout);
-
+        let plan = BuildPerspective.layout();
+        assert_eq!(plan.instance_tabs.len(), 1);
         assert_eq!(
-            layout.instances_in_order(lunco_modelica::ui::panels::graphs::MODELICA_PLOT_KIND),
-            vec![lunco_modelica::ui::viz::DEFAULT_MODELICA_GRAPH.0]
+            plan.instance_tabs[0].kind,
+            lunco_modelica::ui::panels::graphs::MODELICA_PLOT_KIND
         );
+        assert_eq!(
+            plan.instance_tabs[0].instance,
+            lunco_modelica::ui::viz::DEFAULT_MODELICA_GRAPH.0
+        );
+        assert_eq!(plan.instance_tabs[0].slot, PanelSlot::Bottom);
     }
 
     #[test]
@@ -1325,15 +1322,12 @@ mod tests {
 
     #[test]
     fn editor_perspective_stacks_prims_above_twin_browser() {
-        let mut layout = WorkbenchLayout::default();
-        layout.register(usd_prim_tree::UsdPrimTreePanel);
-        layout.register(lunco_workbench::TwinBrowserPanel::default());
-        layout.register(lunco_usd::ui::UsdViewportPanel);
-
-        EditorPerspective.apply(&mut layout);
-
-        assert!(layout.is_panel_docked(usd_prim_tree::USD_PRIM_TREE_PANEL_ID));
-        assert!(layout.is_panel_docked(TWIN_BROWSER_PANEL_ID));
+        let plan = EditorPerspective.layout();
+        assert!(plan
+            .side_browser
+            .primary
+            .contains(&usd_prim_tree::USD_PRIM_TREE_PANEL_ID));
+        assert!(plan.side_browser.secondary.contains(&TWIN_BROWSER_PANEL_ID));
         assert_eq!(EditorPerspective.layout_revision(), 1);
     }
 }

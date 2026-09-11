@@ -45,6 +45,15 @@ dependency cycle, put the provider in a small `*-api` adapter crate and have
 each API-capable composition root install it explicitly. Keep the data/core
 crate independent of transport and presentation layers.
 
+Keep the workbench split at the dependency boundary: `lunco-workbench-core`
+owns renderer-independent panel/menu/perspective contracts and the published
+`WorkbenchSnapshot`; `lunco-workbench` owns `egui_dock`, `bevy_egui`, viewport
+rendering, persistence, built-in shell panels, and shell-only widgets. Domain
+UI crates implement contracts from the core crate, read layout facts from the
+snapshot, and depend on the concrete shell only when they use a shell-owned
+command or presentation service. Do not expose or consume the shell's private
+`WorkbenchLayout` outside that crate.
+
 For a `ShaderLook` with `vertex_shader`, treat the fragment and vertex sources as
 one linked material contract: both stages read the same `@binding(0)` uniform
 block, so their `Material` fields, order, and WGSL types must agree. The
@@ -69,6 +78,12 @@ body schema or a separate collision representation. An explicit Twin setting
 may select a documented unsafe policy, but the movement owner reads that
 setting directly and remains safe when the setting is omitted, malformed, or
 the Twin closes.
+
+The controller's semantic input vocabulary is not avatar-only: the workbench
+owns one app-level local intent surface for editor actions when an isolated
+preview has no avatar. Shared actions such as `CancelIntent` read that surface
+through the same `InputBindingsSettings` map, while avatar control continues to
+use its own surface; neither path may introduce a raw-key or duplicate binding.
 
 ## Source-backed program attachment
 
@@ -449,7 +464,7 @@ python3 scripts/gen_schema.py
 RUSTC_WRAPPER= cargo fmt --all -- --check
 RUSTC_WRAPPER= cargo test -p lunco-usd --test schema_generation -j 4
 RUSTC_WRAPPER= cargo test -p lunco-modelica --test sensor_contracts -j 4
-RUSTC_WRAPPER= cargo test -p lunco-usd-sim --test usd_connection_derivation -j 4
+RUSTC_WRAPPER= cargo test -p lunco-usd-sim --test usd_connection_mechanics -j 4
 CARGO_INCREMENTAL=1 RUSTC_WRAPPER= cargo build -p lunco-luncosim --bin luncosim -j 4
 ```
 
@@ -463,6 +478,10 @@ scene through the real executable. Report separately:
 - visual behavior observed; and
 - warnings that remain, especially rejected force-loop diagnostics or solver
   warnings.
+
+Keep long USD fixtures and asset-specific assertions in authored `.usda` and
+Rhai scene tests. Rust test stages should be minimal and programmatic, and only
+cover mechanisms that the production query/command surface cannot observe.
 
 Never claim that a source parse or unit test proves the scene is physically
 correct.

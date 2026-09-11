@@ -13,17 +13,17 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_core::OpId;
 use lunco_core::ports::PortRegistry;
-use lunco_cosim::{JOINT_ANGLE_PORT, joint_angle_holder};
+use lunco_core::OpId;
+use lunco_cosim::{joint_angle_holder, JOINT_ANGLE_PORT};
 use lunco_doc::Document;
-use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
+use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 // Appearance INTENT. The Material (PBR) section edits this component, not the
 // material asset — see `material_pbr_section`.
 use lunco_materials::{ParamValue, ShaderLook};
 use lunco_render::{PbrLook, SceneCamera};
 
-use lunco_obstacle_field::{ObstacleFieldSpec, Pattern, plugin::UpdateObstacleFieldSpec};
+use lunco_obstacle_field::{plugin::UpdateObstacleFieldSpec, ObstacleFieldSpec, Pattern};
 
 use lunco_scene_commands::SelectedEntities;
 // Doc resolution + material-binding walk: headless-safe, shared verbatim with the
@@ -745,7 +745,7 @@ pub(crate) fn on_modelica_parameter_requested(
             let registry = world.resource::<ModelicaDocumentRegistry>();
             let doc = registry.document_of(request.entity);
             let class = doc.and_then(|doc| registry.host(doc)).and_then(|host| {
-                lunco_modelica::ast_extract::extract_model_name_from_ast(
+                lunco_modelica_ast::ast_extract::extract_model_name_from_ast(
                     host.document().syntax().ast(),
                 )
             });
@@ -838,8 +838,8 @@ pub struct InspectorView {
 /// a quiescent scene. All reads are bounded single-entity lookups or small
 /// scans the panel used to do in-paint.
 pub fn populate_inspector_view(world: &mut World) {
-    use bevy::camera::Exposure;
     use bevy::camera::visibility::RenderLayers;
+    use bevy::camera::Exposure;
     use bevy::light::{CascadeShadowConfig, DirectionalLight, GlobalAmbientLight};
     use bevy::post_process::bloom::Bloom;
 
@@ -1160,8 +1160,8 @@ impl Panel for Inspector {
     fn default_slot(&self) -> PanelSlot {
         PanelSlot::RightInspector
     }
-    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
-        lunco_workbench::PanelMenuGroup::Scene
+    fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
+        lunco_workbench_core::PanelMenuGroup::Scene
     }
     fn transparent_background(&self) -> bool {
         true
@@ -1192,8 +1192,8 @@ impl Panel for EnvironmentPanel {
     fn default_slot(&self) -> PanelSlot {
         PanelSlot::RightInspector
     }
-    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
-        lunco_workbench::PanelMenuGroup::Scene
+    fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
+        lunco_workbench_core::PanelMenuGroup::Scene
     }
     fn transparent_background(&self) -> bool {
         true

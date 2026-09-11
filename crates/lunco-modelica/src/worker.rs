@@ -18,10 +18,10 @@ use serde::{Deserialize, Serialize};
 #[cfg(not(target_arch = "wasm32"))]
 use lunco_assets::modelica_dir;
 
-use crate::ast_extract::{strip_input_defaults_with_report, InputDefaultIssue};
 use crate::simulation_session::LiveStepper;
 use crate::ModelicaCompiler;
 use lunco_experiments::solver;
+use lunco_modelica_ast::ast_extract::{strip_input_defaults_with_report, InputDefaultIssue};
 use lunco_signal::{SimSnapshot, SimStream};
 
 #[cfg(not(target_arch = "wasm32"))]

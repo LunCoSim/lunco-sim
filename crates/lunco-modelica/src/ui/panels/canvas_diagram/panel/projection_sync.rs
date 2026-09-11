@@ -13,7 +13,7 @@ use crate::state::ModelicaDocumentRegistry;
 use bevy_egui::egui;
 use lunco_canvas::Scene;
 use lunco_doc::Document;
-use lunco_workbench::PanelCtx;
+use lunco_workbench_core::PanelCtx;
 
 pub(crate) fn poll_and_swap_projection(
     ui: &mut egui::Ui,
@@ -428,7 +428,7 @@ fn spawn_projection_task(
     let root_model_name = crate::state::simulator_for_ctx(ctx, doc_id)
         .and_then(|entity| ctx.get::<crate::ModelicaModel>(entity))
         .map(|model| model.model_name.clone())
-        .or_else(|| crate::ast_extract::extract_model_name_from_ast(ast_arc.as_ref()));
+        .or_else(|| lunco_modelica_ast::ast_extract::extract_model_name_from_ast(ast_arc.as_ref()));
     let label = match &target_class {
         Some(t) => format!("Projecting {t}"),
         None => "Projecting…".to_string(),
@@ -438,10 +438,10 @@ fn spawn_projection_task(
     // DIFFERENT resource (CanvasDiagramState is already scoped out at
     // the panel level; we hold the threaded `state` directly). The bus
     // and the canvas state are disjoint, so this is safe.
-    let task = ctx.resource_scope::<lunco_workbench::status_bus::StatusBus, _>(|_ctx, bus| {
-        lunco_workbench::tracked_task::spawn_tracked_cancellable_result(
+    let task = ctx.resource_scope::<lunco_status_core::status_bus::StatusBus, _>(|_ctx, bus| {
+        lunco_status_core::tracked_task::spawn_tracked_cancellable_result(
             bus,
-            lunco_workbench::status_bus::BusyScope::Document(doc_id.0),
+            lunco_status_core::status_bus::BusyScope::Document(doc_id.0),
             "projection",
             label,
             std::sync::Arc::clone(&cancel),

@@ -8,7 +8,7 @@ pub(crate) mod util;
 
 use bevy_egui::egui;
 use lunco_canvas::Scene;
-use lunco_workbench::{Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlot};
+use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlot};
 
 use super::{active_doc_from_world_ctx, CanvasDiagramState, CANVAS_DIAGRAM_PANEL_ID};
 use crate::model_tabs_types::TabRenderContext;
@@ -33,8 +33,8 @@ impl Panel for CanvasDiagramPanel {
     /// Not listed: the canvas users actually work in is embedded in the
     /// per-document Model view tab. This singleton renders an empty scene when
     /// no document is active, so a menu entry for it opens a blank panel.
-    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
-        lunco_workbench::PanelMenuGroup::Hidden
+    fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
+        lunco_workbench_core::PanelMenuGroup::Hidden
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {

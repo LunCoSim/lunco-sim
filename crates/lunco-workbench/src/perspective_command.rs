@@ -30,6 +30,7 @@ pub struct ActivatePerspective {
 fn on_activate_perspective(
     trigger: On<ActivatePerspective>,
     layout: Option<ResMut<WorkbenchLayout>>,
+    mut snapshot: Option<ResMut<crate::WorkbenchSnapshot>>,
     pending: Option<ResMut<crate::PendingLayoutRequests>>,
     mut commands: Commands,
 ) {
@@ -43,6 +44,9 @@ fn on_activate_perspective(
         return;
     };
     if layout.activate_perspective_by_str(&id) {
+        if let Some(snapshot) = snapshot.as_deref_mut() {
+            crate::publish_workbench_snapshot(&layout, snapshot);
+        }
         info!("[ActivatePerspective] activated `{id}`");
     } else {
         warn!("[ActivatePerspective] no registered perspective with id `{id}`");
@@ -73,6 +77,7 @@ pub struct ResetWorkspaceLayout {}
 fn on_reset_workspace_layout(
     _trigger: On<ResetWorkspaceLayout>,
     layout: Option<ResMut<WorkbenchLayout>>,
+    mut snapshot: Option<ResMut<crate::WorkbenchSnapshot>>,
     pending: Option<ResMut<crate::PendingLayoutRequests>>,
 ) {
     let Some(mut layout) = layout else {
@@ -82,10 +87,55 @@ fn on_reset_workspace_layout(
         return;
     };
     layout.reset_to_default_layout();
+    if let Some(snapshot) = snapshot.as_deref_mut() {
+        crate::publish_workbench_snapshot(&layout, snapshot);
+    }
     info!("[ResetWorkspaceLayout] dock reset to active perspective preset");
 }
 
-register_commands!(on_activate_perspective, on_reset_workspace_layout);
+/// Constrain perspective activation to an authored presentation perspective.
+#[Command(default)]
+pub struct SetRequiredPerspective {
+    /// Raw id of the required perspective, or `None` to release the shell.
+    pub id: Option<String>,
+}
+
+#[on_command(SetRequiredPerspective)]
+fn on_set_required_perspective(
+    trigger: On<SetRequiredPerspective>,
+    layout: Option<ResMut<WorkbenchLayout>>,
+) {
+    let Some(mut layout) = layout else {
+        return;
+    };
+    layout.set_required_perspective(trigger.event().id.as_deref());
+}
+
+/// Reset the workbench to the required or first registered perspective.
+#[Command(default)]
+pub struct ResetToDefaultPerspective {}
+
+#[on_command(ResetToDefaultPerspective)]
+fn on_reset_to_default_perspective(
+    _trigger: On<ResetToDefaultPerspective>,
+    layout: Option<ResMut<WorkbenchLayout>>,
+    mut snapshot: Option<ResMut<crate::WorkbenchSnapshot>>,
+) {
+    let Some(mut layout) = layout else {
+        return;
+    };
+    layout.reset_to_default_perspective();
+    if let Some(snapshot) = snapshot.as_deref_mut() {
+        crate::publish_workbench_snapshot(&layout, snapshot);
+    }
+}
+
+register_commands!(
+    on_activate_perspective,
+    on_reset_workspace_layout,
+    on_set_required_perspective,
+    on_reset_to_default_perspective,
+);
 
 /// Plugin registering the [`ActivatePerspective`] command observer.
 pub struct PerspectiveCommandPlugin;

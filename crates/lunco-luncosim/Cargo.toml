@@ -32,6 +32,11 @@ path = "src/bin/luncosim.rs"
 # `run()` (via this bin) for `wasm32` — `#[cfg(target_arch = "wasm32")]` blocks
 # in the lib handle platform differences. Served at `dist/luncosim/`.
 
+[[example]]
+name = "usd_rover_visual"
+path = "examples/usd_rover_visual.rs"
+required-features = ["ui"]
+
 [dependencies]
 winit = { version = "0.30.13", optional = true }
 bevy_winit = { version = "0.19", optional = true }
@@ -179,6 +184,8 @@ lunco-materials = { path = "../lunco-materials", optional = true }
 lunco-doc = { path = "../lunco-doc" }
 lunco-theme = { path = "../lunco-theme", optional = true }
 lunco-workbench = { path = "../lunco-workbench", optional = true }
+lunco-workbench-core = { path = "../lunco-workbench-core", optional = true }
+lunco-status-core = { path = "../lunco-status-core", optional = true }
 lunco-ui = { path = "../lunco-ui", optional = true }
 bevy_egui = { workspace = true, optional = true }
 bevy_hui = { workspace = true, optional = true }
@@ -210,6 +217,14 @@ mimalloc = "0.1"
 # builds do not execute or link the updater path.
 velopack = { version = "=1.2.110-ge826545", optional = true, features = ["public-utils"] }
 ureq = { workspace = true, optional = true }
+
+[dev-dependencies]
+# The cross-engine Modelica→Rhai→Avian regression is an application-level
+# integration test. Keep its diagnostics with the existing application package
+# rather than making the leaf co-simulation crate compile the full UI/runtime
+# stack just to host one cross-domain target.
+lunco-modelica-ast = { path = "../lunco-modelica-ast" }
+env_logger = "0.11"
 
 [features]
 # `ui` + `lunco-api` are on by default so native `cargo run --bin luncosim`
@@ -253,6 +268,8 @@ ui = [
     "lunco-networking?/ui",
     "lunco-api?/winit",
     "dep:lunco-workbench",
+    "dep:lunco-workbench-core",
+    "dep:lunco-status-core",
     "dep:lunco-ui",
     "lunco-tutorial/ui",
     "dep:lunco-materials",

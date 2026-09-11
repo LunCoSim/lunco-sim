@@ -5,6 +5,7 @@
 //! deliberately has no renderer dependency and changes only when an exposed
 //! value changes.
 
+use crate::GlobalEntityId;
 use bevy::prelude::Resource;
 use std::collections::HashMap;
 
@@ -32,6 +33,10 @@ impl ExposureValue {
 #[derive(Debug, Default)]
 pub struct ExposureSurface {
     pub visible: bool,
+    /// Canonical entity identity represented by this surface, when it is
+    /// subject-scoped. Presentation policy uses this typed identity instead of
+    /// matching names or serialised payloads.
+    pub subject: Option<GlobalEntityId>,
     pub properties: HashMap<String, ExposureValue>,
 }
 
@@ -58,10 +63,10 @@ impl Default for EngineExposures {
 /// update cadence and keeps unrelated surfaces out of a publication.
 #[derive(Resource, Debug)]
 pub struct ExposureRefresh {
-    /// The driven-vessel surface depends on continuous pose, vehicle, and
+    /// The driven-body surface depends on continuous pose, body, and
     /// telemetry inputs.
     pub driven_vessel_dirty: bool,
-    /// Authored control cards contain live vehicle/modelica values and their
+    /// Authored runtime surfaces contain live model values and their
     /// authored root topology.
     pub control_dirty: bool,
     /// The schema surface depends on selection and authored USD topology.
@@ -141,6 +146,26 @@ impl ExposureWriter<'_> {
         let value = value.into();
         if self.surface.properties.get(name) != Some(&value) {
             self.surface.properties.insert(name.to_owned(), value);
+            *self.revision = self.revision.wrapping_add(1);
+        }
+    }
+
+    /// Remove the previous projection before applying a replacement view model.
+    ///
+    /// A policy-produced surface may change its property set when the active
+    /// Twin or subject changes. Clearing here prevents a retired property from
+    /// remaining visible in a retained consumer.
+    pub fn clear_properties(&mut self) {
+        if !self.surface.properties.is_empty() {
+            self.surface.properties.clear();
+            *self.revision = self.revision.wrapping_add(1);
+        }
+    }
+
+    /// Set the canonical entity represented by this surface.
+    pub fn subject(&mut self, value: Option<GlobalEntityId>) {
+        if self.surface.subject != value {
+            self.surface.subject = value;
             *self.revision = self.revision.wrapping_add(1);
         }
     }

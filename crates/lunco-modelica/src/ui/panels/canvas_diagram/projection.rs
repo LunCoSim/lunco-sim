@@ -734,10 +734,10 @@ pub struct ProjectionTask {
     pub deadline: std::time::Duration,
     pub cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// The pool task. Spawned via
-    /// [`lunco_workbench::tracked_task::spawn_tracked_cancellable`], so a
+    /// [`lunco_status_core::tracked_task::spawn_tracked_cancellable`], so a
     /// `StatusBus` `BusyHandle` lives inside the future and clears the
     /// bus entry on completion, panic, supersede, or drop.
-    pub task: lunco_workbench::tracked_task::TrackedTask<Result<ProjectedScene, String>>,
+    pub task: lunco_status_core::tracked_task::TrackedTask<Result<ProjectedScene, String>>,
     /// Projection-relevant source hash captured at spawn time.
     /// Stashed onto `CanvasDocState::last_seen_source_hash` when the
     /// task completes — used by the next gen-bump check to skip
@@ -750,7 +750,7 @@ mod tests {
     use super::target_unit_instance;
 
     fn fixture() -> rumoca_compile::parsing::ast::StoredDefinition {
-        rumoca_phase_parse::parse_to_ast(
+        lunco_modelica_ast::parse_to_ast(
             r#"
 model Root
   Unit_One left;
@@ -782,7 +782,7 @@ end Unit_Two;
 
     #[test]
     fn repeated_unit_types_are_not_guessed() {
-        let ast = rumoca_phase_parse::parse_to_ast(
+        let ast = lunco_modelica_ast::parse_to_ast(
             r#"
 model Root
   Unit_One left;

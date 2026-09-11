@@ -31,7 +31,7 @@ use bevy_egui::egui;
 use lunco_core::architecture::Port;
 use lunco_cosim::JointTorqueActuator;
 use lunco_mobility::WheelRaycast;
-use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
+use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
 use lunco_scene_commands::SelectedEntities;
 
@@ -291,8 +291,8 @@ impl Panel for JointStatePanel {
         // Wide table — reads like Console/Plots, so it docks at the bottom.
         PanelSlot::Bottom
     }
-    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
-        lunco_workbench::PanelMenuGroup::Scene
+    fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
+        lunco_workbench_core::PanelMenuGroup::Scene
     }
     fn transparent_background(&self) -> bool {
         true

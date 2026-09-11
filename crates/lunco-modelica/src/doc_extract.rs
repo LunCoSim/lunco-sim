@@ -40,7 +40,7 @@ pub fn extract_documentation(
             if arg_name != name {
                 continue;
             }
-            if let Some(s) = crate::ast_extract::string_literal_value(value) {
+            if let Some(s) = lunco_modelica_ast::ast_extract::string_literal_value(value) {
                 return Some(s);
             }
         }

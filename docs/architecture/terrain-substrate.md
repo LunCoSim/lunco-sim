@@ -37,7 +37,8 @@ The composed source is the **single source of truth**. Both consumers sample it:
   streamed/baked, so a spawn over un-baked terrain rests on the ground instead of
   free-falling. The GUI path takes `max(oracle, raycast)` so an obstacle rock poking
   up under the chassis still lifts the spawn. The GUI uses the asset's composed
-  `UsdPhysics` collision footprint; an asset without one is rejected instead of
+  whole-assembly `UsdPhysics` collision envelope, including nested rigid bodies;
+  an asset without one is rejected instead of
   receiving invented dimensions or a lift. The API path uses the explicit
   position supplied by the caller.
 
@@ -472,8 +473,9 @@ size-frequency shape + FBM micro-relief, Nyquist-gated per consumer via
 `SurfaceOracle::detail_limited`), **explicit opt-in** — an authored
 `lunco:layer = "overzoom"` prim is the sole source of synthetic detail; streamed CDLOD visual
 tiles (`stream_viz`) with vertex-morph geomorph via `ShaderMaterial`, tiles
-`NotShadowReceiver` while remaining directional-shadow casters (rim self-shadow
-rides the horizon cache, while the cascades occlude dynamic objects);
+`NotShadowCaster` while remaining directional-shadow receivers (terrain
+self-shadow rides the horizon cache, while the cascade carries dynamic-object
+shadows onto the ground);
 **the collider ring** (`collider_ring`) — 3×3 independently selected
 physics tiles around each focus, with authored `colliderDepth` and
 `colliderResolution`, `FIX_INTERNAL_EDGES`, baked off-thread with stale-swap on

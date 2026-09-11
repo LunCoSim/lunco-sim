@@ -14,6 +14,16 @@ use bevy_picking::{
 
 use crate::{GizmoCamera, GizmoOptions, GizmoStorage, map_cursor_to_gizmo_viewport};
 
+// Keep gizmo handles above the scene camera's ordinary hit layer and below the
+// next camera layer. The workbench's offscreen-preview capture is a fractional
+// layer above the preview camera; the handle must remain interactable through
+// that capture while the egui host still masks the gizmo over real chrome.
+const GIZMO_PICK_ORDER_BIAS: f32 = 0.75;
+
+fn gizmo_pick_order(camera_order: isize) -> f32 {
+    camera_order as f32 + GIZMO_PICK_ORDER_BIAS
+}
+
 pub struct TransformGizmoPickingPlugin;
 
 impl Plugin for TransformGizmoPickingPlugin {
@@ -66,6 +76,20 @@ fn update_hits(
             .map(|(entity, _gizmo)| (*entity, HitData::new(*entity, 0.0, None, None)))
             .collect::<Vec<_>>();
 
-        output.write(PointerHits::new(*pointer_id, hits, 0.0));
+        output.write(PointerHits::new(
+            *pointer_id,
+            hits,
+            gizmo_pick_order(camera.order),
+        ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::gizmo_pick_order;
+
+    #[test]
+    fn gizmo_hit_layer_sits_above_preview_capture() {
+        assert_eq!(gizmo_pick_order(1), 1.75);
     }
 }

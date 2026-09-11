@@ -5,7 +5,7 @@ use crate::document::ModelicaOp;
 use crate::state::ModelicaDocumentRegistry;
 use bevy_egui::egui;
 use lunco_canvas::{Pos as CanvasPos, Rect as CanvasRect};
-use lunco_workbench::PanelCtx;
+use lunco_workbench_core::PanelCtx;
 
 pub(crate) fn handle_context_menu(
     ui: &mut egui::Ui,
@@ -235,7 +235,7 @@ pub(crate) fn handle_drag_and_drop(
                                 let registry = ctx.resource::<ModelicaDocumentRegistry>()?;
                                 let host = registry.host(doc_id)?;
                                 let ast = host.document().strict_ast()?;
-                                crate::ast_extract::extract_model_name_from_ast(&ast)
+                                lunco_modelica_ast::ast_extract::extract_model_name_from_ast(&ast)
                             })
                             .unwrap_or_default()
                     });

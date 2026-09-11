@@ -1294,7 +1294,7 @@ pub(crate) fn drain_pending_usd_file_loads(world: &mut World) {
                 #[cfg(feature = "ui")]
                 if let Some(msg) = user_notice {
                     if let Some(mut bus) =
-                        world.get_resource_mut::<lunco_workbench::status_bus::StatusBus>()
+                        world.get_resource_mut::<lunco_status_core::status_bus::StatusBus>()
                     {
                         let name = load
                             .path
@@ -1303,7 +1303,7 @@ pub(crate) fn drain_pending_usd_file_loads(world: &mut World) {
                             .unwrap_or_else(|| load.path.display().to_string());
                         bus.push(
                             "usd",
-                            lunco_workbench::status_bus::StatusLevel::Warn,
+                            lunco_status_core::status_bus::StatusLevel::Warn,
                             format!("{name} {msg}"),
                         );
                     }
@@ -4750,6 +4750,7 @@ mod tests {
         assert!(!registry.host(doc).unwrap().document().is_dirty());
     }
 
+    #[cfg(feature = "ui")]
     #[test]
     fn new_usd_document_is_registered_as_the_active_workspace_document() {
         let mut app = App::new();

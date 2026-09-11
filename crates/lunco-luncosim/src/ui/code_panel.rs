@@ -15,9 +15,9 @@ use bevy_egui::egui;
 use lunco_doc::DocumentId;
 use lunco_modelica::state::ModelicaDocumentRegistry;
 use lunco_scene_commands::SelectedEntities;
-use lunco_scripting::ScriptRegistry;
 use lunco_scripting::doc::{ScriptLanguage, ScriptedModel};
-use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
+use lunco_scripting::ScriptRegistry;
+use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
 pub(crate) struct CodePanel;
 
@@ -31,8 +31,8 @@ impl Panel for CodePanel {
     fn default_slot(&self) -> PanelSlot {
         PanelSlot::RightInspector
     }
-    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
-        lunco_workbench::PanelMenuGroup::Scene
+    fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
+        lunco_workbench_core::PanelMenuGroup::Scene
     }
     fn transparent_background(&self) -> bool {
         true

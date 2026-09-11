@@ -2,9 +2,8 @@
 
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
-use lunco_workbench::{
-    Panel, PanelCtx, PanelId, PanelRects, PanelSlot, WorkbenchAppExt, VIEWPORT_PANEL_ID,
-};
+use lunco_workbench::{PanelRects, WorkbenchAppExt, VIEWPORT_PANEL_ID};
+use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
 use crate::RoverNameTagSettings;
 use lunco_celestial::{CelestialBody, LeaveSurface, LocalGravityField};
@@ -20,10 +19,11 @@ use crate::{FreeFlightCamera, OrbitCamera, SpringArmCamera, SurfaceCamera};
 /// menu. The movement system and this row call the same policy reader, so the
 /// UI never maintains a second setting cache or infers state from a camera.
 pub fn register_avatar_settings(world: &mut World) {
-    let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
+    let Some(mut menus) = world.get_resource_mut::<lunco_workbench_core::WorkbenchMenuRegistry>()
+    else {
         return;
     };
-    layout.register_settings_submenu("Avatar", |ui, ctx| {
+    menus.register_settings_submenu("Avatar", |ui, ctx| {
         ui.label(egui::RichText::new("Avatar collision").weak().small());
         let policy = crate::avatar_soil_collision_policy(
             ctx.resource::<lunco_workspace::WorkspaceResource>(),
@@ -175,8 +175,8 @@ impl Panel for AvatarStatusPanel {
     fn default_slot(&self) -> PanelSlot {
         PanelSlot::RightInspector
     }
-    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
-        lunco_workbench::PanelMenuGroup::Scene
+    fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
+        lunco_workbench_core::PanelMenuGroup::Scene
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {

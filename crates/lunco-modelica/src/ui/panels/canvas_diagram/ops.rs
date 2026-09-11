@@ -36,7 +36,9 @@ pub(crate) fn on_apply_ops_requested(trigger: On<ApplyOpsRequested>, mut command
 /// Read the active tab id from `TabRenderContext`. `None` identifies the
 /// singleton diagram panel outside a model-tab render call.
 #[cfg(feature = "ui")]
-fn render_tab_id_ctx(ctx: &lunco_workbench::PanelCtx) -> Option<crate::model_tabs_types::TabId> {
+fn render_tab_id_ctx(
+    ctx: &lunco_workbench_core::PanelCtx,
+) -> Option<crate::model_tabs_types::TabId> {
     ctx.resource::<TabRenderContext>().and_then(|c| c.tab_id)
 }
 
@@ -44,7 +46,7 @@ fn render_tab_id_ctx(ctx: &lunco_workbench::PanelCtx) -> Option<crate::model_tab
 /// `PanelCtx` reader used by the canvas render path.
 #[cfg(feature = "ui")]
 pub(super) fn resolve_doc_context(
-    ctx: &lunco_workbench::PanelCtx,
+    ctx: &lunco_workbench_core::PanelCtx,
 ) -> (Option<lunco_doc::DocumentId>, Option<String>) {
     // Active doc from the Workspace session; the per-doc Index
     // is read as a display-cache fallback when the registry AST hasn't
@@ -74,9 +76,9 @@ pub(super) fn resolve_doc_context(
             ctx.resource::<ModelicaDocumentRegistry>()
                 .and_then(|r| r.host(doc_id))
                 .and_then(|h| {
-                    h.document()
-                        .strict_ast()
-                        .and_then(|ast| crate::ast_extract::extract_model_name_from_ast(&ast))
+                    h.document().strict_ast().and_then(|ast| {
+                        lunco_modelica_ast::ast_extract::extract_model_name_from_ast(&ast)
+                    })
                 })
         })
         .or_else(|| crate::state::detected_name_for_ctx(ctx, doc_id));
@@ -88,7 +90,7 @@ pub(super) fn resolve_doc_context(
 /// caller runs it inside its own borrow scope.
 #[cfg(feature = "ui")]
 pub(super) fn build_ops_from_events(
-    ctx: &lunco_workbench::PanelCtx,
+    ctx: &lunco_workbench_core::PanelCtx,
     state: &CanvasDiagramState,
     events: &[lunco_canvas::SceneEvent],
     class: &str,
@@ -421,7 +423,7 @@ pub(super) fn build_ops_from_events(
 /// `label` + `data.type`. Empty strings when the node is gone.
 #[cfg(feature = "ui")]
 pub(super) fn component_headers(
-    ctx: &lunco_workbench::PanelCtx,
+    ctx: &lunco_workbench_core::PanelCtx,
     state: &CanvasDiagramState,
     id: lunco_canvas::NodeId,
 ) -> (String, String) {
@@ -503,7 +505,7 @@ pub(super) fn op_add_component_with_name(
 
 #[cfg(feature = "ui")]
 pub(super) fn op_remove_component(
-    ctx: &lunco_workbench::PanelCtx,
+    ctx: &lunco_workbench_core::PanelCtx,
     state: &CanvasDiagramState,
     id: lunco_canvas::NodeId,
     class: &str,
@@ -519,7 +521,7 @@ pub(super) fn op_remove_component(
 
 #[cfg(feature = "ui")]
 pub(super) fn op_remove_edge(
-    ctx: &lunco_workbench::PanelCtx,
+    ctx: &lunco_workbench_core::PanelCtx,
     state: &CanvasDiagramState,
     id: lunco_canvas::EdgeId,
     class: &str,
@@ -907,7 +909,7 @@ pub fn active_class_for_doc(world: &mut World, doc_id: lunco_doc::DocumentId) ->
 /// `PanelCtx` sibling of [`active_class_for_doc`] — same precedence,
 /// reading resources through the capability-narrowed panel context.
 pub fn active_class_for_doc_ctx(
-    ctx: &lunco_workbench::PanelCtx,
+    ctx: &lunco_workbench_core::PanelCtx,
     doc_id: lunco_doc::DocumentId,
 ) -> Option<String> {
     if let Some(c) = crate::sim_default::drilled_class_for_doc_ctx(ctx, doc_id) {

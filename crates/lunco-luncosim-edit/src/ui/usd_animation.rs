@@ -210,7 +210,7 @@ pub fn produce_usd_animation_view(
     }
 }
 
-fn current_time_code(ctx: &lunco_workbench::PanelCtx, time_codes_per_second: f64) -> f64 {
+fn current_time_code(ctx: &lunco_workbench_core::PanelCtx, time_codes_per_second: f64) -> f64 {
     let seconds = ctx
         .resource::<AnimationPreview>()
         .and_then(|preview| ctx.get::<Playback>(preview.domain))
@@ -247,7 +247,7 @@ fn key_literal(channel: KeyableChannel, type_name: &str, transform: Transform) -
 }
 
 fn apply_animation_ops(
-    ctx: &mut lunco_workbench::PanelCtx,
+    ctx: &mut lunco_workbench_core::PanelCtx,
     view: &UsdAnimationSessionView,
     label: &str,
     ops: Vec<UsdOp>,
@@ -274,7 +274,7 @@ fn animation_time_label(time: f64, tcps: f64) -> String {
 /// in Environment and continue to use the existing `ControlAnimation` command.
 pub fn authored_animation_section(
     ui: &mut bevy_egui::egui::Ui,
-    ctx: &mut lunco_workbench::PanelCtx,
+    ctx: &mut lunco_workbench_core::PanelCtx,
     entity: Entity,
 ) {
     let Some(view) = ctx

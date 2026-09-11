@@ -838,7 +838,10 @@ fn gate_big_space_hierarchy_validation(app: &mut App) {
             bevy::ecs::schedule::ScheduleCleanupPolicy::RemoveSystemsOnly,
         )
         .expect("BigSpace hierarchy validator must be installed by BigSpaceDefaultPlugins");
-    assert_eq!(removed, 1, "BigSpace hierarchy validator must be installed once");
+    assert_eq!(
+        removed, 1,
+        "BigSpace hierarchy validator must be installed once"
+    );
     app.add_systems(
         PostUpdate,
         big_space::validation::validate_hierarchy::<big_space::validation::SpatialHierarchyRoot>
@@ -3309,7 +3312,7 @@ impl Plugin for SandboxCorePlugin {
                 report_terrain_stream_status,
                 report_terrain_generation_status,
             )
-                .run_if(resource_exists::<lunco_workbench::status_bus::StatusBus>),
+                .run_if(resource_exists::<lunco_status_core::status_bus::StatusBus>),
         );
 
         // Scene-spawn progress → status bar, on the same terms and for the same
@@ -3326,7 +3329,7 @@ impl Plugin for SandboxCorePlugin {
             report_scene_spawn_status
                 .after(lunco_usd_bevy::process_queued_usd_visuals)
                 .before(lunco_workbench::screenshot::OfflineRecordingReadinessSet)
-                .run_if(resource_exists::<lunco_workbench::status_bus::StatusBus>),
+                .run_if(resource_exists::<lunco_status_core::status_bus::StatusBus>),
         );
 
         // A textured DomeLight has a second asynchronous visual phase after
@@ -3342,7 +3345,7 @@ impl Plugin for SandboxCorePlugin {
             // newly-instantiated textured DomeLight had not yet been reported.
             PostUpdate,
             report_dome_environment_status
-                .run_if(resource_exists::<lunco_workbench::status_bus::StatusBus>),
+                .run_if(resource_exists::<lunco_status_core::status_bus::StatusBus>),
         );
 
         // Modelica participant readiness → status bus. The screenshot gate must
@@ -3354,7 +3357,7 @@ impl Plugin for SandboxCorePlugin {
         app.add_systems(
             Update,
             report_modelica_status
-                .run_if(resource_exists::<lunco_workbench::status_bus::StatusBus>),
+                .run_if(resource_exists::<lunco_status_core::status_bus::StatusBus>),
         );
 
         // Hold each camera path at its first frame until the RECORDER rolls, so the
@@ -3520,7 +3523,6 @@ mod ground_collider_gate_tests {
         app.update();
         assert!(!app.world().resource::<lunco_usd::GroundColliderPending>().0);
     }
-
 }
 
 /// **Start each camera path when the RECORDER starts.** A shot begins when the
@@ -3667,7 +3669,7 @@ fn mirror_recording_to_terrain_lockstep(
 }
 
 /// Mirror [`lunco_terrain_surface::TerrainStreamStatus`] into the workbench
-/// [`StatusBus`](lunco_workbench::status_bus::StatusBus) so scene-open tile
+/// [`StatusBus`](lunco_status_core::status_bus::StatusBus) so scene-open tile
 /// baking is visible ("streaming terrain N/M" + progress bar) instead of an
 /// unexplained black viewport. The active progress entry is the sole live
 /// streaming state; once it clears, publish the current terminal count so the
@@ -3679,12 +3681,12 @@ fn report_terrain_stream_status(
     // `Option`: the `ui` FEATURE is compile-time, but `--no-ui` headless is a
     // RUNTIME choice on the same binary — the workbench (and its `StatusBus`)
     // is simply not added there, and a bare `ResMut` panics the whole app.
-    bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
+    bus: Option<ResMut<lunco_status_core::status_bus::StatusBus>>,
     mut mirror: ResMut<TerrainStatusMirrorState>,
 ) {
     let Some(mut bus) = bus else { return };
-    const STREAM_SOURCE: &str = lunco_workbench::status_bus::TERRAIN_SOURCE;
-    const DERIVED_SOURCE: &str = lunco_workbench::status_bus::TERRAIN_DERIVED_SOURCE;
+    const STREAM_SOURCE: &str = lunco_status_core::status_bus::TERRAIN_SOURCE;
+    const DERIVED_SOURCE: &str = lunco_status_core::status_bus::TERRAIN_DERIVED_SOURCE;
     // A resident count can reach the selected count before the last bake or
     // render-material publication finishes. Keep the typed live state active
     // until both fulfilment dimensions settle; otherwise the readiness gate
@@ -3723,7 +3725,7 @@ fn report_terrain_stream_status(
     if completed {
         bus.push(
             STREAM_SOURCE,
-            lunco_workbench::status_bus::StatusLevel::Info,
+            lunco_status_core::status_bus::StatusLevel::Info,
             format!(
                 "Terrain streaming ready ({}/{})",
                 status.resident, status.wanted
@@ -3735,7 +3737,7 @@ fn report_terrain_stream_status(
     if derived.active && !mirror.deriving {
         bus.push(
             DERIVED_SOURCE,
-            lunco_workbench::status_bus::StatusLevel::Info,
+            lunco_status_core::status_bus::StatusLevel::Info,
             format!(
                 "Terrain visual preparation started ({}/{})",
                 derived.ready, derived.total
@@ -3772,7 +3774,7 @@ mod terrain_status_tests {
             ..Default::default()
         })
         .insert_resource(lunco_terrain_surface::TerrainDerivedStatus::default())
-        .insert_resource(lunco_workbench::status_bus::StatusBus::default())
+        .insert_resource(lunco_status_core::status_bus::StatusBus::default())
         .insert_resource(TerrainStatusMirrorState::default())
         .add_systems(Update, report_terrain_stream_status);
 
@@ -3780,10 +3782,10 @@ mod terrain_status_tests {
         {
             let bus = app
                 .world()
-                .resource::<lunco_workbench::status_bus::StatusBus>();
+                .resource::<lunco_status_core::status_bus::StatusBus>();
             let progress = bus
                 .active_progress()
-                .find(|event| event.source == lunco_workbench::status_bus::TERRAIN_SOURCE)
+                .find(|event| event.source == lunco_status_core::status_bus::TERRAIN_SOURCE)
                 .expect("terrain streaming must expose live progress");
             assert_eq!(progress.message, "Streaming terrain tiles 0/2");
             assert!(bus.history().next().is_none());
@@ -3801,10 +3803,10 @@ mod terrain_status_tests {
         {
             let bus = app
                 .world()
-                .resource::<lunco_workbench::status_bus::StatusBus>();
+                .resource::<lunco_status_core::status_bus::StatusBus>();
             let progress: Vec<_> = bus
                 .active_progress()
-                .filter(|event| event.source == lunco_workbench::status_bus::TERRAIN_SOURCE)
+                .filter(|event| event.source == lunco_status_core::status_bus::TERRAIN_SOURCE)
                 .collect();
             assert_eq!(
                 progress.len(),
@@ -3827,10 +3829,10 @@ mod terrain_status_tests {
         {
             let bus = app
                 .world()
-                .resource::<lunco_workbench::status_bus::StatusBus>();
+                .resource::<lunco_status_core::status_bus::StatusBus>();
             let progress = bus
                 .active_progress()
-                .find(|event| event.source == lunco_workbench::status_bus::TERRAIN_SOURCE)
+                .find(|event| event.source == lunco_status_core::status_bus::TERRAIN_SOURCE)
                 .expect("render-pending terrain must keep live progress");
             assert_eq!(
                 progress.message,
@@ -3851,10 +3853,10 @@ mod terrain_status_tests {
         {
             let bus = app
                 .world()
-                .resource::<lunco_workbench::status_bus::StatusBus>();
+                .resource::<lunco_status_core::status_bus::StatusBus>();
             assert!(bus
                 .active_progress()
-                .all(|event| event.source != lunco_workbench::status_bus::TERRAIN_SOURCE));
+                .all(|event| event.source != lunco_status_core::status_bus::TERRAIN_SOURCE));
             let history: Vec<_> = bus.history().collect();
             assert_eq!(history.len(), 1);
             assert_eq!(history[0].message, "Terrain streaming ready (2/2)");
@@ -3863,7 +3865,7 @@ mod terrain_status_tests {
         app.update();
         assert_eq!(
             app.world()
-                .resource::<lunco_workbench::status_bus::StatusBus>()
+                .resource::<lunco_status_core::status_bus::StatusBus>()
                 .history()
                 .count(),
             1,
@@ -3883,12 +3885,12 @@ struct TerrainStatusMirrorState {
 #[cfg(feature = "ui")]
 fn reset_terrain_status_mirror_on_scene_teardown(
     mut mirror: ResMut<TerrainStatusMirrorState>,
-    bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
+    bus: Option<ResMut<lunco_status_core::status_bus::StatusBus>>,
 ) {
     *mirror = TerrainStatusMirrorState::default();
     let Some(mut bus) = bus else { return };
-    bus.remove_progress(lunco_workbench::status_bus::TERRAIN_SOURCE);
-    bus.remove_progress(lunco_workbench::status_bus::TERRAIN_DERIVED_SOURCE);
+    bus.remove_progress(lunco_status_core::status_bus::TERRAIN_SOURCE);
+    bus.remove_progress(lunco_status_core::status_bus::TERRAIN_DERIVED_SOURCE);
 }
 
 /// Mirror the DEM build lifecycle into the workbench status bus. Dataset
@@ -3901,11 +3903,11 @@ fn report_terrain_generation_status(
     status: Res<lunco_terrain_surface::TerrainGenStatus>,
     terrains: Query<(), With<lunco_terrain_surface::DemHeightField>>,
     faults: Option<Res<lunco_core::RuntimeFaults>>,
-    bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
+    bus: Option<ResMut<lunco_status_core::status_bus::StatusBus>>,
     mut mirror: ResMut<TerrainStatusMirrorState>,
 ) {
     let Some(mut bus) = bus else { return };
-    const SOURCE: &str = lunco_workbench::status_bus::TERRAIN_BUILD_SOURCE;
+    const SOURCE: &str = lunco_status_core::status_bus::TERRAIN_BUILD_SOURCE;
     if !status.active {
         bus.remove_progress(SOURCE);
         if mirror.generation.take().is_some()
@@ -3919,7 +3921,7 @@ fn report_terrain_generation_status(
         {
             bus.push(
                 SOURCE,
-                lunco_workbench::status_bus::StatusLevel::Info,
+                lunco_status_core::status_bus::StatusLevel::Info,
                 "Terrain ground ready",
             );
         }
@@ -3951,7 +3953,7 @@ fn report_terrain_generation_status(
         };
         bus.push(
             SOURCE,
-            lunco_workbench::status_bus::StatusLevel::Info,
+            lunco_status_core::status_bus::StatusLevel::Info,
             format!("{}{}", status.phase.label(), site),
         );
         mirror.generation = Some(key);
@@ -3965,8 +3967,8 @@ fn report_terrain_generation_status(
 }
 
 /// Mirror USD scene-spawn progress into the workbench
-/// [`StatusBus`](lunco_workbench::status_bus::StatusBus) under
-/// [`SCENE_SOURCE`](lunco_workbench::status_bus::SCENE_SOURCE), the twin of
+/// [`StatusBus`](lunco_status_core::status_bus::StatusBus) under
+/// [`SCENE_SOURCE`](lunco_status_core::status_bus::SCENE_SOURCE), the twin of
 /// [`report_terrain_stream_status`].
 ///
 /// Two signals, because they cover different windows and neither subsumes the
@@ -3995,10 +3997,10 @@ fn report_scene_spawn_status(
     coordinator: Res<lunco_core::SceneTransitionCoordinator>,
     // `Option` for the same reason as the terrain mirror: `--no-ui` is a RUNTIME
     // choice on a binary that still has the `ui` feature compiled in.
-    bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
+    bus: Option<ResMut<lunco_status_core::status_bus::StatusBus>>,
 ) {
     let Some(mut bus) = bus else { return };
-    const SOURCE: &str = lunco_workbench::status_bus::SCENE_SOURCE;
+    const SOURCE: &str = lunco_status_core::status_bus::SCENE_SOURCE;
     let pending = awaiting.iter().count();
     let projecting = projecting.iter().count();
     let pending_meshes = pending_meshes.iter().count();
@@ -4053,10 +4055,10 @@ fn report_dome_environment_status(
         Option<&lunco_usd_bevy::dome::DomeCubemap>,
         Option<&lunco_usd_bevy::dome::DomeProjection>,
     )>,
-    bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
+    bus: Option<ResMut<lunco_status_core::status_bus::StatusBus>>,
 ) {
     let Some(mut bus) = bus else { return };
-    const SOURCE: &str = lunco_workbench::status_bus::DOME_SOURCE;
+    const SOURCE: &str = lunco_status_core::status_bus::DOME_SOURCE;
     let pending = domes.iter().any(|(_, cubemap, projection)| {
         projection.is_some()
             || cubemap.is_none()
@@ -4077,11 +4079,11 @@ fn report_dome_environment_status(
 fn report_modelica_status(
     pending_sources: Query<(), With<lunco_usd_sim::cosim::PendingModelicaSource>>,
     models: Query<&lunco_modelica::ModelicaModel, With<lunco_usd_sim::cosim::UsdSourcedCosim>>,
-    bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
+    bus: Option<ResMut<lunco_status_core::status_bus::StatusBus>>,
     mut mirror: ResMut<ModelicaStatusMirrorState>,
 ) {
     let Some(mut bus) = bus else { return };
-    const SOURCE: &str = lunco_workbench::status_bus::MODELICA_SOURCE;
+    const SOURCE: &str = lunco_status_core::status_bus::MODELICA_SOURCE;
 
     let pending = pending_sources.iter().count();
     // A successfully compiled model whose initial algebraic snapshot has not
@@ -4126,7 +4128,7 @@ fn report_modelica_status(
     if !active && failed == 0 && model_count > 0 && (mirror.was_active || mirror.model_count == 0) {
         bus.push(
             SOURCE,
-            lunco_workbench::status_bus::StatusLevel::Info,
+            lunco_status_core::status_bus::StatusLevel::Info,
             format!("Modelica ready — {model_count} participant(s)"),
         );
     }
@@ -4144,11 +4146,11 @@ struct ModelicaStatusMirrorState {
 #[cfg(feature = "ui")]
 fn reset_modelica_status_mirror_on_scene_teardown(
     mut mirror: ResMut<ModelicaStatusMirrorState>,
-    bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
+    bus: Option<ResMut<lunco_status_core::status_bus::StatusBus>>,
 ) {
     *mirror = ModelicaStatusMirrorState::default();
     if let Some(mut bus) = bus {
-        bus.remove_progress(lunco_workbench::status_bus::MODELICA_SOURCE);
+        bus.remove_progress(lunco_status_core::status_bus::MODELICA_SOURCE);
     }
 }
 
@@ -4166,7 +4168,7 @@ mod modelica_status_tests {
     #[test]
     fn modelica_readiness_is_one_stable_lifecycle_event() {
         let mut app = App::new();
-        app.insert_resource(lunco_workbench::status_bus::StatusBus::default())
+        app.insert_resource(lunco_status_core::status_bus::StatusBus::default())
             .init_resource::<ModelicaStatusMirrorState>()
             .add_systems(Update, report_modelica_status);
         let first = app
@@ -4180,7 +4182,7 @@ mod modelica_status_tests {
         app.update();
         let bus = app
             .world()
-            .resource::<lunco_workbench::status_bus::StatusBus>();
+            .resource::<lunco_status_core::status_bus::StatusBus>();
         assert_eq!(bus.history().count(), 1);
         assert_eq!(
             bus.history().next().map(|event| event.message.as_str()),
@@ -4195,9 +4197,9 @@ mod modelica_status_tests {
         app.update();
         assert!(app
             .world()
-            .resource::<lunco_workbench::status_bus::StatusBus>()
+            .resource::<lunco_status_core::status_bus::StatusBus>()
             .active_progress()
-            .any(|event| event.source == lunco_workbench::status_bus::MODELICA_SOURCE));
+            .any(|event| event.source == lunco_status_core::status_bus::MODELICA_SOURCE));
 
         app.world_mut()
             .entity_mut(first)
@@ -4207,7 +4209,7 @@ mod modelica_status_tests {
         app.update();
         let bus = app
             .world()
-            .resource::<lunco_workbench::status_bus::StatusBus>();
+            .resource::<lunco_status_core::status_bus::StatusBus>();
         // Returning to the same ready snapshot after a compile transition
         // must remain one stable lifecycle event. StatusBus coalesces
         // consecutive identical discrete snapshots by contract.
@@ -4215,7 +4217,7 @@ mod modelica_status_tests {
         assert_eq!(bus.history_total(), 1);
         assert!(bus
             .active_progress()
-            .all(|event| { event.source != lunco_workbench::status_bus::MODELICA_SOURCE }));
+            .all(|event| { event.source != lunco_status_core::status_bus::MODELICA_SOURCE }));
     }
 }
 
@@ -4281,7 +4283,7 @@ impl Plugin for SandboxOffscreenPlugin {
 
         // The offline recorder itself — normally added by `WorkbenchPlugin`,
         // which this mode skips (egui needs a window).
-        app.init_resource::<lunco_workbench::status_bus::StatusBus>();
+        app.init_resource::<lunco_status_core::status_bus::StatusBus>();
         app.add_plugins(lunco_workbench::screenshot::ScreenshotPlugin);
 
         // No winit event loop, so tick the app ourselves — flat out, zero wait:

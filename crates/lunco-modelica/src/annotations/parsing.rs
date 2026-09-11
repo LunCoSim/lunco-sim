@@ -787,10 +787,10 @@ fn extract_color(expr: &Expression) -> Option<Color> {
 }
 
 /// Numeric literal (with optional unary minus). Delegates to the
-/// canonical `ast_extract::numeric_of` so the Terminal/Unary decoding
+/// canonical `lunco_modelica_ast::ast_extract::numeric_of` so the Terminal/Unary decoding
 /// lives in one place.
 fn extract_number(expr: &Expression) -> Option<f64> {
-    crate::ast_extract::numeric_of(expr)
+    lunco_modelica_ast::ast_extract::numeric_of(expr)
 }
 
 fn extract_string(expr: &Expression) -> Option<String> {

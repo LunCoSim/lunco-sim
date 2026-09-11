@@ -20,6 +20,101 @@
 // tick, read it ONCE into `this` in `on_start`. The limit does not change while
 // you drive.
 
+fn near(value, expected, tolerance) {
+    value != () && (value - expected).abs() < tolerance
+}
+
+/// Every ECS descendant of `root`, including nested suspension and attachment
+/// entities. The production hierarchy is the observable vehicle topology, so
+/// callers do not need a second wheel-name convention to inspect it.
+fn vessel_descendants(root) {
+    let out = [];
+    let stack = [];
+    for child in children(root) { stack.push(child); }
+    let visits = 0;
+    while stack.len() > 0 {
+        visits += 1;
+        if visits > 512 { break; }
+        let entity = stack.pop();
+        out.push(entity);
+        for child in children(entity) { stack.push(child); }
+    }
+    out
+}
+
+/// Count the two production wheel realizations under a vessel and retain their
+/// reflected authored parameters. This is intentionally a plain Rhai map: a
+/// scenario can decide whether a fleet, a variant pair, or a single vehicle is
+/// the subject without adding a Rust test-only query.
+fn vessel_wheel_summary(root) {
+    let raycast = 0;
+    let physical = 0;
+    let wheel_count = 0;
+    let raycast_radius = ();
+    let physical_radius = ();
+    let suspension_rest = ();
+    let suspension_spring = ();
+    let suspension_damping = ();
+    for entity in vessel_descendants(root) {
+        let ray_radius = get(entity, "WheelRaycast.wheel_radius");
+        let physical_radius_value = get(entity, "PhysicalWheel.wheel_radius");
+        if ray_radius != () {
+            raycast += 1;
+            wheel_count += 1;
+            if raycast_radius == () { raycast_radius = ray_radius; }
+            if suspension_rest == () { suspension_rest = get(entity, "Suspension.rest_length"); }
+            if suspension_spring == () { suspension_spring = get(entity, "Suspension.spring_k"); }
+            if suspension_damping == () { suspension_damping = get(entity, "Suspension.damping_c"); }
+        } else if physical_radius_value != () {
+            physical += 1;
+            wheel_count += 1;
+            if physical_radius == () { physical_radius = physical_radius_value; }
+        }
+    }
+    #{
+        raycast: raycast,
+        physical: physical,
+        wheels: wheel_count,
+        raycast_radius: raycast_radius,
+        physical_radius: physical_radius,
+        suspension_rest: suspension_rest,
+        suspension_spring: suspension_spring,
+        suspension_damping: suspension_damping,
+    }
+}
+
+/// Validate a vessel's composed wheel realization and shared raycast-wheel
+/// parameters. Asset-specific scenarios supply the expected realization counts
+/// and values; the traversal and reflected field names stay centralized here.
+fn vessel_wheels_match(root, expected_raycast, expected_physical,
+                       radius, suspension_rest, spring_k, damping_c,
+                       friction_mu) {
+    let summary = vessel_wheel_summary(root);
+    if summary.raycast != expected_raycast
+        || summary.physical != expected_physical
+        || summary.wheels != expected_raycast + expected_physical {
+        return false;
+    }
+    let params_ok = true;
+    for entity in vessel_descendants(root) {
+        let ray_radius = get(entity, "WheelRaycast.wheel_radius");
+        if ray_radius != () {
+            params_ok = params_ok
+                && near(ray_radius, radius, 0.001)
+                && near(get(entity, "WheelRaycast.friction_mu"), friction_mu, 0.001)
+                && near(get(entity, "Suspension.rest_length"), suspension_rest, 0.001)
+                && near(get(entity, "Suspension.spring_k"), spring_k, 0.1)
+                && near(get(entity, "Suspension.damping_c"), damping_c, 0.1);
+        } else {
+            let physical_radius = get(entity, "PhysicalWheel.wheel_radius");
+            if physical_radius != () {
+                params_ok = params_ok && near(physical_radius, radius, 0.001);
+            }
+        }
+    }
+    params_ok
+}
+
 /// Minimum tire friction coefficient over a vessel's wheels, or `()` if it has none.
 ///
 /// **min, not mean**: a vehicle slips at its weakest contact, and averaging would
@@ -27,7 +122,7 @@
 fn min_friction(id) {
     if id < 0 { return (); }
     let worst = ();
-    for w in children(id) {
+    for w in vessel_descendants(id) {
         let mu = get(w, "WheelRaycast.friction_mu");
         if mu != () {
             if worst == () || mu < worst { worst = mu; }

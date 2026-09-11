@@ -75,10 +75,10 @@ use std::collections::{HashMap, HashSet};
 use avian3d::prelude::MotorModel;
 use bevy::math::Vec3;
 use lunco_hooks::HookValue as H;
-use lunco_usd_bevy::{StageView, UsdRead, program::ProgramGraph};
+use lunco_usd_bevy::{program::ProgramGraph, StageView, UsdRead};
 use openusd::schemas::physics::tokens as ptok;
 use openusd::sdf::Path as SdfPath;
-use openusd::usd::{Collection, PrimPredicate, compute_included_paths};
+use openusd::usd::{compute_included_paths, Collection, PrimPredicate};
 
 /// The lint domain these facts belong to: hook `lint.usd`, policy
 /// `assets/scripting/policy/lint_usd.rhai`.

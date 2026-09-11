@@ -1,0 +1,100 @@
+<template>
+  <property name="label">VESSEL</property>
+  <property name="tilt">—</property>
+  <property name="tilt_status">STABLE</property>
+  <property name="tilt_limits">generic limits</property>
+  <property name="speed">—</property>
+  <property name="altitude">—</property>
+  <property name="roll">—</property>
+  <property name="pitch">—</property>
+  <property name="heading">—</property>
+  <property name="geographic">—</property>
+  <property name="local_position">—</property>
+  <property name="comms_status">—</property>
+  <property name="comms_peer">—</property>
+  <property name="comms_range">—</property>
+  <property name="comms_elevation">—</property>
+  <property name="telemetry_summary">TELEMETRY UNAVAILABLE</property>
+  <property name="tilt_color">var(--ok-color)</property>
+  <property name="tilt_marker">0%</property>
+  <property name="caution_width">44%</property>
+  <property name="danger_start">44%</property>
+  <property name="danger_width">22%</property>
+  <property name="autopilot_color">var(--muted-color)</property>
+  <property name="autopilot_label">AUTOPILOT</property>
+  <property name="geo_display">none</property>
+  <property name="local_display">flex</property>
+  <property name="comms_display">none</property>
+  <property name="comms_los_display">none</property>
+  <property name="comms_color">var(--muted-color)</property>
+  <property name="telemetry_display">none</property>
+
+  <node id="vessel-hud-root">
+    <node id="vessel-hud-attitude">
+      <text id="vessel-hud-attitude-title">ATTITUDE</text>
+      <node id="vessel-hud-tilt-readout">
+        <text id="vessel-hud-tilt">{tilt}</text>
+        <text id="vessel-hud-tilt-status">{tilt_status}</text>
+      </node>
+      <node id="vessel-hud-tilt-track">
+        <node id="vessel-hud-tilt-caution" />
+        <node id="vessel-hud-tilt-danger" />
+        <node id="vessel-hud-tilt-marker" />
+      </node>
+      <text id="vessel-hud-tilt-limits">{tilt_limits}</text>
+      <node id="vessel-hud-speed-block">
+        <text id="vessel-hud-speed-label">SPEED</text>
+        <text id="vessel-hud-speed">{speed} m/s</text>
+      </node>
+      <node id="vessel-hud-attitude-fine">
+        <text id="vessel-hud-roll">R {roll}</text>
+        <text id="vessel-hud-pitch">P {pitch}</text>
+      </node>
+    </node>
+
+    <node id="vessel-hud-nav">
+      <node id="vessel-hud-nav-heading">
+        <text id="vessel-hud-label">{label}</text>
+        <button id="vessel-hud-autopilot" on_press="runtime_toggle_autopilot">
+          <text>{autopilot_label}</text>
+        </button>
+      </node>
+      <text id="vessel-hud-frame">site frame · metres</text>
+      <node id="vessel-hud-nav-details">
+        <node id="vessel-hud-altitude-block">
+          <text id="vessel-hud-altitude-label">ALT</text>
+          <text id="vessel-hud-altitude">{altitude} m</text>
+        </node>
+        <node id="vessel-hud-position-block">
+          <node id="vessel-hud-geo">
+            <text id="vessel-hud-geographic">{geographic}</text>
+            <text id="vessel-hud-geo-heading">HDG {heading}</text>
+          </node>
+          <node id="vessel-hud-local">
+            <text id="vessel-hud-local-position">{local_position}</text>
+            <text id="vessel-hud-local-heading">HDG {heading}</text>
+          </node>
+        </node>
+      </node>
+
+      <node id="vessel-hud-comms">
+        <node id="vessel-hud-comms-heading">
+          <text id="vessel-hud-comms-label">COMMS</text>
+          <text id="vessel-hud-comms-status">{comms_status}</text>
+        </node>
+        <node id="vessel-hud-comms-detail">
+          <text id="vessel-hud-comms-peer">peer {comms_peer}</text>
+          <text id="vessel-hud-comms-range">range {comms_range} · elev {comms_elevation}</text>
+          <text id="vessel-hud-comms-los">no line of sight · autonomy only</text>
+        </node>
+      </node>
+
+      <node id="vessel-hud-telemetry">
+        <node id="vessel-hud-telemetry-heading">
+          <text id="vessel-hud-telemetry-label">LIVE TELEMETRY</text>
+        </node>
+        <text id="vessel-hud-telemetry-summary">{telemetry_summary}</text>
+      </node>
+    </node>
+  </node>
+</template>

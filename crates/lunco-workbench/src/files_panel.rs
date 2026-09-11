@@ -22,10 +22,10 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 
-use crate::panel::{Panel, PanelCtx, PanelId, PanelSlot};
 use crate::twin_browser::{
     render_search_bar, BrowserActions, BrowserCtx, BrowserScope, BrowserSectionRegistry,
 };
+use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
 /// Stable id of the Files panel.
 pub const FILES_PANEL_ID: PanelId = PanelId("lunco.workbench.files");
@@ -43,8 +43,8 @@ impl Panel for FilesPanel {
         "Files".to_string()
     }
 
-    fn menu_group(&self) -> crate::PanelMenuGroup {
-        crate::PanelMenuGroup::Design
+    fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
+        lunco_workbench_core::PanelMenuGroup::Design
     }
 
     fn default_slot(&self) -> PanelSlot {

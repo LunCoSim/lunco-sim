@@ -187,7 +187,7 @@ pub(crate) fn scan_msl_dir_native(dir: &Path, package_path: String) -> Vec<Packa
     if pkg_mo.is_file() {
         if let Ok(source) = std::fs::read_to_string(&pkg_mo) {
             let ast =
-                rumoca_phase_parse::parse_to_recovered_ast(&source, &pkg_mo.display().to_string());
+                lunco_modelica_ast::parse_to_recovered_ast(&source, &pkg_mo.display().to_string());
             if let Some((_, top_class)) = ast.classes.iter().next() {
                 let existing_names: std::collections::HashSet<String> =
                     results.iter().map(|n| n.name().to_string()).collect();
@@ -282,7 +282,7 @@ fn node_from_modelica_file(path: &Path, qualified: &str, display_name: &str) -> 
     let Ok(source) = std::fs::read_to_string(path) else {
         return leaf_unknown();
     };
-    let ast = rumoca_phase_parse::parse_to_recovered_ast(&source, &path.display().to_string());
+    let ast = lunco_modelica_ast::parse_to_recovered_ast(&source, &path.display().to_string());
     let Some((_, top_class)) = ast.classes.iter().next() else {
         return leaf_unknown();
     };
@@ -290,7 +290,7 @@ fn node_from_modelica_file(path: &Path, qualified: &str, display_name: &str) -> 
 }
 
 pub fn peek_class_kind_from_source(src: &str) -> Option<crate::index::ClassKind> {
-    let ast = rumoca_phase_parse::parse_to_recovered_ast(src, "");
+    let ast = lunco_modelica_ast::parse_to_recovered_ast(src, "");
     ast.classes
         .iter()
         .next()
@@ -312,7 +312,14 @@ fn class_def_to_node(
         let mut children: Vec<PackageNode> = def
             .classes
             .iter()
-            .map(|(n, c)| class_def_to_node(path, &crate::ast_extract::qualify(qualified, n), n, c))
+            .map(|(n, c)| {
+                class_def_to_node(
+                    path,
+                    &lunco_modelica_ast::ast_extract::qualify(qualified, n),
+                    n,
+                    c,
+                )
+            })
             .collect();
         children.sort_by_key(omedit_sort_key);
         PackageNode::Category {

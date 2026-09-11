@@ -22,7 +22,7 @@ use lunco_render::SceneCamera;
 use lunco_settings::SettingsSection;
 use lunco_usd::runtime_persistence::{runtime_persistence_for_twin, RUNTIME_PERSISTENCE_SETTING};
 use lunco_usd_bevy::camera_switch::camera_display_labels;
-use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
+use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 use lunco_workspace::{SetTwinSetting, TwinClosed, TwinSettingInput, WorkspaceResource};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -109,10 +109,11 @@ impl SettingsSection for EntityListSettings {
 /// other persisted view pref lives (theme, perf HUD, terrain). The panel stays a
 /// pure view; it grows no toolbar of its own.
 pub(crate) fn register_settings_submenu(world: &mut World) {
-    let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
+    let Some(mut menus) = world.get_resource_mut::<lunco_workbench_core::WorkbenchMenuRegistry>()
+    else {
         return;
     };
-    layout.register_settings_submenu("Entity list", |ui, ctx| {
+    menus.register_settings_submenu("Entity list", |ui, ctx| {
         ui.label(egui::RichText::new("Entity list").weak().small());
         let current = ctx
             .resource::<EntityListSettings>()
@@ -954,8 +955,8 @@ impl Panel for EntityList {
     fn default_slot(&self) -> PanelSlot {
         PanelSlot::SideBrowser
     }
-    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
-        lunco_workbench::PanelMenuGroup::Scene
+    fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
+        lunco_workbench_core::PanelMenuGroup::Scene
     }
     fn transparent_background(&self) -> bool {
         true

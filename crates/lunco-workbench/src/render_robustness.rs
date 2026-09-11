@@ -1127,7 +1127,7 @@ fn apply_shadow_caster_policy(
     mut commands: Commands,
     settings: Res<RenderingQualitySettings>,
     warning: Option<Res<RenderWarning>>,
-    status_bus: Option<ResMut<crate::status_bus::StatusBus>>,
+    status_bus: Option<ResMut<lunco_status_core::status_bus::StatusBus>>,
     exposures: Option<ResMut<lunco_core::exposure::EngineExposures>>,
     health: Option<Res<RenderHealthHandle>>,
     directional_shadow_map: Res<bevy::light::DirectionalLightShadowMap>,
@@ -1242,8 +1242,8 @@ fn apply_shadow_caster_policy(
         if let Some(message) = policy_warning {
             if !state.configured_limit_status_active {
                 status_bus.push(
-                    crate::status_bus::RENDER_SOURCE,
-                    crate::status_bus::StatusLevel::Warn,
+                    lunco_status_core::status_bus::RENDER_SOURCE,
+                    lunco_status_core::status_bus::StatusLevel::Warn,
                     message,
                 );
             }
@@ -1907,7 +1907,7 @@ mod tests {
             ..Default::default()
         };
         app.insert_resource(settings);
-        app.insert_resource(crate::status_bus::StatusBus::default());
+        app.insert_resource(lunco_status_core::status_bus::StatusBus::default());
         app.insert_resource(lunco_core::exposure::EngineExposures::default());
         app.init_resource::<ShadowAdmissionState>();
         let health = Arc::new(RenderHealth::default());
@@ -1958,11 +1958,13 @@ mod tests {
             health.shadow_budget_bytes.load(Ordering::Relaxed),
             16 * 1024 * 1024
         );
-        let status_bus = app.world().resource::<crate::status_bus::StatusBus>();
+        let status_bus = app
+            .world()
+            .resource::<lunco_status_core::status_bus::StatusBus>();
         assert_eq!(
             status_bus
                 .history()
-                .filter(|event| event.source == crate::status_bus::RENDER_SOURCE)
+                .filter(|event| event.source == lunco_status_core::status_bus::RENDER_SOURCE)
                 .count(),
             1
         );
@@ -1984,9 +1986,9 @@ mod tests {
         app.update();
         assert_eq!(
             app.world()
-                .resource::<crate::status_bus::StatusBus>()
+                .resource::<lunco_status_core::status_bus::StatusBus>()
                 .history()
-                .filter(|event| event.source == crate::status_bus::RENDER_SOURCE)
+                .filter(|event| event.source == lunco_status_core::status_bus::RENDER_SOURCE)
                 .count(),
             1,
             "an unchanged shadow-limit condition must not spam status history"

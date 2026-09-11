@@ -5,7 +5,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
+use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
 use crate::SpawnState;
 use lunco_scene_commands::catalog::{AssetMetaStore, SpawnCatalog, SpawnSource};
@@ -34,8 +34,8 @@ impl Panel for SpawnPalette {
     fn default_slot(&self) -> PanelSlot {
         PanelSlot::Bottom
     }
-    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
-        lunco_workbench::PanelMenuGroup::Scene
+    fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
+        lunco_workbench_core::PanelMenuGroup::Scene
     }
     fn transparent_background(&self) -> bool {
         true

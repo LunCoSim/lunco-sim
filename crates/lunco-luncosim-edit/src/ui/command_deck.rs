@@ -24,7 +24,7 @@ use bevy_egui::egui;
 use lunco_autopilot::{Autopilot, AutopilotBehaviorSpec, BehaviorSpec};
 use lunco_controller::ControllerLink;
 use lunco_core::{GlobalEntityId, TheLocalAvatar};
-use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
+use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
 use lunco_scene_commands::SelectedEntities;
 
@@ -149,8 +149,8 @@ impl Panel for CommandDeck {
     fn default_slot(&self) -> PanelSlot {
         PanelSlot::RightInspector
     }
-    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
-        lunco_workbench::PanelMenuGroup::Tools
+    fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
+        lunco_workbench_core::PanelMenuGroup::Tools
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {

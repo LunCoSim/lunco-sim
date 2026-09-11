@@ -29,7 +29,7 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_canvas::SelectItem;
-use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
+use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
 use crate::api::{ApiOp, ApplyModelicaOps};
 
@@ -100,8 +100,8 @@ impl Panel for InspectorPanel {
         "Inspector".into()
     }
 
-    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
-        lunco_workbench::PanelMenuGroup::Design
+    fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
+        lunco_workbench_core::PanelMenuGroup::Design
     }
 
     fn default_slot(&self) -> PanelSlot {
@@ -226,7 +226,7 @@ impl Panel for InspectorPanel {
             // Project the Index entry into the inspector's
             // [`ComponentInfo`] shape so the rest of this function
             // (rendering, edit collection) doesn't have to change.
-            let info = crate::ast_extract::ComponentInfo {
+            let info = lunco_modelica_ast::ast_extract::ComponentInfo {
                 name: entry.name.clone(),
                 type_name: entry.type_name.clone(),
                 description: entry.description.clone(),
