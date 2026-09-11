@@ -193,7 +193,7 @@ attachment schema permits the direct self-composition. A separate attachment pri
 may instead author the standard `wheel` and `suspension` relationships; neither
 case requires a LunCo-specific index or a Rust-side topology guess.
 
-**The APIs are owned at the topology boundary.** `wheel.usda`'s `Wheel` applies `PhysicsRigidBodyAPI` + `LunCoWheelAPI`; each `suspensions/*.usda`'s `Suspension` applies `PhysxVehicleSuspensionAPI` + `LunCoSuspensionAPI`, and each vehicle wheel instance applies `PhysxVehicleWheelAttachmentAPI` + `PhysxVehicleWheelAPI` because it owns the selected wheel, suspension, tire, and attachment index. Motor, gearbox, and shaft equations are authored Modelica components in one containing `CollectionAPI:components` electrical/mechanical network; the wheel consumes only the solved shaft boundary. `apiSchemas` composes across reference arcs, while the vehicle owns the standard attachment contract. A rover authors values and connections, never a private index or fallback rule.
+**The APIs are owned at the topology boundary.** `wheel.usda`'s raycast `Wheel` applies `LunCoWheelAPI`; a physical wheel variant additionally authors `PhysicsRigidBodyAPI` and `PhysicsCollisionAPI` on its explicit collision geometry. Each `suspensions/*.usda`'s `Suspension` applies `PhysxVehicleSuspensionAPI` + `LunCoSuspensionAPI`, and each vehicle wheel instance applies `PhysxVehicleWheelAttachmentAPI` + `PhysxVehicleWheelAPI` because it owns the selected wheel, suspension, tire, and attachment index. Motor, gearbox, and shaft equations are authored Modelica components in one containing `CollectionAPI:components` electrical/mechanical network; the wheel consumes only the solved shaft boundary. `apiSchemas` composes across reference arcs, while the vehicle owns the standard attachment contract. A rover authors values and connections, never a private index or fallback rule.
 
 ---
 
@@ -254,6 +254,15 @@ components. The contract is ordered by the shared `PhysicsSupportSet`: `Publish`
 creates the footprint, `Apply` flushes its deferred ECS insertion, and `Consume`
 performs support-cache projection and one-time initial placement. This is a runtime
 transaction, not a per-frame reseat or an overturn recovery mechanism.
+
+The physical wheel is the opposite realization: its wheel prim must author both
+`PhysicsRigidBodyAPI` and `PhysicsCollisionAPI` on explicit USD collision geometry.
+The USD-to-Avian projection lowers that authored geometry into the backend collider;
+it never constructs a cylinder from `physxVehicleWheel:radius` or `:width`. A missing,
+disabled, malformed, or unsupported collision description is a terminal authored-state
+error for that wheel. The wheel's standard `physxVehicleWheel:mass` and `:moi` remain
+independent dynamics properties, so changing the collision shape cannot silently
+change the authored body mass or inertia.
 
 Ordinary rigid bodies use their Avian collider bounds directly. Both paths use the
 live spatial support surface for placement: a DEM uses the resident collider ring,

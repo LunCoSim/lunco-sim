@@ -186,9 +186,7 @@ def Xform "Rucheyok" (
         float inputs:drive.connect = </Rucheyok/Shaft_FL.outputs:torque>
         float physxVehicleWheel:radius = 2.0
 
-        bool physics:rigidBodyEnabled = true
         float physxVehicleWheel:mass = 25.0
-        bool physics:collisionEnabled = true
 
     }
 
@@ -214,9 +212,7 @@ def Xform "Rucheyok" (
         float inputs:drive.connect = </Rucheyok/Shaft_FR.outputs:torque>
         float physxVehicleWheel:radius = 2.0
 
-        bool physics:rigidBodyEnabled = true
         float physxVehicleWheel:mass = 25.0
-        bool physics:collisionEnabled = true
 
     }
 
@@ -242,9 +238,7 @@ def Xform "Rucheyok" (
         float inputs:drive.connect = </Rucheyok/Shaft_RL.outputs:torque>
         float physxVehicleWheel:radius = 2.0
 
-        bool physics:rigidBodyEnabled = true
         float physxVehicleWheel:mass = 25.0
-        bool physics:collisionEnabled = true
 
     }
 
@@ -270,9 +264,7 @@ def Xform "Rucheyok" (
         float inputs:drive.connect = </Rucheyok/Shaft_RR.outputs:torque>
         float physxVehicleWheel:radius = 2.0
 
-        bool physics:rigidBodyEnabled = true
         float physxVehicleWheel:mass = 25.0
-        bool physics:collisionEnabled = true
 
     }
 

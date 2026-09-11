@@ -183,6 +183,28 @@ mod compose_tests {
     }
 
     #[test]
+    fn referenced_solar_panel_owns_its_direct_telemetry_surface() {
+        let stage = compose_file_to_stage(&asset("scenes/luncosim/solar_rover_demo.usda"))
+            .expect("compose solar rover stage");
+        let view = StageView::new(&stage);
+        let panel = SdfPath::new("/SolarRoverTest/SolarRover/SolarPanel").unwrap();
+
+        assert!(
+            view.has_api_schema(&panel, "LunCoTelemetryAPI"),
+            "the composed solar panel must carry its telemetry schema"
+        );
+        assert_eq!(
+            view.text(&panel, "lunco:telemetry:port").as_deref(),
+            Some("power_out")
+        );
+        assert!(
+            view.rel_targets(&panel, "lunco:telemetry:target")
+                .is_empty(),
+            "a measured prim with its own runtime port must not need a target relationship"
+        );
+    }
+
+    #[test]
     fn modelica_drive_law_contributes_its_member_to_the_composed_network() {
         let stage = compose_file_to_stage(&asset("scenes/tests/modelica_drive_law.usda"))
             .expect("compose Modelica drive-law stage");
