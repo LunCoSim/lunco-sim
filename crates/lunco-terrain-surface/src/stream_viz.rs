@@ -1430,10 +1430,8 @@ pub struct PendingTileBakes(HashMap<QuadCoord, (u32, Task<BakedTile>)>);
 /// Terrain self-shadow wiring for a STREAMED terrain's tiles: the pre-baked R8
 /// sun-visibility texture from `lunco-environment`'s horizon solution. The
 /// cache owns terrain-on-terrain occlusion at every distance; streamed tiles
-/// remain directional-shadow casters and do not receive the same terrain
-/// shadow a second time. The cascade therefore remains available for
-/// terrain-to-dynamic-object occlusion (rover, rocks, equipment) in its
-/// camera-relative range.
+/// remain directional-shadow receivers so dynamic-object shadows land on the
+/// surface, while the cascade does not redraw the whole tile set as casters.
 ///
 /// Written by the app glue (which can see both `HorizonShadowCache` and this
 /// crate); consumed by tile materials. `on == 0` disables sampling without
@@ -1759,13 +1757,13 @@ pub(crate) struct TerrainDiagnosticTile;
 /// Establish the one shadow ownership split for a streamed terrain tile.
 ///
 /// Terrain self-shadow is sampled from the DEM horizon cache, so the mesh must
-/// not receive a duplicate from the directional cascade. It remains a CSM
-/// caster so it occludes direct sun on dynamic objects (rover, rocks,
-/// equipment). Keeping both operations here prevents initial spawn and late
-/// cache binding from drifting into different contracts again.
+/// not cast a duplicate into the directional cascade. It remains a CSM
+/// receiver so dynamic objects (rover, rocks, equipment) can cast onto the
+/// surface. Keeping both operations here prevents initial spawn and late cache
+/// binding from drifting into different contracts again.
 fn enforce_streamed_shadow_ownership(tile: &mut EntityCommands<'_>) {
-    tile.try_insert(bevy::light::NotShadowReceiver);
-    tile.try_remove::<bevy::light::NotShadowCaster>();
+    tile.try_insert(bevy::light::NotShadowCaster);
+    tile.try_remove::<bevy::light::NotShadowReceiver>();
 }
 
 /// Cross-terrain tile-streaming progress, derived fresh each frame by
@@ -3743,7 +3741,7 @@ mod draw_partition_tests {
     }
 
     #[test]
-    fn late_shadow_cache_keeps_terrain_caster_for_dynamic_shadow_occlusion() {
+    fn late_shadow_cache_keeps_dynamic_shadow_receiver_without_terrain_caster() {
         let mut app = App::new();
         app.add_systems(PostUpdate, bind_shadow_cache_to_tiles);
 
@@ -3783,8 +3781,8 @@ mod draw_partition_tests {
         app.update();
 
         let tile_ref = app.world().entity(tile);
-        assert!(!tile_ref.contains::<bevy::light::NotShadowCaster>());
-        assert!(tile_ref.contains::<bevy::light::NotShadowReceiver>());
+        assert!(tile_ref.contains::<bevy::light::NotShadowCaster>());
+        assert!(!tile_ref.contains::<bevy::light::NotShadowReceiver>());
         let look = tile_ref.get::<ShaderLook>().expect("tile look retained");
         assert_eq!(
             look.textures.get(&TextureLayer::ShadowCache),
