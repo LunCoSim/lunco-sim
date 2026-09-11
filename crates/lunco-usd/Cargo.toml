@@ -45,43 +45,29 @@ serde_json = { workspace = true }
 bevy_egui = { workspace = true, optional = true }
 lunco-workbench = { path = "../lunco-workbench", optional = true }
 lunco-workbench-core = { path = "../lunco-workbench-core", optional = true }
+lunco-status-core = { path = "../lunco-status-core", optional = true }
 lunco-theme = { path = "../lunco-theme", optional = true }
 lunco-ui = { path = "../lunco-ui", optional = true }
 
 [features]
 default = ["ui"]
 # USD document commands + browser/viewport panels (egui + workbench shell).
-ui = ["dep:bevy_egui", "dep:lunco-workbench", "dep:lunco-workbench-core", "dep:lunco-theme", "dep:lunco-ui", "lunco-doc-bevy/ui"]
+ui = ["dep:bevy_egui", "dep:lunco-workbench", "dep:lunco-workbench-core", "dep:lunco-status-core", "dep:lunco-theme", "dep:lunco-ui", "lunco-doc-bevy/ui"]
+
+[[test]]
+name = "apply_usd_op_integration_test"
+required-features = ["ui"]
+
+[[test]]
+name = "live_spawn_projection"
+required-features = ["ui"]
 
 [dev-dependencies]
+# These are used by package-local mechanism tests in `src/` (live entity
+# consumption and temporary document persistence), not by cross-domain
+# integration targets. The latter live in `lunco-usd-sim/tests` or the
+# application package when they cross the full runtime boundary.
 avian3d = { workspace = true }
-# DEV-ONLY `bevy_pbr`. The library is render-free (`bevy = { workspace = true }` above, no
-# pbr), and stays that way. But `examples/usd_rover_visual.rs` is a `DefaultPlugins` visual
-# demo that spawns a `StandardMaterial` ground plane, so the EXAMPLE genuinely needs the pbr
-# types. Declaring it here keeps `cargo check -p lunco-usd --all-targets` honest: without it
-# the examples only built under `--workspace`, where feature unification silently borrowed
-# `bevy_pbr` from another crate — green in CI's workspace build, broken per-crate.
-bevy = { workspace = true, features = ["bevy_pbr"] }
-# The entity-pipeline tests assert on appearance INTENT (`PbrLook`), not on a bound
-# `MeshMaterial3d` — a headless test adds no `LuncoRenderPlugin`, and the intent is
-# what USD actually authors. See docs/architecture/render-decoupling.md.
-# The rover-structure tests inspect the actuator wiring a vessel projects, which
-# is `SimConnection` — owned by `lunco-cosim`. Dev-only: the library itself does
-# not wire actuators, it authors the USD they are built from.
-lunco-cosim = { path = "../lunco-cosim" }
-lunco-modelica = { path = "../lunco-modelica" }
-lunco-mobility = { path = "../lunco-mobility" }
-# The headless entity-pipeline tests must register the same material intent
-# used by the composed USD Shader networks or `process_usd_sim_prims` defers
-# every wheel forever (no WheelRaycast).
-lunco-materials = { path = "../lunco-materials" }
-# `LinkNode` / `LinkOccluder` — `tests/link_occlusion.rs` asserts that the authored
-# comms scene still produces the components the link kernel solves over. The kernel's
-# own geometry is unit-tested in `lunco-celestial`; this guards the USD seam, which is
-# where every connectivity gap actually shipped. `default-features = false` keeps
-# celestial's optional `ui` feature out of the dev graph.
-lunco-celestial = { path = "../lunco-celestial", default-features = false }
 tempfile = { workspace = true }
-
 [lints]
 workspace = true

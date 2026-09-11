@@ -1,0 +1,16 @@
+[package]
+name = "lunco-modelica-ast"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Pure Modelica parsing, AST extraction, source normalization, and lint facts"
+
+[dependencies]
+anyhow = { workspace = true }
+lunco-hooks = { path = "../lunco-hooks" }
+rumoca-core = { workspace = true }
+rumoca-ir-ast = { workspace = true }
+rumoca-phase-parse = { workspace = true }
+
+[lints]
+workspace = true

@@ -15,9 +15,8 @@ use lunco_signal::{SignalExposure, SignalMeta, SignalRef, SignalRegistry, Signal
 use lunco_telemetry::TelemetrySettings;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use crate::{
-    ast_extract::ModelicaVariableMetadata, state::ModelicaDocumentRegistry, ModelicaModel,
-};
+use crate::{state::ModelicaDocumentRegistry, ModelicaModel};
+use lunco_modelica_ast::ast_extract::ModelicaVariableMetadata;
 
 /// Runtime state retained for each Modelica participant.
 ///

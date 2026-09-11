@@ -34,7 +34,7 @@ fn src() -> &'static str {
 }
 
 fn build_stepper(initial_throttle: Option<f64>) -> SimulationSession {
-    let (stripped, _) = lunco_modelica::ast_extract::strip_input_defaults(src());
+    let (stripped, _) = lunco_modelica_ast::ast_extract::strip_input_defaults(src());
     let mut compiler = ModelicaCompiler::new();
     let dae = compiler
         .compile_str(

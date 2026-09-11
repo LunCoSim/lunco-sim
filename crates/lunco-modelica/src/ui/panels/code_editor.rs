@@ -463,9 +463,9 @@ impl Panel for CodeEditorPanel {
                 let loading = source_len == 0
                     && tab_target
                         .map(|d| {
-                            ctx.resource::<lunco_workbench::status_bus::StatusBus>()
+                            ctx.resource::<lunco_status_core::status_bus::StatusBus>()
                                 .map(|bus| {
-                                    bus.is_busy(lunco_workbench::status_bus::BusyScope::Document(
+                                    bus.is_busy(lunco_status_core::status_bus::BusyScope::Document(
                                         d.0,
                                     ))
                                 })

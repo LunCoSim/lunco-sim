@@ -95,9 +95,7 @@ pub mod picker;
 /// because lunica screenshots its egui workbench with no 3D renderer.
 #[cfg(feature = "api")]
 pub mod screenshot;
-pub mod status_bus;
 pub mod theme_command;
-pub mod tracked_task;
 pub mod tutorial_overlay;
 pub mod twin_browser;
 pub mod uri;
@@ -949,8 +947,8 @@ impl Plugin for WorkbenchPlugin {
         // Cross-cutting status bus. Subsystems publish events here;
         // renderers (status bar, console fan-out, diagnostics fan-out)
         // are added separately by their owning plugins.
-        if !app.is_plugin_added::<status_bus::StatusBusPlugin>() {
-            app.add_plugins(status_bus::StatusBusPlugin);
+        if !app.is_plugin_added::<lunco_status_core::status_bus::StatusBusPlugin>() {
+            app.add_plugins(lunco_status_core::status_bus::StatusBusPlugin);
         }
         // Perf HUD (FPS / frame ms / optional physics ms) wired into
         // the right end of the status bar. Off by default; flip via
@@ -5103,11 +5101,11 @@ fn perspective_help_anchor(id: PerspectiveId) -> String {
 
 /// Render a single panel inside its own egui container (side-panel mode).
 /// Mirrors PanelTabViewer's lookup-and-take-back pattern.
-/// Render the bottom status strip. Reads from [`status_bus::StatusBus`]
+/// Render the bottom status strip. Reads from [`lunco_status_core::status_bus::StatusBus`]
 /// (cross-cutting; populated by MSL load, compile, sim, etc.) and
 /// renders a click-to-expand popup with recent history.
 fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_theme::Theme) {
-    use status_bus::{StatusBarAction, StatusBus, StatusLevel};
+    use lunco_status_core::status_bus::{StatusBarAction, StatusBus, StatusLevel};
 
     let popup_id = ui.make_persistent_id("lunco_workbench_status_bar_popup");
 
@@ -5122,7 +5120,7 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
     }
     let (latest, history): (
         Option<LatestSnapshot>,
-        Vec<(StatusEventKey, status_bus::StatusEvent)>,
+        Vec<(StatusEventKey, lunco_status_core::status_bus::StatusEvent)>,
     ) = {
         let bus = world.resource::<StatusBus>();
         let latest = bus.display_latest().map(|e| LatestSnapshot {
@@ -5484,13 +5482,13 @@ const STATUS_EVENT_ATTENTION_WIDTH: f32 = 80.0;
 /// while Attention adds the owning status action.
 fn render_status_event_row(
     ui: &mut egui::Ui,
-    event: &status_bus::StatusEvent,
+    event: &lunco_status_core::status_bus::StatusEvent,
     theme: &lunco_theme::Theme,
     details_id: egui::Id,
 ) -> bool {
     let has_details = matches!(
         event.level,
-        status_bus::StatusLevel::Warn | status_bus::StatusLevel::Error
+        lunco_status_core::status_bus::StatusLevel::Warn | lunco_status_core::status_bus::StatusLevel::Error
     );
     let mut details = egui::collapsing_header::CollapsingState::load_with_default_open(
         ui.ctx(),
@@ -5588,7 +5586,7 @@ fn render_status_event_row(
             );
         }
 
-        if event.level == status_bus::StatusLevel::Attention {
+        if event.level == lunco_status_core::status_bus::StatusLevel::Attention {
             attention_clicked = ui
                 .add_sized(
                     [action_width, 0.0],
@@ -5661,8 +5659,8 @@ fn add_status_text_with_layout(
         .inner
 }
 
-fn status_event_action_width(level: status_bus::StatusLevel, compact: bool) -> f32 {
-    if level == status_bus::StatusLevel::Attention {
+fn status_event_action_width(level: lunco_status_core::status_bus::StatusLevel, compact: bool) -> f32 {
+    if level == lunco_status_core::status_bus::StatusLevel::Attention {
         if compact {
             56.0
         } else {
@@ -5673,8 +5671,8 @@ fn status_event_action_width(level: status_bus::StatusLevel, compact: bool) -> f
     }
 }
 
-fn status_event_has_progress(level: status_bus::StatusLevel, progress: Option<(u64, u64)>) -> bool {
-    progress.is_some() || level == status_bus::StatusLevel::Progress
+fn status_event_has_progress(level: lunco_status_core::status_bus::StatusLevel, progress: Option<(u64, u64)>) -> bool {
+    progress.is_some() || level == lunco_status_core::status_bus::StatusLevel::Progress
 }
 
 const STATUS_BAR_PROGRESS_WIDTH: f32 = 120.0;
@@ -5694,7 +5692,7 @@ fn status_event_rich_text(text: impl Into<String>) -> egui::RichText {
 
 fn status_notification_layout_job(
     style: &egui::Style,
-    level: status_bus::StatusLevel,
+    level: lunco_status_core::status_bus::StatusLevel,
     source: &str,
     message: &str,
     level_color: egui::Color32,
@@ -5732,21 +5730,21 @@ fn status_notification_layout_job(
     job
 }
 
-fn status_level_label(level: status_bus::StatusLevel) -> &'static str {
+fn status_level_label(level: lunco_status_core::status_bus::StatusLevel) -> &'static str {
     match level {
-        status_bus::StatusLevel::Info => "INFO",
-        status_bus::StatusLevel::Warn => "WARN",
-        status_bus::StatusLevel::Error => "ERROR",
-        status_bus::StatusLevel::Attention => "ACTION",
-        status_bus::StatusLevel::Progress => "PROGRESS",
+        lunco_status_core::status_bus::StatusLevel::Info => "INFO",
+        lunco_status_core::status_bus::StatusLevel::Warn => "WARN",
+        lunco_status_core::status_bus::StatusLevel::Error => "ERROR",
+        lunco_status_core::status_bus::StatusLevel::Attention => "ACTION",
+        lunco_status_core::status_bus::StatusLevel::Progress => "PROGRESS",
     }
 }
 
-fn status_level_color(level: status_bus::StatusLevel, theme: &lunco_theme::Theme) -> egui::Color32 {
+fn status_level_color(level: lunco_status_core::status_bus::StatusLevel, theme: &lunco_theme::Theme) -> egui::Color32 {
     match level {
-        status_bus::StatusLevel::Error | status_bus::StatusLevel::Attention => theme.tokens.error,
-        status_bus::StatusLevel::Warn => theme.tokens.warning,
-        status_bus::StatusLevel::Info | status_bus::StatusLevel::Progress => {
+        lunco_status_core::status_bus::StatusLevel::Error | lunco_status_core::status_bus::StatusLevel::Attention => theme.tokens.error,
+        lunco_status_core::status_bus::StatusLevel::Warn => theme.tokens.warning,
+        lunco_status_core::status_bus::StatusLevel::Info | lunco_status_core::status_bus::StatusLevel::Progress => {
             theme.tokens.text_subdued
         }
     }
@@ -5778,7 +5776,7 @@ pub fn menu_popup_max_width(content_width: f32, requested_max_width: f32) -> f32
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 enum StatusEventKey {
     Discrete(u64),
-    Progress(status_bus::BusyScope, &'static str),
+    Progress(lunco_status_core::status_bus::BusyScope, &'static str),
 }
 
 fn discrete_status_event_key(
@@ -7009,31 +7007,31 @@ mod tests {
     #[test]
     fn status_event_rows_reserve_width_only_for_attention_action() {
         assert!(!status_event_has_progress(
-            status_bus::StatusLevel::Info,
+            lunco_status_core::status_bus::StatusLevel::Info,
             None
         ));
         assert!(status_event_has_progress(
-            status_bus::StatusLevel::Progress,
+            lunco_status_core::status_bus::StatusLevel::Progress,
             None
         ));
         assert!(status_event_has_progress(
-            status_bus::StatusLevel::Info,
+            lunco_status_core::status_bus::StatusLevel::Info,
             Some((1, 2))
         ));
         assert_eq!(
-            status_event_action_width(status_bus::StatusLevel::Info, false),
+            status_event_action_width(lunco_status_core::status_bus::StatusLevel::Info, false),
             0.0
         );
         assert_eq!(
-            status_event_action_width(status_bus::StatusLevel::Warn, false),
+            status_event_action_width(lunco_status_core::status_bus::StatusLevel::Warn, false),
             0.0
         );
         assert_eq!(
-            status_event_action_width(status_bus::StatusLevel::Error, true),
+            status_event_action_width(lunco_status_core::status_bus::StatusLevel::Error, true),
             0.0
         );
         assert_eq!(
-            status_event_action_width(status_bus::StatusLevel::Attention, false),
+            status_event_action_width(lunco_status_core::status_bus::StatusLevel::Attention, false),
             STATUS_EVENT_ATTENTION_WIDTH
         );
     }
@@ -7060,7 +7058,7 @@ mod tests {
     fn latest_status_notification_is_one_flowing_string() {
         let job = status_notification_layout_job(
             &egui::Style::default(),
-            status_bus::StatusLevel::Warn,
+            lunco_status_core::status_bus::StatusLevel::Warn,
             "updates",
             "updates unavailable",
             egui::Color32::YELLOW,

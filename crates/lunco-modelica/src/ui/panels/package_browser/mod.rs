@@ -526,9 +526,9 @@ fn open_bundled_class(world: &mut World, class: &ClassRef) {
     // frame after the user clicked open. Handed off to the projection
     // stage by `drive_file_load_openings` (see that fn).
     let busy = world
-        .resource_mut::<lunco_workbench::status_bus::StatusBus>()
+        .resource_mut::<lunco_status_core::status_bus::StatusBus>()
         .begin(
-            lunco_workbench::status_bus::BusyScope::Document(reserved_doc_id.0),
+            lunco_status_core::status_bus::BusyScope::Document(reserved_doc_id.0),
             "opening",
             format!("Loading {display_name}…"),
         );
@@ -669,9 +669,9 @@ fn open_user_file_class(world: &mut World, path: PathBuf, class: &ClassRef) {
     // projection stage in `drive_file_load_openings`. See the matching
     // block in `open_bundled_file_class`.
     let busy = world
-        .resource_mut::<lunco_workbench::status_bus::StatusBus>()
+        .resource_mut::<lunco_status_core::status_bus::StatusBus>()
         .begin(
-            lunco_workbench::status_bus::BusyScope::Document(reserved_doc_id.0),
+            lunco_status_core::status_bus::BusyScope::Document(reserved_doc_id.0),
             "opening",
             format!("Loading {display_name}…"),
         );

@@ -435,12 +435,12 @@ fn shipped_default_policy_emits_visual_and_executable_topology() {
         "an authored external boundary source must become a Modelica equation:\n{}",
         plan.source
     );
-    let interface = lunco_modelica::ast_extract::parse_model_interface(
+    let interface = lunco_modelica_ast::ast_extract::parse_model_interface(
         &plan.source,
         "shipped-synthesis-policy.mo",
     );
     assert_eq!(interface.model_name.as_deref(), Some("Rig_System"));
-    let ast = rumoca_phase_parse::parse_to_ast(&plan.source, "shipped-synthesis-policy.mo")
+    let ast = lunco_modelica_ast::parse_to_ast(&plan.source, "shipped-synthesis-policy.mo")
         .expect("the Rhai-owned source and visual annotations remain valid Modelica");
     assert!(
         lunco_modelica::diagram::find_class_by_qualified_name(&ast, "Rig_System")

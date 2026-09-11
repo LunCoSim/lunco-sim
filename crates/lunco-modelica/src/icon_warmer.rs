@@ -97,7 +97,7 @@ fn collect_referenced_types(ast: &StoredDefinition) -> Vec<String> {
 }
 
 fn walk_class(class: &ClassDef, out: &mut HashSet<String>) {
-    crate::ast_extract::walk_class_type_names(class, &mut |name| {
+    lunco_modelica_ast::ast_extract::walk_class_type_names(class, &mut |name| {
         if interesting_type(name) {
             out.insert(name.to_string());
         }
@@ -115,10 +115,7 @@ fn interesting_type(name: &str) -> bool {
         // already covered by the synchronous engine upsert.
         return false;
     }
-    !matches!(
-        name,
-        "Real" | "Integer" | "Boolean" | "String" | "enumeration"
-    )
+    !lunco_modelica_ast::ast_extract::is_builtin_type_name(name)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -178,7 +175,7 @@ fn spawn_warm_task(doc_id: DocumentId, types: Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rumoca_phase_parse::parse_to_syntax;
+    use lunco_modelica_ast::parse_to_syntax;
 
     #[test]
     fn collects_cross_package_extends_and_component_types() {

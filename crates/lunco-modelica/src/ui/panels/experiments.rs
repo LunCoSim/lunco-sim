@@ -958,9 +958,9 @@ impl ExperimentsPanel {
             .resource::<crate::state::ModelicaDocumentRegistry>()
             .and_then(|r| r.host(doc))
             .and_then(|h| {
-                crate::ast_extract::find_class_by_short_name(
+                lunco_modelica_ast::ast_extract::find_class_by_short_name(
                     h.document().syntax().ast(),
-                    crate::ast_extract::short_name(&model_name),
+                    lunco_modelica_ast::ast_extract::short_name(&model_name),
                 )
                 .map(crate::experiments_runner::detect_top_level_inputs)
             })
@@ -1478,9 +1478,9 @@ impl ExperimentsPanel {
 
         // Parameters come from the parsed AST of the resolved model class
         // (no per-frame source regex — WP-8 / CQ-205).
-        let detected = crate::ast_extract::find_class_by_short_name(
+        let detected = lunco_modelica_ast::ast_extract::find_class_by_short_name(
             document.syntax().ast(),
-            crate::ast_extract::short_name(&model_name),
+            lunco_modelica_ast::ast_extract::short_name(&model_name),
         )
         .map(crate::experiments_runner::detect_top_level_literal_parameters)
         .unwrap_or_default();

@@ -36,7 +36,7 @@ pub fn update_status_bar(
     workbench: Res<WorkbenchState>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     compile_states: Res<DocumentDiagnostics>,
-    bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
+    bus: Option<ResMut<lunco_status_core::status_bus::StatusBus>>,
     registry: Res<ModelicaDocumentRegistry>,
     mut last_status: Local<Option<String>>,
 ) {
@@ -56,7 +56,7 @@ pub fn update_status_bar(
                 let document = h.document();
                 document
                     .strict_ast()
-                    .and_then(|ast| crate::ast_extract::extract_model_name_from_ast(&ast))
+                    .and_then(|ast| lunco_modelica_ast::ast_extract::extract_model_name_from_ast(&ast))
                     .or_else(|| Some(document.origin().display_name()))
             })
         })
@@ -83,8 +83,8 @@ pub fn update_status_bar(
     }
     *last_status = Some(text.clone());
     bus.push(
-        lunco_workbench::status_bus::MODELICA_EDITOR_SOURCE,
-        lunco_workbench::status_bus::StatusLevel::Info,
+        lunco_status_core::status_bus::MODELICA_EDITOR_SOURCE,
+        lunco_status_core::status_bus::StatusLevel::Info,
         text,
     );
 }
@@ -111,7 +111,7 @@ mod tests {
     use bevy::prelude::{App, Update};
     use lunco_doc::{CompileState, DocumentOrigin};
     use lunco_doc_bevy::DocumentDiagnostics;
-    use lunco_workbench::status_bus::StatusBus;
+    use lunco_status_core::status_bus::StatusBus;
 
     use crate::state::{ModelicaDocumentRegistry, WorkbenchState};
 
@@ -170,7 +170,7 @@ mod tests {
         );
         assert_eq!(
             bus.history().last().map(|event| event.source),
-            Some(lunco_workbench::status_bus::MODELICA_EDITOR_SOURCE)
+            Some(lunco_status_core::status_bus::MODELICA_EDITOR_SOURCE)
         );
 
         app.update();

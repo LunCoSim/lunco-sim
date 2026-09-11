@@ -755,7 +755,7 @@ pub fn on_compile_model(
             // Compile-time seed values for `ModelicaModel`
             // (parameters / input defaults / runtime input names)
             // — read straight from the index. Replaces three
-            // `ast_extract::extract_*_from_ast` calls that walked
+            // `lunco_modelica_ast::ast_extract::extract_*_from_ast` calls that walked
             // the same data.
             let mut params: HashMap<String, f64> = HashMap::new();
             let mut inputs_with_defaults: HashMap<String, f64> = HashMap::new();
@@ -892,7 +892,7 @@ pub fn on_compile_model(
     // qualify the target with `P`. Mirrors the run path in
     // `dispatch_experiment`. No-op for top-level scratch models (no `within`)
     // and for drilled MSL classes (empty overlay source → no `within`).
-    let model_name = match crate::ui::duplicate::within_package(&source) {
+    let model_name = match lunco_modelica_ast::ast_extract::within_package_of_source(&source) {
         Some(pkg) if !model_name.starts_with(&format!("{pkg}.")) => {
             format!("{pkg}.{model_name}")
         }
@@ -1151,7 +1151,7 @@ pub fn on_compile_model(
         // within-packages are not bundled (return None) and are left alone;
         // the `claimed` guard avoids a duplicate-class collision if the
         // package is somehow already overlaid.
-        if let Some(pkg) = crate::ui::duplicate::within_package(&source) {
+        if let Some(pkg) = lunco_modelica_ast::ast_extract::within_package_of_source(&source) {
             if !claimed.contains(&pkg) {
                 if let Some(bundled) = crate::ui::class_source::bundled_source_for(&pkg) {
                     extra_sources.push((format!("{pkg}.mo"), bundled.to_string()));
@@ -1728,7 +1728,7 @@ fn dispatch_experiment(
         // leaf fails `model not found` in Instantiate, while `P.<class>`
         // resolves against the merged session. No-op for top-level scratch
         // models and for read-only library drills (empty overlay source).
-        let model_name = match crate::ui::duplicate::within_package(&source) {
+        let model_name = match lunco_modelica_ast::ast_extract::within_package_of_source(&source) {
             Some(pkg) if !model_name.starts_with(&format!("{pkg}.")) => {
                 format!("{pkg}.{model_name}")
             }
@@ -1745,7 +1745,7 @@ fn dispatch_experiment(
         // package as an extra source so `compile_str_multi` merges the siblings
         // back into the same `within` scope. MSL within-packages are not
         // bundled (return None here) and are left untouched.
-        let extras: Vec<(String, String)> = match crate::ui::duplicate::within_package(&source) {
+        let extras: Vec<(String, String)> = match lunco_modelica_ast::ast_extract::within_package_of_source(&source) {
             Some(pkg) => crate::ui::class_source::bundled_source_for(&pkg)
                 .map(|s| vec![(format!("{pkg}.mo"), s.to_string())])
                 .unwrap_or_default(),

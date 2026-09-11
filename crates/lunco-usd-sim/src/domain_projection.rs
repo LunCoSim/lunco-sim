@@ -11,15 +11,18 @@ use bevy::asset::AssetId;
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use lunco_modelica::{
-    ast_extract::{parse_model_interface, ModelicaVariableMetadata},
     ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaNotice, ModelicaSignalLayout,
     ModelicaSignalProvenance, NoticeLevel,
+};
+use lunco_modelica_ast::ast_extract::{
+    parse_model_interface, parse_model_interface_from_ast, ModelInterface,
+    ModelicaVariableMetadata,
 };
 use lunco_usd_bevy::program::ProgramGraph;
 use lunco_usd_bevy::read::UsdReadObject as ComposedReader;
 use lunco_usd_bevy::{CanonicalStages, UsdInstanceProjection, UsdPrimPath, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
-use rumoca_compile::parsing::Causality;
+use rumoca_core::Causality;
 
 // The USD side of a Modelica program facet — the class an asset names, the
 // lexical rules for member/instance identifiers — is ONE reader, shared with the
@@ -251,6 +254,9 @@ pub struct DomainProjectionError {
 pub struct SynthesisPlan {
     /// The Modelica source to compile.
     pub source: String,
+    /// The interface extracted from the validated source. Keeping it beside
+    /// the source makes validation and installation share one AST parse.
+    pub interface: ModelInterface,
     /// Public causal inputs of the generated model.
     pub inputs: BTreeSet<String>,
     /// Public causal outputs of the generated model.
@@ -560,18 +566,25 @@ impl DomainSynthesizer for HookSynthesizer {
                 message,
             }]
         })?;
-        validate_generated_source(source, model_name, &network, &units, &member_output_aliases)
-            .map_err(|message| {
-                vec![DomainProjectionError {
-                    path: network_root.clone(),
-                    message: format!(
-                        "synthesizer `{}` returned invalid Modelica: {message}",
-                        self.name
-                    ),
-                }]
-            })?;
+        let interface = validate_generated_source(
+            source,
+            model_name,
+            &network,
+            &units,
+            &member_output_aliases,
+        )
+        .map_err(|message| {
+            vec![DomainProjectionError {
+                path: network_root.clone(),
+                message: format!(
+                    "synthesizer `{}` returned invalid Modelica: {message}",
+                    self.name
+                ),
+            }]
+        })?;
         Ok(SynthOutcome::Ready(Box::new(SynthesisPlan {
             source: source.to_string(),
+            interface,
             // The BOUNDARY remains Rust's composed-USD answer. The policy owns
             // the emitted source, merge partition, and visual placement, but
             // cannot invent a runtime port surface or a member outside the
@@ -769,8 +782,8 @@ fn parse_validated_root_interface(
     inputs: &BTreeSet<String>,
     outputs: &BTreeSet<String>,
     aliases: &[(String, String, String)],
-) -> Result<rumoca_compile::parsing::ast::StoredDefinition, String> {
-    let ast = rumoca_phase_parse::parse_to_ast(source, "generated-policy.mo")
+) -> Result<rumoca_ir_ast::StoredDefinition, String> {
+    let ast = lunco_modelica_ast::parse_to_ast(source, "generated-policy.mo")
         .map_err(|error| format!("strict Modelica parse failed: {error:?}"))?;
     let root = lunco_modelica::diagram::find_class_by_qualified_name(&ast, model_name)
         .ok_or_else(|| format!("root class `{model_name}` is missing"))?;
@@ -840,7 +853,7 @@ fn validate_generated_source(
     network: &DomainNetwork,
     units: &[SynthesisUnit],
     aliases: &[(String, String, String)],
-) -> Result<(), String> {
+) -> Result<ModelInterface, String> {
     let outputs: BTreeSet<String> = network.outputs.keys().cloned().collect();
     let ast =
         parse_validated_root_interface(source, model_name, &network.inputs, &outputs, aliases)?;
@@ -1018,7 +1031,7 @@ fn validate_generated_source(
             }
         }
     }
-    Ok(())
+    Ok(parse_model_interface_from_ast(&ast))
 }
 
 /// Read a policy-owned unit partition and prove that it is only rearranging
@@ -1946,16 +1959,15 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
                 message: "actuator-wrench synthesis policy returned no string `source` key".into(),
             }]);
         };
-        parse_validated_root_interface(source, model_name, &inputs, &outputs, &[]).map_err(
-            |message| {
+        let interface = parse_validated_root_interface(source, model_name, &inputs, &outputs, &[])
+            .map_err(|message| {
                 vec![DomainProjectionError {
                     path: root_string.clone(),
                     message: format!(
                         "actuator-wrench synthesis policy returned invalid Modelica: {message}"
                     ),
                 }]
-            },
-        )?;
+            })?;
         let source_roots = parse_policy_source_roots(
             hook_map_value(&map, "source_roots"),
             ACTUATOR_WRENCH_SYNTHESIZER,
@@ -1973,6 +1985,7 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
         // that does not exist.
         Ok(SynthOutcome::Ready(Box::new(SynthesisPlan {
             source: source.to_string(),
+            interface: parse_model_interface_from_ast(&interface),
             inputs,
             outputs,
             component_paths,
@@ -2410,6 +2423,7 @@ fn commit_domain_projection(
     };
 
     let component_count = synthesized.component_paths.len();
+    let interface = synthesized.interface;
     let source = synthesized.source;
     let source_for_diagnostics = source.clone();
     let fingerprint = source_fingerprint(&source);
@@ -2417,8 +2431,8 @@ fn commit_domain_projection(
         return false;
     }
 
-    // ONE parse-and-extract, shared with `cosim::dispatch_loaded_modelica_sources`.
-    let interface = parse_model_interface(&source, "usd-network-projection.mo");
+    // The synthesizer already parsed and validated this source once. Carry its
+    // interface through installation so the runtime does not recover it again.
     let compiled_name = interface
         .model_name
         .unwrap_or_else(|| model_name.to_string());
@@ -5182,7 +5196,7 @@ def Scope "Rig"
         assert!(source.contains("allocator.desired_force_x = 0.0;"));
         assert!(source.contains("valve = allocator.command[1];"));
         assert!(source.contains("Force allocation | 1 actuator(s)"));
-        let ast = rumoca_phase_parse::parse_to_ast(&source, "wrench.mo")
+        let ast = lunco_modelica_ast::parse_to_ast(&source, "wrench.mo")
             .expect("generated actuator visual schema must remain valid Modelica");
         let class =
             lunco_modelica::diagram::find_class_by_qualified_name(&ast, "AttitudeActuation")

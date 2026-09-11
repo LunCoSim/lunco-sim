@@ -188,8 +188,12 @@ refactor, and should be taken explicitly rather than arrived at.
 
 ### Modelica compile-core split
 
-**What:** Split a compile-core crate out of `lunco-modelica` so
+**What:** Continue the remaining compile-core split out of `lunco-modelica` so
 `lunco-usd-sim` depends only on what it uses.
+
+The parse/AST boundary is already extracted as `lunco-modelica-ast`; this item
+is only the heavier Rumoca session/compiler/worker boundary and must not pull
+document or UI policy into the reusable parser crate.
 
 **Why:** `lunco-usd-sim → lunco-modelica` drags modelica's full heavy closure
 (parol/rumoca and friends) into consumers that never compile a model. Build

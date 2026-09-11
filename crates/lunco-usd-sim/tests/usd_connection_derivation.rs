@@ -12,7 +12,7 @@ use bevy::prelude::*;
 use lunco_cosim::SimConnection;
 use lunco_usd_bevy::program::is_network_boundary_output;
 use lunco_usd_bevy::{CanonicalStages, StageRecipe, UsdPrimPath, UsdRead, UsdStageAsset};
-use lunco_usd_sim::cosim::{rewire_usd_connections, WiringDirty};
+use lunco_usd_sim::cosim::{install_wiring_system, WiringDirty};
 use lunco_usd_sim::domain_projection::{
     derive_synthesizer_name, ActuatorWrenchSynthesizer, DomainSynthesizer, MemberClasses,
     SynthContext, SynthOutcome,
@@ -55,7 +55,7 @@ fn setup() -> (App, AssetId<UsdStageAsset>, Handle<UsdStageAsset>) {
 #[test]
 fn rewire_derives_at_load_and_clears() {
     let (mut app, id, handle) = setup();
-    app.add_systems(Update, rewire_usd_connections);
+    install_wiring_system(&mut app);
 
     // Author the connection ONTO THE LIVE STAGE (as `UsdOp::SetConnection` would).
     app.world()
@@ -786,7 +786,7 @@ fn lander_rover_stack_is_not_interactive() {
 #[test]
 fn rewire_applies_factor_and_offset() {
     let (mut app, id, handle) = setup();
-    app.add_systems(Update, rewire_usd_connections);
+    install_wiring_system(&mut app);
 
     {
         let stages = app.world().non_send::<CanonicalStages>();
@@ -845,7 +845,7 @@ fn rewire_applies_factor_and_offset() {
 #[test]
 fn rewire_reads_float_authored_transform() {
     let (mut app, id, handle) = setup();
-    app.add_systems(Update, rewire_usd_connections);
+    install_wiring_system(&mut app);
 
     {
         let stages = app.world().non_send::<CanonicalStages>();

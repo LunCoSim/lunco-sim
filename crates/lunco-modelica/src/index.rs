@@ -227,7 +227,7 @@ pub enum ClassResolutionState {
 impl ClassEntry {
     /// Short name (leaf segment of the qualified name).
     pub fn short_name(&self) -> &str {
-        crate::ast_extract::short_name(&self.name)
+        lunco_modelica_ast::ast_extract::short_name(&self.name)
     }
 
     /// Second-level segment of the qualified name — e.g.
@@ -685,7 +685,7 @@ impl ModelicaIndex {
         if let Some(c) = self.components.iter().find(|c| c.name == name) {
             return Some(c);
         }
-        let leaf = crate::ast_extract::short_name(name);
+        let leaf = lunco_modelica_ast::ast_extract::short_name(name);
         if leaf == name {
             return None;
         }
@@ -891,12 +891,12 @@ fn insert_class_recursive(
     // colliding instance names without aliasing. Per-class iteration
     // preserves declaration order via `components_by_class`.
     //
-    // Description + modifications come from `ast_extract::extract_components_for_class`
+    // Description + modifications come from `lunco_modelica_ast::ast_extract::extract_components_for_class`
     // which runs the description + modification-expression flattening
     // logic. Calling that public helper keeps Index in lockstep with
     // the inspector's previous direct-AST path.
-    let infos = crate::ast_extract::extract_components_for_class(class_def);
-    let info_by_name: HashMap<String, crate::ast_extract::ComponentInfo> =
+    let infos = lunco_modelica_ast::ast_extract::extract_components_for_class(class_def);
+    let info_by_name: HashMap<String, lunco_modelica_ast::ast_extract::ComponentInfo> =
         infos.into_iter().map(|i| (i.name.clone(), i)).collect();
     for (name, comp) in class_def.iter_components() {
         let key = idx.alloc_component_key();
@@ -1062,7 +1062,7 @@ mod tests {
 
     #[test]
     fn rebuild_populates_within_classes_components() {
-        let ast = rumoca_phase_parse::parse_to_ast(SRC, "RC.mo").expect("parses");
+        let ast = lunco_modelica_ast::parse_to_ast(SRC, "RC.mo").expect("parses");
         let mut idx = ModelicaIndex::new();
         idx.rebuild_from_ast(&ast, SRC);
 
@@ -1190,12 +1190,12 @@ mod tests {
     #[test]
     fn rebuild_clears_old_state() {
         let mut idx = ModelicaIndex::new();
-        let ast1 = rumoca_phase_parse::parse_to_ast(SRC, "RC.mo").expect("parses");
+        let ast1 = lunco_modelica_ast::parse_to_ast(SRC, "RC.mo").expect("parses");
         idx.rebuild_from_ast(&ast1, SRC);
         let gen_before = idx.generation;
 
         let small = "model Tiny\nend Tiny;\n";
-        let ast2 = rumoca_phase_parse::parse_to_ast(small, "Tiny.mo").expect("parses");
+        let ast2 = lunco_modelica_ast::parse_to_ast(small, "Tiny.mo").expect("parses");
         idx.rebuild_from_ast(&ast2, small);
 
         assert!(idx.generation > gen_before, "generation must advance");
@@ -1304,7 +1304,7 @@ mod tests {
     #[test]
     fn rebuild_extracts_connect_annotation_waypoints() {
         let src = "model M\n  Real a;\n  Real b;\nequation\n  connect(a, b) annotation(Line(points={{0,0},{10,5},{20,10}}));\nend M;\n";
-        let ast = rumoca_phase_parse::parse_to_ast(src, "M.mo").expect("parses");
+        let ast = lunco_modelica_ast::parse_to_ast(src, "M.mo").expect("parses");
         let mut idx = ModelicaIndex::new();
         idx.rebuild_from_ast(&ast, src);
 

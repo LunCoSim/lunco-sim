@@ -39,9 +39,9 @@ use lunco_doc::DocumentId;
 use lunco_doc::DocumentOrigin;
 use lunco_modelica::source_asset::ModelicaSource;
 use lunco_modelica::{
-    ast_extract::parse_model_interface, ModelicaChannels, ModelicaCommand, ModelicaModel,
-    ModelicaSignalLayout,
+    ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaSignalLayout,
 };
+use lunco_modelica_ast::ast_extract::parse_model_interface;
 use lunco_render::SceneCamera;
 #[cfg(feature = "python")]
 use lunco_scripting::doc::{ScriptDocument, ScriptLanguage};
@@ -2539,6 +2539,16 @@ fn settle_binding_epoch(
 /// A connection whose source prim is not yet spawned is skipped (its later spawn
 /// re-runs this); a malformed source path is logged and skipped — restoring the
 /// diagnostic the deleted `process_usd_cosim_wire_read` emitted.
+/// Rebuild the derived USD `connectionPaths` wiring cache in a focused host.
+///
+/// `UsdSimPlugin` installs this system as part of its normal update pipeline.
+/// This narrow installer is also useful to headless integration hosts that
+/// provide the wiring resources and want to exercise this owner without
+/// assembling the complete application plugin graph.
+pub fn install_wiring_system(app: &mut App) {
+    app.add_systems(Update, rewire_usd_connections);
+}
+
 fn rewire_usd_connections(
     mut commands: Commands,
     // Any endpoint identity or contract arriving must re-derive the USD wire

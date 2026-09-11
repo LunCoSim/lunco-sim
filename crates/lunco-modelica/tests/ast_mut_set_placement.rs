@@ -8,7 +8,7 @@
 use lunco_modelica::ast_mut::{self, AstMutError, Edit};
 use lunco_modelica::pretty::Placement;
 use rumoca_compile::parsing::ast::{ClassDef, Component, Expression};
-use rumoca_phase_parse::parse_to_ast;
+use lunco_modelica_ast::parse_to_ast;
 
 /// End-to-end harness — parse, run `op`, apply its splice, reparse, return the
 /// post-mutation `Component`.

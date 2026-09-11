@@ -3,12 +3,12 @@
 //! Holds one [`OpeningState`] per [`DocumentId`] until the parse
 //! resolves and the driver hands the document to
 //! [`crate::state::ModelicaDocumentRegistry`]. Each variant
-//! owns its own typed `Task<...>` plus a [`lunco_workbench::status_bus::BusyHandle`]
+//! owns its own typed `Task<...>` plus a [`lunco_status_core::status_bus::BusyHandle`]
 //! that keeps a `(BusyScope::Document, "opening"|"drill-in"|"duplicate")`
 //! entry on the bus for the parse lifetime.
 //!
 //! **This is not the loading-state authority.** UI panels query the
-//! [`lunco_workbench::status_bus::StatusBus`] directly
+//! [`lunco_status_core::status_bus::StatusBus`] directly
 //! (`bus.is_busy(BusyScope::Document(d.0))` or
 //! `bus.lifecycle(...)`) so a single predicate covers every async
 //! stage that contributes to a doc's view (parse, projection,
@@ -38,13 +38,13 @@ pub enum OpeningState {
     FileLoad {
         display_name: String,
         task: Task<FileLoadResult>,
-        /// RAII guard registered with [`lunco_workbench::status_bus::StatusBus`]
+        /// RAII guard registered with [`lunco_status_core::status_bus::StatusBus`]
         /// at insert time. Same role as [`DrillInBinding::busy`] and
         /// [`DuplicateBinding::busy`]: keeps a `(Document(doc_id),
         /// "opening")` entry on the bus from "user clicked open" until
         /// the file-load driver hands it off to the projection stage
         /// via [`crate::ui::panels::canvas_diagram::CanvasDiagramState::stash_projection_handoff`].
-        busy: lunco_workbench::status_bus::BusyHandle,
+        busy: lunco_status_core::status_bus::BusyHandle,
     },
     /// MSL drill-in slim-slice load. Built by
     /// [`crate::ui::panels::canvas_diagram::drill_into_class`].
@@ -58,7 +58,7 @@ pub enum OpeningState {
 /// filtered to their own variant; panels that need *metadata about*
 /// an in-flight open (tab title, placeholder snapshot) read via the
 /// accessors below. "Is this doc busy?" queries belong on the
-/// [`lunco_workbench::status_bus::StatusBus`], not here.
+/// [`lunco_status_core::status_bus::StatusBus`], not here.
 #[derive(Resource, Default)]
 pub struct DocumentOpenings {
     pub in_flight: HashMap<DocumentId, OpeningState>,
@@ -129,7 +129,7 @@ impl DocumentOpenings {
 /// typing-debounce → parse → AST-install without a per-edit gap.
 #[derive(Resource, Default)]
 pub struct AstReparseBusyHandles {
-    handles: HashMap<DocumentId, lunco_workbench::status_bus::BusyHandle>,
+    handles: HashMap<DocumentId, lunco_status_core::status_bus::BusyHandle>,
 }
 
 /// Edge-triggered tracker for AST reparse state. Mints a `StatusBus`
@@ -140,9 +140,9 @@ pub struct AstReparseBusyHandles {
 pub fn track_ast_reparse_busy(
     registry: Res<crate::state::ModelicaDocumentRegistry>,
     mut handles: ResMut<AstReparseBusyHandles>,
-    mut bus: ResMut<lunco_workbench::status_bus::StatusBus>,
+    mut bus: ResMut<lunco_status_core::status_bus::StatusBus>,
 ) {
-    use lunco_workbench::status_bus::{BusyScope, StatusBus};
+    use lunco_status_core::status_bus::{BusyScope, StatusBus};
     let mut still_stale: std::collections::HashSet<DocumentId> = Default::default();
     for (doc_id, host) in registry.iter() {
         if !host.document().ast_is_stale() {
@@ -170,7 +170,7 @@ pub fn track_ast_reparse_busy(
 /// Same edge-triggered pattern as [`AstReparseBusyHandles`]: minted
 /// when [`lunco_doc_bevy::DocumentDiagnostics::is_compiling`] rises, dropped
 /// when it falls — with the terminal outcome (`Succeeded` /
-/// `Failed(msg)`) recorded for [`lunco_workbench::status_bus::StatusBus::lifecycle`]
+/// `Failed(msg)`) recorded for [`lunco_status_core::status_bus::StatusBus::lifecycle`]
 /// consumers.
 ///
 /// Compile runs in the off-thread Modelica worker; the dispatch path
@@ -180,7 +180,7 @@ pub fn track_ast_reparse_busy(
 /// both paths with a single system.
 #[derive(Resource, Default)]
 pub struct CompileBusyHandles {
-    handles: HashMap<DocumentId, lunco_workbench::status_bus::BusyHandle>,
+    handles: HashMap<DocumentId, lunco_status_core::status_bus::BusyHandle>,
 }
 
 /// Edge-triggered tracker for per-doc compile lifecycle. Mints a
@@ -191,9 +191,9 @@ pub fn track_compile_busy(
     compile_states: Res<lunco_doc_bevy::DocumentDiagnostics>,
     registry: Res<crate::state::ModelicaDocumentRegistry>,
     mut handles: ResMut<CompileBusyHandles>,
-    mut bus: ResMut<lunco_workbench::status_bus::StatusBus>,
+    mut bus: ResMut<lunco_status_core::status_bus::StatusBus>,
 ) {
-    use lunco_workbench::status_bus::{BusyOutcome, BusyScope, StatusBus};
+    use lunco_status_core::status_bus::{BusyOutcome, BusyScope, StatusBus};
     let mut still_compiling: std::collections::HashSet<DocumentId> = Default::default();
     for (doc_id, _host) in registry.iter() {
         if !compile_states.is_compiling(doc_id) {
@@ -239,7 +239,7 @@ pub fn track_compile_busy(
 /// which document owns the active experiment.
 #[derive(Resource, Default)]
 pub struct SimulateBusyHandle {
-    handle: Option<lunco_workbench::status_bus::BusyHandle>,
+    handle: Option<lunco_status_core::status_bus::BusyHandle>,
 }
 
 /// Edge-triggered tracker for Fast Run lifecycle. Mints when
@@ -248,9 +248,9 @@ pub struct SimulateBusyHandle {
 pub fn track_simulate_busy(
     runner: Option<Res<crate::ModelicaRunnerResource>>,
     mut state: ResMut<SimulateBusyHandle>,
-    mut bus: ResMut<lunco_workbench::status_bus::StatusBus>,
+    mut bus: ResMut<lunco_status_core::status_bus::StatusBus>,
 ) {
-    use lunco_workbench::status_bus::{BusyScope, StatusBus};
+    use lunco_status_core::status_bus::{BusyScope, StatusBus};
     let Some(runner) = runner else { return };
     let busy = runner.0.is_busy();
     match (busy, state.handle.is_some()) {
@@ -279,7 +279,7 @@ pub fn drive_file_load_openings(
     mut workspace: ResMut<lunco_workspace::WorkspaceResource>,
     mut canvas_state: ResMut<crate::ui::panels::canvas_diagram::CanvasDiagramState>,
     mut tabs: ResMut<crate::model_tabs::ModelTabs>,
-    mut bus: ResMut<lunco_workbench::status_bus::StatusBus>,
+    mut bus: ResMut<lunco_status_core::status_bus::StatusBus>,
     mut commands: Commands,
 ) {
     use futures_lite::future;
@@ -321,11 +321,11 @@ pub fn drive_file_load_openings(
                 );
                 bus.push(
                     "open",
-                    lunco_workbench::status_bus::StatusLevel::Error,
+                    lunco_status_core::status_bus::StatusLevel::Error,
                     msg.clone(),
                 );
                 let mut busy = busy;
-                busy.set_outcome(lunco_workbench::status_bus::BusyOutcome::Failed(msg));
+                busy.set_outcome(lunco_status_core::status_bus::BusyOutcome::Failed(msg));
                 drop(busy);
                 let orphan_tab_ids: Vec<crate::model_tabs_types::TabId> = tabs
                     .iter_mut_for_doc(ready.doc_id)

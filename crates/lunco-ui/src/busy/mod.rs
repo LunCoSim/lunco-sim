@@ -1,4 +1,4 @@
-//! Busy / loading indicator widgets backed by [`lunco_workbench::status_bus`].
+//! Busy / loading indicator widgets backed by [`lunco_status_core::status_bus`].
 //!
 //! Panels never render spinners directly. They ask
 //! [`LoadingIndicator::for_scope`] whether the requested scope is busy,
@@ -15,6 +15,6 @@ pub mod widget;
 
 pub use widget::LoadingIndicator;
 
-pub use lunco_workbench::status_bus::{
+pub use lunco_status_core::status_bus::{
     BusyHandle, BusyId, BusyScope, StatusBus, StatusEvent, StatusLevel,
 };

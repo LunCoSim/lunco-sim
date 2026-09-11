@@ -65,12 +65,6 @@ pub mod class_ref;
 /// and inspector title all read through one path.
 pub mod class_metadata;
 
-/// AST-based extraction functions for Modelica source code.
-///
-/// Walks the full Modelica AST (via `rumoca_phase_parse`) to extract model names,
-/// parameters, inputs, and other symbols.
-pub mod ast_extract;
-
 /// Structural AST mutation helpers, one per `ModelicaOp` variant.
 ///
 /// Each helper produces a **minimal text splice** against the original source
@@ -165,7 +159,6 @@ pub mod fixed_step;
 /// The rumoca backends, registered into `lunco_experiments::solver`. Solver
 /// selection itself lives there; this module is only where rumoca's two-axis
 /// option shape is expressed, once.
-pub mod lint;
 /// `ModelTabs` registry (was `ui::panels::model_view::tabs`).
 pub mod model_tabs;
 /// Modelica tab registry data types (was `ui::panels::model_view::types`).
@@ -815,10 +808,10 @@ impl ModelicaCompiler {
         // than merely unlikely. `source` is still the authority on WHICH class this
         // is: its `within` clause and class name are read straight from the text the
         // caller loaded, not guessed from the file path.
-        if let Some(within) = crate::ast_extract::within_package_of_source(source) {
+        if let Some(within) = lunco_modelica_ast::ast_extract::within_package_of_source(source) {
             let root = within.split('.').next().unwrap_or(&within).to_string();
             let qualified =
-                crate::ast_extract::qualify(&within, crate::ast_extract::short_name(model_name));
+                lunco_modelica_ast::ast_extract::qualify(&within, lunco_modelica_ast::ast_extract::short_name(model_name));
             if !self.ensure_root_installed(&root) {
                 return Err(format!(
                     "`{qualified}` declares `within {within};`, but no library `{root}` \
@@ -863,7 +856,7 @@ impl ModelicaCompiler {
     /// caller still holds (diagnostic spans → editor click-to-source) keep
     /// pointing at the same characters.
     fn seat_user_source(&mut self, filename: &str, source: &str) {
-        let (stripped, _defaults) = crate::ast_extract::strip_input_defaults(source);
+        let (stripped, _defaults) = lunco_modelica_ast::ast_extract::strip_input_defaults(source);
         self.session.update_document(filename, &stripped);
     }
 
@@ -952,14 +945,14 @@ impl ModelicaCompiler {
         }
         self.prepare_requested_source_roots();
         let primary_owned_class =
-            crate::ast_extract::within_package_of_source(source).and_then(|within| {
+            lunco_modelica_ast::ast_extract::within_package_of_source(source).and_then(|within| {
                 let root = within.split('.').next().unwrap_or(&within);
                 if !self.installed_roots.contains(root) {
                     let _ = self.ensure_root_installed(root);
                 }
-                let qualified = crate::ast_extract::qualify(
+                let qualified = lunco_modelica_ast::ast_extract::qualify(
                     &within,
-                    crate::ast_extract::short_name(model_name),
+                    lunco_modelica_ast::ast_extract::short_name(model_name),
                 );
                 self.class_is_owned_by_installed_root(&qualified)
                     .then_some(qualified)
@@ -972,7 +965,7 @@ impl ModelicaCompiler {
         for (extra_filename, extra_source) in extras {
             if extra_filename != filename {
                 let declared =
-                    crate::ast_extract::declared_class_names(extra_source, extra_filename);
+                    lunco_modelica_ast::ast_extract::declared_class_names(extra_source, extra_filename);
                 let owned = declared
                     .iter()
                     .filter(|qualified| self.class_is_owned_by_installed_root(qualified))
@@ -1285,7 +1278,7 @@ impl ModelicaCompiler {
         let mut uris = Vec::with_capacity(file_count);
         for (uri, text) in &files {
             let (stripped, defaults, issues) =
-                crate::ast_extract::strip_input_defaults_with_report(text);
+                lunco_modelica_ast::ast_extract::strip_input_defaults_with_report(text);
             uris.push(uri.clone());
             // A library member has no editor buffer to point diagnostics at, so
             // the report goes to the log — but it is never dropped: a parse
@@ -1293,7 +1286,7 @@ impl ModelicaCompiler {
             // bound input in it will be folded to a constant.
             for issue in &issues {
                 match issue {
-                    crate::ast_extract::InputDefaultIssue::ParseFailed => {
+                    lunco_modelica_ast::ast_extract::InputDefaultIssue::ParseFailed => {
                         let message = format!(
                             "source root `{id}`: the bound-`input` strip could not parse {uri} — \
                              the file is seated unstripped, so bound inputs would be demoted and \
@@ -1302,7 +1295,7 @@ impl ModelicaCompiler {
                         log::warn!("[ModelicaCompiler] {message}");
                         diagnostics.push(message);
                     }
-                    crate::ast_extract::InputDefaultIssue::Unresolvable {
+                    lunco_modelica_ast::ast_extract::InputDefaultIssue::Unresolvable {
                         name, binding, ..
                     } => {
                         log::warn!(
@@ -1311,7 +1304,7 @@ impl ModelicaCompiler {
                              but starts at 0.0 unless wired"
                         )
                     }
-                    crate::ast_extract::InputDefaultIssue::Collision {
+                    lunco_modelica_ast::ast_extract::InputDefaultIssue::Collision {
                         name,
                         kept_scope,
                         kept,
@@ -1345,7 +1338,7 @@ impl ModelicaCompiler {
                     std::collections::hash_map::Entry::Occupied(_) => {}
                 }
             }
-            match rumoca_phase_parse::parse_to_ast(&stripped, uri) {
+            match lunco_modelica_ast::parse_to_ast(&stripped, uri) {
                 Ok(ast) => parsed.push((uri.clone(), ast)),
                 Err(error) => {
                     let message = format!("source root `{id}`: could not parse {uri}: {error:?}");
@@ -2320,20 +2313,6 @@ pub struct FrameTimeProbe {
 }
 
 // ---------------------------------------------------------------------------
-// Public AST extraction API
-// ---------------------------------------------------------------------------
-// These functions live in `ast_extract` but are re-exported here so external
-// callers (workbench binaries, UI panels) can import from the crate root.
-pub use ast_extract::{
-    extract_input_names_from_ast, extract_inputs_with_defaults,
-    extract_inputs_with_defaults_from_ast, extract_model_name, extract_model_name_from_ast,
-    extract_parameters, extract_parameters_from_ast, hash_content, parse_model_interface,
-    ModelInterface,
-};
-// `strip_input_defaults` is already imported via `use self::ast_extract::strip_input_defaults`
-// above and is available publicly through the `pub mod ast_extract` declaration.
-
-// ---------------------------------------------------------------------------
 // Re-export diagram types for public API
 // ---------------------------------------------------------------------------
 pub use diagram::{list_class_names, DiagramType, ModelicaComponentBuilder};
@@ -2516,7 +2495,7 @@ mod observables_smoke {
     /// Regression is prevented by the lint, not by this test alone: the
     /// `conditional-algebraic-observable` rule in
     /// `assets/scripting/policy/lint_modelica.rhai` rejects the pattern outright,
-    /// over equation facts produced in `lunco-modelica/src/lint.rs`.
+    /// over source facts produced in `lunco-modelica-ast/src/lint_facts.rs`.
     #[test]
     fn rocket_engine_observables_round_trip() {
         let raw = crate::models::get_model("RocketEngine.mo").expect("bundled RocketEngine.mo");
@@ -2575,7 +2554,7 @@ mod observables_smoke {
     #[test]
     fn rocket_engine_descriptions_populate() {
         let raw = crate::models::get_model("RocketEngine.mo").expect("bundled RocketEngine.mo");
-        let ast = rumoca_phase_parse::parse_to_ast(raw, "RocketEngine.mo").expect("parses");
+        let ast = lunco_modelica_ast::parse_to_ast(raw, "RocketEngine.mo").expect("parses");
         let mut index = crate::index::ModelicaIndex::new();
         index.rebuild_from_ast(&ast, raw);
         for (var, needle) in [

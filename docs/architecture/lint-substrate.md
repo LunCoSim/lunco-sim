@@ -25,7 +25,7 @@ situation; a lint catches it by reading what was written.
 
 | Layer | Where | Why there |
 |---|---|---|
-| **Facts** | Rust, in the crate that owns the subject (`lunco_usd_avian` for standard joints, `lunco_usd_sim` for gear drives) | Only something holding the composed stage can answer "is this prim inside a body", "does any joint name it", "is there a collider in its subtree". Each projection owner supplies the fields its runtime reader actually consumes, and the command layer composes them into one USD fact map |
+| **Facts** | Rust, in the crate that owns the subject (`lunco_usd_avian` for standard joints, `lunco_usd_sim` for gear drives, `lunco_modelica_ast` for Rumoca AST facts) | Only the owning projection or parser can answer its subject questions. Each owner supplies the fields its runtime reader actually consumes, and the command layer composes them into one fact map |
 | **Rules** | rhai policy, `assets/scripting/policy/lint_<domain>.rhai` | A rule that needs a rebuild is a rule nobody writes, tunes, or silences. These are editable against a **running** sim |
 | **Findings** | `lunco_lint::LintReport` for mounted stages; `lunco_scene_commands::DocumentLintReports` for explicit Editor documents | Reports stay scoped to the stage/document that was actually linted |
 
@@ -47,8 +47,12 @@ domain "twin"     → hook `lint.twin`     → assets/scripting/policy/lint_twin
 A domain is just a name: `lunco_lint::run_lint(domain, facts)` invokes
 `lint.<domain>` and parses the findings. **No policy registered ⇒ no findings**,
 so an app built without scripting behaves exactly as before. Today the USD domain
-is wired end to end; `rhai`/`modelica` facts come from `ValidateAsset`'s
-per-extension pre-flight (`source`, `path`, parse errors) and grow from there.
+is wired end to end; `modelica` facts come from the pure `lunco-modelica-ast`
+parse/extraction boundary and `ValidateAsset` supplies the shared file facts.
+The Modelica policy derives comparisons, subsets, and branch findings from
+those AST-backed declaration/construct facts in Rhai, so changing a rule does
+not rebuild the parser crate. Rust does not scan Modelica source for lint
+keywords; it only projects evidence Rumoca already parsed.
 
 ### The policy contract
 

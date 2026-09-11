@@ -156,7 +156,7 @@ recipes and their acceptance scenes stay in the owning Twin.
 
    ```bash
    ./scripts/run_rust_tests.sh -p lunco-modelica --module ast_mut_topology -- --nocapture
-   ./scripts/run_rust_tests.sh -p lunco-usd --filter integration_asset_loading::test_sandbox_scene_composes
+   ./scripts/run_rust_tests.sh -p lunco-usd-sim --filter asset_loading_pipeline::test_sandbox_scene_composes
    ```
 
    The wrapper maps `--module`/`--file` to `--test <source-file>`, maps a
@@ -236,8 +236,8 @@ controller scenarios own public runtime outcomes: wheel-realization parity,
 authored output allocation, steering, and real motion. Adding another copy of
 those assertions would duplicate the acceptance gate.
 
-The Rust tests in `crates/lunco-usd/tests/rover_structure.rs` and
-`integration_asset_loading.rs` therefore retain only the projection claims that
+The Rust tests in `crates/lunco-usd-sim/tests/rover_structure_pipeline.rs` and
+`asset_loading_pipeline.rs` therefore retain only the projection claims that
 the production Rhai surface cannot observe precisely: composed USD paths and
 schema edges, Avian compound-shape lowering, render-free physics projection,
 appearance intent (`Mesh3d`/`PbrLook`), and asynchronous observer ordering. They

@@ -235,7 +235,7 @@ pub(crate) fn handle_drag_and_drop(
                                 let registry = ctx.resource::<ModelicaDocumentRegistry>()?;
                                 let host = registry.host(doc_id)?;
                                 let ast = host.document().strict_ast()?;
-                                crate::ast_extract::extract_model_name_from_ast(&ast)
+                                lunco_modelica_ast::ast_extract::extract_model_name_from_ast(&ast)
                             })
                             .unwrap_or_default()
                     });

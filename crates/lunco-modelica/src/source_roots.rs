@@ -326,7 +326,9 @@ pub fn scan_source_root_deps(ast: &StoredDefinition) -> HashSet<String> {
     qualified_names
         .into_iter()
         .filter_map(|name| name.split('.').next().map(|s| s.to_string()))
-        .filter(|root| !root.is_empty() && !is_builtin_root(root))
+        .filter(|root| {
+            !root.is_empty() && !lunco_modelica_ast::ast_extract::is_builtin_type_name(root)
+        })
         .collect()
 }
 
@@ -334,7 +336,7 @@ pub fn scan_source_root_deps(ast: &StoredDefinition) -> HashSet<String> {
 /// This is the source-side equivalent of `scan_source_root_deps` for compile
 /// entry points that have source text but do not yet own an AST.
 pub fn scan_source_root_deps_from_source(source: &str, uri: &str) -> HashSet<String> {
-    rumoca_phase_parse::parse_to_ast(source, uri)
+    lunco_modelica_ast::parse_to_ast(source, uri)
         .map(|ast| scan_source_root_deps(&ast))
         .unwrap_or_default()
 }
@@ -342,11 +344,11 @@ pub fn scan_source_root_deps_from_source(source: &str, uri: &str) -> HashSet<Str
 /// Collect type-name references from `class`, keeping only qualified
 /// (dotted) names — bare names always resolve within the current
 /// doc's own classes, so they never imply an external source-root
-/// load. Traversal lives in `crate::ast_extract::walk_class_type_names`
+/// load. Traversal lives in `lunco_modelica_ast::ast_extract::walk_class_type_names`
 /// so this scanner and the icon warmer can't drift apart on what
 /// "every referenced type" means.
 fn walk_class_qualified_types(class: &ClassDef, out: &mut HashSet<String>) {
-    crate::ast_extract::walk_class_type_names(class, &mut |name| {
+    lunco_modelica_ast::ast_extract::walk_class_type_names(class, &mut |name| {
         if name.contains('.') {
             out.insert(name.to_string());
         }
@@ -364,16 +366,6 @@ fn walk_class_qualified_types(class: &ClassDef, out: &mut HashSet<String>) {
     }
 }
 
-/// Modelica built-in root segments that never need a source root
-/// load. Matches the filter in
-/// [`crate::icon_warmer::interesting_type`].
-fn is_builtin_root(root: &str) -> bool {
-    matches!(
-        root,
-        "Real" | "Integer" | "Boolean" | "String" | "enumeration"
-    )
-}
-
 /// Ensure that the source root `id` is loaded into the rumoca
 /// compile session before the next compile runs. Returns `true`
 /// when the root is `Ready` (either now or after this call's
@@ -385,7 +377,7 @@ fn is_builtin_root(root: &str) -> bool {
 /// to the worker. The worker owns parsing and session installation; this
 /// function only changes registry state and queues the operation.
 ///
-/// Source tag used for [`lunco_workbench::status_bus::StatusBus`]
+/// Source tag used for [`lunco_status_core::status_bus::StatusBus`]
 /// progress entries during source-root loads.
 pub const STATUS_BUS_SOURCE: &str = "source-roots";
 

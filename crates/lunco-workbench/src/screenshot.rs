@@ -1328,13 +1328,13 @@ struct PendingShotStart {
     last_blocker: Option<String>,
 }
 
-/// [`StatusBus`](crate::status_bus::StatusBus) sources whose in-flight work makes the
+/// [`StatusBus`](lunco_status_core::status_bus::StatusBus) sources whose in-flight work makes the
 /// scene un-presentable, for clause (3) of [`scene_visuals_ready`].
 ///
 /// An ALLOWLIST, not "is anything busy at all". The bus is shared with work that has
 /// nothing to do with what the camera sees — a Modelica compile, a document save, an
 /// MCP request — and the MSL download in particular re-pushes progress every frame
-/// from boot (see `status_bus::tests::mirrored_progress_preserves_start_time_…`). Gating
+/// from boot (see `lunco_status_core::status_bus::tests::mirrored_progress_preserves_start_time_…`). Gating
 /// on the whole bus would therefore stall every shot on unrelated work, adding
 /// minutes to an episode and hiding the actual visual blocker.
 ///
@@ -1344,16 +1344,16 @@ struct PendingShotStart {
 /// `report_scene_spawn_status` (from `lunco_usd_sim::cosim::SceneLoadInFlight` +
 /// `UsdAwaitingStage`), plus Modelica participant state. The entries are the SAME
 /// consts the publishers push under, not copies of their spelling — see
-/// [`TERRAIN_SOURCE`](crate::status_bus::TERRAIN_SOURCE),
-/// [`SCENE_SOURCE`](crate::status_bus::SCENE_SOURCE), and
-/// [`MODELICA_SOURCE`](crate::status_bus::MODELICA_SOURCE).
+/// [`TERRAIN_SOURCE`](lunco_status_core::status_bus::TERRAIN_SOURCE),
+/// [`SCENE_SOURCE`](lunco_status_core::status_bus::SCENE_SOURCE), and
+/// [`MODELICA_SOURCE`](lunco_status_core::status_bus::MODELICA_SOURCE).
 const VISUAL_BUSY_SOURCES: &[&str] = &[
-    crate::status_bus::TERRAIN_SOURCE,
-    crate::status_bus::TERRAIN_BUILD_SOURCE,
-    crate::status_bus::SCENE_SOURCE,
-    crate::status_bus::DOME_SOURCE,
-    crate::status_bus::MODELICA_SOURCE,
-    crate::status_bus::RUNTIME_UI_SOURCE,
+    lunco_status_core::status_bus::TERRAIN_SOURCE,
+    lunco_status_core::status_bus::TERRAIN_BUILD_SOURCE,
+    lunco_status_core::status_bus::SCENE_SOURCE,
+    lunco_status_core::status_bus::DOME_SOURCE,
+    lunco_status_core::status_bus::MODELICA_SOURCE,
+    lunco_status_core::status_bus::RUNTIME_UI_SOURCE,
 ];
 
 /// **The one definition of "this scene is presentable".** Returns `None` when the
@@ -1389,7 +1389,7 @@ const VISUAL_BUSY_SOURCES: &[&str] = &[
 fn scene_visuals_ready(
     meshes: &Query<&bevy::mesh::Mesh3d>,
     asset_server: &AssetServer,
-    bus: Option<&crate::status_bus::StatusBus>,
+    bus: Option<&lunco_status_core::status_bus::StatusBus>,
     cameras: &Query<(Entity, &Camera, &bevy::camera::RenderTarget)>,
     render_readiness: Option<&OfflineRenderReadiness>,
     offscreen: bool,
@@ -1485,7 +1485,7 @@ fn scene_visuals_ready(
     // (3) Visual subsystems that report their own progress.
     if let Some(bus) = bus {
         let mut busy: Vec<String> = bus
-            .entries_in(crate::status_bus::BusyScope::Global)
+            .entries_in(lunco_status_core::status_bus::BusyScope::Global)
             .filter(|e| VISUAL_BUSY_SOURCES.contains(&e.source))
             .map(|e| format!("{}: {}", e.source, e.message))
             .collect();
@@ -1518,7 +1518,7 @@ fn start_recording_when_scene_ready(
     render_readiness: Option<Res<OfflineRenderReadiness>>,
     // `Option`: the bus belongs to the workbench UI, which a headless/API-only
     // binary does not add. Absent simply means clause (3) has nothing to say.
-    bus: Option<Res<crate::status_bus::StatusBus>>,
+    bus: Option<Res<lunco_status_core::status_bus::StatusBus>>,
     mut commands: Commands,
 ) {
     let Some(mut pending) = pending else { return };

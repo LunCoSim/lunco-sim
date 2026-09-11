@@ -226,7 +226,7 @@ impl Panel for InspectorPanel {
             // Project the Index entry into the inspector's
             // [`ComponentInfo`] shape so the rest of this function
             // (rendering, edit collection) doesn't have to change.
-            let info = crate::ast_extract::ComponentInfo {
+            let info = lunco_modelica_ast::ast_extract::ComponentInfo {
                 name: entry.name.clone(),
                 type_name: entry.type_name.clone(),
                 description: entry.description.clone(),

@@ -745,7 +745,7 @@ pub(crate) fn on_modelica_parameter_requested(
             let registry = world.resource::<ModelicaDocumentRegistry>();
             let doc = registry.document_of(request.entity);
             let class = doc.and_then(|doc| registry.host(doc)).and_then(|host| {
-                lunco_modelica::ast_extract::extract_model_name_from_ast(
+                lunco_modelica_ast::ast_extract::extract_model_name_from_ast(
                     host.document().syntax().ast(),
                 )
             });

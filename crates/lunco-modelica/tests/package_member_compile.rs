@@ -193,7 +193,7 @@ fn lander_compiles_without_a_dead_logic_dependency() {
 fn stripped_lander_compiles_without_a_dead_logic_dependency() {
     let source = lunco_modelica::models::get_model("Lander.mo").expect("bundled Lander.mo");
     let (stripped, _defaults, issues) =
-        lunco_modelica::ast_extract::strip_input_defaults_with_report(source);
+        lunco_modelica_ast::ast_extract::strip_input_defaults_with_report(source);
     assert!(
         issues.is_empty(),
         "Lander preprocessing must not report input-default issues: {issues:?}"
@@ -215,7 +215,7 @@ fn disk_lander_compiles_without_a_dead_logic_dependency() {
     )
     .expect("disk Lander.mo");
     let (stripped, _defaults, issues) =
-        lunco_modelica::ast_extract::strip_input_defaults_with_report(&source);
+        lunco_modelica_ast::ast_extract::strip_input_defaults_with_report(&source);
     assert!(
         issues.is_empty(),
         "disk Lander preprocessing must not report input-default issues: {issues:?}"

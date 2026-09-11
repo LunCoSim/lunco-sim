@@ -471,7 +471,7 @@ impl ModelicaEngine {
         let mut parsed = Vec::with_capacity(files.len());
         let mut diagnostics = Vec::new();
         for (uri, text) in files {
-            match rumoca_phase_parse::parse_to_ast(&text, &uri) {
+            match lunco_modelica_ast::parse_to_ast(&text, &uri) {
                 Ok(ast) => parsed.push((uri, ast)),
                 Err(error) => diagnostics.push(format!("{uri}: {error:?}")),
             }
@@ -960,7 +960,7 @@ mod tests {
     /// `document::ModelicaDocument::refresh_ast_now` for the canonical
     /// pattern.
     fn upsert_test(engine: &mut ModelicaEngine, id: DocumentId, src: &str) {
-        let ast = rumoca_phase_parse::parse_to_ast(src, "test.mo").expect("test source must parse");
+        let ast = lunco_modelica_ast::parse_to_ast(src, "test.mo").expect("test source must parse");
         engine.upsert_document_with_ast(id, ast);
     }
 
@@ -1120,7 +1120,7 @@ mod tests {
             .map(|(uri, source)| {
                 (
                     uri.clone(),
-                    rumoca_phase_parse::parse_to_ast(&source, &uri).expect("bundled source parses"),
+                    lunco_modelica_ast::parse_to_ast(&source, &uri).expect("bundled source parses"),
                 )
             })
             .collect();

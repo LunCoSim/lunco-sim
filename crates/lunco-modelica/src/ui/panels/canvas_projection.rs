@@ -546,7 +546,7 @@ pub fn import_model_to_diagram_from_ast(
             .join(".");
         if !pkg.is_empty() {
             if let Some(bundled) = crate::ui::class_source::bundled_source_for(&pkg) {
-                if let Ok(pkg_ast) = rumoca_phase_parse::parse_to_ast(bundled, "within-pkg.mo") {
+                if let Ok(pkg_ast) = lunco_modelica_ast::parse_to_ast(bundled, "within-pkg.mo") {
                     for (_top_name, top_class) in pkg_ast.classes.iter() {
                         for (nested_name, nested_class) in top_class.classes.iter() {
                             register_local_class(
@@ -929,7 +929,10 @@ pub fn import_model_to_diagram_from_ast(
                     for (k, v) in &comp.modifications {
                         diagram_node
                             .parameter_values
-                            .insert(k.clone(), format_modifier_expr(v));
+                            .insert(
+                                k.clone(),
+                                lunco_modelica_ast::ast_extract::format_expression_for_display(v),
+                            );
                     }
                     // `Component X if <cond>` — only dim when the
                     // condition evaluates FALSE against the parent's
@@ -1360,7 +1363,7 @@ fn classify_connector(
                 let unit = c
                     .modifications
                     .get("unit")
-                    .and_then(crate::ast_extract::string_literal_value)
+                    .and_then(lunco_modelica_ast::ast_extract::string_literal_value)
                     .unwrap_or_default();
                 Some(FlowVarMeta {
                     name: name.clone(),
@@ -1439,12 +1442,6 @@ fn connector_icon_color(class: &rumoca_compile::parsing::ast::ClassDef) -> Optio
     None
 }
 
-/// Format an instance-modifier expression to a short display string
-/// for `%paramName` text substitution. Mirrors the
-/// `format_default_expr` used by `msl_indexer` for class defaults so
-/// the canvas substitution is consistent regardless of source. Returns
-/// an empty string for expression shapes the icon-text path can't
-/// usefully render (function calls, complex matrix literals, etc.).
 /// Evaluate a Boolean component-condition expression against the
 /// parent class's component defaults. Handles the shapes MSL uses
 /// for `Component X if <cond>` declarations:
@@ -1505,85 +1502,6 @@ fn eval_condition(
     }
 }
 
-fn format_modifier_expr(expr: &rumoca_compile::parsing::ast::Expression) -> String {
-    use rumoca_compile::parsing::ast::{Expression, TerminalType};
-    use rumoca_compile::parsing::ir_core::OpUnary;
-    use rumoca_compile::parsing::OpBinary;
-    match expr {
-        Expression::Terminal {
-            terminal_type,
-            token,
-            ..
-        } => {
-            let raw = token.text.as_ref();
-            match terminal_type {
-                TerminalType::String => raw.trim_matches('"').to_string(),
-                _ => raw.to_string(),
-            }
-        }
-        Expression::ComponentReference(cref) => cref
-            .parts
-            .last()
-            .map(|p| p.ident.text.as_ref().to_string())
-            .unwrap_or_default(),
-        Expression::Unary { op, rhs, .. } => match (op, rhs.as_ref()) {
-            (OpUnary::Minus, inner) => {
-                let inner = format_modifier_expr(inner);
-                if inner.is_empty() {
-                    String::new()
-                } else {
-                    format!("-{}", inner)
-                }
-            }
-            (OpUnary::Plus, inner) => {
-                let inner = format_modifier_expr(inner);
-                if inner.is_empty() {
-                    String::new()
-                } else {
-                    format!("+{}", inner)
-                }
-            }
-            _ => String::new(),
-        },
-        Expression::Parenthesized { inner, .. } => {
-            let inner = format_modifier_expr(inner);
-            if inner.is_empty() {
-                String::new()
-            } else {
-                format!("({})", inner)
-            }
-        }
-        // Render simple arithmetic so MSL params like `k=1/(k*Ni)`
-        // (gainTrack in LimPID) substitute as the expression text
-        // OMEdit shows underneath the gain block, not a blank.
-        Expression::Binary { op, lhs, rhs, .. } => {
-            let l = format_modifier_expr(lhs);
-            let r = format_modifier_expr(rhs);
-            if l.is_empty() || r.is_empty() {
-                return String::new();
-            }
-            let sym = match op {
-                OpBinary::Add => "+",
-                OpBinary::Sub => "-",
-                OpBinary::Mul => "*",
-                OpBinary::Div => "/",
-                OpBinary::Exp => "^",
-                _ => return String::new(),
-            };
-            format!("{}{}{}", l, sym, r)
-        }
-        Expression::Array { elements, .. } => {
-            let parts: Vec<String> = elements.iter().map(format_modifier_expr).collect();
-            if parts.iter().any(|s| s.is_empty()) {
-                String::new()
-            } else {
-                format!("{{{}}}", parts.join(","))
-            }
-        }
-        _ => String::new(),
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Diagram ↔ Snarl Sync
 // ---------------------------------------------------------------------------
@@ -1604,14 +1522,14 @@ mod composite_slim_slice_tests {
             "/../../assets/models/AnnotatedRocketStage.mo"
         ));
         // Reproduce load_msl_class's slice: within + RocketStage body.
-        let ast_full = rumoca_phase_parse::parse_to_ast(full, "rs.mo").unwrap();
-        let class = crate::ast_extract::find_class_by_short_name(&ast_full, "RocketStage")
+        let ast_full = lunco_modelica_ast::parse_to_ast(full, "rs.mo").unwrap();
+        let class = lunco_modelica_ast::ast_extract::find_class_by_short_name(&ast_full, "RocketStage")
             .expect("RocketStage in package");
-        let (s, e) = crate::ast_extract::class_full_text_span(class, full);
+        let (s, e) = lunco_modelica_ast::ast_extract::class_full_text_span(class, full);
         let slim = format!("within AnnotatedRocketStage;\n{}", &full[s..e]);
 
         let ast =
-            std::sync::Arc::new(rumoca_phase_parse::parse_to_ast(&slim, "rs_slim.mo").unwrap());
+            std::sync::Arc::new(lunco_modelica_ast::parse_to_ast(&slim, "rs_slim.mo").unwrap());
         let layout = DiagramAutoLayoutSettings::default();
         let diagram = import_model_to_diagram_from_ast(
             ast,
@@ -1650,7 +1568,7 @@ annotation(
 end Unit_One;
 "#;
         let ast = std::sync::Arc::new(
-            rumoca_phase_parse::parse_to_ast(source, "generated.mo")
+            lunco_modelica_ast::parse_to_ast(source, "generated.mo")
                 .expect("generated source fixture must parse"),
         );
         let diagram = import_model_to_diagram_from_ast(
@@ -1700,7 +1618,7 @@ annotation(
 end Unit_One;
 "#;
         let ast = std::sync::Arc::new(
-            rumoca_phase_parse::parse_to_ast(source, "generated-placement.mo")
+            lunco_modelica_ast::parse_to_ast(source, "generated-placement.mo")
                 .expect("generated placement fixture must parse"),
         );
         let diagram = import_model_to_diagram_from_ast(
@@ -1742,15 +1660,15 @@ end Unit_One;
         ));
         let layout = DiagramAutoLayoutSettings::default();
         let project = |src: &str, target: Option<&str>| -> usize {
-            let ast = std::sync::Arc::new(rumoca_phase_parse::parse_to_ast(src, "x.mo").unwrap());
+            let ast = std::sync::Arc::new(lunco_modelica_ast::parse_to_ast(src, "x.mo").unwrap());
             import_model_to_diagram_from_ast(ast, src, DEFAULT_MAX_DIAGRAM_NODES, target, &layout)
                 .map(|d| d.nodes.len())
                 .unwrap_or(0)
         };
         // slim slice with no target
-        let ast_full = rumoca_phase_parse::parse_to_ast(full, "rs.mo").unwrap();
-        let class = crate::ast_extract::find_class_by_short_name(&ast_full, "RocketStage").unwrap();
-        let (s, e) = crate::ast_extract::class_full_text_span(class, full);
+        let ast_full = lunco_modelica_ast::parse_to_ast(full, "rs.mo").unwrap();
+        let class = lunco_modelica_ast::ast_extract::find_class_by_short_name(&ast_full, "RocketStage").unwrap();
+        let (s, e) = lunco_modelica_ast::ast_extract::class_full_text_span(class, full);
         let slim = format!("within AnnotatedRocketStage;\n{}", &full[s..e]);
 
         let slim_none = project(&slim, None);

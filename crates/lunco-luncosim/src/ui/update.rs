@@ -15,7 +15,7 @@ use bevy::prelude::*;
 use bevy::tasks::{futures_lite::future, IoTaskPool, Task};
 use bevy_egui::egui;
 use lunco_settings::AppSettingsExt;
-use lunco_workbench::status_bus::{StatusBarAction, StatusBus, StatusLevel};
+use lunco_status_core::status_bus::{StatusBarAction, StatusBus, StatusLevel};
 use lunco_workbench_core::WorkbenchMenuRegistry;
 use serde::{Deserialize, Serialize};
 use velopack::sources::UpdateSource;

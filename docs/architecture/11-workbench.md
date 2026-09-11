@@ -15,8 +15,11 @@
 > sense). Read those sections with the translation in mind; the
 > terminology table in §1 is canonical.
 >
-> `lunco-workbench-core` is the stable contract crate and `lunco-workbench` is
-> the concrete shell. Together they are depended on by ~10 crates
+> `lunco-status-core` owns renderer-independent lifecycle, progress, and status
+> data. The workbench status bar is one consumer of that contract, alongside
+> busy widgets and headless diagnostics. `lunco-workbench-core` is the stable
+> workbench contract crate and `lunco-workbench` is the concrete shell. Together
+> they are depended on by ~10 crates
 > (luncosim, lunco-luncosim, lunco-luncosim-edit, lunco-usd, lunco-modelica,
 > lunco-celestial, lunco-avatar, lunco-networking, …).
 
@@ -597,7 +600,7 @@ boot.
 The Scenarios menu owns only presentation. If `TwinRoots`, the shared asset
 manifest, or scene discovery is unavailable, it renders the concise
 `Scenarios unavailable` state and sends the full cause through the existing
-`StatusBus` Recent-status reader. The UI does not remove or replace the active
+`lunco-status-core::status_bus::StatusBus` Recent-status reader. The UI does not remove or replace the active
 Twin to manufacture that failure.
 
 The windowed production harness exposes the explicit typed
@@ -820,6 +823,14 @@ simulation default.
    │    lunco-modelica/ui   lunco-luncosim-edit/ui   lunco-mission/ui
    │         │                     │                       │
    │         ▼                     ▼                       ▼
+   ├── lunco-status-core  (cross-cutting status/lifecycle contract)
+   │     - StatusBus, progress scopes, tracked tasks
+   │     - renderer-independent diagnostics and telemetry mirror
+   │         │
+   │         ├── workbench status bar
+   │         ├── lunco-ui busy widgets
+   │         └── headless/API diagnostics
+   │
    ├── lunco-workbench-core  (stable contracts)
    │     - Panel / InstancePanel + PanelCtx
    │     - Perspective + PerspectiveLayoutPlan

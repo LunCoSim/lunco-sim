@@ -1,6 +1,7 @@
 use bevy::asset::AssetPlugin;
-/// Integration tests that load REAL assets through the EXACT same pipeline as runtime.
-/// NO inline USD strings. NO manual file reading. Uses AssetServer just like the app.
+/// Integration tests that load REAL assets through the USD simulation projection
+/// pipeline. NO inline USD strings. NO manual file reading. Uses the same
+/// prepared asset and projection boundary as the application.
 use bevy::prelude::*;
 use lunco_core::{ControlBinding, InputPorts, MobilityRoot, OutputPorts};
 use lunco_materials::ShaderLook;
@@ -10,58 +11,6 @@ use lunco_usd_bevy::*;
 use lunco_usd_sim::cosim::spawn_scene_root_with_stage;
 use lunco_usd_sim::*;
 
-/// The rover root carries `PhysicsRigidBodyAPI`, so avian builds a
-/// `Collider::compound` from its child colliders. A compound is NOT
-/// `as_cuboid()`. Extract the cuboid half-extents whether the collider is plain
-/// or compound. A body may
-/// have several authored collision children (for example a mounted battery), so
-/// callers must select the shape they are asserting rather than assuming the
-/// first compound entry is the chassis.
-fn cuboid_half_extents(col: &Collider) -> Vec<[f32; 3]> {
-    let shape = col.shape();
-    if let Some(c) = shape.as_cuboid() {
-        return vec![[
-            c.half_extents.x as f32,
-            c.half_extents.y as f32,
-            c.half_extents.z as f32,
-        ]];
-    }
-    if let Some(compound) = shape.as_compound() {
-        return compound
-            .shapes()
-            .iter()
-            .filter_map(|(_, shape)| shape.as_cuboid())
-            .map(|c| {
-                [
-                    c.half_extents.x as f32,
-                    c.half_extents.y as f32,
-                    c.half_extents.z as f32,
-                ]
-            })
-            .collect();
-    }
-    panic!(
-        "collider is neither a cuboid nor a compound-of-cuboid: {:?}",
-        shape.shape_type()
-    );
-}
-
-/// After the Xform-root refactor the visible body mesh lives on the Chassis
-/// CHILD, not the rover root (an `Xform`). Return that Chassis child entity.
-fn chassis_child(app: &App, rover: Entity, label: impl std::fmt::Display) -> Entity {
-    let kids = app
-        .world()
-        .get::<Children>(rover)
-        .unwrap_or_else(|| panic!("{label}: rover missing Children"));
-    kids.iter()
-        .find(|&c| {
-            app.world()
-                .get::<Name>(c)
-                .map(|n| n.as_str().contains("Chassis"))
-                .unwrap_or(false)
-        })
-        .unwrap_or_else(|| panic!("{label}: rover has no Chassis child"))
-}
 use avian3d::prelude::*;
 use big_space::prelude::CellCoord;
 use lunco_usd_bevy::usd_data::UsdDataExt;
@@ -176,7 +125,6 @@ fn load_rover_through_bevy(file_path: &Path, prim_path: &str) -> App {
     app.init_asset::<UsdStageAsset>();
     app.init_asset::<Mesh>();
     app.init_asset::<Image>();
-    app.init_asset::<bevy::shader::Shader>();
     app.add_plugins((UsdBevyPlugin, UsdAvianPlugin, UsdSimPlugin));
 
     let handle = add_canonical_from_file(&mut app, file_path);
@@ -189,7 +137,7 @@ fn load_rover_through_bevy(file_path: &Path, prim_path: &str) -> App {
         },
         // Root needs a Transform + spatial/visibility bundle so the
         // `instantiate_usd_prim` observer cascade spawns the wheel children
-        // (matches the runtime spawn + the passing `rover_structure` harness).
+        // (matches the runtime spawn + the passing `rover_structure_pipeline` harness).
         Transform::default(),
         CellCoord::default(),
         Visibility::Visible,
@@ -279,7 +227,7 @@ fn test_rover_components_via_bevy_pipeline() {
             .world()
             .get::<Collider>(rover_ent)
             .unwrap_or_else(|| panic!("{label}: Missing Collider"));
-        let he = cuboid_half_extents(col);
+        let he = support::cuboid_half_extents(col);
         assert!(
             he.iter().any(|[x, y, z]| {
                 (x - 1.0).abs() < 0.1 && (y - 0.15).abs() < 0.05 && (z - 1.75).abs() < 0.1
@@ -290,7 +238,7 @@ fn test_rover_components_via_bevy_pipeline() {
         // Visual (Mesh3d + authored appearance intent) — on the Chassis child,
         // not the Xform root. USD may select standard PBR or a custom shader;
         // the render plugin binds that intent in render builds.
-        let chassis = chassis_child(&app, rover_ent, label);
+        let chassis = support::chassis_child(&app, rover_ent, label);
         let _mesh = app
             .world()
             .get::<Mesh3d>(chassis)
@@ -501,7 +449,6 @@ fn test_rover_sim_processing_after_async_load() {
         app.init_asset::<UsdStageAsset>();
         app.init_asset::<Mesh>();
         app.init_asset::<Image>();
-        app.init_asset::<bevy::shader::Shader>();
         app.add_plugins((UsdBevyPlugin, UsdAvianPlugin, UsdSimPlugin));
 
         // Publish the live canonical stage (composed off the ref-carrying file).
@@ -660,7 +607,6 @@ fn test_full_scene_loads_with_rovers() {
     // `AssetServer::load::<WorldAsset>` — register the asset so handle
     // allocation doesn't panic in this minimal harness.
     app.init_asset::<bevy::world_serialization::WorldAsset>();
-    app.init_asset::<bevy::shader::Shader>();
     // Physical rovers create revolute joints whose `JointCollisionDisabled`
     // hook reads avian's `JointGraph` resource — without the physics plugins
     // it panics. (The single-rover tests use raycast wheels, so they don't.)
@@ -757,7 +703,7 @@ fn test_full_scene_loads_with_rovers() {
         .iter()
         .filter(|&&r| {
             app.world()
-                .get::<Mesh3d>(chassis_child(&app, r, "scene"))
+                .get::<Mesh3d>(support::chassis_child(&app, r, "scene"))
                 .is_some()
         })
         .count();

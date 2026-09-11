@@ -40,6 +40,7 @@ fn add_prim(host: &mut DocumentHost<UsdDocument>, name: &str) {
         name: name.into(),
         type_name: Some("Xform".into()),
         reference: None,
+        reference_prim_path: None,
     }))
     .expect("AddPrim applies");
 }

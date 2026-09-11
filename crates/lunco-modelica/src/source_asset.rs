@@ -21,35 +21,15 @@
 
 use bevy::asset::{io::Reader, Asset, AssetLoader, LoadContext};
 use bevy::prelude::*;
-use std::borrow::Cow;
-
-/// Normalize text accepted at the Modelica source boundary.
-///
-/// Windows editors commonly write a UTF-8 byte-order mark. It is metadata,
-/// not Modelica syntax, and Rumoca does not treat it as whitespace before the
-/// first token. Replace it with three ASCII spaces instead of removing it:
-/// the UTF-8 BOM occupies three bytes, so source spans and diagnostics keep
-/// the same offsets. CRLF is intentionally left unchanged; the Modelica
-/// lexer handles it and changing line endings would alter authored source
-/// coordinates.
-pub fn normalize_modelica_source(source: &str) -> Cow<'_, str> {
-    let Some(rest) = source.strip_prefix('\u{feff}') else {
-        return Cow::Borrowed(source);
-    };
-
-    let mut normalized = String::with_capacity(source.len());
-    normalized.push_str("   ");
-    normalized.push_str(rest);
-    Cow::Owned(normalized)
-}
+use lunco_modelica_ast::normalize_modelica_source;
 
 /// The text contents of a `.mo` file, surfaced as an asset.
 ///
-/// Kept deliberately dumb — no parse here. The cosim dispatcher and the
-/// experiments runner already invoke `rumoca_phase_parse` against the
-/// text, often with different lenient/strict knobs; pre-parsing in the
-/// loader would either duplicate that work or force a one-size-fits-all
-/// configuration on every consumer.
+/// Kept deliberately dumb — no parse here. Downstream consumers invoke the
+/// shared `lunco-modelica-ast` parse boundary with the strict or recovering
+/// mode appropriate to their job; pre-parsing in the loader would either
+/// duplicate that work or force a one-size-fits-all configuration on every
+/// consumer.
 #[derive(Asset, TypePath, Debug, Clone)]
 pub struct ModelicaSource {
     /// Raw `.mo` text. UTF-8 (the loader rejects non-UTF-8 inputs).

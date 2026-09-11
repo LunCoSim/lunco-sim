@@ -30,7 +30,7 @@ fn class_annotations(
 fn tank_icon_mass_is_dynamic() {
     // The tank shows a static "Propellant" title plus a live mass readout
     // `DynamicSelect("kg", String(m) + " kg")` — the latter is the dynamic text.
-    let ast = rumoca_phase_parse::parse_to_ast(src(), "AnnotatedRocketStage.mo").expect("parse");
+    let ast = lunco_modelica_ast::parse_to_ast(src(), "AnnotatedRocketStage.mo").expect("parse");
     let ann = class_annotations(&ast.classes, "Tank").expect("Tank class");
     let icon = extract_icon(&ann).expect("Tank Icon");
     let mut texts = icon.graphics.iter().filter_map(|g| match g {
@@ -49,7 +49,7 @@ fn tank_icon_mass_is_dynamic() {
 
 #[test]
 fn tank_blue_rectangle_extent_is_dynamic_and_evaluates() {
-    let ast = rumoca_phase_parse::parse_to_ast(src(), "AnnotatedRocketStage.mo").expect("parse");
+    let ast = lunco_modelica_ast::parse_to_ast(src(), "AnnotatedRocketStage.mo").expect("parse");
     let ann = class_annotations(&ast.classes, "Tank").expect("Tank class");
     let icon = extract_icon(&ann).expect("Tank Icon");
 
@@ -108,7 +108,7 @@ fn dyn_expr_survives_json_roundtrip() {
     // The canvas serializes Icon to JSON for transport between the
     // diagram projector and the canvas renderer; deserialise must
     // restore the dynamic branch.
-    let ast = rumoca_phase_parse::parse_to_ast(src(), "AnnotatedRocketStage.mo").expect("parse");
+    let ast = lunco_modelica_ast::parse_to_ast(src(), "AnnotatedRocketStage.mo").expect("parse");
     let ann = class_annotations(&ast.classes, "Tank").expect("Tank class");
     let icon = extract_icon(&ann).expect("Tank Icon");
 
@@ -131,7 +131,7 @@ fn dyn_expr_survives_json_roundtrip() {
 
 #[test]
 fn valve_icon_label_is_dynamic() {
-    let ast = rumoca_phase_parse::parse_to_ast(src(), "AnnotatedRocketStage.mo").expect("parse");
+    let ast = lunco_modelica_ast::parse_to_ast(src(), "AnnotatedRocketStage.mo").expect("parse");
     let ann = class_annotations(&ast.classes, "Valve").expect("Valve class");
     let icon = extract_icon(&ann).expect("Valve Icon");
     let mut texts = icon.graphics.iter().filter_map(|g| match g {

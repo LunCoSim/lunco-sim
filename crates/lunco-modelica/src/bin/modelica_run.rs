@@ -238,7 +238,7 @@ mod native {
         // those declarations bake into the DAE as constants and `set_input`
         // can't reach them.
         let (stripped_source, input_defaults) =
-            lunco_modelica::ast_extract::strip_input_defaults(&source);
+            lunco_modelica_ast::ast_extract::strip_input_defaults(&source);
 
         eprintln!("[modelica_run] compiling {} ...", opts.class);
         let t_compile = Instant::now();

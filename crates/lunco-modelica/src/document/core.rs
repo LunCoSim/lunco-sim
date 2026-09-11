@@ -8,7 +8,7 @@ use std::sync::Arc;
 use lunco_doc::{Diagnostic, Document, DocumentError, DocumentId, DocumentOrigin};
 use rumoca_compile::parsing::ast::StoredDefinition;
 #[cfg(not(target_arch = "wasm32"))]
-use rumoca_phase_parse::parse_to_syntax;
+use lunco_modelica_ast::parse_to_syntax;
 
 use super::ops::{FreshAst, ModelicaChange, ModelicaOp, CHANGE_HISTORY_CAPACITY};
 use crate::index::ModelicaIndex;
@@ -287,17 +287,17 @@ impl ModelicaDocument {
         #[cfg(not(target_arch = "wasm32"))]
         let ast: StoredDefinition = match bundled_ast {
             Some(ast) => ast,
-            None => rumoca_phase_parse::parse_to_ast(&full_source, &key)
+            None => lunco_modelica_ast::parse_to_ast(&full_source, &key)
                 .map_err(|e| format!("parse failed `{}`: {e}", path.display()))?,
         };
 
-        let class_def = crate::ast_extract::find_class_by_short_name(&ast, short_name)
+        let class_def = lunco_modelica_ast::ast_extract::find_class_by_short_name(&ast, short_name)
             .ok_or_else(|| format!("class `{qualified}` not found in `{}`", path.display()))?;
         // `ClassDef.location` omits the prefix keyword and trailing `;` (see
         // `class_full_text_span`); slicing by it alone drops both and yields
         // invalid Modelica. Use the canonical full-declaration span.
         let (full_start, full_end) =
-            crate::ast_extract::class_full_text_span(class_def, &full_source);
+            lunco_modelica_ast::ast_extract::class_full_text_span(class_def, &full_source);
         // Defensive: the AST may come from the pre-parsed bundle while
         // `full_source` was re-read separately (msl_read). If their byte
         // offsets ever disagree (different line endings, a stale bundle, a

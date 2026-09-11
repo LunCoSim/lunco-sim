@@ -6,7 +6,7 @@
 //! whichever side is wrong before touching the renderer.
 
 use lunco_modelica::annotations::{extract_diagram, extract_icon, extract_placement, GraphicItem};
-use rumoca_phase_parse::parse_to_ast;
+use lunco_modelica_ast::parse_to_ast;
 
 fn source() -> &'static str {
     lunco_modelica::models::get_model("AnnotatedRocketStage.mo")

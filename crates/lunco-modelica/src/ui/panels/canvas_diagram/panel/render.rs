@@ -103,7 +103,7 @@ pub(crate) fn render_diagram_canvas(
             .projection_error
             .clone();
 
-        use lunco_workbench::status_bus::LifecycleState;
+        use lunco_status_core::status_bus::LifecycleState;
         if let Some(error) = projection_error {
             overlays::render_error_overlay(
                 ui,
@@ -119,24 +119,24 @@ pub(crate) fn render_diagram_canvas(
                 let has_content = docstate.canvas.scene.node_count() > 0;
                 active_doc
                     .and_then(|d| {
-                        ctx.resource::<lunco_workbench::status_bus::StatusBus>()
+                        ctx.resource::<lunco_status_core::status_bus::StatusBus>()
                             .map(|bus| {
                                 bus.lifecycle(
-                                    lunco_workbench::status_bus::BusyScope::Document(d.0),
+                                    lunco_status_core::status_bus::BusyScope::Document(d.0),
                                     has_content,
                                 )
                             })
                     })
-                    .unwrap_or(lunco_workbench::status_bus::LifecycleState::Empty)
+                    .unwrap_or(lunco_status_core::status_bus::LifecycleState::Empty)
             };
             match lifecycle {
                 LifecycleState::Loading => {
                     if let (Some(doc_id), Some(bus)) = (
                         active_doc,
-                        ctx.resource::<lunco_workbench::status_bus::StatusBus>(),
+                        ctx.resource::<lunco_status_core::status_bus::StatusBus>(),
                     ) {
                         lunco_ui::busy::LoadingIndicator::for_scope(
-                            lunco_workbench::status_bus::BusyScope::Document(doc_id.0),
+                            lunco_status_core::status_bus::BusyScope::Document(doc_id.0),
                         )
                         .overlay_on(ui, response.rect, bus, &theme);
                     }

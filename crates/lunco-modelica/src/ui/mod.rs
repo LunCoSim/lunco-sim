@@ -1318,7 +1318,7 @@ fn install_image_loaders_once(
     commands.insert_resource(ImageLoadersInstalled);
 }
 
-/// Forward newly-pushed [`lunco_workbench::status_bus::StatusBus`]
+/// Forward newly-pushed [`lunco_status_core::status_bus::StatusBus`]
 /// events to the [`panels::console::ConsoleLog`].
 ///
 /// We track how many *discrete* history entries we've already mirrored
@@ -1329,7 +1329,7 @@ fn install_image_loaders_once(
 /// make this early-return forever once the buffer filled, silently
 /// freezing the console audit trail (CQ-523).
 fn fan_status_bus_to_console(
-    bus: bevy::prelude::Res<lunco_workbench::status_bus::StatusBus>,
+    bus: bevy::prelude::Res<lunco_status_core::status_bus::StatusBus>,
     mut console: bevy::prelude::ResMut<panels::console::ConsoleLog>,
     mut last_total: bevy::prelude::Local<u64>,
 ) {
@@ -1352,15 +1352,15 @@ fn fan_status_bus_to_console(
         .rev()
     {
         let level = match ev.level {
-            lunco_workbench::status_bus::StatusLevel::Info => panels::console::ConsoleLevel::Info,
-            lunco_workbench::status_bus::StatusLevel::Warn => panels::console::ConsoleLevel::Warn,
-            lunco_workbench::status_bus::StatusLevel::Error => panels::console::ConsoleLevel::Error,
-            lunco_workbench::status_bus::StatusLevel::Attention => {
+            lunco_status_core::status_bus::StatusLevel::Info => panels::console::ConsoleLevel::Info,
+            lunco_status_core::status_bus::StatusLevel::Warn => panels::console::ConsoleLevel::Warn,
+            lunco_status_core::status_bus::StatusLevel::Error => panels::console::ConsoleLevel::Error,
+            lunco_status_core::status_bus::StatusLevel::Attention => {
                 panels::console::ConsoleLevel::Info
             }
             // Progress events shouldn't be in `history` (they live in
             // active_progress), but if one ever sneaks in, surface as Info.
-            lunco_workbench::status_bus::StatusLevel::Progress => {
+            lunco_status_core::status_bus::StatusLevel::Progress => {
                 panels::console::ConsoleLevel::Info
             }
         };

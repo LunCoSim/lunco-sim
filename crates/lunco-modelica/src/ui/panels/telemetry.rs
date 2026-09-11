@@ -1010,7 +1010,7 @@ fn flatten_class_parameters(index: &crate::index::ModelicaIndex, class: &str) ->
             if cur.is_empty() {
                 break;
             }
-            cur = crate::ast_extract::parent_qualified(cur);
+            cur = lunco_modelica_ast::ast_extract::parent_qualified(cur);
         }
         if let Some(w) = index.within_path.as_ref() {
             let q = format!("{w}.{type_name}");

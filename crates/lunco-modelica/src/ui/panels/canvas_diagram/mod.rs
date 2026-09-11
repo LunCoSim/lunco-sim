@@ -453,7 +453,7 @@ pub struct CanvasDiagramState {
     /// Without this slot the bus blinks empty between parse-complete
     /// and project-spawn, and the canvas overlay flickers off then on.
     pending_projection_handoff:
-        std::collections::HashMap<lunco_doc::DocumentId, lunco_workbench::status_bus::BusyHandle>,
+        std::collections::HashMap<lunco_doc::DocumentId, lunco_status_core::status_bus::BusyHandle>,
     /// Hot-exit camera restore, keyed by document. Populated by
     /// [`stash_pending_view`](Self::stash_pending_view) when a document
     /// is restored from the per-Twin workspace-state (its tab doesn't
@@ -477,7 +477,7 @@ impl CanvasDiagramState {
     pub fn stash_projection_handoff(
         &mut self,
         doc: lunco_doc::DocumentId,
-        handle: lunco_workbench::status_bus::BusyHandle,
+        handle: lunco_status_core::status_bus::BusyHandle,
     ) {
         self.pending_projection_handoff.insert(doc, handle);
     }

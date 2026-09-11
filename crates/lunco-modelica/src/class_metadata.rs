@@ -138,7 +138,7 @@ fn resolve_metadata_from_index(
             }
         }
         if found.is_none() {
-            let leaf = crate::ast_extract::short_name(q);
+            let leaf = lunco_modelica_ast::ast_extract::short_name(q);
             found = index
                 .classes
                 .iter()

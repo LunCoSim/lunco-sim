@@ -42,7 +42,6 @@ fn load_through_bevy(file: &str, prim_path: &str) -> App {
     app.init_asset::<UsdStageAsset>();
     app.init_asset::<Mesh>();
     app.init_asset::<Image>();
-    app.init_asset::<bevy::shader::Shader>();
     // These are production prerequisites of `UsdSimPlugin`.  The full binary
     // installs them through `ModelicaPlugin`; this focused pipeline test does
     // not boot the editor/worker stack, so initialize the same authoritative

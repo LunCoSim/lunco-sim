@@ -48,7 +48,7 @@ fn bundled_member_bounds(pkg: &str, ty: &str, member: &str) -> (Option<f64>, Opt
             return Some(i.clone());
         }
         let src = crate::ui::class_source::bundled_source_for(pkg)?;
-        let ast = rumoca_phase_parse::parse_to_ast(src, "input-bounds.mo").ok()?;
+        let ast = lunco_modelica_ast::parse_to_ast(src, "input-bounds.mo").ok()?;
         let mut index = crate::index::ModelicaIndex::new();
         index.rebuild_with_errors(&ast, src, false);
         let rc = std::rc::Rc::new(index);
@@ -189,7 +189,7 @@ pub(crate) fn stash_snapshots(
                 // to a value-derived range that runs away. Recover the real
                 // bounds (0..100) from the bundled package P.
                 let within_pkg =
-                    host.and_then(|h| crate::ui::duplicate::within_package(h.document().source()));
+                    host.and_then(|h| lunco_modelica_ast::ast_extract::within_package_of_source(h.document().source()));
                 for (qualified, value) in &model.inputs {
                     let (mut mn, mut mx) = index_ref
                         .and_then(|idx| idx.find_component_by_leaf(qualified))

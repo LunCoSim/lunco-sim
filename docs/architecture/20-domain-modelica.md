@@ -39,6 +39,11 @@ attached to 3D entities (Space Systems) in the USD scene.
 The Modelica runtime is **rumoca**, our fork:
 [`github.com/LunCoSim/rumoca`](https://github.com/LunCoSim/rumoca).
 
+The reusable parse boundary is [`lunco-modelica-ast`](../../crates/lunco-modelica-ast/).
+It owns BOM-preserving normalization, strict/recovering Rumoca parse wrappers,
+AST interface projections, and parse-time lint facts. It has no Bevy, document,
+worker, UI, or solver state; `lunco-modelica` owns those heavier runtime seams.
+
 ## 2. Architecture in layers
 
 ```
@@ -63,6 +68,11 @@ The Modelica runtime is **rumoca**, our fork:
     - GraphsPanel (time-series plots)
     - PackageBrowser / LibraryBrowser (MSL + project models)
 ```
+
+Consumers that need only source facts use `lunco-modelica-ast`; they do not
+reimplement parsing or import the workbench. The current compiler/session split
+remains a separate follow-up because compile workers and document lifecycle still
+belong to `lunco-modelica`.
 
 ### 2a. Generated network schemas
 
@@ -91,6 +101,9 @@ units, and layout to diagnostics and the workbench, so the visible diagram and
 the compiled simulation have one inspectable source of truth. Its
 `projection_error` field is reserved for USD-to-Modelica projection failures;
 compiler and solver failures remain on the linked Modelica runtime state.
+The projector carries the interface extracted while validating the generated
+source into installation, so validation and runtime setup share one Rumoca AST
+parse rather than independently recovering the same policy result.
 
 The generated-domain projector is lifecycle-driven. Its scheduler condition
 opens only for a newly projected prim or identity, a USD wiring edit, or a
@@ -1192,6 +1205,7 @@ finishing the acausal-connector visuals on `lunco-canvas`.
 ### Source
 
 - [`../../crates/lunco-modelica/`](../../crates/lunco-modelica/) — crate root
+- [`../../crates/lunco-modelica-ast/`](../../crates/lunco-modelica-ast/) — normalized Rumoca parse boundary, AST projections, and Modelica lint facts
 - [`../../crates/lunco-modelica/src/document/core.rs`](../../crates/lunco-modelica/src/document/core.rs) — `ModelicaDocument`, op set, apply pipeline, span-based patch helpers, qualified-path `resolve_class`
 - [`../../crates/lunco-modelica/src/pretty.rs`](../../crates/lunco-modelica/src/pretty.rs) — subset pretty-printer, `PrettyOptions`
 - [`../../crates/lunco-modelica/src/ui/panels/canvas_projection.rs`](../../crates/lunco-modelica/src/ui/panels/canvas_projection.rs) — diagram panel, sync-from-document, wire/position diffing, scope-aware type lookup

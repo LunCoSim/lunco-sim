@@ -112,6 +112,7 @@ fn add_prim_projects_live_via_sink_no_reload() {
             name: "Box".into(),
             type_name: Some("Cube".into()),
             reference: None,
+            reference_prim_path: None,
         },
     });
 
@@ -179,6 +180,7 @@ fn referenced_spawn_projects_live_via_fetch_inject_author() {
             name: "rover_1".into(),
             type_name: Some("Xform".into()),
             reference: Some("lunco://vessels/rovers/skid_rover.usda".into()),
+            reference_prim_path: None,
         },
     });
 

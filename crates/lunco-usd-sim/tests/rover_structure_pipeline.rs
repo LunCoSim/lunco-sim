@@ -1,7 +1,8 @@
 use avian3d::prelude::*;
 use bevy::asset::AssetPlugin;
-/// Tests that verify USD rover files project the canonical mobility structure.
-/// ALL tests load REAL files from disk — no inline USD strings.
+/// Tests that verify the USD simulation projection produces the canonical
+/// mobility and physics structure. ALL tests load REAL files from disk — no
+/// inline USD strings.
 use bevy::prelude::*;
 use big_space::prelude::CellCoord;
 use lunco_core::{ControlBinding, InputPorts, MobilityRoot, OutputPorts};
@@ -12,59 +13,6 @@ use lunco_usd_bevy::*;
 use lunco_usd_sim::*;
 
 mod support;
-
-/// The rover root carries `PhysicsRigidBodyAPI`, so avian builds a
-/// `Collider::compound` from its child colliders. A compound is NOT
-/// `as_cuboid()`. Extract the cuboid half-extents whether the collider is plain
-/// or compound. A body may
-/// have several authored collision children (for example a mounted battery), so
-/// callers must select the shape they are asserting rather than assuming the
-/// first compound entry is the chassis.
-fn cuboid_half_extents(col: &Collider) -> Vec<[f32; 3]> {
-    let shape = col.shape();
-    if let Some(c) = shape.as_cuboid() {
-        return vec![[
-            c.half_extents.x as f32,
-            c.half_extents.y as f32,
-            c.half_extents.z as f32,
-        ]];
-    }
-    if let Some(compound) = shape.as_compound() {
-        return compound
-            .shapes()
-            .iter()
-            .filter_map(|(_, shape)| shape.as_cuboid())
-            .map(|c| {
-                [
-                    c.half_extents.x as f32,
-                    c.half_extents.y as f32,
-                    c.half_extents.z as f32,
-                ]
-            })
-            .collect();
-    }
-    panic!(
-        "collider is neither a cuboid nor a compound-of-cuboid: {:?}",
-        shape.shape_type()
-    );
-}
-
-/// After the Xform-root refactor the visible body mesh lives on the Chassis
-/// CHILD, not the rover root (an `Xform`). Return that Chassis child entity.
-fn chassis_child(app: &App, rover: Entity, label: impl std::fmt::Display) -> Entity {
-    let kids = app
-        .world()
-        .get::<Children>(rover)
-        .unwrap_or_else(|| panic!("{label}: rover missing Children"));
-    kids.iter()
-        .find(|&c| {
-            app.world()
-                .get::<Name>(c)
-                .map(|n| n.as_str().contains("Chassis"))
-                .unwrap_or(false)
-        })
-        .unwrap_or_else(|| panic!("{label}: rover has no Chassis child"))
-}
 
 use std::path::Path;
 
@@ -82,7 +30,6 @@ fn compose_and_load(file_path: &Path, prim_path: &str) -> App {
     app.init_asset::<UsdStageAsset>();
     app.init_asset::<Mesh>();
     app.init_asset::<Image>();
-    app.init_asset::<bevy::shader::Shader>();
     app.add_plugins((UsdBevyPlugin, UsdAvianPlugin, UsdSimPlugin));
 
     let handle = add_canonical_from_file(&mut app, file_path);
@@ -119,7 +66,6 @@ fn headless_server_builds_wheel_physics_without_renderer() {
     app.init_asset::<UsdStageAsset>();
     app.init_asset::<Mesh>();
     app.init_asset::<Image>();
-    app.init_asset::<bevy::shader::Shader>();
     // DELIBERATELY no `LuncoRenderPlugin` — that is the ONLY thing that binds a
     // material, so its absence is exactly what makes this app a faithful stand-in
     // for the `--no-ui` server.
@@ -216,7 +162,7 @@ fn test_all_rover_files_project_canonical_structure() {
             .world()
             .get::<Collider>(rover)
             .unwrap_or_else(|| panic!("{label}: missing Collider"));
-        let he = cuboid_half_extents(col);
+        let he = support::cuboid_half_extents(col);
         assert!(
             he.iter().any(|[x, y, z]| {
                 (x - 1.0).abs() < 0.1 && (y - 0.15).abs() < 0.05 && (z - 1.75).abs() < 0.1
@@ -225,7 +171,7 @@ fn test_all_rover_files_project_canonical_structure() {
         );
 
         // Visual — body mesh + material live on the Chassis child.
-        let chassis = chassis_child(&app, rover, &label);
+        let chassis = support::chassis_child(&app, rover, &label);
         assert!(
             app.world().get::<Mesh3d>(chassis).is_some(),
             "{label}: Chassis missing Mesh3d (body invisible!)"

@@ -1220,11 +1220,11 @@ fn report_scenario_registry_error(ctx: &mut MenuCtx, detail: impl Into<String>) 
     let detail = scenario_registry_diagnostic(detail);
     let status_message = scenario_registry_status_message(&detail);
     let already_reported = ctx
-        .resource::<lunco_workbench::status_bus::StatusBus>()
+        .resource::<lunco_status_core::status_bus::StatusBus>()
         .and_then(|bus| bus.history().next_back())
         .is_some_and(|event| {
-            event.source == lunco_workbench::status_bus::TELEMETRY_SOURCE
-                && event.level == lunco_workbench::status_bus::StatusLevel::Error
+            event.source == lunco_status_core::status_bus::TELEMETRY_SOURCE
+                && event.level == lunco_status_core::status_bus::StatusLevel::Error
                 && event.message == status_message
         });
     if !already_reported {

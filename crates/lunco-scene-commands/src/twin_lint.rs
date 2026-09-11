@@ -100,7 +100,7 @@ pub fn inspect_twin(twin: &lunco_workspace::Twin) -> TwinNamespaceSnapshot {
             }
         };
         let scope = modelica_scope(rel, &modelica_roots);
-        for name in lunco_modelica::ast_extract::declared_class_names(&source, &slashed(rel)) {
+        for name in lunco_modelica_ast::ast_extract::declared_class_names(&source, &slashed(rel)) {
             entries.push(NamespaceEntry {
                 namespace: MODELICA_NAMESPACE.to_string(),
                 name,

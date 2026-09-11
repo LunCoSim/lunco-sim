@@ -62,9 +62,9 @@ pub(crate) fn on_fast_run_setup_requested(
                 .get_resource::<ModelicaDocumentRegistry>()
                 .and_then(|r| r.host(doc))
                 .and_then(|h| {
-                    crate::ast_extract::find_class_by_short_name(
+                    lunco_modelica_ast::ast_extract::find_class_by_short_name(
                         h.document().syntax().ast(),
-                        crate::ast_extract::short_name(&model_ref.0),
+                        lunco_modelica_ast::ast_extract::short_name(&model_ref.0),
                     )
                     .map(crate::experiments_runner::detect_top_level_inputs)
                 })
@@ -744,9 +744,9 @@ fn render_unified_toolbar(
                     .get_resource::<ModelicaDocumentRegistry>()
                     .and_then(|r| r.host(doc))
                     .and_then(|h| {
-                        crate::ast_extract::find_class_by_short_name(
+                        lunco_modelica_ast::ast_extract::find_class_by_short_name(
                             h.document().syntax().ast(),
-                            crate::ast_extract::short_name(&model_ref.0),
+                            lunco_modelica_ast::ast_extract::short_name(&model_ref.0),
                         )
                         .map(crate::experiments_runner::detect_top_level_inputs)
                     })
@@ -984,8 +984,8 @@ fn render_icon_view(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         };
         let display = document.origin().display_name();
         let from_path = display.strip_prefix("msl://").map(|s| s.to_string());
-        let short = crate::ast_extract::extract_model_name_from_ast(&ast).unwrap_or_default();
-        let Some(class) = crate::ast_extract::find_class_by_short_name(&ast, &short) else {
+        let short = lunco_modelica_ast::ast_extract::extract_model_name_from_ast(&ast).unwrap_or_default();
+        let Some(class) = lunco_modelica_ast::ast_extract::find_class_by_short_name(&ast, &short) else {
             return;
         };
         let qualified = from_path.unwrap_or_else(|| short.clone());

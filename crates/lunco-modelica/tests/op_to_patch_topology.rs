@@ -8,7 +8,7 @@ use std::sync::Arc;
 use lunco_doc::{DocumentHost, DocumentId, DocumentOrigin};
 use lunco_modelica::document::{ModelicaDocument, ModelicaOp, SyntaxCache};
 use lunco_modelica::pretty::{ComponentDecl, ConnectEquation, PortRef};
-use rumoca_phase_parse::parse_to_ast;
+use lunco_modelica_ast::parse_to_ast;
 
 fn host(source: &str) -> DocumentHost<ModelicaDocument> {
     let syntax = Arc::new(SyntaxCache::from_source(source, 0));

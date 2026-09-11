@@ -67,6 +67,7 @@ lunco-obstacle-field = { path = "../lunco-obstacle-field" }
 # (`ui/inspector.rs::modelica_parameters_section`) uses lunco-modelica's egui UI
 # surface, so `ui` propagates `lunco-modelica/ui`.
 lunco-modelica = { path = "../lunco-modelica", default-features = false }
+lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 lunco-usd = { path = "../lunco-usd", default-features = false }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 # Active-document resolution for C4b runtime-layer persistence (ECS-only, no UI).

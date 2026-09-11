@@ -1,7 +1,7 @@
 //! AST and text utility helpers.
 
 use super::errors::AstMutError;
-use crate::ast_extract::string_literal_value;
+use lunco_modelica_ast::ast_extract::string_literal_value;
 use crate::pretty;
 use rumoca_compile::parsing::ast::{ClassDef, ComponentReference, Expression, StoredDefinition};
 use rumoca_compile::parsing::Token;

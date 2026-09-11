@@ -920,7 +920,7 @@ mod tests {
         };
         let body = component_decl(&d);
         let source = format!("model M\n{}end M;\n", body);
-        let ast = rumoca_phase_parse::parse_to_ast(&source, "test.mo")
+        let ast = lunco_modelica_ast::parse_to_ast(&source, "test.mo")
             .expect("emitted component decl should parse");
         let class = ast.classes.get("M").expect("class M");
         assert!(
@@ -939,7 +939,7 @@ mod tests {
         };
         let body = connect_equation(&eq);
         let source = format!("model M\n  Real a;\n  Real b;\nequation\n{}end M;\n", body);
-        let res = rumoca_phase_parse::parse_to_ast(&source, "test.mo");
+        let res = lunco_modelica_ast::parse_to_ast(&source, "test.mo");
         assert!(res.is_ok(), "connect(...) should parse: {:?}", res.err());
     }
 }

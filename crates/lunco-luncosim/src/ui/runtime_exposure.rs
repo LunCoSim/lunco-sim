@@ -606,7 +606,7 @@ pub(crate) fn report_runtime_ui_readiness(
         Option<&ComputedNode>,
     )>,
     render_state: Option<Res<RuntimeUiRenderState>>,
-    bus: Option<ResMut<lunco_workbench::status_bus::StatusBus>>,
+    bus: Option<ResMut<lunco_status_core::status_bus::StatusBus>>,
 ) {
     let Some(mut bus) = bus else { return };
 
@@ -667,7 +667,7 @@ pub(crate) fn report_runtime_ui_readiness(
                 && state.extracted_surface_count == required as u32
         });
     if required == 0 || (ready == required && render_ready) {
-        bus.remove_progress(lunco_workbench::status_bus::RUNTIME_UI_SOURCE);
+        bus.remove_progress(lunco_status_core::status_bus::RUNTIME_UI_SOURCE);
     } else {
         let message = if ready < required {
             format!("mounting recorded UI surfaces {ready}/{required}")
@@ -675,7 +675,7 @@ pub(crate) fn report_runtime_ui_readiness(
             "waiting for recorded UI render extraction".to_string()
         };
         bus.set_progress(
-            lunco_workbench::status_bus::RUNTIME_UI_SOURCE,
+            lunco_status_core::status_bus::RUNTIME_UI_SOURCE,
             message,
             ready as u64,
             required as u64,
@@ -2444,7 +2444,7 @@ mod tests {
         let panel = PanelId("right_inspector");
         rects.record(
             panel,
-            lunco_workbench_core::PanelRect {
+            lunco_workbench::PanelRect {
                 origin: UVec2::new(800, 100),
                 size: UVec2::new(400, 600),
             },

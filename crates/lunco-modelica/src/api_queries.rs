@@ -10,7 +10,6 @@ use lunco_api::{ApiErrorCode, ApiQueryProvider, ApiQueryRegistry, ApiResponse};
 use lunco_doc::{Document, DocumentOrigin};
 use lunco_workspace::WorkspaceResource;
 
-use crate::ast_extract;
 use crate::experiments_runner::ExperimentSources;
 use crate::models::bundled_models;
 use lunco_experiments::{ExperimentId, ExperimentRegistry, RunStatus};
@@ -1087,8 +1086,8 @@ impl ApiQueryProvider for DescribeModelProvider {
         };
         // The caller may pass `Foo.Bar` — try the short tail first.
         let short = target_name.rsplit('.').next().unwrap_or(&target_name);
-        let Some(class) = ast_extract::find_class_by_short_name(&ast, short) else {
-            let candidates = ast_extract::collect_non_package_classes_qualified(&ast);
+        let Some(class) = lunco_modelica_ast::ast_extract::find_class_by_short_name(&ast, short) else {
+            let candidates = lunco_modelica_ast::ast_extract::collect_non_package_classes_qualified(&ast);
             return ApiResponse::error(
                 ApiErrorCode::EntityNotFound,
                 format!(
@@ -1100,12 +1099,12 @@ impl ApiQueryProvider for DescribeModelProvider {
             );
         };
 
-        let inputs = ast_extract::extract_typed_inputs_for_class(class);
-        let parameters = ast_extract::extract_typed_parameters_for_class(class);
-        let outputs = ast_extract::extract_typed_outputs_for_class(class);
-        let components = ast_extract::extract_components_for_class(class);
-        let connections = ast_extract::extract_connections_for_class(class);
-        let extends = ast_extract::extract_extends_for_class(class);
+        let inputs = lunco_modelica_ast::ast_extract::extract_typed_inputs_for_class(class);
+        let parameters = lunco_modelica_ast::ast_extract::extract_typed_parameters_for_class(class);
+        let outputs = lunco_modelica_ast::ast_extract::extract_typed_outputs_for_class(class);
+        let components = lunco_modelica_ast::ast_extract::extract_components_for_class(class);
+        let connections = lunco_modelica_ast::ast_extract::extract_connections_for_class(class);
+        let extends = lunco_modelica_ast::ast_extract::extract_extends_for_class(class);
 
         // Inheritance-merged member list via the long-lived workspace
         // [`ModelicaEngineHandle`]. The engine is kept in sync with
@@ -1127,7 +1126,7 @@ impl ApiQueryProvider for DescribeModelProvider {
         ApiResponse::ok(serde_json::json!({
             "doc_id": doc_id.raw(),
             "class_name": short,
-            "class_kind": ast_extract::class_kind_label(class),
+            "class_kind": lunco_modelica_ast::ast_extract::class_kind_label(class),
             "extends": extends,
             "components": components.iter().map(component_info_to_json).collect::<Vec<_>>(),
             "connections": connections
@@ -1169,7 +1168,7 @@ fn class_member_causality_str(c: &crate::engine::InheritedCausality) -> &'static
     }
 }
 
-fn typed_to_json(c: &ast_extract::TypedComponent) -> serde_json::Value {
+fn typed_to_json(c: &lunco_modelica_ast::ast_extract::TypedComponent) -> serde_json::Value {
     serde_json::json!({
         "name": c.name,
         "type": c.type_name,
@@ -1181,7 +1180,7 @@ fn typed_to_json(c: &ast_extract::TypedComponent) -> serde_json::Value {
     })
 }
 
-fn component_info_to_json(c: &ast_extract::ComponentInfo) -> serde_json::Value {
+fn component_info_to_json(c: &lunco_modelica_ast::ast_extract::ComponentInfo) -> serde_json::Value {
     let mods: serde_json::Map<String, serde_json::Value> = c
         .modifications
         .iter()

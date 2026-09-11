@@ -13,7 +13,7 @@
 use lunco_modelica::ast_mut::{self, AstMutError, Edit};
 use lunco_modelica::pretty::{ComponentDecl, ConnectEquation, PortRef};
 use rumoca_compile::parsing::ast::{ClassDef, Component, Equation};
-use rumoca_phase_parse::parse_to_ast;
+use lunco_modelica_ast::parse_to_ast;
 
 /// Run `op` against `class_name`, apply the resulting splice to `source`, and
 /// reparse — the same route `Document::apply` takes.

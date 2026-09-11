@@ -1,13 +1,12 @@
 //! FACTS for the `modelica` lint domain.
 //!
-//! The split is `lunco-lint`'s: Rust extracts what is true about a model, and
+//! Rust extracts only facts that require Rumoca's AST; the authored policy in
 //! `assets/scripting/policy/lint_modelica.rhai` decides what is worth saying
-//! about it. Only this crate can read a Modelica AST, so extraction is code and
-//! is tested as code; a rule is a line in a script that can be retuned against a
-//! running sim.
+//! about them. This keeps policy changes reloadable and leaves this package with
+//! a small, reusable parse-time fact boundary.
 //!
 //! These are PARSE-phase facts — names, parameters, declared inputs, and the
-//! SHAPE of the equation section. A model's variables and its solver do not
+//! SHAPE of equation and algorithm sections. A model's variables and its solver do not
 //! exist until a compile, so no rule reached from `ValidateAsset` can ask about
 //! their values; but the equations themselves are in the AST at parse, and the
 //! worst defect this domain has is a shape, not a value:
@@ -17,12 +16,11 @@
 //! literal **0** at runtime because the elimination reconstructor only
 //! substitutes continuous expressions. Nothing fails; the observable just lies.
 //! That is only lintable if a rule can see which variable a conditional
-//! equation defines, so the equation facts below exist for exactly that rule.
+//! equation defines, so the source facts below preserve exactly that evidence.
 
 use lunco_hooks::HookValue as H;
-use rumoca_compile::parsing::ast::Equation;
-use rumoca_compile::parsing::{Causality, ClassDef, Expression, StoredDefinition, Variability};
-use std::collections::BTreeMap;
+use rumoca_core::{Causality, Variability};
+use rumoca_ir_ast::{ClassDef, Equation, Expression, Statement, StoredDefinition};
 
 /// The lint domain name, and with it the hook (`lint.modelica`) and the policy
 /// file (`assets/scripting/policy/lint_modelica.rhai`).
@@ -37,34 +35,35 @@ pub const MODELICA_LINT_DOMAIN: &str = "modelica";
 /// model:      "RocketStage"
 /// params:     [ #{ name: "m_dry", value: 120.0 }, … ]
 /// inputs:     [ #{ name: "throttle", default: 0.0 }, … ]
-/// param_names / input_names:  [ "m_dry", … ]   // for cheap `in` tests
-/// shadowed:   [ "x", … ]   // declared BOTH input and parameter
-/// conditional_equations: [ #{ name: "m_dot", kind: "algebraic",
-///                            form: "if-expression", line: 42 }, … ]
-/// conditional_algebraic_names: [ "m_dot", … ]   // the silent-zero set
+/// conditional_constructs: [ #{ name: "m_dot", kind: "algebraic",
+///                             form: "if-expression", section: "equation",
+///                             line: 42 }, … ]
 /// ```
-///
-/// `shadowed` and `conditional_algebraic_names` are computed here rather than
-/// left to the policy because set intersection and nested filtering in rhai run
-/// into the expression-complexity cap that makes a whole policy fail to
-/// compile — the same trap the drivetrain rules hit.
 ///
 /// `ast` is the best-effort parse the caller already holds (the recovering
 /// parser's `best_effort()`); an empty `StoredDefinition` is legitimate input and
-/// simply yields no equation facts.
-pub fn modelica_facts(
-    model: &str,
-    params: &BTreeMap<String, f64>,
-    inputs: &BTreeMap<String, f64>,
+/// simply yields no source facts. Declaration facts are projected from this same
+/// AST, so callers cannot accidentally pass a name from one parse and equations
+/// from another.
+pub fn modelica_facts(ast: &StoredDefinition) -> H {
+    let interface = crate::ast_extract::parse_model_interface_from_ast(ast);
+    modelica_facts_from_interface(ast, &interface)
+}
+
+/// Project lint facts from an interface that the caller already extracted from
+/// this AST. This avoids walking the same declarations again when a validator
+/// needs both the public `info` snapshot and the policy input.
+pub fn modelica_facts_from_interface(
     ast: &StoredDefinition,
+    interface: &crate::ast_extract::ModelInterface,
 ) -> H {
-    let param_entries: Vec<H> = params
-        .iter()
+    let param_entries: Vec<H> = sorted_entries(&interface.parameters)
+        .into_iter()
         .map(|(name, value)| H::map([("name", H::Str(name.clone())), ("value", H::Float(*value))]))
         .collect();
 
-    let input_entries: Vec<H> = inputs
-        .iter()
+    let input_entries: Vec<H> = sorted_entries(&interface.inputs)
+        .into_iter()
         .map(|(name, default)| {
             H::map([
                 ("name", H::Str(name.clone())),
@@ -73,39 +72,27 @@ pub fn modelica_facts(
         })
         .collect();
 
-    let shadowed: Vec<H> = inputs
-        .keys()
-        .filter(|n| params.contains_key(*n))
-        .map(|n| H::Str(n.clone()))
-        .collect();
-
-    let conditionals = conditional_equations(ast);
-    let silent_zero: Vec<H> = conditionals
-        .iter()
-        .filter(|c| c.kind == VarKind::Algebraic && c.form == CondForm::IfExpression)
-        .map(|c| H::Str(c.name.clone()))
-        .collect();
+    let conditionals = conditional_constructs(ast);
     let conditional_entries: Vec<H> = conditionals
         .iter()
-        .map(ConditionalEquation::to_fact)
+        .map(ConditionalConstruct::to_fact)
         .collect();
 
     H::map([
-        ("model", H::Str(model.to_string())),
+        (
+            "model",
+            H::Str(interface.model_name.clone().unwrap_or_default()),
+        ),
         ("params", H::Array(param_entries)),
         ("inputs", H::Array(input_entries)),
-        (
-            "param_names",
-            H::Array(params.keys().map(|n| H::Str(n.clone())).collect()),
-        ),
-        (
-            "input_names",
-            H::Array(inputs.keys().map(|n| H::Str(n.clone())).collect()),
-        ),
-        ("shadowed", H::Array(shadowed)),
-        ("conditional_equations", H::Array(conditional_entries)),
-        ("conditional_algebraic_names", H::Array(silent_zero)),
+        ("conditional_constructs", H::Array(conditional_entries)),
     ])
+}
+
+fn sorted_entries(values: &std::collections::HashMap<String, f64>) -> Vec<(&String, &f64)> {
+    let mut entries: Vec<_> = values.iter().collect();
+    entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+    entries
 }
 
 // ---------------------------------------------------------------------------
@@ -126,6 +113,10 @@ enum CondForm {
     /// `when cond then x = a; end when;` — a discrete event, a different thing
     /// entirely (and one rumoca's branch-free path also cannot take).
     WhenEquation,
+    /// `if cond then ... end if;` in an algorithm section.
+    IfStatement,
+    /// `when cond then ... end when;` in an algorithm section.
+    WhenStatement,
 }
 
 impl CondForm {
@@ -134,11 +125,13 @@ impl CondForm {
             CondForm::IfExpression => "if-expression",
             CondForm::IfEquation => "if-equation",
             CondForm::WhenEquation => "when-equation",
+            CondForm::IfStatement => "if-statement",
+            CondForm::WhenStatement => "when-statement",
         }
     }
 }
 
-/// What the equation defines, from the component's own declaration. Only
+/// What a construct defines, from the component's own declaration. Only
 /// `Algebraic` is the silent-zero case: a state is reconstructed by the
 /// integrator from its derivative, a parameter never enters the DAE, and a
 /// `discrete` is an event variable whose author already knows it is not
@@ -169,29 +162,31 @@ impl VarKind {
     }
 }
 
-struct ConditionalEquation {
+struct ConditionalConstruct {
     name: String,
     kind: VarKind,
     form: CondForm,
+    section: &'static str,
     line: i64,
 }
 
-impl ConditionalEquation {
+impl ConditionalConstruct {
     fn to_fact(&self) -> H {
         H::map([
             ("name", H::Str(self.name.clone())),
             ("kind", H::Str(self.kind.as_str().to_string())),
             ("form", H::Str(self.form.as_str().to_string())),
+            ("section", H::Str(self.section.to_string())),
             ("line", H::Int(self.line)),
         ])
     }
 }
 
-/// Every equation in `ast` whose value depends on a branch, with the variable it
-/// defines. Walks the `equation` sections of every class, nested classes
-/// included; `initial equation` is left out deliberately — it runs once, before
-/// the solver, so a branch there is not the runtime lie this exists to catch.
-fn conditional_equations(ast: &StoredDefinition) -> Vec<ConditionalEquation> {
+/// Every branch construct in `ast`, with the variable it defines when there is
+/// one. The walk covers regular and initial equation/algorithm sections and
+/// nested classes. Rust records syntax and declaration facts; the authored
+/// policy decides which construct is actionable and how it is reported.
+fn conditional_constructs(ast: &StoredDefinition) -> Vec<ConditionalConstruct> {
     let mut out = Vec::new();
     for class in ast.classes.values() {
         collect_from_class(class, &mut out);
@@ -199,23 +194,34 @@ fn conditional_equations(ast: &StoredDefinition) -> Vec<ConditionalEquation> {
     out
 }
 
-fn collect_from_class(class: &ClassDef, out: &mut Vec<ConditionalEquation>) {
+fn collect_from_class(class: &ClassDef, out: &mut Vec<ConditionalConstruct>) {
     for eq in &class.equations {
-        collect_from_equation(eq, class, None, out);
+        collect_from_equation(eq, class, "equation", true, out);
+    }
+    for eq in &class.initial_equations {
+        collect_from_equation(eq, class, "initial-equation", true, out);
+    }
+    for algorithm in &class.algorithms {
+        for statement in algorithm {
+            collect_from_statement(statement, class, "algorithm", true, out);
+        }
+    }
+    for algorithm in &class.initial_algorithms {
+        for statement in algorithm {
+            collect_from_statement(statement, class, "initial-algorithm", true, out);
+        }
     }
     for nested in class.classes.values() {
         collect_from_class(nested, out);
     }
 }
 
-/// `inherited_form` is `Some(..)` while walking the body of an `if`/`when`
-/// equation: an equation inside one is conditional whatever its own RHS looks
-/// like.
 fn collect_from_equation(
     eq: &Equation,
     class: &ClassDef,
-    inherited_form: Option<CondForm>,
-    out: &mut Vec<ConditionalEquation>,
+    section: &'static str,
+    allow_expression: bool,
+    out: &mut Vec<ConditionalConstruct>,
 ) {
     let line = eq
         .get_location()
@@ -223,22 +229,20 @@ fn collect_from_equation(
         .unwrap_or(0);
     match eq {
         Equation::Simple { lhs, rhs } => {
-            let form = match inherited_form {
-                Some(f) => Some(f),
-                None if expression_is_conditional(rhs) => Some(CondForm::IfExpression),
-                None => None,
-            };
-            let Some(form) = form else { return };
+            if !allow_expression || !expression_is_conditional(rhs) {
+                return;
+            }
             let (name, is_derivative) = defined_variable(lhs);
             let kind = if is_derivative {
                 VarKind::State
             } else {
                 declared_kind(class, &name)
             };
-            out.push(ConditionalEquation {
+            out.push(ConditionalConstruct {
                 name,
                 kind,
-                form,
+                form: CondForm::IfExpression,
+                section,
                 line,
             });
         }
@@ -246,29 +250,161 @@ fn collect_from_equation(
             cond_blocks,
             else_block,
         } => {
+            out.push(ConditionalConstruct {
+                name: String::new(),
+                kind: VarKind::Unknown,
+                form: CondForm::IfEquation,
+                section,
+                line,
+            });
             for block in cond_blocks {
                 for inner in &block.eqs {
-                    collect_from_equation(inner, class, Some(CondForm::IfEquation), out);
+                    collect_nested_equation(inner, class, section, out);
                 }
             }
             for inner in else_block.iter().flatten() {
-                collect_from_equation(inner, class, Some(CondForm::IfEquation), out);
+                collect_nested_equation(inner, class, section, out);
             }
         }
         Equation::When(blocks) => {
+            out.push(ConditionalConstruct {
+                name: String::new(),
+                kind: VarKind::Unknown,
+                form: CondForm::WhenEquation,
+                section,
+                line,
+            });
             for block in blocks {
                 for inner in &block.eqs {
-                    collect_from_equation(inner, class, Some(CondForm::WhenEquation), out);
+                    collect_nested_equation(inner, class, section, out);
                 }
             }
         }
         Equation::For { equations, .. } => {
             for inner in equations {
-                collect_from_equation(inner, class, inherited_form, out);
+                collect_from_equation(inner, class, section, allow_expression, out);
             }
         }
         // Connect / FunctionCall / Assert / Empty define nothing an observable
         // is read from.
+        _ => {}
+    }
+}
+
+/// Walk nested equation blocks without reporting their ordinary assignments a
+/// second time. The enclosing conditional block is already the authoritative
+/// fact for the policy; nested blocks still need their own entries.
+fn collect_nested_equation(
+    eq: &Equation,
+    class: &ClassDef,
+    section: &'static str,
+    out: &mut Vec<ConditionalConstruct>,
+) {
+    match eq {
+        Equation::If { .. } | Equation::When(_) => {
+            collect_from_equation(eq, class, section, false, out)
+        }
+        Equation::For { equations, .. } => {
+            for inner in equations {
+                collect_nested_equation(inner, class, section, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_from_statement(
+    statement: &Statement,
+    class: &ClassDef,
+    section: &'static str,
+    allow_expression: bool,
+    out: &mut Vec<ConditionalConstruct>,
+) {
+    let line = statement
+        .get_location()
+        .map(|l| i64::from(l.start_line))
+        .unwrap_or(0);
+    match statement {
+        Statement::Assignment { comp, value } => {
+            if allow_expression && expression_is_conditional(value) {
+                let name = comp.to_string();
+                out.push(ConditionalConstruct {
+                    kind: declared_kind(class, &name),
+                    name,
+                    form: CondForm::IfExpression,
+                    section,
+                    line,
+                });
+            }
+        }
+        Statement::If {
+            cond_blocks,
+            else_block,
+        } => {
+            out.push(ConditionalConstruct {
+                name: String::new(),
+                kind: VarKind::Unknown,
+                form: CondForm::IfStatement,
+                section,
+                line,
+            });
+            for block in cond_blocks {
+                for inner in &block.stmts {
+                    collect_nested_statement(inner, class, section, out);
+                }
+            }
+            for inner in else_block.iter().flatten() {
+                collect_nested_statement(inner, class, section, out);
+            }
+        }
+        Statement::When(blocks) => {
+            out.push(ConditionalConstruct {
+                name: String::new(),
+                kind: VarKind::Unknown,
+                form: CondForm::WhenStatement,
+                section,
+                line,
+            });
+            for block in blocks {
+                for inner in &block.stmts {
+                    collect_nested_statement(inner, class, section, out);
+                }
+            }
+        }
+        Statement::For { equations, .. } => {
+            for inner in equations {
+                collect_from_statement(inner, class, section, allow_expression, out);
+            }
+        }
+        Statement::While(block) => {
+            for inner in &block.stmts {
+                collect_from_statement(inner, class, section, allow_expression, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_nested_statement(
+    statement: &Statement,
+    class: &ClassDef,
+    section: &'static str,
+    out: &mut Vec<ConditionalConstruct>,
+) {
+    match statement {
+        Statement::If { .. } | Statement::When(_) => {
+            collect_from_statement(statement, class, section, false, out)
+        }
+        Statement::For { equations, .. } => {
+            for inner in equations {
+                collect_nested_statement(inner, class, section, out);
+            }
+        }
+        Statement::While(block) => {
+            for inner in &block.stmts {
+                collect_nested_statement(inner, class, section, out);
+            }
+        }
         _ => {}
     }
 }
@@ -302,7 +438,7 @@ fn expression_is_conditional(expr: &Expression) -> bool {
     }
 }
 
-/// The variable an equation's left-hand side defines, and whether it was written
+/// The variable a construct's left-hand side defines, and whether it was written
 /// as `der(x)`. Returns an empty name for a left-hand side that is not a
 /// component reference (a tuple output, say) — a fact a rule can test rather
 /// than an absence it has to infer.
@@ -351,25 +487,19 @@ fn declared_kind(class: &ClassDef, name: &str) -> VarKind {
 mod tests {
     use super::*;
 
-    fn facts_of(params: &[(&str, f64)], inputs: &[(&str, f64)]) -> H {
-        let p: BTreeMap<String, f64> = params.iter().map(|(n, v)| (n.to_string(), *v)).collect();
-        let i: BTreeMap<String, f64> = inputs.iter().map(|(n, v)| (n.to_string(), *v)).collect();
-        modelica_facts("M", &p, &i, &StoredDefinition::default())
-    }
-
     /// Facts from real source, through the same recovering parse `validate_asset`
-    /// uses — the equation facts only exist if the AST really carries them.
+    /// uses — the conditional facts only exist if the AST really carries them.
     fn facts_of_source(src: &str) -> H {
-        let syntax = rumoca_phase_parse::parse_to_syntax(src, "M.mo");
+        let syntax = crate::parse_to_syntax(src, "M.mo");
         let ast = syntax.best_effort();
-        modelica_facts("M", &BTreeMap::new(), &BTreeMap::new(), ast)
+        modelica_facts(ast)
     }
 
     /// `#{ name, kind, form }` triples, for asserting on shape without pinning
     /// line numbers into every test.
     fn conditionals(facts: &H) -> Vec<(String, String, String)> {
-        let H::Array(entries) = key(facts, "conditional_equations") else {
-            panic!("conditional_equations is an array")
+        let H::Array(entries) = key(facts, "conditional_constructs") else {
+            panic!("conditional_constructs is an array")
         };
         entries
             .iter()
@@ -390,39 +520,26 @@ mod tests {
         &entries.iter().find(|(name, _)| name == k).expect(k).1
     }
 
-    /// The one fact a rule cannot cheaply compute for itself: a name declared as
-    /// BOTH an input and a parameter. The cosim would wire it while the
-    /// parameter override also writes it, and neither surface says so.
+    /// Parameters and inputs remain available as independent authored entries;
+    /// policy-level comparisons are intentionally performed by Rhai.
     #[test]
-    fn a_name_declared_input_and_parameter_is_reported_as_shadowed() {
-        let facts = facts_of(&[("x", 1.0), ("m", 2.0)], &[("x", 0.0), ("throttle", 0.0)]);
-        let H::Array(shadowed) = key(&facts, "shadowed") else {
-            panic!("shadowed is an array")
-        };
-        assert_eq!(shadowed.len(), 1, "expected exactly `x`: {shadowed:?}");
-        assert_eq!(shadowed[0], H::Str("x".to_string()));
-    }
-
-    /// A model whose inputs and parameters are disjoint — the normal case —
-    /// must report nothing, or every shipped asset trips the rule.
-    #[test]
-    fn disjoint_inputs_and_parameters_shadow_nothing() {
-        let facts = facts_of(&[("m", 2.0)], &[("throttle", 0.0)]);
-        assert_eq!(key(&facts, "shadowed"), &H::Array(Vec::new()));
-    }
-
-    /// Names are carried alongside the full entries so a rule can test
-    /// membership without walking maps — the expensive shape in rhai.
-    #[test]
-    fn names_are_exposed_flat_for_membership_tests() {
-        let facts = facts_of(&[("m", 2.0)], &[("throttle", 0.0)]);
-        assert_eq!(
-            key(&facts, "param_names"),
-            &H::Array(vec![H::Str("m".to_string())])
+    fn declaration_entries_are_exposed_for_policy_rules() {
+        let facts = facts_of_source(
+            "model M\n  parameter Real m = 2.0;\n  input Real throttle;\nend M;\n",
         );
         assert_eq!(
-            key(&facts, "input_names"),
-            &H::Array(vec![H::Str("throttle".to_string())])
+            key(&facts, "params"),
+            &H::Array(vec![H::map([
+                ("name", H::Str("m".to_string())),
+                ("value", H::Float(2.0)),
+            ])])
+        );
+        assert_eq!(
+            key(&facts, "inputs"),
+            &H::Array(vec![H::map([
+                ("name", H::Str("throttle".to_string())),
+                ("default", H::Float(0.0)),
+            ])])
         );
     }
 
@@ -442,8 +559,14 @@ mod tests {
             )]
         );
         assert_eq!(
-            key(&facts, "conditional_algebraic_names"),
-            &H::Array(vec![H::Str("m_dot".to_string())])
+            key(&facts, "conditional_constructs"),
+            &H::Array(vec![H::map([
+                ("name", H::Str("m_dot".to_string())),
+                ("kind", H::Str("algebraic".to_string())),
+                ("form", H::Str("if-expression".to_string())),
+                ("section", H::Str("equation".to_string())),
+                ("line", H::Int(5)),
+            ])])
         );
     }
 
@@ -454,10 +577,7 @@ mod tests {
         let facts = facts_of_source(
             "model M\n  Real f;\n  Real x;\nequation\n  f = 1.0 + (if x > 0.0 then x else 0.0);\n  x = 2.0;\nend M;\n",
         );
-        assert_eq!(
-            key(&facts, "conditional_algebraic_names"),
-            &H::Array(vec![H::Str("f".to_string())])
-        );
+        assert_eq!(conditionals(&facts)[0].0, "f");
     }
 
     /// A `when` clause is a discrete event, NOT the silent-zero defect. It must
@@ -470,10 +590,24 @@ mod tests {
         );
         let forms: Vec<String> = conditionals(&facts).into_iter().map(|c| c.2).collect();
         assert_eq!(forms, vec!["when-equation".to_string()], "{facts:?}");
-        assert_eq!(
-            key(&facts, "conditional_algebraic_names"),
-            &H::Array(Vec::new())
+        assert!(conditionals(&facts).iter().all(|c| c.2 != "if-expression"));
+    }
+
+    #[test]
+    fn algorithm_branches_are_projected_without_source_scanning() {
+        let facts = facts_of_source(
+            "model M\n  Real x;\nalgorithm\n  if x > 0.0 then\n    x := 1.0;\n  else\n    x := 0.0;\n  end if;\nend M;\n",
         );
+        let entries = conditionals(&facts);
+        assert_eq!(entries, vec![(
+            "".to_string(),
+            "unknown".to_string(),
+            "if-statement".to_string(),
+        )]);
+        let H::Array(raw) = key(&facts, "conditional_constructs") else {
+            panic!("conditional_constructs is an array")
+        };
+        assert_eq!(key(&raw[0], "section"), &H::Str("algorithm".to_string()));
     }
 
     /// A branch-free model — the form every shipped `.mo` is expected to be in —
@@ -483,22 +617,14 @@ mod tests {
         let facts = facts_of_source(
             "model M\n  Real f;\n  Real x;\nequation\n  f = max(0.0, x);\n  der(x) = -x;\nend M;\n",
         );
-        assert_eq!(key(&facts, "conditional_equations"), &H::Array(Vec::new()));
-        assert_eq!(
-            key(&facts, "conditional_algebraic_names"),
-            &H::Array(Vec::new())
-        );
+        assert_eq!(key(&facts, "conditional_constructs"), &H::Array(Vec::new()));
     }
 
     /// A model that never parsed still produces the keys, empty. A missing key is
     /// an error inside every rule that reads it; an empty array is a fact.
     #[test]
-    fn the_equation_keys_exist_even_with_no_ast() {
-        let facts = facts_of(&[], &[]);
-        assert_eq!(key(&facts, "conditional_equations"), &H::Array(Vec::new()));
-        assert_eq!(
-            key(&facts, "conditional_algebraic_names"),
-            &H::Array(Vec::new())
-        );
+    fn the_construct_keys_exist_even_with_no_ast() {
+        let facts = modelica_facts(&StoredDefinition::default());
+        assert_eq!(key(&facts, "conditional_constructs"), &H::Array(Vec::new()));
     }
 }

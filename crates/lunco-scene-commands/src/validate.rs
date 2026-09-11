@@ -12,10 +12,10 @@
 //! by spawning it into a live sim.
 //!
 //! Per extension:
-//! - `.mo` — the same `rumoca_phase_parse::parse_to_syntax` + AST extraction
-//!   the USD-cosim dispatcher runs (`lunco-usd-sim/src/cosim.rs`), plus a lint
-//!   for `if`/`when` equation constructs, which rumoca's solver path cannot
-//!   handle. NO compile, NO `ModelicaCommand` dispatch.
+//! - `.mo` — the same `lunco_modelica_ast::parse_to_syntax` + AST extraction
+//!   the USD-cosim dispatcher runs (`lunco-usd-sim/src/cosim.rs`); the
+//!   reloadable `lint.modelica` policy decides which AST constructs are
+//!   actionable. NO compile, NO `ModelicaCommand` dispatch.
 //! - `.usda` — parse the layer (`usda_to_data`), compose the file
 //!   (`compose_file_to_stage`), then run the SAME `WheelParams::read` the
 //!   spawner runs on every `PhysxVehicleWheelAPI` prim — a wheel that would
@@ -350,8 +350,8 @@ fn apply_lint_policy(mut report: ValidationReport, text: &str) -> ValidationRepo
 // ─── .mo ────────────────────────────────────────────────────────────────────
 
 /// Rumoca PARSE phase only — the same call + extraction the USD-cosim
-/// dispatcher makes (`dispatch_loaded_modelica_sources`), then the
-/// branch-free lint. No compile.
+/// dispatcher makes (`dispatch_loaded_modelica_sources`). The authored
+/// `lint.modelica` policy receives the resulting AST facts. No compile.
 fn validate_modelica(reference: &str, path: &Path, text: &str) -> ValidationReport {
     let mut report = ValidationReport::new(reference, "modelica");
 
@@ -359,7 +359,7 @@ fn validate_modelica(reference: &str, path: &Path, text: &str) -> ValidationRepo
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("validate.mo");
-    let syntax = rumoca_phase_parse::parse_to_syntax(text, file_name);
+    let syntax = lunco_modelica_ast::parse_to_syntax(text, file_name);
     if syntax.has_errors() {
         match syntax.parse_error() {
             Some(joined) => report.errors.extend(joined.lines().map(|l| l.to_string())),
@@ -370,30 +370,25 @@ fn validate_modelica(reference: &str, path: &Path, text: &str) -> ValidationRepo
     }
 
     // Lenient parsing still yields usable name/parameter/input snapshots —
-    // same recovery semantics the cosim dispatcher relies on.
+    // same recovery semantics the cosim dispatcher relies on. The lint facts
+    // below are projected from this exact AST, not from a second parse.
     let ast = syntax.best_effort();
-    let model_name = lunco_modelica::ast_extract::extract_model_name_from_ast(ast);
+    let interface = lunco_modelica_ast::ast_extract::parse_model_interface_from_ast(ast);
+    let model_name = interface.model_name.clone();
     let parameters: std::collections::BTreeMap<String, f64> =
-        lunco_modelica::ast_extract::extract_parameters_from_ast(ast)
-            .into_iter()
-            .collect();
-    let inputs: std::collections::BTreeMap<String, f64> =
-        lunco_modelica::ast_extract::extract_inputs_with_defaults_from_ast(ast)
-            .into_iter()
-            .collect();
-
-    report.errors.extend(branch_lint(text));
+        interface.parameters.iter().map(|(name, value)| (name.clone(), *value)).collect();
+    let inputs: std::collections::BTreeMap<String, f64> = interface
+        .inputs
+        .iter()
+        .map(|(name, value)| (name.clone(), *value))
+        .collect();
 
     // The domain's own facts, for the authored rules. Merged at TOP LEVEL by
-    // `apply_lint_policy` — see the warning there about nesting.
-    // `model` is "" when extraction failed — a fact a rule can test, not an
-    // absence it has to infer.
-    report.lint_facts = Some(lunco_modelica::lint::modelica_facts(
-        model_name.as_deref().unwrap_or(""),
-        &parameters,
-        &inputs,
-        ast,
-    ));
+    // `apply_lint_policy` — see the warning there about nesting. All
+    // declaration and equation facts come from the already-recovered AST.
+    report.lint_facts = Some(
+        lunco_modelica_ast::lint_facts::modelica_facts_from_interface(ast, &interface),
+    );
 
     report.info = json!({
         "model": model_name,
@@ -404,102 +399,6 @@ fn validate_modelica(reference: &str, path: &Path, text: &str) -> ValidationRepo
         "outputs": serde_json::Value::Null,
     });
     report.finish()
-}
-
-/// `word` present in `line` with non-identifier characters on both sides.
-fn has_word(line: &str, word: &str) -> bool {
-    let bytes = line.as_bytes();
-    let is_ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
-    let mut from = 0;
-    while let Some(pos) = line[from..].find(word) {
-        let start = from + pos;
-        let end = start + word.len();
-        let left_ok = start == 0 || !is_ident(bytes[start - 1]);
-        let right_ok = end == bytes.len() || !is_ident(bytes[end]);
-        if left_ok && right_ok {
-            return true;
-        }
-        from = end;
-    }
-    false
-}
-
-/// Flag `if`/`when` equation constructs — rumoca's solver path is branch-free,
-/// so a model using them parses but will not simulate. Text-based (comments
-/// stripped, equation/algorithm sections tracked) so it also fires on source
-/// the recovering parser mangled.
-fn branch_lint(text: &str) -> Vec<String> {
-    const HINT: &str =
-        "rumoca's solver path is branch-free — rewrite as der(x) = expr using max()/min() clamps";
-    let mut errors = Vec::new();
-    let mut in_block_comment = false;
-    let mut in_string = false;
-    let mut in_equations = false;
-    for (idx, raw) in text.lines().enumerate() {
-        let n = idx + 1;
-        // Strip strings and comments in source order. A quote inside a comment
-        // is inert, and comment markers inside a description string are text.
-        let mut line = String::with_capacity(raw.len());
-        let mut chars = raw.chars().peekable();
-        let mut escaped = false;
-        while let Some(ch) = chars.next() {
-            if in_block_comment {
-                if ch == '*' && chars.peek() == Some(&'/') {
-                    chars.next();
-                    in_block_comment = false;
-                }
-                continue;
-            }
-            if in_string {
-                if ch == '"' && !escaped {
-                    in_string = false;
-                }
-                escaped = ch == '\\' && !escaped;
-                continue;
-            }
-            if ch == '/' {
-                match chars.peek() {
-                    Some('/') => break,
-                    Some('*') => {
-                        chars.next();
-                        in_block_comment = true;
-                        continue;
-                    }
-                    _ => {}
-                }
-            }
-            if ch == '"' {
-                in_string = true;
-                escaped = false;
-            } else {
-                line.push(ch);
-            }
-        }
-        let trimmed = line.trim();
-
-        if trimmed == "equation"
-            || trimmed == "initial equation"
-            || trimmed == "algorithm"
-            || trimmed == "initial algorithm"
-        {
-            in_equations = true;
-            continue;
-        }
-        if trimmed.starts_with("end ") || trimmed == "end" {
-            in_equations = false;
-            continue;
-        }
-
-        // `when` is only legal inside equation/algorithm sections, so flag it
-        // anywhere; `if` is also a valid *expression* in bindings, so only
-        // flag it inside the sections the solver walks.
-        if has_word(trimmed, "when") || has_word(trimmed, "elsewhen") {
-            errors.push(format!("line {n}: `when` equation — {HINT}"));
-        } else if in_equations && has_word(trimmed, "if") {
-            errors.push(format!("line {n}: `if` in an equation — {HINT}"));
-        }
-    }
-    errors
 }
 
 // ─── .usda ──────────────────────────────────────────────────────────────────
@@ -871,31 +770,6 @@ pub fn register(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn branch_lint_flags_when_and_equation_if() {
-        let src = "model M\n  Real x;\nequation\n  when x > 1 then\n    reinit(x, 0);\n  end when;\nend M;\n";
-        let errs = branch_lint(src);
-        assert!(errs.iter().any(|e| e.starts_with("line 4:")), "{errs:?}");
-    }
-
-    #[test]
-    fn branch_lint_ignores_comments_and_bindings() {
-        let src = "model M\n  // if this then that\n  parameter Real k = 2;\nequation\n  der(x) = max(0.0, k);\nend M;\n";
-        assert!(branch_lint(src).is_empty());
-    }
-
-    #[test]
-    fn branch_lint_ignores_multiline_model_descriptions() {
-        let src = "model M\n  \"Active when commanded;\n   otherwise idle\"\n  Real x;\nequation\n  der(x) = 0;\nend M;\n";
-        assert!(branch_lint(src).is_empty());
-    }
-
-    #[test]
-    fn branch_lint_ignores_quotes_and_keywords_in_comments() {
-        let src = "model M\n  // \"if this comment never closes\n  Real x;\nequation\n  /* when false then */ der(x) = 0;\nend M;\n";
-        assert!(branch_lint(src).is_empty());
-    }
 
     /// Write a `.usda` under the temp dir and hand back its path — the control
     /// checks run on a COMPOSED stage, so they can only be exercised through the

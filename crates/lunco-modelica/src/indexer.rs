@@ -1,11 +1,10 @@
-// Indexer no longer calls `rumoca_phase_parse::parse_to_ast` directly.
-// Going through `rumoca_compile::parsing::parse_files_parallel` routes
-// every parse through rumoca's content-hash keyed artifact cache
+// Bulk indexing goes through `rumoca_compile::parsing::parse_files_parallel`,
+// which routes every parse through rumoca's content-hash keyed artifact cache
 // (`<workspace>/.cache/rumoca/parsed-files/`). Second indexer runs and
 // the workbench's runtime drill-ins share the same cache entries, so
 // a file parsed here is instant at runtime and vice versa.
 use rumoca_compile::parsing::ast::{ClassDef, StoredDefinition};
-use rumoca_compile::parsing::{Causality, ClassType, Token, Variability};
+use rumoca_compile::parsing::{Causality, ClassType, Variability};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -84,78 +83,6 @@ impl Options {
             }
         }
         opts
-    }
-}
-
-/// Lower a parameter's default expression to a short display string
-/// suitable for `%paramName` substitution in icon Text primitives.
-/// Returns empty for expressions we can't summarise (function calls,
-/// arithmetic, etc.) — the substitutor then drops the placeholder
-/// rather than printing a confusing partial value.
-///
-/// - `Terminal{Bool, "true"}`              → `"true"`
-/// - `Terminal{UnsignedReal, "100"}`       → `"100"`
-/// - `Terminal{String, "Hello"}`           → `"Hello"` (quotes stripped)
-/// - `ComponentReference{Foo.Bar.Baz}`     → `"Baz"` (enum-style leaf)
-/// - `Unary{op:Minus, rhs:Terminal..}`     → `"-100"`
-/// - anything else                          → `""`
-fn format_default_expr(expr: &rumoca_compile::parsing::ast::Expression) -> String {
-    use rumoca_compile::parsing::ast::{Expression, TerminalType};
-    use rumoca_compile::parsing::ir_core::OpUnary;
-    match expr {
-        Expression::Terminal {
-            terminal_type,
-            token,
-            ..
-        } => {
-            let raw = token.text.as_ref();
-            match terminal_type {
-                TerminalType::String => raw.trim_matches('"').to_string(),
-                _ => raw.to_string(),
-            }
-        }
-        Expression::ComponentReference(cref) => cref
-            .parts
-            .last()
-            .map(|p| p.ident.text.as_ref().to_string())
-            .unwrap_or_default(),
-        Expression::Unary { op, rhs, .. } => match (op, rhs.as_ref()) {
-            (OpUnary::Minus, inner) => {
-                let inner = format_default_expr(inner);
-                if inner.is_empty() {
-                    String::new()
-                } else {
-                    format!("-{}", inner)
-                }
-            }
-            // `+1` is parsed as Unary{Plus, Terminal "1"}. Without
-            // this branch the leading `+` swallowed the whole
-            // expression to empty, so MSL params declared as `k1=+1`
-            // (Math.Add, Math.Add3) had blank defaults in the index.
-            (OpUnary::Plus, inner) => {
-                let inner = format_default_expr(inner);
-                if inner.is_empty() {
-                    String::new()
-                } else {
-                    format!("+{}", inner)
-                }
-            }
-            _ => String::new(),
-        },
-        Expression::Parenthesized { inner, .. } => format_default_expr(inner),
-        // Array literals like `{1}`, `{1, 2, 3}` — render with
-        // braces so the Modelica icon text reads natively (matches
-        // what OMEdit shows for `qd_max=%qd_max` on KinematicPTP).
-        // Multi-dimensional arrays nest the same formatting.
-        Expression::Array { elements, .. } => {
-            let parts: Vec<String> = elements.iter().map(format_default_expr).collect();
-            if parts.iter().any(|s| s.is_empty()) {
-                String::new()
-            } else {
-                format!("{{{}}}", parts.join(","))
-            }
-        }
-        _ => String::new(),
     }
 }
 
@@ -339,7 +266,7 @@ struct MSLIndexer {
 /// short name for the palette tagline lookup, full qualified names
 /// are matched elsewhere).
 fn extract_documentation_infos(source: &str) -> HashMap<String, String> {
-    let Ok(ast) = rumoca_phase_parse::parse_to_ast(source, "msl.mo") else {
+    let Ok(ast) = lunco_modelica_ast::parse_to_ast(source, "msl.mo") else {
         return HashMap::new();
     };
     let mut out: HashMap<String, String> = HashMap::new();
@@ -431,35 +358,6 @@ fn msl_domain(full_name: &str) -> String {
         parts.next().unwrap_or("").to_string()
     } else {
         String::new()
-    }
-}
-
-/// Join a class's `description: Vec<Token>` tokens into a single
-/// string and strip the surrounding `"…"` quotes. Modelica parses
-/// the description as a sequence of concatenated string literals so
-/// authors can split long descriptions across lines with `+`; we
-/// just join and clean up.
-fn clean_short_description(tokens: &[Token]) -> Option<String> {
-    if tokens.is_empty() {
-        return None;
-    }
-    let mut s = String::new();
-    for tok in tokens {
-        let t = tok.text.trim();
-        let t = t.strip_prefix('"').unwrap_or(t);
-        let t = t.strip_suffix('"').unwrap_or(t);
-        if !t.is_empty() {
-            if !s.is_empty() {
-                s.push(' ');
-            }
-            s.push_str(t);
-        }
-    }
-    let s = s.trim().to_string();
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
     }
 }
 
@@ -726,17 +624,18 @@ impl MSLIndexer {
                     // R(start=1)`) when no binding is present.
                     // Numeric and string literals show as-written;
                     // enum refs collapse to the leaf name (matches
-                    // OMEdit); array literals render `{a,b,c}`.
+                    // OMEdit); arithmetic and array literals use the shared
+                    // AST display projection.
                     let default = comp
                         .binding
                         .as_ref()
-                        .map(format_default_expr)
+                        .map(lunco_modelica_ast::ast_extract::format_expression_for_display)
                         .filter(|s| !s.is_empty())
                         .unwrap_or_else(|| {
                             // `comp.start: Expression` — Empty when no
-                            // explicit start was given. format_default_expr
-                            // returns "" for `Empty` so this is safe.
-                            format_default_expr(&comp.start)
+                            // explicit start was given. The shared display
+                            // projection returns "" for `Empty` so this is safe.
+                            lunco_modelica_ast::ast_extract::format_expression_for_display(&comp.start)
                         });
                     // TODO: resolve `unit` from the type definition.
                     // For `parameter SI.Torque tau_constant` the
@@ -929,8 +828,8 @@ impl MSLIndexer {
 
                 self.resolve_inheritance(full_name, &mut ports, &mut parameters, &mut visited);
 
-                let short_name = crate::ast_extract::short_name(full_name).to_string();
-                let category = crate::ast_extract::parent_qualified(full_name).replace('.', "/");
+                let short_name = lunco_modelica_ast::ast_extract::short_name(full_name).to_string();
+                let category = lunco_modelica_ast::ast_extract::parent_qualified(full_name).replace('.', "/");
 
                 // Inheritance-merged icon. The merge logic lives in
                 // `extract_icon_inherited`; the resolver does
@@ -983,7 +882,8 @@ impl MSLIndexer {
                         })
                     });
 
-                let short_description = clean_short_description(&class.description);
+                let short_description =
+                    lunco_modelica_ast::ast_extract::description_from_tokens(&class.description);
                 let documentation_info = self.doc_infos.get(&short_name).cloned();
                 let is_example = full_name.contains(".Examples.");
                 let domain = msl_domain(full_name);
@@ -1117,7 +1017,7 @@ fn collect_mo_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
 /// not parse work.
 ///
 /// So we bypass the cache layer entirely: parse each file with the **raw,
-/// lock-free** `rumoca_phase_parse::parse_to_ast` (exactly what
+/// lock-free** `lunco_modelica_ast::parse_to_ast` (exactly what
 /// `parse_files_parallel` calls internally — identical AST) on a
 /// **dedicated, bounded** rayon pool. No shared global pool, no global
 /// mutex → no contention with the render loop; capped threads leave cores
@@ -1173,7 +1073,7 @@ pub fn parse_native_msl_bundle() -> Vec<(String, StoredDefinition)> {
 #[cfg(not(target_arch = "wasm32"))]
 fn parse_one_mo(path: &std::path::Path) -> Option<(String, StoredDefinition)> {
     let src = std::fs::read_to_string(path).ok()?;
-    match rumoca_phase_parse::parse_to_ast(&src, &path.to_string_lossy()) {
+    match lunco_modelica_ast::parse_to_ast(&src, &path.to_string_lossy()) {
         Ok(ast) => Some((path.to_string_lossy().to_string(), ast)),
         Err(e) => {
             log::warn!("[msl-bundle] parse failed for `{}`: {e}", path.display());
@@ -1389,7 +1289,7 @@ fn scan_bundled_examples() -> Vec<crate::package_tree::types::PackageNode> {
     bundled_models()
         .into_iter()
         .filter_map(|m| {
-            let syntax = rumoca_phase_parse::parse_to_syntax(m.source, m.filename);
+            let syntax = lunco_modelica_ast::parse_to_syntax(m.source, m.filename);
             let ast = syntax.best_effort();
             let (top_short, top_class) = ast.classes.iter().next()?;
             Some(bundled_class_node(m.filename, top_short, top_class, ""))
@@ -1407,7 +1307,7 @@ fn bundled_class_node(
     use crate::package_tree::types::PackageNode;
     use crate::state::ModelLibrary;
 
-    let qualified = crate::ast_extract::qualify(parent_path, short_name);
+    let qualified = lunco_modelica_ast::ast_extract::qualify(parent_path, short_name);
     let kind = crate::index::map_class_type(&class_def.class_type);
     let id = format!("bundled://{filename}#{qualified}");
     let is_package = matches!(kind, ClassKind::Package);
@@ -1594,7 +1494,7 @@ fn push_file_units(path: &std::path::Path, units: &mut Vec<(String, WarmKind)>) 
         .to_string();
     // Lenient parse to discover top-level classes. Errors don't kill
     // the warm — we still emit any classes the parser could salvage.
-    let syntax = rumoca_phase_parse::parse_to_syntax(&source, &filename);
+    let syntax = lunco_modelica_ast::parse_to_syntax(&source, &filename);
     let ast = syntax.best_effort();
     let mut emitted = 0;
     for (top_name, class_def) in &ast.classes {
