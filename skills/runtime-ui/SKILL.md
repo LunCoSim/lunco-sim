@@ -21,7 +21,7 @@ Before changing a runtime surface, read:
 4. [`skills/test-via-api/SKILL.md`](../test-via-api/SKILL.md) for live verification
 
 The current implementation is the `luncosim` windowed UI layer in
-`crates/lunco-luncosim/src/ui/`. Do not assume that `lunica` or a headless
+`crates/lunco-luncosim-ui/src/ui/`. Do not assume that `lunica` or a headless
 server has this surface manifest.
 
 ## Choose the right layer
