@@ -28,16 +28,18 @@
 //!
 //! [`Port`]: crate::architecture::Port
 //!
-//! ## One registry, four thin operations
+//! ## One registry, one discovery path and four thin access operations
 //!
-//! Every port-bearing backend is one [`PortBackend`] entry (list / read-output /
-//! read-input / write-input), registered into the [`PortRegistry`] resource. The
-//! four query methods just fold over the registered backends in order, so a new
-//! backend is added by **registering** it — no consumer changes. Registration
-//! order *is* resolution precedence (first match wins).
+//! Every port-bearing backend is one [`PortBackend`] entry with an entity
+//! enumerator and the access operations (list / read-output / read-input /
+//! write-input), registered into the [`PortRegistry`] resource. Discovery and
+//! access fold over the registered backends in order, so a new backend is added
+//! by **registering** it — no consumer changes. Registration order *is*
+//! resolution precedence (first match wins).
 
 use bevy::prelude::*;
 use std::collections::{BTreeMap, HashMap};
+use std::hash::{Hash, Hasher};
 
 use crate::InputPorts;
 
@@ -159,6 +161,27 @@ pub struct PortOwnerInfo {
     pub metadata: PortMetadata,
 }
 
+/// A process-local handle to one registered port backend.
+///
+/// It is captured by inspection projections so a later live-value read can
+/// address the original owner directly instead of folding over every backend
+/// again. Like [`ResolvedPort`], it is valid only for the current registry
+/// ordering and must not be serialized.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PortHandle {
+    backend: usize,
+    slot: Option<u64>,
+    reader: Option<fn(&World, Entity, u64) -> Option<f64>>,
+}
+
+impl PartialEq for PortHandle {
+    fn eq(&self, other: &Self) -> bool {
+        self.backend == other.backend && self.slot == other.slot
+    }
+}
+
+impl Eq for PortHandle {}
+
 /// The access side on which a duplicate public name collides.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PortCollisionDirection {
@@ -211,7 +234,28 @@ pub fn push_map(out: &mut Vec<PortRef>, map: &HashMap<String, f64>, dir: PortDir
     }
 }
 
-/// One port-bearing backend, expressed as four operations over `(World, Entity)`.
+/// Return an order-independent cache key for a backend's port-name set.
+///
+/// Values are deliberately excluded: a topology key changes only when port
+/// identity changes, so live samples can be refreshed without rebuilding the
+/// metadata rows.
+pub fn port_name_set_key<'a, I>(names: I) -> u64
+where
+    I: IntoIterator<Item = &'a String>,
+{
+    let mut key = 0xcbf29ce484222325u64;
+    let mut count = 0u64;
+    for name in names {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        name.hash(&mut hasher);
+        key = key.wrapping_add(hasher.finish().rotate_left(17));
+        count = count.wrapping_add(1);
+    }
+    key ^ count.rotate_left(41)
+}
+
+/// One port-bearing backend, expressed as an entity enumerator plus operations
+/// over `(World, Entity)`.
 ///
 /// Ops are plain `fn` pointers (non-capturing closures), so a backend is `Copy`
 /// and the registry is cheap to clone out of the world for `&mut World` access.
@@ -221,6 +265,18 @@ pub fn push_map(out: &mut Vec<PortRef>, map: &HashMap<String, f64>, dir: PortDir
 /// bidirectional — its one scalar *is* both its output and input.
 #[derive(Clone, Copy)]
 pub struct PortBackend {
+    /// Append entities owned by this backend to `out`.
+    ///
+    /// This is the backend's authoritative discovery boundary. Consumers that
+    /// need to inspect all ports must use [`PortRegistry::port_entities`]
+    /// instead of scanning every ECS entity and probing every backend.
+    pub list_entities: fn(&mut World, &mut Vec<Entity>),
+    /// Return a key for this backend's port identity on `entity`.
+    ///
+    /// The key must ignore live values and change when the backend's port names
+    /// or directions change. It lets consumers cache metadata while still
+    /// observing dynamic authored surfaces.
+    pub topology_key: fn(&World, Entity) -> u64,
     /// Append this backend's ports on `entity` (outputs then inputs) to `out`.
     pub list: fn(&World, Entity, &mut Vec<PortRef>),
     /// Describe one port returned by `list`, or `None` for the generic scalar
@@ -283,7 +339,7 @@ pub struct ResolvedPort {
 /// for every exposed simulation value, whichever backend owns it.
 ///
 /// Backends are registered (in dependency-correct order) by their owning crate's
-/// plugin; the four query methods fold over them. Registration order is
+/// plugin; the registry folds their discovery and access operations. Registration order is
 /// resolution precedence (first match wins). `Clone` is cheap (a `Vec` of `Copy`
 /// `fn` pointers) so a `&mut World` caller clones it out before writing.
 #[derive(Resource, Clone)]
@@ -309,6 +365,19 @@ impl Default for PortRegistry {
 /// control/authority policy. A controller, wire, script, or network peer writes
 /// these inputs through [`PortRegistry`] exactly as it writes a Modelica input.
 const INPUT_PORTS_BACKEND: PortBackend = PortBackend {
+    list_entities: |world, out| {
+        out.extend(
+            world
+                .query_filtered::<Entity, With<InputPorts>>()
+                .iter(world),
+        );
+    },
+    topology_key: |world, entity| {
+        world
+            .get::<InputPorts>(entity)
+            .map(|inputs| port_name_set_key(inputs.values.keys()))
+            .unwrap_or(0)
+    },
     list: |world, entity, out| {
         if let Some(inputs) = world.get::<InputPorts>(entity) {
             push_map(out, &inputs.values, PortDirection::In);
@@ -363,6 +432,60 @@ impl PortRegistry {
         self.backends.push(backend);
     }
 
+    /// Enumerate every entity owned by at least one registered port backend.
+    ///
+    /// Entity discovery belongs to each backend because only the backend owner
+    /// knows which component or authored surface makes an entity eligible. The
+    /// registry only merges and deduplicates those authoritative candidate sets;
+    /// it never infers ownership by probing the whole ECS world.
+    pub fn port_entities(&self, world: &mut World) -> Vec<Entity> {
+        self.port_entities_with_topology_keys(world)
+            .into_iter()
+            .map(|(entity, _)| entity)
+            .collect()
+    }
+
+    /// Enumerate every backend-owned entity with its combined port-identity key.
+    ///
+    /// Each backend's key is evaluated alongside that backend's authoritative
+    /// entity list. This avoids probing every registered backend for every
+    /// candidate while retaining the same combined key for entities exposed by
+    /// multiple owners.
+    pub fn port_entities_with_topology_keys(&self, world: &mut World) -> Vec<(Entity, u64)> {
+        let mut keys: HashMap<Entity, u64> = HashMap::new();
+        for (backend_index, backend) in self.backends.iter().enumerate() {
+            let mut owned = Vec::new();
+            (backend.list_entities)(world, &mut owned);
+            owned.sort_unstable_by_key(|entity| entity.to_bits());
+            owned.dedup();
+            for entity in owned {
+                let owner_key = (backend.topology_key)(world, entity);
+                let contribution = owner_key.rotate_left((backend_index % 63) as u32);
+                keys.entry(entity)
+                    .and_modify(|key| *key = key.wrapping_add(contribution))
+                    .or_insert(contribution);
+            }
+        }
+        let mut entities: Vec<_> = keys.into_iter().collect();
+        entities.sort_unstable_by_key(|(entity, _)| entity.to_bits());
+        entities
+    }
+
+    /// Return the combined port-identity key for one entity.
+    ///
+    /// Each backend owns the identity of its own surface; the registry only
+    /// combines those owner keys for cache invalidation. Live port values are
+    /// intentionally not part of this key.
+    pub fn entity_port_topology_key(&self, world: &World, entity: Entity) -> u64 {
+        self.backends
+            .iter()
+            .enumerate()
+            .fold(0u64, |key, (index, backend)| {
+                let owner_key = (backend.topology_key)(world, entity);
+                key.wrapping_add(owner_key.rotate_left((index % 63) as u32))
+            })
+    }
+
     /// Enumerate every exposed port on `entity`, across all backends.
     /// The backbone of `ListPorts`.
     pub fn entity_ports(&self, world: &World, entity: Entity) -> Vec<PortRef> {
@@ -379,20 +502,58 @@ impl PortRegistry {
     /// remains the compact value-only surface used by compatibility consumers;
     /// both are produced from the same backend list callbacks.
     pub fn entity_port_infos(&self, world: &World, entity: Entity) -> Vec<PortInfo> {
+        self.entity_port_infos_with_handles(world, entity)
+            .into_iter()
+            .map(|(_, info)| info)
+            .collect()
+    }
+
+    /// Enumerate every exposed port with its owning backend handle.
+    ///
+    /// This is the cache-friendly inspection surface. The handle lets a
+    /// consumer refresh the value through the same owner without re-running
+    /// registry precedence resolution on every sample.
+    pub fn entity_port_infos_with_handles(
+        &self,
+        world: &World,
+        entity: Entity,
+    ) -> Vec<(PortHandle, PortInfo)> {
         let mut out = Vec::new();
-        for backend in &self.backends {
+        for (backend_index, backend) in self.backends.iter().enumerate() {
             let mut ports = Vec::new();
             (backend.list)(world, entity, &mut ports);
             out.extend(ports.into_iter().map(|port| {
-                PortInfo {
-                    metadata: backend
-                        .metadata
-                        .map(|describe| describe(world, entity, &port.name, port.direction))
-                        .unwrap_or_else(|| PortMetadata::unknown(port.direction)),
-                    name: port.name,
-                    direction: port.direction,
-                    value: port.value,
-                }
+                (
+                    PortHandle {
+                        backend: backend_index,
+                        slot: match port.direction {
+                            PortDirection::In => backend
+                                .resolve_input
+                                .and_then(|resolve| resolve(world, entity, &port.name)),
+                            PortDirection::Out => backend
+                                .resolve_output
+                                .and_then(|resolve| resolve(world, entity, &port.name)),
+                            PortDirection::InOut => backend
+                                .resolve_output
+                                .and_then(|resolve| resolve(world, entity, &port.name))
+                                .or_else(|| {
+                                    backend
+                                        .resolve_input
+                                        .and_then(|resolve| resolve(world, entity, &port.name))
+                                }),
+                        },
+                        reader: backend.read_slot,
+                    },
+                    PortInfo {
+                        metadata: backend
+                            .metadata
+                            .map(|describe| describe(world, entity, &port.name, port.direction))
+                            .unwrap_or_else(|| PortMetadata::unknown(port.direction)),
+                        name: port.name,
+                        direction: port.direction,
+                        value: port.value,
+                    },
+                )
             }));
         }
         out
@@ -533,6 +694,30 @@ impl PortRegistry {
         self.backends
             .iter()
             .find_map(|b| (b.read_input)(world, entity, name))
+    }
+
+    /// Read a port through the backend that produced its inspection row.
+    ///
+    /// This preserves per-owner rows when two backends expose the same public
+    /// name and avoids a full registry fold in bounded-cadence inspectors.
+    pub fn read_port_for_handle(
+        &self,
+        world: &World,
+        handle: PortHandle,
+        entity: Entity,
+        name: &str,
+        direction: PortDirection,
+    ) -> Option<f64> {
+        if let (Some(slot), Some(read)) = (handle.slot, handle.reader) {
+            return read(world, entity, slot);
+        }
+        let backend = self.backends.get(handle.backend)?;
+        match direction {
+            PortDirection::In => (backend.read_input)(world, entity, name),
+            PortDirection::Out => (backend.read_output)(world, entity, name),
+            PortDirection::InOut => (backend.read_output)(world, entity, name)
+                .or_else(|| (backend.read_input)(world, entity, name)),
+        }
     }
 
     /// Whether an output port is declared by an owning backend, independently
@@ -735,6 +920,8 @@ mod tests {
     }
 
     const OWNER_A_INPUT: PortBackend = PortBackend {
+        list_entities: |_world, _out| {},
+        topology_key: |_world, _entity| 0,
         list: duplicate_input_list,
         metadata: Some(owner_a_metadata),
         read_output: no_read,
@@ -747,6 +934,8 @@ mod tests {
     };
 
     const OWNER_B_INPUT: PortBackend = PortBackend {
+        list_entities: |_world, _out| {},
+        topology_key: |_world, _entity| 0,
         list: duplicate_input_list,
         metadata: Some(owner_b_metadata),
         read_output: no_read,
@@ -759,6 +948,8 @@ mod tests {
     };
 
     const OWNER_A_INOUT: PortBackend = PortBackend {
+        list_entities: |_world, _out| {},
+        topology_key: |_world, _entity| 0,
         list: duplicate_inout_list,
         metadata: Some(owner_a_metadata),
         read_output: no_read,
@@ -771,6 +962,8 @@ mod tests {
     };
 
     const OWNER_B_INOUT: PortBackend = PortBackend {
+        list_entities: |_world, _out| {},
+        topology_key: |_world, _entity| 0,
         list: duplicate_inout_list,
         metadata: Some(owner_b_metadata),
         read_output: no_read,
@@ -803,6 +996,68 @@ mod tests {
         assert!(ports
             .iter()
             .any(|port| port.name == "arm" && port.direction == super::PortDirection::In));
+    }
+
+    #[test]
+    fn topology_key_ignores_live_values_but_tracks_port_identity() {
+        let mut world = World::new();
+        let entity = world.spawn(InputPorts::new(&["throttle"])).id();
+        let registry = PortRegistry::default();
+        let (handle, info) = registry
+            .entity_port_infos_with_handles(&world, entity)
+            .into_iter()
+            .next()
+            .unwrap();
+        assert_eq!(info.name, "throttle");
+        let initial = registry.entity_port_topology_key(&world, entity);
+
+        assert!(registry.write_port(&mut world, entity, "throttle", 0.75));
+        assert_eq!(registry.entity_port_topology_key(&world, entity), initial);
+        assert_eq!(
+            registry.read_port_for_handle(&world, handle, entity, "throttle", PortDirection::In,),
+            Some(0.75)
+        );
+
+        world
+            .get_mut::<InputPorts>(entity)
+            .unwrap()
+            .values
+            .insert("steer".into(), 0.0);
+        assert_ne!(registry.entity_port_topology_key(&world, entity), initial);
+    }
+
+    #[test]
+    fn registry_discovers_backend_owned_entities_once() {
+        let mut world = World::new();
+        let first = world.spawn(InputPorts::new(&["first"])).id();
+        let second = world.spawn(InputPorts::new(&["second"])).id();
+        world.spawn_empty();
+
+        let mut registry = PortRegistry::default();
+        registry.register(PortBackend {
+            list_entities: |world, out| {
+                out.extend(
+                    world
+                        .query_filtered::<Entity, With<InputPorts>>()
+                        .iter(world),
+                );
+            },
+            topology_key: |_world, _entity| 0,
+            list: duplicate_input_list,
+            metadata: None,
+            read_output: no_read,
+            read_input: no_read,
+            write_input,
+            resolve_output: None,
+            resolve_input: None,
+            read_slot: None,
+            write_slot: None,
+        });
+
+        let entities = registry.port_entities(&mut world);
+        assert_eq!(entities.len(), 2);
+        assert!(entities.contains(&first));
+        assert!(entities.contains(&second));
     }
 
     #[test]

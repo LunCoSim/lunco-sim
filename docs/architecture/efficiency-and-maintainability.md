@@ -273,6 +273,10 @@ range, source, or authority rules from port names. The panel samples this
 projection at a bounded 10 Hz cadence because some physics outputs do not carry
 a shared change marker; command emission still uses the existing typed
 `SetPorts`/`ReleasePort` observers.
+The inspection cache compares each candidate's backend-owned `topology_key`
+before rebuilding rows and metadata, then refreshes only live values and wire /
+hold decorations when the identity is stable. A topology key excludes live
+values and is implemented by the backend that owns the port surface.
 
 ### The model: FMI valueReference (resolve once, exchange by handle)
 
