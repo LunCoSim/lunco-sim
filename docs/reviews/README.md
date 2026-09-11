@@ -23,6 +23,9 @@ lesson, which belongs in the architecture doc for that subsystem.
 - [`open-400fps-performance-handover.md`](open-400fps-performance-handover.md) —
   the current 400-FPS target, change-driven globe LOD implementation, and the
   measured upstream/render blocker.
+- [`open-builder-perspective-render-stalls.md`](open-builder-perspective-render-stalls.md) —
+  Tracy diagnosis of the event-driven render-initialisation bursts seen when
+  opening the Builder perspective; telemetry is not the dominant cause.
 - [`open-rbac-not-enforced.md`](open-rbac-not-enforced.md) — **the project does
   not enforce access control.** Trusted LAN only; never expose a host to an
   untrusted network.
