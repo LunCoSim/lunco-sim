@@ -2177,7 +2177,7 @@ mod tests {
     use super::{
         has_authored_movement_route, ordered_runtime_marker_entities, resample_polyline,
         ribbon_right, ribbon_tangent, route_ribbon_points, route_visual_state, runtime_route_loops,
-        BehaviorXml, ReachedWaypoints, RibbonPoint, WAYPOINT_MARKER_ASSET,
+        BehaviorXml, ReachedWaypoints, RibbonPoint,
     };
     use crate::surface_pick::{resolve_cursor_surface, SurfacePickPolicy};
     use bevy::math::DVec3;
@@ -2185,6 +2185,7 @@ mod tests {
     use lunco_autopilot::{
         btcpp_xml::value_to_xml, AutopilotBehaviorSpec, BehaviorSpec, PatrolWaypoint,
     };
+    use lunco_usd::document::WAYPOINT_MARKER_ASSET;
 
     #[test]
     fn analytic_surface_remains_authoritative_when_streamed_terrain_hit_is_removed() {

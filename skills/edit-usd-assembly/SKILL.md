@@ -389,6 +389,17 @@ distance joints and generic `PhysicsJoint` have no primary axis. Use
 `require_positions`/`require_rotations` only when the design requires explicit
 authored frames. Run `assembly_joint_audit` for the diagnostic regression.
 
+To inspect and adjust a joint interactively, select the joint prim in the
+Editor Prims tree and use the Inspector's `USD Joint` `Frames` controls for
+`Local position 0` and `Local position 1`. Values are canonical metres in the
+displayed basis. The focused USD preview draws each authored frame as an amber
+anchor with red/green/blue XYZ arrows and links the two anchors, so a changed
+position is visible on the composed bodies after reprojection. The markers are
+preview-only and do not create runtime physics joints; do not move the joint
+prim's transform when the intent is to change an endpoint frame. Position
+changes use the existing generation-checked, journalled `ApplyUsdOp` path and
+remain undoable. Non-finite values are rejected visibly by the Inspector.
+
 For numeric part transforms, use the focused preview's Inspector Transform
 section for referenced children as well as locally authored parts. Wait for
 the component's dependency closure to load before proposing transforms; a

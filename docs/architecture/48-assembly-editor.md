@@ -628,6 +628,15 @@ float, double and half quaternion opinions instead of reporting them absent.
 These type and axis semantics follow the
 [OpenUSD joint schema](https://openusd.org/release/api/usd_physics_page_front.html).
 
+Selecting a composed USD Physics joint in the Editor exposes its authored
+`localPos0`/`localPos1` fields in the Inspector. The focused USD preview draws
+each available frame as an amber anchor with red/green/blue XYZ arrows and
+connects both anchors, so changing a local position has immediate visible
+feedback on the selected bodies. These markers are preview-only: they read the
+projected body transforms and never create runtime Avian joints. Position edits
+remain canonical typed `ApplyUsdOp` journal operations with generation checks,
+undo, and reprojection; invalid non-finite values are rejected in the Inspector.
+
 The companion `assembly_ui` tool library is presentation policy over the same
 typed boundary. Its templates describe the registered `editor` perspective,
 Twin Browser, USD prim tree, USD viewport, Connections canvas, Inspector, and

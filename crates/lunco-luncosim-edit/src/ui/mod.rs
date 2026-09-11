@@ -872,10 +872,22 @@ impl Plugin for SceneEditUiPlugin {
         // Standard USD Physics joint authoring: the producer reads the
         // composed joint once per selection/stage revision, while the Inspector
         // dispatches the same typed USD operations as Rhai and the API.
+        app.init_gizmo_group::<usd_joint::UsdJointPreviewGizmoConfigGroup>();
         app.init_resource::<usd_joint::UsdJointView>();
         app.add_view_model(
             usd_joint::produce_usd_joint_view,
             usd_selection_view_changed,
+        );
+        app.add_systems(
+            PostUpdate,
+            (
+                usd_joint::sync_usd_joint_preview_gizmo_config,
+                usd_joint::draw_usd_joint_preview_viz
+                    .after(bevy::transform::TransformSystems::Propagate)
+                    .before(bevy::camera::CameraUpdateSystems),
+            )
+                .chain()
+                .after(lunco_core::SceneViewportSet::Reconcile),
         );
         app.init_resource::<usd_animation::UsdAnimationView>();
         app.add_view_model(

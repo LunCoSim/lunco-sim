@@ -37,6 +37,16 @@ const JOINT_BOOL_ATTRIBUTES: &[(&str, &str)] = &[
     ),
 ];
 
+const ANCHOR_COLOR: Color = Color::srgb(1.0, 0.85, 0.2);
+const LINK_COLOR: Color = Color::srgb(0.55, 0.55, 0.55);
+const ANCHOR_RADIUS: f32 = 0.06;
+const AXIS_LEN: f32 = 0.4;
+
+/// Gizmos for USD previews use the session's isolated render layer rather
+/// than the live-scene layer used by the ordinary editor gizmo.
+#[derive(Default, Reflect, GizmoConfigGroup)]
+pub(crate) struct UsdJointPreviewGizmoConfigGroup;
+
 /// One standard scalar on a joint, retained in the USD-native value frame.
 #[derive(Clone)]
 pub struct JointScalar {
@@ -370,6 +380,156 @@ fn body_value(targets: &[String]) -> Option<String> {
     targets.first().cloned().filter(|_| targets.len() == 1)
 }
 
+fn preview_body_path(targets: &[String]) -> Option<&str> {
+    match targets {
+        [] => Some(""),
+        [target] => Some(target),
+        _ => None,
+    }
+}
+
+fn preview_body_transform(
+    path: &str,
+    session: &lunco_usd::ui::viewport::UsdPreviewSession,
+    q_prims: &Query<(Entity, &UsdPrimPath, &GlobalTransform)>,
+    q_globals: &Query<&GlobalTransform>,
+    q_parents: &Query<&ChildOf>,
+) -> Option<GlobalTransform> {
+    if path.is_empty() {
+        return q_globals.get(session.scene_root()).ok().copied();
+    }
+
+    q_prims
+        .iter()
+        .find(|(entity, prim, _)| {
+            prim.stage_handle.id() == session.stage_handle().id()
+                && prim.path == path
+                && crate::ui::is_editor_preview_entity(*entity, session.scene_root(), q_parents)
+        })
+        .map(|(_, _, transform)| *transform)
+}
+
+fn preview_joint_frame(
+    position: Option<[f64; 3]>,
+    rotation: Option<[f64; 4]>,
+    body: &GlobalTransform,
+) -> Option<(Vec3, Quat)> {
+    let position = position?;
+    if position.iter().any(|value| !value.is_finite()) {
+        return None;
+    }
+    let local_position = Vec3::new(position[0] as f32, position[1] as f32, position[2] as f32);
+    let anchor = body.transform_point(local_position);
+    if !anchor.is_finite() {
+        return None;
+    }
+
+    let local_rotation = match rotation {
+        None => DQuat::IDENTITY,
+        Some(value) => {
+            if value.iter().any(|component| !component.is_finite()) {
+                return None;
+            }
+            let quaternion = DQuat::from_xyzw(value[0], value[1], value[2], value[3]);
+            let length_squared = quaternion.length_squared();
+            if !length_squared.is_finite() || length_squared <= 1.0e-24 {
+                return None;
+            }
+            quaternion.normalize()
+        }
+    };
+    let world_rotation = body.rotation().as_dquat() * local_rotation;
+    world_rotation
+        .is_finite()
+        .then(|| (anchor, world_rotation.as_quat()))
+}
+
+fn draw_preview_joint_frame(
+    gizmos: &mut Gizmos<UsdJointPreviewGizmoConfigGroup>,
+    anchor: Vec3,
+    rotation: Quat,
+) {
+    const X_COLOR: Color = Color::srgb(0.95, 0.2, 0.2);
+    const Y_COLOR: Color = Color::srgb(0.2, 0.9, 0.3);
+    const Z_COLOR: Color = Color::srgb(0.25, 0.55, 1.0);
+    let length = AXIS_LEN * 1.5;
+    gizmos.sphere(anchor, ANCHOR_RADIUS, ANCHOR_COLOR);
+    for (axis, color) in [(Vec3::X, X_COLOR), (Vec3::Y, Y_COLOR), (Vec3::Z, Z_COLOR)] {
+        let direction = rotation * axis * length;
+        gizmos.arrow(anchor, anchor + direction, color);
+    }
+}
+
+/// Draw the selected joint's authored frames in an isolated USD preview.
+///
+/// The preview is intentionally inert: it reads the composed joint view and
+/// projected body transforms, but never creates or mutates an Avian joint.
+pub(crate) fn sync_usd_joint_preview_gizmo_config(
+    viewport: Option<Res<UsdViewportState>>,
+    mut store: ResMut<bevy::gizmos::config::GizmoConfigStore>,
+) {
+    let (config, _) = store.config_mut::<UsdJointPreviewGizmoConfigGroup>();
+    let Some(layer) = viewport
+        .as_deref()
+        .and_then(UsdViewportState::focused_session)
+        .map(|session| bevy::camera::visibility::RenderLayers::layer(session.render_layer()))
+    else {
+        config.enabled = false;
+        return;
+    };
+
+    config.enabled = true;
+    config.render_layers = layer;
+    config.depth_bias = -1.0;
+    config.line.width = 4.0;
+}
+
+pub(crate) fn draw_usd_joint_preview_viz(
+    mut gizmos: Gizmos<UsdJointPreviewGizmoConfigGroup>,
+    viewport: Option<Res<UsdViewportState>>,
+    views: Option<Res<UsdJointView>>,
+    q_prims: Query<(Entity, &UsdPrimPath, &GlobalTransform)>,
+    q_globals: Query<&GlobalTransform>,
+    q_parents: Query<&ChildOf>,
+) {
+    let (Some(viewport), Some(views)) = (viewport, views) else {
+        return;
+    };
+    let Some(session) = viewport.focused_session() else {
+        return;
+    };
+    let Some(view) = views.focused(&viewport) else {
+        return;
+    };
+    let Some(entity) = view.entity else {
+        return;
+    };
+    if !crate::ui::is_editor_preview_entity(entity, session.scene_root(), &q_parents) {
+        return;
+    }
+
+    let body0 = preview_body_path(&view.body0)
+        .and_then(|path| preview_body_transform(path, session, &q_prims, &q_globals, &q_parents));
+    let body1 = preview_body_path(&view.body1)
+        .and_then(|path| preview_body_transform(path, session, &q_prims, &q_globals, &q_parents));
+    let frame0 = body0
+        .as_ref()
+        .and_then(|body| preview_joint_frame(view.local_pos0, view.local_rot0, body));
+    let frame1 = body1
+        .as_ref()
+        .and_then(|body| preview_joint_frame(view.local_pos1, view.local_rot1, body));
+
+    if let Some((anchor, rotation)) = frame0 {
+        draw_preview_joint_frame(&mut gizmos, anchor, rotation);
+    }
+    if let Some((anchor, rotation)) = frame1 {
+        draw_preview_joint_frame(&mut gizmos, anchor, rotation);
+    }
+    if let (Some((anchor0, _)), Some((anchor1, _))) = (frame0, frame1) {
+        gizmos.line(anchor0, anchor1, LINK_COLOR);
+    }
+}
+
 fn apply_attribute(
     ctx: &mut lunco_workbench::PanelCtx,
     view: &UsdJointSessionView,
@@ -474,6 +634,17 @@ fn usd_quat_literal(type_name: &str, value: [f64; 4]) -> Option<String> {
     .ok()
 }
 
+fn usd_point_literal(type_name: &str, value: [f64; 3]) -> Result<String, String> {
+    if value.iter().any(|component| !component.is_finite()) {
+        return Err("Position must contain only finite values".into());
+    }
+    normalize_value_literal(
+        type_name,
+        &format!("({}, {}, {})", value[0], value[1], value[2]),
+    )
+    .map_err(|error| error.to_string())
+}
+
 /// Paint the authored standard joint editor for the selected prim.
 pub fn authored_joint_section(
     ui: &mut egui::Ui,
@@ -559,25 +730,30 @@ pub fn authored_joint_section(
 
             ui.separator();
             ui.label(egui::RichText::new("Frames (canonical metres / basis)").strong());
+            ui.weak("Amber anchors and XYZ arrows in the preview show the edited joint frames.");
             if let Some(current) = view.local_pos0 {
                 if let Some(value) = position_control(ui, "Local position 0", current) {
                     let type_name = schema_type("physics:localPos0", "point3f");
-                    if let Ok(literal) = normalize_value_literal(
-                        &type_name,
-                        &format!("({}, {}, {})", value[0], value[1], value[2]),
-                    ) {
-                        apply_attribute(ctx, &view, "physics:localPos0", &type_name, literal);
+                    match usd_point_literal(&type_name, value) {
+                        Ok(literal) => {
+                            apply_attribute(ctx, &view, "physics:localPos0", &type_name, literal)
+                        }
+                        Err(error) => {
+                            ui.colored_label(egui::Color32::RED, error);
+                        }
                     }
                 }
             }
             if let Some(current) = view.local_pos1 {
                 if let Some(value) = position_control(ui, "Local position 1", current) {
                     let type_name = schema_type("physics:localPos1", "point3f");
-                    if let Ok(literal) = normalize_value_literal(
-                        &type_name,
-                        &format!("({}, {}, {})", value[0], value[1], value[2]),
-                    ) {
-                        apply_attribute(ctx, &view, "physics:localPos1", &type_name, literal);
+                    match usd_point_literal(&type_name, value) {
+                        Ok(literal) => {
+                            apply_attribute(ctx, &view, "physics:localPos1", &type_name, literal)
+                        }
+                        Err(error) => {
+                            ui.colored_label(egui::Color32::RED, error);
+                        }
                     }
                 }
             }
@@ -621,4 +797,21 @@ pub fn authored_joint_section(
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::usd_point_literal;
+
+    #[test]
+    fn joint_position_literal_rejects_non_finite_values() {
+        let error = usd_point_literal("point3f", [f64::NAN, 0.0, 0.0]).unwrap_err();
+        assert_eq!(error, "Position must contain only finite values");
+    }
+
+    #[test]
+    fn joint_position_literal_preserves_the_authored_type() {
+        let literal = usd_point_literal("point3d", [1.0, -2.5, 3.0]).unwrap();
+        assert_eq!(literal, "(1.0, -2.5, 3.0)");
+    }
 }
