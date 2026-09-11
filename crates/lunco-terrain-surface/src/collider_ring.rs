@@ -33,11 +33,11 @@ use avian3d::prelude::{
 use bevy::ecs::system::SystemParam;
 use bevy::math::{DQuat, DVec3, Dir3};
 use bevy::prelude::*;
-use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, futures_lite::future};
+use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use big_space::prelude::{CellCoord, Grid};
 use lunco_core::coords::{GridPos, GridRot};
-use lunco_core::{Command, on_command, register_commands};
-use lunco_terrain_core::{HeightSource, quantize};
+use lunco_core::{on_command, register_commands, Command};
+use lunco_terrain_core::{quantize, HeightSource};
 use serde::{Deserialize, Serialize};
 
 use crate::band::SurfaceBand;
@@ -1735,14 +1735,12 @@ pub fn validate_initial_physics_poses(
         };
         let aabb = collider.aabb(shape_position, shape_rotation);
         let bounds_live = aabb.min.is_finite() && aabb.max.is_finite();
-        let is_authored_support = dynamics
-            .get(body)
-            .is_ok_and(|(rb, state_pending)| {
-                matches!(rb, RigidBody::Static)
-                    || (matches!(rb, RigidBody::Kinematic)
-                        && state_pending.is_none()
-                        && q_needs.get(body).is_err())
-            });
+        let is_authored_support = dynamics.get(body).is_ok_and(|(rb, state_pending)| {
+            matches!(rb, RigidBody::Static)
+                || (matches!(rb, RigidBody::Kinematic)
+                    && state_pending.is_none()
+                    && q_needs.get(body).is_err())
+        });
         if is_authored_support {
             static_support_present = true;
             static_support_live |= bounds_live;
@@ -1762,9 +1760,9 @@ pub fn validate_initial_physics_poses(
             .or_insert((aabb.min, aabb.max));
     }
     let adj = joints.adjacency(|e| {
-        dynamics.get(e).is_ok_and(|(rb, _)| {
-            matches!(rb, RigidBody::Dynamic | RigidBody::Kinematic)
-        })
+        dynamics
+            .get(e)
+            .is_ok_and(|(rb, _)| matches!(rb, RigidBody::Dynamic | RigidBody::Kinematic))
     });
 
     let mut done: HashSet<Entity> = HashSet::new();
@@ -1812,9 +1810,7 @@ pub fn validate_initial_physics_poses(
                     lunco_hooks::HookValue::Array(
                         members
                             .iter()
-                            .map(|member| {
-                                lunco_hooks::HookValue::Int(member.to_bits() as i64)
-                            })
+                            .map(|member| lunco_hooks::HookValue::Int(member.to_bits() as i64))
                             .collect(),
                     ),
                 ),
@@ -2002,9 +1998,7 @@ pub fn validate_initial_physics_poses(
             }
             continue;
         }
-        let penetration = probe_displacement
-            .unwrap_or(rigid_penetration)
-            .max(0.0);
+        let penetration = probe_displacement.unwrap_or(rigid_penetration).max(0.0);
         if !penetration.is_finite() {
             findings.push(lunco_core::RuntimeDiagnostic {
                 code: "physics-initialization-non-finite".to_string(),

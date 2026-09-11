@@ -83,13 +83,9 @@ pub fn classify_rhai_source(source: &str) -> Result<SceneTestKind, String> {
         ));
     }
 
-    let value = value
-        .into_string()
-        .map_err(|_| {
-            format!(
-                "`{TEST_KIND_CONST}` must be `\"headless\"`, `\"graphics\"`, or `\"editor\"`"
-            )
-        })?;
+    let value = value.into_string().map_err(|_| {
+        format!("`{TEST_KIND_CONST}` must be `\"headless\"`, `\"graphics\"`, or `\"editor\"`")
+    })?;
     match value.as_str() {
         HEADLESS_TEST_KIND => Ok(SceneTestKind::Headless),
         GRAPHICS_TEST_KIND => Ok(SceneTestKind::Graphics),

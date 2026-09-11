@@ -1424,9 +1424,9 @@ fn process_usd_sim_prim_read(
                 commands.entity(entity).try_insert(policy);
             }
             None => {
-                commands.entity(entity).try_insert(
-                    lunco_physics::PhysicsInitializationInvalid,
-                );
+                commands
+                    .entity(entity)
+                    .try_insert(lunco_physics::PhysicsInitializationInvalid);
                 push_usd_sim_diagnostic(
                     diagnostics,
                     &prim_path.path,
@@ -1440,9 +1440,9 @@ fn process_usd_sim_prim_read(
             }
         }
     } else if reader.has_api_schema(&sdf_path, "PhysicsRigidBodyAPI") {
-        commands.entity(entity).try_insert(
-            lunco_physics::PhysicsInitializationPolicy::default(),
-        );
+        commands
+            .entity(entity)
+            .try_insert(lunco_physics::PhysicsInitializationPolicy::default());
     }
     // Screen-facing label the PRIM asked for. Opt-in: only a prim that
     // authors `lunco:billboard = true` gets one, so adding the schema can

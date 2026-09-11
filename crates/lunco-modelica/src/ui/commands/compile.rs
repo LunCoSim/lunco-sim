@@ -1457,9 +1457,10 @@ pub fn on_restart_active_model(trigger: On<RestartActiveModel>, mut commands: Co
         // Reset to t=0, then run. Mirrors the toolbar's Reset+Run
         // composition; the two triggers run in dispatch order.
         world.commands().trigger(ResetActiveModel { doc_id: doc });
-        world
-            .commands()
-            .trigger(RunActiveModel { doc_id: doc, class: None });
+        world.commands().trigger(RunActiveModel {
+            doc_id: doc,
+            class: None,
+        });
     });
 }
 

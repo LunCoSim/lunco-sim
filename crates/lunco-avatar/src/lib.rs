@@ -32,8 +32,8 @@ use serde::{Deserialize, Serialize};
 
 use lunco_controller::{ControllerLink, InputBindingsSettings};
 use lunco_core::{
-    Avatar, CelestialBody, LocalAvatar, LocalSession, NetworkRole, SessionProfiles, Spacecraft,
-    on_command, register_commands,
+    on_command, register_commands, Avatar, CelestialBody, LocalAvatar, LocalSession, NetworkRole,
+    SessionProfiles, Spacecraft,
 };
 /// Capability test for "**accepts commands**": carries an authored intent→port
 /// binding (`ControlBinding`, from its USD `Controls` scope) or a Modelica actuation
@@ -50,12 +50,12 @@ type Controllable = bevy::prelude::Or<(
     bevy::prelude::With<lunco_core::ControlBinding>,
     bevy::prelude::With<lunco_cosim::SimComponent>,
 )>;
-use lunco_celestial::{LeaveSurface, LocalGravityField, TeleportToSurface, geo::LocalTangentFrame};
+use lunco_celestial::{geo::LocalTangentFrame, LeaveSurface, LocalGravityField, TeleportToSurface};
 use lunco_core::attach::migrate_to_grid;
 use lunco_environment::{GravityBody, GravityProvider};
 use lunco_settings::{AppSettingsExt, ProfileSettings, SettingsSection};
 use lunco_time::{SetTimeTransport, TimeTransport, TransportMode, WorldTime};
-use lunco_usd_bevy::{UsdPreviewOnly, UsdPrimPath, is_preview_only, is_preview_only_entity};
+use lunco_usd_bevy::{is_preview_only, is_preview_only_entity, UsdPreviewOnly, UsdPrimPath};
 
 pub mod commands;
 pub use commands::*;
@@ -6008,7 +6008,7 @@ fn sync_profile(
     mut last_name: Local<Option<String>>,
     mut commands: Commands,
 ) {
-    let session = local.0.0;
+    let session = local.0 .0;
     if *role == NetworkRole::Client && session == 0 {
         *last_sent = None;
         return;
@@ -6838,16 +6838,12 @@ mod tests {
         assert_eq!(world.get::<ChildOf>(avatar).unwrap().parent(), surface_grid);
         assert_eq!(*world.get::<CellCoord>(avatar).unwrap(), return_cell);
         let restored = world.get::<Transform>(avatar).unwrap();
-        assert!(
-            restored
-                .translation
-                .abs_diff_eq(return_transform.translation, 1e-6)
-        );
-        assert!(
-            restored
-                .rotation
-                .abs_diff_eq(return_transform.rotation, 1e-6)
-        );
+        assert!(restored
+            .translation
+            .abs_diff_eq(return_transform.translation, 1e-6));
+        assert!(restored
+            .rotation
+            .abs_diff_eq(return_transform.rotation, 1e-6));
         assert!(!world.resource::<lunco_celestial::OrbitalViewPin>().active);
         assert!(world.get::<OrbitCamera>(avatar).is_none());
         assert_eq!(
@@ -6942,12 +6938,10 @@ mod tests {
         let second_snapshot = app.world().get::<OrbitViewReturn>(avatar).unwrap();
         assert_eq!(second_snapshot.parent_grid, first_snapshot.parent_grid);
         assert_eq!(second_snapshot.cell, first_snapshot.cell);
-        assert!(
-            second_snapshot
-                .transform
-                .translation
-                .abs_diff_eq(first_snapshot.transform.translation, 1e-6)
-        );
+        assert!(second_snapshot
+            .transform
+            .translation
+            .abs_diff_eq(first_snapshot.transform.translation, 1e-6));
         assert_eq!(
             app.world().get::<OrbitCamera>(avatar).unwrap().target,
             earth
@@ -6963,16 +6957,12 @@ mod tests {
         assert_eq!(world.get::<ChildOf>(avatar).unwrap().parent(), surface_grid);
         assert_eq!(*world.get::<CellCoord>(avatar).unwrap(), original_cell);
         let restored = world.get::<Transform>(avatar).unwrap();
-        assert!(
-            restored
-                .translation
-                .abs_diff_eq(original_transform.translation, 1e-6)
-        );
-        assert!(
-            restored
-                .rotation
-                .abs_diff_eq(original_transform.rotation, 1e-6)
-        );
+        assert!(restored
+            .translation
+            .abs_diff_eq(original_transform.translation, 1e-6));
+        assert!(restored
+            .rotation
+            .abs_diff_eq(original_transform.rotation, 1e-6));
         assert_eq!(
             world.get::<SurfaceCamera>(avatar).unwrap().heading,
             original_surface.heading
@@ -7306,16 +7296,12 @@ mod tests {
         assert_eq!(world.get::<ChildOf>(avatar).unwrap().parent(), surface_grid);
         assert_eq!(*world.get::<CellCoord>(avatar).unwrap(), original_cell);
         let restored_transform = world.get::<Transform>(avatar).unwrap();
-        assert!(
-            restored_transform
-                .translation
-                .abs_diff_eq(original_transform.translation, 1e-6)
-        );
-        assert!(
-            restored_transform
-                .rotation
-                .abs_diff_eq(original_transform.rotation, 1e-6)
-        );
+        assert!(restored_transform
+            .translation
+            .abs_diff_eq(original_transform.translation, 1e-6));
+        assert!(restored_transform
+            .rotation
+            .abs_diff_eq(original_transform.rotation, 1e-6));
         let restored_spring = world.get::<SpringArmCamera>(avatar).unwrap();
         assert_eq!(restored_spring.target, original_spring.target);
         assert_eq!(restored_spring.distance, original_spring.distance);
@@ -7428,11 +7414,9 @@ mod tests {
             body
         );
         let avatar_transform = app.world().get::<Transform>(avatar).unwrap();
-        assert!(
-            avatar_transform
-                .translation
-                .abs_diff_eq(Vec3::new(10.0, 2.0, 10.0), 1e-5)
-        );
+        assert!(avatar_transform
+            .translation
+            .abs_diff_eq(Vec3::new(10.0, 2.0, 10.0), 1e-5));
     }
 
     #[test]
