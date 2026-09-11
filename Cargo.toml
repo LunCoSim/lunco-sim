@@ -24,6 +24,7 @@ members = [
     "crates/lunco-modelica-ast",
     "crates/lunco-usd-avian",
     "crates/lunco-usd-bevy",
+    "crates/lunco-usd-bevy-core",
     "crates/lunco-usd-core",
     "crates/lunco-usd-compose",
     "crates/lunco-usd-geometry",

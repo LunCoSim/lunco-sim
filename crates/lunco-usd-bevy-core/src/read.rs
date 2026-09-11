@@ -1382,17 +1382,34 @@ mod real_reader_tests {
     //! strict scalar reads match only one USD type and silently drop the rest.
 
     use super::UsdRead;
-    use crate::canonical::CanonicalStage;
+    use crate::compose::build_stage_with_resolver;
+    use crate::view::StageView;
     use lunco_usd_core::StageRecipe;
     use openusd::sdf::{Path as SdfPath, Value};
+    use openusd::usd::Stage;
 
     const SCENE: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n";
 
     /// Build a live stage carrying a `float`-authored and a `double`-authored
     /// attribute on `/World`.
-    fn stage_with_mixed_precision() -> CanonicalStage {
-        let cs = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", SCENE))
-            .expect("stage builds");
+    struct TestStage(Stage);
+
+    impl TestStage {
+        fn stage(&self) -> &Stage {
+            &self.0
+        }
+
+        fn view(&self) -> StageView<'_> {
+            StageView::new(&self.0)
+        }
+    }
+
+    fn test_stage_from_recipe(recipe: &StageRecipe) -> TestStage {
+        TestStage(build_stage_with_resolver(recipe).expect("stage builds").0)
+    }
+
+    fn stage_with_mixed_precision() -> TestStage {
+        let cs = test_stage_from_recipe(&StageRecipe::from_source("scene.usda", SCENE));
         let stage = cs.stage();
         stage
             .create_attribute("/World.f_val", "float")
@@ -1435,8 +1452,7 @@ mod real_reader_tests {
         // not String/Token); `asset` must return the authored `@…@` path.
         const S: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\n\
             def Xform \"World\"\n{\n    asset a_val = @terrain/connecting_ridge@\n}\n";
-        let cs = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", S))
-            .expect("stage builds");
+        let cs = test_stage_from_recipe(&StageRecipe::from_source("scene.usda", S));
         let view = cs.view();
         let world = SdfPath::new("/World").unwrap();
         assert_eq!(
@@ -1473,8 +1489,7 @@ def Xform "World"
     vector3f direction = (0, 0, 1)
 }
 "#;
-        let cs = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", source))
-            .expect("stage builds");
+        let cs = test_stage_from_recipe(&StageRecipe::from_source("scene.usda", source));
         let view = cs.view();
         let world = SdfPath::new("/World").unwrap();
 
@@ -1507,8 +1522,7 @@ def Xform "World"
             def Xform \"World\"\n{\n\
             \x20   texCoord2f[] st_f = [(0, 0), (1, 0), (1, 1)]\n\
             \x20   texCoord2d[] st_d = [(0, 0), (1, 0), (1, 1)]\n}\n";
-        let cs = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", S))
-            .expect("stage builds");
+        let cs = test_stage_from_recipe(&StageRecipe::from_source("scene.usda", S));
         let view = cs.view();
         let world = SdfPath::new("/World").unwrap();
 
@@ -1600,8 +1614,7 @@ def Xform "World"
 
     #[test]
     fn authored_attribute_presence_is_separate_from_composed_value() {
-        let cs = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", SCENE))
-            .expect("stage builds");
+        let cs = test_stage_from_recipe(&StageRecipe::from_source("scene.usda", SCENE));
         cs.stage()
             .create_attribute("/World.authored", "float")
             .unwrap()
@@ -1632,8 +1645,7 @@ def Xform "World" (
     }
 }
 "#;
-        let cs = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", source))
-            .expect("stage builds");
+        let cs = test_stage_from_recipe(&StageRecipe::from_source("scene.usda", source));
         let view = cs.view();
         let world = SdfPath::new("/World").unwrap();
 
@@ -1645,8 +1657,7 @@ def Xform "World" (
     #[test]
     fn resolve_stage_prim_path_uses_composed_default_prim_for_empty_mounts() {
         let source = "#usda 1.0\n(\n    defaultPrim = \"Apollo\"\n)\ndef Xform \"Apollo\"\n{\n}\n";
-        let cs = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", source))
-            .expect("stage builds");
+        let cs = test_stage_from_recipe(&StageRecipe::from_source("scene.usda", source));
         let view = cs.view();
 
         assert_eq!(

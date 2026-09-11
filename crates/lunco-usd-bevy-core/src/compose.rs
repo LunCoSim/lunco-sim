@@ -1,8 +1,8 @@
 //! Compose USD from an in-memory layer closure with OpenUSD's composition
 //! engine. The asset loader uses this path on its async boundary to prepare the
 //! initial [`UsdStageProjectionPlan`](crate::UsdStageProjectionPlan); the live
-//! [`CanonicalStage`](crate::canonical::CanonicalStage) is built separately on
-//! the main thread for authoring and incremental edits. Neither representation
+//! canonical stage is built separately on the main thread by the runtime
+//! adapter for authoring and incremental edits. Neither representation
 //! is flattened.
 //!
 //! Pipeline:
@@ -45,8 +45,8 @@ use lunco_usd_core::StageRecipe;
 /// `!Send` stage is opened later by the canonical-stage owner when authoring or
 /// incremental projection needs it.
 ///
-/// [`CanonicalStage::from_recipe`]: crate::canonical::CanonicalStage::from_recipe
-pub(crate) async fn fetch_layer_closure(
+/// The runtime adapter opens the same recipe in its live canonical-stage owner.
+pub async fn fetch_layer_closure(
     load_context: &mut LoadContext<'_>,
     root_asset_path: &str,
     root_bytes: Vec<u8>,
@@ -94,23 +94,22 @@ pub(crate) async fn fetch_layer_closure(
 }
 
 /// Test-only convenience: the composed [`Stage`] alone, discarding the resolver
-/// handle. Production builds go through [`build_stage_with_resolver`] (via
-/// [`CanonicalStage::from_recipe`](crate::canonical::CanonicalStage::from_recipe))
-/// so runtime referenced spawns can inject layer bytes into the live resolver.
+/// handle. Production runtime code uses [`build_stage_with_resolver`] when it
+/// needs an editable stage and its resolver handle.
 #[cfg(test)]
 pub(crate) fn build_stage_from_closure(recipe: &StageRecipe) -> Result<Stage> {
     Ok(build_stage_with_resolver(recipe)?.0)
 }
 
 /// Like [`build_stage_from_closure`], but also returns the resolver's
-/// [`SharedLayerBytes`] handle so the caller (the [`CanonicalStage`]) can inject
-/// additional layer closures at runtime — the substrate for authoring a
+/// [`SharedLayerBytes`] handle so a live-stage owner can inject additional layer
+/// closures at runtime — the substrate for authoring a
 /// **referenced spawn** onto a live stage: add the spawned asset's bytes here,
 /// then author the `references` arc, and PCP composes the subtree on the next
 /// read (demand-driven resolution).
 ///
-/// [`CanonicalStage`]: crate::canonical::CanonicalStage
-pub(crate) fn build_stage_with_resolver(recipe: &StageRecipe) -> Result<(Stage, SharedLayerBytes)> {
+/// The runtime adapter owns the live canonical stage.
+pub fn build_stage_with_resolver(recipe: &StageRecipe) -> Result<(Stage, SharedLayerBytes)> {
     let resolver = LuncoUsdResolver::new(recipe.bytes.clone());
     let shared = resolver.shared();
     let stage = Stage::builder()
@@ -154,7 +153,7 @@ pub fn compose_file_to_stage_with_assets(
 #[allow(clippy::disallowed_methods)]
 mod inherits_compose_tests {
     use super::*;
-    use crate::{CanonicalStage, StageView, UsdRead};
+    use crate::{StageView, UsdRead};
 
     /// De-risk the control-profile design: a `class` carrying a `Controls` child
     /// scope, `inherits`-ed by a vessel prim, must land those child prims (with
@@ -280,11 +279,10 @@ def Xform \"Rover\" (\n    inherits = </_RoverControl>\n)\n{\n}\n";
         ]);
         let stage = build_stage_from_closure(&lunco_usd_core::StageRecipe { root_id, bytes })
             .expect("compose scene→wrapper→glb");
-        let cs = CanonicalStage::from_stage(stage, "scene.usda");
+        let view = StageView::new(&stage);
 
         let visual = SdfPath::new("/Scene/Bldg/Visual").unwrap();
-        let resolved = cs
-            .view()
+        let resolved = view
             .binary_asset_uri(&visual)
             .expect("binary payload must be read from the composed Visual prim");
         assert!(
@@ -313,45 +311,6 @@ def Xform \"Visual\" (\n\
         assert!(
             view.binary_asset_uri(&visual).is_none(),
             "ambiguous binary arcs must not choose an arbitrary asset"
-        );
-    }
-
-    #[test]
-    fn binary_asset_uri_tracks_live_reference_authoring() {
-        let source = "#usda 1.0\ndef Xform \"Visual\" {}\n";
-        let recipe = lunco_usd_core::StageRecipe::from_source("scene.usda", source);
-        let stage = CanonicalStage::from_recipe(&recipe).expect("compose live binary-arc fixture");
-        let visual = SdfPath::new("/Visual").unwrap();
-        let referenced_asset = "#usda 1.0\n(defaultPrim = \"Model\")\ndef Xform \"Model\" {}\n";
-        assert!(stage.add_layer_bytes(HashMap::from([
-            (
-                stage.canonical_reference_id("first.glb"),
-                referenced_asset.as_bytes().to_vec(),
-            ),
-            (
-                stage.canonical_reference_id("second.glb"),
-                referenced_asset.as_bytes().to_vec(),
-            ),
-        ])));
-
-        assert!(stage.view().binary_asset_uri(&visual).is_none());
-        stage
-            .projector()
-            .author_reference(&visual, "first.glb")
-            .expect("author first live binary reference");
-        let first = stage
-            .view()
-            .binary_asset_uri(&visual)
-            .expect("live binary reference must be visible immediately");
-        assert!(first.ends_with("first.glb"), "got {first}");
-
-        stage
-            .projector()
-            .author_reference(&visual, "second.glb")
-            .expect("author second live binary reference");
-        assert!(
-            stage.view().binary_asset_uri(&visual).is_none(),
-            "adding a second live binary reference must become an explicit ambiguity"
         );
     }
 }

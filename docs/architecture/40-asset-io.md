@@ -101,7 +101,7 @@ different loading/saving sequences.
 
 | Loader | Asset type | Where | Extensions |
 |---|---|---|---|
-| `UsdLoader` | `UsdStageAsset` | `lunco-usd-bevy` | `.usda` |
+| `UsdLoader` | `UsdStageAsset` | `lunco-usd-bevy` (using `lunco-usd-bevy-core`) | `.usda` |
 | `ModelicaSourceLoader` | `ModelicaSource` | `lunco-modelica-core` | `.mo` |
 | `PythonSourceLoader` | `PythonSource` | `lunco-scripting` (`python` feature) | `.py` |
 | `RhaiSourceLoader` | `RhaiSource` | `lunco-scripting` | `.rhai` |
@@ -190,7 +190,7 @@ no manual hunt.
 | Site | Status |
 |---|---|
 | `lunco-usd-bevy/UsdLoader` | ✅ Bevy AssetLoader |
-| `lunco-usd-bevy/compose.rs` compose (`flatten_stage`, injected fetcher) | ✅ injected fetcher, wasm path pre-fetches via `LoadContext::read_asset_bytes` |
+| `lunco-usd-bevy-core/compose.rs` compose (resolver-backed stage, injected fetcher) | ✅ injected fetcher, wasm path pre-fetches via `LoadContext::read_asset_bytes` |
 | `lunco-usd-sim/cosim.rs` modelica/python source reads | ✅ migrated to AssetServer (see `ModelicaSource` / feature-gated `PythonSource`) |
 | `lunco-usd-ui/src/ui/browser_dispatch.rs` twin browser open | ✅ routed to spawn_usd_load domain command |
 | `lunco-usd/src/commands.rs` usd document load | ✅ reads through the storage abstraction |

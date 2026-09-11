@@ -46,6 +46,7 @@ half = "2"
 # of this manifest means evaluator changes rebuild that package, not this USD
 # stage loader and its runtime projection systems.
 lunco-usd-geometry = { path = "../lunco-usd-geometry" }
+lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 openusd = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-usd-core = { path = "../lunco-usd-core" }

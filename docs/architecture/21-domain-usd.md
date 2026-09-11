@@ -141,7 +141,7 @@ from the composed stage. Object/reference-level reload is intentionally still a
 TODO: do not approximate it by respawning only a visual subtree, because that
 would leave physics, connections, or Modelica worker state stale.
 
-The **read** surface is the `UsdRead` trait (`lunco-usd-bevy/src/read.rs`): `children`,
+The **read** surface is the `UsdRead` trait (`lunco-usd-bevy-core/src/read.rs`): `children`,
 `scalar::<T>`, `attr_value`, `rel_target`, `scalar_at` (time-sampled), etc. It is
 implemented for both `StageView` (the live composed stage, `view.rs`) and `sdf::Data`
 (the flattened layer), so one generic reader works against live and flattened alike.
@@ -155,8 +155,8 @@ is built on the main thread from it; there is no stored `reader` object.
 ```
 Twin (workspace folder, owns documents)         spec 14
   └─ active USD stage = a UsdDocument            spec 10 / 21
-        └─ composed (flatten_stage)               lunco-usd-bevy/compose.rs
-              └─ UsdStageAsset (baked stage)       lunco-usd-bevy
+        └─ composed (resolver-backed stage)      lunco-usd-bevy-core/compose.rs
+              └─ UsdStageAsset (prepared plan)    lunco-usd-bevy
                     └─ UsdPrimPath root under Grid  → sync_usd_visuals spawns entities
                           └─ the live 3D world      (avian + cosim translators key off prims)
 ```
@@ -628,7 +628,7 @@ even though the replacement's change sink is empty. Generation zero identifies
 the initial asset snapshot; an edited replacement must remain on the live
 composed reader path.
 
-One shared stack (`lunco-usd-bevy`, `local_transform_at`) decodes a prim's local
+One shared stack (`lunco-usd-bevy-core`, `local_transform_at`) decodes a prim's local
 `Transform`, used by **both** the static load decoder (`read_transform_from_usd` + the
 instantiate path) and the per-frame animation sampler, so a static pose and its animated
 pose always agree. Precedence:
@@ -680,7 +680,7 @@ the `ControlAnimation` command (API/MCP) and the Inspector **Animation** section
 ### Testing
 All runtime acceptance tests load **real USD files** through the same pipeline
 as runtime. Ownership follows the narrowest production boundary:
-- `crates/lunco-usd-bevy/tests/migration_smoke.rs` — composed-stage reader and composition migration
+- `crates/lunco-usd-bevy-core/src/{read,compose,view}.rs` — composed-stage reader and composition substrate
 - `crates/lunco-usd/tests/live_spawn_projection.rs` — document-backed USD authoring and raw asset composition facts
 - `crates/lunco-usd-sim/tests/usd_connection_mechanics.rs` — generic connection derivation and transform mechanics
 - `assets/scenarios/tests/*.rhai` through the production `luncosim test` gate — composed USD → Bevy → Avian → simulation outcomes, including rover structure, wheel realization, wiring, EPS, and link visibility

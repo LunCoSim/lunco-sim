@@ -52,43 +52,10 @@ pub use openusd::sdf::Path as SdfPath;
 use openusd::sdf::Value;
 use std::sync::Arc;
 
-/// The standard `UsdGeomImageable.purpose` value resolved for a composed prim.
-///
-/// Physics and placement both need the same inherited purpose semantics. Keep
-/// the reader at the USD boundary so downstream projections cannot drift into
-/// separate path walks with different collision ownership rules.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Purpose {
-    Default,
-    Render,
-    Proxy,
-    Guide,
-}
-
-/// Resolve the composed, inherited `UsdGeomImageable.purpose` value.
-pub fn effective_purpose(reader: &dyn read::UsdReadObject, path: &SdfPath) -> Purpose {
-    let mut cur = Some(path.clone());
-    while let Some(p) = cur {
-        if p.is_abs_root() {
-            break;
-        }
-        match reader.text(&p, "purpose").as_deref() {
-            Some("guide") => return Purpose::Guide,
-            Some("proxy") => return Purpose::Proxy,
-            Some("render") => return Purpose::Render,
-            Some("default") => return Purpose::Default,
-            _ => {}
-        }
-        cur = p.parent();
-    }
-    Purpose::Default
-}
-
 mod camera;
 pub mod camera_mount;
 pub mod camera_switch;
 pub mod camera_track;
-mod compose;
 pub mod dome;
 mod light;
 /// Light and transform ports — the port backend for what `light`/`compose` spawn.
@@ -100,21 +67,19 @@ pub mod camera_path;
 pub mod canonical;
 pub mod lathe;
 pub mod mount;
-pub mod program;
-mod projection_plan;
-pub mod read;
-pub mod units;
-pub mod variants;
-pub mod view;
 pub use canonical::{CanonicalStage, CanonicalStages, RawStageChange, StageProjector};
 #[cfg(not(target_arch = "wasm32"))]
 pub use compose::{compose_file_to_stage, compose_file_to_stage_with_assets};
 pub use light::UsdAuthoredLight;
+pub use lunco_usd_bevy_core::{compose, program, projection_plan, read, units, variants, view};
+pub use lunco_usd_bevy_core::{
+    compose_xform_order_at, effective_purpose, is_descendant_or_self, local_transform_at,
+    parent_prim_path, read_transform_from_usd, resolve_bound_material, resolve_bound_shader,
+    resolve_stage_prim_path, stage_convention, stage_default_prim, MaterialPurpose, Purpose,
+    StageView, TransformReadError, UsdPrimProjectionPlan, UsdRead, UsdReadObject, UsdReadSource,
+    UsdStageProjectionPlan,
+};
 use lunco_usd_core::UsdDataExt;
-pub use projection_plan::{UsdPrimProjectionPlan, UsdStageProjectionPlan};
-pub use read::UsdRead;
-pub use units::stage_convention;
-pub use view::StageView;
 // The ambient-fill solve. Uniform ambient is spelled as an untextured `DomeLight`
 // and composed as a SUM, so a command that wants to set the composed TOTAL (the
 // inspector's ambient slider) must solve for the one dome it owns. Exported
@@ -2925,89 +2890,6 @@ pub fn resolve_stage_asset_path(
     }
 }
 
-/// Extractor for parent prim path from property connection target (e.g. `/World/Material/Shader.output` -> `/World/Material/Shader`)
-///
-/// Delegates to openusd's `SdfPath::prim_path()` so namespaced render contexts
-/// and variant selections (e.g. `/World/Mat/Shader{lod=hi}.outputs:surface`)
-/// resolve to the correct owning prim rather than being mis-split on the first `.`.
-pub fn parent_prim_path(target: &str) -> Option<SdfPath> {
-    Some(SdfPath::new(target).ok()?.prim_path())
-}
-
-/// Resolves the surface shader prim bound to a geometry prim, following
-/// `material:binding` → the material's `outputs:surface` connection → the
-/// owning shader prim. Returns `None` if the geometry has no bound material or
-/// the material authors no surface output.
-///
-/// Single source of truth for the bind→shader walk shared by the renderer
-/// ([`apply_standard_material`]) and the inspector's material editor.
-pub fn resolve_bound_shader(
-    reader: &dyn read::UsdReadObject,
-    mesh_path: &SdfPath,
-) -> Option<SdfPath> {
-    let mat_path = reader.bound_material(mesh_path, MaterialPurpose::Render)?;
-    let mat_path = SdfPath::new(&mat_path).ok()?;
-    // `outputs:surface` is an attribute CONNECTION, not a relationship.
-    let surf_conn = reader.connection_source(&mat_path, "outputs:surface")?;
-    parent_prim_path(&surf_conn)
-}
-
-/// Which *purpose* of material binding to resolve.
-///
-/// USD binds a look and a physical surface with the SAME schema
-/// (`UsdShadeMaterial`) and the SAME mechanism (a `material:binding`
-/// relationship) — they differ only in the binding's **purpose** token. So a
-/// single `Material` prim can carry a `UsdPreviewSurface` *and* an applied
-/// `PhysicsMaterialAPI`, and one "Regolith" means both "looks like regolith" and
-/// "grips like regolith". That is the right model for a simulator, and it is
-/// USD's, so we don't invent a parallel one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum MaterialPurpose {
-    /// All-purpose binding (`material:binding`) — the rendered look.
-    Render,
-    /// Purpose-specific binding (`material:binding:physics`) — friction,
-    /// restitution, density (`UsdPhysicsMaterialAPI`).
-    Physics,
-}
-
-impl MaterialPurpose {
-    /// The USD binding *purpose* token. All-purpose is the empty token (the
-    /// `material:binding` relationship); a restricted purpose names itself
-    /// (`material:binding:physics`).
-    pub fn token(self) -> &'static str {
-        match self {
-            MaterialPurpose::Render => openusd::schemas::shade::tokens::PURPOSE_ALL,
-            MaterialPurpose::Physics => "physics",
-        }
-    }
-}
-
-/// Resolve the `Material` prim bound to `prim` for a given purpose —
-/// `UsdShadeMaterialBindingAPI::ComputeBoundMaterial`, delegated to openusd.
-///
-/// The rules are openusd's, not ours: bindings inherit down namespace (nearest
-/// ancestor wins, unless an ancestor is `strongerThanDescendants`), a restricted
-/// purpose resolves across the WHOLE ancestor chain before falling back to
-/// all-purpose, and a collection binding whose collection includes the prim beats
-/// a direct binding. We used to re-derive the first two by hand and support
-/// neither of the last two.
-///
-/// Resolution runs on the prim as it is — `MaterialBindingAPI::on` rather than
-/// `::get` — because the prim being asked about (a mesh deep inside a rover)
-/// normally authors no binding at all, and so carries no `MaterialBindingAPI` in
-/// its `apiSchemas`. `::get` returns `None` there, which would silently drop
-/// every *inherited* binding: the common case, not the corner case.
-pub fn resolve_bound_material(
-    reader: &StageView<'_>,
-    prim: &SdfPath,
-    purpose: MaterialPurpose,
-) -> Option<SdfPath> {
-    openusd::schemas::shade::MaterialBindingAPI::on(reader.stage(), prim.clone())
-        .compute_bound_material(purpose.token())
-        .ok()
-        .flatten()
-}
-
 /// Maps a `UsdUVTexture` `inputs:wrapS`/`inputs:wrapT` token to a Bevy sampler
 /// address mode. USD's `"useMetadata"` (and absent) use the documented
 /// projection default `Repeat` because the image-header metadata is not part
@@ -3563,26 +3445,6 @@ pub fn layer_default_prim(layer: &lunco_usd_core::UsdData) -> Option<String> {
     (!name.is_empty()).then(|| name.to_string())
 }
 
-pub fn stage_default_prim(reader: &dyn read::UsdReadObject) -> Option<String> {
-    // `defaultPrim` is authored as `Value::Token` (see compose.rs). The two
-    // `StageView` resolves it through the composed stage.
-    reader.default_prim()
-}
-
-/// Resolve a mounted prim path against the live composed stage.
-///
-/// Scene roots use an empty path until their asset is parsed; that sentinel
-/// means the stage's composed `defaultPrim`. Every projection that reads a
-/// [`UsdPrimPath`] must use this resolver so deferred visual projection cannot
-/// race another domain projector and make the root permanently unaddressable.
-pub fn resolve_stage_prim_path(reader: &dyn read::UsdReadObject, path: &str) -> Option<String> {
-    if path.is_empty() {
-        stage_default_prim(reader).map(|name| format!("/{name}"))
-    } else {
-        Some(path.to_owned())
-    }
-}
-
 /// A single USD layer's source text, parsed once, positioned on the stage's
 /// `defaultPrim` — with **typed** reads of the attributes authored there.
 ///
@@ -3703,16 +3565,6 @@ pub fn has_api_schema(reader: &lunco_usd_core::UsdData, path: &SdfPath, schema_n
             .any(|s| s.as_str() == schema_name),
         _ => false,
     }
-}
-
-/// Whether `path` is `root` or is below it in the USD namespace.
-pub fn is_descendant_or_self(path: &SdfPath, root: &str) -> bool {
-    let root = root.trim_end_matches('/');
-    path.as_str() == root
-        || path
-            .as_str()
-            .strip_prefix(root)
-            .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
 /// First target path of relationship `rel_name` on `prim_path`, as a
@@ -4767,95 +4619,11 @@ fn prim_rotation_animated(reader: &impl UsdRead, path: &SdfPath) -> bool {
         .any(|op| attr_has_time_samples(reader, path, op))
 }
 
-/// The prim's authored `xformOpOrder` (the ordered op-token list), or `None`
-/// when unauthored or empty. When authored it is the **authoritative** op
-/// sequence — [`compose_xform_order_at`] honors it exactly, including non-TRS
-/// orders that no hand-written decomposition should guess.
-fn read_xform_op_order(reader: &dyn read::UsdReadObject, path: &SdfPath) -> Option<Vec<String>> {
-    let order: Vec<String> = match reader.attr_value(path, "xformOpOrder")? {
-        Value::TokenVec(v) => v.iter().map(|t| t.to_string()).collect(),
-        Value::StringVec(v) => v,
-        Value::TokenListOp(op) => op.flatten().into_iter().map(|t| t.to_string()).collect(),
-        Value::StringListOp(op) => op.flatten(),
-        _ => return None,
-    };
-    (!order.is_empty()).then_some(order)
-}
-
-/// Return whether an ordered USD xform token names a standard `UsdGeomXformOp`
-/// type. Suffixes are legal and identify independent ops of the same type, so
-/// validation checks the type prefix rather than accepting only the handful of
-/// unsuffixed spellings emitted by our authoring helpers.
-fn is_valid_xform_op_token(op: &str, index: usize) -> bool {
-    let (inverted, base) = match op.strip_prefix("!invert!") {
-        Some(base) => (true, base),
-        None => (false, op),
-    };
-    if base == RESET_XFORM_STACK {
-        return !inverted && index == 0;
-    }
-    if inverted && base.starts_with('!') {
-        return false;
-    }
-    [
-        "xformOp:translate",
-        "xformOp:scale",
-        "xformOp:transform",
-        "xformOp:orient",
-        "xformOp:rotateX",
-        "xformOp:rotateY",
-        "xformOp:rotateZ",
-        "xformOp:rotateXYZ",
-        "xformOp:rotateXZY",
-        "xformOp:rotateYXZ",
-        "xformOp:rotateYZX",
-        "xformOp:rotateZXY",
-        "xformOp:rotateZYX",
-    ]
-    .iter()
-    .any(|kind| base == *kind || base.strip_prefix(kind).is_some_and(|s| s.starts_with(':')))
-}
-
-/// Validate the structural part of an authored xform stack before delegating
-/// numeric composition to OpenUSD. OpenUSD currently ignores an unknown op
-/// token or an op whose attribute is absent in this code path, which would turn
-/// malformed authored placement data into an identity transform. That is not a
-/// USD semantic default and is unsafe for physics/spawn consumers.
-fn valid_xform_op_order<R: UsdRead>(reader: &R, path: &SdfPath, order: &[String]) -> bool {
-    order.iter().enumerate().all(|(index, op)| {
-        if !is_valid_xform_op_token(op, index) {
-            return false;
-        }
-        let base = op.strip_prefix("!invert!").unwrap_or(op);
-        base == RESET_XFORM_STACK || reader.has_authored_attribute(path, base)
-    })
-}
-
 /// True iff the prim authors a non-empty `xformOpOrder` (so its local transform
 /// is defined by the ordered op stack, not the implicit TRS fallback).
 fn has_xform_op_order(reader: &dyn read::UsdReadObject, path: &SdfPath) -> bool {
-    read_xform_op_order(reader, path).is_some()
+    lunco_usd_bevy_core::read_xform_op_order(reader, path).is_some()
 }
-
-/// An [`openusd::schemas::geom::Xformable`] view over ANY prim, unchecked —
-/// the transform decoders compose whatever prim carries an `xformOpOrder`, not
-/// just those typed `Xform` (a `Mesh`, a `Camera`, a schema-less `over` are all
-/// xformable). Mirrors the C++ `UsdGeomXformable(prim)` constructor.
-struct XformablePrim(openusd::usd::Prim);
-
-impl openusd::usd::SchemaBase for XformablePrim {
-    const KIND: openusd::usd::SchemaKind = openusd::usd::SchemaKind::AbstractTyped;
-
-    fn prim(&self) -> &openusd::usd::Prim {
-        &self.0
-    }
-}
-impl openusd::schemas::geom::Imageable for XformablePrim {}
-impl openusd::schemas::geom::Xformable for XformablePrim {}
-
-/// The `!resetXformStack!` sentinel, as UsdGeomXformable spells it in
-/// `xformOpOrder`.
-const RESET_XFORM_STACK: &str = "!resetXformStack!";
 
 /// How far up a `ChildOf` chain the stage-root walk will look before giving up.
 /// USD prim hierarchies are shallow; a chain deeper than this is a cycle or a
@@ -4875,8 +4643,11 @@ struct ResetXformStackApplied;
 /// first entry — anywhere else it is a malformed stack, which
 /// [`compose_xform_order_at`] already rejects with [`TransformReadError`].
 fn prim_resets_xform_stack<R: UsdRead>(reader: &R, path: &SdfPath) -> bool {
-    read_xform_op_order(reader, path)
-        .is_some_and(|order| order.first().is_some_and(|op| op == RESET_XFORM_STACK))
+    lunco_usd_bevy_core::read_xform_op_order(reader, path).is_some_and(|order| {
+        order
+            .first()
+            .is_some_and(|op| op == lunco_usd_bevy_core::RESET_XFORM_STACK)
+    })
 }
 
 /// Re-anchor every `!resetXformStack!` prim onto its stage's world frame.
@@ -4947,9 +4718,10 @@ fn detach_reset_xform_stack_prims(
         let root_inverse = stage_root_local.to_matrix().inverse();
         let reset_local = Transform::from_matrix(root_inverse * local.to_matrix());
         info!(
-            "[usd-bevy] {} opens with {RESET_XFORM_STACK} — detaching from its USD ancestry \
+            "[usd-bevy] {} opens with {} — detaching from its USD ancestry \
              onto the stage world frame ({anchor:?})",
-            prim.path
+            prim.path,
+            lunco_usd_bevy_core::RESET_XFORM_STACK,
         );
         let mut entity_commands = commands.entity(entity);
         if let Ok(grid) = q_grids.get(anchor) {
@@ -5066,130 +4838,6 @@ mod reset_xform_stack_tests {
     }
 }
 
-/// A USD transform stack was authored but could not be composed safely.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TransformReadError {
-    pub prim: String,
-}
-
-impl std::fmt::Display for TransformReadError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "malformed authored transform at {}", self.prim)
-    }
-}
-
-impl std::error::Error for TransformReadError {}
-
-fn malformed_transform(path: &SdfPath) -> TransformReadError {
-    TransformReadError {
-        prim: path.as_str().to_owned(),
-    }
-}
-
-/// Compose the prim's local `Transform` at time `time` from its `xformOpOrder`,
-/// via openusd's spec implementation
-/// ([`Xformable::local_to_parent_transform`](openusd::schemas::geom::Xformable::local_to_parent_transform)):
-/// op order, `!invert!` prefixes, the leading `!resetXformStack!` sentinel, the
-/// full op-kind set (translate/scale and their single-axis forms, the six Euler
-/// orders, `orient`, `transform`), all composed in f64 before the one narrowing
-/// to Bevy's `Transform`. USD matrices are row-major / row-vector — glam's
-/// column-major / column-vector layout transposed, and the two transposes
-/// cancel (see [`read_matrix_transform_at`]), so the raw 16 elements feed
-/// `Mat4::from_cols_array` directly. `Ok(None)` means no transform stack is
-/// authored. A malformed authored stack is an error; it must not be converted
-/// into identity or the entity's previous transform.
-pub fn compose_xform_order_at<R: UsdRead>(
-    reader: &R,
-    path: &SdfPath,
-    time: f64,
-) -> Result<Option<Transform>, TransformReadError> {
-    reader.local_transform_at(path, time)
-}
-
-/// Compose a live OpenUSD transform. This is the StageView implementation of
-/// the shared [`UsdRead::local_transform_at`] contract; the initial asset
-/// projection uses its worker-produced owned result instead.
-pub(crate) fn compose_live_xform_order_at(
-    reader: &StageView<'_>,
-    path: &SdfPath,
-    time: f64,
-) -> Result<Option<Transform>, TransformReadError> {
-    use openusd::schemas::geom::Xformable as _;
-    let Some(order) = read_xform_op_order(reader, path) else {
-        return if reader.has_authored_attribute(path, "xformOpOrder")
-            && !authored_empty_xform_op_order(reader, path)
-        {
-            Err(malformed_transform(path))
-        } else {
-            Ok(None)
-        };
-    };
-    if !valid_xform_op_order(reader, path, &order) {
-        return Err(malformed_transform(path));
-    }
-    let m = XformablePrim(reader.stage().prim(path.clone()))
-        .local_to_parent_transform(time)
-        .map_err(|_| malformed_transform(path))?;
-    let cols: [f32; 16] = std::array::from_fn(|i| m.0[i] as f32);
-    let raw = Transform::from_matrix(Mat4::from_cols_array(&cols));
-    let convention = stage_convention(reader).map_err(|_| malformed_transform(path))?;
-    Ok(Some(convention.local_transform(raw)))
-}
-
-/// The prim's full local `Transform` at time `time`, **in the canonical frame**:
-/// `xformOpOrder` composition when authored (authoritative). `Ok(None)` when the
-/// prim authors no transform stack; malformed authored data is an error.
-/// Shared by the static decoder and the animation sampler so both agree.
-///
-/// **Units/axes convert here** (`docs/architecture/41-axes-and-units.md`): the
-/// raw stage-frame transform is conjugated by the stage's
-/// [`ConventionTransform`](units::ConventionTransform), so a Z-up / centimetre
-/// stage (Omniverse, Isaac Sim) yields an upright, metre-scaled local transform.
-/// A canonical stage (all our own assets) takes the identity path — unchanged.
-/// Every downstream consumer (visual sync, avian colliders, mounts, the gizmo)
-/// funnels through here, so none of them sees stage units.
-pub fn local_transform_at(
-    reader: &dyn read::UsdReadObject,
-    path: &SdfPath,
-    time: f64,
-) -> Result<Option<Transform>, TransformReadError> {
-    reader.local_transform_at(path, time)
-}
-
-/// [`local_transform_at`] **before** the canonical conversion — the transform as
-/// authored, in the stage's own frame and units. Private: no consumer may hold a
-/// raw spatial value (doc 41 — "visibility is the guardrail").
-/// Canonical local-transform decode via [`local_transform_at`]. An omitted
-/// transform stack is the USD identity; malformed authored data is returned to
-/// the caller instead of becoming identity. The returned transform is complete:
-/// translation, rotation, and scale are the result of the authored
-/// `xformOpOrder`, after stage-axis and stage-unit conversion.
-pub fn read_transform_from_usd(
-    reader: &dyn read::UsdReadObject,
-    path: &SdfPath,
-) -> Result<Transform, TransformReadError> {
-    match local_transform_at(reader, path, 0.0) {
-        Ok(Some(tf)) => Ok(tf),
-        Ok(None) => Ok(Transform::IDENTITY),
-        Err(error) => Err(error),
-    }
-}
-
-/// Resolve the inherited USD Imageable visibility and purpose on a live stage.
-/// The same result is captured by the worker-produced projection plan.
-pub(crate) fn stage_prim_is_invisible_or_guide(reader: &StageView<'_>, path: &SdfPath) -> bool {
-    use openusd::schemas::geom::Imageable as _;
-    let imageable = XformablePrim(reader.stage().prim(path.clone()));
-    imageable
-        .compute_visibility()
-        .map(|value| value == openusd::schemas::geom::Visibility::Invisible)
-        .unwrap_or(false)
-        || imageable
-            .compute_purpose()
-            .map(|value| value == openusd::schemas::geom::Purpose::Guide)
-            .unwrap_or(false)
-}
-
 /// Small gap (metres) left between an asset's lowest collision point and the
 /// terrain at spawn — a "skin width" so a body never spawns interpenetrating the
 /// ground (which the solver would resolve by ejecting it). Physics is held until
@@ -5285,8 +4933,7 @@ pub fn collision_aabb(
         .any(|(path, _)| effective_purpose(reader, path) == Purpose::Proxy);
     let mut acc: Option<(bevy::math::DVec3, bevy::math::DVec3)> = None;
     for (path, world_tf) in candidates {
-        if reader
-            .text(&path, "lunco:triggerZone")
+        if UsdReadObject::text(reader, &path, "lunco:triggerZone")
             .is_some_and(|zone| !zone.trim().is_empty())
         {
             continue;
@@ -5295,12 +4942,21 @@ pub fn collision_aabb(
         if purpose == Purpose::Guide || (has_proxy && purpose == Purpose::Render) {
             continue;
         }
-        if !reader.has_api_schema(&path, openusd::schemas::physics::tokens::API_COLLISION) {
+        if !UsdReadObject::has_api_schema(
+            reader,
+            &path,
+            openusd::schemas::physics::tokens::API_COLLISION,
+        ) {
             continue;
         }
-        let collides = match reader.boolean(&path, "physics:collisionEnabled") {
+        let collides = match UsdReadObject::boolean(reader, &path, "physics:collisionEnabled") {
             Some(value) => value,
-            None if reader.has_authored_attribute(&path, "physics:collisionEnabled") => {
+            None if UsdReadObject::has_authored_attribute(
+                reader,
+                &path,
+                "physics:collisionEnabled",
+            ) =>
+            {
                 return Err(CollisionAabbError::InvalidCollisionEnabled {
                     prim: path.as_str().to_owned(),
                 });
@@ -5310,7 +4966,7 @@ pub fn collision_aabb(
         if !collides {
             continue;
         }
-        let ty = reader.type_name(&path).unwrap_or_default();
+        let ty = UsdReadObject::type_name(reader, &path).unwrap_or_default();
         let corners = local_shape_corners(reader, &path, &ty).ok_or_else(|| {
             CollisionAabbError::MalformedPrimitive {
                 prim: path.as_str().to_owned(),
@@ -5346,7 +5002,7 @@ pub fn prim_geometry_aabb(
 ) -> Result<Option<ObjectAabb>, CollisionAabbError> {
     let path = SdfPath::new(prim_path)
         .map_err(|_| CollisionAabbError::InvalidRootPath(prim_path.to_owned()))?;
-    let Some(type_name) = reader.type_name(&path) else {
+    let Some(type_name) = UsdReadObject::type_name(reader, &path) else {
         return Ok(None);
     };
     if !matches!(
@@ -5401,7 +5057,7 @@ fn geometry_world_transform(
     reader: &StageView<'_>,
     path: &SdfPath,
 ) -> Result<Transform, CollisionAabbError> {
-    if !reader.has_prim(path) {
+    if !UsdReadObject::has_prim(reader, path) {
         return Err(CollisionAabbError::InvalidRootPath(
             path.as_str().to_owned(),
         ));
@@ -5422,18 +5078,6 @@ fn geometry_world_transform(
     Ok(transform)
 }
 
-/// An authored empty `xformOpOrder` is the valid USD identity stack. It must be
-/// distinguished from an authored value of the wrong type, which is malformed.
-fn authored_empty_xform_op_order(reader: &StageView<'_>, path: &SdfPath) -> bool {
-    match reader.attr_value(path, "xformOpOrder") {
-        Some(Value::TokenVec(values)) => values.is_empty(),
-        Some(Value::StringVec(values)) => values.is_empty(),
-        Some(Value::TokenListOp(op)) => op.flatten().is_empty(),
-        Some(Value::StringListOp(op)) => op.flatten().is_empty(),
-        _ => false,
-    }
-}
-
 /// DFS helper for [`collision_aabb`]: collect every active collision candidate
 /// in the composed asset, crossing nested rigid-body and wheel ownership
 /// boundaries so placement uses the complete envelope. Transforms are always
@@ -5444,8 +5088,8 @@ fn gather_collision_aabb_candidates(
     world_tf: Transform,
     out: &mut Vec<(SdfPath, Transform)>,
 ) -> Result<(), CollisionAabbError> {
-    for child in reader.children(path) {
-        if !reader.is_active(&child) {
+    for child in UsdReadObject::children(reader, path) {
+        if !UsdReadObject::is_active(reader, &child) {
             continue;
         }
         let local = collision_local_transform(reader, &child)?;
@@ -5677,12 +5321,12 @@ fn local_shape_corners(
     ty: &str,
 ) -> Option<Vec<bevy::math::DVec3>> {
     if ty == "Mesh" {
-        let approximation = reader.text(path, "physics:approximation");
+        let approximation = UsdReadObject::text(reader, path, "physics:approximation");
         if approximation
             .as_deref()
             .is_some_and(|value| !matches!(value, "none" | "convexHull" | "convexDecomposition"))
             || (approximation.is_none()
-                && reader.has_authored_attribute(path, "physics:approximation"))
+                && UsdReadObject::has_authored_attribute(reader, path, "physics:approximation"))
         {
             return None;
         }
@@ -8048,8 +7692,7 @@ pub fn reveal_placeholder_on_failure(
                 let check_path = |path: &str| -> Option<Vec3> {
                     if let Ok(sdf_path) = SdfPath::new(path) {
                         get_attribute_as_vec3(&reader, &sdf_path, "xformOp:scale").or_else(|| {
-                            reader
-                                .real(&sdf_path, "size")
+                            UsdRead::real(&reader, &sdf_path, "size")
                                 .map(|size| Vec3::splat(size as f32))
                         })
                     } else {

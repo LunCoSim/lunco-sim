@@ -8210,6 +8210,7 @@ dependencies = [
  "lunco-render",
  "lunco-settings",
  "lunco-time",
+ "lunco-usd-bevy-core",
  "lunco-usd-compose",
  "lunco-usd-core",
  "lunco-usd-geometry",
@@ -8217,6 +8218,20 @@ dependencies = [
  "tempfile",
  "web-time",
  "wgpu-types",
+]
+
+[[package]]
+name = "lunco-usd-bevy-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bevy",
+ "lunco-assets",
+ "lunco-core",
+ "lunco-usd-compose",
+ "lunco-usd-core",
+ "openusd",
+ "tempfile",
 ]
 
 [[package]]

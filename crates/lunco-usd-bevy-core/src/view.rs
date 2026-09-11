@@ -11,7 +11,8 @@ use openusd::sdf::{Path as SdfPath, Value};
 use openusd::usd::{compute_included_paths, Collection, PrimPredicate, Stage};
 
 /// A borrow of a live composed [`Stage`] offering [`UsdDataExt`]-equivalent typed
-/// reads. `!Send` — construct per-system from a `NonSend` `CanonicalStage`.
+/// reads. `!Send` — construct per-system from the runtime adapter's `NonSend`
+/// canonical stage.
 ///
 /// [`UsdDataExt`]: lunco_usd_core::UsdDataExt
 pub struct StageView<'a> {

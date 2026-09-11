@@ -73,7 +73,7 @@ impl UsdStageProjectionPlan {
     /// Build the initial projection from the same composed OpenUSD stage that
     /// runtime readers use. The stage is local to this worker call and is
     /// dropped before the plan crosses the async asset boundary.
-    pub(crate) fn from_recipe(recipe: &StageRecipe) -> Result<Self> {
+    pub fn from_recipe(recipe: &StageRecipe) -> Result<Self> {
         let (stage, _) = crate::compose::build_stage_with_resolver(recipe)?;
         Self::from_stage(&stage)
     }
@@ -81,7 +81,7 @@ impl UsdStageProjectionPlan {
     /// Snapshot an already-composed stage into the owned read surface used by
     /// an external native adapter. The caller retains the live stage separately
     /// for explicit authoring; this plan owns no OpenUSD handles.
-    pub(crate) fn from_stage(stage: &Stage) -> Result<Self> {
+    pub fn from_stage(stage: &Stage) -> Result<Self> {
         let reader = StageView::new(stage);
         let paths = reader.prim_paths();
         let mut plan = Self {
@@ -242,7 +242,7 @@ impl UsdStageProjectionPlan {
     }
 
     /// Validate all prepared transforms before they become ECS state.
-    pub(crate) fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         for prim in &self.prims {
             if let Some(transform) = prim.transform {
                 let t = transform.translation;

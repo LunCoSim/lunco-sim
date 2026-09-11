@@ -648,12 +648,20 @@ pub fn modelica_path_identifier(raw: &str) -> String {
 mod tests {
     use super::*;
 
-    fn program_stage(source: &str) -> crate::CanonicalStage {
-        crate::CanonicalStage::from_recipe(&lunco_usd_core::StageRecipe::from_source(
-            "programs.usda",
-            source,
-        ))
-        .expect("build program stage")
+    struct TestStage(openusd::usd::Stage);
+
+    impl TestStage {
+        fn view(&self) -> crate::view::StageView<'_> {
+            crate::view::StageView::new(&self.0)
+        }
+    }
+
+    fn program_stage(source: &str) -> TestStage {
+        let recipe = lunco_usd_core::StageRecipe::from_source("programs.usda", source);
+        let stage = crate::compose::build_stage_with_resolver(&recipe)
+            .expect("build program stage")
+            .0;
+        TestStage(stage)
     }
 
     #[test]
