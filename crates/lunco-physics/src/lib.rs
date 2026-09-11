@@ -1347,6 +1347,14 @@ impl Plugin for PhysicsGatePlugin {
             // Same reasoning: a readiness decision that nothing enforces is a
             // hold that silently does not hold.
             .add_plugins(readiness::ReadinessEffectPlugin);
+
+        // Avian's async collider-tree optimizer always joins its worker task in
+        // `EndOptimize`, which turns scheduler contention into an unbounded physics
+        // stall. Keep the supported optimizer on the owner schedule so its full
+        // cost stays contained in the physics step that admits it.
+        app.world_mut()
+            .resource_mut::<avian3d::collider_tree::ColliderTreeOptimization>()
+            .use_async_tasks = false;
     }
 }
 
@@ -1374,6 +1382,12 @@ mod tests {
             DEFAULT_SUBSTEP_COUNT
         );
         assert_eq!(DEFAULT_SUBSTEP_COUNT, 8);
+        assert!(
+            !app.world()
+                .resource::<avian3d::collider_tree::ColliderTreeOptimization>()
+                .use_async_tasks,
+            "physics-tree optimization must not join an async task inside PhysicsSchedule"
+        );
     }
 
     #[test]

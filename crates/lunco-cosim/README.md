@@ -25,6 +25,10 @@ command.
 backend enumerates the component or authored surface it owns, and the registry
 merges those candidates once per inspection sample. A consumer must use this
 path instead of scanning every ECS entity and probing every backend.
+For bounded-cadence views, each backend also supplies an identity-only
+`topology_key`; consumers cache the `entity_port_infos` metadata while reading
+live values through the registry on each sample. Values therefore stay current
+without rebuilding the port table when only physics or solver state changes.
 
 | Backend | Ports |
 | --- | --- |

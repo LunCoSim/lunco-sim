@@ -14,6 +14,7 @@ pub struct WorkbenchSnapshot {
     active_perspective: Option<PerspectiveId>,
     focused_tab: Option<TabId>,
     tabs: Vec<TabId>,
+    visible_panels: Vec<PanelId>,
     registered_perspectives: Vec<PerspectiveId>,
     docked_panels: Vec<PanelId>,
 }
@@ -38,12 +39,14 @@ impl WorkbenchSnapshot {
         active_perspective: Option<PerspectiveId>,
         focused_tab: Option<TabId>,
         tabs: Vec<TabId>,
+        visible_panels: Vec<PanelId>,
         registered_perspectives: Vec<PerspectiveId>,
         docked_panels: Vec<PanelId>,
     ) {
         self.active_perspective = active_perspective;
         self.focused_tab = focused_tab;
         self.tabs = tabs;
+        self.visible_panels = visible_panels;
         self.registered_perspectives = registered_perspectives;
         self.docked_panels = docked_panels;
     }
@@ -85,6 +88,11 @@ impl WorkbenchSnapshot {
         self.docked_panels.contains(&id)
     }
 
+    /// Return whether a panel is the active tab in any visible dock leaf.
+    pub fn is_panel_visible(&self, id: PanelId) -> bool {
+        self.visible_panels.contains(&id)
+    }
+
     /// Return whether a perspective is registered with the shell.
     pub fn has_perspective(&self, id: PerspectiveId) -> bool {
         self.registered_perspectives.contains(&id)
@@ -118,6 +126,7 @@ mod tests {
             Some(editor),
             Some(document),
             vec![TabId::singleton(PanelId("browser")), document],
+            vec![model],
             vec![editor],
             vec![model],
         );

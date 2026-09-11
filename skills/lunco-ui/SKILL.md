@@ -47,7 +47,10 @@ outside egui. For ports, use `PortRegistry::entity_port_infos` so values,
 units, ranges, source, authority, and writability come from backend owners;
 sample at a bounded cadence when the data has no shared change marker. Writable
 rows emit the existing typed command and validate against the metadata contract;
-the panel must not infer policy from names or mutate port storage directly.
+the panel must not infer policy from names or mutate port storage directly. If
+the view caches metadata, its invalidation must use the owner-provided
+`PortBackend::topology_key`; the normal sample path reads live values through
+the registry rather than rerunning backend list/metadata callbacks.
 
 `default_slot()` seeds layout intent only before the first perspective is
 active. After that, the active `Perspective` owns its slot declarations;

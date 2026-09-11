@@ -24,7 +24,7 @@ use bevy::prelude::*;
 
 use lunco_core::architecture::{InputPorts, OutputPorts, Port};
 use lunco_core::ports::{
-    push_map, PortBackend, PortDirection, PortMetadata, PortRef, PortRegistry,
+    port_name_set_key, push_map, PortBackend, PortDirection, PortMetadata, PortRef, PortRegistry,
 };
 
 use crate::{DeclaredOutputPorts, SimComponent};
@@ -114,6 +114,16 @@ fn avian_entities(world: &mut World, out: &mut Vec<Entity>) {
     for group in AVIAN {
         (group.entities)(world, out);
     }
+}
+
+fn avian_topology_key(world: &World, entity: Entity) -> u64 {
+    AVIAN.iter().enumerate().fold(0u64, |key, (index, group)| {
+        if (group.present)(world, entity) {
+            key | (1u64 << index)
+        } else {
+            key
+        }
+    })
 }
 
 fn avian_unit(name: &str) -> Option<&'static str> {
@@ -278,6 +288,18 @@ const SIMCOMPONENT_BACKEND: PortBackend = PortBackend {
                 .iter(world),
         );
     },
+    topology_key: |world, entity| {
+        let Some(component) = world.get::<SimComponent>(entity) else {
+            return 0;
+        };
+        let inputs = port_name_set_key(component.inputs.keys());
+        let outputs = port_name_set_key(component.outputs.keys());
+        let declared = world
+            .get::<DeclaredOutputPorts>(entity)
+            .map(|ports| port_name_set_key(ports.names.iter()))
+            .unwrap_or(0);
+        inputs ^ outputs.rotate_left(21) ^ declared.rotate_left(42)
+    },
     list: |w, e, out| {
         if let Some(c) = w.get::<SimComponent>(e) {
             push_map(out, &c.outputs, PortDirection::Out);
@@ -340,6 +362,7 @@ const SIMCOMPONENT_BACKEND: PortBackend = PortBackend {
 /// single component access per tick.
 const AVIAN_BACKEND: PortBackend = PortBackend {
     list_entities: avian_entities,
+    topology_key: avian_topology_key,
     list: avian_list,
     metadata: Some(avian_metadata),
     read_output: avian_read_output,
@@ -360,6 +383,7 @@ const PORT_BACKEND: PortBackend = PortBackend {
     list_entities: |world, out| {
         out.extend(world.query_filtered::<Entity, With<Port>>().iter(world));
     },
+    topology_key: |world, entity| u64::from(world.get::<Port>(entity).is_some()),
     list: |w, e, out| {
         if let Some(p) = w.get::<Port>(e) {
             out.push(PortRef {
@@ -425,6 +449,18 @@ const OUTPUT_PORTS_BACKEND: PortBackend = PortBackend {
                 .iter(world),
         );
     },
+    topology_key: |world, entity| {
+        let Some(outputs) = world.get::<OutputPorts>(entity) else {
+            return 0;
+        };
+        let names = port_name_set_key(outputs.ports.keys());
+        let live = outputs
+            .ports
+            .values()
+            .filter(|port_entity| world.get::<Port>(**port_entity).is_some())
+            .count() as u64;
+        names ^ live.rotate_left(47)
+    },
     list: |world, entity, out| {
         let Some(outputs) = world.get::<OutputPorts>(entity) else {
             return;
@@ -485,6 +521,7 @@ const PILOTED_BACKEND: PortBackend = PortBackend {
                 .iter(world),
         );
     },
+    topology_key: |world, entity| u64::from(world.get::<InputPorts>(entity).is_some()),
     list: |w, e, out| {
         // `GlobalEntityId` names every composed USD prim, not just a vehicle.
         // The `InputPorts` surface is the architecture's already-authoritative
