@@ -1086,8 +1086,10 @@ impl ApiQueryProvider for DescribeModelProvider {
         };
         // The caller may pass `Foo.Bar` — try the short tail first.
         let short = target_name.rsplit('.').next().unwrap_or(&target_name);
-        let Some(class) = lunco_modelica_ast::ast_extract::find_class_by_short_name(&ast, short) else {
-            let candidates = lunco_modelica_ast::ast_extract::collect_non_package_classes_qualified(&ast);
+        let Some(class) = lunco_modelica_ast::ast_extract::find_class_by_short_name(&ast, short)
+        else {
+            let candidates =
+                lunco_modelica_ast::ast_extract::collect_non_package_classes_qualified(&ast);
             return ApiResponse::error(
                 ApiErrorCode::EntityNotFound,
                 format!(

@@ -927,12 +927,10 @@ pub fn import_model_to_diagram_from_ast(
                 // instead of the class default `J=1`).
                 if let Some(comp) = comp_by_short.get(short_name) {
                     for (k, v) in &comp.modifications {
-                        diagram_node
-                            .parameter_values
-                            .insert(
-                                k.clone(),
-                                lunco_modelica_ast::ast_extract::format_expression_for_display(v),
-                            );
+                        diagram_node.parameter_values.insert(
+                            k.clone(),
+                            lunco_modelica_ast::ast_extract::format_expression_for_display(v),
+                        );
                     }
                     // `Component X if <cond>` — only dim when the
                     // condition evaluates FALSE against the parent's
@@ -1523,8 +1521,9 @@ mod composite_slim_slice_tests {
         ));
         // Reproduce load_msl_class's slice: within + RocketStage body.
         let ast_full = lunco_modelica_ast::parse_to_ast(full, "rs.mo").unwrap();
-        let class = lunco_modelica_ast::ast_extract::find_class_by_short_name(&ast_full, "RocketStage")
-            .expect("RocketStage in package");
+        let class =
+            lunco_modelica_ast::ast_extract::find_class_by_short_name(&ast_full, "RocketStage")
+                .expect("RocketStage in package");
         let (s, e) = lunco_modelica_ast::ast_extract::class_full_text_span(class, full);
         let slim = format!("within AnnotatedRocketStage;\n{}", &full[s..e]);
 
@@ -1667,7 +1666,9 @@ end Unit_One;
         };
         // slim slice with no target
         let ast_full = lunco_modelica_ast::parse_to_ast(full, "rs.mo").unwrap();
-        let class = lunco_modelica_ast::ast_extract::find_class_by_short_name(&ast_full, "RocketStage").unwrap();
+        let class =
+            lunco_modelica_ast::ast_extract::find_class_by_short_name(&ast_full, "RocketStage")
+                .unwrap();
         let (s, e) = lunco_modelica_ast::ast_extract::class_full_text_span(class, full);
         let slim = format!("within AnnotatedRocketStage;\n{}", &full[s..e]);
 

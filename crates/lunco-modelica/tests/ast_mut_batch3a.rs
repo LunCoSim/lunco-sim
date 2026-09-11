@@ -9,8 +9,8 @@
 
 use lunco_modelica::ast_mut::{self, AstMutError, Edit};
 use lunco_modelica::pretty::{CausalitySpec, ClassKindSpec, VariabilitySpec, VariableDecl};
-use rumoca_compile::parsing::ast::{ClassDef, StoredDefinition};
 use lunco_modelica_ast::parse_to_ast;
+use rumoca_compile::parsing::ast::{ClassDef, StoredDefinition};
 
 fn mutate_class<F>(source: &str, class_name: &str, op: F) -> ClassDef
 where

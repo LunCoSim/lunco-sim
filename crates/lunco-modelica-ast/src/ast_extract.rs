@@ -98,10 +98,7 @@ pub fn variable_metadata(
 }
 
 fn variable_metadata_from_ast(ast: &StoredDefinition) -> HashMap<String, ModelicaVariableMetadata> {
-    fn collect(
-        class: &ClassDef,
-        output: &mut HashMap<String, ModelicaVariableMetadata>,
-    ) {
+    fn collect(class: &ClassDef, output: &mut HashMap<String, ModelicaVariableMetadata>) {
         for component in class.components.values() {
             let description = description_from_tokens(&component.description);
             let unit = component
@@ -1262,10 +1259,8 @@ pub fn format_expression_for_display(expr: &Expression) -> String {
             }
         }
         Expression::Array { elements, .. } => {
-            let elements: Vec<String> = elements
-                .iter()
-                .map(format_expression_for_display)
-                .collect();
+            let elements: Vec<String> =
+                elements.iter().map(format_expression_for_display).collect();
             if elements.iter().any(String::is_empty) {
                 String::new()
             } else {

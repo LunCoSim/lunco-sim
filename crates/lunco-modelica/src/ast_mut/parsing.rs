@@ -3,8 +3,8 @@
 use super::errors::AstMutError;
 use crate::lock_ext::LockExt;
 use crate::pretty;
-use rumoca_compile::parsing::ast::StoredDefinition;
 use lunco_modelica_ast::parse_to_ast;
+use rumoca_compile::parsing::ast::StoredDefinition;
 use std::sync::Arc;
 
 /// Wrapper class name used when fragments of Modelica (a binding

@@ -56,7 +56,9 @@ pub fn update_status_bar(
                 let document = h.document();
                 document
                     .strict_ast()
-                    .and_then(|ast| lunco_modelica_ast::ast_extract::extract_model_name_from_ast(&ast))
+                    .and_then(|ast| {
+                        lunco_modelica_ast::ast_extract::extract_model_name_from_ast(&ast)
+                    })
                     .or_else(|| Some(document.origin().display_name()))
             })
         })

@@ -635,7 +635,9 @@ impl MSLIndexer {
                             // `comp.start: Expression` — Empty when no
                             // explicit start was given. The shared display
                             // projection returns "" for `Empty` so this is safe.
-                            lunco_modelica_ast::ast_extract::format_expression_for_display(&comp.start)
+                            lunco_modelica_ast::ast_extract::format_expression_for_display(
+                                &comp.start,
+                            )
                         });
                     // TODO: resolve `unit` from the type definition.
                     // For `parameter SI.Torque tau_constant` the
@@ -829,7 +831,8 @@ impl MSLIndexer {
                 self.resolve_inheritance(full_name, &mut ports, &mut parameters, &mut visited);
 
                 let short_name = lunco_modelica_ast::ast_extract::short_name(full_name).to_string();
-                let category = lunco_modelica_ast::ast_extract::parent_qualified(full_name).replace('.', "/");
+                let category =
+                    lunco_modelica_ast::ast_extract::parent_qualified(full_name).replace('.', "/");
 
                 // Inheritance-merged icon. The merge logic lives in
                 // `extract_icon_inherited`; the resolver does

@@ -984,8 +984,10 @@ fn render_icon_view(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         };
         let display = document.origin().display_name();
         let from_path = display.strip_prefix("msl://").map(|s| s.to_string());
-        let short = lunco_modelica_ast::ast_extract::extract_model_name_from_ast(&ast).unwrap_or_default();
-        let Some(class) = lunco_modelica_ast::ast_extract::find_class_by_short_name(&ast, &short) else {
+        let short =
+            lunco_modelica_ast::ast_extract::extract_model_name_from_ast(&ast).unwrap_or_default();
+        let Some(class) = lunco_modelica_ast::ast_extract::find_class_by_short_name(&ast, &short)
+        else {
             return;
         };
         let qualified = from_path.unwrap_or_else(|| short.clone());

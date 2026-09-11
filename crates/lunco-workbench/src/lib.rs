@@ -5488,7 +5488,8 @@ fn render_status_event_row(
 ) -> bool {
     let has_details = matches!(
         event.level,
-        lunco_status_core::status_bus::StatusLevel::Warn | lunco_status_core::status_bus::StatusLevel::Error
+        lunco_status_core::status_bus::StatusLevel::Warn
+            | lunco_status_core::status_bus::StatusLevel::Error
     );
     let mut details = egui::collapsing_header::CollapsingState::load_with_default_open(
         ui.ctx(),
@@ -5659,7 +5660,10 @@ fn add_status_text_with_layout(
         .inner
 }
 
-fn status_event_action_width(level: lunco_status_core::status_bus::StatusLevel, compact: bool) -> f32 {
+fn status_event_action_width(
+    level: lunco_status_core::status_bus::StatusLevel,
+    compact: bool,
+) -> f32 {
     if level == lunco_status_core::status_bus::StatusLevel::Attention {
         if compact {
             56.0
@@ -5671,7 +5675,10 @@ fn status_event_action_width(level: lunco_status_core::status_bus::StatusLevel, 
     }
 }
 
-fn status_event_has_progress(level: lunco_status_core::status_bus::StatusLevel, progress: Option<(u64, u64)>) -> bool {
+fn status_event_has_progress(
+    level: lunco_status_core::status_bus::StatusLevel,
+    progress: Option<(u64, u64)>,
+) -> bool {
     progress.is_some() || level == lunco_status_core::status_bus::StatusLevel::Progress
 }
 
@@ -5740,13 +5747,16 @@ fn status_level_label(level: lunco_status_core::status_bus::StatusLevel) -> &'st
     }
 }
 
-fn status_level_color(level: lunco_status_core::status_bus::StatusLevel, theme: &lunco_theme::Theme) -> egui::Color32 {
+fn status_level_color(
+    level: lunco_status_core::status_bus::StatusLevel,
+    theme: &lunco_theme::Theme,
+) -> egui::Color32 {
     match level {
-        lunco_status_core::status_bus::StatusLevel::Error | lunco_status_core::status_bus::StatusLevel::Attention => theme.tokens.error,
+        lunco_status_core::status_bus::StatusLevel::Error
+        | lunco_status_core::status_bus::StatusLevel::Attention => theme.tokens.error,
         lunco_status_core::status_bus::StatusLevel::Warn => theme.tokens.warning,
-        lunco_status_core::status_bus::StatusLevel::Info | lunco_status_core::status_bus::StatusLevel::Progress => {
-            theme.tokens.text_subdued
-        }
+        lunco_status_core::status_bus::StatusLevel::Info
+        | lunco_status_core::status_bus::StatusLevel::Progress => theme.tokens.text_subdued,
     }
 }
 

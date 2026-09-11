@@ -838,7 +838,10 @@ fn gate_big_space_hierarchy_validation(app: &mut App) {
             bevy::ecs::schedule::ScheduleCleanupPolicy::RemoveSystemsOnly,
         )
         .expect("BigSpace hierarchy validator must be installed by BigSpaceDefaultPlugins");
-    assert_eq!(removed, 1, "BigSpace hierarchy validator must be installed once");
+    assert_eq!(
+        removed, 1,
+        "BigSpace hierarchy validator must be installed once"
+    );
     app.add_systems(
         PostUpdate,
         big_space::validation::validate_hierarchy::<big_space::validation::SpatialHierarchyRoot>
@@ -3520,7 +3523,6 @@ mod ground_collider_gate_tests {
         app.update();
         assert!(!app.world().resource::<lunco_usd::GroundColliderPending>().0);
     }
-
 }
 
 /// **Start each camera path when the RECORDER starts.** A shot begins when the

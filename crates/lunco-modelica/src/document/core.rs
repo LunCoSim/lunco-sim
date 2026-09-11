@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use lunco_doc::{Diagnostic, Document, DocumentError, DocumentId, DocumentOrigin};
-use rumoca_compile::parsing::ast::StoredDefinition;
 #[cfg(not(target_arch = "wasm32"))]
 use lunco_modelica_ast::parse_to_syntax;
+use rumoca_compile::parsing::ast::StoredDefinition;
 
 use super::ops::{FreshAst, ModelicaChange, ModelicaOp, CHANGE_HISTORY_CAPACITY};
 use crate::index::ModelicaIndex;

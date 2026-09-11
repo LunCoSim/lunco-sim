@@ -375,8 +375,11 @@ fn validate_modelica(reference: &str, path: &Path, text: &str) -> ValidationRepo
     let ast = syntax.best_effort();
     let interface = lunco_modelica_ast::ast_extract::parse_model_interface_from_ast(ast);
     let model_name = interface.model_name.clone();
-    let parameters: std::collections::BTreeMap<String, f64> =
-        interface.parameters.iter().map(|(name, value)| (name.clone(), *value)).collect();
+    let parameters: std::collections::BTreeMap<String, f64> = interface
+        .parameters
+        .iter()
+        .map(|(name, value)| (name.clone(), *value))
+        .collect();
     let inputs: std::collections::BTreeMap<String, f64> = interface
         .inputs
         .iter()
@@ -386,9 +389,8 @@ fn validate_modelica(reference: &str, path: &Path, text: &str) -> ValidationRepo
     // The domain's own facts, for the authored rules. Merged at TOP LEVEL by
     // `apply_lint_policy` — see the warning there about nesting. All
     // declaration and equation facts come from the already-recovered AST.
-    report.lint_facts = Some(
-        lunco_modelica_ast::lint_facts::modelica_facts_from_interface(ast, &interface),
-    );
+    report.lint_facts =
+        Some(lunco_modelica_ast::lint_facts::modelica_facts_from_interface(ast, &interface));
 
     report.info = json!({
         "model": model_name,

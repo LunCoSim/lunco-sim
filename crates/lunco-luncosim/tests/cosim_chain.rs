@@ -174,8 +174,10 @@ fn cosim_chain_modelica_python_avian_propagates_data() {
     // ── Wire engines to nodes ───────────────────────────────────────
     // Modelica oscillator: insert ModelicaModel + dispatch Compile.
     {
-        let interface =
-            lunco_modelica_ast::ast_extract::parse_model_interface(oscillator_mo(), "oscillator.mo");
+        let interface = lunco_modelica_ast::ast_extract::parse_model_interface(
+            oscillator_mo(),
+            "oscillator.mo",
+        );
         let model_name = interface.model_name.unwrap_or_else(|| "Oscillator".into());
         let parameters = interface.parameters;
         let inputs = interface.inputs;

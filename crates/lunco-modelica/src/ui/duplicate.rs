@@ -96,7 +96,8 @@ pub(crate) fn spans_from_ast(
     // `load_msl_class`). `rewrite_inject_in_one_pass` re-anchors these
     // absolute spans by `full_start`, so the caller must pass the matching
     // `source[full_start..full_end]` slice.
-    let (full_start, full_end) = lunco_modelica_ast::ast_extract::class_full_text_span(class, source);
+    let (full_start, full_end) =
+        lunco_modelica_ast::ast_extract::class_full_text_span(class, source);
     Some(DuplicateExtract {
         full_start,
         full_end,

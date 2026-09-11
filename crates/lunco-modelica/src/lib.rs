@@ -810,8 +810,10 @@ impl ModelicaCompiler {
         // caller loaded, not guessed from the file path.
         if let Some(within) = lunco_modelica_ast::ast_extract::within_package_of_source(source) {
             let root = within.split('.').next().unwrap_or(&within).to_string();
-            let qualified =
-                lunco_modelica_ast::ast_extract::qualify(&within, lunco_modelica_ast::ast_extract::short_name(model_name));
+            let qualified = lunco_modelica_ast::ast_extract::qualify(
+                &within,
+                lunco_modelica_ast::ast_extract::short_name(model_name),
+            );
             if !self.ensure_root_installed(&root) {
                 return Err(format!(
                     "`{qualified}` declares `within {within};`, but no library `{root}` \
@@ -944,8 +946,8 @@ impl ModelicaCompiler {
             );
         }
         self.prepare_requested_source_roots();
-        let primary_owned_class =
-            lunco_modelica_ast::ast_extract::within_package_of_source(source).and_then(|within| {
+        let primary_owned_class = lunco_modelica_ast::ast_extract::within_package_of_source(source)
+            .and_then(|within| {
                 let root = within.split('.').next().unwrap_or(&within);
                 if !self.installed_roots.contains(root) {
                     let _ = self.ensure_root_installed(root);
@@ -964,8 +966,10 @@ impl ModelicaCompiler {
         let mut filtered_extras = Vec::with_capacity(extras.len());
         for (extra_filename, extra_source) in extras {
             if extra_filename != filename {
-                let declared =
-                    lunco_modelica_ast::ast_extract::declared_class_names(extra_source, extra_filename);
+                let declared = lunco_modelica_ast::ast_extract::declared_class_names(
+                    extra_source,
+                    extra_filename,
+                );
                 let owned = declared
                     .iter()
                     .filter(|qualified| self.class_is_owned_by_installed_root(qualified))
@@ -1296,7 +1300,9 @@ impl ModelicaCompiler {
                         diagnostics.push(message);
                     }
                     lunco_modelica_ast::ast_extract::InputDefaultIssue::Unresolvable {
-                        name, binding, ..
+                        name,
+                        binding,
+                        ..
                     } => {
                         log::warn!(
                             "[ModelicaCompiler] source root `{id}`: {uri} declares `input {name} = \

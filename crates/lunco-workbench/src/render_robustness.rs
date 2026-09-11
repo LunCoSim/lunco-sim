@@ -1958,7 +1958,9 @@ mod tests {
             health.shadow_budget_bytes.load(Ordering::Relaxed),
             16 * 1024 * 1024
         );
-        let status_bus = app.world().resource::<lunco_status_core::status_bus::StatusBus>();
+        let status_bus = app
+            .world()
+            .resource::<lunco_status_core::status_bus::StatusBus>();
         assert_eq!(
             status_bus
                 .history()

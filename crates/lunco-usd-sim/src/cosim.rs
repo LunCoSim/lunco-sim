@@ -38,9 +38,7 @@ use lunco_doc::DocumentId;
 #[cfg(feature = "python")]
 use lunco_doc::DocumentOrigin;
 use lunco_modelica::source_asset::ModelicaSource;
-use lunco_modelica::{
-    ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaSignalLayout,
-};
+use lunco_modelica::{ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaSignalLayout};
 use lunco_modelica_ast::ast_extract::parse_model_interface;
 use lunco_render::SceneCamera;
 #[cfg(feature = "python")]

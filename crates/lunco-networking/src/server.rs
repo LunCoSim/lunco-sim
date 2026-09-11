@@ -2,21 +2,21 @@
 //! outbox→clients / clients→inbox ferry. Native only.
 
 use bevy::prelude::*;
-use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, futures_lite::future};
-use lightyear::netcode::NetcodeServer;
+use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use lightyear::netcode::server_plugin::NetcodeConfig;
+use lightyear::netcode::NetcodeServer;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 
 use crate::scenario::{
-    ScenarioAsset, ScenarioManifestMsg, ScenarioManifestResource, cid_for_content,
-    scenario_revision,
+    cid_for_content, scenario_revision, ScenarioAsset, ScenarioManifestMsg,
+    ScenarioManifestResource,
 };
 use crate::sync::{
-    HandshakeMsg, MAX_SNAPSHOT_ENTRIES, NetworkConfig, OwnershipMsg, PeerInterest, ProfilesMsg,
-    ReplicationState, SnapshotMsg, SyncEnvelope, SyncInbox, SyncOutbox, ViewCenters,
+    HandshakeMsg, NetworkConfig, OwnershipMsg, PeerInterest, ProfilesMsg, ReplicationState,
+    SnapshotMsg, SyncEnvelope, SyncInbox, SyncOutbox, ViewCenters, MAX_SNAPSHOT_ENTRIES,
 };
 use lunco_core::{NetStatus, SessionId, SessionProfiles, SessionRegistry, SimTick, SyncChannel};
 use lunco_doc_bevy::JournalResource;
@@ -63,7 +63,7 @@ impl AssignedSessions {
 
 use crate::protocol::{BulkChannel, CmdChannel, Frame, SnapChannel};
 use crate::shared::{
-    PROTOCOL_ID, deserialize_env, is_dev_netcode_key, netcode_key, peer_to_session, serialize_env,
+    deserialize_env, is_dev_netcode_key, netcode_key, peer_to_session, serialize_env, PROTOCOL_ID,
 };
 
 use lunco_storage::{FileStorage, Storage, StorageHandle};

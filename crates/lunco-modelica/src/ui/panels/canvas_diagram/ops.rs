@@ -76,9 +76,9 @@ pub(super) fn resolve_doc_context(
             ctx.resource::<ModelicaDocumentRegistry>()
                 .and_then(|r| r.host(doc_id))
                 .and_then(|h| {
-                    h.document()
-                        .strict_ast()
-                        .and_then(|ast| lunco_modelica_ast::ast_extract::extract_model_name_from_ast(&ast))
+                    h.document().strict_ast().and_then(|ast| {
+                        lunco_modelica_ast::ast_extract::extract_model_name_from_ast(&ast)
+                    })
                 })
         })
         .or_else(|| crate::state::detected_name_for_ctx(ctx, doc_id));

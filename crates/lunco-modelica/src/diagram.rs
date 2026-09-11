@@ -511,7 +511,8 @@ pub fn resolve_primary_target(ast: &StoredDefinition) -> Option<String> {
         .as_ref()
         .map(|w| w.to_string())
         .unwrap_or_default();
-    let qualify = |short: &str| -> String { lunco_modelica_ast::ast_extract::qualify(&within_prefix, short) };
+    let qualify =
+        |short: &str| -> String { lunco_modelica_ast::ast_extract::qualify(&within_prefix, short) };
     // Models are the canonical "open this in the canvas" choice;
     // connectors and types alone have no diagram.
     let is_diagrammable =
@@ -527,7 +528,9 @@ pub fn resolve_primary_target(ast: &StoredDefinition) -> Option<String> {
         }
         for (inner_name, inner) in &pkg.classes {
             if is_diagrammable(inner.class_type.clone()) {
-                return Some(qualify(&lunco_modelica_ast::ast_extract::qualify(pkg_name, inner_name)));
+                return Some(qualify(&lunco_modelica_ast::ast_extract::qualify(
+                    pkg_name, inner_name,
+                )));
             }
         }
     }

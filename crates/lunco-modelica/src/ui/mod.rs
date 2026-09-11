@@ -1354,7 +1354,9 @@ fn fan_status_bus_to_console(
         let level = match ev.level {
             lunco_status_core::status_bus::StatusLevel::Info => panels::console::ConsoleLevel::Info,
             lunco_status_core::status_bus::StatusLevel::Warn => panels::console::ConsoleLevel::Warn,
-            lunco_status_core::status_bus::StatusLevel::Error => panels::console::ConsoleLevel::Error,
+            lunco_status_core::status_bus::StatusLevel::Error => {
+                panels::console::ConsoleLevel::Error
+            }
             lunco_status_core::status_bus::StatusLevel::Attention => {
                 panels::console::ConsoleLevel::Info
             }

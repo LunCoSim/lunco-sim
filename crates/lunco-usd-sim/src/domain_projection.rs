@@ -15,8 +15,7 @@ use lunco_modelica::{
     ModelicaSignalProvenance, NoticeLevel,
 };
 use lunco_modelica_ast::ast_extract::{
-    parse_model_interface, parse_model_interface_from_ast, ModelInterface,
-    ModelicaVariableMetadata,
+    parse_model_interface, parse_model_interface_from_ast, ModelInterface, ModelicaVariableMetadata,
 };
 use lunco_usd_bevy::program::ProgramGraph;
 use lunco_usd_bevy::read::UsdReadObject as ComposedReader;
@@ -566,22 +565,17 @@ impl DomainSynthesizer for HookSynthesizer {
                 message,
             }]
         })?;
-        let interface = validate_generated_source(
-            source,
-            model_name,
-            &network,
-            &units,
-            &member_output_aliases,
-        )
-        .map_err(|message| {
-            vec![DomainProjectionError {
-                path: network_root.clone(),
-                message: format!(
-                    "synthesizer `{}` returned invalid Modelica: {message}",
-                    self.name
-                ),
-            }]
-        })?;
+        let interface =
+            validate_generated_source(source, model_name, &network, &units, &member_output_aliases)
+                .map_err(|message| {
+                    vec![DomainProjectionError {
+                        path: network_root.clone(),
+                        message: format!(
+                            "synthesizer `{}` returned invalid Modelica: {message}",
+                            self.name
+                        ),
+                    }]
+                })?;
         Ok(SynthOutcome::Ready(Box::new(SynthesisPlan {
             source: source.to_string(),
             interface,

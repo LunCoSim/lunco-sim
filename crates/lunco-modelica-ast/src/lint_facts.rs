@@ -524,9 +524,8 @@ mod tests {
     /// policy-level comparisons are intentionally performed by Rhai.
     #[test]
     fn declaration_entries_are_exposed_for_policy_rules() {
-        let facts = facts_of_source(
-            "model M\n  parameter Real m = 2.0;\n  input Real throttle;\nend M;\n",
-        );
+        let facts =
+            facts_of_source("model M\n  parameter Real m = 2.0;\n  input Real throttle;\nend M;\n");
         assert_eq!(
             key(&facts, "params"),
             &H::Array(vec![H::map([
@@ -599,11 +598,14 @@ mod tests {
             "model M\n  Real x;\nalgorithm\n  if x > 0.0 then\n    x := 1.0;\n  else\n    x := 0.0;\n  end if;\nend M;\n",
         );
         let entries = conditionals(&facts);
-        assert_eq!(entries, vec![(
-            "".to_string(),
-            "unknown".to_string(),
-            "if-statement".to_string(),
-        )]);
+        assert_eq!(
+            entries,
+            vec![(
+                "".to_string(),
+                "unknown".to_string(),
+                "if-statement".to_string(),
+            )]
+        );
         let H::Array(raw) = key(&facts, "conditional_constructs") else {
             panic!("conditional_constructs is an array")
         };
