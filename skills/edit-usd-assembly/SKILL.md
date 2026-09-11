@@ -446,6 +446,14 @@ the path is already known; use `selected_update_context` when starting from the
 Editor selection. Both preserve the exact document, edit target, path, and
 generation checkpoint for human and AI workflows.
 
+If the edited prim is a live model instance, keep compile-time values as
+standard authored `inputs:*` overrides on that instance. The USD edit advances
+the generic `ModelStateRevision`; it never names or invokes a backend. The
+owning Modelica, Rhai, physics, or future tool adapter decides whether the new
+state requires recompilation, reset, or ordinary live-input handling. Verify
+the backend-owned readiness/result after projection and keep the source asset
+unchanged.
+
 When editing a primitive's standard `axis`, compare the visible result after
 reprojection with the composed attribute. Repeated axis edits must apply the
 axis correction once to the authored pose, including identity rotation. A

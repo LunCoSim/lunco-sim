@@ -120,6 +120,15 @@ an actual authored source/topology change or an explicit library-set change;
 normal scene projection and solver stepping do not recompile an unchanged USD
 participant.
 
+When an authored USD `inputs:*` value changes on a live participant, the USD
+projection advances the backend-neutral `lunco_core::ModelStateRevision`. It
+does not request a Modelica compile. The Modelica adapter compares that
+revision against its parsed parameter state: a changed `parameter Real` enters
+the existing source-asset compile/session fence, while a changed `input Real`
+remains a runtime value. Other backends can observe the same revision and own
+different rebuild or reset policies without adding Modelica knowledge to USD
+projection.
+
 In-memory roots are parsed completely before they cross the session boundary and
 are installed through Rumoca's bulk parsed-source-set operation. This keeps one
 package admission to one index/invalidation pass and makes a malformed member a

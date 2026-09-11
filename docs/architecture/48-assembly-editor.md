@@ -194,6 +194,15 @@ command boundary. Modelica parameter semantics remain owned by Modelica; an
 instance edit targets its existing USD `inputs:` override and does not rewrite
 the shared source document.
 
+An authored model-input edit also advances the generic
+`lunco_core::ModelStateRevision` on that live instance. This is an invalidation
+signal, not a compile request: the USD projection does not know which backend
+owns the model or what action it needs. Each backend observes the revision and
+chooses its own lifecycle (for example, Modelica recompiles only when its
+parsed compile-time parameter changed, while a future Rhai or physics adapter
+could rebuild, reset, or accept a live input). The source asset and authored
+instance override remain separate.
+
 ## Current surfaces
 
 The existing implementation provides the substrate the perspective composes:

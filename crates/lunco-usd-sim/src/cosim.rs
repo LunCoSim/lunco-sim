@@ -402,6 +402,11 @@ pub struct PendingModelicaSource {
     /// Asset-relative path, copied into the generated source's stable compiler
     /// URI and diagnostics metadata.
     pub asset_path: String,
+    /// Modelica worker session for this source load. Recompile requests carry
+    /// a newer session so results from the superseded solver are fenced.
+    pub session_id: u64,
+    /// Whether a successful compile should resume this live participant.
+    pub resume_after_compile: bool,
 }
 
 /// Same for Python.
@@ -1489,6 +1494,8 @@ fn process_usd_cosim_prim_read(
         commands.entity(entity).try_insert(PendingModelicaSource {
             handle: asset_server.load(asset_path.clone()),
             asset_path,
+            session_id: 0,
+            resume_after_compile: true,
         });
     }
     #[cfg(feature = "python")]
@@ -1645,6 +1652,7 @@ pub(crate) fn dispatch_loaded_modelica_sources(
         &mut SimComponent,
         Option<&UsdInputDefaults>,
         Option<&UsdModelicaSchedule>,
+        Option<&mut ModelicaModel>,
     )>,
     sources: Res<Assets<ModelicaSource>>,
     asset_server: Res<AssetServer>,
@@ -1669,9 +1677,11 @@ pub(crate) fn dispatch_loaded_modelica_sources(
     // Sorting by prim path makes the order a property of the SCENE rather than
     // of the ECS, which is what a deterministic runner needs.
     let mut pending: Vec<_> = q.iter_mut().collect();
-    pending.sort_unstable_by(|(_, _, a, _, _, _), (_, _, b, _, _, _)| a.path.cmp(&b.path));
+    pending.sort_unstable_by(|(_, _, a, _, _, _, _), (_, _, b, _, _, _, _)| a.path.cmp(&b.path));
 
-    for (entity, pending, prim_path, mut component, usd_defaults, schedule) in pending {
+    for (entity, pending, prim_path, mut component, usd_defaults, schedule, current_model) in
+        pending
+    {
         // Bail loud if the asset failed to load — without this the
         // entity stays Pending forever and the user sees nothing.
         if asset_server.load_state(&pending.handle).is_failed() {
@@ -1684,7 +1694,15 @@ pub(crate) fn dispatch_loaded_modelica_sources(
                 level: lunco_modelica::NoticeLevel::Error,
                 text: format!("[{}] Asset load error: {error}", component.model_name),
             });
-            component.status = SimStatus::Error(error);
+            component.status = SimStatus::Error(error.clone());
+            if let Some(mut model) = current_model {
+                model.is_compiling = false;
+                model.is_compiled = false;
+                model.is_stepping = false;
+                model.paused = true;
+                model.last_error = Some(error.clone());
+                model.resume_after_compile = false;
+            }
             commands
                 .entity(entity)
                 .try_remove::<PendingModelicaSource>();
@@ -1738,6 +1756,14 @@ pub(crate) fn dispatch_loaded_modelica_sources(
                 pending.asset_path
             );
             component.status = SimStatus::Error(error.clone());
+            if let Some(mut model) = current_model {
+                model.is_compiling = false;
+                model.is_compiled = false;
+                model.is_stepping = false;
+                model.paused = true;
+                model.last_error = Some(error.clone());
+                model.resume_after_compile = false;
+            }
             commands
                 .entity(entity)
                 .try_remove::<PendingModelicaSource>();
@@ -1770,7 +1796,7 @@ pub(crate) fn dispatch_loaded_modelica_sources(
             .tx
             .send(ModelicaCommand::Compile {
                 entity,
-                session_id: 0,
+                session_id: pending.session_id,
                 model_name: model_name.clone(),
                 source: src.text.clone(),
                 // Stable per-asset session URI (its asset path) — keeps this
@@ -1811,7 +1837,10 @@ pub(crate) fn dispatch_loaded_modelica_sources(
             // reach them (they have no DocumentId), so without this they
             // would stay frozen forever. The worker's compile-success
             // handler sets `paused = !resume_after_compile`.
-            resume_after_compile: dispatch_error.is_none(),
+            is_compiling: dispatch_error.is_none(),
+            session_id: pending.session_id,
+            paused: !pending.resume_after_compile,
+            resume_after_compile: pending.resume_after_compile && dispatch_error.is_none(),
             ..default()
         });
 
@@ -3269,6 +3298,74 @@ fn derive_causal_barrier_participants(world: &mut World) {
 /// HTTP round-trip later on the web.
 #[derive(Component, Debug, Clone, Default)]
 pub struct UsdInputDefaults(pub HashMap<String, f64>);
+
+/// Let the Modelica backend react when an authored model state revision changes.
+///
+/// The authoring layer publishes only the generic revision. This backend then
+/// compares its own parsed parameter state and, only when a compile-time value
+/// changed, sends the participant through the same pending-source/compile
+/// boundary as initial admission. Generated network roots are deliberately
+/// excluded because their `GeneratedModelicaSource` projection owns that
+/// lifecycle. A changed runtime `input Real` remains a live value.
+pub(crate) fn request_modelica_parameter_recompile(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    mut q: Query<
+        (
+            Entity,
+            &UsdInputDefaults,
+            &mut ModelicaModel,
+            &mut SimComponent,
+        ),
+        (
+            Changed<lunco_core::ModelStateRevision>,
+            With<UsdSourcedCosim>,
+            Without<GeneratedModelicaSource>,
+            Without<PendingModelicaSource>,
+        ),
+    >,
+) {
+    for (entity, defaults, mut model, mut component) in &mut q {
+        let parameter_changed = defaults.0.iter().any(|(name, value)| {
+            model
+                .parameters
+                .get(name)
+                .is_some_and(|current| current.to_bits() != value.to_bits())
+        });
+        if !parameter_changed || model.source_uri.is_empty() {
+            continue;
+        }
+
+        let session_id = model.session_id.checked_add(1).unwrap_or(1);
+        let resume_after_compile = !model.paused;
+        let asset_path = model.source_uri.clone();
+
+        model.session_id = session_id;
+        model.is_compiling = true;
+        model.is_compiled = false;
+        model.is_stepping = false;
+        model.in_flight_step = None;
+        model.next_step_id = 1;
+        model.compiled_input_names.clear();
+        model.last_error = None;
+        model.paused = true;
+        model.resume_after_compile = resume_after_compile;
+        model.current_time = 0.0;
+        model.target_time = 0.0;
+        model.next_communication_time = 0.0;
+        model.last_step_time = 0.0;
+        model.variables.clear();
+        component.outputs.clear();
+        component.status = SimStatus::Compiling;
+
+        commands.entity(entity).try_insert(PendingModelicaSource {
+            handle: asset_server.load(asset_path.clone()),
+            asset_path,
+            session_id,
+            resume_after_compile,
+        });
+    }
+}
 
 /// Seed a model's inputs from the constants USD authored on its unconnected ports.
 ///
@@ -5368,6 +5465,7 @@ pub(crate) fn install(app: &mut App) {
         (
             rewire_usd_connections.run_if(wiring_due),
             wrap_modelica_into_simcomponent.run_if(any_unwrapped_modelica),
+            request_modelica_parameter_recompile,
             seed_usd_input_defaults,
             dispatch_loaded_modelica_sources,
             // The wrapper publishes the generic SimComponent surface and the

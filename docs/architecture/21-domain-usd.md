@@ -124,6 +124,13 @@ to a full rebuild (`rebuild_scene_from_composed`) rather than a silent projectio
 Coarse ops (`ReplaceSource`, `MovePrim`, `RemoveTimeSample`, `SetRelationship`) rebuild;
 the common interactive ops replay incrementally (`apply_incremental_op_to_stage`).
 
+An authored standard `inputs:*` edit on a live model instance also advances the
+backend-neutral `lunco_core::ModelStateRevision`. This is only an invalidation
+signal: USD does not know whether the attached tool is Modelica, Rhai, physics,
+or another backend, and it never issues a backend-specific rebuild request.
+Each owner observes the revision and chooses its own lifecycle while the
+instance override remains separate from the referenced source asset.
+
 For modeling and scene tests, `RestartScene` is the supported full-reload boundary.
 It clears the old USD-derived entities and worker state, reloads the stage, then
 lets USD prim projection recreate cosim Modelica models and rewire connections

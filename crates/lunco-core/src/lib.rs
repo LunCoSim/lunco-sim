@@ -62,6 +62,8 @@ pub mod exposure;
 pub mod faults;
 
 pub mod mobility;
+/// Generic authored-model invalidation shared by all backend adapters.
+pub mod model_state;
 /// Shared, capability-aware rover navigation command law.
 pub mod navigation;
 
@@ -81,6 +83,7 @@ pub use faults::{
 pub use markers::NoSelectionBounds;
 pub use mobility::Mobility;
 pub use mocks::*;
+pub use model_state::ModelStateRevision;
 pub use navigation::{approach_factor, nav_setpoint, steering_command, NavigationCommand};
 pub use pacing::{
     KeepAwake, SimulationBarrier, SimulationBarrierParticipants, SimulationExecutionMode,
@@ -1074,6 +1077,7 @@ impl Plugin for LunCoCorePlugin {
             .register_type::<TelemetryEvent>()
             .register_type::<Parameter>()
             .register_type::<SampledParameter>()
+            .register_type::<ModelStateRevision>()
             .register_type::<UserIntent>()
             .register_type::<SemanticIntentEdgeKind>()
             .register_type::<SemanticIntentEdge>()
