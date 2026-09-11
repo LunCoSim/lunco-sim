@@ -18,8 +18,8 @@
 //! because there was no way to headlessly run a REAL authored scene.
 //!
 //! `luncosim test` composes the **same app the `--no-ui`
-//! server composes** (`SandboxCorePlugin { headless: true }` +
-//! `SandboxHeadlessPlugin` — literally the two plugins `run_with_mode(true)`
+//! server composes** (`LunCoSimCorePlugin { headless: true }` +
+//! `LunCoSimHeadlessPlugin` — literally the two plugins `run_with_mode(true)`
 //! uses), steps it by hand as fast as the CPU allows, watches the scenario's
 //! telemetry verdict, and exits with a status code.
 //!
@@ -54,7 +54,7 @@
 //!    and `--threads` below.)
 //!
 //! Manual stepping also means we do **not** call `App::run()`. The
-//! `ScheduleRunnerPlugin` that `SandboxHeadlessPlugin` installs simply never
+//! `ScheduleRunnerPlugin` that `LunCoSimHeadlessPlugin` installs simply never
 //! gets to drive anything — the loop at the bottom of `main` is the runner.
 //!
 //! ## How the verdict is read
@@ -143,7 +143,7 @@ use std::time::{Duration, Instant};
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 
-use crate::SandboxHeadlessPlugin;
+use crate::LunCoSimHeadlessPlugin;
 use lunco_core::telemetry::{TelemetryEvent, TelemetryValue};
 use lunco_modelica_core::ModelicaModel;
 use lunco_usd::document::UsdDocument;
@@ -170,7 +170,7 @@ struct Cli {
     /// USD scene path. Accepts an asset-root-relative path such as
     /// `scenes/tests/drivetrain_parity.usda`, a cwd-relative path, or an
     /// absolute path into a custom Twin.
-    /// Consumed by `SandboxCorePlugin`, which does its own `--scene` parse off
+    /// Consumed by `LunCoSimCorePlugin`, which does its own `--scene` parse off
     /// `std::env::args()`; we parse it too only so we can REQUIRE it and print it.
     scene: String,
     max_ticks: u64,
@@ -339,7 +339,7 @@ fn parse_args() -> Result<Cli, String> {
                 println!("{}", usage());
                 std::process::exit(0);
             }
-            // Unknown args are IGNORED rather than rejected: `SandboxCorePlugin`
+            // Unknown args are IGNORED rather than rejected: `LunCoSimCorePlugin`
             // and the domain plugins parse their own flags off `env::args()`
             // (`--api`, `--host`, …), and this binary must not veto them.
             _ => i += 1,
@@ -805,7 +805,7 @@ pub fn run() -> u8 {
     // THE app the GUI and the headless server run, assembled exactly as
     // `lunco_luncosim::build_sim_app(true, false)` does it — asset sources first
     // (they MUST precede `AssetPlugin`, which snapshots the source registry), then
-    // the engine plugin group, then `SandboxCorePlugin`.
+    // the engine plugin group, then `LunCoSimCorePlugin`.
     //
     // Re-assembling that prelude here is exactly the mistake this runner made on its
     // first draft: it hand-mirrored the plugin list, omitted the asset-source
@@ -821,11 +821,11 @@ pub fn run() -> u8 {
     // the ONLY divergence from `build_sim_app` is the compute-pool override below.
     let mut app =
         crate::build_sim_app_with_threads(true, false, (cli.threads > 0).then_some(cli.threads));
-    app.add_plugins(SandboxHeadlessPlugin::default());
+    app.add_plugins(LunCoSimHeadlessPlugin::default());
 
     // ── Determinism, installed AFTER the core plugin so it wins ──────────────
     //
-    // `SandboxCorePlugin` inserts a `Time<Virtual>` with `max_delta = 33 ms` —
+    // `LunCoSimCorePlugin` inserts a `Time<Virtual>` with `max_delta = 33 ms` —
     // a JITTER cap for a realtime GUI (it stops one slow frame breeding catch-up
     // ticks). Under manual stepping there is no jitter to cap, and the cap would
     // silently swallow steps for any `--tick-hz` below ~30. Re-insert with a cap

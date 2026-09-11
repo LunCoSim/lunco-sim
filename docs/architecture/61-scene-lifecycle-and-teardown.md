@@ -150,7 +150,7 @@ prepared asset. The owner consumes that wake while authoring the typed delta and
 the live projection sink refreshes ECS. It does not scan document generations on
 the render loop, and the viewport does not maintain a second edit path.
 
-The native `--scene` entry point follows the same boundary: `setup_sandbox` only
+The native `--scene` entry point follows the same boundary: `setup_luncosim` only
 resolves the owning root and queues the shared asynchronous Twin scan. The
 filesystem walk and `TwinMode::open` index never run in `Startup` on the UI
 thread. A scan failure is surfaced through the shared `TWIN_OPEN_FAILED`

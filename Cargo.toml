@@ -10,6 +10,7 @@ members = [
     "crates/lunco-autopilot",
     "crates/lunco-avatar",
     "crates/lunco-luncosim",
+    "crates/lunco-luncosim-ui",
     "crates/lunco-luncosim-exposures",
     "crates/lunco-luncosim-server",
     "crates/lunco-telemetry",
@@ -234,7 +235,7 @@ image = { version = "0.25", default-features = false, features = ["tiff", "png",
 tiff = "0.11"
 smallvec = "1.13"
 # openusd 0.5.0: real PCP composition engine (variantSets + relationship target
-# translation) + typed usd::Stage API. Replaces our hand-rolled lunco-usd-composer.
+# translation) + typed usd::Stage API used by the USD integration crates.
 # Pinned exact — pre-1.0, API moves fast. See crates/lunco-usd-bevy/OPENUSD_0_5_MIGRATION.md.
 #
 # Feature flags gate the TYPED SCHEMAS. We used to enable only `physics`, so the

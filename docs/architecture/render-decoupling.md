@@ -236,5 +236,5 @@ binding happens in an observer, a frame-boundary after the spawn — if any code
 existing in the same tick as the mesh, that was a latent ordering bug worth surfacing anyway.
 
 The GUI is **not** feature-gated into the domain: there is exactly **one** `#[cfg(feature = "ui")]` in
-the whole scheme, in `SandboxCorePlugin::build`, and it exists only because `lunco-render-bevy` is an
+the whole scheme, in `LunCoSimCorePlugin::build`, and it exists only because `lunco-render-bevy` is an
 optional dependency. The simulation crates contain none.

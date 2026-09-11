@@ -38,8 +38,6 @@ path = "examples/usd_rover_visual.rs"
 required-features = ["ui"]
 
 [dependencies]
-winit = { version = "0.30.13", optional = true }
-bevy_winit = { version = "0.19", optional = true }
 # Render ASSET-STORE features (always on, even headless): these register the
 # scene-facing asset and component types that USD visual sync and avian colliders
 # share. A `--no-ui` run does not register RenderPlugin or any render-world
@@ -87,7 +85,7 @@ lunco-autopilot = { path = "../lunco-autopilot" }
 lunco-avatar = { path = "../lunco-avatar", default-features = false }
 lunco-render = { path = "../lunco-render" }
 # The bevy_pbr binding layer. Added as a PLUGIN only in non-headless builds
-# (`SandboxCorePlugin::build`), which is the entire render gate.
+# (`LunCoSimCorePlugin::build`), which is the entire render gate.
 #
 # THE RENDER GATE, at the dependency level. `lunco-render-bevy` is the one crate
 # that names `bevy_pbr`, so making it `optional` + `ui`-only is what finally stops
@@ -101,8 +99,6 @@ lunco-render = { path = "../lunco-render" }
 lunco-render-bevy = { path = "../lunco-render-bevy", optional = true }
 # UI-owned application settings, including update and overlay preferences.
 lunco-settings = { path = "../lunco-settings", optional = true }
-# UI settings and API payloads use the workspace serde dependency.
-serde = { workspace = true, optional = true }
 # `default-features = false` drops celestial's egui inspector (`CelestialUiPlugin`,
 # not used by the luncosim bin). The `celestial` feature still pulls embed-assets.
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
@@ -115,7 +111,7 @@ lunco-terrain-globe = { path = "../lunco-terrain-globe" }
 lunco-obstacle-field = { path = "../lunco-obstacle-field" }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
-lunco-modelica-ui = { path = "../lunco-modelica-ui", default-features = false, optional = true }
+lunco-luncosim-ui = { path = "../lunco-luncosim-ui", default-features = false, optional = true }
 lunco-luncosim-exposures = { path = "../lunco-luncosim-exposures", default-features = false }
 # Experiment registry types — used by the experiment-journal replay leg AND the
 # all-platform result-artifact persistence (write/load). Unconditional: result
@@ -156,11 +152,10 @@ lunco-scene-commands = { path = "../lunco-scene-commands" }
 lunco-luncosim-edit = { path = "../lunco-luncosim-edit", default-features = false, optional = true }
 lunco-web = { workspace = true }
 lunco-assets = { workspace = true }
-lunco-hooks = { path = "../lunco-hooks" }
 lunco-workspace = { path = "../lunco-workspace" }
 lunco-twin = { path = "../lunco-twin" }
 # Canonical Twin change-journal (`TwinJournalPlugin` / `JournalResource`), added
-# by `SandboxCorePlugin` as core substrate so the headless server + clients
+# by `LunCoSimCorePlugin` as core substrate so the headless server + clients
 # record edits (not just the egui workbench). `default-features = false` keeps
 # `lunco-doc-bevy/ui` (→ bevy_egui) off the headless server (CQ-601).
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
@@ -176,15 +171,9 @@ lunco-twin-journal = { path = "../lunco-twin-journal", optional = true }
 # headless-safe concern — not a UI feature. Already compiled transitively via
 # lunco-doc-bevy, so naming it directly adds no build cost. Was under `ui` only because
 # one UI panel imported DocumentId (CQ: de-UI-gate the doc subsystem).
-lunco-doc = { path = "../lunco-doc" }
 lunco-theme = { path = "../lunco-theme", optional = true }
 lunco-workbench = { path = "../lunco-workbench", optional = true }
-lunco-workbench-core = { path = "../lunco-workbench-core", optional = true }
 lunco-status-core = { path = "../lunco-status-core", optional = true }
-lunco-ui = { path = "../lunco-ui", optional = true }
-bevy_egui = { workspace = true, optional = true }
-bevy_hui = { workspace = true, optional = true }
-bevy_flair = { workspace = true, optional = true }
 # `default-features = false` so the native (`lunco-api`) and web (`web`)
 # features choose the transport: `transport-http` (axum/TcpListener) vs.
 # `transport-wasm` (the `window.lunco_api` JS bridge).
@@ -238,8 +227,6 @@ default = ["ui", "celestial", "lunco-api", "transport-http"]
 ui = [
     "dep:velopack",
     "dep:ureq",
-    "dep:winit",
-    "dep:bevy_winit",
     # The screenshot backend lives in the workbench, which only a GUI build links at all.
     # NOT on the `lunco-api` feature: the headless server enables that too, and hanging the
     # workbench off it dragged egui + wgpu straight back into the --no-ui binary.
@@ -249,22 +236,15 @@ ui = [
     "lunco-usd/ui",
     "dep:lunco-luncosim-edit",
     "lunco-luncosim-edit/ui",
-    "dep:lunco-modelica-ui",
-    "lunco-modelica-ui/ui",
+    "dep:lunco-luncosim-ui",
     # egui presence/guided overlays + Network menu bridge — only when networking
     # is also enabled (`?`); the headless server's `server` feature omits this.
     "lunco-networking?/ui",
     "lunco-api?/winit",
     "dep:lunco-workbench",
-    "dep:lunco-workbench-core",
     "dep:lunco-status-core",
-    "dep:lunco-ui",
     "dep:lunco-theme",
     "dep:lunco-settings",
-    "dep:serde",
-    "dep:bevy_egui",
-    "dep:bevy_hui",
-    "dep:bevy_flair",
     "bevy/bevy_winit",
     "bevy/x11",
     "bevy/wayland",
@@ -307,20 +287,35 @@ luncosim = []
 lunco-api = [
     "dep:lunco-api",
     "lunco-modelica-core/lunco-api",
-    "lunco-modelica-ui?/lunco-api",
+    "lunco-luncosim-ui?/lunco-api",
 ]
 # Native HTTP API transport (axum/TcpListener) — also the gate for the in-app
 # rhai REPL panel, which needs `lunco_api::ApiBridge` (present under this feature
 # on native, and always on wasm). In `default` + `server`; the wasm build gets
 # the bridge automatically via `cfg(target_arch="wasm32")`.
-transport-http = ["lunco-api/transport-http", "lunco-networking?/transport-http"]
+transport-http = [
+    "lunco-api/transport-http",
+    "lunco-networking?/transport-http",
+    "lunco-luncosim-ui?/transport-http",
+]
 # Multiplayer over WebTransport (lightyear). Pulls in the real networking
 # adapter; the wire substrate (lunco-api) is required.
-networking = ["dep:lunco-networking", "lunco-networking/networking", "lunco-luncosim-exposures/networking", "lunco-api", "dep:lunco-twin-journal"]
+networking = [
+    "dep:lunco-networking",
+    "lunco-networking/networking",
+    "lunco-luncosim-exposures/networking",
+    "lunco-luncosim-ui?/networking",
+    "lunco-api",
+    "dep:lunco-twin-journal",
+]
 # Netcode jitter diagnostics — off by default (not in normal builds). Build with
 # `--features networking,net-diag` when debugging; see lunco-networking/diagnostics.rs.
 net-diag = ["networking", "lunco-networking/net-diag"]
-python = ["lunco-scripting/python", "lunco-usd-sim/python"]
+python = [
+    "lunco-scripting/python",
+    "lunco-usd-sim/python",
+    "lunco-luncosim-ui?/python",
+]
 # Tracy profiler. Enable with `--features tracy` and connect a Tracy
 # GUI to see per-system flame graphs. Match the GUI version to the
 # tracy-client version pulled in by Bevy 0.18 (check `cargo tree -p

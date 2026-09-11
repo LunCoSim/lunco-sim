@@ -14,19 +14,19 @@ The app lives in `src/lib.rs` as `pub fn run()` / `run_headless()`, the single
 shared entry point for both the windowed GUI and the headless server. It is
 built from three named plugins composed by a tiny shell:
 
-- **`SandboxCorePlugin`** — sim / physics / cosim / USD / networking / API.
+- **`LunCoSimCorePlugin`** — sim / physics / cosim / USD / networking / API.
   Headless-safe, added unconditionally.
-- **`ui::SandboxUiPlugin`** (`ui` feature) — egui workbench, picking, the
+- **`lunco_luncosim_ui::LunCoSimUiPlugin`** (`ui` feature) — egui workbench, picking, the
   in-scene editor, materials, panels, and authored-camera presentation. Added
   only when windowed; a scene without an authored camera contract remains
   visibly camera-less with an owning diagnostic rather than receiving an
   engine-created camera. USD loading completion is independent of presentation.
-- **`SandboxHeadlessPlugin`** — the `ScheduleRunner` plus the Modelica/spawn
+- **`LunCoSimHeadlessPlugin`** — the `ScheduleRunner` plus the Modelica/spawn
   cores a server needs in the UI plugin's place. Added only when headless.
 
-GUI = `SandboxCorePlugin + SandboxUiPlugin`; headless =
-`SandboxCorePlugin + SandboxHeadlessPlugin`. Both binaries compose the SAME
-`SandboxCorePlugin`, so they can never drift.
+GUI = `LunCoSimCorePlugin + LunCoSimUiPlugin`; headless =
+`LunCoSimCorePlugin + LunCoSimHeadlessPlugin`. Both binaries compose the SAME
+`LunCoSimCorePlugin`, so they can never drift.
 
 ## Binaries
 

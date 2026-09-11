@@ -919,7 +919,7 @@ pub fn output_is_video(path: &std::path::Path) -> bool {
 
 /// When present, offline recording captures THIS image each frame instead of
 /// the primary window — the offscreen (`--offscreen`) mode's render target.
-/// Inserted by the binary that owns the mode (`SandboxOffscreenPlugin`); the
+/// Inserted by the binary that owns the mode (`LunCoSimOffscreenPlugin`); the
 /// recorder itself stays target-agnostic.
 #[derive(Resource)]
 pub struct OfflineCaptureTarget(pub Handle<bevy::image::Image>);

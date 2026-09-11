@@ -536,7 +536,7 @@ fn broadcast_scenario_manifest(
     scenario: Res<ScenarioManifestResource>,
     mut outbox: ResMut<SyncOutbox>,
 ) {
-    // `is_changed` fires when `setup_sandbox` fills the resource (None→Some) and
+    // `is_changed` fires when `setup_luncosim` fills the resource (None→Some) and
     // when a reload swaps the manifest (revision bumps). Edge-detecting on the
     // resource avoids re-sending every frame.
     if !scenario.is_changed() {
@@ -685,7 +685,7 @@ fn on_server_connected(
     // so it can fetch the assets it's missing (Phase 3) and load the scene
     // (Phase 4). Only sent if the host has actually loaded a scenario — a bare
     // host that's still loading sends nothing here, and the periodic
-    // `broadcast_scenario_manifest` will push it once `setup_sandbox` fills the
+    // `broadcast_scenario_manifest` will push it once `setup_luncosim` fills the
     // resource.
     if let Some(scenario) = &scenario {
         if let Some(manifest) = &scenario.manifest {

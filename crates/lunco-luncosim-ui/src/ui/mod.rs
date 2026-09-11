@@ -1,16 +1,9 @@
-//! Sandbox UI layer — everything that draws pixels, opens egui panels, or
+//! LunCoSim UI layer — everything that draws pixels, opens egui panels, or
 //! drives an interactive camera.
 //!
-//! This whole module is `#[cfg(feature = "ui")]` (declared in `lib.rs`), so a
-//! headless `--no-ui` / `lunco-luncosim-server` build never compiles it. The
-//! entry point is [`SandboxUiPlugin`]: the app shell adds it only when running
-//! windowed (`ui` feature present AND not `--no-ui`). The shared sim/physics/
-//! cosim/networking core (`SandboxCorePlugin`) and the headless runner
-//! (`SandboxHeadlessPlugin`) live in `lib.rs` and carry no UI.
-//!
-//! Mirrors the `ui/` + `*UiPlugin` convention every library crate already uses
-//! (`SceneEditUiPlugin`, `UsdUiPlugin`, `ModelicaUiPlugin`, …) — the app crate
-//! is now structurally identical to them.
+//! The entry point is [`LunCoSimUiPlugin`]. The application shell adds it only
+//! for a windowed run; the shared simulator core and headless runner do not
+//! compile this crate.
 
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
@@ -86,11 +79,39 @@ impl CameraPickerState {
 /// explicit camera presentation controls.
 ///
 /// Added by the app shell only for a windowed run. A headless server runs the
-/// sim, physics, scene, cosim, and networking host (all in `SandboxCorePlugin`)
+/// sim, physics, scene, cosim, and networking host (all in `LunCoSimCorePlugin`)
 /// *without* any of this — headless mode omits the renderer and keeps only the
 /// simulation-facing asset/type plugins, so nothing here (GPU / window / pointer)
 /// is wired.
-pub(crate) struct SandboxUiPlugin;
+/// Initial scene request supplied by the application composition root.
+#[derive(Resource, Debug, Clone, Default, PartialEq, Eq)]
+pub struct InitialScenePath(pub Option<String>);
+
+/// Window icon bytes prepared by the application build script.
+///
+/// Packaging owns rasterization because the icon is also used for desktop
+/// metadata. This crate owns only installing it on the live native window.
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct WindowIconBytes(pub &'static [u8]);
+
+/// Host metadata and initial presentation input for [`LunCoSimUiPlugin`].
+#[derive(Debug, Clone)]
+pub struct LunCoSimUiConfig {
+    /// Product version stamped by the application build.
+    pub product_version: &'static str,
+    /// Source revision stamped by the application build.
+    pub git_sha: &'static str,
+    /// Public source repository for the stamped revision.
+    pub repository_url: &'static str,
+    /// Optional scene selected by the application's startup policy.
+    pub initial_scene: Option<String>,
+}
+
+/// Interactive presentation for the luncosim application.
+pub struct LunCoSimUiPlugin {
+    /// Host metadata and the initial scene presentation request.
+    pub config: LunCoSimUiConfig,
+}
 
 /// Install the retained runtime-authored HTML surface layer.
 ///
@@ -98,7 +119,7 @@ pub(crate) struct SandboxUiPlugin;
 /// windowless recorder. The latter has no egui host, but it still has a real
 /// Bevy UI render pass and a scene camera, so authored HUDs must use the same
 /// HUI/Flair and exposure path in both modes.
-pub(crate) fn add_runtime_ui_layer(app: &mut App) {
+pub fn add_runtime_ui_layer(app: &mut App) {
     app.add_plugins((
         bevy_hui::HuiPlugin,
         bevy_flair::FlairPlugin,
@@ -167,15 +188,16 @@ pub(crate) fn add_runtime_ui_layer(app: &mut App) {
     runtime_exposure::install_runtime_ui_render_readiness(app);
 }
 
-impl Plugin for SandboxUiPlugin {
+impl Plugin for LunCoSimUiPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(lunco_workbench::BuildIdentity::new(
-            crate::PRODUCT_VERSION,
-            crate::GIT_SHA,
-            crate::REPOSITORY_URL,
+            self.config.product_version,
+            self.config.git_sha,
+            self.config.repository_url,
         ));
         #[cfg(not(target_arch = "wasm32"))]
-        app.add_systems(Update, crate::apply_luncosim_window_icon);
+        app.add_systems(Update, install_window_icon);
+        app.insert_resource(InitialScenePath(self.config.initial_scene.clone()));
         // Winit frame pacing. Continuous while focused lets vsync (Fifo present /
         // requestAnimationFrame on web) act as the frame timer; ReactiveLowPower
         // keeps fans quiet when backgrounded. Networked windows stay Continuous
@@ -212,6 +234,7 @@ impl Plugin for SandboxUiPlugin {
 
         add_runtime_ui_layer(app);
         scenario_fixture::install(app);
+        crate::register_save_scenario_command(app);
         // A windowed host requires a presentation contract. Authored tracks and
         // LocalAvatar cameras remain authoritative; the USD projection may add
         // one Twin-scoped presentation camera/light for a standalone assembly
@@ -240,7 +263,7 @@ impl Plugin for SandboxUiPlugin {
         // subsequent Twin switches still restore their own saved perspectives.
         let has_explicit_scene = app
             .world()
-            .get_resource::<crate::ScenePath>()
+            .get_resource::<InitialScenePath>()
             .is_some_and(|scene| scene.0.is_some());
         if has_explicit_scene {
             app.insert_resource(
@@ -305,7 +328,10 @@ impl Plugin for SandboxUiPlugin {
                 app.add_observer(models_palette::clear_program_catalog_on_twin_closed);
                 // In-app rhai REPL — runs snippets against the live app through the
                 // API bridge, on web + native. Gated on bridge availability.
-                #[cfg(any(target_arch = "wasm32", feature = "transport-http"))]
+                #[cfg(any(
+                    feature = "lunco-api",
+                    feature = "transport-http"
+                ))]
                 app.register_panel(rhai_repl_panel::RhaiReplPanel::default());
                 app.init_resource::<models_palette::AttachState>();
                 // Disarm on scene teardown — see `AttachState`.
@@ -415,9 +441,9 @@ impl Plugin for SandboxUiPlugin {
 
         // URL-driven boot (wasm). Lets headless test harnesses drive the
         // workbench without firing canvas pointer events. See
-        // [`sandbox_boot_from_url`].
+        // [`luncosim_boot_from_url`].
         #[cfg(target_arch = "wasm32")]
-        app.add_systems(bevy::prelude::Update, sandbox_boot_from_url);
+        app.add_systems(bevy::prelude::Update, luncosim_boot_from_url);
     }
 }
 
@@ -829,14 +855,14 @@ fn on_dismiss_terrain_overlay(
 
 // ── wasm URL-driven boot ──────────────────────────────────────────────────────
 
-/// State machine for [`sandbox_boot_from_url`].
+/// State machine for [`luncosim_boot_from_url`].
 ///
 /// Lives in a `Local` so the boot work happens exactly once per app
 /// lifetime — once `open_class` is satisfied the system runs and
 /// no-ops in O(1).
 #[cfg(target_arch = "wasm32")]
 #[derive(Default)]
-struct SandboxBootState {
+struct LunCoSimBootState {
     parsed: bool,
     workspace: Option<String>,
     open_class: Option<String>,
@@ -854,10 +880,10 @@ struct SandboxBootState {
 /// harnesses (e.g. `chrome-devtools-mcp`) which can't drive the egui
 /// canvas via synthetic DOM events.
 #[cfg(target_arch = "wasm32")]
-fn sandbox_boot_from_url(
+fn luncosim_boot_from_url(
     mut commands: bevy::prelude::Commands,
     msl: Option<bevy::prelude::Res<lunco_assets::msl::MslLoadState>>,
-    mut state: bevy::prelude::Local<SandboxBootState>,
+    mut state: bevy::prelude::Local<LunCoSimBootState>,
 ) {
     if state.done {
         return;
@@ -886,7 +912,7 @@ fn sandbox_boot_from_url(
             commands.trigger(lunco_workbench::perspective_command::ActivatePerspective {
                 id: ws.clone(),
             });
-            bevy::log::info!("[sandbox_boot_from_url] activated perspective `{ws}`");
+            bevy::log::info!("[luncosim_boot_from_url] activated perspective `{ws}`");
         }
         state.parsed = true;
     }
@@ -904,13 +930,13 @@ fn sandbox_boot_from_url(
             qualified: qual.clone(),
             ..Default::default()
         });
-        bevy::log::info!("[sandbox_boot_from_url] OpenClass({qual}) triggered (MSL ready)");
+        bevy::log::info!("[luncosim_boot_from_url] OpenClass({qual}) triggered (MSL ready)");
     }
     state.done = true;
 }
 
 fn init_current_scene_path(
-    scene_path: Res<crate::ScenePath>,
+    scene_path: Res<InitialScenePath>,
     mut current: ResMut<CurrentScenePath>,
     current_name: Option<ResMut<CurrentSceneName>>,
 ) {
@@ -922,6 +948,37 @@ fn init_current_scene_path(
                 .and_then(|f| f.to_str())
                 .unwrap_or(path)
                 .to_string();
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn install_window_icon(
+    windows: Query<Entity, With<bevy::window::PrimaryWindow>>,
+    winit_windows: Option<NonSend<bevy_winit::WinitWindows>>,
+    icon: Option<Res<WindowIconBytes>>,
+    mut installed: Local<bool>,
+) {
+    if *installed {
+        return;
+    }
+    let Some(winit_windows) = winit_windows else {
+        return;
+    };
+    let Some(icon_bytes) = icon else {
+        return;
+    };
+    for entity in &windows {
+        let Some(window) = winit_windows.get_window(entity) else {
+            continue;
+        };
+        match winit::window::Icon::from_rgba(icon_bytes.0.to_vec(), 64, 64) {
+            Ok(icon) => {
+                window.set_window_icon(Some(icon));
+                *installed = true;
+                info!("[window] installed LunCoSim icon");
+            }
+            Err(error) => warn!("[window] failed to install LunCoSim icon: {error}"),
         }
     }
 }

@@ -381,7 +381,7 @@ pub(crate) fn attach_rhai_scenario(
     // `info:sourceCode` is read by lunco-usd-bevy into `EmbeddedScenarioSource`
     // and attached by `attach_embedded_scenarios` below, so scene-authored
     // scenarios run on spawn. The SAVE half belongs to the application USD
-    // command (`lunco-luncosim::SaveScenario`), which owns the stage-asset to
+    // command (`lunco-luncosim-ui::SaveScenario`), which owns the stage-asset to
     // editable-document mapping and authors `info:sourceCode` through
     // `ApplyUsdOp`. Keeping that write in the USD-facing application seam avoids
     // a scripting-to-USD dependency and preserves one authoring path.

@@ -9,17 +9,17 @@
 //!
 //! The app is three named plugins, composed by a tiny shell — mirroring how the
 //! library crates split into core modules + a `*UiPlugin`:
-//!   - [`SandboxCorePlugin`] — sim / physics / cosim / USD / networking / API.
+//!   - [`LunCoSimCorePlugin`] — sim / physics / cosim / USD / networking / API.
 //!     Headless-safe, added unconditionally.
-//!   - [`ui::SandboxUiPlugin`] (`ui` feature) — egui workbench, picking, the
+//!   - [`lunco_luncosim_ui::LunCoSimUiPlugin`] (`ui` feature) — egui workbench, picking, the
 //!     in-scene editor, materials, panels, and explicit camera controls. Added only when
 //!     running windowed.
-//!   - [`SandboxHeadlessPlugin`] — the `ScheduleRunner` + the Modelica/spawn
+//!   - [`LunCoSimHeadlessPlugin`] — the `ScheduleRunner` + the Modelica/spawn
 //!     cores a server needs in the UI plugin's place. Added only when headless.
 //!
-//! GUI = `SandboxCorePlugin + SandboxUiPlugin`; headless =
-//! `SandboxCorePlugin + SandboxHeadlessPlugin`. Both bins compose the SAME
-//! `SandboxCorePlugin`, so they can never drift. The only place the GUI/headless
+//! GUI = `LunCoSimCorePlugin + LunCoSimUiPlugin`; headless =
+//! `LunCoSimCorePlugin + LunCoSimHeadlessPlugin`. Both bins compose the SAME
+//! `LunCoSimCorePlugin`, so they can never drift. The only place the GUI/headless
 //! decision touches plugin *configuration* is [`default_plugins`] (the window /
 //! render / winit backend must be chosen at `PluginGroup` build time) — that is
 //! inherently a shell concern.
@@ -42,7 +42,7 @@ use big_space::prelude::*;
 use lunco_hardware::LunCoHardwarePlugin;
 use lunco_mobility::LunCoMobilityPlugin;
 // USD core (scene load + collider build) is always needed; the Twin browser /
-// RTT viewport UI plugins are `ui`-only (added by `SandboxUiPlugin`).
+// RTT viewport UI plugins are `ui`-only (added by `LunCoSimUiPlugin`).
 #[cfg(feature = "networking")]
 use lunco_usd::LoadScene;
 use lunco_usd::{UsdPlugins, UsdPrimPath, UsdStageAsset};
@@ -74,7 +74,7 @@ use lunco_obstacle_field::ObstacleFieldPlugin;
 use lunco_terrain_globe::TerrainPlugin;
 use lunco_terrain_surface::TerrainSurfacePlugin;
 // `ModelicaSet` orders the cosim pipeline (always). The egui workbench plugin is
-// added by `SandboxUiPlugin`; headless adds `ModelicaCorePlugin` instead.
+// added by `LunCoSimUiPlugin`; headless adds `ModelicaCorePlugin` instead.
 use lunco_modelica_core::ModelicaSet;
 
 /// Chassis smoothness census (`LUNCO_JITTER_CSV`) — compares solver `Position`
@@ -85,8 +85,6 @@ mod jitter_probe;
 mod log_dedup;
 #[cfg(feature = "ui")]
 mod terrain_horizon;
-#[cfg(feature = "ui")]
-mod ui;
 /// OS `luncosim://` scheme registration (desktop integration). Native + the
 /// networking feature only — there's nothing to dial without the wire.
 #[cfg(all(feature = "networking", not(target_family = "wasm")))]
@@ -122,14 +120,14 @@ pub fn run_headless() -> AppExit {
 /// The luncosim's process-start render choice. The binary selects it while
 /// `lunco-render-bevy` owns how the policy is rendered.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum SandboxRenderProfile {
+enum LunCoSimRenderProfile {
     #[default]
     Standard,
     Fast,
 }
 
-fn parse_render_profile(args: &[String]) -> Result<SandboxRenderProfile, String> {
-    let mut profile = SandboxRenderProfile::Standard;
+fn parse_render_profile(args: &[String]) -> Result<LunCoSimRenderProfile, String> {
+    let mut profile = LunCoSimRenderProfile::Standard;
     let mut index = 0;
     while index < args.len() {
         let value = if args[index] == "--render-profile" {
@@ -144,8 +142,8 @@ fn parse_render_profile(args: &[String]) -> Result<SandboxRenderProfile, String>
             continue;
         };
         profile = match value {
-            "standard" => SandboxRenderProfile::Standard,
-            "fast" => SandboxRenderProfile::Fast,
+            "standard" => LunCoSimRenderProfile::Standard,
+            "fast" => LunCoSimRenderProfile::Fast,
             _ => {
                 return Err(format!(
                     "invalid render profile `{value}`; expected `standard` or `fast`"
@@ -322,7 +320,7 @@ mod render_profile_tests {
             ],
             vec!["luncosim".to_string(), "--render-profile=fast".to_string()],
         ] {
-            assert_eq!(parse_render_profile(&args), Ok(SandboxRenderProfile::Fast));
+            assert_eq!(parse_render_profile(&args), Ok(LunCoSimRenderProfile::Fast));
         }
     }
 
@@ -639,16 +637,27 @@ fn run_with_mode(headless: bool) -> AppExit {
 
     #[cfg(feature = "ui")]
     if !headless && !offscreen {
-        app.add_plugins(ui::SandboxUiPlugin);
+        app.insert_resource(lunco_luncosim_ui::WindowIconBytes(include_bytes!(concat!(
+            env!("OUT_DIR"),
+            "/luncosim-icon.rgba"
+        ))));
+        app.add_plugins(lunco_luncosim_ui::LunCoSimUiPlugin {
+            config: lunco_luncosim_ui::LunCoSimUiConfig {
+                product_version: PRODUCT_VERSION,
+                git_sha: GIT_SHA,
+                repository_url: REPOSITORY_URL,
+                initial_scene: app.world().resource::<ScenePath>().0.clone(),
+            },
+        });
     }
 
     #[cfg(all(feature = "ui", feature = "lunco-api"))]
     if offscreen {
-        app.add_plugins(SandboxOffscreenPlugin);
+        app.add_plugins(LunCoSimOffscreenPlugin);
     }
 
     if headless {
-        app.add_plugins(SandboxHeadlessPlugin { execution_mode });
+        app.add_plugins(LunCoSimHeadlessPlugin { execution_mode });
     }
 
     apply_render_quality_override(&mut app, render_quality);
@@ -696,7 +705,7 @@ fn apply_render_quality_override(_app: &mut App, _quality: Option<lunco_render::
 /// build time — a plugin added later cannot reconfigure `RenderPlugin`/
 /// `WindowPlugin`. Headless builds retain the simulation's asset/type plugins,
 /// but omit the renderer and its render-world consumers entirely. The
-/// [`ScheduleRunnerPlugin`] added by [`SandboxHeadlessPlugin`] ticks the app in
+/// [`ScheduleRunnerPlugin`] added by [`LunCoSimHeadlessPlugin`] ticks the app in
 /// winit's place.
 /// THE simulation app — asset sources, engine plugins, and every LunCo domain
 /// system. This is the whole application minus its user interface.
@@ -731,7 +740,7 @@ pub const SANDBOX_GRAVITY: lunco_environment::Gravity = lunco_environment::Gravi
 );
 
 pub fn build_sim_app(headless: bool, offscreen: bool) -> App {
-    build_sim_app_with_profile(headless, offscreen, None, SandboxRenderProfile::Standard)
+    build_sim_app_with_profile(headless, offscreen, None, LunCoSimRenderProfile::Standard)
 }
 
 /// Build the production simulation app with an optional fixed compute-pool size.
@@ -746,7 +755,7 @@ pub fn build_sim_app_with_threads(
         headless,
         offscreen,
         compute_threads,
-        SandboxRenderProfile::Standard,
+        LunCoSimRenderProfile::Standard,
     )
 }
 
@@ -878,7 +887,7 @@ fn build_sim_app_with_profile(
     headless: bool,
     offscreen: bool,
     compute_threads: Option<usize>,
-    render_profile: SandboxRenderProfile,
+    render_profile: LunCoSimRenderProfile,
 ) -> App {
     let mut app = App::new();
     // Register every LunCo asset source (lunco:// and twin://) +
@@ -921,7 +930,7 @@ fn build_sim_app_with_profile(
     app.add_plugins(plugins);
     // Flushes the WARN/ERROR dedup counters the `LogPlugin` filter accumulates.
     app.add_plugins(log_dedup::LogDedupPlugin);
-    app.add_plugins(SandboxCorePlugin {
+    app.add_plugins(LunCoSimCorePlugin {
         headless,
         #[cfg(feature = "ui")]
         render_profile,
@@ -935,11 +944,11 @@ fn build_sim_app_with_profile(
 /// windows. It delegates the actual OS gesture to winit, which requires this
 /// window to remain resizable.
 #[cfg(feature = "ui")]
-fn sandbox_window(
+fn luncosim_window(
     title: String,
     present_mode: bevy::window::PresentMode,
     vertical: bool,
-    render_profile: SandboxRenderProfile,
+    render_profile: LunCoSimRenderProfile,
 ) -> Window {
     let mut window = Window {
         // On wasm, attach to the `#bevy` canvas and mirror its CSS size.
@@ -951,7 +960,7 @@ fn sandbox_window(
         // Centralized merged-titlebar chrome + persisted geometry.
         ..lunco_workbench::restored_window(title)
     };
-    if render_profile == SandboxRenderProfile::Fast {
+    if render_profile == LunCoSimRenderProfile::Fast {
         // A smaller default framebuffer is the largest predictable saving on
         // integrated GPUs. The user can still resize the window; the profile does
         // not alter authored scene units or simulation precision.
@@ -973,45 +982,17 @@ fn sandbox_window(
     window
 }
 
-#[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
-fn apply_luncosim_window_icon(
-    windows: Query<Entity, With<bevy::window::PrimaryWindow>>,
-    winit_windows: Option<NonSend<bevy_winit::WinitWindows>>,
-    mut installed: Local<bool>,
-) {
-    if *installed {
-        return;
-    }
-    let Some(winit_windows) = winit_windows else {
-        return;
-    };
-    let rgba = include_bytes!(concat!(env!("OUT_DIR"), "/luncosim-icon.rgba"));
-    for entity in &windows {
-        let Some(window) = winit_windows.get_window(entity) else {
-            continue;
-        };
-        match winit::window::Icon::from_rgba(rgba.to_vec(), 64, 64) {
-            Ok(icon) => {
-                window.set_window_icon(Some(icon));
-                *installed = true;
-                info!("[window] installed LunCoSim icon");
-            }
-            Err(error) => warn!("[window] failed to install LunCoSim icon: {error}"),
-        }
-    }
-}
-
 #[cfg(all(test, feature = "ui"))]
 mod window_tests {
-    use super::{sandbox_window, SandboxRenderProfile};
+    use super::{luncosim_window, LunCoSimRenderProfile};
 
     #[test]
     fn custom_chrome_window_remains_resizable() {
-        let window = sandbox_window(
+        let window = luncosim_window(
             "luncosim test".to_string(),
             bevy::window::PresentMode::Fifo,
             false,
-            SandboxRenderProfile::Standard,
+            LunCoSimRenderProfile::Standard,
         );
 
         assert!(
@@ -1027,13 +1008,13 @@ mod window_tests {
 /// needs a different plugin set — but prefer `build_sim_app`, which also does the
 /// asset-source prelude this function cannot do (it returns a group, not an `App`).
 pub fn default_plugins(headless: bool, offscreen: bool) -> bevy::app::PluginGroupBuilder {
-    default_plugins_with_profile(headless, offscreen, SandboxRenderProfile::Standard)
+    default_plugins_with_profile(headless, offscreen, LunCoSimRenderProfile::Standard)
 }
 
 fn default_plugins_with_profile(
     headless: bool,
     offscreen: bool,
-    render_profile: SandboxRenderProfile,
+    render_profile: LunCoSimRenderProfile,
 ) -> bevy::app::PluginGroupBuilder {
     // `bevy::render` EXISTS ONLY IN A `ui` BUILD. The no-`ui` server does not link
     // bevy_render at all (that is the point of the render decoupling), so every
@@ -1168,7 +1149,7 @@ fn default_plugins_with_profile(
             .disable::<bevy::winit::WinitPlugin>()
     } else {
         group.set(WindowPlugin {
-            primary_window: Some(sandbox_window(
+            primary_window: Some(luncosim_window(
                 window_title,
                 present_mode,
                 vertical,
@@ -2491,112 +2472,7 @@ fn on_set_rhai_policy(
     );
 }
 
-/// Save a live-edited rhai scenario's current source back onto the `LunCoProgramAPI`
-/// prim it came from — the other half of scenario authoring.
-///
-/// The shared USD lowering selects `info:sourceCode` and clears the old `info:id` and
-/// `info:sourceAsset` arms. The `string` value is authored RAW, so the whole rhai source
-/// round-trips verbatim, journals like any edit, and reaches the `.usda` on `SaveDocument`.
-///
-/// It authors onto the PROGRAM, not onto the vessel running it
-/// ([`ScenarioProgramPrim`](lunco_core::ScenarioProgramPrim) carries the path): a
-/// vessel can run several programs, and a source written onto the vessel would sit on
-/// a prim that runs nothing.
-///
-/// Only doc-backed twin scenes have an editable document; a raw-file scene is
-/// **refused** (logged, not silently dropped) — matching the rule that the builder
-/// must only edit doc-backed scenes or it eats work on the next reload.
-#[lunco_core::Command]
-pub struct SaveScenario {
-    /// The scripted entity whose live scenario source to persist onto its prim.
-    /// Ownership-gated (same as `RunScenario`): saving a scenario is editing it.
-    #[authz_target]
-    pub target: Entity,
-}
-
-impl Default for SaveScenario {
-    // `#[Command]` needs a Default for Reflect; `Entity` has none. The placeholder
-    // is never dispatched — a real save always carries the selected entity.
-    fn default() -> Self {
-        Self {
-            target: Entity::PLACEHOLDER,
-        }
-    }
-}
-
-#[lunco_core::on_command(SaveScenario)]
-fn on_save_scenario(
-    trigger: On<SaveScenario>,
-    q_model: Query<&lunco_scripting::doc::ScriptedModel>,
-    q_prim: Query<&lunco_usd::UsdPrimPath>,
-    q_program: Query<&lunco_core::ScenarioProgramPrim>,
-    registry: Res<lunco_scripting::ScriptRegistry>,
-    backed: Res<lunco_usd::twin_projection::DocBackedTwinScenes>,
-    asset_server: Res<AssetServer>,
-    mut commands: Commands,
-) {
-    let target = trigger.event().target;
-
-    // 1. The live source the runtime is currently running for this entity.
-    let Ok(model) = q_model.get(target) else {
-        warn!("[save-scenario] entity {target} has no scenario attached");
-        return;
-    };
-    let Some(doc_id) = model.document_id else {
-        warn!("[save-scenario] entity {target}'s scenario has no document");
-        return;
-    };
-    let Some(host) = registry.documents.get(&lunco_doc::DocumentId::new(doc_id)) else {
-        warn!("[save-scenario] no script document {doc_id} for entity {target}");
-        return;
-    };
-    let source = host.document().source.clone();
-
-    // 2. The prim to author onto + the editable scene document behind it.
-    let Ok(upp) = q_prim.get(target) else {
-        warn!("[save-scenario] entity {target} is not a USD-backed prim — nothing to save onto");
-        return;
-    };
-    let Some(scene_doc) = lunco_usd::twin_projection::scene_document_for(
-        &backed,
-        &asset_server,
-        upp.stage_handle.id(),
-    ) else {
-        warn!(
-            "[save-scenario] the scene backing {target} is a raw-file scene (not doc-backed) — \
-             open it as a Twin to save scenarios in place"
-        );
-        return;
-    };
-
-    // 3. Convert the PROGRAM prim to the selected inline `sourceCode` arm (root
-    //    layer → durable in the .usda on SaveDocument). The shared lowering clears
-    //    the previous id/asset arms before selecting the new source, so the final
-    //    composed program has one unambiguous implementation.
-    let Ok(program) = q_program.get(target) else {
-        warn!(
-            "[save-scenario] entity {target} runs a scenario that came from no program prim \
-             (it was started at runtime, not authored in the scene) — nothing to save onto"
-        );
-        return;
-    };
-    commands.trigger(lunco_usd::ApplyUsdOps {
-        doc_id: scene_doc,
-        parent_gen: None,
-        label: "Save scenario source".into(),
-        ops: lunco_usd::program::inline_program_source_ops(
-            lunco_usd::LayerId::root(),
-            program.0.clone(),
-            source,
-        ),
-    });
-    info!(
-        "[save-scenario] {target}: scenario source written onto `{}` (doc {}) — journals; SaveDocument persists to disk",
-        program.0, scene_doc.0
-    );
-}
-
-lunco_core::register_commands!(on_set_rhai_policy, on_save_scenario);
+lunco_core::register_commands!(on_set_rhai_policy);
 
 #[cfg(all(test, feature = "networking", not(target_arch = "wasm32")))]
 mod policy_projection_tests {
@@ -2744,10 +2620,10 @@ mod policy_projection_tests {
 /// here every plugin is pure-CPU sim/state. USD visual sync only writes the
 /// mesh/material asset stores (never touches a GPU device), so it is safe in
 /// headless mode.
-pub struct SandboxCorePlugin {
+pub struct LunCoSimCorePlugin {
     pub headless: bool,
     #[cfg(feature = "ui")]
-    render_profile: SandboxRenderProfile,
+    render_profile: LunCoSimRenderProfile,
 }
 
 /// The luncosim's one physics configuration.
@@ -2758,7 +2634,7 @@ pub struct SandboxCorePlugin {
 /// the authoritative stepped pose before the next bridge READ. The eased value
 /// is presentation-only between physics steps, and camera/billboard paths
 /// consume that same rendered pose.
-fn sandbox_physics_plugins() -> impl PluginGroup {
+fn luncosim_physics_plugins() -> impl PluginGroup {
     PhysicsPlugins::default()
         .with_collision_hooks::<lunco_usd::UsdCollisionFilter>()
         .set(avian3d::prelude::PhysicsInterpolationPlugin::interpolate_all())
@@ -2776,7 +2652,7 @@ mod physics_configuration_tests {
     fn physical_bodies_receive_render_interpolation() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .add_plugins(sandbox_physics_plugins());
+            .add_plugins(luncosim_physics_plugins());
 
         let body = app.world_mut().spawn(RigidBody::Dynamic).id();
 
@@ -2799,7 +2675,7 @@ mod physics_configuration_tests {
     }
 }
 
-impl Plugin for SandboxCorePlugin {
+impl Plugin for LunCoSimCorePlugin {
     fn build(&self, app: &mut App) {
         let args: Vec<String> = std::env::args().collect();
 
@@ -2822,7 +2698,7 @@ impl Plugin for SandboxCorePlugin {
         // bevy_render → wgpu + naga), not merely from running it. The runtime
         // `!headless` check remains for a `ui`-built binary launched headless.
         // See docs/architecture/render-decoupling.md.
-        // Run-condition effectiveness reporting. In `SandboxCorePlugin` rather
+        // Run-condition effectiveness reporting. In `LunCoSimCorePlugin` rather
         // than the UI plugin because the gates it watches (celestial cadence,
         // view-model producers) exist headless too, and a gate that stops gating
         // costs the same on a server as it does in the GUI.
@@ -2832,7 +2708,7 @@ impl Plugin for SandboxCorePlugin {
         app.add_plugins(jitter_probe::JitterProbePlugin);
         // Render profile is installed before the render plugin below.
         #[cfg(feature = "ui")]
-        if self.render_profile == SandboxRenderProfile::Fast {
+        if self.render_profile == LunCoSimRenderProfile::Fast {
             app.insert_resource(lunco_render_bevy::RenderProfile::Fast);
             info!("[render] fast profile enabled");
         }
@@ -2942,7 +2818,7 @@ impl Plugin for SandboxCorePlugin {
             // app: authored `PhysicsFilteredPairsAPI` pairs (`lunco-usd-avian`'s
             // `UsdCollisionFilter`). Anything else that must veto a contact belongs
             // in that hook rather than in a second one — there is no second slot.
-            .add_plugins(sandbox_physics_plugins())
+            .add_plugins(luncosim_physics_plugins())
             // Whoever installs physics installs its readiness gate: terrain/obstacle
             // subsystems suspend *integration* (avian's `Time<Physics>`) while their
             // colliders bake, instead of pausing the world clock. See `lunco-physics`.
@@ -3044,8 +2920,8 @@ impl Plugin for SandboxCorePlugin {
                 brightness: 0.0,
                 ..Default::default()
             })
-            .add_systems(Startup, setup_sandbox)
-            .add_systems(Startup, load_startup_scene_on_boot.after(setup_sandbox))
+            .add_systems(Startup, setup_luncosim)
+            .add_systems(Startup, load_startup_scene_on_boot.after(setup_luncosim))
             // Fail loud if the requested `--scene` never loads (e.g. a wrong
             // path that resolves to a missing asset). Without this the app
             // silently boots a scene-less world (only procedural terrain /
@@ -3138,7 +3014,7 @@ impl Plugin for SandboxCorePlugin {
         // twin (`[journal] persist = true`); without it the journal is
         // session-only and nothing touches disk.
         if self.headless {
-            // The workspace session — `setup_sandbox`'s twin-load path and the
+            // The workspace session — `setup_luncosim`'s twin-load path and the
             // journal persistence both need it. The SAME plugin the GUI gets:
             // `WorkspacePlugin` lives in `lunco-workspace`, which this binary
             // already links, and it is headless by construction (bevy substrate
@@ -3165,7 +3041,7 @@ impl Plugin for SandboxCorePlugin {
             // ride along inside `lunco_scene_commands::commands::SpawnCommandPlugin`
             // (which still registers `apply_replicated_spawns`, the spawn half — see
             // `lunco_core::NetcodeSet` for how the two halves stay ordered). Added
-            // here, in `SandboxCorePlugin`, so BOTH the GUI and the headless server
+            // here, in `LunCoSimCorePlugin`, so BOTH the GUI and the headless server
             // get it exactly once; gated on `networking` like every other
             // `lunco_networking` use in this crate.
             app.add_plugins(lunco_networking::prediction::NetcodePredictionPlugin);
@@ -4199,16 +4075,16 @@ mod modelica_status_tests {
 /// with `--record-offline out.mp4 --record-frames N` this is the one-command
 /// take: the process exits by itself once the recording drains.
 ///
-/// Contrast with [`SandboxHeadlessPlugin`] (the `--no-ui` SERVER: no GPU at
+/// Contrast with [`LunCoSimHeadlessPlugin`] (the `--no-ui` SERVER: no GPU at
 /// all): both modes use the same render-free simulation projection contract.
 #[cfg(all(feature = "ui", feature = "lunco-api"))]
-pub struct SandboxOffscreenPlugin;
+pub struct LunCoSimOffscreenPlugin;
 
 #[cfg(all(feature = "ui", feature = "lunco-api"))]
-impl Plugin for SandboxOffscreenPlugin {
+impl Plugin for LunCoSimOffscreenPlugin {
     fn build(&self, app: &mut App) {
         // Same non-UI cores the headless server needs (see the twin comments in
-        // `SandboxHeadlessPlugin`): the Modelica compile channels and the
+        // `LunCoSimHeadlessPlugin`): the Modelica compile channels and the
         // spawn-command registry both normally arrive via UI plugins.
         app.add_plugins(lunco_modelica_core::ModelicaCorePlugin);
         app.add_plugins(lunco_scene_commands::commands::SpawnCommandPlugin);
@@ -4218,7 +4094,7 @@ impl Plugin for SandboxOffscreenPlugin {
 
         // The workspace session (WorkspaceResource + journal persistence) —
         // the GUI gets this from `WorkbenchPlugin`, which this mode skips.
-        // `setup_sandbox`'s twin-load path panics without it.
+        // `setup_luncosim`'s twin-load path panics without it.
         app.add_plugins(lunco_workspace::WorkspacePlugin);
 
         // `CloseWindow` is a presentation intent in the shared recording
@@ -4246,7 +4122,7 @@ impl Plugin for SandboxOffscreenPlugin {
         // renders Bevy UI into the same image as the authored scene camera;
         // install the shared HUI/Flair exposure layer so film HUDs are
         // captured as pixels rather than remaining editor-only overlays.
-        crate::ui::add_runtime_ui_layer(app);
+        lunco_luncosim_ui::add_runtime_ui_layer(app);
 
         // The offline recorder itself — normally added by `WorkbenchPlugin`,
         // which this mode skips (egui needs a window).
@@ -5044,13 +4920,13 @@ fn parse_record_size() -> (u32, u32) {
     (1280, 720)
 }
 
-pub struct SandboxHeadlessPlugin {
+pub struct LunCoSimHeadlessPlugin {
     /// Host execution policy. Max-speed mode uses an explicit fixed duration
     /// and a zero-wait runner; realtime mode remains wall-clock paced.
     pub execution_mode: lunco_core::SimulationExecutionMode,
 }
 
-impl Default for SandboxHeadlessPlugin {
+impl Default for LunCoSimHeadlessPlugin {
     fn default() -> Self {
         Self {
             execution_mode: lunco_core::SimulationExecutionMode::Realtime,
@@ -5058,7 +4934,7 @@ impl Default for SandboxHeadlessPlugin {
     }
 }
 
-impl Plugin for SandboxHeadlessPlugin {
+impl Plugin for LunCoSimHeadlessPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(self.execution_mode);
         // A scenario's presentation intents remain valid in a headless run, but
@@ -5120,7 +4996,7 @@ impl Plugin for SandboxHeadlessPlugin {
 
 /// Resource that holds the optional asset-source-relative path of the scene to
 /// load on Startup. `None` means an intentionally empty world shell. It is
-/// initialised from the `--scene` CLI arg by [`SandboxCorePlugin`].
+/// initialised from the `--scene` CLI arg by [`LunCoSimCorePlugin`].
 #[derive(Resource)]
 pub struct ScenePath(pub Option<String>);
 
@@ -5130,7 +5006,7 @@ pub struct ScenePath(pub Option<String>);
 // Grid internally; it is not a rigid body / GridAnchor, so that hazard doesn't
 // apply. Locally allowed.
 #[allow(clippy::disallowed_methods)]
-fn setup_sandbox(world: &mut World) {
+fn setup_luncosim(world: &mut World) {
     // The persistent world shell (BigSpace root + `WorldGrid` + the single
     // `FloatingOrigin`) is owned by `WorldShellPlugin`. `ensure_world_root` is a
     // defensive create-or-get so the shell exists before any scene loads.
@@ -5180,7 +5056,7 @@ fn load_startup_scene_on_boot(world: &mut World) {
 /// and mounts the selected scene through the normal doc-first path. Invalid or
 /// orphaned roots report an error and do not load a base-only scene. Web skips
 /// this — its autoload hook loads the deployment twin directly (see
-/// [`setup_sandbox`]).
+/// [`setup_luncosim`]).
 #[cfg(not(target_arch = "wasm32"))]
 fn load_startup_scene(world: &mut World, scene_path: String) {
     // Resolve the absolute path to find the enclosing Twin folder. This is

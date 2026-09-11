@@ -574,7 +574,7 @@ impl Plugin for ModelicaUiPlugin {
 
         // Twin-level change journal subscribes to the generic document
         // lifecycle events this plugin fires. The journal is now CORE substrate
-        // (added by `SandboxCorePlugin` so the headless server + clients journal
+        // (added by `LunCoSimCorePlugin` so the headless server + clients journal
         // too), but a standalone Modelica workbench that never adds the sandbox
         // core still needs it — so add it here only if absent. Guarded because
         // `TwinJournalPlugin` registers lifecycle observers: a double-add would
