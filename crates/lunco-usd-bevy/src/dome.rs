@@ -54,6 +54,7 @@ use bevy::light::{GeneratedEnvironmentMapLight, Skybox};
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use lunco_render::{RenderQualityProfile, RenderingQualitySettings, SceneCamera};
+use openusd::schemas::lux::tokens as ltok;
 use wgpu_types::{
     Extent3d, TextureDimension, TextureFormat, TextureViewDescriptor, TextureViewDimension,
 };
@@ -101,7 +102,7 @@ fn read_dome_format(
     reader: &impl crate::UsdRead,
     path: &openusd::sdf::Path,
 ) -> Result<(), crate::LightReadError> {
-    match reader.text(path, "inputs:texture:format").as_deref() {
+    match reader.text(path, ltok::A_TEXTURE_FORMAT).as_deref() {
         Some("latlong") | Some("automatic") => Ok(()),
         Some(format) => {
             warn!(
@@ -111,7 +112,7 @@ fn read_dome_format(
             );
             Err(crate::LightReadError)
         }
-        None if !reader.has_authored_attribute(path, "inputs:texture:format") => Ok(()),
+        None if !reader.has_authored_attribute(path, ltok::A_TEXTURE_FORMAT) => Ok(()),
         None => {
             error!(
                 "[usd-bevy] {} has authored DomeLight inputs:texture:format with an unsupported type",
@@ -244,11 +245,11 @@ pub fn read_dome_environment(
     stage_id: bevy::asset::AssetId<crate::UsdStageAsset>,
     quality: RenderQualityProfile,
 ) -> Result<Option<UsdDomeEnvironment>, crate::LightReadError> {
-    let texture_authored = reader.has_authored_attribute(sdf_path, "inputs:texture:file")
+    let texture_authored = reader.has_authored_attribute(sdf_path, ltok::A_TEXTURE_FILE)
         || !reader
-            .connections(sdf_path, "inputs:texture:file")
+            .connections(sdf_path, ltok::A_TEXTURE_FILE)
             .is_empty();
-    let texture_value = reader.asset(sdf_path, "inputs:texture:file");
+    let texture_value = reader.asset(sdf_path, ltok::A_TEXTURE_FILE);
     if texture_authored && texture_value.is_none() {
         error!(
             "[usd-bevy] {} has authored DomeLight inputs:texture:file with an unsupported type",

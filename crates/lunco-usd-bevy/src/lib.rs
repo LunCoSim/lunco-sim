@@ -89,10 +89,7 @@ use openusd::schemas::geom::tokens as gtok;
 // inspector's ambient slider) must solve for the one dome it owns. Exported
 // because the WRITER lives in `lunco-scene-commands`, while the semantics — what
 // counts as an ambient dome, and in what units — live here with the reader.
-pub use light::{
-    ambient_fill_intensity, ambient_fill_saturates, untextured_dome_intensity_sum,
-    DOME_TEXTURE_ATTR,
-};
+pub use light::{ambient_fill_intensity, ambient_fill_saturates, untextured_dome_intensity_sum};
 
 /// Bevy plugin for USD visual synchronization.
 ///

@@ -59,6 +59,7 @@ use lunco_usd_sim::cosim::{
 };
 use lunco_workspace::open::{spawn_twin_scan, PendingTwinOpens, TwinOpenMode};
 use lunco_workspace::{TwinClosed, WorkspaceResource};
+use openusd::schemas::lux::tokens as ltok;
 
 /// Stable id for the USD document kind in
 /// [`DocumentKindRegistry`].
@@ -3342,7 +3343,7 @@ fn on_set_dome_light(
             edit_target: root.clone(),
             parent_path: parent,
             name,
-            type_name: Some("DomeLight".into()),
+            type_name: Some(ltok::T_DOME_LIGHT.into()),
             reference: None,
             reference_prim_path: None,
         }];
@@ -3361,20 +3362,20 @@ fn on_set_dome_light(
             });
         };
         if let Some(t) = &cmd.texture {
-            attr("inputs:texture:file", "asset", format!("@{t}@"));
+            attr(ltok::A_TEXTURE_FILE, "asset", format!("@{t}@"));
             // Be explicit rather than leaning on USD's `automatic`: it makes the
             // authored intent legible in the .usda, and `automatic` is what a
             // reader has to *guess* at.
-            attr("inputs:texture:format", "token", "\"latlong\"".into());
+            attr(ltok::A_TEXTURE_FORMAT, "token", "\"latlong\"".into());
         }
         if let Some(i) = cmd.intensity {
-            attr("inputs:intensity", "float", i.to_string());
+            attr(ltok::A_INTENSITY, "float", i.to_string());
         }
         if let Some(e) = cmd.exposure {
-            attr("inputs:exposure", "float", e.to_string());
+            attr(ltok::A_EXPOSURE, "float", e.to_string());
         }
         if let Some([r, g, b]) = cmd.color {
-            attr("inputs:color", "color3f", format!("({r}, {g}, {b})"));
+            attr(ltok::A_COLOR, "color3f", format!("({r}, {g}, {b})"));
         }
         if let Some(s) = cmd.skybox {
             attr("lunco:dome:skybox", "bool", s.to_string());

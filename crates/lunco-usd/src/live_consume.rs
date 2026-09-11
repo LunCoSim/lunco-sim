@@ -16,6 +16,7 @@
 use bevy::prelude::*;
 use lunco_usd_bevy_core::{UsdRead, UsdStageAsset};
 use lunco_usd_bevy_scene::UsdPrimPath;
+use openusd::schemas::lux::tokens as ltok;
 use openusd::sdf::Path as SdfPath;
 use std::collections::HashMap;
 
@@ -614,7 +615,7 @@ pub(crate) fn refresh_domes_live(world: &mut World, id: AssetId<UsdStageAsset>, 
             .iter()
             .filter_map(|p| {
                 let sp = SdfPath::new(p).ok()?;
-                if view.type_name(&sp).as_deref() != Some("DomeLight") {
+                if view.type_name(&sp).as_deref() != Some(ltok::T_DOME_LIGHT) {
                     return None;
                 }
                 let env = match dome::read_dome_environment(
@@ -813,7 +814,7 @@ pub(crate) fn refresh_edited_prims_live(
             };
             match view.type_name(&sp).as_deref() {
                 // Already re-projected, better, by `refresh_domes_live`.
-                Some("DomeLight") => {}
+                Some(ltok::T_DOME_LIGHT) => {}
                 // Material network edits fan out to every prim bound to them.
                 Some("Shader") | Some("Material") => scene_wide = true,
                 _ => subtrees.push(prim),
