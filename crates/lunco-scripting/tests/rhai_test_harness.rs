@@ -181,6 +181,30 @@ fn t_report_surfaces_a_failure() {
     );
 }
 
+/// Modelica lint policy tests stay authored. Rust supplies only the tiny
+/// harness that concatenates the replaceable policy with its Rhai self-test;
+/// no shipped Modelica file is opened by this target.
+#[test]
+fn modelica_lint_policy_selftest_passes() {
+    let policy = tests_dir()
+        .parent()
+        .expect("tests directory has a scripting parent")
+        .join("policy/lint_modelica.rhai");
+    let script = format!(
+        "{}\n{}",
+        std::fs::read_to_string(&policy).expect("Modelica lint policy must exist"),
+        std::fs::read_to_string(tests_dir().join("test_modelica_lint.rhai"))
+            .expect("Modelica lint self-test must exist")
+    );
+    let printed = run_capturing_print(&script);
+    assert_eq!(
+        printed.last().map(String::as_str),
+        Some("MODELICA_LINT_SELFTEST PASS"),
+        "Modelica lint policy self-test did not pass:\n{}",
+        printed.join("\n")
+    );
+}
+
 #[test]
 fn rhai_lint_rejects_production_tick_and_allows_test_tick() {
     let policy = std::fs::read_to_string(

@@ -34,8 +34,8 @@ fn project_target_unit_scope(
 /// bounds (e.g. `Valve.opening` → 0..100) for a standalone `within P;`
 /// duplicate whose own index can't see the package's class internals —
 /// without it the on-canvas input slider has no range to anchor to and
-/// falls back to a value-derived range that the user's drag can run away
-/// (the `valve.opening` → 3.4e21 crash). Cached per package; bundled
+/// falls back to a value-derived range that the user's drag can run away.
+/// Cached per package; bundled
 /// sources are immutable so the index is parsed at most once per session.
 fn bundled_member_bounds(pkg: &str, ty: &str, member: &str) -> (Option<f64>, Option<f64>) {
     thread_local! {
@@ -185,7 +185,7 @@ pub(crate) fn stash_snapshots(
                 let index_ref = host.map(|h| h.document().index());
                 // A standalone `within P;` duplicate's own index can't see
                 // the sibling component classes (`Valve` etc.), so an input
-                // like `valve.opening` has no min/max → the slider falls back
+                // like an unbounded input has no min/max → the slider falls back
                 // to a value-derived range that runs away. Recover the real
                 // bounds (0..100) from the bundled package P.
                 let within_pkg = host.and_then(|h| {

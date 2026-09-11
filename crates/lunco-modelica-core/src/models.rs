@@ -113,12 +113,4 @@ mod tests {
     fn extract_tagline_empty_when_missing() {
         assert_eq!(extract_tagline("model Foo\nend Foo;\n"), "");
     }
-
-    #[test]
-    fn get_model_known_file_returns_some() {
-        // RC_Circuit.mo ships in-tree; if it goes missing we want a
-        // loud failure here.
-        assert!(get_model("RC_Circuit.mo").is_some());
-        assert!(get_model("DoesNotExist.mo").is_none());
-    }
 }

@@ -77,6 +77,14 @@ package AnnotatedRocketStage
   model RocketStage "Single-stage rocket — pressurised tank, throttle valve, engine"
     parameter Real g = 9.81 "Gravity (m/s^2)";
     parameter Real dry_mass = 1000 "Empty stage mass (kg)";
+    input Real valve_opening(min = 0, max = 100) = 0
+      "Throttle valve opening [0..100 %]";
+    output Real tank_mass "Remaining propellant mass (kg)";
+    output Real altitude "Airframe altitude (m)";
+    output Real velocity "Airframe vertical velocity (m/s)";
+    output Real thrust "Engine thrust (N)";
+    output Real tank_availability "Propellant supply availability [0..1]";
+    output Real mass_flow "Engine mass flow (kg/s)";
 
     Tank tank(m_initial = 4000, p_supply = 3.0e6)
       annotation(Placement(transformation(extent={{-95,20},{-55,80}})));
@@ -88,11 +96,18 @@ package AnnotatedRocketStage
       annotation(Placement(transformation(extent={{70,-30},{110,30}})));
 
   equation
+    valve.opening = valve_opening;
     connect(tank.port, valve.port_a);
     connect(valve.port_b, engine.port);
     connect(tank.mass_out, airframe.mass_in);
     connect(tank.availability, valve.availability);
     connect(engine.thrust, airframe.thrust_in);
+    tank_mass = tank.m;
+    altitude = airframe.altitude;
+    velocity = airframe.velocity;
+    thrust = engine.thrust;
+    tank_availability = tank.availability;
+    mass_flow = valve.port_a.m_flow;
 
     annotation(
       Diagram(coordinateSystem(extent={{-100,-100},{100,100}}),

@@ -287,7 +287,8 @@ than an error. Two consequences, both deliberate:
   "no ceiling" sentinel.
 
 `tests/rumoca_api_coverage.rs::simulation_session_clamps_advance_at_t_end` pins
-this behaviour, so a future rumoca bump that drops the clamp fails loudly.
+this behaviour with an inline mechanism fixture, so a future rumoca bump that
+drops the clamp fails loudly without coupling the Rust target to shipped assets.
 
 Panics in the worker are caught (`catch_unwind`) and reported as solver
 errors rather than crashing the app. This tolerance is essential for
@@ -360,6 +361,15 @@ State on `ModelicaModel`:
 
 Staleness: `stale = !is_compiled || compiled_generation != gen`, where
 `gen` is the document's current `generation_owned()`.
+
+Worker lifecycle and simulation time are separate schedule domains. The core
+plugin registers `handle_modelica_responses` in `Update`, so an off-thread
+compile or step can settle while a host holds the fixed clock during scene
+readiness. It registers `spawn_modelica_requests` in `FixedUpdate`, where the
+master clock advances and the next deterministic communication request is
+issued. Coupling the response drain to `FixedUpdate` (or forgetting either
+registration when splitting the crate) leaves `is_compiling` stuck forever in
+a max-speed/readiness loop even though the worker has finished.
 
 Verb semantics:
 

@@ -430,9 +430,10 @@ waits for both entities **and** the target's runtime contract; it never creates 
 edge merely to discover on a later fixed tick that the port surface was absent.
 
 The result: a multi-component, multi-language cosim is a USD edit, not
-a Rust edit. `crates/lunco-luncosim/tests/cosim_chain.rs` exercises the canonical chain
-(Modelica oscillator → Python amplifier → Avian sphere) headlessly in
-~1.3 s.
+a Rust edit. `assets/scenes/tests/cosim_chain.usda` and its Rhai scenario
+exercise the canonical chain (Modelica oscillator → Python amplifier → Avian
+sphere) through the production runner. The scene requires the optional Python
+backend, so its acceptance command uses a binary built with `--features python`.
 
 ### Interface before solution
 

@@ -1,12 +1,33 @@
-//! Verify DynamicSelect extraction on the actual Tank/Valve icons.
+//! Verify DynamicSelect extraction on representative Modelica icons.
+//!
+//! The extractor is a pure syntax/annotation mechanism. Keep the fixture
+//! inline so editing shipped assets does not invalidate this Rust test target;
+//! shipped icon behavior is covered at the authored scenario boundary.
 
 use lunco_modelica_core::annotations::{extract_icon, DynExpr, DynValue, GraphicItem};
 use rumoca_compile::parsing::ast::Expression;
 
-fn src() -> &'static str {
-    lunco_modelica_core::models::get_model("AnnotatedRocketStage.mo")
-        .expect("bundled AnnotatedRocketStage.mo")
-}
+const SOURCE: &str = r#"
+package IconFixture
+  model Tank
+    Real m;
+    annotation(Icon(graphics = {
+      Rectangle(
+        extent = DynamicSelect({{-40, 40}, {40, -70}},
+          {{-40, -70 + 110 * (m / 4000)}, {40, -70}}),
+        fillColor = {120, 160, 220}),
+      Text(textString = DynamicSelect("kg", String(m) + " kg"))
+    }));
+  end Tank;
+
+  model Valve
+    input Real opening;
+    annotation(Icon(graphics = {
+      Text(textString = DynamicSelect("Valve", "Valve " + String(opening)))
+    }));
+  end Valve;
+end IconFixture;
+"#;
 
 fn class_annotations(
     classes: &rumoca_compile::parsing::ast::AstIndexMap<
@@ -30,7 +51,7 @@ fn class_annotations(
 fn tank_icon_mass_is_dynamic() {
     // The tank shows a static "Propellant" title plus a live mass readout
     // `DynamicSelect("kg", String(m) + " kg")` — the latter is the dynamic text.
-    let ast = lunco_modelica_ast::parse_to_ast(src(), "AnnotatedRocketStage.mo").expect("parse");
+    let ast = lunco_modelica_ast::parse_to_ast(SOURCE, "icon_fixture.mo").expect("parse");
     let ann = class_annotations(&ast.classes, "Tank").expect("Tank class");
     let icon = extract_icon(&ann).expect("Tank Icon");
     let mut texts = icon.graphics.iter().filter_map(|g| match g {
@@ -49,7 +70,7 @@ fn tank_icon_mass_is_dynamic() {
 
 #[test]
 fn tank_blue_rectangle_extent_is_dynamic_and_evaluates() {
-    let ast = lunco_modelica_ast::parse_to_ast(src(), "AnnotatedRocketStage.mo").expect("parse");
+    let ast = lunco_modelica_ast::parse_to_ast(SOURCE, "icon_fixture.mo").expect("parse");
     let ann = class_annotations(&ast.classes, "Tank").expect("Tank class");
     let icon = extract_icon(&ann).expect("Tank Icon");
 
@@ -108,7 +129,7 @@ fn dyn_expr_survives_json_roundtrip() {
     // The canvas serializes Icon to JSON for transport between the
     // diagram projector and the canvas renderer; deserialise must
     // restore the dynamic branch.
-    let ast = lunco_modelica_ast::parse_to_ast(src(), "AnnotatedRocketStage.mo").expect("parse");
+    let ast = lunco_modelica_ast::parse_to_ast(SOURCE, "icon_fixture.mo").expect("parse");
     let ann = class_annotations(&ast.classes, "Tank").expect("Tank class");
     let icon = extract_icon(&ann).expect("Tank Icon");
 
@@ -131,7 +152,7 @@ fn dyn_expr_survives_json_roundtrip() {
 
 #[test]
 fn valve_icon_label_is_dynamic() {
-    let ast = lunco_modelica_ast::parse_to_ast(src(), "AnnotatedRocketStage.mo").expect("parse");
+    let ast = lunco_modelica_ast::parse_to_ast(SOURCE, "icon_fixture.mo").expect("parse");
     let ann = class_annotations(&ast.classes, "Valve").expect("Valve class");
     let icon = extract_icon(&ann).expect("Valve Icon");
     let mut texts = icon.graphics.iter().filter_map(|g| match g {

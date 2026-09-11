@@ -1,26 +1,44 @@
 #usda 1.0
 (
-    defaultPrim = "AnnotatedRocketStageValidation"
+    defaultPrim = "AnnotatedRocketStageTest"
     upAxis = "Y"
     metersPerUnit = 1
 )
 
-# The scenario exercises the shipped Modelica asset through the public
-# ValidateAsset query. It does not open or read the asset file itself.
-def Xform "AnnotatedRocketStageValidation"
+# The scenario exercises the shipped Modelica package through its public USD
+# program boundary. The nested Modelica classes stay inside the source asset;
+# USD exposes only the flat scalar inputs/outputs that the co-simulation
+# contract can legally address.
+def Xform "AnnotatedRocketStageTest"
 (
-    doc = "Preflight acceptance for the bundled AnnotatedRocketStage model."
+    doc = "Runtime acceptance for the bundled AnnotatedRocketStage model."
 )
 {
     def DistantLight "Sun"
     {
+        float intensity = 1.0
+    }
+
+    def Scope "RocketStage" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://models/AnnotatedRocketStage.mo@
+        float inputs:valve_opening = 0.0
+        float outputs:tank_mass
+        float outputs:altitude
+        float outputs:velocity
+        float outputs:thrust
+        float outputs:tank_availability
+        float outputs:mass_flow
     }
 
     def Scope "Scenario"
     {
         custom string lunco:scenario = "annotated-rocket-stage"
 
-        def Scope "AssetValidation"
+        def Scope "AnnotatedRocketStageRuntime"
         (
             prepend apiSchemas = ["LunCoProgramAPI"]
         )

@@ -63,7 +63,7 @@ fn fallback_range(value: f64) -> (f64, f64) {
 /// exactly that max. So holding the strip at the top sets
 /// `value = max = 2·value`, which then widens the range next frame,
 /// which lets the value double again: an exponential runaway that drove
-/// `valve.opening` to 3.4e21 and crashed the solver. The cure is a
+/// an input to 3.4e21 and crashed the solver. The cure is a
 /// domain that does NOT move when the value lands inside it: seed it once
 /// from the first-seen value, and only widen (never recompute) if an
 /// external write pushes the value past an edge. A value that merely
@@ -108,7 +108,7 @@ pub(super) fn paint_input_control_widget(
     // control; they can always edit the parameter literal for precise
     // input. The range must be stable across frames — a value-derived
     // range let dragging to the top feed the value back into an
-    // ever-growing domain (the 3.4e21 `valve.opening` runaway).
+    // ever-growing domain (the runaway input value).
     let mut bound: Vec<(String, f64, f64, f64)> = snap
         .inputs
         .iter()

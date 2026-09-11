@@ -1274,17 +1274,26 @@ function F end F;
     }
 
     #[test]
-    fn fixture_file_parses() {
-        let src = crate::models::get_model("AnnotatedRocketStage.mo")
-            .expect("bundled AnnotatedRocketStage.mo");
+    fn composite_package_fixture_parses() {
+        // The shipped multi-class model is covered by its authored scene. This
+        // browser test only needs a compact package-shaped source to pin class
+        // discovery and qualified child paths without coupling the UI test
+        // target to an asset file.
+        let src = "\
+package CompositeFixture
+  model RocketStage end RocketStage;
+  model Engine end Engine;
+  model Tank end Tank;
+  model Valve end Valve;
+  model Airframe end Airframe;
+end CompositeFixture;
+";
         let (cs, _errors) = parse_classes(src);
         // Top level: one package.
         assert_eq!(cs.len(), 1);
-        assert_eq!(cs[0].short_name, "AnnotatedRocketStage");
+        assert_eq!(cs[0].short_name, "CompositeFixture");
         assert!(matches!(cs[0].kind, ClassType::Package));
-        // Models in the package: RocketStage + Tank + Valve + Engine + Airframe
-        // (plus the FluidPort* / *Signal* connectors and the LunCoAnnotations
-        // sub-package, which are children too).
+        // Models in the package: the browser must retain every child class.
         let child_names: Vec<&str> = cs[0]
             .children
             .iter()
@@ -1300,7 +1309,7 @@ function F end F;
         assert!(cs[0]
             .children
             .iter()
-            .any(|c| c.qualified_path == "AnnotatedRocketStage.Engine"));
+            .any(|c| c.qualified_path == "CompositeFixture.Engine"));
     }
 
     #[test]

@@ -1,0 +1,64 @@
+#usda 1.0
+(
+    defaultPrim = "CosimChain"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Cross-language acceptance fixture. USD owns the participants and the wires;
+# the Rhai scenario owns stimulus and the public runtime verdict.
+def Xform "CosimChain" (
+    doc = "Modelica oscillator to Python amplifier to Avian rigid body."
+)
+{
+    def DistantLight "Sun"
+    {
+        float intensity = 1.0
+    }
+
+    def Scope "Oscillator" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://models/Oscillator.mo@
+        float outputs:signal
+    }
+
+    def Scope "Amplifier" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://models/Amplifier.py@
+        uniform bool lunco:program:realtimeSafe = true
+        float inputs:signal.connect = </CosimChain/Oscillator.outputs:signal>
+        float outputs:scaled
+    }
+
+    def Sphere "CosimTarget" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        double radius = 0.5
+        double3 xformOp:translate = (0.0, 5.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        bool physics:rigidBodyEnabled = true
+        bool physics:collisionEnabled = true
+        float physics:mass = 1.0
+        float inputs:force_y.connect = </CosimChain/Amplifier.outputs:scaled>
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "cosim-chain"
+
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/cosim_chain.rhai@
+        }
+    }
+}

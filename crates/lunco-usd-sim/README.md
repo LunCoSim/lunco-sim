@@ -162,4 +162,4 @@ Useful for confirming a chain works end-to-end without polling logs.
 
 - [`../lunco-cosim/README.md`](../lunco-cosim/README.md) — engine-agnostic cosim master loop, `SimConnection` semantics
 - [`../../docs/architecture/22-domain-cosim.md`](../../docs/architecture/22-domain-cosim.md) — architecture overview
-- [`../../crates/lunco-luncosim/tests/cosim_chain.rs`](../lunco-luncosim/tests/cosim_chain.rs) — application-level Modelica → Python → Avian regression test
+- [`../../assets/scenes/tests/cosim_chain.usda`](../../assets/scenes/tests/cosim_chain.usda) — authored Modelica → Python → Avian regression scene

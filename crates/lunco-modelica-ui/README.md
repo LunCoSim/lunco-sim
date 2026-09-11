@@ -178,7 +178,7 @@ cargo run --release -p lunco-modelica-core --bin modelica_run -- \
     assets/models/AnnotatedRocketStage.mo \
     AnnotatedRocketStage.RocketStage \
     --duration 10 \
-    --input valve.opening=1.0 \
+    --input valve_opening=1.0 \
     --record time,engine.thrust,airframe.altitude,airframe.velocity,tank.m \
     --output /tmp/rocket.csv
 ```

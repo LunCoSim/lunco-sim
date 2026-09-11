@@ -1966,6 +1966,7 @@ pub fn dispatch_loaded_python_sources(
             ScriptedModel {
                 document_id: Some(doc_id.raw()),
                 language: Some(ScriptLanguage::Python),
+                reload_policy: Default::default(),
                 paused: false,
                 inputs: Default::default(),
                 outputs: Default::default(),

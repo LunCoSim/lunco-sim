@@ -2,8 +2,9 @@
 //!
 //! Registers two [`ApiQueryProvider`]s (see `lunco-api` for the trait):
 //!
-//! - **`ListBundled`** — embedded `assets/models/*.mo` examples. Modelica-
-//!   specific; lives here because that's where the data lives.
+//! - **`ListBundled`** — embedded `assets/models/*.mo` examples and the complete
+//!   source inventory used by authored validation. Modelica-specific; lives here
+//!   because that's where the data lives.
 
 use bevy::prelude::*;
 use lunco_api::{ApiErrorCode, ApiQueryProvider, ApiQueryRegistry, ApiResponse};
@@ -67,8 +68,9 @@ impl ApiQueryProvider for ListBundledProvider {
     }
 
     fn execute(&self, _world: &World, _params: &serde_json::Value) -> ApiResponse {
-        let items: Vec<serde_json::Value> = bundled_models()
-            .into_iter()
+        let models = bundled_models();
+        let items: Vec<serde_json::Value> = models
+            .iter()
             .map(|m| {
                 serde_json::json!({
                     "filename": m.filename,
@@ -81,9 +83,33 @@ impl ApiQueryProvider for ListBundledProvider {
                 })
             })
             .collect();
+        let mut source_paths = models
+            .iter()
+            .map(|model| model.filename.to_string())
+            .collect::<Vec<_>>();
+        for package in lunco_assets::models::package_roots() {
+            source_paths.extend(
+                lunco_assets::models::package_files(&package)
+                    .into_iter()
+                    .map(|(path, _)| path),
+            );
+        }
+        source_paths.sort();
+        source_paths.dedup();
+        let sources = source_paths
+            .into_iter()
+            .map(|path| {
+                serde_json::json!({
+                    "path": path,
+                    "uri": format!("lunco://models/{path}"),
+                })
+            })
+            .collect::<Vec<_>>();
+        let count = items.len();
         ApiResponse::ok(serde_json::json!({
             "bundled": items,
-            "count": items.len(),
+            "count": count,
+            "sources": sources,
         }))
     }
 }

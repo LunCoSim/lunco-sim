@@ -108,32 +108,3 @@ pub(crate) fn resolve_class_source(world: &World, qualified: &str) -> Option<Res
         origin_path: None,
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn bundled_source_resolves_via_head_segment() {
-        // The nested-class qualified name resolves to the file named
-        // after its head segment — the path that fixes "(no classes
-        // yet)" on a bundled composite duplicate.
-        let src = bundled_source_for("AnnotatedRocketStage.RocketStage")
-            .expect("AnnotatedRocketStage.mo must be bundled");
-        assert!(
-            src.contains("model RocketStage"),
-            "expected nested model in bundled source"
-        );
-    }
-
-    #[test]
-    fn bundled_source_resolves_flat_top_level() {
-        // A flat bundled model (no dot) maps to `<name>.mo`.
-        assert!(bundled_source_for("RC_Circuit").is_some());
-    }
-
-    #[test]
-    fn bundled_source_unknown_is_none() {
-        assert!(bundled_source_for("NoSuchBundledThing.Whatever").is_none());
-    }
-}

@@ -436,57 +436,33 @@ end Foo;
     }
 
     #[test]
-    fn duplicate_annotated_rocket_stage_parses() {
-        // The exact asset the user duplicated. Its 9-line ASCII-art
-        // comment header puts full_start well past 0 — the case that
-        // regressed when `full_span_with_leading_comments` was dropped.
-        // The drill target is the nested `RocketStage`, so the package
-        // FQN is passed, exercising the `within` prepend as well.
-        let src = include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../assets/models/AnnotatedRocketStage.mo"
-        ));
-        let out = duplicate(
-            src,
-            "AnnotatedRocketStage",
-            "AnnotatedRocketStageCopy",
-            Some("AnnotatedRocketStage.RocketStage"),
-        );
-        assert!(
-            parses_clean(&out),
-            "duplicated AnnotatedRocketStage (with within) must parse:\n{out}"
-        );
-        assert!(out.contains("package AnnotatedRocketStageCopy"));
-        assert!(out.contains("end AnnotatedRocketStageCopy;"));
-        assert!(out.contains("model RocketStage"), "nested models preserved");
-        assert!(out.contains("model Airframe"), "nested models preserved");
-        assert!(
-            out.starts_with("within AnnotatedRocketStage;"),
-            "within clause prepended"
-        );
-        // The qualified run name the dispatch must use (within + copy name).
-        assert_eq!(
-            lunco_modelica_ast::ast_extract::within_package_of_source(&out).as_deref(),
-            Some("AnnotatedRocketStage")
-        );
-    }
-
-    #[test]
-    fn duplicate_nested_rocketstage_model_parses() {
-        // The "Duplicate to edit" path from the read-only RocketStage tab:
-        // duplicate the *nested* model `RocketStage` (not the package),
-        // producing `within AnnotatedRocketStage; model RocketStageCopy …`.
-        // Runtime showed "(no classes yet)" — this asserts the slice parses
-        // and yields the renamed model.
-        let src = include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../assets/models/AnnotatedRocketStage.mo"
-        ));
+    fn duplicate_nested_composite_model_keeps_within_scope() {
+        // Keep this fixture small and local. The production bundled example is
+        // exercised through its authored runtime scene; this test only pins the
+        // source-preserving duplicate mechanism and its nested-package shape.
+        let src = "\
+// multibyte banner ──►│ before the declaration
+package CompositeFixture
+  model RocketStage
+    Tank tank;
+    Valve valve;
+  equation
+    tank.m = 1;
+    valve.opening = 0;
+  end RocketStage;
+  model Tank
+    Real m;
+  end Tank;
+  model Valve
+    input Real opening;
+  end Valve;
+end CompositeFixture;
+";
         let out = duplicate(
             src,
             "RocketStage",
             "RocketStageCopy",
-            Some("AnnotatedRocketStage.RocketStage"),
+            Some("CompositeFixture.RocketStage"),
         );
         assert!(
             parses_clean(&out),
@@ -494,74 +470,12 @@ end Foo;
         );
         assert!(out.contains("model RocketStageCopy"), "renamed:\n{out}");
         assert!(out.contains("end RocketStageCopy;"), "end renamed:\n{out}");
+        assert!(out.starts_with("within CompositeFixture;"));
+        assert!(out.contains("Tank tank;"), "sibling reference preserved");
         assert_eq!(
             lunco_modelica_ast::ast_extract::within_package_of_source(&out).as_deref(),
-            Some("AnnotatedRocketStage")
+            Some("CompositeFixture")
         );
-    }
-
-    #[test]
-    fn duplicate_bundled_nested_class_resolves_via_get_model() {
-        // Runtime repro of the "(no classes yet)" bug: the MSL/OpenClass
-        // duplicate path (`spawn_duplicate_class_task`) resolves source via
-        // the MSL index, which does NOT contain bundled `assets/models/*.mo`
-        // examples. The fallback reads the bundled file keyed by the
-        // qualified head segment. This test mirrors that fallback: look up
-        // `AnnotatedRocketStage.mo` by head, extract the nested `RocketStage`,
-        // and assert the duplicate has a real class (not a comment-only doc).
-        let qualified = "AnnotatedRocketStage.RocketStage";
-        let src = crate::ui::class_source::bundled_source_for(qualified)
-            .expect("AnnotatedRocketStage.mo must be bundled");
-        let origin_short = qualified.rsplit('.').next().unwrap();
-        let out = duplicate(src, origin_short, "RocketStageCopy", Some(qualified));
-        assert!(parses_clean(&out), "bundled duplicate must parse:\n{out}");
-        assert!(out.contains("model RocketStageCopy"), "renamed:\n{out}");
-        assert!(out.contains("end RocketStageCopy;"), "end renamed:\n{out}");
-        assert_eq!(
-            lunco_modelica_ast::ast_extract::within_package_of_source(&out).as_deref(),
-            Some("AnnotatedRocketStage")
-        );
-    }
-
-    #[test]
-    fn nested_duplicate_extra_carries_referenced_siblings() {
-        // Compile regression: duplicating the *nested* `RocketStage` emits
-        // `within AnnotatedRocketStage; model RocketStageCopy …`, whose body
-        // references the sibling classes `Tank`/`Valve`/`Engine`/`Airframe`.
-        // The lone leaf can't compile (`unresolved type reference: 'Tank'`)
-        // unless the enclosing bundled package is re-seated as an extra source.
-        // dispatch_experiment computes that extra as
-        // `bundled_source_for(within_package_of_source(dup))`; this asserts the pieces
-        // line up — the dup names a within-package, and that package's bundled
-        // source provides every sibling the leaf refers to.
-        let src = crate::ui::class_source::bundled_source_for("AnnotatedRocketStage.RocketStage")
-            .expect("AnnotatedRocketStage.mo must be bundled");
-        let dup = duplicate(
-            src,
-            "RocketStage",
-            "RocketStageCopy",
-            Some("AnnotatedRocketStage.RocketStage"),
-        );
-        // The leaf body still refers to its siblings by simple name…
-        for sib in ["Tank", "Valve", "Engine", "Airframe"] {
-            assert!(
-                dup.contains(&format!("{sib} ")),
-                "duplicated leaf should reference sibling `{sib}`:\n{dup}"
-            );
-        }
-        // …and the extra the compile path attaches (the bundled package keyed
-        // by the within-package name) must define every one of them.
-        let pkg = lunco_modelica_ast::ast_extract::within_package_of_source(&dup)
-            .expect("nested dup has a within-package");
-        assert_eq!(pkg, "AnnotatedRocketStage");
-        let extra = crate::ui::class_source::bundled_source_for(&pkg)
-            .expect("within-package resolves to bundled source");
-        for sib in ["Tank", "Valve", "Engine", "Airframe"] {
-            assert!(
-                extra.contains(&format!("model {sib}")),
-                "bundled extra must define sibling `model {sib}`"
-            );
-        }
     }
 
     #[test]

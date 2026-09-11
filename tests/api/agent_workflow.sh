@@ -187,10 +187,10 @@ echo
 
 # ── 6. describe_model — assert valve component is present ────────────
 # Note: AnnotatedRocketStage.RocketStage is a *composed* model — the
-# runtime input lives on the Valve subcomponent (`valve.opening`,
-# Modelica.Blocks.Interfaces.RealInput). describe_model on RocketStage
-# surfaces the components; describe_model on Valve would surface the
-# `opening` input. We verify both shapes here.
+# runtime throttle is a top-level RocketStage input. describe_model on
+# RocketStage surfaces the components and its public input; describe_model on
+# Valve still verifies the reusable component's typed input. We verify both
+# shapes here.
 echo "📋 6a. describe_model(doc_id=$DOC_ID, class=\"RocketStage\")"
 RESP=$(cmd "DescribeModel" "{\"doc_id\":$DOC_ID,\"class\":\"RocketStage\"}")
 COMPONENT_COUNT=$(echo "$RESP" | jq -r '.data.components | length')
@@ -217,12 +217,9 @@ else
 fi
 echo
 
-# ── 7. set_input — happy path. Use the FLATTENED dotted name —────────
-# `RocketStage` has no top-level inputs of its own; the runtime
-# throttle is `valve.opening` after flattening. The simulation
-# worker's `inputs` map is keyed by the flattened name.
-echo "🎛  7. set_input(doc_id=$DOC_ID, name=\"valve.opening\", value=0.5)"
-RESP=$(cmd "SetModelInput" "{\"doc_id\":$DOC_ID,\"name\":\"valve.opening\",\"value\":0.5}")
+# ── 7. set_input — happy path. Use the authored RocketStage boundary ──
+echo "🎛  7. set_input(doc_id=$DOC_ID, name=\"valve_opening\", value=0.5)"
+RESP=$(cmd "SetModelInput" "{\"doc_id\":$DOC_ID,\"name\":\"valve_opening\",\"value\":0.5}")
 OK=$(echo "$RESP" | jq -r '.data.ok // empty')
 if [ "$OK" = "true" ]; then
     echo "  ✅ set_input ok=true"
@@ -240,7 +237,7 @@ echo
 echo "🎛  8. set_input(doc_id=$DOC_ID, name=\"valve.openin\" /* typo */, value=0.5)"
 RESP=$(cmd "SetModelInput" "{\"doc_id\":$DOC_ID,\"name\":\"valve.openin\",\"value\":0.5}")
 ERR=$(echo "$RESP" | jq -r '.error // .message // empty')
-if echo "$ERR" | grep -q "valve.opening"; then
+if echo "$ERR" | grep -q "valve_opening"; then
     echo "  ✅ error lists the valid name: $ERR"
     PASS=$((PASS+1))
 else

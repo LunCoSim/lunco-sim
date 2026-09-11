@@ -1,0 +1,30 @@
+#usda 1.0
+(
+    defaultPrim = "ModelicaLint"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# The scenario invokes the production ValidateAsset query for every embedded
+# Modelica source. The parser and fact producer remain Rust mechanisms; the
+# lint rules and the clean/dirty verdict remain authored Rhai.
+def Xform "ModelicaLint"
+{
+    def DistantLight "Sun"
+    {
+        float intensity = 1.0
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "modelica-lint"
+
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/modelica_lint.rhai@
+        }
+    }
+}

@@ -1624,7 +1624,15 @@ pub struct SimSampleBatch {
     pub is_parameter_update: bool,
 }
 
-/// System sets for Modelica stepping in [`FixedUpdate`].
+/// System sets for Modelica's asynchronous worker lifecycle and fixed-step
+/// simulation exchange.
+///
+/// [`HandleResponses`](Self::HandleResponses) belongs to [`Update`]: worker
+/// completion is a wall-clock lifecycle event and must still be applied while
+/// a host temporarily freezes simulation time during scene readiness.  The
+/// [`SpawnRequests`](Self::SpawnRequests) set belongs to [`FixedUpdate`]:
+/// requests advance the deterministic simulation clock and must remain coupled
+/// to the fixed-step transaction.
 ///
 /// These sets let downstream code (for example, USD program projection) order
 /// its sync systems relative to the Modelica worker communication.
@@ -1890,6 +1898,29 @@ fn build_modelica_core(app: &mut App) {
         ),
     );
 
+    // Worker completion is an asynchronous lifecycle event, not simulation
+    // work. It must be drained from Update so scene-readiness loops can hold
+    // the fixed clock at zero while a background compile or step finishes.
+    // The fixed dispatcher remains separate: only it advances the Modelica
+    // master clock and emits the next deterministic communication request.
+    app.configure_sets(Update, ModelicaSet::HandleResponses);
+    app.configure_sets(FixedUpdate, ModelicaSet::SpawnRequests);
+    app.init_resource::<worker::CosimLag>();
+    app.register_type::<ModelicaModel>()
+        .add_observer(worker::on_remove_modelica)
+        .add_systems(
+            Update,
+            handle_modelica_responses.in_set(ModelicaSet::HandleResponses),
+        )
+        .add_systems(
+            Update,
+            runtime_telemetry::retain_modelica_runtime_state.after(ModelicaSet::HandleResponses),
+        )
+        .add_systems(
+            FixedUpdate,
+            spawn_modelica_requests.in_set(ModelicaSet::SpawnRequests),
+        );
+
     #[cfg(target_arch = "wasm32")]
     {
         // Modelica work on wasm always goes through the Web Worker. A missing
@@ -1930,10 +1961,8 @@ pub struct ModelicaOutput {
 }
 
 #[cfg(test)]
-mod observables_smoke {
+mod source_root_smoke {
     use super::*;
-    use lunco_experiments::RunBounds;
-    use std::fs;
 
     #[test]
     fn source_root_reports_unstrippable_bound_input_files() {
@@ -2012,30 +2041,6 @@ mod observables_smoke {
     }
 
     #[test]
-    fn disk_source_root_loads_standard_package_members() {
-        let temp = tempfile::tempdir().unwrap();
-        fs::write(
-            temp.path().join("package.mo"),
-            "within ; package Vehicle end Vehicle;",
-        )
-        .unwrap();
-        let member = "within Vehicle;\nmodel Part\n  Real x;\nequation\n  x = 1;\nend Part;\n";
-        fs::write(temp.path().join("Part.mo"), member).unwrap();
-
-        let mut compiler = ModelicaCompiler::new();
-        let report = compiler.load_source_root("twin:demo", temp.path());
-        assert_eq!(report.parsed_file_count, 2);
-        assert_eq!(report.inserted_file_count, 2);
-        assert!(report.diagnostics.is_empty(), "{report:?}");
-        assert!(
-            compiler
-                .compile_str("Part", member, "workspace/Part.mo")
-                .is_ok(),
-            "a package member loaded from disk must remain compilable"
-        );
-    }
-
-    #[test]
     fn admitted_library_revision_is_order_independent_and_content_sensitive() {
         let first = vec![
             ("b.mo".to_string(), "model B end B;".to_string()),
@@ -2067,111 +2072,6 @@ mod observables_smoke {
             compiler.library_revision(),
             "successful source-root admission must update the compiler revision"
         );
-    }
-
-    /// End-to-end smoke test for the observables pipeline: compile the
-    /// bundled RocketEngine, run one step at full throttle, and assert
-    /// every algebraic observable shows up with a physically-sensible
-    /// value in [`worker::collect_stepper_observables`]. Protects against
-    /// (a) bumping rumoca to a version that drops `EliminationResult`
-    ///     from the stepper again, and
-    /// (b) reintroducing a Boolean intermediate in the bundled model
-    ///     that rumoca's elimination pass can't reconstruct.
-    ///
-    /// H12: this test was `#[cfg(any())]`-disabled behind a FIXME claiming
-    /// `collect_stepper_observables` had been "removed during the SnapshotStream
-    /// refactor". It was not removed — it lives in `worker.rs` and is on the hot
-    /// path of every Step (it is what fills `ModelicaResult.outputs`). The stale
-    /// FIXME was hiding the one test that covers it. Re-enabled against its real
-    /// home.
-    ///
-    /// The defect this was `#[ignore]`d for is fixed at the source: rumoca's
-    /// reconstructor still evaluates a conditional algebraic as `0`, so the model
-    /// no longer contains one. `RocketEngine.mo` gates on continuous factors
-    /// (`m_dot = m_dot_max * throttle * prop_gate * thr_gate`) instead of an
-    /// `if`, which the reconstructor handles, so `m_dot`/`thrust`/`p_chamber` are
-    /// reachable at full throttle and this test runs.
-    ///
-    /// Regression is prevented by the lint, not by this test alone: the
-    /// `conditional-algebraic-observable` rule in
-    /// `assets/scripting/policy/lint_modelica.rhai` rejects the pattern outright,
-    /// over source facts produced in `lunco-modelica-ast/src/lint_facts.rs`.
-    #[test]
-    fn rocket_engine_observables_round_trip() {
-        let raw = crate::models::get_model("RocketEngine.mo").expect("bundled RocketEngine.mo");
-        let mut c = ModelicaCompiler::new();
-        // `compile_str` strips bound-input defaults itself (the chokepoint).
-        let r = c
-            .compile_str("RocketEngine", raw, "RocketEngine.mo")
-            .expect("compile ok");
-        // Options come from the canonical builder, never `SimOptions::default()`:
-        // the session clamps every advance at `t_end`, whose default is 1.0.
-        let opts = crate::experiments_runner::stepper_options_from_bounds(&RunBounds {
-            t_start: 0.0,
-            t_end: 10.0,
-            ..Default::default()
-        })
-        .expect("solver resolves for this model");
-        let mut stepper = crate::simulation_session::interactive(&r.dae, opts).expect("stepper ok");
-        stepper
-            .set_input("throttle", 1.0)
-            .expect("throttle is an input");
-        stepper.step(0.01).expect("step ok");
-
-        let obs = worker::collect_stepper_observables(&stepper);
-        let by_name: std::collections::HashMap<_, _> = obs.into_iter().collect();
-
-        for name in ["m_prop", "impulse", "m_dot", "thrust", "p_chamber", "isp"] {
-            assert!(by_name.contains_key(name), "missing observable: {name}");
-        }
-        assert!(
-            by_name["m_dot"] > 0.0,
-            "m_dot should be nonzero at throttle=1, got {}",
-            by_name["m_dot"]
-        );
-        assert!(
-            by_name["thrust"] > 0.0,
-            "thrust should be nonzero, got {}",
-            by_name["thrust"]
-        );
-        assert!(
-            by_name["p_chamber"] > 0.0,
-            "p_chamber should be nonzero, got {}",
-            by_name["p_chamber"]
-        );
-        // v_e = 3100.0 in assets/models/RocketEngine.mo (the old 2900 here was stale).
-        assert!(
-            (by_name["isp"] - 3100.0 / 9.80665).abs() < 1e-3,
-            "isp should equal v_e / g, got {}",
-            by_name["isp"]
-        );
-    }
-
-    /// Verifies that `"..."` description strings (MLS §A.2.5) survive
-    /// into the per-doc [`crate::index::ModelicaIndex`] — that's what
-    /// panels read for hover tooltips. If this regresses, Telemetry
-    /// tooltips go dark.
-    #[test]
-    fn rocket_engine_descriptions_populate() {
-        let raw = crate::models::get_model("RocketEngine.mo").expect("bundled RocketEngine.mo");
-        let ast = lunco_modelica_ast::parse_to_ast(raw, "RocketEngine.mo").expect("parses");
-        let mut index = crate::index::ModelicaIndex::new();
-        index.rebuild_from_ast(&ast, raw);
-        for (var, needle) in [
-            ("m_dot_max", "mass flow"),
-            ("throttle", "Throttle"),
-            ("m_prop", "Propellant"),
-            ("thrust", "Thrust"),
-        ] {
-            let entry = index
-                .find_component_by_leaf(var)
-                .unwrap_or_else(|| panic!("no component '{var}' in index"));
-            assert!(
-                entry.description.contains(needle),
-                "'{var}' description should contain '{needle}', got: {:?}",
-                entry.description
-            );
-        }
     }
 
     // ─────────────────────────────────────────────────────────

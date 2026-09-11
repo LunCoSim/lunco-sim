@@ -1508,24 +1508,50 @@ fn eval_condition(
 mod composite_slim_slice_tests {
     use super::*;
 
-    /// Ground-truth the RocketStage card bug: a composite model loaded as a
+    const COMPOSITE_SOURCE: &str = "\
+// compact composite fixture; the shipped rocket is covered by authored runtime tests
+package CompositeFixture
+  model RocketStage
+    Tank tank annotation(Placement(transformation(origin={-120,0})));
+    Valve valve annotation(Placement(transformation(origin={-40,0})));
+    Engine engine annotation(Placement(transformation(origin={40,0})));
+    Airframe airframe annotation(Placement(transformation(origin={120,0})));
+  equation
+    tank.mass = 1;
+    valve.opening = 0;
+    engine.thrust = 0;
+    airframe.altitude = 0;
+  end RocketStage;
+  model Tank
+    Real mass;
+  end Tank;
+  model Valve
+    input Real opening;
+  end Valve;
+  model Engine
+    Real thrust;
+  end Engine;
+  model Airframe
+    Real altitude;
+  end Airframe;
+end CompositeFixture;
+";
+
+    /// Ground-truth the composite-card bug: a composite model loaded as a
     /// slim slice (`within Pkg;\n model RocketStage ... end`) must still
     /// project its 4 component instances as nodes — the sibling *types*
     /// (Tank/Valve/…) are absent, but node creation only needs the
     /// declarations, which the slice carries.
     #[test]
-    fn rocketstage_slim_slice_projects_component_nodes() {
-        let full = include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../assets/models/AnnotatedRocketStage.mo"
-        ));
+    fn composite_slim_slice_projects_component_nodes() {
+        let full = COMPOSITE_SOURCE;
         // Reproduce load_msl_class's slice: within + RocketStage body.
         let ast_full = lunco_modelica_ast::parse_to_ast(full, "rs.mo").unwrap();
         let class =
             lunco_modelica_ast::ast_extract::find_class_by_short_name(&ast_full, "RocketStage")
                 .expect("RocketStage in package");
         let (s, e) = lunco_modelica_ast::ast_extract::class_full_text_span(class, full);
-        let slim = format!("within AnnotatedRocketStage;\n{}", &full[s..e]);
+        let slim = format!("within CompositeFixture;\n{}", &full[s..e]);
 
         let ast =
             std::sync::Arc::new(lunco_modelica_ast::parse_to_ast(&slim, "rs_slim.mo").unwrap());
@@ -1534,7 +1560,7 @@ mod composite_slim_slice_tests {
             ast,
             &slim,
             DEFAULT_MAX_DIAGRAM_NODES,
-            Some("AnnotatedRocketStage.RocketStage"),
+            Some("CompositeFixture.RocketStage"),
             &layout,
         )
         .expect("rocket stage projection must succeed");
@@ -1652,11 +1678,8 @@ end Unit_One;
     }
 
     #[test]
-    fn rocketstage_scenarios() {
-        let full = include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../assets/models/AnnotatedRocketStage.mo"
-        ));
+    fn composite_package_targets_project_primary_class() {
+        let full = COMPOSITE_SOURCE;
         let layout = DiagramAutoLayoutSettings::default();
         let project = |src: &str, target: Option<&str>| -> usize {
             let ast = std::sync::Arc::new(lunco_modelica_ast::parse_to_ast(src, "x.mo").unwrap());
@@ -1670,11 +1693,11 @@ end Unit_One;
             lunco_modelica_ast::ast_extract::find_class_by_short_name(&ast_full, "RocketStage")
                 .unwrap();
         let (s, e) = lunco_modelica_ast::ast_extract::class_full_text_span(class, full);
-        let slim = format!("within AnnotatedRocketStage;\n{}", &full[s..e]);
+        let slim = format!("within CompositeFixture;\n{}", &full[s..e]);
 
         let slim_none = project(&slim, None);
         let full_none = project(full, None);
-        let full_target = project(full, Some("AnnotatedRocketStage.RocketStage"));
+        let full_target = project(full, Some("CompositeFixture.RocketStage"));
         // The bug: a composite model whose file is the whole package,
         // opened with no explicit drill target, used to bail to an empty
         // card (full_none == 0). It must now auto-resolve the primary

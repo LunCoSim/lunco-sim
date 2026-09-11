@@ -94,13 +94,14 @@ rejected: the model held its declared defaults for the whole run while the
 simulation completed and published plausible numbers.
 `LunCo.Propulsion.PlumePhotometry` took `throttle` that way, so a descent burn lit
 no plume. `ensure_root_installed` now reads the members itself and seats them
-through `seat_library_files`, which strips each one.
+through `seat_library_files`, which strips each one. The shipped package path
+is exercised by authored scenes such as `lander_plume_activity`, `lander_rcs`,
+and `sun_tracker`; Rust tests do not read the assets tree.
 
 **Enforced by** `tests/rumoca_chokepoints.rs::user_source_is_seated_only_through_the_strip_chokepoint`
 (fails if a new site seats documents into the compile session directly),
 `tests/rumoca_api_coverage.rs::compile_str_keeps_bound_input_as_runtime_slot`
-(feeds `compile_str` RAW source and asserts `g` survives as a runtime slot), and
-`tests/library_member_inputs.rs` (same assertion for a `within`-package class).
+(feeds `compile_str` RAW source and asserts `g` survives as a runtime slot).
 
 **Diagnosed by** `worker::apply_input_defaults_validated`: a model whose source
 declares inputs but whose stepper exposes **none** logs at ERROR, because that is
@@ -147,7 +148,7 @@ new un-evicted seat can't be added silently.
 > transport id (`twin:school`, for example). A later `compile_str` of a
 > `within P;` member therefore resolves the already-seated root and never adds
 > the same class under a second URI. The regression is
-> `observables_smoke::source_root_namespace_owns_later_package_member_compiles`.
+> `source_root_smoke::source_root_namespace_owns_later_package_member_compiles`.
 
 **Probe — must go at a RAW `rumoca_compile::Session`.** Probing through
 `ModelicaCompiler::compile_str` is worthless: it evicts first, so it tests the
@@ -251,8 +252,11 @@ does not hide a solver-specific fallback or rely on a conditional expression.
 The shipped models must remain free of equation-level `if`/`when`; the validator
 and the modelica lint policy enforce that rule.
 
-**Probe.** `lib.rs::observables_smoke::rocket_engine_observables_round_trip`
-(`#[ignore]`d, `TODO(rumoca-observables)`).
+**Probe.** `assets/scenes/tests/rocket_engine_observables.usda` with
+`assets/scenarios/tests/rocket_engine_observables.rhai`. The production scene
+runner compiles the shipped model through its USD program boundary and Rhai
+asserts the public observable values, so this check covers source resolution,
+worker lifecycle, output collection, and the runtime contract together.
 
 ---
 

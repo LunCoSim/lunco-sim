@@ -50,12 +50,12 @@ fn compile_str_keeps_bound_input_as_runtime_slot() {
 /// `t_end = u32::MAX` sentinel in `worker::live_stepper_options` with it.
 #[test]
 fn simulation_session_clamps_advance_at_t_end() {
-    let source = lunco_modelica_core::models::get_model("Balloon.mo").expect("bundled Balloon.mo");
+    let source = "model HorizonFixture\n  Real x(start = 0, fixed = true);\nequation\n  der(x) = 1;\nend HorizonFixture;\n";
     let (stripped, _) = lunco_modelica_ast::ast_extract::strip_input_defaults(source);
     let mut compiler = lunco_modelica_core::ModelicaCompiler::new();
     let dae = compiler
-        .compile_str("Balloon", &stripped, "balloon.mo")
-        .expect("Balloon compiles");
+        .compile_str("HorizonFixture", &stripped, "horizon_fixture.mo")
+        .expect("HorizonFixture compiles");
 
     let opts = rumoca_sim::SimOptions {
         atol: 1e-3,

@@ -216,14 +216,6 @@ mimalloc = "0.1"
 velopack = { version = "=1.2.110-ge826545", optional = true, features = ["public-utils"] }
 ureq = { workspace = true, optional = true }
 
-[dev-dependencies]
-# The cross-engine Modelica→Rhai→Avian regression is an application-level
-# integration test. Keep its diagnostics with the existing application package
-# rather than making the leaf co-simulation crate compile the full UI/runtime
-# stack just to host one cross-domain target.
-lunco-modelica-ast = { path = "../lunco-modelica-ast" }
-env_logger = "0.11"
-
 [features]
 # `ui` + `lunco-api` are on by default so native `cargo run --bin luncosim`
 # starts a local windowed simulation. Networking is deliberately opt-in: a normal
@@ -332,7 +324,7 @@ networking = ["dep:lunco-networking", "lunco-networking/networking", "lunco-api"
 # Netcode jitter diagnostics — off by default (not in normal builds). Build with
 # `--features networking,net-diag` when debugging; see lunco-networking/diagnostics.rs.
 net-diag = ["networking", "lunco-networking/net-diag"]
-python = ["lunco-scripting/python"]
+python = ["lunco-scripting/python", "lunco-usd-sim/python"]
 # Tracy profiler. Enable with `--features tracy` and connect a Tracy
 # GUI to see per-system flame graphs. Match the GUI version to the
 # tracy-client version pulled in by Bevy 0.18 (check `cargo tree -p
