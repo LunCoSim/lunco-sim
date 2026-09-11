@@ -361,7 +361,7 @@ fn bind_pbr_look(
 ///
 /// **Contract for callers:** an entity must not carry `PbrLook` and a custom-shader
 /// material at the same time. A system that takes over an entity's shading (e.g.
-/// `lunco-usd-sim`'s `apply_usd_shader_materials`) must `remove::<PbrLook>()`, not
+/// `lunco-usd-sim-shader`'s `apply_usd_shader_materials`) must `remove::<PbrLook>()`, not
 /// merely replace the material — otherwise this system re-inserts
 /// `MeshMaterial3d<StandardMaterial>` alongside the shader material and the mesh
 /// draws twice.

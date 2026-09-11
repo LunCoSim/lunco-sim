@@ -20,7 +20,7 @@ use lunco_telemetry::TelemetrySettings;
 use lunco_time::MissionClock;
 use std::collections::HashMap;
 
-use crate::UsdPrimPath;
+use lunco_usd_bevy_scene::UsdPrimPath;
 
 #[derive(Resource, Default)]
 pub struct PhysicsTelemetryState {

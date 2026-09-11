@@ -17,7 +17,7 @@
 //!   time.** The value is a composed attribute on the GPRIM the material is
 //!   bound to (`primvars:displayColor`). It is baked into the
 //!   [`ShaderLook`](crate::ShaderLook)'s parameter map by
-//!   `lunco_usd_sim::shader`, so it rides along automatically wherever the look
+//!   `lunco-usd-sim-shader`, so it rides along automatically wherever the look
 //!   goes — including the wheel physics/visual split, which MOVES the look onto
 //!   a synthesized `*_visual` child. A live `SetAttribute` edit re-projects the
 //!   prim and re-authors the look, so the rendered colour follows the edit.

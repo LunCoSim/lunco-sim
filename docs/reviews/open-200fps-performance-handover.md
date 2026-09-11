@@ -108,7 +108,7 @@ The most important settled and mixed-window CPU attribution was:
 | Render schedule | 16.81% | approximately 8.103 ms mean; broad schedule envelope, not one leaf function |
 | PostUpdate schedule | 13.71% | approximately 6.605 ms mean; inspect contained systems before changing schedule structure |
 | Update schedule | 13.09% | approximately 6.307 ms mean; same rule as above |
-| `physics_telemetry::retain_physics_telemetry` | 2.62% | approximately 0.871 ms mean; only a secondary target after propagation |
+| `lunco-usd-sim-telemetry::retain_physics_telemetry` | 2.62% | approximately 0.871 ms mean; only a secondary target after propagation |
 | `prepare_preprocess_bind_groups` | 2.09% | approximately 1.005 ms mean; render preparation |
 | `globe_lod::update_globe_lod` | 2.04% | approximately 0.982 ms mean; should be change/revision-driven when stable |
 | `prepare_clusters` | 2.02% | approximately 0.975 ms mean; one approximately 39 ms outlier was observed |
@@ -433,7 +433,7 @@ task; its tolerance was not weakened.
 
 #### 2026-08-30 physics telemetry lifecycle cleanup
 
-The next measured app-owned leaf was `physics_telemetry::retain_physics_telemetry`
+The next measured app-owned leaf was `lunco-usd-sim-telemetry::retain_physics_telemetry`
 (approximately **0.17 ms** in the settled Tracy attribution). Its sampling
 cadence and shared `SignalRegistry` ownership were already correct, but its
 cleanup path rebuilt a live-entity `HashSet` and retained four state maps on

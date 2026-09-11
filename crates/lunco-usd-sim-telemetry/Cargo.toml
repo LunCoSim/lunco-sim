@@ -1,0 +1,20 @@
+[package]
+name = "lunco-usd-sim-telemetry"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Render-free USD/Avian physics telemetry for LunCoSim"
+
+[dependencies]
+avian3d = { workspace = true }
+bevy = { workspace = true }
+lunco-core = { path = "../lunco-core" }
+lunco-cosim = { path = "../lunco-cosim" }
+lunco-mobility = { path = "../lunco-mobility" }
+lunco-signal = { path = "../lunco-signal" }
+lunco-telemetry = { path = "../lunco-telemetry" }
+lunco-time = { path = "../lunco-time" }
+lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
+
+[lints]
+workspace = true

@@ -75,6 +75,9 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-usd-bevy`** | Visual Bevy adapter (`UsdBevyPlugin`): projects USD hierarchy, shapes, transforms, materials, and `timeSamples` animation into Bevy entities/components on top of `lunco-usd-bevy-core`. Owns mesh/lathe/curve projection and lighting; installs the independent camera adapter but does not own camera mechanisms. |
 | **`lunco-usd-avian`** | Physics bridge (`UsdAvianPlugin`): maps `UsdPhysics` schemas (RigidBody, Colliders, all joint kinds + drive API) to Avian3D — the single home for joint construction. |
 | **`lunco-usd-sim`** | Simulation-schema bridge (`UsdSimPlugin`): intercepts specialized vehicle/cosim schemas (e.g., PhysX Vehicles) and maps them to LunCo models. Full USD→Bevy→Avian→simulation projection tests live here; direct Avian bridge mechanics stay in `lunco-usd-avian`. |
+| **`lunco-usd-sim-celestial`** | Independent render-free projector for USD-authored celestial anchors, orbits, link nodes, occluders, and reflected-light metadata. It owns the celestial projection marker and does not depend on vehicle or cosimulation projection. |
+| **`lunco-usd-sim-shader`** | Independent render-free projector for `UsdShade` WGSL material intent. It authors `ShaderLook` and owns the shader-resolution marker without pulling the vehicle/cosimulation implementation into the shader source crate. |
+| **`lunco-usd-sim-telemetry`** | Independent render-free Avian rigid-body and wheel telemetry recorder. It publishes through the shared signal/telemetry registries and is isolated from USD vehicle projection changes. |
 | **`lunco-usd-terrain`** | Terrain bridge: projects authored terrain prims into `lunco-terrain-surface`'s `DemTerrainRequest` + composable `TerrainLayerStack` (craters / rocks / edits), and carries hand edits back as journaled, undoable USD ops on the document's **runtime** layer. Standard `UsdShade` owns terrain material intent. |
 | **`lunco-scene-commands`** | The scene/document **command layer**: every runtime mutation — spawn, move, delete, set-property, shader edit — authored as journaled USD ops on the open document's runtime layer. One path for all four callers (rhai, HTTP API, peer over the wire, editor gizmo); an edit that bypasses it escapes save, journal, undo and replication. Validation is a separate production dependency so command changes do not rebuild the validator. |
 | **`lunco-scene-validation`** | Production asset, loaded-stage, and Twin pre-flight: `ValidateAsset`, `ValidateTwin`, live `RunLint`, USD lint-fact aggregation, and Twin namespace inspection. It owns composition/parse/lint integration while `lunco-scene-commands` owns scene mutation and catalog commands. |
@@ -306,6 +309,15 @@ Physics bridge for OpenUSD (`UsdAvianPlugin`). Maps `UsdPhysics` schemas — rig
 
 **`lunco-usd-sim`**
 Specialized simulation metadata bridge. Intercepts complex industry-standard vehicle schemas (like NVIDIA PhysX Vehicles) and substitutes them with optimized LunCo simulation models (e.g., Raycast wheels). Its integration tests cover the complete USD→Bevy→Avian→simulation seam; direct USD physics lowering remains in `lunco-usd-avian`.
+
+**`lunco-usd-sim-celestial`**
+Independent render-free projection of USD-authored celestial and connectivity facts. It converts anchors, orbits, link nodes, occluder extents, and reflected-light declarations to `lunco-celestial` components. Its separate package boundary prevents celestial authoring changes from rebuilding the vehicle and cosimulation projector.
+
+**`lunco-usd-sim-shader`**
+Independent render-free `UsdShade` material-intent projection. It reads authored WGSL shader networks and writes `ShaderLook`; `lunco-render-bevy` remains the only material binder. Shader authoring changes therefore rebuild this leaf without rebuilding the vehicle projector.
+
+**`lunco-usd-sim-telemetry`**
+Independent render-free recorder for post-step Avian rigid-body and wheel state. It owns the transient telemetry cursor and publishes through the shared signal registry; telemetry implementation changes are isolated from USD schema projection.
 
 **`lunco-materials`**
 Shader appearance **intent** — **render-free**. Holds `ShaderLook` (a `.wgsl` path + an open `dyn_params` map + named texture layers), the WGSL-reflected `ParamSchema` (parameter names/ranges/defaults are parsed from each shader's own `struct Material` — **none are hardcoded in Rust**, so adding a parameter is editing a shader), and the CDLOD geomorph vertex attribute. It names **no** material type and no render pipeline, so a domain crate may depend on it without linking `bevy_render`. The concrete `ShaderMaterial` it describes lives in `lunco-render-bevy`. See [architecture/shader-layers-and-params.md](architecture/shader-layers-and-params.md).

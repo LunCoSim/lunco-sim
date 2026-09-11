@@ -33,7 +33,7 @@
 //! every prim bound to it. A driven value is the opposite — it is per-instance, and
 //! four landing legs each report their own load. Authoring the connection on the
 //! bound geometry is therefore where the meaning lives, and it makes the material
-//! private (see `unshared` in `lunco-usd-sim`'s `shader.rs`) rather than leaking one
+//! private (see `unshared` in `lunco-usd-sim-shader`) rather than leaking one
 //! leg's glow onto its three siblings.
 //!
 //! **This is a LunCo-private convention, not standard USD — say so out loud.**
@@ -50,7 +50,7 @@
 //! The standard answer to "same material, varying per gprim" is
 //! `primvars:` + a `UsdPrimvarReader` node in the material's network. It would
 //! delete `unshared` and the private-material-per-prim cost outright, and it is the
-//! convention `shader.rs` already uses for `primvars:doNotCastShadows`. We do not
+//! convention `lunco-usd-sim-shader` already uses for `primvars:doNotCastShadows`. We do not
 //! use it yet for one concrete reason: the binder resolves a SINGLE shader, not a
 //! network (`read_shader_inputs` skips connected inputs and stops at the first hop),
 //! so a `UsdPrimvarReader` has nothing to evaluate it, and per-instance primvars
@@ -70,7 +70,7 @@
 //!
 //! Nothing here needs the GPU. [`ShaderLook::driven`] is the authoring pass's own
 //! answer to "which of this prim's wires name parameters its shader declares"
-//! (`shader.rs`, `driven_shader_inputs`) — computed from the WGSL source at author
+//! (`lunco-usd-sim-shader::driven_shader_inputs`) — computed from the WGSL source at author
 //! time, present in every build. The write lands in [`ShaderLook::live`], a plain
 //! component. So the backend belongs where that component is filled, which is this
 //! crate, and it is registered unconditionally.

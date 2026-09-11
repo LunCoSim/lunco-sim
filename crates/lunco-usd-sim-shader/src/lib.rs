@@ -13,7 +13,7 @@
 //! swaps in the look. That works for prims nobody else touches
 //! (balloons, panels), but it **races** any consumer that runs synchronously in
 //! the same frame and mutates the prim's appearance — notably the wheel
-//! physics/visual split in [`process_usd_sim_prims`](crate::process_usd_sim_prims),
+//! physics/visual split in the USD simulation projector,
 //! which moves the look onto a child entity. An observer's `insert` is a
 //! *deferred* command flushed at an unspecified later sync point, so some wheels
 //! got split while still carrying the plain `PbrLook` → plain wheels.

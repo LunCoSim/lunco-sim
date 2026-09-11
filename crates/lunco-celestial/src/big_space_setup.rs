@@ -107,7 +107,7 @@ const CELESTIAL_PICKING_LAYERS: CollisionLayers =
 /// Adopt a look AUTHORED on the body's prim onto its globe tiles.
 ///
 /// A celestial body is spawned in Rust (its radius, GM and rotation are physics,
-/// not art), but how it LOOKS is content. `lunco_usd_sim::shader` already turns a
+/// not art), but how it LOOKS is content. `lunco-usd-sim-shader` already turns a
 /// `UsdShade` Material binding on any prim into a [`ShaderLook`] — the same path
 /// the terrain layer maps and every prop use. This carries that look from the
 /// declaring prim to the globe it declared, so a scene that wants Earth imagery

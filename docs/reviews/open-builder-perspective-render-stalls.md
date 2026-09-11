@@ -89,7 +89,7 @@ sampling interval.
 ## Telemetry and UI exclusion
 
 Physics telemetry was measured directly. The
-[`retain_physics_telemetry`](../../crates/lunco-usd-sim/src/physics_telemetry.rs)
+[`retain_physics_telemetry`](../../crates/lunco-usd-sim-telemetry/src/lib.rs)
 system consumed 8.222 ms total across 893 calls, with a 9.206 µs mean and a
 38.462 µs maximum. Its command wrapper had a 1.917 ms total and an 8.967 µs
 maximum. That is orders of magnitude below the 29–260 ms render stalls and

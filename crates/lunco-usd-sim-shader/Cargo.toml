@@ -1,0 +1,23 @@
+[package]
+name = "lunco-usd-sim-shader"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Render-free USD shader-intent projection for LunCoSim"
+
+[dependencies]
+bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh"] }
+openusd = { workspace = true }
+lunco-assets = { workspace = true }
+lunco-core = { path = "../lunco-core" }
+lunco-materials = { path = "../lunco-materials" }
+lunco-render = { path = "../lunco-render" }
+lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
+lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
+
+[dev-dependencies]
+lunco-usd-core = { path = "../lunco-usd-core" }
+
+[lints]
+workspace = true

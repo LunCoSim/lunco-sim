@@ -55,8 +55,7 @@ use lunco_usd_avian::{
 use lunco_usd_bevy_camera::camera::{read_camera_exposure_ev100, UsdCameraPose};
 use lunco_usd_bevy_core::read::{read_authored_bool_strict, read_vec3_f64};
 use lunco_usd_bevy_core::{
-    canonical::CanonicalStages, resolve_stage_prim_path, UsdInstanceProjection, UsdInstanceRoot,
-    UsdStageAsset,
+    canonical::CanonicalStages, UsdInstanceProjection, UsdInstanceRoot, UsdStageAsset,
 };
 use lunco_usd_bevy_scene::{
     instance_key, is_preview_only, UsdPreviewOnly, UsdPrimPath, UsdSceneGeometryPending,
@@ -516,11 +515,14 @@ impl Plugin for UsdSimPlugin {
         app.init_resource::<lunco_core::RuntimeDiagnostics>();
         app.init_resource::<InputBindingsSettings>();
         crate::shader_ports::build(app);
+        app.add_plugins(lunco_usd_sim_celestial::CelestialProjectionPlugin);
         app.configure_sets(
             Update,
             (
                 UsdSimSet::Projection.before(lunco_avatar::AvatarSceneHandoffSet),
                 UsdSimSet::ActivateDynamicBodies,
+                lunco_usd_sim_celestial::CelestialProjectionSet::Projection
+                    .before(UsdSimSet::Projection),
             ),
         )
         .configure_sets(PreUpdate, UsdSimSet::ActivateDynamicBodies);
@@ -539,7 +541,8 @@ impl Plugin for UsdSimPlugin {
             )
             .add_systems(
                 FixedPostUpdate,
-                physics_telemetry::retain_physics_telemetry.after(PhysicsSystems::StepSimulation),
+                lunco_usd_sim_telemetry::retain_physics_telemetry
+                    .after(PhysicsSystems::StepSimulation),
             )
             .add_observer(on_add_usd_sim_prim)
             .add_systems(PreUpdate, resolve_differential_coupling)
@@ -549,10 +552,10 @@ impl Plugin for UsdSimPlugin {
             // child. The completed projection boundary also prevents the visual
             // projector from restoring a cylinder-axis rotation after the
             // simulator has established the wheel's identity physics frame.
-            // See `shader.rs`.
+            // See `lunco-usd-sim-shader`.
             .add_systems(
                 Update,
-                shader::apply_usd_shader_materials
+                lunco_usd_sim_shader::apply_usd_shader_materials
                     .after(lunco_usd_bevy::process_queued_usd_visuals)
                     .before(process_usd_sim_prims),
             )
@@ -563,22 +566,12 @@ impl Plugin for UsdSimPlugin {
             // USD prim (archetype-level check, near-zero cost).
             .init_resource::<GroundColliderPending>()
             .init_resource::<JointTopologyIndex>()
-            .init_resource::<physics_telemetry::PhysicsTelemetryState>()
+            .init_resource::<lunco_usd_sim_telemetry::PhysicsTelemetryState>()
             .add_systems(
                 Update,
-                (
-                    process_usd_sim_prims
-                        .run_if(any_unprocessed_usd_sim)
-                        .after(lunco_usd_bevy::process_queued_usd_visuals),
-                    // Independent link/celestial projector — runs for EVERY prim (cosim,
-                    // wheel, plain), gated by its own marker, blocked by nothing.
-                    project_celestial_comms_prims
-                        .run_if(any_unprojected_celestial)
-                        .after(lunco_usd_bevy::sync_usd_visuals),
-                    remove_nested_link_nodes
-                        .run_if(any_nested_link_nodes)
-                        .after(project_celestial_comms_prims),
-                )
+                (process_usd_sim_prims
+                    .run_if(any_unprocessed_usd_sim)
+                    .after(lunco_usd_bevy::process_queued_usd_visuals),)
                     .in_set(UsdSimSet::Projection),
             );
         // Dynamic admission must happen before the fixed loop. The body remains
@@ -616,7 +609,6 @@ impl Plugin for UsdSimPlugin {
 /// USD-authored screen-facing text labels (`lunco:billboard*`) — a prim
 /// declares its own label content, including live geolocation.
 pub mod billboard;
-pub mod celestial;
 pub mod cosim;
 pub mod cosim_diagnostics;
 pub mod domain_projection;
@@ -624,16 +616,11 @@ pub mod lint;
 /// USD-authored screen-constant markers (`lunco:marker:*`) — geometry that
 /// subtends a fixed angle so a physically sub-pixel thing still reads on screen.
 pub mod marker;
-pub mod physics_telemetry;
 pub mod readiness;
 pub use cosim::{CosimStatusProvider, UsdSourcedCosim};
 
-/// USD → [`ShaderMaterial`](lunco_materials::ShaderMaterial) authoring,
-/// deterministically ordered so it can never race a downstream consumer.
-pub mod shader;
-
 /// Shader parameters as connection targets — the port backend for what
-/// [`shader`] authors.
+/// `lunco-usd-sim-shader` authors.
 pub mod shader_ports;
 
 /// A joint-based wheel: a full rigid body that interacts with terrain through
@@ -1594,9 +1581,9 @@ fn process_usd_sim_prim_read(
         }
     }
 
-    // (Link/celestial vocabulary is projected by the independent
-    // `project_celestial_comms_prims` system, NOT here — see its doc. Bundling it
-    // in this system made a cosim prim, which skips this system, lose its LinkNode.)
+    // Link/celestial vocabulary is projected by the independent
+    // `lunco-usd-sim-celestial` plugin, not here. Bundling it in this system
+    // made a cosim prim, which skips this system, lose its LinkNode.
 
     // 0. Avatar role and photographic exposure were validated before any
     // per-prim simulation components were projected.
@@ -3308,16 +3295,6 @@ pub fn invalidate_usd_sim_projection(world: &mut World, entity: Entity) -> bool 
     true
 }
 
-/// Marker: this prim's link/celestial vocabulary has been projected to components.
-#[derive(Component)]
-struct CelestialProjected;
-
-fn any_unprojected_celestial(
-    q: Query<(), (With<UsdPrimPath>, Without<CelestialProjected>)>,
-) -> bool {
-    !q.is_empty()
-}
-
 fn install_authored_sun_state_seed(app: &mut App) {
     app.add_systems(
         PostUpdate,
@@ -3372,103 +3349,6 @@ fn seed_authored_sun_state(
         return;
     }
     sun_state.publish(direction_to_sun.normalize(), Some(light.illuminance));
-}
-
-/// Project a prim's USD-authored link/celestial vocabulary (geodetic anchors, Kepler
-/// orbits, link nodes, occluders) to `lunco-celestial` components — as its OWN system,
-/// independent of `process_usd_sim_prims` (wheels/joints/avatar) and
-/// `process_usd_cosim_prims` (behaviour models).
-///
-/// These concerns are ORTHOGONAL: an antenna can be a link node AND run `CommsLink.mo`;
-/// a lander can anchor to a site AND run guidance. It used to live inside
-/// `process_usd_sim_prims`, so a cosim prim — which stamps `UsdSimProcessed` to skip that
-/// system — silently lost its `LinkNode` and never joined the link graph. One projector,
-/// one marker: every prim gets link/celestial projection exactly once and no projector
-/// blocks another, the way USD API schemas compose.
-fn project_celestial_comms_prims(
-    mut commands: Commands,
-    query: Query<(Entity, &UsdPrimPath), Without<CelestialProjected>>,
-    stages: Res<Assets<UsdStageAsset>>,
-    canonical: NonSend<CanonicalStages>,
-) {
-    for (entity, prim_path) in query.iter() {
-        // A scene mounted without an explicit root uses the empty path as the
-        // documented defaultPrim-resolution sentinel.  The USD visual
-        // projector replaces it with the concrete composed path once the stage
-        // is loaded.  Do not consume the celestial projection marker while the
-        // path is unresolved: the root carries the scene's SiteAnchor, so
-        // marking it here would permanently lose the only frame from which
-        // scene-local link nodes can derive their solar poses.
-        if prim_path.path.is_empty() {
-            continue;
-        }
-        let id = prim_path.stage_handle.id();
-        let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
-            continue;
-        };
-        let (reader, _generation) = canonical.reader_for(id, stage_asset);
-        let Some(resolved_path) = resolve_stage_prim_path(&reader, &prim_path.path) else {
-            warn!(
-                stage = ?id,
-                "USD stage root has no defaultPrim; celestial projection skipped"
-            );
-            continue;
-        };
-        let Ok(sdf_path) = SdfPath::new(&resolved_path) else {
-            continue;
-        };
-        celestial::insert_celestial_comms_components(
-            &reader,
-            entity,
-            &resolved_path,
-            &sdf_path,
-            &mut commands,
-        );
-        commands.entity(entity).try_insert(CelestialProjected);
-    }
-}
-
-/// Keep one physical connectivity endpoint per authored assembly. A nested
-/// `linkNode` is an authoring error (the usual case is a wrapper and its feed
-/// aperture both being marked); remove the outer projection before the link
-/// kernel sees it. The USD lint reports the source error, while this runtime
-/// normalization keeps a malformed custom Twin from creating a self-link.
-fn remove_nested_link_nodes(
-    mut commands: Commands,
-    nodes: Query<(Entity, &lunco_celestial::link::LinkNode)>,
-    parents: Query<&ChildOf>,
-) {
-    for (entity, _) in &nodes {
-        let mut cursor = entity;
-        while let Ok(child_of) = parents.get(cursor) {
-            cursor = child_of.parent();
-            if nodes.get(cursor).is_ok() {
-                commands
-                    .entity(cursor)
-                    .try_remove::<lunco_celestial::link::LinkNode>();
-                commands
-                    .entity(cursor)
-                    .try_remove::<lunco_celestial::link::LinkState>();
-                break;
-            }
-        }
-    }
-}
-
-fn any_nested_link_nodes(
-    nodes: Query<Entity, With<lunco_celestial::link::LinkNode>>,
-    parents: Query<&ChildOf>,
-) -> bool {
-    for entity in &nodes {
-        let mut cursor = entity;
-        while let Ok(child_of) = parents.get(cursor) {
-            cursor = child_of.parent();
-            if nodes.get(cursor).is_ok() {
-                return true;
-            }
-        }
-    }
-    false
 }
 
 /// Observer that fires when a USD prim entity is added.

@@ -36,6 +36,40 @@ use lunco_celestial::kepler::{KeplerOrbit, KeplerianElements};
 use lunco_celestial::transform::LibrationAnchor;
 use openusd::sdf::{Path as SdfPath, Value};
 
+/// Update ordering for authored celestial/link projection.
+///
+/// The USD simulation host places this set before its general simulation
+/// projection boundary. Keeping the boundary here makes this crate usable by
+/// another headless host without depending on the vehicle/cosimulation crate.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CelestialProjectionSet {
+    Projection,
+}
+
+/// Projects authored celestial and link facts independently of vehicle and
+/// cosimulation projection.
+pub struct CelestialProjectionPlugin;
+
+impl Plugin for CelestialProjectionPlugin {
+    fn build(&self, app: &mut App) {
+        app.configure_sets(Update, CelestialProjectionSet::Projection)
+            .add_systems(
+                Update,
+                project_celestial_comms_prims
+                    .run_if(any_unprojected_celestial)
+                    .after(lunco_usd_bevy::sync_usd_visuals)
+                    .in_set(CelestialProjectionSet::Projection),
+            )
+            .add_systems(
+                Update,
+                remove_nested_link_nodes
+                    .run_if(any_nested_link_nodes)
+                    .after(project_celestial_comms_prims)
+                    .in_set(CelestialProjectionSet::Projection),
+            );
+    }
+}
+
 type ComposedReader<'a> = dyn lunco_usd_bevy_core::read::UsdReadObject + 'a;
 
 /// NAIF id of the default anchor body (the Moon).
@@ -935,6 +969,105 @@ fn read_occluder_box(
         half_extents,
         center: (max + min) * 0.5,
     })
+}
+
+/// Marker: this prim's link/celestial vocabulary has been projected to
+/// components. It is public so scene refresh code can invalidate the
+/// projection alongside the other USD-derived markers.
+#[derive(Component)]
+pub struct CelestialProjected;
+
+fn any_unprojected_celestial(
+    q: Query<
+        (),
+        (
+            With<lunco_usd_bevy_scene::UsdPrimPath>,
+            Without<CelestialProjected>,
+        ),
+    >,
+) -> bool {
+    !q.is_empty()
+}
+
+fn project_celestial_comms_prims(
+    mut commands: Commands,
+    query: Query<(Entity, &lunco_usd_bevy_scene::UsdPrimPath), Without<CelestialProjected>>,
+    stages: Res<Assets<lunco_usd_bevy_core::UsdStageAsset>>,
+    canonical: NonSend<lunco_usd_bevy_core::canonical::CanonicalStages>,
+) {
+    for (entity, prim_path) in query.iter() {
+        // A scene mounted without an explicit root uses the empty path as the
+        // documented defaultPrim-resolution sentinel. The USD visual
+        // projector replaces it with the concrete composed path once the stage
+        // is loaded. Do not consume the marker while that path is unresolved:
+        // the root carries the scene's SiteAnchor.
+        if prim_path.path.is_empty() {
+            continue;
+        }
+        let id = prim_path.stage_handle.id();
+        let Some(stage_asset) = stages.get(&prim_path.stage_handle) else {
+            continue;
+        };
+        let (reader, _generation) = canonical.reader_for(id, stage_asset);
+        let Some(resolved_path) =
+            lunco_usd_bevy_core::resolve_stage_prim_path(&reader, &prim_path.path)
+        else {
+            warn!(
+                stage = ?id,
+                "USD stage root has no defaultPrim; celestial projection skipped"
+            );
+            continue;
+        };
+        let Ok(sdf_path) = SdfPath::new(&resolved_path) else {
+            continue;
+        };
+        insert_celestial_comms_components(
+            &reader,
+            entity,
+            &resolved_path,
+            &sdf_path,
+            &mut commands,
+        );
+        commands.entity(entity).try_insert(CelestialProjected);
+    }
+}
+
+fn remove_nested_link_nodes(
+    mut commands: Commands,
+    nodes: Query<(Entity, &lunco_celestial::link::LinkNode)>,
+    parents: Query<&ChildOf>,
+) {
+    for (entity, _) in &nodes {
+        let mut cursor = entity;
+        while let Ok(child_of) = parents.get(cursor) {
+            cursor = child_of.parent();
+            if nodes.get(cursor).is_ok() {
+                commands
+                    .entity(cursor)
+                    .try_remove::<lunco_celestial::link::LinkNode>();
+                commands
+                    .entity(cursor)
+                    .try_remove::<lunco_celestial::link::LinkState>();
+                break;
+            }
+        }
+    }
+}
+
+fn any_nested_link_nodes(
+    nodes: Query<Entity, With<lunco_celestial::link::LinkNode>>,
+    parents: Query<&ChildOf>,
+) -> bool {
+    for entity in &nodes {
+        let mut cursor = entity;
+        while let Ok(child_of) = parents.get(cursor) {
+            cursor = child_of.parent();
+            if nodes.get(cursor).is_ok() {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 #[cfg(test)]

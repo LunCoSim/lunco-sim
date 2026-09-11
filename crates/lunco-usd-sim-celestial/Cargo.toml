@@ -1,0 +1,22 @@
+[package]
+name = "lunco-usd-sim-celestial"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Render-free USD celestial and link-component projection for LunCoSim"
+
+[dependencies]
+bevy = { workspace = true, features = ["bevy_asset"] }
+openusd = { workspace = true }
+lunco-celestial = { path = "../lunco-celestial", default-features = false }
+lunco-environment = { path = "../lunco-environment" }
+lunco-time = { path = "../lunco-time" }
+lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
+lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
+
+[dev-dependencies]
+lunco-usd-core = { path = "../lunco-usd-core" }
+
+[lints]
+workspace = true

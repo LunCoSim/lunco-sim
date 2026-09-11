@@ -8157,6 +8157,7 @@ dependencies = [
  "lunco-usd-compose",
  "lunco-usd-core",
  "lunco-usd-sim",
+ "lunco-usd-sim-shader",
  "lunco-workspace",
  "openusd",
  "serde",
@@ -8316,7 +8317,6 @@ dependencies = [
  "lunco-render",
  "lunco-scripting",
  "lunco-signal",
- "lunco-telemetry",
  "lunco-time",
  "lunco-usd-avian",
  "lunco-usd-bevy",
@@ -8325,9 +8325,58 @@ dependencies = [
  "lunco-usd-bevy-scene",
  "lunco-usd-compose",
  "lunco-usd-core",
+ "lunco-usd-sim-celestial",
+ "lunco-usd-sim-shader",
+ "lunco-usd-sim-telemetry",
  "openusd",
  "serde_json",
  "web-time",
+]
+
+[[package]]
+name = "lunco-usd-sim-celestial"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "lunco-celestial",
+ "lunco-environment",
+ "lunco-time",
+ "lunco-usd-bevy",
+ "lunco-usd-bevy-core",
+ "lunco-usd-bevy-scene",
+ "lunco-usd-core",
+ "openusd",
+]
+
+[[package]]
+name = "lunco-usd-sim-shader"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "lunco-assets",
+ "lunco-core",
+ "lunco-materials",
+ "lunco-render",
+ "lunco-usd-bevy",
+ "lunco-usd-bevy-core",
+ "lunco-usd-bevy-scene",
+ "lunco-usd-core",
+ "openusd",
+]
+
+[[package]]
+name = "lunco-usd-sim-telemetry"
+version = "0.1.0"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "lunco-core",
+ "lunco-cosim",
+ "lunco-mobility",
+ "lunco-signal",
+ "lunco-telemetry",
+ "lunco-time",
+ "lunco-usd-bevy-scene",
 ]
 
 [[package]]
