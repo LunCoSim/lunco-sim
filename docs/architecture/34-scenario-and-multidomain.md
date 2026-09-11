@@ -38,6 +38,16 @@ hands to the rover → progressively harder player tasks that exercise **energy*
 > builds this entire mission from scratch in USD + rhai + Modelica, exercising
 > every mechanism in this table.
 
+For new assemblies, the generic Rhai `model_authoring` facades provide the
+authoring checkpoint above this domain composition: call `model_context` for
+the exact composed tree, `readiness_report` for an explicit topology/
+physicality/mount/connection/control/runtime policy, and `scene_recipe` for
+dry placement, terrain, camera, initial-state, route, and program records.
+Call `port_graph` before wiring and submit only the typed operations returned by
+`wiring_plan`. This keeps Modelica ownership of continuous equations, USD
+ownership of structure and connections, and Twin-specific policy in Rhai.
+The full call shape is in [`../scripting-guide.md#model-and-assembly-authoring-human-and-ai`](../scripting-guide.md#model-and-assembly-authoring-human-and-ai).
+
 **Conclusion:** "several models / several scripts in the world" needs **no core
 change** — it is the SSP one-program-prim-per-domain pattern below. The current
 runtime has one `ScriptedModel` slot per ECS owner. If two executable Rhai

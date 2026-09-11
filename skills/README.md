@@ -142,6 +142,7 @@ only when its contract is needed:
 | Assemble existing assets into a scene | `build-usd-scene` | `build-vehicle` for mobility assemblies; `author-scenario` for behavior |
 | Build a vehicle | `build-vehicle` | `authoring-vessel-controllers` for GNC; `compose-multidomain-twin` for the complete Twin |
 | Create or modify a reusable assembly interactively | `edit-usd-assembly` | `usd-projection` for projection internals; `author-usd-physics` for detailed physics; `lunco-ui` for panel implementation |
+| Build an AI-readable assembly or scene recipe | `author-rhai-tool` | `edit-usd-assembly` for live Editor review; `validate-assets` for pre-flight |
 | Add or diagnose a controller | `authoring-vessel-controllers` | `run-modelica` for standalone Modelica execution |
 | Add or diagnose USD-to-ECS machinery | `usd-projection` | `luncosim-architecture` for cross-domain ownership |
 | Add or locate an asset | `use-asset-library` | `validate-assets` for file checks |

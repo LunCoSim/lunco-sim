@@ -96,6 +96,17 @@ returns dry typed ops. Keep the bundle recipe in the owning Twin/model package,
 preserve existing topology and material ownership, and commit one reviewed
 proposal. Do not infer the recipe from child names or add a Rust registry.
 
+When the component is ready to become a reusable asset, call
+`model_authoring::publish_component(doc, root, edit_target, output,
+provenance)`. It checks the top-level component root, standard `kind` and
+`defaultPrim`, applied schemas, reference identities, and caller-supplied
+provenance, then returns ordinary metadata ops and an explicit `save_as`
+command. Review and apply the ops through `assembly_edit`; call
+`assembly_edit::save_as_document` explicitly after projection/lint. The helper
+does not invent a provenance schema, write USDA directly, or autosave.
+See [`scripting-guide.md`](../../docs/scripting-guide.md#model-and-assembly-authoring-human-and-ai)
+for the complete facade sequence.
+
 ## Skeleton
 
 **One file = one spawnable thing.** The catalog keys off the file, and

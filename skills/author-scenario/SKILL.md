@@ -30,6 +30,17 @@ into Rhai.
 > through the same command/query API the HTTP API, MCP, and UI use — so it
 > inherits every command for free and stays decoupled from physics.
 
+Scene construction is an authoring/preflight concern, not production scenario
+logic. Use the generic Rhai `model_authoring::scene_recipe` before launching a
+scenario to place authored assemblies/terrain, define cameras and initial
+state, and record route/program hand-offs. Use `model_context`,
+`readiness_report`, and `port_graph`/`wiring_plan` to validate the exact
+document, paths, and generation first. Apply returned USD ops through
+`assembly_edit`; pass route entries to `waypoint_editor` and program entries to
+`assembly_edit::attach_program`. Keep mission sequencing here, continuous math
+in Modelica, and do not turn the recipe into an `on_tick` loop. See the
+[model-authoring guide](../../docs/scripting-guide.md#model-and-assembly-authoring-human-and-ai).
+
 **Scope boundary — do not blur these:**
 - **Control MATH** (PID, mixing, force/torque) → Modelica, NOT rhai. If you're
   writing a per-tick control loop here, stop — see

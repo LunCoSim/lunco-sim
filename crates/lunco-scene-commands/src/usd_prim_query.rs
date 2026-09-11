@@ -31,6 +31,12 @@
 //! `lunco_usd_bevy::collision_aabb` reader, so nested compound
 //! ownership, standard shape dimensions, purpose filtering, transforms, and
 //! malformed-data errors have one owner for API, Rhai, and other consumers.
+//! A request with `relationships: true` adds every composed relationship and
+//! `connections: true` adds every composed attribute connection. Both are
+//! opt-in because they enumerate the prim's full property surface; the default
+//! response remains compatible with focused callers that request only selected
+//! relationships. `schemas: true` adds the composed applied API schemas.
+//!
 //! A request with `topology: true` adds one scoped, read-only record containing
 //! visual/collision parts, body ownership, per-part geometry bounds, local and
 //! world transforms, source-layer stack heads, material/shader bindings,
@@ -46,6 +52,7 @@
 //! {"type":"ExecuteCommand","command": "QueryUsdPrim", "params": {"path": "…", "rels": ["lunco:mount:attachmentJoint"]}}
 //! {"type":"ExecuteCommand","command": "QueryUsdPrim", "params": {"doc_id": 7, "path": "…", "collision_bounds": true}}
 //! {"type":"ExecuteCommand","command": "QueryUsdPrim", "params": {"path": "…", "topology": true}}
+//! {"type":"ExecuteCommand","command": "QueryUsdPrim", "params": {"path": "…", "relationships": true, "connections": true, "schemas": true}}
 //! ```
 //!
 //! Omitting `attrs` returns every authored attribute on the prim. Naming them is
@@ -458,6 +465,18 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
                     .filter_map(|value| value.as_str().map(str::to_string))
                     .collect()
             });
+        let include_relationships = params
+            .get("relationships")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let include_connections = params
+            .get("connections")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let include_schemas = params
+            .get("schemas")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
         let include_children = params
             .get("children")
             .and_then(serde_json::Value::as_bool)
@@ -554,6 +573,8 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
             String,
             serde_json::Map<String, serde_json::Value>,
             serde_json::Map<String, serde_json::Value>,
+            serde_json::Map<String, serde_json::Value>,
+            Vec<String>,
             Vec<String>,
             Option<serde_json::Value>,
             Option<serde_json::Value>,
@@ -627,8 +648,13 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
                     map.insert(n.clone(), attr_json(&view, &prim, &n));
                 }
                 let mut relationships = serde_json::Map::new();
-                if let Some(names) = requested_relationships.clone() {
-                    for name in names {
+                let relationship_names = if include_relationships {
+                    view.relationship_names(&prim)
+                } else {
+                    requested_relationships.clone().unwrap_or_default()
+                };
+                if requested_relationships.is_some() || include_relationships {
+                    for name in relationship_names {
                         let targets = view
                             .rel_targets(&prim, &name)
                             .into_iter()
@@ -637,6 +663,20 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
                         relationships.insert(name, serde_json::json!(targets));
                     }
                 }
+                let mut connections = serde_json::Map::new();
+                if include_connections {
+                    for name in view.attr_names(&prim) {
+                        let sources = view.connections(&prim, &name);
+                        if !sources.is_empty() {
+                            connections.insert(name, serde_json::json!(sources));
+                        }
+                    }
+                }
+                let schemas = if include_schemas {
+                    view.api_schemas(&prim)
+                } else {
+                    Vec::new()
+                };
                 let children = if include_children {
                     view.children(&prim)
                         .into_iter()
@@ -649,6 +689,8 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
                     type_name,
                     map,
                     relationships,
+                    connections,
+                    schemas,
                     children,
                     collision_bounds.clone(),
                     include_topology.then(|| topology_for_stage(&view, &prim)),
@@ -656,7 +698,16 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
             })
         };
 
-        let Some((type_name, attrs, relationships, children, collision_bounds, topology)) = read
+        let Some((
+            type_name,
+            attrs,
+            relationships,
+            connections,
+            schemas,
+            children,
+            collision_bounds,
+            topology,
+        )) = read
         else {
             return ApiResponse::error(
                 ApiErrorCode::EntityNotFound,
@@ -682,8 +733,14 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
                 out["position_frame"] = serde_json::json!("canonical_stage");
             }
         }
-        if requested_relationships.is_some() {
+        if requested_relationships.is_some() || include_relationships {
             out["relationships"] = serde_json::Value::Object(relationships);
+        }
+        if include_connections {
+            out["connections"] = serde_json::Value::Object(connections);
+        }
+        if include_schemas {
+            out["api_schemas"] = serde_json::json!(schemas);
         }
         if include_children {
             out["children"] = serde_json::json!(children);

@@ -369,6 +369,18 @@ inputs; inspect exact composed prims and proposal diagnostics before
 committing an authored edit. A Twin recipe may compose these generic plans,
 but it must not add vehicle-specific builders or writers to the core.
 
+For AI-assisted assembly creation, use the generic Rhai `model_authoring`
+facades as the workflow layer above these builders. Start with
+`model_context(doc, root, edit_target)`, then run `readiness_report` with the
+Twin's explicit policy. Use `scene_recipe` for dry placement, terrain,
+camera, and initial-state ops plus explicit route/program hand-offs. Use
+`port_graph` and `wiring_plan` for standard USD endpoint discovery and typed
+connections. Use `publish_component` only after the component contract passes;
+review/apply its metadata ops and execute its explicit Save-As command. Every
+result is path- and generation-addressed, and missing data fails visibly.
+Keep the recipe and policy in the Twin's Rhai/tools package; do not add
+vehicle-specific logic or a second USD writer to the core.
+
 For composed assembly diagnostics, use the companion
 [`assembly_audit.rhai`](../../assets/scripting/tools/assembly_audit.rhai).
 Pass the exact document id as the first argument to every stage-reading helper,
