@@ -137,7 +137,7 @@ and posting the tagged request directly.
 }
 ```
 
-The rover drives the waypoints. Re-issue `RunScenario` on the same entity to
+The subject follows the route points. Re-issue `RunScenario` on the same entity to
 **hot-reload** after you edit the file by sending the updated contents again —
 no rebuild, no restart (the outgoing program's `on_stop` runs first). For a
 scene-authored file-backed program, use
@@ -151,7 +151,7 @@ Rust test that supplies a fake rover or spy command. After the first Rust build,
 rerun authored scene tests with the existing binary:
 
 ```bash
-./scripts/run_scene_tests.sh --no-build -j 4 autopilot
+./scripts/run_scene_tests.sh --no-build -j 1 scripting_task_contract
 ```
 
 The scene runner defaults to four independent headless production processes.
@@ -298,9 +298,9 @@ The host exposes a minimal, generic bridge. Everything else is prelude policy.
 | `name(id)` | string \| `()` | human-readable presentation label; use `QueryEntity` for the canonical USD path |
 | `usd_path(id)` | string \| `()` | prelude helper resolving `QueryEntity.usd_prim_path` for topology addressing |
 | `parent(id)` / `children(id)` | id \| `()` / `[id,…]` | hierarchy traversal |
-| `owner_of(id)` | session id \| `()` | who controls the vessel (`0` = local human, autopilot band = an AI); `()` if unowned |
-| `controller(id)` | string \| `()` | driver's role — `"AiAgent"` (autopilot) vs `"Owner"`/`"Operator"` (human) — the human-vs-AI test |
-| `is_controlled(id)` | bool | is any session (human or autopilot) driving it |
+| `owner_of(id)` | session id \| `()` | which control session owns the entity; `()` if unowned |
+| `controller(id)` | string \| `()` | controlling session role, or `()` if unowned |
+| `is_controlled(id)` | bool | whether any session currently owns it |
 | `list_entities()` | `[#{id,name,type,catalog_id,input_surface,control_bound,celestial_body,pos}]` | every registered entity; `name` is the human-readable presentation label, `type` is the projected USD kind, not a control-component heuristic; `input_surface` is the authoritative `InputPorts` readiness bit |
 | `add(id, "Comp", #{fields})` | bool | **structural** — insert/replace a reflected component (built from default + fields); needs `#[reflect(Default)]` |
 | `remove(id, "Comp")` | bool | **structural** — strip a reflected component |
@@ -375,9 +375,9 @@ verbs — read the topic files for the full, authoritative list. Highlights:
   the id in editor sessions.
 - **Selection toolkit:** `all_of_type`, `min_by`/`max_by`, `count_where`, `nearest_where`/`farthest_where`, `has_component`, `kind`.
 - **View / cutscenes:** `set_camera(name)` — cut the scene viewport to a `def Camera` by name (leaf or full USD path); pairs with a timeline for cutscene camera changes. `possess(vessel)`, `notify(msg)`, `photo()` (capture from the active camera).
-- **Patrol / waypoints** ([`patrol.rhai`](../assets/scripting/prelude/patrol.rhai)): `engage_patrol(vessel, points, speed?, radius?, dwell?)`, `patrol(vessel, points, …)` (hot-swap an engaged vessel's route), `clear_patrol(vessel)`. Each waypoint may be a bare `[x,y,z]` or a `#{pos, dwell?, on_arrival?}` map carrying arrival actions — the declarative way to "fire a tool at a waypoint" (no tree composition). `clear_patrol` fires the `ClearPatrol` typed command (the canonical stop-&-clear verb).
-- **Waypoint presentation** ([`waypoints.rhai`](../assets/scripting/prelude/waypoints.rhai)): `waypoint_event_path(evt)` and `waypoint_event_index(evt)` read the composed path and ordered route index from the structured `waypoint.reached` payload, while `apply_waypoint_reached(evt)` reads the authored inactive color and applies the runtime USD look. Mission scripts only map the arrival to their own progression events.
-- **Science instruments** ([`science.rhai`](../assets/scripting/prelude/science.rhai)): `photo_from(vessel)` (capture from a vessel's mounted camera — fires `CaptureFromCamera`), `take_photo()` / `take_photo(args)` (a `run_tool` action value for a waypoint's `on_arrival` list, naming the registered `science::take_photo` tool). The Rust core owns firing & cleaning via the `lunco-tools` registry + `lunco-tools-bevy` dispatch; these helpers just NAME the tool from data.
+- **Route programs** ([`route_follow.rhai`](../assets/scenarios/route_follow.rhai)): the scene owns an ordered USD route and a sibling `LunCoProgramAPI` program. The program resolves its `inputs:subject` relationship, reads route-point poses, and advances only on generic sensor enter events. Route points are not stored on or discovered through a vessel-owned list.
+- **Route presentation**: the reusable [`route_point.usda`](../assets/markers/route_point.usda) asset owns the standard visual/material and trigger geometry. A scenario consumes `route_point_reached` for mission policy; it does not recreate distance checks or mutate the marker look.
+- **Science instruments** ([`science.rhai`](../assets/scripting/prelude/science.rhai)): `photo_from(vessel)` captures from a vessel's mounted camera through the typed `CaptureFromCamera` command. Tool actions are generic task/program data; the engine dispatches only registered executable tools.
 - **Tutorial HUD** ([`hud.rhai`](../assets/scripting/prelude/hud.rhai)): `hint(msg)`/`clear_hint()` (sticky instruction), `spotlight(anchor, caption)`/`clear_spotlight()` (dim + ring a workbench widget by `HelpAnchors` key), `focus_panel(id)` (open a singleton workbench panel on interactive hosts; unattended gates omit this presentation command), `objectives_hud(list)` (or just declare a `mission(me)` — it auto-publishes), `coach_step(steps, i)` (a guided coach-mark tour step; advance the cursor in `on_event`). This is how tutorials are authored — a tutorial is just a scenario. See [`tutorials/README.md`](../assets/tutorials/README.md).
 
 `coach` only presents a step. Tutorial progression is authored in the lesson's
@@ -904,15 +904,15 @@ same id) — so behavior that used to be hardcoded is data, no rebuild.
 The seam supplies context Rust alone can see (argv, roles, first-run flag); the
 *decision* is entirely the policy's. Consulted via `lunco_hooks::invoke(id, &[ctx])`.
 
-## G. Vessel controllers & control authority
+## G. Authored controllers & control authority
 
-A vessel that drives itself (a GNC / autopilot) is built in **three layers**: the
+A vessel that drives itself through an authored program is built in **three layers**: the
 control **LAW in Modelica** (`.mo`), high-level **logic/events in rhai** (no per-tick
 loops), and **structure/authority in USD**. Full recipe + gotchas:
 [`skills/authoring-vessel-controllers`](../skills/authoring-vessel-controllers/SKILL.md).
 
 **Control authority is the wired `piloted` signal.** The GNC is *internal* to the
-vessel model; a user and an autopilot are both *external sessions* that **possess**
+vessel model; a user and an authored program are both *external sessions* that **possess**
 the vessel (arbitrated by possession + RBAC). The internal controller yields to
 whoever possesses by reading the read-only **`piloted`** cosim port (`1.0` when any
 session owns the vessel — `SessionRegistry::owner_of(...).is_some()`), wired into the
@@ -935,32 +935,33 @@ camera along without taking control via `follow(entity)`.
 > The claim keys on `target`, **not on an avatar**, so this works headless — an unattended
 > or server-side run needs no avatar to hold authority.
 
-## H. Autopilot & Behavior Tree Integration
+## H. Task programs and the reusable kernel
 
-While Layer-1 Sequences and Layer-2 Timelines are useful for linear scripts, complex, reactive, and resilient AI behaviors (like obstacle avoidance and path interception) are best authored using the **Autopilot Behavior Tree System**.
+Layer-1 tasks and Layer-2 timelines are authored in Rhai. Complex reactive
+policy is composed from the same generic task tree: selectors, parallel/race
+branches, waits, event leaves, and anonymous action/predicate closures.
 
-The autopilot accepts a JSON tree specification (`BehaviorSpec`) containing composite nodes, decorators, and actions/conditions, compiling them into a high-performance native behavior tree (see [behaviour-trees.md](./behaviour-trees.md)).
+The `lunco-behavior` crate owns only the reusable cursor, reset, and composite
+mechanics. Rhai owns route choice and mission policy; there is no separate
+vessel-specific behavior command or JSON behavior specification.
 
-You can trigger a behavior tree on a vessel from Rhai by issuing the `SetAutopilotBehavior` command:
+Return a task tree from `task(me)` and attach it through a scene-level
+`LunCoProgramAPI` source:
 
 ```rhai
-fn on_start(me) {
-    // Drive to a goal point, but halt if an obstacle is detected in a forward 50-degree cone
-    let bt_spec = "{\"kind\":\"reactive_selector\",\"children\":[" +
-        "{\"kind\":\"sequence\",\"children\":[" +
-            "{\"kind\":\"obstacle_ahead\",\"distance\":8.0,\"cone\":50.0}," +
-            "{\"kind\":\"hold\"}]}," +
-        "{\"kind\":\"drive_to\",\"target\":[120.0, 0.0, 50.0],\"speed\":0.7,\"radius\":3.0}]}";
-
-    cmd("SetAutopilotBehavior", #{ vessel: me, spec_json: bt_spec });
+fn task(me) {
+    reactive_sel([
+        seq([check(|m| obstacle_ahead(m, 8.0, 50.0)), once(|m| brake(m))]),
+        forever(step(|m| nav_to(m, [120.0, 0.0, 50.0], 0.7, 3.0), |m| false)),
+    ])
 }
 ```
 
-Available nodes include:
-- **Composites:** `sequence`, `selector`, `parallel`, `reactive_sequence`, `reactive_selector`.
-- **Decorators:** `invert`, `force_success`, `force_failure`, `cooldown`.
-- **Actions:** `drive_to`, `follow`, `intercept`, `patrol`, `face`, `cruise`, `brake`, `hold`, `steer_clear`, `wait`, `run_tool`. `patrol` waypoints may each carry an `on_arrival` list of actions (e.g. `run_tool`) — see [`patrol.rhai`](../assets/scripting/prelude/patrol.rhai); `run_tool` fires a registered tool once (latched, re-armed by `repeat`/`cooldown`) and is dispatched by `lunco-tools-bevy`.
-- **Conditions:** `arrived`, `facing`, `obstacle_ahead`, `path_blocked`.
+Available constructors include `seq`, `sel`, `par_all`, `par_race`,
+`reactive_seq`, `reactive_sel`, `repeat`, `forever`, `retry`, `check`,
+`wait`, `wait_until`, `wait_for`, and `once`/`step` action leaves. The
+production contract is exercised by
+[`scripting_task_contract`](../assets/scenarios/tests/scripting_task_contract.rhai).
 
 ## I. Persistence
 
@@ -1030,7 +1031,7 @@ You can inspect the live keys and values of the `this` state map attached to any
   "paused": false,
   "state": {
     "count": 142,
-    "current_waypoint": [10.0, 0.0, 50.0]
+    "current_route_point": [10.0, 0.0, 50.0]
   }
 }
 ```
@@ -1060,9 +1061,9 @@ produces the same sequence — no explicit seeding needed.
 
 | File | Shows |
 |---|---|
-| [`patrol.rhai`](../assets/scripting/examples/patrol.rhai) | a looping waypoint patrol |
+| [`patrol.rhai`](../assets/scripting/examples/patrol.rhai) | a looping task-tree route policy |
 | [`mission.rhai`](../assets/scripting/examples/mission.rhai) | event-channel coordination between scripts |
-| [`mission_plan.rhai`](../assets/scripting/examples/mission_plan.rhai) | a declarative waypoint plan via the task kernel |
+| [`mission_plan.rhai`](../assets/scripting/examples/mission_plan.rhai) | a declarative route plan via the task kernel |
 | [`sequence.rhai`](../assets/scripting/examples/sequence.rhai) | a linear task-tree sequence |
 | [`timeline.rhai`](../assets/scripting/examples/timeline.rhai) | a Layer-2 mission as data |
 | [`robot_mission.rhai`](../assets/scripting/examples/robot_mission.rhai) | task-tree mission with durable phase checkpoints and the default no-`on_tick` style |

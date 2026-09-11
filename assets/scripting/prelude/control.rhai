@@ -15,9 +15,9 @@
 /// `seq`/`tick` default to 0 — fine for host-local scenarios; networked control
 /// should thread real sequence/tick numbers.
 fn drive(rover, forward, steer) {
-    cmd("SetPorts", #{ target: rover,
-        writes: [["throttle", forward], ["steer", steer], ["brake", 0.0]],
-        seq: 0, tick: 0 })
+    port_set(rover, "throttle", forward);
+    port_set(rover, "steer", steer);
+    port_set(rover, "brake", 0.0)
 }
 
 /// Emit one target-scoped semantic edge. The consuming Twin decides whether

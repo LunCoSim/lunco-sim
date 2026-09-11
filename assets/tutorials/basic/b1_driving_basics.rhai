@@ -69,8 +69,8 @@ fn on_event(me, evt) {
 // first_drive.rhai). A windowed session has a student in it, so they drive.
 //
 // The drive is authored as pure DATA (a timeline) and lowered with
-// `compile_timeline` — the same steps `RegisterTimeline` stores in the Twin and
-// the BT.CPP-XML codec exports. `subject` drives the rover from the scenario host.
+// `compile_timeline` — the same steps `RegisterTimeline` stores in the Twin.
+// `subject` drives the rover from the scenario host.
 fn task(me) {
     if !is_unattended() { return; }
     let r = "/DrivingBasics/Rover";

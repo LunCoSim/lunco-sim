@@ -55,7 +55,7 @@ use bevy::prelude::*;
 use lunco_assets::twin_source::TwinRoots;
 use lunco_doc::{Document, DocumentId};
 use lunco_usd_bevy::{
-    UsdAwaitingStage, UsdInstanceProjection, UsdPrimPath, UsdRead, UsdSceneRoot, UsdSourceText,
+    UsdAwaitingStage, UsdInstanceProjection, UsdPrimPath, UsdSceneRoot, UsdSourceText,
     UsdStageAsset, UsdVisualProjectionQueued, UsdVisualSynced,
 };
 use lunco_usd_sim::cosim::LoadScene;
@@ -396,7 +396,7 @@ struct RefSpawn {
     ref_handle: Handle<UsdStageAsset>,
     /// A SetTranslate may follow AddPrim in the same edit burst. Keep it until
     /// the reference closure is installed; otherwise the edit arrives before
-    /// the prim exists on the live stage and the new waypoint stays at origin.
+    /// the prim exists on the live stage and the new prim stays at origin.
     translate: Option<[f64; 3]>,
     /// Child-scoped edits that arrive while the referenced root is still
     /// loading. They are replayed after the reference and its composed
@@ -937,17 +937,7 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
                         .unwrap_or_default();
                     rebuild_scene_from_composed(world, scene_id, &cs);
                 }
-                Some(ops)
-                    if ops.iter().any(|op| {
-                        let waypoint = match op {
-                            UsdOp::SetActive { path, .. } => {
-                                is_waypoint_prim(world, scene_id, path)
-                            }
-                            _ => false,
-                        };
-                        op_needs_rebuild(op, waypoint)
-                    }) =>
-                {
+                Some(ops) if ops.iter().any(op_needs_rebuild) => {
                     if !ensure_reference_layers_for_rebuild(world, scene_id, &ops) {
                         // Keep the document generation pending until every new
                         // reference closure is available to the live resolver.
@@ -1069,24 +1059,18 @@ pub(crate) fn wake_twin_projection_on_stage_event(
 /// correctly. This is not the hot path: `AttachComponent` emits neither, so
 /// building a vehicle from parts stays rebuild-free.
 ///
-/// `SetActive` has ONE carve-out: a prim carrying `LunCoWaypointAPI`. The marker
-/// contract is purely visual — a translucent dome (`physics:collisionEnabled =
-/// false`) plus an overlap-only non-solid Sensor, never a rigid body — so
-/// deactivating it only needs its visual subtree gone, which
-/// `refresh_prim_subtree` reconciles. Every other `SetActive` (a vehicle part, a
-/// joint, or any other physical prim) still rebuilds, since hiding a physics prim
-/// must drop its body/collider, which the visual-only refresh cannot express.
-fn op_needs_rebuild(op: &UsdOp, is_waypoint: bool) -> bool {
+/// Active state changes are always structural: hiding a prim can remove physics
+/// components and entity presence, so the full projection path is required.
+fn op_needs_rebuild(op: &UsdOp) -> bool {
     // The program API schema is the only metadata-only fast path. Kind and
     // defaultPrim changes rebuild so the projection reads the new composed
     // metadata from one authoritative document snapshot.
     if let UsdOp::SetApiSchemas { schemas, .. } = op {
         return !incremental_api_schemas(schemas);
     }
-    // A waypoint-marker hide reconciles incrementally (see the doc comment); any
-    // other `SetActive` is a physics-presence change and must rebuild.
+    // Active state changes prim presence and require the full projection path.
     if matches!(op, UsdOp::SetActive { .. }) {
-        return !is_waypoint;
+        return true;
     }
     matches!(
         op,
@@ -1112,107 +1096,6 @@ fn incremental_api_schemas(schemas: &[String]) -> bool {
             schema.as_str(),
             "LunCoProgramAPI" | "LunCoMountAttachmentAPI"
         )
-    })
-}
-
-/// Whether `path` is a waypoint marker according to the composed USD stage.
-/// The marker's `LunCoWaypointAPI` is the authored identity contract; names and
-/// hierarchy are intentionally irrelevant so scene authors can organize routes
-/// without changing Rust behavior.
-fn is_waypoint_prim(world: &World, scene_id: AssetId<UsdStageAsset>, path: &str) -> bool {
-    let Ok(path) = openusd::sdf::Path::new(path) else {
-        return false;
-    };
-    world
-        .get_non_send::<lunco_usd_bevy::CanonicalStages>()
-        .and_then(|stages| stages.get(scene_id))
-        .is_some_and(|stage| stage.view().has_api_schema(&path, "LunCoWaypointAPI"))
-}
-
-/// A program child is a BT program when its generic `LunCoProgramAPI` source
-/// resolves to inline BT.CPP XML or to a supported BT asset. The child name is
-/// intentionally irrelevant: `Mission`, `Safety`, `Guidance`, and user-authored
-/// names all use the same live projection contract.
-pub(crate) fn is_behavior_program(
-    world: &World,
-    scene_id: AssetId<UsdStageAsset>,
-    path: &openusd::sdf::Path,
-) -> bool {
-    world
-        .get_non_send::<lunco_usd_bevy::CanonicalStages>()
-        .and_then(|stages| stages.get(scene_id))
-        .is_some_and(|stage| {
-            let view = stage.view();
-            view.has_api_schema(path, "LunCoProgramAPI")
-                && matches!(
-                    lunco_usd_bevy::program::resolve_behavior_tree_source(&view, path),
-                    Ok(Some(_))
-                )
-        })
-}
-
-/// Removal-side companion to [`is_behavior_program`]. Once a source attribute is
-/// cleared or changed away from BT.CPP, the composed prim no longer identifies
-/// itself as a behaviour source; the runtime provenance component still tells us
-/// whether this edit owns the currently projected tree.
-fn owns_projected_behavior(
-    world: &World,
-    scene_id: AssetId<UsdStageAsset>,
-    path: &openusd::sdf::Path,
-) -> bool {
-    world.iter_entities().any(|entity| {
-        let Some(prim) = entity.get::<UsdPrimPath>() else {
-            return false;
-        };
-        prim.stage_handle.id() == scene_id
-            && entity
-                .get::<lunco_autopilot::usd_tree::BehaviorProgramSource>()
-                .is_some_and(|source| source.0 == path.as_str())
-    })
-}
-
-fn projected_behavior_entity(
-    world: &World,
-    scene_id: AssetId<UsdStageAsset>,
-    path: &openusd::sdf::Path,
-) -> Option<Entity> {
-    world.iter_entities().find_map(|entity| {
-        let prim = entity.get::<UsdPrimPath>()?;
-        (prim.stage_handle.id() == scene_id
-            && entity
-                .get::<lunco_autopilot::usd_tree::BehaviorProgramSource>()
-                .is_some_and(|source| source.0 == path.as_str()))
-        .then_some(entity.id())
-    })
-}
-
-fn behavior_owner_entity(
-    world: &World,
-    scene_id: AssetId<UsdStageAsset>,
-    path: &openusd::sdf::Path,
-) -> Option<Entity> {
-    if let Some(owner) = projected_behavior_entity(world, scene_id, path) {
-        return Some(owner);
-    }
-    let owner_path = {
-        let stage = world
-            .get_non_send::<lunco_usd_bevy::CanonicalStages>()
-            .and_then(|stages| stages.get(scene_id))?;
-        let view = stage.view();
-        let mut current = path.parent();
-        let mut result = None;
-        while let Some(candidate) = current {
-            if view.has_api_schema(&candidate, "PhysxVehicleContextAPI") {
-                result = Some(candidate.to_string());
-                break;
-            }
-            current = candidate.parent();
-        }
-        result
-    }?;
-    world.iter_entities().find_map(|entity| {
-        let prim = entity.get::<UsdPrimPath>()?;
-        (prim.stage_handle.id() == scene_id && prim.path == owner_path).then_some(entity.id())
     })
 }
 
@@ -1394,52 +1277,6 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
             // consequence, and a refresh would hot-reload a running scenario
             // (resetting its `this`) on a mere save. So author, don't refresh.
             if is_string {
-                // A BT program is owned by the parent vessel, not by its child
-                // program prim. Updating its source is therefore a component
-                // replacement on that already-live vessel, NOT a subtree refresh:
-                // re-instantiating the rover here destroys its physics/cosim state.
-                if matches!(
-                    name.as_str(),
-                    "info:implementationSource" | "info:sourceCode" | "info:sourceAsset"
-                ) && (is_behavior_program(world, scene_id, &sp)
-                    || owns_projected_behavior(world, scene_id, &sp))
-                {
-                    let source = world
-                        .get_non_send::<lunco_usd_bevy::CanonicalStages>()
-                        .and_then(|stages| stages.get(scene_id))
-                        .map(|stage| {
-                            let view = stage.view();
-                            crate::program::selected_behavior_source_values(&view, &sp)
-                                .unwrap_or_default()
-                        });
-                    if let Some(owner) = behavior_owner_entity(world, scene_id, &sp) {
-                        let mut entity = world.entity_mut(owner);
-                        match source {
-                            Some((Some(xml), _)) => {
-                                entity.insert(lunco_autopilot::usd_tree::BehaviorXml(xml));
-                                entity.insert(lunco_autopilot::usd_tree::BehaviorProgramSource(
-                                    sp.as_str().to_string(),
-                                ));
-                                entity.remove::<lunco_autopilot::usd_tree::BehaviorXmlPath>();
-                                entity.remove::<lunco_autopilot::usd_tree::BehaviorXmlHandle>();
-                            }
-                            Some((None, Some(asset))) => {
-                                entity.insert(lunco_autopilot::usd_tree::BehaviorXmlPath(asset));
-                                entity.insert(lunco_autopilot::usd_tree::BehaviorProgramSource(
-                                    sp.as_str().to_string(),
-                                ));
-                                entity.remove::<lunco_autopilot::usd_tree::BehaviorXml>();
-                                entity.remove::<lunco_autopilot::usd_tree::BehaviorXmlHandle>();
-                            }
-                            _ => {
-                                entity.remove::<lunco_autopilot::usd_tree::BehaviorXml>();
-                                entity.remove::<lunco_autopilot::usd_tree::BehaviorXmlPath>();
-                                entity.remove::<lunco_autopilot::usd_tree::BehaviorXmlHandle>();
-                                entity.remove::<lunco_autopilot::usd_tree::BehaviorProgramSource>();
-                            }
-                        }
-                    }
-                }
                 return;
             }
             // Refresh only what the edit can actually change: a material/shader
@@ -1499,33 +1336,6 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                 if let Err(e) = cs.projector().remove_prim_at(&sp) {
                     warn!("[twin] remove {path}: {e}");
                 }
-            }
-        }
-        UsdOp::SetActive { path, active, .. } if is_waypoint_prim(world, scene_id, path) => {
-            let Ok(sp) = openusd::sdf::Path::new(path) else {
-                return;
-            };
-            let authored = match world
-                .get_non_send::<CanonicalStages>()
-                .and_then(|s| s.get(scene_id))
-            {
-                Some(cs) => match cs.projector().author_active(&sp, *active) {
-                    Ok(()) => true,
-                    Err(e) => {
-                        warn!("[twin] author active={active} {path}: {e}");
-                        false
-                    }
-                },
-                None => false,
-            };
-            // A marker carries no rigid body / collider, so toggling its `active`
-            // flag only changes whether its visual subtree is present. The live
-            // author fires the sink, but the bridge does not despawn on
-            // `active = false` the way it does on a spec removal — re-instantiate
-            // the prim's subtree so the (now inactive) marker's visual is dropped
-            // (or, on reactivation, rebuilt). Mirrors the SetConnection arm.
-            if authored {
-                refresh_prim_subtree(world, scene_id, path);
             }
         }
         UsdOp::SetTimeSample {
@@ -2223,134 +2033,90 @@ mod tests {
     fn op_rebuild_routing_matches_the_incremental_authors() {
         let et = LayerId::root();
         // Incremental now — a joint's two `physics:body` rels and a cosim wire.
-        assert!(!op_needs_rebuild(
-            &UsdOp::SetRelationship {
-                edit_target: et.clone(),
-                path: "/J".into(),
-                name: "physics:body0".into(),
-                targets: vec![],
-            },
-            false
-        ));
-        assert!(!op_needs_rebuild(
-            &UsdOp::SetConnection {
-                edit_target: et.clone(),
-                path: "/B".into(),
-                name: "inputs:v".into(),
-                type_name: "float".into(),
-                sources: vec![],
-            },
-            false
-        ));
+        assert!(!op_needs_rebuild(&UsdOp::SetRelationship {
+            edit_target: et.clone(),
+            path: "/J".into(),
+            name: "physics:body0".into(),
+            targets: vec![],
+        }));
+        assert!(!op_needs_rebuild(&UsdOp::SetConnection {
+            edit_target: et.clone(),
+            path: "/B".into(),
+            name: "inputs:v".into(),
+            type_name: "float".into(),
+            sources: vec![],
+        }));
         // Physical apiSchema / active REBUILD: their effect is a prim's ECS
         // component set / entity presence, which the visual-only subtree refresh
         // can't reconcile.
-        assert!(op_needs_rebuild(
-            &UsdOp::SetApiSchemas {
-                edit_target: et.clone(),
-                path: "/W".into(),
-                schemas: vec!["PhysicsRigidBodyAPI".into()],
-            },
-            false
-        ));
-        // A program API is metadata on an existing `Mission` scope. Its consumer
-        // is the vessel's BehaviorXml projection, never the physical rover
-        // topology, so it must remain on the live incremental path.
-        assert!(!op_needs_rebuild(
-            &UsdOp::SetApiSchemas {
-                edit_target: et.clone(),
-                path: "/W/Mission".into(),
-                schemas: vec!["LunCoProgramAPI".into()],
-            },
-            false
-        ));
+        assert!(op_needs_rebuild(&UsdOp::SetApiSchemas {
+            edit_target: et.clone(),
+            path: "/W".into(),
+            schemas: vec!["PhysicsRigidBodyAPI".into()],
+        }));
+        // A program API is metadata on an existing `Mission` scope and remains
+        // on the live incremental path.
+        assert!(!op_needs_rebuild(&UsdOp::SetApiSchemas {
+            edit_target: et.clone(),
+            path: "/W/Mission".into(),
+            schemas: vec!["LunCoProgramAPI".into()],
+        }));
         // A `SetActive` on a physics prim (a rover part) rebuilds: it changes
         // entity presence / physics component set, which the visual-only subtree
         // refresh can't reconcile.
-        assert!(op_needs_rebuild(
-            &UsdOp::SetActive {
-                edit_target: et.clone(),
-                path: "/Rover/Chassis".into(),
-                active: false,
-            },
-            false
-        ));
-        // A `SetActive` on a prim carrying `LunCoWaypointAPI` reconciles
-        // incrementally: the marker is purely visual (a non-colliding dome + an
-        // overlap-only Sensor), so hiding/revealing it only needs its visual
-        // subtree dropped/rebuilt. Deactivation must NOT reload the scene.
-        assert!(!op_needs_rebuild(
-            &UsdOp::SetActive {
-                edit_target: et.clone(),
-                path: "/Rover/Route/W3".into(),
-                active: false,
-            },
-            true
-        ));
-        // Reactivation is symmetric — also incremental.
-        assert!(!op_needs_rebuild(
-            &UsdOp::SetActive {
-                edit_target: et.clone(),
-                path: "/Apollo15/Route/W0".into(),
-                active: true,
-            },
-            true
-        ));
-        // A normal prim without the authored waypoint schema still rebuilds,
-        // regardless of its name or hierarchy.
-        assert!(op_needs_rebuild(
-            &UsdOp::SetActive {
-                edit_target: et.clone(),
-                path: "/Rover/Wheels/W0".into(),
-                active: false,
-            },
-            false
-        ));
+        assert!(op_needs_rebuild(&UsdOp::SetActive {
+            edit_target: et.clone(),
+            path: "/Rover/Chassis".into(),
+            active: false,
+        }));
+        // Active state is structural for every prim and always rebuilds.
+        assert!(op_needs_rebuild(&UsdOp::SetActive {
+            edit_target: et.clone(),
+            path: "/Rover/Route/W3".into(),
+            active: false,
+        }));
+        // Reactivation is structural as well.
+        assert!(op_needs_rebuild(&UsdOp::SetActive {
+            edit_target: et.clone(),
+            path: "/Apollo15/Route/W0".into(),
+            active: true,
+        }));
+        // Every prim follows the same active-state contract.
+        assert!(op_needs_rebuild(&UsdOp::SetActive {
+            edit_target: et.clone(),
+            path: "/Rover/Wheels/W0".into(),
+            active: false,
+        }));
         // Stage and prim metadata are read from the rebuilt composed snapshot
         // so root/runtime opinions and canonical-stage reads stay coherent.
-        assert!(op_needs_rebuild(
-            &UsdOp::SetDefaultPrim {
-                edit_target: et.clone(),
-                default_prim: Some("World".into()),
-            },
-            false
-        ));
-        assert!(op_needs_rebuild(
-            &UsdOp::SetPrimKind {
-                edit_target: et.clone(),
-                path: "/Rover".into(),
-                kind: Some("component".into()),
-            },
-            false
-        ));
+        assert!(op_needs_rebuild(&UsdOp::SetDefaultPrim {
+            edit_target: et.clone(),
+            default_prim: Some("World".into()),
+        }));
+        assert!(op_needs_rebuild(&UsdOp::SetPrimKind {
+            edit_target: et.clone(),
+            path: "/Rover".into(),
+            kind: Some("component".into()),
+        }));
         // Composition-arc edits also rebuild — value resolution recomposes the
         // subtree, which the incremental sink can't express.
-        assert!(op_needs_rebuild(
-            &UsdOp::SetVariantSelection {
-                edit_target: et.clone(),
-                path: "/R".into(),
-                variant_set: "drivetrain".into(),
-                variant: "physical".into(),
-            },
-            false
-        ));
-        assert!(op_needs_rebuild(
-            &UsdOp::SetPayload {
-                edit_target: et.clone(),
-                path: "/H".into(),
-                asset_paths: vec![],
-            },
-            false
-        ));
+        assert!(op_needs_rebuild(&UsdOp::SetVariantSelection {
+            edit_target: et.clone(),
+            path: "/R".into(),
+            variant_set: "drivetrain".into(),
+            variant: "physical".into(),
+        }));
+        assert!(op_needs_rebuild(&UsdOp::SetPayload {
+            edit_target: et.clone(),
+            path: "/H".into(),
+            asset_paths: vec![],
+        }));
         // Pre-existing coarse ops unchanged.
-        assert!(op_needs_rebuild(
-            &UsdOp::MovePrim {
-                edit_target: et,
-                from_path: "/a".into(),
-                to_path: "/b".into(),
-            },
-            false
-        ));
+        assert!(op_needs_rebuild(&UsdOp::MovePrim {
+            edit_target: et,
+            from_path: "/a".into(),
+            to_path: "/b".into(),
+        }));
     }
 
     /// A material/shader/node-graph attribute edit fans out through

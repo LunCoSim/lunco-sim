@@ -40,7 +40,6 @@ pub(crate) enum RuntimeUiActionKind {
     ViewBodyMoon,
     ViewBodyEarth,
     DismissTerrainOverlay,
-    ToggleAutopilot,
     ToggleCameraPicker,
 }
 
@@ -51,7 +50,6 @@ impl RuntimeUiActionKind {
             "view.body.moon" => Ok(Self::ViewBodyMoon),
             "view.body.earth" => Ok(Self::ViewBodyEarth),
             "overlay.terrain.dismiss" => Ok(Self::DismissTerrainOverlay),
-            "autopilot.toggle" => Ok(Self::ToggleAutopilot),
             "camera.picker.toggle" => Ok(Self::ToggleCameraPicker),
             _ => Err(format!("unknown runtime UI action `{value}`")),
         }

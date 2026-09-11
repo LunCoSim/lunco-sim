@@ -3,8 +3,8 @@
 // fine; it never moves).
 //
 // Scripts never call each other directly — they are isolated VMs that interact
-// ONLY through the world: here, the shared TelemetryEvent bus. patrol.rhai
-// emits "WAYPOINT_REACHED"; this script reacts via on_event and, when the
+// ONLY through the world: here, the shared TelemetryEvent bus. A route program
+// emits "route_point_reached"; this script reacts via on_event and, when the
 // mission target is met, emits "MISSION_COMPLETE" for the next consumer (UI,
 // API subscriber, ROS2 action result, or yet another script).
 //
@@ -22,7 +22,7 @@ fn on_start(me) {
 fn on_event(me, evt) {
     if this.done { return; }
 
-    if evt.name == "WAYPOINT_REACHED" {
+    if evt.name == "route_point_reached" {
         this.count += 1;
         print("mission: checkpoint " + this.count + "/" + TARGET);
 

@@ -9,7 +9,7 @@
 //! - `On<ApiCommandEvent>` for API triggers (downcast the command)
 
 use crate::{
-    discovery::{ApiCommandLookupError, discover_commands, discover_queries, find_api_command},
+    discovery::{discover_commands, discover_queries, find_api_command, ApiCommandLookupError},
     queries::{ApiQueryRegistry, ApiVisibility},
     registry::ApiEntityRegistry,
     schema::{ApiErrorCode, ApiRequest, ApiResponse, ApiSchema},
@@ -543,7 +543,7 @@ fn convert_node(
     entities: &ApiEntityRegistry,
     sync_local: bool,
 ) {
-    use bevy::reflect::{TypeInfo, enums::VariantInfo};
+    use bevy::reflect::{enums::VariantInfo, TypeInfo};
     use std::any::TypeId;
 
     // Leaf: the declared type IS Entity → convert the scalar.
@@ -1011,7 +1011,7 @@ impl Plugin for ApiExecutorPlugin {
 mod tests {
     use super::*;
     use lunco_core::{
-        Ack, ActiveCommandId, Command, CommandOutcome, CommandResults, OpId, on_command,
+        on_command, Ack, ActiveCommandId, Command, CommandOutcome, CommandResults, OpId,
     };
 
     #[test]
@@ -1191,16 +1191,14 @@ mod tests {
     fn valid_params_pass_validation() {
         let reg = test_registry();
         let registration = reg.get_with_short_type_path("TestEcho").unwrap();
-        assert!(
-            validate_command_params(
-                "TestEcho",
-                &serde_json::json!({ "fail": true }),
-                registration,
-                &reg,
-                &ApiEntityRegistry::default(),
-            )
-            .is_ok()
-        );
+        assert!(validate_command_params(
+            "TestEcho",
+            &serde_json::json!({ "fail": true }),
+            registration,
+            &reg,
+            &ApiEntityRegistry::default(),
+        )
+        .is_ok());
     }
 
     #[test]
@@ -1209,16 +1207,14 @@ mod tests {
         // All fields default, so this is legitimately valid.
         let reg = test_registry();
         let registration = reg.get_with_short_type_path("TestEcho").unwrap();
-        assert!(
-            validate_command_params(
-                "TestEcho",
-                &serde_json::Value::Null,
-                registration,
-                &reg,
-                &ApiEntityRegistry::default(),
-            )
-            .is_ok()
-        );
+        assert!(validate_command_params(
+            "TestEcho",
+            &serde_json::Value::Null,
+            registration,
+            &reg,
+            &ApiEntityRegistry::default(),
+        )
+        .is_ok());
     }
 
     #[test]
@@ -1241,16 +1237,14 @@ mod tests {
         // The headline case: a typo'd param name. This used to return 200 OK.
         let reg = test_registry();
         let registration = reg.get_with_short_type_path("TestEcho").unwrap();
-        assert!(
-            validate_command_params(
-                "TestEcho",
-                &serde_json::json!({ "nope": true }),
-                registration,
-                &reg,
-                &ApiEntityRegistry::default(),
-            )
-            .is_err()
-        );
+        assert!(validate_command_params(
+            "TestEcho",
+            &serde_json::json!({ "nope": true }),
+            registration,
+            &reg,
+            &ApiEntityRegistry::default(),
+        )
+        .is_err());
     }
 }
 
@@ -1385,7 +1379,7 @@ mod id_codec_tests {
         let mut v = json!({ "avatar": e.to_bits(), "target": e.to_bits() });
         globalize_command_ids(&mut v, TypeId::of::<TPossess>(), &reg, &ent);
         assert_eq!(v["target"], json!(gid.get())); // local bits → gid
-        // sync_local field never carries real local bits onto the wire.
+                                                   // sync_local field never carries real local bits onto the wire.
         assert_eq!(v["avatar"], json!(Entity::PLACEHOLDER.to_bits()));
     }
 

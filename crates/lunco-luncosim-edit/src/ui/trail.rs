@@ -28,7 +28,7 @@ use lunco_mobility::{
 use lunco_render::{PbrLook, SurfaceAlpha};
 use lunco_usd_sim::PhysicalWheel;
 
-use super::waypoint_click::{build_ribbon_mesh, RibbonPoint};
+use super::ribbon::{build_ribbon_mesh, RibbonPoint};
 
 /// Minimum horizontal travel before a new history sample is admitted.
 const TRAIL_SAMPLE_SPACING_M: f64 = 0.5;

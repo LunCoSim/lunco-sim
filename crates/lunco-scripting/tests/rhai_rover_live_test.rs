@@ -1,15 +1,17 @@
-//! Live, headless end-to-end test of the rhai scripting stack (P1–P4).
+//! Low-level live checks for the generic Rhai bridge.
 //!
 //! A real `ScriptedModel { language: Rhai }` runs a scenario against a live
-//! `World`. We assert the scenario actually drove the simulation:
+//! `World`. Authored behavior and policy contracts live in production scene
+//! tests under `assets/scenarios/tests/`; this file retains only bridge seams
+//! that need a deliberately minimal host fixture:
 //! - P2: `on_start`/`on_tick` ran on the host entity.
 //! - P1: `cmd("SetPorts", …)` dispatched by NAME through `ApiCommandEvent`
 //!   → reflect dispatch → the real `SetPorts` observer fired, with the
 //!   `target` gid resolved back to the host `Entity`.
 //! - P3: `world_pos`/`world_forward` reads fed the pure-rhai `nav_to`
 //!   steering, and `emit(...)` produced a `TelemetryEvent`.
-//! - P4: a native task-tree mission advanced its objective and emitted
-//!   `OBJECTIVE_COMPLETE` / `PLAN_COMPLETE`.
+//! - command-result plumbing, tool-library loading, lifecycle/status seams, and
+//!   reflected resource/component mechanics without a USD fixture.
 //!
 //! Spy `#[on_command]` handlers stand in for the real mobility/physics stack
 //! (which lives in other crates) — the bridge dispatches to whatever `SetPorts`
@@ -29,15 +31,11 @@ const ROVER_GID: u64 = 7777;
 
 // ── Spy command (stand-in for the real `lunco_cosim::SetPorts`) ────────────────
 // Control is now the ONE generic `SetPorts` command (a batch of named port
-// writes). The spy records a drive sample (throttle/steer) into `DriveLog` and
-// counts full-brake writes into `BrakeCount`, so the same recording proves the
-// whole `cmd("SetPorts", …)` dispatch path end-to-end.
+// writes). The spy records drive samples (throttle/steer) into `DriveLog`, so
+// the recording proves the whole `cmd("SetPorts", …)` dispatch path end-to-end.
 
 #[derive(Resource, Default)]
 struct DriveLog(Vec<(f64, f64)>); // (throttle, steer) per drive SetPorts
-
-#[derive(Resource, Default)]
-struct BrakeCount(u32);
 
 #[derive(Resource, Default)]
 struct EventLog(Vec<String>); // names of every emitted TelemetryEvent
@@ -65,22 +63,9 @@ struct SetPorts {
     tick: u64,
 }
 
-/// Test-only observer for the production `ReleaseControl` safe-stop command.
-/// The prelude deliberately uses this command for arrival braking, so the
-/// harness records the authoritative release path rather than pretending a
-/// brake is another drive-port write.
-#[Command]
-struct ReleaseControl {
-    #[authz_target]
-    target: Entity,
-}
-
 #[on_command(SetPorts)]
-fn on_drive(trigger: On<SetPorts>, mut log: ResMut<DriveLog>, mut brakes: ResMut<BrakeCount>) {
+fn on_drive(trigger: On<SetPorts>, mut log: ResMut<DriveLog>) {
     let get = |name: &str| cmd.writes.iter().find(|(n, _)| n == name).map(|(_, v)| *v);
-    if get("brake").is_some_and(|b| b > 0.5) {
-        brakes.0 += 1;
-    }
     // A throttle/steer write is a drive sample on the generic port command.
     if cmd
         .writes
@@ -90,11 +75,6 @@ fn on_drive(trigger: On<SetPorts>, mut log: ResMut<DriveLog>, mut brakes: ResMut
         log.0
             .push((get("throttle").unwrap_or(0.0), get("steer").unwrap_or(0.0)));
     }
-}
-
-#[on_command(ReleaseControl)]
-fn on_release_control(trigger: On<ReleaseControl>, mut brakes: ResMut<BrakeCount>) {
-    brakes.0 += 1;
 }
 
 // A result-reporting command that "spawns" something and reports the new gid
@@ -135,7 +115,7 @@ fn on_report(trigger: On<Report>, mut cap: ResMut<CapturedData>) {
     cap.0.push(cmd.value);
 }
 
-register_commands!(on_drive, on_release_control, on_spawn, on_report);
+register_commands!(on_drive, on_spawn, on_report);
 
 // ── Reflect targets for the native get/set verbs ──────────────────────────────
 // A component and a resource, both reflect-registered, exercise the symmetric
@@ -183,7 +163,6 @@ fn build_app() -> App {
 
     // Spies + the test commands (register_all_commands registers types+observers).
     app.init_resource::<DriveLog>()
-        .init_resource::<BrakeCount>()
         .init_resource::<EventLog>()
         .init_resource::<CapturedData>()
         .add_observer(spy_events);
@@ -236,10 +215,9 @@ fn spawn_rover(app: &mut App) -> Entity {
     rover
 }
 
-/// Spawn a rover carrying the same authored kind marker that the USD projector
-/// publishes (so `list_entities().type == "rover"` and the selection toolkit /
-/// formation tool library can find it) at world x = `x`.
-fn spawn_typed_rover(app: &mut App, gid: u64, x: f32) -> Entity {
+/// Spawn a second entity with an explicit identity and pose for generic bridge
+/// operations such as `despawn()`.
+fn spawn_entity_at(app: &mut App, gid: u64, x: f32) -> Entity {
     let frame = app.world().resource::<lunco_core::ActivePhysicsFrame>().0;
     let e = app
         .world_mut()
@@ -247,9 +225,6 @@ fn spawn_typed_rover(app: &mut App, gid: u64, x: f32) -> Entity {
             Transform::from_xyz(x, 0.0, 0.0),
             GlobalTransform::from(Transform::from_xyz(x, 0.0, 0.0)),
             GlobalEntityId::from_raw(gid),
-            lunco_core::SteeringGeometry::Differential,
-            lunco_core::ControlBinding { binds: Vec::new() },
-            lunco_core::UsdPrimKind("rover".to_string()),
             ChildOf(frame),
         ))
         .id();
@@ -304,75 +279,6 @@ fn tick(app: &mut App) {
     app.world_mut().run_schedule(Update);
     app.world_mut().run_schedule(FixedUpdate);
     app.world_mut().flush();
-}
-
-#[test]
-fn rhai_task_arrives_brakes_and_emits() {
-    // Single objective placed AT the rover's position → arrived immediately →
-    // brake + OBJECTIVE_COMPLETE + PLAN_COMPLETE, no forward drive.
-    let source = r#"
-        fn task(me) {
-            seq([
-                once(|m| {
-                    if nav_to(m, [0.0, 0.0, 0.0], 1.0, 5.0) {
-                        emit("OBJECTIVE_COMPLETE", 0);
-                        emit("PLAN_COMPLETE", true);
-                    }
-                })
-            ])
-        }
-    "#;
-    let (mut app, _rover) = setup(source);
-
-    tick(&mut app);
-
-    assert!(
-        app.world().resource::<BrakeCount>().0 >= 1,
-        "arriving on the only waypoint should brake the rover"
-    );
-
-    let events = &app.world().resource::<EventLog>().0;
-    assert!(
-        events.iter().any(|n| n == "OBJECTIVE_COMPLETE"),
-        "reaching a waypoint should emit OBJECTIVE_COMPLETE; got {events:?}"
-    );
-    assert!(
-        events.iter().any(|n| n == "PLAN_COMPLETE"),
-        "finishing the plan should emit PLAN_COMPLETE; got {events:?}"
-    );
-    assert!(
-        app.world().resource::<DriveLog>().0.is_empty(),
-        "already-arrived rover should not be driven forward"
-    );
-}
-
-#[test]
-fn rhai_arrival_uses_ground_distance_for_surface_targets() {
-    // The rover pose is at y=0 while this authored surface target is elevated
-    // in the fixture. Horizontal distance is 3.9 m (inside the 4 m radius),
-    // while the old full 3-D norm is 5.59 m. The task must therefore advance
-    // without inventing a drive command.
-    let source = r#"
-        fn task(me) {
-            seq([
-                wait_until(|m| arrived(m, [0.0, 4.0, -3.9], 4.0)),
-                once(|m| emit("GROUND_ARRIVAL", true))
-            ])
-        }
-    "#;
-    let (mut app, _rover) = setup(source);
-
-    tick(&mut app);
-
-    let events = &app.world().resource::<EventLog>().0;
-    assert!(
-        events.iter().any(|n| n == "GROUND_ARRIVAL"),
-        "surface arrival should ignore authored target height; got {events:?}"
-    );
-    assert!(
-        app.world().resource::<DriveLog>().0.is_empty(),
-        "arrival-only task must not issue a drive command"
-    );
 }
 
 #[test]
@@ -457,320 +363,6 @@ fn run_scenario_command_attaches_and_runs() {
         gen_after,
         gen_before + 1,
         "re-running RunScenario should hot-reload (bump generation) in place"
-    );
-}
-
-#[test]
-fn builtin_task_advances_with_no_on_tick() {
-    // The built-in task: declare `this.task = seq([...])` in on_start and the
-    // engine advances it every tick — NO on_tick hook. step0 emits A and
-    // advances; step1 is a wait_until(true) that clears in one tick; step2 emits B.
-    let source = r#"
-        fn on_start(me) {
-            this.task = seq([
-                once(|m| emit("A", 1)),
-                wait_until(|m| true),
-                once(|m| emit("B", 2)),
-            ]);
-        }
-    "#;
-    let (mut app, _rover) = setup(source);
-
-    tick(&mut app); // step0 → emit A, advance
-    tick(&mut app); // step1 wait_until(true) → advance
-    tick(&mut app); // step2 → emit B
-
-    let events = &app.world().resource::<EventLog>().0;
-    assert!(
-        events.iter().any(|n| n == "A"),
-        "task step0 should emit A; got {events:?}"
-    );
-    assert!(
-        events.iter().any(|n| n == "B"),
-        "task should self-advance (no on_tick) and emit B; got {events:?}"
-    );
-}
-
-#[test]
-fn builtin_task_waits_for_event_with_no_on_event() {
-    // A task's wait_for(name) step completes from a delivered event even though
-    // the script defines NO on_event — the engine feeds events into the task.
-    // on_tick only PRODUCES the event; receiving it is the built-in's job.
-    let source = r#"
-        fn on_start(me) {
-            this.sent = false;
-            this.task = seq([
-                wait_for("GO"),
-                once(|m| emit("DONE", 1)),
-            ]);
-        }
-        fn on_tick(me) {
-            if !this.sent { emit("GO", 1); this.sent = true; }
-        }
-    "#;
-    let (mut app, _rover) = setup(source);
-
-    tick(&mut app); // emits GO (into inbox); task still on wait_for
-    assert!(
-        !app.world()
-            .resource::<EventLog>()
-            .0
-            .iter()
-            .any(|n| n == "DONE"),
-        "task must hold on wait_for(GO) before the event arrives"
-    );
-    tick(&mut app); // GO delivered → task feed advances past wait_for
-    tick(&mut app); // next step runs → emit DONE
-
-    assert!(
-        app.world().resource::<EventLog>().0.iter().any(|n| n == "DONE"),
-        "task should advance past wait_for(GO) via the engine event-feed (no on_event) and emit DONE"
-    );
-}
-
-/// Count how many times event `name` was emitted.
-fn event_count(app: &App, name: &str) -> usize {
-    app.world()
-        .resource::<EventLog>()
-        .0
-        .iter()
-        .filter(|n| n.as_str() == name)
-        .count()
-}
-fn emitted(app: &App, name: &str) -> bool {
-    app.world()
-        .resource::<EventLog>()
-        .0
-        .iter()
-        .any(|n| n == name)
-}
-
-#[test]
-fn builtin_task_fn_sugar_auto_inits_with_no_on_start() {
-    // Sugar: the whole scenario is one `fn task(me)` — no on_start, no
-    // `this.task = …`. The engine seeds it after Start and advances it each tick.
-    let source = r#"
-        fn task(me) {
-            seq([ once(|m| emit("X", 1)), once(|m| emit("Y", 1)) ])
-        }
-    "#;
-    let (mut app, _rover) = setup(source);
-    tick(&mut app); // Start → __init_task seeds this.task; Tick → step0 emits X
-    tick(&mut app); // step1 emits Y
-    assert!(
-        emitted(&app, "X") && emitted(&app, "Y"),
-        "`fn task(me)` should auto-init and advance with no on_start; got {:?}",
-        app.world().resource::<EventLog>().0
-    );
-}
-
-#[test]
-fn builtin_task_par_all_waits_for_every_branch() {
-    // par_all is done only when ALL branches finish. Branch A finishes tick 1
-    // (a once); branch B holds on wait_for(GO) until the event is delivered on
-    // tick 2 → the whole task completes on tick 2, not tick 1. (Branch B needs a
-    // real suspension point: the kernel `seq` advances THROUGH instantly-done
-    // children in one tick — standard behaviour-tree run-through, unlike the
-    // retired rhai engine's one-step-per-tick cursor.)
-    let source = r#"
-        fn on_start(me) {
-            this.sent = false;
-            this.task = par_all([
-                once(|m| emit("A", 1)),
-                seq([ once(|m| emit("B1", 1)), wait_for("GO"), once(|m| emit("B2", 1)) ]),
-            ]);
-        }
-        fn on_tick(me) {
-            if !this.sent { emit("GO", 1); this.sent = true; }
-        }
-    "#;
-    let (mut app, _rover) = setup(source);
-    tick(&mut app); // A + B1 fire; GO goes into the inbox; B holds on wait_for
-    assert!(
-        emitted(&app, "A") && emitted(&app, "B1"),
-        "tick1 runs both branches' first step"
-    );
-    assert!(
-        !emitted(&app, "TASK_COMPLETE"),
-        "par_all must wait for branch B to pass wait_for"
-    );
-    tick(&mut app); // GO delivered → B runs through to B2 → all branches done
-    assert!(emitted(&app, "B2"), "branch B advances on tick2");
-    assert!(
-        emitted(&app, "TASK_COMPLETE"),
-        "par_all completes once all branches finish"
-    );
-}
-
-#[test]
-fn builtin_task_par_race_completes_on_first_branch() {
-    // par_race is done as soon as ANY branch finishes. One branch never completes
-    // (wait_until false); the other finishes immediately → the task completes.
-    let source = r#"
-        fn on_start(me) {
-            this.task = par_race([
-                wait_until(|m| false),
-                once(|m| emit("WIN", 1)),
-            ]);
-        }
-    "#;
-    let (mut app, _rover) = setup(source);
-    tick(&mut app);
-    assert!(emitted(&app, "WIN"), "the finishing branch ran");
-    assert!(
-        emitted(&app, "TASK_COMPLETE"),
-        "par_race completes on the first finished branch"
-    );
-}
-
-#[test]
-fn builtin_task_repeat_runs_body_n_times() {
-    // repeat(3, ...) runs its body to completion three times.
-    let source = r#"
-        fn on_start(me) { this.task = repeat(3, once(|m| emit("R", 1))); }
-    "#;
-    let (mut app, _rover) = setup(source);
-    for _ in 0..4 {
-        tick(&mut app);
-    }
-    assert_eq!(
-        event_count(&app, "R"),
-        3,
-        "repeat(3) should run the body exactly 3 times"
-    );
-    assert!(
-        emitted(&app, "TASK_COMPLETE"),
-        "repeat completes after the last iteration"
-    );
-}
-
-#[test]
-fn builtin_task_forever_never_completes() {
-    // forever re-runs its body and never reports done.
-    let source = r#"
-        fn on_start(me) { this.task = forever(once(|m| emit("F", 1))); }
-    "#;
-    let (mut app, _rover) = setup(source);
-    for _ in 0..3 {
-        tick(&mut app);
-    }
-    assert_eq!(
-        event_count(&app, "F"),
-        3,
-        "forever runs the body every tick"
-    );
-    assert!(
-        !emitted(&app, "TASK_COMPLETE"),
-        "forever must never complete"
-    );
-}
-
-#[test]
-fn builtin_mission_completes_and_emits() {
-    // A `fn mission(me)` is auto-run like `fn task`. One objective whose condition
-    // holds completes immediately → OBJECTIVE_COMPLETE + its on_complete + the
-    // one-shot MISSION_COMPLETE.
-    let source = r#"
-        fn mission(me) {
-            [ objective("reach", #{ done: |m| true, on_complete: |m| emit("REACHED", 1) }) ]
-        }
-    "#;
-    let (mut app, _rover) = setup(source);
-    tick(&mut app);
-    assert!(emitted(&app, "REACHED"), "on_complete should fire");
-    assert!(
-        emitted(&app, "MISSION_COMPLETE"),
-        "a one-objective mission completes; got {:?}",
-        app.world().resource::<EventLog>().0
-    );
-}
-
-#[test]
-fn builtin_mission_requires_gate_locked_objectives() {
-    // `b` requires `a`; `a`'s condition never holds → `a` stays active, `b` never
-    // unlocks → neither b's on_complete nor MISSION_COMPLETE fire.
-    let source = r#"
-        fn mission(me) {
-            [
-                objective("a", #{ done: |m| false }),
-                objective("b", #{ requires: ["a"], done: |m| true,
-                                  on_complete: |m| emit("B_DONE", 1) }),
-            ]
-        }
-    "#;
-    let (mut app, _rover) = setup(source);
-    for _ in 0..3 {
-        tick(&mut app);
-    }
-    assert!(
-        !emitted(&app, "B_DONE"),
-        "b must stay locked until its prerequisite a completes"
-    );
-    assert!(
-        !emitted(&app, "MISSION_COMPLETE"),
-        "mission can't complete while a is unmet"
-    );
-}
-
-#[test]
-fn builtin_mission_fails_on_fail_condition() {
-    // An objective whose `fail` condition trips → OBJECTIVE_FAILED + MISSION_FAILED.
-    let source = r#"
-        fn mission(me) {
-            [ objective("survive", #{ done: |m| false, fail: |m| true }) ]
-        }
-    "#;
-    let (mut app, _rover) = setup(source);
-    tick(&mut app);
-    assert!(
-        emitted(&app, "MISSION_FAILED"),
-        "a failed objective fails the mission; got {:?}",
-        app.world().resource::<EventLog>().0
-    );
-    assert!(
-        !emitted(&app, "MISSION_COMPLETE"),
-        "a failed mission must not also report complete"
-    );
-}
-
-#[test]
-fn builtin_mission_dwell_holds_until_satisfied() {
-    // dwell requires the condition to hold for N sim-seconds. The test harness has
-    // no clock (elapsed_seconds()==0), so a 5s dwell never elapses → the objective
-    // stays active and the mission does not complete.
-    let source = r#"
-        fn mission(me) {
-            [ objective("hold", #{ done: |m| true, dwell: 5.0,
-                                   on_complete: |m| emit("HELD", 1) }) ]
-        }
-    "#;
-    let (mut app, _rover) = setup(source);
-    for _ in 0..3 {
-        tick(&mut app);
-    }
-    assert!(
-        !emitted(&app, "HELD"),
-        "dwell must hold the condition before completing"
-    );
-    assert!(
-        !emitted(&app, "MISSION_COMPLETE"),
-        "mission waits on the dwelling objective"
-    );
-}
-
-#[test]
-fn builtin_task_and_mission_run_together() {
-    // A scenario can run a behaviour (task) AND track success (mission) at once.
-    let source = r#"
-        fn task(me) { seq([ once(|m| emit("ACTING", 1)) ]) }
-        fn mission(me) { [ objective("win", #{ done: |m| true, on_complete: |m| emit("WON", 1) }) ] }
-    "#;
-    let (mut app, _rover) = setup(source);
-    tick(&mut app);
-    assert!(emitted(&app, "ACTING"), "the task ran");
-    assert!(
-        emitted(&app, "WON") && emitted(&app, "MISSION_COMPLETE"),
-        "the mission resolved"
     );
 }
 
@@ -968,33 +560,6 @@ fn registered_tool_dependencies_use_rhai_imports_and_reject_bad_replacements() {
     );
 }
 
-#[test]
-fn builtin_formation_tool_library_drives_a_follower() {
-    // The shipped `formation` tool library (formation::nearest_rover +
-    // formation::hold_line) must work end-to-end: a follower scenario finds the
-    // other rover via the prelude selection toolkit (called from inside the
-    // library) and drives toward it.
-    const LEADER_GID: u64 = 8001;
-    let mut app = build_app();
-    let _follower = spawn_typed_rover(&mut app, ROVER_GID, 0.0); // at origin
-    let _leader = spawn_typed_rover(&mut app, LEADER_GID, 10.0); // 10 m ahead (+X)
-
-    let src = r#"
-        fn on_tick(me) {
-            let leader = formation::nearest_rover(me);
-            if leader != () { formation::hold_line(me, leader, 4.0, 1.0); }
-        }
-    "#;
-    run_scenario(&mut app, ROVER_GID, src, 1);
-    tick(&mut app);
-
-    let drives = &app.world().resource::<DriveLog>().0;
-    assert!(
-        !drives.is_empty(),
-        "formation tool library should have driven the follower toward the leader; got {drives:?}"
-    );
-}
-
 /// Poll the `ScriptStatus` query for an entity (the unified diagnostics surface).
 fn script_status(app: &mut App, gid: u64) -> serde_json::Value {
     use lunco_api::queries::ApiQueryRegistry;
@@ -1150,14 +715,14 @@ fn run_timeline_lowers_data_to_a_running_scenario() {
     // Layer 2 end-to-end: fire RunTimeline with a pure-DATA timeline over the
     // SAME ApiCommandEvent path the API/MCP use. The handler must serialise it
     // into the generic executor, attach a ScriptedModel, and the runtime must
-    // drive the rover from the first `move_to` step (a far waypoint → drive forward).
+    // drive the subject from the first `move_to` step (a far route point → drive forward).
     use lunco_api::executor::ApiCommandEvent;
 
     let mut app = build_app();
     let rover = spawn_rover(&mut app); // bare, at origin facing -Z
     assert!(app.world().get::<ScriptedModel>(rover).is_none());
 
-    // Object form with a far waypoint, then a brake command step.
+    // Object form with a far route point, then a brake command step.
     let timeline = serde_json::json!({
         "name": "t",
         "steps": [
@@ -1185,44 +750,7 @@ fn run_timeline_lowers_data_to_a_running_scenario() {
     let drives = &app.world().resource::<DriveLog>().0;
     assert!(
         !drives.is_empty() && drives[0].0 > 0.0,
-        "first move_to step should drive the rover forward toward the waypoint; got {drives:?}"
-    );
-}
-
-#[test]
-fn run_timeline_arrives_advances_and_brakes() {
-    // A move_to step placed AT the rover (large radius) arrives immediately: nav_to
-    // brakes, then the explicit emit step fires. Proves data-step lowering,
-    // native task advancement, and event delivery.
-    use lunco_api::executor::ApiCommandEvent;
-
-    let mut app = build_app();
-    let _rover = spawn_rover(&mut app);
-
-    let timeline = serde_json::json!([
-        { "move_to": [0.0, 0.0, 0.0], "radius": 5.0 },
-        { "emit": "ARRIVED_A", "value": true },
-    ])
-    .to_string();
-
-    app.world_mut().trigger(ApiCommandEvent {
-        command: "RunTimeline".to_string(),
-        params: serde_json::json!({ "target": ROVER_GID, "timeline": timeline }),
-        id: 1,
-        correlation_id: None,
-    });
-    app.world_mut().flush();
-
-    tick(&mut app);
-
-    assert!(
-        app.world().resource::<BrakeCount>().0 >= 1,
-        "arriving on the move_to step should brake"
-    );
-    let events = &app.world().resource::<EventLog>().0;
-    assert!(
-        events.iter().any(|n| n == "ARRIVED_A"),
-        "the explicit emit step should run after move_to; got {events:?}"
+        "first move_to step should drive the subject forward toward the route point; got {drives:?}"
     );
 }
 
@@ -1287,7 +815,7 @@ fn timeline_storage_register_discover_and_run() {
         "GetTimeline should return the stored JSON; got {got}"
     );
 
-    // 3. Run it by name → the rover drives forward toward the waypoint.
+    // 3. Run it by name → the subject drives forward toward the route point.
     assert!(app.world().get::<ScriptedModel>(rover).is_none());
     app.world_mut().trigger(ApiCommandEvent {
         command: "RunStoredTimeline".to_string(),
@@ -1338,7 +866,7 @@ fn run_stored_timeline_unknown_name_errors() {
 #[test]
 fn client_role_gates_script_execution() {
     use lunco_core::NetworkRole;
-    // The shipped mission drives toward its first (far) waypoint on tick 1 — a
+    // The shipped task program drives toward its first (far) route point on tick 1 — a
     // reliable "did the script run?" probe through the generic SetPorts bridge.
     let src =
         lunco_assets::scripting::example("mission_plan").expect("mission_plan example embedded");
@@ -1722,7 +1250,7 @@ fn despawn_verb_removes_entity() {
     const VICTIM_GID: u64 = 8888;
     let source = format!(r#"fn on_start(me) {{ despawn({VICTIM_GID}); }}"#);
     let (mut app, _rover) = setup(&source);
-    let victim = spawn_typed_rover(&mut app, VICTIM_GID, 50.0);
+    let victim = spawn_entity_at(&mut app, VICTIM_GID, 50.0);
     assert!(
         app.world().get_entity(victim).is_ok(),
         "victim exists before tick"

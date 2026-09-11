@@ -113,11 +113,6 @@ pub enum UserIntent {
     /// While an egui field is focused egui consumes the key, so the guard suppresses
     /// this intent that frame and it acts only once the field is defocused.
     Cancel,
-    /// Place a waypoint on the scene surface when paired with the primary
-    /// pointer action. This is an editor intent, not a rover control port; it
-    /// lives in the same input map so the binding is data-driven and rebinding
-    /// does not leave the waypoint tool with a private raw-key path.
-    PlaceWaypoint,
     /// Delete the current editor selection. This is an editor intent so the
     /// shortcut is rebindable and panels do not inspect raw keyboard state.
     DeleteSelection,
@@ -142,7 +137,6 @@ impl std::fmt::Display for UserIntent {
             Self::SwitchMode => "Switch camera mode",
             Self::Pause => "Pause simulation",
             Self::Cancel => "Cancel current tool",
-            Self::PlaceWaypoint => "Place waypoint",
             Self::DeleteSelection => "Delete selection",
         };
         f.write_str(label)
@@ -169,7 +163,6 @@ impl UserIntent {
             Self::SwitchMode => "switch_mode",
             Self::Pause => "pause",
             Self::Cancel => "cancel",
-            Self::PlaceWaypoint => "place_waypoint",
             Self::DeleteSelection => "delete_selection",
         }
     }
@@ -379,7 +372,6 @@ pub fn parse_user_intent(name: &str) -> Option<UserIntent> {
         "switch_mode" => Some(UserIntent::SwitchMode),
         "pause" => Some(UserIntent::Pause),
         "cancel" => Some(UserIntent::Cancel),
-        "place_waypoint" => Some(UserIntent::PlaceWaypoint),
         "delete_selection" => Some(UserIntent::DeleteSelection),
         _ => None,
     }
@@ -917,7 +909,6 @@ mod tests {
             ("switch_mode", UserIntent::SwitchMode),
             ("pause", UserIntent::Pause),
             ("cancel", UserIntent::Cancel),
-            ("place_waypoint", UserIntent::PlaceWaypoint),
             ("delete_selection", UserIntent::DeleteSelection),
         ] {
             assert_eq!(parse_user_intent(name), Some(expected), "{name}");

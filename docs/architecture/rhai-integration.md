@@ -141,7 +141,7 @@ bus-only (isolated VMs); see §7f.
 
 ### Examples
 
-`assets/scripting/examples/`: `patrol.rhai` (waypoint loop, emits
+`assets/scenarios/`: `route_follow.rhai` (route-point task program, emits
 checkpoints), `mission.rhai` (coordinator reacting via `on_event`),
 `mission_plan.rhai` (declarative task-tree mission), `robot_mission.rhai`
 (durable phase checkpoints), and `script_first_robot.rhai` (USD + Modelica
@@ -458,16 +458,18 @@ policy out of the Rust engine core:
 1. **Sequencing** — `seq`/`par_*`/`repeat`/`wait_*` are data nodes executed by the
    behavior kernel; Rhai authors the policy and callbacks.
 2. **Events and Sensors** — `TelemetryEvent` reaches `on_event`; Avian overlap
-   Sensors publish waypoint arrivals. A waypoint authors a visible dome and a
-   ground-anchored invisible trigger, both using the same standard USD `radius`;
-   mission scripts do not scale markers or poll a duplicate arrival tolerance.
-3. **Behavior Trees** — BT.CPP v4 XML owns route topology and the native behavior
-   kernel executes it; USD owns waypoint identity and geometry.
+   Sensors publish generic `enter:<zone>` events. A route point authors a visible
+   dome and a ground-anchored invisible trigger, both using the same standard USD
+   `radius`; route programs do not scale markers or poll a duplicate arrival
+   tolerance.
+3. **Task programs** — Rhai owns sequencing, route policy, and callbacks while
+   the generic behavior kernel executes the authored task data; USD owns route
+   identity and geometry.
 4. **Objectives** — declarative Rhai objectives consume real event/state predicates
    and publish completion to the tutorial HUD.
 5. **Simulation time** — waits use simulation time and respect pause/transport rate.
-6. **Observability** — `ScriptStatus`, `ScriptInspect`, route cursor state, and
-   `ReachedWaypoints` expose execution and arrival state.
+6. **Observability** — `ScriptStatus`, `ScriptInspect`, task state, and the
+   authored route events expose execution and arrival state.
 
 **Corrected layering — everything above the core line is rhai, not Rust:**
 ```
@@ -484,18 +486,19 @@ policy out of the Rust engine core:
   Events/Triggers from Avian sensors (volumes, not distance polling)
   USD scene/prefab (static authoring)
 ```
-The Sequencer is **Rhai policy data, not core logic**. BT.CPP route topology is
-decoded by the autopilot domain and executed by its generic behavior kernel. The
-engine core only provides lifecycle, command, observation, and event mechanisms.
+The task tree is **Rhai policy data, not product behavior in the core**. The
+generic kernel only lowers and executes explicit task nodes; route topology and
+control policy remain authored in USD and Rhai. The engine core provides the
+lifecycle, command, observation, and event mechanisms.
 
 Rhai has no native coroutines; the cooperative task tree is the deterministic,
 hot-reloadable replacement and does not create a second engine loop.
 
 ## 7d. Core/script boundary (mechanism vs policy) + ROS2
 
-**Directive:** objectives are authored in rhai; behavior trees and
-all higher-level constructs are REMOVED from the Rust core; ROS2 integration is
-planned. Resulting split:
+**Directive:** objectives, routes, and higher-level behavior policy are authored
+in Rhai; Rust retains only the generic task-node lowering and lifecycle seams
+that the production runtime needs. ROS2 integration is planned. Resulting split:
 
 **Core exposes only (irreducible mechanism):**
 - Persistent scenario VM — `rhai::AST` + `Scope` per scenario, recompiled on
@@ -622,7 +625,7 @@ scenario-state map supplied to lifecycle hooks and native task closures.
 **Execution model:** ONE shared `rhai::Engine` resource (all host fns registered),
 **per-entity `AST` + persistent `Scope`** (compiled once, hot-reloaded on source
 change). Fixes today's "fresh Engine per eval" cost. The same `ScriptDocument`
-reused on many entities = **prefab scripts** — 10 rovers run `patrol.rhai`, each
+reused on many entities = **prefab scripts** — 10 subjects run `route_follow.rhai`, each
 with its own `Scope` (independent goal index/state).
 
 Task leaves use anonymous closures with one positional host id: `|me| ...`.

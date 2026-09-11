@@ -477,10 +477,6 @@ impl MarkClientLocalExt for bevy::app::App {
 
 /// Spawn an independent entity from the catalog at a given world position.
 ///
-/// Route markers are intentionally excluded from this command: they have no
-/// meaning without a vessel and ordered mission leg. Use `AddRuntimeWaypoint`
-/// for a runtime route member, or author a marker and mission leg in USD.
-///
 /// **Why the type lives in `lunco-core` and the handler does not.** `SpawnEntity`
 /// is a *wire* command: `lunco-networking` declares its channel
 /// (`declare_channel::<SpawnEntity>`), which needs nothing but the type. The

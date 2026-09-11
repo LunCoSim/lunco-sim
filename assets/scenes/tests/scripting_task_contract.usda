@@ -1,0 +1,27 @@
+#usda 1.0
+(
+    defaultPrim = "ScriptingTaskContract"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Production acceptance fixture for the authored Rhai task and mission
+# contract. The program is scene-owned; no vessel-specific implementation is
+# needed to exercise the generic scripting runtime.
+def Xform "ScriptingTaskContract" (
+    kind = "assembly"
+)
+{
+    def DistantLight "TestLight"
+    {
+        float intensity = 1.0
+    }
+
+    def Scope "Scenario" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/scripting_task_contract.rhai@
+    }
+}

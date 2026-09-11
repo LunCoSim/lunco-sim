@@ -223,14 +223,6 @@ pub fn on_spawn_entity_command(
         }
     };
 
-    if entry.is_route_marker() {
-        warn!(
-            "SPAWN_ENTITY: '{}' is a route marker and cannot be spawned independently; use AddRuntimeWaypoint with an explicit vessel",
-            cmd.entry_id
-        );
-        return;
-    }
-
     if q_grids.get(active_frame.0).is_err() {
         warn!(
             active_frame = ?active_frame.0,
@@ -330,7 +322,7 @@ pub fn on_spawn_entity_command(
     // Networked identity (gap G2): `spawn_usd_entry` already carries the shared
     // runtime identity fence, so this caller only adds its replication contract
     // and the host's spawn journal. Keeping the fence in the constructor is
-    // what makes palette spawns and runtime waypoint markers identical.
+    // what makes palette spawns and authored runtime instances identical.
     commands.entity(result.root_entity).try_insert((
         lunco_core::NetReplicate,
         lunco_core::NetSpawn {
@@ -3509,9 +3501,6 @@ impl Plugin for SpawnCommandPlugin {
         // verb is available consistently through the HTTP API, Rhai, and
         // `discover_schema`.
         register_all_commands(app);
-        // Runtime waypoint creation and collision-sensor arrival are shared by
-        // the GUI click path and the deterministic headless scene runner.
-        crate::runtime_waypoint::register(app);
         // The READ verb for the same entities. Registered here so any binary with
         // the scene verbs answers `QueryEntity` too — the headless server included.
         crate::entity_query::register(app);

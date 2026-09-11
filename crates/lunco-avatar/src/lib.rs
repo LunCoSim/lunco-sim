@@ -1220,9 +1220,7 @@ impl Plugin for LunCoAvatarPlugin {
         app.init_resource::<lunco_core::DragModeActive>();
         app.init_resource::<lunco_core::SpawnToolActive>();
         app.init_resource::<lunco_core::TerrainToolActive>();
-        app.init_resource::<lunco_core::WaypointToolActive>();
         app.init_resource::<lunco_core::ArmedScriptTool>();
-        app.init_resource::<lunco_core::WaypointMenuOpen>();
         // Populated by `lunco-workbench` when egui is present; guaranteed here so
         // the keyboard gate (`scene_keyboard_active`) has a resource to read on
         // binaries that use the avatar without the workbench (headless server) —
@@ -3598,19 +3596,12 @@ fn capture_avatar_intent(
     world: Option<Res<WorldTime>>,
     egui_focus: Res<lunco_core::EguiFocus>,
     drag_mode: Option<Res<lunco_core::DragModeActive>>,
-    waypoint_menu_open: Option<Res<lunco_core::WaypointMenuOpen>>,
     mut commands: Commands,
 ) {
     // Mouse look is a POINTER intent: suppress it while egui holds the pointer so
     // right-dragging over a panel doesn't orbit the scene. (Keyboard focus is
     // irrelevant to look — that gate guards movement/Cancel elsewhere.)
-    //
-    // A waypoint context menu counts too, and needs its own flag: `wants_pointer` only
-    // goes true once the cursor is already ON the menu, so the camera would spin all
-    // the way there and the menu could never be reached comfortably.
-    let pointer_captured = egui_focus.wants_pointer
-        || waypoint_menu_open.map(|m| m.0).unwrap_or(false)
-        || drag_mode.is_some_and(|drag| drag.active);
+    let pointer_captured = egui_focus.wants_pointer || drag_mode.is_some_and(|drag| drag.active);
 
     for (entity, intent_state, mut analog) in q_avatar.iter_mut() {
         let mut delta = Vec2::ZERO;
@@ -3955,7 +3946,7 @@ fn is_vessel_control_endpoint(
 /// Occlusion must not depend on a mesh pick. The analytic spheres should be tested
 /// against the terrain the same way every other placement tool already does — cast
 /// the click ray at the surface oracle (`lunco_terrain_surface::GridSurfaceQuery::raycast`,
-/// which `spawn.rs` and `waypoint_click.rs` both use) and fold that distance into
+/// which the generic placement tools use) and fold that distance into
 /// `min_t` before the sphere loop. That fixes Earth-through-the-ground too, and stops
 /// the behaviour depending on whether a terrain happens to be tile-streamed.
 ///
@@ -3989,7 +3980,6 @@ pub fn avatar_raycast_possession(
     drag_mode_active: Res<lunco_core::DragModeActive>,
     spawn_tool_active: Res<lunco_core::SpawnToolActive>,
     terrain_tool_active: Res<lunco_core::TerrainToolActive>,
-    waypoint_tool_active: Res<lunco_core::WaypointToolActive>,
     armed_script_tool: Res<lunco_core::ArmedScriptTool>,
     mut commands: Commands,
     q_bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>,
@@ -4023,15 +4013,9 @@ pub fn avatar_raycast_possession(
     if !scene_interaction.mode.possession_owns_click(modified) {
         return;
     }
-    // Waypoint placement is a semantic intent, not an Alt-key convention. The
-    // bundled map currently binds Alt, but any user-authored rebind must reserve
-    // the click from possession in exactly the same way.
-    let Some((camera, cam_gtf, avatar_entity, intents)) = camera_q.single().ok() else {
+    let Some((camera, cam_gtf, avatar_entity, _intents)) = camera_q.single().ok() else {
         return;
     };
-    if intents.pressed(&UserIntent::PlaceWaypoint) {
-        return;
-    }
     // Mid-drag on a transform gizmo: don't flip the camera under the user.
     if drag_mode_active.active {
         return;
@@ -4042,10 +4026,6 @@ pub fn avatar_raycast_possession(
     }
     // Terrain brush armed: clicks sculpt the terrain, don't possess.
     if terrain_tool_active.0 {
-        return;
-    }
-    // Waypoint Move/Insert armed: that click places the waypoint, don't possess.
-    if waypoint_tool_active.0 {
         return;
     }
     // A script tool is armed: that click belongs to the tool, don't possess.
@@ -4181,10 +4161,9 @@ fn avatar_escape_possession(
     cursor_mode: lunco_core::CursorModeActive,
     mut commands: Commands,
 ) {
-    // `Cancel` unwinds the INNERMOST mode first. While ANY cursor-driven mode owns the
-    // pointer — a waypoint placement/menu, the spawn ghost, the terrain brush — Cancel
-    // belongs to that mode, not to possession: releasing the vessel out from under the
-    // user as well would be two undos for one keypress. With nothing up, Cancel means
+    // `Cancel` unwinds the active cursor mode first. While a spawn ghost, terrain
+    // brush, or authored script tool owns the pointer, Cancel belongs to that mode,
+    // not to possession. With nothing up, Cancel means
     // what it always did and releases the vessel. Same gate family the click handlers
     // already honour, so keyboard and mouse agree on who owns the interaction.
     if cursor_mode.any() {

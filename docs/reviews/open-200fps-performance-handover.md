@@ -340,7 +340,6 @@ No duplicate propagation path or compatibility API was added.
 
 The focused checks passed:
 
-- `cargo test -p lunco-autopilot --lib -j 4`: **30/30**.
 - `cargo test -p lunco-modelica-core --lib -j 4`: **282 passed, 1 ignored**.
 - `cargo test -p lunco-usd-sim --lib -j 4`: **124/124**.
 - `cargo test -p lunco-celestial --lib -j 4`: **119/119**.

@@ -11,7 +11,7 @@ already have a reusable source below.
 | Assembly | USD (`.usda`) | prim hierarchy, references, variants, transforms, connectors, collections |
 | Continuous math | Modelica (`.mo`) | physical equations, state, rates, domain calculations |
 | Scenario logic | Rhai (`.rhai`) | orchestration, rules, scoring, assertions, user-facing outcomes |
-| Reusable behavior | BT.CPP XML (`.btxml`) | inspectable stateful decisions and behavior composition |
+| Reusable behavior | Rhai (`.rhai`) | inspectable stateful decisions and behavior composition |
 | Heavy runtime capability | Rust | general high-cost algorithms and engine bridges, with control exposed to Rhai |
 
 Rust must not encode a particular rover, lesson, mission, or assembly. Rhai must
@@ -32,7 +32,7 @@ between independently valid parts belong in the USD assembly that uses them.
 | `models/LunCo/<domain>/` | packaged reusable Modelica library |
 | `models/` | standalone examples and compatibility-independent demo models |
 | `scenarios/` | reusable Rhai scenario programs |
-| `behaviors/` | reusable behavior trees |
+| `scenarios/` | reusable Rhai task programs |
 | `scripting/lib/` | importable Rhai helpers |
 | `scripting/policy/` | policy hooks |
 | `tutorials/` | lesson Rhai, optional lesson worlds, and authored lesson data |
@@ -47,7 +47,7 @@ Use `rg` before creating:
 ```sh
 rg -n "concept|port_name|LunCo.*API" assets/components assets/vessels assets/models
 rg -l "info:sourceAsset|references|payload" assets -g '*.usda'
-rg --files assets -g '*.usda' -g '*.mo' -g '*.rhai' -g '*.btxml'
+rg --files assets -g '*.usda' -g '*.mo' -g '*.rhai'
 ```
 
 The filesystem is the discovery manifest. Do not add a second hand-maintained

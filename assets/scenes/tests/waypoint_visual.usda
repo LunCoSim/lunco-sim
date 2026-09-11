@@ -39,10 +39,30 @@ def Xform "WaypointVisual" (
     }
 
     def Xform "Waypoint1" (
-        prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker>
+        prepend references = @lunco://markers/route_point.usda@</RoutePoint>
     )
     {
         double3 xformOp:translate = (0.0, 0.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # The visual acceptance scene is the live owner for reusable annotation
+    # materials. Keep the landing-site and predicted-touchdown markers here so
+    # their appearance contract is observed through composed USD rather than a
+    # Rust fixture that reads asset source text in isolation.
+    def Xform "LandingLocation" (
+        prepend references = @lunco://vessels/markers/landing_location.usda@</LandingLocationMarker>
+    )
+    {
+        double3 xformOp:translate = (4.0, 0.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Xform "PredictedLanding" (
+        prepend references = @lunco://vessels/markers/predicted_landing.usda@</PredictedLandingMarker>
+    )
+    {
+        double3 xformOp:translate = (-4.0, 0.0, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 

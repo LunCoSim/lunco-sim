@@ -1,4 +1,4 @@
-//! A lesson's autopilot must be gated on the AUDIENCE, never on the build profile.
+//! An authored lesson driver must be gated on the AUDIENCE, never on the build profile.
 //!
 //! Every tutorial that can play itself (`first_drive`, `build_base`,
 //! `lander_mission`, …) carries a `task` behaviour guarded by one condition. The
@@ -44,7 +44,7 @@ fn a_window_means_a_human_is_watching() {
     );
 }
 
-/// The CI case: nothing can click, so an autopilot has to carry the lesson or it
+/// The CI case: nothing can click, so an authored driver has to carry the lesson or it
 /// tests nothing.
 #[test]
 fn no_window_means_nobody_is_watching() {
@@ -55,7 +55,7 @@ fn no_window_means_nobody_is_watching() {
 }
 
 /// A world that never resolves the audience (a unit test, a plugin-less `World`)
-/// has no window by construction — so the fail-safe is `Unattended`. An autopilot
+/// has no window by construction — so the fail-safe is `Unattended`. An authored driver
 /// that runs when it should not is visible; a lesson that silently refuses to run
 /// in CI is a green test that tested nothing.
 #[test]
@@ -66,7 +66,7 @@ fn the_default_is_unattended() {
 
 /// No shipped lesson may reason about the build profile. `is_debug()` is gone
 /// from the bridge, and rhai resolves verbs at CALL time — a lesson still calling
-/// it would compile, ship, and fail at runtime only when its autopilot fires,
+/// it would compile, ship, and fail at runtime only when its driver fires,
 /// which is exactly the silent-lesson-failure mode. Catch it here instead.
 #[test]
 fn no_lesson_gates_on_the_build_profile() {

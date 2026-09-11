@@ -286,7 +286,7 @@ impl Plugin for CoSimPlugin {
         // `CosimSet::Propagate` IS the control DAC. Nesting it inside
         // `lunco_core::ControlDacSet` is what gives that anchor its meaning:
         // every actuator that reads a `Port` orders `.after(ControlDacSet)`
-        // (lunco-controller, lunco-autopilot, lunco-hardware, lunco-mobility) and
+        // (lunco-controller, lunco-hardware, lunco-mobility) and
         // those edges must resolve against the system that actually writes the
         // port — this one. A sibling `.before()` relationship would instead leave
         // the anchor empty and every such ordering a silent no-op, letting the
@@ -706,7 +706,7 @@ pub struct SetPorts {
     /// dropped by `PortRegistry` (strict per-backend) — the write stays a no-op,
     /// but when the target exposes a port surface WITHOUT that name the drop is
     /// recorded once per `(entity, port)` in [`CosimDiagnostics::faults`] (M12),
-    /// so a typo'd port from the API/script/autopilot surfaces instead of
+    /// so a typo'd port from the API/script/controller surfaces instead of
     /// vanishing. A binding may still name ports a given vessel doesn't have.
     pub writes: Vec<(String, f64)>,
     #[serde(default)]
@@ -756,7 +756,7 @@ pub struct ReleaseControl {
 /// On control-path latency ("input at tick N → wheels at tick N"), two halves:
 ///
 /// 1. **Producer ordering (not in this crate) — DECLARED.** `drive_from_bindings`
-///    (`lunco-controller`) and `drive_autopilots` (`lunco-autopilot`) register
+///    (`lunco-controller`) and other generic input producers register
 ///    with an explicit `.before(lunco_core::ControlDacSet)` edge, so the
 ///    `SetPorts` they emit is flushed — and the source `Port` written — before
 ///    propagation carries it across the `Wire` and the wheel systems read it.
@@ -792,7 +792,7 @@ fn on_set_ports(
         // `Time<Virtual>` is also paused by the Modelica coupling barrier while
         // a shared solver result is in flight, though; treating that internal
         // synchronization pause as user intent drops legitimate keyboard,
-        // autopilot, API, and Rhai commands nondeterministically under load.
+        // API, and Rhai commands nondeterministically under load.
         // TimeTransport is the authoritative user play/pause owner. The local
         // free avatar has no GlobalEntityId and remains an interaction-cadence
         // endpoint, so an explicit pause does not freeze its presentation
@@ -834,7 +834,7 @@ fn on_set_ports(
             // (`propagate_connections`): an entity exposing NO ports at all is a
             // structural or still-loading endpoint — load order, not a fault —
             // while an entity that has ports but not THIS name is the genuine
-            // case (a typo'd port from the API/script/autopilot). Ledger entry
+            // case (a typo'd port from the API/script/controller). Ledger entry
             // deduped per `(entity, port)`, exactly like the wiring faults, and
             // never re-asserted over a port proven to have landed.
             let has_port_surface = !reg.entity_ports(world, target).is_empty();
@@ -885,7 +885,7 @@ fn on_release_port(
 /// Apply the one authoritative safe-stop transaction for every vehicle control
 /// surface. The command-world closure is necessary because port backends use
 /// `&mut World`; it also gives a stale `SetPorts` write the same lifecycle fence
-/// as possession and autopilot release.
+/// as possession and controller release.
 #[on_command(ReleaseControl)]
 fn on_release_control(
     trigger: On<ReleaseControl>,

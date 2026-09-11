@@ -38,7 +38,7 @@ fn main() -> lunco_luncosim::AppExit {
                 .cloned()
                 .collect();
             if paths.is_empty() {
-                eprintln!("--validate needs at least one path (.mo/.usda/.wgsl/.rhai/.btxml/.xml)");
+                eprintln!("--validate needs at least one path (.mo/.usda/.wgsl/.rhai/.xml)");
                 std::process::exit(2);
             }
             // The app is intentionally not constructed for pre-flight, so its

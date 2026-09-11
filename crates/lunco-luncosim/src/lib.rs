@@ -416,7 +416,7 @@ FLAGS:
                          Without --scene, start with an empty persistent world
                          shell; the sandbox is an explicit scene/test fixture.
         --window-pos SPEC  Place the OS window, e.g. 1920x1080+0+0.
-        --validate PATH…   Pre-flight-check asset files (.mo/.usda/.wgsl/.rhai/.btxml/.xml):
+        --validate PATH…   Pre-flight-check asset files (.mo/.usda/.wgsl/.rhai/.xml):
                          parse-only, no window/GPU/app. Prints a report and
                          exits 0 (all ok) or 1 (any failed).
 
@@ -3032,10 +3032,6 @@ impl Plugin for SandboxCorePlugin {
             // just produces no input while the Drive/Brake/Possess command
             // observers + wire-type registrations the host needs stay live.
             .add_plugins(LunCoControllerPlugin)
-            // Autopilot = a headless AiAgent actor that possesses + drives a vessel
-            // (spec 034). Placed on the control path, not the avatar — runs on the
-            // `--no-ui` server identically.
-            .add_plugins(lunco_autopilot::AutopilotPlugin)
             .add_plugins(LunCoAvatarPlugin)
             .add_plugins(lunco_scripting::LunCoScriptingPlugin)
             // Default scene-wide fill for scenes that author no lighting; a

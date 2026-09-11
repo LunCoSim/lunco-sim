@@ -9,21 +9,21 @@
 // or `dt()` integration in rhai — timing and state come from the simulation.
 //
 // Phases: follow the lander down → wait for the three explicit landing
-// transition events → detach the rover → `rover_deployed` → consume the marker
-// Sensor's waypoint events. The transition waits run concurrently because the
+// transition events → detach the rover → `rover_deployed` → consume the route
+// point Sensor events. The transition waits run concurrently because the
 // physical touchdown predicate and the target-qualified GNC handoff are
 // independent producers and may become true on different simulation steps.
 //
 // Every phase it reaches, it ANNOUNCES on the bus: `rover_deployed`,
 // `waypoint_1_reached` … `waypoint_3_reached`, `course_complete`. That's the whole
-// contract with anything watching — the rover's autopilot wakes on
+// contract with anything watching — the scene route program wakes on
 // `rover_deployed`, the tutorial turns the rest into a student checklist. Neither
 // reaches into this script's state, and this script knows about neither.
 
-// The marker's invisible ground-anchored Trigger is its overlap Sensor. The
-// runtime emits `waypoint.reached` with a structured {path, state, index} value.
-// The shared prelude applies the authored inactive look through the USD runtime
-// layer; this script only translates the arrival into mission events.
+// The route-point's invisible ground-anchored Trigger is its overlap Sensor.
+// The route program consumes its generic `enter:<zone>` event and emits an
+// ordered `route_point_reached` index; this script translates that event into
+// mission milestones.
 const LANDER = "/LanderTest/Lander";
 const DOCK = "/LanderTest/LanderRoverJoint";
 
@@ -57,11 +57,10 @@ fn on_event(me, evt) {
         this.lander_settled = true;
         return;
     }
-    let rover = find("/LanderTest/SkidRover");
-    if evt.name != "waypoint.reached" || evt.source != rover { return; }
-    let index = waypoint_event_index(evt);
+    let route = find("/LanderTest/Route");
+    if evt.name != "route_point_reached" || evt.source != route { return; }
+    let index = evt.value;
     if index == () { return; }
-    apply_waypoint_reached(evt);
     let milestones = [
         "waypoint_1_reached",
         "waypoint_2_reached",
@@ -98,8 +97,8 @@ fn release_notice(me) {
 
 fn engage_notice(me) {
     emit("rover_deployed");
-    cmd("EngageAutopilot", #{ vessel: find("/LanderTest/SkidRover") });
-    notify_kind("Rover deployed - autopilot driving the course. Click the rover to take over. F toggles the authored route autopilot.", "success");
+    emit("route_start");
+    notify_kind("Rover deployed - the authored route program is driving the course. Click the rover to take over.", "success");
 }
 
 fn gate_one_notice(me) {

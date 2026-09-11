@@ -1597,43 +1597,6 @@ mod tests {
     }
 
     #[test]
-    fn both_alt_keys_reach_the_place_waypoint_intent() {
-        use bevy::input::InputPlugin;
-        use leafwing_input_manager::prelude::InputManagerPlugin;
-
-        let mut app = App::new();
-        app.add_plugins((
-            bevy::time::TimePlugin,
-            InputPlugin,
-            InputManagerPlugin::<UserIntent>::default(),
-        ));
-        let entity = app
-            .world_mut()
-            .spawn((
-                ActionState::<UserIntent>::default(),
-                InputBindingsSettings::default().input_map().unwrap(),
-            ))
-            .id();
-
-        for key in [KeyCode::AltLeft, KeyCode::AltRight] {
-            app.world_mut()
-                .resource_mut::<ButtonInput<KeyCode>>()
-                .press(key);
-            app.update();
-            assert!(app
-                .world()
-                .entity(entity)
-                .get::<ActionState<UserIntent>>()
-                .expect("input manager action state")
-                .pressed(&UserIntent::PlaceWaypoint));
-            app.world_mut()
-                .resource_mut::<ButtonInput<KeyCode>>()
-                .release(key);
-            app.update();
-        }
-    }
-
-    #[test]
     fn autopilot_action_is_separate_from_contextual_space_controls() {
         let bindings = InputBindingsSettings::default().key_bindings().unwrap();
         let action = bindings

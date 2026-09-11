@@ -1,12 +1,11 @@
-//! Tool-call vocabulary shared between the autopilot (the emitter) and the
-//! tool handlers (the executors).
+//! Tool-call vocabulary shared between task/program emitters and tool handlers.
 //!
 //! ## Why these types live here
 //!
-//! [`ToolFired`] is produced by a behaviour-tree `run_tool` leaf inside
-//! `lunco-autopilot`, and consumed by arbitrary tool-handler crates
-//! (`lunco-avatar`'s `take_photo`, a future `lunco-science`, …). Forcing every
-//! handler crate to depend on `lunco-autopilot` just to read the event would
+//! [`ToolFired`] is produced by a generic task/program action and consumed by
+//! arbitrary tool-handler crates (`lunco-avatar`'s `take_photo`, a future
+//! `lunco-science`, …). Forcing every handler crate to depend on the producer
+//! just to read the event would
 //! invert the dependency: instruments would depend on the driver. Keeping the
 //! *vocabulary* (this module) in `lunco-core` — which every crate already
 //! depends on — breaks that cycle. The *registry* of handlers (the mechanism)
@@ -18,7 +17,7 @@
 
 use bevy::prelude::*;
 
-/// A single tool invocation queued by a behaviour-tree `run_tool` leaf. The
+/// A single tool invocation queued by a task/program action. The
 /// `tool` names the action (convention `family::verb`, e.g.
 /// `"science::take_photo"`); `args` is an opaque payload (typically JSON) the
 /// tool's handler interprets — the core stays tool-agnostic.
@@ -30,9 +29,8 @@ pub struct ToolInvocation {
     pub args: String,
 }
 
-/// Notification that a `run_tool` behaviour-tree leaf fired. Emitted by the
-/// autopilot's per-tick drive system (the one place with ECS `Commands`
-/// access) after it drains the per-tick tool-call queue. Tool-handler crates
+/// Notification that a task/program tool action fired. Emitted by the owning
+/// runtime after it drains the per-tick tool-call queue. Tool-handler crates
 /// observe this to run the named tool.
 ///
 /// Read via an observer (`fn on_tool_fired(_: On<ToolFired>)`) or — when the
@@ -40,7 +38,7 @@ pub struct ToolInvocation {
 /// fired event out to the registered handler's `execute()`.
 #[derive(Event, Clone, Debug)]
 pub struct ToolFired {
-    /// Vessel whose autopilot's tree fired the tool.
+    /// Entity whose task/program fired the tool.
     pub vessel: Entity,
     /// The vessel's [`GlobalEntityId`] (the api_id rhai/HTTP clients address it
     /// by) — the value a handler passes in a command's Entity field so the

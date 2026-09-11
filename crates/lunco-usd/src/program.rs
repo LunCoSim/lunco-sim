@@ -7,8 +7,6 @@
 
 use crate::document::{LayerId, UsdOp};
 use bevy::prelude::Reflect;
-use lunco_usd_bevy::StageView;
-use openusd::sdf::Path as SdfPath;
 
 /// One scalar input declared by an attached program.
 #[derive(Debug, Clone, PartialEq, Reflect, serde::Serialize, serde::Deserialize)]
@@ -226,20 +224,6 @@ pub fn inline_program_source_ops(
     ]
 }
 
-/// Return the selected BehaviorTree source in the two marker forms consumed by
-/// the live projections. Both stage-update paths use this translation so they
-/// cannot drift back to independent source-arm selection.
-pub(crate) fn selected_behavior_source_values(
-    view: &StageView<'_>,
-    prim: &SdfPath,
-) -> Result<(Option<String>, Option<String>), lunco_usd_bevy::program::ProgramSourceIssue> {
-    match lunco_usd_bevy::program::resolve_behavior_tree_source(view, prim)? {
-        Some(lunco_usd_bevy::program::BehaviorTreeSource::Code(source)) => Ok((Some(source), None)),
-        Some(lunco_usd_bevy::program::BehaviorTreeSource::Asset(asset)) => Ok((None, Some(asset))),
-        None => Ok((None, None)),
-    }
-}
-
 fn validate_spec(spec: &ProgramAttachSpec) -> Result<(), String> {
     if !is_absolute_prim_path(&spec.host_path) {
         return Err(format!(
@@ -266,8 +250,6 @@ fn validate_spec(spec: &ProgramAttachSpec) -> Result<(), String> {
     if !spec.source_asset.ends_with(".mo")
         && !spec.source_asset.ends_with(".py")
         && !spec.source_asset.ends_with(".rhai")
-        && !spec.source_asset.ends_with(".btxml")
-        && !spec.source_asset.ends_with(".xml")
     {
         return Err(format!(
             "unsupported program source extension in `{}`",

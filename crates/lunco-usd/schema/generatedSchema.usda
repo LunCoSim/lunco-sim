@@ -532,8 +532,8 @@ class "LunCoProgramAPI" (
     customData = {
         token apiSchemaType = "singleApply"
     }
-    doc = """ONE program capability applied to a prim — a Modelica plant, a rhai
-    controller, a Python model, or a behaviour tree. Apply it directly to a physical
+    doc = """ONE program capability applied to a prim — a Modelica plant, a Rhai
+    controller, or a Python model. Apply it directly to a physical
     prim when the program is intrinsic. For separable behaviour, apply it to an
     ordinary `Scope` child; the scope supplies namespace and composition identity
     while this API supplies the program contract. No custom concrete prim type is
@@ -561,11 +561,10 @@ class "LunCoProgramAPI" (
     Which placement to use is not a style question, it is whether the program is separable
     from the thing. A vessel's flight-control system is its airframe: it is what the
     stick talks to, its `inputs:` ARE the vessel's control surface, and a lander
-    without it is not a lander with no autopilot — it is a lander with no engine. So
-    those properties go ON the vessel. A guidance law, a supervisory script, a patrol
-    tree are bolted on, and each is a `Scope` child applying `LunCoProgramAPI` and arriving on its own
-    `references` arc: delete the prim and the behaviour is gone, which is exactly what
-    you want for an autopilot and must never have for an engine."""
+    without it is not a lander with no engine. A guidance law or supervisory script
+    is bolted on as a `Scope` child applying `LunCoProgramAPI` and arriving on its own
+    `references` arc: delete the prim and the policy is gone, while the physical
+    model remains intact."""
 )
 {
     uniform token info:implementationSource (
@@ -600,8 +599,8 @@ class "LunCoProgramAPI" (
         visualization is registering a name, not editing a schema."""
     )
     uniform asset info:sourceAsset = @@ (
-        doc = """The program's file — `@models/Lander.mo@`,
-        `@behaviors/rover_patrol.btxml@`.
+        doc = """The program's file — `@models/Lander.mo@` or
+        `@scenarios/route_follow.rhai@`.
 
         `asset`, never `string`. Only an `asset` is visible to USD's resolver and to
         anything that walks a layer for the files a scene depends on — the reference
@@ -1605,21 +1604,6 @@ class "LunCoForceActuatorAPI" (
     )
     rel lunco:forceActuator:commandSource (
         doc = "The scalar output property that supplies this actuator's normalized command slot. This is a structural target for the geometry-derived allocator; the actuator's physical value still arrives through inputs:force_command."
-    )
-}
-
-class "LunCoWaypointAPI" (
-    customData = {
-        token apiSchemaType = "singleApply"
-    }
-    doc = "Marks a non-solid mission waypoint consumed by the route/event projector."
-)
-{
-    bool lunco:waypoint = false (
-        doc = "Whether this prim is a mission waypoint marker."
-    )
-    float3 lunco:waypoint:inactiveColor = (0.38, 0.38, 0.38) (
-        doc = "Linear RGB color projected into the runtime inactive look when this waypoint has been visited."
     )
 }
 

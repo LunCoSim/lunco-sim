@@ -58,7 +58,7 @@ fn first_set_failure(id: u64, path: &str) -> bool {
         .insert((id, path.to_string()))
 }
 
-use rhai::{AST, Dynamic, Engine, FnPtr, ImmutableString, Map, NativeCallContext};
+use rhai::{Dynamic, Engine, FnPtr, ImmutableString, Map, NativeCallContext, AST};
 
 use crate::bridge_core::{self, ValueBuilder};
 use crate::doc::ScriptLanguage;
@@ -589,10 +589,9 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
     });
 
     // to_json(map) -> string — serialize a rhai map to a JSON string. Lets a
-    // script author a structured value (e.g. a [`BehaviorSpec`] patrol) as a
-    // native `#{...}` and feed it to a command that takes a JSON *string* field
-    // (`SetAutopilotBehavior.spec_json`) — keeping the Rust core free of any
-    // domain-specific authoring (§4.2: one input shape, one entry point).
+    // script author a structured value as a native `#{...}` and feed it to a
+    // generic command that accepts a serialized payload — keeping the Rust
+    // core free of domain-specific authoring (one input shape, one entry point).
     engine.register_fn("to_json", |m: Map| -> ImmutableString {
         let v = map_to_json(m);
         serde_json::to_string(&v)
@@ -602,8 +601,8 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
 
     // from_json(text) -> native value — the inverse of to_json for generic
     // structured command payloads. Domain policy may use an existing typed
-    // codec command (for example ImportBehaviorXml) and then inspect the
-    // returned JSON without adding a domain-specific Rust binding.
+    // codec command and then inspect the returned value without adding a
+    // domain-specific Rust binding.
     engine.register_fn("from_json", |text: ImmutableString| -> Dynamic {
         serde_json::from_str::<serde_json::Value>(text.as_str())
             .map(|value| bridge_core::build_from_json(&RhaiBuilder, &value))
@@ -628,7 +627,7 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
     });
 
     // geolocation(id) -> #{ lat, lon, height } — where on the BODY the entity
-    // is. Works for anything with a position (rover, waypoint, mast, marker).
+    // is. Works for anything with a position (route point, mast, marker).
     // `()` when the scene has no `SiteAnchor` (an un-georeferenced sandbox) or
     // the anchor's body is absent.
     //
@@ -849,6 +848,23 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
             }
         }
     });
+
+    // port(id, "name") -> f64 | () and port_set(id, "name", value) -> bool.
+    // These are the scalar co-simulation surface for authored programs. They
+    // use the same PortRegistry as wires and the API, but stay native across
+    // the Rhai boundary so a high-rate controller never builds a JSON map for
+    // every actuator write. Unknown ports fail visibly; no port is created.
+    engine.register_fn("port", |id: i64, name: ImmutableString| -> Dynamic {
+        bridge_core::read_port(id as u64, name.as_str())
+            .map(Dynamic::from_float)
+            .unwrap_or(Dynamic::UNIT)
+    });
+    engine.register_fn(
+        "port_set",
+        |id: i64, name: ImmutableString, value: f64| -> bool {
+            bridge_core::write_port(id as u64, name.as_str(), value)
+        },
+    );
 
     // physics_substeps() / set_physics_substeps(n) — live diagnostic access to
     // Avian's actual solver resource. This is intentionally not a persisted
@@ -1325,6 +1341,20 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
     engine.register_fn("find", |name: ImmutableString| -> i64 {
         bridge_core::find(name.as_str())
     });
+    // find_path(path) -> id (i64), or -1. USD paths are the stable authored
+    // identity used by Twin route/program relations; no name convention is
+    // involved.
+    engine.register_fn("find_path", |path: ImmutableString| -> i64 {
+        bridge_core::find_path(path.as_str())
+    });
+    // usd_path(id) -> exact composed USD path, or (). This is the generic
+    // identity inverse used by scene-level programs; no domain name is encoded
+    // in the lookup.
+    engine.register_fn("usd_path", |id: i64| -> Dynamic {
+        bridge_core::usd_path_of(id as u64)
+            .map(Dynamic::from)
+            .unwrap_or(Dynamic::UNIT)
+    });
 
     // name(id) -> the entity's human-readable label, or () if unknown. Turn an
     // id (from list_entities/nearest/children/…) into a human label for logging/UI;
@@ -1355,25 +1385,22 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
         )
     });
 
-    // ── Control ownership (who drives this vessel — human OR autopilot) ───────
-    // owner_of(id) -> session id (i64) currently controlling the vessel (0 = local
-    // human, the autopilot band for an AI), or () if nobody owns it. Reads the
-    // possession arbiter's ownership, so a scenario can branch on whether a rover is
-    // driven — uniformly across a human and an autopilot (which is just a user with
-    // a specialty).
+    // ── Control ownership (which session currently owns the entity) ──────────
+    // owner_of(id) -> session id (i64) currently controlling the entity, or ()
+    // if nobody owns it. Reads the authority arbiter's ownership so a scenario
+    // can branch on the generic control state without knowing the policy source.
     engine.register_fn("owner_of", |id: i64| -> Dynamic {
         bridge_core::owner_of(id as u64)
             .map(|s| Dynamic::from_int(s as i64))
             .unwrap_or(Dynamic::UNIT)
     });
-    // controller(id) -> role string of the driver ("AiAgent" = autopilot, "Owner"/
-    // "Operator" = human), or () if unowned. The human-vs-AI test.
+    // controller(id) -> role string of the controlling session, or () if unowned.
     engine.register_fn("controller", |id: i64| -> Dynamic {
         bridge_core::controller_role(id as u64)
             .map(Dynamic::from)
             .unwrap_or(Dynamic::UNIT)
     });
-    // is_controlled(id) -> bool — true if any session (human or autopilot) drives it.
+    // is_controlled(id) -> bool — true if any session currently owns it.
     engine.register_fn("is_controlled", |id: i64| -> bool {
         bridge_core::owner_of(id as u64).is_some()
     });
@@ -1436,7 +1463,7 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
 
     // is_unattended() -> bool — is there NOBODY at the controls? A scenario
     // branches on it to decide whether to drive ITSELF:
-    // `if !is_unattended() { return; }` at the top of an autopilot leaves the
+    // `if !is_unattended() { return; }` at the top of an authored driver leaves the
     // lesson to the student and plays it automatically in CI.
     //
     // The fact behind it is a window (see `ScenarioAudience`), NOT the build
@@ -1856,22 +1883,18 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                         // script's id and the prelude's absence of one does no harm.
                         let ast = self.prelude_ast.merge(&ast);
                         let mask = ProgramMask::from_ast(&ast);
-                        let imports_ast = match build_hoisted_ast(
-                            &self.engine,
-                            source,
-                            &ast,
-                            asset_id,
-                        ) {
-                            Ok(ast) => ast,
-                            Err(e) => {
-                                error!(
+                        let imports_ast =
+                            match build_hoisted_ast(&self.engine, source, &ast, asset_id) {
+                                Ok(ast) => ast,
+                                Err(e) => {
+                                    error!(
                                     "[rhai] entity {entity:?} generated import scope failed: {e}"
                                 );
-                                let d = rhai_diagnostic(e.to_string(), e.position());
-                                self.compiled.insert(key, CacheEntry::Err(d.clone()));
-                                return CompileOutcome::Failed(d);
-                            }
-                        };
+                                    let d = rhai_diagnostic(e.to_string(), e.position());
+                                    self.compiled.insert(key, CacheEntry::Err(d.clone()));
+                                    return CompileOutcome::Failed(d);
+                                }
+                            };
                         let task_ast = build_task_ast(&ast, imports_ast.as_ref(), asset_id);
                         let p = Arc::new(CompiledProgram {
                             ast,
@@ -2315,7 +2338,7 @@ impl crate::task_tree::TaskCtx for RhaiTaskCtx {
         &self.events
     }
     fn resolve(&mut self, path: &str) -> i64 {
-        bridge_core::find(path)
+        bridge_core::find_path(path)
     }
     fn call_action(&mut self, f: &FnPtr) -> Result<(), crate::task_tree::TaskCallbackError> {
         match self.call_fn(f) {
@@ -2793,10 +2816,10 @@ mod tests {
     }
 
     #[test]
-    fn emitted_rhai_maps_reach_event_hooks_as_typed_payloads() {
+    fn emitted_rhai_maps_preserve_typed_payloads() {
         let mut payload = Map::new();
-        payload.insert("path".into(), Dynamic::from("/Mission/RoverTarget1"));
-        payload.insert("state".into(), Dynamic::from("reached"));
+        payload.insert("path".into(), Dynamic::from("/Mission/Target1"));
+        payload.insert("state".into(), Dynamic::from("active"));
 
         let value = super::rhai_to_telemetry(&Dynamic::from_map(payload));
         let TelemetryValue::Map(value) = value else {
@@ -2804,15 +2827,15 @@ mod tests {
         };
         assert_eq!(
             value.get("path"),
-            Some(&TelemetryValue::String("/Mission/RoverTarget1".to_string()))
+            Some(&TelemetryValue::String("/Mission/Target1".to_string()))
         );
         assert_eq!(
             value.get("state"),
-            Some(&TelemetryValue::String("reached".to_string()))
+            Some(&TelemetryValue::String("active".to_string()))
         );
 
         let event = TelemetryEvent {
-            name: "waypoint.reached".to_string(),
+            name: "mission.progress".to_string(),
             source: 42,
             severity: Severity::Info,
             data: TelemetryValue::Map(value),
@@ -2831,7 +2854,7 @@ mod tests {
             event_value
                 .get("path")
                 .and_then(|value| value.clone().into_string().ok()),
-            Some("/Mission/RoverTarget1".to_string())
+            Some("/Mission/Target1".to_string())
         );
     }
 
@@ -3187,11 +3210,9 @@ mod tests {
         let engine = super::build_world_engine(Default::default());
         let src = "fn on_tick(me) { 1 }";
         let full = super::compile_with_script_consts(&engine, src).unwrap();
-        assert!(
-            super::build_hoisted_ast(&engine, src, &full, None)
-                .unwrap()
-                .is_none()
-        );
+        assert!(super::build_hoisted_ast(&engine, src, &full, None)
+            .unwrap()
+            .is_none());
     }
 
     /// The extractor takes only DEPTH-0 imports, and is not fooled by imports

@@ -61,14 +61,14 @@ fn wait_for_from(event, src) {
 //   par_race([a, b])    run concurrently, done when ANY is done
 //   repeat(n, node)     run `node` to completion `n` times
 //   forever(node)       run `node` to completion, over and over (never done)
-// e.g. patrol two legs forever, braking 2s at each:
+// e.g. follow two route points forever, braking 2s at each:
 //   this.task = forever(seq([
 //       once(|m| drive_to(m, A)), wait_until(|m| arrived(m, A)), wait(2.0),
 //       once(|m| drive_to(m, B)), wait_until(|m| arrived(m, B)), wait(2.0),
 //   ]));
 //
 // These constructors build PURE DATA — the tree is ticked NATIVELY on the
-// lunco-behavior kernel (the same engine the rover autopilot runs on), which
+// reusable lunco-behavior kernel, which
 // compiles the map once per assignment and feeds it events. There is no rhai
 // tick code: mechanism lives in Rust (`lunco-scripting/src/task_tree.rs`),
 // policy stays here. Emits TASK_COMPLETE once when the root finishes (and

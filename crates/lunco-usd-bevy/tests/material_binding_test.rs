@@ -1,4 +1,4 @@
-//! Integration test: writes a USDA fixture to disk and loads it. Native-only, so
+//! Integration test: writes a minimal USDA fixture to disk and loads it. Native-only, so
 //! the workspace `std::fs` ban (a wasm-runtime guard) does not apply — exactly the
 //! `tests/` exemption `clippy.toml` describes but cargo cannot express as config.
 //!
@@ -6,7 +6,9 @@
 //! `StandardMaterial`: `lunco-usd-bevy` no longer names `bevy_pbr` (see
 //! `docs/architecture/render-decoupling.md`), and `lunco-render-bevy`'s own tests
 //! cover the `PbrLook` → `StandardMaterial` binding. Every channel asserted here
-//! belongs to the current appearance contract.
+//! belongs to the generic appearance projection contract. Asset-specific
+//! annotation appearance is asserted by the production Rhai graphics scene,
+//! where composed USD is the authoritative input.
 #![allow(clippy::disallowed_methods)]
 
 use bevy::prelude::*;
@@ -150,98 +152,6 @@ fn material_for_optional(usda: &str, prim_path: &str) -> Option<PbrLook> {
     app.update();
 
     app.world().get::<PbrLook>(entity).cloned()
-}
-
-#[test]
-fn marker_assets_are_emissive_and_shadowless() {
-    const WAYPOINT: &str = include_str!("../../../assets/vessels/markers/waypoint.usda");
-    const LANDING_LOCATION: &str =
-        include_str!("../../../assets/vessels/markers/landing_location.usda");
-    const PREDICTED_LANDING: &str =
-        include_str!("../../../assets/vessels/markers/predicted_landing.usda");
-    let markers = [
-        ("waypoint", WAYPOINT, "/WaypointMarker/Dome", Some(0.08)),
-        (
-            "landing location",
-            LANDING_LOCATION,
-            "/LandingLocationMarker/Dome",
-            None,
-        ),
-        (
-            "predicted landing PX",
-            PREDICTED_LANDING,
-            "/PredictedLandingMarker/Brackets/PX",
-            None,
-        ),
-        (
-            "predicted landing NX",
-            PREDICTED_LANDING,
-            "/PredictedLandingMarker/Brackets/NX",
-            None,
-        ),
-        (
-            "predicted landing PZ",
-            PREDICTED_LANDING,
-            "/PredictedLandingMarker/Brackets/PZ",
-            None,
-        ),
-        (
-            "predicted landing NZ",
-            PREDICTED_LANDING,
-            "/PredictedLandingMarker/Brackets/NZ",
-            None,
-        ),
-        (
-            "predicted landing center",
-            PREDICTED_LANDING,
-            "/PredictedLandingMarker/Brackets/Center",
-            None,
-        ),
-    ];
-
-    for (name, usda, prim_path, expected_opacity) in markers {
-        let look = material_for(usda, prim_path);
-        assert!(look.no_shadow_cast, "{name} must not cast shadows");
-        assert_eq!(look.base_color.red, 0.0, "{name} must have no diffuse red");
-        assert_eq!(
-            look.base_color.green, 0.0,
-            "{name} must have no diffuse green"
-        );
-        assert_eq!(
-            look.base_color.blue, 0.0,
-            "{name} must have no diffuse blue"
-        );
-        assert_eq!(
-            look.specular_tint.red, 0.0,
-            "{name} must have no specular red"
-        );
-        assert_eq!(
-            look.specular_tint.green, 0.0,
-            "{name} must have no specular green"
-        );
-        assert_eq!(
-            look.specular_tint.blue, 0.0,
-            "{name} must have no specular blue"
-        );
-        assert!(look.emissive != LinearRgba::BLACK, "{name} must emit light");
-        match expected_opacity {
-            Some(opacity) => {
-                assert!(
-                    matches!(look.alpha, SurfaceAlpha::Add),
-                    "{name} must use additive blending"
-                );
-                assert!(
-                    (look.base_color.alpha - opacity).abs() < 1e-4,
-                    "{name} must use authored opacity {opacity}, got {}",
-                    look.base_color.alpha
-                );
-            }
-            None => assert!(
-                matches!(look.alpha, SurfaceAlpha::Opaque),
-                "{name} must remain opaque"
-            ),
-        }
-    }
 }
 
 const OPACITY_STAGE: &str = r#"#usda 1.0

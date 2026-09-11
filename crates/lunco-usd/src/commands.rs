@@ -31,11 +31,11 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
-use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, futures_lite::future};
-use lunco_api::executor::{DeferredCommandAppExt, PendingApiRequest, finish_command_result};
+use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
+use lunco_api::executor::{finish_command_result, DeferredCommandAppExt, PendingApiRequest};
 use lunco_api::schema::ApiErrorCode;
 use lunco_core::{
-    Ack, ActiveCommandId, Command, CommandResults, OpId, on_command, register_commands,
+    on_command, register_commands, Ack, ActiveCommandId, Command, CommandResults, OpId,
 };
 use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_doc_bevy::{
@@ -50,18 +50,18 @@ use lunco_usd_bevy::usd_data::UsdDataExt;
 use lunco_usd_bevy::{UsdPrimPath, UsdRead, UsdSceneRoot};
 #[cfg(feature = "ui")]
 use lunco_workbench::ViewportPlaceholder;
-use lunco_workspace::open::{PendingTwinOpens, TwinOpenMode, spawn_twin_scan};
+use lunco_workspace::open::{spawn_twin_scan, PendingTwinOpens, TwinOpenMode};
 use lunco_workspace::{TwinClosed, WorkspaceResource};
 
 use crate::document::{LayerId, UsdOp};
 use crate::edit_session::{
-    UsdEditScope, UsdEditSessions, UsdProposalId, UsdProposalState, validate_proposal,
+    validate_proposal, UsdEditScope, UsdEditSessions, UsdProposalId, UsdProposalState,
 };
 use lunco_doc::OpenOutcome;
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd_sim::cosim::{
-    ClearScene, LoadScene, SceneEntities, SceneLoadInFlight, clear_scene_entities,
-    resolve_root_prim, spawn_scene_root_world, validate_scene_address,
+    clear_scene_entities, resolve_root_prim, spawn_scene_root_world, validate_scene_address,
+    ClearScene, LoadScene, SceneEntities, SceneLoadInFlight,
 };
 
 /// Stable id for the USD document kind in
@@ -3628,7 +3628,7 @@ mod change_set_tests {
     //! lossless `(forward, inverse)` entry, while the change-set ID makes the
     //! complete attach one undo unit.
     use super::*;
-    use crate::attach::{AttachJoint, AttachSpec, Axis, attach_component_ops};
+    use crate::attach::{attach_component_ops, AttachJoint, AttachSpec, Axis};
     use crate::document::LayerId;
     use lunco_doc_bevy::JournalResource;
     use lunco_twin_journal::{AuthorTag, UndoManager, UndoScope};
@@ -3861,47 +3861,41 @@ mod tests {
         app.add_plugins(UsdCommandsPlugin);
         app.update();
 
-        assert!(
-            app.world()
-                .contains_resource::<DocumentRegistry<UsdDocument>>()
-        );
+        assert!(app
+            .world()
+            .contains_resource::<DocumentRegistry<UsdDocument>>());
         let kinds = app.world().resource::<DocumentKindRegistry>();
         let meta = kinds
             .meta(&DocumentKindId::new(USD_DOCUMENT_KIND))
             .expect("usd kind registered");
         assert_eq!(meta.display_name, "USD Stage");
         assert_eq!(meta.extensions, vec!["usda", "usdc", "usd"]);
-        assert!(
-            app.world()
-                .resource::<lunco_api::queries::ApiQueryRegistry>()
-                .names()
-                .any(|name| name == "InspectUsdDocument")
-        );
+        assert!(app
+            .world()
+            .resource::<lunco_api::queries::ApiQueryRegistry>()
+            .names()
+            .any(|name| name == "InspectUsdDocument"));
         #[cfg(feature = "ui")]
-        assert!(
-            app.world()
-                .resource::<lunco_api::queries::ApiQueryRegistry>()
-                .names()
-                .any(|name| name == "InspectUsdViewport")
-        );
-        assert!(
-            app.world()
-                .resource::<lunco_api::queries::ApiQueryRegistry>()
-                .names()
-                .any(|name| name == "InspectUsdEditSession")
-        );
-        assert!(
-            app.world()
-                .resource::<lunco_api::queries::ApiQueryRegistry>()
-                .names()
-                .any(|name| name == "ResolveUsdTarget")
-        );
-        assert!(
-            app.world()
-                .resource::<lunco_api::queries::ApiQueryRegistry>()
-                .names()
-                .any(|name| name == "SyncUsdDocument")
-        );
+        assert!(app
+            .world()
+            .resource::<lunco_api::queries::ApiQueryRegistry>()
+            .names()
+            .any(|name| name == "InspectUsdViewport"));
+        assert!(app
+            .world()
+            .resource::<lunco_api::queries::ApiQueryRegistry>()
+            .names()
+            .any(|name| name == "InspectUsdEditSession"));
+        assert!(app
+            .world()
+            .resource::<lunco_api::queries::ApiQueryRegistry>()
+            .names()
+            .any(|name| name == "ResolveUsdTarget"));
+        assert!(app
+            .world()
+            .resource::<lunco_api::queries::ApiQueryRegistry>()
+            .names()
+            .any(|name| name == "SyncUsdDocument"));
     }
 
     fn proposal_test_op(name: &str) -> UsdOp {
@@ -3953,15 +3947,14 @@ mod tests {
             assert_eq!(proposal.ops.len(), 1);
             proposal.id
         };
-        assert!(
-            !app.world()
-                .resource::<DocumentRegistry<UsdDocument>>()
-                .host(doc)
-                .expect("document")
-                .document()
-                .source()
-                .contains("Chassis")
-        );
+        assert!(!app
+            .world()
+            .resource::<DocumentRegistry<UsdDocument>>()
+            .host(doc)
+            .expect("document")
+            .document()
+            .source()
+            .contains("Chassis"));
 
         app.world_mut().trigger(ReviewUsdProposal {
             proposal,
@@ -3996,24 +3989,22 @@ mod tests {
         let host = registry.host(doc).expect("committed document");
         assert_eq!(host.generation(), 1);
         assert!(host.document().source().contains("Chassis"));
-        assert!(
-            app.world()
-                .resource::<UsdEditSessions>()
-                .proposal(proposal)
-                .is_none()
-        );
+        assert!(app
+            .world()
+            .resource::<UsdEditSessions>()
+            .proposal(proposal)
+            .is_none());
 
         app.world_mut().trigger(UndoDocument { doc_id: doc });
         app.update();
-        assert!(
-            !app.world()
-                .resource::<DocumentRegistry<UsdDocument>>()
-                .host(doc)
-                .expect("undo document")
-                .document()
-                .source()
-                .contains("Chassis")
-        );
+        assert!(!app
+            .world()
+            .resource::<DocumentRegistry<UsdDocument>>()
+            .host(doc)
+            .expect("undo document")
+            .document()
+            .source()
+            .contains("Chassis"));
     }
 
     #[test]
@@ -4045,12 +4036,10 @@ mod tests {
         let sessions = app.world().resource::<UsdEditSessions>();
         let conflicted = sessions.proposal(proposal).expect("conflict retained");
         assert_eq!(conflicted.state, UsdProposalState::Conflict);
-        assert!(
-            conflicted
-                .diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.contains("stale document generation"))
-        );
+        assert!(conflicted
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.contains("stale document generation")));
         let source = app
             .world()
             .resource::<DocumentRegistry<UsdDocument>>()
@@ -4087,12 +4076,11 @@ mod tests {
         });
         app.update();
 
-        assert!(
-            app.world()
-                .resource::<UsdEditSessions>()
-                .proposal(proposal)
-                .is_none()
-        );
+        assert!(app
+            .world()
+            .resource::<UsdEditSessions>()
+            .proposal(proposal)
+            .is_none());
         assert_eq!(
             app.world()
                 .resource::<DocumentRegistry<UsdDocument>>()
@@ -4220,27 +4208,23 @@ mod tests {
                 .document()
                 .source()
         );
-        assert!(
-            registry
-                .host(fork)
-                .expect("fork host")
-                .document()
-                .origin()
-                .is_untitled()
-        );
+        assert!(registry
+            .host(fork)
+            .expect("fork host")
+            .document()
+            .origin()
+            .is_untitled());
 
         app.world_mut().trigger(DiscardDocument { doc_id: fork });
         app.update();
-        assert!(
-            !app.world()
-                .resource::<DocumentRegistry<UsdDocument>>()
-                .contains(fork)
-        );
-        assert!(
-            app.world()
-                .resource::<DocumentRegistry<UsdDocument>>()
-                .contains(source)
-        );
+        assert!(!app
+            .world()
+            .resource::<DocumentRegistry<UsdDocument>>()
+            .contains(fork));
+        assert!(app
+            .world()
+            .resource::<DocumentRegistry<UsdDocument>>()
+            .contains(source));
     }
 
     #[test]
@@ -4419,11 +4403,9 @@ mod tests {
             serde_json::json!("history_window_exceeded")
         );
         assert_eq!(snapshot["generation"], serde_json::json!(257));
-        assert!(
-            snapshot["layers"]["root"]["source"]
-                .as_str()
-                .is_some_and(|source| source.contains("Part256"))
-        );
+        assert!(snapshot["layers"]["root"]["source"]
+            .as_str()
+            .is_some_and(|source| source.contains("Part256")));
     }
 
     fn wait_for_one_usd_document(app: &mut App) {

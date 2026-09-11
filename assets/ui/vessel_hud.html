@@ -20,8 +20,6 @@
   <property name="caution_width">44%</property>
   <property name="danger_start">44%</property>
   <property name="danger_width">22%</property>
-  <property name="autopilot_color">var(--muted-color)</property>
-  <property name="autopilot_label">AUTOPILOT</property>
   <property name="geo_display">none</property>
   <property name="local_display">flex</property>
   <property name="comms_display">none</property>
@@ -55,9 +53,6 @@
     <node id="vessel-hud-nav">
       <node id="vessel-hud-nav-heading">
         <text id="vessel-hud-label">{label}</text>
-        <button id="vessel-hud-autopilot" on_press="runtime_toggle_autopilot">
-          <text>{autopilot_label}</text>
-        </button>
       </node>
       <text id="vessel-hud-frame">site frame · metres</text>
       <node id="vessel-hud-nav-details">

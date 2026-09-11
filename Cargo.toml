@@ -7,7 +7,6 @@ members = [
     "crates/lunco-time",
     "crates/lunco-behavior",
     "crates/lunco-controller",
-    "crates/lunco-autopilot",
     "crates/lunco-avatar",
     "crates/lunco-luncosim",
     "crates/lunco-luncosim-exposures",

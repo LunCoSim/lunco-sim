@@ -110,7 +110,7 @@ def Xform "DrivingBasics" (
     # Finish flag at the top of the ramp — S1's arrival target. Shared asset via
     # the asset-root `lunco://` scheme (resolves wherever the twin is mounted).
     def Xform "Flag" (
-        prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker>
+        prepend references = @lunco://markers/route_point.usda@</RoutePoint>
     )
     {
         double3 xformOp:translate = (38.0, 6.2, 0.0)

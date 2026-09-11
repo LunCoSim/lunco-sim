@@ -265,7 +265,7 @@ fn domain_title(crate_name: &str) -> (&'static str, u32) {
         "lunco-usd-bevy" | "lunco-usd-sim" | "lunco-usd-avian" => ("USD / scenes", 12),
         "lunco-modelica-core" | "lunco-modelica-ui" => ("Modelica modeling & simulation", 20),
         "lunco-cosim" => ("Co-simulation", 21),
-        "lunco-mobility" | "lunco-hardware" | "lunco-controller" | "lunco-autopilot" => {
+        "lunco-mobility" | "lunco-hardware" | "lunco-controller" => {
             ("Vessels, mobility & control", 30)
         }
         "lunco-avatar" => ("Avatar & possession", 31),

@@ -1,16 +1,16 @@
-# Tutorial, Autopilot, and Port Contracts
+# Tutorial, Task Programs, and Port Contracts
 
-> Status: Active · Audience: contributors authoring tutorials, autopilots, and USD/Modelica connections
+> Status: Active · Audience: contributors authoring tutorials, task programs, and USD/Modelica connections
 
 This page records the runtime contracts that make a tutorial both teachable by
 a person and executable by an automated scenario. It also records the
 environment-provider failure mode that is easy to miss when a USD API schema
 declares ports without authored properties.
 
-## 1. Human and autopilot control are one path
+## 1. Human and authored-program control are one path
 
-An autopilot is a different **policy**, not a second actuation mechanism. The
-human and unattended paths must use the same control sequence:
+An authored task program is a different **policy**, not a second actuation
+mechanism. Human and unattended paths use the same control sequence:
 
 ```text
 PossessVessel
@@ -25,14 +25,12 @@ must not write `LinearVelocity`, `Position`, `ModelicaModel.inputs`, or a
 private autopilot component to move the vehicle. Those paths bypass the
 authority and input plumbing that a person exercises.
 
-For the authored rover waypoint GNC, the continuous controller is an internal
-Modelica program: `RoverAutopilotGuidance.mo` consumes the live Avian
-position/yaw/rate ports through USD connections and produces the steering and
-forward-only drive command. Rhai publishes a waypoint setpoint once with
-`modelica_waypoint(...)`; it does not calculate steering or write actuator
-ports every tick. The generic `piloted` output is the authority gate in the
-drive law, so possession selects direct human inputs and an unpossessed rover
-can run its authored waypoint guidance.
+For a route-following program, the continuous controller is an authored
+Modelica program or a generic named-port consumer. Rhai reads composed route
+points and sensor events, then publishes the program's named inputs through the
+same port surface used by human control. It does not calculate dynamics or
+write transforms every tick. Authority remains an engine-level input gate, so
+possession and authored programs cannot create competing actuation paths.
 
 For a tutorial acceptance test, observe both command events and the resulting
 state:

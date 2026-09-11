@@ -45,8 +45,8 @@ use lunco_usd::ui::viewport::{UsdPreviewId, UsdPreviewSession, UsdViewportState}
 use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdStageAsset};
 
 use projection::{
-    EDGE_KIND, NODE_KIND, PrimNode, UsdPrimNodeData, UsdWireData, Wire, WireKind, build_scene,
-    collect_graph, project_schema, schema_roots,
+    build_scene, collect_graph, project_schema, schema_roots, PrimNode, UsdPrimNodeData,
+    UsdWireData, Wire, WireKind, EDGE_KIND, NODE_KIND,
 };
 
 pub use lunco_usd::ui::USD_CONNECTION_CANVAS_PANEL_ID as USD_CANVAS_PANEL_ID;

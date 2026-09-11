@@ -5,9 +5,8 @@
 //! snapshot-safe. This module is the mechanism that used to be ~100 lines of
 //! rhai `__tick*` recursion: [`compile_node`] turns the map tree into a
 //! [`lunco_behavior`] tree once per assignment, and the world-bridge ticks it
-//! natively every frame. One tick engine (the unit-tested kernel) now serves
-//! both the autopilot (`BehaviorSpec`) and scripted tasks; the rhai side keeps
-//! only the constructors.
+//! natively every frame. One tick engine serves authored task programs; the
+//! Rhai side keeps only the constructors and policy.
 //!
 //! Leaves call back into script closures via [`TaskCtx`] — dyn-erased so the
 //! tree type is `'static` and can live in [`CompiledTask`] beside the script
@@ -20,7 +19,7 @@
 //!   kind or a field belonging to another kind is rejected at compile time;
 //! - dwell is entry-stamped and cleared on [`Node::reset`] so `repeat`/`forever`
 //!   re-dwell; event matching uses name + optional source, with a string source
-//!   path re-resolved via `find()` each tick until it matches;
+//!   path re-resolved via `find_path()` each tick until it matches;
 //! - a closure error is surfaced as a diagnostic and the leaf stays `Running`
 //!   (the retired engine aborted the whole tick and retried next frame).
 //!
@@ -136,7 +135,7 @@ pub trait TaskCtx {
     /// Events buffered since the last tick, as `(name, source-gid)` (`0` =
     /// global emitter).
     fn events(&self) -> &[(ImmutableString, i64)];
-    /// Resolve an entity path/name to a gid (`find()`; `-1` = not found).
+    /// Resolve an exact composed USD path to a gid (`find_path()`; `-1` = not found).
     fn resolve(&mut self, path: &str) -> i64;
     /// Call an action closure with the host gid. Errors are recorded by the
     /// impl (surfaced as a script diagnostic after the tick).
@@ -187,7 +186,7 @@ enum SrcSpec {
     Any,
     /// `wait_for_from(name, gid)` — exact emitter.
     Gid(i64),
-    /// `wait_for_from(name, "path")` — emitter resolved lazily every tick
+    /// `wait_for_from(name, "path")` — exact USD emitter path resolved lazily every tick
     /// (the entity may not exist when the tree is built at `on_start`).
     Path(String),
 }
@@ -530,34 +529,10 @@ pub fn compile_node(v: &Dynamic) -> Result<BoxNode<dyn TaskCtx>, String> {
 
 #[cfg(test)]
 mod tests {
-    //! Semantics parity with the retired rhai `__tick*` engine, via a fake ctx
-    //! (no Engine): closures are keyed by curried tag since a bare test can't
-    //! build callable FnPtrs — leaves under test use explicit `kind` shapes,
-    //! which cover the sequencing/dwell/event logic the engine owned. Closure
-    //! invocation itself is covered by the world-bridge integration path.
+    //! The production scene-test contract covers task behavior through the
+    //! public Rhai runtime. This unit module keeps only malformed-shape
+    //! rejection, which has no smaller public observation surface.
     use super::*;
-
-    struct FakeCtx {
-        now: f64,
-        events: Vec<(ImmutableString, i64)>,
-    }
-    impl TaskCtx for FakeCtx {
-        fn now(&self) -> f64 {
-            self.now
-        }
-        fn events(&self) -> &[(ImmutableString, i64)] {
-            &self.events
-        }
-        fn resolve(&mut self, _path: &str) -> i64 {
-            42
-        }
-        fn call_action(&mut self, _f: &FnPtr) -> Result<(), TaskCallbackError> {
-            Ok(())
-        }
-        fn call_pred(&mut self, _f: &FnPtr) -> Result<bool, TaskCallbackError> {
-            Ok(true)
-        }
-    }
 
     fn map(pairs: &[(&str, Dynamic)]) -> Dynamic {
         let mut m = Map::new();
@@ -574,147 +549,6 @@ mod tests {
             m.insert((*k).into(), v.clone());
         }
         Dynamic::from_map(m)
-    }
-
-    fn anonymous_fn() -> FnPtr {
-        let engine = rhai::Engine::new();
-        let ast = engine.compile("fn make() { |me| me }").unwrap();
-        engine
-            .call_fn(&mut rhai::Scope::new(), &ast, "make", ())
-            .unwrap()
-    }
-
-    #[test]
-    fn seq_of_dwells_advances_with_time() {
-        // seq([ wait(1.0), wait(2.0) ]) — done only after 3 s of cumulative dwell.
-        let tree = tagged(
-            "seq",
-            &[(
-                "items",
-                Dynamic::from_array(vec![
-                    tagged("wait", &[("secs", Dynamic::from_float(1.0))]),
-                    tagged("wait", &[("secs", Dynamic::from_float(2.0))]),
-                ]),
-            )],
-        );
-        let mut node = compile_node(&tree).unwrap();
-        let mut ctx = FakeCtx {
-            now: 0.0,
-            events: vec![],
-        };
-        assert_eq!(node.tick(&mut ctx), Status::Running); // stamps t0 of leg 1
-        ctx.now = 1.5;
-        assert_eq!(node.tick(&mut ctx), Status::Running); // leg 1 done, leg 2 stamps 1.5
-        ctx.now = 3.0;
-        assert_eq!(node.tick(&mut ctx), Status::Running); // 1.5 s into a 2 s dwell
-        ctx.now = 3.6;
-        assert_eq!(node.tick(&mut ctx), Status::Success);
-    }
-
-    #[test]
-    fn wait_for_matches_name_and_source() {
-        // wait_for_from("GO", "path") — src resolves to 42 in FakeCtx.
-        let tree = tagged(
-            "wait_for_from",
-            &[("event", "GO".into()), ("src", "launcher".into())],
-        );
-        let mut node = compile_node(&tree).unwrap();
-        let mut ctx = FakeCtx {
-            now: 0.0,
-            events: vec![("GO".into(), 7)],
-        };
-        assert_eq!(
-            node.tick(&mut ctx),
-            Status::Running,
-            "wrong source must not match"
-        );
-        ctx.events = vec![("HALT".into(), 42)];
-        assert_eq!(
-            node.tick(&mut ctx),
-            Status::Running,
-            "wrong name must not match"
-        );
-        ctx.events = vec![("GO".into(), 42)];
-        assert_eq!(node.tick(&mut ctx), Status::Success);
-    }
-
-    #[test]
-    fn act_until_event_requires_the_named_source() {
-        let tree = tagged(
-            "act_until_event",
-            &[
-                ("act", Dynamic::from(anonymous_fn())),
-                ("event", "GO".into()),
-                ("src", "launcher".into()),
-            ],
-        );
-        let mut node = compile_node(&tree).unwrap();
-        let mut ctx = FakeCtx {
-            now: 0.0,
-            events: vec![("GO".into(), 7)],
-        };
-        assert_eq!(node.tick(&mut ctx), Status::Running);
-        ctx.events = vec![("GO".into(), 42)];
-        assert_eq!(node.tick(&mut ctx), Status::Success);
-    }
-
-    #[test]
-    fn repeat_re_dwells_each_iteration() {
-        // repeat(2, wait(1.0)) — the dwell's t0 must clear between iterations.
-        let tree = tagged(
-            "repeat",
-            &[
-                ("n", Dynamic::from_int(2)),
-                (
-                    "body",
-                    tagged("wait", &[("secs", Dynamic::from_float(1.0))]),
-                ),
-            ],
-        );
-        let mut node = compile_node(&tree).unwrap();
-        let mut ctx = FakeCtx {
-            now: 0.0,
-            events: vec![],
-        };
-        assert_eq!(node.tick(&mut ctx), Status::Running);
-        ctx.now = 1.0;
-        assert_eq!(node.tick(&mut ctx), Status::Running); // iter 1 done, iter 2 restamps
-        ctx.now = 1.5;
-        assert_eq!(
-            node.tick(&mut ctx),
-            Status::Running,
-            "second dwell must restart"
-        );
-        ctx.now = 2.4;
-        assert_eq!(
-            node.tick(&mut ctx),
-            Status::Running,
-            "restamped at 1.5 → done at 2.5"
-        );
-        ctx.now = 2.6;
-        assert_eq!(node.tick(&mut ctx), Status::Success);
-    }
-
-    #[test]
-    fn race_finishes_on_first_done() {
-        let tree = tagged(
-            "race",
-            &[(
-                "items",
-                Dynamic::from_array(vec![
-                    tagged("wait", &[("secs", Dynamic::from_float(10.0))]),
-                    tagged("wait_for", &[("event", "GO".into())]),
-                ]),
-            )],
-        );
-        let mut node = compile_node(&tree).unwrap();
-        let mut ctx = FakeCtx {
-            now: 0.0,
-            events: vec![],
-        };
-        assert_eq!(node.tick(&mut ctx), Status::Running);
-        ctx.events = vec![("GO".into(), 0)];
-        assert_eq!(node.tick(&mut ctx), Status::Success);
     }
 
     #[test]

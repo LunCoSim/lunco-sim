@@ -11,10 +11,9 @@
 //! This read-side bridge drains the stage sink, applies transform and other
 //! attribute edits in place, and reconciles structural resyncs incrementally.
 //! Coarse document operations use the explicit full-rebuild path in
-//! `twin_projection`; ordinary waypoint edits never reach it.
+//! `twin_projection`; ordinary authored route edits use the incremental path.
 
 use bevy::prelude::*;
-use lunco_autopilot::usd_tree::{BehaviorProgramSource, BehaviorXml, BehaviorXmlPath};
 use lunco_usd_bevy::{UsdPrimPath, UsdRead, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
 use std::collections::HashMap;
@@ -193,6 +192,18 @@ fn find_live_entity(
         .map(|(e, _)| e)
 }
 
+fn find_program_owner(
+    world: &mut World,
+    stage_id: AssetId<UsdStageAsset>,
+    source_path: &str,
+) -> Option<Entity> {
+    let mut query = world.query::<(Entity, &UsdPrimPath, &lunco_core::ScenarioProgramPrim)>();
+    query
+        .iter(world)
+        .find(|(_, prim, source)| prim.stage_handle.id() == stage_id && source.0 == source_path)
+        .map(|(entity, _, _)| entity)
+}
+
 /// Re-project a live prim when a structural edit adds its simulation schemas.
 ///
 /// A referenced instance may first appear as a typeless root while its layer
@@ -240,79 +251,6 @@ pub(crate) fn reproject_physics_if_needed(
     true
 }
 
-/// Whether a structural notice belongs to a behavior-tree program child.
-///
-/// Behavior-tree programs are policy projected onto their owning vessel and do
-/// not need a separate physical ECS entity. Causal `.mo`/`.py` programs are
-/// different: their own entity owns the generic `SimComponent` and port
-/// surface, so they must take the normal structural projection path. The
-/// source capability, not a prim name such as `Mission`, is authoritative.
-fn is_behavior_program(world: &World, stage_id: AssetId<UsdStageAsset>, path: &str) -> bool {
-    let Ok(path) = SdfPath::new(path) else {
-        return false;
-    };
-    crate::twin_projection::is_behavior_program(world, stage_id, &path)
-}
-
-/// Whether a program prim is the BT source currently projected onto its owner.
-/// The composed source may already be empty after a clear, so this provenance
-/// check is the removal-side counterpart to [`is_behavior_program`].
-fn projected_behavior_owner(
-    world: &World,
-    stage_id: AssetId<UsdStageAsset>,
-    path: &str,
-) -> Option<Entity> {
-    world.iter_entities().find_map(|entity| {
-        let prim = entity.get::<lunco_usd_bevy::UsdPrimPath>()?;
-        (prim.stage_handle.id() == stage_id
-            && entity
-                .get::<BehaviorProgramSource>()
-                .is_some_and(|source| source.0 == path))
-        .then_some(entity.id())
-    })
-}
-
-/// Find the physical program owner for a BT source before provenance exists.
-/// A program may live directly under a vessel or under a namespace such as
-/// `OBC`; walk the composed USD ancestors to the nearest vehicle context rather
-/// than assuming the source prim's immediate parent is the owner.
-fn behavior_owner_entity(
-    world: &World,
-    stage_id: AssetId<UsdStageAsset>,
-    path: &str,
-) -> Option<Entity> {
-    if let Some(owner) = projected_behavior_owner(world, stage_id, path) {
-        return Some(owner);
-    }
-    let owner_path = {
-        let stage = world
-            .get_non_send::<lunco_usd_bevy::CanonicalStages>()
-            .and_then(|stages| stages.get(stage_id))?;
-        let view = stage.view();
-        let mut current = SdfPath::new(path).ok()?.parent();
-        let mut result = None;
-        while let Some(candidate) = current {
-            if view.has_api_schema(&candidate, "PhysxVehicleContextAPI") {
-                result = Some(candidate.to_string());
-                break;
-            }
-            current = candidate.parent();
-        }
-        result
-    }?;
-    world.iter_entities().find_map(|entity| {
-        let prim = entity.get::<lunco_usd_bevy::UsdPrimPath>()?;
-        (prim.stage_handle.id() == stage_id && prim.path == owner_path).then_some(entity.id())
-    })
-}
-
-/// The `info:sourceCode` write of a mission is consumed synchronously by the
-/// typed op replayer: it replaces [`BehaviorXml`] on the owning vessel. The
-/// resulting stage-sink notice is therefore a duplicate. In particular,
-/// OpenUSD may include the referenced vessel's resync path in that notice;
-/// passing it into the generic structural bridge makes an XML-only edit look
-/// like a vehicle refresh.
-///
 /// Projection bridge (Step 1): drain every live [`CanonicalStage`]'s change-sink
 /// inbox and reconcile the ECS scene off the **live composed stage** — the read
 /// counterpart to authoring onto the stage. This is what turns the openusd
@@ -753,7 +691,8 @@ pub(crate) fn refresh_edited_prims_live(
     // so the ones that do not split are the prim-path half of the same change and
     // are simply skipped here.
     let mut prims: Vec<String> = Vec::new();
-    let mut behavior_updates: Vec<(String, String, Option<String>, Option<String>)> = Vec::new();
+    let mut program_updates: Vec<(Entity, Option<lunco_usd_bevy::program::ResolvedProgram>)> =
+        Vec::new();
     // Wheel/vehicle dynamics edits are claimed by the in-place resync (same
     // shape as the mission `info:sourceCode` special-case below): excluded from the
     // subtree refresh — which would corrupt a spawned wheel — and folded into
@@ -782,30 +721,54 @@ pub(crate) fn refresh_edited_prims_live(
         if matches!(
             attr,
             "info:implementationSource" | "info:sourceCode" | "info:sourceAsset"
-        ) && (is_behavior_program(world, id, prim)
-            || projected_behavior_owner(world, id, prim).is_some())
-        {
-            // Read the value under a short stage borrow, then resolve/mutate the
-            // owner after that borrow is released. The owner may be an ancestor
-            // several levels above a namespaced `OBC` program child.
-            let source = world
+        ) {
+            let projected_owner = find_program_owner(world, id, prim);
+            let authored_generic_program = if projected_owner.is_none() {
+                SdfPath::new(prim)
+                    .ok()
+                    .and_then(|path| {
+                        world
+                            .get_non_send::<CanonicalStages>()
+                            .and_then(|stages| stages.get(id))
+                            .and_then(|stage| {
+                                let view = stage.view();
+                                lunco_usd_bevy::program::resolve_program(&view, &path)
+                                    .ok()
+                                    .filter(|program| {
+                                        lunco_usd_bevy::program::is_generic_program_backend(
+                                            program.backend,
+                                        )
+                                    })
+                            })
+                    })
+                    .is_some()
+            } else {
+                false
+            };
+            if projected_owner.is_none() && !authored_generic_program {
+                continue;
+            }
+            let Ok(sp) = SdfPath::new(prim) else {
+                continue;
+            };
+            let resolved = world
                 .get_non_send::<CanonicalStages>()
                 .and_then(|stages| stages.get(id))
-                .and_then(|cs| {
-                    let view = cs.view();
-                    let sp = SdfPath::new(prim).ok()?;
-                    crate::program::selected_behavior_source_values(&view, &sp).ok()
+                .and_then(|stage| {
+                    let view = stage.view();
+                    match lunco_usd_bevy::program::resolve_program(&view, &sp) {
+                        Ok(program) => Some(program),
+                        Err(issue) => {
+                            warn!(
+                                "[usd-live] program {} is unresolved at {}: {}",
+                                prim, issue.property, issue.message
+                            );
+                            None
+                        }
+                    }
                 });
-            // The tree is authored on the `LunCoProgramAPI` child, but the
-            // vehicle owns it — never stamp the XML onto the program prim.
-            if let (Some(owner), Some((val, path_val))) =
-                (behavior_owner_entity(world, id, prim), source)
-            {
-                let owner_path = world
-                    .get::<lunco_usd_bevy::UsdPrimPath>(owner)
-                    .map(|p| p.path.clone())
-                    .unwrap_or_default();
-                behavior_updates.push((owner_path, prim.to_string(), val, path_val));
+            if let Some(owner) = projected_owner {
+                program_updates.push((owner, resolved));
             }
             continue;
         }
@@ -821,31 +784,8 @@ pub(crate) fn refresh_edited_prims_live(
         lunco_usd_sim::wheel_params::resync_wheels_for_stage(world, id);
     }
 
-    // Apply any inline behavior XML or path updates directly to the entity
-    for (prim, source, xml, path) in behavior_updates {
-        if let Some(entity) = find_live_entity(world, id, &prim) {
-            let mut entity = world.entity_mut(entity);
-            match (xml, path) {
-                (Some(xml_text), _) => {
-                    entity.insert(BehaviorXml(xml_text));
-                    entity.insert(BehaviorProgramSource(source));
-                    entity.remove::<BehaviorXmlPath>();
-                    entity.remove::<lunco_autopilot::usd_tree::BehaviorXmlHandle>();
-                }
-                (None, Some(path_text)) => {
-                    entity.insert(BehaviorXmlPath(path_text));
-                    entity.insert(BehaviorProgramSource(source));
-                    entity.remove::<BehaviorXml>();
-                    entity.remove::<lunco_autopilot::usd_tree::BehaviorXmlHandle>();
-                }
-                (None, None) => {
-                    entity.remove::<BehaviorXml>();
-                    entity.remove::<BehaviorXmlPath>();
-                    entity.remove::<lunco_autopilot::usd_tree::BehaviorXmlHandle>();
-                    entity.remove::<BehaviorProgramSource>();
-                }
-            }
-        }
+    for (owner, resolved) in program_updates {
+        lunco_usd_bevy::apply_program_resolution(world, owner, id, resolved);
     }
 
     if prims.is_empty() {
@@ -906,23 +846,24 @@ pub(crate) fn reconcile_structural_live(
 ) {
     use lunco_usd_bevy::CanonicalStages;
     for path in resync_paths {
-        // A program child has no physical ECS subtree of its own. If the authored
-        // prim disappears, remove only the tree it projected onto its owner; the
-        // owner, ports, physics and avatar remain live.
-        if !is_behavior_program(world, id, path) {
-            if let Some(owner) = projected_behavior_owner(world, id, path) {
-                let mut entity = world.entity_mut(owner);
-                entity.remove::<BehaviorXml>();
-                entity.remove::<BehaviorXmlPath>();
-                entity.remove::<lunco_autopilot::usd_tree::BehaviorXmlHandle>();
-                entity.remove::<BehaviorProgramSource>();
-                continue;
-            }
-        }
-        if is_behavior_program(world, id, path) {
-            continue;
-        }
         let Ok(sp) = SdfPath::new(path) else { continue };
+        // Program source is projected onto the existing owner, while the
+        // program prim itself still follows the normal USD structural path.
+        let program_owner = if let Some(owner) = find_program_owner(world, id, path) {
+            Some(owner)
+        } else {
+            sp.parent()
+                .and_then(|parent| find_live_entity(world, id, parent.as_str()))
+                .filter(|_| {
+                    world
+                        .get_non_send::<CanonicalStages>()
+                        .and_then(|stages| stages.get(id))
+                        .is_some_and(|stage| stage.view().has_api_schema(&sp, "LunCoProgramAPI"))
+                })
+        };
+        if let Some(owner) = program_owner {
+            lunco_usd_bevy::refresh_program_owner(world, id, owner);
+        }
         let exists = {
             let Some(stages) = world.get_non_send::<CanonicalStages>() else {
                 return;

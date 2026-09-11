@@ -7153,25 +7153,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lunco-autopilot"
-version = "0.6.0-dev"
-dependencies = [
- "anyhow",
- "avian3d",
- "bevy",
- "big_space",
- "lunco-behavior",
- "lunco-core",
- "lunco-cosim",
- "lunco-physics",
- "lunco-time",
- "lunco-tools-bevy",
- "quick-xml 0.41.0",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "lunco-avatar"
 version = "0.6.0-dev"
 dependencies = [
@@ -7420,7 +7401,6 @@ dependencies = [
  "js-sys",
  "lunco-api",
  "lunco-assets",
- "lunco-autopilot",
  "lunco-avatar",
  "lunco-celestial",
  "lunco-celestial-ephemeris",
@@ -7491,7 +7471,6 @@ dependencies = [
  "leafwing-input-manager",
  "lunco-api",
  "lunco-assets",
- "lunco-autopilot",
  "lunco-avatar",
  "lunco-canvas",
  "lunco-celestial",
@@ -7533,7 +7512,6 @@ dependencies = [
  "avian3d",
  "bevy",
  "big_space",
- "lunco-autopilot",
  "lunco-celestial",
  "lunco-controller",
  "lunco-core",
@@ -7832,7 +7810,6 @@ dependencies = [
  "futures-lite",
  "lunco-api",
  "lunco-assets",
- "lunco-autopilot",
  "lunco-avatar",
  "lunco-celestial",
  "lunco-core",
@@ -7897,6 +7874,7 @@ dependencies = [
  "lunco-tools",
  "lunco-tools-rhai",
  "lunco-twin-journal",
+ "lunco-usd-bevy",
  "lunco-workspace",
  "pyo3",
  "rhai",
@@ -8132,7 +8110,6 @@ dependencies = [
  "big_space",
  "lunco-api",
  "lunco-assets",
- "lunco-autopilot",
  "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",
@@ -8217,7 +8194,6 @@ dependencies = [
  "leafwing-input-manager",
  "lunco-api",
  "lunco-assets",
- "lunco-autopilot",
  "lunco-avatar",
  "lunco-celestial",
  "lunco-controller",

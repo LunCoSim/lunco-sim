@@ -183,7 +183,7 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
         "geolocation",
         "geolocation(id)",
         "#{lat, lon, height} | ()",
-        "Where on the BODY an entity is — lat/lon in degrees, height in metres (body datum). Works for anything positioned: rover, waypoint, mast, marker. () when the scene has no SiteAnchor.",
+        "Where on the BODY an entity is — lat/lon in degrees, height in metres (body datum). Works for any positioned entity, including route points, masts, and markers. () when the scene has no SiteAnchor.",
     ),
     (
         "world_forward",
@@ -237,7 +237,7 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
         "is_controlled",
         "is_controlled(id)",
         "bool",
-        "READ. Whether a human or autopilot currently controls the entity.",
+        "READ. Whether a control session currently owns the entity.",
     ),
     (
         "list_entities",
@@ -660,14 +660,12 @@ mod tests {
         }
 
         // Hooks present.
-        assert!(
-            data["hooks"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter_map(|h| h["name"].as_str())
-                .any(|name| name == "on_tick")
-        );
+        assert!(data["hooks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|h| h["name"].as_str())
+            .any(|name| name == "on_tick"));
         for entry in ["task", "mission"] {
             assert!(
                 data["hooks"]

@@ -58,7 +58,6 @@ The "Brains and Brawn" — Flight Software (FSW), On-Board Computer (OBC), mobil
 | **`lunco-avatar`** | Human-interaction layer: composable camera **rigs** (SpringArm, Orbit, FreeFlight, Surface) and control intents. (Camera *selection* / viewport lives in `lunco-usd-bevy` + `lunco-core::SceneViewport`.) |
 | **`lunco-hardware`** | Concrete physical actuators and sensors bridging `Port` values to the `avian3d` physics engine. |
 | **`lunco-controller`** | Owns the persisted `InputBindingsSettings` keymap and translates resolved raw user input (Keyboard/Gamepad/Mouse) into typed `UserIntent` actions for FSW. Yields a vessel to its owning session (spec 034), so the human never fights an autopilot. |
-| **`lunco-autopilot`** | Headless autonomous driver as a first-class actor: an `AiAgent` session that possesses + drives a vessel via `SetPorts` (spec 034). Multi-actor (each vessel → one owning session, human or autopilot). Behaviour is a `lunco-behavior` tree authored as DATA (`BehaviorSpec`, rhai/JSON — hot-swappable via `SetAutopilotBehavior`) with Rust nav-math leaves. No avatar/UI dep. |
 
 ---
 
@@ -121,7 +120,7 @@ Logic engines for dynamic simulation behavior, the tool registry, and industrial
 | **`lunco-hooks`** | Language-agnostic hook registry: a *hook* is a named, deterministic-flagged decision point (`HookValue` in/out) whose implementation is pluggable. Backs first-class policies — journal **merge** order, RBAC **authorize** gate, and authored actuation policies — as data, not Rust branches. Dependency-free (no rhai/bevy). |
 | **`lunco-hooks-rhai`** | rhai backend for `lunco-hooks`: compiles a rhai `source` + `entry` fn and registers it under a hook id (`register_rhai_hook`), so any hook point can be authored in rhai and hot-replaced. |
 | **`lunco-lint`** | Universal lint substrate: `LintFinding`/`LintReport` and `run_lint(domain, facts)`, which asks the `lint.<domain>` hook what is wrong with a domain's FACTS. Rules are authored (`assets/scripting/policy/lint_<domain>.rhai`), never compiled here — this crate names no domain and knows nothing about USD, rhai or Modelica. Nothing lints on load; `RunLint` (lunco-scene-commands) and `ValidateAsset` are the two entry points. See `docs/architecture/lint-substrate.md`. |
-| **`lunco-behavior`** | Dependency-free behaviour-tree kernel (mechanism, no bevy/avian/rhai): `Ctx`-driven tick-tree — composites (`Sequence`/`Selector`/`Parallel`), reactive composites (`ReactiveSequence`/`ReactiveSelector`, guards re-checked every tick), loops (`Repeat`/`Retry`), and decorators (`Invert`/`Force`). Consumed by `lunco-autopilot`, which authors trees as data (`BehaviorSpec`) and adds clock/pose leaves. Node catalogue: [docs/behaviour-trees.md](./behaviour-trees.md). |
+| **`lunco-behavior`** | Dependency-free task-tree kernel (mechanism, no bevy/avian/rhai): `Ctx`-driven composites (`Sequence`/`Selector`/`Parallel`), reactive composites, loops, decorators, and timed/event leaves. `lunco-scripting` authors and owns the Rhai-facing task programs. Node catalogue: [docs/behaviour-trees.md](./behaviour-trees.md). |
 
 ---
 
@@ -324,7 +323,7 @@ Backend-agnostic, dependency-free tool registry. A *tool* is a named, reusable u
 rhai adapter for the `lunco-tools` registry. Provides the two concrete `Tool` impls scenarios use today — `RhaiTool` (rhai source) and `NativeRhaiTool` (native Rust functions) — and `bind_registered_tools`, which binds every registered tool into a rhai `Engine` as a static module so it is callable as `name::fn(...)` from anywhere, including task closures and event/lifecycle hooks. Tools authored in other runtimes are exposed to rhai as a `NativeRhaiTool`.
 
 **`lunco-tools-bevy`**
-Bevy dispatch adapter for `lunco-tools` — the **behaviour-tree execution** half. Defines a bevy-aware `ExecutableTool` supertrait (separate from the bevy-free `Tool`, so `lunco-tools-rhai` doesn't pull bevy) + `ClosureTool` (the common-case instrument: a closure that triggers its typed command directly via `&mut World`, no JSON/reflect). Observes `lunco_core::tools::ToolFired` (emitted by `lunco-autopilot`'s `run_tool` leaf), looks the tool up in the registry, downcasts to `ExecutableTool`, and runs it. Instruments are registered declaratively via `register_closure_tool(name, sigs, |world, vessel, gid, args| { world.trigger(MyCommand{...}); Ok })` — the closure IS the tool definition; adding an instrument is one closure, no per-instrument Rust struct.
+Bevy dispatch adapter for `lunco-tools` — the engine-action execution half. Defines a bevy-aware `ExecutableTool` supertrait + `ClosureTool` (a closure that triggers its typed command directly via `&mut World`, no JSON/reflect). Observes `lunco_core::tools::ToolFired`, looks the tool up in the registry, downcasts to `ExecutableTool`, and runs it. Tools register declaratively via `register_closure_tool(name, sigs, |world, subject, gid, args| { world.trigger(MyCommand{...}); Ok })` — the closure is the tool definition; adding an instrument is one closure, no per-instrument Rust struct.
 
 ---
 
