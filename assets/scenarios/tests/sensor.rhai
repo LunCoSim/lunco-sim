@@ -34,6 +34,13 @@ fn on_tick(me) {
     this.t += dt();
     if this.t >= this.settle_s {
         this.phase = "done";
+        let physics = physics_acceptance::sample(this.box);
+        let contact_report = physics_acceptance::contact_report(this.box);
+        let contact_acceptance = physics_acceptance::contact_acceptance(
+            contact_report, 1, 1, 0.25,
+        );
+        let systems = physics_acceptance::system_evidence();
+        let system_acceptance = physics_acceptance::system_acceptance(systems);
         verdict(#{
             fx: get(this.imu, "specific_force_x"),
             fy: get(this.imu, "specific_force_y"),
@@ -42,6 +49,9 @@ fn on_tick(me) {
             range_valid: get(this.altimeter, "range_valid"),
             contact: get(this.box, "contact"),
             force: get(this.box, "contact_force"),
+            physics: physics,
+            contact_acceptance: contact_acceptance,
+            system_acceptance: system_acceptance,
         });
     }
 }
@@ -55,6 +65,12 @@ fn verdict(s) {
     f.push(t_present(s.range_valid, "altimeter range_valid output"));
     f.push(t_present(s.contact, "native Avian contact port"));
     f.push(t_present(s.force, "native Avian contact_force port"));
+    f.push(t_true(s.physics.ok == true && s.physics.contact != (),
+        "generic physics evidence did not include the live contact snapshot"));
+    f.push(t_true(s.contact_acceptance.ok == true,
+        "generic contact acceptance did not observe a resting manifold"));
+    f.push(t_true(s.system_acceptance.ok == true,
+        "generic readiness/binding diagnostics report an unresolved runtime fault"));
 
     if s.fy != () {
         f.push(t_true(s.fx.is_finite() && s.fy.is_finite() && s.fz.is_finite(),

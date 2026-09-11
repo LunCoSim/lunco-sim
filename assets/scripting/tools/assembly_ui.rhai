@@ -43,12 +43,14 @@ fn surface_capabilities(role) {
     else if role == "structure" { ["inspect_prim", "select_prim"] }
     else if role == "preview" { ["visual_checkpoint", "open_views"] }
     else if role == "inspector" {
-        ["transform", "attribute", "variant", "joint", "animation"]
+        ["transform", "attribute", "variant", "joint", "animation", "component_update"]
     } else if role == "connections" { ["connection"] }
     else if role == "animation" { ["transport", "keyframe"] }
     else if role == "mount" { ["attach_component", "detach_component"] }
     else if role == "review" { ["propose", "review", "commit"] }
-    else if role == "persistence" { ["save", "save_as", "discard", "close"] }
+    else if role == "persistence" {
+        ["save", "save_as", "discard", "close", "explicit_autosave_mode"]
+    }
     else { [] }
 }
 

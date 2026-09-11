@@ -1,0 +1,35 @@
+#usda 1.0
+(
+    defaultPrim = "EditorWorkflowTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Headless production fixture for the explicit editor checkpoint. The source
+# stays ordinary USD; the scenario owns the workflow assertions.
+def Xform "EditorWorkflowTest"
+{
+    def DistantLight "TestLight"
+    {
+        float intensity = 1.0
+    }
+
+    def Xform "Part"
+    {
+        double3 xformOp:translate = (0, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "editor-workflow"
+
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/editor_workflow.rhai@
+        }
+    }
+}

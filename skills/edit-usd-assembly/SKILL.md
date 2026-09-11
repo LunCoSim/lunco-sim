@@ -780,10 +780,18 @@ before retrying.
 
 ## Save, verify, and close
 
-Do not save automatically as part of proposal commit. After the user approves
-the visible result, call `assembly_edit::save_document(doc)` for a file-backed
-document or `assembly_edit::save_as_document(doc, path)` for a fork, then
-confirm the document is no longer dirty with
+Do not save automatically as part of proposal commit. The optional
+`editor_workflow::after_edit(doc)` helper can coordinate the explicit
+inspect → current projection → document lint checkpoint after a reviewed
+apply/commit. It returns a retryable projection result and never saves that
+stale generation. Authored autosave is disabled by default: an omitted
+`usd.editor_autosave` Twin setting or `false` returns `save_required`; only an
+explicit `true` permits the helper to call `SaveDocument`.
+
+After the user approves the visible result, call
+`assembly_edit::save_document(doc)` for a file-backed document or
+`assembly_edit::save_as_document(doc, path)` for a fork, then confirm the
+document is no longer dirty with
 `ListOpenDocuments`/`InspectUsdDocument`. Use
 `assembly_edit::discard_document(doc)` to restore the file through the owner,
 or `assembly_edit::close_document(doc)` after the final checkpoint. Keep

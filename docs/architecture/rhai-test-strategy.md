@@ -17,6 +17,13 @@ claim can be observed through a public production surface.
 | Mission sequencing, route choice, behavior policy, authored tolerances and expected outcomes | Rhai / USD | Production scene + `assets/scenarios/tests/*.rhai` |
 | Tutorial steps and application-specific assertions | Rhai observer | Production tutorial scene gate |
 
+Reusable physics acceptance vocabulary is also Rhai-owned. The generic
+`assets/scripting/tools/physics_acceptance.rhai` library composes existing
+contact, pose, joint-drive, readiness, binding, and runtime-diagnostic reads;
+the authored fixture supplies entity paths and thresholds. Rust remains the
+owner of the solver and low-level telemetry, so a Rhai acceptance helper never
+changes collision policy or becomes a second physics model.
+
 The rule is: move a Rust assertion only after an authored fixture can fail for
 the same reason through the public runtime path. A Rust test that supplies a
 spy command, fake world, private component, or direct function call is not a
@@ -124,6 +131,12 @@ recipes and their acceptance scenes stay in the owning Twin.
    gate process still receives `--threads 1 --jitter 0`, so process parallelism
    does not change the deterministic test contract. Graphics scenes remain a
    separate serial GPU/offscreen pass.
+   Each gate process owns a fresh Bevy app, document registry, workspace, and
+   Rhai state. Runtime setup may restore an explicitly enabled runtime overlay,
+   but it must never mark the authored document dirty. Fixtures that edit
+   documents resolve their own scene document and assert `dirty == false` before
+   the first authored operation; they do not select an arbitrary open-document
+   slot.
    Use `--exact <scene-name>` for the smallest edit-loop run; an unqualified
    argument remains a substring group selector (for example, `joint` also
    matches `g7_joints`).

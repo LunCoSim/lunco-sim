@@ -73,6 +73,14 @@ inspect exact target and generation
   -> save through the document owner
 ```
 
+For the common post-edit checkpoint, compose the built-in
+`editor_workflow::after_edit(doc)` helper after a reviewed apply/commit. It
+keeps inspect, current projection, document lint, and optional authored save in
+one explicit result; authored autosave is disabled unless the Twin explicitly
+sets `usd.editor_autosave = true`. For physics scene evidence, compose
+`physics_acceptance` instead of adding one-off threshold code to every test.
+It reads existing runtime facts and leaves solver policy in Rust.
+
 ### Generic parameter edits
 
 Use `assembly_builder::parameter_plan(edit_target, path, parameters)` for a

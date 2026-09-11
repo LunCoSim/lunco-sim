@@ -840,7 +840,11 @@ No data loss from crashes. Matches VS Code's `Backups` behavior.
   changes still use explicit Save; generated USD runtime spawns and moves use
   the Twin setting `[settings] usd.runtime_persistence = true` when the user
   explicitly opts into reading and writing the `.lunco/runtime` cache.
-  Session-only state remains disposable.
+  Session-only state remains disposable. The optional Rhai
+  `editor_workflow::after_edit` checkpoint may save an authored edit only when
+  `[settings] usd.editor_autosave = true`; an omitted or false value leaves the
+  authored document dirty for explicit Save and does not enable runtime
+  persistence.
 - **Orphan:** autosave only after the first explicit save (so the user
   controls initial location). After that, same ~5 s idle rule.
 

@@ -427,7 +427,7 @@ registered tool with ordinary Rhai syntax (`import "other_tool" as other_tool`);
 the tool resolver uses the registry and does not read dependency files.
 
 - Author one: drop a `.rhai` in [`assets/scripting/tools/`](../assets/scripting/tools), or `RegisterToolLibrary { name, source }` at runtime (hot-reloadable).
-- Examples: [`assembly_builder.rhai`](../assets/scripting/tools/assembly_builder.rhai) (generic frame/shape construction, placement, alignment, composed collision-clearance, geometry, parameter, retrofit, and socket mating plans), [`assembly_edit.rhai`](../assets/scripting/tools/assembly_edit.rhai) (explicit USD assembly sessions), [`assembly_ui.rhai`](../assets/scripting/tools/assembly_ui.rhai) (Editor presentation workflows), [`formation.rhai`](../assets/scripting/tools/formation.rhai) (formation flying), [`survey.rhai`](../assets/scripting/tools/survey.rhai) (lawnmower survey pattern).
+- Examples: [`assembly_builder.rhai`](../assets/scripting/tools/assembly_builder.rhai) (generic frame/shape construction, placement, alignment, composed collision-clearance, geometry, parameter, retrofit, and socket mating plans), [`assembly_edit.rhai`](../assets/scripting/tools/assembly_edit.rhai) (explicit USD assembly sessions), [`assembly_ui.rhai`](../assets/scripting/tools/assembly_ui.rhai) (Editor presentation workflows), [`editor_workflow.rhai`](../assets/scripting/tools/editor_workflow.rhai) (explicit inspect/projection/lint checkpoints and opt-in authored autosave), [`physics_acceptance.rhai`](../assets/scripting/tools/physics_acceptance.rhai) (generic contact, motion, settling, joint, and runtime-evidence checks), [`formation.rhai`](../assets/scripting/tools/formation.rhai) (formation flying), [`survey.rhai`](../assets/scripting/tools/survey.rhai) (lawnmower survey pattern).
 - Discover: `ListToolLibraries`, `GetToolLibrary { name }`.
 - **Persistence:** registered libraries are mirrored to `<twin>/tools/*.rhai` and reloaded when the Twin opens.
 
@@ -451,6 +451,38 @@ through `ListOpenDocuments`. Persist or end the session with
 they route through the same lifecycle commands as the human Editor. All
 authored edits require the document, `@root@` or `@runtime@` layer, and the USD
 path explicitly:
+
+For repeated edit automation, `editor_workflow::after_edit(doc)` is an explicit
+checkpoint helper. Call it after one reviewed apply/commit; it inspects the
+document, waits for the current projection, runs document-scoped USD lint, and
+returns a structured retryable result while projection is pending. It does not
+run in `on_tick` in production and it never saves a stale projection. Authored
+autosave is disabled when the Twin omits `usd.editor_autosave` and remains
+disabled when the setting is `false`; only an explicit Twin value of `true`
+allows the helper to call `SaveDocument`. Runtime overlay persistence is a
+separate setting and file path. With the default policy, call
+`assembly_edit::save_document(doc)` only after the human or agent approves the
+visible result.
+
+```rhai
+let checked = editor_workflow::after_edit(doc);
+if checked.stage == "projection" {
+    // Wait for the projection event, then call the helper again.
+} else if checked.ok == true && checked.save_required == true {
+    assembly_edit::save_document(doc); // explicit save, default policy
+}
+```
+
+### Generic physics acceptance evidence
+
+Use `physics_acceptance` in authored scene tests when a result needs more than
+one scalar telemetry value. `sample(entity)` captures the existing world pose,
+velocity, contact, and joint-drive surfaces; `contact_acceptance`,
+`joint_distance_acceptance`, `motion_acceptance`, and `settling_acceptance`
+apply thresholds supplied by the fixture. `system_evidence()` and
+`system_acceptance()` preserve readiness, binding, and runtime-diagnostic
+evidence in the same verdict. These helpers read the production surfaces and
+do not change solver policy, add per-tick control, or encode a vehicle name.
 
 Before editing what is visible, call `assembly_edit::viewport()` and use
 `CaptureScreenshot` with the image viewer. Correlate the returned preview/view

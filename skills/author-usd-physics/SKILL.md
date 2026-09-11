@@ -574,6 +574,15 @@ the launch pitch moment is physical. Lower or correctly assemble the mass
 distribution and rerun the test; do not turn a repeatable tip into a larger tilt
 allowance or a rendering filter.
 
+For reusable authored evidence, use
+`physics_acceptance::sample`, `contact_report`, and the corresponding
+`contact_acceptance`, `joint_distance_acceptance`, `motion_acceptance`, and
+`settling_acceptance` helpers. Supply limits from the fixture or Twin model;
+the library only reads the production telemetry and diagnostic surfaces. Use
+`system_evidence`/`system_acceptance` to keep readiness and binding failures
+visible beside physical measurements. Do not add a vehicle-specific acceptance
+helper or change the solver to satisfy a threshold.
+
 ## 6c. What this engine does NOT read
 
 Before authoring a schema because a DCC offers it, check that the importer
