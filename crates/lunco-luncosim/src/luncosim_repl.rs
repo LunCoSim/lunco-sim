@@ -42,7 +42,7 @@ enum OutputMode {
 /// If the process was invoked as `luncosim rhai [...]`, run the REPL/one-shot
 /// client and return its exit status. Returns `None` for a normal launch so
 /// `main` falls through to the app.
-pub fn run_if_requested() -> Option<i32> {
+pub(super) fn run_if_requested() -> Option<i32> {
     let args: Vec<String> = std::env::args().collect();
     if !args.iter().skip(1).any(|a| a == "rhai") {
         return None;

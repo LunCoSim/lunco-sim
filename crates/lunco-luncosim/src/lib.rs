@@ -92,11 +92,6 @@ mod ui;
 #[cfg(all(feature = "networking", not(target_family = "wasm")))]
 mod url_scheme;
 
-/// `luncosim rhai` — stdin→HTTP rhai REPL client for a running instance. Native
-/// only (raw `std::net` HTTP; no window). See [`rhai_repl::run_if_requested`].
-#[cfg(not(target_family = "wasm"))]
-pub mod rhai_repl;
-
 /// Headless authored-scene regression runner, also exposed by
 /// `luncosim test`. Keeping the implementation in the luncosim crate
 /// lets the standalone test binary and the production CLI use one runner.
