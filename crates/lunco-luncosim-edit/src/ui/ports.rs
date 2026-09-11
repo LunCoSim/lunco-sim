@@ -3,6 +3,8 @@
 //! The registry is the only source of port identity and value semantics. This
 //! module projects it into a small, change-gated view-model so the panel can
 //! browse every port-bearing entity without scanning the ECS during egui paint.
+//! Entity discovery is delegated to each registered backend through the shared
+//! registry; the panel never probes the whole world to find port owners.
 
 use std::collections::{HashMap, HashSet};
 
@@ -49,10 +51,9 @@ pub struct PortView {
     pub sampled_at: f64,
 }
 
-/// Rebuild the table at operator-readable cadence. Avian state ports can change
-/// without a common marker component, so a bounded 10 Hz sample is the honest
-/// shared gate for this diagnostic/control surface; it avoids an O(n) rebuild on
-/// every render frame while keeping live values responsive.
+/// Rebuild the table at operator-readable cadence. A bounded 10 Hz sample is the
+/// honest shared gate for this diagnostic/control surface; the registry supplies
+/// backend-owned entity candidates so sampling does not probe every ECS entity.
 pub fn port_view_due(
     mut first: Local<bool>,
     time: Res<Time>,
@@ -89,10 +90,12 @@ pub fn populate_port_view(world: &mut World) {
         })
         .collect();
 
-    let entities: Vec<(Entity, String, Option<u64>)> = world
-        .query::<(Entity, Option<&Name>, Option<&lunco_core::GlobalEntityId>)>()
-        .iter(world)
-        .map(|(entity, name, global_id)| {
+    let entities: Vec<(Entity, String, Option<u64>)> = registry
+        .port_entities(world)
+        .into_iter()
+        .map(|entity| {
+            let name = world.get::<Name>(entity);
+            let global_id = world.get::<lunco_core::GlobalEntityId>(entity);
             let label = name
                 .map(|name| name.as_str().to_owned())
                 .or_else(|| global_id.map(|id| format!("Entity {}", id.get())))
@@ -406,5 +409,27 @@ mod tests {
         assert!(metadata.validate(0.5).is_ok());
         assert!(metadata.validate(2.0).is_err());
         assert!(metadata.validate(f64::NAN).is_err());
+    }
+
+    #[test]
+    fn port_view_uses_backend_owned_candidates() {
+        let mut world = World::new();
+        world.init_resource::<PortView>();
+        world.insert_resource(PortRegistry::default());
+        world.insert_resource(Time::<()>::default());
+        let owned = world
+            .spawn((
+                Name::new("owned"),
+                lunco_core::InputPorts::new(&["throttle"]),
+            ))
+            .id();
+        world.spawn(Name::new("not a port owner"));
+
+        populate_port_view(&mut world);
+
+        let view = world.resource::<PortView>();
+        assert_eq!(view.entities.len(), 1);
+        assert_eq!(view.entities[0].entity, owned);
+        assert_eq!(view.entities[0].ports[0].info.name, "throttle");
     }
 }

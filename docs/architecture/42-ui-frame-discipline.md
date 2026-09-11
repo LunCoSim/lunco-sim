@@ -192,6 +192,11 @@ The same ownership rule applies to the measured presentation paths:
 - **Dock anchors** publish all authored slot unions from one dock-tree walk.
   Adding another anchor group must extend that pass rather than add another
   full layout traversal.
+- **Universal port inspection** uses `PortRegistry::port_entities`: each
+  registered backend enumerates its own authoritative component/surface
+  candidates, and the registry deduplicates them before the bounded live sample.
+  The Builder Ports panel must never discover owners by probing every ECS entity
+  against every backend.
 
 The same rule applies below the UI boundary. The Modelica engine-sync pass is
 woken by the document registry revision and still compares document generations

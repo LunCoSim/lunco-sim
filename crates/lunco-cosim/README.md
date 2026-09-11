@@ -21,6 +21,11 @@ authority, and manual-writability contract. Consumers do not reconstruct those
 facts from a port name; writes still go through the existing typed `SetPorts`
 command.
 
+`PortRegistry::port_entities` is the corresponding discovery projection. Each
+backend enumerates the component or authored surface it owns, and the registry
+merges those candidates once per inspection sample. A consumer must use this
+path instead of scanning every ECS entity and probing every backend.
+
 | Backend | Ports |
 | --- | --- |
 | **Modelica `SimComponent`** | its declared `input`/`output` variables (`height`, `netForce`, …) |
@@ -34,7 +39,8 @@ command.
 Avian's foreign components are exposed declaratively via the `AVIAN` spec table
 (`ports.rs`) — adding a kind (a new joint or raw physics query) is one AvianGroup entry,
 no observer or sync system. **Adding a port group:** declare the `AvianGroup`
-(present-predicate + `AvianPort`s with read/write closures) and list it in `AVIAN`.
+(present-predicate + entity enumerator + `AvianPort`s with read/write closures)
+and list it in `AVIAN`.
 
 A [`SimConnection`] connects any output port to any input port. The cosim master
 runs in `FixedUpdate`:

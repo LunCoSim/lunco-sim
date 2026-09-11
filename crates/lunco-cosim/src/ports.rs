@@ -1,7 +1,7 @@
 //! The cosim engine's port **backends** and their registration into the shared
 //! [`PortRegistry`].
 //!
-//! The registry itself, the four query operations, and the value types
+//! The registry itself, its discovery/access operations, and the value types
 //! ([`PortRef`], [`PortBackend`], [`PortDirection`]) live in
 //! [`lunco_core::ports`] — the neutral substrate *below* every participant — so
 //! that wires, the API, the inspector, and every scripting runtime read/write
@@ -59,6 +59,8 @@ pub struct AvianPort {
 pub struct AvianGroup {
     /// Does `entity` belong to this group (carry the gating component)?
     pub present: fn(&World, Entity) -> bool,
+    /// Append every entity that can belong to this group to `out`.
+    pub entities: fn(&mut World, &mut Vec<Entity>),
     /// The ports this kind exposes.
     pub ports: &'static [AvianPort],
 }
@@ -105,6 +107,12 @@ fn avian_list(world: &World, entity: Entity, out: &mut Vec<PortRef>) {
                 value,
             });
         }
+    }
+}
+
+fn avian_entities(world: &mut World, out: &mut Vec<Entity>) {
+    for group in AVIAN {
+        (group.entities)(world, out);
     }
 }
 
@@ -263,6 +271,13 @@ fn avian_write_input(world: &mut World, entity: Entity, name: &str, value: f64) 
 
 /// Modelica `SimComponent` — map-based `inputs`/`outputs`.
 const SIMCOMPONENT_BACKEND: PortBackend = PortBackend {
+    list_entities: |world, out| {
+        out.extend(
+            world
+                .query_filtered::<Entity, With<SimComponent>>()
+                .iter(world),
+        );
+    },
     list: |w, e, out| {
         if let Some(c) = w.get::<SimComponent>(e) {
             push_map(out, &c.outputs, PortDirection::Out);
@@ -324,6 +339,7 @@ const SIMCOMPONENT_BACKEND: PortBackend = PortBackend {
 /// up to six group-presence checks + a name scan — resolution collapses that to a
 /// single component access per tick.
 const AVIAN_BACKEND: PortBackend = PortBackend {
+    list_entities: avian_entities,
     list: avian_list,
     metadata: Some(avian_metadata),
     read_output: avian_read_output,
@@ -341,6 +357,9 @@ const AVIAN_BACKEND: PortBackend = PortBackend {
 /// on the far side of a [`crate::SimConnection`] exchanges `f64`, and so does the
 /// port it is wired to.
 const PORT_BACKEND: PortBackend = PortBackend {
+    list_entities: |world, out| {
+        out.extend(world.query_filtered::<Entity, With<Port>>().iter(world));
+    },
     list: |w, e, out| {
         if let Some(p) = w.get::<Port>(e) {
             out.push(PortRef {
@@ -399,6 +418,13 @@ const PORT_BACKEND: PortBackend = PortBackend {
 /// read-only here: commands enter through [`InputPorts`], and a producer owns
 /// the writes to its outputs.
 const OUTPUT_PORTS_BACKEND: PortBackend = PortBackend {
+    list_entities: |world, out| {
+        out.extend(
+            world
+                .query_filtered::<Entity, With<OutputPorts>>()
+                .iter(world),
+        );
+    },
     list: |world, entity, out| {
         let Some(outputs) = world.get::<OutputPorts>(entity) else {
             return;
@@ -452,6 +478,13 @@ const OUTPUT_PORTS_BACKEND: PortBackend = PortBackend {
 /// arbitrated by possession + RBAC upstream; the GNC is simply the floor beneath
 /// the whole session layer.
 const PILOTED_BACKEND: PortBackend = PortBackend {
+    list_entities: |world, out| {
+        out.extend(
+            world
+                .query_filtered::<Entity, With<InputPorts>>()
+                .iter(world),
+        );
+    },
     list: |w, e, out| {
         // `GlobalEntityId` names every composed USD prim, not just a vehicle.
         // The `InputPorts` surface is the architecture's already-authoritative

@@ -132,6 +132,13 @@ fn read_value(world: &World, entity: Entity, name: &str) -> Option<f32> {
 /// outputs) is what keeps `read_output_port` from resolving a material parameter as
 /// a connection SOURCE and silently forming a feedback wire.
 pub const SHADER_PARAM_BACKEND: PortBackend = PortBackend {
+    list_entities: |world, out| {
+        out.extend(
+            world
+                .query_filtered::<Entity, With<ShaderLook>>()
+                .iter(world),
+        );
+    },
     list: |world, entity, out| {
         let Some(look) = world.get::<ShaderLook>(entity) else {
             return;

@@ -981,6 +981,14 @@ fn authored_peer_classes(world: &World, entity: Entity) -> HashSet<String> {
 /// per-class reduction (connected beats nearer, then nearest) is unchanged — it is
 /// what lets a scalar Modelica port see an N-peer graph.
 pub const LINK_PORT_BACKEND: lunco_core::ports::PortBackend = lunco_core::ports::PortBackend {
+    list_entities: |world, out| {
+        out.extend(world.query_filtered::<Entity, With<LinkNode>>().iter(world));
+        out.extend(
+            world
+                .query_filtered::<Entity, With<LinkState>>()
+                .iter(world),
+        );
+    },
     list: |world, entity, out| {
         let state = world.get::<LinkState>(entity);
         let live = state.map(best_per_class);

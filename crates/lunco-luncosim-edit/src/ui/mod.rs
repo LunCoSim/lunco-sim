@@ -777,9 +777,10 @@ impl Plugin for SceneEditUiPlugin {
         );
 
         // The universal port table is a live diagnostic/control surface. Its
-        // producer samples the shared registry at 10 Hz because some Avian
-        // outputs are native solver components without one common change marker;
-        // the panel itself remains a pure view and emits SetPorts/ReleasePort.
+        // producer samples the shared registry at 10 Hz; each backend supplies
+        // its own entity candidates, so a Builder sample does not scan the full
+        // ECS world. The panel itself remains a pure view and emits
+        // SetPorts/ReleasePort.
         app.init_resource::<ports::PortView>();
         app.add_view_model(ports::populate_port_view, ports::port_view_due);
 

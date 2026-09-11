@@ -203,6 +203,23 @@ fn write_transform(world: &mut World, entity: Entity, name: &str, v: f32) -> boo
 /// Scene properties are **inputs**: something the simulation writes into, never a
 /// source another prim reads. See the module docs for why that is not negotiable.
 pub(crate) const SCENE_PROPERTY_BACKEND: PortBackend = PortBackend {
+    list_entities: |world, out| {
+        out.extend(
+            world
+                .query_filtered::<Entity, With<PointLight>>()
+                .iter(world),
+        );
+        out.extend(
+            world
+                .query_filtered::<Entity, With<SpotLight>>()
+                .iter(world),
+        );
+        out.extend(
+            world
+                .query_filtered::<Entity, With<Transform>>()
+                .iter(world),
+        );
+    },
     list: |world, entity, out| {
         // Listing exactly what the entity HAS is what keeps `ListPorts` and
         // `write_input` telling the same story: every name reported here is one a

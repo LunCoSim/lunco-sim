@@ -28,13 +28,14 @@
 //!
 //! [`Port`]: crate::architecture::Port
 //!
-//! ## One registry, four thin operations
+//! ## One registry, one discovery path and four thin access operations
 //!
-//! Every port-bearing backend is one [`PortBackend`] entry (list / read-output /
-//! read-input / write-input), registered into the [`PortRegistry`] resource. The
-//! four query methods just fold over the registered backends in order, so a new
-//! backend is added by **registering** it — no consumer changes. Registration
-//! order *is* resolution precedence (first match wins).
+//! Every port-bearing backend is one [`PortBackend`] entry with an entity
+//! enumerator and the access operations (list / read-output / read-input /
+//! write-input), registered into the [`PortRegistry`] resource. Discovery and
+//! access fold over the registered backends in order, so a new backend is added
+//! by **registering** it — no consumer changes. Registration order *is*
+//! resolution precedence (first match wins).
 
 use bevy::prelude::*;
 use std::collections::{BTreeMap, HashMap};
@@ -211,7 +212,8 @@ pub fn push_map(out: &mut Vec<PortRef>, map: &HashMap<String, f64>, dir: PortDir
     }
 }
 
-/// One port-bearing backend, expressed as four operations over `(World, Entity)`.
+/// One port-bearing backend, expressed as an entity enumerator plus operations
+/// over `(World, Entity)`.
 ///
 /// Ops are plain `fn` pointers (non-capturing closures), so a backend is `Copy`
 /// and the registry is cheap to clone out of the world for `&mut World` access.
@@ -221,6 +223,12 @@ pub fn push_map(out: &mut Vec<PortRef>, map: &HashMap<String, f64>, dir: PortDir
 /// bidirectional — its one scalar *is* both its output and input.
 #[derive(Clone, Copy)]
 pub struct PortBackend {
+    /// Append entities owned by this backend to `out`.
+    ///
+    /// This is the backend's authoritative discovery boundary. Consumers that
+    /// need to inspect all ports must use [`PortRegistry::port_entities`]
+    /// instead of scanning every ECS entity and probing every backend.
+    pub list_entities: fn(&mut World, &mut Vec<Entity>),
     /// Append this backend's ports on `entity` (outputs then inputs) to `out`.
     pub list: fn(&World, Entity, &mut Vec<PortRef>),
     /// Describe one port returned by `list`, or `None` for the generic scalar
@@ -283,7 +291,7 @@ pub struct ResolvedPort {
 /// for every exposed simulation value, whichever backend owns it.
 ///
 /// Backends are registered (in dependency-correct order) by their owning crate's
-/// plugin; the four query methods fold over them. Registration order is
+/// plugin; the registry folds their discovery and access operations. Registration order is
 /// resolution precedence (first match wins). `Clone` is cheap (a `Vec` of `Copy`
 /// `fn` pointers) so a `&mut World` caller clones it out before writing.
 #[derive(Resource, Clone)]
@@ -309,6 +317,13 @@ impl Default for PortRegistry {
 /// control/authority policy. A controller, wire, script, or network peer writes
 /// these inputs through [`PortRegistry`] exactly as it writes a Modelica input.
 const INPUT_PORTS_BACKEND: PortBackend = PortBackend {
+    list_entities: |world, out| {
+        out.extend(
+            world
+                .query_filtered::<Entity, With<InputPorts>>()
+                .iter(world),
+        );
+    },
     list: |world, entity, out| {
         if let Some(inputs) = world.get::<InputPorts>(entity) {
             push_map(out, &inputs.values, PortDirection::In);
@@ -361,6 +376,22 @@ impl PortRegistry {
     /// have to guess needs an authoritative set to answer from instead.
     pub fn register(&mut self, backend: PortBackend) {
         self.backends.push(backend);
+    }
+
+    /// Enumerate every entity owned by at least one registered port backend.
+    ///
+    /// Entity discovery belongs to each backend because only the backend owner
+    /// knows which component or authored surface makes an entity eligible. The
+    /// registry only merges and deduplicates those authoritative candidate sets;
+    /// it never infers ownership by probing the whole ECS world.
+    pub fn port_entities(&self, world: &mut World) -> Vec<Entity> {
+        let mut entities = Vec::new();
+        for backend in &self.backends {
+            (backend.list_entities)(world, &mut entities);
+        }
+        entities.sort_unstable_by_key(|entity| entity.to_bits());
+        entities.dedup();
+        entities
     }
 
     /// Enumerate every exposed port on `entity`, across all backends.
@@ -735,6 +766,7 @@ mod tests {
     }
 
     const OWNER_A_INPUT: PortBackend = PortBackend {
+        list_entities: |_world, _out| {},
         list: duplicate_input_list,
         metadata: Some(owner_a_metadata),
         read_output: no_read,
@@ -747,6 +779,7 @@ mod tests {
     };
 
     const OWNER_B_INPUT: PortBackend = PortBackend {
+        list_entities: |_world, _out| {},
         list: duplicate_input_list,
         metadata: Some(owner_b_metadata),
         read_output: no_read,
@@ -759,6 +792,7 @@ mod tests {
     };
 
     const OWNER_A_INOUT: PortBackend = PortBackend {
+        list_entities: |_world, _out| {},
         list: duplicate_inout_list,
         metadata: Some(owner_a_metadata),
         read_output: no_read,
@@ -771,6 +805,7 @@ mod tests {
     };
 
     const OWNER_B_INOUT: PortBackend = PortBackend {
+        list_entities: |_world, _out| {},
         list: duplicate_inout_list,
         metadata: Some(owner_b_metadata),
         read_output: no_read,
@@ -803,6 +838,39 @@ mod tests {
         assert!(ports
             .iter()
             .any(|port| port.name == "arm" && port.direction == super::PortDirection::In));
+    }
+
+    #[test]
+    fn registry_discovers_backend_owned_entities_once() {
+        let mut world = World::new();
+        let first = world.spawn(InputPorts::new(&["first"])).id();
+        let second = world.spawn(InputPorts::new(&["second"])).id();
+        world.spawn_empty();
+
+        let mut registry = PortRegistry::default();
+        registry.register(PortBackend {
+            list_entities: |world, out| {
+                out.extend(
+                    world
+                        .query_filtered::<Entity, With<InputPorts>>()
+                        .iter(world),
+                );
+            },
+            list: duplicate_input_list,
+            metadata: None,
+            read_output: no_read,
+            read_input: no_read,
+            write_input,
+            resolve_output: None,
+            resolve_input: None,
+            read_slot: None,
+            write_slot: None,
+        });
+
+        let entities = registry.port_entities(&mut world);
+        assert_eq!(entities.len(), 2);
+        assert!(entities.contains(&first));
+        assert!(entities.contains(&second));
     }
 
     #[test]

@@ -1082,6 +1082,7 @@ mod tests {
     }
 
     const TEST_OUTPUT_BACKEND: lunco_core::ports::PortBackend = lunco_core::ports::PortBackend {
+        list_entities: |_world, _out| {},
         list: list_test_output,
         metadata: None,
         read_output: read_test_output,
@@ -1115,6 +1116,7 @@ mod tests {
 
     const TEST_DECLARED_OUTPUT_BACKEND: lunco_core::ports::PortBackend =
         lunco_core::ports::PortBackend {
+            list_entities: |_world, _out| {},
             list: list_test_declared_output,
             metadata: None,
             read_output: read_test_declared_output,
