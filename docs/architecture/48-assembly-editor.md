@@ -344,8 +344,12 @@ The singleton and separate preview-tab renderers both record
 global live-scene egui guard while allowing part selection and handle drags
 inside the focused preview surface. While a focused gizmo handle owns a
 primary drag, the same gate suppresses the preview camera's competing primary
-pan path, leaving the drag in gizmo mode. No second USD gizmo, cursor
-transform, or panel-local input gate is introduced.
+pan path, leaving the drag in gizmo mode. The resolved offscreen target remains
+stable even while the preview image reports an egui pointer gesture, so the
+gizmo stream is not interrupted on held-drag frames. The gizmo picking backend
+uses the fractional layer above its scene camera so the preview capture cannot
+mask the handle, while ordinary egui chrome still masks the scene. No second USD
+gizmo, cursor transform, or panel-local input gate is introduced.
 
 `InspectUsdEditSession` is the read-only proposal review query. It requires an
 explicit `doc_id` and returns each typed proposal, its explicit scope, generation

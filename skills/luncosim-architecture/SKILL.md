@@ -70,6 +70,12 @@ may select a documented unsafe policy, but the movement owner reads that
 setting directly and remains safe when the setting is omitted, malformed, or
 the Twin closes.
 
+The controller's semantic input vocabulary is not avatar-only: the workbench
+owns one app-level local intent surface for editor actions when an isolated
+preview has no avatar. Shared actions such as `CancelIntent` read that surface
+through the same `InputBindingsSettings` map, while avatar control continues to
+use its own surface; neither path may introduce a raw-key or duplicate binding.
+
 ## Source-backed program attachment
 
 `AttachProgram` is the one authoring boundary for binding a `.mo`, `.py`,
