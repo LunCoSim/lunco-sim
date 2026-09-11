@@ -10,6 +10,7 @@ use bevy::prelude::*;
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd::{ApplyUsdOp, UsdCommandsPlugin};
 use lunco_usd_bevy::UsdBevyPlugin;
+use lunco_usd_bevy_core::read::read_primvar_vec3;
 use lunco_usd_bevy_core::{StageView, UsdStageAsset};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_compose::compose_file_to_stage;
@@ -370,7 +371,7 @@ fn sandbox_instance_preserves_the_authored_chassis_livery() {
     let view = StageView::new(&stage);
     let chassis =
         openusd::sdf::Path::new("/SandboxScene/Skid_Raycast_1/Chassis").expect("chassis path");
-    let color = lunco_usd_bevy::read_primvar_vec3(&view, &chassis, "primvars:displayColor")
+    let color = read_primvar_vec3(&view, &chassis, "primvars:displayColor")
         .expect("sandbox chassis livery");
     for (actual, expected) in color.into_iter().zip([0.85, 0.15, 0.12]) {
         assert!((actual - expected).abs() < 1e-5);

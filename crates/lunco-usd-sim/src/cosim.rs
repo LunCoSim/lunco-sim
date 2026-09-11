@@ -51,9 +51,8 @@ use lunco_scripting::{
     doc::ScriptedModel, scenario::ScenarioDriver, world_bridge::RhaiScenarioRuntime,
     SceneOwnedScript, ScriptRegistry,
 };
-use lunco_usd_bevy::{
-    read_authored_bool_strict, UsdAwaitingStage, UsdVisualMeshPending, UsdVisualProjectionQueued,
-};
+use lunco_usd_bevy::{UsdAwaitingStage, UsdVisualMeshPending, UsdVisualProjectionQueued};
+use lunco_usd_bevy_core::read::read_authored_bool_strict;
 use lunco_usd_bevy_core::read::UsdReadObject;
 use lunco_usd_bevy_core::{
     canonical::CanonicalStages, UsdInstanceMember, UsdInstanceProjection, UsdInstanceRoot,

@@ -12,6 +12,7 @@
 //! Pure-reader (no Bevy `App`), so it is immune to the `init_asset::<Scene>()`
 //! harness gap that the older entity-spawning tests hit.
 
+use lunco_usd_bevy_core::read::read_primvar_vec3;
 use lunco_usd_bevy_core::{canonical::CanonicalStage, StageView, UsdRead};
 use openusd::sdf::Path as SdfPath;
 use std::path::PathBuf;
@@ -67,7 +68,7 @@ fn over_color_override_composes() {
     let cs = compose("scenes/luncosim/sandbox_scene.usda");
     let view = cs.view();
     // `primvars:displayColor` is ARRAY-valued (`color3f[]`) per UsdGeomGprim.
-    let c = lunco_usd_bevy::read_primvar_vec3(
+    let c = read_primvar_vec3(
         &view,
         &SdfPath::new("/SandboxScene/Skid_Raycast_1/Chassis").unwrap(),
         "primvars:displayColor",

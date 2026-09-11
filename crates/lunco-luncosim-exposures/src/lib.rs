@@ -29,10 +29,10 @@ use lunco_hooks::HookValue;
 use lunco_mobility::WheelRaycast;
 use lunco_scene_commands::SelectedEntities;
 use lunco_signal::{SignalRef, SignalRegistry, SignalType};
-use lunco_usd_bevy::SdfPath;
 use lunco_usd_bevy_core::read::UsdReadObject;
 use lunco_usd_bevy_core::{CanonicalStages, UsdStageAsset};
 use lunco_usd_bevy_scene::scene_root_ancestor;
+use openusd::sdf::Path as SdfPath;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::Duration;
 

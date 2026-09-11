@@ -17,6 +17,7 @@ lunco-scene-commands = { path = "../lunco-scene-commands" }
 # `lunco-render-bevy`; see `docs/architecture/render-decoupling.md`. The compiler
 # is the enforcement — put `bevy_pbr` back and the rule quietly rots.
 bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh", "bevy_light", "bevy_shader"] }
+openusd = { workspace = true }
 # Appearance intent (render-free): `PbrLook`. Every PBR material site in this crate
 # goes through it instead of `Assets<StandardMaterial>`.
 lunco-render = { path = "../lunco-render" }

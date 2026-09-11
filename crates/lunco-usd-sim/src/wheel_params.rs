@@ -49,7 +49,7 @@ use bevy::log::{error, info};
 use bevy::math::DVec3;
 use bevy::prelude::{Entity, World};
 use lunco_mobility::{JointedWheelTire, Suspension, TireLateralStiffnessGraph, WheelRaycast};
-use lunco_usd_bevy_core::read::UsdReadObject;
+use lunco_usd_bevy_core::read::{read_vec3_f64, UsdReadObject};
 use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdStageAsset};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use openusd::sdf::Path as SdfPath;
@@ -394,14 +394,13 @@ impl WheelParams {
         let moment_of_inertia =
             read_required_real(reader, wheel, "physxVehicleWheel:moi", &mut missing);
 
-        let heading_axis =
-            match lunco_usd_bevy::read_vec3_f64(reader, wheel, "lunco:wheel:headingAxis") {
-                Some(v) => DVec3::new(v[0], v[1], v[2]),
-                None => {
-                    missing.push("lunco:wheel:headingAxis".to_owned());
-                    DVec3::Y
-                }
-            };
+        let heading_axis = match read_vec3_f64(reader, wheel, "lunco:wheel:headingAxis") {
+            Some(v) => DVec3::new(v[0], v[1], v[2]),
+            None => {
+                missing.push("lunco:wheel:headingAxis".to_owned());
+                DVec3::Y
+            }
+        };
 
         if !missing.is_empty() {
             return Err(missing);

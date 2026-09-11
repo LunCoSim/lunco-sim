@@ -27,10 +27,10 @@
 use std::collections::HashMap;
 
 use bevy::prelude::*;
-use lunco_usd_bevy::SdfPath;
 use lunco_usd_bevy_core::{CanonicalStages, UsdStageAsset};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_ui::viewport::{UsdPreviewId, UsdViewportState};
+use openusd::sdf::Path as SdfPath;
 
 /// One variant set on a preview session's selected prim.
 #[derive(Clone)]

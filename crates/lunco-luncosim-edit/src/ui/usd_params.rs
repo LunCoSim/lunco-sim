@@ -18,10 +18,10 @@
 use bevy::prelude::*;
 use std::collections::HashMap;
 
-use lunco_usd_bevy::SdfPath;
 use lunco_usd_bevy_core::{CanonicalStages, UsdRead, UsdStageAsset};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_ui::viewport::{UsdPreviewId, UsdViewportState};
+use openusd::sdf::Path as SdfPath;
 
 /// One ranged parameter derived from an attribute's `customData`.
 #[derive(Clone)]
