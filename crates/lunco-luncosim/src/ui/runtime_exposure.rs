@@ -729,11 +729,11 @@ pub(crate) fn report_runtime_ui_readiness(
 
     if let Some(error) = &contract.error {
         bus.push(
-            lunco_workbench::status_bus::RUNTIME_UI_SOURCE,
-            lunco_workbench::status_bus::StatusLevel::Error,
+            lunco_status_core::status_bus::RUNTIME_UI_SOURCE,
+            lunco_status_core::status_bus::StatusLevel::Error,
             format!("runtime UI recording policy rejected: {error}"),
         );
-        bus.remove_progress(lunco_workbench::status_bus::RUNTIME_UI_SOURCE);
+        bus.remove_progress(lunco_status_core::status_bus::RUNTIME_UI_SOURCE);
         return;
     }
 
