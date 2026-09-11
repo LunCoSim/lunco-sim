@@ -70,6 +70,7 @@ lunco-modelica-ui = { path = "../lunco-modelica-ui", default-features = false }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 lunco-usd = { path = "../lunco-usd", default-features = false }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+lunco-usd-ui = { path = "../lunco-usd-ui", optional = true }
 # Active-document resolution for C4b runtime-layer persistence (ECS-only, no UI).
 lunco-workspace = { path = "../lunco-workspace" }
 lunco-usd-sim = { path = "../lunco-usd-sim" }
@@ -102,7 +103,7 @@ ui = [
     "dep:lunco-canvas",
     "lunco-modelica-ui/ui",
     "lunco-avatar/ui",
-    "lunco-usd/ui",
+    "dep:lunco-usd-ui",
     "bevy/bevy_post_process",
     "bevy/bevy_anti_alias",
     "bevy/mesh_picking",

@@ -18,7 +18,7 @@
 //!
 //! This module just translates browser-panel clicks into the document-load
 //! pipeline. The filesystem read and registry allocation live in
-//! [`crate::commands`] so they also work in headless / sandbox bins that never
+//! [`lunco_usd::commands`] so they also work in headless / sandbox bins that never
 //! add `UsdUiPlugin`.
 
 use bevy::prelude::*;
@@ -28,7 +28,7 @@ use lunco_workspace::WorkspaceResource;
 fn is_usd_open_file(action: &BrowserAction) -> bool {
     match action {
         BrowserAction::OpenFile { relative_path } => {
-            crate::commands::is_usd_path(&relative_path.to_string_lossy())
+            lunco_usd::commands::is_usd_path(&relative_path.to_string_lossy())
         }
         _ => false,
     }
@@ -56,8 +56,8 @@ fn browser_document_path(
 }
 
 /// Drain Twin-browser `OpenFile` actions whose path looks like USD and hand
-/// each off to the document pipeline ([`crate::commands::spawn_usd_load`]).
-/// This deliberately does not trigger [`crate::LoadScene`].
+/// each off to the document pipeline ([`lunco_usd::commands::spawn_usd_load`]).
+/// This deliberately does not trigger [`lunco_usd::LoadScene`].
 pub fn drain_browser_actions_for_usd(world: &mut World) {
     let actions: Vec<BrowserAction> = {
         // Bail gracefully when the workbench's outbox isn't present
@@ -101,7 +101,7 @@ pub fn drain_browser_actions_for_usd(world: &mut World) {
             .filter(|root| abs.strip_prefix(root).is_ok())
             .max_by_key(|root| root.components().count())
             .cloned();
-        crate::commands::spawn_usd_load(world, abs, true, owner_root);
+        lunco_usd::commands::spawn_usd_load(world, abs, owner_root);
     }
 }
 

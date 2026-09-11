@@ -159,7 +159,7 @@ pub fn usd_selection_view_changed(
     selection: Res<lunco_scene_commands::SelectedEntities>,
     target: Res<crate::InspectorTarget>,
     revision: Res<lunco_usd_bevy::UsdStageRevision>,
-    viewport: Option<Res<lunco_usd::ui::viewport::UsdViewportState>>,
+    viewport: Option<Res<lunco_usd_ui::viewport::UsdViewportState>>,
 ) -> bool {
     selection.is_changed()
         || target.is_changed()
@@ -197,7 +197,7 @@ pub(crate) fn is_editor_preview_entity(
 /// applies the existing lease root and stage handle before a panel derives any
 /// authored view-model.
 pub(crate) fn selected_entity_in_preview(
-    session: &lunco_usd::ui::viewport::UsdPreviewSession,
+    session: &lunco_usd_ui::viewport::UsdPreviewSession,
     selected: Option<&lunco_scene_commands::SelectedEntities>,
     target: Option<&crate::InspectorTarget>,
     q_paths: &Query<&lunco_usd_bevy::UsdPrimPath>,
@@ -234,7 +234,7 @@ pub(crate) struct EditorSessionSelection {
 /// that projection belongs to and restores it after focus changes.
 #[derive(Resource, Default)]
 pub(crate) struct EditorSessionSelections {
-    pub(crate) sessions: HashMap<lunco_usd::ui::viewport::UsdPreviewId, EditorSessionSelection>,
+    pub(crate) sessions: HashMap<lunco_usd_ui::viewport::UsdPreviewId, EditorSessionSelection>,
     /// Live-scene selection remains entity-keyed because it is not an authored
     /// USD preview lease and never crosses into an Editor preview.
     live: LiveSceneSelection,
@@ -248,7 +248,7 @@ struct LiveSceneSelection {
 
 fn preview_path_for_entity(
     entity: Entity,
-    preview: &lunco_usd::ui::viewport::UsdPreviewSession,
+    preview: &lunco_usd_ui::viewport::UsdPreviewSession,
     q_paths: &Query<(Entity, &UsdPrimPath)>,
     q_parents: &Query<&ChildOf>,
 ) -> Option<String> {
@@ -261,7 +261,7 @@ fn preview_path_for_entity(
 
 fn preview_entity_for_path(
     path: &str,
-    preview: &lunco_usd::ui::viewport::UsdPreviewSession,
+    preview: &lunco_usd_ui::viewport::UsdPreviewSession,
     q_paths: &Query<(Entity, &UsdPrimPath)>,
     q_parents: &Query<&ChildOf>,
 ) -> Option<Entity> {
@@ -282,7 +282,7 @@ fn preview_entity_for_path(
 /// `InspectorTarget` are synchronized projections used by existing panels and
 /// gizmo systems.
 fn sync_editor_session_selection(
-    viewport: Option<Res<lunco_usd::ui::viewport::UsdViewportState>>,
+    viewport: Option<Res<lunco_usd_ui::viewport::UsdViewportState>>,
     mut selected: ResMut<lunco_scene_commands::SelectedEntities>,
     mut inspector_target: ResMut<crate::InspectorTarget>,
     q_paths: Query<(Entity, &UsdPrimPath)>,
@@ -290,7 +290,7 @@ fn sync_editor_session_selection(
     q_selected: Query<Entity, With<crate::selection::Selected>>,
     mut commands: Commands,
     mut sessions: ResMut<EditorSessionSelections>,
-    mut last_preview: Local<Option<lunco_usd::ui::viewport::UsdPreviewId>>,
+    mut last_preview: Local<Option<lunco_usd_ui::viewport::UsdPreviewId>>,
 ) {
     let focused = viewport
         .as_deref()
@@ -1220,7 +1220,7 @@ impl Perspective for EditorPerspective {
             // USD connection graph is opened from the Connections entry in the
             // Lunica/Twin navigation, so it is not a second Build workflow.
             center: PerspectiveSlotPlan::new()
-                .tabs([lunco_usd::ui::USD_VIEWPORT_PANEL_ID, PanelId("rhai_editor")]),
+                .tabs([lunco_usd_ui::USD_VIEWPORT_PANEL_ID, PanelId("rhai_editor")]),
             // The Inspector alone on the right — parameter editing is the point here.
             right_inspector: PerspectiveSlotPlan::new()
                 .tabs([PanelId("sandbox_inspector"), PanelId("sandbox_environment")]),

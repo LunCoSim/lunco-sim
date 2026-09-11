@@ -88,8 +88,8 @@ use lunco_workbench_core::{
 };
 use lunco_workspace::{document_belongs_to_twin_root, TwinClosed, WorkspaceResource};
 
-use crate::document::{LayerId, UsdDocument};
 use lunco_doc_bevy::DocumentRegistry;
+use lunco_usd::document::{LayerId, UsdDocument};
 
 use std::collections::{HashMap, HashSet};
 
@@ -263,7 +263,7 @@ impl Plugin for UsdViewportPlugin {
         app.add_observer(on_twin_closed_for_viewport);
         app.add_observer(on_doc_closed_for_viewport);
         app.add_observer(on_doc_changed_for_preview_text);
-        app.add_observer(on_browser_usd_document_ready);
+        app.add_observer(on_usd_document_ready);
         app.add_observer(on_viewport_measured);
         app.add_observer(on_preview_view_measured);
         app.add_observer(on_viewport_orbit_input);
@@ -377,6 +377,19 @@ fn request_preview_text_read(world: &mut World, preview: UsdPreviewId) {
 fn on_doc_changed_for_preview_text(trigger: On<DocumentChanged>, mut commands: Commands) {
     let doc = trigger.event().doc;
     commands.queue(move |world: &mut World| {
+        // Document generation is not visual readiness. Invalidate every
+        // preview lease before the canonical stage applies this generation;
+        // transient explode transforms must not leak into the rebuilt stage.
+        let restores = world
+            .resource_mut::<UsdViewportState>()
+            .invalidate_projection(doc);
+        for (entity, transform) in restores {
+            if let Ok(mut entity) = world.get_entity_mut(entity) {
+                if let Some(mut current) = entity.get_mut::<Transform>() {
+                    *current = transform;
+                }
+            }
+        }
         let previews = world
             .resource::<UsdViewportState>()
             .session_ids_for_doc(doc);
@@ -442,8 +455,8 @@ fn drain_pending_usd_preview_text_reads(world: &mut World) {
 /// Bind a browser-admitted document to its document-scoped preview lease and
 /// focus its identifiable USD view tab. The document and root edit target
 /// remain explicit, while repeated clicks reuse the same document and view.
-fn on_browser_usd_document_ready(
-    trigger: On<crate::commands::BrowserUsdDocumentReady>,
+fn on_usd_document_ready(
+    trigger: On<lunco_usd::commands::UsdDocumentReady>,
     registry: Res<DocumentRegistry<UsdDocument>>,
     viewport: Res<UsdViewportState>,
     workspace: Option<Res<WorkspaceResource>>,
@@ -2328,16 +2341,16 @@ fn on_open_usd_preview(trigger: On<OpenUsdPreview>, mut commands: Commands) {
         });
         request_preview_text_read(world, preview);
         world
-            .resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
+            .resource_mut::<lunco_usd::twin_projection::DocBackedTwinScenes>()
             .track_preview(doc, name, rel);
         world
-            .resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
+            .resource_mut::<lunco_usd::twin_projection::DocBackedTwinScenes>()
             .acquire_preview(doc);
         let claimed = world
-            .resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
+            .resource_mut::<lunco_usd::twin_projection::DocBackedTwinScenes>()
             .claim_user(doc);
         if claimed {
-            world.trigger(crate::twin_projection::UsdDocumentUserOwned { doc });
+            world.trigger(lunco_usd::twin_projection::UsdDocumentUserOwned { doc });
         }
         mount_preview_session(world, preview);
     });
@@ -3324,7 +3337,7 @@ fn on_twin_closed_for_viewport(trigger: On<TwinClosed>, mut commands: Commands) 
                 continue;
             }
             let needs_rehome = world
-                .resource::<crate::twin_projection::DocBackedTwinScenes>()
+                .resource::<lunco_usd::twin_projection::DocBackedTwinScenes>()
                 .coords_of(doc)
                 .map(|(name, _)| matches!(world.resource::<TwinRoots>().root_for(&name), Ok(None)))
                 .unwrap_or(true);
@@ -3332,7 +3345,7 @@ fn on_twin_closed_for_viewport(trigger: On<TwinClosed>, mut commands: Commands) 
                 continue;
             }
             world
-                .resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
+                .resource_mut::<lunco_usd::twin_projection::DocBackedTwinScenes>()
                 .detach_projection(doc);
             let sessions = world
                 .resource::<UsdViewportState>()
@@ -3407,11 +3420,9 @@ fn mount_preview_session(world: &mut World, preview: UsdPreviewId) {
         .resource::<AssetServer>()
         .load::<UsdStageAsset>(lunco_assets::twin_uri(&name, &rel));
     world
-        .resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
+        .resource_mut::<lunco_usd::twin_projection::DocBackedTwinScenes>()
         .track_preview(doc, name, rel);
-    world
-        .resource_mut::<crate::twin_projection::TwinProjectionWake>()
-        .wake();
+    lunco_usd::twin_projection::wake_twin_projection(world);
     let Some(scene_root) = world
         .resource::<UsdViewportState>()
         .session(preview)
@@ -3512,7 +3523,7 @@ fn close_preview_view(world: &mut World, view: UsdPreviewViewId) {
 
 fn release_preview_projection(world: &mut World, doc: DocumentId) {
     let Some((name, _rel)) = world
-        .resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
+        .resource_mut::<lunco_usd::twin_projection::DocBackedTwinScenes>()
         .release_preview(doc)
     else {
         return;
@@ -3536,7 +3547,7 @@ fn release_preview_projection(world: &mut World, doc: DocumentId) {
 fn viewport_twin_coords(world: &mut World, doc: DocumentId) -> Option<(String, String)> {
     // Already doc-backed (e.g. the default twin scene)? Reuse its overlay + asset.
     if let Some(coords) = world
-        .resource::<crate::twin_projection::DocBackedTwinScenes>()
+        .resource::<lunco_usd::twin_projection::DocBackedTwinScenes>()
         .coords_of(doc)
     {
         match world.resource::<TwinRoots>().root_for(&coords.0) {
@@ -3551,7 +3562,7 @@ fn viewport_twin_coords(world: &mut World, doc: DocumentId) -> Option<(String, S
             }
         }
         world
-            .resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
+            .resource_mut::<lunco_usd::twin_projection::DocBackedTwinScenes>()
             .detach_projection(doc);
     }
     let host = world
@@ -4112,8 +4123,8 @@ impl InstancePanel for UsdPreviewViewPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::UsdCommandsPlugin;
-    use crate::document::UsdOp;
+    use lunco_usd::commands::UsdCommandsPlugin;
+    use lunco_usd::document::UsdOp;
     use lunco_workbench::{BrowserAction, BrowserActions};
 
     #[derive(Resource, Default)]
@@ -4725,7 +4736,10 @@ mod tests {
             .0;
         app.update();
         app.world_mut()
-            .trigger(crate::commands::BrowserUsdDocumentReady { doc });
+            .trigger(lunco_usd::commands::UsdDocumentReady {
+                doc,
+                outcome: lunco_doc::OpenOutcome::Allocated,
+            });
         app.update();
         app.update();
         let preview = UsdPreviewId::for_document(doc);
@@ -4737,7 +4751,10 @@ mod tests {
             .scene_root();
 
         app.world_mut()
-            .trigger(crate::commands::BrowserUsdDocumentReady { doc });
+            .trigger(lunco_usd::commands::UsdDocumentReady {
+                doc,
+                outcome: lunco_doc::OpenOutcome::Allocated,
+            });
         app.update();
         app.update();
         let state = app.world().resource::<UsdViewportState>();
@@ -4850,7 +4867,7 @@ mod tests {
         app.init_resource::<BrowserActions>();
         app.add_systems(
             Update,
-            crate::ui::browser_dispatch::drain_browser_actions_for_usd,
+            crate::browser_dispatch::drain_browser_actions_for_usd,
         );
         app.update();
 
@@ -4912,9 +4929,15 @@ mod tests {
         };
         app.update();
         app.world_mut()
-            .trigger(crate::commands::BrowserUsdDocumentReady { doc: first_doc });
+            .trigger(lunco_usd::commands::UsdDocumentReady {
+                doc: first_doc,
+                outcome: lunco_doc::OpenOutcome::Allocated,
+            });
         app.world_mut()
-            .trigger(crate::commands::BrowserUsdDocumentReady { doc: second_doc });
+            .trigger(lunco_usd::commands::UsdDocumentReady {
+                doc: second_doc,
+                outcome: lunco_doc::OpenOutcome::Allocated,
+            });
         app.update();
         app.update();
 

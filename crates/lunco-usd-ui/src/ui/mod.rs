@@ -3,7 +3,7 @@
 //! inspector, and theme tokens.
 //!
 //! **Layer 4 (UI).** Per `AGENTS.md` §4.1, [`UsdUiPlugin`] is added
-//! independently of [`UsdPlugins`](crate::UsdPlugins) — headless apps
+//! independently of [`UsdPlugins`](lunco_usd::UsdPlugins) — headless apps
 //! and the sandbox bin run without it; workbench bins opt in.
 //!
 //! ## Lifecycle wiring
@@ -18,14 +18,18 @@
 //! is in place so the loader slots in alongside Twin externals.
 
 use bevy::prelude::*;
-use lunco_doc::DocumentId;
-use lunco_doc_bevy::{DocumentClosed, DocumentOpened, DocumentSaved};
-use lunco_workbench::BrowserSectionRegistry;
+use lunco_doc::{DocumentId, OpenOutcome};
+use lunco_doc_bevy::{
+    DocumentClosed, DocumentOpened, DocumentRegistry, DocumentSaved, SaveAsDocument,
+};
+use lunco_status_core::status_bus::{StatusBus, StatusLevel};
+use lunco_usd_bevy::UsdPrimPath;
+use lunco_workbench::{BrowserSectionRegistry, ViewportPlaceholder};
 use lunco_workbench_core::PanelId;
 
-use crate::document::UsdDocument;
-use crate::twin_projection::UsdDocumentUserOwned;
-use lunco_doc_bevy::DocumentRegistry;
+use lunco_usd::document::UsdDocument;
+use lunco_usd::twin_projection::UsdDocumentUserOwned;
+use lunco_workspace::WorkspaceResource;
 
 pub mod browser_dispatch;
 pub mod browser_section;
@@ -100,6 +104,8 @@ impl Plugin for UsdUiPlugin {
         app.add_observer(sync_workspace_on_doc_opened);
         app.add_observer(sync_workspace_on_doc_saved);
         app.add_observer(sync_workspace_on_doc_closed);
+        app.add_observer(on_usd_document_ready_status);
+        app.add_observer(on_save_as_document_ui);
 
         // Document hot-exit: persist & restore open USD buffers via the
         // per-Twin workspace-state, mirroring Modelica. Restore replays
@@ -120,7 +126,146 @@ impl Plugin for UsdUiPlugin {
 
         // Surface external on-disk edits (git pull, another editor) to the user.
         app.add_systems(Update, badge_externally_changed_usd_docs);
+        app.add_systems(Update, update_viewport_placeholder);
     }
+}
+
+/// The generic hint shown when the viewport is empty and no specific cause
+/// was recorded by the USD scene transition.
+pub const GENERIC_EMPTY_HINT: &str = "No visual scene is loaded.";
+
+/// Keep the workbench placeholder synchronized with USD's mounted scene and
+/// the domain-owned empty-scene diagnostic. The placeholder is presentation;
+/// [`lunco_usd::commands::EmptyViewportReason`] remains the only reason owner.
+fn update_viewport_placeholder(
+    scene: Query<(), With<UsdPrimPath>>,
+    empty_reason: Res<lunco_usd::commands::EmptyViewportReason>,
+    placeholder: Option<ResMut<ViewportPlaceholder>>,
+) {
+    let Some(mut placeholder) = placeholder else {
+        return;
+    };
+    if !scene.is_empty() {
+        placeholder.message = None;
+        return;
+    }
+    let message = Some(
+        empty_reason
+            .0
+            .as_deref()
+            .unwrap_or(GENERIC_EMPTY_HINT)
+            .to_string(),
+    );
+    if placeholder.message != message {
+        placeholder.message = message;
+    }
+}
+
+/// Present non-fatal document-load outcomes on the UI status bus. The USD
+/// command layer emits the typed event even in headless applications.
+fn on_usd_document_ready_status(
+    trigger: On<lunco_usd::commands::UsdDocumentReady>,
+    registry: Res<DocumentRegistry<UsdDocument>>,
+    mut bus: Option<ResMut<StatusBus>>,
+) {
+    let Some(message) = (match trigger.event().outcome {
+        OpenOutcome::KeptDirty => Some("has unsaved edits — kept them, did not reload from disk"),
+        OpenOutcome::KeptUnparsable => Some("does not parse as USDA — kept the open document"),
+        OpenOutcome::Allocated | OpenOutcome::Refreshed => None,
+    }) else {
+        return;
+    };
+    let Some(bus) = bus.as_mut() else {
+        return;
+    };
+    let doc = trigger.event().doc;
+    let name = registry
+        .host(doc)
+        .map(|host| host.document().origin().display_name())
+        .unwrap_or_else(|| doc.to_string());
+    bus.push("usd", StatusLevel::Warn, format!("{name} {message}"));
+}
+
+fn suggested_usd_name(origin: &str) -> String {
+    if origin.to_ascii_lowercase().ends_with(".usda")
+        || origin.to_ascii_lowercase().ends_with(".usdc")
+        || origin.to_ascii_lowercase().ends_with(".usd")
+    {
+        origin.to_string()
+    } else {
+        format!("{origin}.usda")
+    }
+}
+
+/// Own the native Save-As picker. A supplied path is handled by the USD
+/// command layer; an empty path opens the shared workbench picker.
+#[cfg(not(target_arch = "wasm32"))]
+fn on_save_as_document_ui(
+    trigger: On<SaveAsDocument>,
+    registry: Res<DocumentRegistry<UsdDocument>>,
+    workspace: Option<Res<WorkspaceResource>>,
+    mut commands: Commands,
+) {
+    let doc = trigger.event().doc_id;
+    if !trigger.event().path.is_empty() {
+        return;
+    }
+    let Some(host) = registry.host(doc) else {
+        return;
+    };
+    let suggested_name = suggested_usd_name(&host.document().origin().display_name());
+    let start_dir = workspace
+        .as_deref()
+        .and_then(|ws| ws.active_twin)
+        .and_then(|id| workspace.as_deref()?.twin(id))
+        .map(|twin| lunco_storage::StorageHandle::File(twin.root.clone()));
+    commands.trigger(lunco_workbench::picker::PickHandle {
+        mode: lunco_workbench::picker::PickMode::SaveFile(lunco_workbench::picker::SaveHint {
+            suggested_name: Some(suggested_name),
+            start_dir,
+            filters: vec![lunco_workbench::picker::OpenFilter::new(
+                "USD stages",
+                &["usda", "usdc", "usd"],
+            )],
+        }),
+        on_resolved: lunco_workbench::picker::PickFollowUp::SaveAs(doc),
+    });
+}
+
+/// Own browser Save-As. A supplied path is a download name; an empty path
+/// still uses the shared picker so the browser can resolve the file name.
+#[cfg(target_arch = "wasm32")]
+fn on_save_as_document_ui(
+    trigger: On<SaveAsDocument>,
+    mut registry: ResMut<DocumentRegistry<UsdDocument>>,
+    mut commands: Commands,
+) {
+    let doc = trigger.event().doc_id;
+    let target_path = trigger.event().path.clone();
+    let Some(host) = registry.host(doc) else {
+        return;
+    };
+    if target_path.is_empty() {
+        let suggested_name = suggested_usd_name(&host.document().origin().display_name());
+        commands.trigger(lunco_workbench::picker::PickHandle {
+            mode: lunco_workbench::picker::PickMode::SaveFile(lunco_workbench::picker::SaveHint {
+                suggested_name: Some(suggested_name),
+                start_dir: None,
+                filters: vec![lunco_workbench::picker::OpenFilter::new(
+                    "USD stages",
+                    &["usda", "usdc", "usd"],
+                )],
+            }),
+            on_resolved: lunco_workbench::picker::PickFollowUp::SaveAs(doc),
+        });
+        return;
+    }
+    let source = host.document().source().to_string();
+    lunco_workbench::picker::download_file(&target_path, &source);
+    if let Some(host) = registry.host_mut(doc) {
+        host.document_mut().mark_saved();
+    }
+    commands.trigger(DocumentSaved::local(doc));
 }
 
 /// Keep the generic Workspace document list in step with the USD registry.
@@ -153,7 +298,7 @@ fn sync_workspace_on_doc_opened(
     };
     workspace.add_document(lunco_workspace::DocumentEntry {
         id: doc,
-        kind: lunco_workspace::DocumentKindId::new(crate::commands::USD_DOCUMENT_KIND),
+        kind: lunco_workspace::DocumentKindId::new(lunco_usd::commands::USD_DOCUMENT_KIND),
         title: origin.display_name(),
         origin,
         context_twin,
@@ -240,7 +385,7 @@ fn badge_externally_changed_usd_docs(
 fn register_workspace_stage_on_doc_opened(
     trigger: On<DocumentOpened>,
     registry: Res<DocumentRegistry<UsdDocument>>,
-    backed: Res<crate::twin_projection::DocBackedTwinScenes>,
+    backed: Res<lunco_usd::twin_projection::DocBackedTwinScenes>,
     mut loaded: ResMut<LoadedUsdStages>,
 ) {
     let doc = trigger.event().doc;
@@ -301,7 +446,7 @@ mod tests {
     fn workspace_stage_registered_on_doc_opened() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.add_plugins(crate::commands::UsdCommandsPlugin);
+        app.add_plugins(lunco_usd::commands::UsdCommandsPlugin);
         app.add_plugins(UsdUiPlugin);
         app.update();
 
@@ -316,7 +461,7 @@ mod tests {
             .0
         };
         app.world_mut()
-            .resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
+            .resource_mut::<lunco_usd::twin_projection::DocBackedTwinScenes>()
             .claim_user(doc_id);
         // Drain pending events → DocumentOpened trigger → observer
         // registers the WorkspaceStage. Two updates so the trigger
@@ -336,7 +481,7 @@ mod tests {
     fn twin_scene_document_is_hidden_until_user_owned() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.add_plugins(crate::commands::UsdCommandsPlugin);
+        app.add_plugins(lunco_usd::commands::UsdCommandsPlugin);
         app.add_plugins(UsdUiPlugin);
         app.update();
 
@@ -351,7 +496,7 @@ mod tests {
             .0
         };
         app.world_mut()
-            .resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
+            .resource_mut::<lunco_usd::twin_projection::DocBackedTwinScenes>()
             .track(
                 doc_id,
                 "/tmp/twin".into(),
@@ -370,7 +515,7 @@ mod tests {
     fn workspace_stage_dropped_on_doc_closed() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.add_plugins(crate::commands::UsdCommandsPlugin);
+        app.add_plugins(lunco_usd::commands::UsdCommandsPlugin);
         app.add_plugins(UsdUiPlugin);
         app.update();
 
@@ -382,7 +527,7 @@ mod tests {
                 .0
         };
         app.world_mut()
-            .resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
+            .resource_mut::<lunco_usd::twin_projection::DocBackedTwinScenes>()
             .claim_user(doc_id);
         app.update();
         app.update();

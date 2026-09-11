@@ -24,11 +24,11 @@ use std::collections::{BTreeSet, HashMap};
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_render::SceneCamera;
-use lunco_usd::ui::viewport::{UsdPreviewId, UsdViewportState};
 use lunco_usd_bevy::{
     camera_switch::camera_display_labels, CanonicalStages, SdfPath, UsdPrimPath, UsdRead,
     UsdStageAsset,
 };
+use lunco_usd_ui::viewport::{UsdPreviewId, UsdViewportState};
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
 pub const USD_PRIM_TREE_PANEL_ID: PanelId = PanelId("usd_prim_tree");

@@ -5025,7 +5025,7 @@ pub fn spawn_scene_root_world(
 /// rooted at `/SandboxScene`, so the prim composes into the layer and is then
 /// never mounted. The scene root is the answer to both questions; ask it.
 ///
-/// The preview viewport (`lunco_usd::ui::viewport`) mounts its own private root
+/// The preview viewport (`lunco_usd_ui::viewport`) mounts its own private root
 /// the same way, so consumers that must act on the *running* scene should scope
 /// their query rather than assume a single one exists.
 /// Spawn a USD scene root from an **already-built** stage handle.

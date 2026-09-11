@@ -9,15 +9,13 @@
 use bevy::prelude::*;
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd::document::UsdDocument;
-use lunco_usd::{
-    ui::{
-        CloseUsdPreview, FocusUsdPreview, OpenUsdPreview, OpenUsdPreviewView, UsdPreviewId,
-        UsdPreviewViewId, UsdViewportPlugin,
-    },
-    ApplyUsdOp, LayerId, UsdCommandsPlugin, UsdOp,
-};
+use lunco_usd::{ApplyUsdOp, LayerId, UsdCommandsPlugin, UsdOp};
 use lunco_usd_bevy::usd_data::UsdDataExt;
 use lunco_usd_bevy::*;
+use lunco_usd_ui::{
+    CloseUsdPreview, FocusUsdPreview, OpenUsdPreview, OpenUsdPreviewView, UsdPreviewId,
+    UsdPreviewViewId, UsdViewportPlugin,
+};
 use openusd::sdf::AbstractData;
 
 mod support;
@@ -240,14 +238,14 @@ fn simultaneous_assembly_previews_keep_identical_paths_isolated() {
     support::settle_visual_projection(&mut app);
     let first_stage = app
         .world()
-        .resource::<lunco_usd::ui::UsdViewportState>()
+        .resource::<lunco_usd_ui::UsdViewportState>()
         .session(UsdPreviewId(1))
         .expect("first assembly has an open preview")
         .stage_handle()
         .id();
     let first_root = app
         .world()
-        .resource::<lunco_usd::ui::UsdViewportState>()
+        .resource::<lunco_usd_ui::UsdViewportState>()
         .session(UsdPreviewId(1))
         .unwrap()
         .scene_root();
@@ -258,7 +256,7 @@ fn simultaneous_assembly_previews_keep_identical_paths_isolated() {
         view: UsdPreviewViewId(2),
     });
     app.update();
-    let state = app.world().resource::<lunco_usd::ui::UsdViewportState>();
+    let state = app.world().resource::<lunco_usd_ui::UsdViewportState>();
     let primary = state
         .focused_view_id()
         .expect("opening a preview creates a primary view");
@@ -280,7 +278,7 @@ fn simultaneous_assembly_previews_keep_identical_paths_isolated() {
         edit_target: LayerId::runtime(),
     });
     support::settle_visual_projection(&mut app);
-    let state = app.world().resource::<lunco_usd::ui::UsdViewportState>();
+    let state = app.world().resource::<lunco_usd_ui::UsdViewportState>();
     let second_session = state
         .session(UsdPreviewId(2))
         .expect("second assembly has an open preview");
@@ -309,7 +307,7 @@ fn simultaneous_assembly_previews_keep_identical_paths_isolated() {
         preview: UsdPreviewId(1),
     });
     app.update();
-    let state = app.world().resource::<lunco_usd::ui::UsdViewportState>();
+    let state = app.world().resource::<lunco_usd_ui::UsdViewportState>();
     assert_eq!(state.focused_doc(), Some(first_doc));
     assert_eq!(state.session_count(), 2);
     assert!(state.session(UsdPreviewId(2)).is_some());
@@ -320,7 +318,7 @@ fn simultaneous_assembly_previews_keep_identical_paths_isolated() {
         preview: UsdPreviewId(2),
     });
     app.update();
-    let state = app.world().resource::<lunco_usd::ui::UsdViewportState>();
+    let state = app.world().resource::<lunco_usd_ui::UsdViewportState>();
     assert_eq!(state.session_count(), 1);
     assert!(state.session(UsdPreviewId(1)).is_some());
     assert!(state.session(UsdPreviewId(2)).is_none());

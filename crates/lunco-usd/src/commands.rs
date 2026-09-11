@@ -31,11 +31,11 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
-use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, futures_lite::future};
-use lunco_api::executor::{DeferredCommandAppExt, PendingApiRequest, finish_command_result};
+use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
+use lunco_api::executor::{finish_command_result, DeferredCommandAppExt, PendingApiRequest};
 use lunco_api::schema::ApiErrorCode;
 use lunco_core::{
-    Ack, ActiveCommandId, Command, CommandResults, OpId, on_command, register_commands,
+    on_command, register_commands, Ack, ActiveCommandId, Command, CommandResults, OpId,
 };
 use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_doc_bevy::{
@@ -44,24 +44,20 @@ use lunco_doc_bevy::{
 };
 use lunco_storage::Storage; // brings `write_sync` / `read_sync` into scope
 use lunco_twin::{DocumentKindId, DocumentKindMeta, DocumentKindRegistry};
-// The empty-viewport placeholder is a workbench (egui shell) concept; the
-// document/file command surface below is headless-safe. Gate only this.
 use lunco_usd_bevy::usd_data::UsdDataExt;
 use lunco_usd_bevy::{UsdPrimPath, UsdRead, UsdSceneRoot};
-#[cfg(feature = "ui")]
-use lunco_workbench::ViewportPlaceholder;
-use lunco_workspace::open::{PendingTwinOpens, TwinOpenMode, spawn_twin_scan};
+use lunco_workspace::open::{spawn_twin_scan, PendingTwinOpens, TwinOpenMode};
 use lunco_workspace::{TwinClosed, WorkspaceResource};
 
 use crate::document::{LayerId, UsdOp};
 use crate::edit_session::{
-    UsdEditScope, UsdEditSessions, UsdProposalId, UsdProposalState, validate_proposal,
+    validate_proposal, UsdEditScope, UsdEditSessions, UsdProposalId, UsdProposalState,
 };
 use lunco_doc::OpenOutcome;
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd_sim::cosim::{
-    ClearScene, LoadScene, SceneEntities, SceneLoadInFlight, clear_scene_entities,
-    resolve_root_prim, spawn_scene_root_world, validate_scene_address,
+    clear_scene_entities, resolve_root_prim, spawn_scene_root_world, validate_scene_address,
+    ClearScene, LoadScene, SceneEntities, SceneLoadInFlight,
 };
 
 /// Stable id for the USD document kind in
@@ -73,12 +69,10 @@ pub const USD_DOCUMENT_KIND: &str = "usd";
 /// `default_scene` (the usual cause: you opened the WRONG FOLDER, one level
 /// too shallow, so the real twin's manifest is not where the engine looked).
 ///
-/// Without this, [`update_viewport_placeholder`] only sees `scene.is_empty()`
-/// and falls back to a generic "open a scene" hint — which tells you nothing
-/// about *why* the scene you expected never appeared. This resource carries
-/// that why through to the placeholder for as long as the viewport stays empty,
-/// and is cleared the instant a real scene mounts. Headless-safe: it is a plain
-/// `Resource` with no UI dependency, so test/`scene_test` bins pay nothing.
+/// The USD UI presents this diagnostic in its placeholder while headless
+/// consumers can inspect it directly. It is cleared the instant a real scene
+/// mounts. Headless-safe: it is a plain `Resource` with no UI dependency, so
+/// test/`scene_test` bins pay nothing.
 #[derive(Resource, Default)]
 pub struct EmptyViewportReason(pub Option<String>);
 
@@ -292,8 +286,6 @@ impl Plugin for UsdCommandsPlugin {
             .world_mut()
             .resource_mut::<lunco_api::queries::ApiQueryRegistry>();
         query_registry.register(crate::assembly_api::InspectUsdDocumentProvider);
-        #[cfg(feature = "ui")]
-        query_registry.register(crate::ui::viewport::InspectUsdViewportProvider);
         query_registry.register(crate::assembly_api::InspectUsdEditSessionProvider);
         query_registry.register(crate::assembly_api::ResolveUsdTargetProvider);
         query_registry.register(crate::assembly_api::SyncUsdDocumentProvider);
@@ -356,10 +348,6 @@ impl Plugin for UsdCommandsPlugin {
             Update,
             wire_usd_journal_handle.run_if(resource_added::<lunco_doc_bevy::JournalResource>),
         );
-        // Workbench-only: the empty-viewport placeholder lives in the egui
-        // shell; headless / sandbox / server bins don't add it.
-        #[cfg(feature = "ui")]
-        app.add_systems(Update, update_viewport_placeholder);
         // Carries the *reason* a scene is empty through to the placeholder.
         // Always present (headless too) so the open path can record one without
         // a UI feature gate.
@@ -623,69 +611,6 @@ fn open_usd_docs_on_twin_asset_mounted(
     }
 }
 
-/// The generic hint shown when the viewport is empty and no specific cause
-/// was recorded. Public so tests can assert against it without hardcoding the
-/// string in two places.
-pub const GENERIC_EMPTY_HINT: &str = "No visual scene is loaded.";
-
-/// Pure decision: given whether a scene is mounted and an optional recorded
-/// [`EmptyViewportReason`], what (if anything) should the placeholder show?
-///
-/// - Scene present → `None` (render nothing; a real world is on screen).
-/// - Empty WITH a recorded reason → `Some(reason)` (the diagnostic — e.g.
-///   "opened folder has no twin.toml").
-/// - Empty WITHOUT a reason → `Some(GENERIC_EMPTY_HINT)` (the fallback).
-///
-/// Extracted from [`update_viewport_placeholder`] so the precedence (reason
-/// beats generic; scene beats both) is unit-testable without the `ui` feature
-/// or a workbench resource.
-#[cfg(any(feature = "ui", test))]
-fn empty_viewport_message(scene_empty: bool, reason: Option<&str>) -> Option<String> {
-    if !scene_empty {
-        return None;
-    }
-    Some(reason.unwrap_or(GENERIC_EMPTY_HINT).to_string())
-}
-
-/// Keep the workbench's [`ViewportPlaceholder`] in sync with whether a
-/// USD scene is loaded. With **no** `UsdPrimPath` entities — an empty
-/// viewport, e.g. right after [`ClearScene`] from opening a scene-less
-/// folder — show an empty-state hint; otherwise clear it so the message
-/// vanishes the instant a scene mounts. No-op in headless binaries that
-/// don't add the workbench (the resource is absent).
-///
-/// When [`EmptyViewportReason`] carries a *specific* reason the viewport was
-/// emptied (e.g. "opened folder has no twin.toml"), prefer it over the generic
-/// hint — the generic one tells you nothing about why the scene you expected
-/// never appeared. The reason is dropped the moment a real scene mounts, so a
-/// subsequent open that succeeds returns to the plain "nothing to show" only
-/// when the viewport is next empty *without* a recorded cause.
-#[cfg(feature = "ui")]
-fn update_viewport_placeholder(
-    scene: Query<(), With<UsdPrimPath>>,
-    empty_reason: Res<EmptyViewportReason>,
-    placeholder: Option<ResMut<ViewportPlaceholder>>,
-) {
-    let Some(mut placeholder) = placeholder else {
-        return;
-    };
-    if !scene.is_empty() {
-        // A real scene is on screen — render nothing. NOTE: the reason is NOT
-        // cleared here. Entity despawns from a `ClearScene` are deferred, so on
-        // the same frame a folder-open sets a reason and clears the scene, this
-        // query can still read the OLD scene's `UsdPrimPath` entities as
-        // non-empty — clearing the reason here would wipe the diagnostic the
-        // open just recorded. The reason is cleared authoritatively in
-        // `on_load_scene` when a NEW scene actually mounts.
-        placeholder.message = None;
-        return;
-    }
-    let want = empty_viewport_message(true, empty_reason.0.as_deref());
-    if placeholder.message != want {
-        placeholder.message = want;
-    }
-}
-
 /// Mount a scene, resolving the requested path to its **document** first.
 ///
 /// A scene that is backed by a registry document must mount that document's
@@ -753,7 +678,7 @@ fn execute_admitted_load_scene(
     mut coordinator: ResMut<lunco_core::SceneTransitionCoordinator>,
     // A real scene is mounting — clear any empty-viewport reason recorded by a
     // prior clear/folder-open, so it can't haunt the placeholder once this load
-    // despawns/resolves. Done HERE (not in `update_viewport_placeholder`) so a
+    // despawns/resolves. Done HERE (not in the UI placeholder updater) so a
     // freshly-set reason is not wiped on the same frame by stale `UsdPrimPath`
     // entities from the scene being cleared (their despawn is deferred, so the
     // query would still read non-empty and clobber the reason mid-open).
@@ -1093,18 +1018,13 @@ fn spawn_twin_from_scene(scene: &Path, pending: &mut PendingTwinOpens, log_tag: 
 
 /// Pending file-read kicked off by [`spawn_usd_load`]. Polled by
 /// [`drain_pending_usd_file_loads`] each frame until it completes; the
-/// resulting source is allocated as a USD document. USD opens publish
-/// [`BrowserUsdDocumentReady`] after admission so the UI can pair the native
-/// preview with a source-text tab, matching Modelica's text-plus-visual
-/// workflow.
+/// resulting source is allocated as a USD document.
 struct PendingUsdLoad {
     path: PathBuf,
     /// Root of the Twin that emitted a browser request, if any. A closed Twin
     /// cancels its pending reads before they can create a stale document or
     /// focus a preview for a replaced workspace.
     twin_root: Option<PathBuf>,
-    /// USD opens request the editor preview once admission succeeds.
-    open_preview: bool,
     task: Task<Result<String, String>>,
 }
 
@@ -1127,14 +1047,15 @@ struct PendingUsdDiscards {
     tasks: Vec<PendingUsdDiscard>,
 }
 
-/// Emitted after a browser-originated USD file has been admitted to the
-/// canonical document registry so the UI viewport can claim the presentation
-/// lease. Headless document opens have no presentation event.
-#[cfg(feature = "ui")]
+/// Emitted after a USD file has been admitted to the canonical document
+/// registry. UI adapters use it to claim a preview and present any
+/// non-fatal reload outcome; headless consumers can ignore it.
 #[derive(Event, Clone, Copy, Debug)]
-pub(crate) struct BrowserUsdDocumentReady {
-    /// The admitted document to bind to the editor preview lease.
+pub struct UsdDocumentReady {
+    /// The admitted document.
     pub doc: DocumentId,
+    /// Whether the registry allocated, refreshed, or retained the document.
+    pub outcome: OpenOutcome,
 }
 
 /// Observer for the workbench's typed [`OpenFile`] command. Picks up
@@ -1166,7 +1087,7 @@ fn on_open_file_for_usd(trigger: On<OpenFile>, mut commands: Commands) {
                     .filter(|root| path.strip_prefix(root).is_ok())
                     .max_by_key(|root| root.components().count())
             });
-        spawn_usd_load(world, path, true, twin_root);
+        spawn_usd_load(world, path, twin_root);
     });
 }
 
@@ -1174,22 +1095,14 @@ fn on_open_file_for_usd(trigger: On<OpenFile>, mut commands: Commands) {
 /// [`PendingUsdLoads`]. Callers should have already established that the
 /// path looks like a USD file. Shared by the [`OpenFile`] observer and
 /// the UI's `browser_dispatch::drain_browser_actions_for_usd`.
-pub(crate) fn spawn_usd_load(
-    world: &mut World,
-    abs_path: PathBuf,
-    open_preview: bool,
-    twin_root: Option<PathBuf>,
-) {
+pub fn spawn_usd_load(world: &mut World, abs_path: PathBuf, twin_root: Option<PathBuf>) {
     if let Some(existing) = world
         .resource_mut::<PendingUsdLoads>()
         .tasks
         .iter_mut()
         .find(|load| load.path == abs_path)
     {
-        existing.open_preview |= open_preview;
-        if open_preview {
-            existing.twin_root = twin_root;
-        }
+        existing.twin_root = twin_root;
         return;
     }
     let pool = AsyncComputeTaskPool::get();
@@ -1213,7 +1126,6 @@ pub(crate) fn spawn_usd_load(
         .push(PendingUsdLoad {
             path: abs_path,
             twin_root,
-            open_preview,
             task,
         });
 }
@@ -1267,56 +1179,31 @@ pub(crate) fn drain_pending_usd_file_loads(world: &mut World) {
                     .open_file(load.path.clone(), source);
                 claim_user_document_if_projected(world, doc);
                 // A re-open that couldn't take the disk bytes is not an error,
-                // but it IS a surprise the user should see — "I opened the file
-                // and nothing happened" otherwise. `warn!` alone was invisible
-                // in the app; also raise it on the status bus (UI builds only).
-                let user_notice = match outcome {
+                // but it is a surprise the user should see. Keep the warning
+                // in the domain log and publish the typed outcome for a UI
+                // adapter to present through its own status surface.
+                match outcome {
                     OpenOutcome::KeptDirty => {
                         bevy::log::warn!(
                             "[UsdOpenFile] {} has unsaved edits — keeping them; disk NOT reloaded ({doc})",
                             load.path.display()
                         );
-                        Some("has unsaved edits — kept them, did not reload from disk")
                     }
                     OpenOutcome::KeptUnparsable => {
                         bevy::log::warn!(
                             "[UsdOpenFile] {} does not parse as USDA — keeping the open document ({doc})",
                             load.path.display()
                         );
-                        Some("does not parse as USDA — kept the open document")
                     }
                     OpenOutcome::Refreshed => {
                         bevy::log::info!(
                             "[UsdOpenFile] {} already open — refreshed from disk ({doc})",
                             load.path.display()
                         );
-                        None
                     }
-                    OpenOutcome::Allocated => None,
-                };
-                #[cfg(feature = "ui")]
-                if let Some(msg) = user_notice {
-                    if let Some(mut bus) =
-                        world.get_resource_mut::<lunco_status_core::status_bus::StatusBus>()
-                    {
-                        let name = load
-                            .path
-                            .file_name()
-                            .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| load.path.display().to_string());
-                        bus.push(
-                            "usd",
-                            lunco_status_core::status_bus::StatusLevel::Warn,
-                            format!("{name} {msg}"),
-                        );
-                    }
+                    OpenOutcome::Allocated => {}
                 }
-                #[cfg(not(feature = "ui"))]
-                let _ = user_notice;
-                #[cfg(feature = "ui")]
-                if load.open_preview {
-                    world.trigger(BrowserUsdDocumentReady { doc });
-                }
+                world.trigger(UsdDocumentReady { doc, outcome });
             }
         }
     }
@@ -1671,13 +1558,12 @@ fn on_save_document(trigger: On<SaveDocument>, mut commands: Commands) {
 ///
 /// Untitled stages are real documents, so Save-As is the promotion edge that
 /// makes their edits visible to the ordinary file/Twin workflow. The domain
-/// owns the bytes and origin update; the workbench only supplies a path when a
+/// owns the bytes and origin update; a UI adapter supplies a path when a
 /// dialog is needed.
 #[on_command(SaveAsDocument)]
 fn on_save_as_document(
     trigger: On<SaveAsDocument>,
     mut registry: ResMut<DocumentRegistry<UsdDocument>>,
-    #[cfg(feature = "ui")] workspace: Option<Res<WorkspaceResource>>,
     mut commands: Commands,
 ) {
     let doc_id = trigger.event().doc_id;
@@ -1688,63 +1574,15 @@ fn on_save_as_document(
     };
     let document = host.document();
     let source = document.source().to_string();
-    #[cfg(feature = "ui")]
-    let suggested_name = {
-        let name = document.origin().display_name();
-        if name.to_ascii_lowercase().ends_with(".usda")
-            || name.to_ascii_lowercase().ends_with(".usdc")
-            || name.to_ascii_lowercase().ends_with(".usd")
-        {
-            name
-        } else {
-            format!("{name}.usda")
-        }
-    };
-
     if target_path.is_empty() {
-        #[cfg(feature = "ui")]
-        {
-            let start_dir = workspace
-                .as_deref()
-                .and_then(|ws| ws.active_twin)
-                .and_then(|id| workspace.as_deref()?.twin(id))
-                .map(|twin| lunco_storage::StorageHandle::File(twin.root.clone()));
-            commands.trigger(lunco_workbench::picker::PickHandle {
-                mode: lunco_workbench::picker::PickMode::SaveFile(
-                    lunco_workbench::picker::SaveHint {
-                        suggested_name: Some(suggested_name),
-                        start_dir,
-                        filters: vec![lunco_workbench::picker::OpenFilter::new(
-                            "USD stages",
-                            &["usda", "usdc", "usd"],
-                        )],
-                    },
-                ),
-                on_resolved: lunco_workbench::picker::PickFollowUp::SaveAs(doc_id),
-            });
-        }
-        #[cfg(not(feature = "ui"))]
-        bevy::log::warn!(
-            "[SaveAsUsd] {doc_id} has no target path; a headless caller must provide one"
-        );
+        bevy::log::warn!("[SaveAsUsd] {doc_id} has no target path; the caller must provide one");
         return;
     }
 
     #[cfg(target_arch = "wasm32")]
     {
-        #[cfg(feature = "ui")]
-        {
-            if let Err(error) = lunco_workbench::picker::download_file(&suggested_name, &source) {
-                bevy::log::error!("[SaveAsUsd] {doc_id} download failed: {error:?}");
-                return;
-            }
-            if let Some(host) = registry.host_mut(doc_id) {
-                host.document_mut().mark_saved();
-            }
-            commands.trigger(lunco_doc_bevy::DocumentSaved::local(doc_id));
-        }
-        #[cfg(not(feature = "ui"))]
-        bevy::log::warn!("[SaveAsUsd] {doc_id} cannot save without the browser UI backend");
+        let _ = (source, commands);
+        bevy::log::warn!("[SaveAsUsd] {doc_id} cannot save a local file on wasm");
         return;
     }
 
@@ -3628,7 +3466,7 @@ mod change_set_tests {
     //! lossless `(forward, inverse)` entry, while the change-set ID makes the
     //! complete attach one undo unit.
     use super::*;
-    use crate::attach::{AttachJoint, AttachSpec, Axis, attach_component_ops};
+    use crate::attach::{attach_component_ops, AttachJoint, AttachSpec, Axis};
     use crate::document::LayerId;
     use lunco_doc_bevy::JournalResource;
     use lunco_twin_journal::{AuthorTag, UndoManager, UndoScope};
@@ -3816,7 +3654,7 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_browser_loads_share_one_pending_read_and_preview_request() {
+    fn duplicate_usd_loads_share_one_pending_read_and_owner() {
         let root = PathBuf::from("/twins/rover");
         let path = root.join("scene.usda");
         let mut app = App::new();
@@ -3824,12 +3662,11 @@ mod tests {
         app.add_plugins(UsdCommandsPlugin);
         app.update();
 
-        spawn_usd_load(app.world_mut(), path.clone(), false, None);
-        spawn_usd_load(app.world_mut(), path, true, Some(root.clone()));
+        spawn_usd_load(app.world_mut(), path.clone(), None);
+        spawn_usd_load(app.world_mut(), path, Some(root.clone()));
 
         let pending = app.world().resource::<PendingUsdLoads>();
         assert_eq!(pending.tasks.len(), 1);
-        assert!(pending.tasks[0].open_preview);
         assert_eq!(pending.tasks[0].twin_root.as_deref(), Some(root.as_path()));
     }
 
@@ -3841,7 +3678,7 @@ mod tests {
         app.add_plugins(MinimalPlugins);
         app.add_plugins(UsdCommandsPlugin);
         app.update();
-        spawn_usd_load(app.world_mut(), path, true, Some(root.clone()));
+        spawn_usd_load(app.world_mut(), path, Some(root.clone()));
         assert_eq!(app.world().resource::<PendingUsdLoads>().tasks.len(), 1);
 
         app.world_mut().trigger(TwinClosed {
@@ -3861,47 +3698,35 @@ mod tests {
         app.add_plugins(UsdCommandsPlugin);
         app.update();
 
-        assert!(
-            app.world()
-                .contains_resource::<DocumentRegistry<UsdDocument>>()
-        );
+        assert!(app
+            .world()
+            .contains_resource::<DocumentRegistry<UsdDocument>>());
         let kinds = app.world().resource::<DocumentKindRegistry>();
         let meta = kinds
             .meta(&DocumentKindId::new(USD_DOCUMENT_KIND))
             .expect("usd kind registered");
         assert_eq!(meta.display_name, "USD Stage");
         assert_eq!(meta.extensions, vec!["usda", "usdc", "usd"]);
-        assert!(
-            app.world()
-                .resource::<lunco_api::queries::ApiQueryRegistry>()
-                .names()
-                .any(|name| name == "InspectUsdDocument")
-        );
-        #[cfg(feature = "ui")]
-        assert!(
-            app.world()
-                .resource::<lunco_api::queries::ApiQueryRegistry>()
-                .names()
-                .any(|name| name == "InspectUsdViewport")
-        );
-        assert!(
-            app.world()
-                .resource::<lunco_api::queries::ApiQueryRegistry>()
-                .names()
-                .any(|name| name == "InspectUsdEditSession")
-        );
-        assert!(
-            app.world()
-                .resource::<lunco_api::queries::ApiQueryRegistry>()
-                .names()
-                .any(|name| name == "ResolveUsdTarget")
-        );
-        assert!(
-            app.world()
-                .resource::<lunco_api::queries::ApiQueryRegistry>()
-                .names()
-                .any(|name| name == "SyncUsdDocument")
-        );
+        assert!(app
+            .world()
+            .resource::<lunco_api::queries::ApiQueryRegistry>()
+            .names()
+            .any(|name| name == "InspectUsdDocument"));
+        assert!(app
+            .world()
+            .resource::<lunco_api::queries::ApiQueryRegistry>()
+            .names()
+            .any(|name| name == "InspectUsdEditSession"));
+        assert!(app
+            .world()
+            .resource::<lunco_api::queries::ApiQueryRegistry>()
+            .names()
+            .any(|name| name == "ResolveUsdTarget"));
+        assert!(app
+            .world()
+            .resource::<lunco_api::queries::ApiQueryRegistry>()
+            .names()
+            .any(|name| name == "SyncUsdDocument"));
     }
 
     fn proposal_test_op(name: &str) -> UsdOp {
@@ -3953,15 +3778,14 @@ mod tests {
             assert_eq!(proposal.ops.len(), 1);
             proposal.id
         };
-        assert!(
-            !app.world()
-                .resource::<DocumentRegistry<UsdDocument>>()
-                .host(doc)
-                .expect("document")
-                .document()
-                .source()
-                .contains("Chassis")
-        );
+        assert!(!app
+            .world()
+            .resource::<DocumentRegistry<UsdDocument>>()
+            .host(doc)
+            .expect("document")
+            .document()
+            .source()
+            .contains("Chassis"));
 
         app.world_mut().trigger(ReviewUsdProposal {
             proposal,
@@ -3996,24 +3820,22 @@ mod tests {
         let host = registry.host(doc).expect("committed document");
         assert_eq!(host.generation(), 1);
         assert!(host.document().source().contains("Chassis"));
-        assert!(
-            app.world()
-                .resource::<UsdEditSessions>()
-                .proposal(proposal)
-                .is_none()
-        );
+        assert!(app
+            .world()
+            .resource::<UsdEditSessions>()
+            .proposal(proposal)
+            .is_none());
 
         app.world_mut().trigger(UndoDocument { doc_id: doc });
         app.update();
-        assert!(
-            !app.world()
-                .resource::<DocumentRegistry<UsdDocument>>()
-                .host(doc)
-                .expect("undo document")
-                .document()
-                .source()
-                .contains("Chassis")
-        );
+        assert!(!app
+            .world()
+            .resource::<DocumentRegistry<UsdDocument>>()
+            .host(doc)
+            .expect("undo document")
+            .document()
+            .source()
+            .contains("Chassis"));
     }
 
     #[test]
@@ -4045,12 +3867,10 @@ mod tests {
         let sessions = app.world().resource::<UsdEditSessions>();
         let conflicted = sessions.proposal(proposal).expect("conflict retained");
         assert_eq!(conflicted.state, UsdProposalState::Conflict);
-        assert!(
-            conflicted
-                .diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.contains("stale document generation"))
-        );
+        assert!(conflicted
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.contains("stale document generation")));
         let source = app
             .world()
             .resource::<DocumentRegistry<UsdDocument>>()
@@ -4087,12 +3907,11 @@ mod tests {
         });
         app.update();
 
-        assert!(
-            app.world()
-                .resource::<UsdEditSessions>()
-                .proposal(proposal)
-                .is_none()
-        );
+        assert!(app
+            .world()
+            .resource::<UsdEditSessions>()
+            .proposal(proposal)
+            .is_none());
         assert_eq!(
             app.world()
                 .resource::<DocumentRegistry<UsdDocument>>()
@@ -4220,27 +4039,23 @@ mod tests {
                 .document()
                 .source()
         );
-        assert!(
-            registry
-                .host(fork)
-                .expect("fork host")
-                .document()
-                .origin()
-                .is_untitled()
-        );
+        assert!(registry
+            .host(fork)
+            .expect("fork host")
+            .document()
+            .origin()
+            .is_untitled());
 
         app.world_mut().trigger(DiscardDocument { doc_id: fork });
         app.update();
-        assert!(
-            !app.world()
-                .resource::<DocumentRegistry<UsdDocument>>()
-                .contains(fork)
-        );
-        assert!(
-            app.world()
-                .resource::<DocumentRegistry<UsdDocument>>()
-                .contains(source)
-        );
+        assert!(!app
+            .world()
+            .resource::<DocumentRegistry<UsdDocument>>()
+            .contains(fork));
+        assert!(app
+            .world()
+            .resource::<DocumentRegistry<UsdDocument>>()
+            .contains(source));
     }
 
     #[test]
@@ -4419,11 +4234,9 @@ mod tests {
             serde_json::json!("history_window_exceeded")
         );
         assert_eq!(snapshot["generation"], serde_json::json!(257));
-        assert!(
-            snapshot["layers"]["root"]["source"]
-                .as_str()
-                .is_some_and(|source| source.contains("Part256"))
-        );
+        assert!(snapshot["layers"]["root"]["source"]
+            .as_str()
+            .is_some_and(|source| source.contains("Part256")));
     }
 
     fn wait_for_one_usd_document(app: &mut App) {
@@ -4985,62 +4798,5 @@ mod tests {
             Some(target.as_path())
         );
         assert!(!registry.host(doc).unwrap().document().is_dirty());
-    }
-
-    #[cfg(feature = "ui")]
-    #[test]
-    fn new_usd_document_is_registered_as_the_active_workspace_document() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.init_resource::<lunco_workspace::WorkspaceResource>();
-        app.add_plugins(UsdCommandsPlugin);
-        app.add_plugins(crate::ui::UsdUiPlugin);
-        app.update();
-
-        app.world_mut().trigger(NewDocument {
-            kind: USD_DOCUMENT_KIND.to_string(),
-        });
-        app.update();
-        app.update();
-
-        let workspace = app.world().resource::<lunco_workspace::WorkspaceResource>();
-        let doc = workspace.active_document.expect("new USD doc is active");
-        let entry = workspace.document(doc).expect("new USD doc is registered");
-        assert_eq!(entry.kind.as_str(), USD_DOCUMENT_KIND);
-        assert!(entry.origin.is_untitled());
-    }
-
-    /// A scene present on screen beats every empty-state message — even a
-    /// recorded reason — so a stale reason can't haunt a viewport that now has
-    /// a real world in it. (The UI system clears the reason too; this asserts
-    /// the pure decision agrees.)
-    #[test]
-    fn empty_viewport_message_prefers_a_mounted_scene_over_a_reason() {
-        assert_eq!(
-            empty_viewport_message(false, Some("opened the wrong folder")),
-            None
-        );
-    }
-
-    /// An empty viewport WITH a recorded reason shows that reason — the whole
-    /// point of the channel: tell the user *why* the scene they expected never
-    /// appeared, instead of the generic "open a scene" hint.
-    #[test]
-    fn empty_viewport_message_reason_beats_generic_hint() {
-        let reason = "`/x` has no twin.toml — you may have opened the wrong folder.";
-        assert_eq!(
-            empty_viewport_message(true, Some(reason)).as_deref(),
-            Some(reason)
-        );
-    }
-
-    /// An empty viewport WITHOUT a recorded reason uses the generic hint for
-    /// cold start / cleared scenes.
-    #[test]
-    fn empty_viewport_message_falls_back_to_generic_hint() {
-        assert_eq!(
-            empty_viewport_message(true, None).as_deref(),
-            Some(GENERIC_EMPTY_HINT)
-        );
     }
 }

@@ -3,7 +3,7 @@
 //!
 //! Under the WP-8 reactive-egui contract the section is a pure reader:
 //! it snapshots the change-gated [`UsdBrowserView`] (built by
-//! [`produce_usd_browser_view`](crate::ui::loaded_stages::produce_usd_browser_view))
+//! [`produce_usd_browser_view`](crate::loaded_stages::produce_usd_browser_view))
 //! through `BrowserCtx::resource`, paints the row + prim tree, and emits
 //! viewport intent through typed commands. No `&mut World`, no inline
 //! parse, no resource take-and-restore.
@@ -19,10 +19,10 @@ use openusd::sdf;
 use lunco_usd_bevy::usd_data::UsdDataExt;
 use lunco_usd_bevy::UsdData;
 
-use crate::ui::loaded_stages::{UsdBrowserView, UsdStageRow};
-use crate::ui::viewport::{OpenUsdPreview, UsdPreviewId, UsdViewportState};
-use crate::ui::USD_CONNECTION_CANVAS_PANEL_ID;
-use crate::{
+use crate::loaded_stages::{UsdBrowserView, UsdStageRow};
+use crate::viewport::{OpenUsdPreview, UsdPreviewId, UsdViewportState};
+use crate::USD_CONNECTION_CANVAS_PANEL_ID;
+use lunco_usd::{
     CommitUsdProposal, LayerId, ReviewUsdProposal, UsdProposalId, UsdProposalReviewAction,
     UsdProposalState, UsdProposalSummary,
 };
@@ -93,8 +93,8 @@ impl BrowserSection for ConnectionsSection {
 
 /// Browser section that lists the active Twin's loaded USD stages as sibling
 /// rows in the Twin browser's Models scope. Populated by the lifecycle
-/// observers in [`UsdUiPlugin`](crate::ui::UsdUiPlugin) (via
-/// [`LoadedUsdStages`](crate::ui::loaded_stages::LoadedUsdStages)) and
+/// observers in [`UsdUiPlugin`](crate::UsdUiPlugin) (via
+/// [`LoadedUsdStages`](crate::loaded_stages::LoadedUsdStages)) and
 /// flattened into [`UsdBrowserView`] by the producer system.
 pub struct UsdSceneSection;
 

@@ -287,8 +287,8 @@ impl Plugin for LunCoSimUiPlugin {
             // user selects a document in the Twin Browser; it never auto-mounts
             // the simulation's default scene and therefore cannot duplicate the
             // live world.
-            .add_plugins(lunco_usd::ui::UsdViewportPlugin)
-            .add_plugins(lunco_usd::ui::UsdUiPlugin)
+            .add_plugins(lunco_usd_ui::UsdViewportPlugin)
+            .add_plugins(lunco_usd_ui::UsdUiPlugin)
             .add_plugins(lunco_luncosim_edit::SceneEditPlugin)
             .add_plugins(lunco_luncosim_edit::ui::SceneEditUiPlugin)
             // NOTE: `ShaderMaterialPlugin` (the dynamic `ShaderMaterial` render

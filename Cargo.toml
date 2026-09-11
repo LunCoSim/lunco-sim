@@ -12,6 +12,7 @@ members = [
     "crates/lunco-luncosim",
     "crates/lunco-luncosim-ui",
     "crates/lunco-luncosim-exposures",
+    "crates/lunco-usd-ui",
     "crates/lunco-luncosim-server",
     "crates/lunco-telemetry",
     "crates/lunco-celestial",

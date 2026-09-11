@@ -41,15 +41,15 @@ use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlo
 use lunco_doc::DocumentId;
 use lunco_modelica_ui::ui::commands::FocusDocumentByName;
 use lunco_usd::document::{LayerId, UsdOp};
-use lunco_usd::ui::viewport::{UsdPreviewId, UsdPreviewSession, UsdViewportState};
 use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdStageAsset};
+use lunco_usd_ui::viewport::{UsdPreviewId, UsdPreviewSession, UsdViewportState};
 
 use projection::{
-    EDGE_KIND, NODE_KIND, PrimNode, UsdPrimNodeData, UsdWireData, Wire, WireKind, build_scene,
-    collect_graph, project_schema, schema_roots,
+    build_scene, collect_graph, project_schema, schema_roots, PrimNode, UsdPrimNodeData,
+    UsdWireData, Wire, WireKind, EDGE_KIND, NODE_KIND,
 };
 
-pub use lunco_usd::ui::USD_CONNECTION_CANVAS_PANEL_ID as USD_CANVAS_PANEL_ID;
+pub use lunco_usd_ui::USD_CONNECTION_CANVAS_PANEL_ID as USD_CANVAS_PANEL_ID;
 
 /// Build the visual registry for the USD canvas — one node kind, one edge kind.
 fn build_registry() -> VisualRegistry {

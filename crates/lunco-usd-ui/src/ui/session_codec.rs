@@ -15,8 +15,8 @@
 use bevy::prelude::*;
 use lunco_workbench::{finalize_revision, revision_term, DocumentSessionCodec, DocumentSnapshot};
 
-use crate::document::UsdDocument;
 use lunco_doc_bevy::DocumentRegistry;
+use lunco_usd::document::UsdDocument;
 
 const KIND: &str = "usd";
 

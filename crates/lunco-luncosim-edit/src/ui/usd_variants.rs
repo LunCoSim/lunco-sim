@@ -27,8 +27,8 @@
 use std::collections::HashMap;
 
 use bevy::prelude::*;
-use lunco_usd::ui::viewport::{UsdPreviewId, UsdViewportState};
 use lunco_usd_bevy::{CanonicalStages, SdfPath, UsdPrimPath, UsdStageAsset};
+use lunco_usd_ui::viewport::{UsdPreviewId, UsdViewportState};
 
 /// One variant set on a preview session's selected prim.
 #[derive(Clone)]

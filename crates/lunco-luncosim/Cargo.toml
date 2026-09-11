@@ -125,7 +125,7 @@ lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-scripting = { path = "../lunco-scripting" }
 # USD core (scene load + collider build) is always needed; its Twin-browser /
-# viewport egui UI rides `lunco-usd/ui`, re-enabled below by the `ui` feature.
+# viewport egui UI is supplied by the application UI shell.
 lunco-usd = { path = "../lunco-usd", default-features = false }
 # Live canonical stage read path (`CanonicalStages` / `StageView` / `UsdRead`):
 # the USD-reading systems below consume the composed stage, while initial reads
@@ -233,7 +233,6 @@ ui = [
     "lunco-workbench/api",
     "dep:lunco-render-bevy",
     "lunco-avatar/ui",
-    "lunco-usd/ui",
     "dep:lunco-luncosim-edit",
     "lunco-luncosim-edit/ui",
     "dep:lunco-luncosim-ui",

@@ -27,10 +27,10 @@ use bevy::window::PrimaryWindow;
 use lunco_core::SceneViewport;
 use lunco_doc::DocumentId;
 use lunco_usd::document::LayerId;
-use lunco_usd::ui::viewport::{
+use lunco_usd_bevy::UsdPrimPath;
+use lunco_usd_ui::viewport::{
     UsdPreviewId, UsdViewportState, USD_PREVIEW_VIEW_PANEL_ID, USD_VIEWPORT_PANEL_ID,
 };
-use lunco_usd_bevy::UsdPrimPath;
 use lunco_workbench::{PanelRect, PanelRects, ScenePickGate, SceneTarget};
 use transform_gizmo_bevy::{
     GizmoCamera, GizmoDragStarted, GizmoDragging, GizmoMode, GizmoOptions, GizmoTarget,

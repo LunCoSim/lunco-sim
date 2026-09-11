@@ -20,10 +20,8 @@ use bevy::prelude::*;
 
 // `commands` is the headless-safe document/file verb layer (ApplyUsdOp,
 // OpenFile/NewDocument/SaveDocument observers, the async load pipeline +
-// twin-scene resolver) — egui-free, so server / sandbox / networking bins get
-// the full USD document surface. Only the empty-viewport placeholder inside it
-// is `ui`-gated. `ui` (browser/viewport panels) is the egui + workbench-shell
-// layer. `document` is the egui-free USD document model and the shared
+// twin-scene resolver). The browser and viewport presentation lives in
+// `lunco-usd-ui`; `document` is the USD document model and the shared
 // `DocumentRegistry<UsdDocument>` owns document identity. Edits author through
 // OpenUSD's Stage by SDF path (`lunco_usd_bevy::author`).
 pub mod assembly_api;
@@ -43,8 +41,6 @@ pub mod registry;
 pub mod runtime_persistence;
 pub mod schema;
 pub mod twin_projection;
-#[cfg(feature = "ui")]
-pub mod ui;
 
 pub use commands::{
     ApplyUsdOp, ApplyUsdOps, AttachProgram, CommitUsdProposal, CreateUsdProposal,
@@ -90,9 +86,8 @@ impl Plugin for UsdPlugins {
         app.add_plugins((lunco_usd_bevy::UsdBevyPlugin, UsdAvianPlugin, UsdSimPlugin));
         // Document/file commands (ApplyUsdOp + OpenFile/NewDocument/SaveDocument
         // observers + the async load pipeline + twin-scene resolver) are
-        // headless-safe domain-layer wiring — added unconditionally so server /
-        // sandbox / networking bins get the full USD document surface. Only the
-        // egui browser/viewport panels (`UsdUiPlugin`) stay behind `ui`.
+        // headless-safe domain-layer wiring. The egui browser/viewport panels
+        // are installed separately by `lunco-usd-ui`.
         app.add_plugins(UsdCommandsPlugin);
     }
 }

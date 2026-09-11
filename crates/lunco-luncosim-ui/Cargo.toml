@@ -69,8 +69,9 @@ lunco-theme = { path = "../lunco-theme" }
 lunco-time = { path = "../lunco-time" }
 lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
 lunco-ui = { path = "../lunco-ui" }
-lunco-usd = { path = "../lunco-usd", default-features = false, features = ["ui"] }
+lunco-usd = { path = "../lunco-usd", default-features = false }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+lunco-usd-ui = { path = "../lunco-usd-ui" }
 lunco-workbench = { path = "../lunco-workbench", features = ["api"] }
 lunco-workbench-core = { path = "../lunco-workbench-core" }
 lunco-workspace = { path = "../lunco-workspace" }

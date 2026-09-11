@@ -241,7 +241,10 @@ Input mapping and translation. Owns the persisted `InputBindingsSettings` keymap
 ### USD Integration Layer
 
 **`lunco-usd`**
-High-level USD orchestrator (`UsdPlugins`) and engineering metadata bridge. Maps LunCo-specific metadata (`lunco:*` namespace) from USD stages to Bevy components, enriching 3D models with simulation-critical data like Ephemeris IDs.
+High-level, UI-free USD orchestrator (`UsdPlugins`) and engineering metadata bridge. Maps LunCo-specific metadata (`lunco:*` namespace) from USD stages to Bevy components, enriching 3D models with simulation-critical data like Ephemeris IDs. Document commands and composition are available to headless consumers; interactive presentation lives in `lunco-usd-ui`.
+
+**`lunco-usd-ui`**
+Interactive USD browser and preview presentation. Owns workbench sections, preview sessions/views, viewport queries, Save-As picker integration, and UI status/placeholder adapters while consuming the document and projection APIs from `lunco-usd`.
 
 **`lunco-usd-bevy`**
 Core OpenUSD visual bridge. Maps USD prim hierarchies, shapes, and transforms into Bevy entities/components, decodes the full xform-op stack (`local_transform_at`), and drives authored `timeSamples` animation (`sample_usd_animation`). Composition/flattening is implemented by this crate (`compose.rs`, `flatten_stage`), so composed-stage and visual-projection tests stay with this owner. Also owns the **camera intent bridge**: USD `def Camera` → render-free intent, with `lunco-render-bevy` supplying the complete inactive `Camera3d` pipeline, rover-mounted grid-direct camera followers (`camera_mount.rs`), and the **single-authority viewport-camera reconciler** + explicit camera-selection commands (`camera_switch.rs`) that actuate `lunco_core::SceneViewport`. See [`17-view-and-intent.md §6`](architecture/17-view-and-intent.md).

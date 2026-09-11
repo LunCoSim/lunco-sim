@@ -19,9 +19,9 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 use lunco_usd::attach::resolve_mount_placement;
-use lunco_usd::ui::viewport::{UsdPreviewId, UsdViewportState};
 use lunco_usd_bevy::mount::{read_attachment_joint, read_plug, read_sockets, MountDiagnostic};
 use lunco_usd_bevy::{CanonicalStages, SdfPath, UsdPrimPath, UsdStageAsset};
+use lunco_usd_ui::viewport::{UsdPreviewId, UsdViewportState};
 
 /// Position and orientation tolerance for the editor's no-op Snap state.
 const MOUNT_ALIGNMENT_TOLERANCE: f32 = 1.0e-3;

@@ -2,7 +2,7 @@
 //! access to in this session.
 //!
 //! Mirrors the Modelica browser's document registry: a flat registry of
-//! [`crate::ui::loaded_stages::LoadedStage`] entries, with the Twin browser
+//! [`crate::loaded_stages::LoadedStage`] entries, with the Twin browser
 //! presenting only entries in the active Workspace scope. Workspace docs,
 //! future bundled stages, and future Twin externals share the same row model.
 //!
@@ -23,7 +23,7 @@
 //!   USD document the user has open. Registered on
 //!   [`DocumentOpened`](lunco_doc_bevy::DocumentOpened) for our kind,
 //!   dropped on [`DocumentClosed`](lunco_doc_bevy::DocumentClosed).
-//!   Wired in [`UsdUiPlugin`](crate::ui::UsdUiPlugin).
+//!   Wired in [`UsdUiPlugin`](crate::UsdUiPlugin).
 //! - **System stages** *(deferred)* — bundled / Twin-pinned stages
 //!   loaded from disk. The trait surface is in place; the loader slots
 //!   in alongside Twin externals.
@@ -35,9 +35,9 @@ use lunco_doc::{Document, DocumentId};
 use lunco_usd_bevy::UsdData;
 use lunco_usd_compose::parse_usda;
 
-use crate::document::UsdDocument;
-use crate::edit_session::{UsdEditSessions, UsdProposalSummary};
 use lunco_doc_bevy::DocumentRegistry;
+use lunco_usd::document::UsdDocument;
+use lunco_usd::edit_session::{UsdEditSessions, UsdProposalSummary};
 
 /// A top-level USD stage loaded into the current session.
 ///
@@ -80,9 +80,9 @@ pub trait LoadedStage: Send + Sync + 'static {
     fn build_row(&mut self, registry: &DocumentRegistry<UsdDocument>) -> Option<UsdStageRow>;
 }
 
-/// Live registry of [`crate::ui::loaded_stages::LoadedStage`] entries.
+/// Live registry of [`crate::loaded_stages::LoadedStage`] entries.
 /// Maintained by the lifecycle observers in
-/// [`UsdUiPlugin`](crate::ui::UsdUiPlugin) and read by the
+/// [`UsdUiPlugin`](crate::UsdUiPlugin) and read by the
 /// [`produce_usd_browser_view`] producer (never directly by the panel).
 #[derive(Resource, Default)]
 pub struct LoadedUsdStages {
@@ -143,7 +143,7 @@ pub struct UsdStageRow {
     pub parse_error: Option<String>,
 }
 
-/// Change-gated view-model the [`UsdSceneSection`](crate::ui::browser_section::UsdSceneSection)
+/// Change-gated view-model the [`UsdSceneSection`](crate::browser_section::UsdSceneSection)
 /// reads each frame. Rebuilt only when an entry is added/removed or a
 /// document's generation, dirty state, or review-session revision advances — see
 /// [`produce_usd_browser_view`].
@@ -216,7 +216,7 @@ pub fn produce_usd_browser_view(
 // ─────────────────────────────────────────────────────────────────────
 
 /// A writable USD document the user is authoring — one
-/// [`crate::ui::loaded_stages::LoadedStage`] per document, matching the Modelica WorkspaceClass
+/// [`crate::loaded_stages::LoadedStage`] per document, matching the Modelica WorkspaceClass
 /// shape where `Untitled1.mo`, `MyController.mo`, etc. each appear as
 /// siblings in the browser.
 ///
