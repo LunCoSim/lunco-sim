@@ -86,6 +86,15 @@ body, joint, socket occupancy, or material asset. Add those contracts through
 their existing explicit builders and test the component's normalized facts
 and composed result in Rhai.
 
+When editing an existing component rather than creating it, use the generic
+`component_editor::update_context` or
+`component_editor::selected_update_context` facade. It combines the exact
+document/edit-target/generation checkpoint with the standard property catalog;
+`component_editor::update_plan` delegates to the same bundle planner and
+returns dry typed ops. Keep the bundle recipe in the owning Twin/model package,
+preserve existing topology and material ownership, and commit one reviewed
+proposal. Do not infer the recipe from child names or add a Rust registry.
+
 ## Skeleton
 
 **One file = one spawnable thing.** The catalog keys off the file, and

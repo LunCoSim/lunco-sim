@@ -44,6 +44,14 @@ then review and commit its `.ops` through `assembly_edit`. Structural or
 derived fields remain read-only, and unregistered `lunco:` properties are not
 invented as a second component schema.
 
+When several owned facts must change together, use the generic
+`component_editor` Rhai library. Its `update_context`/`selected_update_context`
+functions combine the exact authoring checkpoint with the property catalog;
+`update_plan` delegates to the existing topology-preserving bundle update
+planner. Supply the explicit bundle recipe from the owning Twin/model package,
+review the returned `.ops`, and commit one proposal. The library does not
+infer component recipes or add a core component registry.
+
 Before adding a component, search by domain API, connector, and Modelica class:
 
 ```sh

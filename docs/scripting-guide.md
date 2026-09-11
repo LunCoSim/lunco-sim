@@ -649,6 +649,32 @@ scope, and returns typed `SetTranslate`/`SetAttribute`/relationship/kind/
 variant operations without writing source. Review the proposal before commit;
 do not bypass the document journal with a raw USDA rewrite.
 
+For a whole reusable component, use the generic `component_editor` facade. It
+is a Rhai tool library, so its dependencies are loaded through ordinary Rhai
+imports rather than a Rust registry. `selected_update_context(preview, ())`
+reads the exact selected component, generation, topology, and schema-owned
+property catalog. A Twin or model package supplies the explicit component
+bundle recipe; USD has no standard parametric-recipe schema and the editor
+must not infer one from child names or materials:
+
+```rhai
+let context = component_editor::selected_update_context(preview, ());
+let plan = component_editor::update_plan(
+    context.doc_id, context.edit_target, context.path, bundle, bindings,
+);
+let proposal = assembly_edit::propose(
+    context.doc_id, #{ Assembly: () }, "Update component", plan.ops,
+    context.generation,
+);
+```
+
+`update_plan` delegates to `assembly_builder::component_bundle_update_plan`.
+It updates only existing standard geometry, transforms, mass facts, and
+explicit bindings; it rejects topology, kind, collision-role, visibility, and
+material drift. Review the proposal and commit it through
+`review_session`/`commit_proposal`. An unchanged recipe is a true no-op, and a
+failed or stale context produces no journal entry.
+
 `place_with_clearance_plan` is the conservative placement path for parts that
 must stay clear of authored geometry. It takes exact moving/blocker frame and
 Cube-shape paths under one translation-only parent, checks the composed Cube

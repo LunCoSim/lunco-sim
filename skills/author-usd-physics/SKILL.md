@@ -70,6 +70,14 @@ use the explicit body/joint/mount planners when the part is movable. A
 successful Rhai plan is not permission to omit the frame, collider, mass, or
 generation contract.
 
+For an existing generic component whose geometry, frames, and mass must change
+together, use `component_editor::update_plan` with an explicit bundle recipe.
+Its `component_editor::update_context`/`selected_update_context` helpers are
+read-only discovery; the returned plan still goes through the normal
+proposal/review/commit path. The planner preserves topology and material
+ownership and rejects role drift, so it is not a replacement for explicit body
+or joint authoring.
+
 For physical placement, use `assembly_builder::place_with_clearance_plan` with
 explicit Cube envelopes, or
 `assembly_builder::place_with_collision_clearance_plan` with exact moving and

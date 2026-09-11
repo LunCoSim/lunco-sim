@@ -3,6 +3,13 @@ const TEST_KIND = "editor";
 const PART = "/SelectionAiWorkflow/Part";
 const OTHER = "/SelectionAiWorkflow/Other";
 
+fn has_operation(operations, name) {
+    for operation in operations {
+        if operation.operation == name { return true; }
+    }
+    false
+}
+
 fn on_start(me) {
     this.phase = 0;
     this.elapsed = 0.0;
@@ -99,6 +106,15 @@ fn on_tick(me) {
                 && selected_authoring.selection_identity == selected.primary.identity
                 && selected_authoring.edit_target == selected.edit_target,
             "selected authoring context preserves exact identity and edit target"));
+        this.checks.push(t_true(has_operation(
+                selected.primary.supported_operations, "UpdateComponent"),
+            "component selection advertises the generic recipe-driven update plan"));
+        let component_context = component_editor::selected_update_context(12202, ());
+        this.checks.push(t_true(component_context.ok
+                && component_context.kind == "component_update_context"
+                && component_context.path == PART
+                && component_context.generation == selected_authoring.generation,
+            "selected component context preserves the exact Editor checkpoint"));
         let selected_doc = selection_doc(selected);
         let proposal = correction(selected, assembly_edit::describe(selected_doc).generation);
         let review = assembly_edit::review_session(selected_doc);
@@ -118,6 +134,9 @@ fn on_tick(me) {
         if current.primary == () || current.primary.path != OTHER { return; }
         this.checks.push(t_true(current.primary.identity != this.context.primary.identity,
             "selection changed during planning is detectable"));
+        this.checks.push(t_true(!has_operation(
+                current.primary.supported_operations, "UpdateComponent"),
+            "non-component selection does not advertise component regeneration"));
         // Agent policy: never silently retarget or commit after context changes.
         assembly_edit::review_proposal(this.proposal, #{ Reject: () });
         this.checks.push(t_true(assembly_edit::describe(this.fork).generation == this.fork_generation,
