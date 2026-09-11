@@ -558,11 +558,13 @@ generation before proposing an edit.
 
 For component-level datum, attachment, and actuator discovery, use
 `assembly_builder::functional_frame_catalog(doc, edit_target, root_path)`.
-It follows the authored `lunco:mount:frame`, `lunco:component:frames`, and
-`lunco:component:actuatorFrames` relationships, returning exact frame paths,
-roles, mount/actuator metadata, local transforms, and transforms relative to
-the requested root. It also returns the root's explicit socket paths. It does
-not scan child names or promote geometry into a functional frame.
+It follows the registered `LunCoMountPlugAPI` relationship
+`lunco:mount:frame`, returning the exact authored mount frame and its standard
+transform facts. Generic datum and actuator paths remain explicit inputs to the
+caller-authored plan and are consumed by standard joint or Modelica contracts;
+the tool does not mirror them into unregistered component metadata, scan child
+names, or promote geometry into a functional frame. It also returns the root's
+explicit socket paths.
 
 To preview placement between two authored frames, use
 `assembly_builder::align_frames_plan(doc, edit_target, moving_path,
@@ -581,15 +583,19 @@ normalizes one caller-authored contract and
 `component_bundle_plan` lowers it to the existing reviewed USD operations.
 The bundle may contain standard Cube/Cylinder/Cone geometry with independent
 visual and collision roles, an optional existing material relationship, SI
-dimensions, `PhysicsMassAPI` facts, named datum/attachment/actuator frames,
-actuator endpoints with units and limits, and optional deployment state. The
-builder validates names, dimensions, frame ownership, finite values, and
-duplicate geometry/frame/actuator identities before a proposal is created.
+dimensions, `PhysicsMassAPI` facts, explicit datum/attachment/actuator paths,
+actuator endpoints, and optional deployment state. The builder validates names,
+dimensions, frame ownership, finite values, and duplicate geometry/frame/
+actuator identities before a proposal is created. It authors standard
+`UsdGeom`, `UsdPhysics`, `UsdShade`, `kind`, and `inputs:`/`outputs:` opinions;
+draft units, limits, and deployment values remain caller-side inputs or belong
+to the standard joint/Modelica owner rather than becoming duplicate `lunco:`
+properties.
 
 This is a reusable data contract, not a vehicle schema: panels, plates, feet,
 rails, struts, and actuator bodies are represented by the same bundle and
-remain authored in Rhai/USD. The root receives the component metadata and
-mass facts; each geometry child receives its standard shape, transform,
+remain authored in Rhai/USD. The root receives its standard kind, transform,
+and mass facts; each geometry child receives its standard shape, transform,
 collision, visibility, and material-binding opinions. The builder does not
 infer a rigid body, joint, socket occupancy, or material asset. Add an
 explicit `assembly_edit::rigid_body_plan` or joint/mount plan when the part
@@ -654,6 +660,14 @@ collision query returns an envelope. Duplicate paths, unknown roles, missing
 prims, and incomplete coverage are visible structured errors. This keeps the
 asset policy reloadable in Rhai without adding a second geometry reader or
 Rust-side intent registry.
+For components created by an external USD tool or edited directly in USDA, use
+`assembly_audit::standard_component_report(doc, manifest)` as a read-only
+compliance check. The manifest names the exact root and parts and expected
+standard `type_name`, shape, `UsdPhysics`, visibility, purpose, and
+`UsdShade` material-binding facts. It reports missing or mismatched authored
+facts without repairing them, guessing paths, or requiring a duplicate
+component schema; run it before regeneration and before committing an external
+edit.
 
 Preview-only visual projection does not attach generic Rhai or builtin programs.
 The `UsdPreviewOnly` scope guards the program attachment owner as well as the

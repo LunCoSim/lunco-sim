@@ -335,14 +335,18 @@ a runtime write retry or fallback.
 For semantic component construction, use
 `assembly_builder::component_bundle_facts` and
 `assembly_builder::component_bundle_plan` for reusable geometry, collision,
-mass, dimensions, frames, and actuator endpoint contracts. Validate the facts,
-append the returned `.ops` to one reviewed proposal, then query the composed
-root and children. The bundle is Rhai policy over existing typed USD
-operations; it does not create a material, infer a rigid body/joint, or hide a
-missing mount relationship. Use the explicit body/joint planners for
-articulation and `find_compatible_socket`/`mount_component` for an authored
-socket attachment. Do not hand-author a reference plus guessed transform when
-a component advertises a mount plug.
+mass, dimensions, explicit frame paths, and actuator endpoint contracts.
+Validate the facts, append the returned `.ops` to one reviewed proposal, then
+query the composed root and children. The bundle is Rhai policy over existing
+typed USD operations: it uses `UsdGeom`, `UsdPhysics`, `UsdShade`, `kind`, and
+`inputs:`/`outputs:` where those standard owners fit. Draft units, limits, and
+deployment state stay caller-side or in the owning Modelica/joint contract; do
+not mirror them into unregistered `lunco:` properties. It does not create a
+material, infer a rigid body/joint, or hide a missing mount relationship. Use
+the explicit body/joint planners for articulation and
+`find_compatible_socket`/`mount_component` for an authored socket attachment.
+Do not hand-author a reference plus guessed transform when a component
+advertises a mount plug.
 
 Mission-specific construction belongs in the owning Twin's Rhai tool library.
 Keep the core workflow generic: compose a referenced instance, wait for its
@@ -372,6 +376,13 @@ explicit `mass`, `inertia`, `joints`, and `colliders` to the existing audits. A
 envelope. Duplicate paths, unknown roles, missing prims, and incomplete
 coverage remain visible structured errors; the tool is dynamically reloadable
 Rhai policy and does not create a parallel geometry or USD writer.
+For a direct standard-schema compliance check on a generated or hand-edited
+component, use `assembly_audit::standard_component_report(doc, manifest)`.
+Provide the exact root and part paths plus the expected standard `type_name`,
+shape, physics, visibility, purpose, and material-binding facts. It is
+read-only, manifest-driven, and reports errors instead of repairing or
+inferring missing fields; use it before proposing a regeneration or committing
+an external USDA edit.
 
 For `joint_frame_report`, supply `axis` only for revolute, prismatic or
 spherical joints (their standard omitted axis is X). Fixed payload adapters,
@@ -541,10 +552,10 @@ Use the smallest existing typed intent that expresses the change:
   multiple, stale, and ambiguous selection state; preserve its selection
   identity and generation until proposal review.
 - Use `assembly_builder::functional_frame_catalog(doc, edit_target, root_path)`
-  to read authored datum, attachment, and actuator frames. It follows only
-  `lunco:mount:frame`, `lunco:component:frames`, and
-  `lunco:component:actuatorFrames`, returning exact paths, roles, mount and
-  actuator metadata, transforms, and socket paths. Use
+  to read the registered mount frame. It follows only the authored
+  `lunco:mount:frame` relationship and returns its exact path, standard
+  transform facts, and socket paths. Keep generic datum and actuator paths as
+  explicit plan inputs consumed by standard joint or Modelica contracts. Use
   `assembly_builder::align_frames_plan(doc, edit_target, moving_path,
   moving_frame_path, target_path, target_frame_path)` for a dry two-op visual
   placement plan; the roots must be sibling Xforms and the frame stacks must
