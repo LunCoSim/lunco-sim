@@ -137,8 +137,14 @@ fn on_tick(me) {
     let invalid_frame = assembly_builder::mount_frame_realignment_plan(
         this.doc, "@root@", HOST, BAD_SOCKET, BAD_PART, BAD_JOINT,
     );
-    let plan = assembly_builder::mount_frame_realignment_plan(
-        this.doc, "@root@", HOST, SOCKET, PART, JOINT,
+    let plan = assembly_builder::place_or_attach_plan(
+        this.doc, "@root@", #{
+            mode: "realign_existing_mount",
+            host_path: HOST,
+            socket_path: SOCKET,
+            part_path: PART,
+            joint_path: JOINT,
+        },
     );
     if !plan.ok {
         fail(this, "valid mount-frame plan was rejected: " + plan.error);
@@ -165,6 +171,15 @@ fn on_tick(me) {
         return;
     }
     this.plan_ops = plan.ops.len();
+    if plan.kind != "placement_attachment_plan"
+        || plan.mode != "realign_existing_mount"
+        || plan.moved != [PART]
+        || !plan.fixed.contains(HOST)
+        || !plan.fixed.contains(SOCKET)
+        || !plan.fixed.contains(JOINT) {
+        fail(this, "unified placement/attachment plan did not expose exact moved and fixed paths");
+        return;
+    }
     this.expected_translation = plan.placement;
     this.expected_rotation = plan.rotation;
     this.invalid_socket = invalid_socket.error.contains("advertised");

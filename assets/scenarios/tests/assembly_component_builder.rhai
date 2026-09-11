@@ -248,6 +248,23 @@ fn on_tick(me) {
                 path: BUNDLE + "/Mount",
                 attrs: ["lunco:component:frameRole"],
             });
+            let context = assembly_builder::authoring_context(
+                this.doc, BUNDLE, "@root@",
+            );
+            let invalid_dispatch = assembly_builder::place_or_attach_plan(
+                this.doc, "@root@", #{ mode: "unsupported" },
+            );
+            let invalid_component_plan = assembly_builder::place_or_attach_plan(
+                this.doc, "@root@", #{
+                    mode: "attach_component",
+                    host_path: ASSEMBLY,
+                    socket_kind: "panel",
+                    joint_kind: "fixed",
+                    asset: ASSET,
+                    name: "MissingPanel",
+                    joint_name: "MissingPanelJoint",
+                },
+            );
             this.checks.push(t_true(query_ok(bundle_root)
                     && bundle_root.attrs["lunco:component:units"] == "m"
                     && bundle_root.attrs["physics:mass"] == 2.0
@@ -269,6 +286,22 @@ fn on_tick(me) {
                     && actuator.attrs["lunco:component:actuatorName"] == "deployment"
                     && actuator.attrs["lunco:component:actuatorLimits"] != (),
                 "component bundle exposes explicit attachment and actuator endpoint frames"));
+            this.checks.push(t_true(query_ok(context)
+                    && context.kind == "authoring_context"
+                    && context.path == BUNDLE
+                    && context.parent_path == ASSEMBLY
+                    && context.edit_target == "@root@"
+                    && context.generation == before.generation
+                    && context.prim.type_name == "Xform"
+                    && context.sockets.len() == 0
+                    && context.plug != ()
+                    && context.actions.contains("inspect")
+                    && context.actions.contains("transform")
+                    && !context.actions.contains("plan_component_attachment")
+                    && !context.actions.contains("plan_existing_mount_realignment"),
+                "authoring context exposes exact identity, generation, and available actions"));
+            this.checks.push(t_true(!invalid_dispatch.ok && !invalid_component_plan.ok,
+                "unified placement/attachment planner rejects unsupported modes and missing sockets"));
             this.bundle_checked = true;
         }
         // Applying the reviewed reference reprojects the document and can
