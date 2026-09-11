@@ -614,6 +614,19 @@ creating a root with an uncomposed subtree. Generic validation still rejects
 duplicate identities, missing parents, invalid references, invalid shapes, and
 unavailable variant targets before proposal.
 
+For repeated authoring, use
+`assembly_builder::referenced_instance_pattern_plan(doc, edit_target, parent,
+template, placements)`. The template contains the shared explicit USD type,
+asset, optional schemas, attributes, and targeted reference path; every
+placement supplies its own USD identifier and local pose. The input order is
+preserved in the returned paths and operations, duplicate identities and
+missing poses fail before proposal, and the plan composes the existing
+single-instance planner. Use
+`assembly_builder::referenced_instance_mirror_plan` for one local-axis mirror
+placement. It reflects translation across X, Y, or Z and rejects non-zero
+source Euler rotation rather than guessing a reflected orientation. Both plans
+are dry and must go through the normal proposal/review/commit path.
+
 Mission-specific recipes remain data-driven Rhai in the owning Twin. They
 compose the generic builder, supply exact paths and study inputs, and submit
 only through the existing proposal/attach/journal owners. The core asset

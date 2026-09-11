@@ -606,6 +606,16 @@ Use the smallest existing typed intent that expresses the change:
   `ApplyUsdOps` command path as Inspector edits. This sequencing keeps async
   reference loading and coarse variant recomposition from producing a root
   with missing children.
+- For repeated references, use
+  `assembly_builder::referenced_instance_pattern_plan` with one explicit
+  template and an ordered array of `{ name, translation, rotation, scale }`
+  placements. It preserves that order, composes the existing referenced
+  instance planner, and rejects duplicate names or placements without a local
+  pose. For a reflected placement, use
+  `assembly_builder::referenced_instance_mirror_plan`; provide a cardinal
+  local axis and source translation. It rejects non-zero source Euler rotation
+  because the reflected orientation must be authored explicitly, rather than
+  silently guessed. Review the returned `.ops` before committing.
 - Use `assembly_builder::place_with_clearance_plan` when placing a part near
   other authored geometry. Supply the exact moving frame and Cube shape plus
   every exact blocker frame and Cube shape. The frames must share a
