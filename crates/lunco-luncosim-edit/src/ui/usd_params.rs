@@ -9,9 +9,10 @@
 //! control, per [`feedback_inspector_derives_params_not_hardcoded`].
 //!
 //! The producer runs on the main thread (the composed stage is `!Send`) and
-//! harvests each open preview's selected prim into its session entry in [`UsdParamView`]; the
-//! Inspector section (`inspector::usd_parameters_section`) renders them and
-//! writes edits back through the same `ApplyUsdOp(SetAttribute)` path.
+//! harvests each open preview's selected prim into its session entry in
+//! [`UsdParamView`]. The Inspector section (`inspector::usd_parameters_section`)
+//! keeps edits as a session-local draft and submits them through the same
+//! compound `ApplyUsdOps` path used by Rhai and API callers.
 
 use bevy::prelude::*;
 use std::collections::HashMap;
@@ -62,6 +63,22 @@ impl UsdParamView {
             .focused_preview_id()
             .and_then(|preview| self.sessions.get(&preview))
     }
+}
+
+/// Draft values for one selected prim. Drafts are editor state only: they are
+/// never projected into the stage until the Inspector submits one compound
+/// USD change set.
+#[derive(Default)]
+pub(crate) struct UsdParamDraft {
+    pub generation: u64,
+    pub values: HashMap<String, f64>,
+}
+
+/// Session/path keyed parameter drafts. The composed stage remains the only
+/// authoritative value source while a user edits several fields together.
+#[derive(Resource, Default)]
+pub(crate) struct UsdParamDrafts {
+    pub entries: HashMap<(UsdPreviewId, String), UsdParamDraft>,
 }
 
 /// View-model producer: harvest the selected prim's `customData`-ranged

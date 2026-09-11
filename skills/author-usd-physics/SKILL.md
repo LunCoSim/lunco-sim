@@ -102,34 +102,18 @@ unsupported frame stacks, malformed values, or non-unit scale.
 When a model is a reusable referenced assembly rather than a socket attachment,
 use `assembly_builder::referenced_instance_plan` or
 `assembly_builder::referenced_instance_targeted_plan` when the source prim must
-be explicit, or `assembly_builder::flip_rover_instance_plan` for the explicit
-identity and placement. Then wait for its composed children before using
+be explicit. Then wait for its composed children before using
 `assembly_builder::select_variants_plan`. This keeps first-use asset loading
-separate from the variant recompose and makes missing wheel identities or
-variant targets fail in Rhai before review.
+separate from the variant recompose and makes missing parents, occupied
+identities, and invalid targets fail in Rhai before review. Parameter edits use
+`assembly_builder::parameter_plan`; the resulting typed `SetAttribute` ops go
+through the same proposal/journal boundary as every other authored edit.
 
-For a new reusable FLIP asset, use the dynamic
-`griffin_flip_builder::flip_rover_asset_plan` recipe to compose the maintained
-skid-rover reference and local study shapes, then apply
-`flip_rover_asset_detail_plan` after the targeted `/SkidRover` subtree is
-queryable. Its production fixture is wholly Rhai and starts from an empty
-frame, so the construction policy and negative cases can change without a
-Rust-core authoring test or writer.
-
-Mission-level recipes may compose these generic helpers through the dynamic
-`griffin_flip_builder` library. Use `griffin_ramp_pair_plan` for the two
-explicit Griffin ramp identities and `flip_four_wheel_layout_plan` for the
-four authored FLIP wheel stations. `griffin_mission_assembly_plan` builds
-maintained lander and the dedicated `flip_rover.usda` composition with explicit
-placements;
-after the composed children are visible, `griffin_mission_adapter_plan`
-authors the fixed adapter. `griffin_mission_plan` remains the validation path
-for an already-authored mission topology. These functions return reviewed
-typed operations and reject missing, duplicated, swapped, or dimensionally
-inconsistent identities; they do not supply undocumented flight values. The
-dedicated `flip_rover.usda` layer is intentionally a public-value study proxy
-over shared mobility/power components; it does not assert as-built CAD or
-articulated solar deployment.
+Mission-level recipes may compose these generic helpers through a Twin-local
+tool library. Keep those recipes and their study values in the owning Twin,
+not in the core asset library, and keep their output to explicit generic USD
+operations. The core should provide only reusable component facts, topology,
+placement, and typed-op validation.
 
 The local avatar is a runtime kinematic camera embodiment, not an authored
 rigid body. Its `MoveAndSlide` capsule reuses the standard `UsdPhysics`

@@ -170,6 +170,30 @@ canonical scalar/vector type for their reflected value. This is the same
 resolver used by `SetObjectProperty`, so interactive and agent edits have one
 USD destination and one type contract.
 
+### Component parameter edits
+
+The Inspector's USD parameter section is a draft surface, not a per-slider
+writer. It derives scalar controls from the selected prim's authored/schema UI
+hints, keeps draft values session-local, and commits changed properties with one
+generation-checked `ApplyUsdOps` change set labelled `Edit component parameters`.
+Apply is the undo/journal boundary; Cancel discards the draft and a changed
+document generation resets it. The selected prim path and explicit edit layer
+come from the focused preview, so a same-named prim in another document cannot
+receive the edit.
+
+AI and Rhai authoring use the same lower-level path. `assembly_builder::parameter_plan`
+returns typed `SetAttribute` operations for an exact prim; the caller submits
+them through `assembly_edit::batch` or `assembly_edit::propose`. The helper is
+generic and contains no vehicle policy. UI and agent callers therefore share
+the USD compound transaction, generation check, type validation, journalling,
+undo, and projection path; only their presentation differs.
+
+Rhai remains the place for component-specific parameter selection, derivation,
+and cross-field rules. It must not duplicate the USD writer or bypass the typed
+command boundary. Modelica parameter semantics remain owned by Modelica; an
+instance edit targets its existing USD `inputs:` override and does not rewrite
+the shared source document.
+
 ## Current surfaces
 
 The existing implementation provides the substrate the perspective composes:
@@ -536,40 +560,15 @@ default prim. Once the referenced asset closure is visible in the composed
 query, use `select_variants_plan` for variant selections. Variant selection is a
 composition-arc change and therefore triggers the existing coarse recompose;
 separating it from first-use reference loading keeps the dynamic recipe from
-creating a root with an uncomposed subtree. The production
-`flip_rover_asset_builder` scenario proves the complete empty-frame FLIP asset
-construction with a targeted `/SkidRover` reference, while duplicate
-identities, missing parents, invalid references, invalid shapes, and unavailable
-variant targets fail before proposal.
+creating a root with an uncomposed subtree. Generic validation still rejects
+duplicate identities, missing parents, invalid references, invalid shapes, and
+unavailable variant targets before proposal.
 
-Mission-specific recipes remain data-driven Rhai. The current
-`griffin_flip_builder` library composes the generic builder into a symmetric
-Griffin ramp plan and a validated FLIP four-wheel layout plan. The maintained
-`assets/vessels/rovers/flip_rover.usda` asset is a thin composition over the
-shared skid-rover mobility/power components; it owns the FLIP identity, study
-envelope, wheel opinions, payload deck, sensor mast, and fixed solar proxy.
-Its metadata preserves the study-proxy boundary rather than implying as-built
-CAD or articulated solar deployment. Its
-`griffin_mission_plan` checks an already-authored mission topology before
-returning the combined ramp-and-wheel plan. For construction from maintained
-assets, `griffin_mission_assembly_plan` authors the lander and dedicated FLIP
-rover references plus explicit root placement, then
-`griffin_mission_adapter_plan` adds the fixed payload adapter only after both
-reference closures are queryable. The production
-`griffin_flip_production_builder` scenario keeps setup, negative cases,
-proposal/review/commit, and the final verdict entirely in Rhai; the static
-fixture contains only the empty mission frame. Adding or changing a mission
-recipe therefore does not add a Rust command; the recipe still supplies exact
-paths and study inputs and submits only through the existing
-proposal/attach/journal owners.
-
-For a reusable FLIP asset itself, `flip_rover_asset_plan` builds the composition
-from the maintained skid-rover reference and local payload-deck, sensor-mast,
-and solar-proxy shapes. After the targeted reference is queryable,
-`flip_rover_asset_detail_plan` applies the FLIP identity, mass, wheel, solar,
-and study metadata as a second reviewed plan. The
-`flip_rover_asset_builder` fixture contains only an empty frame; its full
-construction, negative cases, and `TESTS_OK 10` verdict are authored in Rhai.
+Mission-specific recipes remain data-driven Rhai in the owning Twin. They
+compose the generic builder, supply exact paths and study inputs, and submit
+only through the existing proposal/attach/journal owners. The core asset
+library stays free of mission names, vehicle-specific builders, and duplicate
+USD writers.
 
 The companion `assembly_audit` library is the authored diagnostic surface for
 assembly contracts. Every stage-reading helper takes the document id first; `()` explicitly

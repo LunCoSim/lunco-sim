@@ -105,6 +105,48 @@ fn place_plan(edit_target, path, translation, rotation, scale) {
     #{ ok: true, kind: "placement", path: path, ops: ops }
 }
 
+/// Build a generic multi-parameter edit for one exact prim.
+///
+/// `parameters` is an array of `{ name, type_name, value }` maps. `value` is
+/// the canonical USD literal string, so this helper supports scalar and
+/// structured properties without inventing a second value codec. The helper
+/// only validates the plan and returns typed `SetAttribute` operations; callers
+/// submit them through `assembly_edit::batch` or `assembly_edit::propose`, the
+/// same compound document boundary used by the Inspector and API.
+fn parameter_plan(edit_target, path, parameters) {
+    if edit_target == () || path == () || parameters == () {
+        return plan_error("parameter_plan requires an edit target, exact prim path, and parameter list");
+    }
+    if !path.starts_with("/") || path.ends_with("/") && path != "/" {
+        return plan_error("parameter_plan path must be an absolute USD prim path");
+    }
+    if parameters.len() == 0 {
+        return plan_error("parameter_plan requires at least one parameter");
+    }
+
+    let names = [];
+    let ops = [];
+    for parameter in parameters {
+        if parameter == () || parameter.name == () || parameter.type_name == ()
+            || parameter.value == () || parameter.name == ""
+            || parameter.type_name == "" {
+            return plan_error(path + ": parameters require name, type_name, and value");
+        }
+        if names.contains(parameter.name) {
+            return plan_error(path + ": parameter names must be unique");
+        }
+        names.push(parameter.name);
+        ops.push(#{ SetAttribute: #{
+            edit_target: edit_target,
+            path: path,
+            name: parameter.name,
+            type_name: parameter.type_name,
+            value: parameter.value,
+        }});
+    }
+    #{ ok: true, kind: "parameter_edit", path: path, parameters: names, ops: ops }
+}
+
 /// Build one referenced component instance without writing USDA source.
 ///
 /// The reference is the component's identity and composition boundary; local
@@ -309,38 +351,6 @@ fn frame_plan(edit_target, parent, name, translation, rotation, scale) {
         for op in placement.ops { ops.push(op); }
     }
     #{ ok: true, kind: "frame", path: path, ops: ops }
-}
-
-/// Instantiate a complete four-wheel rover assembly from one maintained USD
-/// vehicle asset. The asset owns its chassis, wheel, suspension, drivetrain,
-/// and controller composition; this recipe owns only the explicit instance
-/// identity, placement, and expected wheel paths. Variant choices are applied
-/// afterward through `select_variants_plan` once the reference closure is
-/// materialized. The paths are checked before proposal for uniqueness and
-/// containment, then the production scenario inspects their composed
-/// Cylinder/index/dimension contract after the reference is committed.
-fn flip_rover_instance_plan(doc, edit_target, parent, name, asset,
-    translation, rotation, wheel_paths) {
-    if wheel_paths == () || wheel_paths.len() != 4 {
-        return plan_error("flip_rover_instance_plan requires exactly four explicit wheel paths");
-    }
-    let path = if parent == "/" { "/" + name } else { parent + "/" + name };
-    let seen = [];
-    for wheel_path in wheel_paths {
-        if wheel_path == () || !wheel_path.starts_with(path + "/")
-            || seen.contains(wheel_path) {
-            return plan_error("flip_rover_instance_plan wheel paths must be unique descendants of the instance");
-        }
-        seen.push(wheel_path);
-    }
-    let plan = referenced_instance_plan(
-        doc, edit_target, parent, name, "Xform", asset,
-        translation, rotation, (), (), (),
-    );
-    if !plan.ok { return plan; }
-    plan.kind = "flip_rover_instance";
-    plan.wheel_paths = seen;
-    plan
 }
 
 /// Build a standard Cube shape under an existing frame with an explicit scale

@@ -37,7 +37,7 @@ The normal opening sequence is:
 ```bash
 curl -s -X POST http://127.0.0.1:4127/api/commands \
   -H 'content-type: application/json' \
-  -d '{"type":"ExecuteCommand","command":"OpenTwin","params":{"path":"/home/rod/Documents/models/lunar-base-model"}}'
+  -d '{"type":"ExecuteCommand","command":"OpenTwin","params":{"path":"<twin-root>"}}'
 curl -s -X POST http://127.0.0.1:4127/api/commands \
   -H 'content-type: application/json' \
   -d '{"type":"ExecuteCommand","command":"ActivatePerspective","params":{"id":"editor"}}'
@@ -344,23 +344,13 @@ articulation and `find_compatible_socket`/`mount_component` for an authored
 socket attachment. Do not hand-author a reference plus guessed transform when
 a component advertises a mount plug.
 
-For the current Griffin/FLIP study package, the dynamic
-`griffin_flip_builder` library composes the same generic surface into paired
-ramp and four-wheel layout recipes. Use
-`griffin_mission_assembly_plan` to build the maintained lander and dedicated
-`assets/vessels/rovers/flip_rover.usda` reference with explicit placement, then
-wait for their composed children and use `griffin_mission_adapter_plan` for the
-fixed payload adapter. The FLIP asset is a thin composition over shared rover
-components and is explicitly labelled a study proxy; its payload deck, sensor
-mast, and fixed solar proxy are authored facts, while articulated deployment
-and as-built fidelity remain separate contracts. `griffin_mission_plan`
-validates an already-authored mission before adding ramp and wheel layout
-edits. Treat mass, inertia, dimensions, and frame values as caller-supplied
-study inputs; inspect exact composed prims and proposal diagnostics before
-committing an authored edit. The
-`griffin_flip_production_builder` scene test keeps the complete observable
-construction and negative cases in Rhai; its USDA contains only the empty
-mission frame.
+Mission-specific construction belongs in the owning Twin's Rhai tool library.
+Keep the core workflow generic: compose a referenced instance, wait for its
+children, and submit explicit typed operations through the proposal/journal
+boundary. Treat mass, inertia, dimensions, and frame values as caller-supplied
+inputs; inspect exact composed prims and proposal diagnostics before
+committing an authored edit. A Twin recipe may compose these generic plans,
+but it must not add vehicle-specific builders or writers to the core.
 
 For composed assembly diagnostics, use the companion
 [`assembly_audit.rhai`](../../assets/scripting/tools/assembly_audit.rhai).
@@ -415,6 +405,13 @@ unitless scale factors; the Inspector commits changed translation, rotation,
 and/or scale fields as one journaled `ApplyUsdOps` edit. The typed
 `UsdOp::SetScale` operation preserves the standard `xformOpOrder` and stage
 unit/axis boundary.
+
+For multiple scalar component values, edit the draft Parameters section and
+press **Apply parameters** once. The Inspector commits only changed values as
+one generation-checked `ApplyUsdOps` edit. AI callers use
+`assembly_builder::parameter_plan` and the same `assembly_edit::batch` or
+proposal flow; do not make one command per slider or create a vehicle-specific
+parameter writer.
 When editing a primitive's standard `axis`, compare the visible result after
 reprojection with the composed attribute. Repeated axis edits must apply the
 axis correction once to the authored pose, including identity rotation. A
@@ -567,19 +564,15 @@ Use the smallest existing typed intent that expresses the change:
   `assembly_builder::referenced_instance_plan` or
   `assembly_builder::referenced_instance_targeted_plan` when the source prim
   must be explicit, or
-  `assembly_builder::flip_rover_instance_plan` to author the explicit
-  component identity, asset URI, parent, and local pose. The FLIP helper checks
-  four unique wheel descendants before proposal. Materialize first-use
-  references before applying composition-changing variants; once the composed
-  children are queryable, use `assembly_builder::select_variants_plan` as a
-  second reviewed plan. This sequencing keeps async reference loading and
-  coarse variant recomposition from producing a root with missing children.
-- To build a reusable FLIP asset from its maintained skid-rover reference, use
-  `griffin_flip_builder::flip_rover_asset_plan`, wait for the targeted
-  `/SkidRover` composition to become queryable, then use
-  `flip_rover_asset_detail_plan` for its explicit FLIP facts. The
-  `flip_rover_asset_builder` production fixture keeps the whole positive and
-  negative test in Rhai and starts from an empty frame.
+  `assembly_builder::referenced_instance_plan` (or its targeted form) to
+  author the explicit component identity, asset URI, parent, and local pose.
+  Materialize first-use references before applying composition-changing
+  variants; once the composed children are queryable, use
+  `assembly_builder::select_variants_plan` as a second reviewed plan. Parameter
+  changes use `assembly_builder::parameter_plan` and the same typed
+  `ApplyUsdOps` command path as Inspector edits. This sequencing keeps async
+  reference loading and coarse variant recomposition from producing a root
+  with missing children.
 - Use `assembly_builder::place_with_clearance_plan` when placing a part near
   other authored geometry. Supply the exact moving frame and Cube shape plus
   every exact blocker frame and Cube shape. The frames must share a
@@ -633,21 +626,11 @@ replacement, a direct filesystem write, or direct ECS mutation to get around a
 rejected command. A rejected target or invalid topology is feedback from the
 authoritative owner and must be fixed there.
 
-## Concrete lander workflow
+## Concrete assembly workflow
 
-For the local lunar-base Twin:
-
-```text
-Twin root: /home/rod/Documents/models/lunar-base-model
-Twin:      astrobotic-griffin-1
-Scene:     twin://astrobotic-griffin-1/scenes/griffin_1_surface_ops.usda
-Wrapper:   twin://astrobotic-griffin-1/vehicles/griffin_1.usda
-Source:    lunco://vessels/landers/descent_lander.usda
-```
-
-Open the Twin, inspect `Lander` in the mission composition, and decide whether
-the requested change belongs in the Twin wrapper or in the reusable source
-asset. For a new payload, inspect the host's composed mount sockets and the
+Open the target Twin, inspect the composed assembly, and decide whether the
+requested change belongs in the Twin wrapper or in the reusable source asset.
+For a new payload, inspect the host's composed mount sockets and the
 component's plug frame first, then submit one validated `AttachComponent`
 intent. The lowering authors the reference, placement, joint, relationships,
 and socket occupancy together. For a change to an existing mounted part,
