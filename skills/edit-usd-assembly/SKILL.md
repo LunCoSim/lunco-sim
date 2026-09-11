@@ -528,6 +528,16 @@ Use the smallest existing typed intent that expresses the change:
   topology. It rejects missing or ambiguous mount relationships, unsupported
   frame operations, non-unit scale, malformed values, and body mismatches
   before proposal; do not hand-copy the socket pose into the part or joint.
+- Before choosing an assembly action, use
+  `assembly_builder::authoring_context(doc, path, edit_target)`. It returns the
+  exact identity, generation, resolved authored target, topology/collision
+  facts, socket occupancy, plug relationships, and only the actions supported
+  by those authored facts. For a dry AI or human intent, use
+  `assembly_builder::place_or_attach_plan` with either
+  `mode: "attach_component"` (review `.spec`, then call the existing
+  `assembly_edit::attach_component`) or `mode: "realign_existing_mount"`
+  (review `.ops`, then use the normal proposal flow). Never add an AI-only
+  writer or guess a frame from a part name.
 - `assembly_edit::attach_program(doc, spec)` dispatches the existing typed
   `AttachProgram` contract. Build its `inputs` and `outputs` with the
   namespaced helpers `assembly_edit::program_input_connection`,

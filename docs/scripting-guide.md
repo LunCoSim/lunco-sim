@@ -683,6 +683,23 @@ the inspected generation, then send the returned `.ops` through the normal
 test in Rhai, including nested rotation, topology preservation, and negative
 plans; changing this policy does not require a Rust-core rebuild.
 
+For AI-friendly discovery before any edit, use
+`assembly_builder::authoring_context(doc, path, edit_target)`. The result keeps
+the exact path, parent, document generation, resolved target, composed prim
+record, topology/collision facts, authored sockets and occupancy, plug-frame
+relationships, and an explicit `actions` affordance list together. It is
+read-only and never guesses a target from a name.
+
+Use `assembly_builder::place_or_attach_plan(doc, edit_target, request)` for a
+reviewable placement/attachment intent. An `attach_component` request returns
+an explicit `spec` for `assembly_edit::attach_component` after selecting one
+compatible empty socket; a `realign_existing_mount` request returns the typed
+`.ops` from the existing frame planner with `moved` and `fixed` paths. Apply
+the reviewed result through the existing typed owner: proposal/review/commit
+for `.ops`, or `assembly_edit::attach_component(doc, plan.spec)` for a new
+component. This keeps generated authoring and human editing on the same USD
+paths and validation boundary without adding a Rust policy layer.
+
 Mission-specific builders stay in the owning Twin. They should compose the
 generic `assembly_builder` plans, keep all paths and study facts explicit, and
 submit only typed operations through `assembly_edit`; they do not belong in the

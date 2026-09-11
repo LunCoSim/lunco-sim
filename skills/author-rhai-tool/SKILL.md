@@ -89,6 +89,24 @@ policy in a reusable core tool. Modelica parameter meaning and lifecycle stay
 with the Modelica declaration/compiler; an instance override remains a USD
 `inputs:` edit.
 
+### AI-readable assembly authoring
+
+For an exact composed prim, call
+`assembly_builder::authoring_context(doc, path, edit_target)` before planning.
+It returns the document generation and resolved edit target together with the
+prim, topology, collision envelope, exact mount sockets/occupancy, plug frames,
+and a small authored-affordance list. Treat every returned path and generation
+as a checkpoint; do not infer a socket, component, or parent from a leaf name.
+
+Use `assembly_builder::place_or_attach_plan` to keep generated intent dry:
+`attach_component` returns a reviewed AttachSpec for the existing generic
+owner, while `realign_existing_mount` returns ordinary typed USD operations.
+After the user or agent reviews the plan, submit `.spec` through
+`assembly_edit::attach_component` or `.ops` through
+`assembly_edit::propose`/`review_session`/`commit_proposal`. Do not put this
+workflow in Rust or create an AI-only writer; Rhai supplies the policy and the
+existing USD owners supply validation and journalling.
+
 ## Use an existing tool first
 
 Before creating a library, query the live surface with `DiscoverSchema`,

@@ -530,6 +530,26 @@ while missing or ambiguous authored relationships still fail before proposal.
 A completed body/joint identity is likewise rejected by a construction recipe
 until the caller chooses an explicit update plan.
 
+For AI-assisted and human-assisted authoring, start with
+`assembly_builder::authoring_context(doc, path, edit_target)`. It returns one
+structured record containing the exact prim path and parent, document
+generation, resolved edit target, requested composed prim facts, opt-in
+topology and collision envelope, mount sockets with exact occupancy, and plug
+frame/joint relationships. Its `actions` list is derived only from authored
+relationships (`inspect`, `transform`, `plan_component_attachment`, and
+`plan_existing_mount_realignment`); it does not invent sockets or identify
+parts by leaf names.
+
+Use `assembly_builder::place_or_attach_plan` for the next dry step. With
+`mode: "attach_component"`, it returns an explicit `spec` for the existing
+`AttachComponent` owner after checking one compatible empty socket. With
+`mode: "realign_existing_mount"`, it returns the existing four-operation
+frame realignment plan plus `moved`, `fixed`, and `mutation` metadata. Review
+the returned record first; send `.ops` through the normal proposal flow, or
+send the reviewed component `.spec` to `assembly_edit::attach_component`.
+Neither helper mutates USD, so generated plans and human previews share the
+same exact-path contract and generation checkpoint.
+
 #### Generic component bundles
 
 For a recurring parametric part, `assembly_builder::component_bundle_facts`
