@@ -746,6 +746,14 @@ fn test_full_scene_loads_with_rovers() {
         physical_count, 8,
         "2 physical rovers x 4 wheels = 8, got {physical_count}"
     );
+    let mut q_physical_without_collider = app
+        .world_mut()
+        .query_filtered::<Entity, (With<PhysicalWheel>, Without<Collider>)>();
+    assert_eq!(
+        q_physical_without_collider.iter(app.world()).count(),
+        0,
+        "every physical wheel must receive its authored USD collision projection"
+    );
 
     // All 5 rovers must show a visible body — the Chassis CHILD carries the
     // Mesh3d (the rover root is an Xform after the Xform-root refactor).

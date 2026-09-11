@@ -27,7 +27,7 @@
 def Xform "SolarPanel" (
     doc = "Reusable photovoltaic panel component with mass, collision, electrical source, and telemetry facets."
     kind = "component"
-    prepend apiSchemas = ["LunCoCatalogAPI", "PhysicsMassAPI", "LunCoProgramAPI", "LunCoModelicaTopologyAPI"]
+    prepend apiSchemas = ["LunCoCatalogAPI", "PhysicsMassAPI", "LunCoProgramAPI", "LunCoTelemetryAPI", "LunCoModelicaTopologyAPI"]
 )
 {
     uniform token lunco:modelica:topologyRole = "source"
@@ -58,6 +58,17 @@ def Xform "SolarPanel" (
     float outputs:terminal_voltage_v
     float outputs:generated_current_a
     custom token connectors:p
+
+    # One channel lives directly on the measured prim. A relationship is only
+    # needed for a declaration Scope that describes a different prim; this
+    # source already owns `power_out`, so direct composition is the canonical
+    # and reference-safe form.
+    bool lunco:telemetry = true
+    string ui:displayName = "Solar power"
+    token lunco:telemetry:port = "power_out"
+    token lunco:telemetry:name = "power.solar_power"
+    token lunco:telemetry:unit = "W"
+    string lunco:telemetry:description = "Solved power delivered by the solar panel at its terminals."
 
     float physics:mass = 15.0
     # Looks — the panel's photovoltaic surface. A `Material` whose surface comes from a

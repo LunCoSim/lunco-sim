@@ -150,6 +150,11 @@ fn every_rover_wheel_composes_its_applied_schemas() {
                  not see a wheel here at all"
             );
         }
+        assert!(
+            !view.has_api_schema(&p, "PhysicsRigidBodyAPI")
+                && !view.has_api_schema(&p, "PhysicsCollisionAPI"),
+            "{asset}: default raycast wheel must not inherit a rigid body or collider contract"
+        );
     }
 }
 

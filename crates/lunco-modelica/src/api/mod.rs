@@ -1350,7 +1350,8 @@ pub fn trigger_apply_ops(world: &mut World, doc: lunco_doc::DocumentId, ops: Vec
     if api_ops.is_empty() {
         return;
     }
-    world
-        .commands()
-        .trigger(ApplyModelicaOps { doc_id: doc, ops: api_ops });
+    world.commands().trigger(ApplyModelicaOps {
+        doc_id: doc,
+        ops: api_ops,
+    });
 }

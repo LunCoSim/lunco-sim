@@ -688,7 +688,7 @@ fn render_unified_toolbar(
         ctx.trigger(lunco_doc_bevy::RedoDocument { doc_id: doc });
     }
     if duplicate_clicked {
-                ctx.trigger(crate::ui::commands::DuplicateModelFromReadOnly { source_doc_id: doc });
+        ctx.trigger(crate::ui::commands::DuplicateModelFromReadOnly { source_doc_id: doc });
     }
     if run_pause_clicked {
         // Run = compile-if-stale then play (RunActiveModel); Pause just
@@ -698,9 +698,12 @@ fn render_unified_toolbar(
         // compile (it unpauses directly when already compiled & clean).
         let realtime_running = sim_state.map(|(p, _)| !p).unwrap_or(false);
         if realtime_running {
-        ctx.trigger(crate::ui::commands::PauseActiveModel { doc_id: doc });
+            ctx.trigger(crate::ui::commands::PauseActiveModel { doc_id: doc });
         } else {
-            ctx.trigger(crate::ui::commands::RunActiveModel { doc_id: doc, class: None });
+            ctx.trigger(crate::ui::commands::RunActiveModel {
+                doc_id: doc,
+                class: None,
+            });
         }
     }
     if reset_clicked {

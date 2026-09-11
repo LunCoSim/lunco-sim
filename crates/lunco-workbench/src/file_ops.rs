@@ -319,7 +319,10 @@ fn on_rename_open_document(
         return;
     }
     let Some(entry) = workspace.document(ev.doc_id) else {
-        warn!("[RenameOpenDocument] no Workspace doc with id {}", ev.doc_id);
+        warn!(
+            "[RenameOpenDocument] no Workspace doc with id {}",
+            ev.doc_id
+        );
         return;
     };
     match &entry.origin {

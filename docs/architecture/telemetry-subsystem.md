@@ -369,7 +369,7 @@ No separate sensor telemetry machinery exists.
 struct TelemetrySettings {          // impl SettingsSection, KEY = "telemetry"
     default_rate_hz: f64,           // 5.0 — the semantic default for omitted channel rates
     default_retention: usize,       // 1500 samples — five minutes at 5 Hz
-    max_channels: usize,            // backpressure guard
+    max_channels: usize,            // 8192 by default; backpressure guard
     enabled: bool,
     default_deadband: TelemetryDeadband,
 }

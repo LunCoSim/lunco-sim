@@ -160,6 +160,16 @@ fn suspension_projection_matches_each_wheel_realization() {
     for wheel in ["Wheel_FL", "Wheel_FR", "Wheel_RL", "Wheel_RR"] {
         let raycast = SdfPath::new(&wheel_path(RAYCAST, wheel)).unwrap();
         let physical = SdfPath::new(&wheel_path(PHYSICAL, wheel)).unwrap();
+        assert!(
+            !view.has_api_schema(&raycast, "PhysicsRigidBodyAPI")
+                && !view.has_api_schema(&raycast, "PhysicsCollisionAPI"),
+            "{wheel} raycast realization must remain a query-only wheel"
+        );
+        assert!(
+            view.has_api_schema(&physical, "PhysicsRigidBodyAPI")
+                && view.has_api_schema(&physical, "PhysicsCollisionAPI"),
+            "{wheel} physical realization must author its rigid body and collision geometry"
+        );
         let raycast_rest = view.real(&raycast, "lunco:suspension:restLength");
         let physical_rest = view.real(&physical, "lunco:suspension:restLength");
         assert!(
