@@ -109,7 +109,7 @@ pub fn resolve_metadata_for_doc(
 /// index-driven resolution reading the registry via `ctx`.
 #[cfg(feature = "ui")]
 pub fn resolve_metadata_for_doc_ctx(
-    ctx: &lunco_workbench::PanelCtx,
+    ctx: &lunco_workbench_core::PanelCtx,
     doc_id: lunco_doc::DocumentId,
     drilled: Option<&str>,
 ) -> Option<ClassMetadata> {

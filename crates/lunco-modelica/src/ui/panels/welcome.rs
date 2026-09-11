@@ -30,7 +30,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
+use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 use serde::{Deserialize, Serialize};
 
 use crate::models::bundled_models;
@@ -219,8 +219,8 @@ impl Panel for WelcomePanel {
         "Welcome".into()
     }
 
-    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
-        lunco_workbench::PanelMenuGroup::Design
+    fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
+        lunco_workbench_core::PanelMenuGroup::Design
     }
 
     fn default_slot(&self) -> PanelSlot {

@@ -325,8 +325,8 @@ pub fn drill_into_class(world: &mut World, qualified: &str) {
     // tab allocation. A generated network can be opened from the simulation
     // Build perspective; switch to the Modelica perspective before creating
     // the tab so the user lands on the diagram instead of the 3D viewport.
-    // WorkbenchLayout is extracted while egui panels render, so navigation
-    // must use the workbench's deferred command boundary rather than touching
+    // The concrete workbench shell is extracted while egui panels render, so
+    // navigation must use the workbench's deferred command boundary rather than touching
     // the resource directly. The workbench drains perspective requests before
     // tab requests, preserving this ordering even when the gesture originated
     // inside a panel render.

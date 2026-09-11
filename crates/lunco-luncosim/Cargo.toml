@@ -179,6 +179,7 @@ lunco-materials = { path = "../lunco-materials", optional = true }
 lunco-doc = { path = "../lunco-doc" }
 lunco-theme = { path = "../lunco-theme", optional = true }
 lunco-workbench = { path = "../lunco-workbench", optional = true }
+lunco-workbench-core = { path = "../lunco-workbench-core", optional = true }
 lunco-ui = { path = "../lunco-ui", optional = true }
 bevy_egui = { workspace = true, optional = true }
 bevy_hui = { workspace = true, optional = true }
@@ -253,6 +254,7 @@ ui = [
     "lunco-networking?/ui",
     "lunco-api?/winit",
     "dep:lunco-workbench",
+    "dep:lunco-workbench-core",
     "dep:lunco-ui",
     "lunco-tutorial/ui",
     "dep:lunco-materials",

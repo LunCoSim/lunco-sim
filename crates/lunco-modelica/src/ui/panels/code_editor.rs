@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_workbench::{Panel, PanelId, PanelSlot};
+use lunco_workbench_core::{Panel, PanelId, PanelSlot};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -416,7 +416,7 @@ impl Panel for CodeEditorPanel {
         false
     }
 
-    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut lunco_workbench::PanelCtx) {
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut lunco_workbench_core::PanelCtx) {
         // Whole render runs with `EditorBufferState` scoped out of the
         // world so the live editor fields (read into the TextEdit,
         // edited, committed back) can be mutated in one paint frame

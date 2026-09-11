@@ -29,7 +29,7 @@ share the word "workspace" in other tools:
 | Concept | Our term | Lives in | Analogy |
 |---|---|---|---|
 | Editor shell (dock engine + panel registry) | **Workbench** | `lunco-workbench` (this crate) | Eclipse Workbench, VS Code workbench |
-| Task-specific UI chrome preset | **[`Perspective`]** | this crate (trait) | Eclipse Perspective, Blender "workspace" |
+| Task-specific UI chrome preset | **[`Perspective`]** | `lunco-workbench-core` (trait) | Eclipse Perspective, Blender "workspace" |
 | Editor session (open Twins, active tab, recents) | **Workspace** | `lunco-workspace` (wrapped here as `WorkspaceResource`) | VS Code Workspace, JetBrains Project |
 
 None of these are `Twin` — that's the *simulation unit* on disk, a
@@ -38,16 +38,20 @@ for that.
 
 ## Core types
 
+The stable panel, menu, and perspective contracts live in
+`lunco-workbench-core`. This crate owns the concrete egui/egui_dock shell and
+publishes `WorkbenchSnapshot` for consumers that need current layout facts.
+
 | Type | Role |
 |------|------|
-| [`Panel`] | Trait every dockable UI implements: `id`, `title`, `default_slot`, `render(&mut egui::Ui, &mut PanelCtx)` |
-| [`PanelId`] | Stable identifier newtype |
-| [`PanelSlot`] | Dock region: `SideBrowser` / `Center` / `RightInspector` / `Bottom` / `Floating` |
-| [`WorkbenchLayout`] | Bevy resource tracking what's docked where |
+| `lunco_workbench_core::Panel` / `PanelCtx` | Contract every dockable UI implements |
+| `lunco_workbench_core::PanelId` / `PanelSlot` | Stable panel identity and semantic dock region |
+| `WorkbenchSnapshot` | Published shell-independent view of active perspective, tabs, and docked panels |
+| `WorkbenchLayout` | Private shell resource tracking the concrete `egui_dock` tree |
 | [`WorkbenchPlugin`] | Installs the frame renderer + WorkspacePlugin into a Bevy app |
 | [`WorkbenchAppExt::register_panel`] | Ergonomic `app.register_panel(MyPanel)` extension |
-| [`Perspective`] | Trait for a named slot-assignment preset (Build, Simulate, …) |
-| [`PerspectiveId`] | Stable perspective identifier |
+| `lunco_workbench_core::Perspective` | Trait for a named slot-assignment preset (Build, Simulate, …) |
+| `lunco_workbench_core::PerspectiveId` | Stable perspective identifier |
 | [`WorkbenchAppExt::register_perspective`] | `app.register_perspective(MyPerspective)` |
 | [`WorkspaceResource`] | Bevy `Resource` wrapping `lunco_workspace::Workspace` (open Twins + documents + active selectors) |
 | [`WorkspacePlugin`] | Registers `WorkspaceResource` + the `RegisterDocument` / `UnregisterDocument` observer pair |
@@ -60,9 +64,10 @@ for that.
 ```rust,no_run
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiPlugin};
-use lunco_workbench::{
+use lunco_workbench::{WorkbenchAppExt, WorkbenchPlugin};
+use lunco_workbench_core::{
     Panel, PanelCtx, PanelId, PanelSlot, Perspective, PerspectiveId,
-    WorkbenchAppExt, WorkbenchLayout, WorkbenchPlugin,
+    PerspectiveLayoutPlan, PerspectiveSlotPlan,
 };
 
 struct SceneTreePanel;
@@ -79,8 +84,10 @@ struct BuildPerspective;
 impl Perspective for BuildPerspective {
     fn id(&self) -> PerspectiveId { PerspectiveId("build") }
     fn title(&self) -> String { "🏗 Build".into() }
-    fn apply(&self, layout: &mut WorkbenchLayout) {
-        layout.set_side_browser(Some(PanelId("scene_tree")));
+    fn layout(&self) -> PerspectiveLayoutPlan {
+        let mut plan = PerspectiveLayoutPlan::new();
+        plan.side_browser = PerspectiveSlotPlan::new().single(Some(PanelId("scene_tree")));
+        plan
     }
 }
 
@@ -110,11 +117,10 @@ cargo run --bin lunica      # Modelica workbench
 - `Panel` trait with a capability-limited `PanelCtx` render context.
 - Default-slot registration — panel goes where its author said it
   should the first time it's registered.
-- Slot-setter DSL (`set_side_browser` / `set_center` /
-  `set_right_inspector` / `set_bottom`) — convenience for Perspective
-  presets.
+- `PerspectiveLayoutPlan` materialization — the shell turns semantic slot
+  declarations from `lunco-workbench-core` into the concrete dock tree.
 - Multi-instance tabs can be seeded by a perspective with
-  `WorkbenchLayout::open_instance`; the instance panel's `default_slot()`
+  `PerspectiveLayoutPlan::open_instance`; the instance panel's `default_slot()`
   determines the insertion region and cached user layouts remain authoritative.
 - **Perspectives** (renamed from the earlier `Workspace` trait — the
   latter is now taken for the editor session concept). Register any
@@ -184,8 +190,11 @@ bevy + bevy_egui
    ├── lunco-twin        ← Twin struct + manifest + recursion
    ├── lunco-workspace   ← editor session type (headless)
    │
-   └── lunco-workbench   ← this crate (editor shell + WorkspaceResource)
-          ▲
-          │ panels plug into (via Panel trait)
-          └── lunco-modelica, lunco-luncosim-edit, lunco-cosim, …
+   ├── lunco-workbench-core ← contracts (Panel, Perspective, Snapshot)
+   │       ▲
+   │       │ panels and perspectives implement these contracts
+   │       └── lunco-workbench ← this crate (editor shell + WorkspaceResource)
+   │              ▲
+   │              │ shell-owned widgets, commands, and browser services
+   │              └── lunco-modelica, lunco-luncosim-edit, lunco-cosim, …
 ```

@@ -21,6 +21,7 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 use lunco_core::{LocalSession, NetConnectRequest, NetDisconnectRequest, NetStatus};
 use lunco_doc_bevy::Presence;
+use lunco_workbench_core::WorkbenchMenuRegistry;
 
 use crate::client::{JoinServer, LeaveServer};
 
@@ -125,10 +126,10 @@ fn draw_pending_connect_prompt(
 
 #[cfg(feature = "workbench")]
 fn register_settings_submenu(world: &mut World) {
-    let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
+    let Some(mut menus) = world.get_resource_mut::<WorkbenchMenuRegistry>() else {
         return;
     };
-    layout.register_settings_submenu("Collaboration", |ui, ctx| {
+    menus.register_settings_submenu("Collaboration", |ui, ctx| {
         // Read/clone all needed resources up front to avoid borrow conflicts and keep
         // menu rendering from owning the domain world.
         let Some(mut settings) = ctx.resource::<crate::sync::CursorSettings>().cloned() else {

@@ -36,7 +36,7 @@ use std::hash::{Hash, Hasher};
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_canvas::{Canvas, EdgeId, NodeId, PortRef, Scene, SceneEvent, VisualRegistry};
-use lunco_workbench::{Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlot};
+use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlot};
 
 use lunco_doc::DocumentId;
 use lunco_modelica::ui::commands::FocusDocumentByName;
@@ -435,8 +435,8 @@ impl Panel for UsdCanvasPanel {
     fn title(&self) -> String {
         "Connections".into()
     }
-    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
-        lunco_workbench::PanelMenuGroup::Scene
+    fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
+        lunco_workbench_core::PanelMenuGroup::Scene
     }
 
     fn default_slot(&self) -> PanelSlot {

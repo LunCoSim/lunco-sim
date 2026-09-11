@@ -32,7 +32,7 @@ impl ResourceRead for World {
 }
 
 #[cfg(feature = "ui")]
-impl ResourceRead for lunco_workbench::PanelCtx<'_> {
+impl ResourceRead for lunco_workbench_core::PanelCtx<'_> {
     fn read_resource<T: Resource>(&self) -> Option<&T> {
         self.resource::<T>()
     }
@@ -118,7 +118,7 @@ pub fn default_simulation_class(world: &World, doc: DocumentId) -> Option<String
 /// drilled class during paint without `&World`.
 #[cfg(feature = "ui")]
 pub fn drilled_class_for_doc_ctx(
-    ctx: &lunco_workbench::PanelCtx,
+    ctx: &lunco_workbench_core::PanelCtx,
     doc: DocumentId,
 ) -> Option<String> {
     drilled_class_for_doc_in(ctx, doc)
@@ -127,7 +127,7 @@ pub fn drilled_class_for_doc_ctx(
 /// `PanelCtx` sibling of [`default_simulation_class`].
 #[cfg(feature = "ui")]
 pub fn default_simulation_class_ctx(
-    ctx: &lunco_workbench::PanelCtx,
+    ctx: &lunco_workbench_core::PanelCtx,
     doc: DocumentId,
 ) -> Option<String> {
     default_simulation_class_in(ctx, doc)

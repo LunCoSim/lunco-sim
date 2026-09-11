@@ -60,6 +60,13 @@ use egui_dock::{
 use lunco_core::{on_command, register_commands, Command};
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use lunco_theme::ColorAlpha;
+#[cfg(test)]
+use lunco_workbench_core::PerspectiveSlotPlan;
+use lunco_workbench_core::{
+    InstancePanel, MenuCtx, Panel, PanelCtx, PanelId, PanelMenuGroup, PanelRenderTarget,
+    PanelScrollPolicy, PanelSlot, PanelSurfaceStyle, Perspective, PerspectiveId,
+    PerspectiveLayoutPlan, TabId, UndoProbeCtx, WorkbenchMenuRegistry, WorkbenchSnapshot,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -68,8 +75,6 @@ pub use icons::{icon_button, icon_button_sized, icon_text_button, paint_icon, Ui
 pub mod tree;
 
 mod editor_tabs;
-mod menu;
-mod panel;
 mod perspective;
 mod perspective_help;
 mod render_robustness;
@@ -133,12 +138,6 @@ pub use workspace_state::{
     finalize_revision, revision_term, workspace_state_path, AppDocumentSessionExt,
     DocumentSessionCodec, DocumentSessionRegistry, DocumentSnapshot, RuntimeSurfaceLayout,
     RuntimeSurfaceLayouts, WorkspaceState, WorkspaceStatePlugin, WorkspaceStateRestorePolicy,
-};
-
-pub use menu::{MenuCtx, UndoProbeCtx};
-pub use panel::{
-    InstancePanel, InstancePanelMenuEntry, Panel, PanelCtx, PanelId, PanelMenuGroup,
-    PanelScrollPolicy, PanelSlot, TabId,
 };
 
 /// SystemSet that runs the main workbench egui pass. Use
@@ -231,17 +230,6 @@ impl Default for DockSizes {
     }
 }
 
-/// Saved position of a tab in the dock — opaque to callers.
-/// Returned by [`WorkbenchLayout::move_tab_next_to`] and passed to
-/// [`WorkbenchLayout::restore_tab_to`] to move a tab back where it
-/// was before a demo / programmatic rearrangement.
-#[derive(Clone, Copy, Debug)]
-pub struct TabLocation {
-    surface: egui_dock::SurfaceIndex,
-    node: egui_dock::NodeIndex,
-    index: egui_dock::TabIndex,
-}
-
 /// Screen-space rects of named UI landmarks, refreshed each frame
 /// by whoever draws them. Read by feature-tour overlays (e.g. the
 /// Modelica help tour) to spotlight a real widget instead of a
@@ -295,10 +283,9 @@ pub use uri::{UriClicked, UriHandler, UriRegistry, UriResolution};
 ///
 /// Fire via `commands.trigger(OpenTab { kind, instance })` from
 /// anywhere — a panel's render fn, a system, a domain-crate observer.
-/// The workbench installs an observer that handles the event by
-/// calling [`WorkbenchLayout::open_instance`] on its own schedule,
-/// which avoids the re-entrance trap of touching `WorkbenchLayout`
-/// while it's extracted for rendering.
+/// The workbench installs an observer that handles the event by mutating its
+/// private concrete dock state on its own schedule, which avoids the
+/// re-entrance trap of touching the shell while it is extracted for rendering.
 #[derive(Event, Clone, Copy, Debug)]
 pub struct OpenTab {
     /// The [`InstancePanel::kind`] to open.
@@ -513,6 +500,50 @@ fn drain_pending_layout_requests(
     }
 }
 
+/// Publish the shell's current layout as the renderer-independent read model.
+///
+/// The dock remains authoritative for concrete rendering and persistence. The
+/// snapshot is the only layout fact domain crates should consume, so they do
+/// not acquire a dependency on `egui_dock` or the shell's private resource.
+pub(crate) fn publish_workbench_snapshot(
+    layout: &WorkbenchLayout,
+    snapshot: &mut WorkbenchSnapshot,
+) {
+    let tabs: Vec<TabId> = layout.dock.iter_all_tabs().map(|(_, tab)| *tab).collect();
+    let focused_tab = layout.dock.main_surface().focused_leaf().and_then(|node| {
+        match &layout.dock.main_surface()[node] {
+            egui_dock::Node::Leaf(leaf) => leaf.tabs.get(leaf.active.0).copied(),
+            _ => None,
+        }
+    });
+    let registered_perspectives = layout
+        .perspectives
+        .iter()
+        .map(|perspective| perspective.id())
+        .collect();
+    let mut docked_panels = Vec::new();
+    for tab in &tabs {
+        let id = match tab {
+            TabId::Singleton(id) => *id,
+            TabId::Instance { kind, .. } => *kind,
+        };
+        if !docked_panels.contains(&id) {
+            docked_panels.push(id);
+        }
+    }
+    snapshot.replace(
+        layout.active_perspective,
+        focused_tab,
+        tabs,
+        registered_perspectives,
+        docked_panels,
+    );
+}
+
+fn sync_workbench_snapshot(layout: Res<WorkbenchLayout>, mut snapshot: ResMut<WorkbenchSnapshot>) {
+    publish_workbench_snapshot(&layout, &mut snapshot);
+}
+
 /// Bring a registered singleton panel forward in the dock, mounting it in its
 /// authored default slot when it is currently closed.
 ///
@@ -719,7 +750,6 @@ pub struct SaveSourceText {
     pub update: bool,
 }
 
-pub use perspective::{Perspective, PerspectiveId};
 // The session binding (WorkspaceResource, WorkspacePlugin, add/close events)
 // lives in `lunco-workspace` now — consumers import it from there directly.
 // `session` here is just the workbench-side recents persistence.
@@ -740,6 +770,27 @@ fn panel_surface_fill(theme: &lunco_theme::Theme, translucent_tab_content: bool)
         theme.tokens.overlay_backdrop
     } else {
         theme.colors.mantle
+    }
+}
+
+/// Build the shell-supplied appearance contract for panel-owned content.
+///
+/// The dock body and standalone side-panel frame may use a translucent
+/// backdrop, but a panel's standard content frame remains transparent in that
+/// mode. This preserves the shell presentation while keeping the style
+/// decision outside the renderer-independent panel crate.
+fn panel_content_surface_style(
+    theme: &lunco_theme::Theme,
+    translucent_tab_content: bool,
+) -> PanelSurfaceStyle {
+    PanelSurfaceStyle {
+        fill: if translucent_tab_content {
+            egui::Color32::TRANSPARENT
+        } else {
+            theme.colors.mantle
+        },
+        inner_margin: theme.spacing.window_padding.into(),
+        corner_radius: theme.rounding.window.into(),
     }
 }
 
@@ -981,6 +1032,8 @@ impl Plugin for WorkbenchPlugin {
             app.add_plugins(perspective_help::PerspectiveHelpPlugin);
         }
         app.init_resource::<WorkbenchLayout>()
+            .init_resource::<WorkbenchMenuRegistry>()
+            .init_resource::<WorkbenchSnapshot>()
             .init_resource::<lunco_core::SceneInteractionMode>()
             .init_resource::<OfflineRecordingPresentation>()
             .init_resource::<PendingTabRequests>()
@@ -1025,7 +1078,12 @@ impl Plugin for WorkbenchPlugin {
                 // tab while the layout is extracted for egui rendering. Apply
                 // the layout first so the tab lands in the requested
                 // perspective, not the outgoing one.
-                (drain_pending_layout_requests, drain_pending_tab_requests).chain(),
+                (
+                    drain_pending_layout_requests,
+                    drain_pending_tab_requests,
+                    sync_workbench_snapshot,
+                )
+                    .chain(),
             )
             .add_systems(First, perspective::sync_scene_interaction_mode)
             .add_systems(
@@ -1098,16 +1156,14 @@ pub struct CurrentSceneName(pub String);
 #[reflect(Resource, Default)]
 pub struct CurrentScenePath(pub String);
 
-/// Workbench state: registered panels + the dock tree they live in.
+/// Workbench state: registered panels plus the concrete dock tree.
 ///
-/// Holds an `egui_dock::DockState<PanelId>` plus a registry of `Panel`
-/// trait objects keyed by `PanelId`. The tree is mutated directly by
-/// the user via egui_dock's drag-and-drop UI; perspectives seed it via
-/// the slot-setter DSL ([`set_side_browser`](Self::set_side_browser),
-/// [`set_center`](Self::set_center), [`set_right_inspector`](Self::set_right_inspector),
-/// [`set_bottom`](Self::set_bottom)).
+/// Holds an `egui_dock::DockState<TabId>` plus registries of the panel
+/// contracts keyed by their stable ids. The tree is mutated directly by the
+/// user via egui_dock's drag-and-drop UI; perspectives return a
+/// `PerspectiveLayoutPlan` that the shell materializes here.
 #[derive(Resource)]
-pub struct WorkbenchLayout {
+pub(crate) struct WorkbenchLayout {
     pub(crate) panels: HashMap<PanelId, Box<dyn Panel>>,
     /// Registered multi-instance panel kinds (one entry per
     /// [`InstancePanel::kind`]). Instances share the same renderer;
@@ -1137,57 +1193,6 @@ pub struct WorkbenchLayout {
     pub(crate) right_inspector: Vec<PanelId>,
     pub(crate) right_inspector_bottom: Vec<PanelId>,
     pub(crate) bottom: Vec<PanelId>,
-
-    /// Named, scrollable groups within Settings.  Use this for a coherent
-    /// feature area with enough rows that keeping it in the root menu would
-    /// obscure unrelated preferences.
-    pub(crate) settings_submenus: Vec<(
-        String,
-        Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync>>,
-    )>,
-
-    /// App-wide Edit menu contributions. Domain plugins push a closure via
-    /// [`WorkbenchLayout::register_edit_menu`] at Startup so
-    /// the global Edit menu can host domain-specific verbs (e.g. the
-    /// code editor's Cut/Copy/Paste) without each plugin scattering its
-    /// own toolbar.
-    pub(crate) edit_menu: Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync>>,
-
-    /// Undo/redo availability probes. Domain plugins push a closure via
-    /// [`WorkbenchLayout::register_undo_probe`] at Startup; each probe
-    /// inspects the active document and returns
-    /// `Some((can_undo, can_redo))` when its domain owns that document,
-    /// `None` otherwise. The Edit menu asks probes in registration order
-    /// and the first `Some` wins — the same first-owner-wins contract as
-    /// the `EditorIntent` resolvers. With no probe answering, the menu
-    /// falls back to "a document is active" so a domain without a probe
-    /// keeps working Undo/Redo entries.
-    pub(crate) undo_probes: Vec<Box<dyn Fn(&UndoProbeCtx) -> Option<(bool, bool)> + Send + Sync>>,
-
-    /// App-wide Help menu contributions. Domain plugins push a closure via
-    /// [`WorkbenchLayout::register_help_menu`] at Startup
-    /// so the Help drop-down can host tour / docs / about entries
-    /// without each domain inventing its own help button.
-    pub(crate) help_menu: Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync>>,
-
-    /// App-wide File menu contributions. Domain plugins push a closure via
-    /// [`WorkbenchLayout::register_file_menu`] at Startup so
-    /// the File menu can host domain-specific verbs (e.g. Load Example)
-    /// without hardcoding them in `lunco-workbench`.
-    pub(crate) file_menu: Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync>>,
-
-    /// App-wide Time menu contributions. Domain plugins push a closure via
-    /// [`WorkbenchLayout::register_time_menu`] at Startup so
-    /// clock-shaped controls (sim rate, the sky clock, epoch readouts)
-    /// live under ONE discoverable menu. The toolbar keeps pause/resume and
-    /// nothing else.
-    pub(crate) time_menu: Vec<Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync>>,
-
-    /// Dynamic top-level menus contributed by domain plugins.
-    pub(crate) custom_menus: Vec<(
-        &'static str,
-        Box<dyn Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync>,
-    )>,
 
     /// The live dock tree — what egui_dock actually renders. Stores
     /// [`TabId`]s so both singleton panels and multi-instance tabs
@@ -1274,13 +1279,6 @@ impl Default for WorkbenchLayout {
             right_inspector: Vec::new(),
             right_inspector_bottom: Vec::new(),
             bottom: Vec::new(),
-            settings_submenus: Vec::new(),
-            edit_menu: Vec::new(),
-            undo_probes: Vec::new(),
-            help_menu: Vec::new(),
-            file_menu: Vec::new(),
-            time_menu: Vec::new(),
-            custom_menus: Vec::new(),
             dock: DockState::new(Vec::new()),
             dock_cache: HashMap::new(),
         }
@@ -1288,26 +1286,15 @@ impl Default for WorkbenchLayout {
 }
 
 impl WorkbenchLayout {
-    /// Whether a singleton panel currently has a tab in the live dock.
-    ///
-    /// View-model producers use this as their authoritative visibility gate:
-    /// a closed panel must not keep rebuilding an expensive projection merely
-    /// because its renderer is still registered.
-    pub fn is_panel_docked(&self, id: PanelId) -> bool {
-        self.dock
-            .iter_all_tabs()
-            .any(|(_, tab)| matches!(tab, TabId::Singleton(panel_id) if *panel_id == id))
-    }
-
     /// Register a panel and make its renderer available to the workbench.
     ///
     /// Before the first perspective is active, [`Panel::default_slot`] seeds
     /// the initial slot intent. Once a perspective is active, that
     /// perspective owns the slot intent; late registration must not add a
     /// panel to the active layout. A perspective that wants a late-registered
-    /// panel declares its id through its slot setters, and the rebuild below
-    /// then realizes that declaration.
-    pub fn register<P: Panel + 'static>(&mut self, panel: P) {
+    /// panel declares its id through its `PerspectiveLayoutPlan`, and the
+    /// rebuild below then realizes that declaration.
+    pub(crate) fn register<P: Panel + 'static>(&mut self, panel: P) {
         let id = panel.id();
         let slot = panel.default_slot();
         // A perspective may declare a panel before the domain plugin registers
@@ -1355,7 +1342,7 @@ impl WorkbenchLayout {
     ///
     /// A given kind should only be registered once per App; re-registering
     /// replaces the previous renderer.
-    pub fn register_instance_panel<P: InstancePanel + 'static>(&mut self, panel: P) {
+    pub(crate) fn register_instance_panel<P: InstancePanel + 'static>(&mut self, panel: P) {
         self.instance_panels.insert(panel.kind(), Box::new(panel));
     }
 
@@ -1367,7 +1354,16 @@ impl WorkbenchLayout {
     /// id and focuses it if found; otherwise adds a new tab to the
     /// **center** leaf — identified by matching any singleton tab
     /// currently in the `center` slot intent.
-    pub fn open_instance(&mut self, kind: PanelId, instance: u64) {
+    pub(crate) fn open_instance(&mut self, kind: PanelId, instance: u64) {
+        self.open_instance_with_slot(kind, instance, None);
+    }
+
+    fn open_instance_with_slot(
+        &mut self,
+        kind: PanelId,
+        instance: u64,
+        slot_override: Option<PanelSlot>,
+    ) {
         if !self.instance_panels.contains_key(&kind) {
             bevy::log::warn!(
                 "open_instance: no InstancePanel registered for kind {:?}",
@@ -1402,7 +1398,8 @@ impl WorkbenchLayout {
         // land in the same dock area as their kind's defaults — e.g.
         // a `VizPanel` (Bottom) opened next to the singleton `Graphs`
         // tab, NOT in the Center alongside the model view.
-        let preferred_slot = self.instance_panels.get(&kind).map(|p| p.default_slot());
+        let preferred_slot =
+            slot_override.or_else(|| self.instance_panels.get(&kind).map(|p| p.default_slot()));
         // Build the set of singleton PanelIds occupying each slot so
         // we can find a leaf hosting any of them.
         let slot_ids: std::collections::HashSet<PanelId> = match preferred_slot {
@@ -1496,7 +1493,7 @@ impl WorkbenchLayout {
     }
 
     /// Open an instance tab without changing the user's current tab.
-    pub fn open_instance_without_focus(
+    pub(crate) fn open_instance_without_focus(
         &mut self,
         kind: PanelId,
         instance: u64,
@@ -1519,124 +1516,6 @@ impl WorkbenchLayout {
         }
     }
 
-    /// Move an already-open instance tab to position 0 in its leaf so
-    /// it renders as the leftmost tab. No-op if the tab isn't open.
-    pub fn move_instance_to_front(&mut self, kind: PanelId, instance: u64) {
-        let tab = TabId::Instance { kind, instance };
-        let Some(path) = self.dock.find_tab(&tab) else {
-            return;
-        };
-        if path.tab.0 == 0 {
-            return;
-        }
-        let surface_ref = self
-            .dock
-            .get_surface_mut(path.surface)
-            .and_then(|s| s.node_tree_mut());
-        let Some(tree) = surface_ref else { return };
-        if let Some(removed) = tree[path.node].remove_tab(path.tab) {
-            tree[path.node].insert_tab(egui_dock::TabIndex(0), removed);
-            let _ = tree.set_active_tab(path.node, egui_dock::TabIndex(0));
-        }
-    }
-
-    /// Opaque handle to a tab's position in the dock — surface,
-    /// node, index. Returned by [`Self::move_tab_next_to`] so callers
-    /// can restore the tab to its original spot later.
-    ///
-    /// Wrapper around egui_dock's internal indices; treat as
-    /// round-trip only (don't compare across frames where the dock
-    /// has been rebuilt).
-    /// Move `src` to a fresh split-leaf alongside `sibling_of` so the
-    /// two panels render **side-by-side**, not as tabs of the same
-    /// strip. Returns the source's original [`TabLocation`] so
-    /// callers can restore later, or `None` if either tab isn't in
-    /// the dock. No-op when they're already in the same node.
-    ///
-    /// Splits 50/50 to the right of `sibling_of`'s node. egui_dock
-    /// auto-collapses the source leaf if removing the tab leaves it
-    /// empty.
-    pub fn move_tab_next_to(&mut self, src: TabId, sibling_of: TabId) -> Option<TabLocation> {
-        let src_loc = self.dock.find_tab(&src)?;
-        let sib = self.dock.find_tab(&sibling_of)?;
-        if src_loc.surface == sib.surface && src_loc.node == sib.node {
-            return Some(TabLocation {
-                surface: src_loc.surface,
-                node: src_loc.node,
-                index: src_loc.tab,
-            });
-        }
-        let saved = TabLocation {
-            surface: src_loc.surface,
-            node: src_loc.node,
-            index: src_loc.tab,
-        };
-        self.dock.move_tab(
-            src_loc,
-            egui_dock::TabDestination::Node(
-                sib.node_path(),
-                egui_dock::TabInsert::Split(egui_dock::Split::Right),
-            ),
-        );
-        Some(saved)
-    }
-
-    /// Move `src` back to a saved [`TabLocation`]. No-op if `src`
-    /// isn't in the dock or the destination node no longer exists
-    /// (e.g. it was collapsed when a sibling was closed).
-    pub fn restore_tab_to(&mut self, src: TabId, loc: TabLocation) {
-        let Some(src_loc) = self.dock.find_tab(&src) else {
-            return;
-        };
-        if (src_loc.surface, src_loc.node) == (loc.surface, loc.node) {
-            return;
-        }
-        // Validate the destination still exists and is a leaf.
-        let dest_ok = self
-            .dock
-            .get_surface(loc.surface)
-            .and_then(|s| s.node_tree())
-            .map(|tree| loc.node.0 < tree.len() && tree[loc.node].is_leaf())
-            .unwrap_or(false);
-        if !dest_ok {
-            return;
-        }
-        let count = self
-            .dock
-            .get_surface(loc.surface)
-            .and_then(|s| s.node_tree())
-            .map(|tree| tree[loc.node].tabs_count())
-            .unwrap_or(0);
-        let idx = egui_dock::TabIndex(loc.index.0.min(count));
-        self.dock.move_tab(
-            src_loc,
-            egui_dock::TabDestination::Node(
-                egui_dock::NodePath {
-                    surface: loc.surface,
-                    node: loc.node,
-                },
-                egui_dock::TabInsert::Insert(idx),
-            ),
-        );
-    }
-
-    /// Find the first tab matching the given instance-kind, returning
-    /// the typed [`TabId`]. Useful when callers know the kind but not
-    /// the instance id (e.g. demo-tour "move the plot tab").
-    pub fn find_any_instance(&self, kind: PanelId) -> Option<TabId> {
-        for (_, t) in self.dock.iter_all_tabs() {
-            if let TabId::Instance { kind: k, instance } = t {
-                if *k == kind {
-                    return Some(TabId::Instance {
-                        kind: *k,
-                        instance: *instance,
-                    });
-                }
-            }
-        }
-        None
-    }
-
     /// Rewrite the side-browser and right-inspector split fractions
     /// so the panes occupy a fixed absolute pixel width regardless
     /// of the current window size. Driven by [`maintain_dock_widths`]
@@ -1647,7 +1526,7 @@ impl WorkbenchLayout {
     /// - if `right_inspector` non-empty, the right-inspector split
     ///   is the previous root, i.e. at `NodeIndex(2)` when wrapped
     ///   by a side-left split, or at `NodeIndex(0)` otherwise.
-    pub fn enforce_widths(&mut self, window_w: f32, side_px: f32, right_px: f32) {
+    pub(crate) fn enforce_widths(&mut self, window_w: f32, side_px: f32, right_px: f32) {
         // Reject non-finite inputs up front: `f32::clamp` propagates NaN, so a
         // NaN px width would be written straight into a split fraction and
         // panic egui_dock's separator layout on the next frame.
@@ -1694,118 +1573,38 @@ impl WorkbenchLayout {
         }
     }
 
-    /// All instance ids of `kind` in left-to-right dock walk order.
-    /// Used by VS-Code-style "Close Others / to the Right / All" tab
-    /// menus, which need the visual tab sequence (a `HashMap`-backed
-    /// domain registry can't supply order).
-    pub fn instances_in_order(&self, kind: PanelId) -> Vec<u64> {
-        self.dock
-            .iter_all_tabs()
-            .filter_map(|(_, t)| match t {
-                TabId::Instance { kind: k, instance } if *k == kind => Some(*instance),
-                _ => None,
-            })
-            .collect()
-    }
-
     /// Close a multi-instance tab if present. Idempotent.
-    pub fn close_instance(&mut self, kind: PanelId, instance: u64) {
+    pub(crate) fn close_instance(&mut self, kind: PanelId, instance: u64) {
         let tab = TabId::Instance { kind, instance };
         if let Some(pos) = self.dock.find_tab(&tab) {
             self.dock.remove_tab(pos);
         }
     }
 
-    /// Toggle visibility of the activity bar on the far left.
-    pub fn toggle_activity_bar(&mut self) {
-        self.activity_bar = !self.activity_bar;
-    }
-
-    /// Register a perspective and store it in the switcher. If this is the
-    /// first perspective added, it also becomes active and its `apply`
-    /// runs immediately to seed the initial layout.
-    /// Register rows under one named, scrollable Settings submenu. Multiple
-    /// plugins can contribute to the same submenu without coupling to one
-    /// another; the label is the single grouping key.
-    pub fn register_settings_submenu<F>(&mut self, label: impl Into<String>, callback: F)
-    where
-        F: Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync + 'static,
-    {
-        let label = label.into();
-        if let Some((_, callbacks)) = self
-            .settings_submenus
-            .iter_mut()
-            .find(|(existing, _)| existing == &label)
-        {
-            callbacks.push(Box::new(callback));
-        } else {
-            self.settings_submenus
-                .push((label, vec![Box::new(callback)]));
+    /// Materialize a renderer-independent perspective plan into the concrete
+    /// dock tree. Only this shell method knows how semantic slots map to
+    /// `egui_dock` nodes.
+    fn apply_perspective_plan(&mut self, plan: PerspectiveLayoutPlan) {
+        self.activity_bar = plan.activity_bar;
+        self.side_browser = plan.side_browser.primary;
+        self.side_browser_bottom = plan.side_browser.secondary;
+        self.center = plan.center.primary;
+        self.active_center_tab = plan
+            .active_center_tab
+            .unwrap_or(0)
+            .min(self.center.len().saturating_sub(1));
+        self.right_inspector = plan.right_inspector.primary;
+        self.right_inspector_bottom = plan.right_inspector.secondary;
+        self.bottom = plan.bottom.primary;
+        self.rebuild_dock();
+        for tab in plan.instance_tabs {
+            self.open_instance_with_slot(tab.kind, tab.instance, Some(tab.slot));
         }
-    }
-
-    /// Register a closure that contributes entries to the global Edit menu.
-    pub fn register_edit_menu<F>(&mut self, callback: F)
-    where
-        F: Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync + 'static,
-    {
-        self.edit_menu.push(Box::new(callback));
-    }
-
-    /// Register an undo/redo availability probe for the global Edit menu.
-    ///
-    /// The probe returns `Some((can_undo, can_redo))` for documents its
-    /// domain owns (read the domain registry off [`UndoProbeCtx`]), `None` for
-    /// anything else. First registered probe to answer wins — mirror of
-    /// the `EditorIntent` resolver contract, so register exactly one per
-    /// domain, next to [`register_edit_menu`](Self::register_edit_menu).
-    pub fn register_undo_probe<F>(&mut self, probe: F)
-    where
-        F: Fn(&UndoProbeCtx) -> Option<(bool, bool)> + Send + Sync + 'static,
-    {
-        self.undo_probes.push(Box::new(probe));
-    }
-
-    /// Register a closure that contributes entries to the global Help menu.
-    pub fn register_help_menu<F>(&mut self, callback: F)
-    where
-        F: Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync + 'static,
-    {
-        self.help_menu.push(Box::new(callback));
-    }
-
-    /// Register a closure that contributes entries to the global File menu.
-    pub fn register_file_menu<F>(&mut self, callback: F)
-    where
-        F: Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync + 'static,
-    {
-        self.file_menu.push(Box::new(callback));
-    }
-
-    /// Register a closure that contributes entries to the global Time menu.
-    ///
-    /// This is where a clock control belongs. The toolbar carries
-    /// pause/resume alone, so anything that sets a rate, retargets a clock
-    /// or shows an epoch goes here rather than into a floating overlay the
-    /// user cannot turn off.
-    pub fn register_time_menu<F>(&mut self, callback: F)
-    where
-        F: Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync + 'static,
-    {
-        self.time_menu.push(Box::new(callback));
-    }
-
-    /// Register a custom top-level menu button.
-    pub fn register_custom_menu<F>(&mut self, name: &'static str, callback: F)
-    where
-        F: Fn(&mut bevy_egui::egui::Ui, &mut MenuCtx) + Send + Sync + 'static,
-    {
-        self.custom_menus.push((name, Box::new(callback)));
     }
 
     /// Register a perspective (named workbench layout). The first one
     /// registered becomes the active default.
-    pub fn register_perspective<W: Perspective + 'static>(&mut self, perspective: W) {
+    pub(crate) fn register_perspective<W: Perspective + 'static>(&mut self, perspective: W) {
         let id = perspective.id();
         let first = self.perspectives.is_empty();
         self.perspectives.push(Box::new(perspective));
@@ -1824,7 +1623,7 @@ impl WorkbenchLayout {
     /// — and the live dock is cleared first so the new perspective doesn't
     /// inherit the outgoing one's tabs (the old "VSCode never closes
     /// editors" merge is what made Build show Design's tabs).
-    pub fn activate_perspective(&mut self, id: PerspectiveId) {
+    pub(crate) fn activate_perspective(&mut self, id: PerspectiveId) {
         // Guided presentations own their authored chrome for the duration of
         // the flow. This applies equally to the title-bar switcher, the typed
         // API command, and internal callers because they all converge here.
@@ -1876,12 +1675,12 @@ impl WorkbenchLayout {
             self.dock = DockState::new(Vec::new());
         }
 
-        // `ws.apply(self)` borrows `self` mutably while we hold a borrowed
-        // `ws`, so take the registry out for the call (same dance the
-        // original did).
+        // `ws.layout()` borrows the registry immutably, while materialization
+        // mutates the concrete shell. Take the registry out for the call.
         let perspectives = std::mem::take(&mut self.perspectives);
         if let Some(ws) = perspectives.iter().find(|w| w.id() == id) {
-            ws.apply(self);
+            let plan = ws.layout();
+            self.apply_perspective_plan(plan);
             self.active_perspective = Some(id);
         }
         self.perspectives = perspectives;
@@ -1932,7 +1731,7 @@ impl WorkbenchLayout {
     }
 
     /// Which perspective is currently active, if any.
-    pub fn active_perspective(&self) -> Option<PerspectiveId> {
+    pub(crate) fn active_perspective(&self) -> Option<PerspectiveId> {
         self.active_perspective
     }
 
@@ -1943,18 +1742,8 @@ impl WorkbenchLayout {
     /// author perspective ids, while [`PerspectiveId`] is a static registry
     /// key. The requirement is resolved against the registered perspectives
     /// at activation time and never persisted as workspace state.
-    pub fn set_required_perspective(&mut self, id: Option<&str>) {
+    pub(crate) fn set_required_perspective(&mut self, id: Option<&str>) {
         self.required_perspective = id.map(str::to_owned);
-    }
-
-    /// Whether the host registered a perspective with this authored id.
-    ///
-    /// This is a read-only validation seam for data-driven callers. They can
-    /// reject an unknown id before resetting or changing the active layout.
-    pub fn has_perspective(&self, id: &str) -> bool {
-        self.perspectives
-            .iter()
-            .any(|perspective| perspective.id().as_str() == id)
     }
 
     /// Reset the dock to a clean state by re-applying the active perspective's
@@ -1963,7 +1752,7 @@ impl WorkbenchLayout {
     /// importantly the 3D `ViewportPanel`, whose absence leaves the centre blank
     /// and the viewport camera inactive. Exposed as the `ResetWorkspaceLayout`
     /// command and the View ▸ "Reset Layout" menu item.
-    pub fn reset_to_default_layout(&mut self) {
+    pub(crate) fn reset_to_default_layout(&mut self) {
         let id = self
             .active_perspective
             .or_else(|| self.perspectives.first().map(|p| p.id()));
@@ -1983,7 +1772,7 @@ impl WorkbenchLayout {
     /// [`Self::reset_to_default_layout`]: opening a guided tutorial must not
     /// inherit the user's current perspective or any cached per-perspective
     /// tabs and splits.
-    pub fn reset_to_default_perspective(&mut self) {
+    pub(crate) fn reset_to_default_perspective(&mut self) {
         let Some(id) = self
             .required_perspective
             .as_deref()
@@ -2013,7 +1802,7 @@ impl WorkbenchLayout {
     /// open path, so reading it here is what makes hot-exit restore the
     /// *correct* active tab. Returns `None` when the focused tab is a
     /// singleton panel (not a document) or nothing is focused.
-    pub fn active_tab_instance(&self) -> Option<u64> {
+    pub(crate) fn active_tab_instance(&self) -> Option<u64> {
         let tree = self.dock.main_surface();
         let node = tree.focused_leaf()?;
         if let egui_dock::Node::Leaf(leaf) = &tree[node] {
@@ -2181,7 +1970,7 @@ impl WorkbenchLayout {
     fn scene_viewport_panel_id(&self) -> Option<PanelId> {
         self.panels
             .iter()
-            .find(|(_, p)| p.scene_target() == Some(SceneTarget::MainViewport))
+            .find(|(_, p)| p.scene_target() == Some(PanelRenderTarget::MainViewport))
             .map(|(id, _)| *id)
     }
 
@@ -2414,7 +2203,7 @@ impl WorkbenchLayout {
     /// `String`, so restore looks the string up here and drops ids that
     /// aren't registered in the current binary (e.g. a perspective only
     /// `luncosim` ships, loaded into `lunica`).
-    pub fn activate_perspective_by_str(&mut self, id: &str) -> bool {
+    pub(crate) fn activate_perspective_by_str(&mut self, id: &str) -> bool {
         let found = self
             .perspectives
             .iter()
@@ -2519,7 +2308,7 @@ impl WorkbenchLayout {
     /// Used by the [`FocusPanel`] typed command so HTTP / scripting
     /// callers can deterministically bring a panel forward (e.g.
     /// activating Experiments before screenshotting it).
-    pub fn focus_singleton(&mut self, id: PanelId) -> bool {
+    pub(crate) fn focus_singleton(&mut self, id: PanelId) -> bool {
         let tab = TabId::Singleton(id);
         if let Some(pos) = self.dock.find_tab(&tab) {
             self.dock.set_focused_node_and_surface(pos.node_path());
@@ -2575,8 +2364,8 @@ impl WorkbenchLayout {
         // may only exist in some binaries (e.g. a rover-only Code tab
         // referenced from the shared `BuildPerspective`).
         //
-        // Perspective slot-setters still use `PanelId` — slot presets
-        // describe singleton-panel layouts. Instance-panel tabs are
+        // Perspective plans still use `PanelId` — slot declarations describe
+        // singleton-panel layouts. Instance-panel tabs are
         // opened dynamically at runtime (e.g. Package Browser opens a
         // model tab) and don't come from the perspective preset.
         let known = |ids: &[PanelId]| -> Vec<TabId> {
@@ -2600,8 +2389,8 @@ impl WorkbenchLayout {
             .collect();
 
         // Preserve dynamically-opened instance (document/model/viz) tabs
-        // across a *same-perspective* slot rebuild (e.g. `add_to_center`,
-        // a panel re-registering, or `ResetWorkspaceLayout` after it
+        // across a *same-perspective* slot rebuild (e.g. a panel re-registering
+        // or `ResetWorkspaceLayout` after it
         // cleared the dock). The skeleton below is built purely from the
         // *singleton* slot intent, so without this every instance tab —
         // open model docs, plot instances — would silently vanish when a
@@ -2847,13 +2636,12 @@ pub trait WorkbenchAppExt {
     /// Register a panel with the default workbench layout.
     fn register_panel<P: Panel + 'static>(&mut self, panel: P) -> &mut Self;
 
-    /// Register a multi-instance panel kind (e.g. model tabs).
-    /// Instances are opened at runtime via
-    /// [`WorkbenchLayout::open_instance`].
+    /// Register a multi-instance panel kind (e.g. model tabs). Instances are
+    /// opened at runtime via the [`OpenTab`] command.
     fn register_instance_panel<P: InstancePanel + 'static>(&mut self, panel: P) -> &mut Self;
 
     /// Register a perspective. The first perspective registered becomes
-    /// active and its `apply` seeds the initial slot assignments.
+    /// active and its layout plan seeds the initial slot assignments.
     fn register_perspective<W: Perspective + 'static>(&mut self, perspective: W) -> &mut Self;
 
     /// Register help content for a perspective.
@@ -2885,9 +2673,16 @@ impl WorkbenchAppExt for App {
         if !self.world().contains_resource::<WorkbenchLayout>() {
             self.init_resource::<WorkbenchLayout>();
         }
+        let id = perspective.id();
         self.world_mut()
             .resource_mut::<WorkbenchLayout>()
             .register_perspective(perspective);
+        if !self.world().contains_resource::<WorkbenchSnapshot>() {
+            self.init_resource::<WorkbenchSnapshot>();
+        }
+        self.world_mut()
+            .resource_mut::<WorkbenchSnapshot>()
+            .register_perspective(id);
         self
     }
 
@@ -2910,8 +2705,20 @@ impl WorkbenchAppExt for App {
             if !self.world().contains_resource::<WorkbenchLayout>() {
                 self.init_resource::<WorkbenchLayout>();
             }
-            let mut layout = self.world_mut().resource_mut::<WorkbenchLayout>();
-            perspective_help::register_help_menu_item(&mut layout, id);
+            let title = self
+                .world()
+                .resource::<WorkbenchLayout>()
+                .perspectives
+                .iter()
+                .find(|perspective| perspective.id() == id && perspective.show_in_switcher())
+                .map(|perspective| perspective.title());
+            if let Some(title) = title {
+                if !self.world().contains_resource::<WorkbenchMenuRegistry>() {
+                    self.init_resource::<WorkbenchMenuRegistry>();
+                }
+                let mut menus = self.world_mut().resource_mut::<WorkbenchMenuRegistry>();
+                perspective_help::register_help_menu_item(&mut menus, id, title);
+            }
         }
         self
     }
@@ -3062,6 +2869,10 @@ fn render_workbench(world: &mut World) {
     let Some(mut layout) = world.remove_resource::<WorkbenchLayout>() else {
         return;
     };
+    let Some(mut menus) = world.remove_resource::<WorkbenchMenuRegistry>() else {
+        world.insert_resource(layout);
+        return;
+    };
 
     // Clear stale anchor rects at the start of each frame; menu /
     // panel writers refresh them as they render.
@@ -3135,9 +2946,10 @@ fn render_workbench(world: &mut World) {
         Arc::clone(&cache.theme)
     };
 
-    render_layout(&ctx, &mut layout, world, &theme);
+    render_layout(&ctx, &mut layout, world, &theme, &mut menus);
 
     world.insert_resource(layout);
+    world.insert_resource(menus);
     // No scene-pointer gate is computed here: scene picking is bevy_picking-driven
     // and egui occlusion is handled by bevy_egui's picking backend.
 }
@@ -3246,6 +3058,7 @@ struct PanelTabViewer<'a> {
     panels: &'a mut HashMap<PanelId, Box<dyn Panel>>,
     instance_panels: &'a mut HashMap<PanelId, Box<dyn InstancePanel>>,
     world: &'a mut World,
+    surface: PanelSurfaceStyle,
 }
 
 /// Publish the exact screen rect for a registered panel. Generic dock-slot
@@ -3307,7 +3120,7 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
                     // Mutations the panel emits are queued and applied
                     // after paint (WP-8 structural prevention).
                     let is_main_scene =
-                        panel.scene_target() == Some(viewport::SceneTarget::MainViewport);
+                        panel.scene_target() == Some(PanelRenderTarget::MainViewport);
                     let transparent = panel_body_is_transparent(
                         self.world,
                         panel.transparent_background(),
@@ -3319,7 +3132,7 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
                     // area below a short card.
                     let body = ui.clip_rect();
                     let scroll_policy = panel.scroll_policy();
-                    let mut ctx = PanelCtx::new(self.world);
+                    let mut ctx = PanelCtx::with_surface(self.world, self.surface);
                     match scroll_policy {
                         PanelScrollPolicy::Vertical => {
                             egui::ScrollArea::vertical()
@@ -3329,11 +3142,9 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
                         }
                         PanelScrollPolicy::SelfManaged => panel.render(ui, &mut ctx),
                     }
-                    let intents = ctx.into_intents();
+                    let intents = ctx.take_intents();
                     self.panels.insert(id, panel);
-                    for intent in intents {
-                        intent.apply(self.world);
-                    }
+                    intents.apply(self.world);
                     if !is_main_scene {
                         record_chrome(self.world, ui, body, transparent);
                     }
@@ -3361,7 +3172,7 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
                     );
                     let body = ui.clip_rect();
                     let scroll_policy = panel.scroll_policy();
-                    let mut ctx = PanelCtx::new(self.world);
+                    let mut ctx = PanelCtx::with_surface(self.world, self.surface);
                     match scroll_policy {
                         PanelScrollPolicy::Vertical => {
                             egui::ScrollArea::vertical()
@@ -3371,11 +3182,9 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
                         }
                         PanelScrollPolicy::SelfManaged => panel.render(ui, &mut ctx, instance),
                     }
-                    let intents = ctx.into_intents();
+                    let intents = ctx.take_intents();
                     self.instance_panels.insert(kind, panel);
-                    for intent in intents {
-                        intent.apply(self.world);
-                    }
+                    intents.apply(self.world);
                     record_chrome(self.world, ui, body, transparent);
                 } else {
                     let error_color = self
@@ -3411,8 +3220,7 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
                 let Some(panel) = self.panels.get(&id) else {
                     return true;
                 };
-                let is_main_scene =
-                    panel.scene_target() == Some(viewport::SceneTarget::MainViewport);
+                let is_main_scene = panel.scene_target() == Some(PanelRenderTarget::MainViewport);
                 !panel_body_is_transparent(
                     self.world,
                     panel.transparent_background(),
@@ -3471,13 +3279,11 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
             // how `tab_ui` swaps panels in/out for render to dodge the
             // self-borrow conflict.
             if let Some(mut panel) = self.instance_panels.remove(&kind) {
-                let mut ctx = PanelCtx::new(self.world);
+                let mut ctx = PanelCtx::with_surface(self.world, self.surface);
                 panel.tab_context_menu(ui, &mut ctx, instance);
-                let intents = ctx.into_intents();
+                let intents = ctx.take_intents();
                 self.instance_panels.insert(kind, panel);
-                for intent in intents {
-                    intent.apply(self.world);
-                }
+                intents.apply(self.world);
             }
         }
     }
@@ -3577,9 +3383,7 @@ fn run_menu_callback(
 ) {
     let mut menu = MenuCtx::new(world);
     callback(ui, &mut menu);
-    for intent in menu.into_intents() {
-        intent.apply(world);
-    }
+    menu.take_intents().apply(world);
 }
 
 /// Render the network controls shared by the File → Network submenu.
@@ -3733,7 +3537,7 @@ fn render_network_menu(ui: &mut egui::Ui, world: &mut World) {
 
 /// Render the document-editing commands used by both the direct Edit menu and
 /// the compact title-bar overflow menu.
-fn render_edit_menu(ui: &mut egui::Ui, world: &mut World, layout: &mut WorkbenchLayout) {
+fn render_edit_menu(ui: &mut egui::Ui, world: &mut World, menus: &mut WorkbenchMenuRegistry) {
     let has_active = world
         .resource::<WorkspaceResource>()
         .active_document
@@ -3743,7 +3547,7 @@ fn render_edit_menu(ui: &mut egui::Ui, world: &mut World, layout: &mut Workbench
     // contract as the EditorIntent resolvers). No probe answering falls back
     // to plain "a document is active" so a domain that registered no probe
     // keeps working entries.
-    let (can_undo, can_redo) = layout
+    let (can_undo, can_redo) = menus
         .undo_probes
         .iter()
         .find_map(|probe| probe(&UndoProbeCtx::new(world)))
@@ -3770,20 +3574,20 @@ fn render_edit_menu(ui: &mut egui::Ui, world: &mut World, layout: &mut Workbench
     // Domain plugins (e.g. the Modelica code editor) contribute Cut/Copy/
     // Paste/Select-All here via `register_edit_menu`. The capability-limited
     // MenuCtx keeps the command path shared with the direct menu.
-    let callbacks = std::mem::take(&mut layout.edit_menu);
+    let callbacks = std::mem::take(&mut menus.edit_menu);
     if !callbacks.is_empty() {
         ui.separator();
         for cb in &callbacks {
             run_menu_callback(ui, world, cb.as_ref());
         }
     }
-    layout.edit_menu = callbacks;
+    menus.edit_menu = callbacks;
 }
 
 /// Render Settings in either its direct top-level menu or the compact
 /// overflow menu. Settings submenu sizing remains owned by the existing
 /// viewport-bounded helper.
-fn render_settings_menu(ui: &mut egui::Ui, world: &mut World, layout: &mut WorkbenchLayout) {
+fn render_settings_menu(ui: &mut egui::Ui, world: &mut World, menus: &mut WorkbenchMenuRegistry) {
     ui.label(egui::RichText::new("Theme").weak().small());
     let mut theme = world.resource_mut::<lunco_theme::Theme>();
     let mode = theme.mode;
@@ -3800,7 +3604,7 @@ fn render_settings_menu(ui: &mut egui::Ui, world: &mut World, layout: &mut Workb
 
     // Feature areas stay discoverable without forcing the root Settings menu
     // to contain every row or fill the viewport.
-    let submenus = std::mem::take(&mut layout.settings_submenus);
+    let submenus = std::mem::take(&mut menus.settings_submenus);
     for (label, callbacks) in &submenus {
         ui.menu_button(label, |ui| {
             let max_width = settings_submenu_max_width(ui.ctx().content_rect().width());
@@ -3819,12 +3623,12 @@ fn render_settings_menu(ui: &mut egui::Ui, world: &mut World, layout: &mut Workb
                 });
         });
     }
-    layout.settings_submenus = submenus;
+    menus.settings_submenus = submenus;
 }
 
 /// Render Help in either its direct top-level menu or the compact overflow
 /// menu.
-fn render_help_menu(ui: &mut egui::Ui, world: &mut World, layout: &mut WorkbenchLayout) {
+fn render_help_menu(ui: &mut egui::Ui, world: &mut World, menus: &mut WorkbenchMenuRegistry) {
     if let Some(identity) = world.get_resource::<BuildIdentity>() {
         ui.label(format!(
             "{} · {}",
@@ -3841,19 +3645,19 @@ fn render_help_menu(ui: &mut egui::Ui, world: &mut World, layout: &mut Workbench
             );
         }
     }
-    let callbacks = std::mem::take(&mut layout.help_menu);
+    let callbacks = std::mem::take(&mut menus.help_menu);
     if !callbacks.is_empty() {
         ui.separator();
         for cb in &callbacks {
             run_menu_callback(ui, world, cb.as_ref());
         }
     }
-    layout.help_menu = callbacks;
+    menus.help_menu = callbacks;
 }
 
 /// Render Time in either its direct top-level menu or the compact overflow
 /// menu. Every rate still uses the single TimeTransport command authority.
-fn render_time_menu(ui: &mut egui::Ui, world: &mut World, layout: &mut WorkbenchLayout) {
+fn render_time_menu(ui: &mut egui::Ui, world: &mut World, menus: &mut WorkbenchMenuRegistry) {
     ui.label(egui::RichText::new("Simulation rate").weak().small());
     let (paused, rate) = world
         .get_resource::<lunco_time::TimeTransport>()
@@ -3891,33 +3695,33 @@ fn render_time_menu(ui: &mut egui::Ui, world: &mut World, layout: &mut Workbench
             .on_hover_text("Live transport is bounded to 64x; higher rates are rejected.");
     }
 
-    let callbacks = std::mem::take(&mut layout.time_menu);
+    let callbacks = std::mem::take(&mut menus.time_menu);
     if !callbacks.is_empty() {
         ui.separator();
         for cb in &callbacks {
             run_menu_callback(ui, world, cb.as_ref());
         }
     }
-    layout.time_menu = callbacks;
+    menus.time_menu = callbacks;
 }
 
 /// Render registered custom menus without creating a second callback path.
 fn render_custom_menus(
     ui: &mut egui::Ui,
     world: &mut World,
-    layout: &mut WorkbenchLayout,
+    menus: &mut WorkbenchMenuRegistry,
     mut anchors: Option<&mut Vec<(String, egui::Rect)>>,
 ) {
-    let custom_menus = std::mem::take(&mut layout.custom_menus);
+    let custom_menus = std::mem::take(&mut menus.custom_menus);
     for (name, cb) in &custom_menus {
-        let response = ui.menu_button(*name, |ui| {
+        let response = ui.menu_button(name, |ui| {
             run_menu_callback(ui, world, cb.as_ref());
         });
         if let Some(anchors) = anchors.as_deref_mut() {
-            anchors.push(((*name).to_owned(), response.response.rect));
+            anchors.push((name.clone(), response.response.rect));
         }
     }
-    layout.custom_menus = custom_menus;
+    menus.custom_menus = custom_menus;
 }
 
 /// The title-bar policy is based on measured widget widths and the same
@@ -4040,6 +3844,7 @@ fn render_layout(
     layout: &mut WorkbenchLayout,
     world: &mut World,
     theme: &lunco_theme::Theme,
+    menus: &mut WorkbenchMenuRegistry,
 ) {
     // ── Clean capture ───────────────────────────────────────────────
     // A frame the offline recorder is capturing is a FILM frame: the whole
@@ -4288,7 +4093,7 @@ fn render_layout(
                 "Edit".to_owned(),
                 "View".to_owned(),
             ];
-            direct_menu_labels.extend(layout.custom_menus.iter().map(|(name, _)| (*name).to_owned()));
+            direct_menu_labels.extend(menus.custom_menus.iter().map(|(name, _)| name.clone()));
             direct_menu_labels.extend([
                 "Settings".to_owned(),
                 "Help".to_owned(),
@@ -4518,14 +4323,14 @@ fn render_layout(
                     ui.separator();
                 }
 
-                let callbacks = std::mem::take(&mut layout.file_menu);
+                let callbacks = std::mem::take(&mut menus.file_menu);
                 if !callbacks.is_empty() {
                     for cb in &callbacks {
                         run_menu_callback(ui, world, cb.as_ref());
                     }
                     ui.separator();
                 }
-                layout.file_menu = callbacks;
+                menus.file_menu = callbacks;
 
                 // -- Close --------------------------------------------
                 if menu_item(ui, has_active, "Close", "Ctrl+W", "No document open")
@@ -4538,23 +4343,23 @@ fn render_layout(
             anchor_rects.push(("menu.file".to_owned(), r_file.response.rect));
             if matches!(menu_mode, TopMenuMode::Direct) {
                 let r_edit = ui.menu_button("Edit", |ui| {
-                    render_edit_menu(ui, world, layout);
+                    render_edit_menu(ui, world, menus);
                 });
                 anchor_rects.push(("menu.edit".to_owned(), r_edit.response.rect));
             } else {
                 let r_more = ui.menu_button("More", |ui| {
                     ui.menu_button("Edit", |ui| {
-                        render_edit_menu(ui, world, layout);
+                        render_edit_menu(ui, world, menus);
                     });
-                    render_custom_menus(ui, world, layout, None);
+                    render_custom_menus(ui, world, menus, None);
                     ui.menu_button("Settings", |ui| {
-                        render_settings_menu(ui, world, layout);
+                        render_settings_menu(ui, world, menus);
                     });
                     ui.menu_button("Help", |ui| {
-                        render_help_menu(ui, world, layout);
+                        render_help_menu(ui, world, menus);
                     });
                     ui.menu_button("Time", |ui| {
-                        render_time_menu(ui, world, layout);
+                        render_time_menu(ui, world, menus);
                     });
                 });
                 anchor_rects.push(("menu.more".to_owned(), r_more.response.rect));
@@ -4742,14 +4547,14 @@ fn render_layout(
             // Custom top-level menus are rendered through the same helper in
             // direct and compact layouts, so registered commands keep one
             // owner and one callback path.
-            render_custom_menus(ui, world, layout, Some(&mut anchor_rects));
+            render_custom_menus(ui, world, menus, Some(&mut anchor_rects));
 
             let r_settings = ui.menu_button("Settings", |ui| {
-                render_settings_menu(ui, world, layout);
+                render_settings_menu(ui, world, menus);
             });
             anchor_rects.push(("menu.settings".to_owned(), r_settings.response.rect));
             let r_help = ui.menu_button("Help", |ui| {
-                render_help_menu(ui, world, layout);
+                render_help_menu(ui, world, menus);
             });
             anchor_rects.push(("menu.help".to_owned(), r_help.response.rect));
 
@@ -4762,11 +4567,11 @@ fn render_layout(
             // menu answers it; the toolbar keeps only the verb you actually reach
             // for mid-drive.
             //
-            // Domain plugins contribute rows via
-            // `WorkbenchLayout::register_time_menu` (the celestial sky clock),
+            // Domain plugins contribute rows via the core
+            // `WorkbenchMenuRegistry` (the celestial sky clock),
             // so nothing about the sky is hardcoded here.
             let r_time = ui.menu_button("Time", |ui| {
-                render_time_menu(ui, world, layout);
+                render_time_menu(ui, world, menus);
             });
             anchor_rects.push(("menu.time".to_owned(), r_time.response.rect));
             }
@@ -4978,11 +4783,12 @@ fn render_layout(
     // parked docs hidden until the user switches to a centre-driven
     // perspective (which re-attaches them via `rebuild_dock`).
     let has_dock_tabs = !layout.center.is_empty() && layout.dock.iter_all_tabs().next().is_some();
+    let translucent_tab_content = world
+        .resource::<WorkbenchAppearanceSettings>()
+        .translucent_tab_content;
+    let panel_surface = panel_content_surface_style(theme, translucent_tab_content);
 
     if has_dock_tabs {
-        let translucent_tab_content = world
-            .resource::<WorkbenchAppearanceSettings>()
-            .translucent_tab_content;
         let WorkbenchLayout {
             panels,
             instance_panels,
@@ -4996,6 +4802,7 @@ fn render_layout(
             panels,
             instance_panels,
             world,
+            surface: panel_surface,
         };
         let mut style = Style::from_egui(viewport_ui.style().as_ref());
         // Drop the outer dock border — it shows up as a thin line along
@@ -5103,7 +4910,7 @@ fn render_layout(
             // ended at `show_inside`.
             let scene_vp_tab = panels
                 .iter()
-                .find(|(_, p)| p.scene_target() == Some(SceneTarget::MainViewport))
+                .find(|(_, p)| p.scene_target() == Some(PanelRenderTarget::MainViewport))
                 .map(|(id, _)| TabId::Singleton(*id));
             let scene_vp_rect = scene_vp_tab.and_then(|vp_tab| {
                 dock.main_surface().iter().find_map(|node| match node {
@@ -5170,7 +4977,7 @@ fn render_layout(
                     egui::Frame::side_top_panel(viewport_ui.style().as_ref()).fill(side_panel_fill),
                 )
                 .show(&mut viewport_ui, |ui| {
-                    render_panel_solo(ui, &id, layout, world);
+                    render_panel_solo(ui, &id, layout, world, panel_surface);
                 });
             publish_panel_anchor(world, id, r.response.rect);
             if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
@@ -5187,7 +4994,7 @@ fn render_layout(
                     egui::Frame::side_top_panel(viewport_ui.style().as_ref()).fill(side_panel_fill),
                 )
                 .show(&mut viewport_ui, |ui| {
-                    render_panel_solo(ui, &id, layout, world);
+                    render_panel_solo(ui, &id, layout, world, panel_surface);
                 });
             publish_panel_anchor(world, id, r.response.rect);
             if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
@@ -5203,7 +5010,7 @@ fn render_layout(
                     egui::Frame::side_top_panel(viewport_ui.style().as_ref()).fill(side_panel_fill),
                 )
                 .show(&mut viewport_ui, |ui| {
-                    render_panel_solo(ui, &id, layout, world);
+                    render_panel_solo(ui, &id, layout, world, panel_surface);
                 });
             publish_panel_anchor(world, id, r.response.rect);
             if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
@@ -6259,6 +6066,7 @@ fn render_panel_solo(
     id: &PanelId,
     layout: &mut WorkbenchLayout,
     world: &mut World,
+    surface: PanelSurfaceStyle,
 ) {
     if let Some(panel) = layout.panels.get(id) {
         ui.label(egui::RichText::new(panel.title()).strong());
@@ -6266,7 +6074,7 @@ fn render_panel_solo(
     }
     if let Some(mut panel) = layout.panels.remove(id) {
         let scroll_policy = panel.scroll_policy();
-        let mut ctx = PanelCtx::new(world);
+        let mut ctx = PanelCtx::with_surface(world, surface);
         match scroll_policy {
             PanelScrollPolicy::Vertical => {
                 egui::ScrollArea::vertical()
@@ -6276,11 +6084,9 @@ fn render_panel_solo(
             }
             PanelScrollPolicy::SelfManaged => panel.render(ui, &mut ctx),
         }
-        let intents = ctx.into_intents();
+        let intents = ctx.take_intents();
         layout.panels.insert(*id, panel);
-        for intent in intents {
-            intent.apply(world);
-        }
+        intents.apply(world);
     } else {
         let error_color = world
             .get_resource::<lunco_theme::Theme>()
@@ -6295,10 +6101,10 @@ fn render_panel_solo(
 
 fn register_workbench_appearance_settings_menu(world: &mut World) {
     use bevy_egui::egui;
-    let Some(mut layout) = world.get_resource_mut::<crate::WorkbenchLayout>() else {
+    let Some(mut menus) = world.get_resource_mut::<WorkbenchMenuRegistry>() else {
         return;
     };
-    layout.register_settings_submenu("Appearance", |ui, ctx| {
+    menus.register_settings_submenu("Appearance", |ui, ctx| {
         let Some(mut settings) = ctx
             .resource::<WorkbenchAppearanceSettings>()
             .copied()
@@ -6329,10 +6135,10 @@ fn register_workbench_appearance_settings_menu(world: &mut World) {
 
 fn register_graphics_settings_menu(world: &mut World) {
     use bevy_egui::egui;
-    let Some(mut layout) = world.get_resource_mut::<crate::WorkbenchLayout>() else {
+    let Some(mut menus) = world.get_resource_mut::<WorkbenchMenuRegistry>() else {
         return;
     };
-    layout.register_settings_submenu("Graphics", |ui, ctx| {
+    menus.register_settings_submenu("Graphics", |ui, ctx| {
         ui.label(egui::RichText::new("Rendering").weak().small());
         if let Some(current) = ctx.resource::<lunco_render::RenderingQualitySettings>() {
             let mut settings = *current;
@@ -7128,8 +6934,8 @@ mod tests {
             true
         }
 
-        fn apply(&self, layout: &mut WorkbenchLayout) {
-            layout.set_center(vec![]);
+        fn layout(&self) -> PerspectiveLayoutPlan {
+            PerspectiveLayoutPlan::new()
         }
     }
 
@@ -7413,12 +7219,19 @@ mod tests {
         layout.register(FocusPanelFixture);
         // Simulate the viewport-only perspective: the panel remains registered
         // globally, but its tab is not part of this perspective's dock.
-        layout.set_side_browser(None);
-        assert!(!layout.is_panel_docked(PanelId("focus_fixture")));
+        layout.side_browser.clear();
+        layout.rebuild_dock();
+        assert!(layout
+            .dock
+            .find_tab(&TabId::Singleton(PanelId("focus_fixture")))
+            .is_none());
 
         focus_panel_now(&mut layout, "focus_fixture");
 
-        assert!(layout.is_panel_docked(PanelId("focus_fixture")));
+        assert!(layout
+            .dock
+            .find_tab(&TabId::Singleton(PanelId("focus_fixture")))
+            .is_some());
         assert_eq!(layout.side_browser, [PanelId("focus_fixture")]);
     }
 
@@ -7447,9 +7260,13 @@ mod tests {
             layout.register(DockPanel(PanelId(id)));
         }
 
-        layout.set_side_browser_stacked(vec![PanelId("entities")], vec![PanelId("telemetry")]);
-        layout.set_center(vec![PanelId("viewport")]);
-        layout.set_right_inspector_stacked(vec![PanelId("inspector")], vec![PanelId("spawn")]);
+        let mut plan = PerspectiveLayoutPlan::new();
+        plan.side_browser =
+            PerspectiveSlotPlan::new().stacked([PanelId("entities")], [PanelId("telemetry")]);
+        plan.center = PerspectiveSlotPlan::new().single(Some(PanelId("viewport")));
+        plan.right_inspector =
+            PerspectiveSlotPlan::new().stacked([PanelId("inspector")], [PanelId("spawn")]);
+        layout.apply_perspective_plan(plan);
 
         let leaves: Vec<Vec<TabId>> = layout
             .dock
@@ -7474,9 +7291,13 @@ mod tests {
     #[test]
     fn registering_a_predeclared_stacked_panel_keeps_its_declared_slot() {
         let mut layout = WorkbenchLayout::default();
-        layout.set_side_browser_stacked(vec![PanelId("entities")], vec![PanelId("telemetry")]);
-        layout.set_center(vec![PanelId("viewport")]);
-        layout.set_right_inspector_stacked(vec![PanelId("inspector")], vec![PanelId("spawn")]);
+        let mut plan = PerspectiveLayoutPlan::new();
+        plan.side_browser =
+            PerspectiveSlotPlan::new().stacked([PanelId("entities")], [PanelId("telemetry")]);
+        plan.center = PerspectiveSlotPlan::new().single(Some(PanelId("viewport")));
+        plan.right_inspector =
+            PerspectiveSlotPlan::new().stacked([PanelId("inspector")], [PanelId("spawn")]);
+        layout.apply_perspective_plan(plan);
 
         layout.register(DockPanel(PanelId("entities")));
         layout.register(DockPanel(PanelId("telemetry")));
@@ -7528,11 +7349,10 @@ mod tests {
         fn show_in_switcher(&self) -> bool {
             self.id != PerspectiveId("hidden")
         }
-        fn apply(&self, layout: &mut WorkbenchLayout) {
-            layout.set_side_browser(Some(self.marker));
-            layout.set_right_inspector(None);
-            layout.set_bottom(None);
-            layout.set_center(vec![]);
+        fn layout(&self) -> PerspectiveLayoutPlan {
+            let mut plan = PerspectiveLayoutPlan::new();
+            plan.side_browser = PerspectiveSlotPlan::new().single(Some(self.marker));
+            plan
         }
     }
 
@@ -7549,9 +7369,10 @@ mod tests {
             self.id.0.to_string()
         }
 
-        fn apply(&self, layout: &mut WorkbenchLayout) {
-            layout.set_side_browser(None);
-            layout.set_center(vec![PanelId("center")]);
+        fn layout(&self) -> PerspectiveLayoutPlan {
+            let mut plan = PerspectiveLayoutPlan::new();
+            plan.center = PerspectiveSlotPlan::new().tabs([PanelId("center")]);
+            plan
         }
     }
 
@@ -7849,28 +7670,31 @@ mod tests {
     }
 
     #[test]
-    fn center_tabs_stack_in_order() {
+    fn perspective_plan_materializes_center_tabs_in_order() {
         let mut layout = WorkbenchLayout::default();
-        layout.add_to_center(PanelId("a"));
-        layout.add_to_center(PanelId("b"));
-        layout.add_to_center(PanelId("a")); // duplicate — no-op
+        let mut plan = PerspectiveLayoutPlan::new();
+        plan.center = PerspectiveSlotPlan::new().tabs([PanelId("a"), PanelId("b")]);
+        layout.apply_perspective_plan(plan);
         assert_eq!(layout.center, vec![PanelId("a"), PanelId("b")]);
     }
 
     #[test]
-    fn set_active_center_panel_selects_by_id() {
+    fn perspective_plan_selects_the_requested_center_tab() {
         let mut layout = WorkbenchLayout::default();
-        layout.set_center(vec![PanelId("code"), PanelId("diagram")]);
-        layout.set_active_center_panel(PanelId("diagram"));
+        let mut plan = PerspectiveLayoutPlan::new();
+        plan.center = PerspectiveSlotPlan::new().tabs([PanelId("code"), PanelId("diagram")]);
+        plan.active_center_tab = Some(1);
+        layout.apply_perspective_plan(plan);
         assert_eq!(layout.active_center_tab, 1);
     }
 
     #[test]
-    fn set_center_clamps_active_tab() {
+    fn perspective_plan_clamps_an_out_of_range_center_tab() {
         let mut layout = WorkbenchLayout::default();
-        layout.set_center(vec![PanelId("a"), PanelId("b"), PanelId("c")]);
-        layout.set_active_center_tab(2);
-        layout.set_center(vec![PanelId("x")]); // shrink
+        let mut plan = PerspectiveLayoutPlan::new();
+        plan.center = PerspectiveSlotPlan::new().tabs([PanelId("x")]);
+        plan.active_center_tab = Some(2);
+        layout.apply_perspective_plan(plan);
         assert_eq!(layout.active_center_tab, 0);
     }
 }

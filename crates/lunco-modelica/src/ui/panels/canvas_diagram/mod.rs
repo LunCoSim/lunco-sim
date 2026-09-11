@@ -34,7 +34,7 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_canvas::{Canvas, NavBarOverlay, VisualRegistry};
-use lunco_workbench::PanelId;
+use lunco_workbench_core::PanelId;
 
 pub const CANVAS_DIAGRAM_PANEL_ID: PanelId = PanelId("modelica_canvas_diagram");
 
@@ -870,7 +870,9 @@ pub fn active_doc_from_world(world: &World) -> Option<lunco_doc::DocumentId> {
 
 /// `PanelCtx` sibling of [`active_doc_from_world`] — same precedence,
 /// reading resources through the capability-narrowed panel context.
-pub fn active_doc_from_world_ctx(ctx: &lunco_workbench::PanelCtx) -> Option<lunco_doc::DocumentId> {
+pub fn active_doc_from_world_ctx(
+    ctx: &lunco_workbench_core::PanelCtx,
+) -> Option<lunco_doc::DocumentId> {
     if let Some((doc, _)) = ctx
         .resource::<crate::model_tabs_types::TabRenderContext>()
         .and_then(|c| c.current())
@@ -882,11 +884,11 @@ pub fn active_doc_from_world_ctx(ctx: &lunco_workbench::PanelCtx) -> Option<lunc
 }
 
 /// `(doc, drilled_class)` for the currently-rendering tab body, read through the
-/// capability-narrowed [`PanelCtx`](lunco_workbench::PanelCtx). Falls back to
+/// capability-narrowed [`PanelCtx`](lunco_workbench_core::PanelCtx). Falls back to
 /// `(active_document, DrilledInClassNames[doc])` when no tab body is rendering.
 #[cfg(feature = "ui")]
 pub(super) fn render_target_ctx(
-    ctx: &lunco_workbench::PanelCtx,
+    ctx: &lunco_workbench_core::PanelCtx,
 ) -> Option<(lunco_doc::DocumentId, Option<String>)> {
     if let Some(tc) = ctx.resource::<crate::model_tabs_types::TabRenderContext>() {
         if let Some(doc) = tc.doc {

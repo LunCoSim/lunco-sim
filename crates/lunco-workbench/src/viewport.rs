@@ -602,8 +602,8 @@ impl Panel for ViewportPanel {
 
     /// Never listed: it is the centre fixture (empty title, not closable), not
     /// something a user opens.
-    fn menu_group(&self) -> crate::PanelMenuGroup {
-        crate::PanelMenuGroup::Hidden
+    fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
+        lunco_workbench_core::PanelMenuGroup::Hidden
     }
 
     fn default_slot(&self) -> PanelSlot {
@@ -616,10 +616,10 @@ impl Panel for ViewportPanel {
         false
     }
 
-    fn scene_target(&self) -> Option<SceneTarget> {
+    fn scene_target(&self) -> Option<lunco_workbench_core::PanelRenderTarget> {
         // This IS the full-window scene — exempt from the pick gate's chrome-card
         // recording; the 3D camera paints through this transparent leaf.
-        Some(SceneTarget::MainViewport)
+        Some(lunco_workbench_core::PanelRenderTarget::MainViewport)
     }
 
     fn transparent_background(&self) -> bool {
@@ -824,8 +824,7 @@ fn resolve_scene_viewport_layout(
 /// True iff `panel` appears in the active layout — either as a tab in
 /// the dock or in one of the four slot Vecs the perspectives populate.
 ///
-/// `dock.iter_all_tabs()` alone isn't enough: a perspective that calls
-/// `set_side_browser/set_center/set_right_inspector/set_bottom` writes
+/// `dock.iter_all_tabs()` alone isn't enough: a perspective plan writes
 /// to the slot Vecs first; the dock is *rebuilt from those slots* by
 /// `rebuild_dock`. In steady state both contain the same panels, but
 /// pinning the camera-active decision to layout membership (rather than
@@ -855,7 +854,7 @@ pub(crate) fn layout_is_empty(layout: &crate::WorkbenchLayout) -> bool {
         && !layout
             .dock
             .iter_all_tabs()
-            .any(|(_, t)| matches!(t, crate::TabId::Singleton(_)))
+            .any(|(_, t)| matches!(t, lunco_workbench_core::TabId::Singleton(_)))
 }
 
 pub(crate) fn layout_contains_panel(layout: &crate::WorkbenchLayout, panel: PanelId) -> bool {
@@ -871,7 +870,7 @@ pub(crate) fn layout_contains_panel(layout: &crate::WorkbenchLayout, panel: Pane
     layout
         .dock
         .iter_all_tabs()
-        .any(|(_, t)| matches!(t, crate::TabId::Singleton(id) if *id == panel))
+        .any(|(_, t)| matches!(t, lunco_workbench_core::TabId::Singleton(id) if *id == panel))
 }
 
 /// Sentinel — runs each frame on newly-added Camera3d entities and
@@ -1633,9 +1632,9 @@ mod tests {
 
     struct SceneBackedPerspective;
 
-    impl crate::Perspective for SceneBackedPerspective {
-        fn id(&self) -> crate::PerspectiveId {
-            crate::PerspectiveId("scene_backed")
+    impl lunco_workbench_core::Perspective for SceneBackedPerspective {
+        fn id(&self) -> lunco_workbench_core::PerspectiveId {
+            lunco_workbench_core::PerspectiveId("scene_backed")
         }
 
         fn title(&self) -> String {
@@ -1646,8 +1645,8 @@ mod tests {
             true
         }
 
-        fn apply(&self, layout: &mut crate::WorkbenchLayout) {
-            layout.set_center(vec![]);
+        fn layout(&self) -> lunco_workbench_core::PerspectiveLayoutPlan {
+            lunco_workbench_core::PerspectiveLayoutPlan::new()
         }
     }
 

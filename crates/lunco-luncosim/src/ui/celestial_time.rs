@@ -32,7 +32,7 @@ use bevy_egui::{egui, EguiContexts};
 
 use lunco_core::CelestialBody;
 use lunco_time::{ClockId, ClockParent, Clocks, SetClock, TimeDomain, WorldTime};
-use lunco_workbench::MenuCtx;
+use lunco_workbench_core::MenuCtx;
 
 /// The sky-clock controls, drawn into whatever `Ui` is given.
 ///

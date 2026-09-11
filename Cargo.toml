@@ -45,6 +45,7 @@ members = [
     "crates/lunco-hooks",
     "crates/lunco-hooks-rhai",
     "crates/lunco-workbench",
+    "crates/lunco-workbench-core",
     "crates/lunco-web",
     "crates/lunco-scripting",
     "crates/lunco-signal",

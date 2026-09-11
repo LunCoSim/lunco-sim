@@ -44,13 +44,14 @@ serde_json = { workspace = true }
 # egui + the egui workbench shell entirely.
 bevy_egui = { workspace = true, optional = true }
 lunco-workbench = { path = "../lunco-workbench", optional = true }
+lunco-workbench-core = { path = "../lunco-workbench-core", optional = true }
 lunco-theme = { path = "../lunco-theme", optional = true }
 lunco-ui = { path = "../lunco-ui", optional = true }
 
 [features]
 default = ["ui"]
 # USD document commands + browser/viewport panels (egui + workbench shell).
-ui = ["dep:bevy_egui", "dep:lunco-workbench", "dep:lunco-theme", "dep:lunco-ui", "lunco-doc-bevy/ui"]
+ui = ["dep:bevy_egui", "dep:lunco-workbench", "dep:lunco-workbench-core", "dep:lunco-theme", "dep:lunco-ui", "lunco-doc-bevy/ui"]
 
 [dev-dependencies]
 avian3d = { workspace = true }

@@ -13,7 +13,7 @@
 use std::sync::{Arc, Mutex};
 
 use bevy_egui::egui;
-use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
+use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
 /// Shared inbox: async bridge tasks push `(code, output)` here; `render` drains
 /// it into `history`. `Arc<Mutex<…>>` (not a channel) keeps the panel
@@ -44,8 +44,8 @@ impl Panel for RhaiReplPanel {
     fn title(&self) -> String {
         "Rhai".into()
     }
-    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
-        lunco_workbench::PanelMenuGroup::Tools
+    fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
+        lunco_workbench_core::PanelMenuGroup::Tools
     }
 
     fn default_slot(&self) -> PanelSlot {

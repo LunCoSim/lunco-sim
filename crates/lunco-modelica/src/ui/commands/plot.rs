@@ -105,7 +105,7 @@ pub fn on_new_plot_panel(trigger: On<NewPlotPanel>, mut commands: Commands) {
         let restore = world
             .get_resource::<crate::ui::panels::experiments::ActivePlot>()
             .and_then(|active| active.0)
-            .map(|active| lunco_workbench::TabId::Instance {
+            .map(|active| lunco_workbench_core::TabId::Instance {
                 kind: crate::ui::panels::graphs::MODELICA_PLOT_KIND,
                 instance: active.0,
             });

@@ -20,7 +20,8 @@
 use bevy::prelude::*;
 use lunco_doc::DocumentId;
 use lunco_doc_bevy::{DocumentClosed, DocumentOpened, DocumentSaved};
-use lunco_workbench::{BrowserSectionRegistry, PanelId};
+use lunco_workbench::BrowserSectionRegistry;
+use lunco_workbench_core::PanelId;
 
 use crate::document::UsdDocument;
 use crate::twin_projection::UsdDocumentUserOwned;

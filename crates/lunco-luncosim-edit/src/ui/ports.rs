@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_core::ports::{PortDirection, PortInfo, PortMetadata, PortRegistry};
-use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchLayout};
+use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchSnapshot};
 
 /// Stable id of the universal port inspection panel.
 pub const PORT_PANEL_ID: PanelId = PanelId("port_inspector");
@@ -57,7 +57,7 @@ pub fn port_view_due(
     mut first: Local<bool>,
     time: Res<Time>,
     view: Res<PortView>,
-    layout: Option<Res<WorkbenchLayout>>,
+    layout: Option<Res<WorkbenchSnapshot>>,
 ) -> bool {
     if !layout.is_some_and(|layout| layout.is_panel_docked(PORT_PANEL_ID)) {
         return false;
@@ -155,8 +155,8 @@ impl Panel for PortPanel {
         PanelSlot::SideBrowser
     }
 
-    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
-        lunco_workbench::PanelMenuGroup::Scene
+    fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
+        lunco_workbench_core::PanelMenuGroup::Scene
     }
 
     fn transparent_background(&self) -> bool {

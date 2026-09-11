@@ -134,10 +134,11 @@ fn sample_frame_time(
 /// Push the perf HUD's row into the workbench Settings menu.
 fn register_settings_submenu(world: &mut World) {
     use bevy_egui::egui;
-    let Some(mut layout) = world.get_resource_mut::<crate::WorkbenchLayout>() else {
+    let Some(mut menus) = world.get_resource_mut::<lunco_workbench_core::WorkbenchMenuRegistry>()
+    else {
         return;
     };
-    layout.register_settings_submenu("Performance", |ui, ctx| {
+    menus.register_settings_submenu("Performance", |ui, ctx| {
         ui.label(egui::RichText::new("Performance HUD").weak().small());
         let Some(mut settings) = ctx.resource::<PerfHudSettings>().copied() else {
             return;

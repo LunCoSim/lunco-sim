@@ -11,9 +11,10 @@
 //! visibility, so Help cannot drift from the top-right navigation. Closed
 //! with Esc or by clicking the dimmed backdrop.
 
-pub(crate) use crate::{PerspectiveId, WorkbenchLayout};
+pub(crate) use crate::WorkbenchLayout;
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
+use lunco_workbench_core::{PerspectiveId, WorkbenchMenuRegistry};
 use std::collections::HashMap;
 
 /// A single keyboard shortcut entry.
@@ -139,11 +140,12 @@ pub(crate) fn visible_perspective_title(
         .map(|perspective| perspective.title())
 }
 
-pub(crate) fn register_help_menu_item(layout: &mut WorkbenchLayout, id: PerspectiveId) {
-    let Some(title) = visible_perspective_title(layout, id) else {
-        return;
-    };
-    layout.register_help_menu(move |ui, ctx| {
+pub(crate) fn register_help_menu_item(
+    menus: &mut WorkbenchMenuRegistry,
+    id: PerspectiveId,
+    title: String,
+) {
+    menus.register_help_menu(move |ui, ctx| {
         let available = ctx
             .resource::<PerspectiveHelpRegistry>()
             .is_some_and(|registry| registry.get(id).is_some());

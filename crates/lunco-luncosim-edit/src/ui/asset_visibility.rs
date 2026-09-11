@@ -29,10 +29,11 @@ impl SettingsSection for AssetVisibilitySettings {
 /// Push the filter into the workbench **Settings** menu, alongside every other
 /// persisted view pref.
 pub(crate) fn register_settings_submenu(world: &mut World) {
-    let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
+    let Some(mut menus) = world.get_resource_mut::<lunco_workbench_core::WorkbenchMenuRegistry>()
+    else {
         return;
     };
-    layout.register_settings_submenu("Asset browser", |ui, ctx| {
+    menus.register_settings_submenu("Asset browser", |ui, ctx| {
         ui.label(egui::RichText::new("Assets").weak().small());
         let Some(mut settings) = ctx.resource::<AssetVisibilitySettings>().copied() else {
             return;

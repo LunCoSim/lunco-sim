@@ -80,9 +80,11 @@ use lunco_usd_bevy::{
     UsdVisualSynced,
 };
 use lunco_workbench::{
-    CloseTab, InstancePanel, OpenTab, Panel, PanelCtx, PanelId, PanelRect, PanelRects,
-    PanelScrollPolicy, PanelSlot, PendingTabCloses, ScenePickGate, SceneTarget, TabId,
+    CloseTab, OpenTab, PanelRect, PanelRects, PendingTabCloses, ScenePickGate, SceneTarget,
     WorkbenchAppExt,
+};
+use lunco_workbench_core::{
+    InstancePanel, Panel, PanelCtx, PanelId, PanelRenderTarget, PanelScrollPolicy, PanelSlot, TabId,
 };
 use lunco_workspace::{document_belongs_to_twin_root, TwinClosed, WorkspaceResource};
 
@@ -3632,15 +3634,15 @@ impl Panel for UsdViewportPanel {
         "USD Preview".to_string()
     }
 
-    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
-        lunco_workbench::PanelMenuGroup::Scene
+    fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
+        lunco_workbench_core::PanelMenuGroup::Scene
     }
 
     fn default_slot(&self) -> PanelSlot {
         PanelSlot::Center
     }
 
-    fn scene_target(&self) -> Option<SceneTarget> {
+    fn scene_target(&self) -> Option<PanelRenderTarget> {
         // This is NOT the full-window 3D scene: it renders a camera to an offscreen
         // `Image` and shows it as an `egui::Image` with its own `click_and_drag`
         // orbit handling (below). Declaring `MainViewport` here made every drag over
@@ -3649,7 +3651,7 @@ impl Panel for UsdViewportPanel {
         // owns its own input and the gate keeps the main scene out of it — while the
         // dock dispatch still records it as an opaque blocked region (it has the
         // default opaque background), so nothing leaks through.
-        Some(SceneTarget::Offscreen(USD_VIEWPORT_PANEL_ID))
+        Some(PanelRenderTarget::Offscreen(USD_VIEWPORT_PANEL_ID))
     }
 
     fn closable(&self) -> bool {

@@ -15,7 +15,8 @@
 > sense). Read those sections with the translation in mind; the
 > terminology table in §1 is canonical.
 >
-> `lunco-workbench` is the canonical workbench crate, depended on by ~10 crates
+> `lunco-workbench-core` is the stable contract crate and `lunco-workbench` is
+> the concrete shell. Together they are depended on by ~10 crates
 > (luncosim, lunco-luncosim, lunco-luncosim-edit, lunco-usd, lunco-modelica,
 > lunco-celestial, lunco-avatar, lunco-networking, …).
 
@@ -40,9 +41,11 @@
 ## 1. What "workbench" means here
 
 A **workbench** is the application shell of a LunCoSim app — the chrome around
-the 3D world. It owns the root window layout, the perspective switcher, the
-panel registry and keybind integration. A command palette and detachable-window
-host remain planned capabilities (§7–8).
+the 3D world. The `lunco-workbench-core` crate defines the stable panel,
+perspective, menu, and read-model contracts. The `lunco-workbench` crate owns
+the concrete `egui_dock`/`bevy_egui` shell that materializes those contracts,
+including persistence and renderer integration. A command palette and
+detachable-window host remain planned capabilities (§7–8).
 
 Terminology mapping:
 
@@ -50,7 +53,7 @@ Terminology mapping:
 |---------|----------|---------|
 | App shell (layout engine) | **Workbench** (`lunco-workbench`) | Eclipse Workbench, VS Code workbench, Qt QMainWindow |
 | Editor session (open Twins, active tab, recents) | **Workspace** (`lunco-workspace`) | VS Code Workspace, JetBrains Project |
-| Task-specific UI configuration (layout preset) | **Perspective** (`lunco-workbench` trait) | Eclipse Perspective; Blender "workspaces" (same idea, different word) |
+| Task-specific UI configuration (layout preset) | **Perspective** (`lunco-workbench-core` trait) | Eclipse Perspective; Blender "workspaces" (same idea, different word) |
 | A dockable UI element | **Panel** | VS Code sidebar view, Blender editor area |
 | The 3D world | **Viewport** (structural, not a panel) | CAD 3D view |
 | Primary navigation category | **Activity** | VS Code activity bar |
@@ -73,8 +76,10 @@ It revealed architectural mismatches for a 3D-canvas engineering app:
   monitors; `bevy_workbench` doesn't support tab-drag-out-to-window.
 
 `lunco-workbench` is built around a **SidePanel + CentralPanel** root layout
-(the standard egui pattern for CAD/IDE apps), with `egui_tiles` used *inside*
-the side panels for tabbed dock trees.
+(the standard egui pattern for CAD/IDE apps), with `egui_dock` used by the
+concrete shell for tabbed dock trees. Domain crates depend on
+`lunco-workbench-core` for contracts and do not need to link the shell merely
+to implement a panel or perspective.
 
 ## 3. The standard layout
 
@@ -208,19 +213,24 @@ interleaving.
 
 ### 3.2 Render-time resource ownership
 
-`WorkbenchLayout` is the owner of the dock tree, but `render_workbench` removes
+`WorkbenchLayout` is a private resource in the concrete shell and the owner of
+the dock tree, but `render_workbench` removes
 that resource for the duration of the egui pass. Panel renderers and observers
 must therefore emit typed navigation requests (`ActivatePerspective`,
 `OpenTab`, `FocusPanel`, and related commands); they must not read or mutate
-`WorkbenchLayout` from a render-time callback. The workbench drains deferred
-layout requests before deferred tab requests so a request that changes both
-the perspective and the active tab is applied in authored order.
+`WorkbenchLayout` from a render-time callback. The shell publishes the current
+layout as the `lunco_workbench_core::WorkbenchSnapshot` resource after
+deferred layout and tab requests are applied. Domain systems that need layout
+facts read that snapshot, never the dock resource. The workbench drains
+deferred layout requests before deferred tab requests so a request that changes
+both the perspective and the active tab is applied in authored order.
 
-UI projection plugins that read workbench resources install
+UI projection plugins that read shell-owned workbench resources install
 `WorkbenchPlugin` when it is not already present. In particular,
 `lunco_tutorial::TutorialPlugin` owns the launcher projection but relies on
-the Workbench owner for `WorkbenchLayout` and `HelpAnchors`; its composition
-contract is valid both standalone and inside an existing workbench host.
+the concrete Workbench shell for `HelpAnchors` and on `WorkbenchSnapshot` for
+published layout facts; its composition contract is valid both standalone and
+inside an existing workbench host.
 
 Panel landmarks use the registered panel id as their canonical anchor:
 `panel.<id>`. The Workbench publishes that exact rect for both docked and
@@ -325,7 +335,7 @@ turning the scene camera off.
 ### Guided presentation ownership
 
 A guided tutorial may author a required perspective on its curriculum track.
-While that tutorial is active, `WorkbenchLayout` temporarily owns that
+While that tutorial is active, the concrete workbench shell temporarily owns that
 presentation: every perspective entry point is constrained to the required
 registered perspective. This includes the title-bar switcher, the typed
 `ActivatePerspective` command, and internal callers because they all converge
@@ -336,6 +346,10 @@ tutorial launcher clears it on completion, skip, scene teardown, or failure,
 so ordinary user perspective switching resumes immediately afterward. The
 purpose is to keep view-local `HelpAnchors` visible; a learner must not be
 turned into a failed tutorial merely by selecting a full-screen perspective.
+The tutorial execution core remains headless-safe: its optional UI projection
+uses one launch-boundary bridge to validate the authored perspective and issue
+the typed shell reset, rather than making the lesson lifecycle read the
+concrete dock resource.
 
 ## 5. Panel system
 
@@ -343,7 +357,7 @@ Panels live inside side docks or bottom docks. Each panel implements a
 small trait:
 
 ```rust
-// The Panel trait — lunco-workbench/src/panel.rs
+// The Panel trait — lunco-workbench-core/src/panel.rs
 pub trait Panel: Send + Sync + 'static {
     fn id(&self) -> PanelId;                 // newtype over &'static str
     fn title(&self) -> String;
@@ -377,13 +391,14 @@ Panel registration and perspective ownership are separate. Before the first
 perspective is active, `default_slot()` seeds the initial slot intent. After a
 perspective is active, registering another panel only adds its renderer to the
 registry; it does not mutate the active perspective or place the panel in its
-dock. A perspective may seed a canonical multi-instance tab during `apply` by
-calling `WorkbenchLayout::open_instance`; that insertion uses the instance
-panel's authoritative `default_slot()`. Because `apply` runs for a first visit,
-layout revision rebuild, or explicit reset, switching back to a visited
-perspective restores its cached user layout and does not reopen a closed tab.
-Opening a panel from the View menu is an explicit user request and uses the
-same workbench insertion path.
+dock. A perspective returns a `PerspectiveLayoutPlan` from `layout()` and may
+seed a canonical multi-instance tab with `open_instance`. The concrete shell
+materializes that plan and uses the instance panel's authoritative
+`default_slot()`. Because the plan is evaluated for a first visit, layout
+revision rebuild, or explicit reset, switching back to a visited perspective
+restores its cached user layout and does not reopen a closed tab. Opening a
+panel from the View menu is an explicit user request and uses the same shell
+insertion path.
 
 ### 5a. Side-browser architecture — Twin panel + Files panel
 
@@ -626,7 +641,7 @@ After registration the slice is a normal `Resource`. The crate:
   corrupting on kill.
 
 UI surfaces the same resource three ways — a named Settings submenu row
-(`WorkbenchLayout::register_settings_submenu`), a typed `#[Command]` for
+(`WorkbenchMenuRegistry::register_settings_submenu`), a typed `#[Command]` for
 the API/script bus (e.g. `TogglePerfHud`), and direct mutation. All
 three converge on the same persisted resource.
 
@@ -805,12 +820,17 @@ simulation default.
    │    lunco-modelica/ui   lunco-luncosim-edit/ui   lunco-mission/ui
    │         │                     │                       │
    │         ▼                     ▼                       ▼
-   ├── lunco-workbench  (app scaffold — this document)
+   ├── lunco-workbench-core  (stable contracts)
+   │     - Panel / InstancePanel + PanelCtx
+   │     - Perspective + PerspectiveLayoutPlan
+   │     - Menu registry + WorkbenchSnapshot
+   │         │
+   │         ▼
+   ├── lunco-workbench  (concrete app shell — this document)
    │     - Root layout (SidePanel + CentralPanel)
-   │     - Panel trait + registry
-   │     - Workspace enum + per-workspace layout
-   │     - Command palette, activity bar, status bar
-   │     - Detach / multi-viewport
+   │     - egui_dock materialization and persistence
+   │     - bevy_egui / viewport / built-in shell panels
+   │     - Shell commands, activity bar, status bar
    │         │
    │         ▼
    ├── lunco-ui  (widget toolkit)
@@ -821,13 +841,18 @@ simulation default.
    │     (Node graphs / diagrams render on `lunco-canvas`)
    │         │
    │         ▼
-   └── egui + bevy_egui + egui_tiles (inside side panels only)
+   └── egui (contract surface) + bevy_egui + egui_dock (shell only)
 ```
 
-- `lunco-workbench` is the app framework — layout, workspace, panel host.
+- `lunco-workbench-core` is the app-facing contract layer — panel contexts,
+  perspective plans, menu contributions, and published layout facts.
+- `lunco-workbench` is the concrete app framework — layout, persistence,
+  workspace integration, rendering, and panel host.
 - `lunco-ui` is the widget library — draws things inside panels.
 - Domain crates contribute **Panel** implementations that use `lunco-ui`
-  widgets and `lunco-workbench`'s Panel trait.
+  widgets and `lunco-workbench-core`'s Panel trait. They use
+  `lunco-workbench` only for shell-owned widgets, commands, browser services,
+  or other concrete presentation integration.
 
 Both `lunco-workbench` and `lunco-ui` are LunCoSim-agnostic at their core —
 they don't know about balloons, solar panels, or Modelica. Domain knowledge

@@ -9,6 +9,7 @@ description = "Thin UI adapter layer for LunCoSim on top of lunco-workbench"
 bevy = { workspace = true }
 bevy_egui = { workspace = true }
 lunco-workbench = { path = "../lunco-workbench" }
+lunco-workbench-core = { path = "../lunco-workbench-core" }
 lunco-theme = { path = "../lunco-theme" }
 lunco-core = { path = "../lunco-core" }
 lunco-controller = { path = "../lunco-controller" }

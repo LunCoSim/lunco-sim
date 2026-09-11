@@ -29,8 +29,18 @@ and design decisions. This skill is a quick-reference summary.
 
 1. **UI lives in `src/ui/`** — domain crates have `src/ui/mod.rs` exporting a `*UiPlugin`. UI code never lives outside `ui/` directories.
 2. **UI never mutates state** — all interactions emit typed command events (the `#[Command]` structs, triggered via `ctx.trigger(...)`) that observers handle. This makes the UI AI-native: AI observes the same command stream as humans and can emit identical commands.
-3. **Panels are `Panel` impls** (the trait lives in `lunco_workbench`) — registered via `app.register_panel()` with lunco-workbench's docking system.
+3. **Panels are `Panel` impls** (the contract lives in `lunco_workbench_core`) — registered via `lunco_workbench::WorkbenchAppExt::register_panel()` with the concrete shell's docking system.
 4. **Headless must work** — removing UI plugins (Layers 3 and 4) leaves a functioning simulation. See `AGENTS.md` §4.1 for the four-layer architecture.
+
+The workbench is deliberately two layers. `lunco-workbench-core` contains the
+stable `Panel`/`PanelCtx`, `InstancePanel`, `PerspectiveLayoutPlan`, menu
+registry, and `WorkbenchSnapshot` contracts. It is safe for domain UI crates
+that need panel behavior or published layout facts and does not pull the
+renderer or `egui_dock`. `lunco-workbench` is the concrete shell: it owns
+docking, egui/bevy integration, persistence, built-in browser services, and
+shell-only widgets such as icons and tree renderers. Domain crates must not
+read the shell's private `WorkbenchLayout`; use `WorkbenchSnapshot` for layout
+facts and typed workbench commands for navigation.
 
 Universal runtime inspections should read an authoritative view model produced
 outside egui. For ports, use `PortRegistry::entity_port_infos` so values,
@@ -252,7 +262,8 @@ input, and modal dialogs use the shared `lunco-ui::modal` host.
 ## Adding a Panel
 
 ```rust
-use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
+use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
+use lunco_workbench::WorkbenchAppExt;
 use lunco_ui::prelude::*;
 
 pub struct MyPanel;
@@ -274,12 +285,12 @@ impl Panel for MyPanel {
             ctx.trigger(MyCommand { /* ... */ });
         }
 
-        // Need `&mut World`? Queue it instead of blocking the paint:
-        // ctx.defer(|world: &mut World| { /* ... */ });
+        // Other supported mutations are queued through the same context:
+        // ctx.set_resource(MyResource::default());
     }
 }
 
-// Register in ui/mod.rs:
+// Register in ui/mod.rs through the concrete shell:
 // app.register_panel(MyPanel);
 ```
 

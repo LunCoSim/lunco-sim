@@ -56,7 +56,7 @@ impl ViewTarget {
 /// Context passed to a viz kind's 2D render path.
 ///
 /// Carries the egui `Ui` to paint into plus a capability-narrowed
-/// [`lunco_workbench::PanelCtx`] — the only world access a viz kind
+/// [`lunco_workbench_core::PanelCtx`] — the only world access a viz kind
 /// gets (WP-8). A viz reads view-model / signal resources through
 /// `wb.resource::<T>()` and emits typed mutations; there
 /// is no raw `&mut World`, so per-frame scans / in-paint mutation are
@@ -64,5 +64,5 @@ impl ViewTarget {
 /// (`wb`) and painting (`ui`) borrow disjointly.
 pub struct Panel2DCtx<'a, 'w> {
     pub ui: &'a mut bevy_egui::egui::Ui,
-    pub wb: &'a mut lunco_workbench::PanelCtx<'w>,
+    pub wb: &'a mut lunco_workbench_core::PanelCtx<'w>,
 }

@@ -531,7 +531,7 @@ pub(crate) fn draw_usd_joint_preview_viz(
 }
 
 fn apply_attribute(
-    ctx: &mut lunco_workbench::PanelCtx,
+    ctx: &mut lunco_workbench_core::PanelCtx,
     view: &UsdJointSessionView,
     name: &str,
     type_name: &str,
@@ -554,7 +554,7 @@ fn apply_attribute(
 }
 
 fn apply_relationship(
-    ctx: &mut lunco_workbench::PanelCtx,
+    ctx: &mut lunco_workbench_core::PanelCtx,
     view: &UsdJointSessionView,
     name: &str,
     target: String,
@@ -648,7 +648,7 @@ fn usd_point_literal(type_name: &str, value: [f64; 3]) -> Result<String, String>
 /// Paint the authored standard joint editor for the selected prim.
 pub fn authored_joint_section(
     ui: &mut egui::Ui,
-    ctx: &mut lunco_workbench::PanelCtx,
+    ctx: &mut lunco_workbench_core::PanelCtx,
     entity: Entity,
 ) {
     let Some(view) = ctx

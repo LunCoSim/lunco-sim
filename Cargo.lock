@@ -7193,6 +7193,7 @@ dependencies = [
  "lunco-twin",
  "lunco-usd-bevy",
  "lunco-workbench",
+ "lunco-workbench-core",
  "lunco-workspace",
  "serde",
  "tempfile",
@@ -7241,6 +7242,7 @@ dependencies = [
  "lunco-theme",
  "lunco-time",
  "lunco-workbench",
+ "lunco-workbench-core",
  "serde",
  "serde_json",
 ]
@@ -7469,6 +7471,7 @@ dependencies = [
  "lunco-usd-terrain",
  "lunco-web",
  "lunco-workbench",
+ "lunco-workbench-core",
  "lunco-workspace",
  "mimalloc",
  "openusd",
@@ -7523,6 +7526,7 @@ dependencies = [
  "lunco-usd-bevy",
  "lunco-usd-sim",
  "lunco-workbench",
+ "lunco-workbench-core",
  "lunco-workspace",
  "serde",
  "serde_json",
@@ -7603,6 +7607,7 @@ dependencies = [
  "lunco-viz",
  "lunco-web",
  "lunco-workbench",
+ "lunco-workbench-core",
  "lunco-worker-transport",
  "lunco-workspace",
  "lunco-workspace-api",
@@ -7667,6 +7672,7 @@ dependencies = [
  "lunco-usd-bevy",
  "lunco-usd-compose",
  "lunco-workbench",
+ "lunco-workbench-core",
  "lunco-workspace",
  "rustls-pemfile",
  "serde",
@@ -8018,6 +8024,7 @@ dependencies = [
  "lunco-usd-bevy",
  "lunco-usd-compose",
  "lunco-workbench",
+ "lunco-workbench-core",
  "lunco-workspace",
  "openusd",
  "serde",
@@ -8066,6 +8073,7 @@ dependencies = [
  "lunco-theme",
  "lunco-time",
  "lunco-workbench",
+ "lunco-workbench-core",
  "web-time",
 ]
 
@@ -8099,6 +8107,7 @@ dependencies = [
  "lunco-usd-compose",
  "lunco-usd-sim",
  "lunco-workbench",
+ "lunco-workbench-core",
  "lunco-workspace",
  "openusd",
  "serde",
@@ -8232,6 +8241,7 @@ dependencies = [
  "lunco-theme",
  "lunco-usd-bevy",
  "lunco-workbench",
+ "lunco-workbench-core",
  "serde",
  "serde_json",
 ]
@@ -8271,6 +8281,7 @@ dependencies = [
  "lunco-time",
  "lunco-tools-bevy",
  "lunco-twin",
+ "lunco-workbench-core",
  "lunco-workspace",
  "lunco-workspace-api",
  "rfd",
@@ -8281,6 +8292,16 @@ dependencies = [
  "web-sys",
  "web-time",
  "wgpu",
+]
+
+[[package]]
+name = "lunco-workbench-core"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "egui 0.35.0",
+ "lunco-core",
+ "serde",
 ]
 
 [[package]]

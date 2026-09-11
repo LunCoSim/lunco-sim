@@ -13,7 +13,7 @@ use crate::state::ModelicaDocumentRegistry;
 use bevy_egui::egui;
 use lunco_canvas::Scene;
 use lunco_doc::Document;
-use lunco_workbench::PanelCtx;
+use lunco_workbench_core::PanelCtx;
 
 pub(crate) fn poll_and_swap_projection(
     ui: &mut egui::Ui,

@@ -18,7 +18,7 @@ default = ["lunco-api", "lunco-api/transport-http", "ui", "scripting"]
 ui = [
     # Screenshot backend — workbench-only, and NOT on `lunco-api` (a server build enables that).
     "lunco-workbench/api",
-    "dep:bevy_egui", "dep:lunco-theme", "dep:lunco-workbench", "dep:lunco-ui",
+    "dep:bevy_egui", "dep:lunco-theme", "dep:lunco-workbench", "dep:lunco-workbench-core", "dep:lunco-ui",
     "dep:lunco-viz", "dep:lunco-canvas", "dep:egui_plot", "dep:egui_commonmark",
     "dep:egui_extras", "dep:htmd", "dep:lyon_tessellation", "dep:lyon_path",
     "dep:lyon_geom", "lunco-doc-bevy/ui",
@@ -98,6 +98,7 @@ lunco-settings = { path = "../lunco-settings" }
 lunco-signal = { path = "../lunco-signal" }
 lunco-telemetry = { path = "../lunco-telemetry" }
 lunco-workbench = { path = "../lunco-workbench", optional = true }
+lunco-workbench-core = { path = "../lunco-workbench-core", optional = true }
 lunco-web = { workspace = true }
 lunco-ui = { path = "../lunco-ui", optional = true }
 lunco-viz = { path = "../lunco-viz", features = ["ui"], optional = true }

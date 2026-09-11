@@ -35,7 +35,7 @@ use lunco_usd::document::UsdDocument;
 use lunco_usd::document::{LayerId, UsdOp};
 use lunco_usd_bevy::camera_path::{eval_curve, eval_curve_tangent, AimMode, CameraPath};
 use lunco_usd_bevy::UsdPrimPath;
-use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
+use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
 use super::authoring_paths::{join_prim, prim_exists};
 
@@ -380,8 +380,8 @@ impl Panel for CinematicPanel {
     fn title(&self) -> String {
         "Cinematic".into()
     }
-    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
-        lunco_workbench::PanelMenuGroup::Scene
+    fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
+        lunco_workbench_core::PanelMenuGroup::Scene
     }
 
     fn default_slot(&self) -> PanelSlot {

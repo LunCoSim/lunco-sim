@@ -22,7 +22,7 @@ use std::collections::VecDeque;
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
+use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
 use crate::state::ModelicaDocumentRegistry;
 use crate::ui::panels::log::{render_log_view, LogEntry, LogLevel};
@@ -120,8 +120,8 @@ impl Panel for DiagnosticsPanel {
         "Diagnostics".into()
     }
 
-    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
-        lunco_workbench::PanelMenuGroup::Design
+    fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
+        lunco_workbench_core::PanelMenuGroup::Design
     }
 
     fn default_slot(&self) -> PanelSlot {

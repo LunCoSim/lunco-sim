@@ -32,7 +32,7 @@ use lunco_viz::{
     kinds::line_plot::LinePlot, view::Panel2DCtx, viz::VizId, SignalRegistry,
     VisualizationRegistry, VizFitRequests,
 };
-use lunco_workbench::{InstancePanel, PanelCtx, PanelId, PanelSlot};
+use lunco_workbench_core::{InstancePanel, PanelCtx, PanelId, PanelSlot};
 
 use crate::ui::viz::{ensure_default_modelica_graph, DEFAULT_MODELICA_GRAPH};
 
@@ -63,9 +63,9 @@ impl InstancePanel for ModelicaPlotPanel {
         PanelSlot::Bottom
     }
 
-    fn menu_entry(&self) -> Option<lunco_workbench::InstancePanelMenuEntry> {
-        Some(lunco_workbench::InstancePanelMenuEntry {
-            group: lunco_workbench::PanelMenuGroup::Design,
+    fn menu_entry(&self) -> Option<lunco_workbench_core::InstancePanelMenuEntry> {
+        Some(lunco_workbench_core::InstancePanelMenuEntry {
+            group: lunco_workbench_core::PanelMenuGroup::Design,
             title: "Graphs",
             instance: DEFAULT_MODELICA_GRAPH.0,
         })

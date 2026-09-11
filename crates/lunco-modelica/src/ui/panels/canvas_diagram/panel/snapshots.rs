@@ -3,7 +3,7 @@
 use crate::state::ModelicaDocumentRegistry;
 use crate::ModelicaModel;
 use bevy_egui::egui;
-use lunco_workbench::PanelCtx;
+use lunco_workbench_core::PanelCtx;
 
 /// Publish the active diagram's namespace into the canvas snapshot. This is
 /// an explicit Modelica root-scope projection, not a renderer fallback: all

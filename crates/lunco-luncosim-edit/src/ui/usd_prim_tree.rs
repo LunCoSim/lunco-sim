@@ -29,7 +29,7 @@ use lunco_usd_bevy::{
     camera_switch::camera_display_labels, CanonicalStages, SdfPath, UsdPrimPath, UsdRead,
     UsdStageAsset,
 };
-use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
+use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
 pub const USD_PRIM_TREE_PANEL_ID: PanelId = PanelId("usd_prim_tree");
 
@@ -285,8 +285,8 @@ impl Panel for UsdPrimTreePanel {
     fn title(&self) -> String {
         "Prims".into()
     }
-    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
-        lunco_workbench::PanelMenuGroup::Scene
+    fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
+        lunco_workbench_core::PanelMenuGroup::Scene
     }
 
     fn default_slot(&self) -> PanelSlot {

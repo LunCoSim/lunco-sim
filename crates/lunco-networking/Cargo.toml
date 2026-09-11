@@ -30,8 +30,8 @@ net-diag = ["networking"]
 # JoinServer/LeaveServer commands from `client`/`sync`. OFF for headless servers.
 ui = ["networking", "dep:bevy_egui", "workbench"]
 # Perspective/layout sync against the workbench (`sync.rs` ActivatePerspective +
-# WorkbenchLayout reads). UI-adjacent but no egui itself; pulled in by `ui`.
-workbench = ["dep:lunco-workbench"]
+# WorkbenchSnapshot reads). UI-adjacent but no egui itself; pulled in by `ui`.
+workbench = ["dep:lunco-workbench", "dep:lunco-workbench-core"]
 # Host-side HTTP **bytes plane**: serve scenario assets by CID over HTTP instead of
 # streaming them through the reliable QUIC channel (which queues without bound and
 # stalls on multi-MB twins). Native-only in effect — the `lunco-api` asset server is
@@ -42,6 +42,7 @@ transport-http = ["networking", "lunco-api/transport-http"]
 [dependencies]
 bevy = { workspace = true }
 lunco-workbench = { path = "../lunco-workbench", optional = true }
+lunco-workbench-core = { path = "../lunco-workbench-core", optional = true }
 lunco-core = { path = "../lunco-core" }
 # `default-features = false`: we only use the registry/executor types + plugin,
 # never the native `transport-http` server (axum/tokio/mio — wasm-incompatible).

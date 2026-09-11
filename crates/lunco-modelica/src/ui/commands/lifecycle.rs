@@ -107,7 +107,7 @@ impl PendingCloseAfterSave {
 /// context menu. The anchor is the right-clicked tab; the scope picks
 /// which *other* tabs go with it. Resolved by
 /// [`resolve_tab_close_scopes`], which expands the scope into concrete
-/// instance ids (using dock order from [`lunco_workbench::WorkbenchLayout`])
+/// instance ids (using dock order from the published workbench snapshot)
 /// and feeds them through the existing [`lunco_workbench::PendingTabCloses`]
 /// pipeline — so each dirty tab still gets its Save / Don't-save prompt.
 #[derive(Clone, Copy, Debug)]
@@ -234,7 +234,7 @@ pub fn request_app_close(world: &mut World) {
     // enqueue Save/Don't save/Cancel modals through `render_close_dialogs`.
     if let Some(mut pending) = world.get_resource_mut::<lunco_workbench::PendingTabCloses>() {
         for (_doc, tab) in dirty_tabs {
-            pending.push(lunco_workbench::TabId::Instance {
+            pending.push(lunco_workbench_core::TabId::Instance {
                 kind: MODEL_VIEW_KIND,
                 instance: tab,
             });
@@ -1114,7 +1114,7 @@ pub fn finish_close_after_save(
 /// same dirty-check + Save-prompt pipeline a single × click uses.
 pub fn resolve_tab_close_scopes(
     mut scopes: ResMut<PendingTabCloseScopes>,
-    layout: Res<lunco_workbench::WorkbenchLayout>,
+    layout: Res<lunco_workbench_core::WorkbenchSnapshot>,
     registry: Res<ModelicaDocumentRegistry>,
     model_tabs: Res<ModelTabs>,
     mut pending: ResMut<lunco_workbench::PendingTabCloses>,
@@ -1147,7 +1147,7 @@ pub fn resolve_tab_close_scopes(
             TabCloseScope::Saved => ordered.iter().copied().filter(|&i| is_clean(i)).collect(),
         };
         for instance in targets {
-            pending.push(lunco_workbench::TabId::Instance {
+            pending.push(lunco_workbench_core::TabId::Instance {
                 kind: MODEL_VIEW_KIND,
                 instance,
             });
@@ -1164,7 +1164,7 @@ pub fn drain_pending_tab_closes(
 ) {
     let mut unclaimed = Vec::new();
     for tab in pending.drain() {
-        let lunco_workbench::TabId::Instance { kind, instance } = tab else {
+        let lunco_workbench_core::TabId::Instance { kind, instance } = tab else {
             unclaimed.push(tab);
             continue;
         };

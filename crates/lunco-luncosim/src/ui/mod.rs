@@ -19,7 +19,8 @@ use lunco_modelica::{ModelicaUiConfig, ModelicaWorkbenchPlugin};
 use lunco_usd_bevy::camera_switch::{
     CameraSelectionOwner, CameraSelectionStatus, ObserveAvatar, ResumeCameraDirector, SetUserCamera,
 };
-use lunco_workbench::{CurrentSceneName, CurrentScenePath, MenuCtx};
+use lunco_workbench::{CurrentSceneName, CurrentScenePath};
+use lunco_workbench_core::{MenuCtx, WorkbenchMenuRegistry, WorkbenchSnapshot};
 
 /// Surface ⇄ Moon ⇄ Earth view-mode switcher (site-anchored scenes only).
 mod celestial_time;
@@ -431,7 +432,7 @@ impl Plugin for SandboxUiPlugin {
 }
 
 fn update_runtime_ui_gates(
-    layout: Option<Res<lunco_workbench::WorkbenchLayout>>,
+    layout: Option<Res<WorkbenchSnapshot>>,
     overlays: Option<Res<overlays::OverlaySettings>>,
     recording: Option<Res<lunco_workbench::screenshot::OfflineRecordingState>>,
     mut gates: ResMut<runtime_exposure::RuntimeUiGates>,
@@ -446,7 +447,7 @@ fn update_runtime_ui_gates(
     }
     *initialized = true;
     let in_view = layout.is_some_and(|value| {
-        value.active_perspective() == Some(lunco_workbench::PerspectiveId("sandbox_view"))
+        value.active_perspective() == Some(lunco_workbench_core::PerspectiveId("sandbox_view"))
     });
     let overlay_enabled = overlays.is_some_and(|value| value.view_switcher);
     let recording = recording.is_some_and(|value| value.active);
@@ -459,9 +460,9 @@ fn recording_offline(
     recording.is_some_and(|recording| recording.active)
 }
 
-fn in_view_perspective(layout: Option<Res<lunco_workbench::WorkbenchLayout>>) -> bool {
+fn in_view_perspective(layout: Option<Res<WorkbenchSnapshot>>) -> bool {
     layout.is_some_and(|layout| {
-        layout.active_perspective() == Some(lunco_workbench::PerspectiveId("sandbox_view"))
+        layout.active_perspective() == Some(lunco_workbench_core::PerspectiveId("sandbox_view"))
     })
 }
 
@@ -656,12 +657,12 @@ fn draw_camera_picker(
     mut picker: ResMut<CameraPickerState>,
     status: Option<Res<CameraSelectionStatus>>,
     rects: Res<runtime_exposure::RuntimeUiSurfaceRects>,
-    layout: Option<Res<lunco_workbench::WorkbenchLayout>>,
+    layout: Option<Res<WorkbenchSnapshot>>,
     theme: Option<Res<lunco_theme::Theme>>,
     mut commands: Commands,
 ) {
     if !layout.is_some_and(|layout| {
-        layout.active_perspective() == Some(lunco_workbench::PerspectiveId("sandbox_view"))
+        layout.active_perspective() == Some(lunco_workbench_core::PerspectiveId("sandbox_view"))
     }) {
         picker.open = false;
         return;
@@ -763,10 +764,10 @@ fn draw_camera_picker(
 /// in-viewport presentation; it is not the sole way to operate an essential
 /// camera mode because retained HTML currently exposes no accessibility tree.
 fn register_camera_menu(world: &mut World) {
-    let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
+    let Some(mut menus) = world.get_resource_mut::<WorkbenchMenuRegistry>() else {
         return;
     };
-    layout.register_custom_menu("Camera", |ui, ctx| {
+    menus.register_custom_menu("Camera", |ui, ctx| {
         let state = ctx.resource::<CameraSelectionStatus>().cloned();
         ui.label("Presentation");
         if let Some(state) = &state {
@@ -865,7 +866,6 @@ struct SandboxBootState {
 #[cfg(target_arch = "wasm32")]
 fn sandbox_boot_from_url(
     mut commands: bevy::prelude::Commands,
-    mut layout: Option<bevy::prelude::ResMut<lunco_workbench::WorkbenchLayout>>,
     msl: Option<bevy::prelude::Res<lunco_assets::msl::MslLoadState>>,
     mut state: bevy::prelude::Local<SandboxBootState>,
 ) {
@@ -891,9 +891,11 @@ fn sandbox_boot_from_url(
                 _ => {}
             }
         }
-        if let (Some(ws), Some(layout)) = (state.workspace.as_ref(), layout.as_mut()) {
+        if let Some(ws) = state.workspace.as_ref() {
             let id: &'static str = Box::leak(ws.clone().into_boxed_str());
-            layout.activate_perspective(lunco_workbench::PerspectiveId(id));
+            commands.trigger(lunco_workbench::perspective_command::ActivatePerspective {
+                id: ws.clone(),
+            });
             bevy::log::info!("[sandbox_boot_from_url] activated perspective `{ws}`");
         }
         state.parsed = true;
@@ -945,10 +947,10 @@ fn init_current_scene_path(
 fn register_downloadable_assets_settings(world: &mut World) {
     use bevy_egui::egui;
     use lunco_assets::datasets::{DatasetRegistry, DatasetState};
-    let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
+    let Some(mut menus) = world.get_resource_mut::<WorkbenchMenuRegistry>() else {
         return;
     };
-    layout.register_settings_submenu("Data & libraries", |ui, ctx| {
+    menus.register_settings_submenu("Data & libraries", |ui, ctx| {
         ui.label(egui::RichText::new("Downloadable data").weak().small());
         let Some(mut settings) = ctx.resource::<lunco_settings::DownloadSettings>().cloned() else {
             return;
@@ -1246,10 +1248,10 @@ fn render_scenario_registry_unavailable(ui: &mut bevy_egui::egui::Ui) {
 }
 
 fn register_sandbox_scenarios_menu(world: &mut World) {
-    let Some(mut layout) = world.get_resource_mut::<lunco_workbench::WorkbenchLayout>() else {
+    let Some(mut menus) = world.get_resource_mut::<WorkbenchMenuRegistry>() else {
         return;
     };
-    layout.register_custom_menu("Scenarios", |ui, ctx| {
+    menus.register_custom_menu("Scenarios", |ui, ctx| {
         ui.set_min_width(SCENARIO_MENU_MIN_WIDTH);
         ui.set_max_width(SCENARIO_MENU_MAX_WIDTH);
         ui.label(

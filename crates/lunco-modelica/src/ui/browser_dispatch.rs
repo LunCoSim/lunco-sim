@@ -127,8 +127,9 @@ pub fn drain_browser_actions(world: &mut World) {
                 };
                 // ensure_preview_for never rebinds TabIds; an evicted
                 // previous preview is closed here. Layout mutation goes
-                // through CloseTab/OpenTab triggers because WorkbenchLayout
-                // is removed from the World for the duration of rendering.
+                // through CloseTab/OpenTab triggers because the concrete
+                // workbench shell is removed from the World for the duration
+                // of rendering.
                 if let Some(old_id) = evict {
                     world.commands().trigger(lunco_workbench::CloseTab {
                         kind: crate::ui::MODEL_VIEW_KIND,

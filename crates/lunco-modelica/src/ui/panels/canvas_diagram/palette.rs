@@ -8,7 +8,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_workbench::PanelCtx;
+use lunco_workbench_core::PanelCtx;
 
 use crate::document::ModelicaOp;
 

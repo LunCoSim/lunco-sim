@@ -11,7 +11,7 @@ use bevy_egui::egui;
 pub(crate) fn render_diagram_canvas(
     _panel: &super::CanvasDiagramPanel,
     ui: &mut egui::Ui,
-    ctx: &mut lunco_workbench::PanelCtx,
+    ctx: &mut lunco_workbench_core::PanelCtx,
     state: &mut CanvasDiagramState,
 ) {
     let _frame_t0 = web_time::Instant::now();

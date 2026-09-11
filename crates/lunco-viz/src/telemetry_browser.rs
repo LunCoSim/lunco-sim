@@ -58,7 +58,8 @@ use egui_plot::{Line, Plot, PlotPoints};
 use lunco_core::{on_command, register_commands, Command};
 use lunco_settings::SettingsSection;
 use lunco_usd_bevy::UsdPrimPath;
-use lunco_workbench::{OpenTab, Panel, PanelCtx, PanelId, PanelMenuGroup, PanelSlot};
+use lunco_workbench::OpenTab;
+use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelMenuGroup, PanelSlot};
 
 use crate::kinds::canvas_plot_node::{PlotBinding, PlotNodeData, PLOT_NODE_KIND};
 use crate::registry::VisualizationRegistry;

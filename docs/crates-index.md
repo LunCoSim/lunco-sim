@@ -93,7 +93,8 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-workbench`** | The IDE-like frame: docking engine, perspective presets, panel registration, and the reactive `Panel`/`PanelCtx` API. |
+| **`lunco-workbench-core`** | Renderer-independent workbench contracts: `Panel`/`PanelCtx`, instance tabs, perspective layout plans, menu contributions, and the published `WorkbenchSnapshot`. It uses the Bevy ECS substrate and egui types but does not pull `bevy_render`, `bevy_egui`, `egui_dock`, storage, or window/render services. |
+| **`lunco-workbench`** | The concrete IDE-like shell: `egui_dock` layout materialization, `bevy_egui` rendering, panel registration, persistence, viewport integration, built-in browser panels, and shell-only commands/widgets. It publishes `WorkbenchSnapshot` and consumes the contracts from `lunco-workbench-core`. |
 | **`lunco-ui`** | Reusable UI infrastructure: cached widgets, 3D world panels, command builders. |
 | **`lunco-viz`** | Domain-agnostic visualization: `SignalRegistry`, LinePlots, and future 3D/Rerun bridges. |
 | **`lunco-canvas`** | Stateful 2D scene editor substrate for diagrams and annotation overlays. |

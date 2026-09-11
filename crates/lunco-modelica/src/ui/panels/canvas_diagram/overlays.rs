@@ -7,7 +7,7 @@
 
 use bevy_egui::egui;
 use lunco_theme::ColorAlpha;
-use lunco_workbench::PanelCtx;
+use lunco_workbench_core::PanelCtx;
 
 use crate::state::ModelicaDocumentRegistry;
 use crate::ui::theme::ModelicaThemeExt;

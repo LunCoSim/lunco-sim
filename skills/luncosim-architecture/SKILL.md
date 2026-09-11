@@ -45,6 +45,15 @@ dependency cycle, put the provider in a small `*-api` adapter crate and have
 each API-capable composition root install it explicitly. Keep the data/core
 crate independent of transport and presentation layers.
 
+Keep the workbench split at the dependency boundary: `lunco-workbench-core`
+owns renderer-independent panel/menu/perspective contracts and the published
+`WorkbenchSnapshot`; `lunco-workbench` owns `egui_dock`, `bevy_egui`, viewport
+rendering, persistence, built-in shell panels, and shell-only widgets. Domain
+UI crates implement contracts from the core crate, read layout facts from the
+snapshot, and depend on the concrete shell only when they use a shell-owned
+command or presentation service. Do not expose or consume the shell's private
+`WorkbenchLayout` outside that crate.
+
 For a `ShaderLook` with `vertex_shader`, treat the fragment and vertex sources as
 one linked material contract: both stages read the same `@binding(0)` uniform
 block, so their `Material` fields, order, and WGSL types must agree. The

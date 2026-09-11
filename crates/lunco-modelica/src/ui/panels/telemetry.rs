@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_workbench::{Panel, PanelCtx, PanelId, PanelSlot};
+use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
 use crate::state::WorkbenchState;
 use crate::ui::viz::{is_signal_plotted, set_signal_plotted};
@@ -88,8 +88,8 @@ impl Panel for TelemetryPanel {
     fn default_slot(&self) -> PanelSlot {
         PanelSlot::RightInspector
     }
-    fn menu_group(&self) -> lunco_workbench::PanelMenuGroup {
-        lunco_workbench::PanelMenuGroup::Design
+    fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {
+        lunco_workbench_core::PanelMenuGroup::Design
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {

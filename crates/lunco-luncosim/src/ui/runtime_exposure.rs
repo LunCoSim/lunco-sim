@@ -21,9 +21,8 @@ use bevy_hui::prelude::{
 use lunco_core::exposure::EngineExposures;
 use lunco_core::SceneViewport;
 use lunco_render::SceneCamera;
-use lunco_workbench::{
-    PanelId, PanelRects, RuntimeSurfaceLayout, RuntimeSurfaceLayouts, ScenePickGate,
-};
+use lunco_workbench::{PanelRects, RuntimeSurfaceLayout, RuntimeSurfaceLayouts, ScenePickGate};
+use lunco_workbench_core::{PanelId, WorkbenchSnapshot};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -923,7 +922,7 @@ pub(crate) fn mount_runtime_ui_surfaces(
     manifests: Res<Assets<RuntimeUiManifest>>,
     server: Res<AssetServer>,
     exposures: Res<EngineExposures>,
-    layout: Option<Res<lunco_workbench::WorkbenchLayout>>,
+    layout: Option<Res<WorkbenchSnapshot>>,
     gates: Option<Res<RuntimeUiGates>>,
     surface_layouts: Res<RuntimeSurfaceLayouts>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
@@ -996,7 +995,7 @@ pub(crate) fn mount_runtime_ui_surfaces(
 
 fn runtime_ui_is_allowed(
     surface: &RuntimeUiSurface,
-    layout: Option<&lunco_workbench::WorkbenchLayout>,
+    layout: Option<&WorkbenchSnapshot>,
     gates: Option<&RuntimeUiGates>,
     workspace: Option<&lunco_workspace::WorkspaceResource>,
 ) -> bool {
@@ -1139,7 +1138,7 @@ pub(crate) fn apply_runtime_ui_exposures(
     mut commands: Commands,
     exposures: Res<EngineExposures>,
     mut manifest_state: ResMut<RuntimeUiManifestState>,
-    layout: Option<Res<lunco_workbench::WorkbenchLayout>>,
+    layout: Option<Res<WorkbenchSnapshot>>,
     gates: Option<Res<RuntimeUiGates>>,
     surface_layouts: Res<RuntimeSurfaceLayouts>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
@@ -2445,7 +2444,7 @@ mod tests {
         let panel = PanelId("right_inspector");
         rects.record(
             panel,
-            lunco_workbench::PanelRect {
+            lunco_workbench_core::PanelRect {
                 origin: UVec2::new(800, 100),
                 size: UVec2::new(400, 600),
             },

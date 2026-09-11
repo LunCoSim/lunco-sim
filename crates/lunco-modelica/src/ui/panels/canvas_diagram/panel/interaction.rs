@@ -5,7 +5,7 @@ use crate::document::ModelicaOp;
 use crate::state::ModelicaDocumentRegistry;
 use bevy_egui::egui;
 use lunco_canvas::{Pos as CanvasPos, Rect as CanvasRect};
-use lunco_workbench::PanelCtx;
+use lunco_workbench_core::PanelCtx;
 
 pub(crate) fn handle_context_menu(
     ui: &mut egui::Ui,
