@@ -206,9 +206,10 @@ impl Plugin for TerrainSurfacePlugin {
         // terrains, until the ring tiles under every dynamic body are resident —
         // so dynamic bodies don't fall through the not-yet-ready collider (esp. web,
         // where the DEM load is slow). See `collider_ring::hold_physics_until_dem_ready`.
-        // This is a `lunco_time::SimHolds` hold, NOT a transport pause: the user's
-        // play state is untouched, so the scene does not open "paused" while the
-        // DEM bakes and resumes on its own the moment the terrain is safe to step.
+        // This is a `lunco_physics::PhysicsHolds` hold, NOT a transport pause:
+        // the user's play state is untouched, so the scene does not open
+        // "paused" while the DEM bakes and resumes on its own the moment the
+        // terrain is safe to step.
         app.add_systems(
             Update,
             crate::collider_ring::hold_physics_until_dem_ready

@@ -47,12 +47,11 @@ lunco-workbench = { path = "../lunco-workbench", optional = true }
 lunco-workbench-core = { path = "../lunco-workbench-core", optional = true }
 lunco-status-core = { path = "../lunco-status-core", optional = true }
 lunco-theme = { path = "../lunco-theme", optional = true }
-lunco-ui = { path = "../lunco-ui", optional = true }
 
 [features]
 default = ["ui"]
 # USD document commands + browser/viewport panels (egui + workbench shell).
-ui = ["dep:bevy_egui", "dep:lunco-workbench", "dep:lunco-workbench-core", "dep:lunco-status-core", "dep:lunco-theme", "dep:lunco-ui", "lunco-doc-bevy/ui"]
+ui = ["dep:bevy_egui", "dep:lunco-workbench", "dep:lunco-workbench-core", "dep:lunco-status-core", "dep:lunco-theme", "lunco-doc-bevy/ui"]
 
 [[test]]
 name = "apply_usd_op_integration_test"

@@ -37,7 +37,7 @@ ui = [
 # server comes from `lunco-api/transport-http` (added to `default` above);
 # the wasm build (`build_web.sh --features lunco-api`) gets the
 # `window.lunco_api` JS bridge automatically via `cfg(target_arch="wasm32")`.
-lunco-api = ["dep:lunco-api", "dep:lunco-workspace-api", "lunco-modelica-core/lunco-api"]
+lunco-api = ["dep:lunco-api", "lunco-modelica-core/lunco-api"]
 # Headless Modelica compile/run server: the HTTP API, no `ui`. Build the lunica
 # bin with `--no-default-features --features server`. No screenshot backend (`lunco-workbench/api`; the
 # server captures no screenshots) and no winit/egui.
@@ -78,7 +78,6 @@ lunco-modelica-core = { path = "../lunco-modelica-core", default-features = fals
 bevy_egui = { workspace = true, optional = true }
 lunco-assets = { workspace = true }
 lunco-core = { path = "../lunco-core" }
-lunco-time = { path = "../lunco-time" }
 lunco-theme = { path = "../lunco-theme", optional = true }
 lunco-doc = { path = "../lunco-doc" }
 # Core document-lifecycle events; its egui systems come back via `ui` below.
@@ -96,12 +95,8 @@ lunco-viz = { path = "../lunco-viz", features = ["ui"], optional = true }
 lunco-canvas = { path = "../lunco-canvas", features = ["ui"], optional = true }
 lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
 lunco-workspace = { path = "../lunco-workspace" }
-lunco-workspace-api = { path = "../lunco-workspace-api", optional = true }
 lunco-storage = { path = "../lunco-storage" }
 egui_plot = { workspace = true, optional = true }
-# base64url encode/decode for shareable model links (see `model_share.rs`).
-# Already resolved transitively (0.22.x) — no new download.
-base64 = { workspace = true }
 # Docs view (ModelViewMode::Docs): HTML → Markdown → egui render.
 # `egui_commonmark` pulls the right `egui` version transitively to
 # match bevy_egui 0.40 (→ egui 0.34). Syntax highlighting is enabled
@@ -125,55 +120,18 @@ htmd = { version = "0.5", optional = true }
 lyon_tessellation = { version = "1", optional = true }
 lyon_path = { version = "1", optional = true }
 lyon_geom = { version = "1", optional = true }
-# Direct rayon dependency for the indexer's own DEDICATED, bounded parse
-# pool (`indexer::parse_native_msl_bundle`), which deliberately does not
-# touch the global pool.
-#
-# It is NO LONGER used to race rumoca for the global pool: an unconfigured
-# pool grabbing `num_cpus - 1` threads saturates all-but-one core on every
-# parse-on-Add and starves bevy_render (the `Last` schedule blocks waiting
-# on the previous frame). `lunica` now states that budget through
-# `rumoca_compile::parallelism::set_compiler_parallelism()` instead, so
-# rumoca builds its pool with our thread count — and its own 16 MB stacks,
-# which deep MSL class hierarchies need.
-rayon = { workspace = true }
 # Wasm-safe replacement for `std::time::Instant`. On native it's an alias
 # for `std::time::Instant`; on wasm32 it's backed by `performance.now()`.
 # Required because `std::time::Instant::now()` panics with
 # "time not implemented on this platform" on wasm32-unknown-unknown.
 web-time = { workspace = true }
-# Pre-parsed MSL bundle deserialiser. Same encoding as rumoca's
-# on-disk artifact cache — the wasm fetcher decodes a Vec of
-# (uri, StoredDefinition) shipped at build time, skipping a ~27-min
-# per-file parse on the page.
-bincode = { workspace = true }
 # Raster decoders used by egui_extras' `all_loaders`. Only the formats
 # actually present in MSL Resources/Images are enabled to keep the
 # compile surface small.
 image = { workspace = true, optional = true }
-# LunCoSim/rumoca, `main` (see the workspace Cargo.toml for the pin). It
-# carries the wasm32 `Instant` fix (std::time::Instant panics on
-# wasm32-unknown-unknown), reconstruction of algebraic/output variables via the
-# retained `EliminationResult` (so `state()`/`get()` return every variable, not
-# just solver-vector entries), and `Session::load_source_root_in_memory(...)`,
-# which lets the wasm runtime hand pre-fetched MSL bytes to the compile session
-# with no filesystem.
-#
-# The interactive stepper is `SimulationSession` (rumoca ≥0.9.20; it replaced
-# `SimStepper`). NOTE: it clamps every advance at `SimOptions::t_end`, so build
-# it through `experiments_runner::stepper_options_from_bounds`, never from
-# `SimOptions::default()` — see the docs there.
-rumoca-sim = { workspace = true }
-rumoca-solver-rk45 = { workspace = true }
-rumoca-eval-solve = { workspace = true }
 lunco-experiments = { path = "../lunco-experiments" }
-# FACTS for the `modelica` lint domain (`../lunco-modelica-ast/src/lint_facts.rs`) are `HookValue`, the same
-# typed shape every other domain hands its authored rules.
-lunco-hooks = { path = "../lunco-hooks" }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 rumoca-compile = { workspace = true }
-rumoca-ir-solve = { workspace = true }
-rumoca-phase-parse = { workspace = true }
 # Modelica formatter — surfaced as a "Format" toolbar button +
 # Ctrl+Shift+F binding. Rewrites the active editor buffer with
 # the canonical layout rumoca-tool-fmt produces.
@@ -182,16 +140,10 @@ rumoca-tool-fmt = { workspace = true, optional = true }
 # parse errors. Wraps `rumoca_tool_lint::lint(source, name, opts)`
 # which returns a `Vec<LintMessage>` we map to `LogEntry`s.
 rumoca-tool-lint = { workspace = true, optional = true }
-anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 regex = "1.10"
-# rumoca's AST uses `indexmap::IndexMap` for class collections; we
-# reference the type directly in `ast_extract` helpers so our
-# hot-path extractors can walk the cached AST without any clone.
-indexmap = { workspace = true }
 futures-lite = "2.3"
-crossbeam-channel = { workspace = true }
 # `default-features = false`: the `lunco-api` (native) and `web` features pick
 # the transport — `transport-http` vs. `transport-wasm`.
 lunco-api = { path = "../lunco-api", optional = true, default-features = false }
@@ -229,7 +181,6 @@ lunco-scripting = { path = "../lunco-scripting", optional = true }
 # To keep `log::debug!` in release too, swap `release_max_level_info` →
 # `release_max_level_debug` (still kills the trace flood).
 log = { version = "0.4", features = ["max_level_debug", "release_max_level_info"] }
-uuid = { workspace = true }
 
 # Tracy profiler is wired via the `tracy` feature above
 # (`tracy = ["bevy/trace_tracy"]`). Off by default because tracy-client-sys
@@ -246,20 +197,9 @@ uuid = { workspace = true }
 # `manage_clipboard` feature — no new compile.
 arboard = { version = "3", optional = true }
 
-# zstd codec for the native pre-parsed MSL bundle (`.cache/msl/parsed-msl.bin`).
-# The bundle is now zstd-compressed bincode (~10× smaller on disk than the raw
-# bincode it replaced — matters because the cache is large and disk has filled
-# up before). C-backed, but native already links it via `build_msl_assets`, and
-# it's target-gated so wasm keeps using the pure-Rust `ruzstd` decoder below.
-zstd = { workspace = true }
-
 # Web-specific: wasm32-unknown-unknown needs JS interop for console output,
 # panic hooks, and RNG (std::time is unavailable).
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-# The generic Web Worker pool (spawn / boot handshake / byte + Transferable post
-# / crash respawn), shared with the DEM bake worker. `worker_transport` composes
-# it and keeps the Modelica-specific MSL/run state on top.
-lunco-worker-transport = { path = "../lunco-worker-transport" }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
 # bevy_math → rand pulls getrandom 0.3, which on wasm needs an explicit backend.
@@ -317,18 +257,7 @@ web-sys = { workspace = true, features = [
     "KeyboardEvent",
     "AddEventListenerOptions",
 ] }
-js-sys = { workspace = true }
 console_error_panic_hook = { workspace = true }
-# Pure-Rust zstd decoder for the MSL bundle. Smaller than the
-# `zstd` crate (which uses a C dep) and the encoder side already runs
-# on native (see `lunco-assets/src/bin/build_msl_assets.rs`).
-ruzstd = "0.7"
-# Tar reader to walk the decompressed MSL bundle. The `tar` crate is
-# fs-free if you only call `Archive::entries()`; works on wasm.
-tar = { workspace = true }
 
 [lints]
 workspace = true
-
-[dev-dependencies]
-tempfile = { workspace = true }

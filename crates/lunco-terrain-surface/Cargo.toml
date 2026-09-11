@@ -71,11 +71,10 @@ lunco-physics = { workspace = true }
 lunco-hooks = { path = "../lunco-hooks" }
 big_space = { workspace = true }
 lunco-storage = { path = "../lunco-storage" }
-# Transport pause lever: freeze the sim (via `TimeTransport`) while a DEM terrain
-# is still building so physics bodies don't fall through the not-yet-ready collider
-# (critical on web, where the DEM byte-fetch + decode takes seconds). Same freeze
-# mechanism the obstacle-field regen uses. See `collider_ring::hold_physics_until_dem_ready`.
-lunco-time = { path = "../lunco-time" }
+# Physics readiness lever: hold Avian while a DEM terrain is still building so
+# bodies don't fall through the not-yet-ready collider (critical on web, where
+# the DEM byte-fetch + decode takes seconds). See
+# `collider_ring::hold_physics_until_dem_ready`.
 # Shared content-addressed cache directory for the derived-layer bake
 # (P4): persist surface/normal maps keyed by DEM+param hash so the AO march
 # isn't redone every load and peers converge. `cache_dir()` is cross-platform.
@@ -84,9 +83,6 @@ lunco-assets = { path = "../lunco-assets" }
 # bake (`DerivedBake`) is a `lunco_precompute::Bake`; the crate owns the
 # load/store/rebake orchestration + the FNV-1a key fold (re-exported `Fnv1a`).
 lunco-precompute = { path = "../lunco-precompute" }
-# The virtual simulation clock may be paused during Twin loading. Liveness of
-# scene-owned terrain work must use a real cross-platform wall clock instead.
-web-time = { workspace = true }
 # `ApiQueryProvider` speaks `serde_json::Value` for params/response.
 serde_json = { workspace = true }
 serde = { workspace = true }
