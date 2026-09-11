@@ -1756,10 +1756,10 @@ class "LunCoUiSchemaAPI" (
     string lunco:ui:schemaRole = "" (
         doc = "Short authored explanation of what enters and leaves this projected block."
     )
-    bool lunco:ui:controlHud = false (
-        doc = "Whether this prim contributes a control-HUD projection."
+    string lunco:ui:surfaceId = "" (
+        doc = "Stable runtime UI surface identity authored by the active scene or Twin."
     )
-    int lunco:ui:controlHudColumn = 0 (
-        doc = "Column in the projected control HUD."
+    string lunco:ui:visibilityMode = "possessed" (
+        doc = "Input to the built-in runtime UI policy: possessed or always."
     )
 }

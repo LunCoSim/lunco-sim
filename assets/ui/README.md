@@ -31,6 +31,17 @@ Engine capabilities publish named snapshots through
 mutates simulation state. Ports, telemetry, physics, scripts, and derived
 capabilities use the same exposure boundary.
 
+Subject-scoped surfaces are selected by composed USD metadata, not by a Rust
+list of models or slots. Author `lunco:ui:surfaceId` on the scene/model prim;
+that value is the exposure namespace and must match a manifest namespace.
+`lunco:ui:visibilityMode` is consumed by the built-in Rhai policy and supports
+`possessed` and `always`. Twin policy may replace visibility and presentation
+without changing Rust.
+
+Offline recording is Twin-owned. The `runtime.ui.recording` policy returns the
+stable surface IDs required for the current capture, and the recorder validates
+the selected IDs against visible retained surfaces before capture.
+
 Each exposed value is mirrored as a declared template property and as a CSS
 custom property named `--ui-<property-name>`. The registry stores typed values,
 not CSS or HUI types. A manifest binding may map exact rendered values such as
