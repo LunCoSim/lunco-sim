@@ -130,6 +130,7 @@ Primary entry points and simulation assembly targets.
 
 | Crate | Binary | Responsibility |
 | :--- | :--- | :--- |
+| **`lunco-luncosim-exposures`** | — | Headless-safe runtime exposure projection plugin. Resolves authoritative ECS/domain state and authored telemetry into the shared `EngineExposures` registry for HTML, egui, API, telemetry, and remote consumers; it has no renderer or UI dependency. |
 | **`lunco-luncosim`** | `luncosim` | Ground-physics simulator (ground mobility + physics, loaded from USD): USD scene + Avian physics, luncosim edit tools, the embedded Modelica workbench, and the application-owned authored lesson menu. The production `luncosim test` command executes authored USD + Rhai scenario assertions headlessly through the same composition root. |
 | **`lunco-luncosim-server`** | `luncosim-server` | Headless launcher for LunCoSim (no winit/egui) with the API + networking host. Its own crate purely so it can default to headless. |
 | **`lunco-modelica-ui`** | `lunica` | The Modelica workbench application and UI facade. |
@@ -331,6 +332,9 @@ Bevy dispatch adapter for `lunco-tools` — the **behaviour-tree execution** hal
 
 **`lunco-luncosim`**
 The LunCoSim application — ground mobility + physics, loaded from USD (binary `luncosim`). A composition root rather than a UI host: `SandboxCorePlugin` (headless-safe sim/physics/cosim/USD/networking/API) plus an optional `SandboxUiPlugin` (egui workbench, windowed) or `SandboxHeadlessPlugin`. Assembles the USD scene, Avian physics, and the in-scene edit tools, and is the single shared entry point for both the `luncosim` GUI and `luncosim-server` headless binaries.
+
+**`lunco-luncosim-exposures`**
+Production integration crate for the renderer-independent runtime exposure projection. `RuntimeExposuresPlugin` registers the single shared path from authoritative ECS/domain state and authored telemetry to `lunco_core::exposure::EngineExposures`; HTML, egui, API, telemetry, and remote clients consume that registry. It owns no UI, renderer, or tutorial policy, so changing exposure derivation does not recompile the application composition root.
 
 **`lunco-luncosim-server`**
 Headless launcher for the luncosim — the same app as `luncosim`, built without the GUI (no winit/egui) and with the API + networking host enabled. Exists as its own crate purely so it can default to headless (Cargo default features are per-package).

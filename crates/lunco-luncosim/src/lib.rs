@@ -83,11 +83,6 @@ use lunco_modelica_core::ModelicaSet;
 mod jitter_probe;
 /// Collapse repeated WARN/ERROR log lines into one line + a count (§6.4).
 mod log_dedup;
-/// Runtime producers for the generic exposure registry. Consumers are
-/// independent of this module: HTML, egui, API, and telemetry can all read the
-/// same retained snapshot. Domain models publish their own authored telemetry;
-/// this module only projects it into runtime surfaces.
-mod runtime_exposures;
 #[cfg(feature = "ui")]
 mod terrain_horizon;
 #[cfg(feature = "ui")]
@@ -2974,26 +2969,11 @@ impl Plugin for SandboxCorePlugin {
             // application paths from silently simulating different mechanics.
             .add_plugins(CoSimPlugin)
             .add_plugins(lunco_core::LunCoCorePlugin)
-            // Camera status is a retained current-camera fact. Seed it once,
-            // then let the camera domain's status-change event update the
-            // exposure registry; it does not belong in the continuous HUD
-            // invalidation/presentation loop below.
-            .add_systems(Startup, runtime_exposures::publish_initial_camera_exposure)
-            .add_observer(runtime_exposures::on_camera_selection_status_changed)
-            .add_systems(
-                lunco_core::SceneTeardown,
-                runtime_exposures::clear_scene_exposures,
-            )
-            // Dirty detection must run every frame: possession and release are
-            // edge changes that can be gone before the bounded publisher tick.
-            // Only the snapshot rebuild is cadence-limited.
-            .add_systems(Update, runtime_exposures::mark_exposure_dirty)
-            .add_systems(
-                Update,
-                runtime_exposures::publish_exposure
-                    .after(runtime_exposures::mark_exposure_dirty)
-                    .run_if(runtime_exposures::exposure_publish_due),
-            )
+            // Renderer-independent exposure aggregation is kept in its own
+            // production crate. It remains in the shared core path so GUI and
+            // headless hosts publish identical facts, while exposure edits no
+            // longer recompile this application composition root.
+            .add_plugins(lunco_luncosim_exposures::RuntimeExposuresPlugin)
             .add_plugins(lunco_core::WorldShellPlugin)
             // Parameter telemetry — the PRODUCER of `SampledParameter`. Its consumer
             // side (`lunco_api`'s `sampled_param_observer`, i.e. `SubscribeTelemetry`,

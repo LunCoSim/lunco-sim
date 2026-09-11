@@ -10,6 +10,7 @@ members = [
     "crates/lunco-autopilot",
     "crates/lunco-avatar",
     "crates/lunco-luncosim",
+    "crates/lunco-luncosim-exposures",
     "crates/lunco-luncosim-server",
     "crates/lunco-telemetry",
     "crates/lunco-celestial",

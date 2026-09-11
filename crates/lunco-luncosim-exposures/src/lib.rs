@@ -34,6 +34,30 @@ use lunco_usd_bevy::{scene_root_ancestor, CanonicalStages, SdfPath, UsdStageAsse
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::Duration;
 
+/// Registers the renderer-independent runtime exposure projection.
+///
+/// The application owns composition policy, while this crate owns the one
+/// production projection from authoritative ECS/domain state to the shared
+/// [`lunco_core::exposure::EngineExposures`] registry. Keeping that projection
+/// behind a plugin prevents the application composition root from recompiling
+/// when exposure logic changes and keeps the headless server on the same path.
+pub struct RuntimeExposuresPlugin;
+
+impl Plugin for RuntimeExposuresPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(Startup, publish_initial_camera_exposure)
+            .add_observer(on_camera_selection_status_changed)
+            .add_systems(lunco_core::SceneTeardown, clear_scene_exposures)
+            .add_systems(Update, mark_exposure_dirty)
+            .add_systems(
+                Update,
+                publish_exposure
+                    .after(mark_exposure_dirty)
+                    .run_if(exposure_publish_due),
+            );
+    }
+}
+
 const LUNAR_MAP_SETTING_KEY: &str = "ui.lunar_map";
 const RUNTIME_UI_VISIBILITY_HOOK: &str = "runtime.ui.visibility";
 const RUNTIME_UI_PROPERTIES_HOOK: &str = "runtime.ui.properties";

@@ -7435,6 +7435,7 @@ dependencies = [
  "lunco-hardware",
  "lunco-hooks",
  "lunco-luncosim-edit",
+ "lunco-luncosim-exposures",
  "lunco-materials",
  "lunco-mobility",
  "lunco-modelica-core",
@@ -7448,7 +7449,6 @@ dependencies = [
  "lunco-scene-commands",
  "lunco-scripting",
  "lunco-settings",
- "lunco-signal",
  "lunco-status-core",
  "lunco-storage",
  "lunco-telemetry",
@@ -7527,6 +7527,30 @@ dependencies = [
  "serde",
  "serde_json",
  "transform-gizmo-bevy",
+]
+
+[[package]]
+name = "lunco-luncosim-exposures"
+version = "0.1.0-dev"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "big_space",
+ "lunco-autopilot",
+ "lunco-celestial",
+ "lunco-controller",
+ "lunco-core",
+ "lunco-cosim",
+ "lunco-hooks",
+ "lunco-mobility",
+ "lunco-networking",
+ "lunco-scene-commands",
+ "lunco-signal",
+ "lunco-terrain-surface",
+ "lunco-twin",
+ "lunco-usd",
+ "lunco-usd-bevy",
+ "lunco-workspace",
 ]
 
 [[package]]

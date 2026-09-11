@@ -487,7 +487,8 @@ known per-extraction work at its owning render acknowledgement boundary.
 #### Current exposure publisher cadence and invalidation gating
 
 Tracy attributed approximately **0.93 ms** of mean work to
-`runtime_exposures::publish_exposure`. The cadence is an existing Bevy scheduler
+`lunco-luncosim-exposures::publish_exposure`. The cadence is an existing Bevy
+scheduler
 condition, and `ExposureRefresh` retains changes between cadence ticks. Its
 invalidation domains are separate for the driven vessel, authored controls,
 schema, celestial capability, and overlays; stable frames skip the publisher
