@@ -10,7 +10,6 @@ avian3d = { workspace = true }
 bevy = { workspace = true }
 openusd = { workspace = true }
 big_space = { workspace = true }
-lunco-autopilot = { path = "../lunco-autopilot" }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-controller = { path = "../lunco-controller" }
 lunco-core = { path = "../lunco-core" }

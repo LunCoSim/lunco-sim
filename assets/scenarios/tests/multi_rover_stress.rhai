@@ -13,6 +13,7 @@ fn on_start(me) {
     this.rovers = [];
     this.previous = [];
     this.distance = [];
+    this.targets = [];
 
     let group = find("/MultiRoverStress/Rovers");
     if group == () || group < 0 {
@@ -53,13 +54,12 @@ fn on_tick(me) {
                 let at = world_pos(this.rovers[i]);
                 this.previous[i] = at;
                 if at != () {
-                    engage_patrol(
-                        this.rovers[i],
-                        [[at[0], at[1], at[2] - DRIVE_DISTANCE_M]],
-                        DRIVE_THROTTLE,
-                        0.75,
-                        ()
-                    );
+                    this.targets.push([at[0], at[1], at[2] - DRIVE_DISTANCE_M]);
+                } else {
+                    // Preserve the roster index if a subject disappears during
+                    // settling; later samples must not address a shorter route
+                    // array and hide the real failure behind a script exception.
+                    this.targets.push(());
                 }
             }
             this.phase = "drive";
@@ -70,6 +70,9 @@ fn on_tick(me) {
 
     for i in 0..this.rovers.len() {
         let at = world_pos(this.rovers[i]);
+        if at != () && this.targets[i] != () {
+            nav_to(this.rovers[i], this.targets[i], DRIVE_THROTTLE, 0.75);
+        }
         if at != () && this.previous[i] != () {
             this.distance[i] += seg(this.previous[i], at);
             this.previous[i] = at;
@@ -77,7 +80,7 @@ fn on_tick(me) {
     }
 
     if this.t < SETTLE_SECONDS + DRIVE_SECONDS { return; }
-    for rover in this.rovers { this.clear_patrol(rover); }
+    for rover in this.rovers { brake(rover); }
 
     let checks = [];
     for i in 0..this.rovers.len() {
@@ -95,6 +98,6 @@ fn on_tick(me) {
 
 fn on_stop(me) {
     for rover in this.rovers {
-        if rover != () && rover >= 0 { this.clear_patrol(rover); }
+        if rover != () && rover >= 0 { brake(rover); }
     }
 }

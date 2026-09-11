@@ -139,8 +139,6 @@
         "caution_width": { "source": "caution_width" },
         "danger_start": { "source": "danger_start" },
         "danger_width": { "source": "danger_width" },
-        "autopilot_color": { "source": "autopilot_color" },
-        "autopilot_label": { "source": "autopilot_label" },
         "geo_display": { "source": "geo_display" },
         "local_display": { "source": "local_display" },
         "comms_display": { "source": "comms_display" },
@@ -148,9 +146,7 @@
         "comms_color": { "source": "comms_color" },
         "telemetry_display": { "source": "telemetry_display" }
       },
-      "actions": [
-        { "callback": "runtime_toggle_autopilot", "action": "autopilot.toggle" }
-      ],
+      "actions": [],
       "visible_in_perspective": "sandbox_view",
       "interactive": true,
       "placement": { "mode": "viewport" }

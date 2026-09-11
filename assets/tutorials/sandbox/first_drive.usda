@@ -93,7 +93,7 @@ def Xform "FirstDrive" (
     # can emit `enter:waypoint` for other task consumers; First Drive's mission
     # deliberately verifies distance to this named flag instead.
     def Xform "Flag" (
-        prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker>
+        prepend references = @lunco://markers/route_point.usda@</RoutePoint>
     )
     {
         double3 xformOp:translate = (0.0, 0.0, -18.0)

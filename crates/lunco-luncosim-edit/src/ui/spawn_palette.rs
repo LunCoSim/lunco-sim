@@ -67,33 +67,17 @@ fn spawn_palette_content(
         .resource::<SpawnState>()
         .map(|s| matches!(*s, SpawnState::Selecting { .. }))
         .unwrap_or(false);
-    let is_placing_waypoint = ctx
-        .resource::<crate::ui::waypoint_click::WaypointPlacement>()
-        .is_some_and(|placement| {
-            matches!(
-                placement.0.as_ref(),
-                Some(crate::ui::waypoint_click::PendingPlacement::Append)
-            )
-        });
     let selecting_id = ctx.resource::<SpawnState>().and_then(|s| match s {
         SpawnState::Selecting { entry_id } => Some(entry_id.clone()),
         _ => None,
     });
 
-    if is_selecting || is_placing_waypoint {
+    if is_selecting {
         if let Some(id) = &selecting_id {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(format!("Placing: {id}")).color(tokens.success));
                 if ui.button("Cancel").clicked() {
                     ctx.trigger(SpawnStateRequested(SpawnState::Idle));
-                }
-            });
-            ui.separator();
-        } else if is_placing_waypoint {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Placing: waypoint").color(tokens.success));
-                if ui.button("Cancel").clicked() {
-                    ctx.trigger(crate::ui::waypoint_click::CancelWaypointEdit {});
                 }
             });
             ui.separator();
@@ -120,11 +104,9 @@ fn spawn_palette_content(
     for (category, entries) in categories {
         ui.collapsing(category.to_string(), |ui| {
                 for entry in &entries {
-                    let route_waypoint = entry.is_route_marker();
                     let selected = ctx.resource::<SpawnState>()
                         .map(|s| matches!(s, SpawnState::Selecting { entry_id } if *entry_id == entry.id))
-                        .unwrap_or(false)
-                        || (route_waypoint && is_placing_waypoint);
+                        .unwrap_or(false);
 
                     let btn_text = format!("{} · {}", entry.display_name, entry.origin.label());
 
@@ -153,29 +135,17 @@ fn spawn_palette_content(
                     };
 
                     if response.clicked() {
-                        if route_waypoint {
-                            ctx.trigger(
-                                crate::ui::waypoint_click::AppendWaypointPlacementRequested,
-                            );
+                        let entry_id = entry.id.clone();
+                        ctx.trigger(SpawnStateRequested(if selected {
+                            SpawnState::Idle
                         } else {
-                            let entry_id = entry.id.clone();
-                            ctx.trigger(SpawnStateRequested(if selected {
-                                SpawnState::Idle
-                            } else {
-                                SpawnState::Selecting { entry_id }
-                            }));
-                        }
+                            SpawnState::Selecting { entry_id }
+                        }));
                     }
 
                     if response.drag_started() {
-                        if route_waypoint {
-                            ctx.trigger(
-                                crate::ui::waypoint_click::AppendWaypointPlacementRequested,
-                            );
-                        } else {
-                            let entry_id = entry.id.clone();
-                            ctx.trigger(SpawnStateRequested(SpawnState::Selecting { entry_id }));
-                        }
+                        let entry_id = entry.id.clone();
+                        ctx.trigger(SpawnStateRequested(SpawnState::Selecting { entry_id }));
                     }
                 }
             });

@@ -191,8 +191,8 @@ pub struct ScriptAuthority(pub Option<SessionId>);
 /// Whether a HUMAN is at the controls of this run.
 ///
 /// A scenario branches on this to decide whether to drive ITSELF: a tutorial
-/// ships an autopilot so an automated run (CI, the `scene_test` runner, a
-/// headless smoke) can exercise the whole lesson end to end, while a student
+/// may ship an authored task program so an automated run (CI, the `scene_test`
+/// runner, a headless smoke) can exercise the whole lesson end to end, while a student
 /// plays it by hand. That is a question about the *audience*, and the only fact
 /// that answers it is whether anything can receive input.
 ///
@@ -230,7 +230,7 @@ impl ScenarioAudience {
 /// `--no-ui`) with nothing to remember to set.
 ///
 /// `LUNCO_SCENARIO_UNATTENDED=1|0` forces it either way, so a windowed session
-/// can watch an autopilot play (`1`), and a headless capture can hold a lesson
+/// can watch an authored program play (`1`), and a headless capture can hold a lesson
 /// still for a scripted driver (`0`), with no rebuild.
 pub fn resolve_scenario_audience(
     windows: Query<(), With<Window>>,

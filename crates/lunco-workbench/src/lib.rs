@@ -694,7 +694,7 @@ register_commands!(on_focus_panel,);
 /// Open a registered asset as read-only text in the source viewer panel.
 ///
 /// Fired by the LunCo Library browser section when any file is clicked —
-/// uniformly for every source extension (`.usda`, `.rhai`, `.mo`, `.btxml`,
+/// uniformly for every source extension (`.usda`, `.rhai`, `.mo`,
 /// `.wgsl`), because the library is a *browse + read* surface, not a load
 /// surface. Distinct from [`OpenFile`](lunco_doc_bevy::OpenFile) on purpose:
 /// `OpenFile` is extension-routed (USD and Modelica each claim their own types

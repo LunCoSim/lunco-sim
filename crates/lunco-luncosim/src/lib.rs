@@ -414,7 +414,7 @@ FLAGS:
                          Without --scene, start with an empty persistent world
                          shell; the sandbox is an explicit scene/test fixture.
         --window-pos SPEC  Place the OS window, e.g. 1920x1080+0+0.
-        --validate PATH…   Pre-flight-check asset files (.mo/.usda/.wgsl/.rhai/.btxml/.xml):
+        --validate PATH…   Pre-flight-check asset files (.mo/.usda/.wgsl/.rhai/.xml):
                          parse-only, no window/GPU/app. Prints a report and
                          exits 0 (all ok) or 1 (any failed).
 
@@ -2202,7 +2202,8 @@ fn on_set_rhai_policy(
     asset_server: Res<AssetServer>,
     mut commands: Commands,
 ) {
-    use lunco_usd::{ApplyUsdOp, LayerId, UsdOp};
+    use lunco_usd::ApplyUsdOp;
+    use lunco_usd_core::{LayerId, UsdOp};
     let cmd = trigger.event();
     let roots: Vec<_> = roots.iter().collect();
     let [root] = roots.as_slice() else {
@@ -2319,7 +2320,7 @@ lunco_core::register_commands!(on_set_rhai_policy);
 #[cfg(all(test, feature = "networking", not(target_arch = "wasm32")))]
 mod policy_projection_tests {
     use super::{append_usd_policies, AuthoredPolicy};
-    use lunco_usd_bevy_core::{CanonicalStage, CanonicalStages};
+    use lunco_usd_bevy_core::canonical::{CanonicalStage, CanonicalStages};
     use lunco_usd_core::StageRecipe;
 
     fn extract_usd_policies(canonical: &CanonicalStages) -> Vec<AuthoredPolicy> {
@@ -2521,6 +2522,11 @@ mod physics_configuration_tests {
 impl Plugin for LunCoSimCorePlugin {
     fn build(&self, app: &mut App) {
         let args: Vec<String> = std::env::args().collect();
+
+        // Asset and loaded-stage validation is a shared headless/UI service;
+        // install it once with the simulator core rather than coupling it to
+        // the scene mutation command crate.
+        app.add_plugins(lunco_scene_validation::SceneValidationPlugin);
 
         // THE RENDER GATE — and the whole of it.
         //
@@ -2751,10 +2757,6 @@ impl Plugin for LunCoSimCorePlugin {
             // just produces no input while the Drive/Brake/Possess command
             // observers + wire-type registrations the host needs stay live.
             .add_plugins(LunCoControllerPlugin)
-            // Autopilot = a headless AiAgent actor that possesses + drives a vessel
-            // (spec 034). Placed on the control path, not the avatar — runs on the
-            // `--no-ui` server identically.
-            .add_plugins(lunco_autopilot::AutopilotPlugin)
             .add_plugins(LunCoAvatarPlugin)
             .add_plugins(lunco_scripting::LunCoScriptingPlugin)
             // Default scene-wide fill for scenes that author no lighting; a

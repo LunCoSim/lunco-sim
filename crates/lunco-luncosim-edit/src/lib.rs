@@ -79,8 +79,6 @@ impl Plugin for SceneEditPlugin {
             .insert_resource(lunco_core::DragModeActive { active: false })
             .init_resource::<lunco_core::SpawnToolActive>()
             .init_resource::<lunco_core::TerrainToolActive>()
-            .init_resource::<lunco_core::WaypointToolActive>()
-            .init_resource::<lunco_core::WaypointMenuOpen>()
             .init_resource::<lunco_core::ArmedScriptTool>()
             .init_resource::<gizmo::GizmoDragSession>()
             .init_resource::<gizmo::GizmoVisibilityState>()
@@ -284,11 +282,6 @@ impl Plugin for SceneEditPlugin {
             ),
         );
         diagnostic_visuals::register_all_commands(app);
-
-        // NOTE: waypoints have no gizmo, and no plugin. A waypoint is a USD prim
-        // referencing `vessels/markers/waypoint.usda` — the USD scene renders it, the
-        // ordinary transform gizmo drags it, and Delete removes it. See
-        // `ui::waypoint_click`.
 
         // NOTE: gizmo handle picking is provided by transform-gizmo-bevy's own
         // `TransformGizmoPickingPlugin` (added by `TransformGizmoPlugin`). Its

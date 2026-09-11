@@ -2,11 +2,11 @@
 //! itself, with the content written in the scene rather than compiled in.
 //!
 //! A waypoint or any other scene prim can carry its own label without a
-//! waypoint-specific renderer. The prim says what it wants to show:
+//! route-specific renderer. The prim says what it wants to show:
 //!
 //! ```usda
 //! def Xform "W3" (
-//!     prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker>
+//!     prepend references = @lunco://markers/route_point.usda@</RoutePoint>
 //! )
 //! {
 //!     double3 xformOp:translate = (121.0, -1950.9, 87.0)
@@ -139,7 +139,7 @@ fn expand_token(token: &str, facts: &BillboardFacts<'_>) -> Option<String> {
     }
 }
 
-/// Trailing digits of a prim name — `W3` → `3`, `Waypoint_12` → `12`. Falls
+/// Trailing digits of a prim name — `W3` → `3`, `Marker_12` → `12`. Falls
 /// back to the whole name when it does not end in digits, so `{index}` on a
 /// prim called `Base` reads `Base` rather than empty.
 fn index_of(name: &str) -> String {
@@ -220,14 +220,14 @@ mod tests {
     #[test]
     fn index_reads_trailing_digits_or_the_whole_name() {
         assert_eq!(index_of("W3"), "3");
-        assert_eq!(index_of("Waypoint_12"), "12");
+        assert_eq!(index_of("Marker_12"), "12");
         assert_eq!(index_of("Base"), "Base");
     }
 
     #[test]
     fn explicit_index_does_not_depend_on_prim_name() {
         let facts = BillboardFacts {
-            name: "WaypointMarker",
+            name: "Marker",
             label: None,
             index: Some(7),
             geo: None,

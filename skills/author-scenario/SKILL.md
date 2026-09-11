@@ -379,9 +379,10 @@ those application events.
 matching user `on_event` hook; do not recreate a persistent Rhai event buffer or
 retain a retired event-delivery API.
 
-For **complex reactive AI** (obstacle avoidance, interception) prefer the
-Autopilot Behavior Tree (`cmd("SetAutopilotBehavior", #{vessel, spec_json})`,
-see `docs/behaviour-trees.md`) over hand-rolled `on_tick` state machines.
+For complex reactive policy, compose the task tree in the scenario with the
+prelude's reactive selectors, guards, waits, and event leaves. The generic
+task kernel is shared and fast; no vessel-specific Rust driver or autopilot
+command is required.
 
 ## 5. Events — the reactive spine
 
@@ -430,7 +431,7 @@ Delete the prim and the behaviour is gone:
 def Xform "Rover_01"
 {
     def Scope "Patrol" (prepend apiSchemas = ["LunCoProgramAPI"]) {
-        uniform asset info:sourceAsset = @scenarios/patrol.rhai@
+        uniform asset info:sourceAsset = @scenarios/route_follow.rhai@
         # File-backed source is canonical for production programs.
 
         # per-instance config: one typed attribute per key, read by param(me, "speed", 1.0)

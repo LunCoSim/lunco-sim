@@ -679,8 +679,8 @@ fn camera_identity(
     Some(name.map_or_else(|| format!("{entity:?}"), |name| name.as_str().to_string()))
 }
 
-/// Register the science instrument tools into the global `lunco_tools` registry, so a
-/// behaviour tree's `run_tool` leaf can fire them.
+/// Register the science instrument tools into the global `lunco_tools` registry,
+/// so an engine task/program action can fire them.
 ///
 /// The closure IS the tool definition and triggers its typed command directly via
 /// `world.trigger(...)` — no JSON, no reflection. Registered from [`ScreenshotPlugin`]

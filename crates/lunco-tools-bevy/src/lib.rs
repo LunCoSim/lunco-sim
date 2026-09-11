@@ -2,14 +2,13 @@
 //!
 //! [`lunco_tools`] is deliberately bevy-free (it owns the `Tool` trait, the
 //! global registry, and discovery; the rhai-binding adapter `lunco-tools-rhai`
-//! needs it slim). The behaviour-tree execution path is bevy-specific — a
-//! `run_tool` leaf's fire needs `&mut World`/`Commands` to act — so it lives
+//! needs it slim). The engine execution path is bevy-specific — a task/program
+//! action needs `&mut World`/`Commands` to act — so it lives
 //! HERE, behind the [`ExecutableTool`] supertrait.
 //!
 //! ## The flow
 //!
-//! 1. `lunco-autopilot`'s `run_tool` leaf queues a [`ToolInvocation`] on
-//!    `DriveCtx::fired`; `drive_autopilots` re-emits each as a
+//! 1. A task/program action queues a [`ToolInvocation`] and emits each as a
 //!    [`ToolFired`](lunco_core::tools::ToolFired) event.
 //! 2. This crate's [`ToolDispatchPlugin`] observes `ToolFired`, looks the tool
 //!    up by name in the [`lunco_tools`] registry, and downcasts to
@@ -62,7 +61,7 @@ fn executables() -> &'static RwLock<HashMap<String, Arc<dyn ExecutableTool>>> {
 }
 
 /// Register a tool that is both discoverable (via [`lunco_tools`]) and executable
-/// by the behaviour tree's `run_tool` leaf. The general seam — any
+/// by a task/program action. The general seam — any
 /// `Tool + ExecutableTool` impl, not just [`ClosureTool`]. Idempotent (re-register
 /// replaces).
 pub fn register_executable<T: ExecutableTool + 'static>(tool: Arc<T>) {
@@ -95,12 +94,12 @@ pub enum ToolResult {
 /// `trigger`/`insert`/`remove`/resource reads, which is exactly what an
 /// instrument closure needs.
 pub struct ToolCallCtx<'w> {
-    /// The vessel whose autopilot's tree fired the tool (local Entity).
+    /// The entity whose task/program fired the tool (local Entity).
     pub vessel: Entity,
     /// The vessel's `GlobalEntityId` (the api_id rhai/HTTP clients address it
     /// by). `0` when the vessel has no registered gid.
     pub vessel_gid: u64,
-    /// The opaque args string the `run_tool` leaf passed through.
+    /// The opaque args string the task/program action passed through.
     pub args: String,
     world: DeferredWorld<'w>,
 }
@@ -113,8 +112,8 @@ impl<'w> ToolCallCtx<'w> {
     }
 }
 
-/// A tool that can be **executed** when the behaviour tree's `run_tool` leaf
-/// fires it — the bevy-aware supertrait of [`Tool`]. A tool registered in the
+/// A tool that can be **executed** when a task/program action fires it — the
+/// bevy-aware supertrait of [`Tool`]. A tool registered in the
 /// [`lunco_tools`] registry is dispatched by [`ToolDispatchPlugin`] iff it also
 /// implements this trait (the downcast is via [`Tool::as_any`]).
 ///
@@ -206,7 +205,7 @@ pub struct ClosureTool {
 }
 
 impl ClosureTool {
-    /// Build a closure-defined tool. `name` is the `run_tool` leaf's tool id
+    /// Build a closure-defined tool. `name` is the task/program action's tool id
     /// (convention `family::verb`); `functions` are discovery signatures
     /// (`"verb/arity"`); `exec` triggers the typed command(s) directly.
     ///

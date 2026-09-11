@@ -20,7 +20,7 @@
 //! Hierarchical growth (later): a priority/utility selector that *scores* children
 //! and named reusable subtrees are just new `Node` impls — no change to this core.
 //! Time-bounded decorators (timeout/cooldown) need a clock, so they live in the
-//! consuming layer that owns a context (see `lunco-autopilot`).
+//! consuming layer that owns a context (currently `lunco-scripting`).
 
 /// Result of ticking a [`Node`] once.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -42,7 +42,7 @@ pub trait Node<Ctx: ?Sized> {
     fn reset(&mut self) {}
     /// The index of the child an ordered composite ([`Sequence`]/[`Selector`]) is
     /// currently executing, if this node is one — so a host can preserve route
-    /// progress across a rebuild (append a waypoint without the rover U-turning
+    /// progress across a rebuild (append a route point without the subject U-turning
     /// to leg 0). `None` for every other node.
     fn cursor(&self) -> Option<usize> {
         None
@@ -317,7 +317,7 @@ impl<Ctx: ?Sized> Node<Ctx> for Repeat<Ctx> {
     }
 
     // Single-child wrappers delegate cursor to their one child, so
-    // `cursor()` on a whole `forever(sequence[…])` patrol reports the
+    // `cursor()` on a whole `forever(sequence[…])` route program reports the
     // sequence's progress (a host preserves it across rebuilds).
     fn cursor(&self) -> Option<usize> {
         self.child.cursor()
@@ -860,7 +860,7 @@ mod tests {
 
     #[test]
     fn repeat_delegates_cursor_to_its_sequence_child() {
-        // The patrol shape `forever(sequence[…])` — `cursor()` on the ROOT must
+        // The route shape `forever(sequence[…])` — `cursor()` on the ROOT must
         // report the sequence's progress so a host can preserve it across a
         // rebuild without knowing the tree's internal shape.
         let mut root = Repeat::forever(Box::new(Sequence::new(vec![

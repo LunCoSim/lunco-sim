@@ -13,10 +13,9 @@
 //
 //   THE ROUTE      is not scene content. It is a property of the manoeuvre under
 //                  test, so it is built here from where each rover ACTUALLY
-//                  settled — one waypoint at the far end of that rover's own
-//                  lane — and handed to the autopilot. Same pattern as
-//                  `autopilot_hold.rhai`. This file previously engaged an
-//                  autopilot against waypoint prims under
+//                  settled — one goal at the far end of that rover's own
+//                  lane — and handed to the authored route policy. This file
+//                  previously addressed waypoint prims under
 //                  `/RoverComparison/Routes` that do not exist and never have,
 //                  so every rover sat at its spawn and the comparison measured
 //                  1 cm of travel.
@@ -29,9 +28,9 @@
 //                  counted in stations actually passed, which is what "identical
 //                  obstacle sequence, three tiers" is asking about anyway.
 //
-// ── Why the autopilot and not raw throttle ──────────────────────────────────
+// ── Why the navigation policy and not raw throttle ───────────────────────────
 //
-// Because the manoeuvre is "traverse the lane", and only a controller does that.
+// Because the manoeuvre is "traverse the lane", and only a navigation policy does that.
 // Full throttle with no steering is a different experiment: it leaves the lane
 // (nothing holds x), it does not stop at the end (nothing knows where the end
 // is), and it hits the obstacles far harder than a traversing rover would, which
@@ -55,8 +54,8 @@ const COURSE_RUNOUT_M = 2.0;
 // contract rather than inheriting the interactive default.
 const COURSE_ARRIVAL_RADIUS_M = 0.75;
 
-// `engage_patrol`'s `speed` is a THROTTLE FRACTION, not a velocity — the
-// autopilot scales it by its own approach law (`throttle = speed * f(heading)`).
+// The route policy's speed is a THROTTLE FRACTION, not a velocity — `nav_to`
+// applies the shared approach law (`throttle = speed * f(heading)`).
 // 0.32 keeps the route controller engaged while making this bounded acceptance
 // run finish promptly. It is below the full-throttle charge that turns a
 // suspension comparison into a rollover comparison.
@@ -97,6 +96,7 @@ fn on_start(me) {
     this.max_tilt = [];
     this.passed = [];
     this.lane_stations = [];
+    this.goals = [];
     for c in candidates {
         let gid = find(c[1]);
         if gid != () && gid >= 0 {
@@ -170,7 +170,7 @@ fn on_tick(me) {
                     if (s[1] - at[0]).abs() <= LANE_HALF_WIDTH { mine.push(s[2]); }
                 }
                 this.lane_stations[i] = mine;
-                // The route: one waypoint at the end of this rover's own lane,
+                // The route: one goal at the end of this rover's own lane,
                 // on its own settled x, so every tier drives the same leg.
                 // The finish line: past this lane's LAST station, so the leg
                 // covers the authored sequence and nothing beyond it.
@@ -180,24 +180,25 @@ fn on_tick(me) {
                 }
                 let end_z = last_z - COURSE_RUNOUT_M;
                 let goal = [at[0], at[1], end_z];
-                engage_patrol(rover, [goal], TRAVERSE_THROTTLE, COURSE_ARRIVAL_RADIUS_M, ());
+                this.goals[i] = goal;
                 print("[rover-comparison] " + this.names[i] + " lane x=" + r2(at[0]) +
                       "  " + mine.len() + " station(s)  -> z=" + r2(end_z));
             }
             this.phase = "drive";
             this.next_sample = this.t;
-            print("[rover-comparison] DRIVE: autopilot traverse, one leg, all tiers together");
+            print("[rover-comparison] DRIVE: authored navigation policy, one leg, all tiers together");
         }
         return;
     }
 
-    // No drive()/brake() from here on: whatever moves these rovers is the
-    // autopilot, and the tiers must differ only in how they cope with the course.
+    // The shared route policy is explicit here; the tiers must differ only in
+    // how their authored physics cope with the course.
     for i in 0..this.n {
         let pos = world_pos(this.rovers[i]);
         // Once the escape guard has removed a rover there is nothing left to
         // sample; its last good figures stand and the verdict names it below.
         if pos == () { continue; }
+        nav_to(this.rovers[i], this.goals[i], TRAVERSE_THROTTLE, COURSE_ARRIVAL_RADIUS_M);
         this.distance[i] += seg(this.prev[i], pos);
         this.prev[i] = pos;
         let tilt = tilt_deg(this.rovers[i]).abs();
@@ -228,7 +229,7 @@ fn on_tick(me) {
     }
 
     if this.t >= this.settle_s + this.run_s {
-        for rover in this.rovers { this.clear_patrol(rover); }
+        for rover in this.rovers { brake(rover); }
         let checks = [];
         for i in 0..this.n {
             let rover = this.rovers[i];
@@ -246,7 +247,7 @@ fn on_tick(me) {
                 continue;
             }
             checks.push(t_bounded(at, 200.0, this.names[i] + " rover"));
-            // LIVENESS, per subject: the autopilot claimed it and it traversed.
+            // LIVENESS, per subject: its authored navigation policy traversed.
             // Stated against the course rather than as a metre count, so it
             // follows the scene if the lanes are re-cut.
             checks.push(t_true(this.passed[i] > 0,
@@ -310,12 +311,12 @@ fn idx_of(names, want) {
 }
 
 // A reload or manual stop can interrupt the run before its terminal release.
-// Drop the autopilot in that case too, so no vehicle inherits a patrol into the
+// Apply the safe stop in that case too, so no vehicle inherits a route into the
 // next scenario.
 fn on_stop(me) {
     for rover in this.rovers {
         if rover != () && rover >= 0 {
-            this.clear_patrol(rover);
+            brake(rover);
         }
     }
 }

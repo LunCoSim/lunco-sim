@@ -3,11 +3,10 @@
 // dynamics are physics — they run without any cinematic involvement.
 
 fn on_event(me, evt) {
-    let rover = find("/SolarRoverTest/SolarRover");
-    if evt.name != "waypoint.reached" || evt.source != rover { return; }
-    let index = waypoint_event_index(evt);
+    let route = find("/SolarRoverTest/Route");
+    if evt.name != "route_point_reached" || evt.source != route { return; }
+    let index = evt.value;
     if index == () { return; }
-    apply_waypoint_reached(evt);
     let milestones = [
         "waypoint_1_reached",
         "waypoint_2_reached",
@@ -30,8 +29,7 @@ fn intro_notice(me) {
 
 fn deploy_notice(me) {
     emit("rover_deployed");
-    cmd("EngageAutopilot", #{ vessel: find("/SolarRoverTest/SolarRover") });
-    notify_kind("Autopilot engaged. Battery begins draining under load...", "info");
+    notify_kind("Authored route program engaged. Battery begins draining under load...", "info");
 }
 
 fn battery_low(me) {

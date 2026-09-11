@@ -13,3 +13,14 @@
 pub mod lint_command;
 pub mod twin_lint;
 pub mod validate;
+
+/// Installs the shared validation queries and the explicit `RunLint` command.
+pub struct SceneValidationPlugin;
+
+impl bevy::prelude::Plugin for SceneValidationPlugin {
+    fn build(&self, app: &mut bevy::prelude::App) {
+        validate::register(app);
+        lint_command::register_all_commands(app);
+        lint_command::register(app);
+    }
+}

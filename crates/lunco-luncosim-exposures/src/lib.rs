@@ -14,7 +14,6 @@ use avian3d::prelude::{AngularVelocity, ComputedCenterOfMass, LinearVelocity, Ro
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
-use lunco_autopilot::Autopilot;
 use lunco_celestial::link::LinkState;
 use lunco_celestial::OrbitalViewPin;
 use lunco_controller::ControllerLink;
@@ -30,7 +29,7 @@ use lunco_mobility::WheelRaycast;
 use lunco_scene_commands::SelectedEntities;
 use lunco_signal::{SignalRef, SignalRegistry, SignalType};
 use lunco_usd_bevy_core::read::UsdReadObject;
-use lunco_usd_bevy_core::{CanonicalStages, UsdStageAsset};
+use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdStageAsset};
 use lunco_usd_bevy_scene::scene_root_ancestor;
 use openusd::sdf::Path as SdfPath;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -515,9 +514,6 @@ impl DrivenVesselPose {
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct GeodeticHud<'w, 's> {
     surface_pose: lunco_celestial::SurfacePoseQuery<'w, 's>,
-    /// Kept inside this aggregate system parameter so the HUD stays under
-    /// Bevy's flat system-parameter limit.
-    autopilots: Query<'w, 's, &'static Autopilot>,
 }
 
 /// The tilt bands to paint, in degrees: (amber, red).
@@ -1179,7 +1175,6 @@ pub(crate) fn mark_exposure_dirty(
     q_wheels: Query<(), Or<(Changed<WheelRaycast>, Changed<Transform>)>>,
     q_com: Query<(), Changed<ComputedCenterOfMass>>,
     q_sim: Query<(), Changed<SimComponent>>,
-    q_autopilot: Query<(), Changed<Autopilot>>,
     q_bodies: Query<(), Or<(Added<CelestialBody>, Changed<CelestialBody>)>>,
     selected: Res<SelectedEntities>,
     orbital_pin: Option<Res<OrbitalViewPin>>,
@@ -1195,8 +1190,7 @@ pub(crate) fn mark_exposure_dirty(
         || !q_links.is_empty()
         || !q_wheels.is_empty()
         || !q_com.is_empty()
-        || !q_sim.is_empty()
-        || !q_autopilot.is_empty();
+        || !q_sim.is_empty();
 
     let schema_changed = selected.is_changed();
     let celestial_changed = !q_bodies.is_empty()
@@ -1520,10 +1514,6 @@ pub(crate) fn publish_exposure(
                 }
             }
 
-            let autopilot = geo
-                .autopilots
-                .iter()
-                .any(|pilot| pilot.vessel == vessel.entity && pilot.engaged);
             if let Some(surface) = runtime_surface_roots
                 .roots
                 .iter()
@@ -1574,7 +1564,7 @@ pub(crate) fn publish_exposure(
                     &queries.parents,
                     &queries.channels,
                 );
-                publish_vessel_values(&mut ui, &vessel, autopilot, &telemetry);
+                publish_vessel_values(&mut ui, &vessel, &telemetry);
             } else {
                 if let Some(surface_id) = seminar.current_surface.take() {
                     hide_runtime_surface(&mut runtime.exposures, &surface_id);
@@ -2416,7 +2406,6 @@ fn link_snapshot(
 fn publish_vessel_values(
     ui: &mut ExposureWriter<'_>,
     v: &DrivenVessel,
-    autopilot: bool,
     telemetry: &[PublicTelemetryValue],
 ) {
     let tilt_color = if v.tilt_deg >= v.danger_deg {
@@ -2438,22 +2427,6 @@ fn publish_vessel_values(
     ui.property("caution_width", percent(v.caution_deg / 45.0 * 100.0));
     ui.property("danger_start", percent(v.caution_deg / 45.0 * 100.0));
     ui.property("danger_width", percent(danger_width));
-    ui.property(
-        "autopilot_color",
-        if autopilot {
-            "var(--accent-color)"
-        } else {
-            "var(--muted-color)"
-        },
-    );
-    ui.property(
-        "autopilot_label",
-        if autopilot {
-            "AUTOPILOT ON"
-        } else {
-            "AUTOPILOT"
-        },
-    );
     ui.property("label", v.label.clone());
     ui.property("tilt", format!("{:.0}°", v.tilt_deg));
     ui.property("tilt_limits", limits);

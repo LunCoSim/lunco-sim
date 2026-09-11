@@ -431,8 +431,7 @@ def Xform "Balloon" (prepend apiSchemas = ["LunCoProgramAPI"]) {
 }
 ```
 
-`.mo` → Modelica, `.py` → Python, `.rhai` → Rhai, `.btxml` → behaviour tree
-(`.xml` is accepted only for upstream interoperability).
+`.mo` → Modelica, `.py` → Python, `.rhai` → Rhai.
 **Nothing else about the prim changes.**
 
 - **Role is derived, never declared.** A program with `inputs:`/`outputs:` ports
@@ -455,10 +454,10 @@ def Xform "Balloon" (prepend apiSchemas = ["LunCoProgramAPI"]) {
 - Wiring is native USD `connectionPaths`; `SimConnection` is a derived cache, so
   hand-authoring it is pointless.
 
-Behaviour trees follow the ordinary `LunCoProgramAPI` rule — a child prim
-(conventionally `Mission`) whose `info:sourceAsset` ends in canonical `.btxml`,
-exactly as `.rhai` and `.mo` select their engines. Imported BehaviorTree.CPP/Groot/ROS
-`.xml` is also accepted.
+Task programs follow the ordinary `LunCoProgramAPI` rule — a child `Scope`
+(conventionally `Mission` or `Program`) whose `info:sourceAsset` names a
+`.rhai` source, exactly as `.mo` selects Modelica. Compose reusable task
+constructors and policy in Rhai; do not introduce a second behavior format.
 
 Vehicles are a special case with **no fallbacks**: a wheel missing any required
 `LunCoWheelAPI`, `PhysxVehicleTireAPI`, or `PhysicsMaterialAPI` attribute logs an

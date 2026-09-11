@@ -48,8 +48,6 @@ pub enum ProgramBackend {
     Builtin,
     /// A Rhai source, inline or file-backed.
     Rhai,
-    /// A BehaviorTree.CPP XML source, inline or file-backed.
-    BehaviorTree,
     /// A Modelica source file.
     Modelica,
     /// A Python source file.
@@ -64,16 +62,6 @@ pub enum ProgramSource {
     /// Text authored directly on the program prim.
     Code(String),
     /// A resolver-visible external asset.
-    Asset(String),
-}
-
-/// The selected source form when the program is owned by the BehaviorTree.CPP
-/// projection.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum BehaviorTreeSource {
-    /// XML authored directly on the program prim.
-    Code(String),
-    /// XML loaded from the selected asset.
     Asset(String),
 }
 
@@ -93,9 +81,7 @@ fn asset_path_without_fragment(path: &str) -> &str {
 /// Classify a source asset by its canonical extension.
 fn program_asset_backend(path: &str) -> Option<ProgramBackend> {
     let path = asset_path_without_fragment(path);
-    if lunco_core::programs::is_behavior_tree_asset(path) {
-        Some(ProgramBackend::BehaviorTree)
-    } else if path.ends_with(".rhai") {
+    if path.ends_with(".rhai") {
         Some(ProgramBackend::Rhai)
     } else if path.ends_with(".mo") {
         Some(ProgramBackend::Modelica)
@@ -173,11 +159,7 @@ pub fn resolve_program(
                 ));
             }
             Ok(ResolvedProgram {
-                backend: if code.trim_start().starts_with('<') {
-                    ProgramBackend::BehaviorTree
-                } else {
-                    ProgramBackend::Rhai
-                },
+                backend: ProgramBackend::Rhai,
                 source: ProgramSource::Code(code),
             })
         }
@@ -221,30 +203,8 @@ pub fn resolve_program(
     }
 }
 
-/// Resolve a program only when its selected source belongs to the
-/// BehaviorTree.CPP projection. This keeps source selection and backend
-/// classification in one place; consumers only translate the result into
-/// their own runtime marker.
-pub fn resolve_behavior_tree_source(
-    view: &dyn UsdReadObject,
-    prim: &SdfPath,
-) -> Result<Option<BehaviorTreeSource>, ProgramSourceIssue> {
-    match resolve_program(view, prim)? {
-        ResolvedProgram {
-            backend: ProgramBackend::BehaviorTree,
-            source: ProgramSource::Code(source),
-        } => Ok(Some(BehaviorTreeSource::Code(source))),
-        ResolvedProgram {
-            backend: ProgramBackend::BehaviorTree,
-            source: ProgramSource::Asset(asset),
-        } => Ok(Some(BehaviorTreeSource::Asset(asset))),
-        ResolvedProgram { .. } => Ok(None),
-    }
-}
-
 /// Whether the source is owned by the generic script/driver projection in
-/// `lunco-usd-bevy`. Modelica and BehaviorTree sources are deliberately not
-/// included: their own projections own those execution paths.
+/// `lunco-usd-bevy`. Modelica and Python sources have their own projections.
 pub fn is_generic_program_backend(backend: ProgramBackend) -> bool {
     matches!(backend, ProgramBackend::Builtin | ProgramBackend::Rhai)
 }
@@ -679,10 +639,10 @@ mod tests {
     fn selected_program_arm_is_the_single_backend_resolution() {
         let stage = program_stage(
             "#usda 1.0\n\
-             def Scope \"InlineTree\" (prepend apiSchemas = [\"LunCoProgramAPI\"])\n\
+             def Scope \"InlineRhai\" (prepend apiSchemas = [\"LunCoProgramAPI\"])\n\
              {\n\
                  uniform token info:implementationSource = \"sourceCode\"\n\
-                 uniform string info:sourceCode = \"<root/>\"\n\
+                 uniform string info:sourceCode = \"fn task(me) { seq([]) }\"\n\
              }\n\
              def Scope \"Rhai\" (prepend apiSchemas = [\"LunCoProgramAPI\"])\n\
              {\n\
@@ -707,12 +667,6 @@ mod tests {
         );
         let view = stage.view();
 
-        let inline = SdfPath::new("/InlineTree").unwrap();
-        assert_eq!(
-            resolve_behavior_tree_source(&view, &inline),
-            Ok(Some(BehaviorTreeSource::Code("<root/>".into())))
-        );
-
         let rhai = SdfPath::new("/Rhai").unwrap();
         assert_eq!(
             resolve_program(&view, &rhai),
@@ -721,8 +675,6 @@ mod tests {
                 source: ProgramSource::Asset("lunco://scenarios/test.rhai".into()),
             })
         );
-        assert_eq!(resolve_behavior_tree_source(&view, &rhai), Ok(None));
-
         let modelica = SdfPath::new("/Modelica").unwrap();
         assert_eq!(
             modelica_source_ref(&view, &modelica).unwrap().asset,

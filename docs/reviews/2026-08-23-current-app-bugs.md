@@ -336,12 +336,11 @@ paths: a 10-frame 640x360 take exited after draining with non-clear pixels
 `CaptureFromCamera` each produced a 1280x720 non-clear PNG. Typed `Exit` closed
 the API session and released its port.
 
-The route projection cutover is now single-owner: `lunco-autopilot` exposes
-`AuthoredRouteMetadata` for target identity, loop policy, and smoothness. The
-editor and arrival handling consume it; they no longer carry duplicate XML
-parsers or fall back from malformed authored XML to a stale runtime route. The
-focused tests cover malformed authored data, navigation-only target extraction,
-route completion, and the no-blue-first-leg contract.
+The route projection is now scene-owned: USD authors the ordered route points
+and typed subject relationship, while the sibling Rhai program consumes generic
+sensor events and emits route milestones. The editor and arrival handling no
+longer carry a vehicle-specific route parser or a fallback route. The focused
+production scene contract covers the authored task/event surface.
 
 The external Twin remains a separate dirty worktree and was not folded into the
 engine merge. Its `sim/rovers/lunokhod2.usda` currently authors eight wheel

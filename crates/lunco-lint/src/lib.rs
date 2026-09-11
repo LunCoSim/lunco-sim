@@ -259,7 +259,7 @@ pub fn clear_report(mut report: ResMut<LintReport>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lunco_hooks::{RegisteredHook, ScriptHook, register};
+    use lunco_hooks::{register, RegisteredHook, ScriptHook};
     use std::sync::Arc;
 
     /// A stand-in for a rhai policy: whatever the test wants to "author".

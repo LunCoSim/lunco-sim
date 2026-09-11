@@ -101,6 +101,9 @@ fn on_start(me) {
     this.camera_fwd_min_dot = 1.0;
     this.camera_baseline = ();
     this.asset_contract = false;
+    this.nav_checked = false;
+    this.nav_arrived = false;
+    this.ground_arrived = false;
     this.pos_prev = ();
     this.fprev = ();
     this.phase = "settle";
@@ -159,6 +162,20 @@ fn on_tick(me) {
 
     if !this.asset_contract {
         this.asset_contract = authored_asset_contract(this.rover);
+    }
+
+    // Keep navigation acceptance at the production scene boundary. The
+    // subject is the composed rover and the target is a live pose, so this
+    // checks the same public Rhai navigation contract used by route programs.
+    // The elevated target proves surface arrival is measured in the yaw plane,
+    // while the coincident target proves the policy brakes instead of issuing
+    // a drive command. The later drivetrain matrix remains the anti-trivial
+    // movement control for the rest of this scene.
+    if !this.nav_checked {
+        this.nav_checked = true;
+        this.nav_arrived = nav_to(this.rover, p, 0.6, 5.0);
+        this.ground_arrived = arrived(this.rover,
+            [p[0], p[1] + 4.0, p[2] - 3.9], 4.0);
     }
 
     this.t += dt();
@@ -333,6 +350,11 @@ fn verdict(s) {
     f.push(t_true(s.asset_contract,
         "six-wheel asset did not expose six raycast wheels with the composed " +
         "tire/suspension parameters and mounted camera contract"));
+
+    f.push(t_true(s.nav_arrived,
+        "nav_to did not report arrival at a coincident target or apply its safe stop"));
+    f.push(t_true(s.ground_arrived,
+        "surface navigation did not ignore target support height when checking arrival"));
 
     f.push(t_true(s.yaw_ok > 10,
         "the rover's heading was readable on only " + s.yaw_ok + " ticks, so the " +

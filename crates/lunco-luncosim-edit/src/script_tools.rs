@@ -25,29 +25,15 @@
 //! tool handler can do anything a scenario can.
 
 use bevy::prelude::*;
-use lunco_core::TelemetryValue;
+use lunco_controller::ControllerLink;
+use lunco_core::{TelemetryValue, TheLocalAvatar};
+use lunco_scene_commands::SelectedEntities;
 
 /// Build the language-neutral map passed to a script tool. The map is an
 /// interaction contract, not an API serialization format; the scripting
 /// backend converts it directly to the target runtime's native value.
 pub(crate) fn tool_map(entries: Vec<(String, TelemetryValue)>) -> TelemetryValue {
     TelemetryValue::Map(entries.into_iter().collect())
-}
-
-pub(crate) fn tool_string(value: impl Into<String>) -> TelemetryValue {
-    TelemetryValue::String(value.into())
-}
-
-pub(crate) fn tool_i64(value: u64) -> TelemetryValue {
-    TelemetryValue::I64(value as i64)
-}
-
-pub(crate) fn tool_bool(value: bool) -> TelemetryValue {
-    TelemetryValue::Bool(value)
-}
-
-pub(crate) fn tool_vec3(value: [f64; 3]) -> TelemetryValue {
-    TelemetryValue::Array(value.into_iter().map(TelemetryValue::F64).collect())
 }
 
 /// Disarm the armed script tool on Cancel (Esc), like every other cursor mode.
@@ -90,7 +76,14 @@ pub fn on_scene_click_script_tool(
     q_selectable: Query<Entity, With<lunco_core::SelectableRoot>>,
     q_ids: Query<&lunco_core::GlobalEntityId>,
     q_prim: Query<&lunco_usd_bevy_scene::UsdPrimPath>,
+    q_scene_roots: Query<
+        &lunco_usd_bevy_scene::UsdPrimPath,
+        With<lunco_usd_bevy_scene::UsdSceneRoot>,
+    >,
     q_parents: Query<&ChildOf>,
+    selected: Res<SelectedEntities>,
+    local_avatar: Res<TheLocalAvatar>,
+    q_links: Query<&ControllerLink>,
     backed: Res<lunco_usd::twin_projection::DocBackedTwinScenes>,
     asset_server: Res<AssetServer>,
     mut commands: Commands,
@@ -176,6 +169,56 @@ pub fn on_scene_click_script_tool(
             context.push(("doc_id".to_string(), TelemetryValue::I64(doc.raw() as i64)));
         }
     }
+    let selected_entity = selected.primary();
+    if let Some(entity) = selected_entity {
+        if let Ok(id) = q_ids.get(entity) {
+            context.push((
+                "selected_entity_id".to_string(),
+                TelemetryValue::I64(id.get() as i64),
+            ));
+        }
+        if let Ok(path) = q_prim.get(entity) {
+            context.push((
+                "selected_path".to_string(),
+                TelemetryValue::String(path.path.clone()),
+            ));
+        }
+    }
+    let controlled_entity = local_avatar
+        .0
+        .and_then(|avatar| q_links.get(avatar).ok().map(|link| link.vessel_entity));
+    if let Some(entity) = controlled_entity {
+        if let Ok(id) = q_ids.get(entity) {
+            context.push((
+                "controlled_entity_id".to_string(),
+                TelemetryValue::I64(id.get() as i64),
+            ));
+        }
+        if let Ok(path) = q_prim.get(entity) {
+            context.push((
+                "controlled_path".to_string(),
+                TelemetryValue::String(path.path.clone()),
+            ));
+        }
+    }
+    // The click hit is not necessarily the document owner (terrain and empty
+    // space have no prim), so derive the canonical document from the active
+    // control/selection context as well.
+    let context_prim = controlled_entity
+        .and_then(|entity| q_prim.get(entity).ok())
+        .or_else(|| selected_entity.and_then(|entity| q_prim.get(entity).ok()))
+        .or(target_prim);
+    if let Some(path) = context_prim {
+        if let Some(doc) = lunco_usd::twin_projection::scene_document_for(
+            &backed,
+            &asset_server,
+            path.stage_handle.id(),
+        ) {
+            if !context.iter().any(|(name, _)| name == "doc_id") {
+                context.push(("doc_id".to_string(), TelemetryValue::I64(doc.raw() as i64)));
+            }
+        }
+    }
     if let Some(position) = click.hit.position {
         context.push((
             "world_position".to_string(),
@@ -187,6 +230,17 @@ pub fn on_scene_click_script_tool(
                     .collect(),
             ),
         ));
+    }
+    if let Some(context_prim) = context_prim {
+        if let Some(scene_root) = q_scene_roots
+            .iter()
+            .find(|root| root.stage_handle.id() == context_prim.stage_handle.id())
+        {
+            context.push((
+                "scene_root_path".to_string(),
+                TelemetryValue::String(scene_root.path.clone()),
+            ));
+        }
     }
     commands.trigger(lunco_scripting::commands::RunRhaiTool {
         tool,

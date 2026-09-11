@@ -42,16 +42,16 @@ use std::{
 
 use lunco_api::discovery::find_api_command;
 use lunco_api::executor::{
-    ApiCommandEvent, authz_target_gid, command_result_json, validate_command_params,
+    authz_target_gid, command_result_json, validate_command_params, ApiCommandEvent,
 };
 use lunco_api::queries::{ApiQueryRegistry, ApiVisibility};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::ApiResponse;
-use lunco_core::session::{CommandPolicyRegistry, SessionRbac, SessionRegistry, authorize};
+use lunco_core::session::{authorize, CommandPolicyRegistry, SessionRbac, SessionRegistry};
 use lunco_core::{
-    CelestialBody, CommandResults, GlobalEntityId, NavigationCommand, OpId, SECS_PER_TICK,
-    SessionId, Severity, SimTick, SteeringGeometry, TelemetryEvent, TelemetryValue,
     coords::{GridPos, VehicleFrame},
+    CelestialBody, CommandResults, GlobalEntityId, NavigationCommand, OpId, SessionId, Severity,
+    SimTick, SteeringGeometry, TelemetryEvent, TelemetryValue, SECS_PER_TICK,
 };
 
 // ── Native value construction ──────────────────────────────────────────────
@@ -175,6 +175,23 @@ pub fn build_from_reflect<B: ValueBuilder>(
         }
         ReflectRef::Array(a) => {
             Some(b.array(a.iter().filter_map(|x| build_from_reflect(b, x)).collect()))
+        }
+        ReflectRef::Map(m) => {
+            // The bridge's native map contract is string-keyed. Preserve that
+            // contract for reflected maps and reject non-string keys visibly
+            // at the value boundary instead of stringifying an arbitrary key.
+            Some(
+                b.map(
+                    m.iter()
+                        .filter_map(|(key, value)| {
+                            let key = key
+                                .try_as_reflect()
+                                .and_then(|key| key.as_any().downcast_ref::<String>())?;
+                            Some((key.clone(), build_from_reflect(b, value)?))
+                        })
+                        .collect(),
+                ),
+            )
         }
         ReflectRef::Tuple(t) => Some(
             b.array(
@@ -488,8 +505,7 @@ pub(crate) fn resolve_entity(world: &World, gid: u64) -> Option<Entity> {
         .resolve(&GlobalEntityId::from_raw(gid))
 }
 
-/// The session id currently controlling `gid`'s vessel (`0` = the local human, the
-/// autopilot band for an AI), or `None` if nobody owns it. Reads the same
+/// The session id currently controlling `gid`, or `None` if nobody owns it. Reads the same
 /// [`SessionRegistry`] ownership the possession arbiter uses, so a scenario can
 /// answer "is this rover controlled, and by whom?" **uniformly across human and AI**
 /// drivers — the observability the audit flagged as missing.
@@ -497,8 +513,7 @@ pub fn owner_of(gid: u64) -> Option<u64> {
     with_world(|world| Some(world.get_resource::<SessionRegistry>()?.owner_of(gid)?.0)).flatten()
 }
 
-/// The role of `gid`'s controlling session — `"AiAgent"` (an autopilot),
-/// `"Owner"`/`"Operator"` (a human), … — or `None` if unowned. Falls back to
+/// The role of `gid`'s controlling session — or `None` if unowned. Falls back to
 /// `"Owner"` for an owned-but-unregistered (local) session. The human-vs-AI test.
 pub fn controller_role(gid: u64) -> Option<String> {
     with_world(|world| {
@@ -840,7 +855,7 @@ pub fn world_pos(gid: u64) -> Option<DVec3> {
 /// `(lat_deg, lon_deg, height_m)`. `None` when the scene is not site-anchored
 /// (no `SiteAnchor`) or the anchor's body is not present.
 ///
-/// Works for any positioned entity — rover, waypoint, mast, marker — through
+/// Works for any positioned entity — route point, mast, marker — through
 /// the same explicit site/body-fixed frame query used by HUDs and billboards.
 /// Root-world position is deliberately not a fallback: celestial ancestors
 /// move with ephemeris time and are not site ENU coordinates.
@@ -1262,6 +1277,41 @@ pub fn find(name: &str) -> i64 {
     .unwrap_or(-1)
 }
 
+/// `find_path(path)` — first entity gid with the exact composed USD prim path,
+/// or `-1`. Paths are the authored identity; this is intentionally separate
+/// from `find`, whose name lookup is only a display convenience.
+pub fn find_path(path: &str) -> i64 {
+    with_world(|world| {
+        let pairs = world.get_resource::<ApiEntityRegistry>()?.entities();
+        pairs
+            .into_iter()
+            .find(|(_, entity)| {
+                world
+                    .get::<lunco_usd_bevy_scene::UsdPrimPath>(*entity)
+                    .is_some_and(|prim| prim.path == path)
+            })
+            .map(|(id, _)| id.get() as i64)
+    })
+    .flatten()
+    .unwrap_or(-1)
+}
+
+/// `usd_path(id)` — the exact composed USD path carried by an entity, or `()`.
+/// This is the inverse of `find_path` and is the generic identity primitive
+/// authored programs use to inspect their own scene-level ownership.
+pub fn usd_path_of(gid: u64) -> Option<String> {
+    with_world(|world| {
+        let entity = resolve_entity(world, gid)?;
+        Some(
+            world
+                .get::<lunco_usd_bevy_scene::UsdPrimPath>(entity)?
+                .path
+                .clone(),
+        )
+    })
+    .flatten()
+}
+
 /// `name(id)` — the entity's shared human-readable label, or `None`.
 pub fn name_of(gid: u64) -> Option<String> {
     with_world(|world| {
@@ -1406,13 +1456,13 @@ pub fn get_exposure<B: ValueBuilder>(b: &B, namespace: &str, property: &str) -> 
     .flatten()
 }
 
-/// `is_unattended()` — whether NOTHING can take user input this run, so a
-/// scenario carrying an autopilot should drive itself. See
+/// `is_unattended()` — whether NOTHING can take user input this run, so an
+/// authored task program may drive itself. See
 /// [`ScenarioAudience`](crate::scenario::ScenarioAudience) for how it's resolved
 /// and why it is not the build profile.
 ///
 /// Unresolvable (no such resource — a bare `World`) ⇒ `true`: a world with no
-/// scripting plugin has no window either, and an autopilot that runs when it
+/// scripting plugin has no window either, and an authored program that runs when it
 /// should not is visible, whereas a lesson that silently refuses to run in CI is
 /// a green test that tested nothing.
 #[cfg(any(feature = "rhai", feature = "python"))]

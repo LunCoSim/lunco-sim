@@ -375,10 +375,10 @@ operation; it reuses `child_layer_ids` because it needs only parseable layers.
 
 ## 11. The rule that generalises
 
-`usd_tree.rs` found it first, for behaviour trees: topology stays BT.CPP XML
-because it is *interchange* (Groot2, ROS/Nav2 edit it); the waypoints are USD
-prims because a prim is *"selectable, draggable, deletable, journaled, undoable,
-persisted, and replicated by the machinery that already serves every other prim."*
+The current route design generalises the same rule: route topology and point
+identity are USD prims because a prim is *"selectable, draggable, deletable,
+journaled, undoable, persisted, and replicated by the machinery that already
+serves every other prim."* Route execution policy is a sibling Rhai program.
 
 > **Before adding a document type, ask whether it should be a prim.**
 

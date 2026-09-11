@@ -7,7 +7,7 @@ use lunco_core::coords::GridPos;
 use lunco_core::{on_command, register_commands, Command, SceneViewport};
 use lunco_render::SceneCamera;
 use lunco_usd_bevy_core::UsdStageAsset;
-use lunco_usd_bevy_core::{stage_default_prim, CanonicalStages};
+use lunco_usd_bevy_core::{canonical::CanonicalStages, stage_default_prim};
 use std::collections::HashMap;
 
 use crate::surface_pick::{

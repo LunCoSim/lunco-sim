@@ -240,17 +240,6 @@ def Xform "SolarRoverTest" (
             float outputs:solar_incidence.connect = </SolarRoverTest/SolarRover/YawHead/SolarPanel.outputs:cos_incidence>
             prepend rel collection:components:includes = [</SolarRoverTest/SolarRover/YawHead/SolarPanel>]
 
-        # ── Autopilot Script (Rhai) ──
-        # Reuses the scene-agnostic rover_autopilot which discovers waypoints
-        # via parent(me) and yields to the player on any key press.
-        def Scope "Autopilot" (
-            prepend apiSchemas = ["LunCoProgramAPI"]
-        )
-        {
-            uniform token info:implementationSource = "sourceAsset"
-            uniform asset info:sourceAsset = @lunco://behaviors/solar_rover_patrol.btxml@
-        }
-
         # ── Chase camera riding behind the rover ──
         def Camera "RoverCam" (
             prepend apiSchemas = ["LunCoCameraAPI"]
@@ -278,29 +267,47 @@ def Xform "SolarRoverTest" (
         }
     }
 
-    # ── Waypoint course ──
-    def Xform "RoverTarget1" (
-        prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker>
-    )
+    # ── Scene-level route ──
+    # Route data and its executable policy are siblings of the rover. The rover
+    # remains a reusable physical asset and only appears as the program subject.
+    def Scope "Route"
     {
-        double3 xformOp:translate = (18.0, 0.0, 10.0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-    }
+        def Scope "Program" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/route_follow.rhai@
+            float inputs:enabled = 1.0
+            rel inputs:subject = </SolarRoverTest/SolarRover>
+        }
 
-    def Xform "RoverTarget2" (
-        prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker>
-    )
-    {
-        double3 xformOp:translate = (-15.0, 0.0, 20.0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-    }
+        def Xform "P0" (
+            prepend references = @lunco://markers/route_point.usda@</RoutePoint>
+        )
+        {
+            double3 xformOp:translate = (18.0, 0.0, 10.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            over "Trigger" { token lunco:triggerZone = "route_P0" }
+        }
 
-    def Xform "RoverTarget3" (
-        prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker>
-    )
-    {
-        double3 xformOp:translate = (8.0, 0.0, -18.0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Xform "P1" (
+            prepend references = @lunco://markers/route_point.usda@</RoutePoint>
+        )
+        {
+            double3 xformOp:translate = (-15.0, 0.0, 20.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            over "Trigger" { token lunco:triggerZone = "route_P1" }
+        }
+
+        def Xform "P2" (
+            prepend references = @lunco://markers/route_point.usda@</RoutePoint>
+        )
+        {
+            double3 xformOp:translate = (8.0, 0.0, -18.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            over "Trigger" { token lunco:triggerZone = "route_P2" }
+        }
     }
 
     # ── Scenario director ──

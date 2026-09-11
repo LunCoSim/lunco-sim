@@ -129,8 +129,8 @@ impl Tool for NativeRhaiTool {
 ///
 /// `Ok(None)` exists because the registry holds more than rhai tools. A closure
 /// tool (`lunco_tools::register_closure_tool`, e.g. `science::take_photo`) is
-/// invoked by a behaviour-tree `run_tool` leaf through `world.trigger`, and never
-/// had a rhai module to build. Reporting that as an error logged
+/// invoked by an engine action through `world.trigger`, and never had a rhai
+/// module to build. Reporting that as an error logged
 /// `[rhai] tool 'science::take_photo' failed to bind` at ERROR on every twin open
 /// — a permanent false alarm in a codebase whose lesson smoke test is "zero
 /// `[rhai]` lines", i.e. exactly the noise that trains people to ignore the log.
@@ -378,11 +378,11 @@ mod tests {
         assert_eq!(backends.get("lib").map(String::as_str), Some("rhai"));
     }
 
-    /// A tool with no rhai surface is SKIPPED, not reported as a failure.
+    /// A tool with no Rhai surface is skipped, not reported as a failure.
     ///
-    /// Behaviour-tree closure tools (`science::take_photo`) are invoked through
-    /// `world.trigger`, never as a rhai module. Treating them as bind failures put
-    /// a permanent `[rhai] … failed to bind` ERROR in every session's log.
+    /// Engine-only tools are invoked through typed dispatch, never as a Rhai
+    /// module. Treating them as bind failures would put a permanent binding
+    /// error in every session's log.
     #[test]
     fn a_tool_with_no_rhai_surface_is_skipped_not_an_error() {
         struct BtOnlyTool;
@@ -406,7 +406,7 @@ mod tests {
         let errs = bind_registered_tools(&mut engine);
         assert!(
             !errs.iter().any(|(n, _)| n == "bt_only"),
-            "a BT-only tool must not be reported as a bind failure: {errs:?}"
+            "an engine-only tool must not be reported as a bind failure: {errs:?}"
         );
         // It is still discoverable — skipping the rhai binding is not deregistering.
         assert!(lunco_tools::index().iter().any(|i| i.name == "bt_only"));

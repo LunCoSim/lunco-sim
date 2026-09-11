@@ -792,9 +792,6 @@ scene (`my_mission.usda`) and clamp it to the lander with a fixed joint:
         double3 xformOp:translate = (0, 58.35, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
 
-        def Scope "Autopilot" (prepend apiSchemas = ["LunCoProgramAPI"]) {
-            uniform asset info:sourceAsset = @lunco://behaviors/lander_rover_patrol.btxml@
-        }
     }
 
     def PhysicsFixedJoint "LanderRoverJoint"
@@ -818,24 +815,23 @@ the same scene policy edge-detects that command, accepts it only after touchdown
 and reports a failed detach instead of silently retrying. That ordering is not
 cosmetic: cut the rover loose in flight and it falls from altitude; release before
 the GNC has handed control to the gear and it can still be under powered-flight authority.
-The rover drops the last metre onto the regolith and rolls away. We point it at an
-autopilot script now and write that in Step 10.
+The rover drops the last metre onto the regolith and rolls away. The scene-owned
+route program that drives it is added separately in Step 10; the rover asset does
+not contain a mission or route.
 
 ---
 
 ## Step 8 — Plant the waypoints
 
-The rover's job is to visit three spots. The reusable waypoint asset at
-`assets/vessels/markers/waypoint.usda` has a visible lifted dome and a separate
+The rover's job is to visit three spots. The reusable route-point asset at
+`assets/markers/route_point.usda` has a visible lifted dome and a separate
 ground-anchored trigger volume:
 
 ```usda
-def Xform "WaypointMarker" (
-    prepend apiSchemas = ["LunCoWaypointAPI"]
+def Xform "RoutePoint" (
+    prepend apiSchemas = ["LunCoCatalogAPI", "LunCoBillboardAPI"]
 )
 {
-    float3 lunco:waypoint:inactiveColor = (0.38, 0.38, 0.38)
-
     def Sphere "Dome"
     {
         double radius = 1.5
@@ -850,18 +846,17 @@ def Xform "WaypointMarker" (
         double radius = 2.5
         token visibility = "invisible"
         bool physics:collisionEnabled = true
-        custom string lunco:triggerZone = "waypoint"
+        token lunco:triggerZone = "route_P0"
     }
 }
 ```
 
 The dome is visual only. The `Trigger` uses standard USD `radius`, collision, and
-`lunco:triggerZone` properties to provide the non-solid Sensor footprint. The
-shared waypoint projection consumes its physics overlap, records the composed
-marker path in `ReachedWaypoints`, and emits the canonical `waypoint.reached`
-event with a typed `{ path, state, index }` payload. The shared Rhai waypoint helper
-applies the authored inactive look through the USD runtime layer. The lower-level
-Sensor/zone notification is an engine mechanism, not the mission completion contract.
+the registered `lunco:triggerZone` property to provide the non-solid Sensor
+footprint. The generic sensor emits `enter:<zone>`; the scene-level route program
+consumes that event, advances its route cursor, and emits `route_point_reached`
+for mission policy. No vessel-owned waypoint state or Rust waypoint projection is
+needed.
 
 For a visual review, use the authored `assets/scenes/tests/waypoint_visual.usda`
 companion with the production `target/debug/luncosim` binary from the tutorial
@@ -871,12 +866,26 @@ green annotation remains visible while the rover stays readable through it.
 Drop three markers into the scene:
 
 ```usda
-    def Xform "RoverTarget1" ( prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker> )
-    { double3 xformOp:translate = (14, 0, 9); uniform token[] xformOpOrder = ["xformOp:translate"] }
-    def Xform "RoverTarget2" ( prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker> )
-    { double3 xformOp:translate = (-11, 0, 16); uniform token[] xformOpOrder = ["xformOp:translate"] }
-    def Xform "RoverTarget3" ( prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker> )
-    { double3 xformOp:translate = (5, 0, -15); uniform token[] xformOpOrder = ["xformOp:translate"] }
+    def Scope "Route"
+    {
+        def Scope "Program" (prepend apiSchemas = ["LunCoProgramAPI"])
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/route_follow.rhai@
+            float inputs:enabled = 0.0
+            rel inputs:subject = </Mission/SkidRover>
+        }
+
+        def Xform "P0" ( prepend references = @lunco://markers/route_point.usda@</RoutePoint> )
+        { double3 xformOp:translate = (14, 0, 9); uniform token[] xformOpOrder = ["xformOp:translate"]
+          over "Trigger" { token lunco:triggerZone = "route_P0" } }
+        def Xform "P1" ( prepend references = @lunco://markers/route_point.usda@</RoutePoint> )
+        { double3 xformOp:translate = (-11, 0, 16); uniform token[] xformOpOrder = ["xformOp:translate"]
+          over "Trigger" { token lunco:triggerZone = "route_P1" } }
+        def Xform "P2" ( prepend references = @lunco://markers/route_point.usda@</RoutePoint> )
+        { double3 xformOp:translate = (5, 0, -15); uniform token[] xformOpOrder = ["xformOp:translate"]
+          over "Trigger" { token lunco:triggerZone = "route_P2" } }
+    }
 
     # The touchdown target: a landmark for the pilot, not a wire. The GNC descends
     # on its altimeter and never reads this — it just marks the spot to aim at.
@@ -912,11 +921,10 @@ or an event.
 
 ```rhai
 fn on_event(me, evt) {
-    let rover = find("/Mission/SkidRover");
-    if evt.name != "waypoint.reached" || evt.source != rover { return; }
-    let index = waypoint_event_index(evt);
+    let route = find("/Mission/Route");
+    if evt.name != "route_point_reached" || evt.source != route { return; }
+    let index = evt.value;
     if index == () { return; }
-    apply_waypoint_reached(evt);
     let milestones = [
         "waypoint_1_reached",
         "waypoint_2_reached",
@@ -948,12 +956,13 @@ fn task(me) {
         wait(2.0),                                     // let the rover fall clear
 
         once(|m| {
-            emit("rover_deployed");                    // wakes the autopilot (Step 10)
-            notify_kind("Rover deployed - autopilot driving. Click the rover to take over. F toggles the authored route autopilot.", "success");
+            emit("rover_deployed");                    // wakes the route program (Step 10)
+            emit("route_start");
+            notify_kind("Rover deployed - the authored route program is driving. Click the rover to take over.", "success");
         }),
 
-        // The course. The scene's Sensor events are the only arrival facts;
-        // the shared Rhai waypoint helper owns the authored inactive look.
+        // The course. The scene route program is the route cursor; this mission
+        // only translates its events into tutorial milestones.
         wait_for("waypoint_1_reached"),
         once(|m| notify_kind("Waypoint 1 reached (2 of 3).", "success")),
         wait_for("waypoint_2_reached"),
@@ -991,8 +1000,8 @@ we haven't taught it to drive yet.
 
 ## Step 10 — Let the rover drive itself, and hand over cleanly
 
-Finally, the autopilot. It should drive the rover from gate to gate on its own, and
-the moment the player wants the wheel, get out of the way.
+Finally, add the scene-level route program. It should drive the rover from gate to
+gate on its own, and the moment the player wants the wheel, get out of the way.
 
 "The moment the player wants the wheel" is where autopilots usually go wrong, so
 let's be precise. The player is asking for the rover if they possess the rover.
@@ -1001,16 +1010,14 @@ lander — that intent belongs to the lander. An autopilot that grabs possession
 the camera off the lander mid-descent, which is a genuinely baffling thing to
 experience. Authority is a question you *ask*, never one you assume.
 
-The referenced behaviour tree sequences the waypoint actions and yields when manual
-authority takes over. Continuous steering remains in the native navigation action; it is
-not interpreted each tick by rhai. The mission script has only one job here: when
-`rover_deployed` arrives, dispatch `EngageAutopilot` for the rover. This keeps mission
-policy event-driven and leaves numerical control in the compiled runtime.
-
-For a custom `/Mission` hierarchy, author a behaviour tree whose targets use that
-scene's paths; the shipped `lander_rover_patrol.btxml` intentionally targets the
-`/LanderTest/...` fixture. `EngageAutopilot` loads the behaviour tree attached to
-the rover when no inline specification is supplied.
+The route is an ordinary scene scope, not a child of the rover. Its `Program`
+prim references the reusable `scenarios/route_follow.rhai` source and names the
+subject with the typed `inputs:subject` relationship. The program reads the
+ordered route-point children, calls the generic navigation/port surface, and
+yields automatically because manual possession owns the subject's control
+authority. A different route or controller is another USD program instance and
+another Rhai source asset; no Rust autopilot type or behavior-tree fixture is
+required.
 
 Reload one more time. The lander flies down, the rover drops and drives the course
 on its own, the domes light up one by one — and the moment you click it, the rover is

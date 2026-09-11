@@ -6,8 +6,8 @@
 //! the whole point: the mechanism lives here once, deterministic and unit-tested,
 //! and each language binding in `lunco-scripting` drives the *same* engine by
 //! supplying a context (`Ctx`) that gives world access and invokes its callables.
-//! Mission *policy* (which waypoints, which steps) stays in the thin per-language
-//! prelude; only the reusable machinery moves here.
+//! Mission *policy* (which route points, which steps) stays in the thin
+//! per-language prelude; only the reusable machinery moves here.
 //!
 //! ## What's here now
 //! - [`Status`], the [`Node`] trait, and the [`Action`] closure leaf.
@@ -25,13 +25,13 @@
 //!
 //! The kernel is deliberately clock-free, so *time-bounded* decorators (timeout,
 //! cooldown) and pose/sensor leaves live in the consuming layer that owns a
-//! context — e.g. `lunco-autopilot`'s `Timeout` reads its `DriveCtx.now`.
+//! context — for example a scripting task's dwell leaf reads the mission clock.
 //!
 //! ## Growing further (later)
 //! A utility/priority selector that *scores* children, and named reusable
 //! subtrees, are each just new [`Node`] impls — the tick contract above does not
-//! change. Every kernel node maps 1:1 onto the rhai/JSON `BehaviorSpec` in
-//! `lunco-autopilot`, which authors the tree as data and compiles the leaves.
+//! change. Every kernel node maps 1:1 onto the task data authored by the
+//! `lunco-scripting` prelude, which compiles the leaves against its context.
 
 pub mod events;
 pub mod node;

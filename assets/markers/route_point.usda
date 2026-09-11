@@ -1,0 +1,74 @@
+#usda 1.0
+(
+    defaultPrim = "RoutePoint"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Reusable visual and sensor for one point in a route. This is a mission
+# annotation, not a vessel component: a scene-level Route owns instances of
+# this asset and its program decides what the sensor means.
+def Xform "RoutePoint" (
+    doc = "Reusable route-point marker with a non-solid overlap sensor."
+    prepend apiSchemas = ["LunCoCatalogAPI", "LunCoBillboardAPI"]
+    kind = "component"
+)
+{
+    uniform bool lunco:spawnable = true
+    bool lunco:billboard = true
+    string lunco:billboard:text = "Route point {index}\n{lat:.5}, {lon:.5}\n{height:.1} m"
+    float lunco:billboard:offsetY = 4.0
+    float lunco:billboard:fadeEnd = 1200.0
+    custom string lunco:interaction:left = "pass_through"
+    custom string lunco:interaction:right = "context"
+
+    def Scope "Looks"
+    {
+        def Material "Dome_Mat"
+        {
+            token outputs:surface.connect = </RoutePoint/Looks/Dome_Mat/Surface.outputs:surface>
+
+            def Shader "Surface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0, 0, 0)
+                color3f inputs:specularColor = (0, 0, 0)
+                float inputs:useSpecularWorkflow = 1
+                float inputs:roughness = 1.0
+                color3f inputs:emissiveColor = (0.12, 1.3, 0.45)
+                token outputs:surface
+            }
+        }
+    }
+
+    # Visual-only dome. It is translucent, emissive, and excluded from shadow
+    # maps so a route annotation cannot darken the terrain or a vehicle.
+    def Sphere "Dome" (
+        prepend apiSchemas = ["MaterialBindingAPI", "LunCoSurfaceAPI"]
+    )
+    {
+        custom string lunco:interaction:left = "pass_through"
+        custom string lunco:interaction:right = "context"
+        double radius = 1.5
+        double3 xformOp:translate = (0, 1.5, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        rel material:binding = </RoutePoint/Looks/Dome_Mat>
+        color3f[] primvars:displayColor = [(0.35, 1.0, 0.6)]
+        float[] primvars:displayOpacity = [0.08]
+        bool lunco:surface:additive = true
+        bool primvars:doNotCastShadows = true
+    }
+
+    # Ground-anchored overlap-only sensor. The generic Avian sensor bridge
+    # emits enter:<zone> and exit:<zone>; the route program authors the zone
+    # token per instance, so no waypoint-specific runtime state is required.
+    def Sphere "Trigger" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoTriggerZoneAPI"]
+    )
+    {
+        double radius = 2.5
+        token visibility = "invisible"
+        bool physics:collisionEnabled = true
+        token lunco:triggerZone = ""
+    }
+}

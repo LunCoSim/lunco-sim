@@ -1,359 +1,95 @@
-# Missions: BT.CPP XML + USD waypoint prims
+# Routes and route points in USD
 
-> Status: Active · Audience: contributors on waypoints, routes, and mission authoring
+Route geometry and route execution are scene-level concerns. A route is an
+ordinary USD scope containing reusable route-point prims and a sibling Rhai
+program. The subject is an authored relationship on the program, so a vehicle
+does not own a waypoint list and the Rust core does not know about vehicles or
+autopilot programs.
 
-## The route contract
+## Ownership
 
-Three statements settle the design:
-
-1. **The behaviour tree is the model.** A waypoint is a spatial leaf of a tree.
-2. **Waypoints are a visualization of the tree.** Editing a pin is editing the tree.
-3. **Visuals are the USD scene.** A pin is a real prim, not a gizmo.
-
-## The split: topology vs geometry
-
-XML and USD are not competing — they answer different questions, so each stores what
-it is actually good at.
-
-| | Format | Why |
-|---|---|---|
-| **Tree topology** — sequences, decorators, which tool fires where | BehaviorTree.CPP v4 XML | Portable: **Groot2 edits it, ROS/Nav2 runs it**. The codec (`btcpp_xml`) already existed. |
-| **Mission geometry** — where the waypoints *are* | USD prims | Selectable, gizmo-draggable, journaled, undoable, persisted, replicated — by machinery that already serves every prim. |
-
-The XML's spatial leaves **reference** the prims by path rather than baking
-coordinates — which is how BT.CPP is meant to be used anyway (leaves read ports, not
-constants):
-
-Mission target paths are absolute, composed USD prim paths. They are identity
-references, not names: resolution uses the exact composed `SdfPath` string together
-with the stage and instance scope. Relative paths, property paths, variant-selection
-paths, malformed paths, and paths that are not present on the composed stage are
-invalid mission data and keep the route in an explicit unresolved state. No suffix,
-relative-name, or query-order matching is permitted.
-
-```xml
-<!-- behaviors/rover_patrol.btxml — canonical LunCoSim name; Groot2 opens this -->
-<root BTCPP_format="4" main_tree_to_execute="MainTree">
-  <BehaviorTree ID="MainTree">
-    <Repeat><Sequence>
-      <Action ID="drive_to" target="/World/Route/W0"/>
-      <Action ID="run_tool" tool="science::take_photo"/>
-      <Action ID="drive_to" target="/World/Route/W1"/>
-    </Sequence></Repeat>
-  </BehaviorTree>
-</root>
-```
-
-```usda
-def Xform "Rover" {
-    def Scope "Patrol" (prepend apiSchemas = ["LunCoProgramAPI"]) {
-        uniform asset info:sourceAsset = @behaviors/rover_patrol.btxml@
-    }
-}
-
-def Scope "Route" {
-    def "W0" (prepend references = @vessels/markers/waypoint.usda@) {
-        double3 xformOp:translate = (10, 0, 3)      # ← drag this; the rover re-routes
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-    }
-}
-```
-
-A behaviour tree is a program like any other: a `LunCoProgramAPI` child prim selecting
-the XML through `info:implementationSource = "sourceAsset"` (or selecting inline
-`info:sourceCode`).
-The engine that runs it comes from the source's extension, so nothing about the tree
-needs a binding of its own — and deleting the prim deletes the mission, which is exactly
-what a patrol should be.
-
-The marker has one authored USD identity and one runtime arrival path:
-
-- **The marker has separate visual and event geometry** —
-  `assets/vessels/markers/waypoint.usda` authors a visible `UsdGeomSphere` named
-  `Dome` and an invisible ground-anchored `UsdGeomSphere` named `Trigger`.
-  Both use explicit standard USD `radius` values: the dome radius controls the
-  visual annotation and the trigger radius controls the interaction volume.
-  Only `Trigger` has `PhysicsCollisionAPI` and the waypoint trigger tag. They
-  are separate authored geometry contracts because the dome is lifted for
-  presentation while the trigger is anchored to the terrain.
-  The dome is softly translucent, additive, and emissive, so its authored green
-  display remains visible without writing an occluding depth value over a rover
-  inside it or the terrain behind it. Its standard `primvars:displayOpacity` is
-  authored as an array (`float[]`, here `0.08` opacity); the
-  `lunco:surface:additive` policy selects the existing non-occluding material
-  mode. The separate Trigger remains invisible and fully independent. The standard
-  `primvars:doNotCastShadows` flag excludes the annotation from shadow maps
-  without adding a marker renderer. This keeps the visible dome lifted above
-  terrain while the overlap volume remains useful on slopes.
-- **Arrival is one runtime fact** — `CollisionStart` on that Sensor updates the
-  vessel's live `ReachedWaypoints` set and emits `waypoint.reached` with a typed
-  `{ path, state, index }` payload. The USD simulation projection reads the
-  authored `lunco:waypoint:inactiveColor` once and stores active/inactive
-  render intents on the projected marker. Its change-gated presentation system
-  switches that intent from the live reached set without authoring a USD edit.
-  The shared Rhai prelude validates and exposes the event for mission policy; it
-  does not poll distance or mutate marker materials.
-
-This keeps USD as the source of truth for identity, geometry, placement, sensor size,
-and inactive look parameters. Rust owns collision, identity projection, and the
-runtime look transition; Rhai consumes the structured event and sequences mission
-policy. It does not poll a duplicate distance tolerance or author a live material
-opinion.
-
-The authored graphics companion at `assets/scenes/tests/waypoint_visual.usda`
-reuses the six-wheel rover and places this marker at the rover's terrain anchor.
-Run it through the production binary's offscreen recorder when reviewing marker
-visibility; the expected result is a readable rover silhouette through the green
-dome, with the dome still visibly emissive.
-
-### Labels follow the waypoint
-
-A waypoint that needs a screen label authors `lunco:billboard = true` and its
-`lunco:billboard:*` presentation fields on the waypoint prim. The reusable
-waypoint asset opts in, so composed scene references and runtime-created markers
-have the same label contract; the Rhai authoring tool only references that
-asset and does not duplicate its visual metadata. The generic USD billboard renderer is the
-only label reader: it consumes the waypoint's propagated `GlobalTransform`, which
-BigSpace derives from the terrain grid and its ancestors, and projects that render
-pose with the active camera. It wraps labels to a bounded width, clamps their
-backdrop to the viewport, and gives nearer markers first choice of one of four
-camera-facing slots. A label with no collision-free slot is omitted for that frame
-rather than covering another label or its marker. Route projection does not draw
-a second label, subtract active-frame positions from camera positions, or
-reimplement distance/coordinate conversion. This keeps a label attached to its
-waypoint when celestial parents rotate and leaves the route snapshot responsible
-only for terrain-grid ribbon geometry and active-leg presentation. Runtime-only
-markers attach the same data-only `UsdBillboard` contract plus the generic
-`BillboardIndex` fact to their shared USD marker root. Their `Name` identity
-remains owned by the spawn/catalog path; the route key is used only by arrival
-state. Both paths therefore feed the same renderer without a route-specific label
-path or alternate identity path.
-
-The change-gated surface projection uses the shared BigSpace conversion
-`position_in_grid_to_parent_local`: it samples in the active terrain frame and
-stores the result in the marker's actual parent, splitting a `CellCoord` only
-when that parent is a `Grid`. This keeps plain USD scene-root markers and
-terrain-grid markers on the same canonical hierarchy.
-
-`BehaviorSpec`'s own doc already declares JSON its wire format and names "USD
-metadata" as an intended channel.
-
-### Interaction ownership
-
-The editor's pointer layer owns only engine mechanics: the egui gate, click
-identity, camera/frame conversion, terrain surface query, and canonical document
-identity. It emits a typed `RunRhaiTool` request with a structured click/edit
-context. It does not construct a Rhai source string, parse route topology, or
-write USD operations.
-
-`assets/scripting/tools/waypoint_editor.rhai` owns waypoint policy: route shape
-validation, marker naming, BT.CPP import/export, and the single compound
-`ApplyUsdOps` transaction. A new scene processor is a new `on_click(context)`
-tool library; it does not require a Rust registration branch. The only JSON
-remaining in this path is inside explicit command contracts such as the existing
-BT.CPP codec and USD operation API, not as an internal Rust-to-Rhai value hop.
-
-### One authored marker, explicit visual and interaction geometry
-
-The reusable marker follows the standard-schema boundary:
-
-```usda
-def Sphere "Dome"
-{
-    double radius = 1.5
-    double3 xformOp:translate = (0, 1.5, 0)
-    float[] primvars:displayOpacity = [0.08]
-    bool lunco:surface:additive = true
-}
-def Sphere "Trigger" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
-{
-    double radius = 2.5
-    custom string lunco:triggerZone = "waypoint"
-}
-```
-
-`lunco:triggerZone` is the mission meaning that USD does not define; `radius`,
-transform, visibility, material, and collision are standard USD/UsdPhysics data.
-`lunco-usd-bevy-scene::read_shape_dims` projects both spheres from their authored
-radius, while only `Trigger` is projected into the Avian overlap sensor. The
-visual dome remains present after arrival; the USD simulation projection reads
-the authored inactive color into a render intent and switches it from session
-state without changing the authored stage.
-
-The derived route is intentionally quieter than the marker annotation: it is a
-surface-separated, unlit triangle strip with a narrow total width (14 cm), a
-muted green complete path, and a brighter blue active leg. It remains one
-change-gated route projection and never grows with the waypoint dome or vehicle
-dimensions. This preserves ordered-route context without painting a road over a
-close rover view.
-
-### Visual progress uses the authoritative live binding
-
-An authored target path is resolved once by the USD behavior projection into the
-vessel's `TargetBindings` map. The route visualizer associates that exact
-path-to-entity binding with the authored marker entity; it does not scan marker
-paths, reinterpret a path relative to another prim, or rely on ECS query order.
-Runtime-only targets use their explicit `RuntimeWaypointBinding` instead. If an authored binding is
-unavailable, the route keeps its authored geometry and no visited state is
-inferred. The gray/green material transition is therefore driven by the
-structured arrival event and the marker's own USD metadata; the route visualizer
-remains responsible only for active-leg presentation. The same exact path-to-entity
-identity drives the behavior tree and the arrival state, so a waypoint cannot
-oscillate because two unrelated path representations happen to match.
-
-### Waypoints are not children of the vessel
-
-A route is in WORLD space. Parented under the rover, the waypoints would ride along
-as it drives — the route would chase the vehicle. They live in the scene root's
-`Route` scope, and the XML names them by path.
-
-### Resolution happens at compile time
-
-`compile_behavior_xml` resolves each `target` prim path to that prim's live
-`GlobalTransform`, bakes the coordinates into the compiled tree, and **recompiles
-whenever a referenced prim moves**. So dragging a pin re-routes the rover, while the
-hot path (`drive_autopilots`) stays a plain coordinate chase with no per-tick lookups.
-
-`BehaviorSpec` therefore needed **no new variant**: the prim reference exists only in
-the XML/JSON intermediate and is gone by the time a tree is built.
-
-A tree naming a deleted waypoint **refuses to compile** and keeps its last good route
-— it must never silently bake `[0,0,0]` and drive the rover into the world origin.
-
-### Live edits are prepare/commit transactions
-
-Changing a route is not a scene reset. The USD resolver, autopilot compiler, and
-route visualizer use the same two-phase rule:
-
-1. **Prepare** a candidate from the newest authored XML, exact composed target
-   bindings, active-frame poses, and terrain samples. Missing bindings, pending
-   referenced prims, invalid XML, and failed surface projection are incomplete
-   candidates; they do not publish an empty route.
-2. **Commit** the candidate atomically at the normal ECS command boundary. Until
-   then, the last complete binding set, compiled tree, controller state, and route
-   ribbon remain authoritative.
-
-The commit never changes the rover's pose, velocity, physics state, or possession.
-An append preserves the current leg; a valid replan selects the next valid leg from
-the current route state; an explicit empty route is a visible hold/clear operation.
-Only an explicit engage, disengage, clear, or mission policy may reset execution.
-The active controller remains a fixed-step Rust hot path, so preparation is
-change-gated and asynchronous work never becomes per-tick scripting or a full scene
-reload.
-
-Adding a waypoint may resync the USD ancestors of the new marker or mission prim.
-Those ancestor paths are structural context, not physics changes: the live bridge
-reprojects an ancestor only when its composed physics schema has not yet reached the
-matching ECS admission marker. An already admitted rover therefore keeps its body,
-wheels, Modelica sessions, pose, velocity, and possession while the new child lands.
-When an editor changes a file-backed BT mission into inline XML, it uses the standard
-`info:implementationSource = "sourceCode"` arm and clears the other source arms in
-the same journaled transaction, so a selected `sourceAsset` can never conflict with
-the edited `info:sourceCode`.
-
-## Interaction — document-backed and runtime-only routes
-
-For a rover mounted in an authored USD document, **no new command verbs** are
-needed. The `PlaceWaypoint` intent paired with the primary pointer action
-(Alt+LMB in the bundled keymap) lowers to `ApplyUsdOps`: ordered
-`AddPrim`/`SetTranslate` operations for the marker, optional mission-program
-construction (`AddPrim` + `SetApiSchemas`), and the standard inline-program source
-arm for `info:sourceCode`. The document journals it as one undo unit and the live projector
-sees the complete authored shape after the change set, so no ECS component is
-patched directly by the editor.
-
-A runtime-spawned asset has no owning `UsdDocument`. The same `PlaceWaypoint`
-intent therefore does not
-guess the active document or write a path into an unrelated scene. It extends the
-vessel's mirrored `AutopilotBehaviorSpec` through the existing
-`SetAutopilotBehavior`/`EngageAutopilot` commands. The resulting route is
-read-only runtime geometry: it is visible and drives the same behaviour-tree
-autopilot, but has no authored marker to drag or persist until the user mounts or
-authors it in a document.
-
-The Spawn palette's Waypoint entry is the UI affordance for this same route
-operation: it arms a ground placement and appends to the currently possessed or
-selected vessel. It does not create a free-standing marker, because a marker
-without a vessel and an ordered mission leg cannot follow or be followed by
-anything. API/Rhai callers use `AddRuntimeWaypoint` with an explicit vessel.
-That command creates the shared USD marker instance and uses a 2 m geometric
-arrival radius inside its authored 2.5 m sensor radius, keeping route progression
-and collision-backed `waypoint.reached` events on the same physical target.
-
-Everything else about a waypoint is *already implemented*, by code that knows nothing
-about waypoints:
-
-| Interaction | Mechanism |
+| Concern | Owner |
 |---|---|
-| Move a pin | The ordinary transform gizmo — its authored `lunco:spawnable` root is projected to `SelectableRoot` |
-| Delete a pin | The ordinary Delete key → `RemovePrim` |
-| Undo | The document's typed inverse ops |
-| Inspect | Its attributes are ordinary prim parameters |
-| Persist | Saved to `.usda` |
-| Journal / replay | `DomainKind::Usd`, lossless (forward, inverse) pairs |
-| Network | Replicates on the USD document plane |
+| Route identity, point placement, trigger radius, look, and subject relationship | Composed USD |
+| Route sequencing, enable/disable policy, mission reactions | Rhai program |
+| Sensor overlap and `enter:<zone>` event production | Generic physics/sensor runtime |
+| Steering math and named-port writes | Generic navigation/port mechanisms |
+| Equations, actuator dynamics, and contact response | Modelica / Avian |
 
-That is the whole point: **the feature mostly stops existing.**
+The standard reusable marker is
+[`assets/markers/route_point.usda`](../../assets/markers/route_point.usda).
+It contains a visual-only dome and a separate invisible overlap sensor. The
+asset uses standard USD geometry/material properties plus the registered
+project schemas needed for a trigger zone and billboard presentation. It is a
+route annotation, not a vessel component.
 
-## Ownership boundary
+## Scene shape
 
-The editor owns authoring intent and submits typed USD operations for document-backed
-routes. The autopilot owns the compiled behavior and runtime control state. The
-Command Deck and generic billboard renderer are read-only projections of those
-authoritative sources; they do not maintain a second waypoint list or draw a second
-route annotation.
+```usda
+def Scope "Route"
+{
+    def Scope "Program" (prepend apiSchemas = ["LunCoProgramAPI"])
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/route_follow.rhai@
+        rel inputs:subject = </Traverse/Rover>
+    }
 
-Rhai owns mission policy: runtime route construction, sequencing, arrival actions,
-and the explicit decision to append, replan, hold, or clear. Rust keeps only the
-generic mechanisms that must be authoritative and fast: typed command dispatch,
-USD identity/binding resolution, active-frame pose conversion, collision-backed
-arrival events, candidate compilation/commit, route-mesh projection, runtime look
-projection, and the fixed-step controller. A future unified route-edit API should
-pass stable waypoint identities plus an explicit update policy from Rhai; it must
-not move pointer raycasts, `DocumentId` resolution, USD transactions, collision
-events, geometry projection, or per-frame steering into the VM.
+    def Xform "P0" (
+        prepend references = @lunco://markers/route_point.usda@</RoutePoint>
+    )
+    {
+        over "Trigger" { token lunco:triggerZone = "route_p0" }
+    }
+}
+```
 
-This is the deliberate “waypoint as a tool” boundary. A Rhai tool may inspect
-composed USD facts and request a typed route operation, while the engine remains
-the single owner that validates the document, applies the journaled USD change,
-resolves exact prim identities, and publishes a complete route snapshot. The
-editor's pointer handler is therefore a thin semantic authoring adapter, not a
-second mission implementation. Moving the whole click path into Rhai would
-duplicate active-frame picking and document transaction rules, add a script-host
-ordering dependency, and weaken the current atomic prepare/commit contract.
+The program reads its own composed USD parent, enumerates point children in
+authored order, resolves their poses, and reads `inputs:subject`. It does not
+copy coordinates into Rust or into the subject. Multiple routes can coexist by
+using distinct scopes and subject relationships; enablement is a property of
+each program instance.
 
-## What correctly stays in ECS
+## Progression
 
-**Scene data goes to USD; control authority does not.** Whether an autopilot is
-*engaged*, and who possesses a vessel, are runtime session state (a `SessionRegistry`
-claim), not scene description — the same way possession isn't a USD attribute.
-`EngageAutopilot` / `DisengageAutopilot` stay as they are.
+The generic sensor emits `enter:<zone>` and `exit:<zone>` events. The route
+program accepts an enter event only when its source is the current subject and
+the zone is the current point. It then emits the authored route-level
+`route_point_reached` event for mission policy and advances its local route
+cursor. Physics reports the sensor event; it does not publish a route-specific
+“target reached” fact and it does not decide mission progression.
 
-The line: *the route* is authored; *whether we're driving it right now* is not.
+The route task remains live while the scene is running. Editing point placement,
+point order, the subject relationship, or the program's enabled input is seen
+through the normal USD/program reload path. An unresolved point or subject
+causes a visible safe stop and diagnostic; it is not treated as the origin and
+does not fall back to a vessel-owned route.
 
-## The tick-rate trap this design would otherwise have reintroduced
+## Presentation
 
-`Sequence` resets its children the instant it completes, and `Repeat::forever` resets
-the lap — so a rover parked inside a waypoint's radius completes a lap **every tick**
-and re-fires that waypoint's tools at 60 Hz. `build_patrol` guards its own legs; a
-hand-authored `sequence[drive_to, run_tool]` — which is exactly what this XML compiles
-to — would have walked straight back into it.
+The marker's dome is emissive, translucent, and shadowless. Its trigger is
+invisible and has its own authored radius. Billboard text and placement are
+read by the generic billboard renderer. Route execution does not recolor or
+rebuild marker geometry; a scenario may react to `route_point_reached` to update
+mission state or the HUD through its own policy.
 
-So the guard is now a general rule in `build_sequence_children`: **a `run_tool` fires
-on the arrival edge of the nearest preceding `drive_to` in its sequence.** The drive
-leaf arms a latch while it is genuinely en route; firing consumes it. Parked ⇒ never
-re-armed ⇒ never re-fires; a real lap drives away and back ⇒ fires once per lap.
+The visual contract is covered by
+[`assets/scenes/tests/waypoint_visual.usda`](../../assets/scenes/tests/waypoint_visual.usda)
+and its Rhai observer. The route/task behavior contract is covered by authored
+scene scenarios, including
+[`scripting_task_contract.rhai`](../../assets/scenarios/tests/scripting_task_contract.rhai).
+Rust tests retain only generic USD projection, sensor, and task-shape
+mechanisms that the production scene surface cannot isolate more directly.
 
-## Still open
+## Authoring rules
 
-- **`patrol()` in rhai** still emits `SetAutopilotBehavior{spec_json}` rather than
-  authoring prims. This is intentional for runtime-only vessels; a future document
-  authoring command may offer an explicit “promote route to USD” operation.
-- Runtime-only pins are visible but intentionally not draggable or right-click
-  editable: there is no USD prim/document to own those edits. Promotion to authored
-  USD is still a separate authoring feature.
-- **Ctrl+Z does not undo a spawn or a gizmo move today** — the editor's `UndoStack` is
-  a separate ECS-only stack, while the real (typed, invertible) undo lives on the
-  document host. Waypoints ride the document path, so re-pointing Ctrl+Z at
-  `DocumentHost::undo()` would fix undo for waypoints, spawns and moves in one move.
-  Pre-existing, but this design leans on it.
+- Use composed USD queries for runtime scene facts and authored-layer reads only
+  for document/edit questions.
+- Use exact composed `SdfPath` identity and an authored relationship for the
+  subject; do not resolve by display name or query order.
+- Keep route and mission policy in `.rhai`; keep continuous control laws in
+  Modelica or the generic navigation mechanism.
+- Add a production Rhai scene test for an observable route/policy contract. Do
+  not add a Rust fixture that recreates a route, a vehicle, or a mission tree.
+- Keep the marker asset reusable. A new route type needs a composition or
+  generic schema extension only when existing USD facts cannot express it.

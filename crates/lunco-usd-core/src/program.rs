@@ -250,8 +250,6 @@ fn validate_spec(spec: &ProgramAttachSpec) -> Result<(), String> {
     if !spec.source_asset.ends_with(".mo")
         && !spec.source_asset.ends_with(".py")
         && !spec.source_asset.ends_with(".rhai")
-        && !spec.source_asset.ends_with(".btxml")
-        && !spec.source_asset.ends_with(".xml")
     {
         return Err(format!(
             "unsupported program source extension in `{}`",

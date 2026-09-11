@@ -32,15 +32,15 @@ by the annotation system. The two ownership models must not be mixed.
 
 ## Route ribbons are derived annotations
 
-The waypoint prims and the BT.CPP mission are the authored facts. The route ribbon is a
+The route-point prims and the Rhai task program are the authored facts. The route ribbon is a
 view of those facts plus live execution state, so it is generated as transient Bevy
 geometry. It is not a second USD route, a per-frame USD edit, or a screen-space gizmo.
 `RouteVisualProjection` is the one derived view: its change-gated producer resolves
-every authored target through the exact composed USD path binding, samples every route
+every authored route point through the exact composed USD path binding, samples every route
 leg on the authoritative terrain surface, and publishes the active-frame geometry.
 The marker-root surface projection runs before that producer and is a separate
 change-gated owner; the route mesh consumes the resulting snapshot. The waypoint
-appearance is authored USD plus the runtime USD opinion applied by the Rhai waypoint
+appearance is authored USD plus the runtime USD opinion applied by the Rhai route-point
 helper after a structured arrival event. The clearance is owned by the annotation
 renderer; it never reuses a waypoint sphere's radius or local transform. The complete
 ordered route remains visible while the same state transition advances the active-leg
@@ -130,11 +130,11 @@ source):
 
 | Attribute | Resolves to |
 |---|---|
-| `uniform asset info:sourceAsset = @behaviors/rover_patrol.btxml@` | the behaviour-tree engine (`.btxml` canonical; `.xml` accepted for interop) |
+| `uniform asset info:sourceAsset = @scenarios/route_follow.rhai@` | the Rhai task-program runtime |
 | `uniform token info:id = "range_beam"` | a Rust driver, from `ProgramDriverRegistry` |
 
-Same prim type, same discovery, same per-instance params. Vehicle behavior does
-not dispatch through a Rust registry: USD composes a Modelica/Rhai program and
+Same prim type, same discovery, same per-instance params. Scene behavior does
+not dispatch through a behavior-specific Rust registry: USD composes a Modelica/Rhai program and
 the program publishes named port values. Rust projects those generic values into
 physics and rendering. `PortRegistry` remains the name-dispatch boundary for
 inspection and command transport; it does not select a vehicle steering mode.

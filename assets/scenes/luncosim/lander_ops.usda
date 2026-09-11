@@ -12,8 +12,8 @@
 # and how they are bolted together:
 #
 #   Lander      → vessels/landers/descent_lander.usda   (GNC model + sensors + flame)
-#   SkidRover   → vessels/rovers/skid_rover.usda        (+ an autopilot script)
-#   RoverTarget → vessels/markers/waypoint.usda         (×3, the course)
+#   SkidRover   → vessels/rovers/skid_rover.usda
+#   Route point → markers/route_point.usda              (×3, the course)
 #
 # What's left in this file is the MISSION: the joint that holds the two together,
 # where the gates are, and the `Scenario` prim that sequences the whole thing.
@@ -241,18 +241,6 @@ def Xform "LanderTest" (
         uniform token[] xformOpOrder = ["xformOp:translate"]
         double3 physics:velocity = (-5.0, 0.0, -5.0)
 
-        # Autopilot: drives the deployed rover through the waypoint course, and yields
-        # to the player on any key press. Engages on the `rover_deployed` event. A
-        # program the SCENE adds to a stock rover — the same separation the lander's
-        # guidance gets, and for the same reason: a rover asset that patrolled the
-        # moment you spawned it would be a surprise, not a feature.
-        def Scope "Autopilot" (
-            prepend apiSchemas = ["LunCoProgramAPI"]
-        )
-        {
-            uniform token info:implementationSource = "sourceAsset"
-            uniform asset info:sourceAsset = @lunco://behaviors/lander_rover_patrol.btxml@
-        }
     }
 
     # ── The fixed joint holding the rover and lander together ──
@@ -264,32 +252,45 @@ def Xform "LanderTest" (
         point3f physics:localPos1 = (0, 0.15, 0)
     }
 
-    # ── Rover drive-to waypoints ────────────────────────────────────────────
-    # Three translucent glowing markers (the same reusable marker asset) forming a
-    # course. Each marker has a visible dome and a ground-anchored overlap-only
-    # Trigger; the runtime emits a structured `waypoint.reached` payload and
-    # `rover_surface_ops.rhai` applies the authored inactive look and translates
-    # the authoritative event for anything downstream (the tutorial) to wait on.
-    def Xform "RoverTarget1" (
-        prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker>
-    )
+    # ── Scene-level rover route ─────────────────────────────────────────────
+    # Route data and execution are owned by the mission scene. The rover asset
+    # is only the subject relationship of this program.
+    def Scope "Route"
     {
-        double3 xformOp:translate = (14.0, 0.0, 9.0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-    }
-    def Xform "RoverTarget2" (
-        prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker>
-    )
-    {
-        double3 xformOp:translate = (-11.0, 0.0, 16.0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
-    }
-    def Xform "RoverTarget3" (
-        prepend references = @lunco://vessels/markers/waypoint.usda@</WaypointMarker>
-    )
-    {
-        double3 xformOp:translate = (5.0, 0.0, -15.0)
-        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Scope "Program" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/route_follow.rhai@
+            float inputs:enabled = 0.0
+            rel inputs:subject = </LanderTest/SkidRover>
+        }
+
+        def Xform "P0" (
+            prepend references = @lunco://markers/route_point.usda@</RoutePoint>
+        )
+        {
+            double3 xformOp:translate = (14.0, 0.0, 9.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            over "Trigger" { token lunco:triggerZone = "route_P0" }
+        }
+        def Xform "P1" (
+            prepend references = @lunco://markers/route_point.usda@</RoutePoint>
+        )
+        {
+            double3 xformOp:translate = (-11.0, 0.0, 16.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            over "Trigger" { token lunco:triggerZone = "route_P1" }
+        }
+        def Xform "P2" (
+            prepend references = @lunco://markers/route_point.usda@</RoutePoint>
+        )
+        {
+            double3 xformOp:translate = (5.0, 0.0, -15.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            over "Trigger" { token lunco:triggerZone = "route_P2" }
+        }
     }
 
     # Kinematic touchdown target. The child dome is visual-only and pass-through;

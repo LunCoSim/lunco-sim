@@ -66,7 +66,6 @@ use lunco_usd_bevy_scene::{
 // `bevy_core_pipeline` → wgpu + naga). `lunco-render-bevy` binds these.
 // See docs/architecture/render-decoupling.md.
 use leafwing_input_manager::prelude::ActionState;
-use lunco_autopilot::usd_tree::BehaviorXml;
 use lunco_avatar::{
     AdaptiveNearPlane, AvatarFlightSettings, FreeFlightCamera, OrbitCamera, SpringArmCamera,
 };
@@ -527,14 +526,6 @@ impl Plugin for UsdSimPlugin {
         .configure_sets(PreUpdate, UsdSimSet::ActivateDynamicBodies);
         app.add_systems(lunco_core::SceneTeardown, reset_scene_runtime_safety);
         app.add_systems(lunco_core::SceneTeardown, retire_scene_cameras);
-        // Autopilot actors claim scene vessels and hold compiled trees of the scene's
-        // route — scene-derived state, so the shared teardown boundary retires them
-        // with the rest of the scene (despawn + release the claim, so the respawned
-        // vessel can be re-engaged and its waypoints reset cleanly).
-        app.add_systems(
-            lunco_core::SceneTeardown,
-            lunco_autopilot::teardown_autopilot_actors,
-        );
         app.register_type::<PhysicalWheel>()
             // Client-only: reconstruct a remote rover's wheels from its chassis
             // (kinematic followers — wheels are no longer replicated), then re-derive
@@ -579,13 +570,6 @@ impl Plugin for UsdSimPlugin {
                     process_usd_sim_prims
                         .run_if(any_unprocessed_usd_sim)
                         .after(lunco_usd_bevy::process_queued_usd_visuals),
-                    // Resolve behavior targets only after this frame's USD
-                    // prim projection has admitted newly spawned waypoint
-                    // entities. Running in PreUpdate raced the projection and
-                    // replaced a valid binding with an incomplete map.
-                    resolve_behavior_targets
-                        .after(process_usd_sim_prims)
-                        .after(lunco_usd_bevy::sync_usd_visuals),
                     // Independent link/celestial projector — runs for EVERY prim (cosim,
                     // wheel, plain), gated by its own marker, blocked by nothing.
                     project_celestial_comms_prims
@@ -614,13 +598,6 @@ impl Plugin for UsdSimPlugin {
         app.add_systems(
             PostUpdate,
             marker::scale_screen_constant_markers.before(TransformSystems::Propagate),
-        );
-        // Waypoint progress is runtime session state. Keep it on the projected
-        // appearance intent rather than routing a material edit back through the
-        // live USD stage (which would rebuild the scene during an active mission).
-        app.add_systems(
-            Update,
-            marker::sync_waypoint_visuals.after(process_usd_sim_prims),
         );
         // The authored light's `Transform` is installed during Update, while
         // its composed world rotation is produced by Bevy/big_space transform
@@ -987,47 +964,6 @@ fn collect_joint_scan_read(
 /// surface — maps one composed prim's authored `lunco:*` / PhysX-vehicle
 /// schemas to its sim/avatar/wheel components.
 #[allow(clippy::too_many_arguments)]
-/// Collect behavior-tree program children below a vehicle, including a
-/// namespace such as `OBC`. Program discovery is capability-based and recursive;
-/// the namespace's spelling and depth are authoring choices, not runtime rules.
-/// The source arm and backend come from the shared USD program resolver.
-fn collect_behavior_sources(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
-    parent: &SdfPath,
-    out: &mut Vec<(String, Option<String>, Option<String>)>,
-) {
-    if !reader.is_active(parent) {
-        return;
-    }
-    for child in reader.children(parent) {
-        // Inactive composed prims are not part of the scene contract. Do not
-        // recurse through them: an inactive vessel may still carry a mission
-        // program in a referenced layer, but that program must not be
-        // projected onto an active assembly or vessel.
-        if !reader.is_active(&child) {
-            continue;
-        }
-        if reader.has_api_schema(&child, "LunCoProgramAPI") {
-            match lunco_usd_bevy_core::program::resolve_behavior_tree_source(reader, &child) {
-                Ok(Some(lunco_usd_bevy_core::program::BehaviorTreeSource::Code(xml))) => {
-                    out.push((child.as_str().to_string(), Some(xml), None))
-                }
-                Ok(Some(lunco_usd_bevy_core::program::BehaviorTreeSource::Asset(path))) => {
-                    out.push((child.as_str().to_string(), None, Some(path)))
-                }
-                Ok(_) => {}
-                Err(issue) => warn!(
-                    "[usd-sim] behavior program {} is unresolved at {}: {}",
-                    child.as_str(),
-                    issue.property,
-                    issue.message
-                ),
-            }
-        }
-        collect_behavior_sources(reader, &child, out);
-    }
-}
-
 fn read_gear_drive_real(
     reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     prim: &SdfPath,
@@ -1515,81 +1451,6 @@ fn process_usd_sim_prim_read(
                     "USD prim {} has invalid billboard attributes; label ignored",
                     prim_path.path
                 );
-            }
-        }
-    }
-    let waypoint = match read_authored_bool_strict(reader, &sdf_path, "lunco:waypoint") {
-        Ok(Some(value)) => value,
-        Ok(None) => false,
-        Err(_) => {
-            push_usd_sim_diagnostic(
-                diagnostics,
-                &prim_path.path,
-                "waypoint-attribute",
-                "lunco:waypoint must be an authored boolean",
-            );
-            warn!(
-                "USD prim {} has malformed `lunco:waypoint`; marker ignored",
-                prim_path.path
-            );
-            false
-        }
-    };
-    if waypoint {
-        commands.entity(entity).try_insert(marker::WaypointMarker);
-    }
-    // Waypoint arrival is session state. Capture the composed active/inactive
-    // looks on the projected visual child so `marker::sync_waypoint_visuals` can
-    // update appearance in ECS without authoring a live USD material edit. A
-    // material edit would rebuild every bound visual and tear down active
-    // co-simulation participants while a route is running.
-    if let Some(material) = maybe_mat {
-        let mut owner = sdf_path.as_str().to_string();
-        let marker_path = loop {
-            let owner_sdf = SdfPath::new(&owner).ok();
-            if owner_sdf
-                .as_ref()
-                .is_some_and(|path| reader.has_api_schema(path, "LunCoWaypointAPI"))
-            {
-                break Some(owner);
-            }
-            if owner == "/" {
-                break None;
-            }
-            owner = owner
-                .rsplit_once('/')
-                .map(|(parent, _)| if parent.is_empty() { "/" } else { parent })
-                .unwrap_or("/")
-                .to_string();
-        };
-        if let Some(marker_path) = marker_path {
-            if let Some(inactive) = read_vec3_f64(
-                reader,
-                &SdfPath::new(&marker_path).expect("validated waypoint marker path"),
-                "lunco:waypoint:inactiveColor",
-            ) {
-                if inactive.iter().all(|value| value.is_finite()) {
-                    let mut inactive_look = material.clone();
-                    inactive_look.base_color = LinearRgba::new(
-                        inactive[0] as f32,
-                        inactive[1] as f32,
-                        inactive[2] as f32,
-                        material.base_color.alpha,
-                    );
-                    inactive_look.emissive = LinearRgba::new(
-                        inactive[0] as f32,
-                        inactive[1] as f32,
-                        inactive[2] as f32,
-                        material.emissive.alpha,
-                    );
-                    commands
-                        .entity(entity)
-                        .try_insert(marker::WaypointVisualLook {
-                            active: material.clone(),
-                            inactive: inactive_look,
-                            marker_path,
-                        });
-                }
             }
         }
     }
@@ -2172,101 +2033,6 @@ fn process_usd_sim_prim_read(
         // vessel prim's authored `outputs:` attributes. The
         // two stay separate components on purpose — both carry a `"brake"`, and
         // they are not the same value (analog command vs discretized gate).
-    }
-
-    // 1b. Mission behaviour: a BT.CPP v4 XML tree, carried by a program-API
-    // child of this prim — the vessel OWNS the tree, so the tree is read from
-    // here, its owner. Inline source wins over a file: an author editing a tree in
-    // place means it. The tree's spatial leaves reference WAYPOINT PRIMS by path;
-    // `resolve_behavior_targets` binds those, and `lunco_autopilot::usd_tree` bakes
-    // their live positions into the compiled tree.
-    //
-    // A `.btxml` (canonical) or interoperable `.xml` is the one program with a role
-    // of its own: a declarative tree is
-    // not a script, it is compiled and ticked by the behaviour engine. Extension
-    // picks the engine, exactly as it does for `.mo` and `.rhai`.
-    let mut behavior_sources: Vec<(String, Option<String>, Option<String>)> = Vec::new();
-    // A behavior program belongs to the prim that owns the command surface. A
-    // scene/root may contain the vessel as a descendant, but recursively scanning
-    // every prim would attach the descendant mission to that root and leave the
-    // actual vessel without an autopilot. `Controls` is the authored, generic
-    // ownership boundary shared by vehicles and other controllable assemblies.
-    let owns_control_surface = reader
-        .children(&sdf_path)
-        .into_iter()
-        .any(|child| child.name() == Some("Controls"));
-    if owns_control_surface {
-        if reader.has_api_schema(&sdf_path, "PhysxVehicleContextAPI") {
-            // Steering geometry is a required authored capability of every
-            // controllable vehicle. It is read at the same ownership boundary as
-            // Controls, so native and scripted navigation cannot silently disagree
-            // about whether the body can pivot or must roll through a turn.
-            match reader
-                .text(&sdf_path, "lunco:steeringGeometry")
-                .and_then(|value| lunco_core::parse_steering_geometry(&value))
-            {
-                Some(geometry) => {
-                    commands.entity(entity).try_insert(geometry);
-                }
-                None => {
-                    commands
-                        .entity(entity)
-                        .remove::<lunco_core::SteeringGeometry>();
-                    push_usd_sim_diagnostic(
-                        diagnostics,
-                        &prim_path.path,
-                        "missing-steering-geometry",
-                        "controllable vehicle must author lunco:steeringGeometry as differential or ackermann",
-                    );
-                }
-            }
-        }
-        collect_behavior_sources(reader, &sdf_path, &mut behavior_sources);
-    }
-    // A BT.CPP file may contain several named BehaviorTree definitions; its
-    // `main_tree_to_execute` is the explicit selection for that file. Several
-    // sibling BT program children are different controllers, not an implicit
-    // priority list: choosing one by traversal order would make Safety/Mission
-    // arbitration a hidden last-writer race. Keep the projection fail-closed
-    // until those programs are connected through an authored port arbiter.
-    behavior_sources.sort_by(|a, b| a.0.cmp(&b.0));
-    if behavior_sources.len() > 1 {
-        warn!(
-            "USD prim {} carries {} BT program children; no tree projected until an authored port arbiter selects one",
-            prim_path.path,
-            behavior_sources.len()
-        );
-    }
-    if behavior_sources.len() != 1 {
-        commands
-            .entity(entity)
-            .remove::<lunco_autopilot::usd_tree::BehaviorXml>()
-            .remove::<lunco_autopilot::usd_tree::BehaviorXmlPath>()
-            .remove::<lunco_autopilot::usd_tree::BehaviorXmlHandle>()
-            .remove::<lunco_autopilot::usd_tree::BehaviorProgramSource>();
-    }
-    let selected_behavior = (behavior_sources.len() == 1)
-        .then(|| behavior_sources.into_iter().next().expect("length checked"));
-    if let Some((source_path, xml, asset)) = selected_behavior {
-        if let Some(xml) = xml {
-            commands
-                .entity(entity)
-                .try_insert((
-                    lunco_autopilot::usd_tree::BehaviorXml(xml),
-                    lunco_autopilot::usd_tree::BehaviorProgramSource(source_path),
-                ))
-                .remove::<lunco_autopilot::usd_tree::BehaviorXmlPath>()
-                .remove::<lunco_autopilot::usd_tree::BehaviorXmlHandle>();
-        } else if let Some(asset) = asset {
-            commands
-                .entity(entity)
-                .try_insert((
-                    lunco_autopilot::usd_tree::BehaviorXmlPath(asset),
-                    lunco_autopilot::usd_tree::BehaviorProgramSource(source_path),
-                ))
-                .remove::<lunco_autopilot::usd_tree::BehaviorXml>()
-                .remove::<lunco_autopilot::usd_tree::BehaviorXmlHandle>();
-        }
     }
 
     // 2b. A GEAR JOINT — `PhysxPhysicsGearJoint`, the PhysX schema for two hinges
@@ -3723,153 +3489,7 @@ fn on_add_usd_sim_prim(
     // 3. No duplicate processing or duplicate FSW ports
 }
 
-/// Bind the waypoint prims a vessel's behaviour tree references (`<Action ID="drive_to"
-/// target="/World/Route/W0"/>`) to their live entities, so
-/// `lunco_autopilot::usd_tree::compile_behavior_xml` can bake their world positions
-/// into the compiled tree.
-///
-/// Prim-path → entity resolution is USD's job, which is why it lives HERE and not in
-/// `lunco-autopilot` — that crate stays USD-free and merely compiles the bindings it
-/// is handed. A replacement binding set is published only when every target is
-/// present; until then the last complete set remains the active route snapshot.
-///
-/// Runs when a tree's XML or the USD identity projection changes. Target paths
-/// are derived once per entity/XML change and cached in this resolver; the
-/// compiler owns the separate active-frame pose bake. Unresolved paths do not
-/// replace an already-complete binding set: a pending route is re-evaluated when
-/// the authoritative prim or identity publication changes, while a first route
-/// with no complete binding remains unresolved rather than driving to origin.
-fn resolve_behavior_targets(
-    q_trees: Query<(
-        Entity,
-        Ref<lunco_autopilot::usd_tree::BehaviorXml>,
-        Option<&UsdPrimPath>,
-        Option<&lunco_autopilot::usd_tree::TargetBindings>,
-    )>,
-    q_prims: Query<(Entity, &UsdPrimPath)>,
-    q_changed_trees: Query<(), Or<(Added<BehaviorXml>, Changed<BehaviorXml>)>>,
-    q_changed_prims: Query<(), Or<(Added<UsdPrimPath>, Changed<UsdPrimPath>)>>,
-    q_changed_ids: Query<
-        (),
-        Or<(
-            Added<lunco_core::GlobalEntityId>,
-            Changed<lunco_core::GlobalEntityId>,
-        )>,
-    >,
-    mut removed_trees: RemovedComponents<BehaviorXml>,
-    q_provenance: Query<&lunco_core::Provenance>,
-    q_gid: Query<&lunco_core::GlobalEntityId>,
-    q_instance_root: Query<(), With<UsdInstanceRoot>>,
-    q_instance_projection: Query<&UsdInstanceProjection>,
-    mut target_cache: Local<bevy::ecs::entity::EntityHashMap<Vec<String>>>,
-    mut commands: Commands,
-) {
-    for vessel in removed_trees.read() {
-        target_cache.remove(&vessel);
-    }
-    if q_trees.is_empty() {
-        return;
-    }
-    if q_changed_trees.is_empty() && q_changed_prims.is_empty() && q_changed_ids.is_empty() {
-        return;
-    }
-    let mut xml_changed = false;
-    for (vessel, xml, _, _) in q_trees.iter() {
-        if xml.is_changed() || !target_cache.contains_key(&vessel) {
-            xml_changed = true;
-            let targets = lunco_autopilot::usd_tree::target_paths(&xml.0);
-            target_cache.insert(vessel, targets);
-        }
-    }
-    if !xml_changed && q_changed_prims.is_empty() && q_changed_ids.is_empty() {
-        return;
-    }
-    for (vessel, _xml, vessel_path, current_bindings) in q_trees.iter() {
-        let vessel_instance = instance_key(
-            vessel,
-            &q_provenance,
-            &q_gid,
-            &q_instance_root,
-            &q_instance_projection,
-        );
-        let mut bindings = lunco_autopilot::usd_tree::TargetBindings::default();
-        let mut missing = false;
-        let targets = target_cache
-            .get(&vessel)
-            .expect("target cache entry exists after the change-detection pass");
-        debug!(
-            "[resolve_behavior_targets] vessel {:?} ({}) has {} targets: {:?}",
-            vessel,
-            vessel_path
-                .map(|p| p.path.as_str())
-                .unwrap_or("no-usd-path"),
-            targets.len(),
-            targets
-        );
-        for path in targets.iter().cloned() {
-            let valid_target = SdfPath::new(&path).is_ok_and(|target| {
-                target.is_abs()
-                    && !target.is_property_path()
-                    && !target.is_prim_variant_selection_path()
-            });
-            let found = q_prims.iter().find(|(e, p)| {
-                let match_path = valid_target && p.path == path;
-                let match_stage = vessel_path
-                    .map(|vp| p.stage_handle == vp.stage_handle)
-                    .unwrap_or(true);
-                let inst = instance_key(
-                    *e,
-                    &q_provenance,
-                    &q_gid,
-                    &q_instance_root,
-                    &q_instance_projection,
-                );
-                let match_inst = inst.is_none()
-                    || vessel_instance.is_none()
-                    || inst == vessel_instance;
-                if match_path {
-                    debug!(
-                        "[resolve_behavior_targets] candidate {:?} ({}) match_stage={} match_inst={}",
-                        e, p.path, match_stage, match_inst
-                    );
-                }
-                match_path && match_stage && match_inst
-            });
-            if let Some((e, _)) = found {
-                debug!(
-                    "[resolve_behavior_targets] resolved target {} -> entity {:?}",
-                    path, e
-                );
-                bindings.0.insert(path, e);
-            } else {
-                missing = true;
-                debug!(
-                    "[resolve_behavior_targets] target {} for vessel {:?} is pending USD projection",
-                    path, vessel
-                );
-            }
-        }
-        if !missing {
-            commands.entity(vessel).try_insert(bindings);
-        } else if current_bindings.is_some_and(|bindings| !bindings.0.is_empty()) {
-            // Keep the last complete binding set authoritative while a newly
-            // authored/referenced target is still being projected. Publishing an
-            // empty set here would make a transient asset wait look like a
-            // deleted route and reset the running autopilot.
-            warn_once!(
-                "[resolve_behavior_targets] vessel {:?} has unresolved route targets; retaining the previous binding set while composed prim projection completes",
-                vessel
-            );
-        } else {
-            debug!(
-                "[resolve_behavior_targets] vessel {:?} still waiting for composed route targets",
-                vessel
-            );
-        }
-    }
-}
-
-/// Resolve a [`PendingDifferential`] — an authored gear joint — into a
+/// Resolve an authored gear joint into a
 /// [`DifferentialCoupling`] once every body it names is spawned and Avian-admitted
 /// (the `With<Position>` gate, same as USD joints). Matches the authored prim-path
 /// strings against live `UsdPrimPath`s, scoped by stage and instance root, so two

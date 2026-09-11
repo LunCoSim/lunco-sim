@@ -12,7 +12,7 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_doc::DocumentId;
-use lunco_usd_bevy_core::{stage_convention, CanonicalStages, UsdRead, UsdStageAsset};
+use lunco_usd_bevy_core::{canonical::CanonicalStages, stage_convention, UsdRead, UsdStageAsset};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_core::author::normalize_value_literal;
 use lunco_usd_core::document::{LayerId, UsdOp};

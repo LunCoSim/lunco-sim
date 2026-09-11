@@ -3,7 +3,7 @@
 //! This observes the authored `lander_ops.usda` mission in one process.  It
 //! proves the real Modelica propulsion projection is live (thrust, propellant,
 //! mass and inertia), the authored touchdown/deployment events occur, and the
-//! production rover completes its route through the normal autopilot/control
+//! production rover completes its route through the scene-level program/control
 //! boundary.  The negative handoff check uses only the public command surface;
 //! it does not write transforms or physics state.
 
@@ -45,7 +45,7 @@ fn on_start(me) {
     this.leg_pz = find("/LanderTest/Lander/LegPZ");
     this.leg_nz = find("/LanderTest/Lander/LegNZ");
     this.rover = find("/LanderTest/SkidRover");
-    this.goal = find("/LanderTest/RoverTarget3");
+    this.goal = find("/LanderTest/Route/P2");
     this.event_sources_ok = true;
     this.native_contacts_seen = false;
     this.model_contacts_seen = false;
@@ -92,8 +92,8 @@ fn on_event(me, evt) {
     } else if evt.name == "rover_deployed" {
         this.deployed = true;
         print("[descent-runtime] rover_deployed rover=" + world_pos(this.rover));
-    } else if evt.name == "waypoint.reached" {
-        print("[descent-runtime] waypoint_reached path=" + evt.value.path +
+    } else if evt.name == "route_point_reached" {
+        print("[descent-runtime] route point reached index=" + evt.value +
               " rover=" + world_pos(this.rover));
     } else if evt.name == "course_complete" {
         print("[descent-runtime] course_complete observed; finalizing acceptance");
@@ -226,9 +226,9 @@ fn on_tick(me) {
     if this.elapsed > 480.0 {
         this.done = true;
         let route_detail = "rover=" + world_pos(this.rover) +
-            " target1=" + world_pos(find("/LanderTest/RoverTarget1")) +
-            " target2=" + world_pos(find("/LanderTest/RoverTarget2")) +
-            " target3=" + world_pos(find("/LanderTest/RoverTarget3"));
+            " point0=" + world_pos(find("/LanderTest/Route/P0")) +
+            " point1=" + world_pos(find("/LanderTest/Route/P1")) +
+            " point2=" + world_pos(find("/LanderTest/Route/P2"));
         verdict(false, "production descent/deployment/course did not finish in 480 simulated seconds; " + route_detail);
     }
 }

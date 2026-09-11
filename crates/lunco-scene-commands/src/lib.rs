@@ -46,8 +46,6 @@ pub mod doc_resolve;
 /// `QueryEntity` — the READ side of the scene verbs, reporting the same semantic
 /// active physics frame [`commands::TransformEntity`] accepts.
 pub mod entity_query;
-/// Runtime-only waypoint command and shared collision-sensor arrival path.
-pub mod runtime_waypoint;
 /// Shaders as a journaled, synced, live-editable domain (WGSL twin of rhai's
 /// `ScriptDocument`) — edits record to the Twin journal (`DomainKind::Shader`).
 pub mod shader_doc;

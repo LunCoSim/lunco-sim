@@ -66,7 +66,7 @@ fn undo_removes_an_authored_prim_and_redo_restores_it() {
 
 #[test]
 fn undo_covers_verbs_nobody_wrote_undo_code_for() {
-    // A waypoint drop authors AddPrim + SetTranslate + SetAttribute. None of those had
+    // A scene annotation edit authors AddPrim + SetTranslate + SetAttribute. None of those had
     // a hand-written undo action, and none needed one: each carries its own typed
     // inverse. Undoing three times peels the whole edit off.
     let mut host = host();
@@ -94,7 +94,7 @@ fn undo_covers_verbs_nobody_wrote_undo_code_for() {
     }
     assert!(
         !has_prim(&host, "/World/wp1"),
-        "undoing the whole waypoint edit removes the pin prim"
+        "undoing the whole annotation edit removes the pin prim"
     );
     assert_eq!(host.undo_depth(), 0);
 }

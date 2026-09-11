@@ -1112,9 +1112,8 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
         // be deleted to take the behaviour away), and what gives the script its own
         // typed parameters, which live on it rather than on the owner.
         //
-        // A program with a source this engine does not run — a `.mo` solved by
-        // lunco-usd-sim, an `.xml` compiled by the behaviour-tree engine — is not
-        // ours; extension picks the engine, exactly as USD picks a file format.
+        // A program with a `.mo` source is owned by lunco-usd-sim; generic Rhai
+        // programs are the policy surface projected here.
         // Preview stages are inert presentations, including generic programs
         // attached by this visual projection rather than the physics projector.
         if !preview_only {
@@ -1123,7 +1122,6 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                 &sdf_path,
                 entity,
                 prim_path.stage_handle.id(),
-                asset_server,
                 commands,
             );
         }
@@ -3233,11 +3231,167 @@ pub fn get_attribute_as_vec3(
     read_vec3_f64(reader, path, attr).map(|v| Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32))
 }
 
+/// Apply one generic program resolution to its owning entity.
+///
+/// The program prim is the authored source identity; the owning entity carries
+/// the runtime source marker. Keeping this operation generic lets the live USD
+/// edit bridge update Rhai programs in place without rebuilding the owner.
+pub fn apply_program_resolution(
+    world: &mut World,
+    entity: Entity,
+    stage_id: bevy::asset::AssetId<UsdStageAsset>,
+    resolved: Option<program::ResolvedProgram>,
+) {
+    let rhai_asset = resolved.as_ref().and_then(|resolved| {
+        let program::ProgramSource::Asset(asset) = &resolved.source else {
+            return None;
+        };
+        (resolved.backend == program::ProgramBackend::Rhai)
+            .then(|| resolve_stage_asset_path(world.resource::<AssetServer>(), stage_id, asset))
+    });
+    let mut entity = world.entity_mut(entity);
+    entity
+        .remove::<lunco_core::programs::ProgramDriverId>()
+        .remove::<lunco_core::EmbeddedScenarioSource>()
+        .remove::<lunco_core::EmbeddedScenarioPath>();
+
+    match resolved {
+        Some(program::ResolvedProgram {
+            backend: program::ProgramBackend::Builtin,
+            source: program::ProgramSource::Id(id),
+        }) => {
+            entity.insert(lunco_core::programs::ProgramDriverId(id));
+        }
+        Some(program::ResolvedProgram {
+            backend: program::ProgramBackend::Rhai,
+            source: program::ProgramSource::Code(source),
+        }) => {
+            entity.insert(lunco_core::EmbeddedScenarioSource(source));
+        }
+        Some(program::ResolvedProgram {
+            backend: program::ProgramBackend::Rhai,
+            source: program::ProgramSource::Asset(_),
+        }) => {
+            let Some(asset) = rhai_asset else {
+                warn!(
+                    "[usd] Rhai program asset could not be resolved for {:?}",
+                    entity.id()
+                );
+                return;
+            };
+            entity.insert(lunco_core::EmbeddedScenarioPath(asset));
+        }
+        Some(resolved) => {
+            warn!(
+                "[usd] non-generic program {:?} reached generic projection: {:?}",
+                entity.id(),
+                resolved.backend
+            );
+        }
+        None => {}
+    }
+}
+
+/// Re-read the generic program children of one existing owner.
+///
+/// This is the structural counterpart to source hot-reload: adding or removing
+/// a program prim changes the owner's executable policy, but must not recreate
+/// the owner's physics or visual subtree.
+pub fn refresh_program_owner(
+    world: &mut World,
+    stage_id: bevy::asset::AssetId<UsdStageAsset>,
+    owner: Entity,
+) {
+    let Some(owner_path) = world
+        .get::<UsdPrimPath>(owner)
+        .map(|path| path.path.clone())
+    else {
+        return;
+    };
+    let Some((program_path, resolved, params)) = ({
+        let Some(stages) = world.get_non_send::<CanonicalStages>() else {
+            return;
+        };
+        let Some(stage) = stages.get(stage_id) else {
+            return;
+        };
+        let view = stage.view();
+        let owner = SdfPath::new(&owner_path).expect("projected USD path is valid");
+        let network_members = program::modelica_network_member_paths(&view);
+        let mut candidates: Vec<SdfPath> = UsdRead::children(&view, &owner)
+            .into_iter()
+            .filter(|child| UsdRead::is_active(&view, child))
+            .filter(|child| UsdRead::has_api_schema(&view, child, "LunCoProgramAPI"))
+            .collect();
+        if UsdRead::type_name(&view, &owner).as_deref() != Some("Scope")
+            && UsdRead::has_api_schema(&view, &owner, "LunCoProgramAPI")
+        {
+            candidates.push(owner.clone());
+        }
+
+        let mut programs = Vec::new();
+        for child in candidates {
+            if network_members.contains(child.as_str()) {
+                continue;
+            }
+            let resolved = match program::resolve_program(&view, &child) {
+                Ok(resolved) if program::is_generic_program_backend(resolved.backend) => resolved,
+                Ok(_) => continue,
+                Err(issue) => {
+                    warn!(
+                        "[usd] program {} is unresolved at {}: {}",
+                        child.as_str(),
+                        issue.property,
+                        issue.message
+                    );
+                    continue;
+                }
+            };
+            let params = UsdRead::attr_names(&view, &child)
+                .iter()
+                .filter_map(|name| {
+                    let key = name.strip_prefix("lunco:param:")?;
+                    Some((key.to_string(), UsdRead::real(&view, &child, name)?))
+                })
+                .collect::<std::collections::HashMap<_, _>>();
+            programs.push((child.to_string(), resolved, params));
+        }
+        if programs.len() > 1 {
+            warn!(
+                "[usd] {} has {} generic executable program children; none was attached",
+                owner_path,
+                programs.len()
+            );
+            None
+        } else {
+            programs.into_iter().next()
+        }
+    }) else {
+        let mut entity = world.entity_mut(owner);
+        entity
+            .remove::<lunco_core::ScriptParams>()
+            .remove::<lunco_core::ScenarioProgramPrim>();
+        drop(entity);
+        apply_program_resolution(world, owner, stage_id, None);
+        return;
+    };
+
+    let mut entity = world.entity_mut(owner);
+    if params.is_empty() {
+        entity.remove::<lunco_core::ScriptParams>();
+    } else {
+        entity.insert(lunco_core::ScriptParams(params));
+    }
+    entity.insert(lunco_core::ScenarioProgramPrim(program_path));
+    drop(entity);
+    apply_program_resolution(world, owner, stage_id, Some(resolved));
+}
+
 /// Attach the generic script/driver programs a prim carries to `entity`.
 ///
 /// Program resolution happens before the one-program-per-owner check. Modelica
-/// facets in a `CollectionAPI:components` network and BehaviorTree programs are
-/// owned by their respective projections; they are not generic script siblings.
+/// facets in a `CollectionAPI:components` network are owned by their domain
+/// projection; they are not generic script siblings.
 /// This is the boundary that prevents a physical network's component count from
 /// becoming a false duplicate-program diagnostic.
 fn attach_programs<R: UsdRead>(
@@ -3245,7 +3399,6 @@ fn attach_programs<R: UsdRead>(
     owner: &SdfPath,
     entity: Entity,
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
-    asset_server: &AssetServer,
     commands: &mut Commands,
 ) {
     let network_members = program::modelica_network_member_paths(reader);
@@ -3331,25 +3484,9 @@ fn attach_programs<R: UsdRead>(
             .entity(entity)
             .try_insert(lunco_core::ScenarioProgramPrim(child.as_str().to_string()));
 
-        match (resolved.backend, resolved.source) {
-            (program::ProgramBackend::Builtin, program::ProgramSource::Id(id)) => {
-                commands
-                    .entity(entity)
-                    .try_insert(lunco_core::programs::ProgramDriverId(id));
-            }
-            (program::ProgramBackend::Rhai, program::ProgramSource::Code(source)) => {
-                commands
-                    .entity(entity)
-                    .try_insert(lunco_core::EmbeddedScenarioSource(source));
-            }
-            (program::ProgramBackend::Rhai, program::ProgramSource::Asset(asset)) => {
-                let asset = resolve_stage_asset_path(asset_server, stage_id, &asset);
-                commands
-                    .entity(entity)
-                    .try_insert(lunco_core::EmbeddedScenarioPath(asset));
-            }
-            _ => unreachable!("generic program resolution returned a foreign source"),
-        }
+        commands.queue(move |world: &mut World| {
+            apply_program_resolution(world, entity, stage_id, Some(resolved));
+        });
     }
 }
 

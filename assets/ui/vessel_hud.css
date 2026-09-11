@@ -13,7 +13,6 @@
   --ui-caution-width: 44%;
   --ui-danger-start: 44%;
   --ui-danger-width: 22%;
-  --ui-autopilot-color: var(--muted-color);
   --ui-geo-display: none;
   --ui-local-display: flex;
   --ui-comms-display: none;
@@ -196,20 +195,6 @@
 #vessel-hud-telemetry-summary {
   color: var(--text-color);
   font-size: 12px;
-}
-
-#vessel-hud-autopilot {
-  min-width: 104px;
-  min-height: 24px;
-  flex-shrink: 0;
-  color: var(--ui-autopilot-color);
-  background-color: transparent;
-  border-width: 1px;
-  border-color: var(--ui-autopilot-color);
-  border-radius: 4px;
-  padding: 3px 6px;
-  font-size: 12px;
-  font-weight: 700;
 }
 
 #vessel-hud-geo {

@@ -223,14 +223,6 @@ pub fn on_spawn_entity_command(
         }
     };
 
-    if entry.is_route_marker() {
-        warn!(
-            "SPAWN_ENTITY: '{}' is a route marker and cannot be spawned independently; use AddRuntimeWaypoint with an explicit vessel",
-            cmd.entry_id
-        );
-        return;
-    }
-
     if q_grids.get(active_frame.0).is_err() {
         warn!(
             active_frame = ?active_frame.0,
@@ -330,7 +322,7 @@ pub fn on_spawn_entity_command(
     // Networked identity (gap G2): `spawn_usd_entry` already carries the shared
     // runtime identity fence, so this caller only adds its replication contract
     // and the host's spawn journal. Keeping the fence in the constructor is
-    // what makes palette spawns and runtime waypoint markers identical.
+    // what makes palette spawns and authored runtime instances identical.
     commands.entity(result.root_entity).try_insert((
         lunco_core::NetReplicate,
         lunco_core::NetSpawn {
@@ -3489,7 +3481,6 @@ register_commands!(
     on_reload_shader,
     on_rescan_shaders,
     on_rescan_spawn_catalog,
-    lunco_scene_validation::lint_command::on_run_lint,
     on_set_camera_look_at,
     on_set_object_property,
     on_set_shader_source,
@@ -3509,9 +3500,6 @@ impl Plugin for SpawnCommandPlugin {
         // verb is available consistently through the HTTP API, Rhai, and
         // `discover_schema`.
         register_all_commands(app);
-        // Runtime waypoint creation and collision-sensor arrival are shared by
-        // the GUI click path and the deterministic headless scene runner.
-        crate::runtime_waypoint::register(app);
         // The READ verb for the same entities. Registered here so any binary with
         // the scene verbs answers `QueryEntity` too — the headless server included.
         crate::entity_query::register(app);
@@ -3521,13 +3509,6 @@ impl Plugin for SpawnCommandPlugin {
         // The AUTHORED read beside the spawned one: composed USD attributes, so
         // asset invariants are checkable from rhai/Python/HTTP and not just Rust.
         crate::usd_prim_query::register(app);
-        // Parse-only asset pre-flight ("does this file compile?") — pure file
-        // checks, so it answers even while no scene is loaded.
-        lunco_scene_validation::validate::register(app);
-        // `RunLint` + the `LintReport` read-back. Nothing lints on load or on a
-        // physics cadence: the linter is an explicit verb called from rhai, HTTP
-        // or MCP after an authoring/preflight change.
-        lunco_scene_validation::lint_command::register(app);
         // Selection → telemetry focus, so every host that has the scene verbs has
         // scoped telemetry (the sandbox, the workbench, a headless server driven
         // by `SelectEntity`). Render-free: `lunco-signal` is a ring buffer of

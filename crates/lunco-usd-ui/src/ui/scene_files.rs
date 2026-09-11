@@ -484,7 +484,7 @@ mod tests {
             SceneFileKind::Modelica
         );
         assert_eq!(
-            SceneFileKind::of(Path::new("/a/patrol.rhai")),
+            SceneFileKind::of(Path::new("/a/mission.rhai")),
             SceneFileKind::Script
         );
         assert_eq!(

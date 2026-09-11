@@ -831,14 +831,11 @@ impl ArmedScriptTool {
 
 /// "A cursor-driven editor mode owns the pointer" — the one gate, in one place.
 ///
-/// The waypoint placement/menu, the spawn ghost and the terrain brush all park a mode
-/// on the cursor. The click observers already consulted these flags one-by-one; this
-/// bundles them so the keyboard ([`CancelIntent`]) honours exactly the same set. A
-/// mode must not be click-suppressed but keyboard-transparent (or the reverse).
+/// The spawn ghost, terrain brush, and authored script tools can own the cursor.
+/// The click observers already consult these flags one-by-one; this bundles them
+/// so the keyboard ([`CancelIntent`]) honours exactly the same set.
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct CursorModeActive<'w> {
-    waypoint_tool: Option<Res<'w, WaypointToolActive>>,
-    waypoint_menu: Option<Res<'w, WaypointMenuOpen>>,
     spawn_tool: Option<Res<'w, SpawnToolActive>>,
     terrain_tool: Option<Res<'w, TerrainToolActive>>,
     script_tool: Option<Res<'w, ArmedScriptTool>>,
@@ -847,9 +844,7 @@ pub struct CursorModeActive<'w> {
 impl CursorModeActive<'_> {
     /// True while any editor mode is using the cursor.
     pub fn any(&self) -> bool {
-        self.waypoint_tool.as_ref().is_some_and(|t| t.0)
-            || self.waypoint_menu.as_ref().is_some_and(|m| m.0)
-            || self.spawn_tool.as_ref().is_some_and(|t| t.0)
+        self.spawn_tool.as_ref().is_some_and(|t| t.0)
             || self.terrain_tool.as_ref().is_some_and(|t| t.0)
             || self.script_tool.as_ref().is_some_and(|t| t.armed())
     }
@@ -907,23 +902,6 @@ impl DeleteSelectionIntent<'_, '_> {
                 .any(|intent| intent.just_pressed(&UserIntent::DeleteSelection))
     }
 }
-
-/// True while a waypoint's right-click context menu is open.
-///
-/// Read by avatar mouse-look to hold the camera still while the pointer is
-/// being used by the menu. Set/cleared by scene-edit's waypoint menu.
-/// Deliberately separate from [`WaypointToolActive`]: during ground-placement
-/// you still WANT to look around.
-#[derive(Resource, Default)]
-pub struct WaypointMenuOpen(pub bool);
-
-/// True while the waypoint editor is waiting for a "click the ground to place"
-/// (Move / Insert-after, armed from a waypoint's right-click menu). Read by avatar
-/// possession and entity selection to suppress their click handling — that click
-/// belongs to the placement, not to possess/select. Mirrors [`SpawnToolActive`] and
-/// [`TerrainToolActive`]; set/cleared by scene-edit's waypoint systems.
-#[derive(Resource, Default)]
-pub struct WaypointToolActive(pub bool);
 
 /// Per-entity marker: this entity is currently being dragged by the editor
 /// transform gizmo.

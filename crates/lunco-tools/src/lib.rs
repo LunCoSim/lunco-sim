@@ -6,8 +6,8 @@
 //!   `name::fn(...)`. A tool's IMPLEMENTATION is pluggable: rhai source, native
 //!   Rust, or (later) any other runtime. The `lunco-tools-rhai` adapter binds
 //!   each registered tool into a script engine so a scenario can call it.
-//! - **As a behaviour-tree action** — when the autopilot's `run_tool` leaf
-//!   fires a tool name, the bevy-aware adapter (`lunco-tools-bevy`) runs it.
+//! - **As an engine action** — when a task/program action fires a tool name,
+//!   the bevy-aware adapter (`lunco-tools-bevy`) runs it.
 //!   That path is bevy-specific (it needs `&mut World`/`Commands`), so it lives
 //!   in `lunco-tools-bevy`, NOT here — see [`ExecutableTool`] there.
 //!
@@ -21,7 +21,7 @@
 //! // any adapter registers a tool (script-callable; optionally executable)…
 //! lunco_tools::register(Arc::new(MyTool));
 //! // …lunco-tools-rhai binds it into an engine as `name::fn(...)`,
-//! // …lunco-tools-bevy runs it (if it's also an ExecutableTool) on a run_tool leaf.
+//! // …lunco-tools-bevy runs it when the action is also executable.
 //! ```
 
 use std::any::Any;

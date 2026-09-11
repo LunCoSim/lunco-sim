@@ -1,23 +1,22 @@
-// Waypoint authoring policy.
+// Authored route editing policy.
 //
-// The editor supplies one explicit operation context and this tool lowers it
-// to the existing generic USD operation command. Rust owns pointer geometry,
-// document identity, and projection; this file owns the route policy. It is
-// therefore hot-reloadable and can evolve without adding a waypoint command or
-// another USD writer.
+// Rust supplies only the generic click context and the typed USD-operation
+// command. This policy creates ordinary USD prims and a generic Rhai program;
+// no route, waypoint, or vehicle type is known by the engine.
 
-fn ui_label() { "Waypoint editor" }
-fn ui_hint() { "Select a vessel, then click terrain to append a waypoint" }
+fn ui_label() { "Route point" }
+fn ui_hint() { "Click the terrain to append a point to the active route" }
 
-const MARKER_ASSET = "lunco://vessels/markers/waypoint.usda";
+const MARKER_ASSET = "lunco://markers/route_point.usda";
 const ROOT_LAYER = "@root@";
+const ROUTE_PROGRAM = "lunco://scenarios/route_follow.rhai";
 
 fn failure(message) {
-    notify_kind("Waypoint edit failed: " + message, "error");
+    notify_kind("Route edit failed: " + message, "error");
     #{ ok: false, error: message }
 }
 
-fn resolved(doc, path) {
+fn target_record(doc, path) {
     let result = query("ResolveUsdTarget", #{
         doc_id: doc,
         path: path,
@@ -26,137 +25,21 @@ fn resolved(doc, path) {
     if result == () || result.ok == false {
         return #{ ok: false, error: if result == () { "USD target query returned no result" } else { result.error } };
     }
-    #{
-        ok: true,
-        exists: result.composed_exists == true || result.authored_in_document == true,
-    }
+    #{ ok: true, exists: result.composed_exists == true || result.authored_in_document == true }
 }
 
-fn parent_generation(doc, path) {
-    let result = query("QueryUsdPrim", #{
-        doc_id: doc,
-        path: path,
-        children: false,
-    });
+fn generation(doc, path) {
+    let result = query("QueryUsdPrim", #{ doc_id: doc, path: path });
     if result == () || result.ok == false || result.generation == () {
         return ();
     }
     result.generation
 }
 
-fn source_ops(mission, xml) {
-    [
-        #{ SetAttribute: #{
-            edit_target: ROOT_LAYER,
-            path: mission,
-            name: "info:sourceCode",
-            type_name: "string",
-            value: xml,
-        }},
-        #{ SetAttribute: #{
-            edit_target: ROOT_LAYER,
-            path: mission,
-            name: "info:id",
-            type_name: "token",
-            value: "\"\"",
-        }},
-        #{ SetAttribute: #{
-            edit_target: ROOT_LAYER,
-            path: mission,
-            name: "info:sourceAsset",
-            type_name: "asset",
-            value: "@@",
-        }},
-        #{ SetAttribute: #{
-            edit_target: ROOT_LAYER,
-            path: mission,
-            name: "info:implementationSource",
-            type_name: "token",
-            value: "\"sourceCode\"",
-        }},
-    ]
-}
-
-fn load_route(doc, mission, supplied_xml) {
-    if supplied_xml != "" {
-        let imported = cmd("ImportBehaviorXml", #{ xml: supplied_xml });
-        if imported == () || imported.ok != true || imported.data == ()
-            || imported.data.spec_json == () {
-            return failure("the current mission XML could not be imported");
-        }
-        let spec = from_json(imported.data.spec_json);
-        if spec == () { return failure("the current mission JSON is invalid"); }
-        return #{ ok: true, spec: spec };
-    }
-
-    let existing = resolved(doc, mission);
-    if !existing.ok { return failure(existing.error); }
-    if !existing.exists {
-        return #{ ok: true, spec: #{ kind: "sequence", children: [] } };
-    }
-
-    let record = query("QueryUsdPrim", #{
-        doc_id: doc,
-        path: mission,
-        attrs: ["info:sourceCode", "info:sourceAsset"],
-        children: false,
-    });
-    if record == () || record.ok == false || record.attrs == () {
-        return failure("the existing mission is not readable yet; wait for projection");
-    }
-    let source_code = record.attrs["info:sourceCode"];
-    let source_asset = record.attrs["info:sourceAsset"];
-    if source_code != () && source_code != "" {
-        let imported = cmd("ImportBehaviorXml", #{ xml: source_code });
-        if imported == () || imported.ok != true || imported.data == () {
-            return failure("the existing mission XML could not be imported");
-        }
-        let spec = from_json(imported.data.spec_json);
-        if spec != () { return #{ ok: true, spec: spec }; }
-        return failure("the existing mission JSON is invalid");
-    }
-    if source_asset != () && source_asset != "" && source_asset != "@@" {
-        return failure("the mission file is still loading; wait until its route is ready");
-    }
-    failure("the existing mission has no readable source");
-}
-
-fn route_children(spec) {
-    if spec.kind == "sequence" && spec.children != () {
-        return spec.children;
-    }
-    if spec.kind == "forever" && spec.child != ()
-        && spec.child.kind == "sequence" && spec.child.children != () {
-        return spec.child.children;
-    }
-    ()
-}
-
-fn with_route_children(spec, children) {
-    if spec.kind == "sequence" {
-        spec.children = children;
-        return spec;
-    }
-    if spec.kind == "forever" && spec.child != () && spec.child.kind == "sequence" {
-        spec.child.children = children;
-        return spec;
-    }
-    ()
-}
-
-fn export_route(spec) {
-    let exported = cmd("ExportBehaviorXml", #{ spec_json: to_json(spec) });
-    if exported == () || exported.ok != true || exported.data == ()
-        || exported.data.xml == () {
-        return #{ ok: false, error: "the edited route could not be exported" };
-    }
-    #{ ok: true, xml: exported.data.xml }
-}
-
-fn apply_ops(doc, vessel_path, label, ops) {
+fn apply_ops(doc, generation_path, label, ops) {
     let result = cmd("ApplyUsdOps", #{
         doc_id: doc,
-        parent_gen: parent_generation(doc, vessel_path),
+        parent_gen: generation(doc, generation_path),
         label: label,
         ops: ops,
     });
@@ -166,192 +49,173 @@ fn apply_ops(doc, vessel_path, label, ops) {
     #{ ok: true }
 }
 
-fn marker_name(doc, route_scope) {
+fn route_path(context) {
+    if context.route_path != () && context.route_path != "" {
+        return context.route_path;
+    }
+    if context.scene_root_path == () || context.scene_root_path == "" {
+        return ();
+    }
+    context.scene_root_path + "/Route"
+}
+
+fn subject_path(context) {
+    if context.controlled_path != () && context.controlled_path != "" {
+        return context.controlled_path;
+    }
+    if context.selected_path != () && context.selected_path != "" {
+        return context.selected_path;
+    }
+    ()
+}
+
+fn next_point_name(doc, route) {
+    let children = query("QueryUsdPrim", #{
+        doc_id: doc,
+        path: route,
+        children: true,
+    });
+    if children == () || children.ok == false || children.children == () {
+        return "P0";
+    }
     let index = 0;
     while index < 100000 {
-        let name = "W" + index.to_string();
-        let target = resolved(doc, route_scope + "/" + name);
-        if !target.ok { return target; }
-        if !target.exists { return #{ ok: true, name: name }; }
+        let candidate = "P" + index.to_string();
+        let used = false;
+        for child in children.children {
+            if child == route + "/" + candidate { used = true; break; }
+        }
+        if !used { return candidate; }
         index += 1;
     }
-    #{ ok: false, error: "route contains too many waypoint names" }
+    ()
 }
 
-fn ensure_marker(doc, root, position) {
-    let route_scope = root + "/Route";
-    let route = resolved(doc, route_scope);
-    if !route.ok { return route; }
-    let name = marker_name(doc, route_scope);
-    if !name.ok { return name; }
-    let path = route_scope + "/" + name.name;
+fn route_setup(doc, route, subject) {
+    let existing = target_record(doc, route);
+    if !existing.ok { return existing; }
     let ops = [];
-    if !route.exists {
+    if !existing.exists {
+        if route.index_of("/") < 0 {
+            return #{ ok: false, error: "route path must be rooted" };
+        }
+        let slash = route.last_index_of("/");
+        let parent = route.sub_string(0, slash);
+        let name = route.sub_string(slash + 1);
         ops.push(#{ AddPrim: #{
             edit_target: ROOT_LAYER,
-            parent_path: root,
-            name: "Route",
+            parent_path: parent,
+            name: name,
             type_name: "Scope",
             reference: "",
             reference_prim_path: "",
         }});
     }
-    ops.push(#{ AddPrim: #{
-        edit_target: ROOT_LAYER,
-        parent_path: route_scope,
-        name: name.name,
-        type_name: "Xform",
-        reference: MARKER_ASSET,
-        reference_prim_path: "",
-    }});
-    ops.push(#{ SetTranslate: #{
-        edit_target: ROOT_LAYER,
-        path: path,
-        value: position,
-    }});
-    #{ ok: true, path: path, ops: ops }
-}
-
-fn mission_setup(doc, vessel_path) {
-    let mission = vessel_path + "/Mission";
-    let result = resolved(doc, mission);
-    if !result.ok { return #{ ok: false, error: result.error }; }
-    let ops = [];
-    if !result.exists {
+    let program = route + "/Program";
+    let program_record = target_record(doc, program);
+    if !program_record.ok { return program_record; }
+    if !program_record.exists {
         ops.push(#{ AddPrim: #{
             edit_target: ROOT_LAYER,
-            parent_path: vessel_path,
-            name: "Mission",
+            parent_path: route,
+            name: "Program",
             type_name: "Scope",
             reference: "",
             reference_prim_path: "",
         }});
-        ops.push(#{ SetApiSchemas: #{
-            edit_target: ROOT_LAYER,
-            path: mission,
-            schemas: ["LunCoProgramAPI"],
-        }});
     }
-    #{ ok: true, path: mission, ops: ops }
+    ops.push(#{ SetApiSchemas: #{
+        edit_target: ROOT_LAYER,
+        path: program,
+        schemas: ["LunCoProgramAPI"],
+    }});
+    ops.push(#{ SetAttribute: #{
+        edit_target: ROOT_LAYER,
+        path: program,
+        name: "info:implementationSource",
+        type_name: "token",
+        value: "\"sourceAsset\"",
+    }});
+    ops.push(#{ SetAttribute: #{
+        edit_target: ROOT_LAYER,
+        path: program,
+        name: "info:id",
+        type_name: "token",
+        value: "\"\"",
+    }});
+    ops.push(#{ SetAttribute: #{
+        edit_target: ROOT_LAYER,
+        path: program,
+        name: "info:sourceCode",
+        type_name: "string",
+        value: "",
+    }});
+    ops.push(#{ SetAttribute: #{
+        edit_target: ROOT_LAYER,
+        path: program,
+        name: "inputs:enabled",
+        type_name: "float",
+        value: "1.0",
+    }});
+    ops.push(#{ SetAttribute: #{
+        edit_target: ROOT_LAYER,
+        path: program,
+        name: "info:sourceAsset",
+        type_name: "asset",
+        value: "@lunco://scenarios/route_follow.rhai@",
+    }});
+    ops.push(#{ SetRelationship: #{
+        edit_target: ROOT_LAYER,
+        path: program,
+        name: "inputs:subject",
+        targets: [subject],
+    }});
+    #{ ok: true, ops: ops }
 }
 
-fn edit(args) {
-    if args == () || args.doc == () || args.vessel_path == ()
-        || args.action == () {
-        return failure("incomplete waypoint edit context");
-    }
-    let doc = args.doc;
-    let vessel_path = args.vessel_path;
-    let action = args.action;
-    let target = args.target;
-    let position = args.position;
-    let mission = vessel_path + "/Mission";
-
-    if action == "move" {
-        if target == () || position == () { return failure("move requires target and position"); }
-        return apply_ops(doc, vessel_path, "Move waypoint", [#{ SetTranslate: #{
+fn marker_ops(doc, route, position) {
+    let name = next_point_name(doc, route);
+    if name == () { return #{ ok: false, error: "route contains too many points" }; }
+    let path = route + "/" + name;
+    let zone = "route_" + name;
+    #{ ok: true, path: path, ops: [
+        #{ AddPrim: #{
             edit_target: ROOT_LAYER,
-            path: target,
+            parent_path: route,
+            name: name,
+            type_name: "Xform",
+            reference: MARKER_ASSET,
+            reference_prim_path: "",
+        }},
+        #{ SetTranslate: #{
+            edit_target: ROOT_LAYER,
+            path: path,
             value: position,
-        }}]);
-    }
-
-    let loaded = load_route(doc, mission, args.xml);
-    if !loaded.ok { return loaded; }
-    let children = route_children(loaded.spec);
-    if children == () {
-        return failure("mission is not a plain sequence or forever(sequence) route");
-    }
-
-    if action == "append" || action == "insert_after" {
-        if position == () { return failure("new waypoint requires a position"); }
-        if action == "insert_after" && target == () {
-            return failure("insert-after requires a target");
-        }
-        let marker = ensure_marker(doc, args.root, position);
-        if !marker.ok { return failure(marker.error); }
-        let leaf = #{ kind: "drive_to", target: marker.path };
-        if action == "append" {
-            children.push(leaf);
-        } else {
-            let at = -1;
-            for i in 0..children.len() {
-                if children[i].kind == "drive_to" && children[i].target == target {
-                    at = i;
-                    break;
-                }
-            }
-            if at < 0 { return failure("target is not in the mission route"); }
-            children.insert(at + 1, leaf);
-        }
-        let updated = with_route_children(loaded.spec, children);
-        let exported = export_route(updated);
-        if !exported.ok { return failure(exported.error); }
-        let setup = mission_setup(doc, vessel_path);
-        if !setup.ok { return failure(setup.error); }
-        for op in setup.ops { marker.ops.push(op); }
-        for op in source_ops(setup.path, exported.xml) { marker.ops.push(op); }
-        return apply_ops(doc, vessel_path,
-            if action == "append" { "Create waypoint mission" } else { "Insert waypoint" },
-            marker.ops);
-    }
-
-    if action == "delete" || action == "dwell" || action == "smooth" {
-        let updated_children = [];
-        let found = false;
-        if action == "delete" {
-            for child in children {
-                if child.kind == "drive_to" && child.target == target {
-                    found = true;
-                } else {
-                    updated_children.push(child);
-                }
-            }
-        } else {
-            for i in 0..children.len() {
-                let child = children[i];
-                if child.kind == "drive_to"
-                    && (action == "smooth" || child.target == target) {
-                    found = found || action == "smooth" || child.target == target;
-                    if action == "dwell" {
-                        if args.dwell > 0.0 { child.dwell = args.dwell; }
-                        else { child.remove("dwell"); }
-                    } else if args.smooth { child.smooth = true; }
-                    else { child.remove("smooth"); }
-                }
-                updated_children.push(child);
-            }
-        }
-        if !found { return failure("target is not in the mission route"); }
-        let updated = with_route_children(loaded.spec, updated_children);
-        let exported = export_route(updated);
-        if !exported.ok { return failure(exported.error); }
-        let setup = mission_setup(doc, vessel_path);
-        if !setup.ok { return failure(setup.error); }
-        let ops = setup.ops;
-        for op in source_ops(setup.path, exported.xml) { ops.push(op); }
-        if action == "delete" {
-            if target == () { return failure("delete requires a target"); }
-            ops.push(#{ SetActive: #{
-                edit_target: ROOT_LAYER,
-                path: target,
-                active: false,
-            }});
-        }
-        return apply_ops(doc, vessel_path,
-            if action == "delete" { "Delete waypoint" }
-            else if action == "dwell" { "Edit waypoint dwell" }
-            else { "Edit route smoothing" },
-            ops);
-    }
-    failure("unknown waypoint edit action: " + action)
+        }},
+        #{ SetAttribute: #{
+            edit_target: ROOT_LAYER,
+            path: path + "/Trigger",
+            name: "lunco:triggerZone",
+            type_name: "token",
+            value: "\"" + zone + "\"",
+        }},
+    ] }
 }
 
-// Generic click-tool entry point. Rust supplies only the canonical scene
-// context and the editor's current intent; route policy stays in this library.
 fn on_click(context) {
-    if context.action == () {
-        return failure("waypoint editor click has no editing intent");
+    if context == () || context.doc_id == () || context.scene_root_path == () {
+        return failure("click has no active document or scene root");
     }
-    edit(context)
+    let subject = subject_path(context);
+    if subject == () { return failure("select or possess the object that owns this route"); }
+    if context.world_position == () { return failure("click has no world position"); }
+    let route = route_path(context);
+    if route == () { return failure("active scene root has no route path"); }
+    let setup = route_setup(context.doc_id, route, subject);
+    if !setup.ok { return failure(setup.error); }
+    let point = marker_ops(context.doc_id, route, context.world_position);
+    if !point.ok { return failure(point.error); }
+    let ops = setup.ops;
+    for op in point.ops { ops.push(op); }
+    apply_ops(context.doc_id, context.scene_root_path, "Append route point", ops)
 }

@@ -75,7 +75,6 @@ impl ApiQueryProvider for SpawnCatalogProvider {
                     "entry_id": entry.id,
                     "name": entry.display_name,
                     "category": entry.category,
-                    "route_marker": entry.is_route_marker(),
                     "origin": entry.origin.as_api_value(),
                     "default_transform": {
                         "position": [
@@ -209,22 +208,6 @@ pub struct SpawnableEntry {
     pub origin: SpawnOrigin,
     /// Default transform applied at spawn (overridden by click position).
     pub default_transform: Transform,
-}
-
-impl SpawnableEntry {
-    /// Whether this catalog entry is a route member rather than an independent
-    /// scene object. Route members need an owning vessel and ordered mission
-    /// index, so they must enter through the waypoint route command/tool.
-    pub fn is_route_marker(&self) -> bool {
-        match &self.source {
-            SpawnSource::UsdFile(path) => {
-                lunco_assets::engine_asset_rel(path)
-                    == lunco_assets::engine_asset_rel(
-                        lunco_usd_core::document::WAYPOINT_MARKER_ASSET,
-                    )
-            }
-        }
-    }
 }
 
 /// How a spawnable entry is created.
@@ -1120,25 +1103,6 @@ mod tests {
     }
 
     #[test]
-    fn route_marker_is_not_an_independent_spawn_entry() {
-        let marker = SpawnableEntry {
-            id: "waypoint".into(),
-            display_name: "Waypoint".into(),
-            category: "Markers".into(),
-            source: SpawnSource::UsdFile("vessels/markers/waypoint.usda".into()),
-            origin: SpawnOrigin::BuiltIn,
-            default_transform: Transform::default(),
-        };
-        let rover = SpawnableEntry {
-            source: SpawnSource::UsdFile("vessels/rovers/ackermann_rover.usda".into()),
-            ..marker.clone()
-        };
-
-        assert!(marker.is_route_marker());
-        assert!(!rover.is_route_marker());
-    }
-
-    #[test]
     fn spawn_catalog_provider_exposes_the_command_authority() {
         let mut world = World::new();
         world.insert_resource(SpawnCatalog {
@@ -1175,7 +1139,6 @@ mod tests {
         assert_eq!(data["entries"][0]["origin"]["label"], "Built-in LunCo");
         assert_eq!(data["entries"][1]["origin"]["kind"], "twin");
         assert_eq!(data["entries"][1]["origin"]["name"], "summer-space-school");
-        assert_eq!(data["entries"][0]["route_marker"], false);
     }
 
     #[test]

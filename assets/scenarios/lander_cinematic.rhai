@@ -5,8 +5,8 @@
 //     then cuts between an authored `timeSamples` dolly (`OrbitView`) and
 //     mounted cameras that RIDE the moving lander/rover.
 //   • PLANNING  — after the explicit landing-transition join it deploys the
-//     rover and drives the same 3-gate survey course, consuming the marker
-//     Sensor events.
+//     rover and starts the scene-authored route program, consuming its Sensor
+//     events.
 //
 // The camera CUTS are the cinematic layer; the land→deploy→survey PHASES are
 // gated on real simulation state (the three source-qualified landing events and
@@ -47,11 +47,10 @@ fn on_event(me, evt) {
         this.lander_settled = true;
         return;
     }
-    let rover = find("/LanderTest/SkidRover");
-    if evt.name != "waypoint.reached" || evt.source != rover { return; }
-    let index = waypoint_event_index(evt);
+    let route = find("/LanderTest/Route");
+    if evt.name != "route_point_reached" || evt.source != route { return; }
+    let index = evt.value;
     if index == () { return; }
-    apply_waypoint_reached(evt);
     let milestones = [
         "waypoint_1_reached",
         "waypoint_2_reached",
@@ -97,7 +96,7 @@ fn deploy_notice(me) {
 fn engage_notice(me) {
     set_camera("RoverCam");
     emit("rover_deployed");
-    cmd("EngageAutopilot", #{ vessel: find("/LanderTest/SkidRover") });
+    emit("route_start");
     notify_kind("Rover deployed - driving the survey course.", "success");
 }
 

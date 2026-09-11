@@ -1,4 +1,4 @@
-// ── Solar rover: tracked sun, generated power island, BT traverse, recharge ─
+// ── Solar rover: tracked sun, generated power island, route traverse, recharge
 //
 // Runs against `scenes/tests/solar_rover_energy_cycle.usda`.
 //
@@ -6,12 +6,12 @@
 //
 //   environment provider -> SunTracker.mo -> hinge -> articulated panel
 //   panel + battery + motors -> generated Modelica electrical island
-//   BT.CPP patrol -> rover movement / motor demand
+//   scene-level route program -> rover movement / motor demand
 //   Rhai -> bounded phase policy and machine-readable verdict
 //
 // The scene starts with a deliberately small but real battery and panel. While
-// the BT patrol drives, motor load exceeds solar generation and SOC falls. Once
-// Rhai disengages the patrol, the still-lit panel charges the same battery back
+// the route program drives, motor load exceeds solar generation and SOC falls.
+// Once Rhai applies the safe stop, the still-lit panel charges the same battery back
 // up. No script writes SOC, panel power, a Sun vector, or a motor demand.
 
 const PORT_WAIT_S = 30.0;
@@ -27,6 +27,7 @@ const MOTION_MIN_M = 0.25;
 const IDLE_DRIVE_TOL = 0.001;
 const MOTOR_LOAD_MIN_W = 1.0;
 const POWER_TOL_W = 0.1;
+const ROUTE_THROTTLE = 0.6;
 
 // Every observed value is an authored rover-root boundary port. Generated
 // member identifiers are implementation details, not a scenario contract.
@@ -77,6 +78,8 @@ fn on_start(me) {
     this.hinge_after_step = ();
     this.position_before_drive = ();
     this.position_after_drive = ();
+    this.route = ();
+    this.route_goal = ();
     this.island_drive_left_after_stop = ();
     this.island_drive_right_after_stop = ();
     this.peak_motor_power = 0.0;
@@ -138,14 +141,24 @@ fn on_tick(me) {
         this.hinge_after_step = get(this.hinge, "angle");
         this.soc_before_drive = island_value(this.elec, BATTERY_SOC);
         this.position_before_drive = world_pos(this.rover);
-        cmd("EngageAutopilot", #{ vessel: this.rover });
+        this.route = find("/SolarRoverTest/Route");
+        if this.route < 0 {
+            finish_failure(this, "scene-level route was not composed");
+            return;
+        }
+        this.route_goal = [this.position_before_drive[0], this.position_before_drive[1],
+            this.position_before_drive[2] - 20.0];
+        emit("route_start", 1);
         this.phase = "drive";
         this.phase_started = this.t;
-        print("[solar-cycle] tracker settled; engaging authored BT patrol");
+        print("[solar-cycle] tracker settled; starting scene-level route");
         return;
     }
 
     if this.phase == "drive" {
+        if this.route_goal != () {
+            nav_to(this.rover, this.route_goal, ROUTE_THROTTLE, 1.0);
+        }
         let motor = island_value(this.elec, MOTOR_ELECTRICAL_POWER);
         if motor != () && motor > this.peak_motor_power {
             this.peak_motor_power = motor;
@@ -182,10 +195,10 @@ fn on_tick(me) {
         if phase_t < DRIVE_S { return; }
         this.soc_after_drive = island_value(this.elec, BATTERY_SOC);
         this.position_after_drive = world_pos(this.rover);
-        cmd("DisengageAutopilot", #{ vessel: this.rover });
+        brake(this.rover);
         this.phase = "charge";
         this.phase_started = this.t;
-        print("[solar-cycle] patrol stopped; observing idle solar recharge");
+        print("[solar-cycle] route stopped; observing idle solar recharge");
         return;
     }
 
@@ -218,8 +231,8 @@ fn verdict(s) {
     f.push(t_present(s.incidence_after_step, "panel incidence after sun step"));
     f.push(t_present(s.yaw_after_step, "SunTracker yaw"));
     f.push(t_present(s.hinge_after_step, "panel hinge angle"));
-    f.push(t_present(s.position_before_drive, "rover position before patrol"));
-    f.push(t_present(s.position_after_drive, "rover position after patrol"));
+    f.push(t_present(s.position_before_drive, "rover position before route"));
+    f.push(t_present(s.position_after_drive, "rover position after route"));
 
     if s.yaw_before != () && s.yaw_after_step != () {
         f.push(t_true((s.yaw_after_step - s.yaw_before).abs() > YAW_DELTA_MIN,
@@ -239,12 +252,12 @@ fn verdict(s) {
     }
     if s.position_before_drive != () && s.position_after_drive != () {
         f.push(t_true(vlen(vsub(s.position_after_drive, s.position_before_drive)) > MOTION_MIN_M,
-            "BT patrol did not move the rover while engaged"));
+            "scene-level route did not move the rover while active"));
     }
     f.push(t_true(s.peak_motor_power > 0.0,
-        "generated motor model reported no electrical draw under BT patrol"));
+        "generated motor model reported no electrical draw under route drive"));
     f.push(t_true(s.peak_motor_current > 0.0,
-        "generated motor model reported no terminal current under BT patrol"));
+        "generated motor model reported no terminal current under route drive"));
     f.push(t_true(s.peak_battery_discharge_power > 0.0,
         "battery reported no discharge power under motor load"));
     f.push(t_true(s.loaded_drive_samples > 100,
@@ -262,19 +275,19 @@ fn verdict(s) {
             r2(s.max_loaded_drive_net_power) + " W)"));
     }
     f.push(t_true(s.peak_battery_charge_power > 0.0,
-        "battery reported no charge power after the patrol stopped"));
+        "battery reported no charge power after the route stopped"));
     if s.soc_before_drive != () && s.soc_after_drive != () {
         f.push(t_true(s.soc_before_drive - s.soc_after_drive > SOC_DROP_MIN,
             "battery SOC did not fall under motor load"));
     }
     if s.soc_after_drive != () && s.soc_after_charge != () {
         f.push(t_true(s.soc_after_charge - s.soc_after_drive > SOC_RECOVER_MIN,
-            "battery SOC did not recover after the patrol stopped"));
+            "battery SOC did not recover after the route stopped"));
     }
     if s.island_drive_left_after_stop != () && s.island_drive_right_after_stop != () {
         f.push(t_true(s.island_drive_left_after_stop.abs() < IDLE_DRIVE_TOL &&
                       s.island_drive_right_after_stop.abs() < IDLE_DRIVE_TOL,
-            "disengaged autopilot left drive demand on the electrical island"));
+            "route safe stop left drive demand on the electrical island"));
     }
 
     print("[solar-cycle] SOC " + r4(s.soc_before_drive) + " -> " +

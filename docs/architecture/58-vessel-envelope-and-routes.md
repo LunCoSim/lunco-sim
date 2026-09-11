@@ -139,14 +139,16 @@ include mechanism. Edit one and the check measures a route nobody drives.
 The fix is not to sync them. It is to move the route out of the scripts:
 
 ```usda
-def Xform "Route" ( kind = "group" )
+def Scope "Route"
 {
-    def Xform "WP_0" ( prepend references = @lunco://vessels/markers/waypoint.usda@ ) { … }
-    def Xform "WP_1" ( … ) { … }
+    def Scope "Program" (prepend apiSchemas = ["LunCoProgramAPI"]) { … }
+    def Xform "P0" ( prepend references = @lunco://markers/route_point.usda@</RoutePoint> ) { … }
+    def Xform "P1" ( prepend references = @lunco://markers/route_point.usda@</RoutePoint> ) { … }
 }
 ```
 
-Ordered waypoint prims under a group, read by any lesson that needs them. This
+Ordered route-point prims under a scene scope, read by the sibling Rhai program
+and any lesson that needs them. This
 pays for itself three times:
 
 1. **Kills the duplication** — one route, in the scene, read by both lessons.
@@ -161,8 +163,8 @@ on the crop) rather than requiring the author to supply heights they cannot know
 
 ## Route line: drape, do not span
 
-`lunco-autopilot` mirrors `AutopilotBehaviorSpec` onto the vessel so the editor can
-derive the route from the same mission data that drives the vehicle. The editor's
+The scene-level Rhai route program and composed USD points are the single source
+for the route that drives the vehicle. The editor's
 `RouteVisualProjection` is the single derived view consumed by marker progress and
 `sync_route_visual_meshes`; it is real 3D geometry in the active physics frame,
 not the camera-path preview's screen-space presentation. Waypoint labels are
@@ -170,15 +172,12 @@ different: the waypoint prim authors `lunco:billboard*`, and the generic billboa
 renderer projects that prim's propagated render pose. Route code must not redraw
 labels or convert active-frame coordinates for the camera.
 
-`rebuild_waypoint_route_projection` is change-gated. The autopilot-owned
-`AuthoredRouteMetadata` read derives target identity, loop policy, and smoothness
-from the mission XML once; the editor then uses the exact `TargetBindings` map
-(runtime patrols use their explicit `RuntimeWaypointBinding` marker roots), resolves
+`rebuild_waypoint_route_projection` is change-gated. The route program reads
+target identity and policy from composed USD once; the editor then uses exact
+composed paths and resolves
 positions in the active physics grid, and publishes one atomic snapshot. A valid
-authored route owns the view; the empty `Mission/Sequence` placeholder carried by
-runtime-spawned vessels explicitly transfers ownership to the live runtime patrol.
-Malformed authored XML remains an unresolved route and never selects a stale
-derived runtime spec.
+authored route owns the view. A missing subject or malformed point remains an
+unresolved route and never selects a stale derived route.
 `project_waypoint_markers_to_surface` is a separate change-gated owner for the
 runtime marker root, so the dome and arrival sensor remain on the same surface
 without coupling marker transforms to mesh reconciliation. Meshes and marker looks
@@ -188,7 +187,7 @@ When it is written it must **drape over the relief, not connect the waypoints**.
 straight chord between two waypoints 651 m apart passes *through* the crater wall:
 it renders underground for most of its length, and draws a path the rover does not
 take. Sample the analytic terrain surface along each leg at a fixed 2 m step — the
-same spacing used by the autopilot's Catmull–Rom path — and emit a polyline through
+same spacing used by the route's authored path policy — and emit a polyline through
 those points, lifted slightly to avoid z-fighting. Straight legs are sampled too;
 endpoints alone are never used as a terrain-crossing chord.
 

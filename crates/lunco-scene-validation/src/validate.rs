@@ -29,8 +29,6 @@
 //!   Full naga module validation is deliberately absent: naga is not a direct
 //!   dependency of this crate and the light path adds none.
 //! - `.rhai` — `rhai::Engine::compile` only; nothing is executed.
-//! - `.btxml` / `.xml` — the same BehaviorTree.CPP v4 parser and semantic
-//!   validation used by the runtime asset loader; nothing is executed.
 //!
 //! Registered as [`ApiQueryProvider`]s (they return data, like
 //! [`crate::usd_prim_query`]), so one implementation answers rhai `query()`,
@@ -51,8 +49,7 @@ use std::path::{Path, PathBuf};
 pub struct ValidationReport {
     /// The path as the caller gave it.
     pub path: String,
-    /// Asset kind, from the extension: `modelica` | `usd` | `wgsl` | `rhai` |
-    /// `behavior_tree`.
+    /// Asset kind, from the extension: `modelica` | `usd` | `wgsl` | `rhai`.
     pub kind: String,
     /// True iff `errors` is empty — the file would survive the load path.
     pub ok: bool,
@@ -144,9 +141,8 @@ pub fn validate_asset(reference: &str) -> ValidationReport {
         "usda" => validate_usda(reference, &path, &text),
         "wgsl" => validate_wgsl(reference, &text),
         "rhai" => validate_rhai(reference, &text),
-        "btxml" | "xml" => validate_behavior_tree(reference, &text),
         other => ValidationReport::new(reference, "unknown").error(format!(
-            "unsupported extension `.{other}` — supported: .mo, .usda, .wgsl, .rhai, .btxml, .xml"
+            "unsupported extension `.{other}` — supported: .mo, .usda, .wgsl, .rhai"
         )),
     };
     apply_lint_policy(report, &text)
@@ -661,24 +657,6 @@ fn validate_rhai(reference: &str, text: &str) -> ValidationReport {
     }
 }
 
-// ─── .btxml / .xml ─────────────────────────────────────────────────────────
-
-/// Parse BehaviorTree.CPP through the runtime's authoritative codec.
-///
-/// The codec validates XML structure, entry-tree selection, composite arity,
-/// subtree references and recursion. Calling it here keeps preflight and load
-/// semantics identical instead of maintaining a second XML walk.
-fn validate_behavior_tree(reference: &str, text: &str) -> ValidationReport {
-    let mut report = ValidationReport::new(reference, "behavior_tree");
-    match lunco_autopilot::btcpp_xml::xml_to_value(text) {
-        Ok(tree) => report.info = json!({ "tree": tree }),
-        Err(error) => report
-            .errors
-            .push(format!("BehaviorTree.CPP parse: {error}")),
-    }
-    report.finish()
-}
-
 // ─── CLI ────────────────────────────────────────────────────────────────────
 
 /// One-shot CLI leg (`luncosim --validate <path>…`): print each report
@@ -757,9 +735,8 @@ impl ApiQueryProvider for ValidateTwinProvider {
     }
 }
 
-/// Register the provider. Called by [`crate::commands::SpawnCommandPlugin`],
-/// so any binary with the scene verbs answers `ValidateAsset` too — the
-/// headless server included.
+/// Register the providers. Called by [`crate::SceneValidationPlugin`], so any
+/// host that installs validation answers `ValidateAsset` and `ValidateTwin`.
 pub fn register(app: &mut App) {
     app.init_resource::<ApiQueryRegistry>();
     app.world_mut()
@@ -865,56 +842,5 @@ def Xform \"Battery\" (\n\
     fn unknown_extension_lists_supported() {
         let report = validate_asset("no/such/file.xyz");
         assert!(!report.ok);
-    }
-
-    fn temp_text(name: &str, body: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join("lunco-validate-text");
-        std::fs::create_dir_all(&dir).expect("temp dir");
-        let path = dir.join(name);
-        std::fs::write(&path, body).expect("write temp text asset");
-        path
-    }
-
-    #[test]
-    fn validates_canonical_btxml_through_runtime_codec() {
-        let path = temp_text(
-            "route.btxml",
-            r#"<root BTCPP_format="4" main_tree_to_execute="MainTree">
-  <BehaviorTree ID="MainTree">
-    <Sequence>
-      <Action ID="drive_to" target="/Route/W1"/>
-      <Action ID="drive_to" target="/Route/W2"/>
-    </Sequence>
-  </BehaviorTree>
-</root>"#,
-        );
-        let report = validate_asset(path.to_str().unwrap());
-        assert!(report.ok, "{:?}", report.errors);
-        assert_eq!(report.kind, "behavior_tree");
-        assert!(
-            report.info["tree"].is_object(),
-            "the parser must return a real runtime tree: {}",
-            report.info
-        );
-    }
-
-    #[test]
-    fn rejects_semantically_invalid_btxml() {
-        let path = temp_text(
-            "missing-entry.btxml",
-            r#"<root BTCPP_format="4" main_tree_to_execute="Missing">
-  <BehaviorTree ID="MainTree"><Action ID="hold"/></BehaviorTree>
-</root>"#,
-        );
-        let report = validate_asset(path.to_str().unwrap());
-        assert!(!report.ok);
-        assert!(
-            report
-                .errors
-                .iter()
-                .any(|error| error.contains("names no <BehaviorTree>")),
-            "{:?}",
-            report.errors
-        );
     }
 }

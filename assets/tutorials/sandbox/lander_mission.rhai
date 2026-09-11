@@ -7,7 +7,7 @@
 //!     the explicit engine-cutoff + flight-handoff + touchdown join → detach the
 //!     joint → `rover_deployed` → consume the three marker Sensor events,
 //!     announcing `waypoint_N_reached` / `course_complete`.
-//!   • `/LanderTest/SkidRover` → `lander_rover_patrol.btxml`: drives the course after
+//!   • `/LanderTest/SkidRover` → the scene-level Rhai route program: drives the course after
 //!     `rover_deployed`, and yields the moment a human takes the rover.
 //! Both emit their phase events on the global bus, so this tutorial just *watches*:
 //! it turns those events into a student-facing objectives checklist and coaches

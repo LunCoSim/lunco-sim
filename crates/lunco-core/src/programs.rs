@@ -34,17 +34,6 @@
 use bevy::prelude::*;
 use std::collections::HashSet;
 
-/// Whether an asset path names BehaviorTree.CPP XML.
-///
-/// `.btxml` is LunCoSim's canonical, unambiguous authoring extension. Plain
-/// `.xml` remains accepted for direct BehaviorTree.CPP/Groot/ROS interchange.
-/// Keep extension dispatch centralized: a program must not select different
-/// engines depending on which USD consumer happened to inspect it.
-pub fn is_behavior_tree_asset(path: &str) -> bool {
-    let path = path.split(['?', '#']).next().unwrap_or(path);
-    path.ends_with(".btxml") || path.ends_with(".xml")
-}
-
 /// The program id authored on a `LunCoProgramAPI` prim (`info:id`), stamped on
 /// the prim that **owns** the program — not on the program prim itself.
 ///
@@ -137,19 +126,5 @@ fn warn_unknown_program_drivers(
                 id.0, entity, names
             );
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::is_behavior_tree_asset;
-
-    #[test]
-    fn behavior_tree_extensions_are_canonical_plus_interop() {
-        assert!(is_behavior_tree_asset("behaviors/patrol.btxml"));
-        assert!(is_behavior_tree_asset("imported/nav2_tree.xml"));
-        assert!(is_behavior_tree_asset("patrol.btxml#MainTree"));
-        assert!(!is_behavior_tree_asset("modelDescription.xml.backup"));
-        assert!(!is_behavior_tree_asset("controller.rhai"));
     }
 }

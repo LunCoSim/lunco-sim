@@ -1237,7 +1237,8 @@ fn process_usd_cosim_prim_read(
     // cosim graph.
     // The shared USD resolver selects the source arm and dispatches by file
     // format. This crate owns only Modelica and Python participants; Rhai and
-    // BehaviorTree sources remain with their own projections.
+    // Rhai owns authored behavior; this crate only projects Modelica and Python
+    // participants.
     let resolved = match lunco_usd_bevy_core::program::resolve_program(reader, sdf_path) {
         Ok(resolved) => resolved,
         Err(issue) => {
@@ -1265,8 +1266,8 @@ fn process_usd_cosim_prim_read(
             None,
             Some(path),
         ),
-        // A program this crate does not solve (a Rhai script, a behavior tree,
-        // or a built-in driver) is somebody else's to run.
+        // A program this crate does not solve (a Rhai script or a built-in
+        // driver) is somebody else's to run.
         _ => return,
     };
     let has_ports = reader

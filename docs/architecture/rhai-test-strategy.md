@@ -31,53 +31,42 @@ production behavior test merely because Rhai appears in its source.
 
 ## What has moved in this wave
 
-`rhai_scenario_drives_real_rover` was removed from
-`crates/lunco-scripting/tests/rhai_rover_live_test.rs`. It used a `DriveLog` spy
-in a `MinimalPlugins` world and therefore proved the generic dispatch seam, not
-a rover. The authored `autopilot_hold` scene is the production owner for that
-outcome: it runs the real rover, engages the same public autopilot command, and
-requires a routed control rover to move before accepting the no-route hold.
+Asset-specific annotation appearance moved out of
+`crates/lunco-usd-bevy/tests/material_binding_test.rs`. The production
+`assets/scenes/tests/waypoint_visual.usda` scene composes the route-point,
+landing-location, and predicted-landing assets, while
+`assets/scenarios/tests/waypoint_visual.rhai` checks their composed shader
+channels, opacity, collision intent, and shadow policy through `QueryUsdPrim`.
+The Rust target retains only generic `PbrLook` projection cases such as opacity,
+masking, additive blending, malformed values, and workflow binding; changing a
+marker asset no longer requires a Rust fixture rebuild.
 
-The generic command path and hot-reload generation check remain in
-`rhai_rover_live_test.rs`; those are runtime-mechanism contracts and still
-belong in Rust. Motion allocation is no longer a Rust or test-only kernel: each
-vehicle's authored Modelica/Rhai program owns its output ports and its live
-scene test owns the observable motion result.
+The generic command path, script lifecycle, hot-reload generation, and
+resource/reflection seams remain in
+`crates/lunco-scripting/tests/rhai_rover_live_test.rs` because those tests own
+runtime mechanisms rather than a particular Twin's route or expected outcome.
+The task/mission semantics are exercised by the production
+`scripting_task_contract` scene and
+`assets/scenarios/tests/scripting_task_contract.rhai`; the Rust harness no
+longer embeds one test script per task combinator. Route composition and progression are authored by the scene-level
+`assets/scenarios/route_follow.rhai` program and observed by the production
+scene scenarios. There is no Rust test or Rust runtime path for a vessel-owned
+waypoint list.
 
-The second review also removed the Rust integration copy of
-`appending_waypoints_while_running_resumes_route_and_drives_the_new_legs` from
-`crates/lunco-autopilot/tests/waypoint_lifecycle_test.rs`. The existing
-`autopilot_hold` production scene now holds a real rover with no route, then uses
-the public Rhai `patrol(...)` update while that rover is part-way through a real
-route. Its forward-motion assertion catches a reset-to-leg-zero U-turn, while
-the same scene's routed rover remains the anti-trivial drive control. The
-retained Rust tests cover exact cursor arithmetic and scene teardown; neither
-is replaced by a weaker string-level check.
+The same boundary applies to authored physics and editor outcomes: when a
+public USD/query/event surface can observe the claim, the acceptance assertion
+belongs in its scene's Rhai observer. Rust keeps only the generic document,
+projection, parser, lifecycle, and numerical mechanism tests that cannot be
+observed without inventing a test-only API.
 
-The same boundary now applies to scene commands and runtime markers. The
-`test_detach_joint_command` unit case moved into `assets/scenarios/tests/joint.rhai`:
-the real scene first proves the fixed joint holds `CubeB`, sends the public
-`DetachJoint` command, and then requires the released body to fall while the
-independent `FreeCube` remains the simulation witness. The two synthetic
-`observer_test` waypoint cases were removed because
-`assets/scenarios/tests/runtime_waypoint.rhai` already spawns a real rover,
-creates two public runtime waypoints, and verifies ordered collision-backed
-arrival events plus `RuntimeWaypointStatus`.
-
-This cleanup also removed tests with no maintained production claim: a
-dump-only USD probe, historical Rumoca emitter round-trip and bisection suites,
-a compile-only Bevy no-op, an intentionally panicking Avian measurement probe,
-and a legacy waypoint JSON-shape check. It also removed a known-failing MSL
-diagnostic and a duplicate external-bundle presence check; the passing
-Modelica source-root admission example remains the maintained MSL contract. The two
-selection/drag integration files were also removed because they simulated
-state without invoking the production systems. Current schema, parser,
-lifecycle, physics, editor-selection, and source-preservation contracts remain
-covered at their owners. Editor selection is intentionally not translated into
-a headless Rhai scene: `SceneEditPlugin` is UI-gated and exposes no production
-headless selection observer. Its owning Rust tests exercise the shared
-selection observer, replace/extend/remove semantics, and highlight state
-without entering the separate active-gizmo drag mode.
+Tests with no maintained production claim are not part of the active suite.
+Current schema, parser, lifecycle, physics, editor-selection, and
+source-preservation contracts remain covered at their owners. Editor selection
+is intentionally not translated into a headless Rhai scene: `SceneEditPlugin`
+is UI-gated and exposes no production headless selection observer. Its owning
+Rust tests exercise the shared selection observer, replace/extend/remove
+semantics, and highlight state without entering the separate active-gizmo drag
+mode.
 
 Dynamic asset construction follows the same boundary. The generic
 `assembly_component_builder` scene starts from an empty USDA frame and checks
@@ -108,7 +97,7 @@ recipes and their acceptance scenes stay in the owning Twin.
    ./scripts/run_scene_tests.sh --no-build
    ./scripts/run_scene_tests.sh --no-build -j 4
    ./scripts/run_scene_tests.sh --no-build --exact joint
-   ./scripts/run_scene_tests.sh --no-build autopilot
+   ./scripts/run_scene_tests.sh --no-build route
    ```
 
    This reuses `target/debug/luncosim` and runs each authored scene through
@@ -203,7 +192,7 @@ separate scenes.
 | Generic component/reference construction, schema-aware regeneration/compliance, deterministic pattern/mirror placement, typed parameter plans, schema-driven property catalogs and dry patches, AI-readable authoring context, dry placement/attachment planning, and backend-neutral model-state invalidation | `assembly_component_builder`, `assembly_pattern_builder`, `assembly_mount_frame_realign`, `assembly_property_editor`, `model_state_invalidation` | same Rhai scenarios' invalid asset, missing parent, duplicate parameter/identity, malformed placement, unsupported mode, missing socket, invalid frame, stale generation, wrong type, structural edit, custom-property, standard-schema mismatch, independent instance, source-preservation, and parameter-rebuild cases | dynamic `assembly_builder`/`assembly_audit`/`assembly_edit` plans, generic `ModelStateRevision`, standard USD instance overrides, proposal/review/commit, direct standard-USD compliance, and composed `QueryUsdPrim`/`InspectUsdDocument` |
 | Reload/reset and event-gated authored policy | `component_detach`, `rhai_event_delivery` | `rhai_event_delivery_negative` | public commands and telemetry |
 | Wheel contact, steering, ramp/leg clearance, and vehicle assembly | `drivetrain_parity`, `ackermann_parity`, `sandbox_ramp_placement`, `landing_legs`, `lander_rover_stack` | `rocker_bogie_*_nodiff`, `escape_containment` | authored verdicts over production physics |
-| Supported multi-rover stress cardinalities and shared-command motion | `multi_rover_stress_4`, `multi_rover_stress_8`, `multi_rover_stress_20` | `multi_rover_stress_negative` (three-rover unsupported cardinality) | discovered roster, production patrol command, world poses, and terminal Rhai verdict |
+| Supported multi-rover stress cardinalities and shared-command motion | `multi_rover_stress_4`, `multi_rover_stress_8`, `multi_rover_stress_20` | `multi_rover_stress_negative` (three-rover unsupported cardinality) | discovered roster, authored Rhai route/control policy, world poses, and terminal Rhai verdict |
 | Possession and handoff authority | `tutorial_authority_handoff`, `descent_lander_runtime` | authority-conflict cases in those scenarios | semantic commands, events, and final owner |
 | Terrain stream readiness and terrain-progress completion | no repository-owned deterministic DEM fixture | external DEM scenes are not accepted as this branch's authored gate | `TerrainLodStatus` and `ReadExposures` exist; a test-owned DEM/Twin is still required |
 | Rigid bodies escaping scene bounds | `escape_containment` | deliberate out-of-bounds body | terminal `physics-body-escaped` verdict; the owning physics boundary also emits one shared `TelemetryEvent` for log/status consumers |
@@ -280,8 +269,6 @@ the Rust duplicate in the same change.
 The following are intentionally not deleted until their production replacements
 exist:
 
-- `lunco-autopilot` behavior-tree tests that assert exact leaf/kernel semantics;
-  production scenes cover route outcomes, not every private node transition;
 - `lunco-usd-sim` synthesizer tests for malformed policy result shapes and
   boundary validation; Rust owns the ABI firewall, while policy-specific
   generated topology checks can move only when a live inspectable result is

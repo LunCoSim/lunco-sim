@@ -9,19 +9,19 @@
 #
 # It reuses the playable demo intact: USD owns the assembled rover, panel,
 # electrical membership and wires; Modelica owns the sun tracker and synthesized
-# electrical island; the rover's BT.CPP patrol owns navigation; Rhai below owns
+# electrical island; the scene-level route program owns navigation; Rhai below owns
 # only the bounded test phases and verdict. No test-only Rust mechanism or
 # authored Sun-vector bypass is involved.
 #
-# The production scene's root name is retained deliberately. Its patrol XML and
-# its component connections use absolute authored targets below `/SolarRoverTest`.
+# The production scene's root name is retained deliberately. Its route and
+# component connections use absolute authored targets below `/SolarRoverTest`.
 # Renaming the referenced root would test broken targets instead of the rover.
 #
 # The reduced capacity and panel area are test parameters, not a second power
 # topology: they make one loaded/idle energy cycle observable in seconds while
 # retaining the same battery, panel, bus, and environment-probe components.
 # The capacity remains large enough for the rover to perform the authored
-# patrol before its voltage-dependent motor torque physically collapses.
+# route before its voltage-dependent motor torque physically collapses.
 #
 # Run after building this worktree's production binary:
 #   target/debug/luncosim test --scene assets/scenes/tests/solar_rover_energy_cycle.usda
@@ -44,6 +44,16 @@ def Xform "SolarRoverTest" (
             {
                 float inputs:area = 0.10
             }
+        }
+    }
+
+    # Keep the scene-level route inert until the energy-cycle observer has
+    # recorded the tracked-sun baseline, then start it through the event bus.
+    over "Route"
+    {
+        over "Program"
+        {
+            float inputs:enabled = 0.0
         }
     }
 

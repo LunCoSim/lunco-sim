@@ -19,7 +19,7 @@ const SOURCE_EDITOR_KIND: PanelId = PanelId("source_editor");
 // USD is intentionally retained here for explicit OpenSourceView/OpenTwinSource
 // requests; the generic OpenFile observer below claims only source-only text so
 // it cannot race the USD document editor.
-const TEXT_VIEW_EXTS: &[&str] = &["rhai", "btxml", "wgsl", "usda", "usd", "usdc"];
+const TEXT_VIEW_EXTS: &[&str] = &["rhai", "wgsl", "usda", "usd", "usdc"];
 
 fn is_text_view_path(path: &Path) -> bool {
     path.extension()
@@ -41,12 +41,7 @@ pub(crate) fn is_source_only_text_path(path: &Path) -> bool {
     }
     path.extension()
         .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            matches!(
-                extension.to_ascii_lowercase().as_str(),
-                "rhai" | "btxml" | "wgsl"
-            )
-        })
+        .is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "rhai" | "wgsl"))
 }
 
 pub(crate) struct SourceEditorPanel;

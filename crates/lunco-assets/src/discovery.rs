@@ -560,7 +560,7 @@ mod tests {
         assert!(is_test_asset("scenes/tests/landing_legs.usda"));
         assert!(is_test_asset("scenarios/tests/landing_legs.rhai"));
         assert!(!is_test_asset("scenes/luncosim/lander_cinematic.usda"));
-        assert!(!is_test_asset("behaviors/solar_rover_patrol.btxml"));
+        assert!(!is_test_asset("behaviors/legacy_tree.xml"));
         // The suffix convention it replaces — a file that merely READS as a test
         // is still shown, because nothing but its folder makes it one.
         assert!(!is_test_asset("scenes/luncosim/something_test.usda"));

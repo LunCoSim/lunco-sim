@@ -42,7 +42,6 @@ README defines the stable taxonomy.
 | `assets/scenes/` | loadable stages — `base/`, `luncosim/`, `tests/`, `celestial/` |
 | `assets/models/` | behaviour sources: `.mo` (Modelica), `.py` |
 | `assets/scenarios/` | `.rhai` bound as a `LunCoProgramAPI` source |
-| `assets/behaviors/` | reusable `.btxml` behavior trees |
 | `assets/scripting/` | importable rhai modules — `lib/`, `prelude/`, `policy/`, `tools/` |
 | `assets/shaders/` | `.wgsl` |
 | `assets/celestial/`, `missions/`, `tutorials/`, `lighting/`, `config/` | global/application data |
@@ -52,7 +51,7 @@ README defines the stable taxonomy.
 - USD owns assembly, transforms, variants, references, and wiring.
 - Modelica owns continuous/domain math.
 - Rhai owns scenario orchestration, rules, scoring, and assertions.
-- BT.CPP XML owns reusable inspectable behavior.
+- The task kernel is reusable mechanism; Rhai owns authored behavior policy.
 - Rust owns only general heavy runtime capabilities and bridges; expose their
   controls to Rhai instead of baking mission policy into Rust.
 
@@ -69,7 +68,7 @@ output and connect that output back to itself.
 
 The engine-recognized **source** extensions are walked into the discovery manifest
 (`crates/lunco-assets/src/discovery.rs`): **`.usda`, `.wgsl`, `.rhai`, `.mo`,
-`.py`, `.btxml`**. `.mo` (Modelica), `.py` (Python), and `.btxml` (BT.CPP behaviour trees)
+`.py`**. `.mo` (Modelica) and `.py` (Python)
 are catalogued both because a `.usda` names them and so they can be browsed
 directly — the Scenarios menu lists every registered source file, grouped by type.
 Non-source data (`.json`, `.toml`) is not walked: it is read by a subsystem or
@@ -250,7 +249,7 @@ into one Modelica model; never bind one solver program per electrical part.
 Three gates, each of which silently does nothing when unmet:
 
 1. **The language is the file extension**, nothing else. `.mo` → Modelica,
-   `.py` → Python, `.rhai` → rhai, `.btxml` → behaviour tree (`.xml` accepted for interop).
+   `.py` → Python, `.rhai` → Rhai.
 2. **No `inputs:`/`outputs:` ⇒ never stepped.** The cosimulation projector requires at least
    one port-prefixed attribute. A model with no ports is a documentation-only
    reference.
@@ -275,7 +274,7 @@ progression in task/events.
 Native runtime walks the filesystem, so **adding a file needs no step at all**.
 The **web** build has no filesystem: it fetches `assets/manifest.json`
 (`crates/lunco-assets/src/discovery.rs`). After adding or removing any catalogued source
-(`.usda`/`.wgsl`/`.rhai`/`.mo`/`.btxml`):
+(`.usda`/`.wgsl`/`.rhai`/`.mo`):
 
 ```bash
 ./scripts/build_web.sh build luncosim
