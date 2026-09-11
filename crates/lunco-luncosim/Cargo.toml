@@ -69,7 +69,6 @@ lunco-physics = { workspace = true }
 # The sky-clock panel drives the celestial `TimeDomain` (`SetClock`) directly.
 lunco-time = { path = "../lunco-time" }
 big_space = { workspace = true }
-leafwing-input-manager = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-hardware = { path = "../lunco-hardware" }
 # The PRODUCER of `SampledParameter`. Its consumer (`lunco-api`'s
@@ -146,7 +145,6 @@ lunco-usd-sim = { path = "../lunco-usd-sim" }
 # hand edits back onto the document's runtime layer. Render-free, so the headless
 # server gets its terrain collider without linking any UI.
 lunco-usd-terrain = { path = "../lunco-usd-terrain" }
-openusd = { workspace = true }
 # The scene/document COMMAND LAYER — NOT optional: the headless server needs its
 # `commands::SpawnCommandPlugin` (runtime spawn/move + `NetReplicate` tagging) and
 # the journaled shader domain. Render-free, UI-free.
@@ -174,7 +172,6 @@ lunco-twin-journal = { path = "../lunco-twin-journal", optional = true }
 # these entirely: the egui workbench, the blueprint/shader material editors,
 # the doc/theme/general-UI crates. luncosim.rs cfg-gates every use behind
 # `feature = "ui"`.
-lunco-materials = { path = "../lunco-materials", optional = true }
 # Not optional/ui-gated: the doc subsystem (DocumentId, edit authoring) is a core,
 # headless-safe concern — not a UI feature. Already compiled transitively via
 # lunco-doc-bevy, so naming it directly adds no build cost. Was under `ui` only because
@@ -262,7 +259,6 @@ ui = [
     "dep:lunco-workbench-core",
     "dep:lunco-status-core",
     "dep:lunco-ui",
-    "dep:lunco-materials",
     "dep:lunco-theme",
     "dep:lunco-settings",
     "dep:serde",

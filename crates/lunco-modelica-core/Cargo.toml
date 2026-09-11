@@ -43,7 +43,6 @@ lunco-twin-journal = { path = "../lunco-twin-journal" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-signal = { path = "../lunco-signal" }
 lunco-telemetry = { path = "../lunco-telemetry" }
-lunco-web = { workspace = true }
 lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
 lunco-workspace = { path = "../lunco-workspace" }
 lunco-workspace-api = { path = "../lunco-workspace-api", optional = true }
@@ -111,7 +110,6 @@ rumoca-eval-solve = { workspace = true }
 lunco-experiments = { path = "../lunco-experiments" }
 # FACTS for the `modelica` lint domain (`../lunco-modelica-ast/src/lint_facts.rs`) are `HookValue`, the same
 # typed shape every other domain hands its authored rules.
-lunco-hooks = { path = "../lunco-hooks" }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 rumoca-compile = { workspace = true }
 rumoca-ir-solve = { workspace = true }
