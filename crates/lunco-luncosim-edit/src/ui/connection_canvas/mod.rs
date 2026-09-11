@@ -45,8 +45,8 @@ use lunco_usd::ui::viewport::{UsdPreviewId, UsdPreviewSession, UsdViewportState}
 use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdStageAsset};
 
 use projection::{
-    build_scene, collect_graph, project_schema, schema_roots, PrimNode, UsdPrimNodeData,
-    UsdWireData, Wire, WireKind, EDGE_KIND, NODE_KIND,
+    EDGE_KIND, NODE_KIND, PrimNode, UsdPrimNodeData, UsdWireData, Wire, WireKind, build_scene,
+    collect_graph, project_schema, schema_roots,
 };
 
 pub use lunco_usd::ui::USD_CONNECTION_CANVAS_PANEL_ID as USD_CANVAS_PANEL_ID;
@@ -102,6 +102,9 @@ pub struct UsdCanvasSessionState {
     source_wires: Vec<Wire>,
     schema_roots: Vec<String>,
     active_schema_root: Option<String>,
+    /// Last rejected graph edit. Keep it next to the graph so an invalid drag
+    /// cannot disappear as a no-op between frames.
+    last_error: Option<String>,
 }
 
 impl Default for UsdCanvasSessionState {
@@ -126,6 +129,7 @@ impl Default for UsdCanvasSessionState {
             source_wires: Vec::new(),
             schema_roots: Vec::new(),
             active_schema_root: None,
+            last_error: None,
         }
     }
 }
@@ -145,6 +149,7 @@ impl UsdCanvasSessionState {
         self.source_wires.clear();
         self.schema_roots.clear();
         self.active_schema_root = None;
+        self.last_error = None;
     }
 }
 
@@ -339,26 +344,44 @@ fn edge_sink(scene: &Scene, id: EdgeId) -> Option<EdgeSink> {
 
 /// Classify an `EdgeCreated`'s two endpoints into (source-output, sink-input)
 /// by port kind, then author the sink's `inputs:<c>.connect`.
-fn connect_op(scene: &Scene, from: &PortRef, to: &PortRef, edit_target: &LayerId) -> Option<UsdOp> {
-    let kind = |pr: &PortRef| -> Option<&str> {
+fn connect_op(
+    scene: &Scene,
+    from: &PortRef,
+    to: &PortRef,
+    edit_target: &LayerId,
+) -> Result<UsdOp, String> {
+    let kind = |pr: &PortRef| -> Result<&str, String> {
         scene
-            .node(pr.node)?
+            .node(pr.node)
+            .ok_or_else(|| format!("connection endpoint node {:?} no longer exists", pr.node))?
             .ports
             .iter()
             .find(|p| p.id == pr.port)
             .map(|p| p.kind.as_str())
+            .ok_or_else(|| format!("connection endpoint port `{:?}` no longer exists", pr.port))
     };
-    let (source, sink) = match (kind(from)?, kind(to)?) {
+    let from_kind = kind(from)?;
+    let to_kind = kind(to)?;
+    let (source, sink) = match (from_kind, to_kind) {
         ("output", "input") => (from, to),
         ("input", "output") => (to, from),
-        // Same-side or joint anchors — not a dataflow wire the user can author.
-        _ => return None,
+        _ => {
+            return Err(format!(
+                "cannot connect `{from_kind}` to `{to_kind}`; dataflow connections require an output and an input"
+            ));
+        }
     };
-    let source_prim = scene.node(source.node)?.origin.clone()?;
-    let sink_prim = scene.node(sink.node)?.origin.clone()?;
+    let source_prim = scene
+        .node(source.node)
+        .and_then(|node| node.origin.clone())
+        .ok_or_else(|| format!("source node {:?} has no USD prim origin", source.node))?;
+    let sink_prim = scene
+        .node(sink.node)
+        .and_then(|node| node.origin.clone())
+        .ok_or_else(|| format!("sink node {:?} has no USD prim origin", sink.node))?;
     let sink_conn = sink.port.as_str();
     let source_conn = source.port.as_str();
-    Some(UsdOp::SetConnection {
+    Ok(UsdOp::SetConnection {
         edit_target: edit_target.clone(),
         path: sink_prim,
         name: format!("inputs:{sink_conn}"),
@@ -378,14 +401,12 @@ fn build_ops(
     edge_sinks: &HashMap<EdgeId, EdgeSink>,
     events: &[SceneEvent],
     edit_target: &LayerId,
-) -> Vec<UsdOp> {
+) -> Result<Vec<UsdOp>, String> {
     let mut ops = Vec::new();
     for ev in events {
         match ev {
             SceneEvent::EdgeCreated { from, to, .. } => {
-                if let Some(op) = connect_op(scene, from, to, edit_target) {
-                    ops.push(op);
-                }
+                ops.push(connect_op(scene, from, to, edit_target)?);
             }
             SceneEvent::EdgeDeleted { id } => {
                 if let Some(sink) = edge_sinks.get(id) {
@@ -421,7 +442,7 @@ fn build_ops(
             _ => {}
         }
     }
-    ops
+    Ok(ops)
 }
 
 // ─── Panel ──────────────────────────────────────────────────────────────────
@@ -608,17 +629,32 @@ impl Panel for UsdCanvasPanel {
                 ui.colored_label(lunco_theme::active(ui.ctx()).tokens.port_output, "output");
                 ui.small("Names come from the USD port contract");
             });
+            if let Some(error) = state.last_error.as_deref() {
+                ui.colored_label(
+                    ui.visuals().error_fg_color,
+                    format!("Connection edit rejected: {error}"),
+                );
+            }
             let (_resp, events) = state.canvas.ui(ui);
             if events.is_empty() {
                 return;
             }
-            let ops = build_ops(
+            let ops = match build_ops(
                 &state.canvas.scene,
                 &node_origin,
                 &edge_sinks,
                 &events,
                 &edit_target,
-            );
+            ) {
+                Ok(ops) => {
+                    state.last_error = None;
+                    ops
+                }
+                Err(error) => {
+                    state.last_error = Some(error);
+                    return;
+                }
+            };
             if ops.is_empty() {
                 return;
             }

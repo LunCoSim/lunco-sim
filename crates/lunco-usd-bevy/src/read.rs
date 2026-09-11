@@ -645,6 +645,43 @@ pub trait UsdReadObject {
     fn attr_ui_hint(&self, prim: &SdfPath, name: &str) -> Option<AttrUiHint>;
 }
 
+/// The authored provider schema that can publish runtime-discovered value ports.
+///
+/// USD authored connections describe the topology, but Avian bodies,
+/// environment probes, raycast providers, and Modelica program facets publish
+/// some values only after projection/compilation. Those values deliberately
+/// stay out of the authored USD property surface. A connection may therefore
+/// target an existing runtime provider without having an authored source
+/// attribute; an absent source prim is still always invalid.
+pub fn runtime_port_provider(view: &dyn UsdReadObject, prim: &SdfPath) -> Option<&'static str> {
+    const DIRECT_PROVIDERS: &[&str] = &[
+        "PhysicsRigidBodyAPI",
+        "LunCoEnvironmentProbeAPI",
+        "LunCoRaycastAPI",
+        "LunCoProgramAPI",
+    ];
+    if let Some(schema) = DIRECT_PROVIDERS
+        .iter()
+        .copied()
+        .find(|schema| view.has_api_schema(prim, schema))
+    {
+        return Some(schema);
+    }
+
+    let root = prim.to_string();
+    view.prim_paths().into_iter().find_map(|candidate| {
+        (candidate != *prim
+            && crate::is_descendant_or_self(&candidate, &root)
+            && view.has_api_schema(&candidate, "LunCoProgramAPI"))
+        .then_some("LunCoProgramAPI (descendant)")
+    })
+}
+
+/// Whether a prim is an owner of runtime-discovered value ports.
+pub fn has_runtime_port_surface(view: &dyn UsdReadObject, prim: &SdfPath) -> bool {
+    runtime_port_provider(view, prim).is_some()
+}
+
 impl<T: UsdRead + ?Sized> UsdReadObject for T {
     fn type_name(&self, prim: &SdfPath) -> Option<String> {
         UsdRead::type_name(self, prim)

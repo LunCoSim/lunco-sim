@@ -27,14 +27,15 @@
 //! without any central edit.
 
 use crate::document::UsdDocument;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
-use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
-use lunco_api::executor::{finish_command_result, DeferredCommandAppExt, PendingApiRequest};
+use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, futures_lite::future};
+use lunco_api::executor::{DeferredCommandAppExt, PendingApiRequest, finish_command_result};
 use lunco_api::schema::ApiErrorCode;
 use lunco_core::{
-    on_command, register_commands, Ack, ActiveCommandId, Command, CommandResults, OpId,
+    Ack, ActiveCommandId, Command, CommandResults, OpId, on_command, register_commands,
 };
 use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_doc_bevy::{
@@ -49,18 +50,18 @@ use lunco_usd_bevy::usd_data::UsdDataExt;
 use lunco_usd_bevy::{UsdPrimPath, UsdRead, UsdSceneRoot};
 #[cfg(feature = "ui")]
 use lunco_workbench::ViewportPlaceholder;
-use lunco_workspace::open::{spawn_twin_scan, PendingTwinOpens, TwinOpenMode};
+use lunco_workspace::open::{PendingTwinOpens, TwinOpenMode, spawn_twin_scan};
 use lunco_workspace::{TwinClosed, WorkspaceResource};
 
 use crate::document::{LayerId, UsdOp};
 use crate::edit_session::{
-    validate_proposal, UsdEditScope, UsdEditSessions, UsdProposalId, UsdProposalState,
+    UsdEditScope, UsdEditSessions, UsdProposalId, UsdProposalState, validate_proposal,
 };
 use lunco_doc::OpenOutcome;
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd_sim::cosim::{
-    clear_scene_entities, resolve_root_prim, spawn_scene_root_world, validate_scene_address,
-    ClearScene, LoadScene, SceneEntities, SceneLoadInFlight,
+    ClearScene, LoadScene, SceneEntities, SceneLoadInFlight, clear_scene_entities,
+    resolve_root_prim, spawn_scene_root_world, validate_scene_address,
 };
 
 /// Stable id for the USD document kind in
@@ -958,7 +959,9 @@ fn on_restart_scene_refresh_active_document(
             }
         }
         OpenOutcome::KeptDirty => {
-            warn!("[restart-scene] active Twin has unsaved edits; retaining them instead of overwriting from disk");
+            warn!(
+                "[restart-scene] active Twin has unsaved edits; retaining them instead of overwriting from disk"
+            );
         }
         OpenOutcome::KeptUnparsable => {
             warn!("[restart-scene] source did not parse as USDA; retaining the mounted document")
@@ -2433,6 +2436,7 @@ fn usd_ack_data(
         })
     });
     serde_json::json!({
+        "status": "applied",
         "doc_id": doc,
         "target_layer": target_layers.first(),
         "target_layers": target_layers,
@@ -2506,10 +2510,53 @@ fn validate_live_attribute_types(
     doc: DocumentId,
     ops: &[UsdOp],
 ) -> Result<(), String> {
+    let planned_attributes: HashMap<(String, String), String> = ops
+        .iter()
+        .filter_map(|op| match op {
+            UsdOp::SetAttribute {
+                path,
+                name,
+                type_name,
+                ..
+            }
+            | UsdOp::SetTimeSample {
+                path,
+                name,
+                type_name,
+                ..
+            }
+            | UsdOp::SetConnection {
+                path,
+                name,
+                type_name,
+                ..
+            } => Some(((path.clone(), name.clone()), type_name.clone())),
+            _ => None,
+        })
+        .collect();
+
     let Some(stage) = crate::assembly_api::canonical_stage_for_document(world, doc) else {
-        return Ok(());
+        let Some(composed) = world
+            .get_resource::<DocumentRegistry<UsdDocument>>()
+            .and_then(|registry| registry.host(doc))
+            .map(|host| host.document().composed_arc())
+        else {
+            return Ok(());
+        };
+        return validate_authored_attribute_types(&composed, ops, &planned_attributes);
     };
     let view = stage.view();
+    let stage_path = world
+        .get_resource::<crate::twin_projection::DocBackedTwinScenes>()
+        .and_then(|scenes| scenes.coords_of(doc))
+        .map(|(name, rel)| lunco_assets::twin_uri(&name, &rel));
+    let stage_id = stage_path
+        .and_then(|path| {
+            world
+                .get_resource::<AssetServer>()
+                .and_then(|server| server.get_handle::<lunco_usd_bevy::UsdStageAsset>(path))
+        })
+        .map(|handle| handle.id());
     for op in ops {
         let (path, name, requested) = match op {
             UsdOp::SetAttribute {
@@ -2535,13 +2582,185 @@ fn validate_live_attribute_types(
         let sdf_path = openusd::sdf::Path::new(path).map_err(|error| {
             format!("typed USD edit `{path}.{name}` has an invalid path: {error}")
         })?;
-        let Some(declared) = view.attr_type_name(&sdf_path, name) else {
+        if let Some(declared) = view.attr_type_name(&sdf_path, name) {
+            if declared != *requested {
+                return Err(format!(
+                    "typed USD edit `{path}.{name}` requests `{requested}`, but the composed stage declares `{declared}`"
+                ));
+            }
+        }
+        let UsdOp::SetConnection {
+            sources, type_name, ..
+        } = op
+        else {
             continue;
         };
-        if declared != *requested {
-            return Err(format!(
-                "typed USD edit `{path}.{name}` requests `{requested}`, but the composed stage declares `{declared}`"
-            ));
+        for source in sources {
+            let source_path = openusd::sdf::Path::new(source).map_err(|error| {
+                format!("USD connection `{path}.{name}` has invalid source `{source}`: {error}")
+            })?;
+            let Some((source_prim, source_name)) = source_path.split_property() else {
+                return Err(format!(
+                    "USD connection `{path}.{name}` source `{source}` is not a property path; author a source attribute such as `/Controller.outputs:throttle`"
+                ));
+            };
+            let source_key = (source_prim.to_string(), source_name.to_string());
+            let source_type = planned_attributes
+                .get(&source_key)
+                .cloned()
+                .or_else(|| view.attr_type_name(&source_prim, source_name));
+            if !view.has_prim(&source_prim)
+                && !planned_attributes
+                    .keys()
+                    .any(|(path, _)| path == &source_prim.to_string())
+            {
+                return Err(format!(
+                    "USD connection `{path}.{name}` source `{source}` references missing prim `{source_prim}`"
+                ));
+            }
+            let Some(source_type) = source_type else {
+                if lunco_usd_bevy::read::has_runtime_port_surface(&view, &source_prim)
+                    && stage_id.is_some_and(|stage_id| {
+                        live_runtime_port_exists(world, stage_id, &source_prim, source_name)
+                    })
+                {
+                    continue;
+                }
+                return Err(format!(
+                    "USD connection `{path}.{name}` source `{source}` references missing property `{source_name}` on `{source_prim}`"
+                ));
+            };
+            if source_type != *type_name {
+                return Err(format!(
+                    "USD connection `{path}.{name}` source `{source}` declares `{source_type}`, but the sink declares `{type_name}`"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Check the exact dynamic endpoint against the projected registry. A provider
+/// schema only says that a prim can publish runtime ports; it does not make
+/// every spelling a valid port. This is intentionally a live-only check: the
+/// file validator has no ECS/runtime registry to consult.
+fn live_runtime_port_exists(
+    world: &World,
+    stage_id: bevy::asset::AssetId<lunco_usd_bevy::UsdStageAsset>,
+    prim: &openusd::sdf::Path,
+    property: &str,
+) -> bool {
+    let Some((direction, name)) = property
+        .strip_prefix("outputs:")
+        .map(|name| ("output", name))
+        .or_else(|| property.strip_prefix("inputs:").map(|name| ("input", name)))
+    else {
+        return false;
+    };
+    let Some(registry) = world.get_resource::<lunco_core::ports::PortRegistry>() else {
+        return false;
+    };
+    for entity in world.iter_entities() {
+        let Some(path) = entity.get::<lunco_usd_bevy::UsdPrimPath>() else {
+            continue;
+        };
+        if path.stage_handle.id() != stage_id || path.path != prim.as_str() {
+            continue;
+        }
+        return if direction == "output" {
+            registry.has_output_port(world, entity.id(), name)
+        } else {
+            registry.has_input_port(world, entity.id(), name)
+        };
+    }
+    false
+}
+
+/// The document-owned fallback for command preflight while a preview's
+/// canonical composed stage is still settling. It covers self-contained and
+/// newly opened documents; once a canonical stage exists the live composed
+/// reader above remains authoritative for references, payloads, and variants.
+fn validate_authored_attribute_types(
+    composed: &openusd::sdf::Data,
+    ops: &[UsdOp],
+    planned_attributes: &HashMap<(String, String), String>,
+) -> Result<(), String> {
+    let attr_type = |path: &openusd::sdf::Path, name: &str| {
+        let property = path.append_property(name).ok()?;
+        match composed.field(&property, "typeName") {
+            Some(openusd::sdf::Value::Token(type_name)) => Some(type_name.to_string()),
+            Some(openusd::sdf::Value::String(type_name)) => Some(type_name.clone()),
+            _ => None,
+        }
+    };
+    let planned_prim = |path: &openusd::sdf::Path| {
+        let path = path.to_string();
+        planned_attributes.keys().any(|(prim, _)| prim == &path)
+    };
+    for op in ops {
+        let (path, name, requested) = match op {
+            UsdOp::SetAttribute {
+                path,
+                name,
+                type_name,
+                ..
+            }
+            | UsdOp::SetTimeSample {
+                path,
+                name,
+                type_name,
+                ..
+            }
+            | UsdOp::SetConnection {
+                path,
+                name,
+                type_name,
+                ..
+            } => (path, name, type_name),
+            _ => continue,
+        };
+        let target_path = openusd::sdf::Path::new(path).map_err(|error| {
+            format!("typed USD edit `{path}.{name}` has an invalid path: {error}")
+        })?;
+        if let Some(declared) = attr_type(&target_path, name) {
+            if declared != *requested {
+                return Err(format!(
+                    "typed USD edit `{path}.{name}` requests `{requested}`, but the composed document declares `{declared}`"
+                ));
+            }
+        }
+        let UsdOp::SetConnection { sources, .. } = op else {
+            continue;
+        };
+        for source in sources {
+            let source_path = openusd::sdf::Path::new(source).map_err(|error| {
+                format!("USD connection `{path}.{name}` has invalid source `{source}`: {error}")
+            })?;
+            let Some((source_prim, source_name)) = source_path.split_property() else {
+                return Err(format!(
+                    "USD connection `{path}.{name}` source `{source}` is not a property path; author a source attribute such as `/Controller.outputs:throttle`"
+                ));
+            };
+            let source_key = (source_prim.to_string(), source_name.to_string());
+            let source_type = planned_attributes
+                .get(&source_key)
+                .cloned()
+                .or_else(|| attr_type(&source_prim, source_name));
+            if !composed.prim_type_name(&source_prim).is_some() && !planned_prim(&source_prim) {
+                return Err(format!(
+                    "USD connection `{path}.{name}` source `{source}` references missing prim `{source_prim}`"
+                ));
+            }
+            let Some(source_type) = source_type else {
+                return Err(format!(
+                    "USD connection `{path}.{name}` source `{source}` references missing property `{source_name}` on `{source_prim}`"
+                ));
+            };
+            if source_type != *requested {
+                return Err(format!(
+                    "USD connection `{path}.{name}` source `{source}` declares `{source_type}`, but the sink declares `{requested}`"
+                ));
+            }
         }
     }
     Ok(())
@@ -3409,7 +3628,7 @@ mod change_set_tests {
     //! lossless `(forward, inverse)` entry, while the change-set ID makes the
     //! complete attach one undo unit.
     use super::*;
-    use crate::attach::{attach_component_ops, AttachJoint, AttachSpec, Axis};
+    use crate::attach::{AttachJoint, AttachSpec, Axis, attach_component_ops};
     use crate::document::LayerId;
     use lunco_doc_bevy::JournalResource;
     use lunco_twin_journal::{AuthorTag, UndoManager, UndoScope};
@@ -3642,41 +3861,47 @@ mod tests {
         app.add_plugins(UsdCommandsPlugin);
         app.update();
 
-        assert!(app
-            .world()
-            .contains_resource::<DocumentRegistry<UsdDocument>>());
+        assert!(
+            app.world()
+                .contains_resource::<DocumentRegistry<UsdDocument>>()
+        );
         let kinds = app.world().resource::<DocumentKindRegistry>();
         let meta = kinds
             .meta(&DocumentKindId::new(USD_DOCUMENT_KIND))
             .expect("usd kind registered");
         assert_eq!(meta.display_name, "USD Stage");
         assert_eq!(meta.extensions, vec!["usda", "usdc", "usd"]);
-        assert!(app
-            .world()
-            .resource::<lunco_api::queries::ApiQueryRegistry>()
-            .names()
-            .any(|name| name == "InspectUsdDocument"));
+        assert!(
+            app.world()
+                .resource::<lunco_api::queries::ApiQueryRegistry>()
+                .names()
+                .any(|name| name == "InspectUsdDocument")
+        );
         #[cfg(feature = "ui")]
-        assert!(app
-            .world()
-            .resource::<lunco_api::queries::ApiQueryRegistry>()
-            .names()
-            .any(|name| name == "InspectUsdViewport"));
-        assert!(app
-            .world()
-            .resource::<lunco_api::queries::ApiQueryRegistry>()
-            .names()
-            .any(|name| name == "InspectUsdEditSession"));
-        assert!(app
-            .world()
-            .resource::<lunco_api::queries::ApiQueryRegistry>()
-            .names()
-            .any(|name| name == "ResolveUsdTarget"));
-        assert!(app
-            .world()
-            .resource::<lunco_api::queries::ApiQueryRegistry>()
-            .names()
-            .any(|name| name == "SyncUsdDocument"));
+        assert!(
+            app.world()
+                .resource::<lunco_api::queries::ApiQueryRegistry>()
+                .names()
+                .any(|name| name == "InspectUsdViewport")
+        );
+        assert!(
+            app.world()
+                .resource::<lunco_api::queries::ApiQueryRegistry>()
+                .names()
+                .any(|name| name == "InspectUsdEditSession")
+        );
+        assert!(
+            app.world()
+                .resource::<lunco_api::queries::ApiQueryRegistry>()
+                .names()
+                .any(|name| name == "ResolveUsdTarget")
+        );
+        assert!(
+            app.world()
+                .resource::<lunco_api::queries::ApiQueryRegistry>()
+                .names()
+                .any(|name| name == "SyncUsdDocument")
+        );
     }
 
     fn proposal_test_op(name: &str) -> UsdOp {
@@ -3728,14 +3953,15 @@ mod tests {
             assert_eq!(proposal.ops.len(), 1);
             proposal.id
         };
-        assert!(!app
-            .world()
-            .resource::<DocumentRegistry<UsdDocument>>()
-            .host(doc)
-            .expect("document")
-            .document()
-            .source()
-            .contains("Chassis"));
+        assert!(
+            !app.world()
+                .resource::<DocumentRegistry<UsdDocument>>()
+                .host(doc)
+                .expect("document")
+                .document()
+                .source()
+                .contains("Chassis")
+        );
 
         app.world_mut().trigger(ReviewUsdProposal {
             proposal,
@@ -3770,22 +3996,24 @@ mod tests {
         let host = registry.host(doc).expect("committed document");
         assert_eq!(host.generation(), 1);
         assert!(host.document().source().contains("Chassis"));
-        assert!(app
-            .world()
-            .resource::<UsdEditSessions>()
-            .proposal(proposal)
-            .is_none());
+        assert!(
+            app.world()
+                .resource::<UsdEditSessions>()
+                .proposal(proposal)
+                .is_none()
+        );
 
         app.world_mut().trigger(UndoDocument { doc_id: doc });
         app.update();
-        assert!(!app
-            .world()
-            .resource::<DocumentRegistry<UsdDocument>>()
-            .host(doc)
-            .expect("undo document")
-            .document()
-            .source()
-            .contains("Chassis"));
+        assert!(
+            !app.world()
+                .resource::<DocumentRegistry<UsdDocument>>()
+                .host(doc)
+                .expect("undo document")
+                .document()
+                .source()
+                .contains("Chassis")
+        );
     }
 
     #[test]
@@ -3817,10 +4045,12 @@ mod tests {
         let sessions = app.world().resource::<UsdEditSessions>();
         let conflicted = sessions.proposal(proposal).expect("conflict retained");
         assert_eq!(conflicted.state, UsdProposalState::Conflict);
-        assert!(conflicted
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.contains("stale document generation")));
+        assert!(
+            conflicted
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("stale document generation"))
+        );
         let source = app
             .world()
             .resource::<DocumentRegistry<UsdDocument>>()
@@ -3857,11 +4087,12 @@ mod tests {
         });
         app.update();
 
-        assert!(app
-            .world()
-            .resource::<UsdEditSessions>()
-            .proposal(proposal)
-            .is_none());
+        assert!(
+            app.world()
+                .resource::<UsdEditSessions>()
+                .proposal(proposal)
+                .is_none()
+        );
         assert_eq!(
             app.world()
                 .resource::<DocumentRegistry<UsdDocument>>()
@@ -3989,23 +4220,27 @@ mod tests {
                 .document()
                 .source()
         );
-        assert!(registry
-            .host(fork)
-            .expect("fork host")
-            .document()
-            .origin()
-            .is_untitled());
+        assert!(
+            registry
+                .host(fork)
+                .expect("fork host")
+                .document()
+                .origin()
+                .is_untitled()
+        );
 
         app.world_mut().trigger(DiscardDocument { doc_id: fork });
         app.update();
-        assert!(!app
-            .world()
-            .resource::<DocumentRegistry<UsdDocument>>()
-            .contains(fork));
-        assert!(app
-            .world()
-            .resource::<DocumentRegistry<UsdDocument>>()
-            .contains(source));
+        assert!(
+            !app.world()
+                .resource::<DocumentRegistry<UsdDocument>>()
+                .contains(fork)
+        );
+        assert!(
+            app.world()
+                .resource::<DocumentRegistry<UsdDocument>>()
+                .contains(source)
+        );
     }
 
     #[test]
@@ -4184,9 +4419,11 @@ mod tests {
             serde_json::json!("history_window_exceeded")
         );
         assert_eq!(snapshot["generation"], serde_json::json!(257));
-        assert!(snapshot["layers"]["root"]["source"]
-            .as_str()
-            .is_some_and(|source| source.contains("Part256")));
+        assert!(
+            snapshot["layers"]["root"]["source"]
+                .as_str()
+                .is_some_and(|source| source.contains("Part256"))
+        );
     }
 
     fn wait_for_one_usd_document(app: &mut App) {

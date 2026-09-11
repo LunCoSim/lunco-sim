@@ -134,6 +134,9 @@ pub struct LintReport {
     /// Findings not yet shown to the user. A UI bridge drains this to raise one
     /// toast per batch instead of one per finding.
     pub unreported: usize,
+    /// True while an explicit lint command has queued evidence that is not
+    /// visible in this report yet.
+    pub pending: bool,
 }
 
 impl LintReport {
@@ -256,7 +259,7 @@ pub fn clear_report(mut report: ResMut<LintReport>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lunco_hooks::{register, RegisteredHook, ScriptHook};
+    use lunco_hooks::{RegisteredHook, ScriptHook, register};
     use std::sync::Arc;
 
     /// A stand-in for a rhai policy: whatever the test wants to "author".

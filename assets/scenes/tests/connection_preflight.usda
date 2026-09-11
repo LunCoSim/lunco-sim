@@ -1,0 +1,56 @@
+#usda 1.0
+(
+    defaultPrim = "ConnectionPreflight"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# A deliberately small, schema-neutral USD dataflow fixture. The connection
+# linter must inspect standard typed attributes even when the sink has no
+# LunCo-specific API schema.
+def Xform "ConnectionPreflight"
+{
+    def Scope "Scenario" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/connection_preflight.rhai@
+    }
+
+    def Xform "Source"
+    {
+        float outputs:valid = 1.0
+        double outputs:wide = 2.0
+    }
+
+    # Physics state ports are published by Avian at projection time rather
+    # than authored as USD attributes. The linter must accept the real port and
+    # reject a typo in the same dynamic surface.
+    def Xform "RuntimeBody" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI"]
+    )
+    {
+        def Cube "Collider" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+        }
+    }
+
+    def Xform "Sink"
+    {
+        float inputs:valid.connect = </ConnectionPreflight/Source.outputs:valid>
+        float inputs:missing_property.connect = </ConnectionPreflight/Source.outputs:ghost>
+        float inputs:missing_prim.connect = </ConnectionPreflight/Ghost.outputs:signal>
+        float inputs:type_mismatch.connect = </ConnectionPreflight/Source.outputs:wide>
+        float inputs:runtime_valid.connect = </ConnectionPreflight/RuntimeBody.outputs:position_x>
+        float inputs:runtime_missing.connect = </ConnectionPreflight/RuntimeBody.outputs:positon_x>
+        float inputs:runtime_invalid.connect = </ConnectionPreflight/RuntimeBody.position_x>
+    }
+
+    def DistantLight "TestLight"
+    {
+        float intensity = 1.0
+    }
+}

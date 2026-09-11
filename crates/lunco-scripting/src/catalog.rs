@@ -36,8 +36,14 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
     (
         "cmd",
         "cmd(name, #{params})",
-        "#{ id, ok, data, error }",
-        "WRITE. Fire a command by name through ApiCommandEvent — every #[Command] is reachable with no per-command binding. Runs synchronously; `data` carries command-specific result data (a spawned gid, stdout, etc.).",
+        "#{ id, ok, status, data, error }",
+        "WRITE. Fire a command by name through ApiCommandEvent — every #[Command] is reachable with no per-command binding. `status` is applied, rejected, failed, or pending; `data` carries command-specific result data (a spawned gid, stdout, etc.). Use command_result(id) when a deferred owner has not finished yet.",
+    ),
+    (
+        "command_result",
+        "command_result(id)",
+        "#{ id, ok, status, data, error }",
+        "READ. Get the shared terminal result of a prior cmd() call. Deferred commands remain status=pending until their owner records applied, rejected, or failed; do not treat acceptance as applied.",
     ),
     (
         "to_json",
@@ -654,12 +660,14 @@ mod tests {
         }
 
         // Hooks present.
-        assert!(data["hooks"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|h| h["name"].as_str())
-            .any(|name| name == "on_tick"));
+        assert!(
+            data["hooks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|h| h["name"].as_str())
+                .any(|name| name == "on_tick")
+        );
         for entry in ["task", "mission"] {
             assert!(
                 data["hooks"]

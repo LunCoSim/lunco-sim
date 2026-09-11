@@ -254,8 +254,8 @@ for the design.
 edited, no file describes what is running; lint **that** with the verb:
 
 ```rhai
-cmd("RunLint", #{});        // lints every loaded stage, same rules, same facts
-query("LintReport");        // { errors, warnings, findings[] }
+cmd("RunLint", #{});        // explicit loaded-stage lint
+query("LintReport");        // { ok, pending, errors, warnings, findings[] }
 ```
 
 or `{"type":"ExecuteCommand","command":"RunLint"}` over HTTP/MCP. Nothing lints automatically at load,
@@ -266,7 +266,9 @@ launcher, or caller explicitly repeats the command after an authored change, and
 register_hook("lint.usd", "lint_usd", my_rules);   // next RunLint obeys
 ```
 
-re-shapes the rules for the next explicit lint run without a rebuild.
+re-shapes the rules for the next explicit lint run without a rebuild. Loaded
+lint evidence can be deferred for one or more frames; wait until `pending:false`
+before using `ok:true` as a clean result.
 
 `RunLint` also checks the live projected port surface through the shared
 `PortRegistry`. A `port-owner-collision` warning identifies the composed
@@ -277,6 +279,15 @@ owners that are introduced by projection. Repair it in USD/Rhai authoring so one
 semantic public name has one owner; rename a separate actuator (for example to
 `dock_release`) instead of adding retries, fallbacks, or vehicle-specific Rust
 input handlers.
+
+USD connections have a second, explicit preflight contract. Static file lint
+reports invalid property paths, missing source prims/properties, and authored
+type mismatches. Loaded `RunLint` additionally checks runtime-provider
+connections against the exact projected `inputs:`/`outputs:` port name and
+reports a missing port as an error or an explicitly pending surface as a
+warning. A runtime source without the standard direction namespace is an
+error. Rust only supplies these facts; the Rhai USD policy chooses rule IDs,
+severity, and wording. `ValidateAsset` cannot prove dynamic runtime names.
 
 ## Where it fits
 

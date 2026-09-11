@@ -398,7 +398,9 @@ fn relationship(doc, edit_target, path, name, targets, parent_gen) {
     })
 }
 
-/// Set one USD connection in an explicit authored layer.
+/// Set one USD connection in an explicit authored layer. The typed command
+/// rejects missing source prims/properties, mismatched types, and invalid
+/// runtime port paths; poll command_result(id) when the result is pending.
 fn connection(doc, edit_target, path, name, type_name, sources, parent_gen) {
     cmd("ApplyUsdOp", #{
         doc_id: doc,

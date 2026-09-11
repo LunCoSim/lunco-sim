@@ -2,7 +2,10 @@
 //
 // The host (Rust) exposes only the minimal, generic bridge:
 //   cmd(name, #{params})          write: fire any #[Command] by name; returns
-//                                        #{ id, ok, data, error } — `data` is the
+//                                        #{ id, ok, status, data?, error? } —
+//                                        `status` is applied/rejected/failed/
+//                                        pending; poll command_result(id) when
+//                                        the command is pending. `data` is the
 //                                        handler's result data (spawned gid, …),
 //                                        so you can create-then-manipulate
 //   query(name, #{params})        read:  call any ApiQueryProvider (Raycast,
