@@ -34,7 +34,7 @@
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::schema::ApiResponse;
-use lunco_core::{Command, on_command};
+use lunco_core::{on_command, Command};
 use lunco_doc::{Document, DocumentId};
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_hooks::HookValue as H;
@@ -835,13 +835,11 @@ mod tests {
     #[test]
     fn collision_report_contains_structured_winner_and_shadowed_owner_fields() {
         let stage = composed_fixture();
-        assert!(
-            stage
-                .view()
-                .prim_paths()
-                .iter()
-                .any(|path| path.to_string() == "/Griffin1")
-        );
+        assert!(stage
+            .view()
+            .prim_paths()
+            .iter()
+            .any(|path| path.to_string() == "/Griffin1"));
 
         let mut world = World::new();
         world.spawn((
@@ -863,22 +861,18 @@ mod tests {
         assert_eq!(finding.rule, "port-owner-collision");
         assert_eq!(finding.severity, lunco_lint::LintSeverity::Warn);
         assert_eq!(finding.subject, "/Griffin1");
-        assert!(
-            finding
-                .message
-                .contains("PORT_OWNER_COLLISION: `release` has 2 input owners")
-        );
+        assert!(finding
+            .message
+            .contains("PORT_OWNER_COLLISION: `release` has 2 input owners"));
         assert!(finding.message.contains("Modelica/OBC"));
         assert!(finding.message.contains("hardware port"));
         assert!(finding.message.contains("/Griffin1.inputs:release"));
         assert!(finding.message.contains("/Griffin1.inputs/outputs:release"));
         assert!(finding.message.contains("registry precedence 1"));
         assert!(finding.message.contains("registry precedence 2"));
-        assert!(
-            finding
-                .message
-                .contains("writes may be routed to the winner")
-        );
+        assert!(finding
+            .message
+            .contains("writes may be routed to the winner"));
     }
 
     #[test]
@@ -892,13 +886,11 @@ mod tests {
              }\n",
         ))
         .expect("clean port fixture composes");
-        assert!(
-            stage
-                .view()
-                .prim_paths()
-                .iter()
-                .any(|path| path.to_string() == "/Griffin1")
-        );
+        assert!(stage
+            .view()
+            .prim_paths()
+            .iter()
+            .any(|path| path.to_string() == "/Griffin1"));
 
         let mut world = World::new();
         world.spawn((

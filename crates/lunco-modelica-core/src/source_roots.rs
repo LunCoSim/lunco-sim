@@ -401,55 +401,6 @@ fn normalize_twin_source_path(path: &Path) -> Result<PathBuf, String> {
     Ok(lunco_assets::asset_path::normalize(path))
 }
 
-/// Discover the Modelica source directories represented by a Twin's indexed
-/// `.mo` files when its manifest does not declare `[modelica].paths`.
-///
-/// Package directories are preferred over their nested package members, while
-/// flat files remain grouped by their nearest common indexed directory. This
-/// is the same source-root identity used by the compile gate and by Twin-level
-/// namespace inspection.
-pub fn discover_twin_modelica_paths(twin: &lunco_twin::Twin) -> Vec<PathBuf> {
-    fn is_modelica_file(path: &Path) -> bool {
-        path.extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("mo"))
-    }
-
-    fn is_under_or_equal(path: &Path, ancestor: &Path) -> bool {
-        ancestor.as_os_str().is_empty() || path == ancestor || path.starts_with(ancestor)
-    }
-
-    let mut candidates: Vec<PathBuf> = twin
-        .files()
-        .iter()
-        .filter(|entry| is_modelica_file(&entry.relative_path))
-        .filter_map(|entry| {
-            let parent = entry.relative_path.parent()?.to_path_buf();
-            Some(parent)
-        })
-        .collect();
-
-    candidates.sort_by_key(|path| {
-        (
-            path.components().count(),
-            lunco_assets::asset_path::slashed(path),
-        )
-    });
-    candidates.dedup();
-
-    let mut roots = Vec::new();
-    for candidate in candidates {
-        if roots
-            .iter()
-            .any(|root: &PathBuf| is_under_or_equal(&candidate, root))
-        {
-            continue;
-        }
-        roots.push(candidate);
-    }
-    roots
-}
-
 fn twin_for_root<'a>(
     workspace: Option<&'a lunco_workspace::WorkspaceResource>,
     root: &Path,
@@ -496,7 +447,7 @@ fn twin_source_root_specs(
     let local_paths = if let Some(modelica) = modelica {
         modelica.paths.clone()
     } else if let Some(twin) = twin {
-        discover_twin_modelica_paths(twin)
+        twin.discover_indexed_file_roots("mo")
     } else {
         Vec::new()
     };

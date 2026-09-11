@@ -30,6 +30,7 @@ members = [
     "crates/lunco-usd",
     "crates/lunco-luncosim-edit",
     "crates/lunco-scene-commands",
+    "crates/lunco-scene-validation",
     "crates/lunco-ui",
     "crates/lunco-assets",
     "crates/lunco-materials",

@@ -78,7 +78,7 @@ fn shipped_usd_assets_have_no_lint_errors() {
         if f.file_name().is_some_and(|n| n == "lint_selftest.usda") {
             continue;
         }
-        let report = lunco_scene_commands::validate::validate_asset(&f.to_string_lossy());
+        let report = lunco_scene_validation::validate::validate_asset(&f.to_string_lossy());
         // Only the LINT findings: a pre-existing parse/compose failure in some
         // unrelated asset is a different test's business, and mixing them would
         // make this one unfixable.
@@ -106,7 +106,7 @@ fn the_deliberately_broken_scene_still_fails_the_same_gate() {
     register_usd_lint_policy();
 
     let broken = assets_dir().join("scenes/tests/lint_selftest.usda");
-    let report = lunco_scene_commands::validate::validate_asset(&broken.to_string_lossy());
+    let report = lunco_scene_validation::validate::validate_asset(&broken.to_string_lossy());
     let lint_errors: Vec<&String> = report
         .errors
         .iter()
@@ -204,7 +204,7 @@ fn targetless_metadata_telemetry_is_a_usd_lint_error() {
     let stage = lunco_usd_bevy::compose_file_to_stage(&path).expect("compose lint fixture");
     let canonical =
         lunco_usd_bevy::CanonicalStage::from_stage(stage, path.to_string_lossy().into_owned());
-    let findings = lunco_scene_commands::lint_command::lint_stage(&canonical.view());
+    let findings = lunco_scene_validation::lint_command::lint_stage(&canonical.view());
     assert!(
         findings.iter().any(|finding| {
             finding.rule == "telemetry-target-required"
@@ -218,7 +218,7 @@ fn targetless_metadata_telemetry_is_a_usd_lint_error() {
 fn massed_linear_force_drives_are_not_false_positive_lint_errors() {
     register_usd_lint_policy();
     let asset = assets_dir().join("scenes/tests/prismatic_spring.usda");
-    let report = lunco_scene_commands::validate::validate_asset(&asset.to_string_lossy());
+    let report = lunco_scene_validation::validate::validate_asset(&asset.to_string_lossy());
     let conditional: Vec<&String> = report
         .errors
         .iter()
@@ -377,7 +377,7 @@ fn a_strut_that_outreaches_its_foot_is_caught_by_geometry_alone() {
     register_usd_lint_policy();
 
     let broken = assets_dir().join("scenes/tests/lint_selftest.usda");
-    let report = lunco_scene_commands::validate::validate_asset(&broken.to_string_lossy());
+    let report = lunco_scene_validation::validate::validate_asset(&broken.to_string_lossy());
     let lint_errors: Vec<&String> = report
         .errors
         .iter()

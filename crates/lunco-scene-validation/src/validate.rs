@@ -58,6 +58,7 @@ pub struct ValidationReport {
     pub ok: bool,
     /// Human-readable, with `line N:` prefixes where the parser gives them.
     pub errors: Vec<String>,
+    /// Non-fatal diagnostics produced by the loader or authored lint policy.
     pub warnings: Vec<String>,
     /// Kind-specific extras: `model`/`params`/`inputs` (.mo),
     /// `wheel_prims` (.usda), `shader_params` (.wgsl).

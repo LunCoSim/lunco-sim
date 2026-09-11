@@ -3489,7 +3489,7 @@ register_commands!(
     on_reload_shader,
     on_rescan_shaders,
     on_rescan_spawn_catalog,
-    crate::lint_command::on_run_lint,
+    lunco_scene_validation::lint_command::on_run_lint,
     on_set_camera_look_at,
     on_set_object_property,
     on_set_shader_source,
@@ -3523,11 +3523,11 @@ impl Plugin for SpawnCommandPlugin {
         crate::usd_prim_query::register(app);
         // Parse-only asset pre-flight ("does this file compile?") — pure file
         // checks, so it answers even while no scene is loaded.
-        crate::validate::register(app);
+        lunco_scene_validation::validate::register(app);
         // `RunLint` + the `LintReport` read-back. Nothing lints on load or on a
         // physics cadence: the linter is an explicit verb called from rhai, HTTP
         // or MCP after an authoring/preflight change.
-        crate::lint_command::register(app);
+        lunco_scene_validation::lint_command::register(app);
         // Selection → telemetry focus, so every host that has the scene verbs has
         // scoped telemetry (the sandbox, the workbench, a headless server driven
         // by `SelectEntity`). Render-free: `lunco-signal` is a ring buffer of

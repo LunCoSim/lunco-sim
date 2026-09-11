@@ -134,6 +134,7 @@ lunco-usd-terrain = { path = "../lunco-usd-terrain" }
 # `commands::SpawnCommandPlugin` (runtime spawn/move + `NetReplicate` tagging) and
 # the journaled shader domain. Render-free, UI-free.
 lunco-scene-commands = { path = "../lunco-scene-commands" }
+lunco-scene-validation = { path = "../lunco-scene-validation" }
 # The in-scene EDITOR (gizmo, selection, inspector, physics-viz, spawn ghost).
 # Optional + `ui`-only: the server used to link a crate called "edit" purely to get
 # `SpawnEntity`, which now lives in `lunco-scene-commands` above. A `--no-ui` build

@@ -27,7 +27,7 @@ situation; a lint catches it by reading what was written.
 |---|---|---|
 | **Facts** | Rust, in the crate that owns the subject (`lunco_usd_avian` for standard joints, `lunco_usd_sim` for gear drives, `lunco_modelica_ast` for Rumoca AST facts) | Only the owning projection or parser can answer its subject questions. Each owner supplies the fields its runtime reader actually consumes, and the command layer composes them into one fact map |
 | **Rules** | rhai policy, `assets/scripting/policy/lint_<domain>.rhai` | A rule that needs a rebuild is a rule nobody writes, tunes, or silences. These are editable against a **running** sim |
-| **Findings** | `lunco_lint::LintReport` for mounted stages; `lunco_scene_commands::DocumentLintReports` for explicit Editor documents | Reports stay scoped to the stage/document that was actually linted |
+| **Findings** | `lunco_lint::LintReport` for mounted stages; `lunco_scene_validation::lint_command::DocumentLintReports` for explicit Editor documents | Reports stay scoped to the stage/document that was actually linted |
 
 `lunco-lint` is substrate: it knows what a finding is and how a domain asks
 policy for one. It knows nothing about USD, rhai or Modelica.
@@ -181,7 +181,7 @@ from `ValidateAsset`'s file-only preflight.
 ## Twin-wide namespace inspection
 
 `RunLint { scope: "twin" }` and `ValidateTwin` share the read-only inspector in
-`lunco-scene-commands::twin_lint`. It builds deterministic entries from the
+`lunco-scene-validation::twin_lint`. It builds deterministic entries from the
 active Twin's indexed files and existing resolver owners:
 
 - Modelica declared classes are scoped to the manifest/discovered Modelica
@@ -342,7 +342,7 @@ of a link inside a link attached to nothing.
 
 ## What keeps it honest
 
-- `crates/lunco-scene-commands/tests/shipped_assets_lint_clean.rs` — every
+- `crates/lunco-scene-validation/tests/shipped_assets_lint_clean.rs` — every
   shipped vessel/scene/mission/tutorial must be lint-clean, **and** the
   deliberately broken scene must still fail through the same path. "All clean"
   and "the rules never ran" are the same green square without that second test.

@@ -470,7 +470,7 @@ actually call, with the fields the deserializer actually accepts. See the
  identifies the owner paths and the actual registry precedence used for
  routing. Fix the duplicate in authoring rather than adding a runtime fallback.
 
-- *defined in:* `crates/lunco-scene-commands/src/lint_command.rs`
+- *defined in:* `crates/lunco-scene-validation/src/lint_command.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -485,7 +485,7 @@ local folder and without requiring an active scene or ECS state. It reports
 Modelica classes, USD default/prim identities, Rhai tools, shader modules, and
 asset stems only when their names collide in a real resolver scope.
 
-- *defined in:* `crates/lunco-scene-commands/src/validate.rs`
+- *defined in:* `crates/lunco-scene-validation/src/validate.rs`
 
 | Field | Type | Description |
 |---|---|---|

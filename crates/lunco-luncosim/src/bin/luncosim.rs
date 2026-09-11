@@ -49,7 +49,7 @@ fn main() -> lunco_luncosim::AppExit {
                 eprintln!("--validate cannot register built-in policies: {error}");
                 std::process::exit(1);
             }
-            std::process::exit(lunco_scene_commands::validate::run_cli(&paths));
+            std::process::exit(lunco_scene_validation::validate::run_cli(&paths));
         }
     }
     lunco_luncosim::run()
