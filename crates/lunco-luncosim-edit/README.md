@@ -9,7 +9,7 @@ In-scene editing tools for the LunCoSim luncosim: spawn, selection, transform gi
 - **USD Preview Picking** — clicks in the isolated Editor image map through its focused offscreen camera and select the nearest authored prim-backed part
 - **Prims Navigation** — a newly selected prim opens its ancestors and scrolls into view; unchanged selections leave manual tree scrolling alone
 - **Transform Gizmo** — translate/rotate via `transform-gizmo-bevy`; live entities use BigSpace and the scene command, while USD previews use parent-local projection and `ApplyUsdOps`
-- **Inspector Panel** — EGUI sliders for transform, mass, damping, and wheel parameters
+- **Inspector Panel** — schema-hinted USD fields with units and authored/inherited provenance; component edits are prepared as explicit, reviewable USD proposals
 - **Undo** — Ctrl+Z to revert spawns and transform changes
 
 The Assembly Editor is document-scoped. Its native USD tree, connection graph,

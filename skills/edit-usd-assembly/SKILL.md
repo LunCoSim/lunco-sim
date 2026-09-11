@@ -417,12 +417,23 @@ and/or scale fields as one journaled `ApplyUsdOps` edit. The typed
 `UsdOp::SetScale` operation preserves the standard `xformOpOrder` and stage
 unit/axis boundary.
 
-For multiple scalar component values, edit the draft Parameters section and
-press **Apply parameters** once. The Inspector commits only changed values as
-one generation-checked `ApplyUsdOps` edit. AI callers use
-`assembly_builder::parameter_plan` and the same `assembly_edit::batch` or
-proposal flow; do not make one command per slider or create a vehicle-specific
-parameter writer.
+For multiple scalar values on a `kind = "component"` prim, edit the draft
+Component parameters section and press **Prepare component proposal** once.
+Review the displayed units, bounds, authored/inherited provenance, and the
+explicit authoring scope. Invalid composed values remain visible with their
+diagnostic and block preparation; the Inspector does not clamp them. Commit or
+reject the matching proposal in the section. Commit uses the same typed USD
+proposal/journal/projection/undo path as AI/Rhai work and saving remains
+explicit. Non-component scalar views retain their grouped direct edit surface
+until their owning schema gets a proposal UI.
+
+The native section exposes the standard-property half of the generic
+`component_editor` contract. A coherent geometry/frame/mass/binding
+regeneration still requires the explicit Twin-owned bundle and bindings in
+Rhai; do not infer a recipe from child names. AI callers use
+`assembly_builder::parameter_plan` or `component_editor::update_plan` and the
+same proposal flow; do not make one command per field or create a
+vehicle-specific parameter writer.
 
 For a component-level update that must keep geometry, frames, mass, and
 explicit bindings coherent, use the generic `component_editor` Rhai facade:

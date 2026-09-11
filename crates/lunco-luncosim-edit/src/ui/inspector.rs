@@ -32,8 +32,12 @@ use lunco_scene_commands::doc_resolve::{
     bound_shader_prim, geom_api_schemas, resolve_doc_for_entity,
     resolve_shader_parameter_usd_target,
 };
-use lunco_usd::commands::{ApplyUsdOp, ApplyUsdOps};
+use lunco_usd::commands::{
+    ApplyUsdOp, ApplyUsdOps, CommitUsdProposal, CreateUsdProposal, ReviewUsdProposal,
+    UsdProposalReviewAction,
+};
 use lunco_usd::document::{LayerId, UsdOp};
+use lunco_usd::edit_session::{UsdEditScope, UsdProposalId, UsdProposalState};
 use lunco_usd_bevy::UsdPrimPath;
 
 fn report_inspector_error(world: &mut World, message: impl Into<String>) {
@@ -1884,13 +1888,10 @@ fn camera_projection_section(
         });
 }
 
-/// Live sun + ambient controls. Reads the change-driven [`InspectorView`]
-/// snapshot and dispatches every edit through a single
-/// Bounded sliders for the selected prim's `customData`-ranged attributes,
-/// from the [`UsdParamView`](crate::ui::usd_params::UsdParamView) view-model. An
-/// asset that authors `customData {min,max,unit}` on a scalar gets a slider
-/// here without any hand-coded range; several edits are drafted together and
-/// written through one `ApplyUsdOps` change set.
+/// Edit standard USD scalar properties exposed by the selected prim's
+/// `customData`-ranged attributes. Component prims use the same typed proposal
+/// boundary as Rhai/AI plans; non-component legacy parameter views retain the
+/// direct grouped edit command until their owning schema gets a proposal UI.
 /// Grid-absolute translation of `entity` — `cell × edge + local`, the frame USD
 /// authors `xformOp:translate` in and the frame `MoveEntity` takes.
 ///
@@ -1913,6 +1914,14 @@ fn grid_absolute_of(ctx: &PanelCtx, entity: Entity) -> Option<bevy::math::DVec3>
     Some(grid.grid_position_double(&cell, tf))
 }
 
+fn usd_edit_scope_label(scope: UsdEditScope) -> &'static str {
+    match scope {
+        UsdEditScope::SourceAsset => "Source asset",
+        UsdEditScope::Assembly => "Assembly",
+        UsdEditScope::InstanceOverride => "Instance override",
+    }
+}
+
 fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
     // The producer aims the view at the DRILLED prim-backed part when one is
     // set (see `produce_usd_param_view`), else at the primary. Render whenever
@@ -1920,11 +1929,14 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
     let part = ctx
         .resource::<crate::InspectorTarget>()
         .and_then(|t| t.part);
-    let (preview, target, path, generation, params): (
+    let (preview, doc, edit_target, target, path, generation, kind, params): (
         lunco_usd::ui::viewport::UsdPreviewId,
+        lunco_doc::DocumentId,
+        LayerId,
         Entity,
         String,
         u64,
+        Option<String>,
         Vec<crate::ui::usd_params::UsdParam>,
     ) = match ctx
         .resource::<lunco_usd::ui::viewport::UsdViewportState>()
@@ -1933,114 +1945,319 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
                 .and_then(|views| views.focused(viewport))
         }) {
         Some(v)
-            if !v.params.is_empty()
+            if (v.kind.as_deref() == Some("component") || !v.params.is_empty())
                 && (v.entity == Some(entity) || (v.entity.is_some() && v.entity == part)) =>
         {
             (
                 v.preview,
+                v.doc,
+                v.edit_target.clone(),
                 v.entity.unwrap(),
                 v.path.clone(),
                 v.generation,
+                v.kind.clone(),
                 v.params.clone(),
             )
         }
         _ => return,
     };
-    egui::CollapsingHeader::new("Parameters")
-        .default_open(true)
-        .show(ui, |ui| {
-            // Breadcrumb when drilled into a subpart: name the part being
-            // edited and offer the way back to the whole vehicle.
-            if target != entity {
-                ui.horizontal(|ui| {
-                    let part_name = lunco_core::entity_display_name(
-                        ctx.get::<Name>(target),
-                        ctx.get::<lunco_core::markers::Callsign>(target),
-                        ctx.get::<lunco_core::CatalogEntryId>(target),
-                    );
-                    let part_name = if part_name.is_empty() {
-                        "Unnamed entity".to_string()
-                    } else {
-                        part_name
-                    };
-                    ui.label(egui::RichText::new(format!("part: {part_name}")).italics());
-                    if ui.small_button("⏶ back to root").clicked() {
-                        ctx.resource_scope::<crate::InspectorTarget, _>(|_, target| {
-                            target.part = None;
-                        });
-                    }
-                });
-                ui.separator();
-            }
-            let draft_key = (preview, path);
-            let mut apply_values: Option<std::collections::HashMap<String, f64>> = None;
-            let mut cancel = false;
-            ctx.resource_scope::<crate::ui::usd_params::UsdParamDrafts, _>(|_, drafts| {
-                let draft = drafts.entries.entry(draft_key.clone()).or_insert_with(|| {
-                    crate::ui::usd_params::UsdParamDraft {
-                        generation,
-                        values: params.iter().map(|p| (p.name.clone(), p.value)).collect(),
-                    }
-                });
-                if draft.generation != generation {
-                    draft.generation = generation;
-                    draft.values = params.iter().map(|p| (p.name.clone(), p.value)).collect();
-                }
-
-                for p in &params {
-                    let value = draft.values.entry(p.name.clone()).or_insert(p.value);
-                    let text = if p.unit.is_empty() {
-                        p.label.clone()
-                    } else {
-                        format!("{} ({})", p.label, p.unit)
-                    };
-                    ui.add(egui::Slider::new(value, p.min..=p.max).text(text));
-                }
-
-                let has_changes = params
-                    .iter()
-                    .any(|p| draft.values.get(&p.name).copied().unwrap_or(p.value) != p.value);
-                ui.separator();
-                ui.horizontal(|ui| {
-                    if ui
-                        .add_enabled(has_changes, egui::Button::new("Apply parameters"))
-                        .clicked()
-                    {
-                        apply_values = Some(draft.values.clone());
-                    }
-                    if ui
-                        .add_enabled(has_changes, egui::Button::new("Cancel"))
-                        .clicked()
-                    {
-                        cancel = true;
-                    }
-                });
-            });
-
-            if let Some(values) = apply_values {
-                let edits = params
-                    .iter()
-                    .filter_map(|p| {
-                        let value = values.get(&p.name).copied().unwrap_or(p.value);
-                        (value != p.value)
-                            .then(|| (p.name.clone(), p.type_name.clone(), value.to_string()))
-                    })
-                    .collect::<Vec<_>>();
-                if !edits.is_empty() {
-                    ctx.trigger(UsdAttributeBatchEditRequested {
-                        entity: target,
-                        edits,
+    let is_component = kind.as_deref() == Some("component");
+    let proposals = if is_component {
+        ctx.resource::<lunco_usd::edit_session::UsdEditSessions>()
+            .map(|sessions| {
+                sessions
+                    .for_document(doc)
+                    .filter(|proposal| proposal.affected_paths.iter().any(|p| p == &path))
+                    .map(|proposal| proposal.summary())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    egui::CollapsingHeader::new(if is_component {
+        "Component parameters"
+    } else {
+        "Parameters"
+    })
+    .default_open(true)
+    .show(ui, |ui| {
+        // Breadcrumb when drilled into a subpart: name the part being
+        // edited and offer the way back to the whole vehicle.
+        if target != entity {
+            ui.horizontal(|ui| {
+                let part_name = lunco_core::entity_display_name(
+                    ctx.get::<Name>(target),
+                    ctx.get::<lunco_core::markers::Callsign>(target),
+                    ctx.get::<lunco_core::CatalogEntryId>(target),
+                );
+                let part_name = if part_name.is_empty() {
+                    "Unnamed entity".to_string()
+                } else {
+                    part_name
+                };
+                ui.label(egui::RichText::new(format!("part: {part_name}")).italics());
+                if ui.small_button("⏶ back to root").clicked() {
+                    ctx.resource_scope::<crate::InspectorTarget, _>(|_, target| {
+                        target.part = None;
                     });
                 }
-                ctx.resource_scope::<crate::ui::usd_params::UsdParamDrafts, _>(|_, drafts| {
-                    drafts.entries.remove(&draft_key);
+            });
+            ui.separator();
+        }
+        if is_component {
+            ui.small("Standard USD properties · component policy stays in Rhai");
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Recipe:");
+                ui.monospace("component_editor::update_plan");
+                ui.label("(explicit bundle and bindings)");
+            });
+        }
+
+        let draft_key = (preview, path.clone());
+        let mut apply_values: Option<std::collections::HashMap<String, f64>> = None;
+        let mut prepare_values: Option<(std::collections::HashMap<String, f64>, UsdEditScope)> =
+            None;
+        let mut cancel = false;
+        let mut proposal_action: Option<(UsdProposalId, bool)> = None;
+        ctx.resource_scope::<crate::ui::usd_params::UsdParamDrafts, _>(|_, drafts| {
+            let draft = drafts.entries.entry(draft_key.clone()).or_insert_with(|| {
+                crate::ui::usd_params::UsdParamDraft {
+                    generation,
+                    values: params
+                        .iter()
+                        .filter(|p| p.valid)
+                        .map(|p| (p.name.clone(), p.value))
+                        .collect(),
+                    scope: UsdEditScope::Assembly,
+                }
+            });
+            if draft.generation != generation {
+                draft.generation = generation;
+                draft.values = params
+                    .iter()
+                    .filter(|p| p.valid)
+                    .map(|p| (p.name.clone(), p.value))
+                    .collect();
+                draft.scope = UsdEditScope::Assembly;
+            }
+
+            if is_component {
+                egui::ComboBox::from_id_salt(("usd-component-edit-scope", preview, &path))
+                    .selected_text(usd_edit_scope_label(draft.scope))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut draft.scope,
+                            UsdEditScope::Assembly,
+                            usd_edit_scope_label(UsdEditScope::Assembly),
+                        );
+                        ui.selectable_value(
+                            &mut draft.scope,
+                            UsdEditScope::InstanceOverride,
+                            usd_edit_scope_label(UsdEditScope::InstanceOverride),
+                        );
+                        ui.selectable_value(
+                            &mut draft.scope,
+                            UsdEditScope::SourceAsset,
+                            usd_edit_scope_label(UsdEditScope::SourceAsset),
+                        );
+                    });
+            }
+
+            for p in &params {
+                let provenance = if p.authored { "authored" } else { "inherited" };
+                if !p.valid && (!is_component || !p.numeric) {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.colored_label(ui.visuals().error_fg_color, &p.label);
+                        ui.colored_label(
+                            ui.visuals().error_fg_color,
+                            format!("invalid · {provenance}"),
+                        );
+                        if let Some(diagnostic) = &p.diagnostic {
+                            ui.small(diagnostic);
+                        }
+                    });
+                    continue;
+                }
+                let value = draft.values.entry(p.name.clone()).or_insert(p.value);
+                let text = if p.unit.is_empty() {
+                    p.label.clone()
+                } else {
+                    format!("{} ({})", p.label, p.unit)
+                };
+                if is_component {
+                    let status = if p.valid {
+                        provenance.to_string()
+                    } else {
+                        format!("invalid · {provenance}")
+                    };
+                    ui.horizontal(|ui| {
+                        ui.label(text);
+                        ui.add(egui::DragValue::new(value).speed((p.max - p.min) / 100.0));
+                        ui.small(format!("[{:.4}, {:.4}] · {status}", p.min, p.max));
+                    });
+                    if let Some(diagnostic) = &p.diagnostic {
+                        ui.colored_label(ui.visuals().error_fg_color, diagnostic);
+                    }
+                } else {
+                    ui.add(egui::Slider::new(value, p.min..=p.max).text(text));
+                }
+            }
+
+            let has_changes = params
+                .iter()
+                .filter(|p| if is_component { p.numeric } else { p.valid })
+                .any(|p| draft.values.get(&p.name).copied().unwrap_or(p.value) != p.value);
+            let invalid_count = params
+                .iter()
+                .filter(|p| {
+                    if !p.numeric {
+                        true
+                    } else {
+                        let value = draft.values.get(&p.name).copied().unwrap_or(p.value);
+                        !value.is_finite() || value < p.min || value > p.max
+                    }
+                })
+                .count();
+            if is_component && invalid_count != 0 {
+                ui.colored_label(
+                    ui.visuals().error_fg_color,
+                    format!("{invalid_count} value(s) must be fixed before preparing a proposal"),
+                );
+            }
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(
+                        has_changes && (!is_component || invalid_count == 0),
+                        egui::Button::new(if is_component {
+                            "Prepare component proposal"
+                        } else {
+                            "Apply parameters"
+                        }),
+                    )
+                    .clicked()
+                {
+                    if is_component {
+                        prepare_values = Some((draft.values.clone(), draft.scope));
+                    } else {
+                        apply_values = Some(draft.values.clone());
+                    }
+                }
+                if ui
+                    .add_enabled(has_changes, egui::Button::new("Cancel"))
+                    .clicked()
+                {
+                    cancel = true;
+                }
+            });
+
+            if is_component {
+                ui.separator();
+                ui.label(egui::RichText::new("Review proposals").strong());
+                if proposals.is_empty() {
+                    ui.small("No proposal for this component.");
+                } else {
+                    for proposal in &proposals {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.small(format!(
+                                "#{} · {} · {} op(s)",
+                                proposal.id.0,
+                                usd_edit_scope_label(proposal.scope),
+                                proposal.operation_count
+                            ));
+                            match proposal.state {
+                                UsdProposalState::Pending => {
+                                    if ui.small_button("Commit").clicked() {
+                                        proposal_action = Some((proposal.id, true));
+                                    }
+                                    if ui.small_button("Reject").clicked() {
+                                        proposal_action = Some((proposal.id, false));
+                                    }
+                                }
+                                UsdProposalState::Conflict => {
+                                    ui.colored_label(
+                                        ui.visuals().error_fg_color,
+                                        "conflict; prepare again",
+                                    );
+                                }
+                                UsdProposalState::Muted => {
+                                    ui.small("muted; review it in the USD browser");
+                                }
+                            }
+                        });
+                        for diagnostic in &proposal.diagnostics {
+                            ui.colored_label(ui.visuals().error_fg_color, diagnostic);
+                        }
+                    }
+                }
+            }
+        });
+
+        if let Some(values) = apply_values {
+            let edits = params
+                .iter()
+                .filter_map(|p| {
+                    let value = values.get(&p.name).copied().unwrap_or(p.value);
+                    (value != p.value)
+                        .then(|| (p.name.clone(), p.type_name.clone(), value.to_string()))
+                })
+                .collect::<Vec<_>>();
+            if !edits.is_empty() {
+                ctx.trigger(UsdAttributeBatchEditRequested {
+                    entity: target,
+                    edits,
                 });
-            } else if cancel {
+            }
+            ctx.resource_scope::<crate::ui::usd_params::UsdParamDrafts, _>(|_, drafts| {
+                drafts.entries.remove(&draft_key);
+            });
+        } else if cancel {
+            ctx.resource_scope::<crate::ui::usd_params::UsdParamDrafts, _>(|_, drafts| {
+                drafts.entries.remove(&draft_key);
+            });
+        }
+
+        if let Some((values, scope)) = prepare_values {
+            let ops = params
+                .iter()
+                .filter(|p| p.numeric)
+                .filter_map(|p| {
+                    let value = values.get(&p.name).copied().unwrap_or(p.value);
+                    (value != p.value).then(|| UsdOp::SetAttribute {
+                        edit_target: edit_target.clone(),
+                        path: path.clone(),
+                        name: p.name.clone(),
+                        type_name: p.type_name.clone(),
+                        value: value.to_string(),
+                    })
+                })
+                .collect::<Vec<_>>();
+            if !ops.is_empty() {
+                ctx.trigger(CreateUsdProposal {
+                    doc_id: doc,
+                    scope,
+                    label: "Edit component parameters".to_string(),
+                    parent_gen: generation,
+                    ops,
+                });
                 ctx.resource_scope::<crate::ui::usd_params::UsdParamDrafts, _>(|_, drafts| {
                     drafts.entries.remove(&draft_key);
                 });
             }
-        });
+        }
+
+        if let Some((proposal, commit)) = proposal_action {
+            if commit {
+                ctx.trigger(CommitUsdProposal { proposal });
+            } else {
+                ctx.trigger(ReviewUsdProposal {
+                    proposal,
+                    action: UsdProposalReviewAction::Reject,
+                });
+            }
+        }
+    });
 }
 
 /// The ⎇ Variants section — one row per variant set the selected prim ships,
@@ -3832,9 +4049,9 @@ fn apply_usd_path_attribute_change(
     }
 }
 
-/// Lower a staged attribute edit to the same generic compound command used by
-/// Rhai and API callers. The Inspector adds no parameter-specific USD write
-/// path; it only supplies the selected entity and explicit typed values.
+/// Lower a staged non-component attribute edit to the generic direct command
+/// used by Rhai and API callers. Component parameter edits use the proposal
+/// path in [`usd_parameters_section`] so their review state stays visible.
 fn apply_usd_attribute_batch_change(
     world: &mut World,
     entity: Entity,
@@ -3865,7 +4082,7 @@ fn apply_usd_attribute_batch_change(
     world.trigger(lunco_usd::commands::ApplyUsdOps {
         doc_id: doc,
         parent_gen: (generation != 0).then_some(generation),
-        label: "Edit component parameters".to_string(),
+        label: "Edit USD parameters".to_string(),
         ops,
     });
 }

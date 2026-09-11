@@ -172,21 +172,27 @@ USD destination and one type contract.
 
 ### Component parameter edits
 
-The Inspector's USD parameter section is a draft surface, not a per-slider
-writer. It derives scalar controls from the selected prim's authored/schema UI
-hints, keeps draft values session-local, and commits changed properties with one
-generation-checked `ApplyUsdOps` change set labelled `Edit component parameters`.
-Apply is the undo/journal boundary; Cancel discards the draft and a changed
-document generation resets it. The selected prim path and explicit edit layer
-come from the focused preview, so a same-named prim in another document cannot
-receive the edit.
+The Inspector's USD parameter section is a draft surface, not a per-field
+writer. On a `kind = "component"` prim it derives scalar controls from the
+selected prim's authored/schema UI hints, shows units and authored versus
+inherited provenance, and keeps draft values session-local. The user selects an
+explicit source-asset, assembly, or instance-override scope and presses
+**Prepare component proposal** once. The matching proposal can be committed or
+rejected in the section; `CommitUsdProposal` is the journal, undo, and
+projection boundary. Save remains explicit. A changed document generation
+invalidates the draft/proposal rather than silently overwriting a newer edit.
 
-AI and Rhai authoring use the same lower-level path. `assembly_builder::parameter_plan`
-returns typed `SetAttribute` operations for an exact prim; the caller submits
-them through `assembly_edit::batch` or `assembly_edit::propose`. The helper is
-generic and contains no vehicle policy. UI and agent callers therefore share
-the USD compound transaction, generation check, type validation, journalling,
-undo, and projection path; only their presentation differs.
+Missing, non-finite, or out-of-range composed values remain visible with the
+owner diagnostic and are not clamped into an apparently valid value. The
+selected prim path, document, and edit layer come from the focused preview, so
+a same-named prim in another document cannot receive the edit.
+
+This is the standard-property half of the shared component contract. AI and
+Rhai authoring use `assembly_builder::parameter_plan` or the explicit
+`component_editor::update_plan` bundle recipe and submit the resulting typed
+operations through the same proposal flow. The native Inspector does not guess
+geometry, frames, mass, or bindings from child names; those policy inputs stay
+in the owning Twin/model package.
 
 Rhai remains the place for component-specific parameter selection, derivation,
 and cross-field rules. It must not duplicate the USD writer or bypass the typed
