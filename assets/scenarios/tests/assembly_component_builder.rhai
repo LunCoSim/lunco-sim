@@ -248,6 +248,12 @@ fn on_tick(me) {
                 path: BUNDLE + "/Mount",
                 attrs: ["lunco:component:frameRole"],
             });
+            let frame_catalog = assembly_builder::functional_frame_catalog(
+                this.doc, "@root@", BUNDLE,
+            );
+            let invalid_frame_catalog = assembly_builder::functional_frame_catalog(
+                this.doc, "@root@", BUNDLE + "/Missing",
+            );
             let context = assembly_builder::authoring_context(
                 this.doc, BUNDLE, "@root@",
             );
@@ -300,6 +306,23 @@ fn on_tick(me) {
                     && !context.actions.contains("plan_component_attachment")
                     && !context.actions.contains("plan_existing_mount_realignment"),
                 "authoring context exposes exact identity, generation, and available actions"));
+            this.checks.push(t_true(query_ok(frame_catalog)
+                    && frame_catalog.kind == "functional_frame_catalog"
+                    && frame_catalog.edit_target == "@root@"
+                    && frame_catalog.root_path == BUNDLE
+                    && frame_catalog.generation == before.generation
+                    && frame_catalog.frame_paths == [BUNDLE + "/Mount", BUNDLE + "/DeployEnd"]
+                    && frame_catalog.socket_paths.len() == 0
+                    && frame_catalog.frames.len() == 2
+                    && frame_catalog.frames[0].role == "attachment"
+                    && frame_catalog.frames[0].is_mount_frame
+                    && frame_catalog.frames[1].role == "actuator"
+                    && frame_catalog.frames[1].is_actuator_frame
+                    && frame_catalog.frames[1].actuator.name == "deployment"
+                    && frame_catalog.frames[1].actuator.unit == "rad",
+                "functional frame catalog preserves authored frame order, roles, transforms, and actuator facts"));
+            this.checks.push(t_true(!invalid_frame_catalog.ok,
+                "functional frame catalog rejects an unavailable exact root"));
             this.checks.push(t_true(!invalid_dispatch.ok && !invalid_component_plan.ok,
                 "unified placement/attachment planner rejects unsupported modes and missing sockets"));
             this.bundle_checked = true;

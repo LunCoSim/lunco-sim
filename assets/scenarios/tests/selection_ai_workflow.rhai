@@ -67,6 +67,9 @@ fn on_tick(me) {
         let empty = assembly_edit::selection_context();
         this.checks.push(t_true(empty.selection_state == "no_selection"
             && empty.requires_single_target, "no selection cannot imply a target"));
+        let empty_authoring = assembly_builder::selected_authoring_context(());
+        this.checks.push(t_true(!empty_authoring.ok,
+            "selected authoring context rejects no selection"));
         assembly_ui::select_prim(12202, PART, false, false);
         this.phase = 3;
         return;
@@ -81,6 +84,13 @@ fn on_tick(me) {
         let hidden = assembly_edit::selection_context_for(12201);
         this.checks.push(t_true(hidden.doc == this.original && !hidden.focused
             && hidden.selection_state == "no_selection", "hidden same-name document stays isolated"));
+        let selected_authoring = assembly_builder::selected_authoring_context(12202);
+        this.checks.push(t_true(selected_authoring.ok
+                && selected_authoring.kind == "selected_authoring_context"
+                && selected_authoring.path == PART
+                && selected_authoring.selection_identity == selected.primary.identity
+                && selected_authoring.edit_target == selected.edit_target,
+            "selected authoring context preserves exact identity and edit target"));
         let proposal = correction(selected, 0);
         let review = assembly_edit::review_session(selected.doc);
         if proposal.ok == false || review.proposals.len() != 1 {

@@ -92,9 +92,15 @@ fn on_tick(me) {
         report_verdict([
             t_true(this.place_ops == 1, "place_plan emits one typed local transform"),
             t_true(this.alignment_ops == 1, "edge alignment emits one typed local transform"),
+            t_true(this.frame_alignment_ops == 2
+                && close_enough(this.frame_alignment_translation[0], 0.0, 0.001)
+                && close_enough(this.frame_alignment_translation[1], 0.0, 0.001)
+                && close_enough(this.frame_alignment_translation[2], 0.0, 0.001),
+                "frame alignment emits a dry rigid placement for exact source and target frames"),
             t_true(this.invalid_place == true, "invalid placement dimensions are rejected"),
             t_true(this.invalid_axis == true, "invalid alignment axes are rejected"),
             t_true(this.invalid_parent == true, "cross-parent alignment is rejected"),
+            t_true(this.invalid_frame_parent == true, "cross-parent frame alignment is rejected"),
             t_true(query_ok(moving) && query_ok(target), "aligned prims remain queryable"),
             t_true(moving_position != () && target_position != ()
                 && close_enough(moving_position[0], -1.75, 0.001),
@@ -148,14 +154,24 @@ fn on_tick(me) {
     let invalid_parent = assembly_builder::align_centers_plan(
         this.doc, "@root@", MOVING, ROOT, "X", 0.0,
     );
-    if !placement.ok || invalid_place.ok || invalid_axis.ok || invalid_parent.ok {
+    let frame_alignment = assembly_builder::align_frames_plan(
+        this.doc, "@root@", MOVING, MOVING, TARGET, TARGET,
+    );
+    let invalid_frame_parent = assembly_builder::align_frames_plan(
+        this.doc, "@root@", MOVING, MOVING, ROOT, ROOT,
+    );
+    if !placement.ok || invalid_place.ok || invalid_axis.ok || invalid_parent.ok
+        || !frame_alignment.ok || invalid_frame_parent.ok {
         fail(this, "semantic placement/alignment tools did not reject invalid input");
         return;
     }
     this.place_ops = placement.ops.len();
+    this.frame_alignment_ops = frame_alignment.ops.len();
+    this.frame_alignment_translation = frame_alignment.placement;
     this.invalid_place = invalid_place.error.contains("three components");
     this.invalid_axis = invalid_axis.error.contains("axis");
     this.invalid_parent = invalid_parent.error.contains("same authored parent");
+    this.invalid_frame_parent = invalid_frame_parent.error.contains("same authored parent");
 
     let proposal = assembly_edit::propose(
         this.doc, #{ Assembly: () }, "Place moving cube",

@@ -700,6 +700,27 @@ for `.ops`, or `assembly_edit::attach_component(doc, plan.spec)` for a new
 component. This keeps generated authoring and human editing on the same USD
 paths and validation boundary without adding a Rust policy layer.
 
+When authoring from the open Editor, use
+`assembly_builder::selected_authoring_context(preview)` to turn the current
+single selection into that same exact authoring record. Pass `()` for the
+focused preview or an explicit preview id for a hidden session. It rejects
+no-selection, multiple selection, stale entries, and ambiguous projected paths;
+it never guesses a document or prim from a tab/name. Treat its selection
+identity and generation as a checkpoint before proposing an edit.
+
+Use `assembly_builder::functional_frame_catalog(doc, edit_target, root_path)`
+to discover authored datum, attachment, and actuator frames. It follows only
+the root's explicit frame relationships and returns exact paths, roles,
+mount/actuator facts, local transforms, root-relative transforms, and socket
+paths. Use `assembly_builder::align_frames_plan(doc, edit_target,
+moving_path, moving_frame_path, target_path, target_frame_path)` for a dry
+visual placement plan. The roots must be sibling Xforms and the frame chains
+must be rigid `translate`/`rotateXYZ` with unit scale; review the returned two
+typed transform operations before sending them to `assembly_edit::propose`.
+Use the existing attach/realignment planner when physical joint topology must
+change. These helpers are generic Rhai policy over the existing USD query and
+journal owners, so a vehicle recipe does not need a new Rust builder.
+
 Mission-specific builders stay in the owning Twin. They should compose the
 generic `assembly_builder` plans, keep all paths and study facts explicit, and
 submit only typed operations through `assembly_edit`; they do not belong in the
@@ -964,7 +985,7 @@ produces the same sequence — no explicit seeding needed.
 | [`multi_robot_mission_coordinator.rhai`](../assets/scripting/examples/multi_robot_mission_coordinator.rhai) | single-authority event-driven assignment coordinator |
 | [`multi_robot_mission_worker.rhai`](../assets/scripting/examples/multi_robot_mission_worker.rhai) | identity-scoped worker that installs a native task tree |
 | [`avoid.rhai`](../assets/scripting/examples/avoid.rhai) | sensing + obstacle avoidance |
-| [`tools/assembly_builder.rhai`](../assets/scripting/tools/assembly_builder.rhai) | semantic placement, generic component bundles, Cube and composed collision alignment/clearance, referenced component instances, staged variant selection, geometry, socket mating, retrofit, and body/joint plans |
+| [`tools/assembly_builder.rhai`](../assets/scripting/tools/assembly_builder.rhai) | selected-prim authoring context, functional-frame catalog, dry frame alignment, semantic placement, generic component bundles, Cube and composed collision alignment/clearance, referenced component instances, staged variant selection, geometry, socket mating, retrofit, and body/joint plans |
 | [`tools/formation.rhai`](../assets/scripting/tools/formation.rhai) | a tool library (formation flying) |
 | [`tools/survey.rhai`](../assets/scripting/tools/survey.rhai) | a custom tool library (survey pattern) |
 

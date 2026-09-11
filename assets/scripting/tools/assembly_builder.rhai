@@ -1319,6 +1319,44 @@ fn authoring_context(doc, path, edit_target) {
     }
 }
 
+/// Lift the focused Editor selection into the same exact authoring record used
+/// by explicit-path tools. The selection query remains the identity owner: a
+/// missing, multi-selected, stale, or ambiguous selection is an actionable
+/// failure rather than an invitation to guess a path or document.
+fn selected_authoring_context(preview) {
+    let selection = if preview == () {
+        assembly_edit::selection_context()
+    } else {
+        assembly_edit::selection_context_for(preview)
+    };
+    if !query_ok(selection) {
+        return plan_error("selected_authoring_context could not read Editor selection");
+    }
+    if selection.selection_state != "single" || selection.primary == () {
+        return plan_error("selected_authoring_context requires exactly one selected prim");
+    }
+    if selection.stale_selection_count != () && selection.stale_selection_count != 0 {
+        return plan_error("selected_authoring_context rejects stale selection entries");
+    }
+    if selection.ambiguous_paths != () && selection.ambiguous_paths.len() != 0 {
+        return plan_error("selected_authoring_context rejects ambiguous selection paths");
+    }
+    if selection.edit_target == () {
+        return plan_error("selected_authoring_context selection has no edit target");
+    }
+    let doc = if selection.doc_id != () { selection.doc_id } else { selection.doc };
+    let path = selection.primary.path;
+    if doc == () || path == () {
+        return plan_error("selected_authoring_context selection has no document or prim path");
+    }
+    let context = authoring_context(doc, path, selection.edit_target);
+    if !context.ok { return context; }
+    context.kind = "selected_authoring_context";
+    context.selection = selection;
+    context.selection_identity = selection.primary.identity;
+    context
+}
+
 /// Resolve exactly one empty, authored socket for a reusable component.
 ///
 /// The host's `lunco:mount:sockets` relationship is the source of truth. This
@@ -1654,6 +1692,205 @@ fn mount_relationship_targets(record, name) {
         return [];
     }
     record.relationships[name]
+}
+
+fn frame_attribute(record, name) {
+    if !query_ok(record) || record.attrs == () { return (); }
+    record.attrs[name]
+}
+
+fn append_unique_path(paths, path) {
+    if path != () && path != "" && !paths.contains(path) { paths.push(path); }
+    paths
+}
+
+/// Discover the functional frames explicitly advertised by one component or
+/// assembly root. Relationships are the source of truth; the helper never
+/// scans child names or treats geometry as a frame by convention. Every
+/// returned transform is relative to `root_path`, so an AI or a human tool can
+/// choose a datum, mount, or actuator endpoint without rebuilding frame math.
+fn functional_frame_catalog(doc, edit_target, root_path) {
+    if doc == () || edit_target == () || root_path == () {
+        return plan_error("functional_frame_catalog requires document, edit target, and root path");
+    }
+    if !root_path.starts_with("/") || root_path.ends_with("/") && root_path != "/" {
+        return plan_error("functional_frame_catalog root path must be an absolute USD path");
+    }
+    let document = assembly_edit::describe(doc);
+    if !query_ok(document) || document.generation == () {
+        return plan_error("functional_frame_catalog could not read the document generation");
+    }
+    let target = assembly_edit::resolve_target(doc, root_path, edit_target);
+    if !query_ok(target) {
+        return plan_error(root_path + ": authored root target is unavailable");
+    }
+    let root = query("QueryUsdPrim", #{
+        doc_id: doc,
+        path: root_path,
+        attrs: ["lunco:mount:plug", "lunco:component:units", "lunco:component:dimensions"],
+        rels: [
+            "lunco:mount:frame",
+            "lunco:component:frames",
+            "lunco:component:actuatorFrames",
+            "lunco:mount:sockets",
+        ],
+        children: false,
+    });
+    if !query_ok(root) {
+        return plan_error(root_path + ": composed root is unavailable");
+    }
+
+    let mount_frames = mount_relationship_targets(root, "lunco:mount:frame");
+    let component_frames = mount_relationship_targets(root, "lunco:component:frames");
+    let actuator_frames = mount_relationship_targets(root, "lunco:component:actuatorFrames");
+    let frame_paths = [];
+    for path in mount_frames { frame_paths = append_unique_path(frame_paths, path); }
+    for path in component_frames { frame_paths = append_unique_path(frame_paths, path); }
+    for path in actuator_frames { frame_paths = append_unique_path(frame_paths, path); }
+
+    let frames = [];
+    for frame_path in frame_paths {
+        let frame = query("QueryUsdPrim", #{
+            doc_id: doc,
+            path: frame_path,
+            attrs: [
+                "xformOp:translate",
+                "xformOp:rotateXYZ",
+                "xformOp:scale",
+                "xformOpOrder",
+                "lunco:component:frameRole",
+                "lunco:component:actuatorName",
+                "lunco:component:actuatorDirection",
+                "lunco:component:actuatorUnit",
+                "lunco:component:actuatorLimits",
+                "lunco:mount:socket",
+                "lunco:mount:joint",
+                "lunco:mount:axis",
+            ],
+            rels: ["lunco:component:port", "lunco:mount:part"],
+            children: false,
+        });
+        if !query_ok(frame) {
+            return plan_error(frame_path + ": advertised functional frame is unavailable");
+        }
+        let local = mount_local_transform(doc, frame_path);
+        if !local.ok { return local; }
+        let relative = mount_frame_in_body(doc, root_path, frame_path);
+        if !relative.ok { return relative; }
+        let role = frame_attribute(frame, "lunco:component:frameRole");
+        let actuator_name = frame_attribute(frame, "lunco:component:actuatorName");
+        let actuator_direction = frame_attribute(frame, "lunco:component:actuatorDirection");
+        let actuator_unit = frame_attribute(frame, "lunco:component:actuatorUnit");
+        let actuator_limits = frame_attribute(frame, "lunco:component:actuatorLimits");
+        frames.push(#{
+            path: frame_path,
+            leaf_name: frame_path.split("/")[frame_path.split("/").len() - 1],
+            role: role,
+            is_mount_frame: mount_frames.contains(frame_path),
+            is_actuator_frame: actuator_frames.contains(frame_path),
+            local_transform: local.value,
+            relative_transform: relative.value,
+            mount: #{
+                socket_kind: frame_attribute(frame, "lunco:mount:socket"),
+                joint_kind: frame_attribute(frame, "lunco:mount:joint"),
+                axis: frame_attribute(frame, "lunco:mount:axis"),
+                occupied_by: mount_relationship_targets(frame, "lunco:mount:part"),
+            },
+            actuator: #{
+                name: actuator_name,
+                direction: actuator_direction,
+                unit: actuator_unit,
+                limits: actuator_limits,
+                ports: mount_relationship_targets(frame, "lunco:component:port"),
+            },
+        });
+    }
+    #{
+        ok: true,
+        kind: "functional_frame_catalog",
+        doc_id: doc,
+        edit_target: edit_target,
+        root_path: root_path,
+        generation: document.generation,
+        root: root,
+        socket_paths: mount_relationship_targets(root, "lunco:mount:sockets"),
+        frame_paths: frame_paths,
+        frames: frames,
+    }
+}
+
+/// Compute a dry rigid placement that makes one exact source frame coincide
+/// with one exact target frame. The moving and target roots must be siblings;
+/// this keeps the returned SetTranslate/SetRotate local to one authored parent
+/// and avoids pretending to solve arbitrary USD hierarchy or scale.
+fn align_frames_plan(doc, edit_target, moving_path, moving_frame_path,
+    target_path, target_frame_path) {
+    if doc == () || edit_target == () || moving_path == ()
+        || moving_frame_path == () || target_path == () || target_frame_path == () {
+        return plan_error("align_frames_plan requires document, edit target, moving root/frame, and target root/frame paths");
+    }
+    for path in [moving_path, moving_frame_path, target_path, target_frame_path] {
+        if !path.starts_with("/") || path.ends_with("/") {
+            return plan_error("align_frames_plan paths must be absolute USD paths");
+        }
+    }
+    if moving_path == target_path {
+        return plan_error("align_frames_plan requires distinct moving and target roots");
+    }
+    if parent_path(moving_path) != parent_path(target_path) {
+        return plan_error("align_frames_plan requires moving and target roots to share the same authored parent");
+    }
+    let document = assembly_edit::describe(doc);
+    if !query_ok(document) || document.generation == () {
+        return plan_error("align_frames_plan could not read the document generation");
+    }
+
+    let moving_root = mount_local_transform(doc, moving_path);
+    if !moving_root.ok { return moving_root; }
+    let target_root = mount_local_transform(doc, target_path);
+    if !target_root.ok { return target_root; }
+    let source_frame = mount_frame_in_body(doc, moving_path, moving_frame_path);
+    if !source_frame.ok { return source_frame; }
+    let target_frame = mount_frame_in_body(doc, target_path, target_frame_path);
+    if !target_frame.ok { return target_frame; }
+
+    let target_in_parent = mount_transform_compose(target_root.value, target_frame.value);
+    let placement = mount_transform_compose(
+        target_in_parent, mount_transform_inverse(source_frame.value),
+    );
+    let translation = finite_vector3(placement.translation,
+        "resolved frame alignment translation");
+    if !translation.ok { return translation; }
+    let rotation = mount_xyz_deg_from_quat(placement.rotation);
+    let valid_rotation = finite_vector3(rotation, "resolved frame alignment rotation");
+    if !valid_rotation.ok { return valid_rotation; }
+    #{
+        ok: true,
+        kind: "frame_alignment_plan",
+        mode: "placement",
+        moving_path: moving_path,
+        moving_frame_path: moving_frame_path,
+        target_path: target_path,
+        target_frame_path: target_frame_path,
+        moved: [moving_path],
+        fixed: [target_path, target_frame_path],
+        generation: document.generation,
+        placement: placement.translation,
+        rotation: rotation,
+        mutation: "assembly_edit::propose",
+        ops: [
+            #{ SetTranslate: #{
+                edit_target: edit_target,
+                path: moving_path,
+                value: placement.translation,
+            }},
+            #{ SetRotate: #{
+                edit_target: edit_target,
+                path: moving_path,
+                value: rotation,
+            }},
+        ],
+    }
 }
 
 fn mount_count_target(targets, expected) {
