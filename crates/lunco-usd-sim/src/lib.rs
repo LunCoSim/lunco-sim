@@ -52,11 +52,11 @@ use big_space::prelude::{CellCoord, Grid};
 use lunco_usd_avian::{
     AuthoredInitialVelocity, PendingJointAdmission, SharedTireContact, ShouldBeDynamic,
 };
-use lunco_usd_bevy::{instance_key, is_preview_only, UsdPreviewOnly, UsdPrimPath};
 use lunco_usd_bevy_core::{
     canonical::CanonicalStages, resolve_stage_prim_path, UsdInstanceProjection, UsdInstanceRoot,
     UsdStageAsset,
 };
+use lunco_usd_bevy_scene::{instance_key, is_preview_only, UsdPreviewOnly, UsdPrimPath};
 // Appearance + camera **intent** — this crate must never name `MeshMaterial3d`,
 // `StandardMaterial`, `ShaderMaterial` or `Camera3d` (all `bevy_pbr` /
 // `bevy_core_pipeline` → wgpu + naga). `lunco-render-bevy` binds these.
@@ -563,7 +563,7 @@ impl Plugin for UsdSimPlugin {
             )
             // `process_usd_sim_prims` does a per-stage joint scan + per-
             // entity dispatch — too coupled to fit cleanly into a single
-            // `OnAdd<UsdVisualSynced>` observer. Gating with `run_if`
+            // `OnAdd<UsdSceneProjected>` observer. Gating with `run_if`
             // skips the system entirely on frames with no unprocessed
             // USD prim (archetype-level check, near-zero cost).
             .init_resource::<GroundColliderPending>()
@@ -738,7 +738,7 @@ fn any_unprocessed_usd_sim(
         (),
         (
             With<UsdPrimPath>,
-            With<lunco_usd_bevy::UsdVisualSynced>,
+            With<lunco_usd_bevy_scene::UsdSceneProjected>,
             Without<UsdSimProcessed>,
         ),
     >,
@@ -764,7 +764,7 @@ fn process_usd_sim_prims(
             Has<lunco_usd_bevy::UsdVisualShaderBound>,
         ),
         (
-            With<lunco_usd_bevy::UsdVisualSynced>,
+            With<lunco_usd_bevy_scene::UsdSceneProjected>,
             Without<UsdSimProcessed>,
         ),
     >,
@@ -778,7 +778,7 @@ fn process_usd_sim_prims(
     // use the live canonical stage selected by the shared reader boundary.
     canonical: NonSend<CanonicalStages>,
     mut topology_index: ResMut<JointTopologyIndex>,
-    stage_revision: Res<lunco_usd_bevy::UsdStageRevision>,
+    stage_revision: Res<lunco_usd_bevy_scene::UsdStageRevision>,
     // The active-scene sun: the avatar camera's exposure is read from the SAME
     // resource the sun illuminance comes from, so they can't drift (a dimmed
     // sun under a bright-tuned camera blacked the viewport). `Option` so the

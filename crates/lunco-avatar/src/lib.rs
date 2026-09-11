@@ -55,7 +55,7 @@ use lunco_core::attach::migrate_to_grid;
 use lunco_environment::{GravityBody, GravityProvider};
 use lunco_settings::{AppSettingsExt, ProfileSettings, SettingsSection};
 use lunco_time::{SetTimeTransport, TimeTransport, TransportMode, WorldTime};
-use lunco_usd_bevy::{is_preview_only, is_preview_only_entity, UsdPreviewOnly, UsdPrimPath};
+use lunco_usd_bevy_scene::{is_preview_only, is_preview_only_entity, UsdPreviewOnly, UsdPrimPath};
 
 pub mod commands;
 pub use commands::*;

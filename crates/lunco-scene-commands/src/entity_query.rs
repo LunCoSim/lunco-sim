@@ -16,7 +16,7 @@ use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
 use lunco_core::{CatalogEntryId, GlobalEntityId, UsdPrimKind};
-use lunco_usd_bevy::UsdPrimPath;
+use lunco_usd_bevy_scene::UsdPrimPath;
 
 /// `QueryEntity { id }` → that entity's name, kind, pose.
 pub struct QueryEntityProvider;

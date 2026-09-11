@@ -357,7 +357,7 @@ resync.
 
 Modelica runtime admission respects the same `UsdPreviewOnly` ancestry as the
 simulation projector. Domain member discovery, synthesis, and asynchronous
-completion use `lunco_usd_bevy::is_preview_only`; presentation collections do
+completion use `lunco_usd_bevy_scene::is_preview_only`; presentation collections do
 not load runtime member classes or publish generated solver participants.
 Structural collection queries and lint remain available independently of this
 execution gate. `preview_domain_isolation` compares a live electrical network

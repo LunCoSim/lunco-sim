@@ -32,7 +32,7 @@ use crate::cosim::{SceneLoadInFlight, UsdSourcedCosim};
 use lunco_cosim::SimComponent;
 use lunco_usd_avian::ShouldBeDynamic;
 use lunco_usd_bevy::UsdAwaitingStage;
-use lunco_usd_bevy::UsdPrimPath;
+use lunco_usd_bevy_scene::UsdPrimPath;
 
 /// The open world-scoped scene-load wait, if a scene is loading.
 #[derive(Resource)]

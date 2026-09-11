@@ -36,7 +36,7 @@ use lunco_usd::commands::{
     ApplyUsdOp, ApplyUsdOps, CommitUsdProposal, CreateUsdProposal, ReviewUsdProposal,
     UsdProposalReviewAction,
 };
-use lunco_usd_bevy::UsdPrimPath;
+use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_core::document::{LayerId, UsdOp};
 use lunco_usd_core::edit_session::{UsdEditScope, UsdProposalId, UsdProposalState};
 
@@ -495,7 +495,7 @@ fn authoring_context(
     world: &mut World,
     entity: Entity,
 ) -> Option<(lunco_doc::DocumentId, LayerId, u64)> {
-    if lunco_usd_bevy::is_preview_only_entity(world, entity) {
+    if lunco_usd_bevy_scene::is_preview_only_entity(world, entity) {
         preview_authoring_context(world, entity)
     } else {
         resolve_doc_for_entity(world, entity).map(|doc| (doc, LayerId::root(), 0))

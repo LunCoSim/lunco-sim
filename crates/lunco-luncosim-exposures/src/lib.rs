@@ -29,10 +29,10 @@ use lunco_hooks::HookValue;
 use lunco_mobility::WheelRaycast;
 use lunco_scene_commands::SelectedEntities;
 use lunco_signal::{SignalRef, SignalRegistry, SignalType};
-use lunco_usd_bevy::scene_root_ancestor;
 use lunco_usd_bevy::SdfPath;
 use lunco_usd_bevy_core::read::UsdReadObject;
 use lunco_usd_bevy_core::{CanonicalStages, UsdStageAsset};
+use lunco_usd_bevy_scene::scene_root_ancestor;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::Duration;
 
@@ -179,7 +179,7 @@ fn runtime_ui_facts(
     q_rotation: &Query<&Rotation>,
     q_grids: &Query<&Grid>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
-    q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
+    q_paths: &Query<(Entity, &lunco_usd_bevy_scene::UsdPrimPath)>,
     stages: &Assets<UsdStageAsset>,
     canonical: &CanonicalStages,
     telemetry: &[PublicTelemetryValue],
@@ -400,7 +400,7 @@ pub(crate) struct SeminarExposureTrace {
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct SeminarTraceInputs<'w, 's> {
     surface: lunco_terrain_surface::GridSurfaceQuery<'w, 's>,
-    prims: Query<'w, 's, &'static lunco_usd::UsdPrimPath>,
+    prims: Query<'w, 's, &'static lunco_usd_bevy_scene::UsdPrimPath>,
     provenance: Query<'w, 's, &'static lunco_core::Provenance>,
 }
 
@@ -1182,7 +1182,7 @@ pub(crate) fn mark_exposure_dirty(
     selected: Res<SelectedEntities>,
     orbital_pin: Option<Res<OrbitalViewPin>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
-    stage_revision: Option<Res<lunco_usd_bevy::UsdStageRevision>>,
+    stage_revision: Option<Res<lunco_usd_bevy_scene::UsdStageRevision>>,
     scene_mount: Res<SceneMountState>,
     overlays: RuntimeOverlayInputs,
     mut refresh: ResMut<ExposureRefresh>,
@@ -1348,11 +1348,11 @@ pub(crate) struct ExposureQueries<'w, 's> {
             Option<&'static lunco_core::markers::Callsign>,
         ),
     >,
-    usd_paths: Query<'w, 's, (Entity, &'static lunco_usd::UsdPrimPath)>,
+    usd_paths: Query<'w, 's, (Entity, &'static lunco_usd_bevy_scene::UsdPrimPath)>,
     entities: Query<'w, 's, Entity>,
     /// Preview descendants also carry `UsdPrimPath`, but are render-only
     /// projections and must never populate live operator exposures.
-    scene_roots: Query<'w, 's, (), With<lunco_usd_bevy::UsdSceneRoot>>,
+    scene_roots: Query<'w, 's, (), With<lunco_usd_bevy_scene::UsdSceneRoot>>,
 }
 
 fn hide_runtime_surface(exposures: &mut EngineExposures, surface_id: &str) {
@@ -1371,7 +1371,7 @@ pub(crate) fn publish_exposure(
     mut seminar: Local<SeminarExposureTrace>,
     mut runtime_surface_roots: Local<RuntimeSurfaceRootCache>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
-    stage_revision: Option<Res<lunco_usd_bevy::UsdStageRevision>>,
+    stage_revision: Option<Res<lunco_usd_bevy_scene::UsdStageRevision>>,
 ) {
     if let Some(overlay) = overlays.overlay.as_deref() {
         if seminar.overlay != Some(*overlay) {
@@ -1775,7 +1775,7 @@ fn project_lunar_map(
 fn publish_lunica_schema_exposure(
     exposures: &mut EngineExposures,
     selected: &SelectedEntities,
-    q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
+    q_paths: &Query<(Entity, &lunco_usd_bevy_scene::UsdPrimPath)>,
     stages: &Assets<UsdStageAsset>,
     canonical: &CanonicalStages,
 ) -> bool {
@@ -1941,9 +1941,9 @@ impl RuntimeSurfaceRootCache {
         &mut self,
         revision: Option<u64>,
         scene_mount: &SceneMountState,
-        q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
+        q_paths: &Query<(Entity, &lunco_usd_bevy_scene::UsdPrimPath)>,
         q_parents: &Query<&ChildOf>,
-        q_scene_roots: &Query<(), With<lunco_usd_bevy::UsdSceneRoot>>,
+        q_scene_roots: &Query<(), With<lunco_usd_bevy_scene::UsdSceneRoot>>,
         q_entities: &Query<Entity>,
         stages: &Assets<UsdStageAsset>,
         canonical: &CanonicalStages,
@@ -2004,7 +2004,7 @@ fn publish_runtime_surface_exposures(
     q_angvel: &Query<&AngularVelocity>,
     q_rotation: &Query<&Rotation>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
-    q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
+    q_paths: &Query<(Entity, &lunco_usd_bevy_scene::UsdPrimPath)>,
     stages: &Assets<UsdStageAsset>,
     canonical: &CanonicalStages,
     roots: &[AuthoredRuntimeSurface],
@@ -2072,7 +2072,7 @@ fn publish_selected_control_exposure(
     q_angvel: &Query<&AngularVelocity>,
     q_rotation: &Query<&Rotation>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
-    q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
+    q_paths: &Query<(Entity, &lunco_usd_bevy_scene::UsdPrimPath)>,
     stages: &Assets<UsdStageAsset>,
     canonical: &CanonicalStages,
 ) {
@@ -2127,9 +2127,9 @@ fn locally_possesses(
 /// registered runtime surface without an engine change.
 fn authored_runtime_surfaces(
     scene_mount: &SceneMountState,
-    q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
+    q_paths: &Query<(Entity, &lunco_usd_bevy_scene::UsdPrimPath)>,
     q_parents: &Query<&ChildOf>,
-    q_scene_roots: &Query<(), With<lunco_usd_bevy::UsdSceneRoot>>,
+    q_scene_roots: &Query<(), With<lunco_usd_bevy_scene::UsdSceneRoot>>,
     q_entities: &Query<Entity>,
     stages: &Assets<UsdStageAsset>,
     canonical: &CanonicalStages,
@@ -2194,7 +2194,7 @@ fn is_active_scene_entity(
     entity: Entity,
     scene_mount: &SceneMountState,
     q_parents: &Query<&ChildOf>,
-    q_scene_roots: &Query<(), With<lunco_usd_bevy::UsdSceneRoot>>,
+    q_scene_roots: &Query<(), With<lunco_usd_bevy_scene::UsdSceneRoot>>,
     q_entities: &Query<Entity>,
 ) -> bool {
     scene_root_ancestor(entity, q_scene_roots, q_parents, q_entities)
@@ -2215,7 +2215,7 @@ fn accept_runtime_surface_identity(
 
 fn authored_output_names(
     entity: Entity,
-    q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
+    q_paths: &Query<(Entity, &lunco_usd_bevy_scene::UsdPrimPath)>,
     stages: &Assets<UsdStageAsset>,
     canonical: &CanonicalStages,
 ) -> Option<std::collections::HashSet<String>> {

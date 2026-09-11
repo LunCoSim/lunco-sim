@@ -19,8 +19,9 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 use lunco_usd_bevy::mount::{read_attachment_joint, read_plug, read_sockets, MountDiagnostic};
-use lunco_usd_bevy::{SdfPath, UsdPrimPath};
+use lunco_usd_bevy::SdfPath;
 use lunco_usd_bevy_core::{local_transform_at, CanonicalStages, UsdStageAsset};
+use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_core::attach::resolve_mount_placement;
 use lunco_usd_ui::viewport::{UsdPreviewId, UsdViewportState};
 

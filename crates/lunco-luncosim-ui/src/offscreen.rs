@@ -642,7 +642,7 @@ fn activate_offscreen_camera(
             &bevy::camera::RenderTarget,
             bevy::ecs::query::Has<Camera3d>,
             bevy::ecs::query::Has<lunco_render::SceneCamera>,
-            Option<&lunco_usd_bevy::UsdPrimPath>,
+            Option<&lunco_usd_bevy_scene::UsdPrimPath>,
             bevy::ecs::query::Has<lunco_usd_bevy::camera_path::CameraPathDriven>,
             bevy::ecs::query::Has<lunco_core::LocalAvatar>,
             bevy::ecs::query::Has<bevy::camera::ShadowLodOrigin>,

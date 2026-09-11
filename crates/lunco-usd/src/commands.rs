@@ -44,8 +44,8 @@ use lunco_doc_bevy::{
 };
 use lunco_storage::Storage; // brings `write_sync` / `read_sync` into scope
 use lunco_twin::{DocumentKindId, DocumentKindMeta, DocumentKindRegistry};
-use lunco_usd_bevy::{UsdPrimPath, UsdSceneRoot};
 use lunco_usd_bevy_core::{UsdRead, UsdStageAsset};
+use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneRoot};
 use lunco_usd_core::UsdDataExt;
 use lunco_workspace::open::{spawn_twin_scan, PendingTwinOpens, TwinOpenMode};
 use lunco_workspace::{TwinClosed, WorkspaceResource};
@@ -2498,7 +2498,7 @@ fn live_runtime_port_exists(
         return false;
     };
     for entity in world.iter_entities() {
-        let Some(path) = entity.get::<lunco_usd_bevy::UsdPrimPath>() else {
+        let Some(path) = entity.get::<lunco_usd_bevy_scene::UsdPrimPath>() else {
             continue;
         };
         if path.stage_handle.id() != stage_id || path.path != prim.as_str() {

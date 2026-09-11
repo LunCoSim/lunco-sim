@@ -14,7 +14,7 @@ use lunco_core::{
     SceneViewport,
 };
 use lunco_render::SceneCamera;
-use lunco_usd_bevy::UsdSceneRoot;
+use lunco_usd_bevy_scene::UsdSceneRoot;
 use serde_json::json;
 use std::collections::HashMap;
 

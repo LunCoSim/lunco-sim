@@ -57,7 +57,7 @@ use bevy_egui::egui;
 use egui_plot::{Line, Plot, PlotPoints};
 use lunco_core::{on_command, register_commands, Command};
 use lunco_settings::SettingsSection;
-use lunco_usd_bevy::UsdPrimPath;
+use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_workbench::OpenTab;
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelMenuGroup, PanelSlot};
 

@@ -12,7 +12,7 @@
 //! Pure-reader (no Bevy `App`), so it is immune to the `init_asset::<Scene>()`
 //! harness gap that the older entity-spawning tests hit.
 
-use lunco_usd_bevy_core::{CanonicalStage, StageView, UsdRead};
+use lunco_usd_bevy_core::{canonical::CanonicalStage, StageView, UsdRead};
 use openusd::sdf::Path as SdfPath;
 use std::path::PathBuf;
 

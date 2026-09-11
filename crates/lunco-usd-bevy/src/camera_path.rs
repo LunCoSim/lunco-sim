@@ -67,7 +67,6 @@
 //! it is reproducible by construction rather than by an undocumented invariant held up
 //! by a resource the recorder happens to set.
 
-use crate::{UsdPrimPath, UsdRead};
 use bevy::math::cubic_splines::{
     CubicBezier, CubicCardinalSpline, CubicGenerator, CyclicCubicGenerator,
 };
@@ -76,6 +75,8 @@ use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_core::{on_command, Command};
 use lunco_time::{Clocks, Playback, ResolvedDomains, TimeBinding, TimeDomain, TransportMode};
+use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdRead, UsdStageAsset};
+use lunco_usd_bevy_scene::UsdPrimPath;
 
 /// Which standard basis the curve interpolates with (`uniform token basis`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -438,8 +439,8 @@ pub fn camera_path_transport(
 ///
 /// Non-curve prims retire from the scan after one look — see [`NotACameraPath`].
 pub fn resolve_camera_paths(
-    stages: Res<Assets<crate::UsdStageAsset>>,
-    canonical: NonSend<crate::CanonicalStages>,
+    stages: Res<Assets<UsdStageAsset>>,
+    canonical: NonSend<CanonicalStages>,
     clocks: Option<Res<Clocks>>,
     q_new: Query<(Entity, &UsdPrimPath), (Without<CameraPath>, Without<NotACameraPath>)>,
     q_prims: Query<(Entity, &UsdPrimPath)>,

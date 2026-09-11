@@ -45,7 +45,8 @@ use lunco_mobility::LunCoMobilityPlugin;
 // RTT viewport UI plugins are `ui`-only (added by `LunCoSimUiPlugin`).
 #[cfg(feature = "networking")]
 use lunco_usd::LoadScene;
-use lunco_usd::{UsdPlugins, UsdPrimPath};
+use lunco_usd::UsdPlugins;
+use lunco_usd_bevy_scene::UsdPrimPath;
 // USD policy and terrain presentation read the composed reader selected by the
 // shared USD projection boundary. Initial scene loads use the worker-produced
 // plan; authored generations use the live canonical stage. `UsdDataExt` remains
@@ -2058,7 +2059,7 @@ fn resolve_policy_source_file(
 fn project_usd_policies(
     stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<lunco_usd_bevy_core::canonical::CanonicalStages>,
-    roots: Query<&lunco_usd_bevy::UsdPrimPath, With<lunco_usd_bevy::UsdSceneRoot>>,
+    roots: Query<&lunco_usd_bevy_scene::UsdPrimPath, With<lunco_usd_bevy_scene::UsdSceneRoot>>,
     mut registry: ResMut<lunco_scripting::policy::ScriptedPolicyRegistry>,
     mut synthesizers: ResMut<lunco_usd_sim::domain_projection::SynthesizerRegistry>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
@@ -2197,7 +2198,7 @@ pub struct SetRhaiPolicy {
 fn on_set_rhai_policy(
     trigger: On<SetRhaiPolicy>,
     backed: Res<lunco_usd::twin_projection::DocBackedTwinScenes>,
-    roots: Query<&lunco_usd_bevy::UsdPrimPath, With<lunco_usd_bevy::UsdSceneRoot>>,
+    roots: Query<&lunco_usd_bevy_scene::UsdPrimPath, With<lunco_usd_bevy_scene::UsdSceneRoot>>,
     asset_server: Res<AssetServer>,
     mut commands: Commands,
 ) {

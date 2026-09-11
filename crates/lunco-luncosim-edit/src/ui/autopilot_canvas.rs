@@ -16,7 +16,7 @@ use lunco_canvas::{
     Scene, VisualRegistry,
 };
 use lunco_usd::commands::ApplyUsdOps;
-use lunco_usd_bevy::UsdPrimPath;
+use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_core::document::{LayerId, UsdOp};
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlot};
 

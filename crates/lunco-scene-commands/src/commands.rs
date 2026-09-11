@@ -24,7 +24,7 @@ use lunco_doc_bevy::{RedoDocument, UndoDocument};
 use lunco_materials::{ParamSchema, ParamValue, ShaderLook};
 use lunco_render::{PbrLook, SurfaceAlpha};
 use lunco_usd::commands::{ApplyUsdOp, ApplyUsdOps};
-use lunco_usd_bevy::{UsdPrimPath, UsdSceneRoot};
+use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneRoot};
 use lunco_usd_core::document::UsdDocument;
 use lunco_usd_core::document::{LayerId, UsdOp};
 

@@ -8,8 +8,8 @@
 use bevy::asset::AssetApp;
 use bevy::prelude::*;
 use lunco_cosim::SimConnection;
-use lunco_usd_bevy::UsdPrimPath;
-use lunco_usd_bevy_core::{CanonicalStages, UsdStageAsset};
+use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdStageAsset};
+use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_core::StageRecipe;
 use lunco_usd_sim::cosim::{install_wiring_system, WiringDirty};
 use openusd::sdf::Path as SdfPath;

@@ -44,8 +44,8 @@ use avian3d::{
 use bevy::ecs::entity::{EntityHashMap, EntityHashSet};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use lunco_usd_bevy::{instance_key, UsdPrimPath};
 use lunco_usd_bevy_core::{UsdInstanceProjection, UsdInstanceRoot, UsdStageAsset};
+use lunco_usd_bevy_scene::{instance_key, UsdPrimPath};
 use openusd::schemas::physics::tokens as ptok;
 use openusd::sdf::Path as SdfPath;
 /// Authored `physics:filteredPairs` targets, waiting for their prims to spawn.

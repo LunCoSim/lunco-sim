@@ -73,6 +73,7 @@ lunco-ui = { path = "../lunco-ui" }
 lunco-usd = { path = "../lunco-usd", default-features = false }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
+lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-sim = { path = "../lunco-usd-sim" }
 lunco-usd-ui = { path = "../lunco-usd-ui" }

@@ -33,8 +33,8 @@
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
-use lunco_usd_bevy::UsdPrimPath;
 use lunco_usd_bevy_core::UsdInstanceRoot;
+use lunco_usd_bevy_scene::UsdPrimPath;
 
 /// Registry of all spawnable object types.
 #[derive(Resource, Default)]

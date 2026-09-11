@@ -174,7 +174,7 @@ def Sphere "Trigger" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
 
 `lunco:triggerZone` is the mission meaning that USD does not define; `radius`,
 transform, visibility, material, and collision are standard USD/UsdPhysics data.
-`lunco-usd-bevy::read_shape_dims` projects both spheres from their authored
+`lunco-usd-bevy-scene::read_shape_dims` projects both spheres from their authored
 radius, while only `Trigger` is projected into the Avian overlap sensor. The
 visual dome remains present after arrival; the USD simulation projection reads
 the authored inactive color into a render intent and switches it from session

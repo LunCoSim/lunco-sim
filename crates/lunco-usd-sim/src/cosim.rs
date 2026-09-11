@@ -52,14 +52,14 @@ use lunco_scripting::{
     SceneOwnedScript, ScriptRegistry,
 };
 use lunco_usd_bevy::{
-    read_authored_bool_strict, UsdAwaitingStage, UsdPrimPath, UsdSceneRoot, UsdVisualMeshPending,
-    UsdVisualProjectionQueued,
+    read_authored_bool_strict, UsdAwaitingStage, UsdVisualMeshPending, UsdVisualProjectionQueued,
 };
 use lunco_usd_bevy_core::read::UsdReadObject;
 use lunco_usd_bevy_core::{
     canonical::CanonicalStages, UsdInstanceMember, UsdInstanceProjection, UsdInstanceRoot,
     UsdStageAsset,
 };
+use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneRoot};
 use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::{BTreeSet, HashMap};
 
@@ -122,7 +122,7 @@ fn mark_usd_telemetry_projection_index_dirty(
             Changed<ModelicaSignalLayout>,
         )>,
     >,
-    stage_revision: Option<Res<lunco_usd_bevy::UsdStageRevision>>,
+    stage_revision: Option<Res<lunco_usd_bevy_scene::UsdStageRevision>>,
     projected: Query<Entity, With<UsdTelemetryProjected>>,
     channels: Query<Entity, With<UsdTelemetryChannel>>,
     mut commands: Commands,
@@ -157,7 +157,7 @@ fn telemetry_projection_index_changed(
         )>,
     >,
     index: Res<UsdTelemetryProjectionIndex>,
-    stage_revision: Option<Res<lunco_usd_bevy::UsdStageRevision>>,
+    stage_revision: Option<Res<lunco_usd_bevy_scene::UsdStageRevision>>,
 ) -> bool {
     !added_prims.is_empty()
         || !changed_wrappers.is_empty()
@@ -2256,7 +2256,7 @@ pub fn fire_connected_events(
         return;
     };
     let instance_of = |entity| {
-        lunco_usd_bevy::instance_key(
+        lunco_usd_bevy_scene::instance_key(
             entity,
             &q_provenance,
             &q_gid,
@@ -2645,7 +2645,7 @@ fn rewire_usd_connections(
     // is what keeps two spawns of one asset — byte-identical stage-relative paths
     // and all — from collapsing onto one entity below. See `instance_key`.
     let instance_of = |e: Entity, projection: Option<&UsdInstanceProjection>| {
-        lunco_usd_bevy::instance_key_from_projection(
+        lunco_usd_bevy_scene::instance_key_from_projection(
             e,
             &wiring.provenance,
             &wiring.global_ids,
@@ -5652,7 +5652,7 @@ mod tests {
     fn telemetry_stage_revision_removes_derived_channels_and_markers() {
         let mut app = App::new();
         app.init_resource::<UsdTelemetryProjectionIndex>()
-            .insert_resource(lunco_usd_bevy::UsdStageRevision(1))
+            .insert_resource(lunco_usd_bevy_scene::UsdStageRevision(1))
             .add_systems(Update, mark_usd_telemetry_projection_index_dirty);
         let declaration = app.world_mut().spawn(UsdTelemetryProjected).id();
         let channel = app.world_mut().spawn(UsdTelemetryChannel).id();

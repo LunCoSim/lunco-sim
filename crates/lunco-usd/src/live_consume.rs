@@ -15,8 +15,8 @@
 
 use bevy::prelude::*;
 use lunco_autopilot::usd_tree::{BehaviorProgramSource, BehaviorXml, BehaviorXmlPath};
-use lunco_usd_bevy::UsdPrimPath;
 use lunco_usd_bevy_core::{UsdRead, UsdStageAsset};
+use lunco_usd_bevy_scene::UsdPrimPath;
 use openusd::sdf::Path as SdfPath;
 use std::collections::HashMap;
 
@@ -284,7 +284,7 @@ fn projected_behavior_owner(
     path: &str,
 ) -> Option<Entity> {
     world.iter_entities().find_map(|entity| {
-        let prim = entity.get::<lunco_usd_bevy::UsdPrimPath>()?;
+        let prim = entity.get::<lunco_usd_bevy_scene::UsdPrimPath>()?;
         (prim.stage_handle.id() == stage_id
             && entity
                 .get::<BehaviorProgramSource>()
@@ -322,7 +322,7 @@ fn behavior_owner_entity(
         result
     }?;
     world.iter_entities().find_map(|entity| {
-        let prim = entity.get::<lunco_usd_bevy::UsdPrimPath>()?;
+        let prim = entity.get::<lunco_usd_bevy_scene::UsdPrimPath>()?;
         (prim.stage_handle.id() == stage_id && prim.path == owner_path).then_some(entity.id())
     })
 }
@@ -440,10 +440,10 @@ pub(crate) fn project_stage_changes(world: &mut World) {
     // Same reason, one level up: a live edit to an already-spawned prim changes
     // the composed stage without spawning or despawning anything, so it raises no
     // ECS-structural signal. Every USD-derived view-model gates on this revision
-    // (`lunco_usd_bevy::UsdStageRevision`), so without the bump an edit would
+    // (`lunco_usd_bevy_scene::UsdStageRevision`), so without the bump an edit would
     // never reach the connection canvas or the prim tree.
     if projected_anything {
-        if let Some(mut rev) = world.get_resource_mut::<lunco_usd_bevy::UsdStageRevision>() {
+        if let Some(mut rev) = world.get_resource_mut::<lunco_usd_bevy_scene::UsdStageRevision>() {
             rev.bump();
         }
     }
@@ -499,7 +499,8 @@ pub(crate) fn apply_transform_edits_live(
         if channels.translate {
             seat_authored_translate(world, entity, transform.translation);
         }
-        let preview_only = channels.scale && lunco_usd_bevy::is_preview_only_entity(world, entity);
+        let preview_only =
+            channels.scale && lunco_usd_bevy_scene::is_preview_only_entity(world, entity);
         if let Some(mut tf) = world.entity_mut(entity).get_mut::<Transform>() {
             if channels.rotate {
                 tf.rotation = transform.rotation;
@@ -824,7 +825,7 @@ pub(crate) fn refresh_edited_prims_live(
                 (behavior_owner_entity(world, id, prim), source)
             {
                 let owner_path = world
-                    .get::<lunco_usd_bevy::UsdPrimPath>(owner)
+                    .get::<lunco_usd_bevy_scene::UsdPrimPath>(owner)
                     .map(|p| p.path.clone())
                     .unwrap_or_default();
                 behavior_updates.push((owner_path, prim.to_string(), val, path_val));
@@ -1164,8 +1165,8 @@ mod tests {
     fn authoring_a_scale_updates_an_already_live_preview_entity() {
         use bevy::asset::AssetApp;
         use bevy::prelude::*;
-        use lunco_usd_bevy::UsdPreviewOnly;
         use lunco_usd_bevy_core::canonical::CanonicalStages;
+        use lunco_usd_bevy_scene::UsdPreviewOnly;
         use lunco_usd_core::StageRecipe;
 
         let mut app = App::new();

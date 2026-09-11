@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 use lunco_controller::ControllerLink;
 use lunco_core::{Avatar, ControlBinding, InputPorts, SceneMountState, TheLocalAvatar};
-use lunco_usd_bevy::UsdPrimPath;
+use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_workbench::twin_browser::TWIN_BROWSER_PANEL_ID;
 use lunco_workbench::{
     HelpMouse, HelpShortcut, LiveHelpSection, LiveHelpSections, PerspectiveHelp, ViewportPanel,
@@ -158,7 +158,7 @@ impl ViewModelAppExt for App {
 pub fn usd_selection_view_changed(
     selection: Res<lunco_scene_commands::SelectedEntities>,
     target: Res<crate::InspectorTarget>,
-    revision: Res<lunco_usd_bevy::UsdStageRevision>,
+    revision: Res<lunco_usd_bevy_scene::UsdStageRevision>,
     viewport: Option<Res<lunco_usd_ui::viewport::UsdViewportState>>,
 ) -> bool {
     selection.is_changed()
@@ -200,7 +200,7 @@ pub(crate) fn selected_entity_in_preview(
     session: &lunco_usd_ui::viewport::UsdPreviewSession,
     selected: Option<&lunco_scene_commands::SelectedEntities>,
     target: Option<&crate::InspectorTarget>,
-    q_paths: &Query<&lunco_usd_bevy::UsdPrimPath>,
+    q_paths: &Query<&lunco_usd_bevy_scene::UsdPrimPath>,
     q_parents: &Query<&ChildOf>,
 ) -> Option<Entity> {
     let belongs = |entity: Entity| {

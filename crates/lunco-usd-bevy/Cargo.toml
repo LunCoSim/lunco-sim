@@ -47,6 +47,7 @@ half = "2"
 # stage loader and its runtime projection systems.
 lunco-usd-geometry = { path = "../lunco-usd-geometry" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
+lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 openusd = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-usd-core = { path = "../lunco-usd-core" }

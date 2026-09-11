@@ -10,7 +10,7 @@ fn test_usd_bevy_plugin_constructs() {
 #[test]
 fn test_usd_prim_path_constructs() {
     use bevy::prelude::*;
-    use lunco_usd_bevy::UsdPrimPath;
+    use lunco_usd_bevy_scene::UsdPrimPath;
 
     let path = UsdPrimPath {
         stage_handle: Handle::default(),

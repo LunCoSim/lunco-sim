@@ -17,8 +17,8 @@ use crate::SpawnState;
 use lunco_controller::ControllerLink;
 use lunco_core::{on_command, register_commands, Avatar, Command, LocalAvatar};
 use lunco_scene_commands::SelectedEntities;
-use lunco_usd_bevy::UsdPrimPath;
 use lunco_usd_bevy_core::UsdStageAsset;
+use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_ui::viewport::{UsdPreviewId, UsdViewportState};
 
 /// Component marking an entity as currently selected.
@@ -634,7 +634,7 @@ fn find_selectable(
 fn find_prim_part(
     hit: Entity,
     root: Entity,
-    q_prims: &Query<Entity, With<lunco_usd_bevy::UsdPrimPath>>,
+    q_prims: &Query<Entity, With<lunco_usd_bevy_scene::UsdPrimPath>>,
     q_parents: &Query<&ChildOf>,
 ) -> Option<Entity> {
     const MAX_DEPTH: usize = 32;
@@ -686,7 +686,7 @@ pub fn on_scene_click_select(
     scene_interaction: Res<lunco_core::SceneInteractionMode>,
     q_selectable: Query<Entity, With<lunco_core::SelectableRoot>>,
     q_mobility: Query<Entity, With<lunco_core::MobilityRoot>>,
-    q_prims: Query<Entity, With<lunco_usd_bevy::UsdPrimPath>>,
+    q_prims: Query<Entity, With<lunco_usd_bevy_scene::UsdPrimPath>>,
     q_parents: Query<&ChildOf>,
     selected: Res<SelectedEntities>,
     mut inspector_target: ResMut<crate::InspectorTarget>,

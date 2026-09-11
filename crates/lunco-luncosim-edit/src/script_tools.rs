@@ -89,7 +89,7 @@ pub fn on_scene_click_script_tool(
     egui_focus: Res<lunco_core::EguiFocus>,
     q_selectable: Query<Entity, With<lunco_core::SelectableRoot>>,
     q_ids: Query<&lunco_core::GlobalEntityId>,
-    q_prim: Query<&lunco_usd_bevy::UsdPrimPath>,
+    q_prim: Query<&lunco_usd_bevy_scene::UsdPrimPath>,
     q_parents: Query<&ChildOf>,
     backed: Res<lunco_usd::twin_projection::DocBackedTwinScenes>,
     asset_server: Res<AssetServer>,

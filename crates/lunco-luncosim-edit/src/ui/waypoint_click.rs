@@ -45,7 +45,7 @@ use lunco_render::{PbrLook, SceneCamera, SurfaceAlpha};
 use lunco_scene_commands::runtime_waypoint::runtime_waypoint_key;
 use lunco_scene_commands::runtime_waypoint::RuntimeWaypointBinding;
 use lunco_scene_commands::SelectedEntities;
-use lunco_usd_bevy::UsdPrimPath;
+use lunco_usd_bevy_scene::UsdPrimPath;
 
 fn report_waypoint_failure(commands: &mut Commands, message: impl Into<String>) {
     let message = message.into();
@@ -1634,7 +1634,7 @@ pub(crate) fn arm_route_projection_rebuild(
             Or<(
                 Changed<Transform>,
                 Changed<big_space::grid::cell::CellCoord>,
-                Changed<lunco_usd_bevy::UsdVisualSynced>,
+                Changed<lunco_usd_bevy_scene::UsdSceneProjected>,
             )>,
             Or<(
                 With<lunco_usd_sim::marker::WaypointMarker>,
