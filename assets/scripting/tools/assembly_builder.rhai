@@ -147,6 +147,417 @@ fn parameter_plan(edit_target, path, parameters) {
     #{ ok: true, kind: "parameter_edit", path: path, parameters: names, ops: ops }
 }
 
+// Return the small, schema-owned field vocabulary exposed by the editor.
+// Names outside this vocabulary are rejected instead of being guessed from a
+// prim or written as an unregistered LunCo property. `inputs:` and `outputs:`
+// are standard USD properties whose concrete type is supplied by inspection.
+fn standard_editable_field_definition(name) {
+    if name == () || type_of(name) != "string" || name == "" { return (); }
+    if name == "xformOp:translate" {
+        return #{ owner: "UsdGeom.Xformable", kind: "transform", type_name: "double3", units: "m", edit_kind: "translate", writable: true };
+    }
+    if name == "xformOp:rotateXYZ" {
+        return #{ owner: "UsdGeom.Xformable", kind: "transform", type_name: "double3", units: "deg", edit_kind: "rotate", writable: true };
+    }
+    if name == "xformOp:scale" {
+        return #{ owner: "UsdGeom.Xformable", kind: "transform", type_name: "double3", units: "unitless", edit_kind: "scale", writable: true };
+    }
+    if name == "xformOpOrder" {
+        return #{ owner: "UsdGeom.Xformable", kind: "structure", type_name: "token[]", units: "()", edit_kind: "readonly", writable: false };
+    }
+    if name == "size" {
+        return #{ owner: "UsdGeom.Gprim", kind: "geometry", type_name: "double", units: "m", edit_kind: "attribute", writable: true };
+    }
+    if name == "radius" || name == "height" {
+        return #{ owner: "UsdGeom.Gprim", kind: "geometry", type_name: "double", units: "m", edit_kind: "attribute", writable: true };
+    }
+    if name == "axis" || name == "visibility" || name == "purpose" {
+        return #{ owner: "UsdGeom.Gprim", kind: "geometry", type_name: "token", units: "()", edit_kind: "attribute", writable: true };
+    }
+    if name == "extent" {
+        return #{ owner: "UsdGeom.Boundable", kind: "derived_geometry", type_name: "float3[]", units: "m", edit_kind: "readonly", writable: false };
+    }
+    if name == "physics:mass" {
+        return #{ owner: "UsdPhysics.MassAPI", kind: "physics", type_name: "float", units: "kg", edit_kind: "attribute", writable: true };
+    }
+    if name == "physics:centerOfMass" {
+        return #{ owner: "UsdPhysics.MassAPI", kind: "physics", type_name: "point3f", units: "m", edit_kind: "attribute", writable: true };
+    }
+    if name == "physics:diagonalInertia" {
+        return #{ owner: "UsdPhysics.MassAPI", kind: "physics", type_name: "float3", units: "kg*m^2", edit_kind: "attribute", writable: true };
+    }
+    if name == "physics:principalAxes" {
+        return #{ owner: "UsdPhysics.MassAPI", kind: "physics", type_name: "quatf", units: "unitless", edit_kind: "attribute", writable: true };
+    }
+    if name == "physics:collisionEnabled" || name == "physics:kinematicEnabled"
+        || name == "physics:startsAsleep" {
+        return #{ owner: "UsdPhysics", kind: "physics", type_name: "bool", units: "()", edit_kind: "attribute", writable: true };
+    }
+    if name == "material:binding" {
+        return #{ owner: "UsdShade", kind: "relationship", type_name: "relationship", units: "()", edit_kind: "relationship", writable: true };
+    }
+    if name == "physics:simulationOwner" || name == "physics:body0"
+        || name == "physics:body1" {
+        return #{ owner: "UsdPhysics", kind: "relationship", type_name: "relationship", units: "()", edit_kind: "relationship", writable: true };
+    }
+    if name == "kind" {
+        return #{ owner: "USD metadata", kind: "metadata", type_name: "token", units: "()", edit_kind: "kind", writable: true };
+    }
+    if name.starts_with("inputs:") && name.len() > "inputs:".len() {
+        return #{ owner: "USD attribute", kind: "parameter", type_name: (), units: "()", edit_kind: "attribute", writable: true };
+    }
+    if name.starts_with("outputs:") && name.len() > "outputs:".len() {
+        return #{ owner: "USD attribute", kind: "port", type_name: (), units: "()", edit_kind: "attribute", writable: true };
+    }
+    if name.starts_with("variant:") && name.len() > "variant:".len() {
+        return #{ owner: "USD metadata", kind: "variant", type_name: "token", units: "()", edit_kind: "variant", writable: true };
+    }
+    ()
+}
+
+fn editable_attribute_record(prim, name) {
+    if prim == () || prim.attributes == () { return (); }
+    for attribute in prim.attributes {
+        if attribute.name == name { return attribute; }
+    }
+    ()
+}
+
+fn editable_source_record(target) {
+    if target == () || target.prim_stack == () || target.prim_stack.len() == 0 {
+        return ();
+    }
+    target.prim_stack[0]
+}
+
+fn editable_value_matches(actual, expected) {
+    if actual == () || expected == () { return actual == expected; }
+    if type_of(expected) == "array" {
+        if type_of(actual) != "array" || actual.len() != expected.len() { return false; }
+        for i in 0..expected.len() {
+            if !editable_value_matches(actual[i], expected[i]) { return false; }
+        }
+        return true;
+    }
+    if type_of(expected) == "string" || type_of(expected) == "bool" {
+        return actual == expected;
+    }
+    if type_of(actual) == "string" || type_of(actual) == "bool" {
+        return false;
+    }
+    (actual - expected).abs() <= 0.000001
+}
+
+fn editable_usd_literal(type_name, value) {
+    if type_name == () || type_name == "" || value == () { return (); }
+    if type_of(value) == "array" {
+        if value.len() == 3 { return assembly_edit::tuple3_literal(value); }
+        if value.len() == 4 { return assembly_edit::quat4_literal(value); }
+        return ();
+    }
+    if type_name == "token" || type_name == "string" || type_name == "asset" {
+        if type_of(value) != "string" || value.contains("\"") { return (); }
+        return "\"" + value + "\"";
+    }
+    if type_name == "bool" {
+        if type_of(value) != "bool" { return (); }
+        return value.to_string();
+    }
+    if type_of(value) == "string" || type_of(value) == "bool" {
+        return ();
+    }
+    value.to_string()
+}
+
+fn editable_catalog_field(properties, name) {
+    for property in properties {
+        if property.name == name { return property; }
+    }
+    ()
+}
+
+fn editable_property_catalog(doc, path, edit_target, requested) {
+    if doc == () || path == () || edit_target == () {
+        return plan_error("editable_property_catalog requires document, exact prim path, and edit target");
+    }
+    if !path.starts_with("/") || path.ends_with("/") && path != "/" {
+        return plan_error("editable_property_catalog path must be an absolute USD prim path");
+    }
+    let inspection = assembly_edit::inspect(doc, path);
+    if !query_ok(inspection) || inspection.prim == () || inspection.prim.exists != true {
+        return plan_error(path + ": prim is not available for property inspection");
+    }
+    let target = assembly_edit::resolve_target(doc, path, edit_target);
+    if !query_ok(target) || target.status != "resolved" {
+        return plan_error(path + ": edit target could not resolve the composed prim");
+    }
+
+    let names = [];
+    let automatic = requested == ();
+    if automatic {
+        if inspection.prim.attributes != () {
+            for attribute in inspection.prim.attributes {
+                if standard_editable_field_definition(attribute.name) != () {
+                    names.push(attribute.name);
+                }
+            }
+        }
+        let kind = inspection.prim.metadata.kind.composed;
+        if kind != () && kind.present == true { names.push("kind"); }
+        // Variant selections are standard USD metadata and are exposed by the
+        // existing document inspector, not by a parallel LunCo field.
+        let variants = inspection.prim.metadata.variantSelections.composed;
+        if variants != () && variants.value != () {
+            for variant_set in variants.value.keys() {
+                names.push("variant:" + variant_set);
+            }
+        }
+        // Keep relationship fields visible even when their target list is
+        // currently empty; the editor can then author an explicit binding.
+        names.push("material:binding");
+        names.push("physics:simulationOwner");
+        names.push("physics:body0");
+        names.push("physics:body1");
+    } else {
+        if type_of(requested) != "array" || requested.len() == 0 {
+            return plan_error("editable_property_catalog requested fields must be a non-empty array");
+        }
+        for name in requested {
+            if type_of(name) != "string" || name == "" {
+                return plan_error(path + ": requested field names must be non-empty strings");
+            }
+            if standard_editable_field_definition(name) == () {
+                return plan_error(path + ": unsupported or unregistered USD field `" + name + "`");
+            }
+            if names.contains(name) {
+                return plan_error(path + ": requested field names must be unique");
+            }
+            names.push(name);
+        }
+    }
+
+    let attrs = [];
+    let rels = [];
+    for name in names {
+        let definition = standard_editable_field_definition(name);
+        if definition.edit_kind == "relationship" {
+            if !rels.contains(name) { rels.push(name); }
+        } else if definition.edit_kind != "kind" && definition.edit_kind != "variant"
+            && !attrs.contains(name) {
+            attrs.push(name);
+        }
+    }
+    let prim = query("QueryUsdPrim", #{
+        doc_id: doc,
+        path: path,
+        attrs: attrs,
+        rels: rels,
+        children: false,
+    });
+    if !query_ok(prim) { return plan_error(path + ": composed property values are unavailable"); }
+
+    let source = editable_source_record(target);
+    let editable_scope = target.edit_scope == "authored_layer"
+        || target.edit_scope == "local_override";
+    let properties = [];
+    for name in names {
+        let definition = standard_editable_field_definition(name);
+        let attribute = editable_attribute_record(inspection.prim, name);
+        let present = attribute != ();
+        let value = ();
+        let literal = ();
+        let type_name = definition.type_name;
+        if definition.edit_kind == "kind" {
+            let metadata = inspection.prim.metadata.kind.composed;
+            if metadata != () && metadata.present == true {
+                present = true;
+                value = metadata.value;
+            }
+        } else if definition.edit_kind == "variant" {
+            let variant_set = name.sub_string("variant:".len());
+            let metadata = inspection.prim.metadata.variantSelections.composed;
+            if metadata != () && metadata.value != () && metadata.value[variant_set] != () {
+                present = true;
+                value = metadata.value[variant_set];
+            }
+        } else if definition.edit_kind == "relationship" {
+            value = prim.relationships[name];
+            present = value != () && value.len() > 0;
+        } else {
+            if attribute != () {
+                type_name = attribute.type;
+                literal = attribute.value;
+            }
+            if prim.attrs != () { value = prim.attrs[name]; }
+        }
+        let read_only_reason = if !editable_scope {
+            "edit target is composed_read_only"
+        } else if !definition.writable {
+            "field is structural or derived and is read-only"
+        } else {
+            ""
+        };
+        properties.push(#{
+            name: name,
+            owner: definition.owner,
+            kind: definition.kind,
+            edit_kind: definition.edit_kind,
+            type_name: type_name,
+            units: definition.units,
+            value: value,
+            literal: literal,
+            present: present,
+            authored_here: target.authored_here,
+            authored_in_document: target.authored_in_document,
+            status: if target.authored_here { "authored_here" } else if editable_scope { "editable_override" } else { "read_only" },
+            editable: editable_scope && definition.writable,
+            edit_scope: target.edit_scope,
+            source: source,
+            source_path: if source == () { () } else { source.path },
+            read_only_reason: read_only_reason,
+        });
+    }
+    #{
+        ok: true,
+        kind: "editable_property_catalog",
+        doc_id: doc,
+        path: path,
+        edit_target: edit_target,
+        generation: assembly_edit::describe(doc).generation,
+        target: target,
+        source: source,
+        properties: properties,
+        no_properties: properties.len() == 0,
+    }
+}
+
+fn editable_relationship_targets(value, path) {
+    if type_of(value) != "array" { return plan_error(path + " must be an array of USD prim paths"); }
+    let targets = [];
+    for target in value {
+        if type_of(target) != "string" || !target.starts_with("/")
+            || target.ends_with("/") || targets.contains(target) {
+            return plan_error(path + " contains an invalid or duplicate USD prim path");
+        }
+        targets.push(target);
+    }
+    #{ ok: true, value: targets }
+}
+
+// Build a typed, generation-checked dry patch. The caller reviews and submits
+// only `ops` through assembly_edit; this function never mutates USD.
+fn editable_property_patch_plan(doc, edit_target, path, edits, parent_gen) {
+    if doc == () || edit_target == () || path == () || edits == () {
+        return plan_error("editable_property_patch_plan requires document, edit target, exact path, and edits");
+    }
+    if !path.starts_with("/") || path.ends_with("/") && path != "/" {
+        return plan_error("editable_property_patch_plan path must be an absolute USD prim path");
+    }
+    if type_of(edits) != "array" { return plan_error("editable_property_patch_plan edits must be an array"); }
+    let current = assembly_edit::describe(doc);
+    if !query_ok(current) || current.generation == () {
+        return plan_error("editable_property_patch_plan could not read document generation");
+    }
+    if parent_gen != () && current.generation != parent_gen {
+        return plan_error("editable_property_patch_plan rejected stale document generation");
+    }
+    if edits.len() == 0 {
+        return #{ ok: true, kind: "editable_property_patch", path: path,
+            edit_target: edit_target, parent_generation: current.generation,
+            changed: [], no_op: true, ops: [], catalog: () };
+    }
+
+    let names = [];
+    for edit in edits {
+        if edit == () || edit.name == () || type_of(edit.name) != "string"
+            || edit.name == "" || edit.value == () {
+            return plan_error(path + ": each edit requires a name and value");
+        }
+        if names.contains(edit.name) { return plan_error(path + ": edit names must be unique"); }
+        names.push(edit.name);
+    }
+    let catalog = editable_property_catalog(doc, path, edit_target, names);
+    if !catalog.ok { return catalog; }
+    let ops = [];
+    let changed = [];
+    for edit in edits {
+        let field = editable_catalog_field(catalog.properties, edit.name);
+        if field == () { return plan_error(path + ": field is missing from the catalog"); }
+        if !field.editable { return plan_error(path + ": field `" + edit.name + "` is not editable"); }
+        let value = edit.value;
+        if field.edit_kind == "translate" || field.edit_kind == "rotate"
+            || field.edit_kind == "scale" {
+            let valid = vector3(value, edit.name);
+            if !valid.ok { return valid; }
+            if editable_value_matches(field.value, value) { continue; }
+            if field.edit_kind == "translate" {
+                ops.push(#{ SetTranslate: #{
+                    edit_target: edit_target, path: path, value: value,
+                }});
+            } else if field.edit_kind == "rotate" {
+                ops.push(#{ SetRotate: #{
+                    edit_target: edit_target, path: path, value: value,
+                }});
+            } else {
+                ops.push(#{ SetScale: #{
+                    edit_target: edit_target, path: path, value: value,
+                }});
+            }
+        } else if field.edit_kind == "kind" {
+            if type_of(value) != "string" || value == "" {
+                return plan_error(path + ": kind must be a non-empty string");
+            }
+            if editable_value_matches(field.value, value) { continue; }
+            ops.push(#{ SetPrimKind: #{ edit_target: edit_target, path: path, kind: value }});
+        } else if field.edit_kind == "variant" {
+            if type_of(value) != "string" || value == "" {
+                return plan_error(path + ": variant selection must be a non-empty string");
+            }
+            if editable_value_matches(field.value, value) { continue; }
+            ops.push(#{ SetVariantSelection: #{
+                edit_target: edit_target,
+                path: path,
+                variant_set: edit.name.sub_string("variant:".len()),
+                variant: value,
+            }});
+        } else if field.edit_kind == "relationship" {
+            let valid = editable_relationship_targets(value, edit.name);
+            if !valid.ok { return valid; }
+            if editable_value_matches(field.value, valid.value) { continue; }
+            ops.push(#{ SetRelationship: #{
+                edit_target: edit_target, path: path, name: edit.name, targets: valid.value,
+            }});
+        } else {
+            let type_name = if edit.type_name == () { field.type_name } else { edit.type_name };
+            if type_name == () || type_name == "" {
+                return plan_error(path + ": attribute `" + edit.name + "` needs an explicit USD type");
+            }
+            if field.type_name != () && field.type_name != "" && type_name != field.type_name {
+                return plan_error(path + ": attribute `" + edit.name + "` has the wrong USD type");
+            }
+            let literal = editable_usd_literal(type_name, value);
+            if literal == () { return plan_error(path + ": value for `" + edit.name + "` does not match its USD type"); }
+            if editable_value_matches(field.value, value) { continue; }
+            ops.push(#{ SetAttribute: #{
+                edit_target: edit_target, path: path, name: edit.name,
+                type_name: type_name, value: literal,
+            }});
+        }
+        changed.push(edit.name);
+    }
+    #{
+        ok: true,
+        kind: "editable_property_patch",
+        path: path,
+        edit_target: edit_target,
+        parent_generation: current.generation,
+        changed: changed,
+        no_op: ops.len() == 0,
+        ops: ops,
+        catalog: catalog,
+    }
+}
+
 /// Build one referenced component instance without writing USDA source.
 ///
 /// The reference is the component's identity and composition boundary; local

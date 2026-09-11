@@ -610,6 +610,25 @@ Use the smallest existing typed intent that expresses the change:
   `ApplyUsdOps` command path as Inspector edits. This sequencing keeps async
   reference loading and coarse variant recomposition from producing a root
   with missing children.
+- For generic human or AI property editing, start with
+  `assembly_builder::editable_property_catalog(doc, path, edit_target,
+  requested)`. Pass an explicit field array for a focused view or `()` to
+  discover supported standard `UsdGeom`, `UsdPhysics`, `UsdShade`, `kind`,
+  variant, and `inputs:`/`outputs:` fields. The result includes the USD owner,
+  exact type, units, composed value, USDA literal, authored/editable status,
+  edit scope, and source path. `xformOpOrder` and `extent` are visible but
+  read-only; unknown names and guessed `lunco:` fields fail visibly.
+- Build a dry change set with
+  `assembly_builder::editable_property_patch_plan(doc, edit_target, path,
+  edits, parent_gen)`, where each edit is `{ name, value, type_name }`.
+  It reuses the existing typed transform, attribute, relationship, kind, and
+  variant operations, checks the exact generation and target scope, rejects
+  wrong types/paths and structural edits, and reports a true `no_op` with an
+  empty `.ops` list when values already match. Submit `.ops` through the
+  normal `assembly_edit::propose`/`review_session`/`commit_proposal` flow; the
+  planner never writes USDA directly. `InspectUsdDocument` exposes standard
+  variant selections at `prim.metadata.variantSelections` for the same
+  human/AI read path.
 - For repeated references, use
   `assembly_builder::referenced_instance_pattern_plan` with one explicit
   template and an ordered array of `{ name, translation, rotation, scale }`

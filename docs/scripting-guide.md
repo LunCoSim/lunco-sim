@@ -616,6 +616,39 @@ typed `SetAttribute` operations for the same `ApplyUsdOps`/proposal boundary
 used by the Editor. The core tool has no model-specific paths; a Twin-local
 recipe supplies those paths and facts.
 
+For a generic Inspector or AI editing loop, first call
+`editable_property_catalog(doc, path, edit_target, requested)`. Give it an
+explicit field array for a focused view, or `()` to discover supported
+standard `UsdGeom`, `UsdPhysics`, `UsdShade`, `kind`, variant, and
+`inputs:`/`outputs:` properties. The result includes each field's owner,
+type, units, composed value, USDA literal, edit scope, source path, and
+`editable`/read-only status. Unknown names, including guessed `lunco:` fields,
+are rejected. Structural `xformOpOrder` and derived `extent` are reported but
+not editable.
+
+Turn an edit list into a dry plan with
+`editable_property_patch_plan(doc, edit_target, path, edits, parent_gen)`:
+
+```rhai
+let catalog = assembly_builder::editable_property_catalog(
+    doc, "/Rover/Panel", "@root@", (),
+);
+let plan = assembly_builder::editable_property_patch_plan(
+    doc, "@root@", "/Rover/Panel",
+    [#{ name: "xformOp:translate", value: [2.0, 0.0, 0.0] },
+     #{ name: "inputs:surface_area", type_name: "float", value: 3.5 }],
+    catalog.generation,
+);
+let proposal = assembly_edit::propose(
+    doc, #{ Rover: () }, "Edit panel properties", plan.ops, plan.parent_generation,
+);
+```
+
+The patch planner preserves true no-op edits, validates exact types and target
+scope, and returns typed `SetTranslate`/`SetAttribute`/relationship/kind/
+variant operations without writing source. Review the proposal before commit;
+do not bypass the document journal with a raw USDA rewrite.
+
 `place_with_clearance_plan` is the conservative placement path for parts that
 must stay clear of authored geometry. It takes exact moving/blocker frame and
 Cube-shape paths under one translation-only parent, checks the composed Cube
