@@ -68,8 +68,8 @@ def Xform "DescentLander" (
     prepend references = @lunco://components/avionics/obc_lander.usda@</LanderOBC>
 )
 {
-    bool lunco:ui:controlHud = true
-    int lunco:ui:controlHudColumn = 0
+    string lunco:ui:surfaceId = "vehicle-control-left"
+    string lunco:ui:visibilityMode = "possessed"
 
     # The USD rigid-body projection aggregates each leg's foot collider into its
     # Avian compound body. Bind the landing surface at that body boundary so

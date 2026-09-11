@@ -1,0 +1,49 @@
+<template>
+  <property name="vehicle">VEHICLE</property>
+  <property name="status">WAITING</property>
+  <property name="status_color">var(--muted-color)</property>
+  <property name="owner">none</property>
+  <property name="speed">—</property>
+  <property name="position">—</property>
+  <property name="angular_velocity">—</property>
+  <property name="simulation_summary">NO SIMULATION PARTICIPANTS</property>
+  <property name="telemetry_summary">TELEMETRY UNAVAILABLE</property>
+  <property name="error">—</property>
+
+  <node id="compact-control-root">
+    <node id="compact-control-header">
+      <text id="compact-control-vehicle">{vehicle}</text>
+      <node id="compact-control-status-chip">
+        <node id="compact-control-status-marker" />
+        <text id="compact-control-status">{status}</text>
+      </node>
+    </node>
+
+    <node id="compact-control-owner-row">
+      <text id="compact-control-owner-label">CONTROL</text>
+      <text id="compact-control-owner">{owner}</text>
+    </node>
+
+    <node id="compact-control-motion-grid">
+      <node id="compact-speed"><text id="compact-speed-label">VELOCITY</text><text id="compact-speed-value">{speed}</text></node>
+      <node id="compact-position"><text id="compact-position-label">POSITION</text><text id="compact-position-value">{position}</text></node>
+    </node>
+
+    <node id="compact-control-angular-row">
+      <text id="compact-control-angular-label">ANGULAR VELOCITY</text>
+      <text id="compact-control-angular">{angular_velocity}</text>
+    </node>
+
+    <node id="compact-control-simulation-row">
+      <text id="compact-control-simulation">{simulation_summary}</text>
+    </node>
+
+    <node id="compact-telemetry-row">
+      <text id="compact-telemetry-value">{telemetry_summary}</text>
+    </node>
+
+    <node id="compact-control-error-row">
+      <text id="compact-control-error">{error}</text>
+    </node>
+  </node>
+</template>

@@ -28,6 +28,18 @@ fn array_has(values, expected) {
     false
 }
 
+fn close_scalar(actual, expected) {
+    actual != () && (actual - expected).abs() <= 0.0001
+}
+
+fn close_vector(actual, expected) {
+    if actual == () || actual.len() != expected.len() { return false; }
+    for i in 0..expected.len() {
+        if !close_scalar(actual[i], expected[i]) { return false; }
+    }
+    true
+}
+
 fn fail(me, message) {
     if !me.done {
         me.done = true;
@@ -58,6 +70,9 @@ fn on_start(me) {
     this.wait_generation = -1;
     this.bundle_wait_generation = -1;
     this.bundle_checked = false;
+    this.bundle_update_started = false;
+    this.bundle_update_wait_generation = -1;
+    this.bundle_update_checked = false;
     this.checks = [];
     this.done = false;
 }
@@ -180,6 +195,9 @@ fn on_tick(me) {
                     fail(this, "generic component bundle facts did not validate its contract");
                     return;
                 }
+                this.checks.push(t_true(plan.frame_paths == [BUNDLE + "/Mount", BUNDLE + "/DeployEnd"]
+                        && plan.input_ports == ["inputs:deployment"],
+                    "component bundle returns exact frame paths and standard input ports"));
                 let proposal = assembly_edit::propose(
                     this.doc, #{ Assembly: () }, "Build generic panel component bundle",
                     plan.ops, before.generation,
@@ -210,18 +228,12 @@ fn on_tick(me) {
                 doc_id: this.doc,
                 path: BUNDLE,
                 attrs: [
-                    "lunco:component:units",
-                    "lunco:component:dimensions",
                     "physics:mass",
                     "lunco:mount:plug",
-                    "lunco:deployment:state",
-                    "lunco:deployment:limits",
                     "inputs:deployment",
                 ],
                 rels: [
                     "lunco:mount:frame",
-                    "lunco:component:frames",
-                    "lunco:component:actuatorFrames",
                 ],
                 children: true,
             });
@@ -234,22 +246,24 @@ fn on_tick(me) {
             let actuator = query("QueryUsdPrim", #{
                 doc_id: this.doc,
                 path: BUNDLE + "/DeployEnd",
-                attrs: [
-                    "lunco:component:frameRole",
-                    "lunco:component:actuatorName",
-                    "lunco:component:actuatorDirection",
-                    "lunco:component:actuatorUnit",
-                    "lunco:component:actuatorLimits",
-                ],
-                rels: ["lunco:component:port"],
+                attrs: ["xformOp:translate", "xformOpOrder"],
             });
             let mount = query("QueryUsdPrim", #{
                 doc_id: this.doc,
                 path: BUNDLE + "/Mount",
-                attrs: ["lunco:component:frameRole"],
+                attrs: ["xformOp:translate", "xformOpOrder"],
             });
+            let frame_catalog = assembly_builder::functional_frame_catalog(
+                this.doc, "@root@", BUNDLE,
+            );
+            let invalid_frame_catalog = assembly_builder::functional_frame_catalog(
+                this.doc, "@root@", BUNDLE + "/Missing",
+            );
             let context = assembly_builder::authoring_context(
                 this.doc, BUNDLE, "@root@",
+            );
+            let component_context = component_editor::update_context(
+                this.doc, "@root@", BUNDLE, (),
             );
             let invalid_dispatch = assembly_builder::place_or_attach_plan(
                 this.doc, "@root@", #{ mode: "unsupported" },
@@ -266,26 +280,21 @@ fn on_tick(me) {
                 },
             );
             this.checks.push(t_true(query_ok(bundle_root)
-                    && bundle_root.attrs["lunco:component:units"] == "m"
                     && bundle_root.attrs["physics:mass"] == 2.0
                     && bundle_root.attrs["lunco:mount:plug"] == "panel"
-                    && bundle_root.attrs["lunco:deployment:state"] == "stowed"
-                    && bundle_root.relationships["lunco:mount:frame"][0] == BUNDLE + "/Mount"
-                    && bundle_root.relationships["lunco:component:frames"].len() == 2
-                    && bundle_root.relationships["lunco:component:actuatorFrames"].len() == 1,
-                "component bundle root exposes units, dimensions, mass, mount, deployment, and frame relationships"));
+                    && bundle_root.attrs["inputs:deployment"] == 0.0
+                    && bundle_root.relationships["lunco:mount:frame"][0] == BUNDLE + "/Mount",
+                "component bundle uses standard mass, mount, transform, and input contracts"));
             this.checks.push(t_true(query_ok(visual)
                     && visual.attrs["size"] == 1.0
                     && visual.attrs["physics:collisionEnabled"] == true
                     && visual.relationships["material:binding"][0] == BUNDLE + "/Looks/Panel",
                 "component bundle geometry preserves visual, collision, and material-binding roles"));
             this.checks.push(t_true(query_ok(mount)
-                    && mount.attrs["lunco:component:frameRole"] == "attachment"
                     && query_ok(actuator)
-                    && actuator.attrs["lunco:component:frameRole"] == "actuator"
-                    && actuator.attrs["lunco:component:actuatorName"] == "deployment"
-                    && actuator.attrs["lunco:component:actuatorLimits"] != (),
-                "component bundle exposes explicit attachment and actuator endpoint frames"));
+                    && actuator.type_name == "Xform"
+                    && actuator.attrs["xformOpOrder"].len() > 0,
+                "component bundle exposes explicit mount and actuator frame paths without custom metadata"));
             this.checks.push(t_true(query_ok(context)
                     && context.kind == "authoring_context"
                     && context.path == BUNDLE
@@ -300,9 +309,235 @@ fn on_tick(me) {
                     && !context.actions.contains("plan_component_attachment")
                     && !context.actions.contains("plan_existing_mount_realignment"),
                 "authoring context exposes exact identity, generation, and available actions"));
+            this.checks.push(t_true(query_ok(component_context)
+                    && component_context.kind == "component_update_context"
+                    && component_context.doc_id == this.doc
+                    && component_context.path == BUNDLE
+                    && component_context.generation == before.generation
+                    && component_context.operation.planner == "component_editor::update_plan"
+                    && component_context.operation.implementation
+                        == "assembly_builder::component_bundle_update_plan"
+                    && component_context.operation.topology_preserved
+                    && component_context.properties.ok,
+                "component editor exposes one exact, recipe-driven update workflow"));
+            this.checks.push(t_true(query_ok(frame_catalog)
+                    && frame_catalog.kind == "functional_frame_catalog"
+                    && frame_catalog.edit_target == "@root@"
+                    && frame_catalog.root_path == BUNDLE
+                    && frame_catalog.generation == before.generation
+                    && frame_catalog.frame_paths == [BUNDLE + "/Mount"]
+                    && frame_catalog.socket_paths.len() == 0
+                    && frame_catalog.frames.len() == 1
+                    && frame_catalog.frames[0].role == "attachment"
+                    && frame_catalog.frames[0].is_mount_frame
+                    && !frame_catalog.frames[0].is_actuator_frame,
+                "functional frame catalog reads the registered mount schema without custom frame metadata"));
+            this.checks.push(t_true(!invalid_frame_catalog.ok,
+                "functional frame catalog rejects an unavailable exact root"));
             this.checks.push(t_true(!invalid_dispatch.ok && !invalid_component_plan.ok,
                 "unified placement/attachment planner rejects unsupported modes and missing sockets"));
             this.bundle_checked = true;
+        }
+        if this.bundle_checked && !this.bundle_update_started {
+            let updated = #{
+                units: "m",
+                dimensions: [1.6, 0.12, 0.8],
+                geometry: [
+                    #{
+                        name: "Panel",
+                        kind: "Cube",
+                        size: 1.0,
+                        scale: [1.6, 0.06, 0.8],
+                        render: true,
+                        collision: true,
+                        material: BUNDLE + "/Looks/Panel",
+                    },
+                    #{
+                        name: "ActuatorBody",
+                        kind: "Cylinder",
+                        radius: 0.1,
+                        height: 0.35,
+                        axis: "Y",
+                        translation: [0.0, 0.22, 0.0],
+                        render: true,
+                        collision: false,
+                    },
+                ],
+                mass: #{
+                    value: 2.2,
+                    center_of_mass: [0.0, 0.01, 0.0],
+                    diagonal_inertia: [0.45, 0.4, 0.45],
+                },
+                frames: [
+                    #{
+                        name: "Mount",
+                        role: "attachment",
+                        mount_kind: "panel",
+                        translation: [0.1, 0.0, 0.0],
+                    },
+                    #{
+                        name: "DeployEnd",
+                        role: "actuator",
+                        translation: [0.0, 0.22, 0.0],
+                    },
+                ],
+                actuators: [#{
+                    name: "deployment",
+                    direction: "input",
+                    unit: "rad",
+                    frame: "DeployEnd",
+                    default_value: 1.0,
+                    limits: [0.0, 1.57],
+                }],
+                deployment: #{ state: "deployed", units: "rad", limits: [0.0, 1.57] },
+                spawnable: false,
+            };
+            this.updated_bundle = updated;
+            let bindings = [#{
+                path: BUNDLE,
+                name: "inputs:surface_area",
+                type_name: "double",
+                value: 1.6,
+                expected: 1.6,
+            }];
+            let update = component_editor::update_plan(
+                this.doc, "@root@", BUNDLE, updated, bindings,
+            );
+            let invalid_update = updated;
+            invalid_update.geometry[0].kind = "Cylinder";
+            let invalid = component_editor::update_plan(
+                this.doc, "@root@", BUNDLE, invalid_update, bindings,
+            );
+            invalid_update.geometry[0].kind = "Cube";
+            if !query_ok(update) || update.kind != "component_update_plan"
+                || update.planner != "assembly_builder::component_bundle_update_plan"
+                || update.no_op || update.ops.len() < 10 || query_ok(invalid) {
+                fail(this, "generic component regeneration did not preserve topology and produce owned updates");
+                return;
+            }
+            let proposal = assembly_edit::propose(
+                this.doc, #{ Assembly: () }, "Regenerate generic panel component",
+                update.ops, before.generation,
+            );
+            if !query_ok(proposal) {
+                fail(this, "generic component regeneration proposal was rejected: " + proposal.error);
+                return;
+            }
+            let review = assembly_edit::review_session(this.doc);
+            if !query_ok(review) || review.proposals.len() != 1
+                || review.proposals[0].diagnostics.len() != 0 {
+                fail(this, "generic component regeneration proposal did not validate cleanly");
+                return;
+            }
+            let committed = assembly_edit::commit_proposal(review.proposals[0].id);
+            if !query_ok(committed) {
+                fail(this, "generic component regeneration could not be committed: " + committed.error);
+                return;
+            }
+            this.bundle_update_wait_generation = before.generation;
+            this.bundle_update_started = true;
+            return;
+        }
+        if this.bundle_update_started && !this.bundle_update_checked {
+            if before.generation <= this.bundle_update_wait_generation {
+                if this.elapsed > 10.0 { fail(this, "generic component regeneration did not reach its committed generation"); }
+                return;
+            }
+            let bindings = [#{
+                path: BUNDLE,
+                name: "inputs:surface_area",
+                type_name: "double",
+                value: 1.6,
+                expected: 1.6,
+            }];
+            let root = query("QueryUsdPrim", #{
+                doc_id: this.doc,
+                path: BUNDLE,
+                attrs: ["physics:mass", "physics:centerOfMass",
+                    "physics:diagonalInertia", "inputs:deployment", "inputs:surface_area"],
+            });
+            let panel = query("QueryUsdPrim", #{
+                doc_id: this.doc,
+                path: BUNDLE + "/Panel",
+                attrs: ["xformOp:scale", "physics:collisionEnabled"],
+                rels: ["material:binding"],
+            });
+            let mount = query("QueryUsdPrim", #{
+                doc_id: this.doc,
+                path: BUNDLE + "/Mount",
+                attrs: ["xformOp:translate"],
+            });
+            if !query_ok(root)
+                || !close_scalar(root.attrs["physics:mass"], 2.2)
+                || !close_vector(root.attrs["physics:centerOfMass"], [0.0, 0.01, 0.0])
+                || !close_vector(root.attrs["physics:diagonalInertia"], [0.45, 0.4, 0.45])
+                || !close_scalar(root.attrs["inputs:deployment"], 1.0)
+                || root.attrs["inputs:surface_area"] != 1.6
+                || !query_ok(panel) || !close_vector(panel.attrs["xformOp:scale"], [1.6, 0.06, 0.8])
+                || !query_ok(mount) || !close_vector(mount.attrs["xformOp:translate"], [0.1, 0.0, 0.0]) {
+                if this.elapsed > 10.0 {
+                    fail(this, "generic component regeneration did not reproject its owned values");
+                }
+                return;
+            }
+            let same = component_editor::update_plan(
+                this.doc, "@root@", BUNDLE, this.updated_bundle, bindings,
+            );
+            let standard_manifest = #{
+                path: BUNDLE,
+                expected_type: "Xform",
+                mass: #{
+                    value: 2.2,
+                    center_of_mass: [0.0, 0.01, 0.0],
+                    diagonal_inertia: [0.45, 0.4, 0.45],
+                },
+                parts: [
+                    #{
+                        path: BUNDLE + "/Panel",
+                        type_name: "Cube",
+                        size: 1.0,
+                        collision_enabled: true,
+                        material: BUNDLE + "/Looks/Panel",
+                    },
+                    #{
+                        path: BUNDLE + "/ActuatorBody",
+                        type_name: "Cylinder",
+                        radius: 0.1,
+                        height: 0.35,
+                    },
+                ],
+            };
+            let invalid_standard = #{
+                path: BUNDLE,
+                parts: [#{ path: BUNDLE + "/Panel", type_name: "Cylinder" }],
+            };
+            let compliance = assembly_audit::standard_component_report(
+                this.doc, standard_manifest,
+            );
+            let invalid_compliance = assembly_audit::standard_component_report(
+                this.doc, invalid_standard,
+            );
+            this.checks.push(t_true(query_ok(same) && same.no_op && same.ops.len() == 0,
+                "unchanged component regeneration is a true no-op"));
+            this.checks.push(t_true(query_ok(compliance) && compliance.ok
+                    && !query_ok(invalid_compliance),
+                "standard USD compliance report accepts direct edits and rejects type drift"));
+            this.checks.push(t_true(query_ok(root)
+                    && close_scalar(root.attrs["physics:mass"], 2.2)
+                    && close_vector(root.attrs["physics:centerOfMass"], [0.0, 0.01, 0.0])
+                    && close_vector(root.attrs["physics:diagonalInertia"], [0.45, 0.4, 0.45])
+                    && close_scalar(root.attrs["inputs:deployment"], 1.0)
+                    && root.attrs["inputs:surface_area"] == 1.6,
+                "regeneration updates standard mass properties and explicit inputs"));
+            this.checks.push(t_true(query_ok(panel)
+                    && close_vector(panel.attrs["xformOp:scale"], [1.6, 0.06, 0.8])
+                    && panel.attrs["physics:collisionEnabled"] == true
+                    && panel.relationships["material:binding"][0] == BUNDLE + "/Looks/Panel",
+                "regeneration updates owned shape geometry while preserving collision and material"));
+            this.checks.push(t_true(query_ok(mount)
+                    && close_vector(mount.attrs["xformOp:translate"], [0.1, 0.0, 0.0]),
+                "regeneration updates the named frame placement"));
+            this.bundle_update_checked = true;
         }
         // Applying the reviewed reference reprojects the document and can
         // reload this authored scenario. Preserve the one real commit by

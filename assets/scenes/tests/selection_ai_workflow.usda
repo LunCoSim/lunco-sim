@@ -7,10 +7,12 @@
 def Xform "SelectionAiWorkflow" (kind = "assembly")
 {
     def DistantLight "Light" { float intensity = 1 }
-    def Cube "Part" {
-        double size = 0.5
+    def Xform "Part" (kind = "component") {
         double3 xformOp:translate = (0, 0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "Shape" {
+            double size = 0.5
+        }
     }
     def Cube "Other" {
         double size = 0.5

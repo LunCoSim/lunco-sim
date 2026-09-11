@@ -20,6 +20,38 @@ author its standard geometry, collision/material bindings, mass, dimensions,
 frames, and actuator endpoints through one reviewed Rhai plan. Articulation
 and socket attachment remain explicit assembly contracts.
 
+The generic builder uses existing USD owners wherever possible: `UsdGeom` for
+shape and transforms, `UsdPhysics` for rigid-body mass/collision facts,
+`UsdShade` for material bindings, `kind` for assembly identity, and
+`inputs:`/`outputs:` for authored parameters and ports. Units, actuator limits,
+and deployment state are caller-side or owned by Modelica/joint contracts; do
+not add unregistered `lunco:` properties to duplicate them. Validate a
+hand-authored or generated component with
+`assembly_audit::standard_component_report(doc, manifest)` before committing
+it.
+
+For repeated instances, use
+`assembly_builder::referenced_instance_pattern_plan` with explicit ordered
+placements; use `referenced_instance_mirror_plan` for a local-axis reflected
+translation. Both reuse the generic reference planner and preserve standard
+USD identities and transforms.
+
+For a human or AI editing an existing component, use
+`assembly_builder::editable_property_catalog` to expose its standard USD
+properties, exact types, units, composed values, edit scope, and source path.
+Use `editable_property_patch_plan` for a generation-checked dry change set,
+then review and commit its `.ops` through `assembly_edit`. Structural or
+derived fields remain read-only, and unregistered `lunco:` properties are not
+invented as a second component schema.
+
+When several owned facts must change together, use the generic
+`component_editor` Rhai library. Its `update_context`/`selected_update_context`
+functions combine the exact authoring checkpoint with the property catalog;
+`update_plan` delegates to the existing topology-preserving bundle update
+planner. Supply the explicit bundle recipe from the owning Twin/model package,
+review the returned `.ops`, and commit one proposal. The library does not
+infer component recipes or add a core component registry.
+
 Before adding a component, search by domain API, connector, and Modelica class:
 
 ```sh

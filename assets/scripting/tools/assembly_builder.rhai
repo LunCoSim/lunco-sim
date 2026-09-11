@@ -147,6 +147,417 @@ fn parameter_plan(edit_target, path, parameters) {
     #{ ok: true, kind: "parameter_edit", path: path, parameters: names, ops: ops }
 }
 
+// Return the small, schema-owned field vocabulary exposed by the editor.
+// Names outside this vocabulary are rejected instead of being guessed from a
+// prim or written as an unregistered LunCo property. `inputs:` and `outputs:`
+// are standard USD properties whose concrete type is supplied by inspection.
+fn standard_editable_field_definition(name) {
+    if name == () || type_of(name) != "string" || name == "" { return (); }
+    if name == "xformOp:translate" {
+        return #{ owner: "UsdGeom.Xformable", kind: "transform", type_name: "double3", units: "m", edit_kind: "translate", writable: true };
+    }
+    if name == "xformOp:rotateXYZ" {
+        return #{ owner: "UsdGeom.Xformable", kind: "transform", type_name: "double3", units: "deg", edit_kind: "rotate", writable: true };
+    }
+    if name == "xformOp:scale" {
+        return #{ owner: "UsdGeom.Xformable", kind: "transform", type_name: "double3", units: "unitless", edit_kind: "scale", writable: true };
+    }
+    if name == "xformOpOrder" {
+        return #{ owner: "UsdGeom.Xformable", kind: "structure", type_name: "token[]", units: "()", edit_kind: "readonly", writable: false };
+    }
+    if name == "size" {
+        return #{ owner: "UsdGeom.Gprim", kind: "geometry", type_name: "double", units: "m", edit_kind: "attribute", writable: true };
+    }
+    if name == "radius" || name == "height" {
+        return #{ owner: "UsdGeom.Gprim", kind: "geometry", type_name: "double", units: "m", edit_kind: "attribute", writable: true };
+    }
+    if name == "axis" || name == "visibility" || name == "purpose" {
+        return #{ owner: "UsdGeom.Gprim", kind: "geometry", type_name: "token", units: "()", edit_kind: "attribute", writable: true };
+    }
+    if name == "extent" {
+        return #{ owner: "UsdGeom.Boundable", kind: "derived_geometry", type_name: "float3[]", units: "m", edit_kind: "readonly", writable: false };
+    }
+    if name == "physics:mass" {
+        return #{ owner: "UsdPhysics.MassAPI", kind: "physics", type_name: "float", units: "kg", edit_kind: "attribute", writable: true };
+    }
+    if name == "physics:centerOfMass" {
+        return #{ owner: "UsdPhysics.MassAPI", kind: "physics", type_name: "point3f", units: "m", edit_kind: "attribute", writable: true };
+    }
+    if name == "physics:diagonalInertia" {
+        return #{ owner: "UsdPhysics.MassAPI", kind: "physics", type_name: "float3", units: "kg*m^2", edit_kind: "attribute", writable: true };
+    }
+    if name == "physics:principalAxes" {
+        return #{ owner: "UsdPhysics.MassAPI", kind: "physics", type_name: "quatf", units: "unitless", edit_kind: "attribute", writable: true };
+    }
+    if name == "physics:collisionEnabled" || name == "physics:kinematicEnabled"
+        || name == "physics:startsAsleep" {
+        return #{ owner: "UsdPhysics", kind: "physics", type_name: "bool", units: "()", edit_kind: "attribute", writable: true };
+    }
+    if name == "material:binding" {
+        return #{ owner: "UsdShade", kind: "relationship", type_name: "relationship", units: "()", edit_kind: "relationship", writable: true };
+    }
+    if name == "physics:simulationOwner" || name == "physics:body0"
+        || name == "physics:body1" {
+        return #{ owner: "UsdPhysics", kind: "relationship", type_name: "relationship", units: "()", edit_kind: "relationship", writable: true };
+    }
+    if name == "kind" {
+        return #{ owner: "USD metadata", kind: "metadata", type_name: "token", units: "()", edit_kind: "kind", writable: true };
+    }
+    if name.starts_with("inputs:") && name.len() > "inputs:".len() {
+        return #{ owner: "USD attribute", kind: "parameter", type_name: (), units: "()", edit_kind: "attribute", writable: true };
+    }
+    if name.starts_with("outputs:") && name.len() > "outputs:".len() {
+        return #{ owner: "USD attribute", kind: "port", type_name: (), units: "()", edit_kind: "attribute", writable: true };
+    }
+    if name.starts_with("variant:") && name.len() > "variant:".len() {
+        return #{ owner: "USD metadata", kind: "variant", type_name: "token", units: "()", edit_kind: "variant", writable: true };
+    }
+    ()
+}
+
+fn editable_attribute_record(prim, name) {
+    if prim == () || prim.attributes == () { return (); }
+    for attribute in prim.attributes {
+        if attribute.name == name { return attribute; }
+    }
+    ()
+}
+
+fn editable_source_record(target) {
+    if target == () || target.prim_stack == () || target.prim_stack.len() == 0 {
+        return ();
+    }
+    target.prim_stack[0]
+}
+
+fn editable_value_matches(actual, expected) {
+    if actual == () || expected == () { return actual == expected; }
+    if type_of(expected) == "array" {
+        if type_of(actual) != "array" || actual.len() != expected.len() { return false; }
+        for i in 0..expected.len() {
+            if !editable_value_matches(actual[i], expected[i]) { return false; }
+        }
+        return true;
+    }
+    if type_of(expected) == "string" || type_of(expected) == "bool" {
+        return actual == expected;
+    }
+    if type_of(actual) == "string" || type_of(actual) == "bool" {
+        return false;
+    }
+    (actual - expected).abs() <= 0.000001
+}
+
+fn editable_usd_literal(type_name, value) {
+    if type_name == () || type_name == "" || value == () { return (); }
+    if type_of(value) == "array" {
+        if value.len() == 3 { return assembly_edit::tuple3_literal(value); }
+        if value.len() == 4 { return assembly_edit::quat4_literal(value); }
+        return ();
+    }
+    if type_name == "token" || type_name == "string" || type_name == "asset" {
+        if type_of(value) != "string" || value.contains("\"") { return (); }
+        return "\"" + value + "\"";
+    }
+    if type_name == "bool" {
+        if type_of(value) != "bool" { return (); }
+        return value.to_string();
+    }
+    if type_of(value) == "string" || type_of(value) == "bool" {
+        return ();
+    }
+    value.to_string()
+}
+
+fn editable_catalog_field(properties, name) {
+    for property in properties {
+        if property.name == name { return property; }
+    }
+    ()
+}
+
+fn editable_property_catalog(doc, path, edit_target, requested) {
+    if doc == () || path == () || edit_target == () {
+        return plan_error("editable_property_catalog requires document, exact prim path, and edit target");
+    }
+    if !path.starts_with("/") || path.ends_with("/") && path != "/" {
+        return plan_error("editable_property_catalog path must be an absolute USD prim path");
+    }
+    let inspection = assembly_edit::inspect(doc, path);
+    if !query_ok(inspection) || inspection.prim == () || inspection.prim.exists != true {
+        return plan_error(path + ": prim is not available for property inspection");
+    }
+    let target = assembly_edit::resolve_target(doc, path, edit_target);
+    if !query_ok(target) || target.status != "resolved" {
+        return plan_error(path + ": edit target could not resolve the composed prim");
+    }
+
+    let names = [];
+    let automatic = requested == ();
+    if automatic {
+        if inspection.prim.attributes != () {
+            for attribute in inspection.prim.attributes {
+                if standard_editable_field_definition(attribute.name) != () {
+                    names.push(attribute.name);
+                }
+            }
+        }
+        let kind = inspection.prim.metadata.kind.composed;
+        if kind != () && kind.present == true { names.push("kind"); }
+        // Variant selections are standard USD metadata and are exposed by the
+        // existing document inspector, not by a parallel LunCo field.
+        let variants = inspection.prim.metadata.variantSelections.composed;
+        if variants != () && variants.value != () {
+            for variant_set in variants.value.keys() {
+                names.push("variant:" + variant_set);
+            }
+        }
+        // Keep relationship fields visible even when their target list is
+        // currently empty; the editor can then author an explicit binding.
+        names.push("material:binding");
+        names.push("physics:simulationOwner");
+        names.push("physics:body0");
+        names.push("physics:body1");
+    } else {
+        if type_of(requested) != "array" || requested.len() == 0 {
+            return plan_error("editable_property_catalog requested fields must be a non-empty array");
+        }
+        for name in requested {
+            if type_of(name) != "string" || name == "" {
+                return plan_error(path + ": requested field names must be non-empty strings");
+            }
+            if standard_editable_field_definition(name) == () {
+                return plan_error(path + ": unsupported or unregistered USD field `" + name + "`");
+            }
+            if names.contains(name) {
+                return plan_error(path + ": requested field names must be unique");
+            }
+            names.push(name);
+        }
+    }
+
+    let attrs = [];
+    let rels = [];
+    for name in names {
+        let definition = standard_editable_field_definition(name);
+        if definition.edit_kind == "relationship" {
+            if !rels.contains(name) { rels.push(name); }
+        } else if definition.edit_kind != "kind" && definition.edit_kind != "variant"
+            && !attrs.contains(name) {
+            attrs.push(name);
+        }
+    }
+    let prim = query("QueryUsdPrim", #{
+        doc_id: doc,
+        path: path,
+        attrs: attrs,
+        rels: rels,
+        children: false,
+    });
+    if !query_ok(prim) { return plan_error(path + ": composed property values are unavailable"); }
+
+    let source = editable_source_record(target);
+    let editable_scope = target.edit_scope == "authored_layer"
+        || target.edit_scope == "local_override";
+    let properties = [];
+    for name in names {
+        let definition = standard_editable_field_definition(name);
+        let attribute = editable_attribute_record(inspection.prim, name);
+        let present = attribute != ();
+        let value = ();
+        let literal = ();
+        let type_name = definition.type_name;
+        if definition.edit_kind == "kind" {
+            let metadata = inspection.prim.metadata.kind.composed;
+            if metadata != () && metadata.present == true {
+                present = true;
+                value = metadata.value;
+            }
+        } else if definition.edit_kind == "variant" {
+            let variant_set = name.sub_string("variant:".len());
+            let metadata = inspection.prim.metadata.variantSelections.composed;
+            if metadata != () && metadata.value != () && metadata.value[variant_set] != () {
+                present = true;
+                value = metadata.value[variant_set];
+            }
+        } else if definition.edit_kind == "relationship" {
+            value = prim.relationships[name];
+            present = value != () && value.len() > 0;
+        } else {
+            if attribute != () {
+                type_name = attribute.type;
+                literal = attribute.value;
+            }
+            if prim.attrs != () { value = prim.attrs[name]; }
+        }
+        let read_only_reason = if !editable_scope {
+            "edit target is composed_read_only"
+        } else if !definition.writable {
+            "field is structural or derived and is read-only"
+        } else {
+            ""
+        };
+        properties.push(#{
+            name: name,
+            owner: definition.owner,
+            kind: definition.kind,
+            edit_kind: definition.edit_kind,
+            type_name: type_name,
+            units: definition.units,
+            value: value,
+            literal: literal,
+            present: present,
+            authored_here: target.authored_here,
+            authored_in_document: target.authored_in_document,
+            status: if target.authored_here { "authored_here" } else if editable_scope { "editable_override" } else { "read_only" },
+            editable: editable_scope && definition.writable,
+            edit_scope: target.edit_scope,
+            source: source,
+            source_path: if source == () { () } else { source.path },
+            read_only_reason: read_only_reason,
+        });
+    }
+    #{
+        ok: true,
+        kind: "editable_property_catalog",
+        doc_id: doc,
+        path: path,
+        edit_target: edit_target,
+        generation: assembly_edit::describe(doc).generation,
+        target: target,
+        source: source,
+        properties: properties,
+        no_properties: properties.len() == 0,
+    }
+}
+
+fn editable_relationship_targets(value, path) {
+    if type_of(value) != "array" { return plan_error(path + " must be an array of USD prim paths"); }
+    let targets = [];
+    for target in value {
+        if type_of(target) != "string" || !target.starts_with("/")
+            || target.ends_with("/") || targets.contains(target) {
+            return plan_error(path + " contains an invalid or duplicate USD prim path");
+        }
+        targets.push(target);
+    }
+    #{ ok: true, value: targets }
+}
+
+// Build a typed, generation-checked dry patch. The caller reviews and submits
+// only `ops` through assembly_edit; this function never mutates USD.
+fn editable_property_patch_plan(doc, edit_target, path, edits, parent_gen) {
+    if doc == () || edit_target == () || path == () || edits == () {
+        return plan_error("editable_property_patch_plan requires document, edit target, exact path, and edits");
+    }
+    if !path.starts_with("/") || path.ends_with("/") && path != "/" {
+        return plan_error("editable_property_patch_plan path must be an absolute USD prim path");
+    }
+    if type_of(edits) != "array" { return plan_error("editable_property_patch_plan edits must be an array"); }
+    let current = assembly_edit::describe(doc);
+    if !query_ok(current) || current.generation == () {
+        return plan_error("editable_property_patch_plan could not read document generation");
+    }
+    if parent_gen != () && current.generation != parent_gen {
+        return plan_error("editable_property_patch_plan rejected stale document generation");
+    }
+    if edits.len() == 0 {
+        return #{ ok: true, kind: "editable_property_patch", path: path,
+            edit_target: edit_target, parent_generation: current.generation,
+            changed: [], no_op: true, ops: [], catalog: () };
+    }
+
+    let names = [];
+    for edit in edits {
+        if edit == () || edit.name == () || type_of(edit.name) != "string"
+            || edit.name == "" || edit.value == () {
+            return plan_error(path + ": each edit requires a name and value");
+        }
+        if names.contains(edit.name) { return plan_error(path + ": edit names must be unique"); }
+        names.push(edit.name);
+    }
+    let catalog = editable_property_catalog(doc, path, edit_target, names);
+    if !catalog.ok { return catalog; }
+    let ops = [];
+    let changed = [];
+    for edit in edits {
+        let field = editable_catalog_field(catalog.properties, edit.name);
+        if field == () { return plan_error(path + ": field is missing from the catalog"); }
+        if !field.editable { return plan_error(path + ": field `" + edit.name + "` is not editable"); }
+        let value = edit.value;
+        if field.edit_kind == "translate" || field.edit_kind == "rotate"
+            || field.edit_kind == "scale" {
+            let valid = vector3(value, edit.name);
+            if !valid.ok { return valid; }
+            if editable_value_matches(field.value, value) { continue; }
+            if field.edit_kind == "translate" {
+                ops.push(#{ SetTranslate: #{
+                    edit_target: edit_target, path: path, value: value,
+                }});
+            } else if field.edit_kind == "rotate" {
+                ops.push(#{ SetRotate: #{
+                    edit_target: edit_target, path: path, value: value,
+                }});
+            } else {
+                ops.push(#{ SetScale: #{
+                    edit_target: edit_target, path: path, value: value,
+                }});
+            }
+        } else if field.edit_kind == "kind" {
+            if type_of(value) != "string" || value == "" {
+                return plan_error(path + ": kind must be a non-empty string");
+            }
+            if editable_value_matches(field.value, value) { continue; }
+            ops.push(#{ SetPrimKind: #{ edit_target: edit_target, path: path, kind: value }});
+        } else if field.edit_kind == "variant" {
+            if type_of(value) != "string" || value == "" {
+                return plan_error(path + ": variant selection must be a non-empty string");
+            }
+            if editable_value_matches(field.value, value) { continue; }
+            ops.push(#{ SetVariantSelection: #{
+                edit_target: edit_target,
+                path: path,
+                variant_set: edit.name.sub_string("variant:".len()),
+                variant: value,
+            }});
+        } else if field.edit_kind == "relationship" {
+            let valid = editable_relationship_targets(value, edit.name);
+            if !valid.ok { return valid; }
+            if editable_value_matches(field.value, valid.value) { continue; }
+            ops.push(#{ SetRelationship: #{
+                edit_target: edit_target, path: path, name: edit.name, targets: valid.value,
+            }});
+        } else {
+            let type_name = if edit.type_name == () { field.type_name } else { edit.type_name };
+            if type_name == () || type_name == "" {
+                return plan_error(path + ": attribute `" + edit.name + "` needs an explicit USD type");
+            }
+            if field.type_name != () && field.type_name != "" && type_name != field.type_name {
+                return plan_error(path + ": attribute `" + edit.name + "` has the wrong USD type");
+            }
+            let literal = editable_usd_literal(type_name, value);
+            if literal == () { return plan_error(path + ": value for `" + edit.name + "` does not match its USD type"); }
+            if editable_value_matches(field.value, value) { continue; }
+            ops.push(#{ SetAttribute: #{
+                edit_target: edit_target, path: path, name: edit.name,
+                type_name: type_name, value: literal,
+            }});
+        }
+        changed.push(edit.name);
+    }
+    #{
+        ok: true,
+        kind: "editable_property_patch",
+        path: path,
+        edit_target: edit_target,
+        parent_generation: current.generation,
+        changed: changed,
+        no_op: ops.len() == 0,
+        ops: ops,
+        catalog: catalog,
+    }
+}
+
 /// Build one referenced component instance without writing USDA source.
 ///
 /// The reference is the component's identity and composition boundary; local
@@ -279,6 +690,114 @@ fn referenced_instance_targeted_plan(doc, edit_target, parent, name, type_name, 
         asset: asset,
         ops: ops,
     }
+}
+
+/// Build an ordered set of referenced instances from one explicit template.
+/// Each placement must provide its own USD identifier and local pose; the
+/// input order is preserved in both `paths` and `ops`. The helper composes the
+/// existing single-instance planner, so references, schemas, attributes, and
+/// transforms keep one validation and write path.
+fn referenced_instance_pattern_plan(doc, edit_target, parent, template, placements) {
+    if doc == () || edit_target == () || parent == () || template == ()
+        || placements == () {
+        return plan_error("referenced_instance_pattern_plan requires document, edit target, parent, template, and placements");
+    }
+    if placements.len() == 0 {
+        return plan_error("referenced_instance_pattern_plan requires at least one placement");
+    }
+    if template.type_name == () || template.asset == () {
+        return plan_error("referenced_instance_pattern_plan template requires type_name and asset");
+    }
+
+    let names = [];
+    let paths = [];
+    let ops = [];
+    for placement in placements {
+        if placement == () || placement.name == () || placement.name == ""
+            || placement.name.contains("/") {
+            return plan_error("referenced_instance_pattern_plan placements require one USD identifier");
+        }
+        if names.contains(placement.name) {
+            return plan_error(parent + "/" + placement.name + ": pattern placement identity is duplicated");
+        }
+        if placement.translation == () && placement.rotation == ()
+            && placement.scale == () {
+            return plan_error(parent + "/" + placement.name + ": pattern placement requires an explicit local pose");
+        }
+        names.push(placement.name);
+        let reference_prim_path = if template.reference_prim_path == () {
+            ()
+        } else {
+            template.reference_prim_path
+        };
+        let instance = referenced_instance_targeted_plan(
+            doc, edit_target, parent, placement.name, template.type_name,
+            template.asset, reference_prim_path,
+            placement.translation, placement.rotation, placement.scale,
+            template.api_schemas, template.attributes,
+        );
+        if !instance.ok { return instance; }
+        paths.push(instance.path);
+        for op in instance.ops { ops.push(op); }
+    }
+    #{
+        ok: true,
+        kind: "referenced_instance_pattern",
+        parent: parent,
+        paths: paths,
+        placement_names: names,
+        ops: ops,
+    }
+}
+
+/// Build one mirrored referenced instance across a parent-local cardinal
+/// coordinate plane. Reflection of a non-zero Euler rotation is intentionally
+/// rejected: callers must provide an orientation that remains meaningful
+/// under the explicit translation mirror rather than receiving a guessed
+/// reflected rotation. The operation itself is delegated to the pattern and
+/// single-instance planners above.
+fn referenced_instance_mirror_plan(doc, edit_target, parent, template, name,
+    mirror_axis, source_translation, source_rotation, scale) {
+    if name == () || mirror_axis == () || source_translation == () {
+        return plan_error("referenced_instance_mirror_plan requires name, mirror axis, and source translation");
+    }
+    if !cardinal_axis(mirror_axis) {
+        return plan_error("referenced_instance_mirror_plan mirror axis must be X, Y, or Z");
+    }
+    let valid_translation = vector3(source_translation, "source_translation");
+    if !valid_translation.ok { return valid_translation; }
+    if source_rotation != () {
+        let valid_rotation = vector3(source_rotation, "source_rotation");
+        if !valid_rotation.ok { return valid_rotation; }
+        for value in source_rotation {
+            if value.abs() > 0.0001 {
+                return plan_error("referenced_instance_mirror_plan supports only zero source rotation");
+            }
+        }
+    }
+
+    let mirrored_translation = [
+        source_translation[0],
+        source_translation[1],
+        source_translation[2],
+    ];
+    let index = axis_index(mirror_axis);
+    mirrored_translation[index] = -mirrored_translation[index];
+    let placement = #{
+        name: name,
+        translation: mirrored_translation,
+        rotation: source_rotation,
+        scale: scale,
+    };
+    let pattern = referenced_instance_pattern_plan(
+        doc, edit_target, parent, template, [placement],
+    );
+    if !pattern.ok { return pattern; }
+    pattern.kind = "referenced_instance_mirror";
+    pattern.mirror_axis = mirror_axis;
+    pattern.source_translation = source_translation;
+    pattern.mirrored_translation = mirrored_translation;
+    pattern
 }
 
 /// Build a second-phase variant-selection plan for an already materialized
@@ -522,6 +1041,27 @@ fn bundle_tuple2_literal(value) {
 
 fn bundle_token_literal(value) {
     "\"" + value + "\""
+}
+
+fn bundle_port_name(direction, name) {
+    if direction == "input" { return "inputs:" + name; }
+    if direction == "output" { return "outputs:" + name; }
+    ()
+}
+
+fn bundle_value_matches(actual, expected) {
+    if actual == () || expected == () { return actual == expected; }
+    if type_of(expected) == "array" {
+        if type_of(actual) != "array" || actual.len() != expected.len() { return false; }
+        for i in 0..expected.len() {
+            if (actual[i] - expected[i]).abs() > 0.000001 { return false; }
+        }
+        return true;
+    }
+    if type_of(expected) != "string" && type_of(expected) != "bool" {
+        return (actual - expected).abs() <= 0.000001;
+    }
+    actual == expected
 }
 
 fn bundle_optional_transform(spec, path) {
@@ -829,11 +1369,12 @@ fn bundle_geometry_plan(edit_target, parent, shape) {
 }
 
 /// Build one generic parametric component bundle as a pure typed USD plan.
-/// The root owns standard component/mass facts; child geometry owns its
-/// visual and collision roles; named frames own mount/actuator endpoints; and
-/// deployment/dimensional data stays explicit on the component root. The
-/// caller submits the returned `.ops` through one reviewed `assembly_edit`
-/// proposal or batch. No vehicle identity is encoded here.
+/// USD owns prim identity, `kind`, transforms, typed geometry properties,
+/// physics mass, material binding, and `inputs:`/`outputs:` ports. The bundle's
+/// dimensions, actuator units/limits, and deployment state remain caller-side
+/// draft data until a standard geometry, joint, variant, or Modelica declaration
+/// owns them. The caller submits the returned `.ops` through one reviewed
+/// `assembly_edit` proposal or batch. No vehicle identity is encoded here.
 fn component_bundle_plan(edit_target, parent, name, bundle) {
     if edit_target == () || parent == () || name == () {
         return bundle_plan_error("component_bundle_plan requires edit target, parent path, name, and bundle");
@@ -859,14 +1400,6 @@ fn component_bundle_plan(edit_target, parent, name, bundle) {
     }}];
     ops.push(#{ SetPrimKind: #{ edit_target: edit_target, path: path, kind: "component" }});
     ops.push(#{ SetApiSchemas: #{ edit_target: edit_target, path: path, schemas: schemas }});
-    ops.push(#{ SetAttribute: #{
-        edit_target: edit_target, path: path, name: "lunco:component:units",
-        type_name: "token", value: bundle_token_literal(facts.units),
-    }});
-    ops.push(#{ SetAttribute: #{
-        edit_target: edit_target, path: path, name: "lunco:component:dimensions",
-        type_name: "double3", value: assembly_edit::tuple3_literal(facts.dimensions),
-    }});
     if facts.spawnable {
         ops.push(#{ SetAttribute: #{
             edit_target: edit_target, path: path, name: "lunco:spawnable",
@@ -897,22 +1430,7 @@ fn component_bundle_plan(edit_target, parent, name, bundle) {
             targets: [path + "/" + facts.mount.name],
         }});
     }
-    if facts.deployment != () {
-        ops.push(#{ SetAttribute: #{
-            edit_target: edit_target, path: path, name: "lunco:deployment:state",
-            type_name: "token", value: bundle_token_literal(facts.deployment.state),
-        }});
-        ops.push(#{ SetAttribute: #{
-            edit_target: edit_target, path: path, name: "lunco:deployment:units",
-            type_name: "token", value: bundle_token_literal(facts.deployment.units),
-        }});
-        ops.push(#{ SetAttribute: #{
-            edit_target: edit_target, path: path, name: "lunco:deployment:limits",
-            type_name: "double2", value: bundle_tuple2_literal(facts.deployment.limits),
-        }});
-    }
     let frame_paths = [];
-    let actuator_frame_paths = [];
     for frame in facts.frames {
         let planned = frame_plan(edit_target, path, frame.name,
             frame.translation, frame.rotation, frame.scale);
@@ -920,53 +1438,15 @@ fn component_bundle_plan(edit_target, parent, name, bundle) {
         for op in planned.ops { ops.push(op); }
         let frame_path = path + "/" + frame.name;
         frame_paths.push(frame_path);
-        ops.push(#{ SetAttribute: #{
-            edit_target: edit_target, path: frame_path, name: "lunco:component:frameRole",
-            type_name: "token", value: bundle_token_literal(frame.role),
-        }});
-        if frame.role == "actuator" { actuator_frame_paths.push(frame_path); }
-    }
-    if frame_paths.len() > 0 {
-        ops.push(#{ SetRelationship: #{
-            edit_target: edit_target, path: path, name: "lunco:component:frames",
-            targets: frame_paths,
-        }});
-    }
-    if actuator_frame_paths.len() > 0 {
-        ops.push(#{ SetRelationship: #{
-            edit_target: edit_target, path: path, name: "lunco:component:actuatorFrames",
-            targets: actuator_frame_paths,
-        }});
     }
     for actuator in facts.actuators {
-        let port_name = actuator.direction + ":" + actuator.name;
+        let port_name = bundle_port_name(actuator.direction, actuator.name);
+        if port_name == () {
+            return bundle_plan_error("actuator direction must map to a USD inputs:/outputs: port");
+        }
         ops.push(#{ SetAttribute: #{
             edit_target: edit_target, path: path, name: port_name,
             type_name: "float", value: actuator.default_value.to_string(),
-        }});
-        let frame_path = path + "/" + actuator.frame;
-        ops.push(#{ SetAttribute: #{
-            edit_target: edit_target, path: frame_path, name: "lunco:component:actuatorName",
-            type_name: "token", value: bundle_token_literal(actuator.name),
-        }});
-        ops.push(#{ SetAttribute: #{
-            edit_target: edit_target, path: frame_path, name: "lunco:component:actuatorDirection",
-            type_name: "token", value: bundle_token_literal(actuator.direction),
-        }});
-        ops.push(#{ SetAttribute: #{
-            edit_target: edit_target, path: frame_path, name: "lunco:component:actuatorUnit",
-            type_name: "token", value: bundle_token_literal(actuator.unit),
-        }});
-        if actuator.limits != () {
-            ops.push(#{ SetAttribute: #{
-                edit_target: edit_target, path: frame_path,
-                name: "lunco:component:actuatorLimits", type_name: "double2",
-                value: bundle_tuple2_literal(actuator.limits),
-            }});
-        }
-        ops.push(#{ SetRelationship: #{
-            edit_target: edit_target, path: frame_path, name: "lunco:component:port",
-            targets: [path + "." + port_name],
         }});
     }
     let visual_paths = [];
@@ -985,6 +1465,235 @@ fn component_bundle_plan(edit_target, parent, name, bundle) {
         contract: facts,
         visual_paths: visual_paths,
         collision_paths: collision_paths,
+        frame_paths: frame_paths,
+        actuator_paths: facts.actuators.map(|actuator| path + "/" + actuator.frame),
+        input_ports: facts.actuators.map(|actuator| bundle_port_name(actuator.direction, actuator.name)),
+        ops: ops,
+    }
+}
+
+fn bundle_transform_update_ops(edit_target, path, record, translation, rotation, scale) {
+    let ops = [];
+    let attrs = if record.attrs == () { #{} } else { record.attrs };
+    if translation != () && !bundle_value_matches(attrs["xformOp:translate"], translation) {
+        ops.push(#{ SetTranslate: #{
+            edit_target: edit_target, path: path, value: translation,
+        }});
+    }
+    if rotation != () && !bundle_value_matches(attrs["xformOp:rotateXYZ"], rotation) {
+        ops.push(#{ SetRotate: #{
+            edit_target: edit_target, path: path, value: rotation,
+        }});
+    }
+    if scale != () && !bundle_value_matches(attrs["xformOp:scale"], scale) {
+        ops.push(#{ SetScale: #{
+            edit_target: edit_target, path: path, value: scale,
+        }});
+    }
+    ops
+}
+
+/// Build a regeneration plan for one already-authored generic component.
+///
+/// The caller supplies the new component draft and optional explicit
+/// Modelica/USD bindings. Existing geometry and frame identities must still
+/// exist with the same primitive kinds; extra authored children and material
+/// bindings are preserved. The plan changes only standard USD geometry,
+/// transforms, physics mass properties, and explicit typed bindings. Bundle
+/// dimensions are caller-side draft data; deployment state and actuator limits
+/// belong to standard variants/joints or Modelica declarations. An unchanged
+/// draft returns an empty operation list so the caller can skip the journal.
+fn component_bundle_update_plan(doc, edit_target, path, bundle, bindings) {
+    if doc == () || edit_target == () || path == () || bundle == () {
+        return bundle_plan_error(
+            "component_bundle_update_plan requires document, edit target, exact component path, and bundle",
+        );
+    }
+    if !path.starts_with("/") || path.ends_with("/") {
+        return bundle_plan_error("component_bundle_update_plan path must be an absolute USD prim path");
+    }
+    let facts = component_bundle_facts(bundle);
+    if !facts.ok { return facts; }
+    let root = query("QueryUsdPrim", #{
+        doc_id: doc,
+        path: path,
+        attrs: [
+            "lunco:spawnable", "physics:mass", "physics:centerOfMass",
+            "physics:diagonalInertia", "lunco:mount:plug",
+        ],
+        rels: ["lunco:mount:frame"],
+        children: true,
+    });
+    if !query_ok(root) || root.type_name != "Xform" {
+        return bundle_plan_error(path + ": component root is unavailable or not an Xform");
+    }
+
+    let ops = [];
+    let root_attrs = root.attrs;
+    if facts.mass != () {
+        if !bundle_value_matches(root_attrs["physics:mass"], facts.mass.value) {
+            ops.push(#{ SetAttribute: #{
+                edit_target: edit_target, path: path, name: "physics:mass",
+                type_name: "float", value: facts.mass.value.to_string(),
+            }});
+        }
+        if !bundle_value_matches(root_attrs["physics:centerOfMass"], facts.mass.center_of_mass) {
+            ops.push(#{ SetAttribute: #{
+                edit_target: edit_target, path: path,
+                name: "physics:centerOfMass", type_name: "point3f",
+                value: assembly_edit::tuple3_literal(facts.mass.center_of_mass),
+            }});
+        }
+        if !bundle_value_matches(root_attrs["physics:diagonalInertia"], facts.mass.diagonal_inertia) {
+            ops.push(#{ SetAttribute: #{
+                edit_target: edit_target, path: path,
+                name: "physics:diagonalInertia", type_name: "float3",
+                value: assembly_edit::tuple3_literal(facts.mass.diagonal_inertia),
+            }});
+        }
+    }
+    for frame in facts.frames {
+        let frame_path = path + "/" + frame.name;
+        let record = query("QueryUsdPrim", #{
+            doc_id: doc,
+            path: frame_path,
+            attrs: ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"],
+            children: false,
+        });
+        if !query_ok(record) || record.type_name != "Xform" {
+            return bundle_plan_error(frame_path + ": regeneration cannot change frame topology or type");
+        }
+        let transform_ops = bundle_transform_update_ops(edit_target, frame_path, record,
+            frame.translation, frame.rotation, frame.scale);
+        for op in transform_ops { ops.push(op); }
+    }
+
+    for actuator in facts.actuators {
+        let frame_path = path + "/" + actuator.frame;
+        let frame = query("QueryUsdPrim", #{
+            doc_id: doc,
+            path: frame_path,
+            children: false,
+        });
+        if !query_ok(frame) || frame.type_name != "Xform" {
+            return bundle_plan_error(frame_path + ": regeneration cannot change actuator frame topology or type");
+        }
+        let port_name = bundle_port_name(actuator.direction, actuator.name);
+        if port_name == () {
+            return bundle_plan_error("actuator direction must map to a USD inputs:/outputs: port");
+        }
+        let port = query("QueryUsdPrim", #{
+            doc_id: doc, path: path, attrs: [port_name], children: false,
+        });
+        if !query_ok(port) {
+            return bundle_plan_error(path + ": actuator port is unavailable: " + port_name);
+        }
+        if !bundle_value_matches(port.attrs[port_name], actuator.default_value) {
+            ops.push(#{ SetAttribute: #{
+                edit_target: edit_target, path: path, name: port_name,
+                type_name: "float", value: actuator.default_value.to_string(),
+            }});
+        }
+    }
+
+    for shape in facts.geometry {
+        let shape_path = path + "/" + shape.name;
+        let record = query("QueryUsdPrim", #{
+            doc_id: doc,
+            path: shape_path,
+            attrs: ["size", "radius", "height", "axis",
+                "physics:collisionEnabled", "visibility", "xformOp:translate",
+                "xformOp:rotateXYZ", "xformOp:scale"],
+            rels: ["material:binding"],
+            children: false,
+        });
+        if !query_ok(record) || record.type_name != shape.kind {
+            return bundle_plan_error(shape_path + ": regeneration cannot change geometry topology or kind");
+        }
+        let collision_enabled = record.attrs["physics:collisionEnabled"];
+        if shape.collision && collision_enabled != true {
+            return bundle_plan_error(shape_path + ": collision role drifted; regeneration will not invent a collider");
+        }
+        if !shape.collision && collision_enabled == true {
+            return bundle_plan_error(shape_path + ": collision role drifted; regeneration will not remove a collider");
+        }
+        let visibility = record.attrs["visibility"];
+        if shape.render && visibility == "invisible" {
+            return bundle_plan_error(shape_path + ": visual role drifted; regeneration will not unhide authored geometry");
+        }
+        if !shape.render && visibility != "invisible" {
+            return bundle_plan_error(shape_path + ": visual role drifted; regeneration will not hide authored geometry");
+        }
+        if shape.material != () {
+            let targets = record.relationships["material:binding"];
+            if targets == () || targets.len() != 1 || targets[0] != shape.material {
+                return bundle_plan_error(shape_path + ": material binding drifted; regeneration preserves material ownership");
+            }
+        }
+        let transform_ops = bundle_transform_update_ops(edit_target, shape_path, record,
+            shape.translation, shape.rotation, shape.scale);
+        for op in transform_ops { ops.push(op); }
+        if shape.kind == "Cube" {
+            if !bundle_value_matches(record.attrs["size"], shape.size) {
+                ops.push(#{ SetAttribute: #{
+                    edit_target: edit_target, path: shape_path, name: "size",
+                    type_name: "double", value: shape.size.to_string(),
+                }});
+            }
+        } else {
+            if !bundle_value_matches(record.attrs["radius"], shape.radius) {
+                ops.push(#{ SetAttribute: #{
+                    edit_target: edit_target, path: shape_path, name: "radius",
+                    type_name: "double", value: shape.radius.to_string(),
+                }});
+            }
+            if !bundle_value_matches(record.attrs["height"], shape.height) {
+                ops.push(#{ SetAttribute: #{
+                    edit_target: edit_target, path: shape_path, name: "height",
+                    type_name: "double", value: shape.height.to_string(),
+                }});
+            }
+        }
+        if shape.axis != () && !bundle_value_matches(record.attrs["axis"], shape.axis) {
+            ops.push(#{ SetAttribute: #{
+                edit_target: edit_target, path: shape_path, name: "axis",
+                type_name: "token", value: bundle_token_literal(shape.axis),
+            }});
+        }
+    }
+
+    let binding_names = [];
+    if bindings != () {
+        for binding in bindings {
+            if binding == () || binding.path == () || binding.name == ()
+                || binding.type_name == () || binding.value == ()
+                || binding.expected == () || !binding.path.starts_with("/")
+                || binding.name == "" || binding.type_name == ""
+                || binding_names.contains(binding.path + ":" + binding.name) {
+                return bundle_plan_error(path + ": bindings require unique absolute path, name, type_name, value, and expected");
+            }
+            let binding_prim = query("QueryUsdPrim", #{
+                doc_id: doc, path: binding.path, attrs: [binding.name], children: false,
+            });
+            if !query_ok(binding_prim) {
+                return bundle_plan_error(binding.path + ": explicit binding target is unavailable");
+            }
+            binding_names.push(binding.path + ":" + binding.name);
+            if !bundle_value_matches(binding_prim.attrs[binding.name], binding.expected) {
+                ops.push(#{ SetAttribute: #{
+                    edit_target: edit_target, path: binding.path, name: binding.name,
+                    type_name: binding.type_name, value: binding.value.to_string(),
+                }});
+            }
+        }
+    }
+    #{
+        ok: true,
+        kind: "component_bundle_update",
+        path: path,
+        topology_preserved: true,
+        bindings: binding_names,
+        no_op: ops.len() == 0,
         ops: ops,
     }
 }
@@ -1242,8 +1951,6 @@ fn authoring_context(doc, path, edit_target) {
             "xformOp:scale",
             "xformOpOrder",
             "lunco:mount:plug",
-            "lunco:component:units",
-            "lunco:component:dimensions",
             "physics:mass",
             "physics:collisionEnabled",
         ],
@@ -1317,6 +2024,44 @@ fn authoring_context(doc, path, edit_target) {
         plug: plug,
         actions: actions,
     }
+}
+
+/// Lift the focused Editor selection into the same exact authoring record used
+/// by explicit-path tools. The selection query remains the identity owner: a
+/// missing, multi-selected, stale, or ambiguous selection is an actionable
+/// failure rather than an invitation to guess a path or document.
+fn selected_authoring_context(preview) {
+    let selection = if preview == () {
+        assembly_edit::selection_context()
+    } else {
+        assembly_edit::selection_context_for(preview)
+    };
+    if !query_ok(selection) {
+        return plan_error("selected_authoring_context could not read Editor selection");
+    }
+    if selection.selection_state != "single" || selection.primary == () {
+        return plan_error("selected_authoring_context requires exactly one selected prim");
+    }
+    if selection.stale_selection_count != () && selection.stale_selection_count != 0 {
+        return plan_error("selected_authoring_context rejects stale selection entries");
+    }
+    if selection.ambiguous_paths != () && selection.ambiguous_paths.len() != 0 {
+        return plan_error("selected_authoring_context rejects ambiguous selection paths");
+    }
+    if selection.edit_target == () {
+        return plan_error("selected_authoring_context selection has no edit target");
+    }
+    let doc = if selection.doc_id != () { selection.doc_id } else { selection.doc };
+    let path = selection.primary.path;
+    if doc == () || path == () {
+        return plan_error("selected_authoring_context selection has no document or prim path");
+    }
+    let context = authoring_context(doc, path, selection.edit_target);
+    if !context.ok { return context; }
+    context.kind = "selected_authoring_context";
+    context.selection = selection;
+    context.selection_identity = selection.primary.identity;
+    context
 }
 
 /// Resolve exactly one empty, authored socket for a reusable component.
@@ -1654,6 +2399,171 @@ fn mount_relationship_targets(record, name) {
         return [];
     }
     record.relationships[name]
+}
+
+/// Discover the standard mount frame explicitly advertised by one component or
+/// assembly root. The relationship is the source of truth; the helper never
+/// scans child names or treats geometry as a frame by convention. Generic
+/// datum/actuator frames are returned by the component plan to its caller and
+/// are later consumed by an explicit standard joint or Modelica port contract.
+fn functional_frame_catalog(doc, edit_target, root_path) {
+    if doc == () || edit_target == () || root_path == () {
+        return plan_error("functional_frame_catalog requires document, edit target, and root path");
+    }
+    if !root_path.starts_with("/") || root_path.ends_with("/") && root_path != "/" {
+        return plan_error("functional_frame_catalog root path must be an absolute USD path");
+    }
+    let document = assembly_edit::describe(doc);
+    if !query_ok(document) || document.generation == () {
+        return plan_error("functional_frame_catalog could not read the document generation");
+    }
+    let target = assembly_edit::resolve_target(doc, root_path, edit_target);
+    if !query_ok(target) {
+        return plan_error(root_path + ": authored root target is unavailable");
+    }
+    let root = query("QueryUsdPrim", #{
+        doc_id: doc,
+        path: root_path,
+        attrs: ["lunco:mount:plug"],
+        rels: [
+            "lunco:mount:frame",
+            "lunco:mount:sockets",
+        ],
+        children: false,
+    });
+    if !query_ok(root) {
+        return plan_error(root_path + ": composed root is unavailable");
+    }
+
+    let frame_paths = mount_relationship_targets(root, "lunco:mount:frame");
+
+    let frames = [];
+    for frame_path in frame_paths {
+        let frame = query("QueryUsdPrim", #{
+            doc_id: doc,
+            path: frame_path,
+            attrs: [
+                "xformOp:translate",
+                "xformOp:rotateXYZ",
+                "xformOp:scale",
+                "xformOpOrder",
+                "lunco:mount:socket",
+                "lunco:mount:joint",
+                "lunco:mount:axis",
+            ],
+            rels: ["lunco:mount:part"],
+            children: false,
+        });
+        if !query_ok(frame) {
+            return plan_error(frame_path + ": advertised functional frame is unavailable");
+        }
+        let local = mount_local_transform(doc, frame_path);
+        if !local.ok { return local; }
+        let relative = mount_frame_in_body(doc, root_path, frame_path);
+        if !relative.ok { return relative; }
+        frames.push(#{
+            path: frame_path,
+            leaf_name: frame_path.split("/")[frame_path.split("/").len() - 1],
+            role: "attachment",
+            is_mount_frame: true,
+            is_actuator_frame: false,
+            local_transform: local.value,
+            relative_transform: relative.value,
+            mount: #{
+                socket_kind: if frame.attrs == () { () } else { frame.attrs["lunco:mount:socket"] },
+                joint_kind: if frame.attrs == () { () } else { frame.attrs["lunco:mount:joint"] },
+                axis: if frame.attrs == () { () } else { frame.attrs["lunco:mount:axis"] },
+                occupied_by: mount_relationship_targets(frame, "lunco:mount:part"),
+            },
+            actuator: #{ name: (), direction: (), unit: (), limits: (), ports: [] },
+        });
+    }
+    #{
+        ok: true,
+        kind: "functional_frame_catalog",
+        doc_id: doc,
+        edit_target: edit_target,
+        root_path: root_path,
+        generation: document.generation,
+        root: root,
+        socket_paths: mount_relationship_targets(root, "lunco:mount:sockets"),
+        frame_paths: frame_paths,
+        frames: frames,
+    }
+}
+
+/// Compute a dry rigid placement that makes one exact source frame coincide
+/// with one exact target frame. The moving and target roots must be siblings;
+/// this keeps the returned SetTranslate/SetRotate local to one authored parent
+/// and avoids pretending to solve arbitrary USD hierarchy or scale.
+fn align_frames_plan(doc, edit_target, moving_path, moving_frame_path,
+    target_path, target_frame_path) {
+    if doc == () || edit_target == () || moving_path == ()
+        || moving_frame_path == () || target_path == () || target_frame_path == () {
+        return plan_error("align_frames_plan requires document, edit target, moving root/frame, and target root/frame paths");
+    }
+    for path in [moving_path, moving_frame_path, target_path, target_frame_path] {
+        if !path.starts_with("/") || path.ends_with("/") {
+            return plan_error("align_frames_plan paths must be absolute USD paths");
+        }
+    }
+    if moving_path == target_path {
+        return plan_error("align_frames_plan requires distinct moving and target roots");
+    }
+    if parent_path(moving_path) != parent_path(target_path) {
+        return plan_error("align_frames_plan requires moving and target roots to share the same authored parent");
+    }
+    let document = assembly_edit::describe(doc);
+    if !query_ok(document) || document.generation == () {
+        return plan_error("align_frames_plan could not read the document generation");
+    }
+
+    let moving_root = mount_local_transform(doc, moving_path);
+    if !moving_root.ok { return moving_root; }
+    let target_root = mount_local_transform(doc, target_path);
+    if !target_root.ok { return target_root; }
+    let source_frame = mount_frame_in_body(doc, moving_path, moving_frame_path);
+    if !source_frame.ok { return source_frame; }
+    let target_frame = mount_frame_in_body(doc, target_path, target_frame_path);
+    if !target_frame.ok { return target_frame; }
+
+    let target_in_parent = mount_transform_compose(target_root.value, target_frame.value);
+    let placement = mount_transform_compose(
+        target_in_parent, mount_transform_inverse(source_frame.value),
+    );
+    let translation = finite_vector3(placement.translation,
+        "resolved frame alignment translation");
+    if !translation.ok { return translation; }
+    let rotation = mount_xyz_deg_from_quat(placement.rotation);
+    let valid_rotation = finite_vector3(rotation, "resolved frame alignment rotation");
+    if !valid_rotation.ok { return valid_rotation; }
+    #{
+        ok: true,
+        kind: "frame_alignment_plan",
+        mode: "placement",
+        moving_path: moving_path,
+        moving_frame_path: moving_frame_path,
+        target_path: target_path,
+        target_frame_path: target_frame_path,
+        moved: [moving_path],
+        fixed: [target_path, target_frame_path],
+        generation: document.generation,
+        placement: placement.translation,
+        rotation: rotation,
+        mutation: "assembly_edit::propose",
+        ops: [
+            #{ SetTranslate: #{
+                edit_target: edit_target,
+                path: moving_path,
+                value: placement.translation,
+            }},
+            #{ SetRotate: #{
+                edit_target: edit_target,
+                path: moving_path,
+                value: rotation,
+            }},
+        ],
+    }
 }
 
 fn mount_count_target(targets, expected) {

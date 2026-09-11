@@ -5215,23 +5215,21 @@ pub(crate) fn stage_prim_is_invisible_or_guide(reader: &StageView<'_>, path: &Sd
 /// handler) so they place identically.
 pub const SPAWN_GROUND_CLEARANCE: f64 = 0.05;
 
-/// Axis-aligned bounding box of an asset's COLLISION geometry, in the asset's own
-/// root reference frame — the general, wheel-free basis for spawn placement.
+/// Axis-aligned bounding box of a composed USD asset's COLLISION geometry, in
+/// the asset root's reference frame.
 ///
 /// Walks the composed USD stage from `root_prim` and, for every active gprim that
 /// applies the standard `UsdPhysicsCollisionAPI` and whose
 /// `physics:collisionEnabled` is not `false`, folds that shape's local bounding
 /// box (its 8 corners transformed into the root frame) into a running min/max.
-/// Nested rigid bodies and authored vehicle wheels are ownership boundaries and
-/// are not folded into the root body. Shape dimensions come from the shared
-/// [`read_shape_dims`], so the box can't drift from the avian collider built off
-/// the same attributes. The result's
-/// [`rest_depth`](ObjectAabb::rest_depth) (`-min.y`) is the distance from the root
-/// origin down to the lowest collision point: lift a spawn by it and the object
-/// rests ON the ground with no part buried — for ANY asset (lander, rover, prop),
-/// no per-asset placement tuning, no dependency on wheels. Computed off the
-/// same composed stage the live entity is instantiated from, so the placement
-/// solver and the physics body can never disagree.
+/// Nested rigid bodies and authored vehicle wheels are included because this is
+/// the placement envelope for the complete composed asset. Shape dimensions come from the shared
+/// [`read_shape_dims`], so the box cannot drift from the Avian collider built
+/// from the same attributes. The result's [`rest_depth`](ObjectAabb::rest_depth)
+/// (`-min.y`) is the distance from the asset origin down to its lowest collision
+/// point. This is the single placement-envelope contract used by spawn and
+/// composed-USD inspection; Avian's body-level compound construction has its
+/// own ownership boundary.
 ///
 /// Returns `Ok(None)` when no collision geometry is found (a pure-visual prop).
 /// Native `UsdGeomMesh` collision topology is included using the same indexed
@@ -5453,9 +5451,10 @@ fn authored_empty_xform_op_order(reader: &StageView<'_>, path: &SdfPath) -> bool
     }
 }
 
-/// DFS helper for [`collision_aabb`]: collect the same ownership candidates as
-/// the Avian compound-body reader. Transforms are composed in the root frame;
-/// nested rigid bodies and vehicle wheels remain their own physics owners.
+/// DFS helper for [`collision_aabb`]: collect every active collision candidate
+/// in the composed asset, crossing nested rigid-body and wheel ownership
+/// boundaries so placement uses the complete envelope. Transforms are always
+/// composed in the root frame.
 fn gather_collision_aabb_candidates(
     reader: &StageView<'_>,
     path: &SdfPath,
@@ -5464,13 +5463,6 @@ fn gather_collision_aabb_candidates(
 ) -> Result<(), CollisionAabbError> {
     for child in reader.children(path) {
         if !reader.is_active(&child) {
-            continue;
-        }
-        if reader.has_api_schema(&child, openusd::schemas::physics::tokens::API_RIGID_BODY)
-            || reader
-                .real_f32(&child, "physxVehicleWheel:radius")
-                .is_some()
-        {
             continue;
         }
         let local = collision_local_transform(reader, &child)?;
@@ -5537,6 +5529,45 @@ def Xform "Root"
                 .is_none(),
             "visual geometry without UsdPhysicsCollisionAPI must not affect placement"
         );
+    }
+
+    #[test]
+    fn assembly_envelope_includes_nested_rigid_body_colliders() {
+        let stage = parse(
+            r#"#usda 1.0
+(
+    metersPerUnit = 1
+)
+def Xform "Root"
+{
+    def Cube "Body" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double size = 2
+    }
+    def Xform "Leg" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI"]
+    )
+    {
+        def Cube "Pad" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 2
+            double3 xformOp:translate = (0, -5, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+        }
+    }
+}
+"#,
+        );
+        let aabb = collision_aabb(&stage.view(), "/Root")
+            .expect("composed collision AABB")
+            .expect("root collision AABB");
+
+        assert_eq!(aabb.min.y, -6.0);
+        assert!(aabb.rest_depth() > 1.0);
     }
 
     #[test]

@@ -8,8 +8,6 @@
 // Every stage-reading helper takes an explicit document id first; () selects
 // the mounted live scene. Stale document projections fail the query.
 
-const EPSILON = 0.001;
-
 fn close_scalar(actual, expected, epsilon) {
     actual != () && expected != () && (actual - expected).abs() <= epsilon
 }
@@ -238,6 +236,112 @@ fn topology_report(doc, nodes) {
         records.push(entry);
     }
     #{ ok: errors.len() == 0, records: records, errors: errors }
+}
+
+/// Validate a small, explicit component manifest against the standard USD
+/// owners. spec contains {path, expected_type?, mass?, parts?}. A part may
+/// provide type_name, size or radius/height, axis, collision_enabled,
+/// visibility, purpose, and material. This is a read-only compliance report
+/// for direct USDA or DCC edits: it never repairs missing fields, derives
+/// topology from names, or checks a custom component namespace. The caller
+/// supplies the manifest because USD has no universal component schema beyond
+/// its standard prim and API schemas.
+fn standard_component_report(doc, spec) {
+    if spec == () || spec.path == () || spec.path == "" {
+        return #{ ok: false, records: [], errors: [
+            "standard component report requires an exact root path",
+        ]};
+    }
+    let root = query_prim(doc, spec.path, [
+        "physics:mass", "physics:centerOfMass", "physics:diagonalInertia",
+        "purpose", "visibility",
+    ], (), true);
+    let epsilon = 0.001;
+    let errors = [];
+    let records = [];
+    if !query_ok(root) {
+        return #{ ok: false, records: [], errors: [spec.path + ": root prim is missing"] };
+    }
+    let expected_type = if spec.expected_type == () { "Xform" } else { spec.expected_type };
+    if root.type_name != expected_type {
+        errors.push(spec.path + ": expected " + expected_type + ", got " + root.type_name);
+    }
+    let mass = spec.mass;
+    if mass != () {
+        if mass.value != () && !close_scalar(root.attrs["physics:mass"], mass.value, epsilon) {
+            errors.push(spec.path + ": physics:mass differs from the manifest");
+        }
+        if mass.center_of_mass != ()
+            && !close_vec(root.attrs["physics:centerOfMass"], mass.center_of_mass, epsilon) {
+            errors.push(spec.path + ": physics:centerOfMass differs from the manifest");
+        }
+        if mass.diagonal_inertia != ()
+            && !close_vec(root.attrs["physics:diagonalInertia"], mass.diagonal_inertia, epsilon) {
+            errors.push(spec.path + ": physics:diagonalInertia differs from the manifest");
+        }
+    }
+    let parts = if spec.parts == () { [] } else { spec.parts };
+    for part in parts {
+        if part.path == () || part.path == "" {
+            errors.push(spec.path + ": component part requires an exact path");
+            continue;
+        }
+        let relation_names = if part.material == () { [] } else { ["material:binding"] };
+        let record = query_prim(doc, part.path, [
+            "size", "radius", "height", "axis", "physics:collisionEnabled",
+            "visibility", "purpose", "xformOp:translate", "xformOp:rotateXYZ",
+            "xformOp:scale", "xformOpOrder",
+        ], relation_names, false);
+        if !query_ok(record) {
+            errors.push(part.path + ": component part is missing");
+            continue;
+        }
+        let expected_part_type = part.type_name;
+        if expected_part_type != () && record.type_name != expected_part_type {
+            errors.push(part.path + ": expected " + expected_part_type
+                + ", got " + record.type_name);
+        }
+        if part.size != () && !close_scalar(record.attrs["size"], part.size, epsilon) {
+            errors.push(part.path + ": UsdGeomCube.size differs from the manifest");
+        }
+        if part.radius != () && !close_scalar(record.attrs["radius"], part.radius, epsilon) {
+            errors.push(part.path + ": UsdGeomCylinder/Cone.radius differs from the manifest");
+        }
+        if part.height != () && !close_scalar(record.attrs["height"], part.height, epsilon) {
+            errors.push(part.path + ": UsdGeomCylinder/Cone.height differs from the manifest");
+        }
+        if part.axis != () && record.attrs["axis"] != part.axis {
+            errors.push(part.path + ": UsdGeom axis differs from the manifest");
+        }
+        if part.collision_enabled != ()
+            && record.attrs["physics:collisionEnabled"] != part.collision_enabled {
+            errors.push(part.path + ": physics:collisionEnabled differs from the manifest");
+        }
+        if part.visibility != () && record.attrs["visibility"] != part.visibility {
+            errors.push(part.path + ": UsdGeomImageable.visibility differs from the manifest");
+        }
+        if part.purpose != () && record.attrs["purpose"] != part.purpose {
+            errors.push(part.path + ": UsdGeomImageable.purpose differs from the manifest");
+        }
+        if part.material != () {
+            let targets = relationship_targets(record, "material:binding");
+            if targets.len() != 1 || targets[0] != part.material {
+                errors.push(part.path + ": UsdShade material:binding differs from the manifest");
+            }
+        }
+        records.push(#{
+            path: part.path,
+            type_name: record.type_name,
+            attrs: record.attrs,
+            relationships: record.relationships,
+        });
+    }
+    #{
+        ok: errors.len() == 0,
+        root: root,
+        records: records,
+        errors: errors,
+    }
 }
 
 /// Verify the reciprocal metadata for an explicit mount. This checks the

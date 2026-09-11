@@ -18,13 +18,15 @@ use lunco_autopilot::Autopilot;
 use lunco_celestial::link::LinkState;
 use lunco_celestial::OrbitalViewPin;
 use lunco_controller::ControllerLink;
-use lunco_core::exposure::{EngineExposures, ExposureRefresh, ExposureWriter, EXPOSURE_UPDATE_HZ};
+use lunco_core::exposure::{
+    EngineExposures, ExposureRefresh, ExposureValue, ExposureWriter, EXPOSURE_UPDATE_HZ,
+};
 use lunco_core::{
     Avatar, CelestialBody, GlobalEntityId, LocalAvatar, SceneMountState, TheLocalAvatar,
 };
 use lunco_cosim::{SimComponent, SimStatus};
+use lunco_hooks::HookValue;
 use lunco_mobility::WheelRaycast;
-use lunco_modelica::ModelicaModel;
 use lunco_scene_commands::SelectedEntities;
 use lunco_signal::{SignalRef, SignalRegistry, SignalType};
 use lunco_usd_bevy::read::UsdReadObject;
@@ -33,6 +35,313 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::Duration;
 
 const LUNAR_MAP_SETTING_KEY: &str = "ui.lunar_map";
+const RUNTIME_UI_VISIBILITY_HOOK: &str = "runtime.ui.visibility";
+const RUNTIME_UI_PROPERTIES_HOOK: &str = "runtime.ui.properties";
+
+/// Ask the active Twin's Rhai policy whether a subject-scoped surface is
+/// visible. The engine passes one owned, typed fact map; no product or model
+/// name is interpreted here.
+fn runtime_ui_visibility(facts: &HookValue, surface_id: &str) -> bool {
+    match lunco_hooks::invoke(RUNTIME_UI_VISIBILITY_HOOK, std::slice::from_ref(facts)) {
+        Some(Ok(HookValue::Map(values))) => {
+            let visible = values
+                .iter()
+                .find(|(key, _)| key == "visible")
+                .and_then(|(_, value)| match value {
+                    HookValue::Bool(value) => Some(*value),
+                    _ => None,
+                });
+            match visible {
+                Some(visible) => visible,
+                _ => {
+                    warn!(surface_id, "[runtime-ui] visibility policy must return a map with boolean `visible`; surface hidden");
+                    false
+                }
+            }
+        }
+        Some(Ok(value)) => {
+            warn!(
+                surface_id,
+                returned = ?value,
+                "[runtime-ui] visibility policy must return a typed result map; surface hidden"
+            );
+            false
+        }
+        Some(Err(error)) => {
+            warn!(
+                surface_id,
+                "[runtime-ui] visibility policy failed: {error}; surface hidden"
+            );
+            false
+        }
+        None => {
+            warn!(
+                surface_id,
+                hook = RUNTIME_UI_VISIBILITY_HOOK,
+                "[runtime-ui] no visibility policy is registered; surface hidden"
+            );
+            false
+        }
+    }
+}
+
+/// Ask the active Twin's Rhai policy for scalar presentation properties. The
+/// exposure registry deliberately remains scalar because HUI/egui/API readers
+/// share it; structured facts are consumed and flattened only at this policy
+/// boundary.
+fn runtime_ui_properties(facts: &HookValue, surface_id: &str) -> Vec<(String, ExposureValue)> {
+    let Some(result) = lunco_hooks::invoke(RUNTIME_UI_PROPERTIES_HOOK, std::slice::from_ref(facts))
+    else {
+        warn!(
+            surface_id,
+            hook = RUNTIME_UI_PROPERTIES_HOOK,
+            "[runtime-ui] no properties policy is registered; surface has no presentation values"
+        );
+        return Vec::new();
+    };
+    let result = match result {
+        Ok(HookValue::Map(values)) => values,
+        Ok(value) => {
+            warn!(
+                surface_id,
+                returned = ?value,
+                "[runtime-ui] properties policy must return a typed map; surface has no presentation values"
+            );
+            return Vec::new();
+        }
+        Err(error) => {
+            warn!(surface_id, "[runtime-ui] properties policy failed: {error}");
+            return Vec::new();
+        }
+    };
+    result
+        .into_iter()
+        .filter_map(|(name, value)| {
+            let value = match value {
+                HookValue::Str(value) => ExposureValue::Text(value),
+                HookValue::Bool(value) => ExposureValue::Bool(value),
+                HookValue::Int(value) => ExposureValue::Number(value as f64),
+                HookValue::Float(value) if value.is_finite() => ExposureValue::Number(value),
+                _ => {
+                    warn!(
+                        surface_id,
+                        property = name,
+                        "[runtime-ui] ignored non-scalar policy property"
+                    );
+                    return None;
+                }
+            };
+            Some((name, value))
+        })
+        .collect()
+}
+
+fn runtime_ui_facts(
+    surface_id: &str,
+    root: Option<Entity>,
+    subject: Option<GlobalEntityId>,
+    control_owner: &str,
+    visibility_mode: &str,
+    q_name: &Query<&Name>,
+    q_callsign: &Query<&lunco_core::markers::Callsign>,
+    q_catalog_id: &Query<&lunco_core::CatalogEntryId>,
+    q_gid: &Query<&GlobalEntityId>,
+    q_sim: &Query<(Entity, &SimComponent)>,
+    q_parents: &Query<&ChildOf>,
+    q_vel: &Query<&LinearVelocity>,
+    q_angvel: &Query<&AngularVelocity>,
+    q_rotation: &Query<&Rotation>,
+    q_grids: &Query<&Grid>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
+    q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
+    stages: &Assets<UsdStageAsset>,
+    canonical: &CanonicalStages,
+    telemetry: &[PublicTelemetryValue],
+) -> HookValue {
+    let label = root
+        .map(|root| {
+            lunco_core::entity_display_name(
+                q_name.get(root).ok(),
+                q_callsign.get(root).ok(),
+                q_catalog_id.get(root).ok(),
+            )
+        })
+        .filter(|label| !label.is_empty())
+        .unwrap_or_else(|| "selected".to_owned());
+
+    let status = root
+        .and_then(|root| q_sim.get(root).ok())
+        .map(|(_, sim)| sim_status_facts(&sim.status))
+        .unwrap_or_else(|| ("unavailable".to_owned(), None));
+
+    let position = root
+        .and_then(|root| {
+            lunco_core::coords::world_position(root, q_parents, q_grids, q_spatial).ok()
+        })
+        .map(|position| {
+            HookValue::Array(
+                [position.0.x, position.0.y, position.0.z]
+                    .into_iter()
+                    .map(HookValue::Float)
+                    .collect(),
+            )
+        })
+        .unwrap_or_else(|| HookValue::Array(Vec::new()));
+    let velocity = root
+        .and_then(|root| q_vel.get(root).ok())
+        .map(|velocity| {
+            HookValue::Array(
+                [
+                    velocity.0.x as f64,
+                    velocity.0.y as f64,
+                    velocity.0.z as f64,
+                ]
+                .into_iter()
+                .map(HookValue::Float)
+                .collect(),
+            )
+        })
+        .unwrap_or_else(|| HookValue::Array(Vec::new()));
+    let angular_velocity = root
+        .and_then(|root| q_angvel.get(root).ok())
+        .map(|velocity| {
+            HookValue::Array(
+                [
+                    velocity.0.x as f64,
+                    velocity.0.y as f64,
+                    velocity.0.z as f64,
+                ]
+                .into_iter()
+                .map(HookValue::Float)
+                .collect(),
+            )
+        })
+        .unwrap_or_else(|| HookValue::Array(Vec::new()));
+    let rotation = root
+        .and_then(|root| q_rotation.get(root).ok())
+        .map(|rotation| {
+            HookValue::Array(
+                [
+                    rotation.0.x as f64,
+                    rotation.0.y as f64,
+                    rotation.0.z as f64,
+                    rotation.0.w as f64,
+                ]
+                .into_iter()
+                .map(HookValue::Float)
+                .collect(),
+            )
+        })
+        .unwrap_or_else(|| HookValue::Array(Vec::new()));
+
+    let mut participants = q_sim
+        .iter()
+        .filter(|(entity, _)| root.is_some_and(|root| is_owned_by_vessel(*entity, root, q_parents)))
+        .map(|(entity, sim)| {
+            let path = q_paths
+                .get(entity)
+                .map(|(_, path)| path.path.clone())
+                .unwrap_or_default();
+            let public_names = authored_output_names(entity, q_paths, stages, canonical);
+            let outputs = sim
+                .outputs
+                .iter()
+                .map(|(name, value)| (name.clone(), HookValue::Float(*value)))
+                .collect::<Vec<_>>();
+            let public_outputs = sim
+                .outputs
+                .iter()
+                .filter(|(name, _)| {
+                    public_names
+                        .as_ref()
+                        .is_some_and(|names| names.contains(*name))
+                })
+                .map(|(name, value)| (name.clone(), HookValue::Float(*value)))
+                .collect::<Vec<_>>();
+            let (status, error) = sim_status_facts(&sim.status);
+            let gid = q_gid
+                .get(entity)
+                .ok()
+                .map(|gid| HookValue::Int(gid.get() as i64))
+                .unwrap_or(HookValue::Unit);
+            (
+                path.clone(),
+                HookValue::map([
+                    ("entity_gid", gid),
+                    ("path", HookValue::str(path)),
+                    ("model", HookValue::str(sim.model_name.clone())),
+                    ("status", HookValue::str(status)),
+                    ("error", error.map_or(HookValue::Unit, HookValue::str)),
+                    ("inputs", scalar_hook_map(&sim.inputs)),
+                    ("outputs", HookValue::Map(outputs)),
+                    ("public_outputs", HookValue::Map(public_outputs)),
+                ]),
+            )
+        })
+        .collect::<Vec<_>>();
+    participants.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+    let telemetry = telemetry
+        .iter()
+        .map(|value| {
+            HookValue::map([
+                ("label", HookValue::str(value.label.clone())),
+                ("value", HookValue::Float(value.value)),
+                (
+                    "unit",
+                    value
+                        .unit
+                        .as_ref()
+                        .map_or(HookValue::Unit, |unit| HookValue::str(unit.clone())),
+                ),
+            ])
+        })
+        .collect();
+
+    HookValue::map([
+        ("surface_id", HookValue::str(surface_id)),
+        (
+            "subject_gid",
+            subject
+                .map(|gid| HookValue::Int(gid.get() as i64))
+                .unwrap_or(HookValue::Unit),
+        ),
+        ("control_owner", HookValue::str(control_owner)),
+        ("visibility_mode", HookValue::str(visibility_mode)),
+        ("available", HookValue::Bool(root.is_some())),
+        ("label", HookValue::str(label)),
+        ("status", HookValue::str(status.0)),
+        ("error", status.1.map_or(HookValue::Unit, HookValue::str)),
+        ("position", position),
+        ("velocity", velocity),
+        ("angular_velocity", angular_velocity),
+        ("rotation", rotation),
+        ("telemetry", HookValue::Array(telemetry)),
+        (
+            "participants",
+            HookValue::Array(participants.into_iter().map(|(_, facts)| facts).collect()),
+        ),
+    ])
+}
+
+fn scalar_hook_map(values: &HashMap<String, f64>) -> HookValue {
+    let mut values = values
+        .iter()
+        .map(|(name, value)| (name.clone(), HookValue::Float(*value)))
+        .collect::<Vec<_>>();
+    values.sort_by(|(a, _), (b, _)| a.cmp(b));
+    HookValue::Map(values)
+}
+
+fn sim_status_facts(status: &SimStatus) -> (String, Option<String>) {
+    match status {
+        SimStatus::Idle => ("idle".to_owned(), None),
+        SimStatus::Compiling => ("compiling".to_owned(), None),
+        SimStatus::Running => ("running".to_owned(), None),
+        SimStatus::Paused => ("paused".to_owned(), None),
+        SimStatus::Error(error) => ("error".to_owned(), Some(error.clone())),
+    }
+}
 
 /// Optional progress resources projected into generic runtime surfaces.
 ///
@@ -55,6 +364,7 @@ pub(crate) struct RuntimeOverlayInputs<'w> {
 #[derive(Default)]
 pub(crate) struct SeminarExposureTrace {
     current_vessel: Option<Entity>,
+    current_surface: Option<String>,
     last_label: Option<String>,
     tipped: bool,
     max_slope_deg: Option<f32>,
@@ -68,14 +378,14 @@ pub(crate) struct SeminarTraceInputs<'w, 's> {
     provenance: Query<'w, 's, &'static lunco_core::Provenance>,
 }
 
-/// Fallback amber threshold, for a vessel whose limits cannot be derived.
+/// Fallback amber threshold for a body whose limits cannot be derived.
 ///
 /// GENERIC on purpose: the real roll-over angle is `atan(half_track / com_height)`
 /// and the real slip limit is `atan(μ)`, both properties of the AUTHORED vehicle.
 /// A driven rover publishes exactly those through the generic exposure registry,
-/// and the HTML HUD prefers them — see
+/// and a Twin policy may prefer them — see
 /// `docs/architecture/58-vessel-envelope-and-routes.md`. These remain for the
-/// unknown-vehicle case (a lander, a wheel-less body), where they are
+/// unknown-body case (a wheel-less body), where they are
 /// honest "meaningful slope" / "slope that rolls things" bands spanning the range
 /// real lunar rovers cared about (Lunokhod-1 drove to ~32° operationally, with a
 /// 45° auto-brake cut-out).
@@ -103,22 +413,7 @@ struct PublicTelemetryValue {
     unit: Option<String>,
 }
 
-/// The live GNC state projected from the authored guidance program boundary.
-///
-/// The GNC is an internal Modelica participant, not the generic external
-/// `Autopilot` actor. Its lifecycle and authority therefore come from the
-/// existing Modelica/SimComponent state and its authored causal ports.
-#[derive(Debug, Clone, PartialEq)]
-struct GncExposure {
-    readiness: &'static str,
-    readiness_color: &'static str,
-    authority: &'static str,
-    mode: &'static str,
-    handoff: &'static str,
-    error: String,
-}
-
-/// What the HUD needs about the driven vessel, resolved at the bounded exposure
+/// What a generic driven-body surface needs, resolved at the bounded exposure
 /// cadence after authoritative inputs change.
 #[derive(PartialEq)]
 struct DrivenVessel {
@@ -665,51 +960,6 @@ mod exposure_schedule_tests {
 }
 
 #[cfg(test)]
-mod control_root_tests {
-    use super::*;
-
-    #[test]
-    fn replacement_invalidates_the_outgoing_control_root() {
-        let outgoing = Entity::from_bits(41);
-        let incoming = Entity::from_bits(42);
-        let mut mount = SceneMountState::default();
-        mount.register_root(outgoing, true);
-
-        assert!(is_active_scene_root(&mount, Some(outgoing)));
-        assert!(!is_active_scene_root(&mount, Some(incoming)));
-
-        mount.begin_replacement();
-        assert!(!is_active_scene_root(&mount, Some(outgoing)));
-
-        mount.register_root(incoming, true);
-        assert!(!is_active_scene_root(&mount, Some(outgoing)));
-        assert!(is_active_scene_root(&mount, Some(incoming)));
-    }
-
-    #[test]
-    fn duplicate_composed_control_root_is_not_published_twice() {
-        let stage_id = Handle::<UsdStageAsset>::default().id();
-        let mut seen = HashSet::new();
-
-        assert!(accept_control_root_identity(
-            &mut seen,
-            stage_id,
-            "/LanderTest/Lander"
-        ));
-        assert!(!accept_control_root_identity(
-            &mut seen,
-            stage_id,
-            "/LanderTest/Lander"
-        ));
-        assert!(accept_control_root_identity(
-            &mut seen,
-            stage_id,
-            "/LanderTest/BackupLander"
-        ));
-    }
-}
-
-#[cfg(test)]
 mod exposure_tests {
     use super::*;
 
@@ -813,52 +1063,6 @@ mod exposure_tests {
     }
 
     #[test]
-    fn gnc_projection_uses_modelica_lifecycle_and_authored_authority_ports() {
-        let unavailable = project_gnc_state(None, None);
-        assert_eq!(unavailable.readiness, "UNAVAILABLE");
-        assert_eq!(unavailable.authority, "—");
-
-        let mut model = ModelicaModel::default();
-        let compiling = project_gnc_state(None, Some(&model));
-        assert_eq!(compiling.readiness, "COMPILING");
-
-        model.is_compiled = true;
-        let ready = project_gnc_state(None, Some(&model));
-        assert_eq!(ready.readiness, "READY");
-        assert_eq!(ready.mode, "READY");
-
-        model.current_time = 1.0;
-        model.inputs.insert("engage".into(), 1.0);
-        let mut sim = SimComponent {
-            inputs: model.inputs.clone(),
-            status: SimStatus::Running,
-            ..default()
-        };
-        let active = project_gnc_state(Some(&sim), Some(&model));
-        assert_eq!(active.readiness, "ACTIVE");
-        assert_eq!(active.authority, "GNC");
-        assert_eq!(active.mode, "GUIDANCE");
-
-        model.inputs.insert("piloted".into(), 1.0);
-        sim.outputs.insert("flight_authority_gate".into(), 0.0);
-        let piloted = project_gnc_state(Some(&sim), Some(&model));
-        assert_eq!(piloted.authority, "PILOT");
-        assert_eq!(piloted.mode, "PILOT OVERRIDE");
-
-        model.inputs.insert("piloted".into(), 0.0);
-        sim.outputs.insert("landing_handoff".into(), 1.0);
-        let landed = project_gnc_state(Some(&sim), Some(&model));
-        assert_eq!(landed.authority, "LANDING");
-        assert_eq!(landed.handoff, "LANDING HANDOFF");
-
-        model.last_error = Some("solver stopped".into());
-        let failed = project_gnc_state(Some(&sim), Some(&model));
-        assert_eq!(failed.readiness, "FAILED");
-        assert_eq!(failed.mode, "FAULT");
-        assert_eq!(failed.error, "FAILED: solver stopped");
-    }
-
-    #[test]
     fn camera_exposure_projects_authoritative_fact_and_compact_label() {
         let status = lunco_usd_bevy::camera_switch::CameraSelectionStatus {
             cameras: vec!["/World/Wide".into(), "/World/Close".into()],
@@ -907,8 +1111,8 @@ mod exposure_tests {
     fn scene_teardown_hides_scene_surfaces_but_retains_camera_status() {
         let mut exposures = EngineExposures::default();
         exposures.writer("camera-status").visible(true);
-        exposures.writer("lander-control-0").visible(true);
-        exposures.writer("driven-vessel").visible(true);
+        exposures.writer("subject-surface").visible(true);
+        exposures.writer("secondary-surface").visible(true);
         let mut refresh = ExposureRefresh::default();
         refresh.first_update = false;
         refresh.clear_dirty();
@@ -916,8 +1120,8 @@ mod exposure_tests {
         clear_scene_exposures_impl(&mut exposures, &mut refresh);
 
         assert!(exposures.surfaces["camera-status"].visible);
-        assert!(!exposures.surfaces["lander-control-0"].visible);
-        assert!(!exposures.surfaces["driven-vessel"].visible);
+        assert!(!exposures.surfaces["subject-surface"].visible);
+        assert!(!exposures.surfaces["secondary-surface"].visible);
         assert!(refresh.first_update);
         assert!(refresh.any_dirty());
     }
@@ -1087,7 +1291,7 @@ pub(crate) struct ExposureRuntime<'w, 's> {
     canonical: NonSend<'w, CanonicalStages>,
 }
 
-/// Authoritative inputs for the driven-vessel projection.
+/// Authoritative inputs for the driven-body projection.
 ///
 /// Bevy's function-system adapter has a bounded number of direct system
 /// parameters. Keeping these queries in one `SystemParam` preserves the
@@ -1109,7 +1313,6 @@ pub(crate) struct ExposureQueries<'w, 's> {
     wheels: Query<'w, 's, (Entity, &'static WheelRaycast, &'static Transform)>,
     com: Query<'w, 's, &'static ComputedCenterOfMass>,
     sim: Query<'w, 's, (Entity, &'static SimComponent)>,
-    models: Query<'w, 's, (Entity, &'static ModelicaModel)>,
     channels: Query<
         'w,
         's,
@@ -1126,6 +1329,13 @@ pub(crate) struct ExposureQueries<'w, 's> {
     scene_roots: Query<'w, 's, (), With<lunco_usd_bevy::UsdSceneRoot>>,
 }
 
+fn hide_runtime_surface(exposures: &mut EngineExposures, surface_id: &str) {
+    let mut ui = exposures.writer(surface_id);
+    ui.subject(None);
+    ui.visible(false);
+    ui.clear_properties();
+}
+
 pub(crate) fn publish_exposure(
     queries: ExposureQueries,
     geo: GeodeticHud,
@@ -1133,7 +1343,7 @@ pub(crate) fn publish_exposure(
     overlays: RuntimeOverlayInputs,
     trace_inputs: SeminarTraceInputs,
     mut seminar: Local<SeminarExposureTrace>,
-    mut control_roots: Local<ControlRootCache>,
+    mut runtime_surface_roots: Local<RuntimeSurfaceRootCache>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     stage_revision: Option<Res<lunco_usd_bevy::UsdStageRevision>>,
 ) {
@@ -1155,13 +1365,55 @@ pub(crate) fn publish_exposure(
         return;
     }
     let first_update = runtime.refresh.first_update;
-    let update_driven = first_update || runtime.refresh.driven_vessel_dirty;
+    // Authored surface metadata is part of the driven-body projection. A USD
+    // edit can change its identity or visibility mode without changing pose,
+    // so refresh the driven projection with the same invalidation boundary.
+    let update_driven =
+        first_update || runtime.refresh.driven_vessel_dirty || runtime.refresh.control_dirty;
     let update_control = first_update || runtime.refresh.control_dirty;
     let update_schema = first_update || runtime.refresh.schema_dirty;
     let update_celestial = first_update || runtime.refresh.celestial_dirty;
     let update_overlay = first_update || runtime.refresh.overlay_dirty;
     runtime.refresh.clear_dirty();
     runtime.refresh.first_update = false;
+
+    if update_control {
+        let revision = stage_revision.as_deref().map(|revision| revision.0);
+        runtime_surface_roots.refresh(
+            revision,
+            &runtime.scene_mount,
+            &queries.usd_paths,
+            &queries.parents,
+            &queries.scene_roots,
+            &queries.entities,
+            &runtime.stages,
+            &runtime.canonical,
+        );
+        publish_runtime_surface_exposures(
+            &mut runtime.exposures,
+            &queries.name,
+            &queries.callsign,
+            &queries.catalog_id,
+            &queries.gid,
+            &queries.sim,
+            &runtime.signals,
+            &queries.channels,
+            &queries.parents,
+            &queries.grids,
+            &queries.velocity,
+            &runtime.angular_velocity,
+            &runtime.rotation,
+            &queries.spatial,
+            &queries.usd_paths,
+            &runtime.stages,
+            &runtime.canonical,
+            &runtime_surface_roots.roots,
+            &runtime_surface_roots.retired_surface_ids,
+            &runtime.local_avatar,
+            &queries.avatar,
+        );
+        runtime_surface_roots.retired_surface_ids.clear();
+    }
 
     if update_driven {
         let vessel = resolve_driven(
@@ -1244,21 +1496,70 @@ pub(crate) fn publish_exposure(
                 .autopilots
                 .iter()
                 .any(|pilot| pilot.vessel == vessel.entity && pilot.engaged);
-            let mut ui = runtime.exposures.writer("driven-vessel");
-            ui.visible(true);
-            let telemetry = resolve_authored_telemetry(
-                vessel.entity,
-                &runtime.signals,
-                &queries.parents,
-                &queries.channels,
-            );
-            publish_vessel_values(&mut ui, &vessel, autopilot, &telemetry);
+            if let Some(surface) = runtime_surface_roots
+                .roots
+                .iter()
+                .find(|surface| surface.entity == vessel.entity)
+            {
+                if seminar.current_surface.as_deref() != Some(surface.surface_id.as_str()) {
+                    if let Some(previous) =
+                        seminar.current_surface.replace(surface.surface_id.clone())
+                    {
+                        hide_runtime_surface(&mut runtime.exposures, &previous);
+                    }
+                }
+                let mut ui = runtime.exposures.writer(&surface.surface_id);
+                let subject = queries.gid.get(vessel.entity).ok().copied();
+                ui.subject(subject);
+                let control_owner =
+                    if locally_possesses(&runtime.local_avatar, &queries.avatar, vessel.entity) {
+                        "local"
+                    } else {
+                        "none"
+                    };
+                let facts = runtime_ui_facts(
+                    &surface.surface_id,
+                    Some(vessel.entity),
+                    subject,
+                    control_owner,
+                    &surface.visibility_mode,
+                    &queries.name,
+                    &queries.callsign,
+                    &queries.catalog_id,
+                    &queries.gid,
+                    &queries.sim,
+                    &queries.parents,
+                    &queries.velocity,
+                    &runtime.angular_velocity,
+                    &runtime.rotation,
+                    &queries.grids,
+                    &queries.spatial,
+                    &queries.usd_paths,
+                    &runtime.stages,
+                    &runtime.canonical,
+                    &[],
+                );
+                ui.visible(runtime_ui_visibility(&facts, &surface.surface_id));
+                let telemetry = resolve_authored_telemetry(
+                    vessel.entity,
+                    &runtime.signals,
+                    &queries.parents,
+                    &queries.channels,
+                );
+                publish_vessel_values(&mut ui, &vessel, autopilot, &telemetry);
+            } else {
+                if let Some(surface_id) = seminar.current_surface.take() {
+                    hide_runtime_surface(&mut runtime.exposures, &surface_id);
+                }
+            }
         } else {
             seminar.current_vessel = None;
             seminar.last_label = None;
             seminar.tipped = false;
             seminar.max_slope_deg = None;
-            runtime.exposures.writer("driven-vessel").visible(false);
+            if let Some(surface_id) = seminar.current_surface.take() {
+                hide_runtime_surface(&mut runtime.exposures, &surface_id);
+            }
         }
     }
 
@@ -1269,42 +1570,6 @@ pub(crate) fn publish_exposure(
             &queries.usd_paths,
             &runtime.stages,
             &runtime.canonical,
-        );
-    }
-    if update_control {
-        let revision = stage_revision.as_deref().map(|revision| revision.0);
-        control_roots.refresh(
-            revision,
-            &runtime.scene_mount,
-            &queries.usd_paths,
-            &queries.parents,
-            &queries.scene_roots,
-            &queries.entities,
-            &runtime.stages,
-            &runtime.canonical,
-        );
-        publish_control_exposures(
-            &mut runtime.exposures,
-            &runtime.scene_mount,
-            &queries.name,
-            &queries.callsign,
-            &queries.catalog_id,
-            &queries.sim,
-            &queries.models,
-            &runtime.signals,
-            &queries.channels,
-            &queries.parents,
-            &queries.grids,
-            &queries.velocity,
-            &runtime.angular_velocity,
-            &runtime.rotation,
-            &queries.spatial,
-            &queries.usd_paths,
-            &queries.scene_roots,
-            &queries.entities,
-            &runtime.stages,
-            &runtime.canonical,
-            &control_roots.roots,
         );
     }
     if update_celestial {
@@ -1626,18 +1891,26 @@ fn publish_lunica_schema_exposure(
     true
 }
 
-/// Cached authored control-root topology. The USD revision is the authoritative
+/// Cached authored runtime-surface topology. The USD revision is the authoritative
 /// invalidation boundary; entity IDs remain valid until that same projection
 /// changes, so a motion-only publication never scans every USD prim again.
 #[derive(Default)]
-pub(crate) struct ControlRootCache {
+pub(crate) struct RuntimeSurfaceRootCache {
     revision: Option<u64>,
     active_root: Option<Entity>,
     initialized: bool,
-    roots: Vec<(Option<Entity>, i32)>,
+    roots: Vec<AuthoredRuntimeSurface>,
+    retired_surface_ids: Vec<String>,
 }
 
-impl ControlRootCache {
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AuthoredRuntimeSurface {
+    entity: Entity,
+    surface_id: String,
+    visibility_mode: String,
+}
+
+impl RuntimeSurfaceRootCache {
     fn refresh(
         &mut self,
         revision: Option<u64>,
@@ -1653,7 +1926,12 @@ impl ControlRootCache {
         if self.initialized && self.revision == revision && self.active_root == active_root {
             return;
         }
-        self.roots = authored_control_roots(
+        let previous = self
+            .roots
+            .iter()
+            .map(|root| root.surface_id.clone())
+            .collect::<HashSet<_>>();
+        self.roots = authored_runtime_surfaces(
             scene_mount,
             q_paths,
             q_parents,
@@ -1662,26 +1940,32 @@ impl ControlRootCache {
             stages,
             canonical,
         );
-        self.roots.sort_by_key(|(_, column)| *column);
+        self.roots
+            .sort_by(|left, right| left.surface_id.cmp(&right.surface_id));
+        let current = self
+            .roots
+            .iter()
+            .map(|root| root.surface_id.clone())
+            .collect::<HashSet<_>>();
+        self.retired_surface_ids = previous.difference(&current).cloned().collect();
         self.revision = revision;
         self.active_root = active_root;
         self.initialized = true;
     }
 }
 
-/// Publish control responses for explicitly authored runtime surfaces.
+/// Publish responses for explicitly authored runtime surfaces.
 ///
-/// A selected entity is not enough to opt into the compact lander card: the
-/// surface is a scene-authored presentation contract. This keeps a rover
-/// selection from accidentally publishing a lander-specific HUD.
-fn publish_control_exposures(
+/// Surface identity and visibility mode come from composed USD. This keeps the
+/// engine independent of a fixed set of product models, surface names, or
+/// surface slots.
+fn publish_runtime_surface_exposures(
     exposures: &mut EngineExposures,
-    scene_mount: &SceneMountState,
     q_name: &Query<&Name>,
     q_callsign: &Query<&lunco_core::markers::Callsign>,
     q_catalog_id: &Query<&lunco_core::CatalogEntryId>,
+    q_gid: &Query<&GlobalEntityId>,
     q_sim: &Query<(Entity, &SimComponent)>,
-    q_models: &Query<(Entity, &ModelicaModel)>,
     signals: &SignalRegistry,
     q_channels: &Query<(
         Entity,
@@ -1695,78 +1979,127 @@ fn publish_control_exposures(
     q_rotation: &Query<&Rotation>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
     q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
-    q_scene_roots: &Query<(), With<lunco_usd_bevy::UsdSceneRoot>>,
-    q_entities: &Query<Entity>,
     stages: &Assets<UsdStageAsset>,
     canonical: &CanonicalStages,
-    roots: &[(Option<Entity>, i32)],
+    roots: &[AuthoredRuntimeSurface],
+    retired_surface_ids: &[String],
+    local_avatar: &TheLocalAvatar,
+    q_avatar: &Query<&ControllerLink, (With<Avatar>, With<LocalAvatar>)>,
 ) {
-    let first_root = roots.first().and_then(|(entity, _)| *entity);
-    let first_telemetry = first_root
-        .map(|root| resolve_authored_telemetry(root, signals, q_parents, q_channels))
-        .unwrap_or_default();
+    for surface_id in retired_surface_ids {
+        let mut ui = exposures.writer(surface_id);
+        ui.subject(None);
+        ui.visible(false);
+        ui.clear_properties();
+    }
 
-    publish_selected_control_exposure(
-        exposures,
-        "lander-control-0",
-        first_root,
-        &first_telemetry,
-        scene_mount,
-        q_name,
-        q_callsign,
-        q_catalog_id,
-        q_sim,
-        q_models,
-        q_parents,
-        q_grids,
-        q_vel,
-        q_angvel,
-        q_rotation,
-        q_spatial,
-        q_paths,
-        q_scene_roots,
-        q_entities,
-        stages,
-        canonical,
-    );
-
-    let second_root = roots.get(1).and_then(|(entity, _)| *entity);
-    let second_telemetry = second_root
-        .map(|root| resolve_authored_telemetry(root, signals, q_parents, q_channels))
-        .unwrap_or_default();
-
-    publish_selected_control_exposure(
-        exposures,
-        "lander-control-1",
-        second_root,
-        &second_telemetry,
-        scene_mount,
-        q_name,
-        q_callsign,
-        q_catalog_id,
-        q_sim,
-        q_models,
-        q_parents,
-        q_grids,
-        q_vel,
-        q_angvel,
-        q_rotation,
-        q_spatial,
-        q_paths,
-        q_scene_roots,
-        q_entities,
-        stages,
-        canonical,
-    );
+    for root in roots {
+        let subject = q_gid.get(root.entity).ok().copied();
+        let control_owner = if locally_possesses(local_avatar, q_avatar, root.entity) {
+            "local"
+        } else {
+            "none"
+        };
+        let telemetry = resolve_authored_telemetry(root.entity, signals, q_parents, q_channels);
+        publish_selected_control_exposure(
+            exposures,
+            &root.surface_id,
+            Some(root.entity),
+            subject,
+            control_owner,
+            &root.visibility_mode,
+            &telemetry,
+            q_name,
+            q_callsign,
+            q_catalog_id,
+            q_gid,
+            q_sim,
+            q_parents,
+            q_grids,
+            q_vel,
+            q_angvel,
+            q_rotation,
+            q_spatial,
+            q_paths,
+            stages,
+            canonical,
+        );
+    }
 }
 
-/// Discover the roots that explicitly opt into a compact control card.
+fn publish_selected_control_exposure(
+    exposures: &mut EngineExposures,
+    namespace: &str,
+    root: Option<Entity>,
+    subject: Option<GlobalEntityId>,
+    control_owner: &str,
+    visibility_mode: &str,
+    telemetry: &[PublicTelemetryValue],
+    q_name: &Query<&Name>,
+    q_callsign: &Query<&lunco_core::markers::Callsign>,
+    q_catalog_id: &Query<&lunco_core::CatalogEntryId>,
+    q_gid: &Query<&GlobalEntityId>,
+    q_sim: &Query<(Entity, &SimComponent)>,
+    q_parents: &Query<&ChildOf>,
+    q_grids: &Query<&Grid>,
+    q_vel: &Query<&LinearVelocity>,
+    q_angvel: &Query<&AngularVelocity>,
+    q_rotation: &Query<&Rotation>,
+    q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
+    q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
+    stages: &Assets<UsdStageAsset>,
+    canonical: &CanonicalStages,
+) {
+    let facts = runtime_ui_facts(
+        namespace,
+        root,
+        subject,
+        control_owner,
+        visibility_mode,
+        q_name,
+        q_callsign,
+        q_catalog_id,
+        q_gid,
+        q_sim,
+        q_parents,
+        q_vel,
+        q_angvel,
+        q_rotation,
+        q_grids,
+        q_spatial,
+        q_paths,
+        stages,
+        canonical,
+        telemetry,
+    );
+    let visible = runtime_ui_visibility(&facts, namespace);
+    let properties = runtime_ui_properties(&facts, namespace);
+    let mut ui = exposures.writer(namespace);
+    ui.subject(subject);
+    ui.visible(visible);
+    ui.clear_properties();
+    for (name, value) in properties {
+        ui.property(name, value);
+    }
+}
+
+fn locally_possesses(
+    local_avatar: &TheLocalAvatar,
+    q_avatar: &Query<&ControllerLink, (With<Avatar>, With<LocalAvatar>)>,
+    subject: Entity,
+) -> bool {
+    local_avatar
+        .0
+        .and_then(|avatar| q_avatar.get(avatar).ok())
+        .is_some_and(|controller| controller.vessel_entity == subject)
+}
+
+/// Discover roots that explicitly opt into a runtime surface.
 ///
-/// The roots are authored USD data, not a list of vehicle paths in Rust.  The
-/// column is likewise an authored presentation hint, so a scene can place a
-/// pair of cards without teaching the engine what a particular film calls its
-/// vehicles.
-fn authored_control_roots(
+/// The surface ID and visibility mode are authored USD data, not a list of
+/// vehicle paths or a slot convention in Rust. A Twin can bind any model to any
+/// registered runtime surface without an engine change.
+fn authored_runtime_surfaces(
     scene_mount: &SceneMountState,
     q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
     q_parents: &Query<&ChildOf>,
@@ -1774,9 +2107,10 @@ fn authored_control_roots(
     q_entities: &Query<Entity>,
     stages: &Assets<UsdStageAsset>,
     canonical: &CanonicalStages,
-) -> Vec<(Option<Entity>, i32)> {
+) -> Vec<AuthoredRuntimeSurface> {
     let mut roots = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen_paths = HashSet::new();
+    let mut seen_surface_ids = HashSet::new();
     for (entity, prim_path) in q_paths.iter() {
         if !is_active_scene_entity(entity, scene_mount, q_parents, q_scene_roots, q_entities) {
             continue;
@@ -1789,20 +2123,37 @@ fn authored_control_roots(
         let Ok(path) = SdfPath::new(&prim_path.path) else {
             continue;
         };
-        if reader.boolean(&path, "lunco:ui:controlHud") != Some(true) {
+        let Some(surface_id) = reader
+            .text(&path, "lunco:ui:surfaceId")
+            .filter(|surface_id| !surface_id.trim().is_empty())
+        else {
             continue;
-        }
-        if !accept_control_root_identity(&mut seen, prim_path.stage_handle.id(), &prim_path.path) {
+        };
+        if !accept_runtime_surface_identity(
+            &mut seen_paths,
+            prim_path.stage_handle.id(),
+            &prim_path.path,
+        ) {
             warn!(
-                "[control-hud] duplicate ECS projection for authored root {}; keeping one active projection",
+                "[runtime-ui] duplicate ECS projection for authored surface root {}; keeping one active projection",
                 prim_path.path
             );
             continue;
         }
-        let column = reader
-            .integer(&path, "lunco:ui:controlHudColumn")
-            .unwrap_or(0);
-        roots.push((Some(entity), column));
+        if !seen_surface_ids.insert(surface_id.clone()) {
+            warn!(
+                surface_id,
+                "[runtime-ui] duplicate active surface identity; keeping the first authored root"
+            );
+            continue;
+        }
+        roots.push(AuthoredRuntimeSurface {
+            entity,
+            surface_id,
+            visibility_mode: reader
+                .text(&path, "lunco:ui:visibilityMode")
+                .unwrap_or_else(|| "possessed".to_owned()),
+        });
     }
     roots
 }
@@ -1828,7 +2179,7 @@ fn is_active_scene_root(scene_mount: &SceneMountState, root: Option<Entity>) -> 
     root.is_some_and(|root| scene_mount.active_root() == Some(root))
 }
 
-fn accept_control_root_identity(
+fn accept_runtime_surface_identity(
     seen: &mut HashSet<(AssetId<UsdStageAsset>, String)>,
     stage_id: AssetId<UsdStageAsset>,
     path: &str,
@@ -1836,551 +2187,6 @@ fn accept_control_root_identity(
     seen.insert((stage_id, path.to_owned()))
 }
 
-/// Resolve the authored target and both entities' absolute positions. This keeps
-/// the HUD honest across BigSpace cells, parent hierarchies, and floating-origin
-/// recentering even when the generated GNC model does not expose estimator error
-/// channels.
-fn authored_target_positions(
-    root: Entity,
-    scene_mount: &SceneMountState,
-    q_parents: &Query<&ChildOf>,
-    q_grids: &Query<&Grid>,
-    q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
-    q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
-    q_scene_roots: &Query<(), With<lunco_usd_bevy::UsdSceneRoot>>,
-    q_entities: &Query<Entity>,
-    stages: &Assets<UsdStageAsset>,
-    canonical: &CanonicalStages,
-) -> Option<(lunco_core::coords::GridPos, lunco_core::coords::GridPos)> {
-    if !is_active_scene_entity(root, scene_mount, q_parents, q_scene_roots, q_entities) {
-        return None;
-    }
-    let (_, root_path) = q_paths.get(root).ok()?;
-    let stage_asset = stages.get(&root_path.stage_handle)?;
-    let (reader, _generation) = canonical.reader_for(root_path.stage_handle.id(), stage_asset);
-    let reader: &dyn UsdReadObject = &reader;
-    // The guidance boundary is selected by its authored schema column. Its
-    // target is then read from the real USD connection, so neither a vehicle
-    // path nor a target name is embedded in the producer.
-    let guidance = authored_guidance_path(reader, root_path)?;
-    let target_source = reader
-        .connections(&guidance, "inputs:target_x")
-        .into_iter()
-        .next()?;
-    let (target_path, _) = target_source.rsplit_once('.')?;
-    let mut target_entities = q_paths.iter().filter_map(|(entity, prim_path)| {
-        (prim_path.stage_handle.id() == root_path.stage_handle.id()
-            && prim_path.path == target_path
-            && is_active_scene_entity(entity, scene_mount, q_parents, q_scene_roots, q_entities))
-        .then_some(entity)
-    });
-    let target_entity = target_entities.next()?;
-    if target_entities.next().is_some() {
-        warn!(
-            "[control-hud] multiple ECS entities represent target {}; target is ambiguous",
-            target_path
-        );
-        return None;
-    }
-
-    let root_position =
-        lunco_core::coords::world_position(root, q_parents, q_grids, q_spatial).ok()?;
-    let target_position =
-        lunco_core::coords::world_position(target_entity, q_parents, q_grids, q_spatial).ok()?;
-    Some((root_position, target_position))
-}
-
-/// Resolve the one authored guidance node used by the control profile.
-///
-/// `schemaNode` and `schemaColumn` are the existing USD presentation contract
-/// used by the schema canvas. Reusing that contract keeps target projection and
-/// GNC projection on one identity path without guessing from prim names.
-fn authored_guidance_path(
-    reader: &dyn UsdReadObject,
-    root_path: &lunco_usd::UsdPrimPath,
-) -> Option<SdfPath> {
-    let root_prefix = format!("{}/", root_path.path.trim_end_matches('/'));
-    let mut guidance_paths: Vec<_> = reader
-        .prim_paths()
-        .into_iter()
-        .filter(|path| {
-            let path_text = path.to_string();
-            path_text.starts_with(&root_prefix)
-                && reader.is_active(path)
-                && reader.has_api_schema(path, "LunCoProgramAPI")
-                && reader.boolean(path, "lunco:ui:schemaNode") == Some(true)
-                && reader.integer(path, "lunco:ui:schemaColumn") == Some(0)
-        })
-        .collect();
-    guidance_paths.sort_by(|a, b| a.as_str().cmp(b.as_str()));
-    match guidance_paths.as_slice() {
-        [guidance] => Some(guidance.clone()),
-        [] => None,
-        _ => {
-            warn!(
-                "[control-hud] multiple schema column-0 guidance nodes under {}; boundary is ambiguous",
-                root_path.path
-            );
-            None
-        }
-    }
-}
-
-fn authored_guidance_entity(
-    root: Entity,
-    scene_mount: &SceneMountState,
-    q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
-    q_parents: &Query<&ChildOf>,
-    q_scene_roots: &Query<(), With<lunco_usd_bevy::UsdSceneRoot>>,
-    q_entities: &Query<Entity>,
-    stages: &Assets<UsdStageAsset>,
-    canonical: &CanonicalStages,
-) -> Option<Entity> {
-    if !is_active_scene_entity(root, scene_mount, q_parents, q_scene_roots, q_entities) {
-        return None;
-    }
-    let (_, root_path) = q_paths.get(root).ok()?;
-    let stage_asset = stages.get(&root_path.stage_handle)?;
-    let (reader, _generation) = canonical.reader_for(root_path.stage_handle.id(), stage_asset);
-    let reader: &dyn UsdReadObject = &reader;
-    let guidance = authored_guidance_path(reader, root_path)?;
-    let mut entities = q_paths.iter().filter_map(|(entity, prim_path)| {
-        (prim_path.stage_handle.id() == root_path.stage_handle.id()
-            && prim_path.path == guidance.as_str()
-            && is_active_scene_entity(entity, scene_mount, q_parents, q_scene_roots, q_entities))
-        .then_some(entity)
-    });
-    let entity = entities.next()?;
-    if entities.next().is_some() {
-        warn!(
-            "[control-hud] multiple ECS entities represent guidance {}; boundary is ambiguous",
-            guidance
-        );
-        return None;
-    }
-    Some(entity)
-}
-
-fn project_gnc_state(sim: Option<&SimComponent>, model: Option<&ModelicaModel>) -> GncExposure {
-    let error = model
-        .and_then(|model| model.last_error.as_deref())
-        .or_else(|| {
-            sim.and_then(|sim| match &sim.status {
-                SimStatus::Error(error) => Some(error.as_str()),
-                _ => None,
-            })
-        })
-        .filter(|error| !error.is_empty())
-        .map(str::to_owned);
-
-    let readiness = if error.is_some() {
-        ("FAILED", "var(--danger-color)")
-    } else if let Some(model) = model {
-        if model.is_compiling || !model.is_compiled {
-            ("COMPILING", "var(--accent-color)")
-        } else if model.paused {
-            ("PAUSED", "var(--caution-color)")
-        } else if model.current_time > 0.0 {
-            ("ACTIVE", "var(--ok-color)")
-        } else {
-            ("READY", "var(--accent-color)")
-        }
-    } else {
-        match sim.map(|sim| &sim.status) {
-            Some(SimStatus::Compiling) => ("COMPILING", "var(--accent-color)"),
-            Some(SimStatus::Paused) => ("PAUSED", "var(--caution-color)"),
-            Some(SimStatus::Running) => ("ACTIVE", "var(--ok-color)"),
-            Some(SimStatus::Idle) => ("READY", "var(--accent-color)"),
-            Some(SimStatus::Error(_)) => ("FAILED", "var(--danger-color)"),
-            None => ("UNAVAILABLE", "var(--muted-color)"),
-        }
-    };
-
-    let inputs = model
-        .map(|model| &model.inputs)
-        .or_else(|| sim.map(|sim| &sim.inputs));
-    let outputs = sim
-        .map(|sim| &sim.outputs)
-        .or_else(|| model.map(|model| &model.variables));
-    let input = |name: &str| inputs.and_then(|values| values.get(name)).copied();
-    let output = |name: &str| outputs.and_then(|values| values.get(name)).copied();
-    let piloted = input("piloted");
-    let engage = input("engage");
-    let handoff = output("landing_handoff");
-    let cutoff = output("landing_engine_cutoff");
-    let handoff_request = output("landing_handoff_request");
-    let cutoff_request = output("landing_engine_cutoff_request");
-    let recovery = output("target_recovery_gate");
-    let authority_gate = output("flight_authority_gate");
-
-    let authority = if readiness.0 == "FAILED" {
-        "FAULT"
-    } else if cutoff.is_some_and(|value| value >= 0.5) || handoff.is_some_and(|value| value >= 0.5)
-    {
-        "LANDING"
-    } else if piloted.is_some_and(|value| value >= 0.5) {
-        "PILOT"
-    } else if engage.is_some_and(|value| value < 0.5) {
-        "STANDBY"
-    } else if authority_gate.is_some_and(|value| value < 0.5) && readiness.0 == "ACTIVE" {
-        "LIMITED"
-    } else if matches!(readiness.0, "READY" | "ACTIVE") {
-        "GNC"
-    } else {
-        "—"
-    };
-
-    let mode = if readiness.0 == "FAILED" {
-        "FAULT"
-    } else if cutoff.is_some_and(|value| value >= 0.5) {
-        "ENGINE CUTOFF"
-    } else if handoff.is_some_and(|value| value >= 0.5) {
-        "HANDOFF"
-    } else if piloted.is_some_and(|value| value >= 0.5) {
-        "PILOT OVERRIDE"
-    } else if engage.is_some_and(|value| value < 0.5) {
-        "STANDBY"
-    } else if recovery.is_some_and(|value| value >= 0.5) {
-        "GO-AROUND"
-    } else if readiness.0 == "ACTIVE" {
-        "GUIDANCE"
-    } else if readiness.0 == "READY" {
-        "READY"
-    } else {
-        "—"
-    };
-
-    let handoff_label = if cutoff.is_some_and(|value| value >= 0.5) {
-        "ENGINE CUTOFF"
-    } else if handoff.is_some_and(|value| value >= 0.5) {
-        "LANDING HANDOFF"
-    } else if cutoff_request.is_some_and(|value| value >= 0.5) {
-        "CUTOFF REQUEST"
-    } else if handoff_request.is_some_and(|value| value >= 0.5) {
-        "HANDOFF REQUEST"
-    } else {
-        "NONE"
-    };
-
-    GncExposure {
-        readiness: readiness.0,
-        readiness_color: readiness.1,
-        authority,
-        mode,
-        handoff: handoff_label,
-        error: error.map_or_else(|| "—".to_owned(), |error| format!("FAILED: {error}")),
-    }
-}
-
-fn publish_selected_control_exposure(
-    exposures: &mut EngineExposures,
-    namespace: &str,
-    root: Option<Entity>,
-    telemetry: &[PublicTelemetryValue],
-    scene_mount: &SceneMountState,
-    q_name: &Query<&Name>,
-    q_callsign: &Query<&lunco_core::markers::Callsign>,
-    q_catalog_id: &Query<&lunco_core::CatalogEntryId>,
-    q_sim: &Query<(Entity, &SimComponent)>,
-    q_models: &Query<(Entity, &ModelicaModel)>,
-    q_parents: &Query<&ChildOf>,
-    q_grids: &Query<&Grid>,
-    q_vel: &Query<&LinearVelocity>,
-    q_angvel: &Query<&AngularVelocity>,
-    q_rotation: &Query<&Rotation>,
-    q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
-    q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
-    q_scene_roots: &Query<(), With<lunco_usd_bevy::UsdSceneRoot>>,
-    q_entities: &Query<Entity>,
-    stages: &Assets<UsdStageAsset>,
-    canonical: &CanonicalStages,
-) {
-    let mut ui = exposures.writer(namespace);
-    ui.visible(false);
-    ui.property("vehicle", "No simulation selected");
-    ui.property("status", "WAITING");
-    ui.property("status_color", "var(--muted-color)");
-    ui.property("ground_speed", "—");
-    ui.property("lateral_speed", "—");
-    ui.property("vertical_speed", "—");
-    ui.property("vertical_direction", "—");
-    ui.property("altitude", "—");
-    ui.property("target_offset", "—");
-    ui.property("predicted_impact", "—");
-    ui.property("telemetry_summary", "TELEMETRY UNAVAILABLE");
-    ui.property("roll", "—");
-    ui.property("pitch", "—");
-    ui.property("yaw", "—");
-    ui.property("spin", "—");
-    ui.property("rcs_activity", "0%");
-    ui.property("rcs_activity_width", "0%");
-    ui.property("rcs_axis", "OFF");
-    ui.property("torque_x", "—");
-    ui.property("torque_y", "—");
-    ui.property("torque_z", "—");
-    ui.property("gnc_label", "GNC");
-    ui.property("gnc_readiness", "UNAVAILABLE");
-    ui.property("gnc_readiness_color", "var(--muted-color)");
-    ui.property("gnc_authority", "—");
-    ui.property("gnc_mode", "—");
-    ui.property("gnc_handoff", "NONE");
-    ui.property("gnc_error", "—");
-
-    let Some(root) = root else {
-        return;
-    };
-
-    // The surface footprint is part of the recording composition. Mount it as
-    // soon as the authored HUD root exists, before Modelica has published its
-    // first values, so solver readiness cannot cause a large mid-shot layout pop.
-    ui.visible(true);
-
-    let vehicle = lunco_core::entity_display_name(
-        q_name.get(root).ok(),
-        q_callsign.get(root).ok(),
-        q_catalog_id.get(root).ok(),
-    );
-    let vehicle = if vehicle.is_empty() {
-        "selected".to_owned()
-    } else {
-        vehicle
-    };
-    ui.property("vehicle", vehicle.clone());
-    ui.property("status", "INITIALIZING");
-
-    let guidance_entity = authored_guidance_entity(
-        root,
-        scene_mount,
-        q_paths,
-        q_parents,
-        q_scene_roots,
-        q_entities,
-        stages,
-        canonical,
-    );
-    let guidance_sim = guidance_entity.and_then(|guidance| {
-        q_sim
-            .iter()
-            .find(|(entity, _)| *entity == guidance)
-            .map(|(_, sim)| sim)
-    });
-    let guidance_model = guidance_entity.and_then(|guidance| {
-        q_models
-            .iter()
-            .find(|(entity, _)| *entity == guidance)
-            .map(|(_, model)| model)
-    });
-    let gnc = project_gnc_state(guidance_sim, guidance_model);
-    ui.property("gnc_readiness", gnc.readiness);
-    ui.property("gnc_readiness_color", gnc.readiness_color);
-    ui.property("gnc_authority", gnc.authority);
-    ui.property("gnc_mode", gnc.mode);
-    ui.property("gnc_handoff", gnc.handoff);
-    ui.property("gnc_error", gnc.error);
-
-    let mut outputs = std::collections::HashMap::<String, f64>::new();
-    let mut max_valve = 0.0_f64;
-    let mut touchdown = 0.0_f64;
-    for (entity, sim) in q_sim.iter() {
-        if !is_owned_by_vessel(entity, root, q_parents) {
-            continue;
-        }
-        let authored_outputs = authored_output_names(entity, q_paths, stages, canonical);
-        for (name, &value) in &sim.outputs {
-            let is_public = (guidance_entity == Some(entity))
-                || authored_outputs
-                    .as_ref()
-                    .is_none_or(|authored| authored.contains(name));
-            if !is_public {
-                continue;
-            }
-            // Prefer the selected prim's own public output when a generated
-            // wrapper also republishes the same name below it.
-            if entity == root || !outputs.contains_key(name) {
-                outputs.insert(name.clone(), value);
-            }
-            if name.ends_with("_valve") {
-                max_valve = max_valve.max(value.clamp(0.0, 1.0));
-            }
-        }
-        if let Some(&value) = sim.outputs.get("touchdown") {
-            touchdown = touchdown.max(value);
-        }
-    }
-
-    let landing_handoff = outputs.get("landing_handoff").copied();
-    let (rcs_axis, rcs_peak) = rcs_axis_label(&outputs);
-    let flight_handoff = landing_handoff.is_some_and(|value| value >= 0.5);
-    let status = if gnc.readiness == "FAILED" {
-        ("GNC FAILED", "var(--danger-color)")
-    } else if touchdown >= 0.5 {
-        ("TOUCHDOWN", "var(--ok-color)")
-    } else if flight_handoff {
-        ("GEAR SETTLING", "var(--ok-color)")
-    } else if max_valve > 0.01 {
-        ("RCS FIRING", "var(--accent-color)")
-    } else if gnc.readiness != "ACTIVE" {
-        (gnc.readiness, gnc.readiness_color)
-    } else {
-        ("ATTITUDE HOLD", "var(--ok-color)")
-    };
-
-    let motion = q_vel.get(root).ok().map(|velocity| {
-        let v = velocity.0;
-        let ground_speed = v.x.hypot(v.z);
-        (ground_speed, v.x, v.y)
-    });
-    let attitude = q_rotation.get(root).ok().map(|rotation| {
-        let (yaw, pitch, roll) = rotation.0.to_euler(EulerRot::YXZ);
-        (roll.to_degrees(), pitch.to_degrees(), yaw.to_degrees())
-    });
-    let spin = q_angvel.get(root).ok().map(|angular| angular.0.length());
-    // A tipped lander can have a valid-looking zero range while its downward
-    // beam has no usable surface return.  Exposing that as `0.0 m` makes the
-    // HUD claim that the vehicle is on the ground during the attitude-recovery
-    // phase.  Keep the sensor contract honest: a range is displayable only
-    // when the Modelica altimeter reports usable vertical confidence.
-    let altitude = outputs
-        .get("range_m")
-        .copied()
-        .zip(outputs.get("range_confidence").copied())
-        .and_then(|(range, confidence)| (confidence >= 0.5).then_some(range));
-    let target_positions = authored_target_positions(
-        root,
-        scene_mount,
-        q_parents,
-        q_grids,
-        q_spatial,
-        q_paths,
-        q_scene_roots,
-        q_entities,
-        stages,
-        canonical,
-    );
-    let target_offset_xy = target_positions.map(|(root_position, target_position)| {
-        let offset = root_position.0 - target_position.0;
-        (offset.x, offset.z)
-    });
-    let target_offset = target_offset_xy.map_or_else(
-        || "—".to_owned(),
-        |(x, z)| format!("X {x:+.1} · Z {z:+.1} m"),
-    );
-    let predicted_impact = match (
-        outputs.get("predicted_landing_x"),
-        outputs.get("predicted_landing_z"),
-        outputs.get("predicted_landing_time"),
-        target_positions,
-    ) {
-        (Some(&x), Some(&z), Some(&time), Some((_, target_position))) => {
-            let target_x = target_position.0.x;
-            let target_z = target_position.0.z;
-            format!(
-                "X {:+.1} · Z {:+.1} m / {time:.1}s",
-                x - target_x,
-                z - target_z,
-            )
-        }
-        _ => "—".to_owned(),
-    };
-
-    ui.property("vehicle", vehicle);
-    ui.property("status", status.0);
-    ui.property("status_color", status.1);
-    ui.property(
-        "ground_speed",
-        motion.map_or_else(|| "—".to_owned(), |(speed, _, _)| format!("{speed:.2} m/s")),
-    );
-    ui.property(
-        "lateral_speed",
-        motion.map_or_else(
-            || "—".to_owned(),
-            |(_, speed, _)| format!("{speed:+.2} m/s"),
-        ),
-    );
-    ui.property(
-        "vertical_speed",
-        motion.map_or_else(
-            || "—".to_owned(),
-            // The model keeps the signed world-frame velocity.  The film-facing
-            // card reports a rate magnitude and puts the sign into the adjacent
-            // direction word, so "DOWN 1.82 m/s" is immediately readable.
-            |(_, _, speed)| format!("{:.2} m/s", speed.abs()),
-        ),
-    );
-    ui.property(
-        "vertical_direction",
-        motion.map_or_else(
-            || "—".to_owned(),
-            |(_, _, speed)| {
-                if speed < -0.01 {
-                    "DOWN".to_owned()
-                } else if speed > 0.01 {
-                    "UP".to_owned()
-                } else {
-                    "HOLD".to_owned()
-                }
-            },
-        ),
-    );
-    ui.property(
-        "altitude",
-        altitude.map_or_else(|| "NO LOCK".to_owned(), |value| format!("{value:.1} m")),
-    );
-    ui.property("target_offset", target_offset);
-    ui.property("predicted_impact", predicted_impact);
-    ui.property(
-        "telemetry_summary",
-        if telemetry.is_empty() {
-            "TELEMETRY UNAVAILABLE".to_owned()
-        } else {
-            format_telemetry_summary(telemetry)
-        },
-    );
-    ui.property(
-        "roll",
-        attitude.map_or_else(|| "—".to_owned(), |(roll, _, _)| format!("{roll:+.0}°")),
-    );
-    ui.property(
-        "pitch",
-        attitude.map_or_else(|| "—".to_owned(), |(_, pitch, _)| format!("{pitch:+.0}°")),
-    );
-    ui.property(
-        "yaw",
-        attitude.map_or_else(|| "—".to_owned(), |(_, _, yaw)| format!("{yaw:+.0}°")),
-    );
-    ui.property(
-        "spin",
-        spin.map_or_else(|| "—".to_owned(), |value| format!("{value:.2} rad/s")),
-    );
-    ui.property("rcs_activity", format!("{:.0}%", rcs_peak * 100.0));
-    ui.property("rcs_activity_width", format!("{:.1}%", rcs_peak * 100.0));
-    ui.property("rcs_axis", rcs_axis);
-    ui.property(
-        "torque_x",
-        outputs
-            .get("torque_x")
-            .map_or_else(|| "—".to_owned(), |value| format!("{value:+.0} N·m")),
-    );
-    ui.property(
-        "torque_y",
-        outputs
-            .get("torque_y")
-            .map_or_else(|| "—".to_owned(), |value| format!("{value:+.0} N·m")),
-    );
-    ui.property(
-        "torque_z",
-        outputs
-            .get("torque_z")
-            .map_or_else(|| "—".to_owned(), |value| format!("{value:+.0} N·m")),
-    );
-}
-
-/// Names on the prim's composed public co-simulation boundary.
-///
-/// This is derived from authored USD properties, not from solver variable
-/// spelling. Generated networks can expose hundreds of member values in their
-/// runtime `SimComponent`; only the root `outputs:*` properties are the public
-/// contract a scene author chose.
 fn authored_output_names(
     entity: Entity,
     q_paths: &Query<(Entity, &lunco_usd::UsdPrimPath)>,
@@ -2398,53 +2204,6 @@ fn authored_output_names(
         .filter_map(|name| name.strip_prefix("outputs:").map(str::to_owned))
         .collect::<std::collections::HashSet<_>>();
     (!names.is_empty()).then_some(names)
-}
-
-/// RCS valve names are the authored actuator contract of AttitudeActuation:
-/// `pitch_pos_a_valve`, `roll_neg_b_valve`, and so on. This is classification
-/// of public model outputs, not a vehicle-path or film-specific heuristic.
-fn rcs_axis_label(outputs: &std::collections::HashMap<String, f64>) -> (String, f64) {
-    let mut axes = [("PITCH", 0.0_f64, ""), ("ROLL", 0.0, ""), ("YAW", 0.0, "")];
-    for (name, value) in outputs {
-        if !name.ends_with("_valve") {
-            continue;
-        }
-        let axis = if name.starts_with("pitch_") {
-            Some(0)
-        } else if name.starts_with("roll_") {
-            Some(1)
-        } else if name.starts_with("yaw_") {
-            Some(2)
-        } else {
-            None
-        };
-        let Some(axis) = axis else { continue };
-        let opening = value.clamp(0.0, 1.0);
-        if opening <= axes[axis].1 {
-            continue;
-        }
-        let direction = if name.contains("_pos_") {
-            "+"
-        } else if name.contains("_neg_") {
-            "-"
-        } else {
-            ""
-        };
-        axes[axis].1 = opening;
-        axes[axis].2 = direction;
-    }
-
-    let peak = axes.iter().map(|(_, value, _)| *value).fold(0.0, f64::max);
-    let active = axes
-        .iter()
-        .filter(|(_, value, _)| *value > 0.01)
-        .map(|(axis, _, direction)| format!("{axis} {direction}"))
-        .collect::<Vec<_>>();
-    if active.is_empty() {
-        ("OFF".to_owned(), peak)
-    } else {
-        (active.join(" · "), peak)
-    }
 }
 
 fn publish_runtime_overlay_exposures(
@@ -2621,7 +2380,7 @@ fn link_snapshot(
     )
 }
 
-/// Publish the formatted values for the vessel exposure namespace.
+/// Publish the generic derived values for the driven-body surface.
 ///
 /// This is the only domain-specific part of the first producer. It emits generic
 /// properties and CSS state variables; no HUI, Flair, egui, or Bevy UI component

@@ -107,6 +107,26 @@ After the user or agent reviews the plan, submit `.spec` through
 workflow in Rust or create an AI-only writer; Rhai supplies the policy and the
 existing USD owners supply validation and journalling.
 
+For Editor-driven authoring, add
+`assembly_builder::selected_authoring_context(preview)` as the first
+discovery call. It accepts `()` for the focused preview or an explicit hidden
+preview id and fails unless exactly one current, unambiguous prim is selected.
+It returns the selection identity and generation alongside the normal
+`authoring_context`; do not replace those exact values with a display name.
+Use `functional_frame_catalog(doc, edit_target, root_path)` to enumerate
+authored functional frames and `align_frames_plan(...)` to compute a dry
+source-frame-to-target-frame placement. Keep the same-parent and rigid-stack
+constraints visible in the tool result, and send only the returned typed ops
+through the existing review/journal path.
+
+For a reusable component recipe, compose the existing libraries with ordinary
+Rhai imports through `component_editor::update_context` or
+`component_editor::selected_update_context`. Its `update_plan` is a thin
+facade over `assembly_builder::component_bundle_update_plan`; keep the bundle
+recipe in the owning Twin/model package, return a dry plan, and let
+`assembly_edit` own proposal, review, commit, generation checks, and journalling.
+Do not add a Rust component registry or infer a recipe from USD child names.
+
 ## Use an existing tool first
 
 Before creating a library, query the live surface with `DiscoverSchema`,

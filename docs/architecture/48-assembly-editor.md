@@ -469,10 +469,11 @@ being converted into guessed bounds.
 
 For referenced, cylindrical, mesh, or compound parts, use
 `place_with_collision_clearance_plan`. It takes exact moving and blocker body
-paths and asks `QueryUsdPrim` for `collision_bounds: true`; that request is
-serialized from the shared `lunco_usd_bevy::collision_aabb` owner in the
-canonical stage frame. The tool only applies a candidate translation when all
-bodies share a translation-only parent chain, then checks the aggregate AABBs
+paths and asks `QueryUsdPrim` for `collision_bounds: true`; that request uses the
+shared `lunco_usd_bevy::collision_aabb` owner in the canonical stage
+frame, so nested rigid parts are included in an assembly envelope. The tool only
+applies a candidate translation when all bodies share a translation-only parent
+chain, then checks the aggregate AABBs
 against the caller's minimum gap. Missing collision geometry, malformed or
 unsupported collision data, overlap, duplicate paths, and rotated frames fail
 before a proposal is created. This keeps positioning policy hot-reloadable in
@@ -550,6 +551,61 @@ send the reviewed component `.spec` to `assembly_edit::attach_component`.
 Neither helper mutates USD, so generated plans and human previews share the
 same exact-path contract and generation checkpoint.
 
+### Schema-driven property editing
+
+For a selected prim's editable facts, use
+`assembly_builder::editable_property_catalog(doc, path, edit_target, requested)`.
+Pass an explicit array of field names for a focused Inspector/agent view, or
+`()` to discover supported standard attributes, `kind`, variant selections,
+and common USD relationships. Each returned property carries its USD owner,
+`type_name`, units, composed value, USDA literal, authored/editable status,
+edit scope, and source path. `xformOpOrder` and `extent` remain visible but are
+read-only because they describe structure or derived geometry. Unknown or
+`lunco:`-specific names are rejected; the catalog does not guess a schema.
+
+Use `assembly_builder::editable_property_patch_plan` to turn a list of
+`{ name, value, type_name }` edits into a dry, generation-checked plan. It
+reuses the typed transform, attribute, relationship, kind, and variant
+operations already owned by `assembly_edit`; it does not mutate USD. The plan
+rejects composed read-only targets, wrong USD types, invalid relationship paths,
+structural fields, and stale generations, and reports a true `no_op` with no
+operations when all requested values already match. Review and commit
+`plan.ops` through the normal `assembly_edit::propose`/`review_session`/
+`commit_proposal` flow. `InspectUsdDocument` exposes the underlying standard
+variant selection metadata at `prim.metadata.variantSelections`, so a human
+Inspector and an AI tool can display the same authored/root, runtime, and
+composed state.
+
+When the Editor already has one unambiguous prim selected, use
+`assembly_builder::selected_authoring_context(preview)` instead of copying a
+path from a tab label or display name. With `preview == ()` it reads the
+focused preview; an explicit preview id reads a hidden session without
+changing focus. The wrapper preserves the selection identity, document,
+edit target, generation, and the same composed authoring facts as
+`authoring_context`, and rejects no-selection, multi-selection, stale, or
+ambiguous state before a plan can be built. Recheck its returned identity and
+generation before proposing an edit.
+
+For component-level datum, attachment, and actuator discovery, use
+`assembly_builder::functional_frame_catalog(doc, edit_target, root_path)`.
+It follows the registered `LunCoMountPlugAPI` relationship
+`lunco:mount:frame`, returning the exact authored mount frame and its standard
+transform facts. Generic datum and actuator paths remain explicit inputs to the
+caller-authored plan and are consumed by standard joint or Modelica contracts;
+the tool does not mirror them into unregistered component metadata, scan child
+names, or promote geometry into a functional frame. It also returns the root's
+explicit socket paths.
+
+To preview placement between two authored frames, use
+`assembly_builder::align_frames_plan(doc, edit_target, moving_path,
+moving_frame_path, target_path, target_frame_path)`. It returns two ordinary
+transform operations that make the source frame coincide with the target
+frame. The roots must be distinct siblings and all frame transforms must be
+canonical rigid `translate`/`rotateXYZ` stacks with unit scale. The result is
+dry; review it and submit `.ops` through the normal proposal flow. Physical
+mount creation and existing-joint realignment remain the explicit
+`place_or_attach_plan` paths above.
+
 #### Generic component bundles
 
 For a recurring parametric part, `assembly_builder::component_bundle_facts`
@@ -557,20 +613,40 @@ normalizes one caller-authored contract and
 `component_bundle_plan` lowers it to the existing reviewed USD operations.
 The bundle may contain standard Cube/Cylinder/Cone geometry with independent
 visual and collision roles, an optional existing material relationship, SI
-dimensions, `PhysicsMassAPI` facts, named datum/attachment/actuator frames,
-actuator endpoints with units and limits, and optional deployment state. The
-builder validates names, dimensions, frame ownership, finite values, and
-duplicate geometry/frame/actuator identities before a proposal is created.
+dimensions, `PhysicsMassAPI` facts, explicit datum/attachment/actuator paths,
+actuator endpoints, and optional deployment state. The builder validates names,
+dimensions, frame ownership, finite values, and duplicate geometry/frame/
+actuator identities before a proposal is created. It authors standard
+`UsdGeom`, `UsdPhysics`, `UsdShade`, `kind`, and `inputs:`/`outputs:` opinions;
+draft units, limits, and deployment values remain caller-side inputs or belong
+to the standard joint/Modelica owner rather than becoming duplicate `lunco:`
+properties.
 
 This is a reusable data contract, not a vehicle schema: panels, plates, feet,
 rails, struts, and actuator bodies are represented by the same bundle and
-remain authored in Rhai/USD. The root receives the component metadata and
-mass facts; each geometry child receives its standard shape, transform,
+remain authored in Rhai/USD. The root receives its standard kind, transform,
+and mass facts; each geometry child receives its standard shape, transform,
 collision, visibility, and material-binding opinions. The builder does not
 infer a rigid body, joint, socket occupancy, or material asset. Add an
 explicit `assembly_edit::rigid_body_plan` or joint/mount plan when the part
 must participate in articulated physics, and ensure any material relationship
 target already exists in the composed stage.
+
+The `component_editor` Rhai tool library is the shared Editor/AI facade for
+updating an existing component. `update_context(doc, edit_target, path,
+requested)` composes the exact authoring context and schema-driven property
+catalog; `selected_update_context(preview, requested)` obtains the same input
+from the current unambiguous Editor selection. `update_plan` delegates to the
+existing `component_bundle_update_plan` and returns a dry
+`component_update_plan` with the typed `.ops`. The caller must provide the
+component bundle recipe and optional explicit bindings, then submit the ops
+through the ordinary proposal/review/commit journal path. The facade is
+recipe-driven: it never derives a recipe from child names and does not create
+a component registry, expression language, or second USD writer. The
+selected-context operation is advertised only for an authored `Xform`
+component; an explicit context still requires an existing `Xform` root. It
+preserves existing topology, material bindings, and unowned children while
+rejecting drift and true no-op updates.
 
 Referenced construction has one additional sequencing rule. Use
 `assembly_builder::referenced_instance_plan` or
@@ -583,6 +659,19 @@ separating it from first-use reference loading keeps the dynamic recipe from
 creating a root with an uncomposed subtree. Generic validation still rejects
 duplicate identities, missing parents, invalid references, invalid shapes, and
 unavailable variant targets before proposal.
+
+For repeated authoring, use
+`assembly_builder::referenced_instance_pattern_plan(doc, edit_target, parent,
+template, placements)`. The template contains the shared explicit USD type,
+asset, optional schemas, attributes, and targeted reference path; every
+placement supplies its own USD identifier and local pose. The input order is
+preserved in the returned paths and operations, duplicate identities and
+missing poses fail before proposal, and the plan composes the existing
+single-instance planner. Use
+`assembly_builder::referenced_instance_mirror_plan` for one local-axis mirror
+placement. It reflects translation across X, Y, or Z and rejects non-zero
+source Euler rotation rather than guessing a reflected orientation. Both plans
+are dry and must go through the normal proposal/review/commit path.
 
 Mission-specific recipes remain data-driven Rhai in the owning Twin. They
 compose the generic builder, supply exact paths and study inputs, and submit
@@ -604,7 +693,7 @@ coverage, and mass/inertia plus explicit collider coverage. Its
 preview/transform boundary; it does not author transforms or create a second
 selection or journal. Callers supply the assembly manifest and expected
 targets, so missing metadata fails visibly instead of being inferred from
-names. `collision_bounds: true` exposes the shared composed aggregate envelope
+names. `collision_bounds: true` exposes the shared composed whole-assembly
 for placement and inspection; a null envelope means visual-only geometry,
 whereas malformed collision data is an error. Raycast wheels are not listed as
 rigid bodies: only actual movable bodies are checked for joint coverage.
@@ -630,6 +719,14 @@ collision query returns an envelope. Duplicate paths, unknown roles, missing
 prims, and incomplete coverage are visible structured errors. This keeps the
 asset policy reloadable in Rhai without adding a second geometry reader or
 Rust-side intent registry.
+For components created by an external USD tool or edited directly in USDA, use
+`assembly_audit::standard_component_report(doc, manifest)` as a read-only
+compliance check. The manifest names the exact root and parts and expected
+standard `type_name`, shape, `UsdPhysics`, visibility, purpose, and
+`UsdShade` material-binding facts. It reports missing or mismatched authored
+facts without repairing them, guessing paths, or requiring a duplicate
+component schema; run it before regeneration and before committing an external
+edit.
 
 Preview-only visual projection does not attach generic Rhai or builtin programs.
 The `UsdPreviewOnly` scope guards the program attachment owner as well as the

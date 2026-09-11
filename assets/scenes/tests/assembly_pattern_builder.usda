@@ -1,0 +1,35 @@
+#usda 1.0
+(
+    defaultPrim = "AssemblyPatternBuilderTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Empty authored assembly for deterministic repeated and mirrored reference
+# placement. The production Rhai scenario supplies all instance identities and
+# local poses through the reviewed assembly plan.
+def Xform "AssemblyPatternBuilderTest" (
+    kind = "assembly"
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+)
+{
+    def DistantLight "TestLight"
+    {
+        float intensity = 1.0
+    }
+
+    def Xform "Assembly"
+    {
+    }
+
+    def Scope "Scenario"
+    {
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            asset info:sourceAsset = @lunco://scenarios/tests/assembly_pattern_builder.rhai@
+        }
+    }
+}

@@ -616,6 +616,65 @@ typed `SetAttribute` operations for the same `ApplyUsdOps`/proposal boundary
 used by the Editor. The core tool has no model-specific paths; a Twin-local
 recipe supplies those paths and facts.
 
+For a generic Inspector or AI editing loop, first call
+`editable_property_catalog(doc, path, edit_target, requested)`. Give it an
+explicit field array for a focused view, or `()` to discover supported
+standard `UsdGeom`, `UsdPhysics`, `UsdShade`, `kind`, variant, and
+`inputs:`/`outputs:` properties. The result includes each field's owner,
+type, units, composed value, USDA literal, edit scope, source path, and
+`editable`/read-only status. Unknown names, including guessed `lunco:` fields,
+are rejected. Structural `xformOpOrder` and derived `extent` are reported but
+not editable.
+
+Turn an edit list into a dry plan with
+`editable_property_patch_plan(doc, edit_target, path, edits, parent_gen)`:
+
+```rhai
+let catalog = assembly_builder::editable_property_catalog(
+    doc, "/Rover/Panel", "@root@", (),
+);
+let plan = assembly_builder::editable_property_patch_plan(
+    doc, "@root@", "/Rover/Panel",
+    [#{ name: "xformOp:translate", value: [2.0, 0.0, 0.0] },
+     #{ name: "inputs:surface_area", type_name: "float", value: 3.5 }],
+    catalog.generation,
+);
+let proposal = assembly_edit::propose(
+    doc, #{ Rover: () }, "Edit panel properties", plan.ops, plan.parent_generation,
+);
+```
+
+The patch planner preserves true no-op edits, validates exact types and target
+scope, and returns typed `SetTranslate`/`SetAttribute`/relationship/kind/
+variant operations without writing source. Review the proposal before commit;
+do not bypass the document journal with a raw USDA rewrite.
+
+For a whole reusable component, use the generic `component_editor` facade. It
+is a Rhai tool library, so its dependencies are loaded through ordinary Rhai
+imports rather than a Rust registry. `selected_update_context(preview, ())`
+reads the exact selected component, generation, topology, and schema-owned
+property catalog. A Twin or model package supplies the explicit component
+bundle recipe; USD has no standard parametric-recipe schema and the editor
+must not infer one from child names or materials:
+
+```rhai
+let context = component_editor::selected_update_context(preview, ());
+let plan = component_editor::update_plan(
+    context.doc_id, context.edit_target, context.path, bundle, bindings,
+);
+let proposal = assembly_edit::propose(
+    context.doc_id, #{ Assembly: () }, "Update component", plan.ops,
+    context.generation,
+);
+```
+
+`update_plan` delegates to `assembly_builder::component_bundle_update_plan`.
+It updates only existing standard geometry, transforms, mass facts, and
+explicit bindings; it rejects topology, kind, collision-role, visibility, and
+material drift. Review the proposal and commit it through
+`review_session`/`commit_proposal`. An unchanged recipe is a true no-op, and a
+failed or stale context produces no journal entry.
+
 `place_with_clearance_plan` is the conservative placement path for parts that
 must stay clear of authored geometry. It takes exact moving/blocker frame and
 Cube-shape paths under one translation-only parent, checks the composed Cube
@@ -699,6 +758,27 @@ the reviewed result through the existing typed owner: proposal/review/commit
 for `.ops`, or `assembly_edit::attach_component(doc, plan.spec)` for a new
 component. This keeps generated authoring and human editing on the same USD
 paths and validation boundary without adding a Rust policy layer.
+
+When authoring from the open Editor, use
+`assembly_builder::selected_authoring_context(preview)` to turn the current
+single selection into that same exact authoring record. Pass `()` for the
+focused preview or an explicit preview id for a hidden session. It rejects
+no-selection, multiple selection, stale entries, and ambiguous projected paths;
+it never guesses a document or prim from a tab/name. Treat its selection
+identity and generation as a checkpoint before proposing an edit.
+
+Use `assembly_builder::functional_frame_catalog(doc, edit_target, root_path)`
+to discover authored datum, attachment, and actuator frames. It follows only
+the root's explicit frame relationships and returns exact paths, roles,
+mount/actuator facts, local transforms, root-relative transforms, and socket
+paths. Use `assembly_builder::align_frames_plan(doc, edit_target,
+moving_path, moving_frame_path, target_path, target_frame_path)` for a dry
+visual placement plan. The roots must be sibling Xforms and the frame chains
+must be rigid `translate`/`rotateXYZ` with unit scale; review the returned two
+typed transform operations before sending them to `assembly_edit::propose`.
+Use the existing attach/realignment planner when physical joint topology must
+change. These helpers are generic Rhai policy over the existing USD query and
+journal owners, so a vehicle recipe does not need a new Rust builder.
 
 Mission-specific builders stay in the owning Twin. They should compose the
 generic `assembly_builder` plans, keep all paths and study facts explicit, and
@@ -964,7 +1044,7 @@ produces the same sequence — no explicit seeding needed.
 | [`multi_robot_mission_coordinator.rhai`](../assets/scripting/examples/multi_robot_mission_coordinator.rhai) | single-authority event-driven assignment coordinator |
 | [`multi_robot_mission_worker.rhai`](../assets/scripting/examples/multi_robot_mission_worker.rhai) | identity-scoped worker that installs a native task tree |
 | [`avoid.rhai`](../assets/scripting/examples/avoid.rhai) | sensing + obstacle avoidance |
-| [`tools/assembly_builder.rhai`](../assets/scripting/tools/assembly_builder.rhai) | semantic placement, generic component bundles, Cube and composed collision alignment/clearance, referenced component instances, staged variant selection, geometry, socket mating, retrofit, and body/joint plans |
+| [`tools/assembly_builder.rhai`](../assets/scripting/tools/assembly_builder.rhai) | selected-prim authoring context, functional-frame catalog, dry frame alignment, semantic placement, generic component bundles, Cube and composed collision alignment/clearance, referenced component instances, staged variant selection, geometry, socket mating, retrofit, and body/joint plans |
 | [`tools/formation.rhai`](../assets/scripting/tools/formation.rhai) | a tool library (formation flying) |
 | [`tools/survey.rhai`](../assets/scripting/tools/survey.rhai) | a custom tool library (survey pattern) |
 

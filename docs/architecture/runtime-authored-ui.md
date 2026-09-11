@@ -37,7 +37,8 @@ Each side owns one concern:
 |---|---|---|
 | Engine/domain producer | authoritative values, sampling, visibility, capability names | HTML ids, CSS, layout, widget-specific code |
 | `EngineExposures` | typed named snapshots and change revision | renderer or presentation policy |
-| `runtime_surfaces.json` | surface registration, bindings, gates, actions, placement | simulation state and CSS rules |
+| `runtime_surfaces.json` | reusable surface registration, bindings, gates, actions, placement | simulation state, subject selection, and visibility policy |
+| active Twin `LunCoPolicy` / Rhai | subject visibility, scalar presentation, recording selection | retained tree, simulation authority, and renderer details |
 | `.html` template | retained tree shape, declared properties, callback names | ECS queries, domain commands, CSS layout |
 | `.css` stylesheet | appearance, internal layout, transitions, custom-property mapping | engine state and command dispatch |
 | workbench / egui | shell, editors, complex panels, docking tree | runtime surface content |
@@ -46,6 +47,13 @@ The generic exposure namespace is the contract. Do not create a special
 `domain_to_view` path or a Rust producer for one particular HTML template. Ports,
 telemetry, physics, scripts, and derived capabilities all publish through the
 same registry.
+
+Subject-scoped surfaces are discovered from composed USD. A prim opts in with
+`lunco:ui:surfaceId`, and `lunco:ui:visibilityMode` supplies the mode consumed
+by the built-in Rhai policy (`possessed` or `always`). The surface ID is the
+exposure namespace; Rust does not construct names from model classes, slots, or
+vehicle counts. A Twin may author, override, or omit this metadata on its
+scene-level opinions.
 
 ## Where to work
 
@@ -184,68 +192,52 @@ setting; omission means hidden. The workbench's existing Twin-scoped
 must not derive coordinates from transforms, duplicate pose state, or keep a
 stale marker across avatar, Twin, or scene lifecycle changes.
 
-### Overlay ownership audit
+### Ownership and visibility
 
 Moving every overlay into the Twin would mix persistent project policy with
 transient session state. The correct split for the shipped surfaces is:
 
-| Surface/state | Owner | Twin policy? |
-|---|---|---|
-| `camera-status` visibility | `runtime_surfaces.json` + active Twin `[settings]` | Yes; `ui.camera_status`, default on |
-| `rover-hud` visibility | possession/capability state | No; it follows the currently driven vessel |
-| lander control cards | authored USD `lunco:ui:controlHud` metadata, scoped to the active `SceneMountState` root | Already scene/Twin-authored opt-in |
-| `lunica-schema` | selected authored USD schema root | No; selection-derived |
-| `celestial-view` | runtime exposure plus global view-switcher host gate; the lunar map itself is controlled by active Twin `[settings].ui_lunar_map`, while the view-switcher preference is surfaced in Settings ▸ HUD and the Camera menu | Map policy is Twin-authored; the view-selector host gate remains application chrome |
-| terrain/scenario-download progress | terrain/network/session resources | No; transient lifecycle state |
-| tutorial HUD/objectives | lesson Rhai state and tutorial lifecycle | No persistent preference |
-| notifications, blackout | runtime session state | No; transient/application scope |
-| perf/input overlays | user-global settings | No; Settings ▸ HUD and typed commands share the persisted owner |
-| theme, window geometry | user-global settings | No; other Settings sections own these preferences |
+| Surface/state | Owner |
+|---|---|
+| reusable template, style, binding, action, and placement | `runtime_surfaces.json` |
+| subject identity and surface membership | composed USD `lunco:ui:surfaceId` |
+| `possessed` / `always` visibility | built-in Rhai policy, selected by authored `lunco:ui:visibilityMode` |
+| model-specific presentation and telemetry selection | active Twin/model Rhai policy and authored USD/Modelica outputs |
+| recording surface selection | active Twin `runtime.ui.recording` policy |
+| schema, terrain, tutorial, notification, and performance state | their existing authoritative lifecycle/resources |
+| user preferences and window overrides | existing settings/workspace owners |
 
-The workbench's **Settings ▸ HUD** submenu is a single presentation over those
-existing owners. Time and the celestial view switcher replace their respective
-`OverlaySettings` values; Performance and Input replace their typed persisted
-resources; and Camera/status reads and writes the active Twin's existing
-`ui.camera_status` setting. It does not introduce a registry or mirror of HUD
-visibility state. Rover, lander, terrain/download, tutorial, notification, and
-blackout rows are inventory-only because their owners must remain possession,
-authored USD, or lifecycle state; a global checkbox would conflict with those
-authoritative gates.
+The workbench's **Settings ▸ HUD** submenu remains a presentation over existing
+settings/workspace owners. It does not become a second visibility registry.
 
-When a future surface needs project-authored policy, add a manifest `setting`
-binding and use the generic Twin map. Do not persist its live progress, current
-selection, or network state in the Twin merely because the pixels are rendered
-by HUI.
+Surface policy is authored in Twin Rhai where it is project-specific. Do not
+persist live progress, current selection, or network state in the Twin merely
+because the pixels are rendered by HUI.
 
-The lander control profile reads Modelica-owned propulsion values through the
-authored telemetry channel contract. Its generic telemetry summary preserves
-the authored display label and unit, so remaining fuel is shown in kg and
-unavailable channels remain explicit. No lander-specific fuel or thrust
-conversion lives in the runtime snapshot projector.
+Modelica values remain authoritative at their authored network boundaries.
+Rhai presentation policy may select and label those typed telemetry values for
+a surface, while the generic exposure registry preserves authored units and
+availability states.
 
-The same profile projects the internal guidance computer from the authored USD
-`lunco:ui:schemaNode` in column zero. That boundary is resolved once through
-the composed stage and matched to its `SimComponent`/`ModelicaModel` entity;
-the generic external `Autopilot` actor is not used as a GNC signal. The card's
-GNC readiness, authority, mode, handoff, and failure properties therefore come
-from the existing Modelica lifecycle and authored input/output ports. GNC
-operator channels use `LunCoTelemetryAPI` on the guidance component, so the
-telemetry browser and compact card consume the same SignalRegistry samples.
-Missing, compiling, paused, and failed states remain visible on the authored
-surface instead of being hidden until an actuator sample exists.
+The same policy boundary applies to simulation participants: Rust exposes
+typed participant facts and authored public outputs, while Twin Rhai chooses
+which values become a presentation property. Missing, compiling, paused, and
+failed states remain explicit instead of being hidden until a sample exists.
 
-The control-root projector is also lifecycle-scoped. It accepts only prims below
-the current primary `SceneMountState::active_root`; preview, additive, and
-outgoing roots cannot keep publishing a card while a replacement scene is being
-teardown. The cache invalidates when that active root changes, and repeated ECS
-projections of the same composed `(stage, prim path)` are reduced to one
-operator identity with a diagnostic. This keeps the two authored manifest slots
-from becoming two copies of one active lander during scene reload or projection
-churn. At the same replacement boundary, scene-derived exposure namespaces are
-withdrawn synchronously; the retained UI cannot display the outgoing card while
-deferred entity teardown is still pending. The next active root repopulates those
-namespaces through the normal first publication, while the application-owned
-`camera-status` fact remains retained.
+Subject-scoped publication is lifecycle-scoped. It accepts only prims below the
+current primary `SceneMountState::active_root`; preview, additive, and outgoing
+roots cannot keep publishing after a replacement begins. Duplicate composed
+projections and duplicate authored surface IDs are rejected visibly so one
+retained namespace cannot represent two subjects. Scene-derived snapshots are
+withdrawn synchronously at teardown, then rebuilt from the next active scene.
+
+Offline recording is Twin-owned. While capture is active, the
+`runtime.ui.recording` policy receives typed lists of stable manifest IDs and
+currently visible IDs, and returns the IDs required in the shot. The runtime
+validates that selection and acknowledges actual retained/rendered surfaces
+through the status bus. Unknown, hidden, duplicate, or malformed selections
+produce an explicit readiness error; capture selection is not stored in the
+reusable manifest.
 
 Bindings are deliberately explicit. A target property must first be declared
 by the template; otherwise the bridge ignores it. If `bindings` is omitted, the

@@ -37,7 +37,8 @@ The composed source is the **single source of truth**. Both consumers sample it:
   streamed/baked, so a spawn over un-baked terrain rests on the ground instead of
   free-falling. The GUI path takes `max(oracle, raycast)` so an obstacle rock poking
   up under the chassis still lifts the spawn. The GUI uses the asset's composed
-  `UsdPhysics` collision footprint; an asset without one is rejected instead of
+  whole-assembly `UsdPhysics` collision envelope, including nested rigid bodies;
+  an asset without one is rejected instead of
   receiving invented dimensions or a lift. The API path uses the explicit
   position supplied by the caller.
 

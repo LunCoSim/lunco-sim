@@ -335,14 +335,18 @@ a runtime write retry or fallback.
 For semantic component construction, use
 `assembly_builder::component_bundle_facts` and
 `assembly_builder::component_bundle_plan` for reusable geometry, collision,
-mass, dimensions, frames, and actuator endpoint contracts. Validate the facts,
-append the returned `.ops` to one reviewed proposal, then query the composed
-root and children. The bundle is Rhai policy over existing typed USD
-operations; it does not create a material, infer a rigid body/joint, or hide a
-missing mount relationship. Use the explicit body/joint planners for
-articulation and `find_compatible_socket`/`mount_component` for an authored
-socket attachment. Do not hand-author a reference plus guessed transform when
-a component advertises a mount plug.
+mass, dimensions, explicit frame paths, and actuator endpoint contracts.
+Validate the facts, append the returned `.ops` to one reviewed proposal, then
+query the composed root and children. The bundle is Rhai policy over existing
+typed USD operations: it uses `UsdGeom`, `UsdPhysics`, `UsdShade`, `kind`, and
+`inputs:`/`outputs:` where those standard owners fit. Draft units, limits, and
+deployment state stay caller-side or in the owning Modelica/joint contract; do
+not mirror them into unregistered `lunco:` properties. It does not create a
+material, infer a rigid body/joint, or hide a missing mount relationship. Use
+the explicit body/joint planners for articulation and
+`find_compatible_socket`/`mount_component` for an authored socket attachment.
+Do not hand-author a reference plus guessed transform when a component
+advertises a mount plug.
 
 Mission-specific construction belongs in the owning Twin's Rhai tool library.
 Keep the core workflow generic: compose a referenced instance, wait for its
@@ -372,6 +376,13 @@ explicit `mass`, `inertia`, `joints`, and `colliders` to the existing audits. A
 envelope. Duplicate paths, unknown roles, missing prims, and incomplete
 coverage remain visible structured errors; the tool is dynamically reloadable
 Rhai policy and does not create a parallel geometry or USD writer.
+For a direct standard-schema compliance check on a generated or hand-edited
+component, use `assembly_audit::standard_component_report(doc, manifest)`.
+Provide the exact root and part paths plus the expected standard `type_name`,
+shape, physics, visibility, purpose, and material-binding facts. It is
+read-only, manifest-driven, and reports errors instead of repairing or
+inferring missing fields; use it before proposing a regeneration or committing
+an external USDA edit.
 
 For `joint_frame_report`, supply `axis` only for revolute, prismatic or
 spherical joints (their standard omitted axis is X). Fixed payload adapters,
@@ -412,6 +423,29 @@ one generation-checked `ApplyUsdOps` edit. AI callers use
 `assembly_builder::parameter_plan` and the same `assembly_edit::batch` or
 proposal flow; do not make one command per slider or create a vehicle-specific
 parameter writer.
+
+For a component-level update that must keep geometry, frames, mass, and
+explicit bindings coherent, use the generic `component_editor` Rhai facade:
+
+```rhai
+let context = component_editor::selected_update_context(preview, ());
+let plan = component_editor::update_plan(
+    context.doc_id, context.edit_target, context.path, bundle, bindings,
+);
+```
+
+The bundle is an explicit Twin/model-package recipe, not something inferred
+from a selected prim. The facade delegates to
+`assembly_builder::component_bundle_update_plan`, so the result is dry and
+topology-preserving. It updates existing standard `UsdGeom`/`UsdPhysics`
+values and explicit bindings, while rejecting missing children, kind or role
+drift, changed material ownership, stale generations, and no-op journals.
+Review `plan.ops` through `assembly_edit::propose`, `review_session`, and
+`commit_proposal`. Use `update_context(doc, edit_target, path, requested)` when
+the path is already known; use `selected_update_context` when starting from the
+Editor selection. Both preserve the exact document, edit target, path, and
+generation checkpoint for human and AI workflows.
+
 When editing a primitive's standard `axis`, compare the visible result after
 reprojection with the composed attribute. Repeated axis edits must apply the
 axis correction once to the authored pose, including identity rotation. A
@@ -538,6 +572,22 @@ Use the smallest existing typed intent that expresses the change:
   `assembly_edit::attach_component`) or `mode: "realign_existing_mount"`
   (review `.ops`, then use the normal proposal flow). Never add an AI-only
   writer or guess a frame from a part name.
+- When the user is already working in the Editor, use
+  `assembly_builder::selected_authoring_context(preview)` to bridge the exact
+  single selection into the same authoring record. Pass `()` for the focused
+  preview or an explicit preview id for a hidden session. It rejects no,
+  multiple, stale, and ambiguous selection state; preserve its selection
+  identity and generation until proposal review.
+- Use `assembly_builder::functional_frame_catalog(doc, edit_target, root_path)`
+  to read the registered mount frame. It follows only the authored
+  `lunco:mount:frame` relationship and returns its exact path, standard
+  transform facts, and socket paths. Keep generic datum and actuator paths as
+  explicit plan inputs consumed by standard joint or Modelica contracts. Use
+  `assembly_builder::align_frames_plan(doc, edit_target, moving_path,
+  moving_frame_path, target_path, target_frame_path)` for a dry two-op visual
+  placement plan; the roots must be sibling Xforms and the frame stacks must
+  be rigid `translate`/`rotateXYZ` with unit scale. Physical mount topology
+  still goes through the attach/realignment planners above.
 - `assembly_edit::attach_program(doc, spec)` dispatches the existing typed
   `AttachProgram` contract. Build its `inputs` and `outputs` with the
   namespaced helpers `assembly_edit::program_input_connection`,
@@ -583,6 +633,35 @@ Use the smallest existing typed intent that expresses the change:
   `ApplyUsdOps` command path as Inspector edits. This sequencing keeps async
   reference loading and coarse variant recomposition from producing a root
   with missing children.
+- For generic human or AI property editing, start with
+  `assembly_builder::editable_property_catalog(doc, path, edit_target,
+  requested)`. Pass an explicit field array for a focused view or `()` to
+  discover supported standard `UsdGeom`, `UsdPhysics`, `UsdShade`, `kind`,
+  variant, and `inputs:`/`outputs:` fields. The result includes the USD owner,
+  exact type, units, composed value, USDA literal, authored/editable status,
+  edit scope, and source path. `xformOpOrder` and `extent` are visible but
+  read-only; unknown names and guessed `lunco:` fields fail visibly.
+- Build a dry change set with
+  `assembly_builder::editable_property_patch_plan(doc, edit_target, path,
+  edits, parent_gen)`, where each edit is `{ name, value, type_name }`.
+  It reuses the existing typed transform, attribute, relationship, kind, and
+  variant operations, checks the exact generation and target scope, rejects
+  wrong types/paths and structural edits, and reports a true `no_op` with an
+  empty `.ops` list when values already match. Submit `.ops` through the
+  normal `assembly_edit::propose`/`review_session`/`commit_proposal` flow; the
+  planner never writes USDA directly. `InspectUsdDocument` exposes standard
+  variant selections at `prim.metadata.variantSelections` for the same
+  human/AI read path.
+- For repeated references, use
+  `assembly_builder::referenced_instance_pattern_plan` with one explicit
+  template and an ordered array of `{ name, translation, rotation, scale }`
+  placements. It preserves that order, composes the existing referenced
+  instance planner, and rejects duplicate names or placements without a local
+  pose. For a reflected placement, use
+  `assembly_builder::referenced_instance_mirror_plan`; provide a cardinal
+  local axis and source translation. It rejects non-zero source Euler rotation
+  because the reflected orientation must be authored explicitly, rather than
+  silently guessed. Review the returned `.ops` before committing.
 - Use `assembly_builder::place_with_clearance_plan` when placing a part near
   other authored geometry. Supply the exact moving frame and Cube shape plus
   every exact blocker frame and Cube shape. The frames must share a

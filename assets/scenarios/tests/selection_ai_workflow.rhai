@@ -3,6 +3,13 @@ const TEST_KIND = "editor";
 const PART = "/SelectionAiWorkflow/Part";
 const OTHER = "/SelectionAiWorkflow/Other";
 
+fn has_operation(operations, name) {
+    for operation in operations {
+        if operation.operation == name { return true; }
+    }
+    false
+}
+
 fn on_start(me) {
     this.phase = 0;
     this.elapsed = 0.0;
@@ -13,16 +20,22 @@ fn on_start(me) {
     this.checks = [];
 }
 
-fn ready(preview, doc, generation) {
-    for p in assembly_edit::viewport().previews {
-        if p.preview == preview && p.doc == doc && p.projection_ready
+fn ready(preview, doc) {
+    let generation = assembly_edit::describe(doc).generation;
+    let viewport = assembly_edit::viewport();
+    for p in viewport.previews {
+        if p.preview == preview && p.doc_id == doc && p.projection_ready
             && p.projected_generation == generation { return true; }
     }
     false
 }
 
+fn selection_doc(selection) {
+    if selection.doc_id != () { selection.doc_id } else { selection.doc }
+}
+
 fn correction(context, generation) {
-    assembly_edit::propose(context.doc, "Assembly", "Raise selected test part",
+    assembly_edit::propose(selection_doc(context), "Assembly", "Raise selected test part",
         [#{ SetTranslate: #{ edit_target: context.edit_target,
             path: context.primary.path, value: [0.0, 1.0, 0.0] } }], generation)
 }
@@ -63,10 +76,15 @@ fn on_tick(me) {
         return;
     }
     if this.phase == 2 {
-        if !ready(12201, this.original, 0) || !ready(12202, this.fork, 0) { return; }
+        if !ready(12201, this.original) || !ready(12202, this.fork) { return; }
+        this.original_generation = assembly_edit::describe(this.original).generation;
+        this.fork_generation = assembly_edit::describe(this.fork).generation;
         let empty = assembly_edit::selection_context();
         this.checks.push(t_true(empty.selection_state == "no_selection"
             && empty.requires_single_target, "no selection cannot imply a target"));
+        let empty_authoring = assembly_builder::selected_authoring_context(());
+        this.checks.push(t_true(!empty_authoring.ok,
+            "selected authoring context rejects no selection"));
         assembly_ui::select_prim(12202, PART, false, false);
         this.phase = 3;
         return;
@@ -75,14 +93,31 @@ fn on_tick(me) {
         let selected = assembly_edit::selection_context();
         if selected.primary == () || selected.primary.path != PART { return; }
         this.context = selected;
-        this.checks.push(t_true(selected.doc == this.fork && selected.preview == 12202
+        this.checks.push(t_true(selection_doc(selected) == this.fork && selected.preview == 12202
             && selected.selection_mode == "single" && !selected.requires_single_target,
             "selected part has exact fork and preview identity"));
         let hidden = assembly_edit::selection_context_for(12201);
-        this.checks.push(t_true(hidden.doc == this.original && !hidden.focused
+        this.checks.push(t_true(selection_doc(hidden) == this.original && !hidden.focused
             && hidden.selection_state == "no_selection", "hidden same-name document stays isolated"));
-        let proposal = correction(selected, 0);
-        let review = assembly_edit::review_session(selected.doc);
+        let selected_authoring = assembly_builder::selected_authoring_context(12202);
+        this.checks.push(t_true(selected_authoring.ok
+                && selected_authoring.kind == "selected_authoring_context"
+                && selected_authoring.path == PART
+                && selected_authoring.selection_identity == selected.primary.identity
+                && selected_authoring.edit_target == selected.edit_target,
+            "selected authoring context preserves exact identity and edit target"));
+        this.checks.push(t_true(has_operation(
+                selected.primary.supported_operations, "UpdateComponent"),
+            "component selection advertises the generic recipe-driven update plan"));
+        let component_context = component_editor::selected_update_context(12202, ());
+        this.checks.push(t_true(component_context.ok
+                && component_context.kind == "component_update_context"
+                && component_context.path == PART
+                && component_context.generation == selected_authoring.generation,
+            "selected component context preserves the exact Editor checkpoint"));
+        let selected_doc = selection_doc(selected);
+        let proposal = correction(selected, assembly_edit::describe(selected_doc).generation);
+        let review = assembly_edit::review_session(selected_doc);
         if proposal.ok == false || review.proposals.len() != 1 {
             this.checks.push(t_true(false, "correction proposal was not created"));
             this.done = true;
@@ -99,9 +134,12 @@ fn on_tick(me) {
         if current.primary == () || current.primary.path != OTHER { return; }
         this.checks.push(t_true(current.primary.identity != this.context.primary.identity,
             "selection changed during planning is detectable"));
+        this.checks.push(t_true(!has_operation(
+                current.primary.supported_operations, "UpdateComponent"),
+            "non-component selection does not advertise component regeneration"));
         // Agent policy: never silently retarget or commit after context changes.
         assembly_edit::review_proposal(this.proposal, #{ Reject: () });
-        this.checks.push(t_true(assembly_edit::describe(this.fork).generation == 0,
+        this.checks.push(t_true(assembly_edit::describe(this.fork).generation == this.fork_generation,
             "uncommitted proposal did not mutate either selected part"));
         assembly_ui::select_prim(12202, PART, true, false);
         this.phase = 5;
@@ -119,9 +157,10 @@ fn on_tick(me) {
     if this.phase == 6 {
         let current = assembly_edit::selection_context();
         if current.selected.len() != 1 || current.primary.path != PART { return; }
-        let document = assembly_edit::describe(current.doc);
+        let current_doc = selection_doc(current);
+        let document = assembly_edit::describe(current_doc);
         let proposal = correction(current, document.generation);
-        let session = assembly_edit::review_session(current.doc);
+        let session = assembly_edit::review_session(current_doc);
         if proposal.ok == false || session.proposals.len() != 1 {
             this.checks.push(t_true(false, "exact correction proposal is not reviewable"));
             this.done = true;
@@ -134,17 +173,18 @@ fn on_tick(me) {
         return;
     }
     if this.phase == 7 {
-        if !ready(12202, this.fork, 1) { return; }
+        if !ready(12202, this.fork) { return; }
+        let committed_generation = assembly_edit::describe(this.fork).generation;
         let changed = query("QueryUsdPrim", #{ doc_id: this.fork, path: PART });
         let untouched = query("QueryUsdPrim", #{ doc_id: this.original, path: PART });
         this.checks.push(t_true(changed.attrs["xformOp:translate"][1] == 1.0,
             "correction reached selected document projection"));
         this.checks.push(t_true(untouched.attrs["xformOp:translate"][1] == 0.0
-            && assembly_edit::describe(this.original).generation == 0,
+            && assembly_edit::describe(this.original).generation == this.original_generation,
             "same-name part in other document is unchanged"));
         let stale = assembly_edit::batch(this.fork, "Reject stale correction",
-            [#{ SetTranslate: #{ edit_target: "@root@", path: PART, value: [0.0, 9.0, 0.0] } }], 0);
-        this.checks.push(t_true(stale.ok == false && assembly_edit::describe(this.fork).generation == 1,
+            [#{ SetTranslate: #{ edit_target: "@root@", path: PART, value: [0.0, 9.0, 0.0] } }], this.fork_generation);
+        this.checks.push(t_true(stale.ok == false && assembly_edit::describe(this.fork).generation == committed_generation,
             "stale generation fails without mutation"));
         cmd("UndoDocument", #{ doc_id: this.fork });
         this.phase = 8;
@@ -152,7 +192,7 @@ fn on_tick(me) {
     }
     if this.phase == 8 {
         let generation = assembly_edit::describe(this.fork).generation;
-        if generation <= 1 || !ready(12202, this.fork, generation) { return; }
+        if !ready(12202, this.fork) { return; }
         let restored = query("QueryUsdPrim", #{ doc_id: this.fork, path: PART });
         this.checks.push(t_true(restored.attrs["xformOp:translate"][1] == 0.0,
             "undo restores the selected part through the same projection"));

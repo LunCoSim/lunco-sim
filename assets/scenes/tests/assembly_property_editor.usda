@@ -1,0 +1,56 @@
+#usda 1.0
+(
+    defaultPrim = "AssemblyPropertyEditorTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Minimal authored assembly used to exercise the schema-driven editor catalog.
+# The fixture deliberately uses standard USD attributes and a real variant set;
+# the scenario must reject a guessed `lunco:` property.
+def Xform "AssemblyPropertyEditorTest" (
+    kind = "assembly"
+)
+{
+    def DistantLight "TestLight"
+    {
+        float intensity = 1.0
+    }
+
+    def Xform "Assembly"
+    {
+        def Cube "Panel" (
+            kind = "component"
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+            variants = {
+                string configuration = "base"
+            }
+        )
+        {
+            variantSet "configuration" = {
+                "base" {
+                    double size = 13.0
+                }
+                "wide" {
+                    double size = 19.0
+                }
+            }
+            double3 xformOp:translate = (11.0, 0.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            bool physics:collisionEnabled = true
+            float inputs:surface_area = 17.0
+            float outputs:observed_area = 17.0
+        }
+    }
+
+    def Scope "Scenario"
+    {
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            asset info:sourceAsset = @lunco://scenarios/tests/assembly_property_editor.rhai@
+        }
+    }
+}

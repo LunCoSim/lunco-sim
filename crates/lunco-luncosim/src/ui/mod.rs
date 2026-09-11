@@ -104,6 +104,7 @@ pub(crate) fn add_runtime_ui_layer(app: &mut App) {
     .init_resource::<lunco_workbench::RuntimeSurfaceLayouts>()
     .init_resource::<runtime_exposure::RuntimeUiRenderState>()
     .init_resource::<runtime_exposure::RuntimeUiPresentationGeneration>()
+    .init_resource::<runtime_exposure::RuntimeUiRecordingContract>()
     .init_resource::<runtime_exposure::RuntimeUiGates>()
     .init_resource::<runtime_exposure::RuntimeUiSurfaceRects>()
     .add_systems(Startup, runtime_exposure::load_runtime_ui_manifest)
@@ -152,7 +153,10 @@ pub(crate) fn add_runtime_ui_layer(app: &mut App) {
                 .after(bevy_flair::style::StyleSystems::ApplyComputedProperties)
                 .after(bevy::ui::UiSystems::Propagate)
                 .before(bevy::ui::UiSystems::Content),
+            runtime_exposure::update_runtime_ui_recording_contract
+                .after(runtime_exposure::apply_runtime_ui_placement_after_style),
             runtime_exposure::report_runtime_ui_readiness
+                .after(runtime_exposure::update_runtime_ui_recording_contract)
                 .after(runtime_exposure::apply_runtime_ui_placement_after_style)
                 .after(bevy::ui::UiSystems::PostLayout),
         ),
