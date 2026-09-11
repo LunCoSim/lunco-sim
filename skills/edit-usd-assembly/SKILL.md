@@ -427,6 +427,10 @@ and separate preview tabs publish `SceneTarget::Offscreen` through the shared
 `ScenePickGate`; the maintained gizmo picking backend consumes the same
 rectangle used by rendering before testing handles. This admits a handle drag
 despite the global egui focus flag while keeping live-scene input excluded.
+The resolved offscreen target is retained while the preview image reports an
+egui-held gesture, so a valid gizmo drag remains owned across frames.
+The gizmo hit layer is above the preview capture layer, preserving handle hover
+without allowing the preview to leak input to the live scene.
 Do not add panel-specific cursor math or a second gizmo driver.
 The presentation helpers are in
 [`assembly_ui.rhai`](../../assets/scripting/tools/assembly_ui.rhai): use

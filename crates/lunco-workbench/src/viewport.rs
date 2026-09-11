@@ -478,8 +478,8 @@ impl PressLatch {
 /// Pure scene-vs-chrome decision — no ECS, no egui `Context`, no window.
 ///
 /// The pointer is over CHROME (`None`) when:
-///  • egui is dragging one of its own widgets (`using_pointer`) outside the
-///    occlusion-aware live scene leaf, or
+///  • egui is dragging one of its own widgets (`using_pointer`) and no
+///    occlusion-aware scene leaf owns the pointer, or
 ///  • `is_pointer_over_egui()` — a reserved egui panel / menu / status bar /
 ///    floating window / popup, or
 ///  • the pointer has left the window (`hover_pos == None`), or
@@ -511,14 +511,12 @@ pub(crate) fn resolve_scene_target(
     // the MAIN scene), and we want the precise target, not just "not the main
     // scene". The main viewport records its target here too when its panel renders.
     if let Some(target) = scene_leaf {
-        // The transparent main viewport is represented by an egui leaf, so
-        // egui may report `using_pointer` while a right-button orbit is in
-        // progress. Its occlusion-aware leaf hit-test is more precise than
-        // that broad state. Other scene targets remain behind their opaque
-        // preview chrome and therefore cannot claim the main scene pointer.
-        if target == SceneTarget::MainViewport || !egui_state.using_pointer {
-            return Some(target);
-        }
+        // The scene leaf is the occlusion-aware owner, including an offscreen
+        // preview whose egui::Image is also reporting `using_pointer` for the
+        // same gesture. Keep the precise target available to that panel's
+        // specialized consumers (notably the editor gizmo); `over_main_scene`
+        // still prevents an offscreen target from driving the main scene.
+        return Some(target);
     }
     // An egui widget drag owns the pointer unless the live main viewport leaf
     // claimed this exact position above. This keeps sliders, dock separators,
@@ -1417,6 +1415,23 @@ mod tests {
         );
         assert_eq!(out, Some(SceneTarget::Offscreen(USD_PREVIEW)));
         assert_ne!(out, Some(SceneTarget::MainViewport));
+    }
+
+    /// An egui::Image reports `using_pointer` while its preview drag is held,
+    /// but that must not erase the preview scene leaf or interrupt a gizmo drag.
+    #[test]
+    fn offscreen_preview_remains_owner_during_egui_drag() {
+        let mut state = hovering((400.0, 200.0));
+        state.using_pointer = true;
+        state.any_down = true;
+        let out = resolve_scene_target(
+            state,
+            Some(SceneTarget::Offscreen(USD_PREVIEW)),
+            &[],
+            Some(rect((0.0, 30.0), (800.0, 400.0))),
+            None,
+        );
+        assert_eq!(out, Some(SceneTarget::Offscreen(USD_PREVIEW)));
     }
 
     /// A COLLAPSED (or background-tab) viewport leaf records no `scene_leaf` — its
