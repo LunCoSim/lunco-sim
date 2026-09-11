@@ -6,12 +6,7 @@ license.workspace = true
 description = "Production asset, loaded-stage, and Twin validation for LunCoSim"
 
 [dependencies]
-bevy = { workspace = true, features = [
-    "bevy_gltf",
-    "bevy_world_serialization",
-    "bevy_mesh",
-    "bevy_light",
-] }
+bevy = { workspace = true, features = ["bevy_asset"] }
 openusd = { workspace = true }
 lunco-api = { path = "../lunco-api", default-features = false }
 lunco-assets = { path = "../lunco-assets" }

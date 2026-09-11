@@ -21,8 +21,7 @@ networking = ["dep:lunco-networking", "lunco-networking/networking"]
 
 [dependencies]
 bevy = { workspace = true, features = [
-    "bevy_gltf",
-    "bevy_world_serialization",
+    "bevy_asset",
     "bevy_mesh",
     "bevy_light",
     "bevy_window",
@@ -40,6 +39,7 @@ bevy = { workspace = true, features = [
     "png",
     "webgl2",
 ] }
+big_space = { workspace = true }
 bevy_egui = { workspace = true }
 bevy_hui = { workspace = true }
 bevy_flair = { workspace = true }
@@ -54,6 +54,7 @@ lunco-controller = { path = "../lunco-controller" }
 lunco-core = { path = "../lunco-core" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
+lunco-environment = { path = "../lunco-environment" }
 lunco-hooks = { path = "../lunco-hooks" }
 lunco-luncosim-edit = { path = "../lunco-luncosim-edit", default-features = false, features = ["ui"] }
 lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
@@ -71,6 +72,7 @@ lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
 lunco-ui = { path = "../lunco-ui" }
 lunco-usd = { path = "../lunco-usd", default-features = false }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+lunco-usd-sim = { path = "../lunco-usd-sim" }
 lunco-usd-ui = { path = "../lunco-usd-ui" }
 lunco-workbench = { path = "../lunco-workbench", features = ["api"] }
 lunco-workbench-core = { path = "../lunco-workbench-core" }

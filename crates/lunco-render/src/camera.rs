@@ -197,7 +197,7 @@ impl SceneCamera {
 /// exposure, while `lunco-avatar`'s "Avatar Camera" spawned `SceneCamera::default()`
 /// and NO `Exposure` at all — so it rendered at Bevy's default EV 9.7 against a
 /// ~131 klx sun, about five stops open, and every surface blew out to white. It
-/// could not be repaired downstream either: `project_env_settings` writes exposure
+/// could not be repaired downstream either: the UI environment bridge writes exposure
 /// only to cameras that already carry the component, so the avatar camera was
 /// unreachable by the very system meant to keep exposure consistent.
 ///

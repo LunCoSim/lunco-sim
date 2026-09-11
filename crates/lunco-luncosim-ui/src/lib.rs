@@ -5,10 +5,21 @@
 //! windowed-only update surface. The simulator core does not depend on these
 //! modules, so editing the UI does not rebuild the headless application core.
 
+#[cfg(feature = "lunco-api")]
+mod offscreen;
+mod presentation_bridge;
 mod save_scenario;
+mod terrain_horizon;
 mod ui;
 
+#[cfg(feature = "lunco-api")]
+pub use offscreen::LunCoSimOffscreenPlugin;
 pub(crate) use save_scenario::SaveScenario;
+
+/// Register UI-facing projections after the headless-safe domain plugins.
+pub fn register_presentation_bridges(app: &mut bevy::prelude::App) {
+    presentation_bridge::register(app);
+}
 pub use ui::{
     add_runtime_ui_layer, InitialScenePath, LunCoSimUiConfig, LunCoSimUiPlugin, WindowIconBytes,
 };

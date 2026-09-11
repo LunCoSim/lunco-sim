@@ -17,7 +17,7 @@ description = "The scene/document command layer: every runtime mutation of the s
 # `Assets<Shader>` so an edit renders without a disk round-trip). It pulls `naga`
 # but NOT wgpu; moving those three onto an intent+binder of their own is the
 # follow-up that would take naga out of the headless server too.
-bevy = { workspace = true, features = ["bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light", "bevy_shader"] }
+bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh", "bevy_light", "bevy_shader"] }
 # Appearance intent (render-free): `PbrLook`. Every PBR material site in this crate
 # goes through it instead of `Assets<StandardMaterial>`.
 lunco-render = { path = "../lunco-render" }

@@ -178,7 +178,7 @@ pub(crate) fn instantiate_camera_prim(
     // doesn't jump the grade. Spawning at Bevy's `Exposure::default()` (EV 9.7) instead
     // left a load-time window in which the celestial system had already raised
     // the sun to 131 klux but the camera still sat ~5 stops too open, blowing
-    // out the terrain until the late `project_env_settings`/celestial EV write
+    // out the terrain until the late UI environment/celestial EV write
     // caught up (and on stage re-composition that window re-opened).
     //
     // Only an explicitly mounted camera is reparented to its grid. Authored,

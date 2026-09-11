@@ -9,8 +9,7 @@ description = "LunCoSim's interactive USD browser and preview UI"
 # The UI crate opts into the render-facing Bevy facade. The USD core and its
 # server consumers keep the workspace's render-free Bevy baseline.
 bevy = { workspace = true, features = [
-    "bevy_gltf",
-    "bevy_world_serialization",
+    "bevy_asset",
     "bevy_mesh",
     "bevy_light",
     "bevy_render",

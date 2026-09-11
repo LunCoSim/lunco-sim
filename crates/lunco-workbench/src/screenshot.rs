@@ -1338,7 +1338,7 @@ struct PendingShotStart {
 /// on the whole bus would therefore stall every shot on unrelated work, adding
 /// minutes to an episode and hiding the actual visual blocker.
 ///
-/// These entries are published by `lunco-luncosim`, which mirrors state this crate
+/// These entries are published by `lunco-luncosim-ui`, which mirrors state this crate
 /// cannot name onto the bus: terrain by `report_terrain_stream_status` (from
 /// `lunco_terrain_surface::TerrainStreamStatus`) and scene by
 /// `report_scene_spawn_status` (from `lunco_usd_sim::cosim::SceneLoadInFlight` +

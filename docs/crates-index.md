@@ -132,7 +132,7 @@ Primary entry points and simulation assembly targets.
 | Crate | Binary | Responsibility |
 | :--- | :--- | :--- |
 | **`lunco-luncosim-exposures`** | — | Headless-safe runtime exposure projection plugin. Resolves authoritative ECS/domain state and authored telemetry into the shared `EngineExposures` registry for HTML, egui, API, telemetry, and remote consumers; it has no renderer or UI dependency. |
-| **`lunco-luncosim`** | `luncosim` | Ground-physics simulator (ground mobility + physics, loaded from USD): USD scene + Avian physics, luncosim edit tools, the embedded Modelica workbench, and the application-owned authored lesson menu. The production `luncosim test` command executes authored USD + Rhai scenario assertions headlessly through the same composition root. |
+| **`lunco-luncosim`** | `luncosim` | Headless-safe ground-physics composition root (USD + Avian + cosim + networking/API) plus the production authored-scene test runner. Windowed status, camera, terrain-shadow, environment-presentation, and offscreen-recording bridges live in `lunco-luncosim-ui`; the application still composes both through one core plugin. |
 | **`lunco-luncosim-server`** | `luncosim-server` | Headless launcher for LunCoSim (no winit/egui) with the API + networking host. Its own crate purely so it can default to headless. |
 | **`lunco-modelica-ui`** | `lunica` | The Modelica workbench application and UI facade. |
 | **`lunco-modelica-core`** | `lunica_worker`, `modelica_run`, `modelica_tester`, `msl_indexer`, `msl_parse_bench` | Headless Modelica worker and CLI/indexing tools; none link the workbench UI. |
@@ -338,7 +338,7 @@ Bevy dispatch adapter for `lunco-tools` — the **behaviour-tree execution** hal
 The LunCoSim application — ground mobility + physics, loaded from USD (binary `luncosim`). A composition root rather than a UI host: `LunCoSimCorePlugin` (headless-safe sim/physics/cosim/USD/networking/API) plus an optional `LunCoSimUiPlugin` from `lunco-luncosim-ui` (egui workbench, windowed) or `LunCoSimHeadlessPlugin`. Assembles the USD scene, Avian physics, and the in-scene edit tools, and is the single shared entry point for both the `luncosim` GUI and `luncosim-server` headless binaries.
 
 **`lunco-luncosim-ui`**
-Windowed LunCoSim presentation and packaging boundary: egui workbench, interactive editor composition, native window icon generation, and the UI-owned `window_icon_bytes()` API. The headless application core and `luncosim-server` do not compile its GUI/build-time graphics dependencies.
+Windowed LunCoSim presentation and packaging boundary: egui workbench, interactive editor composition, status/camera/terrain/environment bridges, GPU-backed offscreen recording, native window icon generation, and the UI-owned `window_icon_bytes()` API. The headless application core and `luncosim-server` do not compile its GUI/build-time graphics dependencies.
 
 **`lunco-luncosim-exposures`**
 Production integration crate for the renderer-independent runtime exposure projection. `RuntimeExposuresPlugin` registers the single shared path from authoritative ECS/domain state and authored telemetry to `lunco_core::exposure::EngineExposures`; HTML, egui, API, telemetry, and remote clients consume that registry. It owns no UI, renderer, or tutorial policy, so changing exposure derivation does not recompile the application composition root.

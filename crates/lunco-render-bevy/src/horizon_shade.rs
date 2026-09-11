@@ -178,7 +178,7 @@ pub fn wire_terrain_materials(
     // gate, not just cosmetics — inside it the configured live march is
     // skipped (CSM owns the near field), and "march everywhere" turned low
     // flight into a slideshow. (Streamed tiles DO get a baked cache on
-    // native — `lunco-luncosim/src/terrain_horizon.rs` samples the oracle
+    // native — `lunco-luncosim-ui` samples the oracle
     // into a `HorizonMap` and mirrors the cache to tiles — but the cache
     // fades in on the same `csm_far` boundary.) The cost of the fade is
     // that the CSM volume (~1.5 km) cannot contain multi-km ridge occluders,

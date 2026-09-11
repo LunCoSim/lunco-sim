@@ -1267,7 +1267,7 @@ pub(crate) fn instantiate_light_prim(
 ///
 /// That was not true before. A scene could also author
 /// `lunco:env:ambientBrightness` on a custom environment prim, which a separate
-/// projector (`lunco-luncosim::project_env_settings`) assigned into this same
+/// projector (`lunco-luncosim-ui`'s environment bridge) assigned into this same
 /// field. Two writers, one field, and load order decided the winner. Worse, a
 /// *textured* dome deliberately contributes no [`UsdDomeAmbient`] — its texture
 /// becomes IBL instead, which is the strictly better version of the same quantity
