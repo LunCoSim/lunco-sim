@@ -20,6 +20,16 @@ author its standard geometry, collision/material bindings, mass, dimensions,
 frames, and actuator endpoints through one reviewed Rhai plan. Articulation
 and socket attachment remain explicit assembly contracts.
 
+The generic builder uses existing USD owners wherever possible: `UsdGeom` for
+shape and transforms, `UsdPhysics` for rigid-body mass/collision facts,
+`UsdShade` for material bindings, `kind` for assembly identity, and
+`inputs:`/`outputs:` for authored parameters and ports. Units, actuator limits,
+and deployment state are caller-side or owned by Modelica/joint contracts; do
+not add unregistered `lunco:` properties to duplicate them. Validate a
+hand-authored or generated component with
+`assembly_audit::standard_component_report(doc, manifest)` before committing
+it.
+
 Before adding a component, search by domain API, connector, and Modelica class:
 
 ```sh

@@ -38,6 +38,15 @@ it with this one.
   reads for authoring/document questions. A composed stage is inert: it does not
   launch Modelica, Rhai, behavior trees, physics, or rendering. Tutorials read a
   supplied stage and never open layers themselves.
+- Prefer existing USD schemas and properties whenever they express the authored
+  fact (`UsdGeom`, `UsdShade`, `UsdPhysics`, `UsdLux`, `Usd.CollectionAPI`,
+  `kind`, variants, and `inputs:`/`outputs:`). Introduce a `lunco:` property or
+  API only when USD has no suitable owner, first checking the registered schema
+  source and maintained readers for an existing LunCo contract. Never add an
+  unregistered `lunco:` field; update `crates/lunco-usd/schema/schema.usda` and
+  regenerate only when a genuinely missing project semantic is required. Keep
+  editor/Rhai tools schema-aware by querying and validating the standard owner
+  instead of mirroring facts into custom metadata.
 - Asset identity, traversal, and storage belong to `lunco-assets`; USD runtime
   crates do not read asset bytes with `std::fs`. `lunco-usd-compose` owns USD
   dependency interpretation and assembly (sublayers, references, payloads,
