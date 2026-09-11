@@ -669,7 +669,9 @@ pub async fn read_asset_meta(
                 // question: "will the same file survive the runtime loader?"
                 // Keep invalid content out of the palette instead of making a
                 // user discover the failure only after dropping it into a sim.
-                let report = crate::validate::validate_asset(&asset.abs_path.to_string_lossy());
+                let report = lunco_scene_validation::validate::validate_asset(
+                    &asset.abs_path.to_string_lossy(),
+                );
                 if !report.ok {
                     warn!(
                         "CATALOG: {} is marked spawnable but failed load preflight; hiding it from SpawnCatalog: {}",

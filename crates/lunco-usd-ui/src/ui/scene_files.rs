@@ -3,7 +3,7 @@
 //! # Why this is not the Files section
 //!
 //! [`FilesSection`](lunco_workbench::FilesSection) shows a FOLDER (the active
-//! Twin's tree) and [`UsdSceneSection`](crate::ui::browser_section::UsdSceneSection)
+//! Twin's tree) and [`UsdSceneSection`](crate::browser_section::UsdSceneSection)
 //! shows the open STAGES. Neither answers "what is this scene composed of", which
 //! is a graph question: a scene pulls its rovers from `assets/vessels/…`, those
 //! pull components from `assets/components/…`, and those bind `.mo` models,
@@ -49,7 +49,7 @@ use lunco_workbench::twin_browser::BrowserQuery;
 use lunco_workbench::twin_browser::BrowserScope;
 use lunco_workbench::{BrowserAction, BrowserCtx, BrowserSection};
 
-use crate::document::UsdDocument;
+use lunco_usd::document::UsdDocument;
 
 /// What kind of file a row is — decides its group and its click action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -70,7 +70,7 @@ pub enum SceneFileKind {
 
 impl SceneFileKind {
     fn of(path: &Path) -> Self {
-        if crate::commands::is_usd_path(&path.to_string_lossy()) {
+        if lunco_usd::commands::is_usd_path(&path.to_string_lossy()) {
             return Self::Layer;
         }
         match path

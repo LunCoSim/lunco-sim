@@ -14,17 +14,6 @@ autobins = false
 name = "lunco_luncosim"
 path = "src/lib.rs"
 
-[build-dependencies]
-# The native window and package icons are rasterized from the tracked SVG source
-# during the build. Keeping this in Rust makes release builds independent of
-# host shell tools (notably unavailable on the Windows CI runner).
-resvg = { workspace = true }
-usvg = { workspace = true }
-image = { workspace = true, features = ["ico"] }
-
-[target.'cfg(windows)'.build-dependencies]
-winresource = "0.1.31"
-
 [[bin]]
 name = "luncosim"
 path = "src/bin/luncosim.rs"
@@ -125,7 +114,7 @@ lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-scripting = { path = "../lunco-scripting" }
 # USD core (scene load + collider build) is always needed; its Twin-browser /
-# viewport egui UI rides `lunco-usd/ui`, re-enabled below by the `ui` feature.
+# viewport egui UI is supplied by the application UI shell.
 lunco-usd = { path = "../lunco-usd", default-features = false }
 # Live canonical stage read path (`CanonicalStages` / `StageView` / `UsdRead`):
 # the USD-reading systems below consume the composed stage, while initial reads
@@ -145,6 +134,7 @@ lunco-usd-terrain = { path = "../lunco-usd-terrain" }
 # `commands::SpawnCommandPlugin` (runtime spawn/move + `NetReplicate` tagging) and
 # the journaled shader domain. Render-free, UI-free.
 lunco-scene-commands = { path = "../lunco-scene-commands" }
+lunco-scene-validation = { path = "../lunco-scene-validation" }
 # The in-scene EDITOR (gizmo, selection, inspector, physics-viz, spawn ghost).
 # Optional + `ui`-only: the server used to link a crate called "edit" purely to get
 # `SpawnEntity`, which now lives in `lunco-scene-commands` above. A `--no-ui` build
@@ -233,7 +223,6 @@ ui = [
     "lunco-workbench/api",
     "dep:lunco-render-bevy",
     "lunco-avatar/ui",
-    "lunco-usd/ui",
     "dep:lunco-luncosim-edit",
     "lunco-luncosim-edit/ui",
     "dep:lunco-luncosim-ui",
@@ -332,10 +321,9 @@ console_error_panic_hook = { workspace = true }
 # URL-parameter boot path (`?workspace=…&open=…`) reads `window.location.search`.
 web-sys = { workspace = true, features = ["Window", "Location"] }
 js-sys = { workspace = true }
-# ahash (egui 0.26.2 → catppuccin-egui → lunco-theme) and lightyear's netcode
-# RNG pull getrandom 0.3, which on wasm needs an explicit backend. Enable the
-# browser-crypto (`wasm_js`) feature here; build_web.sh sets the matching
-# `--cfg getrandom_backend="wasm_js"` (both are required).
+# The wasm build's RNG pull from Bevy and lightyear's netcode needs an explicit
+# browser-crypto backend. Enable the `wasm_js` feature here; build_web.sh sets
+# the matching `--cfg getrandom_backend="wasm_js"` (both are required).
 getrandom = { version = "0.3", features = ["wasm_js"] }
 
 [lints]

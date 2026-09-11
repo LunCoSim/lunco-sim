@@ -15,8 +15,8 @@ use lunco_api::queries::ApiQueryProvider;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
 use lunco_core::markers::Callsign;
 use lunco_core::{entity_display_name, CatalogEntryId};
-use lunco_usd::ui::viewport::{UsdPreviewId, UsdViewportState};
 use lunco_usd_bevy::{CanonicalStages, SdfPath, UsdPrimPath, UsdRead};
+use lunco_usd_ui::viewport::{UsdPreviewId, UsdViewportState};
 
 use super::EditorSessionSelections;
 

@@ -13,6 +13,7 @@ use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use lunco_modelica_ast::ast_extract::{
     parse_model_interface, parse_model_interface_from_ast, ModelInterface, ModelicaVariableMetadata,
 };
+use lunco_modelica_ast::{Causality, StoredDefinition};
 use lunco_modelica_core::{
     ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaNotice, ModelicaSignalLayout,
     ModelicaSignalProvenance, NoticeLevel,
@@ -21,7 +22,6 @@ use lunco_usd_bevy::program::ProgramGraph;
 use lunco_usd_bevy::read::UsdReadObject as ComposedReader;
 use lunco_usd_bevy::{CanonicalStages, UsdInstanceProjection, UsdPrimPath, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
-use rumoca_core::Causality;
 
 // The USD side of a Modelica program facet — the class an asset names, the
 // lexical rules for member/instance identifiers — is ONE reader, shared with the
@@ -776,7 +776,7 @@ fn parse_validated_root_interface(
     inputs: &BTreeSet<String>,
     outputs: &BTreeSet<String>,
     aliases: &[(String, String, String)],
-) -> Result<rumoca_ir_ast::StoredDefinition, String> {
+) -> Result<StoredDefinition, String> {
     let ast = lunco_modelica_ast::parse_to_ast(source, "generated-policy.mo")
         .map_err(|error| format!("strict Modelica parse failed: {error:?}"))?;
     let root = lunco_modelica_core::diagram::find_class_by_qualified_name(&ast, model_name)

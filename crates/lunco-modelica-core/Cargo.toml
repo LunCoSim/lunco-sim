@@ -50,23 +50,6 @@ lunco-storage = { path = "../lunco-storage" }
 # base64url encode/decode for shareable model links (see `model_share.rs`).
 # Already resolved transitively (0.22.x) — no new download.
 base64 = { workspace = true }
-# Docs view (ModelViewMode::Docs): HTML → Markdown → egui render.
-# `egui_commonmark` pulls the right `egui` version transitively to
-# match bevy_egui 0.40 (→ egui 0.34). Syntax highlighting is enabled
-# so `<pre><code>` blocks in Modelica docs render with colour.
-# `all_loaders` wires up every shipped image source (file://, http://,
-# bytes://, raw paths) so images in Documentation HTML render. We add
-# a custom `modelica://` loader on top to resolve MSL-internal URIs
-# against the on-disk MSL tree.
-# Pure-Rust HTML → Markdown converter. Used once per Documentation
-# annotation to normalise into the shape commonmark expects.
-# Polygon tessellator with EvenOdd fill-rule support — matches the
-# de-facto Modelica standard (Qt's QPainterPath default that OMEdit
-# and Dymola rely on). egui's built-in `Shape::convex_polygon` only
-# triangulates convex shapes; concave or self-intersecting polygons
-# (PartialValve's bowtie, sensor Y-marks, gauge X-shapes) need a real
-# tessellator. lyon does this in pure Rust with vertex/index buffer
-# output that drops straight into `egui::Mesh`. ~150 KB compiled.
 # Direct rayon dependency for the indexer's own DEDICATED, bounded parse
 # pool (`indexer::parse_native_msl_bundle`), which deliberately does not
 # touch the global pool.
@@ -99,7 +82,6 @@ bincode = { workspace = true }
 # just solver-vector entries), and `Session::load_source_root_in_memory(...)`,
 # which lets the wasm runtime hand pre-fetched MSL bytes to the compile session
 # with no filesystem.
-#
 # The interactive stepper is `SimulationSession` (rumoca ≥0.9.20; it replaced
 # `SimStepper`). NOTE: it clamps every advance at `SimOptions::t_end`, so build
 # it through `experiments_runner::stepper_options_from_bounds`, never from

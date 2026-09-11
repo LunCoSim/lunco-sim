@@ -13,11 +13,11 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_doc::DocumentId;
 use lunco_usd::document::{LayerId, UsdOp};
-use lunco_usd::ui::viewport::{UsdPreviewId, UsdViewportState};
 use lunco_usd_bevy::{
     author::normalize_value_literal, stage_convention, CanonicalStages, SdfPath, UsdPrimPath,
     UsdRead, UsdStageAsset,
 };
+use lunco_usd_ui::viewport::{UsdPreviewId, UsdViewportState};
 
 const JOINT_TYPES: &[&str] = &[
     "PhysicsJoint",
@@ -390,7 +390,7 @@ fn preview_body_path(targets: &[String]) -> Option<&str> {
 
 fn preview_body_transform(
     path: &str,
-    session: &lunco_usd::ui::viewport::UsdPreviewSession,
+    session: &lunco_usd_ui::viewport::UsdPreviewSession,
     q_prims: &Query<(Entity, &UsdPrimPath, &GlobalTransform)>,
     q_globals: &Query<&GlobalTransform>,
     q_parents: &Query<&ChildOf>,

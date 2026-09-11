@@ -16,7 +16,7 @@ engine accept it?** — without a scene, a cosim, a GPU, or a window. It is the
 cheapest possible check and it is safe to run against a live luncosim
 **mid-simulation**: it only reads files.
 
-Implementation: [`crates/lunco-scene-commands/src/validate.rs`](../../crates/lunco-scene-commands/src/validate.rs).
+Implementation: [`crates/lunco-scene-validation/src/validate.rs`](../../crates/lunco-scene-validation/src/validate.rs).
 Related: [`author-usd-component`](../author-usd-component/SKILL.md) (author the
 file), [`use-asset-library`](../use-asset-library/SKILL.md) (get it discovered),
 [`build-vehicle`](../build-vehicle/SKILL.md) (wheels), [`test-via-api`](../test-via-api/SKILL.md)

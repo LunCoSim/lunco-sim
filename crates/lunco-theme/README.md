@@ -10,8 +10,8 @@ downstream crates**.
 - **`Theme`** (`Resource`, `Clone`) — the single source of truth.
   - `mode: ThemeMode` (`Dark` | `Light`)
   - `colors: ColorPalette` — 26 Catppuccin swatches (`mauve`, `mantle`,
-    `surface0`, …). Bridged to the workspace `egui::Color32` so egui
-    version drift in `catppuccin-egui` can't leak upward.
+    `surface0`, …), represented directly as the workspace `egui::Color32`
+    type.
     **Read from this tier only when defining a new semantic token.**
   - `tokens: DesignTokens` — **generic semantic colours** for any UI:
     `accent`, `success`, `warning`, `error`, `success_subdued`, `text`,
@@ -210,9 +210,9 @@ a default inside tier 3, stop — you should be adding to tier 2 first.
 
 - **No hard-coded colors elsewhere.** If you find yourself typing
   `Color32::from_rgb(...)` in another crate, add a token here instead.
-- **No egui-version coupling.** The palette stores workspace-`egui`
-  `Color32`s, bridged from `catppuccin-egui` via component accessors so
-  a minor-version mismatch doesn't break the build.
+- **No duplicate egui-version dependency.** The palette values are owned here
+  and converted directly to the workspace egui type, so the theme does not
+  introduce a second egui release.
 - **Not a general theming framework.** Scope is LunCoSim's own panels;
   we don't aim to theme third-party widgets beyond what
   `to_visuals()` covers.

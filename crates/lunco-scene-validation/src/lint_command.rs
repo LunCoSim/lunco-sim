@@ -34,7 +34,7 @@
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::schema::ApiResponse;
-use lunco_core::{Command, on_command};
+use lunco_core::{on_command, Command};
 use lunco_doc::{Document, DocumentId};
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_hooks::HookValue as H;

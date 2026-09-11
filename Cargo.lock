@@ -1199,7 +1199,7 @@ dependencies = [
  "bevy_winit",
  "bytemuck",
  "crossbeam-channel",
- "egui 0.35.0",
+ "egui",
  "encase",
  "getrandom 0.4.3",
  "image",
@@ -2773,15 +2773,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 
 [[package]]
-name = "catppuccin-egui"
-version = "5.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "119005543bcd5cc74f76323d40801bb29baf1b062e84f86eb42fb0b2a3fe61e9"
-dependencies = [
- "egui 0.26.2",
-]
-
-[[package]]
 name = "cc"
 version = "1.2.67"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3942,30 +3933,13 @@ checksum = "e1d926b4d407d372f141f93bb444696142c29d32962ccbd3531117cf3aa0bfa9"
 
 [[package]]
 name = "ecolor"
-version = "0.26.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "03cfe80b1890e1a8cdbffc6044d6872e814aaf6011835a2a5e2db0e5c5c4ef4e"
-
-[[package]]
-name = "ecolor"
 version = "0.35.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6758be723a3f298bbfda4db75748bc2ba0abafe096b6383c7c32da264764fbc3"
 dependencies = [
  "bytemuck",
- "emath 0.35.0",
+ "emath",
  "serde",
-]
-
-[[package]]
-name = "egui"
-version = "0.26.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "180f595432a5b615fc6b74afef3955249b86cfea72607b40740a4cd60d5297d0"
-dependencies = [
- "ahash",
- "epaint 0.26.2",
- "nohash-hasher",
 ]
 
 [[package]]
@@ -3977,8 +3951,8 @@ dependencies = [
  "accesskit",
  "ahash",
  "bitflags 2.13.0",
- "emath 0.35.0",
- "epaint 0.35.0",
+ "emath",
+ "epaint",
  "itertools 0.14.0",
  "log",
  "nohash-hasher",
@@ -3994,7 +3968,7 @@ version = "0.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c833127228cc61cef806166adadc23572431fe2ea4cf753e60f654f82a2b3270"
 dependencies = [
- "egui 0.35.0",
+ "egui",
  "egui_commonmark_backend",
  "egui_extras",
  "pulldown-cmark",
@@ -4006,7 +3980,7 @@ version = "0.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5758a1110eb8259743c9b220241c30ff014b2dec53c1a2b861d464e41fa3483e"
 dependencies = [
- "egui 0.35.0",
+ "egui",
  "egui_extras",
  "pulldown-cmark",
  "syntect",
@@ -4019,7 +3993,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "340d58d0932c472cba78b4ecb6050d86bddf3ba509e1320ac4c0d29af3383c5c"
 dependencies = [
  "duplicate",
- "egui 0.35.0",
+ "egui",
  "paste",
  "serde",
  "thiserror 2.0.18",
@@ -4032,7 +4006,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2bd33be7338367bf21f54d62e069d58a5fb3ae033fa8bc6df7a77b9ef4cf957"
 dependencies = [
  "ahash",
- "egui 0.35.0",
+ "egui",
  "ehttp",
  "enum-map",
  "image",
@@ -4050,8 +4024,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "302515219c63e7f380058ecc899c5a6b2c5fe9f140ef1d91c3b685c9f0355fa3"
 dependencies = [
  "ahash",
- "egui 0.35.0",
- "emath 0.35.0",
+ "egui",
+ "emath",
 ]
 
 [[package]]
@@ -4073,12 +4047,6 @@ name = "either"
 version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "91622ff5e7162018101f2fea40d6ebf4a78bbe5a49736a2020649edf9693679e"
-
-[[package]]
-name = "emath"
-version = "0.26.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6916301ecf80448f786cdf3eb51d9dbdd831538732229d49119e2d4312eaaf09"
 
 [[package]]
 name = "emath"
@@ -4237,28 +4205,14 @@ dependencies = [
 
 [[package]]
 name = "epaint"
-version = "0.26.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77b9fdf617dd7f58b0c8e6e9e4a1281f730cde0831d40547da446b2bb76a47af"
-dependencies = [
- "ab_glyph",
- "ahash",
- "ecolor 0.26.2",
- "emath 0.26.2",
- "nohash-hasher",
- "parking_lot",
-]
-
-[[package]]
-name = "epaint"
 version = "0.35.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e60a8888b51da911df23918fd7301359b1d43a406a0ff3b8863af093dd7fc6c"
 dependencies = [
  "ahash",
  "bytemuck",
- "ecolor 0.35.0",
- "emath 0.35.0",
+ "ecolor",
+ "emath",
  "epaint_default_fonts",
  "font-types",
  "harfrust 0.7.0",
@@ -7412,7 +7366,6 @@ dependencies = [
  "big_space",
  "console_error_panic_hook",
  "getrandom 0.3.4",
- "image",
  "js-sys",
  "lunco-api",
  "lunco-assets",
@@ -7439,6 +7392,7 @@ dependencies = [
  "lunco-render",
  "lunco-render-bevy",
  "lunco-scene-commands",
+ "lunco-scene-validation",
  "lunco-scripting",
  "lunco-settings",
  "lunco-status-core",
@@ -7459,15 +7413,12 @@ dependencies = [
  "lunco-workbench",
  "lunco-workspace",
  "mimalloc",
- "resvg 0.47.0",
  "serde_json",
  "ureq",
- "usvg 0.47.0",
  "velopack",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "winresource",
 ]
 
 [[package]]
@@ -7508,6 +7459,7 @@ dependencies = [
  "lunco-usd",
  "lunco-usd-bevy",
  "lunco-usd-sim",
+ "lunco-usd-ui",
  "lunco-workbench",
  "lunco-workbench-core",
  "lunco-workspace",
@@ -7556,6 +7508,7 @@ dependencies = [
  "bevy_flair",
  "bevy_hui",
  "bevy_winit",
+ "image",
  "js-sys",
  "lunco-api",
  "lunco-assets",
@@ -7582,16 +7535,20 @@ dependencies = [
  "lunco-ui",
  "lunco-usd",
  "lunco-usd-bevy",
+ "lunco-usd-ui",
  "lunco-workbench",
  "lunco-workbench-core",
  "lunco-workspace",
+ "resvg 0.47.0",
  "serde",
  "serde_json",
  "ureq",
+ "usvg 0.47.0",
  "velopack",
  "wasm-bindgen-futures",
  "web-sys",
  "winit",
+ "winresource",
 ]
 
 [[package]]
@@ -7876,22 +7833,49 @@ dependencies = [
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-environment",
- "lunco-hooks",
  "lunco-hooks-rhai",
- "lunco-lint",
  "lunco-materials",
  "lunco-mobility",
- "lunco-modelica-ast",
- "lunco-modelica-core",
  "lunco-physics",
  "lunco-render",
+ "lunco-scene-validation",
  "lunco-settings",
  "lunco-signal",
  "lunco-storage",
  "lunco-time",
+ "lunco-twin-journal",
+ "lunco-usd",
+ "lunco-usd-avian",
+ "lunco-usd-bevy",
+ "lunco-usd-sim",
+ "lunco-workspace",
+ "openusd",
+ "rhai",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "wasm-bindgen-futures",
+]
+
+[[package]]
+name = "lunco-scene-validation"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "lunco-api",
+ "lunco-assets",
+ "lunco-autopilot",
+ "lunco-core",
+ "lunco-doc",
+ "lunco-doc-bevy",
+ "lunco-hooks",
+ "lunco-hooks-rhai",
+ "lunco-lint",
+ "lunco-materials",
+ "lunco-modelica-ast",
+ "lunco-physics",
  "lunco-tools",
  "lunco-twin",
- "lunco-twin-journal",
  "lunco-usd",
  "lunco-usd-avian",
  "lunco-usd-bevy",
@@ -7903,7 +7887,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "wasm-bindgen-futures",
 ]
 
 [[package]]
@@ -8072,7 +8055,6 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "bevy_egui",
- "catppuccin-egui",
  "lunco-assets",
  "lunco-settings",
  "serde",
@@ -8165,7 +8147,6 @@ version = "0.1.0"
 dependencies = [
  "avian3d",
  "bevy",
- "bevy_egui",
  "big_space",
  "lunco-api",
  "lunco-assets",
@@ -8174,17 +8155,13 @@ dependencies = [
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-render",
- "lunco-status-core",
  "lunco-storage",
- "lunco-theme",
  "lunco-twin",
  "lunco-twin-journal",
  "lunco-usd-avian",
  "lunco-usd-bevy",
  "lunco-usd-compose",
  "lunco-usd-sim",
- "lunco-workbench",
- "lunco-workbench-core",
  "lunco-workspace",
  "openusd",
  "serde",
@@ -8280,8 +8257,6 @@ dependencies = [
  "lunco-usd-bevy",
  "lunco-usd-compose",
  "openusd",
- "rumoca-core",
- "rumoca-ir-ast",
  "serde_json",
  "web-time",
 ]
@@ -8300,6 +8275,33 @@ dependencies = [
  "lunco-usd",
  "lunco-usd-bevy",
  "openusd",
+]
+
+[[package]]
+name = "lunco-usd-ui"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy_egui",
+ "lunco-api",
+ "lunco-assets",
+ "lunco-core",
+ "lunco-doc",
+ "lunco-doc-bevy",
+ "lunco-render",
+ "lunco-status-core",
+ "lunco-storage",
+ "lunco-theme",
+ "lunco-usd",
+ "lunco-usd-bevy",
+ "lunco-usd-compose",
+ "lunco-workbench",
+ "lunco-workbench-core",
+ "lunco-workspace",
+ "openusd",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -8375,7 +8377,7 @@ name = "lunco-workbench-core"
 version = "0.1.0-dev"
 dependencies = [
  "bevy",
- "egui 0.35.0",
+ "egui",
  "lunco-core",
  "serde",
 ]
@@ -13264,11 +13266,11 @@ name = "transform-gizmo"
 version = "0.9.0"
 dependencies = [
  "ahash",
- "ecolor 0.35.0",
- "emath 0.35.0",
+ "ecolor",
+ "emath",
  "enum_dispatch",
  "enumset",
- "epaint 0.35.0",
+ "epaint",
  "glam 0.32.1",
  "mint",
 ]

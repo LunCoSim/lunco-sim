@@ -17,8 +17,8 @@ use crate::SpawnState;
 use lunco_controller::ControllerLink;
 use lunco_core::{on_command, register_commands, Avatar, Command, LocalAvatar};
 use lunco_scene_commands::SelectedEntities;
-use lunco_usd::ui::viewport::{UsdPreviewId, UsdViewportState};
 use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset};
+use lunco_usd_ui::viewport::{UsdPreviewId, UsdViewportState};
 
 /// Component marking an entity as currently selected.
 #[derive(Component)]
@@ -151,7 +151,7 @@ pub(crate) fn on_select_entity_target(
 /// The nearest prim-backed ancestor is the selection target, which keeps a
 /// generated visual mesh attached to the authored USD prim it represents.
 pub(crate) fn on_usd_viewport_click(
-    trigger: On<lunco_usd::ui::viewport::UsdViewportClick>,
+    trigger: On<lunco_usd_ui::viewport::UsdViewportClick>,
     viewport: Res<UsdViewportState>,
     q_cameras: Query<(&Camera, &GlobalTransform)>,
     q_paths: Query<&UsdPrimPath>,

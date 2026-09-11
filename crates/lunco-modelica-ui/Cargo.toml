@@ -98,8 +98,8 @@ lunco-workspace = { path = "../lunco-workspace" }
 lunco-storage = { path = "../lunco-storage" }
 egui_plot = { workspace = true, optional = true }
 # Docs view (ModelViewMode::Docs): HTML → Markdown → egui render.
-# `egui_commonmark` pulls the right `egui` version transitively to
-# match bevy_egui 0.40 (→ egui 0.34). Syntax highlighting is enabled
+# `egui_commonmark` pulls the workspace egui version transitively to
+# match bevy_egui 0.41 (→ egui 0.35). Syntax highlighting is enabled
 # so `<pre><code>` blocks in Modelica docs render with colour.
 egui_commonmark = { version = "0.24", features = ["better_syntax_highlighting"], optional = true }
 # `all_loaders` wires up every shipped image source (file://, http://,

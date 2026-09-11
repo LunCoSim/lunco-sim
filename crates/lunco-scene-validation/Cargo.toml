@@ -1,0 +1,44 @@
+[package]
+name = "lunco-scene-validation"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Production asset, loaded-stage, and Twin validation for LunCoSim"
+
+[dependencies]
+bevy = { workspace = true, features = [
+    "bevy_gltf",
+    "bevy_world_serialization",
+    "bevy_mesh",
+    "bevy_light",
+] }
+openusd = { workspace = true }
+lunco-api = { path = "../lunco-api", default-features = false }
+lunco-assets = { path = "../lunco-assets" }
+lunco-autopilot = { path = "../lunco-autopilot", default-features = false }
+lunco-core = { path = "../lunco-core" }
+lunco-doc = { path = "../lunco-doc" }
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
+lunco-hooks = { path = "../lunco-hooks" }
+lunco-hooks-rhai = { path = "../lunco-hooks-rhai" }
+lunco-lint = { path = "../lunco-lint" }
+lunco-materials = { path = "../lunco-materials" }
+lunco-modelica-ast = { path = "../lunco-modelica-ast" }
+lunco-tools = { path = "../lunco-tools" }
+lunco-twin = { path = "../lunco-twin" }
+lunco-usd = { path = "../lunco-usd", default-features = false }
+lunco-usd-avian = { path = "../lunco-usd-avian" }
+lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+lunco-usd-compose = { path = "../lunco-usd-compose" }
+lunco-usd-sim = { path = "../lunco-usd-sim" }
+lunco-workspace = { path = "../lunco-workspace" }
+rhai = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+lunco-physics = { path = "../lunco-physics" }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

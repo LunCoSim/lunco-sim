@@ -12,6 +12,7 @@ members = [
     "crates/lunco-luncosim",
     "crates/lunco-luncosim-ui",
     "crates/lunco-luncosim-exposures",
+    "crates/lunco-usd-ui",
     "crates/lunco-luncosim-server",
     "crates/lunco-telemetry",
     "crates/lunco-celestial",
@@ -29,6 +30,7 @@ members = [
     "crates/lunco-usd",
     "crates/lunco-luncosim-edit",
     "crates/lunco-scene-commands",
+    "crates/lunco-scene-validation",
     "crates/lunco-ui",
     "crates/lunco-assets",
     "crates/lunco-materials",
@@ -299,8 +301,6 @@ rumoca-solver-rk45 = { git = "https://github.com/LunCoSim/rumoca", branch = "mai
 rumoca-eval-solve  = { git = "https://github.com/LunCoSim/rumoca", branch = "main" }
 rumoca-tool-fmt    = { git = "https://github.com/LunCoSim/rumoca", branch = "main" }
 rumoca-tool-lint   = { git = "https://github.com/LunCoSim/rumoca", branch = "main" }
-
-catppuccin-egui = "5.7.0"
 
 # Centralised here so version drift across crates is visible in one
 # place. Each crate opts in via `dep = { workspace = true }`.

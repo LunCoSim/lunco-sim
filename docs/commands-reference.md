@@ -470,7 +470,7 @@ actually call, with the fields the deserializer actually accepts. See the
  identifies the owner paths and the actual registry precedence used for
  routing. Fix the duplicate in authoring rather than adding a runtime fallback.
 
-- *defined in:* `crates/lunco-scene-commands/src/lint_command.rs`
+- *defined in:* `crates/lunco-scene-validation/src/lint_command.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -485,7 +485,7 @@ local folder and without requiring an active scene or ECS state. It reports
 Modelica classes, USD default/prim identities, Rhai tools, shader modules, and
 asset stems only when their names collide in a real resolver scope.
 
-- *defined in:* `crates/lunco-scene-commands/src/validate.rs`
+- *defined in:* `crates/lunco-scene-validation/src/validate.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -708,7 +708,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Close one preview session and release all of its presentation resources.
 
-- *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -720,7 +720,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  preview session because a session without a presentation view cannot be
  reached from the editor.
 
-- *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -778,7 +778,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  This command changes only projected Bevy transforms; it never enters the
  USD document, journal, save state, or simulation projection.
 
-- *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -794,7 +794,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Focus an already-open preview session in the USD dock.
 
-- *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -804,7 +804,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Focus one presentation view and its parent USD preview session.
 
-- *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -814,7 +814,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Fit one preview view to the projected visual bounds of its USD stage.
 
-- *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -828,7 +828,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  explicit lease. Other sessions keep their roots, cameras, and stages
  untouched.
 
-- *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -842,7 +842,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  The view id is explicit so persisted layouts and agents can address the
  exact camera without relying on tab order or display names.
 
-- *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -855,7 +855,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  delta to its camera plane using the current projection and render-target
  viewport.
 
-- *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -866,7 +866,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Restore one preview view's default orbit pose and fit it to its stage.
 
-- *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -920,7 +920,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  the editor camera; authored USD camera opinions stay read-only presentation
  input and are never rewritten by a navigation gesture.
 
-- *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -931,7 +931,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Change which authored/composed snapshot the Text mode displays.
 
-- *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -942,7 +942,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Change only the presentation mode of one existing USD preview view.
 
-- *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -954,7 +954,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  Zoom one preview view by a positive multiplicative factor. Perspective
  views change orbit distance; orthographic views change projection scale.
 
-- *defined in:* `crates/lunco-usd/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -3433,7 +3433,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  presentation fixture and leaves every Twin/scene resource untouched. The
  default `false` state has no effect on ordinary production runs.
 
-- *defined in:* `crates/lunco-luncosim/src/ui/scenario_fixture.rs`
+- *defined in:* `crates/lunco-luncosim-ui/src/ui/scenario_fixture.rs`
 
 | Field | Type | Description |
 |---|---|---|

@@ -287,7 +287,7 @@ curl -s -X POST http://127.0.0.1:4101/api/commands \
   -d '{"type":"ExecuteCommand","command":"ValidateAsset","params":{"path":"lunco://models/LunCo/Electrical/Battery.mo"}}'
 ```
 
-**Answered by luncosim binaries only** — it lives in `lunco-scene-commands`,
+**Answered by luncosim binaries only** — it lives in `lunco-scene-validation`,
 which lunica does not link, so lunica returns `CommandNotFound`. With no
 instance (or only lunica) up, the same checks run as a one-shot CLI that builds
 no app at all:

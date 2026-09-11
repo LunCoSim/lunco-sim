@@ -69,13 +69,24 @@ lunco-theme = { path = "../lunco-theme" }
 lunco-time = { path = "../lunco-time" }
 lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
 lunco-ui = { path = "../lunco-ui" }
-lunco-usd = { path = "../lunco-usd", default-features = false, features = ["ui"] }
+lunco-usd = { path = "../lunco-usd", default-features = false }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+lunco-usd-ui = { path = "../lunco-usd-ui" }
 lunco-workbench = { path = "../lunco-workbench", features = ["api"] }
 lunco-workbench-core = { path = "../lunco-workbench-core" }
 lunco-workspace = { path = "../lunco-workspace" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+[build-dependencies]
+# The desktop icon is UI/package artwork. Keeping rasterization here prevents
+# the headless application and server from compiling the graphics toolchain.
+resvg = { workspace = true }
+usvg = { workspace = true }
+image = { workspace = true, features = ["ico"] }
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1.31"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 velopack = { version = "=1.2.110-ge826545", features = ["public-utils"] }

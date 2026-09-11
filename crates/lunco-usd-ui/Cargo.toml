@@ -1,0 +1,47 @@
+[package]
+name = "lunco-usd-ui"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "LunCoSim's interactive USD browser and preview UI"
+
+[dependencies]
+# The UI crate opts into the render-facing Bevy facade. The USD core and its
+# server consumers keep the workspace's render-free Bevy baseline.
+bevy = { workspace = true, features = [
+    "bevy_gltf",
+    "bevy_world_serialization",
+    "bevy_mesh",
+    "bevy_light",
+    "bevy_render",
+    "bevy_core_pipeline",
+    "bevy_window",
+    "bevy_ui_render",
+    "bevy_post_process",
+    "bevy_anti_alias",
+] }
+bevy_egui = { workspace = true }
+lunco-api = { path = "../lunco-api", default-features = false }
+lunco-assets = { path = "../lunco-assets" }
+lunco-core = { path = "../lunco-core" }
+lunco-doc = { path = "../lunco-doc" }
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
+lunco-render = { path = "../lunco-render" }
+lunco-status-core = { path = "../lunco-status-core" }
+lunco-storage = { path = "../lunco-storage" }
+lunco-theme = { path = "../lunco-theme" }
+lunco-usd = { path = "../lunco-usd", default-features = false }
+lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+lunco-usd-compose = { path = "../lunco-usd-compose" }
+lunco-workbench = { path = "../lunco-workbench" }
+lunco-workbench-core = { path = "../lunco-workbench-core" }
+lunco-workspace = { path = "../lunco-workspace" }
+openusd = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

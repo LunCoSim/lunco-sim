@@ -56,10 +56,10 @@ grouped journal/undo path. A stale plan becomes an explicit conflict; it is
 never rebased or silently overwritten. Save/Save-As remains a separate
 explicit document operation.
 
-## UI plugins (`ui` feature only)
+## UI plugins (`lunco-usd-ui`)
 
-Behind the `ui` feature the `ui` module adds the egui browser/viewport panels,
-added separately by app composition (not by `UsdPlugins`):
+The separate `lunco-usd-ui` package adds the egui browser/viewport panels and
+is installed by app composition (not by `UsdPlugins`):
 
 - **`UsdUiPlugin`** — Twin browser / loaded-stages / dispatch panels.
 - **`UsdViewportPlugin`** — `UsdViewportPanel` plus the instance-backed
@@ -126,6 +126,10 @@ typed operation families. Its session cache stores paths rather than Bevy
 entities, so a USD reprojection can resolve fresh runtime projections and drop
 deleted paths. Use `assembly_edit::selection_context()` for the focused preview
 or `selection_context_for(preview)` for a hidden open preview.
+
+The USD core package has no UI feature and does not depend on egui, the
+workbench, or status-bar presentation. Headless applications can therefore
+depend on `lunco-usd` without compiling the interactive browser and viewport.
 
 ## Document model
 

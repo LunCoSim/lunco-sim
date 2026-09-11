@@ -457,7 +457,7 @@ fn preview_authoring_context(
     entity: Entity,
 ) -> Option<(lunco_doc::DocumentId, LayerId, u64)> {
     let sessions: Vec<_> = world
-        .resource::<lunco_usd::ui::viewport::UsdViewportState>()
+        .resource::<lunco_usd_ui::viewport::UsdViewportState>()
         .sessions()
         .filter(|session| session.projection_ready())
         .map(|session| {
@@ -1285,7 +1285,7 @@ pub fn delete_selected_on_intent(
 /// review state; it does not infer a document from an ECS entity.
 fn usd_editor_session_context(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     let Some((preview, doc, edit_target, projected_generation, projection_ready)) = ctx
-        .resource::<lunco_usd::ui::viewport::UsdViewportState>()
+        .resource::<lunco_usd_ui::viewport::UsdViewportState>()
         .and_then(|viewport| {
             viewport.focused_session().map(|session| {
                 (
@@ -1379,7 +1379,7 @@ fn focused_preview_transform_context(
     entity: Entity,
 ) -> Option<PreviewTransformContext> {
     let prim = ctx.get::<UsdPrimPath>(entity)?;
-    let viewport = ctx.resource::<lunco_usd::ui::viewport::UsdViewportState>()?;
+    let viewport = ctx.resource::<lunco_usd_ui::viewport::UsdViewportState>()?;
     let session = viewport.focused_session()?;
     if !session.projection_ready() {
         return None;
@@ -1932,7 +1932,7 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
         .resource::<crate::InspectorTarget>()
         .and_then(|t| t.part);
     let (preview, doc, edit_target, target, path, generation, kind, params): (
-        lunco_usd::ui::viewport::UsdPreviewId,
+        lunco_usd_ui::viewport::UsdPreviewId,
         lunco_doc::DocumentId,
         LayerId,
         Entity,
@@ -1941,7 +1941,7 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
         Option<String>,
         Vec<crate::ui::usd_params::UsdParam>,
     ) = match ctx
-        .resource::<lunco_usd::ui::viewport::UsdViewportState>()
+        .resource::<lunco_usd_ui::viewport::UsdViewportState>()
         .and_then(|viewport| {
             ctx.resource::<crate::ui::usd_params::UsdParamView>()
                 .and_then(|views| views.focused(viewport))
@@ -2276,7 +2276,7 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
 /// identical opinion, and each dispatch costs a whole-subtree rebuild.
 fn usd_variants_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
     let (prim_path, sets) = match ctx
-        .resource::<lunco_usd::ui::viewport::UsdViewportState>()
+        .resource::<lunco_usd_ui::viewport::UsdViewportState>()
         .and_then(|viewport| {
             ctx.resource::<crate::ui::usd_variants::UsdVariantView>()
                 .and_then(|views| views.focused(viewport))
@@ -2356,7 +2356,7 @@ fn attach_joint_from(joint: &str, axis: Option<&str>) -> Option<lunco_usd::attac
 /// socket frame math ran in the producer; it needs the `!Send` stage).
 fn mount_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
     let (host_path, items, diagnostics) = match ctx
-        .resource::<lunco_usd::ui::viewport::UsdViewportState>()
+        .resource::<lunco_usd_ui::viewport::UsdViewportState>()
         .and_then(|viewport| {
             ctx.resource::<crate::ui::usd_mount::UsdMountView>()
                 .and_then(|views| views.focused(viewport))
