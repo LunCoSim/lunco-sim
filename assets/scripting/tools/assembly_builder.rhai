@@ -281,6 +281,114 @@ fn referenced_instance_targeted_plan(doc, edit_target, parent, name, type_name, 
     }
 }
 
+/// Build an ordered set of referenced instances from one explicit template.
+/// Each placement must provide its own USD identifier and local pose; the
+/// input order is preserved in both `paths` and `ops`. The helper composes the
+/// existing single-instance planner, so references, schemas, attributes, and
+/// transforms keep one validation and write path.
+fn referenced_instance_pattern_plan(doc, edit_target, parent, template, placements) {
+    if doc == () || edit_target == () || parent == () || template == ()
+        || placements == () {
+        return plan_error("referenced_instance_pattern_plan requires document, edit target, parent, template, and placements");
+    }
+    if placements.len() == 0 {
+        return plan_error("referenced_instance_pattern_plan requires at least one placement");
+    }
+    if template.type_name == () || template.asset == () {
+        return plan_error("referenced_instance_pattern_plan template requires type_name and asset");
+    }
+
+    let names = [];
+    let paths = [];
+    let ops = [];
+    for placement in placements {
+        if placement == () || placement.name == () || placement.name == ""
+            || placement.name.contains("/") {
+            return plan_error("referenced_instance_pattern_plan placements require one USD identifier");
+        }
+        if names.contains(placement.name) {
+            return plan_error(parent + "/" + placement.name + ": pattern placement identity is duplicated");
+        }
+        if placement.translation == () && placement.rotation == ()
+            && placement.scale == () {
+            return plan_error(parent + "/" + placement.name + ": pattern placement requires an explicit local pose");
+        }
+        names.push(placement.name);
+        let reference_prim_path = if template.reference_prim_path == () {
+            ()
+        } else {
+            template.reference_prim_path
+        };
+        let instance = referenced_instance_targeted_plan(
+            doc, edit_target, parent, placement.name, template.type_name,
+            template.asset, reference_prim_path,
+            placement.translation, placement.rotation, placement.scale,
+            template.api_schemas, template.attributes,
+        );
+        if !instance.ok { return instance; }
+        paths.push(instance.path);
+        for op in instance.ops { ops.push(op); }
+    }
+    #{
+        ok: true,
+        kind: "referenced_instance_pattern",
+        parent: parent,
+        paths: paths,
+        placement_names: names,
+        ops: ops,
+    }
+}
+
+/// Build one mirrored referenced instance across a parent-local cardinal
+/// coordinate plane. Reflection of a non-zero Euler rotation is intentionally
+/// rejected: callers must provide an orientation that remains meaningful
+/// under the explicit translation mirror rather than receiving a guessed
+/// reflected rotation. The operation itself is delegated to the pattern and
+/// single-instance planners above.
+fn referenced_instance_mirror_plan(doc, edit_target, parent, template, name,
+    mirror_axis, source_translation, source_rotation, scale) {
+    if name == () || mirror_axis == () || source_translation == () {
+        return plan_error("referenced_instance_mirror_plan requires name, mirror axis, and source translation");
+    }
+    if !cardinal_axis(mirror_axis) {
+        return plan_error("referenced_instance_mirror_plan mirror axis must be X, Y, or Z");
+    }
+    let valid_translation = vector3(source_translation, "source_translation");
+    if !valid_translation.ok { return valid_translation; }
+    if source_rotation != () {
+        let valid_rotation = vector3(source_rotation, "source_rotation");
+        if !valid_rotation.ok { return valid_rotation; }
+        for value in source_rotation {
+            if value.abs() > 0.0001 {
+                return plan_error("referenced_instance_mirror_plan supports only zero source rotation");
+            }
+        }
+    }
+
+    let mirrored_translation = [
+        source_translation[0],
+        source_translation[1],
+        source_translation[2],
+    ];
+    let index = axis_index(mirror_axis);
+    mirrored_translation[index] = -mirrored_translation[index];
+    let placement = #{
+        name: name,
+        translation: mirrored_translation,
+        rotation: source_rotation,
+        scale: scale,
+    };
+    let pattern = referenced_instance_pattern_plan(
+        doc, edit_target, parent, template, [placement],
+    );
+    if !pattern.ok { return pattern; }
+    pattern.kind = "referenced_instance_mirror";
+    pattern.mirror_axis = mirror_axis;
+    pattern.source_translation = source_translation;
+    pattern.mirrored_translation = mirrored_translation;
+    pattern
+}
+
 /// Build a second-phase variant-selection plan for an already materialized
 /// referenced instance. Variant changes recompose a subtree, so first-use
 /// reference materialization must complete before this plan is proposed. The

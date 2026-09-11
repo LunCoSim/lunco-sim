@@ -30,6 +30,12 @@ hand-authored or generated component with
 `assembly_audit::standard_component_report(doc, manifest)` before committing
 it.
 
+For repeated instances, use
+`assembly_builder::referenced_instance_pattern_plan` with explicit ordered
+placements; use `referenced_instance_mirror_plan` for a local-axis reflected
+translation. Both reuse the generic reference planner and preserve standard
+USD identities and transforms.
+
 Before adding a component, search by domain API, connector, and Modelica class:
 
 ```sh
