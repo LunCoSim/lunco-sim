@@ -7,7 +7,7 @@
 //! ambiguous. Rhai policy decides the severity and final finding text.
 
 use lunco_hooks::HookValue as H;
-use lunco_usd_bevy::UsdRead;
+use lunco_usd_bevy_core::UsdRead;
 use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -320,7 +320,7 @@ fn inspect_usd_file(
             return;
         }
     };
-    let canonical = lunco_usd_bevy::CanonicalStage::from_stage(stage, slashed(rel));
+    let canonical = lunco_usd_bevy_core::canonical::CanonicalStage::from_stage(stage, slashed(rel));
     let view = canonical.view();
     let scope = format!("composed USD stage `{}`", slashed(rel));
     if let Some(default_prim) = view.default_prim() {

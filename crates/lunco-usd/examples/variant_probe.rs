@@ -6,13 +6,13 @@
 //! Usage: cargo run -p lunco-usd --example variant_probe -- <scene.usda> [set]
 
 use lunco_doc::{Document, DocumentId, DocumentOrigin};
-use lunco_usd_bevy::{CanonicalStage, UsdRead};
+use lunco_usd_bevy_core::{CanonicalStage, UsdRead};
 use lunco_usd_core::document::{LayerId, UsdDocument, UsdOp};
 use openusd::sdf::Path as SdfPath;
 
 fn probe(label: &str, source: &str, tmp: &std::path::Path) {
     std::fs::write(tmp, source).expect("write temp scene");
-    let stage = match lunco_usd_bevy::compose_file_to_stage(tmp) {
+    let stage = match lunco_usd_bevy_core::compose::compose_file_to_stage(tmp) {
         Ok(s) => s,
         Err(e) => {
             println!("  {label}: COMPOSE FAILED: {e}");
@@ -105,7 +105,7 @@ fn discover_variants(src: &str, set: &str) -> Vec<String> {
     let Ok(data) = openusd::usda::parse(src) else {
         return Vec::new();
     };
-    lunco_usd_bevy::variants::variant_options_in_data(&data)
+    lunco_usd_bevy_core::variants::variant_options_in_data(&data)
         .remove(set)
         .unwrap_or_default()
 }

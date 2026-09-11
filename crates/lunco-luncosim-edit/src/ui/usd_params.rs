@@ -18,7 +18,9 @@
 use bevy::prelude::*;
 use std::collections::HashMap;
 
-use lunco_usd_bevy::{CanonicalStages, SdfPath, UsdPrimPath, UsdRead, UsdStageAsset};
+use lunco_usd_bevy::SdfPath;
+use lunco_usd_bevy::UsdPrimPath;
+use lunco_usd_bevy_core::{CanonicalStages, UsdRead, UsdStageAsset};
 use lunco_usd_ui::viewport::{UsdPreviewId, UsdViewportState};
 
 /// One ranged parameter derived from an attribute's `customData`.

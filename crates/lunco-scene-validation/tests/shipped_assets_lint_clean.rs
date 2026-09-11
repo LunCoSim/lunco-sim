@@ -201,9 +201,12 @@ fn the_deliberately_broken_scene_still_fails_the_same_gate() {
 fn targetless_metadata_telemetry_is_a_usd_lint_error() {
     register_usd_lint_policy();
     let path = assets_dir().join("scenes/tests/lint_selftest.usda");
-    let stage = lunco_usd_bevy::compose_file_to_stage(&path).expect("compose lint fixture");
-    let canonical =
-        lunco_usd_bevy::CanonicalStage::from_stage(stage, path.to_string_lossy().into_owned());
+    let stage =
+        lunco_usd_bevy_core::compose::compose_file_to_stage(&path).expect("compose lint fixture");
+    let canonical = lunco_usd_bevy_core::canonical::CanonicalStage::from_stage(
+        stage,
+        path.to_string_lossy().into_owned(),
+    );
     let findings = lunco_scene_validation::lint_command::lint_stage(&canonical.view());
     assert!(
         findings.iter().any(|finding| {

@@ -284,7 +284,7 @@ fn on_add_camera_here(
     };
 
     let Some(root) =
-        lunco_usd_bevy::layer_default_prim(host.document().data()).map(|p| format!("/{p}"))
+        lunco_usd_bevy_core::layer_default_prim(host.document().data()).map(|p| format!("/{p}"))
     else {
         report_capture_failure(
             &mut commands,

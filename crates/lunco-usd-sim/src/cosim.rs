@@ -51,11 +51,14 @@ use lunco_scripting::{
     doc::ScriptedModel, scenario::ScenarioDriver, world_bridge::RhaiScenarioRuntime,
     SceneOwnedScript, ScriptRegistry,
 };
-use lunco_usd_bevy::read::UsdReadObject;
 use lunco_usd_bevy::{
-    read_authored_bool_strict, CanonicalStages, UsdAwaitingStage, UsdInstanceMember,
-    UsdInstanceProjection, UsdInstanceRoot, UsdPrimPath, UsdSceneRoot, UsdStageAsset,
-    UsdVisualMeshPending, UsdVisualProjectionQueued,
+    read_authored_bool_strict, UsdAwaitingStage, UsdPrimPath, UsdSceneRoot, UsdVisualMeshPending,
+    UsdVisualProjectionQueued,
+};
+use lunco_usd_bevy_core::read::UsdReadObject;
+use lunco_usd_bevy_core::{
+    canonical::CanonicalStages, UsdInstanceMember, UsdInstanceProjection, UsdInstanceRoot,
+    UsdStageAsset,
 };
 use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::{BTreeSet, HashMap};
@@ -638,7 +641,7 @@ pub(crate) fn process_usd_cosim_prims(
             continue;
         }
         let members = members_by_stage.entry(id).or_insert_with(|| {
-            lunco_usd_bevy::program::modelica_network_member_paths(&reader)
+            lunco_usd_bevy_core::program::modelica_network_member_paths(&reader)
                 .into_iter()
                 .collect()
         });
@@ -1087,7 +1090,7 @@ fn project_usd_telemetry(
 }
 
 /// Reads one cosim prim's attributes and dispatches its model + wires + events
-/// from the live composed [`lunco_usd_bevy::UsdRead`] surface.
+/// from the live composed [`lunco_usd_bevy_core::UsdRead`] surface.
 fn process_usd_cosim_prim_read(
     reader: &dyn UsdReadObject,
     entity: Entity,
@@ -1231,7 +1234,7 @@ fn process_usd_cosim_prim_read(
     // The shared USD resolver selects the source arm and dispatches by file
     // format. This crate owns only Modelica and Python participants; Rhai and
     // BehaviorTree sources remain with their own projections.
-    let resolved = match lunco_usd_bevy::program::resolve_program(reader, sdf_path) {
+    let resolved = match lunco_usd_bevy_core::program::resolve_program(reader, sdf_path) {
         Ok(resolved) => resolved,
         Err(issue) => {
             warn!(
@@ -1243,18 +1246,18 @@ fn process_usd_cosim_prim_read(
     };
     let (backend, modelica_path, python_path) = match (resolved.backend, resolved.source) {
         (
-            lunco_usd_bevy::program::ProgramBackend::Modelica,
-            lunco_usd_bevy::program::ProgramSource::Asset(path),
+            lunco_usd_bevy_core::program::ProgramBackend::Modelica,
+            lunco_usd_bevy_core::program::ProgramSource::Asset(path),
         ) => (
-            lunco_usd_bevy::program::ProgramBackend::Modelica,
+            lunco_usd_bevy_core::program::ProgramBackend::Modelica,
             Some(path),
             None,
         ),
         (
-            lunco_usd_bevy::program::ProgramBackend::Python,
-            lunco_usd_bevy::program::ProgramSource::Asset(path),
+            lunco_usd_bevy_core::program::ProgramBackend::Python,
+            lunco_usd_bevy_core::program::ProgramSource::Asset(path),
         ) => (
-            lunco_usd_bevy::program::ProgramBackend::Python,
+            lunco_usd_bevy_core::program::ProgramBackend::Python,
             None,
             Some(path),
         ),
@@ -2767,7 +2770,7 @@ fn rewire_usd_connections(
         // wire both drove it.
         let members = members_by_stage
             .entry(id)
-            .or_insert_with(|| lunco_usd_bevy::program::modelica_network_member_paths(view));
+            .or_insert_with(|| lunco_usd_bevy_core::program::modelica_network_member_paths(view));
         if members.contains(&prim_path.path) {
             continue;
         }
@@ -2854,7 +2857,7 @@ fn rewire_usd_connections(
             // unwritten and every motor's electrical draw at zero.
             if attr.starts_with("outputs:")
                 && crate::domain_projection::is_runtime_domain_network_root(view, &sink_sdf)
-                && lunco_usd_bevy::program::is_network_boundary_output(view, &sink_sdf, &attr)
+                && lunco_usd_bevy_core::program::is_network_boundary_output(view, &sink_sdf, &attr)
             {
                 continue;
             }
@@ -2866,7 +2869,7 @@ fn rewire_usd_connections(
             // when the contract arrives.
             if attr.starts_with("inputs:")
                 && crate::domain_projection::is_runtime_domain_network_root(view, &sink_sdf)
-                && lunco_usd_bevy::program::internal_network_input_source(
+                && lunco_usd_bevy_core::program::internal_network_input_source(
                     view, &sink_sdf, sink_conn,
                 )
                 .is_some()
@@ -5839,8 +5842,9 @@ mod tests {
     fn rigid_body_modelica_interface_leaves_physical_ports_to_avian() {
         let asset = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../assets/vessels/landers/descent_lander.usda");
-        let stage = lunco_usd_bevy::compose_file_to_stage(&asset).expect("compose lander asset");
-        let view = lunco_usd_bevy::StageView::new(&stage);
+        let stage = lunco_usd_bevy_core::compose::compose_file_to_stage(&asset)
+            .expect("compose lander asset");
+        let view = lunco_usd_bevy_core::StageView::new(&stage);
         let root = SdfPath::new("/DescentLander").unwrap();
         let (mut inputs, _) = declared_interface(&view, &root);
         strip_rigid_body_inputs(&view, &root, &mut inputs);
@@ -5882,8 +5886,9 @@ mod tests {
     fn bare_acausal_interface_is_not_treated_as_an_unowned_wire() {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/electrical_network.usda");
-        let stage = lunco_usd_bevy::compose_file_to_stage(&path).expect("compose fixture");
-        let view = lunco_usd_bevy::StageView::new(&stage);
+        let stage =
+            lunco_usd_bevy_core::compose::compose_file_to_stage(&path).expect("compose fixture");
+        let view = lunco_usd_bevy_core::StageView::new(&stage);
 
         let bare_motor = SdfPath::new("/Rig/Motor").expect("motor path");
         let wired_battery = SdfPath::new("/Rig/Battery").expect("battery path");

@@ -26,7 +26,7 @@
 //!    (initial mount, open-time `restore_runtime`, or a later spawn/move), refresh the
 //!    twin **overlay** (for persistence / re-open) and **author the delta onto
 //!    the live composed stage**: translates and structural spawns/removes are
-//!    authored onto the scene's [`CanonicalStage`](lunco_usd_bevy::CanonicalStage)
+//!    authored onto the scene's [`CanonicalStage`](lunco_usd_bevy_core::canonical::CanonicalStage)
 //!    directly, firing its openusd change sink so `project_stage_changes`
 //!    projects the edit in place — no whole-scene asset reload. A referenced
 //!    spawn whose asset isn't loaded yet is fetched once through
@@ -55,9 +55,10 @@ use bevy::prelude::*;
 use lunco_assets::twin_source::TwinRoots;
 use lunco_doc::{Document, DocumentId};
 use lunco_usd_bevy::{
-    UsdAwaitingStage, UsdInstanceProjection, UsdPrimPath, UsdRead, UsdSceneRoot, UsdSourceText,
-    UsdStageAsset, UsdVisualProjectionQueued, UsdVisualSynced,
+    UsdAwaitingStage, UsdPrimPath, UsdSceneRoot, UsdSourceText, UsdVisualProjectionQueued,
+    UsdVisualSynced,
 };
+use lunco_usd_bevy_core::{UsdInstanceProjection, UsdRead, UsdStageAsset};
 use lunco_usd_sim::cosim::LoadScene;
 
 use crate::commands::{EmptyViewportReason, TWIN_SCENE_LOAD_FAILED};
@@ -387,7 +388,7 @@ pub fn scene_document_for(
 /// the openusd change sink fires and `project_stage_changes` instantiates the
 /// composed subtree — no whole-scene reload.
 struct RefSpawn {
-    /// The scene whose live [`CanonicalStage`](lunco_usd_bevy::CanonicalStage)
+    /// The scene whose live [`CanonicalStage`](lunco_usd_bevy_core::canonical::CanonicalStage)
     /// the spawn is authored onto.
     scene_id: AssetId<UsdStageAsset>,
     /// The prim path to spawn (e.g. `/World/rover_1`).
@@ -878,7 +879,7 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             // explicit authoring operation rather than a second initial-load
             // reader or a per-frame rebuild.
             let stage_ready = world
-                .get_non_send::<lunco_usd_bevy::CanonicalStages>()
+                .get_non_send::<lunco_usd_bevy_core::canonical::CanonicalStages>()
                 .is_some_and(|stages| stages.get(scene_id).is_some());
             if has_work && !stage_ready {
                 let recipe = world
@@ -893,7 +894,7 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
                     continue;
                 };
                 let built = world
-                    .get_non_send_mut::<lunco_usd_bevy::CanonicalStages>()
+                    .get_non_send_mut::<lunco_usd_bevy_core::canonical::CanonicalStages>()
                     .is_some_and(|mut stages| stages.get_or_build(scene_id, &recipe).is_some());
                 if !built {
                     continue;
@@ -1108,7 +1109,7 @@ fn is_waypoint_prim(world: &World, scene_id: AssetId<UsdStageAsset>, path: &str)
         return false;
     };
     world
-        .get_non_send::<lunco_usd_bevy::CanonicalStages>()
+        .get_non_send::<lunco_usd_bevy_core::canonical::CanonicalStages>()
         .and_then(|stages| stages.get(scene_id))
         .is_some_and(|stage| stage.view().has_api_schema(&path, "LunCoWaypointAPI"))
 }
@@ -1123,13 +1124,13 @@ pub(crate) fn is_behavior_program(
     path: &openusd::sdf::Path,
 ) -> bool {
     world
-        .get_non_send::<lunco_usd_bevy::CanonicalStages>()
+        .get_non_send::<lunco_usd_bevy_core::canonical::CanonicalStages>()
         .and_then(|stages| stages.get(scene_id))
         .is_some_and(|stage| {
             let view = stage.view();
             view.has_api_schema(path, "LunCoProgramAPI")
                 && matches!(
-                    lunco_usd_bevy::program::resolve_behavior_tree_source(&view, path),
+                    lunco_usd_bevy_core::program::resolve_behavior_tree_source(&view, path),
                     Ok(Some(_))
                 )
         })
@@ -1180,7 +1181,7 @@ fn behavior_owner_entity(
     }
     let owner_path = {
         let stage = world
-            .get_non_send::<lunco_usd_bevy::CanonicalStages>()
+            .get_non_send::<lunco_usd_bevy_core::canonical::CanonicalStages>()
             .and_then(|stages| stages.get(scene_id))?;
         let view = stage.view();
         let mut current = path.parent();
@@ -1207,7 +1208,7 @@ fn behavior_owner_entity(
 /// ECS. Only incremental ops reach here; coarse ops ([`op_needs_rebuild`]) rebuild
 /// instead. Reads/authors the `!Send` stage under short borrows.
 fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAsset>, op: &UsdOp) {
-    use lunco_usd_bevy::CanonicalStages;
+    use lunco_usd_bevy_core::canonical::CanonicalStages;
 
     // A referenced AddPrim may be waiting on its asset closure. Preserve every
     // later edit whose owner is inside that not-yet-live subtree; otherwise a
@@ -1389,7 +1390,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                     || owns_projected_behavior(world, scene_id, &sp))
                 {
                     let source = world
-                        .get_non_send::<lunco_usd_bevy::CanonicalStages>()
+                        .get_non_send::<lunco_usd_bevy_core::canonical::CanonicalStages>()
                         .and_then(|stages| stages.get(scene_id))
                         .map(|stage| {
                             let view = stage.view();
@@ -1682,7 +1683,7 @@ fn spawn_prim_op(
     reference: Option<String>,
     reference_prim_path: Option<String>,
 ) {
-    use lunco_usd_bevy::CanonicalStages;
+    use lunco_usd_bevy_core::canonical::CanonicalStages;
     let reference_prim_path = reference_prim_path.filter(|path| !path.is_empty());
     let Ok(sp) = openusd::sdf::Path::new(prim_path) else {
         return;
@@ -1951,7 +1952,7 @@ fn rebuild_scene_from_composed(
     scene_id: AssetId<UsdStageAsset>,
     composed_source: &str,
 ) {
-    use lunco_usd_bevy::CanonicalStages;
+    use lunco_usd_bevy_core::canonical::CanonicalStages;
     use lunco_usd_core::StageRecipe;
     // Recipe = the edited composed source as the root layer + every referenced
     // `.usda` the current stage already loaded (keyed by the same canonical ids).
@@ -2008,7 +2009,7 @@ fn ensure_reference_layers_for_rebuild(
     for asset_path in references {
         let reference_id = {
             let Some(cs) = world
-                .get_non_send::<lunco_usd_bevy::CanonicalStages>()
+                .get_non_send::<lunco_usd_bevy_core::canonical::CanonicalStages>()
                 .and_then(|stages| stages.get(scene_id))
             else {
                 return false;
@@ -2048,7 +2049,7 @@ fn ensure_reference_layers_for_rebuild(
         return true;
     }
     world
-        .get_non_send::<lunco_usd_bevy::CanonicalStages>()
+        .get_non_send::<lunco_usd_bevy_core::canonical::CanonicalStages>()
         .and_then(|stages| stages.get(scene_id))
         .is_some_and(|cs| cs.add_layer_bytes(extra))
 }
@@ -2059,7 +2060,7 @@ fn ensure_reference_layers_for_rebuild(
 /// instantiates the composed subtree. Exclusive: authors onto the `!Send`
 /// `CanonicalStage`.
 pub(crate) fn drain_ref_spawns(world: &mut World) {
-    use lunco_usd_bevy::CanonicalStages;
+    use lunco_usd_bevy_core::canonical::CanonicalStages;
     if world.resource::<PendingRefSpawns>().items.is_empty() {
         return;
     }

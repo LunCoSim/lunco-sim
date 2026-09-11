@@ -11,7 +11,7 @@ use lunco_api::queries::ApiQueryProvider;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
 use lunco_doc::{Document, DocumentId};
 use lunco_doc_bevy::{DocumentRegistry, JournalResource};
-use lunco_usd_bevy::UsdRead;
+use lunco_usd_bevy_core::UsdRead;
 use lunco_usd_core::UsdDataExt;
 use openusd::sdf::{Path as SdfPath, Value as SdfValue};
 
@@ -95,17 +95,17 @@ fn document_snapshot(
 pub fn canonical_stage_for_document<'a>(
     world: &'a World,
     doc: DocumentId,
-) -> Option<&'a lunco_usd_bevy::CanonicalStage> {
+) -> Option<&'a lunco_usd_bevy_core::canonical::CanonicalStage> {
     let (name, rel) = world
         .get_resource::<crate::twin_projection::DocBackedTwinScenes>()?
         .coords_of(doc)?;
     let twin_path = lunco_assets::twin_uri(&name, &rel);
     let stage_id = world
         .get_resource::<AssetServer>()?
-        .get_handle::<lunco_usd_bevy::UsdStageAsset>(twin_path)?
+        .get_handle::<lunco_usd_bevy_core::UsdStageAsset>(twin_path)?
         .id();
     world
-        .get_non_send::<lunco_usd_bevy::CanonicalStages>()?
+        .get_non_send::<lunco_usd_bevy_core::canonical::CanonicalStages>()?
         .get(stage_id)
 }
 

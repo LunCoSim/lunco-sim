@@ -15,7 +15,9 @@ use lunco_api::queries::ApiQueryProvider;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
 use lunco_core::markers::Callsign;
 use lunco_core::{entity_display_name, CatalogEntryId};
-use lunco_usd_bevy::{CanonicalStages, SdfPath, UsdPrimPath, UsdRead};
+use lunco_usd_bevy::SdfPath;
+use lunco_usd_bevy::UsdPrimPath;
+use lunco_usd_bevy_core::{CanonicalStages, UsdRead, UsdStageAsset};
 use lunco_usd_ui::viewport::{UsdPreviewId, UsdViewportState};
 
 use super::EditorSessionSelections;
@@ -449,7 +451,7 @@ impl SelectedPaths {
     fn resolve(
         self,
         world: &World,
-        stage_id: AssetId<lunco_usd_bevy::UsdStageAsset>,
+        stage_id: AssetId<UsdStageAsset>,
         scene_root: Entity,
         q_paths: &mut QueryState<(
             Entity,

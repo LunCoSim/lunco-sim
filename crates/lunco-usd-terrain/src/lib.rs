@@ -27,9 +27,8 @@ use bevy::prelude::*;
 // Two read planes, two traits: `UsdRead` = the live COMPOSED stage (what the terrain
 // projects from); `UsdDataExt` = a raw authored `sdf::Data` layer, which is what the
 // document registry hands back for the authoring tier's child walks.
-use lunco_usd_bevy::{
-    read_primitive_axis, read_shape_dims, read_transform_from_usd, ShapeDims, StageView, UsdRead,
-};
+use lunco_usd_bevy::{read_primitive_axis, read_shape_dims, ShapeDims};
+use lunco_usd_bevy_core::{read_transform_from_usd, StageView, UsdRead};
 use lunco_usd_core::UsdDataExt;
 
 /// Projects authored USD terrain prims into `lunco-terrain-surface`, and authors hand
@@ -545,8 +544,8 @@ fn sync_obstacle_spec_from_usd(
 /// deliberately suppresses that reload). Routing exactly one path per terrain
 /// avoids a double re-parse.
 fn refresh_layered_terrain_layers(
-    mut ev: MessageReader<AssetEvent<lunco_usd::UsdStageAsset>>,
-    stages: Res<Assets<lunco_usd::UsdStageAsset>>,
+    mut ev: MessageReader<AssetEvent<lunco_usd_bevy_core::UsdStageAsset>>,
+    stages: Res<Assets<lunco_usd_bevy_core::UsdStageAsset>>,
     registry: Res<lunco_terrain_surface::TerrainLayerParserRegistry>,
     q: Query<
         (Entity, &lunco_usd::UsdPrimPath),
@@ -555,7 +554,7 @@ fn refresh_layered_terrain_layers(
             Without<lunco_terrain_surface::DocBackedTerrain>,
         ),
     >,
-    mut canonical: NonSendMut<lunco_usd_bevy::CanonicalStages>,
+    mut canonical: NonSendMut<lunco_usd_bevy_core::canonical::CanonicalStages>,
     mut commands: Commands,
 ) {
     let mut modified = std::collections::HashSet::new();
@@ -1022,7 +1021,7 @@ fn refresh_docbacked_terrain_from_doc(
     // The live PCP-composed stage. Terrain projection reads the same
     // `CanonicalStage` as every other runtime projector; the stage is the
     // composed document that twin_projection updates for every authored op.
-    stages: NonSend<lunco_usd_bevy::CanonicalStages>,
+    stages: NonSend<lunco_usd_bevy_core::canonical::CanonicalStages>,
     parser: Res<lunco_terrain_surface::TerrainLayerParserRegistry>,
     mut obstacle_spec: ResMut<lunco_obstacle_field::ObstacleFieldSpec>,
     mut terrains: Query<
@@ -1404,7 +1403,7 @@ fn on_obstacle_spec_authored(
         (&lunco_usd::UsdPrimPath, &TerrainDocument),
         With<lunco_terrain_surface::DemTerrainSurface>,
     >,
-    stages: NonSend<lunco_usd_bevy::CanonicalStages>,
+    stages: NonSend<lunco_usd_bevy_core::canonical::CanonicalStages>,
     registry: Option<Res<lunco_doc_bevy::DocumentRegistry<lunco_usd_core::document::UsdDocument>>>,
     mut commands: Commands,
 ) {
@@ -1587,13 +1586,13 @@ fn bridge_usd_dem_terrain(
             With<lunco_terrain_surface::DemHeightField>,
         )>,
     >,
-    stages: Res<Assets<lunco_usd::UsdStageAsset>>,
+    stages: Res<Assets<lunco_usd_bevy_core::UsdStageAsset>>,
     twins: Res<lunco_assets::twin_source::TwinRoots>,
     asset_server: Res<AssetServer>,
     datasets: Res<lunco_assets::datasets::DatasetRegistry>,
     registry: Res<lunco_terrain_surface::TerrainLayerParserRegistry>,
     mut obstacle_spec: ResMut<lunco_obstacle_field::ObstacleFieldSpec>,
-    mut canonical: NonSendMut<lunco_usd_bevy::CanonicalStages>,
+    mut canonical: NonSendMut<lunco_usd_bevy_core::canonical::CanonicalStages>,
     mut commands: Commands,
 ) {
     for (entity, prim_path) in &q {
@@ -1693,7 +1692,7 @@ fn bridge_usd_dem_terrain(
 
 /// The DEM-bridge read body, over the composed read surface ([`UsdRead`]) — reads
 /// the authored `lunco:assetMode` / child-layer / anchor attributes off the live
-/// [`StageView`](lunco_usd_bevy::StageView) and attaches the terrain request +
+/// [`StageView`](lunco_usd_bevy_core::StageView) and attaches the terrain request +
 /// composed stack + georef. Split out of `bridge_usd_dem_terrain` so the read
 /// body can be driven directly by tests.
 #[allow(clippy::too_many_arguments)]
@@ -2177,7 +2176,7 @@ mod dem_bridge_tests {
     use bevy::ecs::world::CommandQueue;
     use bevy::prelude::*;
     use lunco_doc_bevy::DocumentRegistry;
-    use lunco_usd_bevy::CanonicalStage;
+    use lunco_usd_bevy_core::canonical::CanonicalStage;
     use lunco_usd_core::document::UsdDocument;
     use lunco_usd_core::StageRecipe;
     use openusd::sdf::Path as SdfPath;

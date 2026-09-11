@@ -9,7 +9,11 @@ mod material_binding;
 mod purpose;
 mod transform;
 
+pub mod asset;
+pub mod authoring;
+pub mod canonical;
 pub mod compose;
+pub mod instance;
 pub mod program;
 pub mod projection_plan;
 pub mod read;
@@ -17,6 +21,9 @@ pub mod units;
 pub mod variants;
 pub mod view;
 
+pub use asset::{UsdLoader, UsdStageAsset};
+pub use authoring::{layer_default_prim, DefaultPrim};
+pub use instance::{UsdInstanceMember, UsdInstanceProjection, UsdInstanceRoot};
 pub use material_binding::{
     parent_prim_path, resolve_bound_material, resolve_bound_shader, MaterialPurpose,
 };

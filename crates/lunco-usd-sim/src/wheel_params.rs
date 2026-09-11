@@ -49,8 +49,9 @@ use bevy::log::{error, info};
 use bevy::math::DVec3;
 use bevy::prelude::{Entity, World};
 use lunco_mobility::{JointedWheelTire, Suspension, TireLateralStiffnessGraph, WheelRaycast};
-use lunco_usd_bevy::read::UsdReadObject;
-use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdStageAsset};
+use lunco_usd_bevy::UsdPrimPath;
+use lunco_usd_bevy_core::read::UsdReadObject;
+use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
 use std::collections::{HashMap, HashSet};
 
@@ -799,7 +800,7 @@ fn validate_nonnegative(errors: &mut Vec<String>, name: &str, value: f64) {
 /// `physxVehicleWheel:mass` is claimed only on a wheel prim — on a chassis it must keep
 /// the normal refresh path (mass overrides are rebuilt by `lunco-usd-avian`).
 pub fn claims_edit(
-    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     prim: &SdfPath,
     attr: &str,
 ) -> bool {

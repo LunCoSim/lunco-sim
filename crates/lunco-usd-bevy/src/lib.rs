@@ -41,7 +41,6 @@ use bevy::asset::{io::Reader, AssetLoader, LoadContext};
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use big_space::prelude::CellCoord;
-use lunco_usd_compose::parse_usda;
 // Appearance **intent**, not a material: this crate must never name
 // `MeshMaterial3d`/`StandardMaterial` (they live in `bevy_pbr` → wgpu + naga).
 // `lunco-render-bevy` observes these and binds the real material.
@@ -50,7 +49,6 @@ use lunco_materials::ProceduralSkybox;
 use lunco_render::{PbrLook, PbrTextures, SurfaceAlpha};
 pub use openusd::sdf::Path as SdfPath;
 use openusd::sdf::Value;
-use std::sync::Arc;
 
 mod camera;
 pub mod camera_mount;
@@ -64,20 +62,20 @@ pub use camera::{read_camera_exposure_ev100, CameraExposureError, UsdCameraPose,
 pub use camera_switch::SetActiveCamera;
 pub use light::{read_dome_intensity, read_intensity_with_exposure, DomeIntensity, LightReadError};
 pub mod camera_path;
-pub mod canonical;
 pub mod lathe;
 pub mod mount;
-pub use canonical::{CanonicalStage, CanonicalStages, RawStageChange, StageProjector};
-#[cfg(not(target_arch = "wasm32"))]
-pub use compose::{compose_file_to_stage, compose_file_to_stage_with_assets};
 pub use light::UsdAuthoredLight;
-pub use lunco_usd_bevy_core::{compose, program, projection_plan, read, units, variants, view};
-pub use lunco_usd_bevy_core::{
+#[cfg(test)]
+use lunco_usd_bevy_core::DefaultPrim;
+use lunco_usd_bevy_core::{
+    canonical, program, read, units, UsdInstanceMember, UsdInstanceProjection, UsdInstanceRoot,
+    UsdLoader, UsdStageAsset,
+};
+use lunco_usd_bevy_core::{
+    canonical::{CanonicalStage, CanonicalStages},
     compose_xform_order_at, effective_purpose, is_descendant_or_self, local_transform_at,
-    parent_prim_path, read_transform_from_usd, resolve_bound_material, resolve_bound_shader,
-    resolve_stage_prim_path, stage_convention, stage_default_prim, MaterialPurpose, Purpose,
-    StageView, TransformReadError, UsdPrimProjectionPlan, UsdRead, UsdReadObject, UsdReadSource,
-    UsdStageProjectionPlan,
+    parent_prim_path, read_transform_from_usd, resolve_bound_shader, resolve_stage_prim_path,
+    stage_convention, Purpose, StageView, UsdRead, UsdReadObject,
 };
 use lunco_usd_core::UsdDataExt;
 // The ambient-fill solve. Uniform ambient is spelled as an untextured `DomeLight`
@@ -498,101 +496,6 @@ lunco_core::register_commands!(
     camera_path::camera_path_transport,
 );
 
-/// A Bevy Asset representing a loaded USD Stage.
-///
-/// Carries the worker-produced [`UsdStageProjectionPlan`] for initial composed
-/// projection and, when available, the `Send` layer-closure [`StageRecipe`]
-/// used to create the live canonical stage for authoring. The non-`Send`
-/// canonical [`Stage`](openusd::usd::Stage) is never part of this asset;
-/// initial hierarchy, transform, and material reads use the prepared plan.
-#[derive(Asset, TypePath, Clone)]
-pub struct UsdStageAsset {
-    /// The `Send` layer-closure recipe shared by the prepared initial projection
-    /// and the live canonical stage. It is absent only for an externally
-    /// composed stage whose live canonical owner was supplied separately.
-    pub recipe: Option<lunco_usd_core::StageRecipe>,
-    /// Structural hierarchy prepared from the composed stage at the async
-    /// boundary. Every valid asset carries a plan, including externally composed
-    /// stages created by [`Self::from_composed_stage`].
-    pub projection_plan: Arc<UsdStageProjectionPlan>,
-}
-
-impl UsdStageAsset {
-    /// Build an in-memory asset with the same prepared projection contract as
-    /// the asynchronous loader. Tests and live-document adapters use this
-    /// constructor so they cannot accidentally create a loaded-looking asset
-    /// without the data required by initial visual materialisation.
-    pub fn from_recipe(recipe: lunco_usd_core::StageRecipe) -> anyhow::Result<Self> {
-        let projection_plan = UsdStageProjectionPlan::from_recipe(&recipe)?;
-        projection_plan.validate()?;
-        Ok(Self {
-            recipe: Some(recipe),
-            projection_plan: Arc::new(projection_plan),
-        })
-    }
-
-    /// Build an asset read surface from an already-composed stage supplied by a
-    /// native adapter. The live stage remains owned by [`CanonicalStages`]; the
-    /// asset receives only the same owned snapshot used by the async loader.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn from_composed_stage(stage: &openusd::usd::Stage) -> anyhow::Result<Self> {
-        let projection_plan = UsdStageProjectionPlan::from_stage(stage)?;
-        projection_plan.validate()?;
-        Ok(Self {
-            recipe: None,
-            projection_plan: Arc::new(projection_plan),
-        })
-    }
-}
-
-#[derive(Default, TypePath)]
-pub struct UsdLoader;
-
-impl AssetLoader for UsdLoader {
-    type Asset = UsdStageAsset;
-    type Settings = ();
-    type Error = anyhow::Error;
-
-    async fn load(
-        &self,
-        reader: &mut dyn Reader,
-        _settings: &Self::Settings,
-        load_context: &mut LoadContext<'_>,
-    ) -> Result<Self::Asset, Self::Error> {
-        // Read raw bytes from the .usda file.
-        let mut bytes = Vec::new();
-        reader.read_to_end(&mut bytes).await?;
-
-        // Source-qualified path of this layer — the composition root and the
-        // pre-fetch BFS anchor. `LoadContext::path()` drops the asset *source*
-        // (Bevy tracks it separately), so a layer loaded from a NAMED source
-        // (e.g. an external Twin scene under `abs://`) would lose its scheme and
-        // its relative refs (the co-located terrain glb) would wrongly resolve
-        // against the default `assets/` source. Re-attach `scheme://` so every
-        // relative arc stays under the layer's own source.
-        let lc_path = load_context.path();
-        let root_asset_path = match lc_path.source() {
-            bevy::asset::io::AssetSourceId::Name(name) => {
-                format!("{}://{}", name, lc_path.path().to_string_lossy())
-            }
-            bevy::asset::io::AssetSourceId::Default => {
-                lc_path.path().to_string_lossy().into_owned()
-            }
-        };
-
-        // Fetch the transitive layer closure, then compose and snapshot its
-        // initial read surface before the asset crosses into Bevy. The live
-        // `!Send` stage is opened by the canonical-stage owner from this same
-        // recipe when authoring or incremental projection requires it.
-        let recipe = compose::fetch_layer_closure(load_context, &root_asset_path, bytes).await?;
-        Ok(UsdStageAsset::from_recipe(recipe)?)
-    }
-
-    fn extensions(&self) -> &[&str] {
-        &["usda"]
-    }
-}
-
 /// A USD layer's **raw source text**, read through the `AssetServer` without
 /// composition.
 ///
@@ -964,52 +867,6 @@ impl Default for UsdVisualProjectionSettings {
             frame_budget: std::time::Duration::from_millis(8),
         }
     }
-}
-
-/// Seed marker for hierarchical instance identity (gap G2/B.1). Placed
-/// **atomically** (in the same spawn bundle as `UsdPrimPath`) on the root of a
-/// runtime-spawned USD instance — a palette/API spawn, never authored scene
-/// content. The loader reads it to start propagating [`UsdInstanceMember`] down
-/// the subtree.
-///
-/// Why a dedicated marker rather than reusing `SkipContentStamp`: that stamp is
-/// inserted in a *separate* command after the root spawn, so the
-/// `Add<UsdPrimPath>` observer can fire before it lands. The loader needs the
-/// signal to be present the instant the root is instantiated, which only an
-/// atomic bundle component guarantees.
-#[derive(Component, Debug, Clone, Copy)]
-pub struct UsdInstanceRoot;
-
-/// Propagated down a runtime-spawned USD instance subtree so each descendant
-/// derives its identity from the instance root rather than taking a `Content`
-/// id (gap G2/B.1: two spawns of the same asset compose identical prim paths,
-/// so their descendants' content ids would collide).
-///
-/// `root` is the instance-root entity — it owns a unique, replicated
-/// `GlobalEntityId`. `root_path` is the root's composed prim path; a member's
-/// *role* is its own prim path relative to it. The loader parks each descendant
-/// as [`lunco_core::Provenance::Local`] and `resolve_usd_instance_identities`
-/// upgrades it to a deterministic `Derived` provenance once the root id exists.
-#[derive(Component, Debug, Clone)]
-pub struct UsdInstanceMember {
-    /// The instance-root entity this member descends from.
-    pub root: Entity,
-    /// The instance root's composed prim path (the prefix to strip for `role`).
-    pub root_path: String,
-}
-
-/// Prepared composed read data and identity scope for a referenced runtime instance.
-///
-/// The source asset is composed once on the asset worker. This remapped plan
-/// lets every descendant read the same composed facts at its scene instance
-/// path without reopening or repeatedly querying the live scene stage.
-#[derive(Component, Debug, Clone)]
-pub struct UsdInstanceProjection {
-    /// The runtime instance root whose USD identity scopes this projection.
-    /// It is assigned when the live-stage reconciliation creates the root and
-    /// is inherited by every projected descendant.
-    pub root: Option<Entity>,
-    pub plan: Arc<UsdStageProjectionPlan>,
 }
 
 /// A USD instance member's *role*: its prim path relative to the instance root.
@@ -3440,107 +3297,6 @@ fn apply_standard_material_intent(
 /// mount?" when authoring into it — no references need resolving to answer that,
 /// and the two must not be conflated: runtime reads the composed stage, while
 /// authoring asks the root layer directly.
-pub fn layer_default_prim(layer: &lunco_usd_core::UsdData) -> Option<String> {
-    let name = layer.field(&SdfPath::abs_root(), "defaultPrim")?.as_str()?;
-    (!name.is_empty()).then(|| name.to_string())
-}
-
-/// A single USD layer's source text, parsed once, positioned on the stage's
-/// `defaultPrim` — with **typed** reads of the attributes authored there.
-///
-/// For data that lives on the root prim (a scene's `doc` metadata, an asset's
-/// `lunco:spawnable`) this is a cheap, composition-free alternative to
-/// [`compose_file`] / the async `AssetServer` loader — referenced sub-layers are
-/// not consulted, which is correct for root-prim metadata but NOT for attributes
-/// that a reference might override.
-///
-/// Reads the authored layer directly, NOT through [`UsdRead`]: `UsdRead` is the
-/// *composed-stage* contract (`StageView`), and this exists precisely because
-/// it does **not** want composition.
-///
-/// Parse ONCE, read many. A caller wanting three attributes off the same prim
-/// (spawnable + lift + description) should not parse the file three times.
-pub struct DefaultPrim {
-    data: openusd::sdf::Data,
-    path: SdfPath,
-}
-
-impl DefaultPrim {
-    /// Parse `text` and locate its `defaultPrim`. `None` when the text doesn't
-    /// parse or the stage declares no `defaultPrim`.
-    pub fn parse(text: &str) -> Option<Self> {
-        let data = parse_usda(text).ok()?;
-        // `defaultPrim` is stage metadata on the pseudo-root, authored as a Token.
-        let name = data
-            .field(&SdfPath::abs_root(), "defaultPrim")?
-            .as_str()?
-            .to_string();
-        if name.is_empty() {
-            return None;
-        }
-        let path = SdfPath::new(&format!("/{name}")).ok()?;
-        Some(Self { data, path })
-    }
-
-    /// The authored `defaultPrim` path, absolute in the source layer.
-    ///
-    /// Runtime reference authoring uses this path explicitly because the live
-    /// stage must compose the source root's applied schemas onto a newly
-    /// defined instance prim; an implicit default-prim reference composes the
-    /// child namespace but leaves that instance root typeless.
-    pub fn path(&self) -> &SdfPath {
-        &self.path
-    }
-
-    /// Raw default-time value of `attr`, as authored.
-    pub fn value(&self, attr: &str) -> Option<&Value> {
-        let attr_path = self.path.append_property(attr).ok()?;
-        self.data.field(&attr_path, "default")
-    }
-
-    /// The prim's `doc` metadata — USD's own human-readable "what is this thing"
-    /// string, which usdview and every other DCC already display.
-    ///
-    /// Metadata on the prim, NOT an attribute on it, so it is read off the prim
-    /// spec rather than through [`value`](Self::value). Authored in the metadata
-    /// parens:
-    ///
-    /// ```usda
-    /// def Xform "LandingPad" (
-    ///     doc = "Blast-hardened landing pad — sintered disc with a centre hub."
-    /// )
-    /// ```
-    ///
-    /// This uses USD's `doc` metadata rather than a custom attribute, so the
-    /// description is visible to OpenUSD tools without a LunCo-specific schema.
-    pub fn documentation(&self) -> Option<String> {
-        self.data
-            .field(&self.path, "documentation")
-            .and_then(|v| v.as_str())
-            .map(str::to_string)
-    }
-
-    /// Typed read, via the same `TryFrom<Value>` conversion `UsdRead::scalar`
-    /// uses — so a `bool` attribute reads as a `bool` and nothing else.
-    pub fn scalar<T: TryFrom<Value>>(&self, attr: &str) -> Option<T> {
-        self.value(attr).cloned()?.get::<T>()
-    }
-
-    /// The text of a `string`/`token`/`asset` attribute, via openusd's own
-    /// [`Value::as_str`] — the one textual coercion (see [`UsdRead::text`]).
-    pub fn text(&self, attr: &str) -> Option<String> {
-        self.value(attr)?.as_str().map(str::to_string)
-    }
-
-    /// A real scalar tolerant of `float` **or** `double` authoring — the
-    /// [`UsdRead::real_f32`] rule, so a value is never dropped for being
-    /// authored in the other precision.
-    pub fn real_f32(&self, attr: &str) -> Option<f32> {
-        self.scalar::<f32>(attr)
-            .or_else(|| self.scalar::<f64>(attr).map(|v| v as f32))
-    }
-}
-
 /// True if the prim at `path` applies the named API schema, by exact
 /// token match against its `apiSchemas` list (or list-op). Canonical
 /// shared helper — `lunco-usd-avian` and `lunco-usd-sim` both call
@@ -6525,6 +6281,8 @@ fn read_patch_surface(
 #[cfg(test)]
 mod parametric_surface_tests {
     use super::*;
+    #[cfg(not(target_arch = "wasm32"))]
+    use lunco_usd_bevy_core::compose::compose_file_to_stage;
 
     #[test]
     fn lathe_api_owns_surface_even_when_profile_is_invalid() {

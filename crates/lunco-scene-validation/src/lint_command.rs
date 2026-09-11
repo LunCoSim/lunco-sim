@@ -38,7 +38,8 @@ use lunco_core::{on_command, Command};
 use lunco_doc::{Document, DocumentId};
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_hooks::HookValue as H;
-use lunco_usd_bevy::{CanonicalStages, UsdRead, UsdStageAsset};
+use lunco_usd_bevy::UsdPrimPath;
+use lunco_usd_bevy_core::{canonical::CanonicalStages, StageView, UsdRead, UsdStageAsset};
 use serde_json::json;
 use std::collections::{BTreeMap, HashMap};
 
@@ -47,7 +48,7 @@ use std::collections::{BTreeMap, HashMap};
 /// `PhysxPhysicsGearJoint` facts come from the `lunco-usd-sim` reader that owns
 /// that projection. The policy sees one map and one authoritative value for
 /// each subject.
-pub(crate) fn usd_physics_facts(view: &lunco_usd_bevy::StageView<'_>) -> H {
+pub(crate) fn usd_physics_facts(view: &StageView<'_>) -> H {
     let mut facts = lunco_usd_avian::physics_facts(view);
     lunco_usd_sim::lint::append_network_synthesizer_facts(view, &mut facts);
     lunco_usd_sim::lint::append_gear_drive_facts(view, &mut facts);
@@ -64,7 +65,7 @@ pub(crate) fn usd_physics_facts(view: &lunco_usd_bevy::StageView<'_>) -> H {
 /// facts come from `lunco-usd-avian`, while USD-sim owns its gear, wheel, and
 /// synthesizer projections. Callers must use this entry point rather than
 /// linting a partial producer's facts.
-pub fn lint_stage(view: &lunco_usd_bevy::StageView<'_>) -> Vec<lunco_lint::LintFinding> {
+pub fn lint_stage(view: &StageView<'_>) -> Vec<lunco_lint::LintFinding> {
     lunco_lint::run_lint(lunco_usd_avian::USD_LINT_DOMAIN, usd_physics_facts(view))
 }
 
@@ -86,7 +87,7 @@ fn live_port_collision_findings(
     // path deterministically if a transient projection view duplicates it.
     let mut entities = BTreeMap::new();
     for entity in world.iter_entities() {
-        let Some(prim) = entity.get::<lunco_usd_bevy::UsdPrimPath>() else {
+        let Some(prim) = entity.get::<UsdPrimPath>() else {
             continue;
         };
         if prim.stage_handle.id() == stage_id {
@@ -168,14 +169,14 @@ fn live_port_collision_findings(
 fn live_runtime_connection_facts(
     world: &World,
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
-    view: &lunco_usd_bevy::StageView<'_>,
+    view: &StageView<'_>,
 ) -> Vec<H> {
     let Some(registry) = world.get_resource::<lunco_core::ports::PortRegistry>() else {
         return Vec::new();
     };
     let mut entities = BTreeMap::new();
     for entity in world.iter_entities() {
-        let Some(prim) = entity.get::<lunco_usd_bevy::UsdPrimPath>() else {
+        let Some(prim) = entity.get::<UsdPrimPath>() else {
             continue;
         };
         if prim.stage_handle.id() == stage_id {
@@ -194,7 +195,7 @@ fn live_runtime_connection_facts(
                     continue;
                 };
                 if view.attr_type_name(&source_prim, source_property).is_some()
-                    || !lunco_usd_bevy::read::has_runtime_port_surface(view, &source_prim)
+                    || !lunco_usd_bevy_core::read::has_runtime_port_surface(view, &source_prim)
                 {
                     continue;
                 }
@@ -218,7 +219,7 @@ fn live_runtime_connection_facts(
                 let pending = source_entity
                     .and_then(|entity| world.get::<lunco_core::PortSurfacePending>(entity))
                     .is_some();
-                let provider = lunco_usd_bevy::read::runtime_port_provider(view, &source_prim)
+                let provider = lunco_usd_bevy_core::read::runtime_port_provider(view, &source_prim)
                     .unwrap_or("runtime provider");
                 facts.push(H::map([
                     ("subject", H::str(format!("{}.{}", sink, attribute))),
@@ -244,7 +245,7 @@ fn live_runtime_connection_facts(
 fn lint_stage_with_runtime(
     world: &World,
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
-    view: &lunco_usd_bevy::StageView<'_>,
+    view: &StageView<'_>,
 ) -> Vec<lunco_lint::LintFinding> {
     let mut facts = usd_physics_facts(view);
     if let H::Map(entries) = &mut facts {

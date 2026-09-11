@@ -13,7 +13,7 @@ use bevy::time::TimeUpdateStrategy;
 use lunco_scene_commands::catalog::{
     spawn_usd_entry, SpawnAnchor, SpawnOrigin, SpawnSource, SpawnableEntry,
 };
-use lunco_usd_bevy::{UsdInstanceRoot, UsdStageAsset};
+use lunco_usd_bevy_core::{UsdInstanceRoot, UsdStageAsset};
 use std::time::Duration;
 
 #[derive(Resource)]

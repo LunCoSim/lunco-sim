@@ -75,10 +75,10 @@ use lunco_render::{
     RenderQualityProfile, RenderingQualitySettings,
 };
 use lunco_usd_bevy::{
-    PendingUsdMesh, SdfPath, UsdAwaitingStage, UsdPreviewOnly, UsdPrimPath, UsdStageAsset,
-    UsdStageRevision, UsdVisualMeshPending, UsdVisualProjectionQueued, UsdVisualSyncFailed,
-    UsdVisualSynced,
+    PendingUsdMesh, SdfPath, UsdAwaitingStage, UsdPreviewOnly, UsdPrimPath, UsdStageRevision,
+    UsdVisualMeshPending, UsdVisualProjectionQueued, UsdVisualSyncFailed, UsdVisualSynced,
 };
+use lunco_usd_bevy_core::{is_descendant_or_self, UsdStageAsset};
 use lunco_workbench::{
     CloseTab, OpenTab, PanelRect, PanelRects, PendingTabCloses, ScenePickGate, SceneTarget,
     WorkbenchAppExt,
@@ -2993,9 +2993,7 @@ fn collect_preview_explode_targets(
     let mut targets = Vec::with_capacity(part_paths.len());
     for path in &part_paths {
         let sdf_path = SdfPath::new(path).expect("part paths were validated");
-        if !lunco_usd_bevy::is_descendant_or_self(&sdf_path, &command.assembly)
-            || path == &command.assembly
-        {
+        if !is_descendant_or_self(&sdf_path, &command.assembly) || path == &command.assembly {
             return Err(format!(
                 "USD preview explode part `{path}` is not below assembly `{}`",
                 command.assembly

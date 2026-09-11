@@ -412,7 +412,7 @@ pub fn read_plug(reader: &crate::StageView<'_>, part: &str) -> Option<MountPlug>
 /// Native-only: composition does file I/O.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_asset_plug(asset_path: &std::path::Path) -> Option<MountPlug> {
-    let stage = crate::compose_file_to_stage(asset_path).ok()?;
+    let stage = lunco_usd_bevy_core::compose::compose_file_to_stage(asset_path).ok()?;
     let cs = crate::CanonicalStage::from_stage(stage, asset_path.to_string_lossy().to_string());
     let view = cs.view();
     let default_prim = view.default_prim()?;

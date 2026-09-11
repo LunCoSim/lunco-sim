@@ -70,7 +70,7 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-usd-core`** | Headless USD document, authoring, operation, schema, unit-conversion, and asset-closure substrate. No runtime, physics, rendering, or UI. |
 | **`lunco-usd`** | High-level runtime USD orchestrator (`UsdPlugins`) and mapper for LunCo-specific engineering metadata (`lunco:*`). |
 | **`lunco-usd-geometry`** | Render-free NURBS evaluators, trimmed-domain tessellation, and rotation-minimizing curve-sweep mesh data. Isolates heavy numeric geometry dependencies from the USD stage loader. |
-| **`lunco-usd-bevy-core`** | Headless composed-USD reader/view, stage composition, send-safe projection plans, program/variant resolution, material binding, transform decoding, and unit conversion. Uses Bevy's asset/ECS substrate but has no mesh, light, camera, renderer, window, or UI projection. |
+| **`lunco-usd-bevy-core`** | Headless composed-USD reader/view, stage composition, prepared stage assets, canonical live-stage ownership, authored-layer readers, instance identity, send-safe projection plans, program/variant resolution, material binding, transform decoding, and unit conversion. Uses Bevy's asset/ECS substrate but has no mesh, light, camera, renderer, window, or UI projection. |
 | **`lunco-usd-bevy`** | Visual Bevy adapter (`UsdBevyPlugin`): projects USD hierarchy, shapes, transforms, materials, and `timeSamples` animation into Bevy entities/components on top of `lunco-usd-bevy-core`. Owns mesh/lathe/curve projection, lighting, USD cameras, camera mounts, and the viewport-camera switch. |
 | **`lunco-usd-avian`** | Physics bridge (`UsdAvianPlugin`): maps `UsdPhysics` schemas (RigidBody, Colliders, all joint kinds + drive API) to Avian3D — the single home for joint construction. |
 | **`lunco-usd-sim`** | Simulation-schema bridge (`UsdSimPlugin`): intercepts specialized vehicle/cosim schemas (e.g., PhysX Vehicles) and maps them to LunCo models. Full USD→Bevy→Avian→simulation projection tests live here; direct Avian bridge mechanics stay in `lunco-usd-avian`. |
@@ -261,11 +261,12 @@ changes do not rebuild unrelated USD runtime code.
 **`lunco-usd-bevy-core`**
 Headless composed-USD substrate shared by visual, physics, and simulation
 projections. It owns the `UsdRead`/`StageView` contract, resolver-backed
-composition, `UsdStageProjectionPlan`, program and variant resolution, standard
-material binding, canonical transform decoding, stage units, and related USD
-helpers. It deliberately contains no visual mesh, light, camera, renderer,
-window, or UI projection, so changes to those adapters do not rebuild this
-reader/composition package.
+composition, `UsdStageAsset` loading, `CanonicalStage` live-stage ownership,
+authored-layer readers, instance identity markers, `UsdStageProjectionPlan`,
+program and variant resolution, standard material binding, canonical transform
+decoding, stage units, and related USD helpers. It deliberately contains no
+visual mesh, light, camera, renderer, window, or UI projection, so changes to
+those adapters do not rebuild this reader/composition package.
 
 **`lunco-usd-ui`**
 Interactive USD browser and preview presentation. Owns workbench sections, preview sessions/views, viewport queries, Save-As picker integration, and UI status/placeholder adapters while consuming the document and projection APIs from `lunco-usd`.
@@ -278,6 +279,8 @@ camera intent bridge (USD `def Camera` → render-free intent), rover-mounted
 grid-direct followers, and the single-authority viewport-camera reconciler
 remain here; `lunco-render-bevy` supplies the concrete render pipeline. See
 [`17-view-and-intent.md §6`](architecture/17-view-and-intent.md).
+Headless consumers import the owning `lunco-usd-bevy-core` modules directly;
+this visual adapter is not a compatibility facade for the headless API.
 
 **`lunco-usd-avian`**
 Physics bridge for OpenUSD (`UsdAvianPlugin`). Maps `UsdPhysics` schemas — rigid bodies + mass-properties, all collider shapes, and **all joints** (revolute/prismatic/fixed/spherical/distance, D6-reduced) with `UsdPhysicsDriveAPI` motor drive — to Avian3D. The single home for Avian joint construction (incl. the programmatic wheel hinge).

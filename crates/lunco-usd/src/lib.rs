@@ -45,7 +45,7 @@ pub use commands::{
 pub use lunco_usd_avian::{
     BigSpacePhysicsBridgePlugin, ShouldBeDynamic, UsdAvianPlugin, UsdCollisionFilter,
 };
-pub use lunco_usd_bevy::{UsdAuthoredLight, UsdPrimPath, UsdStageAsset};
+pub use lunco_usd_bevy::{UsdAuthoredLight, UsdPrimPath};
 /// Asset-backed OpenUSD assembly. This is the public composition boundary:
 /// `lunco-assets` supplies canonical identities and bytes, while this crate
 /// interprets USD sublayers, references, payloads, and variants into a stage.

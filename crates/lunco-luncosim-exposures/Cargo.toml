@@ -23,6 +23,7 @@ lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-twin = { path = "../lunco-twin" }
 lunco-usd = { path = "../lunco-usd", default-features = false }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-workspace = { path = "../lunco-workspace" }
 
 [features]

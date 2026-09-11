@@ -9,7 +9,7 @@
 
 *Built:* the op-driven projection pipeline. An `ApplyUsdOp` edit lands in the
 `UsdDocument` (base⊕runtime layers), `twin_projection::sync_twin_overlays` replays
-the typed op onto the `CanonicalStage` (`lunco-usd-bevy/src/canonical.rs`), openusd's
+the typed op onto the `CanonicalStage` (`lunco-usd-bevy-core/src/canonical.rs`), openusd's
 change sink fires, and `live_consume::project_stage_changes` reconciles the ECS. See
 [`21-domain-usd.md`](21-domain-usd.md) § "Op-driven
 projection". Spawn / remove / reference are USD-first through this path.
@@ -293,7 +293,7 @@ prim→entity.
 - `lunco-usd/src/twin_projection.rs` — `sync_twin_overlays` and document-backed mounts
 - `lunco-usd/src/live_consume.rs` — `project_stage_changes` (E1/E2 consumer)
 - `lunco-usd/src/commands.rs` — scene command admission and document registration
-- `lunco-usd-bevy/src/lib.rs` — `UsdStageAsset`, `UsdPrimPath`
+- `lunco-usd-bevy-core/src/asset.rs` — `UsdStageAsset`; `lunco-usd-bevy/src/lib.rs` — `UsdPrimPath`
 - `lunco-usd-core/src/usd_data.rs` — `UsdDataExt` (read composed attrs)
 - `lunco-usd-sim/src/cosim.rs` — `LoadScene` / `spawn_scene_root_with_stage`; ad-hoc prim→entity index
 - `lunco-luncosim/src/lib.rs:621` — `refresh_layered_terrain_layers` (per-domain

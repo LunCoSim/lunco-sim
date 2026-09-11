@@ -37,12 +37,12 @@ use lunco_materials::{
     to_snake_case, AttrRead, EngineSource, ParamValue, ProceduralSkybox, ShaderLook, TextureLayer,
 };
 use lunco_render::{PbrLook, SurfaceAlpha};
-use lunco_usd_bevy::read::UsdReadObject;
 use lunco_usd_bevy::{
     get_attribute_as_vec3, read_authored_bool_strict, read_primvar_f32_strict,
-    read_primvar_vec3_strict, CanonicalStages, UsdInstanceProjection, UsdPrimPath, UsdStageAsset,
-    UsdVisualSynced,
+    read_primvar_vec3_strict, UsdPrimPath, UsdVisualSynced,
 };
+use lunco_usd_bevy_core::read::UsdReadObject;
+use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdInstanceProjection, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
 use std::collections::BTreeMap;
 
@@ -139,7 +139,7 @@ fn apply_usd_shader_material_read(
     // `info:mdl:sourceAsset`. So usdview, Blender and Omniverse all see a material
     // where a material is, and a prim bound to a `UsdPreviewSurface` instead keeps its
     // `PbrLook` — it has no `wgsl` source, and that is the whole test.
-    let Some(shader_prim) = lunco_usd_bevy::resolve_bound_shader(reader, sdf_path) else {
+    let Some(shader_prim) = lunco_usd_bevy_core::resolve_bound_shader(reader, sdf_path) else {
         return;
     };
     let Some(raw_shader_path) = reader.asset(&shader_prim, "info:wgsl:sourceAsset") else {
@@ -597,7 +597,7 @@ fn scene_base_uri(prim_path: &UsdPrimPath, asset_server: &AssetServer) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lunco_usd_bevy::CanonicalStages;
+    use lunco_usd_bevy_core::canonical::CanonicalStages;
     use lunco_usd_core::StageRecipe;
 
     /// A gprim that binds a WGSL material AND carries simulation wires — the shape

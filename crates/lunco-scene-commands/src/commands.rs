@@ -1708,7 +1708,7 @@ pub fn persist_environment_light_to_runtime_layer(
         return;
     }
 
-    let parent_path = lunco_usd_bevy::layer_default_prim(host.document().data())
+    let parent_path = lunco_usd_bevy_core::layer_default_prim(host.document().data())
         .map(|p| format!("/{p}"))
         .unwrap_or_else(|| "/".to_string());
     let env_path = if parent_path == "/" {

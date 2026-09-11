@@ -6,7 +6,8 @@ use bevy::window::PrimaryWindow;
 use lunco_core::coords::GridPos;
 use lunco_core::{on_command, register_commands, Command, SceneViewport};
 use lunco_render::SceneCamera;
-use lunco_usd_bevy::UsdStageAsset;
+use lunco_usd_bevy_core::UsdStageAsset;
+use lunco_usd_bevy_core::{stage_default_prim, CanonicalStages};
 use std::collections::HashMap;
 
 use crate::surface_pick::{
@@ -179,7 +180,7 @@ fn ensure_footprint(
     catalog: &SpawnCatalog,
     asset_server: &AssetServer,
     stages: &Assets<UsdStageAsset>,
-    canonical: &mut lunco_usd_bevy::CanonicalStages,
+    canonical: &mut CanonicalStages,
     entry_id: &str,
 ) -> Option<ResolvedFootprint> {
     let Some(entry) = catalog.get(entry_id) else {
@@ -210,7 +211,7 @@ fn ensure_footprint(
             }
             if let Some(stage) = canonical.get(id) {
                 if cached.root_prim.is_empty() {
-                    let Some(name) = lunco_usd_bevy::stage_default_prim(&stage.view()) else {
+                    let Some(name) = stage_default_prim(&stage.view()) else {
                         error!(
                             entry_id,
                             "[spawn] rejected asset without authored defaultPrim"
@@ -296,7 +297,7 @@ pub fn update_spawn_ghost(
     catalog: Res<SpawnCatalog>,
     asset_server: Res<AssetServer>,
     stages: Res<Assets<UsdStageAsset>>,
-    mut canonical: NonSendMut<lunco_usd_bevy::CanonicalStages>,
+    mut canonical: NonSendMut<CanonicalStages>,
     mut footprint_cache: ResMut<FootprintCache>,
     camera_frame: SpawnCameraFrame,
     windows: Query<&Window, With<PrimaryWindow>>,

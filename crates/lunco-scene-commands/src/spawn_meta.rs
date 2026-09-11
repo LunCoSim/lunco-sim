@@ -21,7 +21,7 @@
 //! carries `doc` metadata, the standard description shown by usdview and other
 //! USD tools.
 
-use lunco_usd_bevy::DefaultPrim;
+use lunco_usd_bevy_core::DefaultPrim;
 
 /// Spawn metadata authored on a `*.usda`'s default prim.
 #[derive(Debug, Clone, PartialEq)]

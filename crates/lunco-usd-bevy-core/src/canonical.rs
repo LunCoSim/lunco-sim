@@ -146,8 +146,8 @@ impl CanonicalStage {
 
     /// Author `xformOp:translate = value` onto the composed prim at `path` (root
     /// edit target) — this fires the change sink, so the projection bridge
-    /// ([`project_stage_changes`](crate::project_stage_changes) via
-    /// `lunco-usd`) reconciles the move in place. Inserts `xformOp:translate`
+    /// (`project_stage_changes` in `lunco-usd`) reconciles the move in place.
+    /// Inserts `xformOp:translate`
     /// into `xformOpOrder` at its canonical slot when not already listed, so an
     /// existing xform stack is extended, never clobbered.
     ///
@@ -354,7 +354,7 @@ impl CanonicalStage {
             .ok_or_else(|| anyhow!("reference source `{asset_path}` is not loaded"))?;
         let source = std::str::from_utf8(&source)
             .map_err(|e| anyhow!("reference source `{asset_path}` is not UTF-8: {e}"))?;
-        let default_prim = crate::DefaultPrim::parse(source)
+        let default_prim = crate::authoring::DefaultPrim::parse(source)
             .ok_or_else(|| anyhow!("reference source `{asset_path}` has no valid defaultPrim"))?;
         Ok(openusd::sdf::Reference {
             asset_path: asset_path.to_string(),
@@ -534,8 +534,7 @@ impl CanonicalStage {
     /// non-solid Sensor, no rigid body / collider) reaches the live world without
     /// a whole-scene reload — the projection bridge despawns the prim's subtree via
     /// a `refresh_prim_subtree`. Firing the sink lets
-    /// [`project_stage_changes`](crate::live_consume::project_stage_changes)
-    /// reconcile ECS.
+    /// `project_stage_changes` in `lunco-usd` reconcile ECS.
     ///
     /// Callers must still decide whether the prim's ECS consequence can be
     /// reconciled incrementally: a `SetActive` on a physics prim changes its
@@ -565,7 +564,7 @@ impl CanonicalStage {
     /// the live-stage counterpart of the document's `SetAttribute` op, so a
     /// material / inspector edit reaches the live world without a whole-scene
     /// reload. `value` is a typed [`openusd::sdf::Value`] (read from the composed
-    /// document, or parsed via [`author::parse_attribute_value`](crate::author::parse_attribute_value)).
+    /// document or parsed by the authoring command layer).
     pub fn author_attribute(
         &self,
         prim: &SdfPath,
@@ -589,9 +588,8 @@ impl CanonicalStage {
     /// prim at `prim` (root edit target), firing the sink — the live-stage
     /// counterpart of the document's `SetTimeSample` op. A keyframe edit reaches
     /// the live world without a whole-scene rebuild: the per-frame animation
-    /// sampler ([`sample_usd_animation`](crate::sample_usd_animation)) reads this
-    /// stage each frame, so a key on an already-animated prim shows up on the next
-    /// tick. Creates the attribute if absent; adds or overwrites the sample at
+    /// sampler reads this stage each frame, so a key on an already-animated prim
+    /// shows up on the next tick. Creates the attribute if absent; adds or overwrites the sample at
     /// `time` otherwise (openusd exposes no live-stage sample *removal*, so
     /// `RemoveTimeSample` stays on the projector's rebuild path).
     pub(crate) fn author_time_sample(
@@ -1171,7 +1169,7 @@ mod authoring_tests {
             "translate fires the sink"
         );
         assert_eq!(
-            crate::read_vec3_f64(&cs.view(), &rover, "xformOp:translate"),
+            UsdRead::vec3_f64(&cs.view(), &rover, "xformOp:translate"),
             Some([1.0, 2.0, 3.0]),
             "the authored translate composes on the live stage"
         );
@@ -1214,7 +1212,7 @@ mod authoring_tests {
         cs.author_translate(&rover, [0.0, 1.0, 0.0])
             .expect("author canonical metre position");
         let stage_translation =
-            crate::read_vec3_f64(&cs.view(), &rover, "xformOp:translate").expect("stage translate");
+            UsdRead::vec3_f64(&cs.view(), &rover, "xformOp:translate").expect("stage translate");
         assert!(
             stage_translation
                 .iter()
@@ -1226,7 +1224,7 @@ mod authoring_tests {
         cs.author_rotate(&rover, [0.0, 90.0, 0.0])
             .expect("author canonical local rotation");
         let stage_rotation =
-            crate::read_vec3_f64(&cs.view(), &rover, "xformOp:rotateXYZ").expect("stage rotateXYZ");
+            UsdRead::vec3_f64(&cs.view(), &rover, "xformOp:rotateXYZ").expect("stage rotateXYZ");
         assert!(
             stage_rotation
                 .iter()
@@ -1238,7 +1236,7 @@ mod authoring_tests {
         cs.author_scale(&rover, [1.0, 2.0, 3.0])
             .expect("author canonical local scale");
         let stage_scale =
-            crate::read_vec3_f64(&cs.view(), &rover, "xformOp:scale").expect("stage scale");
+            UsdRead::vec3_f64(&cs.view(), &rover, "xformOp:scale").expect("stage scale");
         assert!(
             stage_scale
                 .iter()

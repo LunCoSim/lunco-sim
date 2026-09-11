@@ -269,7 +269,7 @@ pub struct WaypointDocContext<'w> {
 impl<'w> WaypointDocContext<'w> {
     pub fn resolve_document(
         &self,
-        stage_handle: &Handle<lunco_usd_bevy::UsdStageAsset>,
+        stage_handle: &Handle<lunco_usd_bevy_core::UsdStageAsset>,
     ) -> Option<lunco_doc::DocumentId> {
         lunco_usd::twin_projection::scene_document_for(
             &self.backed,

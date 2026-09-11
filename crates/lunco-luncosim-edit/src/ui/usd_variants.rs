@@ -21,13 +21,15 @@
 //! - **Available options** — composition can only ever show ONE selection at a
 //!   time, so the options cannot be read off the composed stage at all. They
 //!   come from the authored layers via
-//!   [`lunco_usd_bevy::variants::variant_options_in_stage`], which also
+//!   [`lunco_usd_bevy_core::variants::variant_options_in_stage`], which also
 //!   documents why they are keyed by set NAME rather than by prim path.
 
 use std::collections::HashMap;
 
 use bevy::prelude::*;
-use lunco_usd_bevy::{CanonicalStages, SdfPath, UsdPrimPath, UsdStageAsset};
+use lunco_usd_bevy::SdfPath;
+use lunco_usd_bevy::UsdPrimPath;
+use lunco_usd_bevy_core::{CanonicalStages, UsdStageAsset};
 use lunco_usd_ui::viewport::{UsdPreviewId, UsdViewportState};
 
 /// One variant set on a preview session's selected prim.
@@ -157,7 +159,7 @@ pub fn produce_usd_variant_view(
             continue;
         }
 
-        let options_by_set = lunco_usd_bevy::variants::variant_options_in_stage(stage);
+        let options_by_set = lunco_usd_bevy_core::variants::variant_options_in_stage(stage);
         for (name, selection) in selections {
             let options = options_by_set.get(&name).cloned().unwrap_or_default();
             session_view.sets.push(UsdVariantSet {

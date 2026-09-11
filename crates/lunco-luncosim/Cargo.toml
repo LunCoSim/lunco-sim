@@ -120,6 +120,7 @@ lunco-usd = { path = "../lunco-usd", default-features = false }
 # the USD-reading systems below consume the composed stage, while initial reads
 # use every asset's prepared projection plan.
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-core = { path = "../lunco-usd-core" }
 # `cosim::SceneLoadInFlight` for `report_scene_spawn_status`, which mirrors "scene
 # prims are still spawning" onto the workbench `StatusBus` — where the offline

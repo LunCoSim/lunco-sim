@@ -44,7 +44,8 @@ use lunco_doc_bevy::{
 };
 use lunco_storage::Storage; // brings `write_sync` / `read_sync` into scope
 use lunco_twin::{DocumentKindId, DocumentKindMeta, DocumentKindRegistry};
-use lunco_usd_bevy::{UsdPrimPath, UsdRead, UsdSceneRoot};
+use lunco_usd_bevy::{UsdPrimPath, UsdSceneRoot};
+use lunco_usd_bevy_core::{UsdRead, UsdStageAsset};
 use lunco_usd_core::UsdDataExt;
 use lunco_workspace::open::{spawn_twin_scan, PendingTwinOpens, TwinOpenMode};
 use lunco_workspace::{TwinClosed, WorkspaceResource};
@@ -636,7 +637,7 @@ fn on_load_scene(
     // meaningless without one, so a missing asset pipeline is a no-op, not a
     // panic — a required `Res` here aborts the whole `Main` schedule.
     asset_server: Option<Res<AssetServer>>,
-    stages: Option<Res<Assets<lunco_usd_bevy::UsdStageAsset>>>,
+    stages: Option<Res<Assets<UsdStageAsset>>>,
     mut coordinator: ResMut<lunco_core::SceneTransitionCoordinator>,
 ) {
     let (Some(_asset_server), Some(_stages)) = (asset_server, stages) else {
@@ -717,9 +718,7 @@ fn execute_admitted_load_scene(
     // Deliberately NOT "any prim from this stage": the active simulation owns
     // one scene root. The editor preview, when present, uses `UsdPreviewOnly`
     // and is outside this simulation mount identity.
-    let new_id = asset_server
-        .load::<lunco_usd_bevy::UsdStageAsset>(&path)
-        .id();
+    let new_id = asset_server.load::<UsdStageAsset>(&path).id();
     let stage_already_loaded = asset_server.load_state(new_id).is_loaded();
     if q_usd.iter().any(|(entity, upp, is_scene_root)| {
         let current_mount_is_live = mount_state.as_deref().is_none_or(|state| {
@@ -2392,7 +2391,7 @@ fn validate_live_attribute_types(
         .and_then(|path| {
             world
                 .get_resource::<AssetServer>()
-                .and_then(|server| server.get_handle::<lunco_usd_bevy::UsdStageAsset>(path))
+                .and_then(|server| server.get_handle::<UsdStageAsset>(path))
         })
         .map(|handle| handle.id());
     for op in ops {
@@ -2457,7 +2456,7 @@ fn validate_live_attribute_types(
                 ));
             }
             let Some(source_type) = source_type else {
-                if lunco_usd_bevy::read::has_runtime_port_surface(&view, &source_prim)
+                if lunco_usd_bevy_core::read::has_runtime_port_surface(&view, &source_prim)
                     && stage_id.is_some_and(|stage_id| {
                         live_runtime_port_exists(world, stage_id, &source_prim, source_name)
                     })
@@ -2484,7 +2483,7 @@ fn validate_live_attribute_types(
 /// file validator has no ECS/runtime registry to consult.
 fn live_runtime_port_exists(
     world: &World,
-    stage_id: bevy::asset::AssetId<lunco_usd_bevy::UsdStageAsset>,
+    stage_id: bevy::asset::AssetId<UsdStageAsset>,
     prim: &openusd::sdf::Path,
     property: &str,
 ) -> bool {
@@ -2705,7 +2704,9 @@ fn validate_detach_component(
     if component.is_property_path() || joint.is_property_path() {
         return Err("detach paths must name prims, not properties".into());
     }
-    if component == joint || lunco_usd_bevy::is_descendant_or_self(&joint, &spec.component_path) {
+    if component == joint
+        || lunco_usd_bevy_core::is_descendant_or_self(&joint, &spec.component_path)
+    {
         return Err(format!(
             "joint {} must be separate from component subtree {}",
             spec.joint_path, spec.component_path
@@ -2847,11 +2848,11 @@ fn validate_detach_component(
                 .map_err(|error| format!("invalid {property_kind} target {target_raw}: {error}"))?;
             let target_prim = target.prim_path();
             let targets_removed = target_prim == joint
-                || lunco_usd_bevy::is_descendant_or_self(&target_prim, &spec.component_path);
+                || lunco_usd_bevy_core::is_descendant_or_self(&target_prim, &spec.component_path);
             if !targets_removed {
                 continue;
             }
-            let internal = lunco_usd_bevy::is_descendant_or_self(&owner, &spec.component_path)
+            let internal = lunco_usd_bevy_core::is_descendant_or_self(&owner, &spec.component_path)
                 || (owner == joint && property_name == "physics:body1" && target == component)
                 || (owner == component
                     && property_name == "lunco:mount:attachmentJoint"
@@ -3005,7 +3006,7 @@ fn validate_attach_component(
         let existing_path = openusd::sdf::Path::new(&existing).map_err(|error| {
             format!("socket {socket_path} has invalid lunco:mount:part target {existing}: {error}")
         })?;
-        if !lunco_usd_bevy::is_descendant_or_self(&existing_path, host_root) {
+        if !lunco_usd_bevy_core::is_descendant_or_self(&existing_path, host_root) {
             return Err(format!(
                 "socket {socket_path} points outside host body {host_root}"
             ));

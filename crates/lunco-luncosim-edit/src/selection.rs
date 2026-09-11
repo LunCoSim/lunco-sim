@@ -17,7 +17,8 @@ use crate::SpawnState;
 use lunco_controller::ControllerLink;
 use lunco_core::{on_command, register_commands, Avatar, Command, LocalAvatar};
 use lunco_scene_commands::SelectedEntities;
-use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset};
+use lunco_usd_bevy::UsdPrimPath;
+use lunco_usd_bevy_core::UsdStageAsset;
 use lunco_usd_ui::viewport::{UsdPreviewId, UsdViewportState};
 
 /// Component marking an entity as currently selected.

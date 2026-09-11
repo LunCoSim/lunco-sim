@@ -70,6 +70,7 @@ lunco-modelica-ui = { path = "../lunco-modelica-ui", default-features = false }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 lunco-usd = { path = "../lunco-usd", default-features = false }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-ui = { path = "../lunco-usd-ui", optional = true }
 # Active-document resolution for C4b runtime-layer persistence (ECS-only, no UI).

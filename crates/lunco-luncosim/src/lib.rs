@@ -45,13 +45,14 @@ use lunco_mobility::LunCoMobilityPlugin;
 // RTT viewport UI plugins are `ui`-only (added by `LunCoSimUiPlugin`).
 #[cfg(feature = "networking")]
 use lunco_usd::LoadScene;
-use lunco_usd::{UsdPlugins, UsdPrimPath, UsdStageAsset};
+use lunco_usd::{UsdPlugins, UsdPrimPath};
 // USD policy and terrain presentation read the composed reader selected by the
 // shared USD projection boundary. Initial scene loads use the worker-produced
 // plan; authored generations use the live canonical stage. `UsdDataExt` remains
 // the separate authored-layer surface for document questions.
 use bevy::asset::AssetLoadFailedEvent;
-use lunco_usd_bevy::read::UsdReadObject;
+use lunco_usd_bevy_core::read::UsdReadObject;
+use lunco_usd_bevy_core::UsdStageAsset;
 
 /// Re-exported so the (bevy-free) bin crates can return it from `main` to
 /// propagate the process exit code (e.g. the startup-scene fail-loud guard).
@@ -1971,7 +1972,7 @@ fn append_usd_policies(
 /// must not register policy hooks in the running simulation.
 fn extract_active_usd_policies(
     stages: &Assets<UsdStageAsset>,
-    canonical: &lunco_usd_bevy::CanonicalStages,
+    canonical: &lunco_usd_bevy_core::canonical::CanonicalStages,
     roots: impl IntoIterator<Item = AssetId<UsdStageAsset>>,
 ) -> Vec<AuthoredPolicy> {
     let mut out = Vec::new();
@@ -2056,7 +2057,7 @@ fn resolve_policy_source_file(
 #[allow(clippy::type_complexity)]
 fn project_usd_policies(
     stages: Res<Assets<UsdStageAsset>>,
-    canonical: NonSend<lunco_usd_bevy::CanonicalStages>,
+    canonical: NonSend<lunco_usd_bevy_core::canonical::CanonicalStages>,
     roots: Query<&lunco_usd_bevy::UsdPrimPath, With<lunco_usd_bevy::UsdSceneRoot>>,
     mut registry: ResMut<lunco_scripting::policy::ScriptedPolicyRegistry>,
     mut synthesizers: ResMut<lunco_usd_sim::domain_projection::SynthesizerRegistry>,
@@ -2317,7 +2318,7 @@ lunco_core::register_commands!(on_set_rhai_policy);
 #[cfg(all(test, feature = "networking", not(target_arch = "wasm32")))]
 mod policy_projection_tests {
     use super::{append_usd_policies, AuthoredPolicy};
-    use lunco_usd_bevy::{CanonicalStage, CanonicalStages};
+    use lunco_usd_bevy_core::{CanonicalStage, CanonicalStages};
     use lunco_usd_core::StageRecipe;
 
     fn extract_usd_policies(canonical: &CanonicalStages) -> Vec<AuthoredPolicy> {

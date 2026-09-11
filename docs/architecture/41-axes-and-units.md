@@ -280,7 +280,7 @@ public accessors are already canonical. There is no separate type to thread and
 **no public raw accessor to forget**:
 
 ```rust
-// lunco-usd-bevy — UsdStageAsset built with its gate
+// lunco-usd-bevy-core — UsdStageAsset built with its gate
 impl UsdStageAsset {
     pub fn translate(&self, p: &Path) -> Option<DVec3> { Some(self.tf.point(self.raw_translate(p)?)) }
     pub fn mass     (&self, p: &Path) -> Option<f64>   { Some(self.tf.mass(self.raw_scalar(p, "physics:mass")?)) }

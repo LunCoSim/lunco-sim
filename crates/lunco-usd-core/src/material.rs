@@ -178,7 +178,7 @@ pub fn ensure_preview_surface_ops(
 ///
 /// What IS shared is the part that should never diverge: binding *resolution* —
 /// namespace inheritance and the purpose fallback — which lives once in
-/// [`lunco_usd_bevy::resolve_bound_material`] and serves both. A scene that DOES
+/// [`lunco_usd_bevy_core::resolve_bound_material`] and serves both. A scene that DOES
 /// merge them still resolves correctly through that fallback, so we read the
 /// legal form even though we don't author it.
 ///

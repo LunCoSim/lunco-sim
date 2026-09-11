@@ -32,7 +32,8 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use lunco_canvas::{empty_node_data, Edge, Node, Port, PortId, PortRef, Pos, Rect, Scene};
-use lunco_usd_bevy::{SdfPath, StageView, UsdRead};
+use lunco_usd_bevy::SdfPath;
+use lunco_usd_bevy_core::{StageView, UsdRead};
 
 /// Node kind id registered in the canvas `VisualRegistry`.
 pub(crate) const NODE_KIND: &str = "usd.prim";

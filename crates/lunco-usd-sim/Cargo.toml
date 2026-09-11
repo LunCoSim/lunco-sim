@@ -13,6 +13,7 @@ license.workspace = true
 bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh", "bevy_light"] }
 openusd = { workspace = true }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-avian = { path = "../lunco-usd-avian" }
 # `ShaderLook` + `ParamValue` (the open, WGSL-reflected parameter set).

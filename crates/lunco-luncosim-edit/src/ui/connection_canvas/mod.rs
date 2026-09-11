@@ -40,7 +40,8 @@ use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlo
 
 use lunco_doc::DocumentId;
 use lunco_modelica_ui::ui::commands::FocusDocumentByName;
-use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdStageAsset};
+use lunco_usd_bevy::UsdPrimPath;
+use lunco_usd_bevy_core::{CanonicalStages, UsdStageAsset};
 use lunco_usd_core::document::{LayerId, UsdOp};
 use lunco_usd_ui::viewport::{UsdPreviewId, UsdPreviewSession, UsdViewportState};
 

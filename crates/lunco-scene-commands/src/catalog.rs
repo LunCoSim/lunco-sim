@@ -33,7 +33,8 @@
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
-use lunco_usd_bevy::{UsdInstanceRoot, UsdPrimPath};
+use lunco_usd_bevy::UsdPrimPath;
+use lunco_usd_bevy_core::UsdInstanceRoot;
 
 /// Registry of all spawnable object types.
 #[derive(Resource, Default)]
@@ -892,7 +893,7 @@ mod spawn_anchor_tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(bevy::asset::AssetPlugin::default())
-            .init_asset::<lunco_usd_bevy::UsdStageAsset>();
+            .init_asset::<lunco_usd_bevy_core::UsdStageAsset>();
 
         let scene_root = app
             .world_mut()

@@ -41,7 +41,7 @@
 //!   read via [`UsdDocument::data`] / [`UsdDocument::runtime_data`]). Plain,
 //!   `Send`, serializable. This is what Save writes, what the journal records, and
 //!   what the networking layer ships. Reads are cheap and run off the main thread.
-//! - **The `CanonicalStage`** (in `lunco_usd_bevy`) — the live, *composed*
+//! - **The `CanonicalStage`** (in `lunco_usd_bevy_core`) — the live, *composed*
 //!   openusd `Stage` with references / sublayers / variants resolved. It is
 //!   `Rc`-backed and therefore `!Send`: a main-thread `NonSend` resource. It is
 //!   the projection engine — authoring onto it fires the openusd change sink that
@@ -722,7 +722,7 @@ impl lunco_twin_journal::OpPayload for UsdOp {
 /// (where it came from and whether it can be saved), and a generation counter
 /// that bumps on every successful op. The flattened, composed scene (references
 /// resolved) is a *separate* derived artifact built by the asset loader
-/// ([`lunco_usd_bevy::UsdStageAsset`]); the document layer never holds it.
+/// ([`lunco_usd_bevy_core::UsdStageAsset`]); the document layer never holds it.
 #[derive(Debug)]
 pub struct UsdDocument {
     id: DocumentId,
@@ -948,7 +948,7 @@ impl UsdDocument {
     /// The check includes prims authored inside a variant selection, matching
     /// the addressing rules used by the document mutation validator. Callers
     /// that need the composed path of a referenced prim must use the live
-    /// [`lunco_usd_bevy::CanonicalStage`] instead; this method intentionally
+    /// [`lunco_usd_bevy_core::canonical::CanonicalStage`] instead; this method intentionally
     /// does not reimplement USD stage composition.
     pub fn authored_prim_exists(
         &self,

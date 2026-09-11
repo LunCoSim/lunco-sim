@@ -66,9 +66,14 @@ use lunco_api::schema::{ApiErrorCode, ApiResponse};
 use lunco_doc::{Document, DocumentId};
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd::twin_projection::DocBackedTwinScenes;
-use lunco_usd_bevy::read::UsdRead;
-use lunco_usd_bevy::view::StageView;
-use lunco_usd_bevy::{CanonicalStages, UsdPrimPath, UsdSceneRoot};
+use lunco_usd_bevy::UsdPrimPath;
+use lunco_usd_bevy::UsdSceneRoot;
+use lunco_usd_bevy_core::read::UsdRead;
+use lunco_usd_bevy_core::view::StageView;
+use lunco_usd_bevy_core::{
+    canonical::CanonicalStages, effective_purpose, is_descendant_or_self, resolve_bound_shader,
+    MaterialPurpose, UsdStageAsset,
+};
 use lunco_usd_core::document::UsdDocument;
 use openusd::sdf::{Path as SdfPath, Value};
 
@@ -145,12 +150,12 @@ fn attr_json(view: &StageView<'_>, prim: &SdfPath, name: &str) -> serde_json::Va
     }
 }
 
-fn purpose_name(purpose: lunco_usd_bevy::Purpose) -> &'static str {
+fn purpose_name(purpose: lunco_usd_bevy_core::Purpose) -> &'static str {
     match purpose {
-        lunco_usd_bevy::Purpose::Default => "default",
-        lunco_usd_bevy::Purpose::Render => "render",
-        lunco_usd_bevy::Purpose::Proxy => "proxy",
-        lunco_usd_bevy::Purpose::Guide => "guide",
+        lunco_usd_bevy_core::Purpose::Default => "default",
+        lunco_usd_bevy_core::Purpose::Render => "render",
+        lunco_usd_bevy_core::Purpose::Proxy => "proxy",
+        lunco_usd_bevy_core::Purpose::Guide => "guide",
     }
 }
 
@@ -243,7 +248,7 @@ fn topology_for_stage(view: &StageView<'_>, selected: &SdfPath) -> serde_json::V
     let mut parts = Vec::new();
 
     for candidate in paths.iter().filter(|candidate| {
-        lunco_usd_bevy::is_descendant_or_self(candidate, root.as_str()) && view.is_active(candidate)
+        is_descendant_or_self(candidate, root.as_str()) && view.is_active(candidate)
     }) {
         let Some(type_name) = view.type_name(candidate) else {
             continue;
@@ -294,17 +299,14 @@ fn topology_for_stage(view: &StageView<'_>, selected: &SdfPath) -> serde_json::V
                 serde_json::Value::Null
             }
         };
-        let render_material =
-            view.bound_material(candidate, lunco_usd_bevy::MaterialPurpose::Render);
-        let physics_material =
-            view.bound_material(candidate, lunco_usd_bevy::MaterialPurpose::Physics);
-        let shader = lunco_usd_bevy::resolve_bound_shader(view, candidate)
-            .map(|path| path.as_str().to_string());
+        let render_material = view.bound_material(candidate, MaterialPurpose::Render);
+        let physics_material = view.bound_material(candidate, MaterialPurpose::Physics);
+        let shader = resolve_bound_shader(view, candidate).map(|path| path.as_str().to_string());
 
         parts.push(serde_json::json!({
             "path": candidate.as_str(),
             "type_name": type_name,
-            "purpose": purpose_name(lunco_usd_bevy::effective_purpose(view, candidate)),
+            "purpose": purpose_name(effective_purpose(view, candidate)),
             "visual": visual,
             "collider": collider,
             "collision_enabled": collision_enabled,
@@ -328,7 +330,7 @@ fn topology_for_stage(view: &StageView<'_>, selected: &SdfPath) -> serde_json::V
 
     let mut joints = Vec::new();
     for candidate in paths.iter().filter(|candidate| {
-        lunco_usd_bevy::is_descendant_or_self(candidate, root.as_str()) && view.is_active(candidate)
+        is_descendant_or_self(candidate, root.as_str()) && view.is_active(candidate)
     }) {
         let Some(type_name) = view.type_name(candidate) else {
             continue;
@@ -554,16 +556,15 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
                 "QueryUsdPrim: USD entity query is unavailable",
             );
         };
-        let spawned: Option<(Entity, bevy::asset::AssetId<lunco_usd_bevy::UsdStageAsset>)> =
-            spawned_query
-                .iter(world)
-                .find(|(entity, p)| {
-                    doc.is_none()
-                        && p.path == path
-                        && Some(p.stage_handle.id()) == live_stage
-                        && !lunco_usd_bevy::is_preview_only_entity(world, *entity)
-                })
-                .map(|(e, p)| (e, p.stage_handle.id()));
+        let spawned: Option<(Entity, bevy::asset::AssetId<UsdStageAsset>)> = spawned_query
+            .iter(world)
+            .find(|(entity, p)| {
+                doc.is_none()
+                    && p.path == path
+                    && Some(p.stage_handle.id()) == live_stage
+                    && !lunco_usd_bevy::is_preview_only_entity(world, *entity)
+            })
+            .map(|(e, p)| (e, p.stage_handle.id()));
 
         // Read everything under ONE short borrow: `CanonicalStages` is `!Send`
         // and aliases the world, so it must be dropped before we touch entities.
