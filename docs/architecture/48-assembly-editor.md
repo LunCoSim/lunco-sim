@@ -546,6 +546,34 @@ send the reviewed component `.spec` to `assembly_edit::attach_component`.
 Neither helper mutates USD, so generated plans and human previews share the
 same exact-path contract and generation checkpoint.
 
+When the Editor already has one unambiguous prim selected, use
+`assembly_builder::selected_authoring_context(preview)` instead of copying a
+path from a tab label or display name. With `preview == ()` it reads the
+focused preview; an explicit preview id reads a hidden session without
+changing focus. The wrapper preserves the selection identity, document,
+edit target, generation, and the same composed authoring facts as
+`authoring_context`, and rejects no-selection, multi-selection, stale, or
+ambiguous state before a plan can be built. Recheck its returned identity and
+generation before proposing an edit.
+
+For component-level datum, attachment, and actuator discovery, use
+`assembly_builder::functional_frame_catalog(doc, edit_target, root_path)`.
+It follows the authored `lunco:mount:frame`, `lunco:component:frames`, and
+`lunco:component:actuatorFrames` relationships, returning exact frame paths,
+roles, mount/actuator metadata, local transforms, and transforms relative to
+the requested root. It also returns the root's explicit socket paths. It does
+not scan child names or promote geometry into a functional frame.
+
+To preview placement between two authored frames, use
+`assembly_builder::align_frames_plan(doc, edit_target, moving_path,
+moving_frame_path, target_path, target_frame_path)`. It returns two ordinary
+transform operations that make the source frame coincide with the target
+frame. The roots must be distinct siblings and all frame transforms must be
+canonical rigid `translate`/`rotateXYZ` stacks with unit scale. The result is
+dry; review it and submit `.ops` through the normal proposal flow. Physical
+mount creation and existing-joint realignment remain the explicit
+`place_or_attach_plan` paths above.
+
 #### Generic component bundles
 
 For a recurring parametric part, `assembly_builder::component_bundle_facts`

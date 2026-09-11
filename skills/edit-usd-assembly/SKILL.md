@@ -534,6 +534,22 @@ Use the smallest existing typed intent that expresses the change:
   `assembly_edit::attach_component`) or `mode: "realign_existing_mount"`
   (review `.ops`, then use the normal proposal flow). Never add an AI-only
   writer or guess a frame from a part name.
+- When the user is already working in the Editor, use
+  `assembly_builder::selected_authoring_context(preview)` to bridge the exact
+  single selection into the same authoring record. Pass `()` for the focused
+  preview or an explicit preview id for a hidden session. It rejects no,
+  multiple, stale, and ambiguous selection state; preserve its selection
+  identity and generation until proposal review.
+- Use `assembly_builder::functional_frame_catalog(doc, edit_target, root_path)`
+  to read authored datum, attachment, and actuator frames. It follows only
+  `lunco:mount:frame`, `lunco:component:frames`, and
+  `lunco:component:actuatorFrames`, returning exact paths, roles, mount and
+  actuator metadata, transforms, and socket paths. Use
+  `assembly_builder::align_frames_plan(doc, edit_target, moving_path,
+  moving_frame_path, target_path, target_frame_path)` for a dry two-op visual
+  placement plan; the roots must be sibling Xforms and the frame stacks must
+  be rigid `translate`/`rotateXYZ` with unit scale. Physical mount topology
+  still goes through the attach/realignment planners above.
 - `assembly_edit::attach_program(doc, spec)` dispatches the existing typed
   `AttachProgram` contract. Build its `inputs` and `outputs` with the
   namespaced helpers `assembly_edit::program_input_connection`,
