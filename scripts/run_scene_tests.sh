@@ -59,6 +59,11 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT" || exit 1
 
+# Acceptance runs are isolated by default: every child is a throwaway process
+# with in-memory settings and no runtime-overlay reads or writes.
+export LUNCOSIM_EPHEMERAL_SETTINGS=1
+export LUNCOSIM_ISOLATED_RUN=1
+
 # ── Stress-pass configuration ───────────────────────────────────────────────
 STRESS=0
 STRESS_THREADS=0     # 0 = leave bevy's default multi-threaded pool alone

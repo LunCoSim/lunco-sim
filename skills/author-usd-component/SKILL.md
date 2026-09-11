@@ -480,6 +480,13 @@ commits all changed properties on the selected prim as one generation-checked
 review, which reaches the same typed document boundary. Parameter hints describe
 the control surface only; they do not replace USD or Modelica validation.
 
+For a live model component, author instance-specific constants as standard
+`inputs:*` overrides and leave the source asset unchanged. A live edit advances
+the generic `lunco_core::ModelStateRevision`; it is intentionally not a
+Modelica-specific compile command. The backend owning the model interprets the
+revision and reports its own rebuild/reset/readiness result, so the same
+authoring pattern remains usable for Rhai, physics, or later tool backends.
+
 USD has **no expressions**. A measured quantity and the transform encoding it are
 two authored numbers you must keep consistent by hand. Author both, and write the
 invariant in a comment — the measurement is the durable record, the transform is

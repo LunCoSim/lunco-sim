@@ -320,6 +320,9 @@ impl UsdStageProjectionPlan {
                     *source = remap_property_path(source);
                 }
             }
+            for material in prim.bound_materials.values_mut() {
+                *material = remap_path(material);
+            }
         }
 
         plan.children = self
@@ -675,8 +678,15 @@ def Xform "World"
             "#usda 1.0\n(\n    defaultPrim = \"Rover\"\n)\n\
 def Xform \"Rover\"\n\
 {\n\
-    def Xform \"Body\"\n\
+    def Cube \"Body\" (\n\
+        prepend apiSchemas = [\"MaterialBindingAPI\"]\n\
+    )\n\
     {\n\
+        rel material:binding = </Rover/Looks/Body>\n\
+    }\n\
+    def Scope \"Looks\"\n\
+    {\n\
+        def Material \"Body\" {}\n\
     }\n\
 }\n",
         );
@@ -686,11 +696,17 @@ def Xform \"Rover\"\n\
             .expect("instance plan remaps");
         let root = SdfPath::new("/Traverse/rover_1").unwrap();
         let body = SdfPath::new("/Traverse/rover_1/Body").unwrap();
+        let looks = SdfPath::new("/Traverse/rover_1/Looks").unwrap();
 
         assert_eq!(instance.default_prim.as_deref(), Some("Traverse/rover_1"));
         assert!(instance.has_prim(&root));
         assert!(instance.has_prim(&body));
-        assert_eq!(instance.children(&root), vec![body]);
+        assert_eq!(instance.children(&root), vec![body.clone(), looks]);
+        assert_eq!(
+            instance.bound_material(&body, MaterialPurpose::Render),
+            Some("/Traverse/rover_1/Looks/Body".to_owned()),
+            "instance material bindings must follow the canonical namespace remap"
+        );
         assert!(!instance.has_prim(&SdfPath::new("/Rover").unwrap()));
     }
 

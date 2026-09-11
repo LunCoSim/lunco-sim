@@ -94,6 +94,9 @@ pub fn runtime_persistence_enabled(
 /// This is shared by the runtime writer/loader and the Settings menu so the
 /// UI cannot advertise a policy different from the one that guards I/O.
 pub fn runtime_persistence_for_twin(twin: &lunco_twin::Twin) -> Result<bool, String> {
+    if lunco_twin::isolated_run_requested() {
+        return Ok(false);
+    }
     let Some(manifest) = twin.manifest.as_ref() else {
         return Ok(false);
     };
@@ -476,6 +479,10 @@ mod tests {
         assert!(
             reopened.data().spec(&prim).is_none(),
             "base untouched by restore"
+        );
+        assert!(
+            !reopened.is_dirty(),
+            "restoring a runtime overlay must not dirty the authored base"
         );
         assert!(
             reopened

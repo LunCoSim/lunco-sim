@@ -17,6 +17,13 @@ claim can be observed through a public production surface.
 | Mission sequencing, route choice, behavior policy, authored tolerances and expected outcomes | Rhai / USD | Production scene + `assets/scenarios/tests/*.rhai` |
 | Tutorial steps and application-specific assertions | Rhai observer | Production tutorial scene gate |
 
+Reusable physics acceptance vocabulary is also Rhai-owned. The generic
+`assets/scripting/tools/physics_acceptance.rhai` library composes existing
+contact, pose, joint-drive, readiness, binding, and runtime-diagnostic reads;
+the authored fixture supplies entity paths and thresholds. Rust remains the
+owner of the solver and low-level telemetry, so a Rhai acceptance helper never
+changes collision policy or becomes a second physics model.
+
 The rule is: move a Rust assertion only after an authored fixture can fail for
 the same reason through the public runtime path. A Rust test that supplies a
 spy command, fake world, private component, or direct function call is not a
@@ -124,6 +131,14 @@ recipes and their acceptance scenes stay in the owning Twin.
    gate process still receives `--threads 1 --jitter 0`, so process parallelism
    does not change the deterministic test contract. Graphics scenes remain a
    separate serial GPU/offscreen pass.
+   Each gate process owns a fresh Bevy app, document registry, workspace, and
+   Rhai state. Isolation is the default contract for scene, render, and editor
+   acceptance runs: launchers keep settings in memory and runtime overlays are
+   neither restored nor written, regardless of Twin policy. The production
+   scene runner also fails before scenario start if a file-backed authored USD
+   document is already dirty. Fixtures that edit documents resolve their own
+   scene document and assert `dirty == false` before the first authored
+   operation; they do not select an arbitrary open-document slot.
    Use `--exact <scene-name>` for the smallest edit-loop run; an unqualified
    argument remains a substring group selector (for example, `joint` also
    matches `g7_joints`).
@@ -185,7 +200,7 @@ separate scenes.
 | Composed battery/solar envelopes | `battery_mounts` | `battery_mounts_negative` | `QueryUsdPrim` and world poses |
 | Component socket, plug-kind, and joint rejection | `socket_attach_rejection` | same fixture's rejected command cases | public `AttachComponent` |
 | Existing-mount nested-frame snap, joint-anchor update, and invalid-frame rejection | `assembly_mount_frame_realign` | same fixture's rejected Rhai plans | dynamic `assembly_builder` plan plus `QueryUsdPrim` |
-| Generic component/reference construction, schema-aware regeneration/compliance, deterministic pattern/mirror placement, typed parameter plans, schema-driven property catalogs and dry patches, AI-readable authoring context, and dry placement/attachment planning | `assembly_component_builder`, `assembly_pattern_builder`, `assembly_mount_frame_realign`, `assembly_property_editor` | same Rhai scenarios' invalid asset, missing parent, duplicate parameter/identity, malformed placement, unsupported mode, missing socket, invalid frame, stale generation, wrong type, structural edit, custom-property, and standard-schema mismatch cases | dynamic `assembly_builder`/`assembly_audit`/`assembly_edit` plans, proposal/review/commit, direct standard-USD compliance, and composed `QueryUsdPrim`/`InspectUsdDocument` |
+| Generic component/reference construction, schema-aware regeneration/compliance, deterministic pattern/mirror placement, typed parameter plans, schema-driven property catalogs and dry patches, AI-readable authoring context, dry placement/attachment planning, and backend-neutral model-state invalidation | `assembly_component_builder`, `assembly_pattern_builder`, `assembly_mount_frame_realign`, `assembly_property_editor`, `model_state_invalidation` | same Rhai scenarios' invalid asset, missing parent, duplicate parameter/identity, malformed placement, unsupported mode, missing socket, invalid frame, stale generation, wrong type, structural edit, custom-property, standard-schema mismatch, independent instance, source-preservation, and parameter-rebuild cases | dynamic `assembly_builder`/`assembly_audit`/`assembly_edit` plans, generic `ModelStateRevision`, standard USD instance overrides, proposal/review/commit, direct standard-USD compliance, and composed `QueryUsdPrim`/`InspectUsdDocument` |
 | Reload/reset and event-gated authored policy | `component_detach`, `rhai_event_delivery` | `rhai_event_delivery_negative` | public commands and telemetry |
 | Wheel contact, steering, ramp/leg clearance, and vehicle assembly | `drivetrain_parity`, `ackermann_parity`, `sandbox_ramp_placement`, `landing_legs`, `lander_rover_stack` | `rocker_bogie_*_nodiff`, `escape_containment` | authored verdicts over production physics |
 | Supported multi-rover stress cardinalities and shared-command motion | `multi_rover_stress_4`, `multi_rover_stress_8`, `multi_rover_stress_20` | `multi_rover_stress_negative` (three-rover unsupported cardinality) | discovered roster, production patrol command, world poses, and terminal Rhai verdict |

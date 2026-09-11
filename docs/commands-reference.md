@@ -2844,7 +2844,8 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
    filled in. Cancellation is silent.
  - **Non-empty** → the observer writes directly, rebinds the
    document's [`lunco_doc::DocumentOrigin`] to the new writable `File` variant,
-   updates `last_saved_generation`, and fires [`DocumentSaved`].
+   updates the owning document's saved authored-base baseline, and fires
+   [`DocumentSaved`].
 
  This single shape covers UI dialogs, recents, drag-drop, HTTP
  automation, and the Untitled-promotion path (Ctrl+S on a draft
@@ -2867,9 +2868,10 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  needed — separate command, not defined yet) or if the backing
  library is read-only (MSL, Bundled in Modelica's case).
 
- Dirty state (generation vs. last-saved generation) is a per-document
- concern; the owning domain updates its internal tracker in the
- observer.
+ Dirty state is a per-document concern; the owning domain compares its
+ persisted authored state with its saved baseline in the observer. Runtime
+ overlays are not part of the authored file and therefore do not make a clean
+ authored document dirty.
 
 - *defined in:* `crates/lunco-doc-bevy/src/lib.rs`
 

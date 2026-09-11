@@ -9,6 +9,11 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT" || exit 1
 
+# Editor acceptance runs are throwaway by design. Do not load or write a
+# developer's settings or Twin runtime overlay while exercising a fixture.
+export LUNCOSIM_EPHEMERAL_SETTINGS=1
+export LUNCOSIM_ISOLATED_RUN=1
+
 BIN="${LUNCOSIM_BIN:-target/debug/luncosim}"
 EDITOR_TIMEOUT="${EDITOR_TIMEOUT:-120}"
 EDITOR_API_PORT="${EDITOR_API_PORT:-4700}"

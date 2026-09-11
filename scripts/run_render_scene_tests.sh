@@ -23,6 +23,11 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT" || exit 1
 
+# Render acceptance runs are throwaway by design. Do not load or write a
+# developer's settings or Twin runtime overlay while exercising a fixture.
+export LUNCOSIM_EPHEMERAL_SETTINGS=1
+export LUNCOSIM_ISOLATED_RUN=1
+
 BIN="${LUNCOSIM_BIN:-target/debug/luncosim}"
 RENDER_TIMEOUT="${RENDER_TIMEOUT:-120}"
 RENDER_FRAMES="${RENDER_FRAMES:-3}"

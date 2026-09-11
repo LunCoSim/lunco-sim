@@ -94,6 +94,39 @@ fn transform_edits(info_only: &[String]) -> HashMap<String, TransformEditChannel
     edits
 }
 
+/// Returns whether an authored standard USD `inputs:*` value changed.
+///
+/// Unconnected scalar inputs are the instance-default boundary for Modelica
+/// parameters. They are reported as ordinary info-only edits, but still need
+/// to invalidate the USD-derived defaults projection so the owning cosim
+/// lifecycle can decide whether a compile-time parameter changed.
+fn authored_input_defaults_changed(info_only: &[String]) -> bool {
+    info_only.iter().any(|path| {
+        path.split_once('.')
+            .is_some_and(|(_, attribute)| attribute.starts_with("inputs:"))
+    })
+}
+
+/// Mark the live model instance owning an authored `inputs:*` edit.
+///
+/// This publishes only a generic state revision. The authoring projection does
+/// not decide whether a backend should recompile, reset, or simply accept a
+/// live input; the backend that owns the model decides that from its own state.
+fn mark_model_state_revision(world: &mut World, prim_path: &str) {
+    let entity = world
+        .query::<(Entity, &UsdPrimPath)>()
+        .iter(world)
+        .find_map(|(entity, path)| (path.path == prim_path).then_some(entity));
+    if let Some(entity) = entity {
+        let mut revision = world
+            .get::<lunco_core::ModelStateRevision>(entity)
+            .copied()
+            .unwrap_or_default();
+        revision.advance();
+        world.entity_mut(entity).insert(revision);
+    }
+}
+
 /// Transform paths explicitly authored by the typed live-stage projector.
 ///
 /// OpenUSD can report a transform author as a resync of an already-live prim,
@@ -311,6 +344,7 @@ pub(crate) fn project_stage_changes(world: &mut World) {
 
     let mut projected_anything = false;
     let mut connection_paths_changed = false;
+    let mut input_defaults_changed = false;
     for (id, changes) in batches {
         let authored_transform_edits = world
             .get_resource_mut::<LiveTransformEditHints>()
@@ -328,6 +362,14 @@ pub(crate) fn project_stage_changes(world: &mut World) {
         resynced.dedup();
         info_only.sort();
         info_only.dedup();
+        input_defaults_changed |= authored_input_defaults_changed(&info_only);
+        for path in &info_only {
+            if let Some((prim_path, attribute)) = path.split_once('.') {
+                if attribute.starts_with("inputs:") {
+                    mark_model_state_revision(world, prim_path);
+                }
+            }
+        }
 
         if resynced.is_empty() && info_only.is_empty() && authored_transform_edits.is_empty() {
             continue;
@@ -366,9 +408,10 @@ pub(crate) fn project_stage_changes(world: &mut World) {
     // `lunco_usd_sim::cosim::rewire_usd_connections`. Prim spawn/despawn triggers
     // that system directly (change-detection); a `connectionPaths` **edit** on an
     // already-spawned prim is neither — use the typed native-field notice to
-    // re-derive off the live stage. Ordinary visual or mission-prim edits do not
-    // invalidate the wiring cache.
-    if connection_paths_changed {
+    // re-derive off the live stage. Standard authored `inputs:*` edits also
+    // publish a backend-neutral `ModelStateRevision`; the owning model adapter
+    // decides whether that state needs a rebuild, reset, or only a live update.
+    if connection_paths_changed || input_defaults_changed {
         if let Some(mut dirty) = world.get_resource_mut::<lunco_usd_sim::cosim::WiringDirty>() {
             dirty.0 = true;
         }

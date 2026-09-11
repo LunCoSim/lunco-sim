@@ -194,6 +194,15 @@ command boundary. Modelica parameter semantics remain owned by Modelica; an
 instance edit targets its existing USD `inputs:` override and does not rewrite
 the shared source document.
 
+An authored model-input edit also advances the generic
+`lunco_core::ModelStateRevision` on that live instance. This is an invalidation
+signal, not a compile request: the USD projection does not know which backend
+owns the model or what action it needs. Each backend observes the revision and
+chooses its own lifecycle (for example, Modelica recompiles only when its
+parsed compile-time parameter changed, while a future Rhai or physics adapter
+could rebuild, reset, or accept a live input). The source asset and authored
+instance override remain separate.
+
 ## Current surfaces
 
 The existing implementation provides the substrate the perspective composes:
@@ -869,6 +878,17 @@ The browser row reflects modified, review, muted, and conflict state from this
 document-scoped resource. `SaveDocument`/`SaveAsDocument` remain explicit
 persistence commands; proposal commit never writes a file implicitly.
 
+For callers that want a repeatable checkpoint, the built-in Rhai
+`editor_workflow` tool composes the existing inspect, projection, document-lint,
+and save commands. `after_edit(doc)` is called explicitly after a reviewed
+apply/commit and returns a retryable projection result until the document's
+current generation is projected and linted. The Twin setting
+`usd.editor_autosave` is opt-in: an omitted setting or `false` keeps authored
+autosave off and returns `save_required`; only `true` permits `SaveDocument`.
+Runtime overlay persistence remains an independent setting and path. The
+coordinator owns no document state, watcher, timer, or writer, and never saves
+an older generation.
+
 ### Interactive headful authoring
 
 The agent-and-human authoring workflow is defined by the
@@ -895,6 +915,12 @@ The production acceptance fixture is
 the same proposal/query/commit surface and verifies non-mutating review,
 journal undo/redo, and stale-conflict rejection. The existing
 `assembly_workflow` fixture remains the catalog attach/save/reload regression.
+
+The generic `physics_acceptance` Rhai tool provides reusable evidence checks for
+contact geometry, joint separation, measured motion, settling, and system
+readiness. It consumes the existing physics telemetry and diagnostic queries;
+fixtures supply their own thresholds and vehicle-specific composition stays in
+the Twin.
 
 ## Mount and attach contract
 

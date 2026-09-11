@@ -59,6 +59,19 @@ def Xform "SolarPanel" (
     float outputs:generated_current_a
     custom token connectors:p
 
+    def Scope "PowerTelemetry" (
+        prepend apiSchemas = ["LunCoTelemetryAPI"]
+    )
+    {
+        bool lunco:telemetry = true
+        string ui:displayName = "Solar power"
+        token lunco:telemetry:port = "power_out"
+        token lunco:telemetry:name = "power.solar_power"
+        token lunco:telemetry:unit = "W"
+        string lunco:telemetry:description = "Electrical power delivered by the photovoltaic panel."
+        rel lunco:telemetry:target = <..>
+    }
+
     float physics:mass = 15.0
     # Looks — the panel's photovoltaic surface. A `Material` whose surface comes from a
     # `Shader` named for the `wgsl` render context, with the shader's parameters as its
