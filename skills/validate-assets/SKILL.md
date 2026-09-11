@@ -230,7 +230,10 @@ and will fall out of the vehicle. …
 ```
 
 The USD rules include `nested-body-no-joint` (error), `joint-target-not-a-body` (error),
-`collision-enabled-without-api` (error),
+`collision-enabled-without-api` (error for ordinary geometry; wheel realizations
+use their dedicated contract rules),
+`raycast-wheel-collision-contract` (error),
+`physical-wheel-collision-contract` (error),
 `vehicle-part-collision-contract` (error),
 `dynamic-body-no-collider` (warn), `mass-outside-any-body` (warn),
 `conditionally-stable-joint-drive` (error),

@@ -52,7 +52,8 @@
 //       rule about a schema nobody has thought about yet needs no Rust change.
 //
 //   facts.vehicle_parts[]  #{ path, type, vehicle, body, purpose, collision_api,
-//                              collision_state, wheel_projector,
+//                              collision_state, wheel_projector, physical_wheel,
+//                              rigid_body_api,
 //                              render_excluded_by_proxy, visual_only,
 //                              shape_valid, contract }
 //       every renderable gprim below an assembly body. contract is the
@@ -147,10 +148,10 @@ fn schemas_of(facts, path) {
     []
 }
 
-/// A collision-enabled ordinary prim without PhysicsCollisionAPI is ignored by
-/// the USD-to-Avian compound reader. Terrain and PhysX wheel prims are omitted
-/// from this fact because their owning projectors admit geometry through their
-/// own applied schemas.
+/// A collision-enabled prim without PhysicsCollisionAPI is ignored by the
+/// USD-to-Avian compound reader. Terrain and PhysX wheel realizations are
+/// excluded here because their dedicated owner rules provide the correct
+/// realization-specific repair.
 fn collision_enabled_without_api(facts) {
     let out = [];
     for path in facts.collision_enabled_without_api {
@@ -164,14 +165,79 @@ fn collision_enabled_without_api(facts) {
     out
 }
 
-/// Every renderable gprim below a vehicle assembly must have one collision
-/// owner. Standard wheel projectors and purpose/disabled metadata are explicit
-/// alternatives; an unannotated visual shape is a silently dropped part.
+/// A physical wheel is selected by a standard revolute joint targeting a
+/// PhysxVehicleWheelAPI prim. That realization requires an authored rigid body
+/// and enabled collision geometry; raycast wheels must not carry either. The
+/// runtime has the same terminal contract, but this catches the error before
+/// admission and prevents a generated shape or ignored schema from hiding it.
+fn physical_wheel_collision_finding(part) {
+    let detail = "";
+    if !part.rigid_body_api { detail += "apply PhysicsRigidBodyAPI; "; }
+    if !part.collision_api { detail += "apply PhysicsCollisionAPI; "; }
+    if part.collision_state == "disabled" {
+        detail += "set physics:collisionEnabled=true; ";
+    }
+    if part.collision_state == "malformed" {
+        detail += "author physics:collisionEnabled as a boolean; ";
+    }
+    if !part.shape_valid && part.collision_api {
+        detail += "author supported collision geometry; ";
+    }
+    if detail == "" { return (); }
+    finding(
+        "physical-wheel-collision-contract",
+        "error",
+        part.path,
+        "physical wheel collision contract is incomplete: " + detail +
+            "the runtime will refuse this physical wheel.",
+    )
+}
+
+fn raycast_wheel_collision_finding(part) {
+    if part.contract == "raycast-rigid-body" {
+        return finding(
+            "raycast-wheel-collision-contract",
+            "error",
+            part.path,
+            "raycast wheel applies PhysicsRigidBodyAPI; remove the body schema because raycast wheels are query-only.",
+        );
+    }
+    if part.contract == "raycast-collider" {
+        return finding(
+            "raycast-wheel-collision-contract",
+            "error",
+            part.path,
+            "raycast wheel applies PhysicsCollisionAPI or a collision setting; remove the collision authoring because raycast wheels are query-only.",
+        );
+    }
+    ()
+}
+
+fn wheel_realization_collision_contract(facts) {
+    let out = [];
+    for part in facts.vehicle_parts {
+        if !part.wheel_projector { continue; }
+        let f = if part.physical_wheel {
+            physical_wheel_collision_finding(part)
+        } else {
+            raycast_wheel_collision_finding(part)
+        };
+        if f != () { out.push(f); }
+    }
+    out
+}
+
+/// Every non-wheel renderable gprim below a vehicle assembly must have one
+/// collision owner. Purpose/disabled metadata are explicit alternatives; an
+/// unannotated visual shape is a silently dropped part. Wheel realizations have
+/// their own stricter contract above.
 fn vehicle_part_collision_contract(facts) {
     let out = [];
     for part in facts.vehicle_parts {
+        if part.physical_wheel { continue; }
         if part.contract == "collider"
             || part.contract == "projector"
+            || part.contract == "physical-collider"
             || part.contract == "visual-only" {
             continue;
         }
@@ -204,6 +270,7 @@ fn lint_usd(facts) {
     for f in stage_meters_per_unit_missing(facts) { out.push(f); }
     for f in epoch_api_requires_authored_time(facts) { out.push(f); }
     for f in collision_enabled_without_api(facts) { out.push(f); }
+    for f in wheel_realization_collision_contract(facts) { out.push(f); }
     for f in vehicle_part_collision_contract(facts) { out.push(f); }
     for f in unsupported_program_prim_type(facts) { out.push(f); }
     for f in connector_requires_modelica(facts) { out.push(f); }

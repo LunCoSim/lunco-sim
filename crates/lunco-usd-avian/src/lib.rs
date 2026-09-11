@@ -847,7 +847,7 @@ const JOINT_DRIVE_MAX_FORCE_DEFAULT: f64 = 1.0e8;
 ///
 /// Returns a list of `(Position, Rotation, Collider)` tuples for `Collider::compound()`.
 #[derive(Debug)]
-enum ColliderProjectionError {
+pub enum ColliderProjectionError {
     Transform(TransformReadError),
     Backend { prim: String, detail: String },
 }
@@ -862,6 +862,58 @@ impl std::fmt::Display for ColliderProjectionError {
 }
 
 impl std::error::Error for ColliderProjectionError {}
+
+/// Project one explicitly authored USD collision prim into an Avian collider.
+///
+/// This is the shared projection boundary for specialized realizations such as
+/// physical vehicle wheels. It accepts only a prim carrying
+/// `PhysicsCollisionAPI` and a supported USD geometry type. In particular, it
+/// never derives a collider from a domain parameter such as wheel radius or
+/// width. Missing or unsupported authored geometry is an error at the owner.
+pub fn authored_collider_from_usd(
+    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    sdf_path: &SdfPath,
+) -> Result<Collider, ColliderProjectionError> {
+    if !reader.has_api_schema(sdf_path, ptok::API_COLLISION) {
+        return Err(ColliderProjectionError::Backend {
+            prim: sdf_path.to_string(),
+            detail: "missing PhysicsCollisionAPI on authored collision geometry".to_owned(),
+        });
+    }
+
+    let collision_enabled =
+        match read_authored_bool_or_default(reader, sdf_path, ptok::A_COLLISION_ENABLED, true) {
+            Ok(value) => value,
+            Err(()) => {
+                return Err(ColliderProjectionError::Backend {
+                    prim: sdf_path.to_string(),
+                    detail: format!("malformed {}", ptok::A_COLLISION_ENABLED),
+                });
+            }
+        };
+    if !collision_enabled {
+        return Err(ColliderProjectionError::Backend {
+            prim: sdf_path.to_string(),
+            detail: format!("{} is authored false", ptok::A_COLLISION_ENABLED),
+        });
+    }
+
+    let collider = build_collider_from_usd(reader, sdf_path)?.ok_or_else(|| {
+        ColliderProjectionError::Backend {
+            prim: sdf_path.to_string(),
+            detail: "authored collision geometry has no supported shape or valid mesh data"
+                .to_owned(),
+        }
+    })?;
+    if !lunco_physics::avian_backend_collider_shape_is_valid(&collider) {
+        return Err(ColliderProjectionError::Backend {
+            prim: sdf_path.to_string(),
+            detail: "collider local bounds are not finite, ordered, or f32-representable"
+                .to_owned(),
+        });
+    }
+    Ok(collider)
+}
 
 fn collect_child_colliders_from_usd(
     reader: &dyn lunco_usd_bevy::read::UsdReadObject,

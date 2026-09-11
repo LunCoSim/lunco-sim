@@ -530,23 +530,31 @@ def Xform "SkidRover" (
             # contract for this deliberate clearance; the revolute joint already
             # filters wheel↔carrier, while this relation covers wheel↔chassis.
             over "Suspension_FL/Wheel_FL" (
-                prepend apiSchemas = ["PhysicsFilteredPairsAPI"]
+                prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsFilteredPairsAPI"]
             ) {
+                bool physics:rigidBodyEnabled = true
+                bool physics:collisionEnabled = true
                 rel physics:filteredPairs = </SkidRover/Chassis>
             }
             over "Suspension_FR/Wheel_FR" (
-                prepend apiSchemas = ["PhysicsFilteredPairsAPI"]
+                prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsFilteredPairsAPI"]
             ) {
+                bool physics:rigidBodyEnabled = true
+                bool physics:collisionEnabled = true
                 rel physics:filteredPairs = </SkidRover/Chassis>
             }
             over "Suspension_RL/Wheel_RL" (
-                prepend apiSchemas = ["PhysicsFilteredPairsAPI"]
+                prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsFilteredPairsAPI"]
             ) {
+                bool physics:rigidBodyEnabled = true
+                bool physics:collisionEnabled = true
                 rel physics:filteredPairs = </SkidRover/Chassis>
             }
             over "Suspension_RR/Wheel_RR" (
-                prepend apiSchemas = ["PhysicsFilteredPairsAPI"]
+                prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsCollisionAPI", "PhysicsFilteredPairsAPI"]
             ) {
+                bool physics:rigidBodyEnabled = true
+                bool physics:collisionEnabled = true
                 rel physics:filteredPairs = </SkidRover/Chassis>
             }
         }
