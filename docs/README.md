@@ -18,6 +18,7 @@ The authoritative home for LunCoSim architecture, design, and reference docs.
 | Call the app from code / curl / MCP | [`commands-reference.md`](commands-reference.md) — every `#[Command]`, generated from source |
 | Build a mission end-to-end | [`tutorials/`](tutorials/README.md) |
 | Write rhai behaviour | [`scripting-guide.md`](scripting-guide.md) · [`behaviour-trees.md`](behaviour-trees.md) |
+| Build or inspect a USD assembly with human/AI tools | [`architecture/48-assembly-editor.md`](architecture/48-assembly-editor.md) · [`scripting-guide.md#model-and-assembly-authoring-human-and-ai`](scripting-guide.md#model-and-assembly-authoring-human-and-ai) |
 | Build a rover or lander | [`architecture/55-building-vessels-rovers-and-landers.md`](architecture/55-building-vessels-rovers-and-landers.md) |
 | Build a Twin-facing HTML/CSS surface | [`architecture/runtime-authored-ui.md`](architecture/runtime-authored-ui.md) · [`../skills/runtime-ui/SKILL.md`](../skills/runtime-ui/SKILL.md) |
 | Record a video / frame-exact capture | [`offline-recording.md`](offline-recording.md) |

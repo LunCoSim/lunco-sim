@@ -712,6 +712,40 @@ only through the existing proposal/attach/journal owners. The core asset
 library stays free of mission names, vehicle-specific builders, and duplicate
 USD writers.
 
+### Generic model-authoring workflow
+
+The Editor and AI authoring paths share the Rhai `model_authoring` library.
+`model_context(doc, root, edit_target)` is the one read for an exact composed
+assembly subtree: it returns the identity tuple and generation together with
+paths, references, variants, component/frame/mount facts, bodies, joints,
+colliders, ports, and applicable actions. It traverses composed USD through
+the existing query and inspection owners; it does not maintain a second scene
+graph.
+
+`readiness_report(doc, root, edit_target, policy)` is the single preflight
+record for the caller-requested topology, physicality, mount, connection,
+control, and runtime checks. Each check has an explicit status and
+path-addressed errors; omitted checks are `not_requested`, not implicit
+evidence. `port_graph` discovers standard USD `inputs:`/`outputs:`/
+`connectors:` endpoints and composed USD connections, while `wiring_plan`
+returns a generation-checked typed connection plan after validating endpoint
+direction and type.
+
+`scene_recipe` composes the existing reference, placement, camera, and
+attribute operations into a dry plan and returns routes/programs as explicit
+hand-offs to their existing Rhai owners. `publish_component` validates a
+standalone `kind = "component"` root, `defaultPrim`, standard schemas,
+references, and caller-supplied provenance, then returns ordinary metadata
+ops plus an explicit Save-As command. Provenance is deliberately not a new
+LunCo schema: the owning package may keep its manifest beside the USD or use
+standard `assetInfo` authoring.
+
+These facades are policy and orchestration, so they remain hot-reloadable
+Rhai. Rust provides only the generic opt-in composed query fields for
+relationships, connections, and applied API schemas. All mutations still go
+through `assembly_edit` proposal/batch/journal boundaries, and all callers
+must preserve the explicit document, edit-target, and generation checkpoint.
+
 The companion `assembly_audit` library is the authored diagnostic surface for
 assembly contracts. Every stage-reading helper takes the document id first; `()` explicitly
 selects the mounted live scene. `QueryUsdPrim { doc_id, path, ... }` resolves the

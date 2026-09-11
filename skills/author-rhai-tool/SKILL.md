@@ -135,6 +135,42 @@ recipe in the owning Twin/model package, return a dry plan, and let
 `assembly_edit` own proposal, review, commit, generation checks, and journalling.
 Do not add a Rust component registry or infer a recipe from USD child names.
 
+### Model-authoring facades
+
+For a new assembly or scene, prefer the generic `model_authoring` library. It
+keeps the workflow in Rhai while reusing the existing typed USD owners:
+
+- `model_context(doc, root, edit_target)` reads the exact composed subtree and
+  returns paths, references, variants, components, frames, mounts, bodies,
+  joints, colliders, ports, generation, and available actions.
+- `readiness_report(doc, root, edit_target, policy)` combines only the checks
+  requested for topology, physicality, mounts, connections, controls, and
+  runtime. Missing sections are `not_requested`; failed lookups are errors.
+- `scene_recipe(doc, edit_target, recipe, parent_generation)` returns dry
+  typed USD ops for references, terrain, cameras, and initial state, plus
+  explicit hand-offs for `waypoint_editor` routes and
+  `assembly_edit::attach_program` programs.
+- `port_graph(doc, root, edit_target)` discovers standard USD
+  `inputs:`/`outputs:`/`connectors:` endpoints and composed connections.
+  `wiring_plan(doc, edit_target, root, connections, parent_generation)`
+  validates direction and type and returns typed `SetConnection` ops.
+- `publish_component(doc, root, edit_target, output, provenance)` validates a
+  standalone `kind = "component"` root, `defaultPrim`, schemas, references,
+  and provenance, then returns the normal metadata ops and explicit Save-As
+  command. Review/apply through `assembly_edit`; provenance remains a
+  caller-owned manifest or standard `assetInfo`, not a new LunCo schema.
+
+When testing a reusable tool or linter behavior, put the authored fixture in
+`assets/scenes/tests/` and the observer in `assets/scenarios/tests/`. Exercise
+the production command/query surface and assert the returned facts in Rhai;
+do not copy a large USDA string or an observable policy assertion into a Rust
+unit test. Keep Rust coverage only for a generic mechanism that the public
+Rhai surface cannot reach.
+
+Pass the exact document id, edit target, and generation returned by the read.
+These facades do not identify parts by vehicle name, write USDA directly, or
+hide missing references, endpoints, mounts, or runtime evidence.
+
 ## Use an existing tool first
 
 Before creating a library, query the live surface with `DiscoverSchema`,

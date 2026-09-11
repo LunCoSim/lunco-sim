@@ -56,6 +56,12 @@ README defines the stable taxonomy.
 - Rust owns only general heavy runtime capabilities and bridges; expose their
   controls to Rhai instead of baking mission policy into Rust.
 
+For a generic human/AI assembly workflow, use the hot-reloadable
+`assets/scripting/tools/model_authoring.rhai` facade. Keep its reusable reads,
+plans, and checks generic; put Twin-specific recipes beside the Twin. Pair any
+observable asset/linter regression with a USD fixture and Rhai scene observer
+under `assets/scenes/tests/` and `assets/scenarios/tests/`.
+
 Environment facts are produced by a distinct
 `components/environment/probe.usda` source prim. Never make a Modelica/Python
 consumer declare `gravity_accel`, `sun_mount_*`, or `earth_mount_*` as its own

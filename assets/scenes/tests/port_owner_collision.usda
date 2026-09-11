@@ -1,0 +1,86 @@
+#usda 1.0
+(
+    defaultPrim = "PortOwnerCollision"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Production linter fixture for duplicate runtime port owners. The collision is
+# authored at a generic assembly boundary: a Modelica network input named
+# `mass` shares the same projected entity as the standard Avian rigid-body
+# `mass` port. The clean case uses the same model without that boundary input.
+def Xform "PortOwnerCollision" (
+    kind = "assembly"
+)
+{
+    def Xform "CollisionCase" (
+        kind = "assembly"
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "CollectionAPI:components"]
+    )
+    {
+        float physics:mass = 10.0
+        float3 physics:diagonalInertia = (1.0, 1.0, 1.0)
+        bool physics:kinematicEnabled = true
+        # This boundary input is a Modelica owner of `mass`; the body exposes
+        # the same public name through the Avian backend.
+        float inputs:mass = 10.0
+
+        def Cube "Body" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 1.0
+            bool physics:collisionEnabled = true
+        }
+
+        def Scope "Model" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://models/LunCo/Sensors/FilteredSignal.mo@
+        }
+
+        uniform token collection:components:expansionRule = "explicitOnly"
+        prepend rel collection:components:includes = [</PortOwnerCollision/CollisionCase/Model>]
+    }
+
+    def Xform "CleanCase" (
+        kind = "assembly"
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "CollectionAPI:components"]
+    )
+    {
+        double3 xformOp:translate = (3.0, 0.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float physics:mass = 10.0
+        float3 physics:diagonalInertia = (1.0, 1.0, 1.0)
+        bool physics:kinematicEnabled = true
+
+        def Cube "Body" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 1.0
+            bool physics:collisionEnabled = true
+        }
+
+        def Scope "Model" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://models/LunCo/Sensors/FilteredSignal.mo@
+        }
+
+        uniform token collection:components:expansionRule = "explicitOnly"
+        prepend rel collection:components:includes = [</PortOwnerCollision/CleanCase/Model>]
+    }
+
+    def Scope "Scenario" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/port_owner_collision.rhai@
+    }
+}

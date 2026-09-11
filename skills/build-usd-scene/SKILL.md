@@ -37,6 +37,28 @@ user. Headless/API-only runs can confirm typed state, but cannot establish
 that the scene looks correct; do not use them as a substitute for viewport
 review.
 
+## Generic scene recipes for humans and AI
+
+For a repeatable scene assembled from authored USD components, use the
+namespaced Rhai `model_authoring` tool instead of scattering independent
+commands. Read the exact document/root and generation, then create a dry
+recipe:
+
+```rhai
+let context = model_authoring::model_context(doc, root, "@root@");
+let recipe = model_authoring::scene_recipe(
+    doc, "@root@", scene_spec, context.generation);
+```
+
+`scene_spec` may contain `references`, `terrain`, `cameras`, `initial_state`,
+`routes`, and `programs`. Review and apply `recipe.ops` with
+`assembly_edit::batch` or the proposal flow. Route entries go to
+`waypoint_editor`; program entries go to `assembly_edit::attach_program`.
+Missing parents/paths, invalid `lunco://` identities, and stale generations
+fail before a plan is returned. Use `readiness_report` and
+`port_graph`/`wiring_plan` before running the composed scene. The complete API
+is in [`scripting-guide.md`](../../docs/scripting-guide.md#model-and-assembly-authoring-human-and-ai).
+
 Before assembling a scene, choose its world/time contract. The complete option
 matrix is in [`assets/tutorials/README.md`](../../assets/tutorials/README.md);
 the short version is below.

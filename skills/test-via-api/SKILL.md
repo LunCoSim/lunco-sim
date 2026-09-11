@@ -61,6 +61,30 @@ Rust core for a script-only change. The observer must verify public `cmd:*`
 events plus the resulting live state and emit a real verdict. Parsing or
 `--validate` is only preflight evidence.
 
+The generic model-authoring facades have the same production gate. The focused
+fixture is `model_authoring`:
+
+```bash
+./scripts/run_scene_tests.sh --no-build --exact model_authoring -j 4
+```
+
+Its Rhai observer exercises `model_context`, `readiness_report`,
+`scene_recipe`, `port_graph`, `wiring_plan`, and `publish_component`, including
+fail-loud missing endpoint, control, asset, identity, and provenance cases.
+Use this narrow gate after changing the tool or its authored fixture; a parse
+pass alone does not prove the namespaced calls work in production.
+
+The live port-owner collision contract is covered the same way:
+
+```bash
+./scripts/run_scene_tests.sh --no-build --exact port_owner_collision -j 4
+```
+
+Its USD fixture owns the duplicate and clean control cases; the Rhai observer
+calls `RunLint` and verifies the structured `LintReport` winner, shadowed owner,
+property paths, and precedence. Prefer this authored pair for observable lint
+behavior instead of embedding USDA or fake backend components in Rust tests.
+
 For spatial safety coverage, keep malformed authored transforms in the USD
 projection layer: that layer must reject them before ECS materialization. Test
 runtime-state admission at the `lunco-usd-avian` bridge owner, where a finite
