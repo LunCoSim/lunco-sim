@@ -768,7 +768,7 @@ remain on the Modelica runtime owner.
 Verification in the USD checkout used the normal `target/debug/luncosim`:
 
 - The focused owner suites passed: `lunco-usd-sim` 129/129,
-  `lunco-modelica-core` 289 passed/1 ignored, and `lunco-luncosim-edit` 59/59.
+  `lunco-modelica-core` 289 passed/1 ignored, and `lunco-luncosim-edit-core` 59/59.
 - USD integration suites passed: `lunco-usd` 175 unit tests plus all
   integration targets; `lunco-usd-sim` 129 unit tests plus 6 reader, 6
   drivetrain, 15 Rhai hook, and 20 connection tests; `lunco-usd-bevy` 250

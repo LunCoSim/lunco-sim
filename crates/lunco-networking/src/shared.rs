@@ -294,8 +294,8 @@ fn add_protocol(app: &mut App) {
     app.declare_channel::<lunco_avatar::ReleaseVessel>(SyncChannel::CommandBus);
     app.declare_channel::<lunco_avatar::UpdateProfile>(SyncChannel::CommandBus);
     // `SpawnEntity`'s TYPE lives in lunco-core (review A6) — declaring its channel
-    // needs the type, not the editor that handles it. This crate no longer depends
-    // on `lunco-luncosim-edit` at all.
+    // needs the type, not the editor that handles it. This crate has no dependency
+    // on either editor package.
     app.declare_channel::<lunco_core::SpawnEntity>(SyncChannel::CommandBus);
     // `UpdateObstacleFieldSpec` no longer rides the command bus — it is journaled
     // (`DomainKind::ObstacleField`) and syncs via the journal plane instead. See

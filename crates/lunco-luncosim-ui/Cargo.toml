@@ -55,7 +55,8 @@ lunco-doc = { path = "../lunco-doc" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-environment = { path = "../lunco-environment" }
 lunco-hooks = { path = "../lunco-hooks" }
-lunco-luncosim-edit = { path = "../lunco-luncosim-edit", default-features = false, features = ["ui"] }
+lunco-luncosim-edit-core = { path = "../lunco-luncosim-edit-core" }
+lunco-luncosim-edit-ui = { path = "../lunco-luncosim-edit-ui" }
 lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
 lunco-modelica-ui = { path = "../lunco-modelica-ui", default-features = false, features = ["ui"] }
 lunco-networking = { path = "../lunco-networking", default-features = false, optional = true }

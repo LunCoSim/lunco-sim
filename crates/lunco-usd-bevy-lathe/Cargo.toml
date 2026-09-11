@@ -1,0 +1,17 @@
+[package]
+name = "lunco-usd-bevy-lathe"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Parametric USD NURBS surfaces and their Bevy mesh projection"
+
+[dependencies]
+bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh"] }
+bevy_mesh = { workspace = true }
+lunco-render = { path = "../lunco-render" }
+lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
+lunco-usd-geometry = { path = "../lunco-usd-geometry" }
+openusd = { workspace = true }
+
+[lints]
+workspace = true

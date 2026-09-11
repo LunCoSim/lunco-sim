@@ -1,18 +1,10 @@
 //! Client-side netcode: snapshot interpolation, prediction, rollback,
 //! reconciliation and correction smoothing over avian bodies.
 //!
-//! Split out of `lunco-luncosim-edit::commands`, which had fused two unrelated
-//! subsystems in one file: the scene/document command layer (spawn / move / delete
-//! / set-property / focus / shader) and *this* — the client half of the wire. The
-//! netcode half never touched an editor symbol; its dependencies are `lunco-core`
-//! (the session/identity substrate), `lunco-api`, `big_space` and
-//! `avian3d`, all of which this crate already had. It belongs next to the wire that
-//! feeds it (`sync.rs` produces the `IncomingSnapshots` this module consumes), not
-//! next to the editor.
-//!
-//! One system stayed behind: `apply_replicated_spawns` (it instantiates from the
-//! editor's spawn catalog). It runs FIRST, and the ordering across the new crate
-//! boundary is preserved by [`lunco_core::NetcodeSet`] — see [`NetcodePredictionPlugin`].
+//! The scene/document command layer supplies replicated-spawn instantiation;
+//! this module owns the client half of the wire. `sync.rs` produces the
+//! `IncomingSnapshots` this module consumes, and the shared
+//! [`lunco_core::NetcodeSet`] preserves ordering between the two systems.
 //!
 //! Compiled unconditionally (no `networking` feature gate): every dependency it
 //! names is a non-optional dependency of this crate, and all of its systems are
@@ -2331,9 +2323,9 @@ pub fn apply_net_replication(
 /// register: snapshot ingest + interpolation, kinematic proxy driving, owned-rover
 /// prediction / reconciliation / rollback, and correction smoothing.
 ///
-/// `SpawnCommandPlugin` (lunco-luncosim-edit) keeps `apply_replicated_spawns`, the
-/// first system of the old `Update` chain, because it spawns from the editor's
-/// catalog. The chain's relative order survives the split via
+/// `SpawnCommandPlugin` in `lunco-scene-commands` owns `apply_replicated_spawns`,
+/// the first system of the netcode pipeline, because it instantiates from the
+/// shared spawn catalog. The relative order is expressed via
 /// [`lunco_core::NetcodeSet`]: scene-edit puts its system in
 /// `NetcodeSet::InstantiateSpawns`, and everything here runs in `NetcodeSet::Predict`,
 /// configured `.after()` it below. The internal order of the rest of the chain is
@@ -2361,9 +2353,9 @@ impl Plugin for NetcodePredictionPlugin {
         // repeated here so the plugin stands alone (tests, net_smoke-style bins).
         app.init_resource::<crate::session::IncomingSnapshots>();
         app.init_resource::<crate::session::DivergenceStats>();
-        // The netcode `Update` pipeline now spans two crates: `apply_replicated_spawns`
-        // (lunco-luncosim-edit) is the chain's first system and stays there, so the
-        // ordering it used to get from `.chain()` is expressed as a set relation.
+        // The netcode `Update` pipeline spans the scene-command and networking
+        // packages: scene commands instantiate replicated spawns first, then
+        // this package runs prediction through the shared set relation.
         app.configure_sets(
             Update,
             lunco_core::NetcodeSet::Predict.after(lunco_core::NetcodeSet::InstantiateSpawns),

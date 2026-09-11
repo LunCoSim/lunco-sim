@@ -8,7 +8,7 @@
 > [`../../crates/lunco-usd-core/`](../../crates/lunco-usd-core/), [`../../crates/lunco-usd/`](../../crates/lunco-usd/) and companion crates
 > `lunco-usd-geometry`, `lunco-usd-avian`, `lunco-usd-bevy-core`,
 > `lunco-usd-bevy-scene`, `lunco-usd-bevy-camera`, `lunco-usd-bevy` and
-> `lunco-usd-sim`.
+> `lunco-usd-bevy-lathe`, `lunco-usd-sim`.
 
 Package ownership follows the same boundary: `lunco-usd-core` contains the
 headless document/authoring surface, schemas, and pure probes; `lunco-usd`
@@ -18,7 +18,9 @@ owns the reusable render-free NURBS, trim, and curve-sweep substrate;
 `lunco-usd-bevy-scene` owns render-free ECS scene identity, lifecycle, ancestry,
 and shared geometry decoding; `lunco-usd-bevy-camera` owns render-free camera
 projection intent, camera paths, mounts, selection, and viewport reconciliation;
-`lunco-usd-bevy` owns visual projection; and
+`lunco-usd-bevy-lathe` owns the independent parametric NURBS/lathe mesh
+projection; `lunco-usd-bevy` owns the remaining visual projection and consumes
+the lathe package directly; and
 `lunco-usd-sim` owns USD-to-Avian/simulation examples and integration tests. This
 keeps runtime and simulation dependencies out of the authoring crate without
 introducing a test-only package.
@@ -557,7 +559,8 @@ author, and why a relative `../` escape fails (silently, for `LunCoProgramAPI` s
 > composed asset.
 
 ### Scene Editing Tools (UX Bridge)
-The `lunco-luncosim-edit` crate provides the interactive layer (palette, gizmo, inspector).
+The `lunco-luncosim-edit-core` and `lunco-luncosim-edit-ui` crates provide the
+interactive layer (spawn mechanisms, palette, gizmo, and inspector).
 - **Spawning**: `SpawnEntity` lowers to `ApplyUsdOp` with `UsdOp::AddPrim { reference: Some(...) }` against its explicit document and parent path.
   A palette spawn mounts the stage's `defaultPrim` via the **empty-path sentinel**
   (`UsdPrimPath { path: "" }`) — the loader resolves and writes back the concrete

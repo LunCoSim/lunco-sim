@@ -31,7 +31,7 @@ The composed source is the **single source of truth**. Both consumers sample it:
   the camera, coarse far away;
 - the **avian collider ring** (`collider_ring`) samples the *same* oracle at the
   collider resolution around each dynamic body;
-- **spawn placement** (`lunco-luncosim-edit`) samples the oracle (`dem_ground_height`)
+- **spawn placement** (`lunco-luncosim-edit-core`) samples the oracle (`dem_ground_height`)
   to drop a rover onto the surface. Because the oracle is analytic — not a collider
   raycast — it answers **before** the collider tile under the drop point has
   streamed/baked, so a spawn over un-baked terrain rests on the ground instead of

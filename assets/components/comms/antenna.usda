@@ -17,7 +17,7 @@
 # ── The reflector is PARAMETRIC, and it is a real paraboloid ──────────────────
 #
 # The surface is LATHED by the engine from the three numbers on `Reflector`, and
-# `crate::lathe` regenerates it whenever one of them changes. The control-point
+# `lunco-usd-bevy-lathe` regenerates it whenever one of them changes. The control-point
 # net is NEVER authored alongside them: two spellings of one shape let the drawn
 # contour disagree with the declared model. `y = r²/4f`, walked from a small apex
 # to the rim; the u direction (the exact rational circle — 9 CVs, √2/2 diagonals,

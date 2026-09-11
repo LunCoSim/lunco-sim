@@ -273,7 +273,7 @@ detail; the shape is the lesson.
 when it runs — the gate is a required argument, not something the author
 remembers to add. A producer that genuinely must run every frame passes
 `every_frame`, which puts the claim at the call site next to its reason, where
-review can see it. (`lunco-luncosim-edit/src/ui/mod.rs`)
+review can see it. (`lunco-luncosim-edit-ui/src/ui/mod.rs`)
 
 **Never gate on a hash of the thing you were deciding whether to build.**
 `produce_usd_canvas` spent 11 ms/frame building a graph and hashing it only to

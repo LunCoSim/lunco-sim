@@ -72,7 +72,8 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-usd-bevy-core`** | Headless composed-USD reader/view, stage composition, prepared stage assets, canonical live-stage ownership, authored-layer readers, instance identity, send-safe projection plans, program/variant resolution, material binding, transform decoding, and unit conversion. Uses Bevy's asset/ECS substrate but has no mesh, light, camera, renderer, window, or UI projection. |
 | **`lunco-usd-bevy-scene`** | Render-free Bevy scene contract shared by visual and domain projections: `UsdPrimPath`, scene/revision lifecycle markers, preview/ancestry ownership, and canonical USD primitive/mesh geometry readers. It depends on the core reader and has no visual adapter or renderer dependency. |
 | **`lunco-usd-bevy-camera`** | Render-free USD camera adapter: standard `UsdGeomCamera` projection intent, mounted/cinematic camera pose, camera-track selection, and the single-authority viewport-camera reconciler. It depends on the core reader and scene contract, not on visual projection. |
-| **`lunco-usd-bevy`** | Visual Bevy adapter (`UsdBevyPlugin`): projects USD hierarchy, shapes, transforms, materials, and `timeSamples` animation into Bevy entities/components on top of `lunco-usd-bevy-core`. Owns mesh/lathe/curve projection and lighting; installs the independent camera adapter but does not own camera mechanisms. |
+| **`lunco-usd-bevy-lathe`** | Independent parametric NURBS/lathe projection: reflected surface definitions, profile evaluation, and change-detected Bevy mesh regeneration. |
+| **`lunco-usd-bevy`** | Visual Bevy adapter (`UsdBevyPlugin`): projects USD hierarchy, shapes, transforms, materials, and `timeSamples` animation into Bevy entities/components on top of `lunco-usd-bevy-core`. Owns the remaining mesh/curve projection and lighting; installs the independent camera adapter but does not own camera mechanisms. |
 | **`lunco-usd-avian`** | Physics bridge (`UsdAvianPlugin`): maps `UsdPhysics` schemas (RigidBody, Colliders, all joint kinds + drive API) to Avian3D — the single home for joint construction. |
 | **`lunco-usd-sim`** | Simulation-schema bridge (`UsdSimPlugin`): intercepts specialized vehicle/cosim schemas (e.g., PhysX Vehicles) and maps them to LunCo models. Full USD→Bevy→Avian→simulation projection tests live here; direct Avian bridge mechanics stay in `lunco-usd-avian`. |
 | **`lunco-usd-sim-celestial`** | Independent render-free projector for USD-authored celestial anchors, orbits, link nodes, occluders, and reflected-light metadata. It owns the celestial projection marker and does not depend on vehicle or cosimulation projection. |
@@ -107,7 +108,8 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 | **`lunco-ui`** | Reusable UI infrastructure: cached widgets, 3D world panels, command builders. |
 | **`lunco-viz`** | Domain-agnostic visualization: `SignalRegistry`, LinePlots, and future 3D/Rerun bridges. |
 | **`lunco-canvas`** | Stateful 2D scene editor substrate for diagrams and annotation overlays. |
-| **`lunco-luncosim-edit`** | In-scene editing tools: spawn systems, transform gizmos, and inspector panels. |
+| **`lunco-luncosim-edit-core`** | Headless-safe scene-editing mechanisms: spawn and terrain tools, scene picking, typed command registration, and ECS state. |
+| **`lunco-luncosim-edit-ui`** | Rendered scene-editing presentation: egui/workbench panels, transform-gizmo and selection adapters, and physics diagnostics. |
 | **`lunco-render`** | Appearance **intent**, render-free: `PbrLook`, `SceneCamera`, `WorldLabel`, sun/shadow look. Names `Mesh3d`, never `MeshMaterial3d`. |
 | **`lunco-render-bevy`** | The **only** crate that names `bevy_pbr`. Binds the intent (`PbrLook`/`ShaderLook`/`SceneCamera`/`WorldLabel`) to real materials & cameras; owns `ShaderMaterial`. Headless never adds it. |
 | **`lunco-web`** | Shared web frontend for wasm apps: streaming loader, `WebReadyPlugin`, and the HTML/CSS/Rhai tool host routed through `lunco_rhai`. |
@@ -299,10 +301,20 @@ Visual OpenUSD bridge built on `lunco-usd-bevy-core`. It maps USD prim
 hierarchies and visual facts into Bevy entities/components, projects meshes,
 lights, render intent, and authored `timeSamples` animation. It installs the
 camera adapter at the integration boundary; `lunco-render-bevy` supplies the
-concrete render pipeline. See
+concrete render pipeline. Parametric NURBS/lathe definitions and their mesh
+regeneration live in the independent `lunco-usd-bevy-lathe` package, which this
+crate uses directly rather than re-exporting. See
 [`17-view-and-intent.md §6`](architecture/17-view-and-intent.md).
 Headless consumers import the owning `lunco-usd-bevy-core` modules directly;
 this visual adapter is not a compatibility facade for the headless API.
+
+**`lunco-usd-bevy-lathe`**
+Production parametric NURBS/lathe projection. It retains the authored surface
+definition as reflected ECS components and regenerates the Bevy mesh only when
+the definition or graphics quality changes. Its geometry and tests are isolated
+from the USD hierarchy loader, so a lathe edit does not recompile the main
+visual projection package. It depends on the render-free geometry and intent
+packages and has no dependency back into `lunco-usd-bevy`.
 
 **`lunco-usd-avian`**
 Physics bridge for OpenUSD (`UsdAvianPlugin`). Maps `UsdPhysics` schemas — rigid bodies + mass-properties, all collider shapes, and **all joints** (revolute/prismatic/fixed/spherical/distance, D6-reduced) with `UsdPhysicsDriveAPI` motor drive — to Avian3D. The single home for Avian joint construction (incl. the programmatic wheel hinge).
@@ -362,8 +374,18 @@ Domain-agnostic visualization framework. Collects simulation data into a `Signal
 **`lunco-canvas`**
 2D scene editor substrate. Provides the stateful viewport and tool foundation for diagramming and node-based editing, powering the Modelica diagram editor and other schematic-based tools.
 
-**`lunco-luncosim-edit`**
-In-scene editing toolkit for the 3D viewport. Implements click-to-place spawning, transform gizmos for manipulation, the universal Ports panel, and inspector panels for real-time property editing during simulation assembly.
+**`lunco-luncosim-edit-core`**
+Headless-safe scene-editing mechanisms. Implements spawn and terrain-tool state,
+scene picking, editor ECS state, and typed command registration. It has no egui,
+workbench, transform-gizmo, or immediate-mode diagnostic dependency. Script-
+authored click-tool dispatch is UI-owned because it consumes pointer events and
+the UI tool library.
+
+**`lunco-luncosim-edit-ui`**
+Rendered scene-editing presentation. Implements the egui/workbench panels,
+selection and transform-gizmo adapters, USD preview interaction, and physics
+diagnostic visualization. It depends on `lunco-luncosim-edit-core`; the core
+package does not depend back on this UI package.
 
 **`lunco-render`**
 Appearance **intent** and persisted Graphics quality policy — **render-free**. The vocabulary a domain crate uses to say what a thing should look like without naming a renderer: `PbrLook` (a plain surface as data — colour, roughness, metallic, emissive, alpha mode, texture channels), `SceneCamera`, `WorldLabel`, the sun/shadow look settings, and `RenderingQualitySettings` for shared camera, light, sky, terrain, shadow, and tessellation budgets. It names `Mesh3d` but **never `MeshMaterial3d`** — that one line is the whole rule.

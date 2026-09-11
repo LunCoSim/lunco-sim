@@ -25,8 +25,7 @@ pub mod connect_link;
 
 /// Client-side netcode over avian bodies: snapshot interpolation, prediction,
 /// rollback, reconciliation and correction smoothing (`NetcodePredictionPlugin`).
-/// Split out of `lunco-luncosim-edit::commands`, which had fused it with the
-/// scene/document command layer. Always compiled — it names no lightyear type, only
+/// Always compiled — it names no lightyear type, only
 /// the always-on `lunco-core` session substrate, so it costs nothing in a build
 /// without the `networking` feature (every system self-guards on `NetworkRole`).
 pub mod prediction;

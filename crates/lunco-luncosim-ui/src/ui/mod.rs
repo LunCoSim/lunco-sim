@@ -289,8 +289,8 @@ impl Plugin for LunCoSimUiPlugin {
             // live world.
             .add_plugins(lunco_usd_ui::UsdViewportPlugin)
             .add_plugins(lunco_usd_ui::UsdUiPlugin)
-            .add_plugins(lunco_luncosim_edit::SceneEditPlugin)
-            .add_plugins(lunco_luncosim_edit::ui::SceneEditUiPlugin)
+            .add_plugins(lunco_luncosim_edit_core::SceneEditPlugin)
+            .add_plugins(lunco_luncosim_edit_ui::ui::SceneEditUiPlugin)
             // NOTE: `ShaderMaterialPlugin` (the dynamic `ShaderMaterial` render
             // pipeline) used to be added here. It now lives inside
             // `lunco_render_bevy::LuncoRenderPlugin` — the one crate that may name
@@ -1456,7 +1456,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
         // which of them this menu offers. The pref is one checkbox in the
         // Settings menu, so a test scene is never unreachable.
         let show_tests = ctx
-            .resource::<lunco_luncosim_edit::ui::asset_visibility::AssetVisibilitySettings>()
+            .resource::<lunco_luncosim_edit_ui::ui::asset_visibility::AssetVisibilitySettings>()
             .is_some_and(|s| s.show_test_assets);
         if !show_tests {
             assets.retain(|asset| !lunco_assets::discovery::is_test_asset(&asset.rel));

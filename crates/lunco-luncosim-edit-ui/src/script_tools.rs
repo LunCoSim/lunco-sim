@@ -2,7 +2,8 @@
 //!
 //! A tool library that exposes `on_click(context)` becomes an armable tool in
 //! the Tools palette. Arm it, click in the scene, and the tool's own Rhai
-//! handler receives the canonical click context. Nothing else is required:
+//! handler receives the canonical click context, including whether the click
+//! used the primary, secondary, or middle button. Nothing else is required:
 //! there is no registration call, no palette edit, no Rust per tool. Drop
 //! `assets/scripting/tools/<name>.rhai` with an `on_click` in it and the button
 //! is there next launch.
@@ -89,9 +90,6 @@ pub fn on_scene_click_script_tool(
     mut commands: Commands,
 ) {
     let Some(tool) = armed.0.clone() else { return };
-    if click.button != PointerButton::Primary {
-        return;
-    }
     // Shared egui-vs-scene guard, as used by selection and placement: a click on
     // panel chrome is not a click on the world.
     if egui_focus.wants_pointer {
@@ -118,10 +116,15 @@ pub fn on_scene_click_script_tool(
     let target_prim = root
         .and_then(|entity| q_prim.get(entity).ok())
         .or_else(|| q_prim.get(click.entity).ok());
+    let button = match click.button {
+        PointerButton::Primary => "primary",
+        PointerButton::Secondary => "secondary",
+        PointerButton::Middle => "middle",
+    };
     let mut context = vec![
         (
             "button".to_string(),
-            TelemetryValue::String("primary".to_string()),
+            TelemetryValue::String(button.to_string()),
         ),
         (
             "screen_position".to_string(),

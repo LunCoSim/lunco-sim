@@ -10,7 +10,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
-use crate::terrain_tools::{TerrainTool, TerrainToolState};
+use lunco_luncosim_edit_core::terrain_tools::{TerrainTool, TerrainToolState};
 
 /// Typed UI intent for the editor-owned terrain/script tool resources.
 #[derive(Event)]

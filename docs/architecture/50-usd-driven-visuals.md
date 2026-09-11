@@ -56,7 +56,7 @@ geometry never becomes a second label or camera-dependent route owner.
 ## Motion trails are bounded physics history
 
 A vehicle trail answers a different question from a route ribbon: where the vehicle
-actually travelled. `lunco-luncosim-edit::ui::trail::VehicleTrailPlugin` records one bounded lane per
+actually travelled. `lunco_luncosim_edit_ui::ui::trail::VehicleTrailPlugin` records one bounded lane per
 topology-derived wheel after the solved physics step, in the active physics/grid frame.
 Raycast lanes use the wheel's retained Avian `RayHits` and the same mobility-owned
 contact-point geometry used by suspension and tire forces. Jointed lanes use the

@@ -482,7 +482,7 @@ When adding a new domain (Modelica, USD, SysML, Mission):
 
 Keep the *core document and ops in the domain crate* (`lunco-modelica-core`,
 `lunco-usd`, etc.). Keep *views in UI sub-modules* (`lunco-modelica-ui/src/ui`,
-`lunco-luncosim-edit/ui`).
+`lunco-luncosim-edit-ui/src/ui`).
 
 ## 10. Design principles
 

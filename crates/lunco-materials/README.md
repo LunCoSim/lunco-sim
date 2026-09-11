@@ -20,7 +20,7 @@ chosen per-instance via its `shader: Handle<Shader>`:
   Bevy PBR — directional sun, shadows, tonemapping) — no `StandardMaterial`
   inheritance, no hand-copied `PbrInput` boilerplate.
 - **Discovery is automatic**: drop a `.wgsl` in `assets/shaders/` (or an open Twin)
-  and the catalog scan (`maintain_catalogs` in `lunco-luncosim-edit`) picks it up.
+  and the catalog scan (`maintain_catalogs` in `lunco-scene-commands`) picks it up.
 
 > There are **no bespoke per-effect material types**. The old `SolarPanelMaterial`
 > and `BlueprintMaterial` (hand-rolled `ExtendedMaterial`s) are gone — they are now

@@ -7360,7 +7360,7 @@ dependencies = [
  "lunco-environment",
  "lunco-experiments",
  "lunco-hardware",
- "lunco-luncosim-edit",
+ "lunco-luncosim-edit-ui",
  "lunco-luncosim-exposures",
  "lunco-luncosim-ui",
  "lunco-mobility",
@@ -7403,7 +7403,26 @@ dependencies = [
 ]
 
 [[package]]
-name = "lunco-luncosim-edit"
+name = "lunco-luncosim-edit-core"
+version = "0.1.0"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "big_space",
+ "lunco-assets",
+ "lunco-core",
+ "lunco-doc-bevy",
+ "lunco-physics",
+ "lunco-render",
+ "lunco-scene-commands",
+ "lunco-settings",
+ "lunco-terrain-surface",
+ "lunco-usd-bevy",
+ "lunco-usd-bevy-core",
+]
+
+[[package]]
+name = "lunco-luncosim-edit-ui"
 version = "0.1.0"
 dependencies = [
  "avian3d",
@@ -7421,6 +7440,7 @@ dependencies = [
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-environment",
+ "lunco-luncosim-edit-core",
  "lunco-materials",
  "lunco-mobility",
  "lunco-modelica-ast",
@@ -7505,7 +7525,8 @@ dependencies = [
  "lunco-doc-bevy",
  "lunco-environment",
  "lunco-hooks",
- "lunco-luncosim-edit",
+ "lunco-luncosim-edit-core",
+ "lunco-luncosim-edit-ui",
  "lunco-modelica-core",
  "lunco-modelica-ui",
  "lunco-networking",
@@ -8202,6 +8223,7 @@ dependencies = [
  "lunco-time",
  "lunco-usd-bevy-camera",
  "lunco-usd-bevy-core",
+ "lunco-usd-bevy-lathe",
  "lunco-usd-bevy-scene",
  "lunco-usd-core",
  "lunco-usd-geometry",
@@ -8238,6 +8260,18 @@ dependencies = [
  "lunco-usd-core",
  "openusd",
  "tempfile",
+]
+
+[[package]]
+name = "lunco-usd-bevy-lathe"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy_mesh",
+ "lunco-render",
+ "lunco-usd-bevy-core",
+ "lunco-usd-geometry",
+ "openusd",
 ]
 
 [[package]]

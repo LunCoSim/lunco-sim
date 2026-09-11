@@ -206,7 +206,7 @@ see [`author-usd-component`](../author-usd-component/SKILL.md#adding-a-new-lunco
 
 To reach one wheel: select the rover, then **Alt+Shift+click** the wheel — that
 drills the Inspector to that subpart's own PRIM
-(`crates/lunco-luncosim-edit/src/selection.rs`). Plain **Shift+click is the
+(`crates/lunco-luncosim-edit-ui/src/selection.rs`). Plain **Shift+click is the
 multi-select extend** and retains the existing selection; it does not drill.
 The drill also requires the rover to already be the primary selection.
 

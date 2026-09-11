@@ -2249,7 +2249,7 @@ pub fn on_redo_usd_document(
 /// `UndoManager::take_undo_group` then undoes the whole group.
 ///
 /// **Every multi-op USD handler should route through this** — including the
-/// `realign_component_ops` call sites in `lunco-luncosim-edit`.
+/// `realign_component_ops` call sites in `lunco-luncosim-edit-ui`.
 ///
 /// The generic document host validates the complete sequence against a clone before
 /// committing it. A malformed multi-op intent therefore applies zero operations;

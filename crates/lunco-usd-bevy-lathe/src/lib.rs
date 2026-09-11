@@ -122,7 +122,7 @@ impl NurbsSurface {
     /// guard fired.
     ///
     /// This is the UNTRIMMED build. Trimmed patches (`trimCurve:*`) keep their
-    /// original load-time path in [`crate::build_usd_nurbs_patch_mesh`] and are not
+    /// original load-time path in the USD visual loader and are not
     /// given a `NurbsSurface`, so they are never regenerated: a trim loop lives in
     /// the patch's parameter space and re-deriving it from a changed control net is
     /// a different problem than this one. Better to not offer the capability than to
@@ -424,7 +424,10 @@ impl UsdLathe {
 /// `real` throughout, not `scalar::<f64>` — `float lunco:lathe:contour = 0.55` is
 /// the natural authoring and a strict `double` read of it is indistinguishable from
 /// "unauthored", which would silently substitute a default.
-pub fn read_lathe(reader: &impl crate::UsdRead, path: &openusd::sdf::Path) -> Option<UsdLathe> {
+pub fn read_lathe(
+    reader: &impl lunco_usd_bevy_core::UsdRead,
+    path: &openusd::sdf::Path,
+) -> Option<UsdLathe> {
     let kind = reader.text(path, "lunco:lathe:profile")?;
     let p = |name: &str, default: f32, valid: fn(f32) -> bool| -> Option<f32> {
         let value = match reader.real(path, name) {
@@ -498,8 +501,8 @@ pub fn read_lathe(reader: &impl crate::UsdRead, path: &openusd::sdf::Path) -> Op
 
 /// Read a required standard `NurbsPatch` integer without inventing a sampling
 /// profile when an author omitted or mistyped it.
-pub(crate) fn read_required_nurbs_int(
-    reader: &impl crate::UsdRead,
+pub fn read_required_nurbs_int(
+    reader: &impl lunco_usd_bevy_core::UsdRead,
     path: &openusd::sdf::Path,
     name: &str,
 ) -> Option<usize> {

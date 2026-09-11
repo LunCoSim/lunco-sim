@@ -137,11 +137,10 @@ lunco-usd-terrain = { path = "../lunco-usd-terrain" }
 # the journaled shader domain. Render-free, UI-free.
 lunco-scene-commands = { path = "../lunco-scene-commands" }
 lunco-scene-validation = { path = "../lunco-scene-validation" }
-# The in-scene EDITOR (gizmo, selection, inspector, physics-viz, spawn ghost).
-# Optional + `ui`-only: the server used to link a crate called "edit" purely to get
-# `SpawnEntity`, which now lives in `lunco-scene-commands` above. A `--no-ui` build
-# no longer contains the editor at all.
-lunco-luncosim-edit = { path = "../lunco-luncosim-edit", default-features = false, optional = true }
+# The UI-side editor adapter is optional and only used by the windowed app's
+# debug-scene selection helpers. The editor mechanisms are installed by
+# `lunco-luncosim-ui`, while the headless build contains neither editor package.
+lunco-luncosim-edit-ui = { path = "../lunco-luncosim-edit-ui", optional = true }
 lunco-web = { workspace = true }
 lunco-assets = { workspace = true }
 lunco-workspace = { path = "../lunco-workspace" }
@@ -223,8 +222,7 @@ ui = [
     "lunco-workbench/api",
     "dep:lunco-render-bevy",
     "lunco-avatar/ui",
-    "dep:lunco-luncosim-edit",
-    "lunco-luncosim-edit/ui",
+    "dep:lunco-luncosim-edit-ui",
     "dep:lunco-luncosim-ui",
     # egui presence/guided overlays + Network menu bridge — only when networking
     # is also enabled (`?`); the headless server's `server` feature omits this.

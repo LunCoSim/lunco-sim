@@ -196,5 +196,5 @@ bevy + bevy_egui
    │       └── lunco-workbench ← this crate (editor shell + WorkspaceResource)
    │              ▲
    │              │ shell-owned widgets, commands, and browser services
-   │              └── lunco-modelica-ui, lunco-luncosim-edit, lunco-cosim, …
+   │              └── lunco-modelica-ui, lunco-luncosim-edit-ui, lunco-cosim, …
 ```
