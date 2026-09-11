@@ -24,8 +24,9 @@ use std::collections::{BTreeSet, HashMap};
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_render::SceneCamera;
-use lunco_usd_bevy::{camera_switch::camera_display_labels, SdfPath, UsdPrimPath};
+use lunco_usd_bevy::{camera_switch::camera_display_labels, SdfPath};
 use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdRead, UsdStageAsset};
+use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_ui::viewport::{UsdPreviewId, UsdViewportState};
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
@@ -83,7 +84,7 @@ impl UsdPrimTreeView {
 /// has no selected document.
 pub fn editor_prim_tree_changed(
     viewport: Option<Res<UsdViewportState>>,
-    revision: Res<lunco_usd_bevy::UsdStageRevision>,
+    revision: Res<lunco_usd_bevy_scene::UsdStageRevision>,
 ) -> bool {
     viewport.is_some_and(|state| state.is_changed()) || revision.is_changed()
 }

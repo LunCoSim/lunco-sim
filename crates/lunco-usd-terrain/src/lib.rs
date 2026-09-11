@@ -27,8 +27,8 @@ use bevy::prelude::*;
 // Two read planes, two traits: `UsdRead` = the live COMPOSED stage (what the terrain
 // projects from); `UsdDataExt` = a raw authored `sdf::Data` layer, which is what the
 // document registry hands back for the authoring tier's child walks.
-use lunco_usd_bevy::{read_primitive_axis, read_shape_dims, ShapeDims};
 use lunco_usd_bevy_core::{read_transform_from_usd, StageView, UsdRead};
+use lunco_usd_bevy_scene::{read_primitive_axis, read_shape_dims, ShapeDims};
 use lunco_usd_core::UsdDataExt;
 
 /// Projects authored USD terrain prims into `lunco-terrain-surface`, and authors hand
@@ -548,7 +548,7 @@ fn refresh_layered_terrain_layers(
     stages: Res<Assets<lunco_usd_bevy_core::UsdStageAsset>>,
     registry: Res<lunco_terrain_surface::TerrainLayerParserRegistry>,
     q: Query<
-        (Entity, &lunco_usd::UsdPrimPath),
+        (Entity, &lunco_usd_bevy_scene::UsdPrimPath),
         (
             With<lunco_terrain_surface::DemTerrainSurface>,
             Without<lunco_terrain_surface::DocBackedTerrain>,
@@ -669,7 +669,7 @@ fn seed_edit_seq_past_children(
 fn author_terrain_edit(
     kind: lunco_terrain_surface::EditKind,
     terrains: &Query<
-        (&lunco_usd::UsdPrimPath, &TerrainDocument),
+        (&lunco_usd_bevy_scene::UsdPrimPath, &TerrainDocument),
         With<lunco_terrain_surface::DemTerrainSurface>,
     >,
     registry: &mut lunco_doc_bevy::DocumentRegistry<lunco_usd_core::document::UsdDocument>,
@@ -731,7 +731,7 @@ fn on_brush_terrain_authored(
     trigger: On<lunco_terrain_surface::BrushTerrain>,
     status: Res<TerrainSchemaStatus>,
     terrains: Query<
-        (&lunco_usd::UsdPrimPath, &TerrainDocument),
+        (&lunco_usd_bevy_scene::UsdPrimPath, &TerrainDocument),
         With<lunco_terrain_surface::DemTerrainSurface>,
     >,
     registry: Option<
@@ -765,7 +765,7 @@ fn on_flatten_terrain_authored(
     trigger: On<lunco_terrain_surface::FlattenTerrain>,
     status: Res<TerrainSchemaStatus>,
     terrains: Query<
-        (&lunco_usd::UsdPrimPath, &TerrainDocument),
+        (&lunco_usd_bevy_scene::UsdPrimPath, &TerrainDocument),
         With<lunco_terrain_surface::DemTerrainSurface>,
     >,
     registry: Option<
@@ -799,7 +799,7 @@ fn on_place_crater_authored(
     trigger: On<lunco_terrain_surface::PlaceCrater>,
     status: Res<TerrainSchemaStatus>,
     terrains: Query<
-        (&lunco_usd::UsdPrimPath, &TerrainDocument),
+        (&lunco_usd_bevy_scene::UsdPrimPath, &TerrainDocument),
         With<lunco_terrain_surface::DemTerrainSurface>,
     >,
     registry: Option<
@@ -836,7 +836,7 @@ fn on_place_rock_authored(
     trigger: On<lunco_terrain_surface::PlaceRock>,
     status: Res<TerrainSchemaStatus>,
     terrains: Query<
-        (&lunco_usd::UsdPrimPath, &TerrainDocument),
+        (&lunco_usd_bevy_scene::UsdPrimPath, &TerrainDocument),
         With<lunco_terrain_surface::DemTerrainSurface>,
     >,
     registry: Option<
@@ -936,7 +936,7 @@ fn on_remove_terrain_edit_authored(
 
 fn cache_terrain_document(
     terrains: Query<
-        (Entity, &lunco_usd::UsdPrimPath),
+        (Entity, &lunco_usd_bevy_scene::UsdPrimPath),
         (
             With<lunco_terrain_surface::DemTerrainSurface>,
             Without<TerrainDocument>,
@@ -1027,7 +1027,7 @@ fn refresh_docbacked_terrain_from_doc(
     mut terrains: Query<
         (
             Entity,
-            &lunco_usd::UsdPrimPath,
+            &lunco_usd_bevy_scene::UsdPrimPath,
             &TerrainDocument,
             Option<&mut TerrainDocGeneration>,
             Has<lunco_terrain_surface::DemBaseGrid>,
@@ -1400,7 +1400,7 @@ fn on_obstacle_spec_authored(
     trigger: On<lunco_obstacle_field::plugin::UpdateObstacleFieldSpec>,
     status: Res<TerrainSchemaStatus>,
     terrains: Query<
-        (&lunco_usd::UsdPrimPath, &TerrainDocument),
+        (&lunco_usd_bevy_scene::UsdPrimPath, &TerrainDocument),
         With<lunco_terrain_surface::DemTerrainSurface>,
     >,
     stages: NonSend<lunco_usd_bevy_core::canonical::CanonicalStages>,
@@ -1571,7 +1571,10 @@ fn on_obstacle_spec_authored(
 }
 
 fn bridge_usd_dem_terrain(
-    q: Query<(Entity, &lunco_usd::UsdPrimPath), (Without<DemBridged>, Without<DemDatasetPending>)>,
+    q: Query<
+        (Entity, &lunco_usd_bevy_scene::UsdPrimPath),
+        (Without<DemBridged>, Without<DemDatasetPending>),
+    >,
     // Live terrains already realized from a PRIOR instantiation pass. A stage
     // recompose (runtime-overlay restore, doc-backing) hands every prim a fresh
     // ECS entity; the previous pass's terrain survives long enough to double
@@ -1580,7 +1583,7 @@ fn bridge_usd_dem_terrain(
     // higher (a stale smooth ring over the cratered fresh one reads as
     // "floating over every crater").
     q_prior_terrains: Query<
-        (Entity, &lunco_usd::UsdPrimPath),
+        (Entity, &lunco_usd_bevy_scene::UsdPrimPath),
         Or<(
             With<lunco_terrain_surface::DemTerrainRequest>,
             With<lunco_terrain_surface::DemHeightField>,
@@ -1699,7 +1702,7 @@ fn bridge_usd_dem_terrain(
 fn bridge_dem_prim_read(
     reader: &StageView<'_>,
     entity: Entity,
-    prim_path: &lunco_usd::UsdPrimPath,
+    prim_path: &lunco_usd_bevy_scene::UsdPrimPath,
     sdf: &openusd::sdf::Path,
     scene_root: Option<&std::path::Path>,
     scene_twin_name: Option<&str>,
@@ -2067,7 +2070,7 @@ fn bridge_dem_prim_read(
 fn project_flat_site_surface(
     reader: &StageView<'_>,
     entity: Entity,
-    prim_path: &lunco_usd::UsdPrimPath,
+    prim_path: &lunco_usd_bevy_scene::UsdPrimPath,
     sdf: &openusd::sdf::Path,
     commands: &mut Commands,
 ) {
@@ -2361,7 +2364,7 @@ def Xform \"Traverse\"\n{\n}\n"
         let mut spec = lunco_obstacle_field::spec::ObstacleFieldSpec::default();
         let mut world = World::new();
         let entity = world.spawn_empty().id();
-        let prim_path = lunco_usd::UsdPrimPath {
+        let prim_path = lunco_usd_bevy_scene::UsdPrimPath {
             path: "/Terrain".to_string(),
             ..Default::default()
         };

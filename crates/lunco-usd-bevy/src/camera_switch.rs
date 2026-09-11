@@ -34,8 +34,9 @@ use lunco_core::{
     on_command, Command, LocalAvatar, OriginAnchor, SceneViewport, TheLocalAvatar, WorldGrid,
 };
 use lunco_render::{GraphicsCameraDefaults, LightGraphicsDefaults, SceneCamera};
+use lunco_usd_bevy_core::UsdStageAsset;
 
-use crate::UsdPrimPath;
+use lunco_usd_bevy_scene::UsdPrimPath;
 
 /// Stable camera selection across re-projection. ECS entities are disposable;
 /// an authored camera is identified by the composed stage plus its USD path.
@@ -57,7 +58,7 @@ enum RequestedCamera {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct UsdCameraKey {
-    stage: AssetId<crate::UsdStageAsset>,
+    stage: AssetId<UsdStageAsset>,
     path: String,
 }
 
@@ -115,7 +116,7 @@ pub struct StandalonePresentationLight;
 /// The windowed host enables this resource. Headless hosts leave it disabled,
 /// so they retain the authored camera contract and never create render-only
 /// scene content. The generated entities are children of the active
-/// [`crate::UsdSceneRoot`] and are therefore reclaimed with that Twin scene;
+/// [`lunco_usd_bevy_scene::UsdSceneRoot`] and are therefore reclaimed with that Twin scene;
 /// [`reset_standalone_presentation`] also clears them at the explicit teardown
 /// boundary before a replacement scene is admitted.
 #[derive(Resource, Clone, Debug, Default, PartialEq)]
@@ -981,8 +982,8 @@ pub fn camera_selection_status_changed(
 /// boundary or as soon as an authored presentation takes ownership.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct StandalonePresentationQueries<'w, 's> {
-    scene_roots: Query<'w, 's, (), With<crate::UsdSceneRoot>>,
-    synced_roots: Query<'w, 's, (), With<crate::UsdVisualSynced>>,
+    scene_roots: Query<'w, 's, (), With<lunco_usd_bevy_scene::UsdSceneRoot>>,
+    synced_roots: Query<'w, 's, (), With<lunco_usd_bevy_scene::UsdSceneProjected>>,
     child_of: Query<'w, 's, &'static ChildOf>,
     entities: Query<'w, 's, Entity>,
     pending: Query<
@@ -1015,7 +1016,8 @@ pub(crate) struct StandalonePresentationQueries<'w, 's> {
         Option<&'static bevy::camera::visibility::RenderLayers>,
         With<DirectionalLight>,
     >,
-    root_transforms: Query<'w, 's, &'static GlobalTransform, With<crate::UsdSceneRoot>>,
+    root_transforms:
+        Query<'w, 's, &'static GlobalTransform, With<lunco_usd_bevy_scene::UsdSceneRoot>>,
 }
 
 pub(crate) fn ensure_standalone_presentation(
@@ -1302,11 +1304,11 @@ pub(crate) fn ensure_standalone_presentation(
 fn entity_belongs_to_root(
     entity: Entity,
     root: Entity,
-    q_scene_roots: &Query<(), With<crate::UsdSceneRoot>>,
+    q_scene_roots: &Query<(), With<lunco_usd_bevy_scene::UsdSceneRoot>>,
     q_child_of: &Query<&ChildOf>,
     q_entities: &Query<Entity>,
 ) -> bool {
-    crate::scene_root_ancestor(entity, q_scene_roots, q_child_of, q_entities)
+    lunco_usd_bevy_scene::scene_root_ancestor(entity, q_scene_roots, q_child_of, q_entities)
         .ok()
         .flatten()
         == Some(root)
@@ -1336,10 +1338,10 @@ fn despawn_generated_presentation(
 
 fn standalone_presentation_bounds(
     root: Entity,
-    q_scene_roots: &Query<(), With<crate::UsdSceneRoot>>,
+    q_scene_roots: &Query<(), With<lunco_usd_bevy_scene::UsdSceneRoot>>,
     q_child_of: &Query<&ChildOf>,
     q_entities: &Query<Entity>,
-    q_root_transforms: &Query<&GlobalTransform, With<crate::UsdSceneRoot>>,
+    q_root_transforms: &Query<&GlobalTransform, With<lunco_usd_bevy_scene::UsdSceneRoot>>,
     q_bounds: &Query<(Entity, &Aabb, &GlobalTransform)>,
 ) -> Option<(Vec3, Vec3)> {
     let root_transform = q_root_transforms.get(root).ok()?;
@@ -1462,8 +1464,11 @@ pub(crate) struct CameraContractInputQueries<'w, 's> {
         's,
         (),
         (
-            With<crate::UsdSceneRoot>,
-            Or<(Added<crate::UsdSceneRoot>, Changed<crate::UsdVisualSynced>)>,
+            With<lunco_usd_bevy_scene::UsdSceneRoot>,
+            Or<(
+                Added<lunco_usd_bevy_scene::UsdSceneRoot>,
+                Changed<lunco_usd_bevy_scene::UsdSceneProjected>,
+            )>,
         ),
     >,
     pending_added: Query<'w, 's, (), Added<crate::UsdAwaitingStage>>,
@@ -1498,12 +1503,12 @@ pub(crate) struct CameraContractInputQueries<'w, 's> {
     removed_cameras: RemovedComponents<'w, 's, SceneCamera>,
     removed_tracks: RemovedComponents<'w, 's, crate::camera_track::CameraTrack>,
     removed_plans: RemovedComponents<'w, 's, crate::camera_track::CameraTrackPlan>,
-    removed_roots: RemovedComponents<'w, 's, crate::UsdSceneRoot>,
+    removed_roots: RemovedComponents<'w, 's, lunco_usd_bevy_scene::UsdSceneRoot>,
 }
 
 pub(crate) fn camera_contract_inputs_changed(
     mount: Res<lunco_core::SceneMountState>,
-    revision: Res<crate::UsdStageRevision>,
+    revision: Res<lunco_usd_bevy_scene::UsdStageRevision>,
     contract: Res<CameraContractStatus>,
     presentation: Res<StandalonePresentationState>,
     selection: Res<ViewportCameraSelection>,
@@ -1572,9 +1577,12 @@ pub(crate) fn camera_contract_inputs_changed(
 pub fn validate_authored_camera_contract(
     mount: Res<lunco_core::SceneMountState>,
     presentation: Res<StandalonePresentationState>,
-    scene_roots: Query<Has<crate::UsdVisualSynced>, With<crate::UsdSceneRoot>>,
+    scene_roots: Query<
+        Has<lunco_usd_bevy_scene::UsdSceneProjected>,
+        With<lunco_usd_bevy_scene::UsdSceneRoot>,
+    >,
     pending_projection: Query<Entity, With<crate::UsdAwaitingStage>>,
-    q_scene_root: Query<(), With<crate::UsdSceneRoot>>,
+    q_scene_root: Query<(), With<lunco_usd_bevy_scene::UsdSceneRoot>>,
     q_child_of: Query<&ChildOf>,
     q_entities: Query<Entity>,
     tracks: Query<
@@ -1633,9 +1641,14 @@ pub fn validate_authored_camera_contract(
     let projection_pending = active_root.is_some_and(|root| {
         !scene_roots.get(root).is_ok_and(|synced| synced)
             || pending_projection.iter().any(|entity| {
-                crate::scene_root_ancestor(entity, &q_scene_root, &q_child_of, &q_entities)
-                    .ok()
-                    .flatten()
+                lunco_usd_bevy_scene::scene_root_ancestor(
+                    entity,
+                    &q_scene_root,
+                    &q_child_of,
+                    &q_entities,
+                )
+                .ok()
+                .flatten()
                     == Some(root)
             })
     });
@@ -1901,7 +1914,7 @@ mod tests {
         for _ in &mut plans {}
     }
 
-    fn touch_stage_revision(revision: ResMut<crate::UsdStageRevision>) {
+    fn touch_stage_revision(revision: ResMut<lunco_usd_bevy_scene::UsdStageRevision>) {
         // A producer may borrow the revision mutably while checking its
         // structural inputs without actually advancing the value.
         let _ = revision.0;
@@ -1942,8 +1955,8 @@ mod tests {
         let root = app
             .world_mut()
             .spawn((
-                crate::UsdSceneRoot,
-                crate::UsdVisualSynced,
+                lunco_usd_bevy_scene::UsdSceneRoot,
+                lunco_usd_bevy_scene::UsdSceneProjected,
                 Transform::default(),
                 GlobalTransform::default(),
             ))
@@ -1997,8 +2010,8 @@ mod tests {
         let root = app
             .world_mut()
             .spawn((
-                crate::UsdSceneRoot,
-                crate::UsdVisualSynced,
+                lunco_usd_bevy_scene::UsdSceneRoot,
+                lunco_usd_bevy_scene::UsdSceneProjected,
                 Transform::default(),
                 GlobalTransform::default(),
             ))
@@ -2101,7 +2114,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<lunco_core::SceneMountState>()
-            .init_resource::<crate::UsdStageRevision>()
+            .init_resource::<lunco_usd_bevy_scene::UsdStageRevision>()
             .init_resource::<CameraContractStatus>()
             .init_resource::<StandalonePresentationState>()
             .init_resource::<ViewportCameraSelection>()
@@ -2158,7 +2171,10 @@ mod tests {
             .init_resource::<CameraSelectionStatus>()
             .add_systems(Update, validate_authored_camera_contract);
 
-        let root = app.world_mut().spawn(crate::UsdSceneRoot).id();
+        let root = app
+            .world_mut()
+            .spawn(lunco_usd_bevy_scene::UsdSceneRoot)
+            .id();
         let _ = app
             .world_mut()
             .spawn((crate::UsdAwaitingStage, ChildOf(root)))
@@ -2183,7 +2199,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<lunco_core::SceneMountState>()
-            .init_resource::<crate::UsdStageRevision>()
+            .init_resource::<lunco_usd_bevy_scene::UsdStageRevision>()
             .init_resource::<CameraContractStatus>()
             .init_resource::<StandalonePresentationState>()
             .init_resource::<ViewportCameraSelection>()
@@ -2207,7 +2223,7 @@ mod tests {
         app.world_mut().spawn((
             crate::camera_track::CameraTrack,
             crate::camera_track::CameraTrackPlan::default(),
-            crate::UsdPrimPath::default(),
+            lunco_usd_bevy_scene::UsdPrimPath::default(),
         ));
         app.update();
         assert_eq!(app.world().resource::<CameraContractGateRuns>().0, 2);
@@ -2424,7 +2440,7 @@ mod tests {
             .init_resource::<SceneViewport>()
             .init_resource::<ViewportCameraSelection>()
             .add_systems(Update, reconcile_scene_viewport);
-        let stage = Handle::<crate::UsdStageAsset>::default();
+        let stage = Handle::<UsdStageAsset>::default();
         let path = "/Scene/Wide";
         let old = app
             .world_mut()
@@ -2475,7 +2491,7 @@ mod tests {
         app.init_resource::<ViewportCameraSelection>()
             .init_resource::<CameraSelectionStatus>()
             .add_observer(on_activate_camera);
-        let stage = Handle::<crate::UsdStageAsset>::default();
+        let stage = Handle::<UsdStageAsset>::default();
         let camera = app
             .world_mut()
             .spawn((

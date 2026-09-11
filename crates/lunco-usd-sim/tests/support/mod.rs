@@ -2,9 +2,8 @@
 
 use avian3d::prelude::Collider;
 use bevy::prelude::{App, Children, Entity, Name, Or, With};
-use lunco_usd_bevy::{
-    CanonicalStage, CanonicalStages, UsdAwaitingStage, UsdStageAsset, UsdVisualProjectionQueued,
-};
+use lunco_usd_bevy::{UsdAwaitingStage, UsdVisualProjectionQueued};
+use lunco_usd_bevy_core::{canonical::CanonicalStage, canonical::CanonicalStages, UsdStageAsset};
 use lunco_usd_core::StageRecipe;
 use std::collections::HashMap;
 use std::path::Path;

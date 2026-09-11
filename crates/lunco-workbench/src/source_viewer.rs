@@ -41,12 +41,7 @@ pub(crate) fn is_source_only_text_path(path: &Path) -> bool {
     }
     path.extension()
         .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            matches!(
-                extension.to_ascii_lowercase().as_str(),
-                "rhai" | "wgsl"
-            )
-        })
+        .is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "rhai" | "wgsl"))
 }
 
 pub(crate) struct SourceEditorPanel;

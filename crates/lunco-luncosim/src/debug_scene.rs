@@ -623,7 +623,7 @@ fn log_participant_readiness_blockers(world: &mut World) {
         }
     }
     let mut pending_joints = world
-        .query_filtered::<(Entity, Option<&lunco_usd_bevy::UsdPrimPath>), Or<(
+        .query_filtered::<(Entity, Option<&lunco_usd_bevy_scene::UsdPrimPath>), Or<(
             With<lunco_usd_avian::PendingUsdJoint>,
             With<lunco_usd_avian::PendingJoint<avian3d::prelude::RevoluteJoint>>,
             With<lunco_usd_avian::PendingJoint<avian3d::prelude::PrismaticJoint>>,
@@ -645,7 +645,7 @@ fn log_participant_readiness_blockers(world: &mut World) {
     let describe_target = |path: &str| {
         let found = world.iter_entities().find(|entity| {
             entity
-                .get::<lunco_usd_bevy::UsdPrimPath>()
+                .get::<lunco_usd_bevy_scene::UsdPrimPath>()
                 .is_some_and(|value| value.path == path)
         });
         let Some(entity) = found else {
@@ -708,8 +708,8 @@ fn log_scene_readiness_blockers(world: &mut World) {
         .get_resource::<lunco_usd::GroundColliderPending>()
         .is_some_and(|pending| pending.0);
     let mut prims = world.query::<(
-        &lunco_usd_bevy::UsdPrimPath,
-        Has<lunco_usd_bevy::UsdVisualSynced>,
+        &lunco_usd_bevy_scene::UsdPrimPath,
+        Has<lunco_usd_bevy_scene::UsdSceneProjected>,
         Has<lunco_usd_sim::UsdSimProcessed>,
     )>();
     let mut prim_count = 0usize;
@@ -933,7 +933,7 @@ pub fn run() -> u8 {
             let load_finished = load_done
                 && app
                     .world_mut()
-                    .query_filtered::<(), With<lunco_usd::UsdPrimPath>>()
+                    .query_filtered::<(), With<lunco_usd_bevy_scene::UsdPrimPath>>()
                     .iter(app.world())
                     .next()
                     .is_some();
@@ -941,7 +941,7 @@ pub fn run() -> u8 {
             let all_processed = app
                 .world_mut()
                 .query_filtered::<(), (
-                    With<lunco_usd::UsdPrimPath>,
+                    With<lunco_usd_bevy_scene::UsdPrimPath>,
                     Without<lunco_usd::UsdSimProcessed>,
                 )>()
                 .iter(app.world())
@@ -973,14 +973,14 @@ pub fn run() -> u8 {
         .is_none()
         && app
             .world_mut()
-            .query_filtered::<(), With<lunco_usd::UsdPrimPath>>()
+            .query_filtered::<(), With<lunco_usd_bevy_scene::UsdPrimPath>>()
             .iter(app.world())
             .next()
             .is_some()
         && app
             .world_mut()
             .query_filtered::<(), (
-                With<lunco_usd::UsdPrimPath>,
+                With<lunco_usd_bevy_scene::UsdPrimPath>,
                 Without<lunco_usd::UsdSimProcessed>,
             )>()
             .iter(app.world())
@@ -1090,7 +1090,7 @@ pub fn run() -> u8 {
         if ticks == 10 {
             if let Some(ref target_prim) = cli.select_prim {
                 use lunco_luncosim_edit::selection::{compute_selection_aabb, Selected};
-                use lunco_usd_bevy::UsdPrimPath;
+                use lunco_usd_bevy_scene::UsdPrimPath;
 
                 let target_ent = {
                     let mut q = app.world_mut().query::<(Entity, &UsdPrimPath)>();

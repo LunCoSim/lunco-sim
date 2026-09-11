@@ -40,7 +40,7 @@ impl Default for SaveScenario {
 fn on_save_scenario(
     trigger: On<SaveScenario>,
     q_model: Query<&lunco_scripting::doc::ScriptedModel>,
-    q_prim: Query<&lunco_usd::UsdPrimPath>,
+    q_prim: Query<&lunco_usd_bevy_scene::UsdPrimPath>,
     q_program: Query<&lunco_core::ScenarioProgramPrim>,
     registry: Res<lunco_scripting::ScriptRegistry>,
     backed: Res<lunco_usd::twin_projection::DocBackedTwinScenes>,

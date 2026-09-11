@@ -37,28 +37,28 @@ use lunco_api::schema::ApiErrorCode;
 use lunco_core::{
     on_command, register_commands, Ack, ActiveCommandId, Command, CommandResults, OpId,
 };
+use lunco_doc::OpenOutcome;
 use lunco_doc::{DocumentId, DocumentOrigin};
+use lunco_doc_bevy::DocumentRegistry;
 use lunco_doc_bevy::{
     CloseDocument, DiscardDocument, DocumentChanged, DocumentClosed, DocumentOpened, ForkDocument,
     NewDocument, OpenFile, RedoDocument, SaveAsDocument, SaveDocument, UndoDocument,
 };
 use lunco_storage::Storage; // brings `write_sync` / `read_sync` into scope
 use lunco_twin::{DocumentKindId, DocumentKindMeta, DocumentKindRegistry};
-use lunco_usd_bevy::{UsdPrimPath, UsdSceneRoot};
 use lunco_usd_bevy_core::{UsdRead, UsdStageAsset};
-use lunco_usd_core::UsdDataExt;
-use lunco_workspace::open::{spawn_twin_scan, PendingTwinOpens, TwinOpenMode};
-use lunco_workspace::{TwinClosed, WorkspaceResource};
-use lunco_doc::OpenOutcome;
-use lunco_doc_bevy::DocumentRegistry;
+use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneRoot};
 use lunco_usd_core::document::{LayerId, UsdOp};
 use lunco_usd_core::edit_session::{
     validate_proposal, UsdEditScope, UsdEditSessions, UsdProposalId, UsdProposalState,
 };
+use lunco_usd_core::UsdDataExt;
 use lunco_usd_sim::cosim::{
     clear_scene_entities, resolve_root_prim, spawn_scene_root_world, validate_scene_address,
     ClearScene, LoadScene, SceneEntities, SceneLoadInFlight,
 };
+use lunco_workspace::open::{spawn_twin_scan, PendingTwinOpens, TwinOpenMode};
+use lunco_workspace::{TwinClosed, WorkspaceResource};
 
 /// Stable id for the USD document kind in
 /// [`DocumentKindRegistry`].
@@ -2497,7 +2497,7 @@ fn live_runtime_port_exists(
         return false;
     };
     for entity in world.iter_entities() {
-        let Some(path) = entity.get::<lunco_usd_bevy::UsdPrimPath>() else {
+        let Some(path) = entity.get::<lunco_usd_bevy_scene::UsdPrimPath>() else {
             continue;
         };
         if path.stage_handle.id() != stage_id || path.path != prim.as_str() {

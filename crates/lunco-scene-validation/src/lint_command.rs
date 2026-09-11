@@ -38,8 +38,8 @@ use lunco_core::{on_command, register_commands, Command};
 use lunco_doc::{Document, DocumentId};
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_hooks::HookValue as H;
-use lunco_usd_bevy::UsdPrimPath;
 use lunco_usd_bevy_core::{canonical::CanonicalStages, StageView, UsdRead, UsdStageAsset};
+use lunco_usd_bevy_scene::UsdPrimPath;
 use serde_json::json;
 use std::collections::{BTreeMap, HashMap};
 
@@ -736,8 +736,8 @@ mod tests {
     use bevy::asset::Handle;
     use bevy::prelude::*;
     use lunco_core::ports::{PortBackend, PortDirection, PortMetadata, PortRef, PortRegistry};
-    use lunco_usd_bevy::UsdPrimPath;
     use lunco_usd_bevy_core::{canonical::CanonicalStage, UsdRead, UsdStageAsset};
+    use lunco_usd_bevy_scene::UsdPrimPath;
     use lunco_usd_core::StageRecipe;
 
     #[derive(Component)]

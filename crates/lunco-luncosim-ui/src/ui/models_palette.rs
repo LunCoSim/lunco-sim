@@ -10,7 +10,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_usd::UsdPrimPath;
+use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_core::{
     program::{ProgramAttachSpec, ProgramInput, ProgramOutput},
     LayerId,

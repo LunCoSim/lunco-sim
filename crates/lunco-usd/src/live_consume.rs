@@ -14,8 +14,8 @@
 //! `twin_projection`; ordinary authored route edits use the incremental path.
 
 use bevy::prelude::*;
-use lunco_usd_bevy::UsdPrimPath;
 use lunco_usd_bevy_core::{UsdRead, UsdStageAsset};
+use lunco_usd_bevy_scene::UsdPrimPath;
 use openusd::sdf::Path as SdfPath;
 use std::collections::HashMap;
 
@@ -358,10 +358,10 @@ pub(crate) fn project_stage_changes(world: &mut World) {
     // Same reason, one level up: a live edit to an already-spawned prim changes
     // the composed stage without spawning or despawning anything, so it raises no
     // ECS-structural signal. Every USD-derived view-model gates on this revision
-    // (`lunco_usd_bevy::UsdStageRevision`), so without the bump an edit would
+    // (`lunco_usd_bevy_scene::UsdStageRevision`), so without the bump an edit would
     // never reach the connection canvas or the prim tree.
     if projected_anything {
-        if let Some(mut rev) = world.get_resource_mut::<lunco_usd_bevy::UsdStageRevision>() {
+        if let Some(mut rev) = world.get_resource_mut::<lunco_usd_bevy_scene::UsdStageRevision>() {
             rev.bump();
         }
     }
@@ -417,7 +417,8 @@ pub(crate) fn apply_transform_edits_live(
         if channels.translate {
             seat_authored_translate(world, entity, transform.translation);
         }
-        let preview_only = channels.scale && lunco_usd_bevy::is_preview_only_entity(world, entity);
+        let preview_only =
+            channels.scale && lunco_usd_bevy_scene::is_preview_only_entity(world, entity);
         if let Some(mut tf) = world.entity_mut(entity).get_mut::<Transform>() {
             if channels.rotate {
                 tf.rotation = transform.rotation;
@@ -1087,8 +1088,8 @@ mod tests {
     fn authoring_a_scale_updates_an_already_live_preview_entity() {
         use bevy::asset::AssetApp;
         use bevy::prelude::*;
-        use lunco_usd_bevy::UsdPreviewOnly;
         use lunco_usd_bevy_core::canonical::CanonicalStages;
+        use lunco_usd_bevy_scene::UsdPreviewOnly;
         use lunco_usd_core::StageRecipe;
 
         let mut app = App::new();

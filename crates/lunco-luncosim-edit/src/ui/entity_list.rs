@@ -357,7 +357,7 @@ fn in_scope(
     }
 }
 
-fn stable_key(name: &Name, path: Option<&lunco_usd_bevy::UsdPrimPath>) -> String {
+fn stable_key(name: &Name, path: Option<&lunco_usd_bevy_scene::UsdPrimPath>) -> String {
     path.map(|path| path.path.as_str())
         .filter(|path| !path.is_empty() && *path != "/")
         .unwrap_or_else(|| name.as_str())
@@ -430,7 +430,7 @@ pub(crate) fn populate_entity_tree_view(
         &Name,
         Option<&lunco_core::markers::Callsign>,
         Option<&lunco_core::CatalogEntryId>,
-        Option<&lunco_usd_bevy::UsdPrimPath>,
+        Option<&lunco_usd_bevy_scene::UsdPrimPath>,
         Has<SceneCamera>,
     )>,
     system_q: Query<Entity, With<lunco_core::SystemManaged>>,
@@ -662,7 +662,7 @@ pub(crate) fn scene_topology_changed(
             &Name,
             Option<&lunco_core::markers::Callsign>,
             Option<&lunco_core::CatalogEntryId>,
-            Option<&lunco_usd_bevy::UsdPrimPath>,
+            Option<&lunco_usd_bevy_scene::UsdPrimPath>,
             Option<&ChildOf>,
             Option<&lunco_core::SystemManaged>,
             Has<Mesh3d>,
@@ -676,7 +676,7 @@ pub(crate) fn scene_topology_changed(
                 Changed<ChildOf>,
                 Changed<lunco_core::markers::Callsign>,
                 Changed<lunco_core::CatalogEntryId>,
-                Changed<lunco_usd_bevy::UsdPrimPath>,
+                Changed<lunco_usd_bevy_scene::UsdPrimPath>,
                 Added<Mesh3d>,
                 Added<lunco_core::SelectableRoot>,
                 Added<SceneCamera>,
@@ -689,7 +689,7 @@ pub(crate) fn scene_topology_changed(
     mut rm_sel: RemovedComponents<lunco_core::SelectableRoot>,
     mut rm_callsign: RemovedComponents<lunco_core::markers::Callsign>,
     mut rm_catalog: RemovedComponents<lunco_core::CatalogEntryId>,
-    mut rm_usd_path: RemovedComponents<lunco_usd_bevy::UsdPrimPath>,
+    mut rm_usd_path: RemovedComponents<lunco_usd_bevy_scene::UsdPrimPath>,
     mut rm_camera: RemovedComponents<SceneCamera>,
 ) -> bool {
     let current_grid = active_frame
@@ -732,7 +732,7 @@ pub(crate) fn scene_topology_changed(
         &Name,
         Option<&lunco_core::markers::Callsign>,
         Option<&lunco_core::CatalogEntryId>,
-        Option<&lunco_usd_bevy::UsdPrimPath>,
+        Option<&lunco_usd_bevy_scene::UsdPrimPath>,
         Option<&ChildOf>,
     )| {
         let Some(cached_label) = view.base_labels.get(&entity) else {

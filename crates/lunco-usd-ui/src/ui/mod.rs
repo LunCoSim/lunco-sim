@@ -23,7 +23,7 @@ use lunco_doc_bevy::{
     DocumentClosed, DocumentOpened, DocumentRegistry, DocumentSaved, SaveAsDocument,
 };
 use lunco_status_core::status_bus::{StatusBus, StatusLevel};
-use lunco_usd_bevy::UsdPrimPath;
+use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_workbench::{BrowserSectionRegistry, ViewportPlaceholder};
 use lunco_workbench_core::PanelId;
 

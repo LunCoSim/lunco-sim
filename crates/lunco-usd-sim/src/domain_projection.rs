@@ -18,12 +18,12 @@ use lunco_modelica_core::{
     ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaNotice, ModelicaSignalLayout,
     ModelicaSignalProvenance, NoticeLevel,
 };
-use lunco_usd_bevy::UsdPrimPath;
 #[cfg(test)]
 use lunco_usd_bevy_core::canonical::CanonicalStage;
 use lunco_usd_bevy_core::program::ProgramGraph;
 use lunco_usd_bevy_core::read::UsdReadObject as ComposedReader;
 use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdInstanceProjection, UsdStageAsset};
+use lunco_usd_bevy_scene::UsdPrimPath;
 use openusd::sdf::Path as SdfPath;
 
 // The USD side of a Modelica program facet — the class an asset names, the
@@ -2549,7 +2549,7 @@ pub fn project_domain_islands(
     mut commands: Commands,
     preview: (
         Query<&ChildOf>,
-        Query<(), With<lunco_usd_bevy::UsdPreviewOnly>>,
+        Query<(), With<lunco_usd_bevy_scene::UsdPreviewOnly>>,
     ),
     triggers: (
         Query<(), Added<UsdPrimPath>>,
@@ -2612,7 +2612,7 @@ pub fn project_domain_islands(
     }
     let Some(channels) = channels else { return };
     for (entity, prim, previous, installed_model, instance_projection) in &prims {
-        if lunco_usd_bevy::is_preview_only(entity, &preview.0, &preview.1) {
+        if lunco_usd_bevy_scene::is_preview_only(entity, &preview.0, &preview.1) {
             continue;
         }
         if !full_reprojection && !added.contains(entity) && !identity_added.contains(entity) {
@@ -2621,7 +2621,7 @@ pub fn project_domain_islands(
         // Scope every authored path to the same USD instance as the generated
         // network. Runtime-spawned copies intentionally share stage-relative
         // paths; the instance root identity is the structural disambiguator.
-        let instance_id = lunco_usd_bevy::instance_key_from_projection(
+        let instance_id = lunco_usd_bevy_scene::instance_key_from_projection(
             entity,
             &q_provenance,
             &q_gid,
@@ -2748,7 +2748,7 @@ pub fn poll_domain_projection_tasks(
     mut commands: Commands,
     preview: (
         Query<&ChildOf>,
-        Query<(), With<lunco_usd_bevy::UsdPreviewOnly>>,
+        Query<(), With<lunco_usd_bevy_scene::UsdPreviewOnly>>,
     ),
     mut pending: ResMut<PendingDomainProjections>,
     prims: Query<(
@@ -2768,7 +2768,11 @@ pub fn poll_domain_projection_tasks(
     while index < pending.tasks.len() {
         // A task may finish after its entity enters a presentation-only lease.
         // Cancel before polling so it cannot publish a runtime participant.
-        if lunco_usd_bevy::is_preview_only(pending.tasks[index].entity, &preview.0, &preview.1) {
+        if lunco_usd_bevy_scene::is_preview_only(
+            pending.tasks[index].entity,
+            &preview.0,
+            &preview.1,
+        ) {
             pending.tasks.swap_remove(index);
             continue;
         }
@@ -4154,7 +4158,7 @@ pub fn resolve_member_classes(
     prims: Query<(Entity, &UsdPrimPath, Option<&UsdInstanceProjection>)>,
     preview: (
         Query<&ChildOf>,
-        Query<(), With<lunco_usd_bevy::UsdPreviewOnly>>,
+        Query<(), With<lunco_usd_bevy_scene::UsdPreviewOnly>>,
     ),
     added: Query<(), Added<UsdPrimPath>>,
     mut classes: ResMut<MemberClasses>,
@@ -4209,7 +4213,7 @@ pub fn resolve_member_classes(
     }
     if discover {
         for (entity, prim, instance_projection) in &prims {
-            if lunco_usd_bevy::is_preview_only(entity, &preview.0, &preview.1) {
+            if lunco_usd_bevy_scene::is_preview_only(entity, &preview.0, &preview.1) {
                 continue;
             }
             let id = prim.stage_handle.id();

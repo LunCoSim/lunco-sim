@@ -24,7 +24,7 @@ use lunco_doc_bevy::{RedoDocument, UndoDocument};
 use lunco_materials::{ParamSchema, ParamValue, ShaderLook};
 use lunco_render::{PbrLook, SurfaceAlpha};
 use lunco_usd::commands::{ApplyUsdOp, ApplyUsdOps};
-use lunco_usd_bevy::{UsdPrimPath, UsdSceneRoot};
+use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneRoot};
 use lunco_usd_core::document::UsdDocument;
 use lunco_usd_core::document::{LayerId, UsdOp};
 
@@ -3509,9 +3509,6 @@ impl Plugin for SpawnCommandPlugin {
         // The AUTHORED read beside the spawned one: composed USD attributes, so
         // asset invariants are checkable from rhai/Python/HTTP and not just Rust.
         crate::usd_prim_query::register(app);
-        // Parse-only asset pre-flight ("does this file compile?") — pure file
-        // checks, so it answers even while no scene is loaded.
-        lunco_scene_validation::validate::register(app);
         // Selection → telemetry focus, so every host that has the scene verbs has
         // scoped telemetry (the sandbox, the workbench, a headless server driven
         // by `SelectEntity`). Render-free: `lunco-signal` is a ring buffer of

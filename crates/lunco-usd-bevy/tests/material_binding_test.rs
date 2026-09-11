@@ -13,7 +13,9 @@
 
 use bevy::prelude::*;
 use lunco_render::{PbrLook, SurfaceAlpha};
-use lunco_usd_bevy::*;
+use lunco_usd_bevy::UsdBevyPlugin;
+use lunco_usd_bevy_core::UsdStageAsset;
+use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneProjected};
 use lunco_usd_core::StageRecipe;
 
 #[test]
@@ -88,7 +90,7 @@ def Xform "World"
     app.update();
 
     // Check if the entity was processed and has visual sync
-    assert!(app.world().get::<UsdVisualSynced>(test_entity).is_some());
+    assert!(app.world().get::<UsdSceneProjected>(test_entity).is_some());
 
     // Verify the appearance intent exists
     let look = app

@@ -75,10 +75,11 @@ use lunco_render::{
     RenderQualityProfile, RenderingQualitySettings,
 };
 use lunco_usd_bevy::{
-    PendingUsdMesh, SdfPath, UsdAwaitingStage, UsdPreviewOnly, UsdPrimPath, UsdStageRevision,
-    UsdVisualMeshPending, UsdVisualProjectionQueued, UsdVisualSyncFailed, UsdVisualSynced,
+    PendingUsdMesh, SdfPath, UsdAwaitingStage, UsdVisualMeshPending, UsdVisualProjectionQueued,
+    UsdVisualSyncFailed,
 };
 use lunco_usd_bevy_core::{is_descendant_or_self, UsdStageAsset};
+use lunco_usd_bevy_scene::{UsdPreviewOnly, UsdPrimPath, UsdSceneProjected, UsdStageRevision};
 use lunco_workbench::{
     CloseTab, OpenTab, PanelRect, PanelRects, PendingTabCloses, ScenePickGate, SceneTarget,
     WorkbenchAppExt,
@@ -1286,8 +1287,8 @@ fn preview_projection_inputs_changed(
         Or<(
             Added<UsdPrimPath>,
             Changed<UsdPrimPath>,
-            Added<UsdVisualSynced>,
-            Changed<UsdVisualSynced>,
+            Added<UsdSceneProjected>,
+            Changed<UsdSceneProjected>,
             Added<UsdAwaitingStage>,
             Changed<UsdAwaitingStage>,
             Added<UsdVisualProjectionQueued>,
@@ -1333,7 +1334,7 @@ fn reconcile_preview_projection_state(
         (
             Entity,
             &UsdPrimPath,
-            Has<UsdVisualSynced>,
+            Has<UsdSceneProjected>,
             Has<UsdVisualSyncFailed>,
             Has<UsdAwaitingStage>,
             Has<UsdVisualProjectionQueued>,
@@ -1345,7 +1346,7 @@ fn reconcile_preview_projection_state(
     prims: Query<(
         Entity,
         &UsdPrimPath,
-        Has<UsdVisualSynced>,
+        Has<UsdSceneProjected>,
         Has<UsdAwaitingStage>,
         Has<UsdVisualProjectionQueued>,
         Has<UsdVisualMeshPending>,
@@ -2910,7 +2911,7 @@ fn collect_preview_explode_targets(
         &Transform,
         Option<&ChildOf>,
         Option<&lunco_core::UsdPrimKind>,
-        Has<UsdVisualSynced>,
+        Has<UsdSceneProjected>,
     )>();
     let mut snapshots = HashMap::new();
     let mut parents = HashMap::new();
@@ -3429,7 +3430,7 @@ fn mount_preview_session(world: &mut World, preview: UsdPreviewId) {
         return;
     };
     if let Ok(mut entity) = world.get_entity_mut(scene_root) {
-        entity.remove::<UsdVisualSynced>();
+        entity.remove::<UsdSceneProjected>();
         entity.despawn_related::<Children>();
         entity.insert(UsdPrimPath {
             stage_handle: handle.clone(),
@@ -4214,7 +4215,7 @@ mod tests {
                 stage_handle: stage.clone(),
                 path: "/Scene".into(),
             },
-            UsdVisualSynced,
+            UsdSceneProjected,
         ));
         let assembly = app
             .world_mut()
@@ -4225,7 +4226,7 @@ mod tests {
                     path: "/Scene/Assembly".into(),
                 },
                 Transform::from_xyz(5.0, 0.0, 0.0),
-                UsdVisualSynced,
+                UsdSceneProjected,
                 lunco_core::UsdPrimKind("assembly".into()),
                 ChildOf(root),
             ))
@@ -4238,7 +4239,7 @@ mod tests {
                     path: "/Scene/Assembly/PartA".into(),
                 },
                 Transform::from_xyz(1.0, 0.0, 0.0),
-                UsdVisualSynced,
+                UsdSceneProjected,
                 ChildOf(assembly),
             ))
             .id();
@@ -4250,7 +4251,7 @@ mod tests {
                     path: "/Scene/Assembly/Group".into(),
                 },
                 Transform::from_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)),
-                UsdVisualSynced,
+                UsdSceneProjected,
                 ChildOf(assembly),
             ))
             .id();
@@ -4262,7 +4263,7 @@ mod tests {
                     path: "/Scene/Assembly/Group/PartB".into(),
                 },
                 Transform::from_xyz(0.0, 0.0, 3.0),
-                UsdVisualSynced,
+                UsdSceneProjected,
                 ChildOf(group),
             ))
             .id();
@@ -4794,14 +4795,14 @@ mod tests {
                 stage_handle: stage.clone(),
                 path: "/World".into(),
             },
-            UsdVisualSynced,
+            UsdSceneProjected,
         ));
         app.world_mut().spawn((
             UsdPrimPath {
                 stage_handle: stage.clone(),
                 path: "/World/Rover".into(),
             },
-            UsdVisualSynced,
+            UsdSceneProjected,
             ChildOf(preview_root),
         ));
 
@@ -4811,12 +4812,12 @@ mod tests {
         let live_root = app
             .world_mut()
             .spawn((
-                lunco_usd_bevy::UsdSceneRoot,
+                lunco_usd_bevy_scene::UsdSceneRoot,
                 UsdPrimPath {
                     stage_handle: stage.clone(),
                     path: "/World".into(),
                 },
-                UsdVisualSynced,
+                UsdSceneProjected,
             ))
             .id();
         app.world_mut().spawn((
@@ -4824,7 +4825,7 @@ mod tests {
                 stage_handle: stage,
                 path: "/World/Rover".into(),
             },
-            UsdVisualSynced,
+            UsdSceneProjected,
             ChildOf(live_root),
         ));
 

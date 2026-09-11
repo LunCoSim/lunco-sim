@@ -54,14 +54,14 @@ use bevy::math::{DQuat, DVec3};
 use bevy::mesh::VertexAttributeValues;
 use bevy::prelude::*;
 use lunco_core::coords::GridPos;
-use lunco_usd_bevy::UsdPrimPath;
-use lunco_usd_bevy::{
-    instance_key, is_preview_only, read_primitive_axis, read_shape_dims, read_usd_mesh_indexed,
-    usd_axis_to_quat, ShapeDims, UsdAnimated, UsdPreviewOnly, UsdSceneRoot, UsdVisualSynced,
-};
 use lunco_usd_bevy_core::{
     effective_purpose, local_transform_at, Purpose, TransformReadError, UsdInstanceProjection,
     UsdInstanceRoot, UsdRead, UsdStageAsset,
+};
+use lunco_usd_bevy_scene::{
+    instance_key, is_preview_only, read_primitive_axis, read_shape_dims, read_usd_mesh_indexed,
+    usd_axis_to_quat, ShapeDims, UsdAnimated, UsdPreviewOnly, UsdPrimPath, UsdSceneProjected,
+    UsdSceneRoot,
 };
 use openusd::sdf::Path as SdfPath;
 // UsdPhysics attribute + API-schema names as CONSTANTS, from openusd's own schema
@@ -268,7 +268,7 @@ impl Plugin for UsdAvianPlugin {
         app.add_plugins(JointAttachPlugin);
         app.add_systems(lunco_core::SceneTeardown, prepare_scene_physics_teardown);
         // `on_add_usd_prim`: eager observer for joint pending-state.
-        // `process_usd_avian_prims`: observer on UsdVisualSynced — fires
+        // `process_usd_avian_prims`: observer on UsdSceneProjected — fires
         //   right after the USD structural projection translates each prim,
         //   so the stage and Transform exist. CPU visual meshes may still be
         //   streaming; mesh-backed terrain has its own pending-collider phase.
@@ -1606,13 +1606,13 @@ fn heightfield_from_mesh(mesh: &Mesh) -> Option<Collider> {
 /// - Their shapes are included in the parent's compound collider
 ///
 /// Observer: fires once per entity, the moment the USD structural projection
-/// translates the prim (signalled by inserting `UsdVisualSynced`). CPU visual
+/// translates the prim (signalled by inserting `UsdSceneProjected`). CPU visual
 /// meshes may still be streaming; physics reads the worker-produced composed
 /// projection plan and does not depend on `Mesh3d` or a live `Stage`.
 /// By that point the plan is committed and the same reader contract used by
 /// visual and simulation projection is available for physics components.
 fn process_usd_avian_prims(
-    trigger: On<Add, UsdVisualSynced>,
+    trigger: On<Add, UsdSceneProjected>,
     query: Query<(&UsdPrimPath, Option<&UsdInstanceProjection>), Without<UsdAvianProcessed>>,
     q_child_of: Query<&ChildOf>,
     q_entities: Query<Entity>,
@@ -1640,7 +1640,7 @@ fn process_usd_avian_prims(
         return;
     }
     if let Some(mount_state) = mount_state {
-        let stale_mount = match lunco_usd_bevy::scene_root_ancestor(
+        let stale_mount = match lunco_usd_bevy_scene::scene_root_ancestor(
             entity,
             &q_scene_root,
             &q_child_of,
@@ -1651,7 +1651,7 @@ fn process_usd_avian_prims(
             Err(_) => true,
         };
         if stale_mount {
-            // `UsdVisualSynced` can be applied from a command buffer that was
+            // `UsdSceneProjected` can be applied from a command buffer that was
             // filled before a scene replacement request.  Do not let this
             // observer admit a collider/body into a root whose teardown is
             // already owned by the newer transaction; Avian's collider
@@ -2966,7 +2966,7 @@ fn on_add_usd_prim(
     };
     // Joint authoring is shared with the visual projection, but Editor
     // previews are render-only.  This observer runs independently of the
-    // `UsdVisualSynced` Avian guard, so it must enforce the same ownership
+    // `UsdSceneProjected` Avian guard, so it must enforce the same ownership
     // boundary or a preview hinge becomes a live pending joint forever.
     if is_preview_only(entity, &q_child_of, &q_preview_only) {
         return;
@@ -4138,7 +4138,7 @@ pub fn wheel_revolute_joint(
 /// Reads a `DVec3` attribute (e.g., `double3 xformOp:translate`) at full
 /// f64 precision.
 ///
-/// Thin DVec3 adapter over the canonical [`lunco_usd_bevy::read_vec3_f64`]
+/// Thin DVec3 adapter over the canonical [`UsdRead::vec3_f64`]
 /// (the 4-branch `[f32;3]→[f64;3]→Vec<f32>→Vec<f64>` ladder). Keeping the
 /// reader f64 end-to-end is what avoids the documented silent-`None`
 /// "bodies launched into orbit" bug for `physics:localPos*` anchors.
@@ -4147,7 +4147,9 @@ fn read_vec3_attribute(
     path: &SdfPath,
     attr: &str,
 ) -> Option<DVec3> {
-    lunco_usd_bevy::read_vec3_f64(reader, path, attr).map(|v| DVec3::new(v[0], v[1], v[2]))
+    reader
+        .vec3_f64(path, attr)
+        .map(|v| DVec3::new(v[0], v[1], v[2]))
 }
 
 /// Read a scalar only when its authored value is readable. `None` is reserved

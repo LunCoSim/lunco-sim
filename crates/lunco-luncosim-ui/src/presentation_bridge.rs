@@ -118,7 +118,7 @@ fn apply_authored_env(
 fn project_env_settings(
     stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<lunco_usd_bevy_core::canonical::CanonicalStages>,
-    roots: Query<&lunco_usd_bevy::UsdPrimPath, With<lunco_usd_bevy::UsdSceneRoot>>,
+    roots: Query<&lunco_usd_bevy_scene::UsdPrimPath, With<lunco_usd_bevy_scene::UsdSceneRoot>>,
     mut authored: ResMut<AuthoredEnv>,
     bloom_override: Option<ResMut<lunco_render::SceneBloomOverride>>,
     // Ambient is NOT projected here any more — it is composed from authored

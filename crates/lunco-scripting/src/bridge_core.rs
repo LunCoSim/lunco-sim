@@ -1287,7 +1287,7 @@ pub fn find_path(path: &str) -> i64 {
             .into_iter()
             .find(|(_, entity)| {
                 world
-                    .get::<lunco_usd_bevy::UsdPrimPath>(*entity)
+                    .get::<lunco_usd_bevy_scene::UsdPrimPath>(*entity)
                     .is_some_and(|prim| prim.path == path)
             })
             .map(|(id, _)| id.get() as i64)
@@ -1304,7 +1304,7 @@ pub fn usd_path_of(gid: u64) -> Option<String> {
         let entity = resolve_entity(world, gid)?;
         Some(
             world
-                .get::<lunco_usd_bevy::UsdPrimPath>(entity)?
+                .get::<lunco_usd_bevy_scene::UsdPrimPath>(entity)?
                 .path
                 .clone(),
         )

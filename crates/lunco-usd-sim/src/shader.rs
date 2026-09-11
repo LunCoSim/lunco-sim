@@ -9,7 +9,7 @@
 //!
 //! ## Why a system, not an observer
 //!
-//! The obvious implementation is an `On<Add, UsdVisualSynced>` observer that
+//! The obvious implementation is an `On<Add, UsdSceneProjected>` observer that
 //! swaps in the look. That works for prims nobody else touches
 //! (balloons, panels), but it **races** any consumer that runs synchronously in
 //! the same frame and mutates the prim's appearance — notably the wheel
@@ -39,10 +39,11 @@ use lunco_materials::{
 use lunco_render::{PbrLook, SurfaceAlpha};
 use lunco_usd_bevy::{
     get_attribute_as_vec3, read_authored_bool_strict, read_primvar_f32_strict,
-    read_primvar_vec3_strict, UsdPrimPath, UsdVisualSynced,
+    read_primvar_vec3_strict,
 };
 use lunco_usd_bevy_core::read::UsdReadObject;
 use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdInstanceProjection, UsdStageAsset};
+use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneProjected};
 use openusd::sdf::Path as SdfPath;
 use std::collections::BTreeMap;
 
@@ -66,7 +67,7 @@ pub fn apply_usd_shader_materials(
             Has<ProceduralSkybox>,
             Option<&UsdInstanceProjection>,
         ),
-        (With<UsdVisualSynced>, Without<UsdShaderResolved>),
+        (With<UsdSceneProjected>, Without<UsdShaderResolved>),
     >,
     stages: Res<Assets<UsdStageAsset>>,
     // Initial projection reads the immutable plan prepared by the asset
@@ -358,7 +359,7 @@ fn apply_usd_shader_material_read(
     // ShaderLook is also the owner of the shader-parameter port backend. Publish
     // the generic surface contract together with the look so USD connections on
     // the bound gprim (for example a plume's `inputs:throttle`) are admitted by
-    // the wiring pass. `UsdVisualSynced` only says that a prim was projected; it
+    // the wiring pass. `UsdSceneProjected` only says that a prim was projected; it
     // is not proof that the prim owns a named port surface.
     let material_entity = visual_target.unwrap_or(entity);
     let mut entity_commands = commands.entity(material_entity);

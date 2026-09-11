@@ -66,14 +66,14 @@ use lunco_api::schema::{ApiErrorCode, ApiResponse};
 use lunco_doc::{Document, DocumentId};
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd::twin_projection::DocBackedTwinScenes;
-use lunco_usd_bevy::UsdPrimPath;
-use lunco_usd_bevy::UsdSceneRoot;
 use lunco_usd_bevy_core::read::UsdRead;
 use lunco_usd_bevy_core::view::StageView;
 use lunco_usd_bevy_core::{
     canonical::CanonicalStages, effective_purpose, is_descendant_or_self, resolve_bound_shader,
     MaterialPurpose, UsdStageAsset,
 };
+use lunco_usd_bevy_scene::UsdPrimPath;
+use lunco_usd_bevy_scene::UsdSceneRoot;
 use lunco_usd_core::document::UsdDocument;
 use openusd::sdf::{Path as SdfPath, Value};
 
@@ -381,7 +381,7 @@ fn runtime_binding_json(world: &World, entity: Option<Entity>) -> serde_json::Va
         return serde_json::json!({ "state": "not_projected" });
     };
     let visual_synced = world
-        .get::<lunco_usd_bevy::UsdVisualSynced>(entity)
+        .get::<lunco_usd_bevy_scene::UsdSceneProjected>(entity)
         .is_some();
     let visual_sync_failed = world.get::<lunco_usd_bevy::UsdVisualSyncFailed>(entity);
     let awaiting_stage = world
@@ -562,7 +562,7 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
                 doc.is_none()
                     && p.path == path
                     && Some(p.stage_handle.id()) == live_stage
-                    && !lunco_usd_bevy::is_preview_only_entity(world, *entity)
+                    && !lunco_usd_bevy_scene::is_preview_only_entity(world, *entity)
             })
             .map(|(e, p)| (e, p.stage_handle.id()));
 

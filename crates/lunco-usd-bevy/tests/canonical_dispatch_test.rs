@@ -14,9 +14,10 @@
 use bevy::prelude::*;
 use lunco_materials::ProceduralSkybox;
 use lunco_render::PbrLook;
-use lunco_usd_bevy::{
-    CanonicalStage, CanonicalStages, UsdPrimPath, UsdStageAsset, UsdVisualSyncFailed,
-};
+use lunco_usd_bevy::UsdVisualSyncFailed;
+use lunco_usd_bevy_core::canonical::{CanonicalStage, CanonicalStages};
+use lunco_usd_bevy_core::UsdStageAsset;
+use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_core::StageRecipe;
 
 const SCENE: &str = r#"#usda 1.0
@@ -123,7 +124,8 @@ fn entity_at(app: &mut App, path: &str) -> Option<Entity> {
 
 #[test]
 fn authored_identity_pose_replaces_previous_primitive_projection() {
-    use lunco_usd_bevy::{UsdVisualProjectionQueued, UsdVisualSynced};
+    use lunco_usd_bevy::UsdVisualProjectionQueued;
+    use lunco_usd_bevy_scene::UsdSceneProjected;
     use openusd::sdf::{Path, Value};
 
     let mut app = app();
@@ -191,16 +193,16 @@ def Xform "Placement" {}
             .drain_all_changes();
         app.world_mut()
             .entity_mut(entity)
-            .remove::<UsdVisualSynced>()
+            .remove::<UsdSceneProjected>()
             .insert(UsdVisualProjectionQueued);
         for _ in 0..256 {
             app.update();
-            if app.world().get::<UsdVisualSynced>(entity).is_some() {
+            if app.world().get::<UsdSceneProjected>(entity).is_some() {
                 break;
             }
             std::thread::yield_now();
         }
-        assert!(app.world().get::<UsdVisualSynced>(entity).is_some());
+        assert!(app.world().get::<UsdSceneProjected>(entity).is_some());
         let transform = app.world().get::<Transform>(entity).unwrap();
         assert_eq!(transform.translation, Vec3::ZERO);
         assert_eq!(transform.scale, Vec3::ONE);
@@ -247,16 +249,16 @@ def Cylinder "Post" {
     );
     app.world_mut()
         .entity_mut(entity)
-        .remove::<UsdVisualSynced>()
+        .remove::<UsdSceneProjected>()
         .insert(UsdVisualProjectionQueued);
     for _ in 0..256 {
         app.update();
-        if app.world().get::<UsdVisualSynced>(entity).is_some() {
+        if app.world().get::<UsdSceneProjected>(entity).is_some() {
             break;
         }
         std::thread::yield_now();
     }
-    assert!(app.world().get::<UsdVisualSynced>(entity).is_some());
+    assert!(app.world().get::<UsdSceneProjected>(entity).is_some());
     assert!(
         (app.world().get::<Transform>(entity).unwrap().rotation * Vec3::Y)
             .abs_diff_eq(Vec3::Y, 1e-5)

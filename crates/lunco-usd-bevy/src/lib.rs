@@ -35,7 +35,7 @@
 //! The `On<Add, UsdPrimPath>` observer fires when the entity is spawned, but the USD
 //! asset may not be loaded yet (async loading). The observer and the loaded-stage
 //! event both publish the same queue marker; `process_queued_usd_visuals` is the
-//! single reader and marks each projected entity with `UsdVisualSynced`.
+//! single reader and marks each projected entity with `UsdSceneProjected`.
 
 use bevy::asset::{io::Reader, AssetLoader, LoadContext};
 use bevy::prelude::*;
@@ -76,6 +76,12 @@ use lunco_usd_bevy_core::{
     compose_xform_order_at, effective_purpose, is_descendant_or_self, local_transform_at,
     parent_prim_path, read_transform_from_usd, resolve_bound_shader, resolve_stage_prim_path,
     stage_convention, Purpose, StageView, UsdRead, UsdReadObject,
+};
+use lunco_usd_bevy_scene::{
+    bump_usd_stage_revision, is_preview_only, read_primitive_axis, read_shape_dims,
+    read_usd_mesh_indexed, read_usd_mesh_points, read_usd_mesh_topology, scene_root_ancestor,
+    usd_axis_to_quat, ShapeDims, UsdAnimated, UsdPreviewOnly, UsdPrimPath, UsdSceneProjected,
+    UsdSceneRoot, UsdStageRevision,
 };
 use lunco_usd_core::UsdDataExt;
 // The ambient-fill solve. Uniform ambient is spelled as an untextured `DomeLight`
@@ -189,7 +195,6 @@ impl Plugin for UsdBevyPlugin {
             .init_asset::<UsdSourceText>()
             .register_asset_loader(UsdSourceTextLoader)
             .register_type::<UsdPrimPath>()
-            .register_type::<UsdRelationships>()
             .register_type::<lunco_core::UsdPrimKind>()
             .register_type::<UsdAnimated>()
             .register_type::<UsdResetXformStack>()
@@ -537,109 +542,6 @@ impl AssetLoader for UsdSourceTextLoader {
     }
 }
 
-/// Marks an entity as representing a USD prim path.
-///
-/// This component is added to every entity that corresponds to a USD prim. The system
-/// uses it to look up the prim's attributes from the loaded USD stage.
-///
-/// # Fields
-/// - `stage_handle`: Handle to the loaded `UsdStageAsset`
-/// - `path`: USD prim path (e.g., `/SandboxRover` or `/SandboxRover/Wheel_FL`)
-#[derive(Component, Reflect, Debug, Clone)]
-#[reflect(Component)]
-pub struct UsdPrimPath {
-    /// Handle to the loaded USD stage asset.
-    pub stage_handle: Handle<UsdStageAsset>,
-    /// USD prim path within the stage (e.g., `/SandboxRover/Wheel_FL`).
-    pub path: String,
-}
-
-/// The composed USD relationships projected onto one prim.
-///
-/// Relationships are authored USD facts, not domain state. Keeping the
-/// relationship names and ordered targets together on the projected prim gives
-/// every script and tool one reusable read surface for plans, assemblies,
-/// camera tracks, and future authored programs. Consumers interpret the
-/// relationship name; this component never knows whether a target is a route,
-/// socket, sensor, camera, or another application concept.
-#[derive(Component, Reflect, Debug, Clone, Default)]
-#[reflect(Component)]
-pub struct UsdRelationships(pub std::collections::HashMap<String, Vec<String>>);
-
-impl Default for UsdPrimPath {
-    fn default() -> Self {
-        Self {
-            stage_handle: Handle::default(),
-            path: "/".to_string(),
-        }
-    }
-}
-
-/// Monotonic "the USD projection may have changed" signal.
-///
-/// USD is the source of truth and the ECS is its projection, so everything
-/// derived *from* USD — a view-model, a wiring cache, a panel's graph — needs to
-/// know when to re-derive. This resource is that one signal, and consumers gate
-/// on it with `run_if(resource_changed::<UsdStageRevision>)`.
-///
-/// Why a counter and not a hash of the derived result: a revision is O(1) and
-/// **cannot drift from the truth**, because it is stamped by the writers
-/// themselves. A hash can only tell you *after* paying to produce the thing you
-/// were deciding whether to produce — which is exactly the bug this replaces
-/// (`produce_usd_canvas` spent 11 ms/frame building a graph and hashing it just
-/// to discover the graph was unchanged). Keep hashes for assertions, never for
-/// gates. See `docs/architecture/42-ui-frame-discipline.md` §6.
-///
-/// Bumped by [`bump_usd_stage_revision`] on prim spawn/despawn and stage asset
-/// modification, and directly by the live-edit drain in `lunco-usd`
-/// (`live_consume`) for `ApplyUsdOp` edits to already-spawned prims, which raise
-/// no ECS-structural signal of their own.
-#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct UsdStageRevision(pub u64);
-
-impl UsdStageRevision {
-    /// Mark the USD projection as changed. Consumers gated on
-    /// `resource_changed::<UsdStageRevision>` re-derive on the next run.
-    pub fn bump(&mut self) {
-        self.0 = self.0.wrapping_add(1);
-    }
-}
-
-/// Raise [`UsdStageRevision`] when the USD→ECS projection changes structurally.
-///
-/// Deliberately does NOT touch the resource when nothing happened: writing it
-/// unconditionally would fire `resource_changed` every frame and defeat every
-/// gate downstream.
-pub fn bump_usd_stage_revision(
-    mut rev: ResMut<UsdStageRevision>,
-    added: Query<(), Added<UsdPrimPath>>,
-    mut removed: RemovedComponents<UsdPrimPath>,
-    mut stage_events: MessageReader<AssetEvent<UsdStageAsset>>,
-) {
-    let stage_changed = stage_events.read().any(|e| {
-        matches!(
-            e,
-            AssetEvent::Modified { .. } | AssetEvent::LoadedWithDependencies { .. }
-        )
-    });
-    // `removed.read()` must be drained unconditionally — an unread reader keeps
-    // redelivering, and `||` short-circuiting past it is what let the old wiring
-    // gate stay "structural" for frames after the fact.
-    let any_removed = removed.read().next().is_some();
-    if !added.is_empty() || any_removed || stage_changed {
-        rev.bump();
-    }
-}
-
-/// Marker component indicating that the entity's structural USD projection is
-/// committed. Geometry may still be streaming through [`UsdVisualMeshPending`]
-/// when a CPU-generated mesh is being built asynchronously.
-///
-/// Prevents the projection systems from re-processing the same entity on
-/// subsequent frames and is the lifecycle signal consumed by physics.
-#[derive(Component)]
-pub struct UsdVisualSynced;
-
 /// A NURBS visual whose CPU tessellation is running on Bevy's async compute
 /// pool. Structural USD projection and physics may proceed while the mesh is
 /// being built; the marker is removed when the render asset is committed.
@@ -698,19 +600,6 @@ pub struct UsdVisualSyncFailed(pub String);
 #[reflect(Component)]
 pub struct UsdResetXformStack;
 
-/// Marker: this entity's local `Transform` is driven by USD `timeSamples` on its
-/// xform ops (`xformOp:translate` / `xformOp:rotateXYZ` / `xformOp:scale`).
-///
-/// Stamped at instantiation (see [`prim_has_xform_time_samples`]) so the
-/// per-frame [`sample_usd_animation`] sampler iterates **only** animated entities
-/// (cheap query) rather than re-reading every prim. This is the entity half of
-/// the doc-19 animation funnel; the time source is the `lunco-time` `WorldTime`
-/// (world domain). Per-object / per-selection domains (a `TimeBinding` to a
-/// driven `TimeDomain`) layer on top of this later (doc 19 — T5).
-#[derive(Component, Reflect, Debug, Clone, Copy, Default)]
-#[reflect(Component)]
-pub struct UsdAnimated;
-
 /// Tier-1 RAM memo of an animated prim's **topology** — which channels carry
 /// `timeSamples` and (for materials) the resolved bound-shader path.
 ///
@@ -757,81 +646,6 @@ pub struct MaterialPlan {
     pub geom_color: bool,
     /// Shader `inputs:opacity` is animated.
     pub opacity: bool,
-}
-
-/// Marker placed on a USD scene root that exists purely to render a
-/// preview thumbnail. Plugins that activate simulation side-effects on
-/// USD prims (avatar cameras, vehicle FSW, wheel physics) should walk
-/// each candidate prim's `ChildOf` ancestry and bail if any ancestor
-/// carries this marker — preview-only stages must show geometry but
-/// must not spawn cameras into the window or insert physics bodies
-/// into the live world.
-#[derive(Component, Default, Debug, Clone, Copy)]
-pub struct UsdPreviewOnly;
-
-/// Root of a live USD scene mount.
-///
-/// This marker belongs to the USD projection boundary because visual
-/// synchronization must identify the ownership root without depending on the
-/// simulation translator.  Additive mounts use the same root marker; the
-/// shared [`lunco_core::SceneMountState`] decides which roots are still valid
-/// after a replacement.
-#[derive(Component, Debug, Clone, Copy)]
-pub struct UsdSceneRoot;
-
-/// Returns whether an entity belongs to an off-screen USD preview stage.
-///
-/// Preview stages still need normal USD geometry, transforms, and materials so
-/// their viewport can render them. Their authored `Camera` prims, however,
-/// must never become Bevy window cameras: the viewport owns the one camera
-/// that renders the preview target. Walk `ChildOf` rather than testing only
-/// the entity because cameras are normally descendants of the preview root.
-/// The bounded walk also keeps malformed hierarchy data from hanging a
-/// lifecycle or error path.
-pub fn is_preview_only(
-    entity: Entity,
-    q_child_of: &Query<&ChildOf>,
-    q_preview_only: &Query<(), With<UsdPreviewOnly>>,
-) -> bool {
-    let mut current = entity;
-    for _ in 0..1024 {
-        if q_preview_only.contains(current) {
-            return true;
-        }
-        let Ok(parent) = q_child_of.get(current) else {
-            return false;
-        };
-        current = parent.parent();
-    }
-    warn!(
-        "[usd] preview hierarchy exceeded 1024 ancestors at {:?}",
-        entity
-    );
-    false
-}
-
-/// Returns whether an entity belongs to a render-only USD preview hierarchy.
-///
-/// The root marker is the ownership boundary for a preview lease. Consumers
-/// that reconcile an already-live entity use this same boundary instead of
-/// inferring preview state from a name, stage handle, or missing physics
-/// components.
-pub fn is_preview_only_entity(world: &World, entity: Entity) -> bool {
-    let mut current = entity;
-    for _ in 0..1024 {
-        if world.get::<UsdPreviewOnly>(current).is_some() {
-            return true;
-        }
-        let Some(parent) = world.get::<ChildOf>(current).map(ChildOf::parent) else {
-            return false;
-        };
-        current = parent;
-    }
-    warn!(
-        "[usd] preview hierarchy exceeded 1024 ancestors at {:?}",
-        entity
-    );
-    false
 }
 
 /// Marker placed on an entity whose `UsdPrimPath` was added before the
@@ -915,72 +729,6 @@ fn usd_projection_provenance(
     }
 }
 
-/// The **instance** an entity belongs to, named by its instance-root
-/// [`GlobalEntityId`](lunco_core::GlobalEntityId).
-///
-/// This is THE disambiguator for any resolver that matches authored USD
-/// prim-path strings to entities. Two runtime spawns of one asset compose
-/// BYTE-IDENTICAL stage-relative paths (`/DescentLander`, `/DescentLander/Hull`,
-/// …), so a resolver that matches on path alone binds across copies — a lander
-/// flying on the other lander's model, a rover geared to the other rover's
-/// rockers. Scope the match to the instance and the ambiguity is gone.
-///
-/// The instance-root GID is the right name for it: unique per spawn, identical
-/// on every peer, and stable across entity churn (a descendant's id is
-/// `derive_id(parent, role)`, a pure function of identity, so a hot-swapped
-/// program re-resolves to the same endpoints). Returns:
-/// - `Some(root_gid)` for a runtime instance — a descendant reports its
-///   [`Provenance::Derived`](lunco_core::Provenance::Derived)`{ parent }` when
-///   identity assignment has completed, or resolves the same root through its
-///   durable [`UsdInstanceProjection`] while that projection is live; the root
-///   itself (`Authoritative`, tagged [`UsdInstanceRoot`]) reports its own GID.
-/// - `None` for authored scene prims, whose composed paths are already globally
-///   unique, so they share one namespace safely.
-///
-/// `None` is also the answer in the one-frame window before identity is minted
-/// (`assign_global_entity_ids`, PostUpdate). A resolver that runs every frame
-/// until it succeeds simply DEFERS — a `None` key never equals a `Some` key, so
-/// it can never mis-bind; a resolver gated on `Added` must also wake on
-/// `Added<GlobalEntityId>` to pick the ids up in its next resolution pass.
-pub fn instance_key(
-    entity: Entity,
-    q_provenance: &Query<&lunco_core::Provenance>,
-    q_gid: &Query<&lunco_core::GlobalEntityId>,
-    q_instance_root: &Query<(), With<UsdInstanceRoot>>,
-    q_instance_projection: &Query<&UsdInstanceProjection>,
-) -> Option<u64> {
-    instance_key_from_projection(
-        entity,
-        q_provenance,
-        q_gid,
-        q_instance_root,
-        q_instance_projection.get(entity).ok(),
-    )
-}
-
-/// Resolve instance scope when the caller already fetched the entity's
-/// projection as part of its primary query.
-pub fn instance_key_from_projection(
-    entity: Entity,
-    q_provenance: &Query<&lunco_core::Provenance>,
-    q_gid: &Query<&lunco_core::GlobalEntityId>,
-    q_instance_root: &Query<(), With<UsdInstanceRoot>>,
-    projection: Option<&UsdInstanceProjection>,
-) -> Option<u64> {
-    match q_provenance.get(entity) {
-        Ok(lunco_core::Provenance::Derived { parent, .. }) => Some(*parent),
-        _ => projection
-            .and_then(|projection| projection.root)
-            .and_then(|root| q_gid.get(root).map(|gid| gid.get()).ok())
-            .or_else(|| {
-                q_instance_root
-                    .contains(entity)
-                    .then(|| q_gid.get(entity).map(|gid| gid.get()).ok())
-                    .flatten()
-            }),
-    }
-}
-
 /// Translates a single USD prim into Bevy/big_space/avian components on
 /// `entity`. The caller has already verified that the stage is loaded.
 ///
@@ -1000,11 +748,11 @@ pub fn instance_key_from_projection(
 /// 4. Spawns each prim child below its USD parent. A top-level child of the
 ///    nested scene Grid carries its own `CellCoord`; deeper descendants remain
 ///    ordinary children rooted in the prim's low-precision subtree.
-/// 5. Marks the entity with `UsdVisualSynced` to prevent re-processing.
+/// 5. Marks the entity with `UsdSceneProjected` to prevent re-processing.
 ///
 /// Custom materials (solar panels, blueprint grids, etc.) are applied
 /// by independent material plugins in `lunco-materials` that observe
-/// the `UsdVisualSynced` insertion.
+/// the `UsdSceneProjected` insertion.
 #[allow(clippy::too_many_arguments)]
 fn instantiate_usd_prim(
     entity: Entity,
@@ -1128,7 +876,6 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
         };
         project_usd_prim_kind(reader, &sdf_path, entity, commands);
         project_spawnable_selectable(reader, &sdf_path, entity, commands);
-        project_usd_relationships(reader, &sdf_path, entity, commands);
 
         // M1 identity (Ph1). Three projection scopes:
         //
@@ -1181,7 +928,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
         if !reader.is_active(&sdf_path) {
             commands
                 .entity(entity)
-                .try_insert((UsdVisualSynced, Visibility::Hidden));
+                .try_insert((UsdSceneProjected, Visibility::Hidden));
             return;
         }
 
@@ -1811,7 +1558,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
         }
         commands.entity(entity).try_insert((
             transform,
-            UsdVisualSynced,
+            UsdSceneProjected,
             final_vis,
             InheritedVisibility::default(),
             ViewVisibility::default(),
@@ -1917,36 +1664,6 @@ fn project_spawnable_selectable(
             .entity(entity)
             .try_insert(lunco_core::SelectableRoot);
     }
-}
-
-/// Project every composed relationship without interpreting its domain.
-///
-/// The relationship list is the reusable USD-to-ECS read seam for authored
-/// plans and links. Keeping ordered targets intact is important: a route,
-/// camera track, or assembly plan may use list order as part of its contract.
-/// An empty component is written as well, so a live edit that removes the last
-/// target cannot leave a stale relationship cache on the entity.
-fn project_usd_relationships<R: UsdRead>(
-    reader: &R,
-    path: &SdfPath,
-    entity: Entity,
-    commands: &mut Commands,
-) {
-    let relationships = reader
-        .relationship_names(path)
-        .into_iter()
-        .map(|name| {
-            let targets = reader
-                .rel_targets(path, &name)
-                .into_iter()
-                .map(|target| target.to_string())
-                .collect();
-            (name, targets)
-        })
-        .collect();
-    commands
-        .entity(entity)
-        .try_insert(UsdRelationships(relationships));
 }
 
 /// Record the direct USD children from an owned read source.
@@ -2127,7 +1844,7 @@ fn scene_mount_entity_is_live(world: &World, entity: Entity) -> bool {
 /// is dormant when no prim is waiting.
 fn on_usd_prim_added(
     trigger: On<Add, UsdPrimPath>,
-    q: Query<&UsdPrimPath, (Without<UsdVisualSynced>, Without<UsdVisualSyncFailed>)>,
+    q: Query<&UsdPrimPath, (Without<UsdSceneProjected>, Without<UsdVisualSyncFailed>)>,
     mut commands: Commands,
     stages: Res<Assets<UsdStageAsset>>,
 ) {
@@ -2192,7 +1909,7 @@ pub fn sync_usd_visuals(
         (
             With<UsdAwaitingStage>,
             Without<UsdVisualProjectionQueued>,
-            Without<UsdVisualSynced>,
+            Without<UsdSceneProjected>,
             Without<UsdVisualSyncFailed>,
         ),
     >,
@@ -2274,7 +1991,7 @@ pub fn process_queued_usd_visuals(
         ),
         (
             With<UsdVisualProjectionQueued>,
-            Without<UsdVisualSynced>,
+            Without<UsdSceneProjected>,
             Without<UsdVisualSyncFailed>,
             Without<PendingUsdMesh>,
         ),
@@ -2400,7 +2117,7 @@ fn poll_pending_usd_meshes(
     mut q: Query<(
         Entity,
         &UsdPrimPath,
-        Has<UsdVisualSynced>,
+        Has<UsdSceneProjected>,
         Option<&UsdVisualMeshTarget>,
         &mut PendingUsdMesh,
     )>,
@@ -2474,7 +2191,7 @@ fn retry_awaiting_usd_visuals_after_quality_change(
         (
             With<UsdAwaitingStage>,
             Without<UsdVisualProjectionQueued>,
-            Without<UsdVisualSynced>,
+            Without<UsdSceneProjected>,
             Without<UsdVisualSyncFailed>,
         ),
     >,
@@ -2514,154 +2231,6 @@ fn retry_awaiting_usd_visuals_after_quality_change(
         commands
             .entity(entity)
             .try_insert(UsdVisualProjectionQueued);
-    }
-}
-
-/// Find the live-scene ownership root for a projected entity.
-///
-/// Entities in a preview or an additive/unrooted projection may have no live
-/// scene root ancestor and are intentionally left to their own projection
-/// policy.  A regular scene entity always reaches `UsdSceneRoot`, including
-/// the root itself.  The bound prevents malformed relationship data from
-/// turning a failed load into an infinite loop during error handling.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SceneRootAncestorError {
-    /// A parent relationship points to an entity that no longer exists.
-    MissingParentEntity,
-    /// The hierarchy exceeded the traversal bound and is treated as malformed.
-    DepthExceeded,
-}
-
-pub fn scene_root_ancestor(
-    entity: Entity,
-    q_scene_root: &Query<(), With<UsdSceneRoot>>,
-    q_child_of: &Query<&ChildOf>,
-    q_entities: &Query<Entity>,
-) -> Result<Option<Entity>, SceneRootAncestorError> {
-    let mut current = entity;
-    for _ in 0..1024 {
-        if q_scene_root.contains(current) {
-            return Ok(Some(current));
-        }
-        let Ok(parent) = q_child_of.get(current) else {
-            return Ok(None);
-        };
-        current = parent.parent();
-        if !q_entities.contains(current) {
-            return Err(SceneRootAncestorError::MissingParentEntity);
-        }
-    }
-    warn!(
-        "[usd] scene hierarchy exceeded 1024 ancestors at {:?}",
-        entity
-    );
-    Err(SceneRootAncestorError::DepthExceeded)
-}
-
-#[cfg(test)]
-mod scene_mount_tests {
-    use super::*;
-
-    #[derive(Resource)]
-    struct ExpectedRoots {
-        root: Entity,
-        child: Entity,
-        detached: Entity,
-    }
-
-    fn assert_root_ancestry(
-        expected: Res<ExpectedRoots>,
-        q_scene_root: Query<(), With<UsdSceneRoot>>,
-        q_child_of: Query<&ChildOf>,
-        q_entities: Query<Entity>,
-    ) {
-        assert_eq!(
-            scene_root_ancestor(expected.child, &q_scene_root, &q_child_of, &q_entities),
-            Ok(Some(expected.root))
-        );
-        assert_eq!(
-            scene_root_ancestor(expected.detached, &q_scene_root, &q_child_of, &q_entities),
-            Ok(None)
-        );
-    }
-
-    #[derive(Resource)]
-    struct ExpectedPreview {
-        root: Entity,
-        child: Entity,
-        detached: Entity,
-    }
-
-    fn assert_preview_ancestry(
-        expected: Res<ExpectedPreview>,
-        q_preview_only: Query<(), With<UsdPreviewOnly>>,
-        q_child_of: Query<&ChildOf>,
-    ) {
-        assert!(is_preview_only(expected.root, &q_child_of, &q_preview_only));
-        assert!(is_preview_only(
-            expected.child,
-            &q_child_of,
-            &q_preview_only
-        ));
-        assert!(!is_preview_only(
-            expected.detached,
-            &q_child_of,
-            &q_preview_only
-        ));
-    }
-
-    #[test]
-    fn projected_descendants_resolve_their_scene_mount_root() {
-        let mut app = App::new();
-        let (root, child, detached) = {
-            let world = app.world_mut();
-            let root = world.spawn(UsdSceneRoot).id();
-            let child = world.spawn(ChildOf(root)).id();
-            let detached = world.spawn_empty().id();
-            (root, child, detached)
-        };
-        app.insert_resource(ExpectedRoots {
-            root,
-            child,
-            detached,
-        })
-        .add_systems(Update, assert_root_ancestry);
-        app.update();
-    }
-
-    #[test]
-    fn an_invalidated_root_is_no_longer_owned_by_the_mount() {
-        let root = Entity::from_bits(41);
-        let mut state = lunco_core::SceneMountState::default();
-        state.register_root(root, true);
-        assert!(state.contains_root(root));
-        assert_eq!(state.active_root(), Some(root));
-
-        state.begin_replacement();
-        assert!(!state.contains_root(root));
-        assert_eq!(state.active_root(), None);
-    }
-
-    #[test]
-    fn projected_preview_descendants_resolve_their_preview_ownership_root() {
-        let mut app = App::new();
-        let (root, child, detached) = {
-            let world = app.world_mut();
-            let root = world.spawn(UsdPreviewOnly).id();
-            let child = world.spawn(ChildOf(root)).id();
-            let detached = world.spawn_empty().id();
-            (root, child, detached)
-        };
-        app.insert_resource(ExpectedPreview {
-            root,
-            child,
-            detached,
-        })
-        .add_systems(Update, assert_preview_ancestry);
-        app.update();
-
-        assert!(is_preview_only_entity(app.world(), child));
-        assert!(!is_preview_only_entity(app.world(), detached));
     }
 }
 
@@ -5317,74 +4886,8 @@ fn local_shape_corners(
     Some(corners)
 }
 
-/// Canonical `UsdGeom` `axis` token → quaternion folding. A Bevy/Avian
-/// primitive (`Cylinder`/`Cone`/`Capsule`/`Plane`) is Y-axial; this
-/// rotates it onto the authored `axis`. `None` for `"Y"` (already
-/// aligned) or an unknown token — callers then leave the rotation
-/// untouched. Adding an axis case touches exactly this one place.
-pub fn usd_axis_to_quat(axis: &str) -> Option<Quat> {
-    match axis {
-        "X" => Some(Quat::from_rotation_arc(Vec3::Y, Vec3::X)),
-        "Z" => Some(Quat::from_rotation_arc(Vec3::Y, Vec3::Z)),
-        _ => None,
-    }
-}
-
-/// Read the standard `UsdGeom` axis token for a primitive. The schema fallback
-/// is `Z`; an authored value outside the schema's allowed tokens is invalid and
-/// must not silently become an identity rotation.
-pub fn read_primitive_axis(
-    reader: &dyn read::UsdReadObject,
-    path: &SdfPath,
-    type_name: &str,
-) -> Option<String> {
-    if !matches!(type_name, "Cylinder" | "Cone" | "Capsule" | "Plane") {
-        return Some("Z".to_string());
-    }
-    match reader.text(path, "axis") {
-        Some(axis) if matches!(axis.as_str(), "X" | "Y" | "Z") => Some(axis),
-        Some(axis) => {
-            error!(
-                "[usd-bevy] {} has invalid {} axis token `{axis}`; expected X, Y, or Z",
-                path.as_str(),
-                type_name
-            );
-            None
-        }
-        None if reader.has_authored_attribute(path, "axis")
-            || !reader.connections(path, "axis").is_empty() =>
-        {
-            error!(
-                "[usd-bevy] {} has an authored {} axis with an unsupported value type",
-                path.as_str(),
-                type_name
-            );
-            None
-        }
-        None => Some("Z".to_string()),
-    }
-}
-
-/// Dimensions of a USD primitive shape prim, with the spec-compliant
-/// defaults applied. One home (CQ-102) so the avian collider and the
-/// bevy mesh never desync.
-///
-/// `Cube::size` is the ONLY form. `UsdGeomCube` declares exactly one dimension
-/// attribute (`double size`, default 2.0) — a non-uniform box is a `size` plus an
-/// `xformOp:scale`. `width`/`height`/`depth` on a Cube are not UsdGeomCube
-/// attributes and are not read: accepting them would let a scene encode its box
-/// dimensions in a form no other DCC reads. (`Plane::width`/`length` below ARE
-/// real UsdGeomPlane attributes — that is the difference.)
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ShapeDims {
-    Cube { size: f64 },
-    Sphere { radius: f64 },
-    Cylinder { radius: f64, height: f64 },
-    Cone { radius: f64, height: f64 },
-    Capsule { radius: f64, height: f64 },
-    Plane { width: f64, length: f64 },
-}
-
+/// Dimensions are decoded by `lunco-usd-bevy-scene`, the shared owner used by
+/// both the visual mesh and physics collider paths.
 /// Rendering-only provenance for a USD built-in primitive mesh. The dimensions
 /// remain owned by [`ShapeDims`] so a quality change can rebuild the mesh without
 /// reopening the USD stage or duplicating the dimension reader.
@@ -5745,172 +5248,6 @@ def Xform "World"
     }
 }
 
-/// Read the dimensions of a USD primitive shape prim, **in metres**. `type_name`
-/// is the prim's `typeName` token (callers already have it). Returns `None` for
-/// an unsupported type. **The defaults here are the single source of
-/// truth** for both `lunco-usd-avian` (→ `Collider`) and this crate
-/// (→ `Mesh`); changing one here changes both, so they can't drift.
-///
-/// Every dimension is scaled by the stage's `metersPerUnit`
-/// ([`ConventionTransform::length`]) — a centimetre stage's `radius = 50` reads
-/// back `0.5` m. Identity (and therefore unchanged) for a metre stage.
-pub fn read_shape_dims(
-    reader: &dyn read::UsdReadObject,
-    path: &SdfPath,
-    type_name: &str,
-) -> Option<ShapeDims> {
-    let dims = read_shape_dims_raw(reader, path, type_name)?;
-    let conv = stage_convention(reader).ok()?;
-    if conv.is_identity() {
-        return Some(dims);
-    }
-    let m = |x: f64| conv.length(x);
-    Some(match dims {
-        ShapeDims::Cube { size } => ShapeDims::Cube { size: m(size) },
-        ShapeDims::Sphere { radius } => ShapeDims::Sphere { radius: m(radius) },
-        ShapeDims::Cylinder { radius, height } => ShapeDims::Cylinder {
-            radius: m(radius),
-            height: m(height),
-        },
-        ShapeDims::Cone { radius, height } => ShapeDims::Cone {
-            radius: m(radius),
-            height: m(height),
-        },
-        ShapeDims::Capsule { radius, height } => ShapeDims::Capsule {
-            radius: m(radius),
-            height: m(height),
-        },
-        ShapeDims::Plane { width, length } => ShapeDims::Plane {
-            width: m(width),
-            length: m(length),
-        },
-    })
-}
-
-/// [`read_shape_dims`] **before** the unit conversion — dimensions in the stage's
-/// own linear unit. Private (doc 41: no public raw spatial accessor).
-fn read_shape_dims_raw(
-    reader: &dyn read::UsdReadObject,
-    path: &SdfPath,
-    type_name: &str,
-) -> Option<ShapeDims> {
-    read_primitive_axis(reader, path, type_name)?;
-    let dims = match type_name {
-        "Cube" => ShapeDims::Cube {
-            size: read_shape_dimension(reader, path, "size", 2.0)?,
-        },
-        "Sphere" => ShapeDims::Sphere {
-            radius: read_shape_dimension(reader, path, "radius", 1.0)?,
-        },
-        "Cylinder" => ShapeDims::Cylinder {
-            radius: read_shape_dimension(reader, path, "radius", 1.0)?,
-            height: read_shape_dimension(reader, path, "height", 2.0)?,
-        },
-        "Cone" => ShapeDims::Cone {
-            radius: read_shape_dimension(reader, path, "radius", 1.0)?,
-            height: read_shape_dimension(reader, path, "height", 2.0)?,
-        },
-        "Capsule" => ShapeDims::Capsule {
-            radius: read_shape_dimension(reader, path, "radius", 0.5)?,
-            height: read_shape_dimension(reader, path, "height", 1.0)?,
-        },
-        "Plane" => ShapeDims::Plane {
-            width: read_shape_dimension(reader, path, "width", 2.0)?,
-            length: read_shape_dimension(reader, path, "length", 2.0)?,
-        },
-        _ => return None,
-    };
-    Some(dims)
-}
-
-/// Read one positive USD primitive dimension, keeping omitted schema defaults
-/// distinct from malformed authored values. A wrong type, non-finite value, or
-/// non-positive size rejects the primitive instead of creating a plausible but
-/// different mesh/collider.
-fn read_shape_dimension(
-    reader: &dyn read::UsdReadObject,
-    path: &SdfPath,
-    name: &str,
-    schema_default: f64,
-) -> Option<f64> {
-    let authored =
-        reader.has_authored_attribute(path, name) || !reader.connections(path, name).is_empty();
-    match reader.real(path, name) {
-        Some(value) if value.is_finite() && value > 0.0 => Some(value),
-        Some(value) => {
-            error!(
-                "[usd-bevy] {} has invalid primitive {} = {value}; expected a finite positive value",
-                path.as_str(),
-                name
-            );
-            None
-        }
-        None if authored => {
-            error!(
-                "[usd-bevy] {} has authored primitive {} with an unsupported value type",
-                path.as_str(),
-                name
-            );
-            None
-        }
-        None => Some(schema_default),
-    }
-}
-
-/// Reads an `int[]` / `int64[]` USD array attribute (`Value::IntVec` /
-/// `Int64Vec`) as `Vec<i32>`. The fixed-array `TryFrom<Value>` impls don't
-/// cover integer arrays, so mesh topology (`faceVertexCounts` /
-/// `faceVertexIndices`) is matched directly. `None` if absent or not an int
-/// array.
-/// A `Mesh` prim's `points`, converted to the canonical frame: `p' = k·Q·p`
-/// (see [`units`]). The one place mesh geometry crosses the unit/axis boundary —
-/// both the render mesh ([`build_usd_mesh`]) and the physics trimesh
-/// ([`read_usd_mesh_indexed`]) read through it, so they cannot disagree.
-fn read_mesh_points(reader: &dyn read::UsdReadObject, path: &SdfPath) -> Option<Vec<[f32; 3]>> {
-    // `points3`, NOT `scalar::<Vec<[f32; 3]>>`: USD's `points` is `point3f[]` by
-    // convention but `point3d[]` is legal and exporters do emit it (coordinates feel
-    // like they deserve the precision). A strict `point3f[]` read of a `point3d[]`
-    // mesh returns `None`, i.e. "this prim has no geometry" — so the mesh silently
-    // does not spawn and nothing is logged. An empty result is `None` here, matching
-    // the old contract: a points-less mesh is not a mesh.
-    let points = reader.points3(path, "points");
-    if points.is_empty()
-        || points
-            .iter()
-            .any(|point| !Vec3::from_array(*point).is_finite())
-    {
-        if points
-            .iter()
-            .any(|point| !Vec3::from_array(*point).is_finite())
-        {
-            error!(
-                "[usd-bevy] {} has non-finite mesh points; refusing geometry projection",
-                path.as_str()
-            );
-        }
-        return None;
-    }
-    let conv = stage_convention(reader).ok()?;
-    if conv.is_identity() {
-        return Some(points);
-    }
-    let points: Vec<[f32; 3]> = points
-        .into_iter()
-        .map(|p| conv.point(Vec3::from_array(p)).to_array())
-        .collect();
-    if points
-        .iter()
-        .any(|point| !Vec3::from_array(*point).is_finite())
-    {
-        error!(
-            "[usd-bevy] {} mesh points became non-finite after stage conversion; refusing geometry projection",
-            path.as_str()
-        );
-        return None;
-    }
-    Some(points)
-}
-
 /// A `Mesh` prim's normals, rotated into the canonical frame (`n' = Q·n`) — a
 /// direction, so never scaled. `primvars:normals` wins over the typed `normals`
 /// attribute (UsdGeomPointBased gives the primvar precedence); the returned name
@@ -5972,7 +5309,7 @@ fn build_usd_curve_mesh(
     use lunco_usd_geometry::curve_sweep::sweep_tube;
 
     // Canonical-frame points — same conversion the mesh path takes.
-    let points = read_mesh_points(reader, path)?;
+    let points = read_usd_mesh_points(reader, path)?;
     if points.is_empty() {
         return None;
     }
@@ -6000,7 +5337,7 @@ fn build_usd_curve_mesh(
     };
 
     // Radii are a LENGTH, so they scale with `metersPerUnit` — `conv.length`,
-    // not `conv.point`. (`read_mesh_points` already converted the centerline.)
+    // not `conv.point`. (`read_usd_mesh_points` already converted the centerline.)
     let conv = stage_convention(reader).ok()?;
     let radii: Vec<f32> = widths
         .iter()
@@ -6382,7 +5719,7 @@ fn read_patch_surface(
         return Some((l.surface()?, Some(l)));
     }
 
-    let points = read_mesh_points(reader, path)?;
+    let points = read_usd_mesh_points(reader, path)?;
     let u_count = lathe::read_required_nurbs_int(reader, path, "uVertexCount")?;
     let v_count = lathe::read_required_nurbs_int(reader, path, "vVertexCount")?;
     let u_order = lathe::read_required_nurbs_int(reader, path, "uOrder")?;
@@ -6553,7 +5890,7 @@ def NurbsPatch "Nozzle" (
         let reflector =
             SdfPath::new("/CommsAntenna/YawHead/DishGimbal/DishHead/Reflector").unwrap();
         assert!(
-            view.has_api_schema(&reflector, "LunCoLatheAPI"),
+            UsdRead::has_api_schema(&view, &reflector, "LunCoLatheAPI"),
             "the shipped reflector must opt into the parametric lathe contract"
         );
         let (surface, Some(lathe)) = read_patch_surface(&view, &reflector)
@@ -6574,7 +5911,7 @@ def NurbsPatch "Nozzle" (
         let view = StageView::new(&stage);
         let nozzle = SdfPath::new("/DescentLander/Nozzle").unwrap();
         assert!(
-            view.has_api_schema(&nozzle, "LunCoLatheAPI"),
+            UsdRead::has_api_schema(&view, &nozzle, "LunCoLatheAPI"),
             "the shipped nozzle must opt into the parametric lathe contract"
         );
         let (surface, Some(lathe)) =
@@ -6880,18 +6217,6 @@ fn build_usd_nurbs_patch_mesh(
     Some((mesh, Some((surface, lathe_params))))
 }
 
-fn read_int_array(
-    reader: &dyn read::UsdReadObject,
-    path: &SdfPath,
-    attr: &str,
-) -> Option<Vec<i32>> {
-    match reader.attr_value(path, attr)? {
-        Value::IntVec(v) => Some(v),
-        Value::Int64Vec(v) => Some(v.iter().map(|&x| x as i32).collect()),
-        _ => None,
-    }
-}
-
 /// Read a curve integer array while preserving the distinction between an
 /// omitted optional value and an authored value of the wrong type. Curve
 /// topology is structural USD data; it must never be replaced by a guessed
@@ -7015,57 +6340,6 @@ fn read_double2_array_strict(
     }
 }
 
-/// Triangulated topology of a native USD `Mesh` in the compact **indexed**
-/// form a physics trimesh wants: the raw `points` as vertices, plus
-/// fan-triangulated `faceVertexIndices` as triangle index triples.
-///
-/// This is the collider counterpart to [`build_usd_mesh`] (which expands to an
-/// *unindexed* soup so per-face-varying normals/uvs survive). Here we keep
-/// shared vertices — smaller, and exactly the `(Vec<vertex>, Vec<[u32;3]>)`
-/// shape `Collider::trimesh` consumes. Triangle winding is irrelevant for
-/// collision, so `orientation` is ignored. `None` if the topology attributes
-/// are absent/empty or an index is out of range (malformed mesh).
-pub fn read_usd_mesh_indexed(
-    reader: &dyn read::UsdReadObject,
-    path: &SdfPath,
-) -> Option<(Vec<[f32; 3]>, Vec<[u32; 3]>)> {
-    // Points are converted to the canonical frame (Y-up, metres) — the trimesh
-    // collider must land where the rendered mesh lands. Identity for a canonical
-    // stage. See `units`.
-    let points = read_mesh_points(reader, path)?;
-    let counts = read_int_array(reader, path, "faceVertexCounts")?;
-    let indices = read_int_array(reader, path, "faceVertexIndices")?;
-    if points.is_empty() || counts.is_empty() || indices.is_empty() {
-        return None;
-    }
-    let n_points = points.len() as u32;
-    let n_corners = indices.len();
-    let mut tris: Vec<[u32; 3]> = Vec::new();
-    let mut base = 0usize;
-    for &count in &counts {
-        let count = count as usize;
-        if base + count > n_corners {
-            return None; // counts/indices disagree → malformed
-        }
-        for k in 1..count.saturating_sub(1) {
-            let tri = [
-                indices[base] as u32,
-                indices[base + k] as u32,
-                indices[base + k + 1] as u32,
-            ];
-            if tri[0] >= n_points || tri[1] >= n_points || tri[2] >= n_points {
-                return None; // index out of range → malformed
-            }
-            tris.push(tri);
-        }
-        base += count;
-    }
-    if tris.is_empty() {
-        return None;
-    }
-    Some((points, tris))
-}
-
 /// Build a Bevy [`Mesh`] from a native USD `Mesh` prim (UsdGeomMesh):
 /// `point3f[] points`, `int[] faceVertexCounts`, `int[] faceVertexIndices`,
 /// with optional `normal3f[] normals` and `texCoord2f[] primvars:st`.
@@ -7093,12 +6367,12 @@ pub fn build_usd_mesh(reader: &impl UsdRead, path: &SdfPath) -> Option<Mesh> {
     use bevy_mesh::PrimitiveTopology;
 
     // Canonical-frame points/normals (Y-up, metres); identity for our stages.
-    let points = read_mesh_points(reader, path)?;
-    let counts = read_int_array(reader, path, "faceVertexCounts")?;
-    let indices = read_int_array(reader, path, "faceVertexIndices")?;
-    if points.is_empty() || counts.is_empty() || indices.is_empty() {
-        return None;
-    }
+    // Topology is decoded by the render-free scene contract so physics and
+    // visual projection consume the same authored mesh facts.
+    let topology = read_usd_mesh_topology(reader, path)?;
+    let points = topology.points;
+    let counts = topology.face_vertex_counts;
+    let indices = topology.face_vertex_indices;
 
     // Optional vertex attributes. `primvars:st` is THE UV channel — the
     // `primvars:st0` / bare `st` spellings are gone. A UV set is a primvar, so it
@@ -7878,7 +7152,7 @@ mod mesh_tests {
         let panel = SdfPath::new("/Shader").unwrap();
 
         assert_eq!(
-            reader.asset(&panel, "info:wgsl:sourceAsset").as_deref(),
+            UsdRead::asset(&reader, &panel, "info:wgsl:sourceAsset").as_deref(),
             Some("shaders/wheel.wgsl"),
         );
         assert!(
@@ -7895,7 +7169,7 @@ mod mesh_tests {
         // `None`, for every prim, silently. A shader that never binds is a plain grey
         // surface, not an error, which is why this half is pinned in a test.
         assert_eq!(
-            reader.text(&panel, "info:implementationSource").as_deref(),
+            UsdRead::text(&reader, &panel, "info:implementationSource").as_deref(),
             Some("sourceAsset"),
             "a `token` must read through `text`",
         );

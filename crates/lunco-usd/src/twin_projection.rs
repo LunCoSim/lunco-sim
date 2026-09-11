@@ -54,11 +54,9 @@ use bevy::asset::AssetId;
 use bevy::prelude::*;
 use lunco_assets::twin_source::TwinRoots;
 use lunco_doc::{Document, DocumentId};
-use lunco_usd_bevy::{
-    UsdAwaitingStage, UsdPrimPath, UsdSceneRoot, UsdSourceText, UsdVisualProjectionQueued,
-    UsdVisualSynced,
-};
+use lunco_usd_bevy::{UsdAwaitingStage, UsdSourceText, UsdVisualProjectionQueued};
 use lunco_usd_bevy_core::{UsdInstanceProjection, UsdStageAsset};
+use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneProjected, UsdSceneRoot};
 use lunco_usd_sim::cosim::LoadScene;
 
 use crate::commands::{EmptyViewportReason, TWIN_SCENE_LOAD_FAILED};
@@ -1465,7 +1463,7 @@ fn refresh_relationship_dependents(
 }
 
 /// Whether the live entity projecting `path` in `scene_id` is already tagged
-/// [`UsdAnimated`](lunco_usd_bevy::UsdAnimated) — so the per-frame animation
+/// [`UsdAnimated`](lunco_usd_bevy_scene::UsdAnimated) — so the per-frame animation
 /// sampler already drives it and a fresh keyframe needs no re-instantiation. False
 /// when the prim is static (or has no live entity yet), which is when a first
 /// keyframe must trigger a subtree refresh to (re-)tag it.
@@ -1474,7 +1472,7 @@ fn prim_entity_is_animated(
     scene_id: AssetId<UsdStageAsset>,
     path: &str,
 ) -> bool {
-    let mut q = world.query::<(&UsdPrimPath, Option<&lunco_usd_bevy::UsdAnimated>)>();
+    let mut q = world.query::<(&UsdPrimPath, Option<&lunco_usd_bevy_scene::UsdAnimated>)>();
     q.iter(world)
         .any(|(upp, anim)| upp.stage_handle.id() == scene_id && upp.path == *path && anim.is_some())
 }
@@ -1612,7 +1610,7 @@ fn spawn_prim_op(
 }
 
 /// Re-read the whole live scene from the (now-authored) stage. Only an explicit
-/// [`UsdSceneRoot`](lunco_usd_bevy::UsdSceneRoot) may seed this rebuild.
+/// [`UsdSceneRoot`](lunco_usd_bevy_scene::UsdSceneRoot) may seed this rebuild.
 /// Before rebuilding, retire every other projection entity for that stage.
 ///
 /// This stage-scoped retirement is essential: a mounted USD camera is
@@ -1621,7 +1619,7 @@ fn spawn_prim_op(
 /// create a replacement camera while the detached camera kept rendering.
 /// Parentage is therefore never used as scene ownership; the stage handle is.
 ///
-/// Dropping the root's `UsdVisualSynced` marker and children then re-inserting
+/// Dropping the root's `UsdSceneProjected` marker and children then re-inserting
 /// `UsdPrimPath` re-fires `on_usd_prim_added`, rebuilding exactly one subtree so
 /// an attribute edit that fans out through a material binding reaches every bound
 /// mesh. Structural changes therefore use one explicit, stage-scoped synchronous
@@ -1635,7 +1633,7 @@ pub(crate) fn refresh_scene_visuals(world: &mut World, scene_id: AssetId<UsdStag
         // re-instantiate after a material edit.
         let mut q = world.query_filtered::<(Entity, &UsdPrimPath), Or<(
             With<UsdSceneRoot>,
-            With<lunco_usd_bevy::UsdPreviewOnly>,
+            With<lunco_usd_bevy_scene::UsdPreviewOnly>,
         )>>();
         q.iter(world)
             .filter(|(_, upp)| upp.stage_handle.id() == scene_id)
@@ -1668,7 +1666,7 @@ pub(crate) fn refresh_scene_visuals(world: &mut World, scene_id: AssetId<UsdStag
     }
 }
 
-/// Drop `entity`'s [`UsdVisualSynced`] marker + children and re-insert its
+/// Drop `entity`'s [`UsdSceneProjected`] marker + children and re-insert its
 /// [`UsdPrimPath`], re-firing `on_usd_prim_added` so its subtree rebuilds from
 /// the (now-authored) live stage. The shared primitive under both the whole-scene
 /// [`refresh_scene_visuals`] and the single-prim [`refresh_prim_subtree`].
@@ -1681,7 +1679,7 @@ fn reinstantiate_entity(world: &mut World, entity: Entity) {
                 .is_some_and(|prim| assets.get(&prim.stage_handle).is_some())
         });
     if let Ok(mut em) = world.get_entity_mut(entity) {
-        em.remove::<UsdVisualSynced>();
+        em.remove::<UsdSceneProjected>();
         em.remove::<lunco_usd_sim::shader::UsdShaderResolved>();
         em.despawn_related::<Children>();
         if let Some(pp) = em.take::<UsdPrimPath>() {
@@ -1994,7 +1992,7 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lunco_usd_bevy::UsdVisualSynced;
+    use lunco_usd_bevy_scene::UsdSceneProjected;
     use lunco_usd_core::document::{LayerId, UsdOp};
 
     const TINY: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n";
@@ -2144,7 +2142,7 @@ mod tests {
                     stage_handle: stage.clone(),
                     path: "/Traverse".into(),
                 },
-                UsdVisualSynced,
+                UsdSceneProjected,
             ))
             .id();
         let detached_camera = world
@@ -2153,14 +2151,14 @@ mod tests {
                     stage_handle: stage.clone(),
                     path: "/Traverse/Avatar".into(),
                 },
-                UsdVisualSynced,
+                UsdSceneProjected,
             ))
             .id();
 
         refresh_scene_visuals(&mut world, stage.id());
 
         assert!(
-            world.get::<UsdVisualSynced>(root).is_none(),
+            world.get::<UsdSceneProjected>(root).is_none(),
             "the explicit scene root is refreshed"
         );
         assert!(

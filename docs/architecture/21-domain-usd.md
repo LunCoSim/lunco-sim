@@ -6,16 +6,19 @@
 > LunCoSim uses for the 3D world. Bases, rovers, habitats, terrain — everything
 > physical — lives as USD prims in USD stages. See
 > [`../../crates/lunco-usd-core/`](../../crates/lunco-usd-core/), [`../../crates/lunco-usd/`](../../crates/lunco-usd/) and companion crates
-> `lunco-usd-geometry`, `lunco-usd-avian`, `lunco-usd-bevy` (which also owns
-> composition/flattening), `lunco-usd-sim`.
+> `lunco-usd-geometry`, `lunco-usd-avian`, `lunco-usd-bevy-core`,
+> `lunco-usd-bevy-scene`, `lunco-usd-bevy` and `lunco-usd-sim`.
 
 Package ownership follows the same boundary: `lunco-usd-core` contains the
 headless document/authoring surface, schemas, and pure probes; `lunco-usd`
 contains runtime orchestration and document commands; `lunco-usd-geometry`
 owns the reusable render-free NURBS, trim, and curve-sweep substrate;
-`lunco-usd-bevy` owns stage/visual projection; and `lunco-usd-sim` owns USD-to-Avian/simulation examples
-and integration tests. This keeps runtime and simulation dependencies out of
-the authoring crate without introducing a test-only package.
+`lunco-usd-bevy-core` owns prepared/composed stage data;
+`lunco-usd-bevy-scene` owns render-free ECS scene identity, lifecycle, ancestry,
+and shared geometry decoding; `lunco-usd-bevy` owns visual projection; and
+`lunco-usd-sim` owns USD-to-Avian/simulation examples and integration tests. This
+keeps runtime and simulation dependencies out of the authoring crate without
+introducing a test-only package.
 
 ## Scope
 
@@ -158,7 +161,8 @@ Twin (workspace folder, owns documents)         spec 14
   └─ active USD stage = a UsdDocument            spec 10 / 21
         └─ composed (resolver-backed stage)      lunco-usd-bevy-core/compose.rs
               └─ UsdStageAsset (prepared plan)    lunco-usd-bevy-core/asset.rs
-                    └─ UsdPrimPath root under Grid  → sync_usd_visuals spawns entities
+                    └─ UsdPrimPath root under Grid  → lunco-usd-bevy-scene contract
+                                                       → sync_usd_visuals spawns entities
                           └─ the live 3D world      (avian + cosim translators key off prims)
 ```
 
@@ -682,6 +686,7 @@ the `ControlAnimation` command (API/MCP) and the Inspector **Animation** section
 All runtime acceptance tests load **real USD files** through the same pipeline
 as runtime. Ownership follows the narrowest production boundary:
 - `crates/lunco-usd-bevy-core/src/{asset,authoring,canonical,read,compose,view}.rs` — prepared asset, authored-layer, composed-stage, and live-stage substrate
+- `crates/lunco-usd-bevy-scene/src/{lib,geometry}.rs` — render-free ECS scene identity, lifecycle, ancestry, and shared USD geometry readers
 - `crates/lunco-usd/tests/live_spawn_projection.rs` — document-backed USD authoring and raw asset composition facts
 - `crates/lunco-usd-sim/tests/usd_connection_mechanics.rs` — generic connection derivation and transform mechanics
 - `assets/scenarios/tests/*.rhai` through the production `luncosim test` gate — composed USD → Bevy → Avian → simulation outcomes, including rover structure, wheel realization, wiring, EPS, and link visibility

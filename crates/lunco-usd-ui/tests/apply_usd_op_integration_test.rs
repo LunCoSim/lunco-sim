@@ -6,9 +6,11 @@
 
 use bevy::prelude::*;
 use lunco_doc_bevy::DocumentRegistry;
-use lunco_usd::{ApplyUsdOp, LayerId, UsdCommandsPlugin, UsdOp};
-use lunco_usd_bevy::*;
-use lunco_usd_core::document::UsdDocument;
+use lunco_usd::{ApplyUsdOp, UsdCommandsPlugin};
+use lunco_usd_bevy::UsdBevyPlugin;
+use lunco_usd_bevy_core::UsdStageAsset;
+use lunco_usd_bevy_scene::UsdPrimPath;
+use lunco_usd_core::{document::UsdDocument, LayerId, UsdOp};
 use lunco_usd_ui::{OpenUsdPreview, UsdPreviewId, UsdViewportPlugin, UsdViewportState};
 
 mod support;

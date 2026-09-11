@@ -20,9 +20,9 @@ lunco-scene-commands = { path = "../lunco-scene-commands" }
 lunco-signal = { path = "../lunco-signal" }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-twin = { path = "../lunco-twin" }
-lunco-usd = { path = "../lunco-usd", default-features = false }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
+lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-workspace = { path = "../lunco-workspace" }
 
 [features]

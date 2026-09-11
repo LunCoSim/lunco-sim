@@ -120,6 +120,7 @@ lunco-usd = { path = "../lunco-usd", default-features = false }
 # use every asset's prepared projection plan.
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
+lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-core = { path = "../lunco-usd-core" }
 # `cosim::SceneLoadInFlight` for `report_scene_spawn_status`, which mirrors "scene
 # prims are still spawning" onto the workbench `StatusBus` — where the offline

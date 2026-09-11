@@ -75,8 +75,11 @@ pub fn on_scene_click_script_tool(
     egui_focus: Res<lunco_core::EguiFocus>,
     q_selectable: Query<Entity, With<lunco_core::SelectableRoot>>,
     q_ids: Query<&lunco_core::GlobalEntityId>,
-    q_prim: Query<&lunco_usd_bevy::UsdPrimPath>,
-    q_scene_roots: Query<&lunco_usd_bevy::UsdPrimPath, With<lunco_usd_bevy::UsdSceneRoot>>,
+    q_prim: Query<&lunco_usd_bevy_scene::UsdPrimPath>,
+    q_scene_roots: Query<
+        &lunco_usd_bevy_scene::UsdPrimPath,
+        With<lunco_usd_bevy_scene::UsdSceneRoot>,
+    >,
     q_parents: Query<&ChildOf>,
     selected: Res<SelectedEntities>,
     local_avatar: Res<TheLocalAvatar>,
