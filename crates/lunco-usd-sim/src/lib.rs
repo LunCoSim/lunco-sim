@@ -52,6 +52,7 @@ use big_space::prelude::{CellCoord, Grid};
 use lunco_usd_avian::{
     AuthoredInitialVelocity, PendingJointAdmission, SharedTireContact, ShouldBeDynamic,
 };
+use lunco_usd_bevy_core::read::{read_authored_bool_strict, read_vec3_f64};
 use lunco_usd_bevy_core::{
     canonical::CanonicalStages, resolve_stage_prim_path, UsdInstanceProjection, UsdInstanceRoot,
     UsdStageAsset,
@@ -1095,7 +1096,7 @@ fn read_authored_camera_look_at(
     if !reader.has_authored_attribute(path, "lunco:cameraLookAt") {
         return Ok(None);
     }
-    match lunco_usd_bevy::read_vec3_f64(reader, path, "lunco:cameraLookAt") {
+    match read_vec3_f64(reader, path, "lunco:cameraLookAt") {
         Some(value) if value.iter().all(|value| value.is_finite()) => Ok(Some(value)),
         _ => Err(()),
     }
@@ -1154,7 +1155,7 @@ fn read_raycast_observation(
         Some(value) if value.is_finite() && value > 0.0 => value,
         Some(_) | None => return Err(()),
     };
-    let offset = match lunco_usd_bevy::read_vec3_f64(reader, path, "lunco:raycast:offset") {
+    let offset = match read_vec3_f64(reader, path, "lunco:raycast:offset") {
         Some(value) if value.iter().all(|value| value.is_finite()) => {
             DVec3::new(value[0], value[1], value[2])
         }
@@ -1283,25 +1284,24 @@ fn process_usd_sim_prim_read(
             return;
         }
     }
-    let is_avatar =
-        match lunco_usd_bevy::read_authored_bool_strict(reader, &sdf_path, "lunco:avatar") {
-            Ok(Some(value)) => value,
-            Ok(None) => false,
-            Err(_) => {
-                push_usd_sim_diagnostic(
-                    diagnostics,
-                    &prim_path.path,
-                    "avatar-attribute",
-                    "lunco:avatar must be an authored boolean",
-                );
-                warn!(
-                    "USD prim {} has malformed `lunco:avatar`; prim ignored",
-                    prim_path.path
-                );
-                commands.entity(entity).try_insert(UsdSimProcessed);
-                return;
-            }
-        };
+    let is_avatar = match read_authored_bool_strict(reader, &sdf_path, "lunco:avatar") {
+        Ok(Some(value)) => value,
+        Ok(None) => false,
+        Err(_) => {
+            push_usd_sim_diagnostic(
+                diagnostics,
+                &prim_path.path,
+                "avatar-attribute",
+                "lunco:avatar must be an authored boolean",
+            );
+            warn!(
+                "USD prim {} has malformed `lunco:avatar`; prim ignored",
+                prim_path.path
+            );
+            commands.entity(entity).try_insert(UsdSimProcessed);
+            return;
+        }
+    };
     let avatar_exposure = if is_avatar {
         match lunco_usd_bevy::read_camera_exposure_ev100(reader, &sdf_path) {
             Ok(exposure) => exposure,
@@ -1387,24 +1387,23 @@ fn process_usd_sim_prim_read(
     // Screen-facing label the PRIM asked for. Opt-in: only a prim that
     // authors `lunco:billboard = true` gets one, so adding the schema can
     // never make an existing scene sprout labels.
-    let billboard_enabled =
-        match lunco_usd_bevy::read_authored_bool_strict(reader, &sdf_path, "lunco:billboard") {
-            Ok(Some(value)) => value,
-            Ok(None) => false,
-            Err(_) => {
-                push_usd_sim_diagnostic(
-                    diagnostics,
-                    &prim_path.path,
-                    "billboard-attribute",
-                    "lunco:billboard must be an authored boolean",
-                );
-                warn!(
-                    "USD prim {} has malformed `lunco:billboard`; label ignored",
-                    prim_path.path
-                );
-                false
-            }
-        };
+    let billboard_enabled = match read_authored_bool_strict(reader, &sdf_path, "lunco:billboard") {
+        Ok(Some(value)) => value,
+        Ok(None) => false,
+        Err(_) => {
+            push_usd_sim_diagnostic(
+                diagnostics,
+                &prim_path.path,
+                "billboard-attribute",
+                "lunco:billboard must be an authored boolean",
+            );
+            warn!(
+                "USD prim {} has malformed `lunco:billboard`; label ignored",
+                prim_path.path
+            );
+            false
+        }
+    };
     if billboard_enabled {
         let default = billboard::UsdBillboard::default();
         let billboard = (|| {
@@ -1742,7 +1741,7 @@ fn process_usd_sim_prim_read(
             // `maybe_tf` is `None` on this path, so `existing_tf` defaults to the
             // origin, and aiming from (0,0,0) instead of (e.g.) (14,6,12) points the
             // camera up at the sky. Read `xformOp:translate` directly.
-            let eye = lunco_usd_bevy::read_vec3_f64(reader, &sdf_path, "xformOp:translate")
+            let eye = read_vec3_f64(reader, &sdf_path, "xformOp:translate")
                 .map(|[x, y, z]| DVec3::new(x, y, z))
                 .unwrap_or(existing_tf.translation.as_dvec3());
             let dir = DVec3::new(lx, ly, lz) - eye;
@@ -2500,7 +2499,7 @@ fn raycast_mass_contribution_from_usd(
     let mass = reader
         .real(prim, "physics:mass")
         .ok_or_else(|| "missing `physics:mass`".to_owned())?;
-    let inertia = lunco_usd_bevy::read_vec3_f64(reader, prim, "physics:diagonalInertia")
+    let inertia = read_vec3_f64(reader, prim, "physics:diagonalInertia")
         .ok_or_else(|| "missing `physics:diagonalInertia`".to_owned())?;
     if !mass.is_finite()
         || mass <= 0.0

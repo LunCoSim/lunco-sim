@@ -7446,6 +7446,7 @@ dependencies = [
  "lunco-workbench",
  "lunco-workbench-core",
  "lunco-workspace",
+ "openusd",
  "serde",
  "serde_json",
  "transform-gizmo-bevy",
@@ -7473,6 +7474,7 @@ dependencies = [
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
  "lunco-workspace",
+ "openusd",
 ]
 
 [[package]]

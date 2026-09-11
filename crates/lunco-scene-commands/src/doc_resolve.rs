@@ -14,10 +14,10 @@ use bevy::prelude::*;
 use lunco_doc::DocumentOrigin;
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_materials::ParamValue;
-use lunco_usd_bevy::SdfPath;
 use lunco_usd_bevy_core::{resolve_bound_shader, UsdRead, UsdStageAsset};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_core::document::UsdDocument;
+use openusd::sdf::Path as SdfPath;
 
 /// The exact USD destination and literal for one dynamic shader parameter.
 ///

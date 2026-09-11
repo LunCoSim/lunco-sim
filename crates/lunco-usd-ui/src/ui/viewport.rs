@@ -75,7 +75,7 @@ use lunco_render::{
     RenderQualityProfile, RenderingQualitySettings,
 };
 use lunco_usd_bevy::{
-    PendingUsdMesh, SdfPath, UsdAwaitingStage, UsdVisualMeshPending, UsdVisualProjectionQueued,
+    PendingUsdMesh, UsdAwaitingStage, UsdVisualMeshPending, UsdVisualProjectionQueued,
     UsdVisualSyncFailed,
 };
 use lunco_usd_bevy_core::{is_descendant_or_self, UsdStageAsset};
@@ -88,6 +88,7 @@ use lunco_workbench_core::{
     InstancePanel, Panel, PanelCtx, PanelId, PanelRenderTarget, PanelScrollPolicy, PanelSlot, TabId,
 };
 use lunco_workspace::{document_belongs_to_twin_root, TwinClosed, WorkspaceResource};
+use openusd::sdf::Path as SdfPath;
 
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd_core::document::{LayerId, UsdDocument};

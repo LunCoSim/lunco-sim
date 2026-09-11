@@ -145,7 +145,12 @@ TODO: do not approximate it by respawning only a visual subtree, because that
 would leave physics, connections, or Modelica worker state stale.
 
 The **read** surface is the `UsdRead` trait (`lunco-usd-bevy-core/src/read.rs`): `children`,
-`scalar::<T>`, `attr_value`, `rel_target`, `scalar_at` (time-sampled), etc. It is
+`scalar::<T>`, `attr_value`, `rel_target`, `scalar_at` (time-sampled), etc. The
+same module owns the shared precision-tolerant value readers such as
+`read_vec3_f64`, strict primvar/boolean decoding, and their time-sampled
+variants. Consumers import those functions from `lunco_usd_bevy_core::read`
+directly; the visual adapter does not act as a generic USD facade, and
+OpenUSD types such as `sdf::Path` remain direct OpenUSD dependencies. It is
 implemented for both `StageView` (the live composed stage, `view.rs`) and `sdf::Data`
 (the flattened layer), so one generic reader works against live and flattened alike.
 The `UsdStageAsset` carries a `Send` `StageRecipe` (`recipe`) and a prepared

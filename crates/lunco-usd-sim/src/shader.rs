@@ -37,11 +37,10 @@ use lunco_materials::{
     to_snake_case, AttrRead, EngineSource, ParamValue, ProceduralSkybox, ShaderLook, TextureLayer,
 };
 use lunco_render::{PbrLook, SurfaceAlpha};
-use lunco_usd_bevy::{
-    get_attribute_as_vec3, read_authored_bool_strict, read_primvar_f32_strict,
-    read_primvar_vec3_strict,
+use lunco_usd_bevy::get_attribute_as_vec3;
+use lunco_usd_bevy_core::read::{
+    read_authored_bool_strict, read_primvar_f32_strict, read_primvar_vec3_strict, UsdReadObject,
 };
-use lunco_usd_bevy_core::read::UsdReadObject;
 use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdInstanceProjection, UsdStageAsset};
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneProjected};
 use openusd::sdf::Path as SdfPath;

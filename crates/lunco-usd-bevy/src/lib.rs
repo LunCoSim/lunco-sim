@@ -47,7 +47,7 @@ use big_space::prelude::CellCoord;
 // See docs/architecture/render-decoupling.md.
 use lunco_materials::ProceduralSkybox;
 use lunco_render::{PbrLook, PbrTextures, SurfaceAlpha};
-pub use openusd::sdf::Path as SdfPath;
+use openusd::sdf::Path as SdfPath;
 use openusd::sdf::Value;
 
 mod camera;
@@ -65,6 +65,10 @@ pub mod camera_path;
 pub mod lathe;
 pub mod mount;
 pub use light::UsdAuthoredLight;
+use lunco_usd_bevy_core::read::{
+    read_authored_bool_strict, read_primvar_f32_strict, read_primvar_vec3_at,
+    read_primvar_vec3_strict, read_vec3_f64, read_vec3_f64_at,
+};
 #[cfg(test)]
 use lunco_usd_bevy_core::DefaultPrim;
 use lunco_usd_bevy_core::{
@@ -2958,238 +2962,6 @@ pub fn read_rel_target(
             {
                 return Some(target.as_str().to_string());
             }
-        }
-    }
-    None
-}
-
-// ─────────────────────────────────────────────────────────────────────
-// Canonical USD attribute / geometry readers (WP-3 — CQ-101..104)
-//
-// `lunco-usd-bevy` is the lowest USD layer that the other USD crates
-// already depend on (`lunco-usd-avian` → here; `lunco-usd-sim` → here;
-// the top-level `lunco-usd` aggregator → all three). So the shared
-// parsing lives HERE — putting it in `lunco-usd` would be a dependency
-// cycle. These functions are the single home for the vec3/token/shape/
-// transform/axis parsing that used to be copy-pasted (and drifting)
-// between this crate and `lunco-usd-avian`.
-//
-// `read_vec3_f64` keeps the full f64 4-branch fallback ladder; the
-// `Vec3` (f32) and `DVec3` (f64, at the avian call site) wrappers cast
-// at the boundary, so physics anchors (`physics:localPos*`) keep f64
-// precision.
-// ─────────────────────────────────────────────────────────────────────
-
-/// THE canonical USD vec3 reader. Returns the raw `[f64; 3]` so callers
-/// keep full precision (avian joint anchors need it; downcasting to f32
-/// in the shared layer would silently lose precision).
-///
-/// Tries, in order: `[f32;3]` → `[f64;3]` → `Vec<f32>` → `Vec<f64>`.
-/// **This 4-branch ladder MUST stay intact** — it exists to avoid the
-/// documented silent-`None` "bodies launched into orbit" bug, where a
-/// `point3f` anchor (parsed as `[f32;3]`) read through a single-type
-/// path returned `None` and defaulted the joint anchor to zero.
-pub fn read_vec3_f64(
-    reader: &dyn read::UsdReadObject,
-    path: &SdfPath,
-    attr: &str,
-) -> Option<[f64; 3]> {
-    reader.vec3_f64(path, attr)
-}
-
-/// Read a **`UsdGeomGprim` display primvar** — `primvars:displayColor`.
-///
-/// These are ARRAY-valued by schema (`color3f[]`, i.e. `Vec3fVec`), not scalar
-/// `color3f`. The interpolation defaults to `constant`, meaning one value for
-/// the whole prim, so element 0 is the prim's colour.
-///
-/// Deliberately separate from [`read_vec3_f64`], which reads genuinely *scalar*
-/// `color3f`/`float3` attributes (`inputs:diffuseColor`, `inputs:color`, the
-/// xform ops). Two USD types, two readers — a single lenient one that took
-/// either would let `color3f primvars:displayColor` (the wrong type, which every
-/// asset here used to author) keep working, and that is the bug we are removing.
-pub fn read_primvar_vec3<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<[f64; 3]> {
-    let out = primvar_vec3_from(reader.attr_value(path, attr)?);
-    if out.is_none() {
-        // Authored, but not as the schema's array type (the classic mistake is a
-        // scalar `color3f primvars:displayColor`). Say so ONCE instead of
-        // silently rendering white forever.
-        static NON_ARRAY_PRIMVAR: std::sync::Once = std::sync::Once::new();
-        NON_ARRAY_PRIMVAR.call_once(|| {
-            warn!(
-                "[usd-bevy] {} authors `{attr}` with a non-array value — the schema type \
-                 is `color3f[]`; the value is ignored (further cases not logged)",
-                path.as_str()
-            );
-        });
-    }
-    out
-}
-
-/// Strict authored twin of [`read_primvar_vec3`].  `Ok(None)` means the
-/// attribute is genuinely omitted; `Err` means an authored value has the wrong
-/// USD type, is empty, or contains a non-finite component. Runtime material
-/// boundaries use this distinction so malformed display data cannot turn into
-/// a white surface.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StrictAttributeError {
-    /// Prim that owns the malformed authored value.
-    pub path: String,
-    /// Attribute whose authored value failed strict decoding.
-    pub attribute: String,
-}
-
-impl StrictAttributeError {
-    fn new(path: &SdfPath, attribute: &str) -> Self {
-        Self {
-            path: path.to_string(),
-            attribute: attribute.to_owned(),
-        }
-    }
-}
-
-impl std::fmt::Display for StrictAttributeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{} has an invalid authored `{}` value",
-            self.path, self.attribute
-        )
-    }
-}
-
-impl std::error::Error for StrictAttributeError {}
-
-pub fn read_primvar_vec3_strict(
-    reader: &dyn read::UsdReadObject,
-    path: &SdfPath,
-    attr: &str,
-) -> Result<Option<[f64; 3]>, StrictAttributeError> {
-    match reader.attr_value(path, attr) {
-        Some(value) => primvar_vec3_from(value)
-            .filter(|values| values.iter().all(|value| value.is_finite()))
-            .map(Some)
-            .ok_or_else(|| StrictAttributeError::new(path, attr)),
-        None if reader.has_authored_attribute(path, attr) => {
-            Err(StrictAttributeError::new(path, attr))
-        }
-        None => Ok(None),
-    }
-}
-
-/// Time-sampled twin of [`read_primvar_vec3`].
-pub fn read_primvar_vec3_at(
-    reader: &dyn read::UsdReadObject,
-    path: &SdfPath,
-    attr: &str,
-    time: f64,
-) -> Option<[f64; 3]> {
-    primvar_vec3_from(reader.attr_value_at(path, attr, time)?)
-}
-
-/// First element of an array-valued vec3 primvar (`constant` interpolation).
-fn primvar_vec3_from(value: Value) -> Option<[f64; 3]> {
-    match value {
-        Value::Vec3fVec(v) => v.first().map(|c| [c.x as f64, c.y as f64, c.z as f64]),
-        Value::Vec3dVec(v) => v.first().map(|c| [c.x, c.y, c.z]),
-        Value::Vec3hVec(v) => v.first().map(|c| {
-            [
-                f32::from(c.x) as f64,
-                f32::from(c.y) as f64,
-                f32::from(c.z) as f64,
-            ]
-        }),
-        _ => None,
-    }
-}
-
-/// Read a **`UsdGeomGprim` display primvar** — `primvars:displayOpacity`.
-/// `float[]` by schema, `constant` interpolation → element 0. See
-/// [`read_primvar_vec3`] for why this is not merged with the scalar reader.
-pub fn read_primvar_f32<R: UsdRead>(reader: &R, path: &SdfPath, attr: &str) -> Option<f32> {
-    primvar_f32_from(reader.attr_value(path, attr)?)
-}
-
-/// Strict authored twin of [`read_primvar_f32`].  It preserves omission while
-/// rejecting authored wrong types, empty arrays, and non-finite values.
-pub fn read_primvar_f32_strict(
-    reader: &dyn read::UsdReadObject,
-    path: &SdfPath,
-    attr: &str,
-) -> Result<Option<f32>, StrictAttributeError> {
-    match reader.attr_value(path, attr) {
-        Some(value) => primvar_f32_from(value)
-            .filter(|value| value.is_finite())
-            .map(Some)
-            .ok_or_else(|| StrictAttributeError::new(path, attr)),
-        None if reader.has_authored_attribute(path, attr) => {
-            Err(StrictAttributeError::new(path, attr))
-        }
-        None => Ok(None),
-    }
-}
-
-/// Strict authored boolean reader for USD surface flags.  Integer spellings
-/// remain supported by [`UsdRead::boolean`], but an authored value that is not
-/// a USD boolean/integer is not treated as `false`.
-pub fn read_authored_bool_strict(
-    reader: &dyn read::UsdReadObject,
-    path: &SdfPath,
-    attr: &str,
-) -> Result<Option<bool>, StrictAttributeError> {
-    match reader.boolean(path, attr) {
-        Some(value) => Ok(Some(value)),
-        None if reader.has_authored_attribute(path, attr) => {
-            Err(StrictAttributeError::new(path, attr))
-        }
-        None => Ok(None),
-    }
-}
-
-/// Time-sampled twin of [`read_primvar_f32`].
-pub fn read_primvar_f32_at(
-    reader: &dyn read::UsdReadObject,
-    path: &SdfPath,
-    attr: &str,
-    time: f64,
-) -> Option<f32> {
-    primvar_f32_from(reader.attr_value_at(path, attr, time)?)
-}
-
-fn primvar_f32_from(value: Value) -> Option<f32> {
-    match value {
-        Value::FloatVec(v) => v.first().copied(),
-        Value::DoubleVec(v) => v.first().map(|d| *d as f32),
-        Value::HalfVec(v) => v.first().map(|h| f32::from(*h)),
-        _ => None,
-    }
-}
-
-/// Time-sampled twin of [`read_vec3_f64`]: evaluates the attribute's
-/// `timeSamples` at `time` (held/linear via `openusd::usd::evaluate`), falling
-/// back to `default` when there are no samples. Same value-type coverage
-/// (`[f32;3]`/`[f64;3]` and the `Vec<f32>`/`Vec<f64>` forms).
-pub fn read_vec3_f64_at(
-    reader: &dyn read::UsdReadObject,
-    path: &SdfPath,
-    attr: &str,
-    time: f64,
-) -> Option<[f64; 3]> {
-    let value = reader.attr_value_at(path, attr, time)?;
-    if let Some(v) = value.clone().get::<[f32; 3]>() {
-        return Some([v[0] as f64, v[1] as f64, v[2] as f64]);
-    }
-    if let Some(v) = value.clone().get::<[f64; 3]>() {
-        return Some([v[0], v[1], v[2]]);
-    }
-    if let Some(v) = value.clone().get::<Vec<f32>>() {
-        if v.len() >= 3 {
-            return Some([v[0] as f64, v[1] as f64, v[2] as f64]);
-        }
-    }
-    if let Some(v) = value.get::<Vec<f64>>() {
-        if v.len() >= 3 {
-            return Some([v[0], v[1], v[2]]);
         }
     }
     None

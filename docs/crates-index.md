@@ -264,7 +264,11 @@ projections. It owns the `UsdRead`/`StageView` contract, resolver-backed
 composition, `UsdStageAsset` loading, `CanonicalStage` live-stage ownership,
 authored-layer readers, instance identity markers, `UsdStageProjectionPlan`,
 program and variant resolution, standard material binding, canonical transform
-decoding, stage units, and related USD helpers. It deliberately contains no
+decoding, stage units, and shared composed-value readers (`read_vec3_f64`,
+strict primvar/boolean readers, and their time-sampled variants). Consumers
+import those helpers from `lunco_usd_bevy_core::read`; OpenUSD types such as
+`sdf::Path` are used directly rather than re-exported by a projection crate.
+It deliberately contains no
 visual mesh, light, camera, renderer, window, or UI projection, so changes to
 those adapters do not rebuild this reader/composition package.
 

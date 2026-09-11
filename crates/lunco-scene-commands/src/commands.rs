@@ -1296,7 +1296,7 @@ pub fn authorable_prim(
     let doc = workspace?.0.active_document?;
     let host = usd_registry.host(doc)?;
     let prim = q_prim.get(entity).ok()?;
-    let prim_sdf = lunco_usd_bevy::SdfPath::new(&prim.path).ok()?;
+    let prim_sdf = openusd::sdf::Path::new(&prim.path).ok()?;
     let owned = host.document().data().spec(&prim_sdf).is_some()
         || host.document().runtime_data().spec(&prim_sdf).is_some();
     owned.then(|| (doc, prim.path.clone()))
@@ -1311,7 +1311,7 @@ fn is_mount_component(
     doc: lunco_doc::DocumentId,
     path: &str,
 ) -> bool {
-    let Ok(path) = lunco_usd_bevy::SdfPath::new(path) else {
+    let Ok(path) = openusd::sdf::Path::new(path) else {
         return false;
     };
     registry.host(doc).is_some_and(|host| {
@@ -1596,7 +1596,7 @@ pub fn persist_wheel_to_runtime_layer(
     };
     let Ok(prim) = q_prim.get(target) else { return };
 
-    let Ok(prim_sdf) = lunco_usd_bevy::SdfPath::new(&prim.path) else {
+    let Ok(prim_sdf) = openusd::sdf::Path::new(&prim.path) else {
         return;
     };
     let owned = host.document().data().spec(&prim_sdf).is_some()
@@ -1715,7 +1715,7 @@ pub fn persist_environment_light_to_runtime_layer(
     let ambient_plan = if let Some(requested) = cmd.ambient_brightness {
         let fill_path = format!("{env_path}/AmbientFill");
         let composed = host.document().composed_arc();
-        let fill_sdf = lunco_usd_bevy::SdfPath::new(&fill_path).ok();
+        let fill_sdf = openusd::sdf::Path::new(&fill_path).ok();
         match lunco_usd_bevy::untextured_dome_intensity_sum(&composed, fill_sdf.as_ref()) {
             Ok(others) => Some((requested, others, fill_path)),
             Err(_) => {
@@ -1733,7 +1733,7 @@ pub fn persist_environment_light_to_runtime_layer(
     for (prim, tf) in &q_sun {
         // Ownership guard: only author for suns the active document actually
         // holds (base or runtime), so an unowned runtime entity never gets opinions.
-        let Ok(prim_sdf) = lunco_usd_bevy::SdfPath::new(&prim.path) else {
+        let Ok(prim_sdf) = openusd::sdf::Path::new(&prim.path) else {
             continue;
         };
         let owned = host.document().data().spec(&prim_sdf).is_some()
@@ -1806,7 +1806,7 @@ pub fn persist_environment_light_to_runtime_layer(
         for prim in &q_earthshine {
             // Ownership guard, exactly as for the sun: only author onto fills the
             // active document actually holds.
-            let Ok(prim_sdf) = lunco_usd_bevy::SdfPath::new(&prim.path) else {
+            let Ok(prim_sdf) = openusd::sdf::Path::new(&prim.path) else {
                 continue;
             };
             let owned = host.document().data().spec(&prim_sdf).is_some()
@@ -1856,7 +1856,7 @@ pub fn persist_environment_light_to_runtime_layer(
     // actually absent (else every render tweak would journal a redundant
     // AddPrim). Idempotent thereafter — SetAttribute overwrites in place.
     let prim_missing = |path: &str| {
-        !lunco_usd_bevy::SdfPath::new(path)
+        !openusd::sdf::Path::new(path)
             .ok()
             .map(|sdf| {
                 host.document().data().spec(&sdf).is_some()
@@ -4240,7 +4240,7 @@ mod tests {
 
         let reg = app.world().resource::<DocumentRegistry<UsdDocument>>();
         let docu = reg.host(doc).expect("doc alive").document();
-        let world = lunco_usd_bevy::SdfPath::new("/World").unwrap();
+        let world = openusd::sdf::Path::new("/World").unwrap();
         // The move landed in the RUNTIME layer... (read via `UsdDataExt` on
         // purpose — WHICH LAYER holds the opinion is the whole assertion, and a
         // composed read cannot see that distinction.)
@@ -4251,7 +4251,7 @@ mod tests {
             "authored-scene move persists to the runtime layer"
         );
         // ...and the base layer (what Save writes) stays clean.
-        let attr = lunco_usd_bevy::SdfPath::new("/World.xformOp:translate").unwrap();
+        let attr = openusd::sdf::Path::new("/World.xformOp:translate").unwrap();
         assert!(docu.data().spec(&attr).is_none(), "base layer untouched");
         assert!(
             !docu.source().contains("xformOp:translate"),
@@ -4276,7 +4276,7 @@ mod tests {
 
         let reg = app.world().resource::<DocumentRegistry<UsdDocument>>();
         let docu = reg.host(doc).expect("doc alive").document();
-        let world = lunco_usd_bevy::SdfPath::new("/World").unwrap();
+        let world = openusd::sdf::Path::new("/World").unwrap();
         let authored = docu
             .runtime_data()
             .prim_attribute_value::<[f64; 3]>(&world, "xformOp:rotateXYZ")
@@ -4357,7 +4357,7 @@ mod tests {
         for _ in 0..3 {
             app.update();
         }
-        let world_path = lunco_usd_bevy::SdfPath::new("/World").unwrap();
+        let world_path = openusd::sdf::Path::new("/World").unwrap();
         let gen_after_move = {
             let reg = app.world().resource::<DocumentRegistry<UsdDocument>>();
             let docu = reg.host(doc).unwrap().document();
@@ -4411,7 +4411,7 @@ mod tests {
         assert_eq!(docu.generation(), 0, "un-owned entity move authors nothing");
         assert!(docu
             .runtime_data()
-            .spec(&lunco_usd_bevy::SdfPath::new("/PaletteSpawn").unwrap())
+            .spec(&openusd::sdf::Path::new("/PaletteSpawn").unwrap())
             .is_none());
     }
 
@@ -4457,7 +4457,7 @@ mod tests {
 
         let reg = app.world().resource::<DocumentRegistry<UsdDocument>>();
         let docu = reg.host(doc).expect("doc alive").document();
-        let prim = lunco_usd_bevy::SdfPath::new(&prim_path).unwrap();
+        let prim = openusd::sdf::Path::new(&prim_path).unwrap();
         // The referenced spawn prim landed under the default prim, in RUNTIME...
         assert!(
             docu.runtime_data().spec(&prim).is_some(),

@@ -1,7 +1,7 @@
 //! Shared path helpers for document-backed editor authoring.
 
-use lunco_usd_bevy::SdfPath;
 use lunco_usd_core::document::UsdDocument;
+use openusd::sdf::Path as SdfPath;
 
 /// Join a parent prim path and a child name, including the stage root (`/`).
 pub(crate) fn join_prim(parent: &str, name: &str) -> String {

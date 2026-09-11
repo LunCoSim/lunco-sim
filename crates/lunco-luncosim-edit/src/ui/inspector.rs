@@ -434,8 +434,8 @@ fn mount_attachment_edit_target(
         world.resource::<lunco_doc_bevy::DocumentRegistry<lunco_usd_core::document::UsdDocument>>();
     let document = registry.host(doc)?.document();
     let paths = [
-        lunco_usd_bevy::SdfPath::new(component_path).ok()?,
-        lunco_usd_bevy::SdfPath::new(joint_path).ok()?,
+        openusd::sdf::Path::new(component_path).ok()?,
+        openusd::sdf::Path::new(joint_path).ok()?,
     ];
     [LayerId::runtime(), LayerId::root()]
         .into_iter()
