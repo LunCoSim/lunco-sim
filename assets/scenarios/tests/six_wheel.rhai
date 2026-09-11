@@ -43,6 +43,26 @@ fn set_headlights(target, value) {
     result.ok
 }
 
+fn authored_asset_contract(rover) {
+    if !vessel_wheels_match(rover, 6, 0, 0.4, 0.7, 15000.0, 3000.0, 1.5) {
+        return false;
+    }
+    let camera = query("QueryUsdPrim", #{
+        path: "/SixWheelTest/Rover/FrontCamera",
+        attrs: ["xformOp:translate", "lunco:cameraLookAt"],
+    });
+    if camera == () || camera.ok == false || camera.type_name != "Camera" {
+        return false;
+    }
+    let translation = camera.attrs["xformOp:translate"];
+    let look_at = camera.attrs["lunco:cameraLookAt"];
+    if translation == () || look_at == () {
+        return false;
+    }
+    translation == [0.0, 0.55, 4.0]
+        && look_at == [0.0, 0.75, -12.0]
+}
+
 fn on_start(me) {
     this.t = 0.0;
     this.readiness_elapsed = 0.0;
@@ -80,7 +100,7 @@ fn on_start(me) {
     this.camera_gap_error = 0.0;
     this.camera_fwd_min_dot = 1.0;
     this.camera_baseline = ();
-
+    this.asset_contract = false;
     this.pos_prev = ();
     this.fprev = ();
     this.phase = "settle";
@@ -135,6 +155,10 @@ fn on_tick(me) {
             this.phase = "done";
         }
         return;
+    }
+
+    if !this.asset_contract {
+        this.asset_contract = authored_asset_contract(this.rover);
     }
 
     this.t += dt();
@@ -263,6 +287,7 @@ fn on_tick(me) {
                 render_on_right: this.render_on_right,
                 render_off: this.render_off,
                 render_off_right: this.render_off_right,
+                asset_contract: this.asset_contract,
             });
             return;
         } else if leg >= this.command_timeout {
@@ -304,6 +329,10 @@ fn on_tick(me) {
 fn verdict(s) {
     let f = [];
     f.push(t_bounded(s.pos, 500.0, "rover"));
+
+    f.push(t_true(s.asset_contract,
+        "six-wheel asset did not expose six raycast wheels with the composed " +
+        "tire/suspension parameters and mounted camera contract"));
 
     f.push(t_true(s.yaw_ok > 10,
         "the rover's heading was readable on only " + s.yaw_ok + " ticks, so the " +

@@ -464,7 +464,7 @@ python3 scripts/gen_schema.py
 RUSTC_WRAPPER= cargo fmt --all -- --check
 RUSTC_WRAPPER= cargo test -p lunco-usd --test schema_generation -j 4
 RUSTC_WRAPPER= cargo test -p lunco-modelica --test sensor_contracts -j 4
-RUSTC_WRAPPER= cargo test -p lunco-usd-sim --test usd_connection_derivation -j 4
+RUSTC_WRAPPER= cargo test -p lunco-usd-sim --test usd_connection_mechanics -j 4
 CARGO_INCREMENTAL=1 RUSTC_WRAPPER= cargo build -p lunco-luncosim --bin luncosim -j 4
 ```
 
@@ -478,6 +478,10 @@ scene through the real executable. Report separately:
 - visual behavior observed; and
 - warnings that remain, especially rejected force-loop diagnostics or solver
   warnings.
+
+Keep long USD fixtures and asset-specific assertions in authored `.usda` and
+Rhai scene tests. Rust test stages should be minimal and programmatic, and only
+cover mechanisms that the production query/command surface cannot observe.
 
 Never claim that a source parse or unit test proves the scene is physically
 correct.

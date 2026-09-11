@@ -140,6 +140,70 @@ fn row(tag, t, v_rc, v_ph, d_rc, d_ph) {
     print(s);
 }
 
+fn authored_attr_equal(path_a, path_b, name) {
+    let a = query("QueryUsdPrim", #{ path: path_a, attrs: [name] });
+    let b = query("QueryUsdPrim", #{ path: path_b, attrs: [name] });
+    a != () && b != () && a.ok != false && b.ok != false
+        && a.attrs[name] != () && a.attrs[name] == b.attrs[name]
+}
+
+fn authored_variant_contract(rc, ph) {
+    let raycast = vessel_wheel_summary(rc);
+    let physical = vessel_wheel_summary(ph);
+    let filtered = query("QueryUsdPrim", #{
+        path: "/DrivetrainParity/RoverPhysical/Suspension_FL/Wheel_FL",
+        rels: ["physics:filteredPairs"],
+    });
+    let pair_ok = filtered != () && filtered.ok != false
+        && filtered.relationships["physics:filteredPairs"] ==
+            ["/DrivetrainParity/RoverPhysical/Chassis"];
+    let root_params = true;
+    for name in [
+        "physics:mass",
+        "physxRigidBody:linearDamping",
+        "physxRigidBody:angularDamping",
+        "physics:diagonalInertia",
+    ] {
+        root_params = root_params && authored_attr_equal(
+            "/DrivetrainParity/RoverRaycast",
+            "/DrivetrainParity/RoverPhysical",
+            name);
+    }
+    let wheel_params = true;
+    for suffix in ["FL", "FR", "RL", "RR"] {
+        let ray = "/DrivetrainParity/RoverRaycast/Suspension_" + suffix + "/Wheel_" + suffix;
+        let physical = "/DrivetrainParity/RoverPhysical/Suspension_" + suffix + "/Wheel_" + suffix;
+        for name in [
+            "physxVehicleWheel:radius",
+            "physxVehicleWheel:width",
+            "physxVehicleWheel:mass",
+            "physxVehicleWheel:moi",
+            "physxVehicleWheel:dampingRate",
+            "physxVehicleWheel:maxBrakeTorque",
+            "physxVehicleTire:longitudinalStiffness",
+            "physxVehicleTire:lateralStiffnessGraph",
+            "physxVehicleTire:restLoad",
+            "physics:dynamicFriction",
+            "lunco:wheel:headingAxis",
+            "lunco:suspension:restLength",
+        ] {
+            wheel_params = wheel_params && authored_attr_equal(ray, physical, name);
+        }
+    }
+    let mounts = true;
+    for suffix in ["FL", "FR", "RL", "RR"] {
+        mounts = mounts && authored_attr_equal(
+            "/DrivetrainParity/RoverRaycast/Suspension_" + suffix,
+            "/DrivetrainParity/RoverPhysical/Suspension_" + suffix,
+            "xformOp:translate");
+    }
+    root_params && wheel_params && mounts
+        && raycast.raycast == 4 && raycast.physical == 0
+        && physical.raycast == 0 && physical.physical == 4
+        && raycast.raycast_radius != () && physical.physical_radius != ()
+        && pair_ok
+}
+
 /// Read the solved wheel boundary without adding a Rust-only debug API. The
 /// actuator endpoints are authored child ports, while the tire/Avian values are
 /// the live runtime state. Keeping this probe in the Rhai gate makes the
@@ -191,6 +255,7 @@ fn on_start(me) {
     // the bodies are alive (avian publishes `Computed*` a few ticks after load).
     this.mount_y = -0.65;
     this.mp = ();
+    this.structure_contract = false;
     print("[parity] ── drivetrain parity test ─────────────────────────────");
     print("[parity] raycast rover gid=" + this.rc + "  physical rover gid=" + this.ph);
     print("[parity] contract: omega_max=" + this.omega_max + " rad/s * r=" + this.wheel_r +
@@ -223,6 +288,9 @@ fn on_tick(me) {
     // that the run is still standing still and nothing has been driven.
     if this.mp == () && t > 1.0 {
         this.mp = mass_props(this.rc, this.ph, this.mount_y);
+    }
+    if !this.structure_contract && t > 1.0 {
+        this.structure_contract = authored_variant_contract(this.rc, this.ph);
     }
     let t_drive_end = this.settle_s + this.drive_s;
     let t_steer_end = t_drive_end + this.steer_s;
@@ -398,7 +466,8 @@ fn on_tick(me) {
                 vmin_ph: this.vmin_ph, vmax_plateau_ph: this.vmax_plateau_ph,
                 ymin_rc: this.ymin_rc, ymax_rc: this.ymax_rc,
                 ymin_ph: this.ymin_ph, ymax_ph: this.ymax_ph,
-                mp:       this.mp
+                mp:       this.mp,
+                structure_contract: this.structure_contract,
             });
         }
         return;
@@ -486,6 +555,9 @@ fn verdict(s) {
         let irow = "[parity]   I_yy chassis      " + r2(mp.iyy_rc) + "       " + r2(mp.iyy_ch);
         print(irow + "   (raycast folded; physical chassis-only)");
     }
+    f.push(t_true(s.structure_contract,
+        "drivetrain variants did not expose four raycast versus four physical wheels " +
+        "or the authored physical-wheel clearance relation"));
 
     f.push(t_rel(s.vterm_rc, s.vterm_ph, 15.0, "terminal speed (m/s)"));
     f.push(t_rel(s.vmax_rc, s.vmax_ph, 15.0, "peak speed (m/s)"));

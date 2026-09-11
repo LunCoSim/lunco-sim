@@ -13,11 +13,16 @@ fn port_value(target, name, direction) {
     ()
 }
 
+fn authored_asset_contract(rover) {
+    vessel_wheels_match(rover, 6, 0, 0.4, 0.7, 15000.0, 3000.0, 1.5)
+}
+
 fn on_start(me) {
     this.elapsed = 0.0;
     this.done = false;
     this.rover = find("/SixIndependentParity/Rover");
     this.start = ();
+    this.asset_contract = false;
     if this.rover < 0 {
         this.done = true;
         report_verdict(["six-wheel rover did not compose"],
@@ -36,6 +41,7 @@ fn on_tick(me) {
     }
 
     drive(this.rover, 1.0, 0.0);
+    if !this.asset_contract { this.asset_contract = authored_asset_contract(this.rover); }
     if this.elapsed < 8.0 { return; }
 
     let w0 = port_value(this.rover, "drive_w0", "out");
@@ -53,6 +59,9 @@ fn on_tick(me) {
         t_present(w3, "drive_w3 output"),
         t_present(w4, "drive_w4 output"),
         t_present(w5, "drive_w5 output"),
+        t_true(this.asset_contract,
+            "six-wheel independent asset did not expose six composed raycast wheels " +
+            "with the shared tire/suspension parameters"),
         t_true(travel > 0.5, "six-wheel authored controller did not move the rover"),
     ];
     print("[six-wheel] travel=" + r2(travel) + "m");

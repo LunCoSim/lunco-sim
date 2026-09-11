@@ -1,0 +1,67 @@
+#usda 1.0
+(
+    defaultPrim = "WheelAttachmentContract"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Production acceptance fixture for the standard wheel-attachment form where
+# the wheel, tire, and suspension are separate composed prims. The attached
+# Rhai scenario observes both the authored relationships and the live
+# WheelParams projection; no Rust-only fixture is needed.
+def Xform "WheelAttachmentContract" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
+    kind = "assembly"
+    doc = "A rover wheel whose standard attachment resolves tire and suspension from separate targets."
+    prepend apiSchemas = ["LunCoCatalogAPI"]
+)
+{
+    uniform bool lunco:spawnable = false
+
+    def Xform "Rover" (
+        prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
+        variants = {
+            string power = "infinite"
+            string generation = "none"
+            string thermal = "none"
+            string drivetrain = "raycast"
+        }
+    )
+    {
+        double3 xformOp:translate = (0, 1, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    # These are ordinary reusable component models, not test-local Rust data.
+    def Xform "SeparateTire" (
+        prepend references = @lunco://components/mobility/tires/hard.usda@</Tire>
+    )
+    {
+    }
+    def Xform "SeparateSuspension" (
+        prepend references = @lunco://components/mobility/suspensions/standard.usda@</Suspension>
+    )
+    {
+    }
+
+    # The wheel remains the standard attachment prim. Only its endpoint
+    # relationships are redirected to the separately composed component arcs.
+    over "Rover/Suspension_FL/Wheel_FL"
+    {
+        rel physxVehicleWheelAttachment:tire = </WheelAttachmentContract/SeparateTire>
+        rel physxVehicleWheelAttachment:suspension = </WheelAttachmentContract/SeparateSuspension>
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "wheel-attachment-contract"
+
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/wheel_attachment_contract.rhai@
+        }
+    }
+}

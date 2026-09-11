@@ -668,11 +668,12 @@ the `ControlAnimation` command (API/MCP) and the Inspector **Animation** section
 (T5/T7) for the clock model.
 
 ### Testing
-All tests load **real USD files** through the same pipeline as runtime. Ownership
-follows the narrowest production boundary:
+All runtime acceptance tests load **real USD files** through the same pipeline
+as runtime. Ownership follows the narrowest production boundary:
 - `crates/lunco-usd-bevy/tests/migration_smoke.rs` — composed-stage reader and composition migration
-- `crates/lunco-usd-sim/tests/asset_loading_pipeline.rs` — full pipeline (composition → Bevy → Avian → Sim)
-- `crates/lunco-usd-sim/tests/rover_structure_pipeline.rs` — wheel entity structure (identity rotation + visual child)
+- `crates/lunco-usd/tests/live_spawn_projection.rs` — document-backed USD authoring and raw asset composition facts
+- `crates/lunco-usd-sim/tests/usd_connection_mechanics.rs` — generic connection derivation and transform mechanics
+- `assets/scenarios/tests/*.rhai` through the production `luncosim test` gate — composed USD → Bevy → Avian → simulation outcomes, including rover structure, wheel realization, wiring, EPS, and link visibility
 
 ---
 
