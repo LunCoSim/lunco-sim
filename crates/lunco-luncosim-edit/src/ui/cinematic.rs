@@ -31,10 +31,10 @@ use lunco_doc_bevy::DocumentRegistry;
 use lunco_render::SceneCamera;
 use lunco_time::{ControlAnimation, Playback, TransportMode};
 use lunco_usd::commands::ApplyUsdOp;
-use lunco_usd::document::UsdDocument;
-use lunco_usd::document::{LayerId, UsdOp};
 use lunco_usd_bevy::camera_path::{eval_curve, eval_curve_tangent, AimMode, CameraPath};
 use lunco_usd_bevy::UsdPrimPath;
+use lunco_usd_core::document::UsdDocument;
+use lunco_usd_core::document::{LayerId, UsdOp};
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
 use super::authoring_paths::{join_prim, prim_exists};
@@ -284,7 +284,7 @@ fn on_add_camera_here(
     };
 
     let Some(root) =
-        lunco_usd_bevy::layer_default_prim(host.document().data()).map(|p| format!("/{p}"))
+        lunco_usd_bevy_core::layer_default_prim(host.document().data()).map(|p| format!("/{p}"))
     else {
         report_capture_failure(
             &mut commands,

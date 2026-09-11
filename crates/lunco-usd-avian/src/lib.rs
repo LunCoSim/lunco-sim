@@ -54,13 +54,15 @@ use bevy::math::{DQuat, DVec3};
 use bevy::mesh::VertexAttributeValues;
 use bevy::prelude::*;
 use lunco_core::coords::GridPos;
-pub use lunco_usd_bevy::{effective_purpose, Purpose};
+use lunco_usd_bevy::UsdPrimPath;
 use lunco_usd_bevy::{
-    instance_key, is_preview_only, local_transform_at, read_primitive_axis, read_shape_dims,
-    read_usd_mesh_indexed, usd_axis_to_quat, ShapeDims, TransformReadError, UsdAnimated,
-    UsdInstanceProjection, UsdPreviewOnly, UsdRead, UsdSceneRoot, UsdVisualSynced,
+    instance_key, is_preview_only, read_primitive_axis, read_shape_dims, read_usd_mesh_indexed,
+    usd_axis_to_quat, ShapeDims, UsdAnimated, UsdPreviewOnly, UsdSceneRoot, UsdVisualSynced,
 };
-pub use lunco_usd_bevy::{UsdInstanceRoot, UsdPrimPath, UsdStageAsset};
+use lunco_usd_bevy_core::{
+    effective_purpose, local_transform_at, Purpose, TransformReadError, UsdInstanceProjection,
+    UsdInstanceRoot, UsdRead, UsdStageAsset,
+};
 use openusd::sdf::Path as SdfPath;
 // UsdPhysics attribute + API-schema names as CONSTANTS, from openusd's own schema
 // module. Hand-written `"physics:…"` string literals are how `physics:friction`
@@ -871,7 +873,7 @@ impl std::error::Error for ColliderProjectionError {}
 /// never derives a collider from a domain parameter such as wheel radius or
 /// width. Missing or unsupported authored geometry is an error at the owner.
 pub fn authored_collider_from_usd(
-    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     sdf_path: &SdfPath,
 ) -> Result<Collider, ColliderProjectionError> {
     if !reader.has_api_schema(sdf_path, ptok::API_COLLISION) {
@@ -916,11 +918,11 @@ pub fn authored_collider_from_usd(
 }
 
 fn collect_child_colliders_from_usd(
-    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     parent_path: &SdfPath,
 ) -> Result<Vec<(Position, Rotation, Collider)>, ColliderProjectionError> {
     let mut shapes = Vec::new();
-    let convention = lunco_usd_bevy::stage_convention(reader).map_err(|_| {
+    let convention = lunco_usd_bevy_core::stage_convention(reader).map_err(|_| {
         ColliderProjectionError::Transform(TransformReadError {
             prim: parent_path.as_str().to_owned(),
         })
@@ -1101,7 +1103,7 @@ fn collect_child_colliders_from_usd(
 ///   collider piece of the chassis compound — matches the same skip in
 ///   `process_usd_avian_prims`.
 fn gather_compound_candidates(
-    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     path: &SdfPath,
     acc: Transform,
     out: &mut Vec<(SdfPath, Transform)>,
@@ -1158,7 +1160,7 @@ fn gather_compound_candidates(
 /// `UsdGeomCube` is cubic: `size` is its only dimension. A non-uniform box is
 /// `size` plus a non-uniform `xformOp:scale`, which the scale tail applies.
 fn build_collider_from_usd(
-    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     sdf_path: &SdfPath,
 ) -> Result<Option<Collider>, ColliderProjectionError> {
     let scale = local_transform_at(reader, sdf_path, 0.0)
@@ -1178,7 +1180,7 @@ fn build_collider_from_usd(
 /// transform; compound children obtain it from [`gather_compound_candidates`],
 /// because intermediate USD Xforms have no corresponding Avian collider entity.
 fn build_collider_from_usd_at_scale(
-    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     sdf_path: &SdfPath,
     scale: Vec3,
 ) -> Option<Collider> {
@@ -1277,7 +1279,7 @@ fn apply_collider_scale(mut collider: Collider, scale: Vec3) -> Collider {
 fn add_collider_from_usd(
     commands: &mut Commands,
     entity: Entity,
-    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     sdf_path: &SdfPath,
 ) -> Result<(), ColliderProjectionError> {
     if let Some(collider) = build_collider_from_usd(reader, sdf_path)? {
@@ -1340,7 +1342,7 @@ fn reject_collider_projection(
 /// answers the same way for the prepared initial plan and the live edited stage,
 /// independently of where the prim happens to sit in the ECS.
 fn has_rigid_body_ancestor(
-    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     sdf_path: &SdfPath,
 ) -> bool {
     let mut cur = sdf_path.parent();
@@ -1364,7 +1366,7 @@ fn has_rigid_body_ancestor(
 ///
 /// A collider that DOES have a rigid-body ancestor is not a body — it is folded
 /// into that ancestor's compound shape — so it is deliberately not one here.
-fn is_avian_body(reader: &dyn lunco_usd_bevy::read::UsdReadObject, path: &SdfPath) -> bool {
+fn is_avian_body(reader: &dyn lunco_usd_bevy_core::read::UsdReadObject, path: &SdfPath) -> bool {
     reader.has_api_schema(path, ptok::API_RIGID_BODY)
         || reader.has_api_schema(path, "LunCoTerrainAPI")
         || (reader.has_api_schema(path, ptok::API_COLLISION)
@@ -1393,7 +1395,7 @@ fn is_avian_body(reader: &dyn lunco_usd_bevy::read::UsdReadObject, path: &SdfPat
 /// and that derivation must run against the frame of the body the joint is really
 /// built on. Resolving later would leave the anchor expressed in the wrong frame.
 fn nearest_body_path(
-    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     path: &SdfPath,
 ) -> Option<SdfPath> {
     let mut cur = Some(path.clone());
@@ -1415,7 +1417,7 @@ fn nearest_body_path(
 /// Keep this resolution in the Avian USD reader so topology consumers cannot
 /// accidentally compare an unresolved authored path with a resolved ECS path.
 pub fn resolve_joint_body_path(
-    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     target: &str,
 ) -> Option<String> {
     let path = SdfPath::new(target).ok()?;
@@ -1618,7 +1620,7 @@ fn process_usd_avian_prims(
     q_scene_root: Query<(), With<UsdSceneRoot>>,
     mount_state: Option<Res<lunco_core::SceneMountState>>,
     stages: Res<Assets<UsdStageAsset>>,
-    canonical: NonSend<lunco_usd_bevy::CanonicalStages>,
+    canonical: NonSend<lunco_usd_bevy_core::canonical::CanonicalStages>,
     mut group_tables: ResMut<CollisionGroupTables>,
     mut commands: Commands,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
@@ -1700,10 +1702,10 @@ fn process_usd_avian_prims(
 /// scene author only the half it cares about — a lunar scene names 1.62 and says
 /// nothing about direction.
 fn read_physics_scene_gravity(
-    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     sdf_path: &SdfPath,
 ) -> Result<(f64, DVec3), &'static str> {
-    let convention = lunco_usd_bevy::stage_convention(reader)
+    let convention = lunco_usd_bevy_core::stage_convention(reader)
         .map_err(|_| "stage convention metadata is invalid")?;
     let magnitude = match reader.real(sdf_path, ptok::A_GRAVITY_MAGNITUDE) {
         Some(value) if value < 0.0 => lunco_environment::EARTH_SURFACE_GRAVITY,
@@ -1740,7 +1742,7 @@ fn read_physics_scene_gravity(
 }
 
 fn apply_physics_scene_gravity(
-    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     sdf_path: &SdfPath,
     commands: &mut Commands,
 ) {
@@ -1793,7 +1795,7 @@ fn apply_physics_scene_gravity(
 /// shared reader boundary. Split out of the observer so the read body can be
 /// driven directly by tests.
 fn is_physics_joint_type(
-    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     sdf_path: &SdfPath,
 ) -> bool {
     matches!(
@@ -1816,7 +1818,7 @@ fn is_physics_joint_type(
 /// can arrive before the stage. This keeps valid joints and malformed-joint
 /// faults independent of loading order.
 fn project_pending_joint(
-    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     entity: Entity,
     sdf_path: &SdfPath,
     commands: &mut Commands,
@@ -1853,7 +1855,7 @@ fn project_pending_joint(
 }
 
 fn extract_avian_prim(
-    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     entity: Entity,
     sdf_path: &SdfPath,
     groups: &CollisionGroupTable,
@@ -2215,7 +2217,7 @@ fn apply_collision_groups(
 /// An omitted xform stack composes as USD identity; malformed authored data is returned
 /// as an error.
 pub fn world_transform(
-    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     path: &SdfPath,
 ) -> Result<Transform, TransformReadError> {
     if !reader.has_prim(path) {
@@ -2261,7 +2263,7 @@ pub fn world_transform(
 /// Avian's runtime velocity components are world-frame. Keep that rotation in
 /// one helper so linear and angular initial state share the same convention.
 fn local_vector_to_world(
-    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     path: &SdfPath,
     local: DVec3,
 ) -> Result<DVec3, TransformReadError> {
@@ -2275,7 +2277,7 @@ fn local_vector_to_world(
 /// USD read surface so nested component references and intermediate Xforms remain
 /// valid without repeating the mount position in another description.
 pub fn transform_in_body_frame(
-    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     body_path: &SdfPath,
     prim_path: &SdfPath,
 ) -> Option<Transform> {
@@ -2310,7 +2312,7 @@ pub fn transform_in_body_frame(
 /// local anchor). Relative, hence invariant under the reference/path-translation that
 /// drops a shared component onto each rover root.
 fn derive_joint_anchor(
-    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     body0: &str,
     body1: &str,
 ) -> Option<(DVec3, DVec3)> {
@@ -2332,7 +2334,7 @@ fn derive_joint_anchor(
 /// is resolved from the authored body relationship and applied wheel schema,
 /// never from a prim name or a joint-name convention.
 fn joint_targets_simulated_wheel(
-    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     path: &SdfPath,
 ) -> bool {
     let targets = reader.rel_targets(path, "physics:body1");
@@ -2355,7 +2357,7 @@ fn joint_targets_simulated_wheel(
 /// (owned by `lunco-usd-sim`). Revolute limits are converted degrees→radians
 /// (the `PendingUsdJoint` contract); prismatic/distance stay in scene units.
 fn read_joint_spec(
-    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     path: &SdfPath,
 ) -> Option<PendingUsdJoint> {
     read_joint_spec_with_policy(reader, path, true)
@@ -2368,14 +2370,14 @@ fn read_joint_spec(
 /// constraint merely because the test needs to prove that the linter catches
 /// it.
 pub(crate) fn read_joint_spec_for_lint(
-    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     path: &SdfPath,
 ) -> Option<PendingUsdJoint> {
     read_joint_spec_with_policy(reader, path, false)
 }
 
 fn read_joint_spec_with_policy(
-    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     path: &SdfPath,
     skip_lint_only: bool,
 ) -> Option<PendingUsdJoint> {
@@ -2406,7 +2408,7 @@ fn read_joint_spec_with_policy(
     // Read raw it would hinge about the wrong axis while the meshes and colliders
     // (which do convert, via `local_transform_at`) sit correctly: a silently
     // wrong joint in a visually right assembly.
-    let conv = lunco_usd_bevy::stage_convention(view).ok()?;
+    let conv = lunco_usd_bevy_core::stage_convention(view).ok()?;
     let read_real_or_default = |name: &str, default: f64| -> Option<f64> {
         match view.real(path, name) {
             Some(value) => Some(value),
@@ -2473,7 +2475,7 @@ fn read_joint_spec_with_policy(
     // `world_transform` → `local_transform_at`, which already converted. Applying
     // the convention to both would double-convert the derived path.
     let base = || -> Option<JointBaseRead> {
-        let conv = lunco_usd_bevy::stage_convention(reader).ok()?;
+        let conv = lunco_usd_bevy_core::stage_convention(reader).ok()?;
         // An endpoint that names a prim which is not itself a body resolves to
         // the body that prim is rigidly part of — see [`nearest_body_path`].
         // This is what lets a mounted mechanism name its own root instead of its
@@ -2862,7 +2864,7 @@ fn read_joint_spec_with_policy(
 /// (`limit:{transX..rotZ}`). A DOF is locked when `low > high` and free when
 /// the limit schema is absent or its bounds are unauthored.
 fn reduce_generic_joint(
-    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     path: &SdfPath,
 ) -> Option<(&'static str, DVec3, f64, f64, bool)> {
     const DOFS: [(&str, DVec3, bool); 6] = [
@@ -2953,7 +2955,7 @@ fn on_add_usd_prim(
     q_child_of: Query<&ChildOf>,
     q_preview_only: Query<(), With<UsdPreviewOnly>>,
     stages: Res<Assets<UsdStageAsset>>,
-    canonical: NonSend<lunco_usd_bevy::CanonicalStages>,
+    canonical: NonSend<lunco_usd_bevy_core::canonical::CanonicalStages>,
     mut commands: Commands,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
@@ -4141,7 +4143,7 @@ pub fn wheel_revolute_joint(
 /// reader f64 end-to-end is what avoids the documented silent-`None`
 /// "bodies launched into orbit" bug for `physics:localPos*` anchors.
 fn read_vec3_attribute(
-    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     path: &SdfPath,
     attr: &str,
 ) -> Option<DVec3> {
@@ -4152,7 +4154,7 @@ fn read_vec3_attribute(
 /// for an omitted attribute, so a wrong USD type cannot become a schema default
 /// at a physics boundary.
 fn read_authored_real(
-    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     path: &SdfPath,
     attr: &str,
 ) -> Result<Option<f64>, ()> {
@@ -4166,7 +4168,7 @@ fn read_authored_real(
 /// Read an authored vector without treating a malformed value as an omitted
 /// override. Physics vectors must also remain finite after the read.
 fn read_authored_vec3(
-    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     path: &SdfPath,
     attr: &str,
 ) -> Result<Option<DVec3>, ()> {
@@ -4180,7 +4182,7 @@ fn read_authored_vec3(
 /// Read an authored quaternion, rejecting wrong types, non-finite values and
 /// the zero quaternion rather than silently using identity.
 fn read_authored_quat(
-    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     path: &SdfPath,
     attr: &str,
 ) -> Result<Option<DQuat>, ()> {
@@ -4201,7 +4203,7 @@ fn read_authored_quat(
 /// Read a boolean while preserving the distinction between an omitted standard
 /// default and an authored value of the wrong type.
 fn read_authored_bool_or_default(
-    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     path: &SdfPath,
     attr: &str,
     default: bool,
@@ -4228,7 +4230,7 @@ fn read_authored_bool_or_default(
 fn apply_rigid_body_mass_props(
     commands: &mut Commands,
     entity: Entity,
-    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     sdf_path: &SdfPath,
 ) -> Result<(), ()> {
     // Each of `Mass` / `AngularInertia` / `CenterOfMass` is only an OVERRIDE if the
@@ -4252,7 +4254,7 @@ fn apply_rigid_body_mass_props(
     // MassAPI's ZERO is a sentinel, not a value: `mass = 0`, `density = 0` and
     // `diagonalInertia = (0,0,0)` all mean "unauthored — compute me". Treating
     // them as overrides hands the solver a degenerate body.
-    let conv = lunco_usd_bevy::stage_convention(reader).map_err(|_| ())?;
+    let conv = lunco_usd_bevy_core::stage_convention(reader).map_err(|_| ())?;
     let mpu = conv.length(1.0);
     if !mpu.is_finite() || mpu <= 0.0 {
         return Err(());
@@ -4411,7 +4413,7 @@ fn apply_rigid_body_mass_props(
 fn apply_physics_material(
     commands: &mut Commands,
     entity: Entity,
-    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     sdf_path: &SdfPath,
 ) -> Result<(), ()> {
     // Friction/restitution come from a bound `UsdPhysicsMaterialAPI` material —
@@ -4550,7 +4552,7 @@ pub struct PhysicsMaterial {
 ///
 /// Binding resolution — namespace inheritance, and the purpose→all-purpose
 /// fallback that lets ONE `Material` drive both look and friction — is SHARED
-/// with the renderer ([`lunco_usd_bevy::resolve_bound_material`]). A physical and
+/// with the renderer ([`lunco_usd_bevy_core::resolve_bound_material`]). A physical and
 /// a visual material are the same USD concept bound for different purposes, so
 /// they must resolve through the same code or they will drift.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4576,12 +4578,12 @@ impl std::fmt::Display for PhysicsMaterialReadError {
 impl std::error::Error for PhysicsMaterialReadError {}
 
 pub fn read_physics_material(
-    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     prim: &SdfPath,
 ) -> Result<Option<PhysicsMaterial>, PhysicsMaterialReadError> {
     use openusd::schemas::physics::tokens as ptok;
 
-    let Some(mat_path) = reader.bound_material(prim, lunco_usd_bevy::MaterialPurpose::Physics)
+    let Some(mat_path) = reader.bound_material(prim, lunco_usd_bevy_core::MaterialPurpose::Physics)
     else {
         return Ok(None);
     };
@@ -4680,7 +4682,8 @@ mod collider_parity_tests {
 
     use super::build_collider_from_usd;
     use bevy::math::DVec3;
-    use lunco_usd_bevy::{compose_file_to_stage, StageView};
+    use lunco_usd_bevy_core::compose::compose_file_to_stage;
+    use lunco_usd_bevy_core::StageView;
     use openusd::sdf::Path as SdfPath;
 
     // A UsdGeomMesh pyramid: default → exact trimesh; `physics:approximation =
@@ -4790,7 +4793,8 @@ mod extract_parity_tests {
     use avian3d::prelude::*;
     use bevy::ecs::world::CommandQueue;
     use bevy::prelude::*;
-    use lunco_usd_bevy::{compose_file_to_stage, StageView};
+    use lunco_usd_bevy_core::compose::compose_file_to_stage;
+    use lunco_usd_bevy_core::StageView;
     use openusd::sdf::Path as SdfPath;
 
     // A rover chassis (RigidBodyAPI, mass 500) with a child Cube collider
@@ -5068,7 +5072,8 @@ mod joint_reader_tests {
     use super::{read_joint_spec, read_joint_spec_for_lint};
     use avian3d::prelude::MotorModel;
     use bevy::math::DVec3;
-    use lunco_usd_bevy::{compose_file_to_stage, StageView};
+    use lunco_usd_bevy_core::compose::compose_file_to_stage;
+    use lunco_usd_bevy_core::StageView;
     use openusd::sdf::Path as SdfPath;
 
     const FIXTURE: &str = r#"#usda 1.0
@@ -5301,8 +5306,8 @@ def PhysicsPrismaticJoint "FixtureSpring" (
     float drive:linear:physics:stiffness = 4000.0
 }
 "#;
-        let stage = lunco_usd_bevy::CanonicalStage::from_recipe(
-            &lunco_usd_bevy::StageRecipe::from_source("lint_only.usda", source),
+        let stage = lunco_usd_bevy_core::canonical::CanonicalStage::from_recipe(
+            &lunco_usd_core::StageRecipe::from_source("lint_only.usda", source),
         )
         .expect("compose lint-only fixture");
         let view = stage.view();
@@ -5785,7 +5790,8 @@ def Xform \"Host\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
 #[cfg(test)]
 mod collider_ownership_tests {
     use super::*;
-    use lunco_usd_bevy::{CanonicalStage, StageRecipe};
+    use lunco_usd_bevy_core::canonical::CanonicalStage;
+    use lunco_usd_core::StageRecipe;
     use std::collections::HashMap;
 
     #[test]
@@ -5952,7 +5958,7 @@ def Xform "Mission"
 "#;
 
     /// Run the extractor on one prim and return its resulting components.
-    fn extract(view: &lunco_usd_bevy::StageView<'_>, path: &str) -> (bool, Option<RigidBody>) {
+    fn extract(view: &lunco_usd_bevy_core::StageView<'_>, path: &str) -> (bool, Option<RigidBody>) {
         let mut world = World::new();
         let entity = world.spawn_empty().id();
         let sdf = SdfPath::new(path).unwrap();

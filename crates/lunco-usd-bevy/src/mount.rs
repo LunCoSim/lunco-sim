@@ -37,8 +37,8 @@
 //! stage. A socket/plug frame is composed relative to its **body root** (the host or
 //! the part), so arbitrary intermediate grouping is handled correctly.
 //!
-//! [`resolve_mount_placement`]: lunco_usd::attach::resolve_mount_placement
-//! [`realign_component_ops`]: lunco_usd::attach::realign_component_ops
+//! [`resolve_mount_placement`]: lunco_usd_core::attach::resolve_mount_placement
+//! [`realign_component_ops`]: lunco_usd_core::attach::realign_component_ops
 
 use bevy::prelude::Transform;
 use openusd::sdf::Path as SdfPath;
@@ -412,7 +412,7 @@ pub fn read_plug(reader: &crate::StageView<'_>, part: &str) -> Option<MountPlug>
 /// Native-only: composition does file I/O.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_asset_plug(asset_path: &std::path::Path) -> Option<MountPlug> {
-    let stage = crate::compose_file_to_stage(asset_path).ok()?;
+    let stage = lunco_usd_bevy_core::compose::compose_file_to_stage(asset_path).ok()?;
     let cs = crate::CanonicalStage::from_stage(stage, asset_path.to_string_lossy().to_string());
     let view = cs.view();
     let default_prim = view.default_prim()?;
@@ -429,7 +429,8 @@ mod mount_reader_tests {
     //! bug the design deferred the UI for; this pins it deterministically.
 
     use super::{read_plug, read_sockets};
-    use crate::canonical::{CanonicalStage, StageRecipe};
+    use crate::canonical::CanonicalStage;
+    use lunco_usd_core::StageRecipe;
 
     // Base at (5,6,5); a socket 2.5 up under an arbitrary Interfaces group
     // naming a child Arm; Arm (off at +2 X) carries a plug frame under

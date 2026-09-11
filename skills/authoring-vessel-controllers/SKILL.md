@@ -52,6 +52,14 @@ Before writing a new controller:
 
 This is a discovery rule, not a requirement to reuse one particular vehicle.
 
+For a new controller assembly, use the generic Rhai authoring checkpoint before
+debugging the equations: `model_context` reads the exact program/body tree,
+`readiness_report` checks the caller's topology, physicality, mount, connection,
+control, and runtime policy, and `port_graph`/`wiring_plan` validates the
+standard USD endpoint paths and types. Keep the controller's continuous law in
+Modelica and the phase/mission policy in Rhai; these facades only inspect and
+return dry typed USD plans. See the [model-authoring guide](../../docs/scripting-guide.md#model-and-assembly-authoring-human-and-ai).
+
 ## 1. The control law → a Modelica model
 
 The model reads what the vessel **senses** and outputs force/torque. It is a PROGRAM,

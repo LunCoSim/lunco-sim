@@ -13,7 +13,7 @@
 //! # The properties are real USD now
 //!
 //! `lunco:spawnable` is declared by **`LunCoCatalogAPI`**
-//! (`lunco-usd/schema/schema.usda`), applied to the asset's default prim. It is
+//! (`lunco-usd-core/schema/schema.usda`), applied to the asset's default prim. It is
 //! an explicit opt-in; placement is derived from standard `UsdPhysics` collision
 //! geometry by the editor.
 //!
@@ -21,7 +21,7 @@
 //! carries `doc` metadata, the standard description shown by usdview and other
 //! USD tools.
 
-use lunco_usd_bevy::DefaultPrim;
+use lunco_usd_bevy_core::DefaultPrim;
 
 /// Spawn metadata authored on a `*.usda`'s default prim.
 #[derive(Debug, Clone, PartialEq)]
@@ -58,7 +58,7 @@ pub fn parse_spawn_meta(src: &str) -> SpawnMeta {
     };
     SpawnMeta {
         // Typed `bool`, declared by `LunCoCatalogAPI` (see
-        // lunco-usd/schema/schema.usda).
+        // lunco-usd-core/schema/schema.usda).
         spawnable: prim.scalar::<bool>("lunco:spawnable").unwrap_or(false),
         // USD's `doc` prim metadata — NOT an attribute of ours. See the field doc.
         description: prim.documentation(),

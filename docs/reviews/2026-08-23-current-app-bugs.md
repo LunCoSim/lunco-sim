@@ -105,7 +105,7 @@ The titlebar already uses vector-painted controls because missing glyphs become
 tofu. Other current menus, help, tutorial, and Modelica controls still use
 emoji/Unicode glyphs as visual icons. That is the regression after the earlier
 tofu cleanup: the fallback font is not the root fix. Separately,
-`lunco-luncosim/build.rs` rasterizes an SVG for `winit::Window::set_window_icon`.
+`lunco-luncosim-ui/build.rs` rasterizes an SVG for `winit::Window::set_window_icon`.
 The latest GitHub Linux AppImage contains a valid root PNG and `.DirIcon`, but
 its generated desktop entry declares `StartupWMClass=LunCoSim-linux-x64` while
 the compiled Bevy/winit window used `luncosim`. That identity mismatch prevents
@@ -113,7 +113,7 @@ Linux shells from associating the running window with the packaged icon.
 
 **Implementation:** all scanned UI control glyphs were replaced with the shared
 vector `UiIcon` vocabulary, including Mission Control, Celestial time, busy
-cancellation, and Modelica experiment controls. The Rust build script renders
+cancellation, and Modelica experiment controls. The UI build script renders
 the canonical per-platform SVG and emits the package-native outputs: an
 embedded Windows ICO/PE resource, a macOS iconset for `iconutil`, and Linux
 hicolor PNGs. `build_native.sh` passes the resulting `.ico`, `.icns`, or `.png`

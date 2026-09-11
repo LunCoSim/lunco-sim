@@ -3,9 +3,9 @@
 use avian3d::prelude::Collider;
 use bevy::prelude::{App, Children, Entity, Name, Or, With};
 use lunco_usd_bevy::{
-    CanonicalStage, CanonicalStages, StageRecipe, UsdAwaitingStage, UsdStageAsset,
-    UsdVisualProjectionQueued,
+    CanonicalStage, CanonicalStages, UsdAwaitingStage, UsdStageAsset, UsdVisualProjectionQueued,
 };
+use lunco_usd_core::StageRecipe;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -17,13 +17,11 @@ use std::path::Path;
 pub(crate) fn cuboid_half_extents(col: &Collider) -> Vec<[f32; 3]> {
     let shape = col.shape();
     if let Some(c) = shape.as_cuboid() {
-        return vec![
-            [
-                c.half_extents.x as f32,
-                c.half_extents.y as f32,
-                c.half_extents.z as f32,
-            ],
-        ];
+        return vec![[
+            c.half_extents.x as f32,
+            c.half_extents.y as f32,
+            c.half_extents.z as f32,
+        ]];
     }
     if let Some(compound) = shape.as_compound() {
         return compound
@@ -57,9 +55,9 @@ pub(crate) fn chassis_child(app: &App, rover: Entity, label: impl std::fmt::Disp
     kids.iter()
         .find_map(|c| {
             let c = *c;
-            app.world().get::<Name>(c).and_then(|n| {
-                n.as_str().contains("Chassis").then_some(c)
-            })
+            app.world()
+                .get::<Name>(c)
+                .and_then(|n| n.as_str().contains("Chassis").then_some(c))
         })
         .unwrap_or_else(|| panic!("{label}: rover has no Chassis child"))
 }

@@ -4,7 +4,7 @@
 //! A variantSet is how one asset ships several configurations: a rover's
 //! `drivetrain` (raycast | physical), a scenario scene's `terrain` (which real
 //! lunar site it composes with). Selecting one is a first-class journaled op
-//! ([`UsdOp::SetVariantSelection`](lunco_usd::document::UsdOp)) — networked,
+//! ([`UsdOp::SetVariantSelection`](lunco_usd_core::document::UsdOp)) — networked,
 //! undoable, and replayed from the journal like every other edit — so a picker
 //! here is a real authoring control, not a debug toggle.
 //!
@@ -21,14 +21,16 @@
 //! - **Available options** — composition can only ever show ONE selection at a
 //!   time, so the options cannot be read off the composed stage at all. They
 //!   come from the authored layers via
-//!   [`lunco_usd_bevy::variants::variant_options_in_stage`], which also
+//!   [`lunco_usd_bevy_core::variants::variant_options_in_stage`], which also
 //!   documents why they are keyed by set NAME rather than by prim path.
 
 use std::collections::HashMap;
 
 use bevy::prelude::*;
-use lunco_usd::ui::viewport::{UsdPreviewId, UsdViewportState};
-use lunco_usd_bevy::{CanonicalStages, SdfPath, UsdPrimPath, UsdStageAsset};
+use lunco_usd_bevy::SdfPath;
+use lunco_usd_bevy::UsdPrimPath;
+use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdStageAsset};
+use lunco_usd_ui::viewport::{UsdPreviewId, UsdViewportState};
 
 /// One variant set on a preview session's selected prim.
 #[derive(Clone)]
@@ -48,7 +50,7 @@ pub struct UsdVariantSet {
 pub struct UsdVariantSessionView {
     pub preview: UsdPreviewId,
     pub doc: lunco_doc::DocumentId,
-    pub edit_target: lunco_usd::document::LayerId,
+    pub edit_target: lunco_usd_core::document::LayerId,
     pub generation: u64,
     pub entity: Option<Entity>,
     /// USD path of the prim the rows belong to — the op's `path`.
@@ -157,7 +159,7 @@ pub fn produce_usd_variant_view(
             continue;
         }
 
-        let options_by_set = lunco_usd_bevy::variants::variant_options_in_stage(stage);
+        let options_by_set = lunco_usd_bevy_core::variants::variant_options_in_stage(stage);
         for (name, selection) in selections {
             let options = options_by_set.get(&name).cloned().unwrap_or_default();
             session_view.sets.push(UsdVariantSet {

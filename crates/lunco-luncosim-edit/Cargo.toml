@@ -16,7 +16,7 @@ lunco-scene-commands = { path = "../lunco-scene-commands" }
 # (`lunco_render::PbrLook`, `lunco_materials::ShaderLook`) and bound by
 # `lunco-render-bevy`; see `docs/architecture/render-decoupling.md`. The compiler
 # is the enforcement — put `bevy_pbr` back and the rule quietly rots.
-bevy = { workspace = true, features = ["bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light", "bevy_shader"] }
+bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh", "bevy_light", "bevy_shader"] }
 # Appearance intent (render-free): `PbrLook`. Every PBR material site in this crate
 # goes through it instead of `Assets<StandardMaterial>`.
 lunco-render = { path = "../lunco-render" }
@@ -70,6 +70,9 @@ lunco-modelica-ui = { path = "../lunco-modelica-ui", default-features = false }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 lunco-usd = { path = "../lunco-usd", default-features = false }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
+lunco-usd-core = { path = "../lunco-usd-core" }
+lunco-usd-ui = { path = "../lunco-usd-ui", optional = true }
 # Active-document resolution for C4b runtime-layer persistence (ECS-only, no UI).
 lunco-workspace = { path = "../lunco-workspace" }
 lunco-usd-sim = { path = "../lunco-usd-sim" }
@@ -101,7 +104,7 @@ ui = [
     "dep:lunco-canvas",
     "lunco-modelica-ui/ui",
     "lunco-avatar/ui",
-    "lunco-usd/ui",
+    "dep:lunco-usd-ui",
     "bevy/bevy_post_process",
     "bevy/bevy_anti_alias",
     "bevy/mesh_picking",

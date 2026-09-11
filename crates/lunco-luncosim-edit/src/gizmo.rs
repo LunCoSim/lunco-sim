@@ -26,11 +26,11 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use lunco_core::SceneViewport;
 use lunco_doc::DocumentId;
-use lunco_usd::document::LayerId;
-use lunco_usd::ui::viewport::{
+use lunco_usd_bevy::UsdPrimPath;
+use lunco_usd_core::document::LayerId;
+use lunco_usd_ui::viewport::{
     UsdPreviewId, UsdViewportState, USD_PREVIEW_VIEW_PANEL_ID, USD_VIEWPORT_PANEL_ID,
 };
-use lunco_usd_bevy::UsdPrimPath;
 use lunco_workbench::{PanelRect, PanelRects, ScenePickGate, SceneTarget};
 use transform_gizmo_bevy::{
     GizmoCamera, GizmoDragStarted, GizmoDragging, GizmoMode, GizmoOptions, GizmoTarget,
@@ -790,7 +790,7 @@ pub fn restore_gizmo_dynamic(
                 {
                     let mut ops = Vec::with_capacity(3);
                     if (drag.current_position - drag.original_position).length_squared() > 1.0e-12 {
-                        ops.push(lunco_usd::document::UsdOp::SetTranslate {
+                        ops.push(lunco_usd_core::document::UsdOp::SetTranslate {
                             edit_target: edit_target.clone(),
                             path: path.clone(),
                             value: drag.current_position.to_array(),
@@ -798,7 +798,7 @@ pub fn restore_gizmo_dynamic(
                     }
                     if drag.current_rotation.dot(drag.original_rotation).abs() < 1.0 - 1.0e-12 {
                         let (rx, ry, rz) = drag.current_rotation.to_euler(EulerRot::XYZ);
-                        ops.push(lunco_usd::document::UsdOp::SetRotate {
+                        ops.push(lunco_usd_core::document::UsdOp::SetRotate {
                             edit_target: edit_target.clone(),
                             path: path.clone(),
                             value: [rx.to_degrees(), ry.to_degrees(), rz.to_degrees()],
@@ -808,7 +808,7 @@ pub fn restore_gizmo_dynamic(
                         (drag.current_scale, drag.original_scale)
                     {
                         if (current - original).length_squared() > 1.0e-12 {
-                            ops.push(lunco_usd::document::UsdOp::SetScale {
+                            ops.push(lunco_usd_core::document::UsdOp::SetScale {
                                 edit_target: edit_target.clone(),
                                 path: path.clone(),
                                 value: current.to_array(),

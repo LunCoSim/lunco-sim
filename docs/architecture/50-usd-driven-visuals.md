@@ -252,9 +252,9 @@ Use `inputs:*` only for what a colour cannot express — accents, panel scale, w
 
 | File | Role |
 |---|---|
-| `schema/schema.usda` | the authoritative source. **Not read at runtime.** |
-| `schema/generatedSchema.usda` | what is compiled in (`include_str!`) and ingested by `lunco_usd::schema` |
-| `schema/plugInfo.json` | the `Types` map, so external USD runtimes register the class |
+| `crates/lunco-usd-core/schema/schema.usda` | the authoritative source. **Not read at runtime.** |
+| `crates/lunco-usd-core/schema/generatedSchema.usda` | what is compiled in (`include_str!`) and ingested by `lunco_usd_core::schema` |
+| `crates/lunco-usd-core/schema/plugInfo.json` | the `Types` map, so external USD runtimes register the class |
 
 Plus a reader to consume it, plus authoring on the asset.
 

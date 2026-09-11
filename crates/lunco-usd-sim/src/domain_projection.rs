@@ -13,20 +13,23 @@ use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use lunco_modelica_ast::ast_extract::{
     parse_model_interface, parse_model_interface_from_ast, ModelInterface, ModelicaVariableMetadata,
 };
+use lunco_modelica_ast::{Causality, StoredDefinition};
 use lunco_modelica_core::{
     ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaNotice, ModelicaSignalLayout,
     ModelicaSignalProvenance, NoticeLevel,
 };
-use lunco_usd_bevy::program::ProgramGraph;
-use lunco_usd_bevy::read::UsdReadObject as ComposedReader;
-use lunco_usd_bevy::{CanonicalStages, UsdInstanceProjection, UsdPrimPath, UsdStageAsset};
+use lunco_usd_bevy::UsdPrimPath;
+#[cfg(test)]
+use lunco_usd_bevy_core::canonical::CanonicalStage;
+use lunco_usd_bevy_core::program::ProgramGraph;
+use lunco_usd_bevy_core::read::UsdReadObject as ComposedReader;
+use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdInstanceProjection, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
-use rumoca_core::Causality;
 
 // The USD side of a Modelica program facet — the class an asset names, the
 // lexical rules for member/instance identifiers — is ONE reader, shared with the
 // lint fact producer. See `lunco_usd_bevy::program`.
-pub use lunco_usd_bevy::program::is_domain_network_root;
+pub use lunco_usd_bevy_core::program::is_domain_network_root;
 
 /// Whether a composed component collection is executable in the live runtime.
 ///
@@ -37,14 +40,14 @@ pub use lunco_usd_bevy::program::is_domain_network_root;
 /// execution policy at the projection boundary prevents malformed authoring
 /// fixtures from entering Modelica while preserving one reader for lint facts.
 pub fn is_runtime_domain_network_root(
-    view: &dyn lunco_usd_bevy::read::UsdReadObject,
+    view: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     prim: &SdfPath,
 ) -> bool {
     is_domain_network_root(view, prim)
         && view.text(prim, "purpose").as_deref() != Some("guide")
         && view.boolean(prim, "lunco:lintOnly") != Some(true)
 }
-use lunco_usd_bevy::program::{
+use lunco_usd_bevy_core::program::{
     is_modelica_identifier, modelica_identifier, modelica_path_identifier, modelica_source_ref,
     ACTUATOR_WRENCH_DOMAIN_SYNTHESIZER, DEFAULT_DOMAIN_SYNTHESIZER,
 };
@@ -776,7 +779,7 @@ fn parse_validated_root_interface(
     inputs: &BTreeSet<String>,
     outputs: &BTreeSet<String>,
     aliases: &[(String, String, String)],
-) -> Result<rumoca_ir_ast::StoredDefinition, String> {
+) -> Result<StoredDefinition, String> {
     let ast = lunco_modelica_ast::parse_to_ast(source, "generated-policy.mo")
         .map_err(|error| format!("strict Modelica parse failed: {error:?}"))?;
     let root = lunco_modelica_core::diagram::find_class_by_qualified_name(&ast, model_name)
@@ -2246,7 +2249,7 @@ struct PendingDomainProjection {
     root_path: String,
     model_name: String,
     requested: String,
-    plan: Arc<lunco_usd_bevy::UsdStageProjectionPlan>,
+    plan: Arc<lunco_usd_bevy_core::UsdStageProjectionPlan>,
     task: Task<Result<SynthOutcome, Vec<DomainProjectionError>>>,
 }
 
@@ -2269,7 +2272,7 @@ fn queue_domain_projection(
     model_name: String,
     requested: String,
     synthesizer: Arc<dyn DomainSynthesizer>,
-    plan: Arc<lunco_usd_bevy::UsdStageProjectionPlan>,
+    plan: Arc<lunco_usd_bevy_core::UsdStageProjectionPlan>,
     instance_plan: bool,
     classes: MemberClasses,
 ) {
@@ -2561,12 +2564,12 @@ pub fn project_domain_islands(
     )>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     q_provenance: Query<&lunco_core::Provenance>,
-    q_instance_root: Query<(), With<lunco_usd_bevy::UsdInstanceRoot>>,
+    q_instance_root: Query<(), With<lunco_usd_bevy_core::UsdInstanceRoot>>,
     // A runtime-instanced descendant stays out of Modelica synthesis while its
     // root identity is pending. Once the root GID is available, the durable
     // instance projection scopes the generated session even after the transient
     // membership marker is consumed.
-    q_instance_member: Query<(), With<lunco_usd_bevy::UsdInstanceMember>>,
+    q_instance_member: Query<(), With<lunco_usd_bevy_core::UsdInstanceMember>>,
     stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<CanonicalStages>,
     dirty: Res<WiringDirty>,
@@ -3386,7 +3389,7 @@ pub fn read_network(
     let internal_inputs: BTreeMap<String, String> = authored_inputs
         .iter()
         .filter_map(|name| {
-            lunco_usd_bevy::program::internal_network_input_source(view, root, name)
+            lunco_usd_bevy_core::program::internal_network_input_source(view, root, name)
                 .map(|source| (name.clone(), source))
         })
         .collect();
@@ -3396,7 +3399,7 @@ pub fn read_network(
             let name = attr
                 .strip_prefix("outputs:")
                 .map(|name| name.strip_suffix(".connect").unwrap_or(name))?;
-            lunco_usd_bevy::program::network_member_output_source(view, root, name)
+            lunco_usd_bevy_core::program::network_member_output_source(view, root, name)
                 .map(|source| (name.to_string(), source))
         })
         .collect();
@@ -3444,7 +3447,7 @@ pub fn read_network(
         // `drive_left`. Only an output sourced from a member in this root's
         // component collection is part of the generated Modelica interface.
         // The other outputs remain available to physics and control wiring.
-        if !lunco_usd_bevy::program::is_network_boundary_output(view, root, attr) {
+        if !lunco_usd_bevy_core::program::is_network_boundary_output(view, root, attr) {
             continue;
         }
         let targets = view.connections(root, attr);
@@ -4500,11 +4503,9 @@ mod tests {
     fn generated_signal_layout_keeps_member_class_and_canonical_output_identity() {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/electrical_network.usda");
-        let composed = lunco_usd_bevy::compose_file_to_stage(&path).expect("compose fixture");
-        let stage = lunco_usd_bevy::CanonicalStage::from_stage(
-            composed,
-            path.to_string_lossy().to_string(),
-        );
+        let composed =
+            lunco_usd_bevy_core::compose::compose_file_to_stage(&path).expect("compose fixture");
+        let stage = CanonicalStage::from_stage(composed, path.to_string_lossy().to_string());
         let view = stage.view();
         let root_path = SdfPath::new("/Rig").unwrap();
         let mut classes = MemberClasses::default();
@@ -4637,10 +4638,9 @@ mod tests {
 
     #[test]
     fn authored_member_telemetry_owns_the_public_output_identity() {
-        let stage =
-            lunco_usd_bevy::CanonicalStage::from_recipe(&lunco_usd_bevy::StageRecipe::from_source(
-                "telemetry-owner.usda",
-                r#"#usda 1.0
+        let stage = CanonicalStage::from_recipe(&lunco_usd_core::StageRecipe::from_source(
+            "telemetry-owner.usda",
+            r#"#usda 1.0
 def Scope "Rig"
 {
     def Xform "Battery"
@@ -4651,8 +4651,8 @@ def Scope "Rig"
     }
 }
 "#,
-            ))
-            .expect("telemetry owner stage");
+        ))
+        .expect("telemetry owner stage");
         let view = stage.view();
         assert!(has_authored_telemetry_for_output(
             &view,

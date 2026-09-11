@@ -181,17 +181,13 @@ assets/scenes/sandbox/.lunco/runtime/sandbox_scene.usda
 
 `.gitignore` covers `target/`, `.cache/`, `dist/` — but not `.lunco/`. Its 100 lines are someone's interactive session, captured verbatim:
 
-```usda
-over "SandboxScene" {
-    over "Skid_Raycast_1" {
-        def LunCoProgramAPI "Mission" {
-            string info:sourceCode = """<root BTCPP_format="4" main_tree_to_execute="MainTree">
-              <Action ID="drive_to" target="-0.492109061394828;0.0;-25.01599508837112"/>
-              …
-              <Action ID="drive_to" target="50.044711;12.793973;-25.310144"/>
-```
+The overlay also contained a legacy inline mission program with hand-clicked
+targets, including one at **y = 12.79 m** — a drive-to target 12.8 metres in
+the air.
 
-Hand-clicked waypoints at 15-digit precision, including one at **y = 12.79 m** — a drive-to target 12.8 metres in the air. Every tester who launches this nightly gets `Skid_Raycast_1` running an infinite loop of someone else's mouse clicks, layered over the authored scene, and every bug filed against rover behaviour is filed against that.
+Every tester who launches this nightly gets `Skid_Raycast_1` running an
+infinite loop of someone else's mouse clicks, layered over the authored scene,
+and every bug filed against rover behaviour is filed against that.
 
 This is also the most likely explanation for a class of "cannot reproduce" between the tester's box and a dev checkout: the overlay persists per-install and diverges the moment anyone touches the scene.
 
@@ -200,7 +196,9 @@ This is also the most likely explanation for a class of "cannot reproduce" betwe
 1. `git rm -r --cached assets/scenes/sandbox/.lunco/` and add `.lunco/` to `.gitignore`. Runtime overlay is per-user session state; it is the same category as `target/`.
 2. Exclude `.lunco/` from the release packaging step in `scripts/` — belt and braces, so a stray local overlay cannot ship again.
 3. Consider gating restore behind an explicit opt-in for a *fresh* install: if there is no prior session for this install, there is nothing legitimate to restore.
-4. If a mission behaviour tree is genuinely wanted in the sandbox scene, author it in `sandbox_scene.usda` with round numbers and a comment — not as a recorded overlay.
+4. If mission policy is genuinely wanted in the sandbox scene, author it in
+   `sandbox_scene.usda` with round numbers and a comment — not as a recorded
+   overlay.
 
 ---
 

@@ -273,7 +273,7 @@ pub const CAMERA_SOURCE: &str = "camera";
 /// The bus source name USD scene spawning publishes under.
 ///
 /// Shared for the same reason as [`TERRAIN_SOURCE`]: the publisher
-/// (`lunco-luncosim`'s `report_scene_spawn_status`, mirroring
+/// (`lunco-luncosim-ui`'s `report_scene_spawn_status`, mirroring
 /// `lunco_usd_sim::cosim::SceneLoadInFlight` + `UsdAwaitingStage`) and the
 /// screenshot readiness gate must agree on the spelling, and a silent
 /// disagreement degrades into recordings that open on a half-spawned scene.

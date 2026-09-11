@@ -56,6 +56,67 @@ API, MCP, and UI use — so it inherits [every command](./commands-reference.md)
 free and stays decoupled from physics. Scripts are **host-authoritative**
 ([Part II §L](#l-networking--determinism)).
 
+## Model and assembly authoring (human and AI)
+
+For building or reviewing a USD assembly, use the reusable Rhai
+`model_authoring` tool library. It is an authoring facade, not a second scene
+graph or USD writer. Keep the exact identity tuple from the document read:
+
+```text
+document -> root path -> edit target -> generation
+```
+
+The normal sequence is:
+
+```rhai
+let context = model_authoring::model_context(doc, root, "@root@");
+let ready = model_authoring::readiness_report(doc, root, "@root@", policy);
+let recipe = model_authoring::scene_recipe(doc, "@root@", scene, context.generation);
+let graph = model_authoring::port_graph(doc, root, "@root@");
+let wires = model_authoring::wiring_plan(
+    doc, "@root@", root, connections, context.generation);
+```
+
+`model_context` is one composed, path-addressed read of an assembly: children,
+references, variants, component/frame/mount facts, bodies, joints, colliders,
+ports, generation, and available actions. `readiness_report` accepts an
+explicit Twin policy and returns stable checks for topology, physicality,
+mounts, connections, controls, and runtime evidence. An omitted check is
+`not_requested`; it is not an implicit pass.
+
+`scene_recipe` returns dry typed USD operations for referenced assemblies,
+terrain, cameras, and initial state. It returns routes and program attachments
+as explicit hand-offs to `waypoint_editor` and `assembly_edit::attach_program`.
+After review, apply USD operations through `assembly_edit::batch` or the normal
+proposal/review/commit flow, then re-read the new generation. Do not write
+USDA text directly.
+
+Use `port_graph` to discover standard USD `inputs:`, `outputs:`, and
+`connectors:` endpoints. `wiring_plan` validates exact source/sink paths,
+direction, and USD type before returning `SetConnection` operations. Modelica
+and Rhai are classified from their authored source declarations; no vehicle
+specific port vocabulary is required.
+
+Use `publish_component(doc, root, edit_target, output, provenance)` only after
+the component contract passes. It validates a top-level `kind = "component"`
+root, `defaultPrim`, applied schemas, references, and caller-supplied
+provenance, then returns ordinary metadata operations and an explicit Save-As
+command. Review/apply the operations and call
+`assembly_edit::save_as_document` explicitly; publication never autosaves.
+
+These tools are generic and hot-reloadable. Put vehicle recipes, limits,
+dimensions, and mission policy in the owning Twin's Rhai package. Put
+continuous equations in Modelica and keep Rust limited to shared typed engine
+mechanisms.
+
+Behavioral and linter regressions use the same authored boundary: keep the
+fixture in `assets/scenes/tests/*.usda`, attach an observer in
+`assets/scenarios/tests/*.rhai`, and assert the public command/query result.
+Do not embed a large USDA string in a Rust test when the behavior can be
+observed through the production scene runner. Rust tests remain for low-level
+parsing, serialization, lowering, and generic engine seams that Rhai cannot
+observe.
+
 You'll need a running app with its API on, e.g. the luncosim:
 
 ```sh

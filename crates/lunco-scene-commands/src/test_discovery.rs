@@ -19,7 +19,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use lunco_usd_bevy::{program, StageView, UsdRead};
+use lunco_usd_bevy_core::{program, StageView, UsdRead};
 
 /// The Rhai constant read by the test discovery pass.
 pub const TEST_KIND_CONST: &str = "TEST_KIND";
@@ -126,7 +126,7 @@ pub fn discover_scene_tests(scenes_dir: &Path) -> Result<Vec<SceneTest>, String>
 }
 
 fn discover_scene_test(scene_path: &Path) -> Result<SceneTest, String> {
-    let stage = lunco_usd_bevy::compose_file_to_stage(scene_path)
+    let stage = lunco_usd_bevy_core::compose::compose_file_to_stage(scene_path)
         .map_err(|error| format!("{}: cannot compose scene: {error}", scene_path.display()))?;
     let view = StageView::new(&stage);
     let mut kinds = BTreeSet::new();

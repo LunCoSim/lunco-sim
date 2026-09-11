@@ -8,7 +8,7 @@ Push heavy work off-thread or behind a cache; profile before optimizing.
 > **Frame *count* is fixed at vsync by design — the lever is per-frame *cost*, not
 > redraw frequency.** While focused, both binaries run
 > `WinitSettings { focused_mode: UpdateMode::Continuous }`
-> (`lunco-luncosim/src/ui/mod.rs:55`, `lunco-modelica-ui/src/bin/lunica.rs:177`), so
+> (`lunco-luncosim-ui/src/ui/mod.rs:225`, `lunco-modelica-ui/src/bin/lunica.rs:177`), so
 > the app redraws *every* vsync interval and never idles while focused — this is
 > deliberate (vsync = Fifo present / `requestAnimationFrame` acts as the frame
 > timer; see the comment at `ui/mod.rs:41-49`). Reactive/low-power kicks in only

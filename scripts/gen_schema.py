@@ -15,7 +15,7 @@ makes that drift impossible by construction;
 
 The schema library is CODELESS (`skipCodeGeneration = true`): the "generated"
 file is not C++ codegen, it is the registered layer — `plugInfo.json` points a
-USD runtime at it, and `lunco_usd::schema::SchemaRegistry` parses it at runtime.
+USD runtime at it, and `lunco_usd_core::schema::SchemaRegistry` parses it at runtime.
 Pixar's `usdGenSchema` produces it from `schema.usda`; this script is the
 in-repo equivalent so the two files can never drift by hand-sync (the
 documented trap: schema.usda is INERT, the generated file is what loads).
@@ -38,7 +38,7 @@ import sys
 from collections import OrderedDict
 from pathlib import Path
 
-SCHEMA_DIR = Path("crates/lunco-usd/schema")
+SCHEMA_DIR = Path("crates/lunco-usd-core/schema")
 SRC = SCHEMA_DIR / "schema.usda"
 OUT = SCHEMA_DIR / "generatedSchema.usda"
 PLUGINFO = SCHEMA_DIR / "plugInfo.json"
@@ -103,7 +103,7 @@ GENERATED_HEADER = '''#usda 1.0
     after editing `schema.usda`, which is the authoritative source.
 
     This is the file a USD runtime actually registers (via `plugInfo.json`), and
-    the file `lunco_usd::schema` parses to answer "what does this property's
+    the file `lunco_usd_core::schema` parses to answer "what does this property's
     schema declare?" — its type, its variability, its UI hint, and whether it is
     `custom`.
     """

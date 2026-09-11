@@ -12,7 +12,7 @@
 //! Pure-reader (no Bevy `App`), so it is immune to the `init_asset::<Scene>()`
 //! harness gap that the older entity-spawning tests hit.
 
-use lunco_usd_bevy::{CanonicalStage, StageView, UsdRead};
+use lunco_usd_bevy_core::{canonical::CanonicalStage, StageView, UsdRead};
 use openusd::sdf::Path as SdfPath;
 use std::path::PathBuf;
 
@@ -28,7 +28,7 @@ fn assets_root() -> PathBuf {
 /// Compose an asset into a live [`CanonicalStage`] for composed-stage reads.
 fn compose(rel: &str) -> CanonicalStage {
     let path = assets_root().join(rel);
-    let stage = lunco_usd_bevy::compose_file_to_stage(&path)
+    let stage = lunco_usd_bevy_core::compose::compose_file_to_stage(&path)
         .unwrap_or_else(|e| panic!("compose failed for {path:?}: {e}"));
     CanonicalStage::from_stage(stage, path.to_string_lossy().to_string())
 }

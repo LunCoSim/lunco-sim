@@ -108,7 +108,7 @@ pub struct CollisionGroupTable {
 impl CollisionGroupTable {
     /// Read every `PhysicsCollisionGroup` on the stage and resolve merges,
     /// membership and the blocked-pair table.
-    pub fn read(reader: &dyn lunco_usd_bevy::read::UsdReadObject) -> Self {
+    pub fn read(reader: &dyn lunco_usd_bevy_core::read::UsdReadObject) -> Self {
         let mut by_key: HashMap<String, Group> = HashMap::new();
         let mut order: Vec<String> = Vec::new();
 
@@ -321,7 +321,7 @@ impl Group {
 }
 
 fn rel_paths(
-    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     prim: &SdfPath,
     rel: &str,
 ) -> Vec<String> {
@@ -340,18 +340,18 @@ fn rel_paths(
 /// layers nothing in it defines.
 #[derive(Resource, Default)]
 pub struct CollisionGroupTables {
-    by_stage: HashMap<AssetId<lunco_usd_bevy::UsdStageAsset>, CollisionGroupTable>,
+    by_stage: HashMap<AssetId<lunco_usd_bevy_core::UsdStageAsset>, CollisionGroupTable>,
     /// Stages already reported as having groups, so the summary is logged once
     /// rather than per prim.
-    announced: HashSet<AssetId<lunco_usd_bevy::UsdStageAsset>>,
+    announced: HashSet<AssetId<lunco_usd_bevy_core::UsdStageAsset>>,
 }
 
 impl CollisionGroupTables {
     /// The table for `stage`, reading it on first ask.
     pub fn get_or_read(
         &mut self,
-        stage: AssetId<lunco_usd_bevy::UsdStageAsset>,
-        reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+        stage: AssetId<lunco_usd_bevy_core::UsdStageAsset>,
+        reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     ) -> &CollisionGroupTable {
         let table = self
             .by_stage
@@ -376,7 +376,8 @@ impl CollisionGroupTables {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lunco_usd_bevy::{CanonicalStage, StageRecipe};
+    use lunco_usd_bevy_core::canonical::CanonicalStage;
+    use lunco_usd_core::StageRecipe;
 
     /// Wheels and chassis in two groups that filter each other, plus a body in no
     /// group at all.

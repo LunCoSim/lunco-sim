@@ -17,7 +17,7 @@ description = "The scene/document command layer: every runtime mutation of the s
 # `Assets<Shader>` so an edit renders without a disk round-trip). It pulls `naga`
 # but NOT wgpu; moving those three onto an intent+binder of their own is the
 # follow-up that would take naga out of the headless server too.
-bevy = { workspace = true, features = ["bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light", "bevy_shader"] }
+bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh", "bevy_light", "bevy_shader"] }
 # Appearance intent (render-free): `PbrLook`. Every PBR material site in this crate
 # goes through it instead of `Assets<StandardMaterial>`.
 lunco-render = { path = "../lunco-render" }
@@ -43,20 +43,15 @@ lunco-api = { path = "../lunco-api", default-features = false }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-usd = { path = "../lunco-usd", default-features = false }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
-lunco-usd-compose = { path = "../lunco-usd-compose" }
+lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
+lunco-usd-core = { path = "../lunco-usd-core" }
 # `QueryUsdPrim` addresses prims by `sdf::Path`, so the read side needs the same
 # path type the stage is keyed on — no conversion layer in between.
 openusd = { workspace = true }
 # Active-document resolution for C4b runtime-layer persistence (ECS-only, no UI).
 lunco-workspace = { path = "../lunco-workspace" }
-lunco-twin = { path = "../lunco-twin" }
 lunco-usd-sim = { path = "../lunco-usd-sim" }
-lunco-tools = { path = "../lunco-tools" }
-# `ValidateAsset` runs the SAME authored lint rules the live loader runs, over the
-# SAME USD physics facts — one rule set, two entry points (pre-flight and load).
 lunco-usd-avian = { path = "../lunco-usd-avian" }
-lunco-lint = { path = "../lunco-lint" }
-lunco-hooks = { path = "../lunco-hooks" }
 lunco-hooks-rhai = { path = "../lunco-hooks-rhai" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-materials = { path = "../lunco-materials" }
@@ -65,14 +60,7 @@ lunco-avatar = { path = "../lunco-avatar", default-features = false }
 lunco-assets = { path = "../lunco-assets" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-storage = { path = "../lunco-storage" }
-# `ValidateAsset` (validate.rs) — the parse-only pre-flight. The small
-# `lunco-modelica-ast` package owns the SAME AST extraction and normalized parse
-# boundary the cosim dispatcher runs; `lunco-modelica-core` remains for source-root
-# discovery; `rhai` for compile-only script checks. Both are already in this
-# crate's tree via
-# `lunco-usd-sim`/`lunco-scripting` — no new leaves.
-lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
-lunco-modelica-ast = { path = "../lunco-modelica-ast" }
+lunco-scene-validation = { path = "../lunco-scene-validation" }
 rhai = { workspace = true }
 # The catalogue scan is async (reading a shipped asset on the web is an HTTP
 # fetch), so completed reads come back over a channel and a drain system folds

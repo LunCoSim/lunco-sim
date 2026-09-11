@@ -67,7 +67,8 @@
 //! the diagonals, doubled interior knots, order 3 — and is generated, not authored,
 //! so it cannot drift. That is what keeps the exit rim and the dish edge genuinely
 //! ROUND instead of an octagon. Dropping those weights turns a 0.58 m rim into a
-//! 0.62 m bulge at the diagonals; see the rationality tests in [`crate::nurbs`].
+//! 0.62 m bulge at the diagonals; see the rationality tests in
+//! [`lunco_usd_geometry::nurbs`].
 
 use bevy::prelude::*;
 
@@ -93,8 +94,9 @@ const CIRCLE_U_COUNT: u32 = 9;
 /// `set(id, "NurbsSurface.points", [[x, y, z], ...])`.
 ///
 /// `points` is **row-major over v**: `v_count` rings of `u_count` points, which is
-/// USD's own `uVertexCount` × `vVertexCount` layout and what [`crate::nurbs`]
-/// expects. `weights` follows the same order, or is empty for the polynomial case.
+/// USD's own `uVertexCount` × `vVertexCount` layout and what
+/// [`lunco_usd_geometry::nurbs`] expects. `weights` follows the same order, or
+/// is empty for the polynomial case.
 #[derive(Component, Reflect, Clone, Debug, PartialEq)]
 #[reflect(Component)]
 pub struct NurbsSurface {
@@ -116,7 +118,8 @@ pub struct NurbsSurface {
 
 impl NurbsSurface {
     /// Tessellate into a `Mesh` at the requested graphics quality. `None` when the definition is malformed —
-    /// [`crate::nurbs::sample_nurbs_patch`] has already warned which guard fired.
+    /// [`lunco_usd_geometry::nurbs::sample_nurbs_patch`] has already warned which
+    /// guard fired.
     ///
     /// This is the UNTRIMMED build. Trimmed patches (`trimCurve:*`) keep their
     /// original load-time path in [`crate::build_usd_nurbs_patch_mesh`] and are not
@@ -132,7 +135,7 @@ impl NurbsSurface {
         let u_steps = quality.nurbs_surface_subdivisions(u_count);
         let v_steps = quality.nurbs_surface_subdivisions(v_count);
 
-        let grid = crate::nurbs::sample_nurbs_patch(
+        let grid = lunco_usd_geometry::nurbs::sample_nurbs_patch(
             &self.points,
             &self.weights,
             u_count,
@@ -399,7 +402,10 @@ impl UsdLathe {
             u_order: 3,
             v_order,
             u_knots: CIRCLE_U_KNOTS.to_vec(),
-            v_knots: crate::nurbs::default_clamped_knots(rings as usize, v_order as usize),
+            v_knots: lunco_usd_geometry::nurbs::default_clamped_knots(
+                rings as usize,
+                v_order as usize,
+            ),
             left_handed: self.left_handed,
         })
     }
@@ -804,7 +810,7 @@ mod tests {
             left_handed: false,
         };
         let s = lathe.surface().expect("valid lathe");
-        let grid = crate::nurbs::sample_nurbs_patch(
+        let grid = lunco_usd_geometry::nurbs::sample_nurbs_patch(
             &s.points,
             &s.weights,
             s.u_count as usize,

@@ -20,48 +20,32 @@ use bevy::prelude::*;
 
 // `commands` is the headless-safe document/file verb layer (ApplyUsdOp,
 // OpenFile/NewDocument/SaveDocument observers, the async load pipeline +
-// twin-scene resolver) — egui-free, so server / sandbox / networking bins get
-// the full USD document surface. Only the empty-viewport placeholder inside it
-// is `ui`-gated. `ui` (browser/viewport panels) is the egui + workbench-shell
-// layer. `document` is the egui-free USD document model and the shared
+// twin-scene resolver). The browser and viewport presentation lives in
+// `lunco-usd-ui`; `document` is the USD document model and the shared
 // `DocumentRegistry<UsdDocument>` owns document identity. Edits author through
-// OpenUSD's Stage by SDF path (`lunco_usd_bevy::author`).
+// OpenUSD's Stage by SDF path (`lunco_usd_core::author`).
 pub mod assembly_api;
-pub mod attach;
 pub mod commands;
-pub mod document;
-pub mod edit_session;
 pub mod live_consume;
 /// Lowering a material edit into a real UsdShade network (`Material` +
 /// `UsdPreviewSurface` + `material:binding`). Crate-agnostic op builder — the
 /// Inspector, the command API and scripting all author materials through it, so
 /// none of them can reinvent the non-standard "shader inputs on a geom prim"
 /// spelling.
-pub mod material;
-pub mod program;
 pub mod registry;
 pub mod runtime_persistence;
-pub mod schema;
 pub mod twin_projection;
-#[cfg(feature = "ui")]
-pub mod ui;
 
 pub use commands::{
     ApplyUsdOp, ApplyUsdOps, AttachProgram, CommitUsdProposal, CreateUsdProposal,
     ReviewUsdProposal, UsdCommandsPlugin, UsdProposalReviewAction, USD_DOCUMENT_KIND,
 };
-pub use document::{LayerId, UsdChange, UsdDocument, UsdOp, UsdReferenceArc, UsdReferenceListOp};
-pub use edit_session::{
-    UsdEditScope, UsdEditSessions, UsdProposal, UsdProposalId, UsdProposalState, UsdProposalSummary,
-};
-pub use program::{ProgramAttachSpec, ProgramInput, ProgramOutput};
-// Registry: use `lunco_doc_bevy::DocumentRegistry<UsdDocument>` — no USD-specific type.
+// The document and operation model is owned by `lunco-usd-core`; this crate
+// exposes runtime integration and command/plugin APIs.
 pub use lunco_usd_avian::{
     BigSpacePhysicsBridgePlugin, ShouldBeDynamic, UsdAvianPlugin, UsdCollisionFilter,
 };
-pub use lunco_usd_bevy::{
-    usd_data::UsdDataExt, UsdAuthoredLight, UsdData, UsdPrimPath, UsdStageAsset,
-};
+pub use lunco_usd_bevy::{UsdAuthoredLight, UsdPrimPath};
 /// Asset-backed OpenUSD assembly. This is the public composition boundary:
 /// `lunco-assets` supplies canonical identities and bytes, while this crate
 /// interprets USD sublayers, references, payloads, and variants into a stage.
@@ -90,9 +74,8 @@ impl Plugin for UsdPlugins {
         app.add_plugins((lunco_usd_bevy::UsdBevyPlugin, UsdAvianPlugin, UsdSimPlugin));
         // Document/file commands (ApplyUsdOp + OpenFile/NewDocument/SaveDocument
         // observers + the async load pipeline + twin-scene resolver) are
-        // headless-safe domain-layer wiring — added unconditionally so server /
-        // sandbox / networking bins get the full USD document surface. Only the
-        // egui browser/viewport panels (`UsdUiPlugin`) stay behind `ui`.
+        // headless-safe domain-layer wiring. The egui browser/viewport panels
+        // are installed separately by `lunco-usd-ui`.
         app.add_plugins(UsdCommandsPlugin);
     }
 }

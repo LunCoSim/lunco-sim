@@ -36,7 +36,7 @@ use lunco_celestial::kepler::{KeplerOrbit, KeplerianElements};
 use lunco_celestial::transform::LibrationAnchor;
 use openusd::sdf::{Path as SdfPath, Value};
 
-type ComposedReader<'a> = dyn lunco_usd_bevy::read::UsdReadObject + 'a;
+type ComposedReader<'a> = dyn lunco_usd_bevy_core::read::UsdReadObject + 'a;
 
 /// NAIF id of the default anchor body (the Moon).
 const DEFAULT_ANCHOR_BODY: i32 = 301;
@@ -940,7 +940,8 @@ fn read_occluder_box(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lunco_usd_bevy::{CanonicalStage, StageRecipe};
+    use lunco_usd_bevy_core::canonical::CanonicalStage;
+    use lunco_usd_core::StageRecipe;
 
     fn view(source: &str) -> (CanonicalStage, SdfPath) {
         let stage = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", source))

@@ -178,7 +178,7 @@ pub(crate) fn instantiate_camera_prim(
     // doesn't jump the grade. Spawning at Bevy's `Exposure::default()` (EV 9.7) instead
     // left a load-time window in which the celestial system had already raised
     // the sun to 131 klux but the camera still sat ~5 stops too open, blowing
-    // out the terrain until the late `project_env_settings`/celestial EV write
+    // out the terrain until the late UI environment/celestial EV write
     // caught up (and on stage re-composition that window re-opened).
     //
     // Only an explicitly mounted camera is reparented to its grid. Authored,
@@ -596,7 +596,7 @@ mod tests {
 
     #[test]
     fn authored_clipping_range_converts_from_stage_units_to_metres() {
-        let recipe = crate::canonical::StageRecipe::from_source(
+        let recipe = lunco_usd_core::StageRecipe::from_source(
             "camera.usda",
             "#usda 1.0\n(\n    metersPerUnit = 0.01\n)\ndef Camera \"Camera\"\n{\n    float2 clippingRange = (10, 1000)\n}\n",
         );
@@ -612,7 +612,7 @@ mod tests {
 
     #[test]
     fn omitted_clipping_range_uses_usd_defaults_in_stage_units() {
-        let recipe = crate::canonical::StageRecipe::from_source(
+        let recipe = lunco_usd_core::StageRecipe::from_source(
             "camera.usda",
             "#usda 1.0\n(\n    metersPerUnit = 0.01\n)\ndef Camera \"Camera\"\n{}\n",
         );
@@ -628,7 +628,7 @@ mod tests {
 
     #[test]
     fn invalid_authored_clipping_range_is_rejected() {
-        let recipe = crate::canonical::StageRecipe::from_source(
+        let recipe = lunco_usd_core::StageRecipe::from_source(
             "camera.usda",
             "#usda 1.0\ndef Camera \"Camera\"\n{\n    float2 clippingRange = (0, 100)\n}\n",
         );
@@ -639,7 +639,7 @@ mod tests {
 
     #[test]
     fn invalid_authored_focal_length_is_rejected_instead_of_using_a_heuristic_fov() {
-        let recipe = crate::canonical::StageRecipe::from_source(
+        let recipe = lunco_usd_core::StageRecipe::from_source(
             "camera.usda",
             "#usda 1.0\ndef Camera \"Camera\"\n{\n    float focalLength = 0\n}\n",
         );
@@ -655,7 +655,7 @@ mod tests {
             "uniform token projection = \"fisheye\"",
         ] {
             let source = format!("#usda 1.0\ndef Camera \"Camera\"\n{{\n    {projection}\n}}\n");
-            let recipe = crate::canonical::StageRecipe::from_source("camera.usda", &source);
+            let recipe = lunco_usd_core::StageRecipe::from_source("camera.usda", &source);
             let stage =
                 crate::canonical::CanonicalStage::from_recipe(&recipe).expect("build camera");
             let path = SdfPath::new("/Camera").unwrap();
@@ -665,7 +665,7 @@ mod tests {
 
     #[test]
     fn omitted_camera_exposure_uses_scene_calibration() {
-        let recipe = crate::canonical::StageRecipe::from_source(
+        let recipe = lunco_usd_core::StageRecipe::from_source(
             "camera.usda",
             "#usda 1.0\ndef Camera \"Camera\"\n{\n}\n",
         );
@@ -676,7 +676,7 @@ mod tests {
 
     #[test]
     fn authored_camera_exposure_converts_once_from_usd_fields() {
-        let recipe = crate::canonical::StageRecipe::from_source(
+        let recipe = lunco_usd_core::StageRecipe::from_source(
             "camera.usda",
             "#usda 1.0\ndef Camera \"Camera\"\n{\n    float exposure:iso = 200\n    float exposure = 1\n}\n",
         );
@@ -690,7 +690,7 @@ mod tests {
 
     #[test]
     fn invalid_authored_camera_exposure_is_rejected() {
-        let recipe = crate::canonical::StageRecipe::from_source(
+        let recipe = lunco_usd_core::StageRecipe::from_source(
             "camera.usda",
             "#usda 1.0\ndef Camera \"Camera\"\n{\n    float exposure:iso = 0\n}\n",
         );
@@ -704,7 +704,7 @@ mod tests {
 
     #[test]
     fn authored_camera_exposure_with_wrong_type_is_rejected() {
-        let recipe = crate::canonical::StageRecipe::from_source(
+        let recipe = lunco_usd_core::StageRecipe::from_source(
             "camera.usda",
             "#usda 1.0\ndef Camera \"Camera\"\n{\n    string exposure:iso = \"film\"\n}\n",
         );

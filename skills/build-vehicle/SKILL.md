@@ -53,6 +53,17 @@ The tool composes nested `translate`/`rotateXYZ` unit-scale frames, updates the
 part and its recorded joint anchor atomically through the review boundary, and
 rejects invalid topology or non-rigid frame data before any USD edit.
 
+For an AI- or human-led vehicle build, use `model_authoring::model_context`
+before choosing parts and `readiness_report` after the component contracts are
+composed. Use `port_graph` to inspect the standard USD endpoint surface and
+`wiring_plan` to produce one typed, generation-checked connection plan for
+Modelica/Rhai/physics endpoints. Use `scene_recipe` for the surrounding test
+scene and `publish_component` when a validated part is ready for explicit
+Save-As. These are dry Rhai facades; keep wheel/rover policy and dimensions in
+the owning Twin and send all USD operations through the existing journal path.
+See [`scripting-guide.md`](../../docs/scripting-guide.md#model-and-assembly-authoring-human-and-ai)
+for the call sequence.
+
 Working exemplars, simplest first: `assets/vessels/rovers/skid_rover.usda`
 (4-wheel skid), `ackermann_rover.usda` (steering), `six_wheel_rover.usda`
 (per-wheel port wiring + `driveLaw` variant), `six_wheel_independent.usda`

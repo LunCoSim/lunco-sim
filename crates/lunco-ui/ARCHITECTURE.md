@@ -323,8 +323,8 @@ Domain crate UI layout (panels implement `lunco-workbench-core`'s `Panel`
 trait and use `lunco-workbench` only for concrete shell services):
 
 ```
-crates/lunco-luncosim/src/ui/
-├── mod.rs                   # sandbox UI plugin
+crates/lunco-luncosim-ui/src/ui/
+├── mod.rs                   # LunCoSim UI plugin
 ├── code_panel.rs            # Panel impl
 └── models_palette.rs        # Panel impl
 

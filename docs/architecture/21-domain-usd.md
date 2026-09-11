@@ -5,14 +5,17 @@
 > USD (Pixar Universal Scene Description) is the scene-graph and asset format
 > LunCoSim uses for the 3D world. Bases, rovers, habitats, terrain — everything
 > physical — lives as USD prims in USD stages. See
-> [`../../crates/lunco-usd/`](../../crates/lunco-usd/) and companion crates
-> `lunco-usd-avian`, `lunco-usd-bevy` (which also owns composition/flattening), `lunco-usd-sim`.
+> [`../../crates/lunco-usd-core/`](../../crates/lunco-usd-core/), [`../../crates/lunco-usd/`](../../crates/lunco-usd/) and companion crates
+> `lunco-usd-geometry`, `lunco-usd-avian`, `lunco-usd-bevy` (which also owns
+> composition/flattening), `lunco-usd-sim`.
 
-Package ownership follows the same boundary: `lunco-usd` contains the
-document/authoring surface and its lightweight probes, `lunco-usd-bevy` owns
-visual projection, and `lunco-usd-sim` owns USD-to-Avian/simulation examples
-and integration tests. This keeps simulation-only dev dependencies out of the
-authoring crate without introducing a test-only package.
+Package ownership follows the same boundary: `lunco-usd-core` contains the
+headless document/authoring surface, schemas, and pure probes; `lunco-usd`
+contains runtime orchestration and document commands; `lunco-usd-geometry`
+owns the reusable render-free NURBS, trim, and curve-sweep substrate;
+`lunco-usd-bevy` owns stage/visual projection; and `lunco-usd-sim` owns USD-to-Avian/simulation examples
+and integration tests. This keeps runtime and simulation dependencies out of
+the authoring crate without introducing a test-only package.
 
 ## Scope
 
@@ -43,7 +46,7 @@ view produces a **typed `UsdOp`** that applies to the document; every other view
 updates. The op is the single description of the delta — never a diff re-derived
 by reading state back (the *author-once coherence* invariant, below).
 
-Current `UsdOp` set (`lunco-usd/src/document.rs`), each carrying an
+Current `UsdOp` set (`lunco-usd-core/src/document.rs`), each carrying an
 `edit_target: LayerId` naming which layer receives the opinion:
 
 ```rust
@@ -88,12 +91,12 @@ Views observing a `UsdDocument`:
 A running scene is held in **two** forms, and neither absorbs the other — this is
 USD's own `SdfLayer` (authored opinions you save) vs `UsdStage` (the composition) split:
 
-- **`UsdDocument`** (`lunco-usd/src/document.rs`) — the authored `sdf::Data` **layers**:
+- **`UsdDocument`** (`lunco-usd-core/src/document.rs`) — the authored `sdf::Data` **layers**:
   `base` (persisted root layer, written on Save) **⊕** `runtime` (ephemeral overlay —
   spawns, moves, obstacle fields — *not* saved). `LayerId::root()` vs `LayerId::runtime()`
   route each op. Plain, `Send`, serializable: this is what Save writes, the journal
   records, and the network ships. Reads are cheap and off-main-thread.
-- **`CanonicalStage`** (`lunco-usd-bevy/src/canonical.rs`) — the live, *composed* openusd
+- **`CanonicalStage`** (`lunco-usd-bevy-core/src/canonical.rs`) — the live, *composed* openusd
   `Stage` with references / sublayers / variants resolved. `Rc`-backed, therefore `!Send`:
   a main-thread `NonSend` resource (`CanonicalStages`). It is the projection engine —
   authoring onto it fires openusd's change sink, which reconciles the ECS.
@@ -138,12 +141,13 @@ from the composed stage. Object/reference-level reload is intentionally still a
 TODO: do not approximate it by respawning only a visual subtree, because that
 would leave physics, connections, or Modelica worker state stale.
 
-The **read** surface is the `UsdRead` trait (`lunco-usd-bevy/src/read.rs`): `children`,
+The **read** surface is the `UsdRead` trait (`lunco-usd-bevy-core/src/read.rs`): `children`,
 `scalar::<T>`, `attr_value`, `rel_target`, `scalar_at` (time-sampled), etc. It is
 implemented for both `StageView` (the live composed stage, `view.rs`) and `sdf::Data`
 (the flattened layer), so one generic reader works against live and flattened alike.
-The `UsdStageAsset` now carries only a `Send` `StageRecipe` (`recipe`) — the live stage
-is built on the main thread from it; there is no stored `reader` object.
+The `UsdStageAsset` carries a `Send` `StageRecipe` (`recipe`) and a prepared
+`UsdStageProjectionPlan`; the live stage is built on the main thread from the
+recipe, and there is no stored `reader` object.
 
 ## Scene ownership — Twin → active stage → Grid
 
@@ -152,8 +156,8 @@ is built on the main thread from it; there is no stored `reader` object.
 ```
 Twin (workspace folder, owns documents)         spec 14
   └─ active USD stage = a UsdDocument            spec 10 / 21
-        └─ composed (flatten_stage)               lunco-usd-bevy/compose.rs
-              └─ UsdStageAsset (baked stage)       lunco-usd-bevy
+        └─ composed (resolver-backed stage)      lunco-usd-bevy-core/compose.rs
+              └─ UsdStageAsset (prepared plan)    lunco-usd-bevy-core/asset.rs
                     └─ UsdPrimPath root under Grid  → sync_usd_visuals spawns entities
                           └─ the live 3D world      (avian + cosim translators key off prims)
 ```
@@ -514,7 +518,7 @@ at them. The `@terrain.glb@` payload then composes natively as `Mesh` geometry �
 config only, no conversion, no engine code. This is the proper interop path.
 
 *Future Enhancement (Proper Internal Handling):* A small glTF→USD-layer adapter
-in `lunco-usd-bevy/compose.rs` can emit `Mesh` specs instead of stubbing. That is
+in `lunco-usd-bevy-core/compose.rs` can emit `Mesh` specs instead of stubbing. That is
 an interop improvement; it must continue to use the authored USD payload as the
 asset identity.
 
@@ -625,7 +629,7 @@ even though the replacement's change sink is empty. Generation zero identifies
 the initial asset snapshot; an edited replacement must remain on the live
 composed reader path.
 
-One shared stack (`lunco-usd-bevy`, `local_transform_at`) decodes a prim's local
+One shared stack (`lunco-usd-bevy-core`, `local_transform_at`) decodes a prim's local
 `Transform`, used by **both** the static load decoder (`read_transform_from_usd` + the
 instantiate path) and the per-frame animation sampler, so a static pose and its animated
 pose always agree. Precedence:
@@ -677,7 +681,7 @@ the `ControlAnimation` command (API/MCP) and the Inspector **Animation** section
 ### Testing
 All runtime acceptance tests load **real USD files** through the same pipeline
 as runtime. Ownership follows the narrowest production boundary:
-- `crates/lunco-usd-bevy/tests/migration_smoke.rs` — composed-stage reader and composition migration
+- `crates/lunco-usd-bevy-core/src/{asset,authoring,canonical,read,compose,view}.rs` — prepared asset, authored-layer, composed-stage, and live-stage substrate
 - `crates/lunco-usd/tests/live_spawn_projection.rs` — document-backed USD authoring and raw asset composition facts
 - `crates/lunco-usd-sim/tests/usd_connection_mechanics.rs` — generic connection derivation and transform mechanics
 - `assets/scenarios/tests/*.rhai` through the production `luncosim test` gate — composed USD → Bevy → Avian → simulation outcomes, including rover structure, wheel realization, wiring, EPS, and link visibility

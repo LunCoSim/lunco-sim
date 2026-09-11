@@ -9,7 +9,9 @@ members = [
     "crates/lunco-controller",
     "crates/lunco-avatar",
     "crates/lunco-luncosim",
+    "crates/lunco-luncosim-ui",
     "crates/lunco-luncosim-exposures",
+    "crates/lunco-usd-ui",
     "crates/lunco-luncosim-server",
     "crates/lunco-telemetry",
     "crates/lunco-celestial",
@@ -21,12 +23,16 @@ members = [
     "crates/lunco-modelica-ast",
     "crates/lunco-usd-avian",
     "crates/lunco-usd-bevy",
+    "crates/lunco-usd-bevy-core",
+    "crates/lunco-usd-core",
     "crates/lunco-usd-compose",
+    "crates/lunco-usd-geometry",
     "crates/lunco-usd-sim",
     "crates/lunco-usd-terrain",
     "crates/lunco-usd",
     "crates/lunco-luncosim-edit",
     "crates/lunco-scene-commands",
+    "crates/lunco-scene-validation",
     "crates/lunco-ui",
     "crates/lunco-assets",
     "crates/lunco-materials",
@@ -233,7 +239,7 @@ image = { version = "0.25", default-features = false, features = ["tiff", "png",
 tiff = "0.11"
 smallvec = "1.13"
 # openusd 0.5.0: real PCP composition engine (variantSets + relationship target
-# translation) + typed usd::Stage API. Replaces our hand-rolled lunco-usd-composer.
+# translation) + typed usd::Stage API used by the USD integration crates.
 # Pinned exact — pre-1.0, API moves fast. See crates/lunco-usd-bevy/OPENUSD_0_5_MIGRATION.md.
 #
 # Feature flags gate the TYPED SCHEMAS. We used to enable only `physics`, so the
@@ -297,8 +303,6 @@ rumoca-solver-rk45 = { git = "https://github.com/LunCoSim/rumoca", branch = "mai
 rumoca-eval-solve  = { git = "https://github.com/LunCoSim/rumoca", branch = "main" }
 rumoca-tool-fmt    = { git = "https://github.com/LunCoSim/rumoca", branch = "main" }
 rumoca-tool-lint   = { git = "https://github.com/LunCoSim/rumoca", branch = "main" }
-
-catppuccin-egui = "5.7.0"
 
 # Centralised here so version drift across crates is visible in one
 # place. Each crate opts in via `dep = { workspace = true }`.

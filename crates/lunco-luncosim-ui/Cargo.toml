@@ -1,0 +1,105 @@
+[package]
+name = "lunco-luncosim-ui"
+version = "0.1.0-dev"
+edition = "2021"
+license.workspace = true
+description = "LunCoSim's interactive application UI shell"
+
+[features]
+default = []
+# The in-process API bridge used by the optional Rhai REPL panel. The host
+# application forwards its API feature here so this crate remains a pure UI
+# dependency when the bridge is not part of the build.
+lunco-api = ["dep:lunco-api", "lunco-modelica-ui/lunco-api"]
+# Native HTTP transport for the REPL panel. The panel is still transport
+# agnostic; the feature only makes the host's bridge available on native.
+transport-http = ["lunco-api", "lunco-api/transport-http"]
+# Source-palette presentation for Python-backed programs.
+python = []
+# Downloaded Twin presentation in the Scenarios menu.
+networking = ["dep:lunco-networking", "lunco-networking/networking"]
+
+[dependencies]
+bevy = { workspace = true, features = [
+    "bevy_asset",
+    "bevy_mesh",
+    "bevy_light",
+    "bevy_window",
+    "bevy_winit",
+    "bevy_picking",
+    "mesh_picking",
+    "bevy_ui_render",
+    "file_watcher",
+    "bevy_post_process",
+    "bevy_anti_alias",
+    "smaa_luts",
+    "tonemapping_luts",
+    "bevy_gizmos",
+    "bevy_gizmos_render",
+    "png",
+    "webgl2",
+] }
+big_space = { workspace = true }
+bevy_egui = { workspace = true }
+bevy_hui = { workspace = true }
+bevy_flair = { workspace = true }
+bevy_winit = { version = "0.19" }
+winit = { version = "0.30.13" }
+
+lunco-api = { path = "../lunco-api", default-features = false, optional = true }
+lunco-assets = { workspace = true }
+lunco-avatar = { path = "../lunco-avatar", default-features = false }
+lunco-celestial = { path = "../lunco-celestial", default-features = false }
+lunco-controller = { path = "../lunco-controller" }
+lunco-core = { path = "../lunco-core" }
+lunco-doc = { path = "../lunco-doc" }
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
+lunco-environment = { path = "../lunco-environment" }
+lunco-hooks = { path = "../lunco-hooks" }
+lunco-luncosim-edit = { path = "../lunco-luncosim-edit", default-features = false, features = ["ui"] }
+lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
+lunco-modelica-ui = { path = "../lunco-modelica-ui", default-features = false, features = ["ui"] }
+lunco-networking = { path = "../lunco-networking", default-features = false, optional = true }
+lunco-render = { path = "../lunco-render" }
+lunco-scene-commands = { path = "../lunco-scene-commands" }
+lunco-scripting = { path = "../lunco-scripting" }
+lunco-settings = { path = "../lunco-settings" }
+lunco-status-core = { path = "../lunco-status-core" }
+lunco-terrain-surface = { path = "../lunco-terrain-surface" }
+lunco-theme = { path = "../lunco-theme" }
+lunco-time = { path = "../lunco-time" }
+lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
+lunco-ui = { path = "../lunco-ui" }
+lunco-usd = { path = "../lunco-usd", default-features = false }
+lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
+lunco-usd-core = { path = "../lunco-usd-core" }
+lunco-usd-sim = { path = "../lunco-usd-sim" }
+lunco-usd-ui = { path = "../lunco-usd-ui" }
+lunco-workbench = { path = "../lunco-workbench", features = ["api"] }
+lunco-workbench-core = { path = "../lunco-workbench-core" }
+lunco-workspace = { path = "../lunco-workspace" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[build-dependencies]
+# The desktop icon is UI/package artwork. Keeping rasterization here prevents
+# the headless application and server from compiling the graphics toolchain.
+resvg = { workspace = true }
+usvg = { workspace = true }
+image = { workspace = true, features = ["ico"] }
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1.31"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+velopack = { version = "=1.2.110-ge826545", features = ["public-utils"] }
+ureq = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+web-sys = { workspace = true, features = ["Window", "Location"] }
+
+[lints]
+workspace = true

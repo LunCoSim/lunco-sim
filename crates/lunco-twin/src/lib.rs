@@ -507,6 +507,55 @@ impl Twin {
         &self.files
     }
 
+    /// Discover the indexed parent directories for files with `extension`.
+    ///
+    /// The result is the smallest deterministic set of relative directories
+    /// that covers the matching files: nested directories are folded into an
+    /// already-selected ancestor, while files in separate directories remain
+    /// separate roots. This is a file-index operation only; the extension is
+    /// treated as an opaque domain selector and no file is opened or parsed.
+    ///
+    /// A leading dot is accepted (`"mo"` and `".mo"` are equivalent), and
+    /// matching is case-insensitive. An extensionless file is selected only
+    /// when `extension` is empty.
+    pub fn discover_indexed_file_roots(&self, extension: &str) -> Vec<PathBuf> {
+        let extension = extension.trim_start_matches('.');
+        let mut candidates: Vec<PathBuf> = self
+            .files
+            .iter()
+            .filter(|entry| {
+                let Some(actual) = entry
+                    .relative_path
+                    .extension()
+                    .and_then(|value| value.to_str())
+                else {
+                    return extension.is_empty();
+                };
+                actual.eq_ignore_ascii_case(extension)
+            })
+            .filter_map(|entry| entry.relative_path.parent().map(Path::to_path_buf))
+            .collect();
+
+        candidates.sort_by_key(|path| {
+            (
+                path.components().count(),
+                path.to_string_lossy().replace('\\', "/"),
+            )
+        });
+        candidates.dedup();
+
+        let mut roots = Vec::new();
+        for candidate in candidates {
+            if roots.iter().any(|root: &PathBuf| {
+                root.as_os_str().is_empty() || candidate == *root || candidate.starts_with(root)
+            }) {
+                continue;
+            }
+            roots.push(candidate);
+        }
+        roots
+    }
+
     /// Sub-Twins loaded from the manifest's `[[twin.children]]` with a
     /// local `path`. Read-only accessor so callers can't skip the
     /// open/load invariant. External-URL children are on the manifest
@@ -656,6 +705,28 @@ mod tests {
             }
             _ => panic!("expected Folder mode"),
         }
+    }
+
+    #[test]
+    fn indexed_file_roots_are_extension_agnostic_and_minimal() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(&tmp.path().join("models/Vehicle/package.mo"), "");
+        write(&tmp.path().join("models/Vehicle/Sub/Part.MO"), "");
+        write(&tmp.path().join("examples/Example.mo"), "");
+        write(&tmp.path().join("examples/Example.rhai"), "");
+
+        let TwinMode::Folder(twin) = TwinMode::open(tmp.path()).unwrap() else {
+            panic!("expected Folder mode");
+        };
+
+        assert_eq!(
+            twin.discover_indexed_file_roots(".mo"),
+            vec![PathBuf::from("examples"), PathBuf::from("models/Vehicle")]
+        );
+        assert_eq!(
+            twin.discover_indexed_file_roots("rhai"),
+            vec![PathBuf::from("examples")]
+        );
     }
 
     #[test]

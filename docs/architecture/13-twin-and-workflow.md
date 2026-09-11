@@ -1017,7 +1017,7 @@ composition roots remain distinct:
 | `luncosim-server` | headless luncosim core; no window, GPU, or egui | `run_headless()` drives the same simulation schedules through `ScheduleRunnerPlugin` |
 | `lunica` | Modelica workbench plus rumoca compile/simulation plugins | opens Modelica documents and uses the same Twin/document services |
 
-`luncosim` still owns a small `setup_sandbox` composition step: it creates
+`luncosim` still owns a small `setup_luncosim` composition step: it creates
 the persistent world shell, consults the GUI boot policy, and loads an
 explicit native scene. Browser startup loads the deployment Twin through its
 page autoload hook. The server does not use the GUI startup path.

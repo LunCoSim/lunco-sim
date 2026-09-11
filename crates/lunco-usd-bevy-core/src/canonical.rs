@@ -1,0 +1,1511 @@
+//! `CanonicalStage` — the live composed openusd `Stage` as the single source of
+//! truth for a scene (Ph0′ substrate).
+//!
+//! openusd's `Stage` is `Rc`-backed (`!Send`), so the live authoring/runtime
+//! stage lives as a **`NonSend`** resource on the main thread and remains the
+//! source for edits and incremental re-projection. Initial asset materialisation
+//! crosses that membrane as the loader's `Send` [`UsdStageProjectionPlan`], so
+//! hierarchy and default-time visual reads do not run on the UI thread. The rest
+//! of the engine (render / physics / async) consumes the `Send` ECS components
+//! the projection emits — never the stage.
+//!
+//! A [`StageSink`] pushes each committed change into a `Send` inbox
+//! (`Arc<Mutex<..>>`) that a projection system drains per tick; this is how live
+//! edits (and reference-dependent cascade) reach the projector.
+//!
+//! The canonical owner builds and holds the live stage, exposes a [`StageView`],
+//! and captures change notices. Initial asset projection uses the immutable
+//! prepared plan; this stage owns authoring and incremental re-projection.
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+use lunco_usd_core::StageRecipe;
+use openusd::sdf::Path as SdfPath;
+use openusd::usd::{CommittedChange, Stage, StageSinkId};
+
+use crate::read::UsdReadSource;
+use crate::view::StageView;
+use crate::{UsdRead, UsdStageAsset};
+
+/// One committed change, owned + `Send`, as drained from the stage sink.
+/// (`CommittedChange` borrows the stage; we copy the paths out so the inbox can
+/// cross the sink→system boundary.)
+#[derive(Debug, Clone, Default)]
+pub struct RawStageChange {
+    /// Structurally-resynced prim paths — includes reference/sublayer dependents
+    /// that PCP fanned out (cascade), so the projector re-reads exactly these.
+    pub resynced: Vec<SdfPath>,
+    /// Attribute-only ("info only") prim paths — cheap incremental projection.
+    pub info_only: Vec<SdfPath>,
+    /// True when the committed USD change authored the native
+    /// `connectionPaths` field. This is the only live-edit signal that can
+    /// invalidate the derived simulation wiring cache.
+    pub connection_paths_changed: bool,
+    /// Identifier of the layer whose edit produced this change.
+    pub layer: String,
+}
+
+/// The canonical live-composed stage for the active scene. `NonSend` (holds an
+/// `Rc`-backed `Stage`). Insert via `world.insert_non_send(..)`.
+pub struct CanonicalStage {
+    stage: Stage,
+    /// Root (persisted) layer identifier — the scene `.usda`.
+    pub scene_layer: String,
+    /// Ephemeral edit-target sublayer identifier (empty until S2 inserts it).
+    pub runtime_layer: String,
+    /// Sink inbox drained by the projection system each tick.
+    inbox: Arc<Mutex<Vec<RawStageChange>>>,
+    #[allow(dead_code)] // held to keep the sink alive for the stage's lifetime
+    sink_id: StageSinkId,
+    /// The live resolver's shared byte-map handle, when this stage was built
+    /// from a [`StageRecipe`] via [`from_recipe`](Self::from_recipe). `Some`
+    /// lets [`add_layer_bytes`](Self::add_layer_bytes) inject a spawned asset's
+    /// layer closure so a subsequently [`author_reference`](Self::author_reference)d
+    /// arc composes on the live stage (sink-driven referenced spawn). `None` for
+    /// stages built via [`from_stage`](Self::from_stage) over a foreign resolver
+    /// (native `compose_file_to_stage` / tests) — those can't gain layers.
+    resolver_bytes: Option<lunco_usd_compose::SharedLayerBytes>,
+    /// Bumped by the drain step on each observed change (debug / asserts).
+    pub generation: u64,
+}
+
+impl CanonicalStage {
+    /// Wrap an already-composed [`Stage`] (from `compose_to_stage` /
+    /// `compose_file_to_stage`), installing the change sink. `scene_layer` is the
+    /// root layer identifier the stage was opened from.
+    pub fn from_stage(stage: Stage, scene_layer: impl Into<String>) -> Self {
+        let inbox = Arc::new(Mutex::new(Vec::new()));
+        let sink_inbox = inbox.clone();
+        let sink_id = stage.add_sink(move |_stage: &Stage, change: &CommittedChange<'_>| {
+            if let Ok(mut q) = sink_inbox.lock() {
+                let connection_paths_changed = change
+                    .resynced
+                    .iter()
+                    .chain(change.changed_info_only.iter())
+                    .any(|path| {
+                        change
+                            .changed_fields(path)
+                            .iter()
+                            .any(|field| field == "connectionPaths")
+                    });
+                q.push(RawStageChange {
+                    resynced: change.resynced.to_vec(),
+                    info_only: change.changed_info_only.to_vec(),
+                    connection_paths_changed,
+                    layer: change.layer_identifier.to_string(),
+                });
+            }
+        });
+        Self {
+            stage,
+            scene_layer: scene_layer.into(),
+            runtime_layer: String::new(),
+            inbox,
+            sink_id,
+            resolver_bytes: None,
+            generation: 0,
+        }
+    }
+
+    /// Build the live authoring [`CanonicalStage`] from a fetched [`StageRecipe`].
+    /// Initial scene materialisation uses the worker-produced projection plan;
+    /// this constructor is the explicit live-stage path for authored edits and
+    /// runtime reference insertion. It captures the resolver's shared byte-map
+    /// handle so referenced spawns can inject their layer closure (see
+    /// [`add_layer_bytes`](Self::add_layer_bytes)).
+    pub fn from_recipe(recipe: &StageRecipe) -> anyhow::Result<Self> {
+        let (stage, shared) = crate::compose::build_stage_with_resolver(recipe)?;
+        let mut cs = Self::from_stage(stage, recipe.root_id.clone());
+        cs.resolver_bytes = Some(shared);
+        Ok(cs)
+    }
+
+    /// A [`StageView`] over the live composed stage for typed reads.
+    pub fn view(&self) -> StageView<'_> {
+        StageView::new(&self.stage)
+    }
+
+    /// The underlying stage (escape hatch for authoring / reads not yet wrapped).
+    pub fn stage(&self) -> &Stage {
+        &self.stage
+    }
+
+    /// The twin-projection op-replay door — the **only** sanctioned way to
+    /// mutate a live stage from outside this crate. See [`StageProjector`].
+    pub fn projector(&self) -> StageProjector<'_> {
+        StageProjector(self)
+    }
+
+    /// Monotonic change counter — bumped whenever [`drain_changes`](Self::drain_changes)
+    /// commits sink notices. A stage-reading projector (e.g. the policy projector)
+    /// gates on this so it re-runs only when the composed stage actually changed.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Author `xformOp:translate = value` onto the composed prim at `path` (root
+    /// edit target) — this fires the change sink, so the projection bridge
+    /// (`project_stage_changes` in `lunco-usd`) reconciles the move in place.
+    /// Inserts `xformOp:translate`
+    /// into `xformOpOrder` at its canonical slot when not already listed, so an
+    /// existing xform stack is extended, never clobbered.
+    ///
+    /// The `CanonicalStage` is the live **projection** (rebuilt from the recipe on
+    /// a structural reload), so authoring here updates the live view + drives the
+    /// sink WITHOUT touching the document's save data (`UsdDocument.base`, which
+    /// stays the durable/serialized truth).
+    pub(crate) fn author_translate(&self, path: &SdfPath, value: [f64; 3]) -> anyhow::Result<()> {
+        use anyhow::anyhow;
+        let value = crate::stage_convention(&self.view())
+            .map_err(|error| anyhow!("invalid stage convention: {error}"))?
+            .stage_point_d(bevy::math::DVec3::from_array(value))
+            .to_array();
+        self.stage
+            .create_attribute(format!("{}.xformOp:translate", path.as_str()), "double3")
+            .map_err(|e| anyhow!("author translate at {path}: {e}"))?
+            .set(value)
+            .map_err(|e| anyhow!("set translate at {path}: {e}"))?;
+        self.insert_xform_op(path, "xformOp:translate")
+    }
+
+    /// Author `xformOp:rotateXYZ = value` (Euler XYZ, **degrees**) onto the
+    /// composed prim at `path` — the rotation counterpart of
+    /// [`author_translate`](Self::author_translate). Fires the change sink so the
+    /// projection bridge reconciles the new orientation in place, and inserts
+    /// `xformOp:rotateXYZ` into `xformOpOrder` at its canonical slot when not
+    /// already listed (extends a stack, never clobbers it).
+    pub(crate) fn author_rotate(&self, path: &SdfPath, value: [f64; 3]) -> anyhow::Result<()> {
+        use anyhow::anyhow;
+        let value = crate::stage_convention(&self.view())
+            .map_err(|error| anyhow!("invalid stage convention: {error}"))?
+            .stage_euler_xyz_deg(value);
+        self.stage
+            .create_attribute(format!("{}.xformOp:rotateXYZ", path.as_str()), "double3")
+            .map_err(|e| anyhow!("author rotate at {path}: {e}"))?
+            .set(value)
+            .map_err(|e| anyhow!("set rotate at {path}: {e}"))?;
+        self.insert_xform_op(path, "xformOp:rotateXYZ")
+    }
+
+    /// Author `xformOp:scale = value` (unitless local factors) onto the
+    /// composed prim at `path`. Fires the change sink and inserts the standard
+    /// scale operation into `xformOpOrder` without disturbing existing ops.
+    pub(crate) fn author_scale(&self, path: &SdfPath, value: [f64; 3]) -> anyhow::Result<()> {
+        use anyhow::anyhow;
+        if value.iter().any(|component| !component.is_finite()) {
+            return Err(anyhow!("scale at {path} contains a non-finite component"));
+        }
+        let value = crate::stage_convention(&self.view())
+            .map_err(|error| anyhow!("invalid stage convention: {error}"))?
+            .stage_scale_vec_d(bevy::math::DVec3::from_array(value));
+        self.stage
+            .create_attribute(format!("{}.xformOp:scale", path.as_str()), "double3")
+            .map_err(|e| anyhow!("author scale at {path}: {e}"))?
+            .set(value.to_array())
+            .map_err(|e| anyhow!("set scale at {path}: {e}"))?;
+        self.insert_xform_op(path, "xformOp:scale")
+    }
+
+    /// Rank of `op` in XformCommonAPI's canonical stack: `!resetXformStack!`
+    /// first, then translate → rotate/orient → scale, with unknown/extra ops
+    /// after the canonical trio.
+    fn canonical_xform_rank(op: &str) -> usize {
+        let base = op.strip_prefix("!invert!").unwrap_or(op);
+        match base {
+            "!resetXformStack!" => 0,
+            t if t.starts_with("xformOp:translate") => 1,
+            t if t.starts_with("xformOp:rotate") || t.starts_with("xformOp:orient") => 2,
+            t if t.starts_with("xformOp:scale") => 3,
+            _ => 4,
+        }
+    }
+
+    /// Insert `op` into `xformOpOrder` at its XformCommonAPI canonical slot —
+    /// a blind append would place a translate authored after a rotate *inside*
+    /// it (innermost), flipping the composed transform. No-op when `op` is
+    /// already listed; existing ops keep their relative order.
+    fn insert_xform_op(&self, path: &SdfPath, op: &str) -> anyhow::Result<()> {
+        use anyhow::anyhow;
+        let prim = self.stage.prim(path.clone());
+        let existing: Vec<String> = match prim
+            .attribute("xformOpOrder")
+            .get::<openusd::sdf::Value>()
+            .map_err(|e| anyhow!("read xformOpOrder at {path}: {e}"))?
+        {
+            Some(openusd::sdf::Value::TokenVec(v)) => v.into_iter().map(Into::into).collect(),
+            Some(openusd::sdf::Value::StringVec(v)) => v,
+            Some(openusd::sdf::Value::TokenListOp(l)) => {
+                l.flatten().into_iter().map(Into::into).collect()
+            }
+            Some(openusd::sdf::Value::StringListOp(l)) => l.flatten(),
+            _ => Vec::new(),
+        };
+        if existing.iter().any(|t| t == op) {
+            return Ok(());
+        }
+        let rank = Self::canonical_xform_rank(op);
+        let at = existing
+            .iter()
+            .position(|t| Self::canonical_xform_rank(t) > rank)
+            .unwrap_or(existing.len());
+        let mut updated = existing;
+        updated.insert(at, op.to_string());
+        prim.create_attribute("xformOpOrder", "token[]")
+            .map_err(|e| anyhow!("author xformOpOrder at {path}: {e}"))?
+            .set_variability(openusd::sdf::Variability::Uniform)
+            .map_err(|e| anyhow!("set xformOpOrder variability at {path}: {e}"))?
+            .set_custom(false)
+            .map_err(|e| anyhow!("set xformOpOrder custom at {path}: {e}"))?
+            .set(openusd::sdf::Value::token_vec(updated))
+            .map_err(|e| anyhow!("set xformOpOrder at {path}: {e}"))?;
+        Ok(())
+    }
+
+    /// Define a prim of `type_name` at `path` (root edit target) — fires the sink
+    /// so the projection bridge spawns it. For a referenced spawn, follow with
+    /// [`author_reference`](Self::author_reference).
+    pub(crate) fn author_prim(
+        &self,
+        path: &SdfPath,
+        type_name: Option<&str>,
+    ) -> anyhow::Result<()> {
+        use anyhow::anyhow;
+        let prim = self
+            .stage
+            .define_prim(path.clone())
+            .map_err(|e| anyhow!("define_prim {path}: {e}"))?;
+        if let Some(t) = type_name {
+            prim.set_type_name(t)
+                .map_err(|e| anyhow!("set_type_name {path}: {e}"))?;
+        }
+        Ok(())
+    }
+
+    /// Remove the prim at `path` from the root edit target — fires the sink so the
+    /// projection bridge despawns its subtree.
+    pub(crate) fn remove_prim_at(&self, path: &SdfPath) -> anyhow::Result<bool> {
+        use anyhow::anyhow;
+        self.stage
+            .remove_prim(path.clone())
+            .map_err(|e| anyhow!("remove_prim {path}: {e}"))
+    }
+
+    /// Inject a spawned asset's layer closure (`id → bytes`, keyed by the same
+    /// canonical id [`StageRecipe`] uses) into the live resolver, so a
+    /// subsequently [`author_reference`](StageProjector::author_reference)d arc to any of
+    /// those ids composes on this stage. Returns `false` if this stage has no
+    /// injectable resolver (built via [`from_stage`](Self::from_stage) over a
+    /// foreign resolver). Merges — existing ids keep their bytes.
+    pub fn add_layer_bytes(&self, extra: HashMap<String, Vec<u8>>) -> bool {
+        match &self.resolver_bytes {
+            Some(shared) => {
+                shared.borrow_mut().extend(extra);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Whether the live resolver already holds bytes for layer `id` — so a
+    /// referenced spawn can skip the async fetch when its asset closure is
+    /// already loaded (e.g. spawning a second rover of an already-referenced
+    /// asset).
+    pub fn has_layer_bytes(&self, id: &str) -> bool {
+        self.resolver_bytes
+            .as_ref()
+            .map(|shared| shared.borrow().contains_key(id))
+            .unwrap_or(false)
+    }
+
+    /// A snapshot clone of the live resolver's full layer-byte closure (every
+    /// referenced `.usda` loaded so far). Lets the coarse `full_reload` path
+    /// (Save-As / whole-source undo) rebuild a fresh stage from an edited root
+    /// source that still references those layers, reusing the already-loaded
+    /// closure so it recomposes without re-fetching. Empty if this stage has no
+    /// injectable resolver.
+    pub fn layer_bytes_snapshot(&self) -> HashMap<String, Vec<u8>> {
+        self.resolver_bytes
+            .as_ref()
+            .map(|shared| shared.borrow().clone())
+            .unwrap_or_default()
+    }
+
+    /// The canonical layer id an `asset_path` reference resolves to on *this*
+    /// stage — `asset_path` anchored against the scene (root) layer, exactly as
+    /// PCP will canonicalize the authored `references` arc. This is the key to
+    /// load the asset closure under (`AssetServer::load` / [`add_layer_bytes`])
+    /// so the injected bytes match what PCP demands.
+    pub fn canonical_reference_id(&self, asset_path: &str) -> String {
+        let anchor = openusd::ar::ResolvedPath::new(&self.scene_layer);
+        lunco_usd_compose::canonicalize_at(asset_path, Some(&anchor))
+    }
+
+    fn reference_for_loaded_asset(
+        &self,
+        asset_path: &str,
+    ) -> anyhow::Result<openusd::sdf::Reference> {
+        use anyhow::anyhow;
+        let reference_id = self.canonical_reference_id(asset_path);
+        let source = self
+            .resolver_bytes
+            .as_ref()
+            .and_then(|shared| shared.borrow().get(&reference_id).cloned())
+            .ok_or_else(|| anyhow!("reference source `{asset_path}` is not loaded"))?;
+        let source = std::str::from_utf8(&source)
+            .map_err(|e| anyhow!("reference source `{asset_path}` is not UTF-8: {e}"))?;
+        let default_prim = crate::authoring::DefaultPrim::parse(source)
+            .ok_or_else(|| anyhow!("reference source `{asset_path}` has no valid defaultPrim"))?;
+        Ok(openusd::sdf::Reference {
+            asset_path: asset_path.to_string(),
+            prim_path: default_prim.path().clone(),
+            ..Default::default()
+        })
+    }
+
+    /// Define a referenced runtime instance in one atomic root-layer edit.
+    ///
+    /// The prim definition and reference must become visible to the live
+    /// projection together. Separate authoring commits briefly expose a
+    /// typeless instance root; its one-shot Avian observer can then mark the
+    /// entity processed before the referenced root schemas arrive.
+    pub(crate) fn author_referenced_prim(
+        &self,
+        path: &SdfPath,
+        type_name: Option<&str>,
+        asset_path: &str,
+        reference_prim_path: Option<&str>,
+    ) -> anyhow::Result<()> {
+        use anyhow::anyhow;
+        let mut reference = self.reference_for_loaded_asset(asset_path)?;
+        let explicit_target = reference_prim_path.is_some();
+        if let Some(reference_prim_path) = reference_prim_path {
+            reference.prim_path = SdfPath::new(reference_prim_path).map_err(|e| {
+                anyhow!("invalid referenced prim path `{reference_prim_path}`: {e}")
+            })?;
+        }
+        let references = if explicit_target {
+            openusd::sdf::ReferenceListOp::prepended([reference.clone()])
+        } else {
+            openusd::sdf::ReferenceListOp::explicit([reference.clone()])
+        };
+        self.stage
+            .batch_edit(&[self.scene_layer.as_str()], |edits| {
+                let edit = &mut edits[0];
+                let mut prim = openusd::sdf::PrimSpec::new(
+                    edit.data_mut(),
+                    path.clone(),
+                    openusd::sdf::Specifier::Def,
+                    type_name.unwrap_or_default(),
+                )?;
+                prim.set(
+                    openusd::sdf::FieldKey::References.as_str(),
+                    openusd::sdf::Value::ReferenceListOp(references.clone()),
+                );
+                Ok(())
+            })
+            .map_err(|e| anyhow!("author referenced prim {path}: {e}"))?;
+        Ok(())
+    }
+
+    /// Author a reference to a source asset at `path` (root edit target),
+    /// turning it into a **referenced spawn**. `reference_prim_path` selects an
+    /// explicit source prim when supplied; otherwise the source asset's
+    /// `defaultPrim` is used. The target path is authored explicitly from the
+    /// already-injected source layer rather than relying on the empty-path
+    /// default-prim sentinel: openusd's live incremental composition otherwise
+    /// grafts the child namespace but does not carry the source root's applied
+    /// schemas onto the new instance prim.
+    /// Fires the change sink so the projection bridge instantiates the composed
+    /// subtree. The referenced asset's layer closure must already be resolvable
+    /// — inject it first via [`add_layer_bytes`](Self::add_layer_bytes) (or it
+    /// was loaded with the scene).
+    pub(crate) fn author_reference(&self, path: &SdfPath, asset_path: &str) -> anyhow::Result<()> {
+        use anyhow::anyhow;
+        let reference = self.reference_for_loaded_asset(asset_path)?;
+        // Merge into any existing `references` list-op (`UsdReferences::AddReference`
+        // semantics) — an unconditional set would erase prior arcs on the prim.
+        self.stage
+            .prim(path.clone())
+            .update_metadata(openusd::sdf::FieldKey::References.as_str(), |current| {
+                let mut op = match current {
+                    Some(openusd::sdf::Value::ReferenceListOp(op)) => op,
+                    _ => openusd::sdf::ReferenceListOp::default(),
+                };
+                if !op.iter().any(|r| *r == reference) {
+                    if op.explicit {
+                        op.explicit_items.push(reference);
+                    } else {
+                        op.prepended_items.push(reference);
+                    }
+                }
+                openusd::sdf::Value::ReferenceListOp(op)
+            })
+            .map_err(|e| anyhow!("author reference @{asset_path}@ at {path}: {e}"))?;
+        Ok(())
+    }
+
+    /// Author relationship `name` on `prim`, pointing at `targets` — the
+    /// live-stage counterpart of the document's `SetRelationship` op.
+    ///
+    /// Without this, every relationship edit fell to the projector's whole-scene
+    /// rebuild path. That is the difference between snapping a part onto an
+    /// assembly and respawning every prim in the world: a physics joint authors
+    /// `physics:body0` / `physics:body1`, so a component attach is *two*
+    /// relationship edits. Set-semantics — `targets` replaces any prior list.
+    pub(crate) fn author_relationship(
+        &self,
+        prim: &SdfPath,
+        name: &str,
+        targets: &[String],
+    ) -> anyhow::Result<()> {
+        use anyhow::anyhow;
+        let target_paths = targets
+            .iter()
+            .map(|t| {
+                openusd::sdf::Path::new(t)
+                    .map_err(|e| anyhow!("relationship {prim}.{name}: bad target `{t}`: {e}"))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        self.stage
+            .create_relationship(format!("{}.{}", prim.as_str(), name))
+            .map_err(|e| anyhow!("author relationship {prim}.{name}: {e}"))?
+            .set_targets(target_paths)
+            .map_err(|e| anyhow!("set relationship targets {prim}.{name}: {e}"))?;
+        Ok(())
+    }
+
+    /// Author attribute `name`'s connection targets (`connectionPaths`) onto the
+    /// prim at `prim` — the live-stage counterpart of the document's
+    /// `SetConnection` op. Creates the attribute spec if absent (like
+    /// [`author_attribute`](Self::author_attribute)) so a wire can be drawn to a
+    /// not-yet-materialised port. `sources` replaces any prior list; empty clears.
+    ///
+    /// The stage sink preserves the native `connectionPaths` field notice so the
+    /// live projector can invalidate only the derived wiring cache.
+    pub(crate) fn author_connection(
+        &self,
+        prim: &SdfPath,
+        name: &str,
+        type_name: &str,
+        sources: &[String],
+    ) -> anyhow::Result<()> {
+        use anyhow::anyhow;
+        let source_paths = sources
+            .iter()
+            .map(|s| {
+                openusd::sdf::Path::new(s)
+                    .map_err(|e| anyhow!("connection {prim}.{name}: bad source `{s}`: {e}"))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        self.stage
+            .create_attribute(format!("{}.{}", prim.as_str(), name), type_name)
+            .map_err(|e| anyhow!("author connection {prim}.{name} ({type_name}): {e}"))?
+            .set_connections(source_paths)
+            .map_err(|e| anyhow!("set connection sources {prim}.{name}: {e}"))?;
+        Ok(())
+    }
+
+    /// Author an applied-schema list on the live stage. Callers must still decide
+    /// whether the schema's ECS consequence can be reconciled incrementally.
+    pub(crate) fn author_api_schemas(
+        &self,
+        prim: &SdfPath,
+        schemas: &[String],
+    ) -> anyhow::Result<()> {
+        let tokens: Vec<openusd::tf::Token> = schemas
+            .iter()
+            .cloned()
+            .map(openusd::tf::Token::from)
+            .collect();
+        self.stage
+            .prim(prim.clone())
+            .set_metadata(
+                openusd::sdf::FieldKey::ApiSchemas.as_str(),
+                openusd::sdf::Value::TokenListOp(openusd::sdf::TokenListOp::prepended(tokens)),
+            )
+            .map(|_| ())
+            .map_err(|e| anyhow::anyhow!("author apiSchemas at {prim}: {e}"))
+    }
+
+    /// Author `active` onto the prim's spec on the root edit target. This is the
+    /// live-stage counterpart of the document's `SetActive` op, so a runtime hide
+    /// of a purely-visual prim (a waypoint marker: an opaque emissive dome + a
+    /// non-solid Sensor, no rigid body / collider) reaches the live world without
+    /// a whole-scene reload — the projection bridge despawns the prim's subtree via
+    /// a `refresh_prim_subtree`. Firing the sink lets
+    /// `project_stage_changes` in `lunco-usd` reconcile ECS.
+    ///
+    /// Callers must still decide whether the prim's ECS consequence can be
+    /// reconciled incrementally: a `SetActive` on a physics prim changes its
+    /// presence / component set, which the visual-only subtree refresh cannot
+    /// express, and must take the rebuild path. See
+    /// `twin_projection::op_needs_rebuild`.
+    pub(crate) fn author_active(&self, prim: &SdfPath, active: bool) -> anyhow::Result<()> {
+        use anyhow::anyhow;
+        // `Prim::set_active` requires a spec to exist on this layer's edit target.
+        // A waypoint marker is authored in the base/scene layer, so the live
+        // canonical stage (whose edit target is its own root layer) has no spec
+        // for it yet — the same situation `document.rs::SetActive` fixes with
+        // `define_prim`. Upsert the spec first (idempotent), then set the flag.
+        self.stage
+            .define_prim(prim.clone())
+            .map_err(|e| anyhow!("define_prim before author_active at {prim}: {e}"))?;
+        self.stage
+            .prim(prim.clone())
+            .set_active(active)
+            .map(|_| ())
+            .map_err(|e| anyhow!("author active={active} at {prim}: {e}"))
+    }
+
+    /// Author attribute `name = value` (USD type `type_name`) onto the prim at
+    /// `prim` (root edit target), firing the sink so the projection refreshes the
+    /// prim's visual. Creates the attribute if absent, overwrites it otherwise —
+    /// the live-stage counterpart of the document's `SetAttribute` op, so a
+    /// material / inspector edit reaches the live world without a whole-scene
+    /// reload. `value` is a typed [`openusd::sdf::Value`] (read from the composed
+    /// document or parsed by the authoring command layer).
+    pub fn author_attribute(
+        &self,
+        prim: &SdfPath,
+        name: &str,
+        type_name: &str,
+        value: openusd::sdf::Value,
+    ) -> anyhow::Result<()> {
+        use anyhow::anyhow;
+        let value = crate::stage_convention(&self.view())
+            .map_err(|error| anyhow!("invalid stage convention: {error}"))?
+            .stage_xform_value(name, type_name, value);
+        self.stage
+            .create_attribute(format!("{}.{}", prim.as_str(), name), type_name)
+            .map_err(|e| anyhow!("author attribute {prim}.{name} ({type_name}): {e}"))?
+            .set(value)
+            .map_err(|e| anyhow!("set attribute {prim}.{name}: {e}"))?;
+        Ok(())
+    }
+
+    /// Author `name`'s `timeSamples[time] = value` (USD type `type_name`) onto the
+    /// prim at `prim` (root edit target), firing the sink — the live-stage
+    /// counterpart of the document's `SetTimeSample` op. A keyframe edit reaches
+    /// the live world without a whole-scene rebuild: the per-frame animation
+    /// sampler reads this stage each frame, so a key on an already-animated prim
+    /// shows up on the next tick. Creates the attribute if absent; adds or overwrites the sample at
+    /// `time` otherwise (openusd exposes no live-stage sample *removal*, so
+    /// `RemoveTimeSample` stays on the projector's rebuild path).
+    pub(crate) fn author_time_sample(
+        &self,
+        prim: &SdfPath,
+        name: &str,
+        type_name: &str,
+        time: f64,
+        value: openusd::sdf::Value,
+    ) -> anyhow::Result<()> {
+        use anyhow::anyhow;
+        let value = crate::stage_convention(&self.view())
+            .map_err(|error| anyhow!("invalid stage convention: {error}"))?
+            .stage_xform_value(name, type_name, value);
+        self.stage
+            .create_attribute(format!("{}.{}", prim.as_str(), name), type_name)
+            .map_err(|e| anyhow!("author time sample {prim}.{name} ({type_name}): {e}"))?
+            .set_at(value, openusd::usd::TimeCode::new(time))
+            .map_err(|e| anyhow!("set time sample {prim}.{name} @ {time}: {e}"))?;
+        Ok(())
+    }
+
+    /// Drain and clear the change inbox, bumping `generation` if anything landed.
+    pub fn drain_changes(&mut self) -> Vec<RawStageChange> {
+        let drained = self
+            .inbox
+            .lock()
+            .map(|mut q| std::mem::take(&mut *q))
+            .unwrap_or_default();
+        if !drained.is_empty() {
+            self.generation += 1;
+        }
+        drained
+    }
+}
+
+/// The twin-projection **op-replay door** onto a [`CanonicalStage`], obtained
+/// via [`CanonicalStage::projector`].
+///
+/// Contract ("author once, replay everywhere"): every mutation of the document
+/// flows through `ApplyUsdOp`; `lunco-usd`'s twin-projection replayer then
+/// mirrors the already-applied op onto the live stage through *this* wrapper —
+/// and through nothing else. The surface below is exactly the set of ops the
+/// replayer mirrors incrementally (everything else takes the rebuild path).
+/// Do not reach for this to author new edits: that bypasses the document,
+/// undo, and persistence.
+pub struct StageProjector<'a>(&'a CanonicalStage);
+
+impl StageProjector<'_> {
+    /// Replay a `SetTranslate` op — see [`CanonicalStage::author_translate`].
+    pub fn author_translate(&self, path: &SdfPath, value: [f64; 3]) -> anyhow::Result<()> {
+        self.0.author_translate(path, value)
+    }
+
+    /// Replay a `SetRotate` op — see [`CanonicalStage::author_rotate`].
+    pub fn author_rotate(&self, path: &SdfPath, value: [f64; 3]) -> anyhow::Result<()> {
+        self.0.author_rotate(path, value)
+    }
+
+    /// Replay a `SetScale` op — see [`CanonicalStage::author_scale`].
+    pub fn author_scale(&self, path: &SdfPath, value: [f64; 3]) -> anyhow::Result<()> {
+        self.0.author_scale(path, value)
+    }
+
+    /// Replay a `DefinePrim` op — see [`CanonicalStage::author_prim`].
+    pub fn author_prim(&self, path: &SdfPath, type_name: Option<&str>) -> anyhow::Result<()> {
+        self.0.author_prim(path, type_name)
+    }
+
+    /// Replay an atomic referenced runtime spawn — define the instance root and
+    /// author its source reference together, optionally targeting an explicit
+    /// source prim instead of `defaultPrim`.
+    pub fn author_referenced_prim(
+        &self,
+        path: &SdfPath,
+        type_name: Option<&str>,
+        asset_path: &str,
+        reference_prim_path: Option<&str>,
+    ) -> anyhow::Result<()> {
+        self.0
+            .author_referenced_prim(path, type_name, asset_path, reference_prim_path)
+    }
+
+    /// Replay a `RemovePrim` op — see [`CanonicalStage::remove_prim_at`].
+    pub fn remove_prim_at(&self, path: &SdfPath) -> anyhow::Result<bool> {
+        self.0.remove_prim_at(path)
+    }
+
+    /// Replay an `AddReference` op — see [`CanonicalStage::author_reference`].
+    pub fn author_reference(&self, path: &SdfPath, asset_path: &str) -> anyhow::Result<()> {
+        self.0.author_reference(path, asset_path)
+    }
+
+    /// Replay a `SetRelationship` op — see [`CanonicalStage::author_relationship`].
+    pub fn author_relationship(
+        &self,
+        prim: &SdfPath,
+        name: &str,
+        targets: &[String],
+    ) -> anyhow::Result<()> {
+        self.0.author_relationship(prim, name, targets)
+    }
+
+    /// Replay a `SetConnection` op — see [`CanonicalStage::author_connection`].
+    pub fn author_connection(
+        &self,
+        prim: &SdfPath,
+        name: &str,
+        type_name: &str,
+        sources: &[String],
+    ) -> anyhow::Result<()> {
+        self.0.author_connection(prim, name, type_name, sources)
+    }
+
+    /// Replay a metadata-only `SetApiSchemas` op. Callers classify whether a
+    /// schema can be reconciled without rebuilding physical ECS topology.
+    pub fn author_api_schemas(&self, prim: &SdfPath, schemas: &[String]) -> anyhow::Result<()> {
+        self.0.author_api_schemas(prim, schemas)
+    }
+
+    /// Replay a `SetActive` op — see [`CanonicalStage::author_active`]. Callers
+    /// classify whether the prim's ECS consequence (entity presence / physics
+    /// component set) can be reconciled without a rebuild: only purely-visual
+    /// prims (waypoint markers) may take the incremental path.
+    pub fn author_active(&self, prim: &SdfPath, active: bool) -> anyhow::Result<()> {
+        self.0.author_active(prim, active)
+    }
+
+    /// Replay a `SetAttribute` op — see [`CanonicalStage::author_attribute`].
+    pub fn author_attribute(
+        &self,
+        prim: &SdfPath,
+        name: &str,
+        type_name: &str,
+        value: openusd::sdf::Value,
+    ) -> anyhow::Result<()> {
+        self.0.author_attribute(prim, name, type_name, value)
+    }
+
+    /// Replay a `SetTimeSample` op — see [`CanonicalStage::author_time_sample`].
+    pub fn author_time_sample(
+        &self,
+        prim: &SdfPath,
+        name: &str,
+        type_name: &str,
+        time: f64,
+        value: openusd::sdf::Value,
+    ) -> anyhow::Result<()> {
+        self.0
+            .author_time_sample(prim, name, type_name, time, value)
+    }
+}
+
+/// The set of live canonical stages, keyed by the `UsdStageAsset` they were
+/// built from — the runtime home of the Ph0′ canonical document. `NonSend`
+/// (each `CanonicalStage` holds an `Rc`-backed `Stage`). Parallels
+/// `Assets<UsdStageAsset>`: a consumer that has an entity's
+/// `UsdPrimPath.stage_handle` can look up the matching live stage here.
+#[derive(Default)]
+pub struct CanonicalStages {
+    by_asset: HashMap<bevy::asset::AssetId<crate::UsdStageAsset>, CanonicalStage>,
+}
+
+impl CanonicalStages {
+    /// The live canonical stage built from `asset`, if any.
+    pub fn get(
+        &self,
+        asset: bevy::asset::AssetId<crate::UsdStageAsset>,
+    ) -> Option<&CanonicalStage> {
+        self.by_asset.get(&asset)
+    }
+
+    pub fn get_mut(
+        &mut self,
+        asset: bevy::asset::AssetId<crate::UsdStageAsset>,
+    ) -> Option<&mut CanonicalStage> {
+        self.by_asset.get_mut(&asset)
+    }
+
+    /// Select the one composed read surface for an asset generation.
+    ///
+    /// A stage at generation zero is still the unedited load transaction, so the
+    /// worker-produced plan remains authoritative even when a live stage happens
+    /// to have been opened for another reason. A later generation is authored
+    /// state and must be read from the live canonical stage. The method never
+    /// opens a stage; callers that need one for authoring use [`Self::get_or_build`]
+    /// explicitly.
+    pub fn reader_for<'a>(
+        &'a self,
+        asset: bevy::asset::AssetId<UsdStageAsset>,
+        stage_asset: &'a UsdStageAsset,
+    ) -> (UsdReadSource<'a>, u64) {
+        if let Some(stage) = self.get(asset) {
+            if stage.generation() > 0 {
+                return (UsdReadSource::Live(stage.view()), stage.generation());
+            }
+        }
+        (
+            UsdReadSource::Prepared(stage_asset.projection_plan.as_ref()),
+            0,
+        )
+    }
+
+    /// Select the composed reader for one projected entity.
+    ///
+    /// Referenced runtime instances carry an immutable plan remapped to their
+    /// authored scene path. That plan is the read source for the instance
+    /// subtree; the scene's live stage remains the source for edits and for
+    /// ordinary authored prims. Runtime-layer edits do not replace this read
+    /// surface: they change the instance root's authored pose and metadata,
+    /// while the prepared plan remains the source of the referenced asset's
+    /// local topology and transforms.
+    pub fn reader_for_entity<'a>(
+        &'a self,
+        asset: bevy::asset::AssetId<UsdStageAsset>,
+        stage_asset: &'a UsdStageAsset,
+        instance: Option<&'a crate::UsdInstanceProjection>,
+    ) -> (UsdReadSource<'a>, u64) {
+        if let Some(instance) = instance {
+            return (UsdReadSource::Prepared(instance.plan.as_ref()), 0);
+        }
+        self.reader_for(asset, stage_asset)
+    }
+
+    /// Return the current projection generation without opening a live stage.
+    /// A prepared asset is generation zero until the first authored change is
+    /// committed to its canonical stage.
+    pub fn generation_for(&self, asset: bevy::asset::AssetId<UsdStageAsset>) -> u64 {
+        self.get(asset).map_or(0, CanonicalStage::generation)
+    }
+
+    pub fn len(&self) -> usize {
+        self.by_asset.len()
+    }
+
+    /// Iterate every live stage keyed by its asset id — the door a whole-stage
+    /// projector (e.g. the policy projector, which reads composed `LunCoPolicy`
+    /// prims across all live scenes) uses to walk the composed stages.
+    pub fn iter(
+        &self,
+    ) -> impl Iterator<Item = (bevy::asset::AssetId<crate::UsdStageAsset>, &CanonicalStage)> {
+        self.by_asset.iter().map(|(id, cs)| (*id, cs))
+    }
+
+    /// Insert (or replace) the live stage for `asset` — the door the live-doc
+    /// projection uses to publish a `CanonicalStage` it built from a document's
+    /// composed source, so the extractors read the live stage in-app and the
+    /// change sink is installed. Replacing drops the previous stage (and its
+    /// sink) for that asset.
+    pub fn insert(
+        &mut self,
+        asset: bevy::asset::AssetId<crate::UsdStageAsset>,
+        stage: CanonicalStage,
+    ) {
+        self.by_asset.insert(asset, stage);
+    }
+
+    /// Drain the change-sink inbox of **every** live stage, returning the
+    /// committed changes per asset (empty stages omitted). The Step-1 projection
+    /// bridge calls this each tick, then reconciles ECS off each stage's live
+    /// [`view`](CanonicalStage::view) — the read counterpart to authoring onto
+    /// the stage. Draining bumps each affected stage's `generation`.
+    pub fn drain_all_changes(
+        &mut self,
+    ) -> Vec<(
+        bevy::asset::AssetId<crate::UsdStageAsset>,
+        Vec<RawStageChange>,
+    )> {
+        self.by_asset
+            .iter_mut()
+            .filter_map(|(id, cs)| {
+                let changes = cs.drain_changes();
+                (!changes.is_empty()).then_some((*id, changes))
+            })
+            .collect()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.by_asset.is_empty()
+    }
+
+    /// Replace the live stage after a coarse document edit. The new stage has
+    /// an empty change sink, but is already authored state: advance the existing
+    /// generation so every reader selects it instead of the initial asset plan.
+    /// A failed build leaves the previous stage and generation unchanged.
+    pub fn rebuild(
+        &mut self,
+        asset: bevy::asset::AssetId<crate::UsdStageAsset>,
+        recipe: &lunco_usd_core::StageRecipe,
+    ) -> bool {
+        match CanonicalStage::from_recipe(recipe) {
+            Ok(mut cs) => {
+                cs.generation = self.get(asset).map_or(1, |stage| stage.generation + 1);
+                self.by_asset.insert(asset, cs);
+                true
+            }
+            Err(e) => {
+                bevy::log::warn!("[canonical] rebuild from recipe failed for {asset:?}: {e}");
+                false
+            }
+        }
+    }
+
+    /// Ensure the live canonical stage for `asset` exists and return it. This is
+    /// the explicit stage-owner entry point for runtime entities created before
+    /// the asset event is published; all callers share the resulting stage.
+    /// Initial visual and domain projection still read the asset's prepared
+    /// plan, so this method never supplies a second initial-read path.
+    pub fn get_or_build(
+        &mut self,
+        asset: bevy::asset::AssetId<crate::UsdStageAsset>,
+        recipe: &lunco_usd_core::StageRecipe,
+    ) -> Option<&CanonicalStage> {
+        if let std::collections::hash_map::Entry::Vacant(entry) = self.by_asset.entry(asset) {
+            match CanonicalStage::from_recipe(recipe) {
+                Ok(cs) => {
+                    bevy::log::debug!(
+                        "[canonical] opened live CanonicalStage for {asset:?} ({} prims)",
+                        cs.view().prim_paths().len()
+                    );
+                    entry.insert(cs);
+                }
+                Err(e) => {
+                    bevy::log::warn!("[canonical] failed to open live stage for {asset:?}: {e}");
+                    return None;
+                }
+            }
+        }
+        self.by_asset.get(&asset)
+    }
+}
+
+/// Main-thread system: replace the live [`CanonicalStage`] after an authored
+/// asset modification. Initial loading is already represented by the worker
+/// [`UsdStageProjectionPlan`], so an `Added` event does not open OpenUSD on the
+/// UI thread. `NonSend` is required because the live `Stage` is `!Send`.
+pub fn sync_canonical_stages(
+    mut events: bevy::prelude::MessageReader<bevy::asset::AssetEvent<crate::UsdStageAsset>>,
+    assets: bevy::prelude::Res<bevy::asset::Assets<crate::UsdStageAsset>>,
+    mut stages: bevy::prelude::NonSendMut<CanonicalStages>,
+) {
+    use bevy::asset::AssetEvent;
+    for event in events.read() {
+        match event {
+            AssetEvent::Modified { id } => {
+                let Some(asset) = assets.get(*id) else {
+                    continue;
+                };
+                let Some(recipe) = asset.recipe.as_ref() else {
+                    continue;
+                };
+                match CanonicalStage::from_recipe(recipe) {
+                    Ok(cs) => {
+                        bevy::log::info!(
+                            "[canonical] reopened live CanonicalStage for {:?} ({} prims)",
+                            id,
+                            cs.view().prim_paths().len()
+                        );
+                        stages.by_asset.insert(*id, cs);
+                    }
+                    Err(e) => {
+                        bevy::log::warn!("[canonical] failed to reopen live stage for {id:?}: {e}");
+                    }
+                }
+            }
+            AssetEvent::Added { .. } => {}
+            AssetEvent::Removed { id } | AssetEvent::Unused { id } => {
+                stages.by_asset.remove(id);
+            }
+            _ => {}
+        }
+    }
+}
+
+// Temp-dir USDA fixtures, native-only test code. The `std::fs` ban guards wasm
+// *runtime* paths; `clippy.toml` names tests as exempt, but cargo has no
+// path-scoped lint config, so the exemption is written out.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[allow(clippy::disallowed_methods)]
+mod recipe_tests {
+    //! A `StageRecipe` opens the live canonical stage with the same composed
+    //! semantics as the file-backed authoring path.
+
+    use super::*;
+    use crate::compose::compose_file_to_stage;
+    use crate::view::StageView;
+
+    const FIXTURE: &str = "#usda 1.0\n\ndef Xform \"Root\"\n{\n    def Cube \"Box\"\n    {\n        double size = 3\n    }\n}\n";
+
+    #[test]
+    fn from_recipe_builds_composed_stage() {
+        let dir = std::env::temp_dir().join("lunco_recipe_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("scene.usda");
+        std::fs::write(&f, FIXTURE).unwrap();
+
+        // Recipe mirrors what `fetch_layer_closure` produces for a ref-less scene:
+        // root keyed by the SAME canonical id the resolver uses.
+        let root_id = lunco_assets::asset_path::canonicalize_root(f.to_str().unwrap());
+        let bytes = HashMap::from([(root_id.clone(), std::fs::read(&f).unwrap())]);
+        let recipe = StageRecipe { root_id, bytes };
+
+        let cstage = CanonicalStage::from_recipe(&recipe).expect("from_recipe builds a stage");
+        let view = cstage.view();
+        let prims: Vec<String> = view.prim_paths().iter().map(|p| p.to_string()).collect();
+        assert!(
+            prims.iter().any(|p| p == "/Root/Box"),
+            "recipe-built stage must contain /Root/Box, got {prims:?}"
+        );
+        assert_eq!(
+            view.value::<f64>(&SdfPath::new("/Root/Box").unwrap(), "size"),
+            Some(3.0)
+        );
+
+        // And it composes identically to the known-good file-composed path.
+        let ref_stage = compose_file_to_stage(&f).expect("file compose");
+        let ref_prims: Vec<String> = StageView::new(&ref_stage)
+            .prim_paths()
+            .iter()
+            .map(|p| p.to_string())
+            .collect();
+        assert_eq!(
+            prims, ref_prims,
+            "recipe-built stage must match file-composed stage"
+        );
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[allow(clippy::disallowed_methods)] // temp-dir USDA fixtures; see `recipe_tests`
+mod sync_system_tests {
+    //! The initial `UsdStageAsset` carries a prepared composed projection plan.
+    //! `sync_canonical_stages` only opens the non-`Send` live stage for an
+    //! authored modification, never for the initial `Added` event.
+
+    use super::*;
+    use bevy::asset::{AssetApp, AssetPlugin};
+    use bevy::prelude::*;
+
+    const FIXTURE: &str = "#usda 1.0\n\ndef Xform \"Root\"\n{\n    def Cube \"Box\"\n    {\n        double size = 3\n    }\n}\n";
+
+    #[test]
+    fn added_asset_keeps_live_stage_closed() {
+        let dir = std::env::temp_dir().join("lunco_sync_system_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("scene.usda");
+        std::fs::write(&f, FIXTURE).unwrap();
+
+        let root_id = lunco_assets::asset_path::canonicalize_root(f.to_str().unwrap());
+        let bytes = HashMap::from([(root_id.clone(), std::fs::read(&f).unwrap())]);
+        let recipe = StageRecipe { root_id, bytes };
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(AssetPlugin::default())
+            .init_asset::<crate::UsdStageAsset>()
+            .init_non_send::<CanonicalStages>()
+            .add_systems(Update, sync_canonical_stages);
+
+        // `Assets::add` emits `AssetEvent::Added`, which deliberately does not
+        // open the non-Send live stage. The worker-produced plan is the initial
+        // composed reader for projection systems.
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<crate::UsdStageAsset>>()
+            .add(crate::UsdStageAsset::from_recipe(recipe).expect("prepare stage asset"));
+
+        assert!(
+            app.world()
+                .resource::<Assets<crate::UsdStageAsset>>()
+                .get(handle.id())
+                .map(|asset| asset.projection_plan.as_ref())
+                .is_some(),
+            "initial asset must carry its prepared composed projection plan"
+        );
+
+        // One frame flushes the asset event; the next lets the system act on it.
+        app.update();
+        app.update();
+
+        let stages = app
+            .world()
+            .get_non_send::<CanonicalStages>()
+            .expect("CanonicalStages resource present");
+        assert_eq!(
+            stages.len(),
+            0,
+            "initial projection must not open a live stage"
+        );
+    }
+
+    #[test]
+    fn added_event_does_not_replace_an_explicit_live_stage() {
+        let dir = std::env::temp_dir().join("lunco_sync_existing_stage_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("scene.usda");
+        std::fs::write(&f, FIXTURE).unwrap();
+
+        let root_id = lunco_assets::asset_path::canonicalize_root(f.to_str().unwrap());
+        let bytes = HashMap::from([(root_id.clone(), std::fs::read(&f).unwrap())]);
+        let recipe = StageRecipe { root_id, bytes };
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(AssetPlugin::default())
+            .init_asset::<crate::UsdStageAsset>()
+            .init_non_send::<CanonicalStages>()
+            .add_systems(Update, sync_canonical_stages);
+
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<crate::UsdStageAsset>>()
+            .add(crate::UsdStageAsset::from_recipe(recipe.clone()).expect("prepare stage asset"));
+
+        let mut canonical = CanonicalStage::from_recipe(&recipe).expect("build stage");
+        let rover = SdfPath::new("/Root/Box").unwrap();
+        canonical
+            .author_translate(&rover, [1.0, 2.0, 3.0])
+            .expect("author existing stage");
+        canonical.drain_changes();
+        assert_eq!(canonical.generation(), 1);
+        app.world_mut()
+            .get_non_send_mut::<CanonicalStages>()
+            .expect("CanonicalStages resource present")
+            .insert(handle.id(), canonical);
+
+        app.update();
+        app.update();
+
+        let stages = app
+            .world()
+            .get_non_send::<CanonicalStages>()
+            .expect("CanonicalStages resource present");
+        assert_eq!(
+            stages
+                .get(handle.id())
+                .expect("existing canonical stage retained")
+                .generation(),
+            1,
+            "an Added event must not replace a stage explicitly opened by its owner"
+        );
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod authoring_tests {
+    //! Keystone (write half): authoring op-deltas onto the live `CanonicalStage`
+    //! fires the change sink, so the projection bridge reconciles the edit — the
+    //! "author onto the stage → sink → project" loop, headless.
+
+    use super::*;
+    use crate::UsdRead;
+
+    const SCENE: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n    metersPerUnit = 1.0\n    upAxis = \"Y\"\n)\ndef Xform \"World\"\n{\n    def Xform \"Rover\"\n    {\n    }\n}\n";
+
+    fn touches(changes: &[RawStageChange], path: &str) -> bool {
+        changes.iter().any(|c| {
+            c.info_only
+                .iter()
+                .chain(c.resynced.iter())
+                .any(|p| p.to_string() == path)
+        })
+    }
+
+    #[test]
+    fn authoring_translate_prim_remove_fires_sink() {
+        let recipe = StageRecipe::from_source("scene.usda", SCENE);
+        let mut cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
+        let _ = cs.drain_changes(); // clear any initial notices
+
+        // MOVE: author a translate → sink reports the prim; it composes live.
+        let rover = SdfPath::new("/World/Rover").unwrap();
+        cs.author_translate(&rover, [1.0, 2.0, 3.0])
+            .expect("author translate");
+        assert!(
+            touches(&cs.drain_changes(), "/World/Rover"),
+            "translate fires the sink"
+        );
+        assert_eq!(
+            UsdRead::vec3_f64(&cs.view(), &rover, "xformOp:translate"),
+            Some([1.0, 2.0, 3.0]),
+            "the authored translate composes on the live stage"
+        );
+
+        // SPAWN (plain): define a prim → resync; it's live.
+        let r2 = SdfPath::new("/World/Rover2").unwrap();
+        cs.author_prim(&r2, Some("Xform")).expect("author prim");
+        assert!(
+            cs.drain_changes()
+                .iter()
+                .any(|c| c.resynced.iter().any(|p| p.to_string() == "/World/Rover2")),
+            "defining a prim fires a resync"
+        );
+        assert!(
+            cs.view().has_prim(&r2),
+            "the defined prim is live on the stage"
+        );
+
+        // REMOVE: drop it → resync; it's gone.
+        assert!(cs.remove_prim_at(&r2).expect("remove prim"));
+        assert!(
+            cs.drain_changes()
+                .iter()
+                .any(|c| c.resynced.iter().any(|p| p.to_string() == "/World/Rover2")),
+            "removing a prim fires a resync"
+        );
+        assert!(
+            !cs.view().has_prim(&r2),
+            "the removed prim is gone from the stage"
+        );
+    }
+
+    #[test]
+    fn live_authoring_converts_canonical_values_to_stage_metrics() {
+        let scene = "#usda 1.0\n(\n    metersPerUnit = 0.01\n    upAxis = \"Z\"\n)\ndef Xform \"World\"\n{\n    def Xform \"Rover\"\n    {\n    }\n}\n";
+        let recipe = StageRecipe::from_source("noncanonical.usda", scene);
+        let cs = CanonicalStage::from_recipe(&recipe).expect("build non-canonical stage");
+        let rover = SdfPath::new("/World/Rover").unwrap();
+
+        cs.author_translate(&rover, [0.0, 1.0, 0.0])
+            .expect("author canonical metre position");
+        let stage_translation =
+            UsdRead::vec3_f64(&cs.view(), &rover, "xformOp:translate").expect("stage translate");
+        assert!(
+            stage_translation
+                .iter()
+                .zip([0.0, 0.0, 100.0])
+                .all(|(actual, expected)| (actual - expected).abs() < 1e-3),
+            "canonical +Y metre must be authored as +Z stage centimetres: {stage_translation:?}"
+        );
+
+        cs.author_rotate(&rover, [0.0, 90.0, 0.0])
+            .expect("author canonical local rotation");
+        let stage_rotation =
+            UsdRead::vec3_f64(&cs.view(), &rover, "xformOp:rotateXYZ").expect("stage rotateXYZ");
+        assert!(
+            stage_rotation
+                .iter()
+                .zip([0.0, 0.0, 90.0])
+                .all(|(actual, expected)| (actual - expected).abs() < 1e-3),
+            "canonical rotation must be expressed in the Z-up stage basis: {stage_rotation:?}"
+        );
+
+        cs.author_scale(&rover, [1.0, 2.0, 3.0])
+            .expect("author canonical local scale");
+        let stage_scale =
+            UsdRead::vec3_f64(&cs.view(), &rover, "xformOp:scale").expect("stage scale");
+        assert!(
+            stage_scale
+                .iter()
+                .zip([1.0, 3.0, 2.0])
+                .all(|(actual, expected)| (actual - expected).abs() < 1e-6),
+            "canonical scale must exchange Y/Z in the Z-up stage basis: {stage_scale:?}"
+        );
+    }
+
+    /// A keyframe authored onto the live stage fires the sink and composes as a
+    /// `timeSamples` opinion — the write half of incremental keyframe projection.
+    /// The per-frame animation sampler reads this stage, so no whole-scene rebuild
+    /// is needed for a key on an already-animated prim.
+    #[test]
+    fn authoring_time_sample_fires_sink_and_composes() {
+        let recipe = StageRecipe::from_source("scene.usda", SCENE);
+        let mut cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
+        let _ = cs.drain_changes();
+
+        let rover = SdfPath::new("/World/Rover").unwrap();
+        let v = lunco_usd_core::author::parse_attribute_value("double3", "(1, 2, 3)").unwrap();
+        cs.author_time_sample(&rover, "xformOp:translate", "double3", 12.0, v)
+            .expect("author keyframe");
+        assert!(
+            touches(&cs.drain_changes(), "/World/Rover"),
+            "keyframe fires the sink"
+        );
+        assert!(
+            cs.view().has_time_samples(&rover, "xformOp:translate"),
+            "the authored keyframe composes as timeSamples on the live stage"
+        );
+    }
+
+    /// Keystone of #1 — **referenced spawn onto a live stage**: inject an asset's
+    /// layer bytes at runtime, author a prim + a `references` arc to it, and PCP
+    /// composes the referenced subtree on the live stage (its default prim's
+    /// children land under the spawn) with the sink reporting the resync — no
+    /// whole-scene rebuild, no async reload. This is what lets the palette-spawn
+    /// of a rover ride the "author onto the stage → sink → project" loop.
+    #[test]
+    fn injected_reference_spawns_composed_subtree_and_fires_sink() {
+        // The scene knows NOTHING about the rover — it isn't in the recipe.
+        let recipe = StageRecipe::from_source("scene.usda", SCENE);
+        let mut cs = CanonicalStage::from_recipe(&recipe).expect("build scene stage");
+        let _ = cs.drain_changes();
+
+        // The rover asset has a defaultPrim and a root schema. The live
+        // author must preserve both on the runtime instance root.
+        const ROVER: &str = "#usda 1.0\n(\n    defaultPrim = \"RoverRoot\"\n)\ndef Xform \"RoverRoot\" (\n    prepend apiSchemas = [\"PhysicsRigidBodyAPI\"]\n)\n{\n    def Cube \"Body\"\n    {\n    }\n}\n";
+
+        // The reference id PCP will demand === what we inject the bytes under.
+        let asset_path = "rover.usda";
+        let ref_id = cs.canonical_reference_id(asset_path);
+        assert!(!cs.has_layer_bytes(&ref_id), "rover not loaded yet");
+
+        // Inject the rover's closure into the LIVE resolver, then author the
+        // spawn: a prim + a reference to the rover.
+        assert!(
+            cs.add_layer_bytes(HashMap::from([(ref_id.clone(), ROVER.as_bytes().to_vec())])),
+            "a recipe-built stage must accept injected layer bytes"
+        );
+        assert!(
+            cs.has_layer_bytes(&ref_id),
+            "bytes now present in the live resolver"
+        );
+
+        let spawn = SdfPath::new("/World/rover_1").unwrap();
+        cs.author_referenced_prim(&spawn, Some("Xform"), asset_path, None)
+            .expect("author the referenced spawn atomically");
+
+        // The sink reports the spawn path as resynced (the projector reconciles it).
+        assert!(
+            cs.drain_changes()
+                .iter()
+                .any(|c| c.resynced.iter().any(|p| p.to_string() == "/World/rover_1")),
+            "authoring a referenced spawn must resync its prim"
+        );
+
+        // And PCP composed the referenced subtree onto the live stage: the
+        // rover's `Body` child is now present under the spawn.
+        let body = SdfPath::new("/World/rover_1/Body").unwrap();
+        assert!(
+            cs.view().has_prim(&body),
+            "the referenced rover's Body child must compose under the runtime spawn"
+        );
+        assert_eq!(
+            cs.view().type_name(&spawn).as_deref(),
+            Some("Xform"),
+            "the runtime reference root must retain its authored type"
+        );
+        assert!(
+            cs.view().has_api_schema(&spawn, "PhysicsRigidBodyAPI"),
+            "the runtime reference root must retain its applied schemas"
+        );
+    }
+
+    /// H8: a second `author_reference` on the same prim must merge into the
+    /// existing `references` list-op (`UsdReferences::AddReference` semantics),
+    /// not replace it — both referenced subtrees compose.
+    #[test]
+    fn second_author_reference_preserves_the_first() {
+        let recipe = StageRecipe::from_source("scene.usda", SCENE);
+        let mut cs = CanonicalStage::from_recipe(&recipe).expect("build scene stage");
+        let _ = cs.drain_changes();
+
+        const A: &str = "#usda 1.0\n(\n    defaultPrim = \"A\"\n)\ndef Xform \"A\"\n{\n    def Cube \"FromA\"\n    {\n    }\n}\n";
+        const B: &str = "#usda 1.0\n(\n    defaultPrim = \"B\"\n)\ndef Xform \"B\"\n{\n    def Cube \"FromB\"\n    {\n    }\n}\n";
+        for (path, src) in [("a.usda", A), ("b.usda", B)] {
+            let id = cs.canonical_reference_id(path);
+            assert!(cs.add_layer_bytes(HashMap::from([(id, src.as_bytes().to_vec())])));
+        }
+
+        let spawn = SdfPath::new("/World/combo").unwrap();
+        cs.author_prim(&spawn, Some("Xform")).expect("define prim");
+        cs.author_reference(&spawn, "a.usda").expect("first arc");
+        cs.author_reference(&spawn, "b.usda").expect("second arc");
+
+        let view = cs.view();
+        assert!(
+            view.has_prim(&SdfPath::new("/World/combo/FromA").unwrap()),
+            "the first reference arc must survive the second author_reference"
+        );
+        assert!(
+            view.has_prim(&SdfPath::new("/World/combo/FromB").unwrap()),
+            "the second reference arc must compose too"
+        );
+    }
+
+    /// xformOp ordering: a translate authored after a rotate must land BEFORE
+    /// it in `xformOpOrder` (XformCommonAPI canonical translate→rotate→scale),
+    /// not innermost via a blind append.
+    #[test]
+    fn translate_authored_after_rotate_lands_before_it_in_xform_op_order() {
+        let recipe = StageRecipe::from_source("scene.usda", SCENE);
+        let cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
+
+        let rover = SdfPath::new("/World/Rover").unwrap();
+        cs.author_rotate(&rover, [0.0, 90.0, 0.0]).expect("rotate");
+        cs.author_translate(&rover, [1.0, 2.0, 3.0])
+            .expect("translate");
+
+        let order: Vec<String> = match cs
+            .stage()
+            .prim(rover)
+            .attribute("xformOpOrder")
+            .get::<openusd::sdf::Value>()
+            .expect("read xformOpOrder")
+        {
+            Some(openusd::sdf::Value::TokenVec(v)) => v.into_iter().map(Into::into).collect(),
+            other => panic!("xformOpOrder must be a token array, got {other:?}"),
+        };
+        assert_eq!(
+            order,
+            vec![
+                "xformOp:translate".to_string(),
+                "xformOp:rotateXYZ".to_string()
+            ],
+            "translate must sit at its canonical slot before the rotate"
+        );
+    }
+
+    // ── Assembly live authors (doc 48 §3.2/§3.3) ──
+    // These four are what made the rebuild cliff go away: each edit now composes on
+    // the LIVE stage instead of forcing a whole-scene rebuild. The document-level
+    // `UsdOp` tests prove the ops author into save-data; THESE prove the live-stage
+    // counterparts compose, which is the claim the projector arms actually depend on.
+
+    const RIG: &str = "#usda 1.0\n(\n    defaultPrim = \"Rig\"\n)\ndef Xform \"Rig\"\n{\n    def Xform \"Chassis\"\n    {\n    }\n    def Xform \"Wheel\"\n    {\n    }\n    def PhysicsRevoluteJoint \"Hinge\"\n    {\n    }\n    def Xform \"Bus\"\n    {\n        float inputs:voltage\n    }\n    def Xform \"Battery\"\n    {\n        float outputs:voltage = 28\n    }\n}\n";
+
+    #[test]
+    fn author_relationship_composes_joint_bodies_on_live_stage() {
+        let recipe = StageRecipe::from_source("rig.usda", RIG);
+        let mut cs = CanonicalStage::from_recipe(&recipe).expect("build rig");
+        let _ = cs.drain_changes();
+
+        let hinge = SdfPath::new("/Rig/Hinge").unwrap();
+        cs.author_relationship(&hinge, "physics:body0", &["/Rig/Chassis".into()])
+            .expect("author body0");
+        cs.author_relationship(&hinge, "physics:body1", &["/Rig/Wheel".into()])
+            .expect("author body1");
+
+        // The joint's two bodies compose on the LIVE stage — this is the read the
+        // Avian joint builder does. Before the live author, this required a rebuild.
+        assert_eq!(
+            cs.view()
+                .rel_targets(&hinge, "physics:body0")
+                .iter()
+                .map(|p| p.to_string())
+                .collect::<Vec<_>>(),
+            vec!["/Rig/Chassis".to_string()],
+        );
+        assert_eq!(
+            cs.view()
+                .rel_targets(&hinge, "physics:body1")
+                .iter()
+                .map(|p| p.to_string())
+                .collect::<Vec<_>>(),
+            vec!["/Rig/Wheel".to_string()],
+        );
+    }
+
+    #[test]
+    fn author_connection_composes_on_live_stage() {
+        // A native connection edit composes immediately and carries an exact
+        // field-level invalidation signal for the derived wiring cache.
+        let recipe = StageRecipe::from_source("rig.usda", RIG);
+        let mut cs = CanonicalStage::from_recipe(&recipe).expect("build rig");
+        let _ = cs.drain_changes();
+
+        let bus = SdfPath::new("/Rig/Bus").unwrap();
+        cs.author_connection(
+            &bus,
+            "inputs:voltage",
+            "float",
+            &["/Rig/Battery.outputs:voltage".into()],
+        )
+        .expect("author connection");
+
+        assert_eq!(
+            cs.view().connections(&bus, "inputs:voltage"),
+            vec!["/Rig/Battery.outputs:voltage".to_string()],
+            "the authored wire composes on the live stage"
+        );
+        assert!(
+            cs.drain_changes()
+                .iter()
+                .any(|change| change.connection_paths_changed),
+            "native connectionPaths edits must be typed in the stage change"
+        );
+    }
+
+    #[test]
+    fn author_active_flips_the_live_prim_active_flag() {
+        // The live-stage counterpart of `UsdOp::SetActive`: a runtime hide of a
+        // purely-visual prim (a waypoint marker) composes on the live stage so the
+        // projection can drop its visual subtree without a rebuild.
+        let recipe = StageRecipe::from_source("rig.usda", RIG);
+        let mut cs = CanonicalStage::from_recipe(&recipe).expect("build rig");
+        let _ = cs.drain_changes();
+
+        let chassis = SdfPath::new("/Rig/Chassis").unwrap();
+        assert!(
+            cs.view().is_active(&chassis),
+            "an authored prim starts active"
+        );
+        cs.author_active(&chassis, false)
+            .expect("author active=false");
+        assert!(
+            !cs.view().is_active(&chassis),
+            "author_active(false) composes on the live stage"
+        );
+        // The prim is still DEFINED (just inactive) — this is what keeps the
+        // structural reconcile's `has_prim` true so the incremental path doesn't
+        // fight a concurrent spawn/despawn.
+        assert!(
+            cs.view().has_prim(&chassis),
+            "deactivation does not remove the prim spec"
+        );
+        cs.author_active(&chassis, true)
+            .expect("author active=true");
+        assert!(cs.view().is_active(&chassis), "reactivation is symmetric");
+    }
+
+    // SetApiSchemas has no incremental consumer on purpose: its ECS effect
+    // (physics component set) can't be reconciled by the visual-only subtree
+    // refresh, so it takes the projector's rebuild path (except for the
+    // `LunCoProgramAPI` metadata case). `SetActive` has a live author
+    // (`author_active`) but is only routed incrementally for purely-visual
+    // waypoint-marker prims; any other `SetActive` rebuilds. Their document-level
+    // authoring + inverse are covered in `lunco_usd_core::document::tests`, and their
+    // rebuild routing in `lunco_usd::twin_projection::tests`.
+}

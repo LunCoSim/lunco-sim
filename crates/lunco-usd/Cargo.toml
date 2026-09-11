@@ -14,6 +14,8 @@ big_space = { workspace = true }
 # Core USD subsystems — egui-free. The server keeps these: visual sync (meshes
 # for colliders), avian physics mapping, sim/scene + cosim LoadScene.
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
+lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-compose = { path = "../lunco-usd-compose" }
 lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-usd-sim = { path = "../lunco-usd-sim" }
@@ -21,8 +23,8 @@ lunco-core = { path = "../lunco-core" }
 lunco-api = { path = "../lunco-api", default-features = false }
 lunco-render = { path = "../lunco-render" }
 lunco-doc = { path = "../lunco-doc" }
-# Only the document-lifecycle EVENTS (core); its egui systems are behind
-# doc-bevy's own `ui`, re-enabled by our `ui` feature below.
+# Only the document-lifecycle events are needed here; document presentation
+# belongs to `lunco-usd-ui`.
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-storage = { path = "../lunco-storage" }
 lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
@@ -37,28 +39,6 @@ serde = { workspace = true }
 # `serde_json::Value` for the hot-exit `DocumentSnapshot.view_state`
 # field (USD leaves it null; Modelica fills it with a canvas Viewport).
 serde_json = { workspace = true }
-
-# UI-only: the document/file commands (commands.rs) + browser/viewport panels
-# (ui/). Optional so a headless server build (`--no-default-features`) drops
-# egui + the egui workbench shell entirely.
-bevy_egui = { workspace = true, optional = true }
-lunco-workbench = { path = "../lunco-workbench", optional = true }
-lunco-workbench-core = { path = "../lunco-workbench-core", optional = true }
-lunco-status-core = { path = "../lunco-status-core", optional = true }
-lunco-theme = { path = "../lunco-theme", optional = true }
-
-[features]
-default = ["ui"]
-# USD document commands + browser/viewport panels (egui + workbench shell).
-ui = ["dep:bevy_egui", "dep:lunco-workbench", "dep:lunco-workbench-core", "dep:lunco-status-core", "dep:lunco-theme", "lunco-doc-bevy/ui"]
-
-[[test]]
-name = "apply_usd_op_integration_test"
-required-features = ["ui"]
-
-[[test]]
-name = "live_spawn_projection"
-required-features = ["ui"]
 
 [dev-dependencies]
 # These are used by package-local mechanism tests in `src/` (live entity

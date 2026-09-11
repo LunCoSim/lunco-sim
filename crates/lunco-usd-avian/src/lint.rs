@@ -76,8 +76,8 @@ use std::collections::{HashMap, HashSet};
 use avian3d::prelude::MotorModel;
 use bevy::math::Vec3;
 use lunco_hooks::HookValue as H;
-use lunco_usd_bevy::read::has_runtime_port_surface;
-use lunco_usd_bevy::{program::ProgramGraph, StageView, UsdRead};
+use lunco_usd_bevy_core::read::has_runtime_port_surface;
+use lunco_usd_bevy_core::{program::ProgramGraph, StageView, UsdRead};
 use openusd::schemas::physics::tokens as ptok;
 use openusd::sdf::Path as SdfPath;
 use openusd::usd::{compute_included_paths, Collection, PrimPredicate};
@@ -327,7 +327,8 @@ fn body_has_proxy(
         }
         let Ok(p) = SdfPath::new(s) else { continue };
         if is_vehicle_geometry_type(&reader.prim_type_name(&p).unwrap_or_default())
-            && lunco_usd_bevy::effective_purpose(reader, &p) == lunco_usd_bevy::Purpose::Proxy
+            && lunco_usd_bevy_core::effective_purpose(reader, &p)
+                == lunco_usd_bevy_core::Purpose::Proxy
         {
             return true;
         }
@@ -383,10 +384,10 @@ fn vehicle_part_facts(
                     None => "missing",
                 }
             };
-            let purpose = lunco_usd_bevy::effective_purpose(reader, path);
+            let purpose = lunco_usd_bevy_core::effective_purpose(reader, path);
             let render_excluded_by_proxy =
-                purpose == lunco_usd_bevy::Purpose::Render && proxy_bodies.contains(&body);
-            let visual_only = purpose == lunco_usd_bevy::Purpose::Guide
+                purpose == lunco_usd_bevy_core::Purpose::Render && proxy_bodies.contains(&body);
+            let visual_only = purpose == lunco_usd_bevy_core::Purpose::Guide
                 || collision_state == "disabled"
                 || render_excluded_by_proxy;
             let covered =
@@ -433,10 +434,10 @@ fn vehicle_part_facts(
                 (
                     "purpose",
                     H::str(match purpose {
-                        lunco_usd_bevy::Purpose::Default => "default",
-                        lunco_usd_bevy::Purpose::Render => "render",
-                        lunco_usd_bevy::Purpose::Proxy => "proxy",
-                        lunco_usd_bevy::Purpose::Guide => "guide",
+                        lunco_usd_bevy_core::Purpose::Default => "default",
+                        lunco_usd_bevy_core::Purpose::Render => "render",
+                        lunco_usd_bevy_core::Purpose::Proxy => "proxy",
+                        lunco_usd_bevy_core::Purpose::Guide => "guide",
                     }),
                 ),
                 ("collision_api", H::Bool(collision_api)),
@@ -876,7 +877,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
     let mut collections: Vec<H> = Vec::new();
     let mut network_roots: Vec<H> = Vec::new();
     for p in &paths {
-        if lunco_usd_bevy::program::is_domain_network_root(reader, p) {
+        if lunco_usd_bevy_core::program::is_domain_network_root(reader, p) {
             let (members, collection_error) = match reader.collection_members(p, "components") {
                 Ok(members) => (members, String::new()),
                 Err(error) => (Vec::new(), error),
@@ -892,7 +893,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                         String::new(),
                     )
                 } else {
-                    match lunco_usd_bevy::program::derive_synthesizer_name(reader, p) {
+                    match lunco_usd_bevy_core::program::derive_synthesizer_name(reader, p) {
                         Ok(name) => (name, String::new()),
                         Err(error) => (String::new(), error),
                     }
@@ -906,7 +907,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
             let mut boundary_sources: HashMap<String, Vec<String>> = HashMap::new();
             for attr in reader.attr_names(p) {
                 let connections = reader.connections(p, &attr);
-                if (lunco_usd_bevy::program::is_network_boundary_output(reader, p, &attr)
+                if (lunco_usd_bevy_core::program::is_network_boundary_output(reader, p, &attr)
                     && connections.len() != 1)
                     || (attr.starts_with("inputs:") && connections.len() > 1)
                 {
@@ -938,7 +939,8 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                 // the runtime projector. The class itself is resolved from the
                 // loaded source by lunco-usd-sim; lint must not invent one from
                 // the asset path.
-                let Ok(_) = lunco_usd_bevy::program::modelica_source_ref(reader, member) else {
+                let Ok(_) = lunco_usd_bevy_core::program::modelica_source_ref(reader, member)
+                else {
                     invalid_program_sources.push(member_name.clone());
                     continue;
                 };
@@ -1104,7 +1106,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                 }
             }
             if !connectors.is_empty() {
-                let source_asset = lunco_usd_bevy::program::modelica_source_ref(reader, p)
+                let source_asset = lunco_usd_bevy_core::program::modelica_source_ref(reader, p)
                     .map(|source_ref| source_ref.asset)
                     .unwrap_or_default();
                 connector_programs.push(H::map([
@@ -1195,7 +1197,10 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
                             prim_exists && has_runtime_port_surface(reader, &source_prim);
                         let runtime_provider_name = prim_exists
                             .then(|| {
-                                lunco_usd_bevy::read::runtime_port_provider(reader, &source_prim)
+                                lunco_usd_bevy_core::read::runtime_port_provider(
+                                    reader,
+                                    &source_prim,
+                                )
                             })
                             .flatten()
                             .unwrap_or_default();
@@ -1300,7 +1305,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> H {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lunco_usd_bevy::compose_file_to_stage;
+    use lunco_usd_bevy_core::compose::compose_file_to_stage;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// Compose a fixture through the real composer, so facts are read off

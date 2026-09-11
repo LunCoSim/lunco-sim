@@ -97,7 +97,7 @@ Two consequences that are not obvious:
 > [!WARNING]
 > **This is the repo's worked example of the two-writers bug** (see `AGENTS.md` §3, "Do not
 > preserve legacy, shims, or fallbacks"). A scene could once author both the custom
-> attribute — assigned by `lunco-luncosim::project_env_settings` — and a dome, whose sum was
+> attribute — assigned by the `lunco-luncosim-ui` presentation bridge — and a dome, whose sum was
 > assigned by the light loader. Two writers, one field, load order deciding the winner.
 > Because a textured dome contributes zero, authoring a starfield sky drove the sum to zero
 > and **silently deleted the scene's regolith-bounce fill**; the projector's memoised

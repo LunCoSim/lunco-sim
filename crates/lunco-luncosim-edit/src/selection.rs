@@ -17,8 +17,9 @@ use crate::SpawnState;
 use lunco_controller::ControllerLink;
 use lunco_core::{on_command, register_commands, Avatar, Command, LocalAvatar};
 use lunco_scene_commands::SelectedEntities;
-use lunco_usd::ui::viewport::{UsdPreviewId, UsdViewportState};
-use lunco_usd_bevy::{UsdPrimPath, UsdStageAsset};
+use lunco_usd_bevy::UsdPrimPath;
+use lunco_usd_bevy_core::UsdStageAsset;
+use lunco_usd_ui::viewport::{UsdPreviewId, UsdViewportState};
 
 /// Component marking an entity as currently selected.
 #[derive(Component)]
@@ -151,7 +152,7 @@ pub(crate) fn on_select_entity_target(
 /// The nearest prim-backed ancestor is the selection target, which keeps a
 /// generated visual mesh attached to the authored USD prim it represents.
 pub(crate) fn on_usd_viewport_click(
-    trigger: On<lunco_usd::ui::viewport::UsdViewportClick>,
+    trigger: On<lunco_usd_ui::viewport::UsdViewportClick>,
     viewport: Res<UsdViewportState>,
     q_cameras: Query<(&Camera, &GlobalTransform)>,
     q_paths: Query<&UsdPrimPath>,
@@ -985,7 +986,7 @@ mod tests {
         app.add_plugins(bevy::asset::AssetPlugin::default())
             .init_asset::<UsdStageAsset>();
         let stage = app.world_mut().resource_mut::<Assets<UsdStageAsset>>().add(
-            UsdStageAsset::from_recipe(lunco_usd_bevy::StageRecipe::from_source(
+            UsdStageAsset::from_recipe(lunco_usd_core::StageRecipe::from_source(
                 "preview-hit.usda",
                 MINIMAL_USD,
             ))
@@ -1107,14 +1108,14 @@ mod tests {
             .init_asset::<UsdStageAsset>();
 
         let stage_a = app.world_mut().resource_mut::<Assets<UsdStageAsset>>().add(
-            UsdStageAsset::from_recipe(lunco_usd_bevy::StageRecipe::from_source(
+            UsdStageAsset::from_recipe(lunco_usd_core::StageRecipe::from_source(
                 "preview-a.usda",
                 MINIMAL_USD,
             ))
             .expect("preview A stage asset"),
         );
         let stage_b = app.world_mut().resource_mut::<Assets<UsdStageAsset>>().add(
-            UsdStageAsset::from_recipe(lunco_usd_bevy::StageRecipe::from_source(
+            UsdStageAsset::from_recipe(lunco_usd_core::StageRecipe::from_source(
                 "preview-b.usda",
                 MINIMAL_USD,
             ))

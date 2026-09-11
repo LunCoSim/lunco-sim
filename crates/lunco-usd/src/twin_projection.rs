@@ -17,7 +17,7 @@
 //!    success or failure event.
 //! 2. [`drain_pending_twin_docs`] — once the source asset emits its terminal
 //!    event, allocate a
-//!    [`UsdDocument`](crate::document) for it (origin = the on-disk path, so Save
+//!    [`UsdDocument`](lunco_usd_core::document::UsdDocument) for it (origin = the on-disk path, so Save
 //!    and dedup work), restore its persisted `.lunco/runtime` overlay, publish
 //!    the composed source as the twin overlay, record it in
 //!    [`DocBackedTwinScenes`] (synced at the current generation), and only then
@@ -26,7 +26,7 @@
 //!    (initial mount, open-time `restore_runtime`, or a later spawn/move), refresh the
 //!    twin **overlay** (for persistence / re-open) and **author the delta onto
 //!    the live composed stage**: translates and structural spawns/removes are
-//!    authored onto the scene's [`CanonicalStage`](lunco_usd_bevy::CanonicalStage)
+//!    authored onto the scene's [`CanonicalStage`](lunco_usd_bevy_core::canonical::CanonicalStage)
 //!    directly, firing its openusd change sink so `project_stage_changes`
 //!    projects the edit in place — no whole-scene asset reload. A referenced
 //!    spawn whose asset isn't loaded yet is fetched once through
@@ -45,7 +45,7 @@
 //! that same doc-first mount. Files inside the active Twin remain document-only;
 //! scheme-qualified scene sources enter the typed `LoadScene` path directly.
 
-use crate::document::UsdDocument;
+use lunco_usd_core::document::UsdDocument;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -55,15 +55,16 @@ use bevy::prelude::*;
 use lunco_assets::twin_source::TwinRoots;
 use lunco_doc::{Document, DocumentId};
 use lunco_usd_bevy::{
-    UsdAwaitingStage, UsdInstanceProjection, UsdPrimPath, UsdSceneRoot, UsdSourceText,
-    UsdStageAsset, UsdVisualProjectionQueued, UsdVisualSynced,
+    UsdAwaitingStage, UsdPrimPath, UsdSceneRoot, UsdSourceText, UsdVisualProjectionQueued,
+    UsdVisualSynced,
 };
+use lunco_usd_bevy_core::{UsdInstanceProjection, UsdStageAsset};
 use lunco_usd_sim::cosim::LoadScene;
 
 use crate::commands::{EmptyViewportReason, TWIN_SCENE_LOAD_FAILED};
-use crate::document::UsdOp;
 use lunco_doc::OpenOutcome;
 use lunco_doc_bevy::{DocumentChanged, DocumentRegistry};
+use lunco_usd_core::document::UsdOp;
 
 /// A USD document transitioned from a Twin-only scene lease to a user-facing
 /// session lease. The UI uses this to expose a document only after the user
@@ -228,6 +229,15 @@ impl DocBackedTwinScenes {
         self.user_owned.contains(&doc)
     }
 
+    /// Whether an editor preview currently keeps this document projected.
+    /// Preview ownership is already tracked here, so the projection core does
+    /// not need to know about the concrete viewport resource.
+    pub fn has_preview_lease(&self, doc: DocumentId) -> bool {
+        self.map
+            .get(&doc)
+            .is_some_and(|scene| scene.preview_leases != 0)
+    }
+
     /// Track an already-allocated document as doc-backed under `(name, rel)`, so
     /// [`sync_twin_overlays`] keeps its overlay + live entities in step with the
     /// document generation. Idempotent — a document already tracked (e.g. a
@@ -378,7 +388,7 @@ pub fn scene_document_for(
 /// the openusd change sink fires and `project_stage_changes` instantiates the
 /// composed subtree — no whole-scene reload.
 struct RefSpawn {
-    /// The scene whose live [`CanonicalStage`](lunco_usd_bevy::CanonicalStage)
+    /// The scene whose live [`CanonicalStage`](lunco_usd_bevy_core::canonical::CanonicalStage)
     /// the spawn is authored onto.
     scene_id: AssetId<UsdStageAsset>,
     /// The prim path to spawn (e.g. `/World/rover_1`).
@@ -796,22 +806,11 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
         let (name, rel) = lunco_assets::split_twin_rel(&rel)?;
         world.resource::<DocBackedTwinScenes>().doc_for(name, rel)
     });
-    // Editor previews are additional legitimate mounts: their roots are
-    // deliberately NOT `UsdSceneRoot` (they are `UsdPreviewOnly`, so sim/avian
-    // walkers bail at them), so the query above never sees them. Every open
-    // preview document must still be admitted here; otherwise a document edit
-    // would update only the focused preview and leave other leases stale.
-    // Without the `ui` feature there are no editor mounts to consider.
-    #[cfg(feature = "ui")]
-    let viewport_docs: HashSet<DocumentId> = world
-        .get_resource::<crate::ui::viewport::UsdViewportState>()
-        .map(|state| state.preview_docs().collect())
-        .unwrap_or_default();
-    #[cfg(not(feature = "ui"))]
-    let viewport_docs: HashSet<DocumentId> = HashSet::new();
-
     for (doc, name, rel, synced, overlay_synced) in entries {
-        if active_doc != Some(doc) && !viewport_docs.contains(&doc) {
+        let preview_owned = world
+            .resource::<DocBackedTwinScenes>()
+            .has_preview_lease(doc);
+        if active_doc != Some(doc) && !preview_owned {
             continue;
         }
         // Read the generation before any whole-stage payload. The composed source
@@ -834,27 +833,6 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             // the explicit one-frame settle message, not by rechecking this
             // document on every render frame.
             continue;
-        }
-
-        #[cfg(feature = "ui")]
-        if let Some(mut viewport) =
-            world.get_resource_mut::<crate::ui::viewport::UsdViewportState>()
-        {
-            // Document generation is not visual readiness. Invalidate every
-            // preview lease before the canonical stage applies this generation;
-            // the viewport marks it ready only after the USD queue and async
-            // mesh phase have both settled. Restore any transient explode
-            // transforms first so the existing-transform projection path
-            // cannot carry a presentation offset into the new generation.
-            let restores = viewport.invalidate_projection(doc);
-            drop(viewport);
-            for (entity, transform) in restores {
-                if let Ok(mut entity) = world.get_entity_mut(entity) {
-                    if let Some(mut current) = entity.get_mut::<bevy::prelude::Transform>() {
-                        *current = transform;
-                    }
-                }
-            }
         }
 
         // Author-once: the scene's live stage is keyed by the cached
@@ -901,7 +879,7 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             // explicit authoring operation rather than a second initial-load
             // reader or a per-frame rebuild.
             let stage_ready = world
-                .get_non_send::<lunco_usd_bevy::CanonicalStages>()
+                .get_non_send::<lunco_usd_bevy_core::canonical::CanonicalStages>()
                 .is_some_and(|stages| stages.get(scene_id).is_some());
             if has_work && !stage_ready {
                 let recipe = world
@@ -916,7 +894,7 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
                     continue;
                 };
                 let built = world
-                    .get_non_send_mut::<lunco_usd_bevy::CanonicalStages>()
+                    .get_non_send_mut::<lunco_usd_bevy_core::canonical::CanonicalStages>()
                     .is_some_and(|mut stages| stages.get_or_build(scene_id, &recipe).is_some());
                 if !built {
                     continue;
@@ -999,6 +977,13 @@ impl TwinProjectionWake {
     fn consume(&mut self) {
         self.pending = false;
     }
+}
+
+/// Wake the document-backed projection after a presentation mount installs a
+/// new preview root. The wake resource remains private to the projection
+/// owner; UI adapters use this narrow integration seam.
+pub fn wake_twin_projection(world: &mut World) {
+    world.resource_mut::<TwinProjectionWake>().wake();
 }
 
 pub(crate) fn twin_projection_ready(wake: Res<TwinProjectionWake>) -> bool {
@@ -1106,7 +1091,7 @@ fn incremental_api_schemas(schemas: &[String]) -> bool {
 /// ECS. Only incremental ops reach here; coarse ops ([`op_needs_rebuild`]) rebuild
 /// instead. Reads/authors the `!Send` stage under short borrows.
 fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAsset>, op: &UsdOp) {
-    use lunco_usd_bevy::CanonicalStages;
+    use lunco_usd_bevy_core::canonical::CanonicalStages;
 
     // A referenced AddPrim may be waiting on its asset closure. Preserve every
     // later edit whose owner is inside that not-yet-live subtree; otherwise a
@@ -1232,7 +1217,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
             let v = if is_string {
                 openusd::sdf::Value::String(value.clone())
             } else {
-                match lunco_usd_bevy::author::parse_attribute_value(type_name, value) {
+                match lunco_usd_core::author::parse_attribute_value(type_name, value) {
                     Ok(v) => v,
                     Err(e) => {
                         warn!("[twin] parse attribute {path}.{name} ({type_name}): {e}");
@@ -1349,7 +1334,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
             let Ok(sp) = openusd::sdf::Path::new(path) else {
                 return;
             };
-            let v = match lunco_usd_bevy::author::parse_attribute_value(type_name, value) {
+            let v = match lunco_usd_core::author::parse_attribute_value(type_name, value) {
                 Ok(v) => v,
                 Err(e) => {
                     warn!("[twin] parse keyframe {path}.{name} ({type_name}) @ {time}: {e}");
@@ -1508,7 +1493,7 @@ fn spawn_prim_op(
     reference: Option<String>,
     reference_prim_path: Option<String>,
 ) {
-    use lunco_usd_bevy::CanonicalStages;
+    use lunco_usd_bevy_core::canonical::CanonicalStages;
     let reference_prim_path = reference_prim_path.filter(|path| !path.is_empty());
     let Ok(sp) = openusd::sdf::Path::new(prim_path) else {
         return;
@@ -1777,7 +1762,8 @@ fn rebuild_scene_from_composed(
     scene_id: AssetId<UsdStageAsset>,
     composed_source: &str,
 ) {
-    use lunco_usd_bevy::{CanonicalStages, StageRecipe};
+    use lunco_usd_bevy_core::canonical::CanonicalStages;
+    use lunco_usd_core::StageRecipe;
     // Recipe = the edited composed source as the root layer + every referenced
     // `.usda` the current stage already loaded (keyed by the same canonical ids).
     let (scene_layer, mut bytes) = {
@@ -1833,7 +1819,7 @@ fn ensure_reference_layers_for_rebuild(
     for asset_path in references {
         let reference_id = {
             let Some(cs) = world
-                .get_non_send::<lunco_usd_bevy::CanonicalStages>()
+                .get_non_send::<lunco_usd_bevy_core::canonical::CanonicalStages>()
                 .and_then(|stages| stages.get(scene_id))
             else {
                 return false;
@@ -1873,7 +1859,7 @@ fn ensure_reference_layers_for_rebuild(
         return true;
     }
     world
-        .get_non_send::<lunco_usd_bevy::CanonicalStages>()
+        .get_non_send::<lunco_usd_bevy_core::canonical::CanonicalStages>()
         .and_then(|stages| stages.get(scene_id))
         .is_some_and(|cs| cs.add_layer_bytes(extra))
 }
@@ -1884,7 +1870,7 @@ fn ensure_reference_layers_for_rebuild(
 /// instantiates the composed subtree. Exclusive: authors onto the `!Send`
 /// `CanonicalStage`.
 pub(crate) fn drain_ref_spawns(world: &mut World) {
-    use lunco_usd_bevy::CanonicalStages;
+    use lunco_usd_bevy_core::canonical::CanonicalStages;
     if world.resource::<PendingRefSpawns>().items.is_empty() {
         return;
     }
@@ -2008,8 +1994,8 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document::{LayerId, UsdOp};
     use lunco_usd_bevy::UsdVisualSynced;
+    use lunco_usd_core::document::{LayerId, UsdOp};
 
     const TINY: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n";
 

@@ -44,7 +44,8 @@ use avian3d::{
 use bevy::ecs::entity::{EntityHashMap, EntityHashSet};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use lunco_usd_bevy::{instance_key, UsdInstanceProjection, UsdInstanceRoot, UsdPrimPath};
+use lunco_usd_bevy::{instance_key, UsdPrimPath};
+use lunco_usd_bevy_core::{UsdInstanceProjection, UsdInstanceRoot, UsdStageAsset};
 use openusd::schemas::physics::tokens as ptok;
 use openusd::sdf::Path as SdfPath;
 /// Authored `physics:filteredPairs` targets, waiting for their prims to spawn.
@@ -199,7 +200,7 @@ const PAIR_RESOLVE_RETRY_INTERVAL: u32 = 60;
 /// Returns `None` when the schema is absent, so the caller can skip the insert
 /// entirely rather than stamping an empty carrier on every prim in the scene.
 pub(crate) fn read_filtered_pairs(
-    reader: &dyn lunco_usd_bevy::read::UsdReadObject,
+    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     sdf_path: &SdfPath,
 ) -> Option<PendingFilteredPairs> {
     if !reader.has_api_schema(sdf_path, ptok::API_FILTERED_PAIRS) {
@@ -232,7 +233,7 @@ pub(crate) fn read_filtered_pairs(
 /// is its own and never its parent's.
 fn collider_owner(
     path: &str,
-    stage_handle: &Handle<lunco_usd_bevy::UsdStageAsset>,
+    stage_handle: &Handle<UsdStageAsset>,
     root: Option<u64>,
     q_colliders: &Query<(Entity, &UsdPrimPath), With<Collider>>,
     q_provenance: &Query<&lunco_core::Provenance>,
@@ -608,7 +609,8 @@ mod tests {
     //! `scenes/tests/filtered_pairs.usda`, which needs a stepping solver.
 
     use super::*;
-    use lunco_usd_bevy::{CanonicalStage, StageRecipe};
+    use lunco_usd_bevy_core::canonical::CanonicalStage;
+    use lunco_usd_core::StageRecipe;
 
     /// Two overlapping bodies, one filtering the other by naming its COLLIDER
     /// child — the form that must resolve to the body.

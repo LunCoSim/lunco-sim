@@ -31,7 +31,6 @@ bevy_render.workspace = true
 bevy_shader.workspace = true
 bevy_input.workspace = true
 bevy_asset.workspace = true
-bevy_utils.workspace = true
 bevy_platform.workspace = true
 bevy_pbr.workspace = true
 bevy_ecs.workspace = true
@@ -39,7 +38,6 @@ bevy_log.workspace = true
 bevy_window.workspace = true
 bevy_transform.workspace = true
 bevy_derive.workspace = true
-bevy_image.workspace = true
 bytemuck.workspace = true
 uuid.workspace = true
 

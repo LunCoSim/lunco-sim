@@ -11,7 +11,7 @@
 //! and never touched the document.
 
 use lunco_doc::{DocumentHost, DocumentId, Mutation};
-use lunco_usd::document::{LayerId, UsdDocument, UsdOp};
+use lunco_usd_core::document::{LayerId, UsdDocument, UsdOp};
 
 const STAGE: &str = r#"#usda 1.0
 (

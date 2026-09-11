@@ -24,9 +24,9 @@ use lunco_doc_bevy::{RedoDocument, UndoDocument};
 use lunco_materials::{ParamSchema, ParamValue, ShaderLook};
 use lunco_render::{PbrLook, SurfaceAlpha};
 use lunco_usd::commands::{ApplyUsdOp, ApplyUsdOps};
-use lunco_usd::document::UsdDocument;
-use lunco_usd::document::{LayerId, UsdOp};
 use lunco_usd_bevy::{UsdPrimPath, UsdSceneRoot};
+use lunco_usd_core::document::UsdDocument;
+use lunco_usd_core::document::{LayerId, UsdOp};
 
 /// Detach a joint by despawning it.
 #[Command(reflect_default)]
@@ -1700,7 +1700,7 @@ pub fn persist_environment_light_to_runtime_layer(
         return;
     }
 
-    let parent_path = lunco_usd_bevy::layer_default_prim(host.document().data())
+    let parent_path = lunco_usd_bevy_core::layer_default_prim(host.document().data())
         .map(|p| format!("/{p}"))
         .unwrap_or_else(|| "/".to_string());
     let env_path = if parent_path == "/" {
@@ -2097,7 +2097,7 @@ const PBR_LOOK_KEYS: &[&str] = &[
 /// `double_sided` is deliberately NOT a shader input — it is `uniform bool
 /// doubleSided` on `UsdGeomGprim`, a property of the geometry — so it is authored
 /// on the geom prim instead. `unlit` is render-only intent with no USD equivalent
-/// (see [`lunco_usd::material::preview_surface_input`]) — it is the one knob a saved
+/// (see [`lunco_usd_core::material::preview_surface_input`]) — it is the one knob a saved
 /// scene will not carry, deliberately.
 fn author_look_to_usd(commands: &mut Commands, target: Entity, key: &str, look: &PbrLook) {
     let look = look.clone();
@@ -2125,7 +2125,7 @@ fn author_look_to_usd(commands: &mut Commands, target: Entity, key: &str, look: 
             });
             return;
         }
-        if lunco_usd::material::preview_surface_input(&key).is_none() {
+        if lunco_usd_core::material::preview_surface_input(&key).is_none() {
             return; // `unlit` — render-only intent, no USD surface input to write.
         }
 
@@ -2135,7 +2135,7 @@ fn author_look_to_usd(commands: &mut Commands, target: Entity, key: &str, look: 
             Some(sp) => (Vec::new(), sp, false),
             None => {
                 let schemas = crate::doc_resolve::geom_api_schemas(world, &prim);
-                match lunco_usd::material::ensure_preview_surface_ops(
+                match lunco_usd_core::material::ensure_preview_surface_ops(
                     LayerId::root(),
                     &prim.path,
                     &schemas,
@@ -2169,7 +2169,7 @@ fn author_look_to_usd(commands: &mut Commands, target: Entity, key: &str, look: 
             if !fresh && !key_matches(&key, k) {
                 continue;
             }
-            if let Some((attr, _)) = lunco_usd::material::preview_surface_input(k) {
+            if let Some((attr, _)) = lunco_usd_core::material::preview_surface_input(k) {
                 set(attr, ty, v);
             }
         }
@@ -2186,8 +2186,8 @@ fn author_look_to_usd(commands: &mut Commands, target: Entity, key: &str, look: 
 /// Whether the edited look key names the same `UsdPreviewSurface` input as `slot`
 /// (`roughness` and `alpha` are the canonical command keys).
 fn key_matches(key: &str, slot: &str) -> bool {
-    lunco_usd::material::preview_surface_input(key)
-        == lunco_usd::material::preview_surface_input(slot)
+    lunco_usd_core::material::preview_surface_input(key)
+        == lunco_usd_core::material::preview_surface_input(slot)
 }
 
 fn apply_pbr_look(look: &mut PbrLook, key: &str, value: &str) -> bool {
@@ -3481,7 +3481,6 @@ register_commands!(
     on_reload_shader,
     on_rescan_shaders,
     on_rescan_spawn_catalog,
-    crate::lint_command::on_run_lint,
     on_set_camera_look_at,
     on_set_object_property,
     on_set_shader_source,
@@ -3512,11 +3511,7 @@ impl Plugin for SpawnCommandPlugin {
         crate::usd_prim_query::register(app);
         // Parse-only asset pre-flight ("does this file compile?") — pure file
         // checks, so it answers even while no scene is loaded.
-        crate::validate::register(app);
-        // `RunLint` + the `LintReport` read-back. Nothing lints on load or on a
-        // physics cadence: the linter is an explicit verb called from rhai, HTTP
-        // or MCP after an authoring/preflight change.
-        crate::lint_command::register(app);
+        lunco_scene_validation::validate::register(app);
         // Selection → telemetry focus, so every host that has the scene verbs has
         // scoped telemetry (the sandbox, the workbench, a headless server driven
         // by `SelectEntity`). Render-free: `lunco-signal` is a ring buffer of
@@ -4235,7 +4230,7 @@ mod tests {
     #[test]
     fn move_of_authored_prim_persists_to_runtime_layer() {
         use super::*;
-        use lunco_usd_bevy::usd_data::UsdDataExt;
+        use lunco_usd_core::UsdDataExt;
 
         let (mut app, doc) = app_with_runtime_producer("/World", 42);
         app.world_mut().trigger(MoveEntity {
@@ -4270,7 +4265,7 @@ mod tests {
     #[test]
     fn rotation_of_authored_prim_persists_parent_local_orientation() {
         use super::*;
-        use lunco_usd_bevy::usd_data::UsdDataExt;
+        use lunco_usd_core::UsdDataExt;
 
         let (mut app, doc) = app_with_runtime_producer("/World", 43);
         let requested = DQuat::from_rotation_x(0.2);
@@ -4352,7 +4347,7 @@ mod tests {
     fn undo_document_reverts_the_last_usd_op() {
         use super::*;
         use lunco_doc::Document;
-        use lunco_usd_bevy::usd_data::UsdDataExt;
+        use lunco_usd_core::UsdDataExt;
 
         let (mut app, doc) = app_with_runtime_producer("/World", 42);
         // USD's half of the generic verb now lives in `lunco-usd` (see the note above
@@ -4428,7 +4423,7 @@ mod tests {
     #[test]
     fn document_backed_spawn_is_one_atomic_usd_change() {
         use super::*;
-        use lunco_usd_bevy::usd_data::UsdDataExt;
+        use lunco_usd_core::UsdDataExt;
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);

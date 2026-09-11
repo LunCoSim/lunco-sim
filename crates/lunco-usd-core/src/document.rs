@@ -1,0 +1,5634 @@
+//! `UsdDocument` — the canonical Document representation of one text-based USD
+//! source layer (`.usda` or `.usd`). Binary `.usdc` files are routed by the
+//! document boundary so an unsupported encoding produces an explicit load
+//! diagnostic instead of being silently treated as another file type.
+//!
+//! ## Why data-canonical (Phase C2/C3)
+//!
+//! Earlier phases treated the `.usda` **source text** as canonical and
+//! mutated it by splicing byte ranges ([`crate::text_edit`], now deleted).
+//! That is the CQ-503 nested-child corruption class: editing
+//! `/World/Box.radius` could clobber `/World/Box/Inner.radius` because the
+//! splicer reasoned about text, not structure.
+//!
+//! The document now holds an [`sdf::Data`] — the **root layer's authored
+//! specs** — as its canonical representation. This is *not* the flattened
+//! composition: references, payloads, and sublayer opinions survive verbatim,
+//! so the document still round-trips losslessly with external USD tools
+//! (Omniverse, USDView, Blender). Edits route through openusd's authoring
+//! engine: [`crate::author`] opens the data as a transient `Stage`,
+//! authors the op **by SDF path** (which cannot touch a sibling/nested prim
+//! that shares a name), and extracts the updated root layer back out.
+//!
+//! The serialized `.usda` text is produced on demand ([`UsdDocument::source`])
+//! for saving to disk, the viewport preview, and session snapshots.
+//!
+//! ## Edit target
+//!
+//! Per the Omniverse pattern, every [`UsdOp`] carries an `edit_target:
+//! LayerId` naming *which layer* receives the opinion. The document composes
+//! **`base ⊕ runtime`**: [`LayerId::root`] authors the persisted base layer,
+//! [`LayerId::runtime`] the ephemeral, **non-persisted** overlay — so a tool can
+//! edit non-destructively over the base and promote to persistent on save.
+//! `apply` routes to the target layer via [`TargetLayer::from_id`]; unknown
+//! identifiers are rejected (no silent misrouting to root).
+//!
+//! ## Two representations, and why both are permanent
+//!
+//! A running scene is held in **two** forms, and neither can absorb the other:
+//!
+//! - **This document** — the authored [`sdf::Data`] layers (`base` ⊕ `runtime`,
+//!   read via [`UsdDocument::data`] / [`UsdDocument::runtime_data`]). Plain,
+//!   `Send`, serializable. This is what Save writes, what the journal records, and
+//!   what the networking layer ships. Reads are cheap and run off the main thread.
+//! - **The `CanonicalStage`** (in `lunco_usd_bevy_core`) — the live, *composed*
+//!   openusd `Stage` with references / sublayers / variants resolved. It is
+//!   `Rc`-backed and therefore `!Send`: a main-thread `NonSend` resource. It is
+//!   the projection engine — authoring onto it fires the openusd change sink that
+//!   reconciles the ECS (see [`twin_projection`](crate::twin_projection) and
+//!   [`live_consume`](crate::live_consume)).
+//!
+//! This split is **not** a Rust/`Send` workaround — it is USD's own data model.
+//! Pixar's USD draws the same line between `SdfLayer` (flat authored opinions you
+//! save) and `UsdStage` (the composed view). You always have both: a layer is
+//! *source*, a stage is the *composition* of layers. Collapsing them would mean
+//! serializing a fully reference-expanded graph on every Save — which defeats the
+//! entire purpose of references. The `Send` / `!Send` boundary merely happens to
+//! fall on that same seam, so the two representations stay **even if openusd ever
+//! makes `Stage` `Send`**. The right operations land on the cheap side: Save,
+//! journal, and net-sync touch the small serializable layer; composition (the
+//! expensive, stateful, resolver-driven work) is isolated to the one stage owner.
+//!
+//! ## Author-once coherence invariant
+//!
+//! Two representations of the same edit can drift, so the **op itself** — not a
+//! diff re-derived by reading the stage back — is the single description of each
+//! delta, applied to *both* sides: [`apply`](Document::apply) mutates these layers
+//! and records the typed op in the private `op_log`; the live-stage projector
+//! replays that same op onto the stage. The invariant that keeps them honest:
+//!
+//! > **every generation bump records exactly one op-log entry.**
+//!
+//! The private `commit` is the only mutator, and both its callers maintain it:
+//! `apply` records the real op on success; [`UsdDocument::restore_runtime`]
+//! (a non-op state load) pushes a synthetic `ReplaceSource` marker. Crucially the
+//! invariant is **fail-safe, not merely by-convention**: [`UsdDocument::ops_since`]
+//! returns `None` whenever the op ring is shorter than the generation delta, so a
+//! future `commit` caller that forgets to record degrades to a full rebuild
+//! (correct, just slower) — never a silent projection lie. That fail-safe is the
+//! reason `restore_runtime` needs the synthetic marker at all: without it, a
+//! restore would bump the generation with no op, and every subsequent
+//! `ops_since` would under-count and force needless rebuilds.
+
+use std::collections::VecDeque;
+
+use crate::author::{
+    self, extract_root_layer_data, open_doc_stage, parse_attribute_value, usda_to_data,
+};
+use crate::recipe::StageRecipe;
+use crate::units::{ConventionTransform, StageMetrics};
+use crate::usd_data::UsdDataExt;
+use bevy::log::warn;
+use bevy::math::DVec3;
+use bevy::reflect::Reflect;
+use lunco_doc::{
+    Document, DocumentError, DocumentId, DocumentOp, DocumentOrigin, ForkableDocument,
+};
+use openusd::sdf::{self, Path as SdfPath, SpecType};
+
+/// How many recent changes to keep in the per-document ring buffer.
+///
+/// Views consume the suffix via [`UsdDocument::changes_since`]; 256 is
+/// generous for realistic edit cadences without growing unbounded.
+const CHANGE_HISTORY_CAPACITY: usize = 256;
+
+/// Minimal valid USDA, used as the canonical-data fallback when a document's
+/// source text fails to parse (see [`UsdDocument::with_origin`]).
+const EMPTY_USDA: &str = "#usda 1.0\n(\n    metersPerUnit = 1\n)\n";
+
+// ─────────────────────────────────────────────────────────────────────
+// LayerId — names a layer in a stage's layer stack
+// ─────────────────────────────────────────────────────────────────────
+
+/// Identifies one layer in a [`UsdDocument`]'s layer stack.
+///
+/// A document has two layers (Phase C4):
+/// - [`LayerId::root`] — the **base** layer: the authored scene, serialized to
+///   disk on Save.
+/// - [`LayerId::runtime`] — the **runtime** layer: generated, ephemeral state
+///   (obstacle fields, spawn transforms) that overlays the base for reads but
+///   is **not** written to the authored file.
+///
+/// An op's `edit_target` names which layer receives the opinion; unknown
+/// identifiers are rejected.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Reflect, serde::Serialize, serde::Deserialize)]
+pub struct LayerId(String);
+
+impl LayerId {
+    /// The base/root layer — the authored scene, saved to disk.
+    pub fn root() -> Self {
+        Self("@root@".to_string())
+    }
+
+    /// The runtime layer — generated, non-persisted overlay state.
+    pub fn runtime() -> Self {
+        Self("@runtime@".to_string())
+    }
+
+    /// Wrap an arbitrary layer identifier (path or anonymous handle).
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    /// The raw identifier string.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// True when this id refers to the document's base/root layer.
+    pub fn is_root(&self) -> bool {
+        self.0 == "@root@"
+    }
+
+    /// True when this id refers to the document's runtime layer.
+    pub fn is_runtime(&self) -> bool {
+        self.0 == "@runtime@"
+    }
+}
+
+impl Default for LayerId {
+    fn default() -> Self {
+        Self::root()
+    }
+}
+
+/// One explicit USD reference arc used by [`UsdOp::SetReferenceArcs`].
+/// `asset_path` is the resolver identity without USDA `@` delimiters;
+/// `prim_path` is omitted when the referenced layer's default prim is used.
+#[derive(Debug, Clone, PartialEq, Reflect, serde::Serialize, serde::Deserialize)]
+pub struct UsdReferenceArc {
+    pub asset_path: String,
+    #[serde(default)]
+    pub prim_path: Option<String>,
+}
+
+/// The USD list-op form authored by [`UsdOp::SetReferenceArcs`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect, serde::Serialize, serde::Deserialize)]
+pub enum UsdReferenceListOp {
+    /// Insert arcs before weaker-layer opinions.
+    Prepend,
+    /// Insert arcs after weaker-layer opinions.
+    Append,
+    /// Add arcs without replacing weaker-layer opinions.
+    Add,
+    /// Delete matching arcs while preserving other weaker-layer opinions.
+    Delete,
+    /// Replace the complete list; an empty list explicitly clears the opinion.
+    Explicit,
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// UsdChange — Omniverse-style change notification
+// ─────────────────────────────────────────────────────────────────────
+
+/// Coarse-grained change classification, modelled on USD's
+/// `Tf::Notice` split between resync (structural) and info-only
+/// (attribute value) changes.
+///
+/// Views subscribe to the kinds they care about — the prim-tree
+/// browser only rebuilds on `Resync`; the property inspector reacts
+/// to `InfoOnly` for the selected prim. This is the plumbing that
+/// keeps frame discipline (see `AGENTS.md` §7) when a single attr
+/// edit happens on a 100k-prim stage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UsdChange {
+    /// Structural change: prim added, removed, renamed, or moved.
+    /// Forces a tree rebuild.
+    Resync {
+        /// Prim path (or `/` for whole-stage replacement).
+        path: String,
+    },
+    /// Attribute value changed; tree shape unchanged.
+    InfoOnly {
+        /// Prim path whose attribute changed.
+        path: String,
+        /// Attribute name (e.g. `xformOp:translate`).
+        attr: String,
+    },
+    /// Whole source replaced — every observer should refresh.
+    /// Used by `ReplaceSource` and Save-As round-trips.
+    FullReload,
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// UsdOp — typed mutation
+// ─────────────────────────────────────────────────────────────────────
+
+/// A typed, reversible mutation to a [`UsdDocument`].
+///
+/// Every variant carries an `edit_target: LayerId` naming *which layer*
+/// receives the opinion — [`LayerId::root`] (persisted base) or
+/// [`LayerId::runtime`] (ephemeral, non-persisted overlay); `apply` routes to
+/// each. Unknown identifiers are rejected.
+///
+/// Forward application routes through [`crate::author`] — the op is
+/// authored by SDF path into a transient `Stage` and the updated root layer
+/// is extracted back as [`sdf::Data`]. Inverses are typed where it is cheap
+/// and exact — structural pairs (`AddPrim` ↔ `RemovePrim`, `MovePrim`) and
+/// value-carrying ops whose prior opinion is authored in the target layer —
+/// and fall back to a full-source [`UsdOp::ReplaceSource`] snapshot otherwise
+/// (genuinely structural ops, and prior-unauthored cases where undo must
+/// *remove* the new opinion) — always correct.
+#[derive(Debug, Clone, Reflect, serde::Serialize, serde::Deserialize)]
+pub enum UsdOp {
+    /// Replace the entire source buffer with `text`. Inverse is the
+    /// previous source as another `ReplaceSource`. Used as the
+    /// universal inverse fallback for the other variants.
+    ReplaceSource {
+        /// Layer to write to: [`LayerId::root`] (base) or [`LayerId::runtime`] (overlay).
+        edit_target: LayerId,
+        /// New full source for the layer.
+        text: String,
+    },
+    /// Add a child prim under `parent_path` with the given prim
+    /// `name` and optional schema `type_name` (`"Xform"`, `"Cube"`,
+    /// …; `None` for an untyped prim). `parent_path == "/"` adds at
+    /// the file root.
+    AddPrim {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Parent prim path (`"/"` for top level).
+        parent_path: String,
+        /// Prim name — must be a valid USD identifier.
+        name: String,
+        /// Optional schema type (`Xform`, `Cube`, `Mesh`, …).
+        type_name: Option<String>,
+        /// Optional asset reference (`@vessels/rover.usda@`, bare path, no `@`).
+        /// `Some` authors a `references` arc so the prim instances that asset —
+        /// this is how a runtime spawn persists (the referenced content + a
+        /// local `xformOp` override compose into the rendered prim).
+        reference: Option<String>,
+        /// Optional prim path inside the referenced layer. `None` uses that
+        /// layer's default prim; `Some("/SkidRover")` preserves an explicit
+        /// reference target for assets whose variant composition depends on it.
+        #[serde(default)]
+        reference_prim_path: Option<String>,
+    },
+    /// Remove the prim at `path` together with its entire subtree. The
+    /// inverse re-establishes the prior full source.
+    RemovePrim {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim to remove.
+        path: String,
+    },
+    /// Set the `xformOp:translate` attribute on the prim at `path`.
+    /// Authors `xformOpOrder` too if the prim has none yet.
+    SetTranslate {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim whose translate to set.
+        path: String,
+        /// `[x, y, z]` in canonical metres and Y-up coordinates. The document
+        /// authoring boundary converts it to the target stage convention.
+        value: [f64; 3],
+    },
+    /// Set the `xformOp:rotateXYZ` attribute (Euler XYZ, **degrees**) on the
+    /// prim at `path` — the rotation counterpart of [`UsdOp::SetTranslate`].
+    /// Authors `xformOpOrder` too if the prim has none yet (like `SetTranslate`,
+    /// it only synthesizes a fresh order — it never rewrites an existing xform
+    /// stack). This is what lets a `SetEnvironmentLight` sun-direction tweak
+    /// persist + journal (the sun's orientation is `xformOp:rotateXYZ`).
+    SetRotate {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim whose rotation to set.
+        path: String,
+        /// `[x, y, z]` Euler angles in **degrees** (USD `xformOp:rotateXYZ`).
+        value: [f64; 3],
+    },
+    /// Set the `xformOp:scale` attribute on the prim at `path`.
+    /// Authors `xformOpOrder` too if the prim has none yet. Values are
+    /// unitless canonical local scale factors and preserve negative authored
+    /// scale values.
+    SetScale {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim whose scale to set.
+        path: String,
+        /// Unitless local scale factors `[x, y, z]`.
+        value: [f64; 3],
+    },
+    /// Set an arbitrary attribute on the prim at `path`. Creates the
+    /// attribute if absent, replaces its value otherwise.
+    ///
+    /// The `value` encoding depends on `type_name`, and this is the ONE place it is
+    /// interpreted so no call site hand-escapes:
+    /// - `type_name == "string"` → `value` is the **raw** string content, authored
+    ///   verbatim as `Value::String`. USDA's lexer keeps raw bytes between delimiters
+    ///   (it does not unescape) and the writer picks a delimiter the content can't
+    ///   close, so backslashes/quotes/newlines round-trip — pass arbitrary text (a
+    ///   whole rhai scenario source) directly. The one unserializable value, both
+    ///   `"""` and `'''` present, is rejected at apply.
+    /// - any other type → `value` is a USD **literal exactly as it would appear
+    ///   in a `.usda` file** (e.g. `"(0.2, 0.2, 0.8)"`, `"0.5"`), parsed into a
+    ///   typed [`sdf::Value`] by openusd's parser. The literal INCLUDES the
+    ///   type's own delimiters: a `token` value carries its quotes (`"\"rigid\""`)
+    ///   and an `asset` value its `@…@` wrapper (`"@hull.usdc@"` — which cannot
+    ///   express a path containing `@`). Only `string` gets the raw-content
+    ///   treatment above.
+    SetAttribute {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim whose attribute to set.
+        path: String,
+        /// The name of the attribute (e.g. `primvars:displayColor` or `inputs:roughness`).
+        name: String,
+        /// The USD type name of the attribute (e.g. `color3f`, `float`, `string`).
+        type_name: String,
+        /// The value: **raw content** when `type_name == "string"`, otherwise a
+        /// USD-compliant literal. See the variant doc for the split.
+        value: String,
+    },
+    /// Author one **time sample** of an attribute on the prim at `path` —
+    /// the keyframe primitive. Creates the attribute if absent (just like
+    /// [`UsdOp::SetAttribute`]) and writes `value` at stage time `time`
+    /// instead of as the `default`. Repeated ops at distinct `time`s build
+    /// up the animation curve; the translator interpolates between them
+    /// when it evaluates the attribute at a clock time. A brand-new sample
+    /// inverts to a typed [`UsdOp::RemoveTimeSample`]; overwriting an existing
+    /// one inverts to a typed `SetTimeSample` carrying the prior value. When the
+    /// first xform channel also adds an `xformOpOrder` entry, the inverse is a
+    /// source snapshot so both authored opinions are removed atomically.
+    SetTimeSample {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim whose attribute to keyframe.
+        path: String,
+        /// The name of the attribute (e.g. `xformOp:translate`, `inputs:roughness`).
+        name: String,
+        /// The USD type name of the attribute (e.g. `double3` or `float`).
+        type_name: String,
+        /// Stage (composed) time code at which to author the sample.
+        time: f64,
+        /// The sample value formatted as a USD-compliant string literal,
+        /// parsed into a typed [`sdf::Value`] by openusd at apply time.
+        value: String,
+    },
+    /// Remove the single **time sample** at `time` from attribute `name` on the
+    /// prim at `path` — the inverse primitive to [`UsdOp::SetTimeSample`]. When
+    /// the last sample goes, the attribute's `timeSamples` field is cleared
+    /// entirely (it round-trips as if never keyframed). Removing a sample that
+    /// isn't there is an error, not a silent success, so a wrong `time` surfaces.
+    /// The inverse re-authors the removed value as a typed [`UsdOp::SetTimeSample`]
+    /// (full-source snapshot only when the value has no single-line literal).
+    RemoveTimeSample {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim whose attribute to de-keyframe.
+        path: String,
+        /// The name of the attribute (e.g. `xformOp:translate`).
+        name: String,
+        /// Stage (composed) time code of the sample to remove.
+        time: f64,
+    },
+    /// Author a **relationship** `name` on the prim at `path`, pointing at
+    /// `targets` (absolute prim/property paths). Relationships are how USD
+    /// expresses non-hierarchical links — `material:binding`, collection
+    /// membership, light linking, skeleton bindings. Replaces any existing
+    /// target list (set-semantics, not append); an empty `targets` authors an
+    /// explicitly-empty relationship. The inverse restores a prior explicit
+    /// target list as a typed op; otherwise the prior source.
+    SetRelationship {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim that owns the relationship.
+        path: String,
+        /// The relationship name (e.g. `material:binding`).
+        name: String,
+        /// Absolute target paths the relationship points at.
+        targets: Vec<String>,
+    },
+    /// Author the attribute-**connection** targets (`connectionPaths`) of
+    /// attribute `name` on the prim at `path`. Connections are USD's typed
+    /// dataflow edge — the primitive UsdShade builds every input/output wire
+    /// on, generalized beyond shading. This is how a port/SSP wiring cutover
+    /// authors an edge: the consuming attribute (`inputs:voltage`, an FMI/SSP
+    /// input connector) `.connect`s to a producing property (`outputs:…`).
+    ///
+    /// The attribute spec is created if absent (using `type_name`, exactly like
+    /// [`UsdOp::SetAttribute`]), so a connection can be authored on a
+    /// not-yet-materialised port. `sources` replaces any prior connection list
+    /// (explicit list-op, set-semantics — not append); an **empty** `sources`
+    /// authors an explicitly-empty list, i.e. clears the connection. The
+    /// inverse restores a prior explicit connection list as a typed op;
+    /// otherwise the prior full source. The command boundary additionally
+    /// requires every non-empty source to resolve to a composed property of
+    /// the same declared type; compound plans may declare that source earlier
+    /// in the same batch.
+    SetConnection {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim that owns the attribute.
+        path: String,
+        /// The attribute name (e.g. `inputs:voltage`).
+        name: String,
+        /// The USD type name of the attribute (e.g. `float`), used to create
+        /// the spec if it does not exist yet on the target layer.
+        type_name: String,
+        /// Absolute property paths this attribute connects to
+        /// (e.g. `/Bus/Node.outputs:v`). Empty clears the connection.
+        sources: Vec<String>,
+    },
+    /// Author the stage root's `defaultPrim` metadata in the selected layer.
+    ///
+    /// The value is an absolute prim path or root-relative prim path supplied
+    /// by the editor; the layer stores the standard root-relative spelling.
+    /// `None` removes this layer's opinion without touching weaker layers.
+    SetDefaultPrim {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Prim path selected as the document's default prim, or `None` to
+        /// clear this layer's opinion.
+        default_prim: Option<String>,
+    },
+    /// Author the standard USD `kind` metadata on an existing prim.
+    ///
+    /// `None` removes the selected layer's opinion and lets composition reveal
+    /// any weaker kind. Kind names are USD identifiers, including standard
+    /// values such as `component`, `assembly`, and `group`.
+    SetPrimKind {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim.
+        path: String,
+        /// Kind token, or `None` to clear this layer's opinion.
+        kind: Option<String>,
+    },
+    /// Move the prim at `from_path` to `to_path` — one op covering both
+    /// **rename** (same parent, new leaf) and **reparent** (new parent), since
+    /// both are a namespace move. The destination parent must already exist. The
+    /// inverse is the exact reverse move (`from`/`to` swapped), so undo is typed
+    /// and cheap.
+    MovePrim {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim to move.
+        from_path: String,
+        /// New absolute USD path for the prim.
+        to_path: String,
+    },
+    /// Author the prim's **applied API schemas** (`apiSchemas`) — the list that
+    /// turns a plain prim into a rigid body, a collider, an articulation root.
+    /// Without this op a prim built at runtime can never be made physical, so
+    /// "assemble a vehicle from parts" was authorable in USD text and nowhere else.
+    ///
+    /// `schemas` is the exact desired list for THIS layer, authored as a
+    /// **`prepend` list op** — the form `usdGenSchema`-era files author and the
+    /// one that composes: prepend UNIONS with weaker-layer `apiSchemas` opinions
+    /// instead of erasing them, so applying a schema on a session/runtime layer
+    /// leaves a referenced asset's own applied schemas intact. Within one layer
+    /// it is still set-like: re-applying replaces this layer's prior list. An
+    /// empty list clears this layer's opinion — it cannot un-apply weaker-layer
+    /// schemas (that would need a delete/explicit op this op does not express).
+    SetApiSchemas {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim.
+        path: String,
+        /// The exact applied-schema names (e.g. `["PhysicsRigidBodyAPI"]`).
+        schemas: Vec<String>,
+    },
+    /// Select `variant` within the prim's `variant_set`.
+    ///
+    /// Variant sets are already authored across the vessel assets (a rover's
+    /// `drivetrain` swaps `raycast` for a fully physical joint rig) and nothing
+    /// could switch one at runtime. This is the op behind "reconfigure the rover".
+    ///
+    /// Read-modify-write: selections for *other* variant sets on the same prim are
+    /// preserved. A prim that arrives through a reference or payload may be absent
+    /// from this document's authored layer; the edit is still authored at its
+    /// composed path as a standard local over. Changing a selection re-composes
+    /// the prim's subtree, so the projector rebuilds rather than replaying it
+    /// incrementally.
+    SetVariantSelection {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim carrying the variant set.
+        path: String,
+        /// The variant set name (e.g. `drivetrain`).
+        variant_set: String,
+        /// The variant to select (e.g. `physical`).
+        variant: String,
+    },
+    /// Author the prim's **payloads** — references that lazy composition may
+    /// decline to traverse, i.e. the arc for heavy geometry that should not be
+    /// loaded until needed. Set-semantics (explicit list op); empty clears.
+    ///
+    /// The counterpart of [`UsdOp::AddPrim`]'s `reference`, which composes eagerly.
+    SetPayload {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim.
+        path: String,
+        /// Asset paths to payload (e.g. `["@meshes/hull.usdc@"]`). Empty clears.
+        asset_paths: Vec<String>,
+    },
+    /// Author one USD `references` list-op on an existing prim. The operation
+    /// edits only the selected layer, so prepend/append/add/delete preserve
+    /// weaker-layer arcs and `Explicit` is the deliberate replacement/clear
+    /// form. References remain composition arcs; they are never flattened.
+    SetReferenceArcs {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim carrying the reference list.
+        path: String,
+        /// Asset identities and optional target prims to add, remove, or set.
+        references: Vec<UsdReferenceArc>,
+        /// The USD list-op semantics for this edit.
+        list_op: UsdReferenceListOp,
+    },
+    /// Activate or deactivate the prim. A deactivated prim and its whole subtree
+    /// vanish from composition without being deleted — the non-destructive
+    /// "disable this part" every assembly editor needs, and cheaply reversible
+    /// (unlike [`UsdOp::RemovePrim`], which discards the authored opinions).
+    SetActive {
+        /// Layer to write to.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim.
+        path: String,
+        /// `false` prunes the prim and its descendants from the composed stage.
+        active: bool,
+    },
+}
+
+impl Default for UsdOp {
+    fn default() -> Self {
+        // `Reflect`-derived enums need a Default. Pick the always-valid
+        // identity variant: a no-op ReplaceSource of empty text. Real
+        // callers always supply an explicit variant.
+        UsdOp::ReplaceSource {
+            edit_target: LayerId::root(),
+            text: String::new(),
+        }
+    }
+}
+
+impl DocumentOp for UsdOp {}
+
+impl UsdOp {
+    /// The authored layer selected by this operation.
+    pub fn edit_target(&self) -> &LayerId {
+        match self {
+            Self::ReplaceSource { edit_target, .. }
+            | Self::AddPrim { edit_target, .. }
+            | Self::RemovePrim { edit_target, .. }
+            | Self::SetTranslate { edit_target, .. }
+            | Self::SetRotate { edit_target, .. }
+            | Self::SetScale { edit_target, .. }
+            | Self::SetAttribute { edit_target, .. }
+            | Self::SetTimeSample { edit_target, .. }
+            | Self::RemoveTimeSample { edit_target, .. }
+            | Self::SetRelationship { edit_target, .. }
+            | Self::SetConnection { edit_target, .. }
+            | Self::SetDefaultPrim { edit_target, .. }
+            | Self::SetPrimKind { edit_target, .. }
+            | Self::MovePrim { edit_target, .. }
+            | Self::SetApiSchemas { edit_target, .. }
+            | Self::SetVariantSelection { edit_target, .. }
+            | Self::SetPayload { edit_target, .. }
+            | Self::SetReferenceArcs { edit_target, .. }
+            | Self::SetActive { edit_target, .. } => edit_target,
+        }
+    }
+
+    /// Return the authored prim or property paths touched by this operation.
+    ///
+    /// This is metadata for acknowledgements and diagnostics; validation and
+    /// mutation remain owned by [`UsdDocument`].
+    pub fn affected_paths(&self) -> Vec<String> {
+        match self {
+            Self::ReplaceSource { .. } => vec!["/".to_owned()],
+            Self::AddPrim {
+                parent_path, name, ..
+            } => vec![if parent_path == "/" {
+                format!("/{name}")
+            } else {
+                format!("{parent_path}/{name}")
+            }],
+            Self::RemovePrim { path, .. }
+            | Self::SetTranslate { path, .. }
+            | Self::SetRotate { path, .. }
+            | Self::SetScale { path, .. }
+            | Self::SetAttribute { path, .. }
+            | Self::SetTimeSample { path, .. }
+            | Self::RemoveTimeSample { path, .. }
+            | Self::SetRelationship { path, .. }
+            | Self::SetConnection { path, .. }
+            | Self::SetPrimKind { path, .. }
+            | Self::SetApiSchemas { path, .. }
+            | Self::SetVariantSelection { path, .. }
+            | Self::SetPayload { path, .. }
+            | Self::SetReferenceArcs { path, .. }
+            | Self::SetActive { path, .. } => vec![path.clone()],
+            Self::MovePrim {
+                from_path, to_path, ..
+            } => vec![from_path.clone(), to_path.clone()],
+            Self::SetDefaultPrim { .. } => vec!["/".to_owned()],
+        }
+    }
+}
+
+/// Participation in the canonical Twin journal ([`lunco_twin_journal`]).
+///
+/// `UsdOp` derives `Serialize`, so the journal records the **real op**
+/// (lossless) via `record_op` — no hand-written summary. `referenced_entities`
+/// stays the default empty set: every variant knows the prim path it touches,
+/// but an [`EntityRef`](lunco_twin_journal::EntityRef) also needs the owning
+/// `DocumentId`, which the op alone doesn't carry. That enrichment lands with
+/// the multi-user replication path.
+impl lunco_twin_journal::OpPayload for UsdOp {
+    fn domain(&self) -> lunco_twin_journal::DomainKind {
+        lunco_twin_journal::DomainKind::Usd
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// UsdDocument
+// ─────────────────────────────────────────────────────────────────────
+
+/// The canonical Document representation of one USD source file.
+///
+/// Owns the root layer's authored [`sdf::Data`], a [`lunco_doc::DocumentOrigin`]
+/// (where it came from and whether it can be saved), and a generation counter
+/// that bumps on every successful op. The flattened, composed scene (references
+/// resolved) is a *separate* derived artifact built by the asset loader
+/// ([`lunco_usd_bevy_core::UsdStageAsset`]); the document layer never holds it.
+#[derive(Debug)]
+pub struct UsdDocument {
+    id: DocumentId,
+    /// Loaded dependencies for synchronous composed authoring reads. Current
+    /// root opinions always come from this document, including earlier group ops.
+    authoring_recipe: Option<std::sync::Arc<StageRecipe>>,
+    /// The **base** layer: the authored scene's specs (references intact). This
+    /// is the canonical content [`source`](Self::source) serializes and Save
+    /// writes to disk. Root-targeted ops edit this layer.
+    base: sdf::Data,
+    /// The **runtime** layer: generated, ephemeral overlay state authored by
+    /// runtime-targeted ops (obstacle fields, spawn transforms). Kept separate
+    /// so it never reaches the saved file. Starts empty; folding it into reads
+    /// is deferred until a producer needs it (see [`runtime_data`](Self::runtime_data)).
+    runtime: sdf::Data,
+    /// Set only when the base source text failed to parse on construction:
+    /// holds the verbatim source so [`source`](Self::source) and Save preserve
+    /// the file rather than silently emptying it. While `Some`, structural ops
+    /// are rejected; a base [`UsdOp::ReplaceSource`] clears it.
+    parse_error: Option<String>,
+    generation: u64,
+    /// Revision of the authored base layer. It is independent from the
+    /// document generation so derived caches can name every layer input.
+    base_revision: u64,
+    /// Revision of the runtime overlay layer.
+    runtime_revision: u64,
+    origin: DocumentOrigin,
+    /// Authored-base revision at which the document was last persisted to disk.
+    /// `None` = never saved (freshly created in-memory); `Some(r)` = last
+    /// saved base revision. Runtime-overlay revisions do not affect this
+    /// authored dirty flag because the runtime layer is never written to the
+    /// authored USDA file.
+    last_saved_base_revision: Option<u64>,
+    /// Ring buffer of `(generation_after_change, change)` for catch-up
+    /// reads. See [`changes_since`](Self::changes_since).
+    changes: VecDeque<(u64, UsdChange)>,
+    /// Ring buffer of `(generation_after_change, op)` — the **typed op** that
+    /// produced each generation. The live-stage projection replays these ops
+    /// directly (author-once: the op is the single delta description, applied to
+    /// both this save layer and the `!Send` projection stage), so it never has to
+    /// re-derive an edit's value by reading it back out of [`composed`](Self::composed).
+    /// Non-op state changes (e.g. [`restore_runtime`](Self::restore_runtime)) push
+    /// a synthetic [`UsdOp::ReplaceSource`] marker so the projector still rebuilds.
+    /// See [`ops_since`](Self::ops_since).
+    op_log: VecDeque<(u64, UsdOp)>,
+    /// Memoized `base ⊕ runtime` composition. The cache is private to this
+    /// document instance; its key names the document identity and both layer
+    /// revisions, so derived data cannot cross a fork boundary or survive a
+    /// changed layer.
+    composed_cache: std::sync::Mutex<Option<(UsdCompositionKey, std::sync::Arc<sdf::Data>)>>,
+}
+
+/// Inputs to the document's authored-layer composition memo.
+///
+/// Full USD stage composition remains owned by `lunco-usd-compose` and its
+/// resolver recipe. This key is only for the local `base ⊕ runtime` merge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct UsdCompositionKey {
+    document: DocumentId,
+    base_revision: u64,
+    runtime_revision: u64,
+}
+
+impl Clone for UsdDocument {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            authoring_recipe: self.authoring_recipe.clone(),
+            base: self.base.clone(),
+            runtime: self.runtime.clone(),
+            parse_error: self.parse_error.clone(),
+            generation: self.generation,
+            base_revision: self.base_revision,
+            runtime_revision: self.runtime_revision,
+            origin: self.origin.clone(),
+            last_saved_base_revision: self.last_saved_base_revision,
+            changes: self.changes.clone(),
+            op_log: self.op_log.clone(),
+            composed_cache: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl UsdDocument {
+    /// Build a fresh in-memory `UsdDocument` from USDA source as an Untitled
+    /// document. Starts dirty (never-saved).
+    pub fn new(id: DocumentId, source: impl Into<String>) -> Self {
+        Self::with_origin(
+            id,
+            source,
+            DocumentOrigin::untitled(format!("Untitled-{}.usda", id.raw())),
+        )
+    }
+
+    /// Build a `UsdDocument` with an explicit origin.
+    ///
+    /// On-disk origins start clean (source assumed to match disk at
+    /// generation 0). Untitled origins start dirty. If the source text doesn't
+    /// parse as USDA the document still opens — the raw text is preserved (see
+    /// [`parse_error`](Self::parse_error)) — but structural edits are blocked
+    /// until a [`UsdOp::ReplaceSource`] supplies valid source.
+    pub fn with_origin(id: DocumentId, source: impl Into<String>, origin: DocumentOrigin) -> Self {
+        let source = source.into();
+        let (base, parse_error) = match usda_to_data(&source) {
+            Ok(data) => (data, None),
+            Err(e) => {
+                warn!(
+                    "[usd] document {} source did not parse as USDA ({e}); \
+                     keeping raw text, edits disabled until replaced",
+                    id.raw()
+                );
+                (usda_to_data(EMPTY_USDA).unwrap_or_default(), Some(source))
+            }
+        };
+        let last_saved_base_revision = match &origin {
+            DocumentOrigin::File { .. } => Some(0),
+            DocumentOrigin::Untitled { .. } | DocumentOrigin::Bundled { .. } => None,
+        };
+        Self {
+            id,
+            authoring_recipe: None,
+            base,
+            runtime: usda_to_data(EMPTY_USDA).unwrap_or_default(),
+            parse_error,
+            generation: 0,
+            base_revision: 0,
+            runtime_revision: 0,
+            origin,
+            last_saved_base_revision,
+            changes: VecDeque::with_capacity(CHANGE_HISTORY_CAPACITY),
+            op_log: VecDeque::with_capacity(CHANGE_HISTORY_CAPACITY),
+            composed_cache: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// The current source text, serialized from the **base** layer on demand.
+    /// This is what Save writes to disk and what the viewport preview / session
+    /// snapshot consume. The runtime overlay is deliberately excluded — sim
+    /// state must never reach the authored file. Round-trips losslessly with
+    /// [`new`](Self::new) (references and structure survive); only formatting is
+    /// normalized.
+    ///
+    /// If the document was opened from un-parseable source, the verbatim
+    /// original text is returned instead so the file is never corrupted.
+    pub fn source(&self) -> String {
+        if let Some(raw) = &self.parse_error {
+            return raw.clone();
+        }
+        author::data_to_usda(&self.base).unwrap_or_else(|e| {
+            warn!("[usd] failed to serialize document {}: {e}", self.id.raw());
+            EMPTY_USDA.to_string()
+        })
+    }
+
+    /// The authored **base** layer data (references intact). Query it with the
+    /// [`UsdDataExt`](crate::usd_data::UsdDataExt) helpers. The runtime
+    /// overlay is not folded in here — read it separately via
+    /// [`runtime_data`](Self::runtime_data) until a consumer needs a composed
+    /// view (deferred with the runtime-producer wiring).
+    pub fn data(&self) -> &sdf::Data {
+        &self.base
+    }
+
+    /// The **runtime** layer's overlay data — generated state authored by
+    /// runtime-targeted ops, never persisted to the base file. Empty until a
+    /// runtime op lands.
+    pub fn runtime_data(&self) -> &sdf::Data {
+        &self.runtime
+    }
+
+    /// Attach the send-safe layer closure used to rebuild the live stage.
+    ///
+    /// The document owns authored and runtime data; the runtime USD crate owns
+    /// the non-sendable composed stage built from this recipe.
+    pub fn set_authoring_recipe(&mut self, recipe: Option<StageRecipe>) {
+        self.authoring_recipe = recipe.map(std::sync::Arc::new);
+    }
+
+    /// Validate against real composition and preserve its inherited operation
+    /// order. No dependency data is copied into the authored layer.
+    fn transform_edit_context(
+        &self,
+        path: &str,
+        op_name: &str,
+    ) -> Result<(SdfPath, Vec<String>, bool), DocumentError> {
+        let prim_path = parse_prim_path(path)?;
+        let data = self.composed_arc();
+        let stage = match &self.authoring_recipe {
+            Some(recipe) => author::open_doc_stage_with_recipe(&data, recipe),
+            None => open_doc_stage(&data),
+        }
+        .map_err(author_err)?;
+        let prim = stage.prim(prim_path.clone());
+        if !prim.is_valid().map_err(author_err)? {
+            return Err(DocumentError::ValidationFailed(format!(
+                "composed transform target `{path}` not found"
+            )));
+        }
+        let order = match prim
+            .attribute("xformOpOrder")
+            .get::<sdf::Value>()
+            .map_err(author_err)?
+        {
+            Some(sdf::Value::TokenVec(values)) => values.into_iter().map(Into::into).collect(),
+            Some(sdf::Value::StringVec(values)) => values,
+            Some(sdf::Value::TokenListOp(values)) => {
+                values.flatten().into_iter().map(Into::into).collect()
+            }
+            Some(sdf::Value::StringListOp(values)) => values.flatten(),
+            None => Vec::new(),
+            Some(_) => {
+                return Err(DocumentError::ValidationFailed(format!(
+                    "invalid xformOpOrder at `{path}`"
+                )));
+            }
+        };
+        let append = !order.iter().any(|token| token == op_name);
+        Ok((prim_path, order, append))
+    }
+
+    /// Whether `path` has a prim opinion in the requested document layer.
+    ///
+    /// The check includes prims authored inside a variant selection, matching
+    /// the addressing rules used by the document mutation validator. Callers
+    /// that need the composed path of a referenced prim must use the live
+    /// [`lunco_usd_bevy_core::canonical::CanonicalStage`] instead; this method intentionally
+    /// does not reimplement USD stage composition.
+    pub fn authored_prim_exists(
+        &self,
+        edit_target: &LayerId,
+        path: &str,
+    ) -> Result<bool, DocumentError> {
+        let target = TargetLayer::from_id(edit_target).ok_or_else(|| {
+            DocumentError::ValidationFailed(format!(
+                "unknown USD edit target `{}`",
+                edit_target.as_str()
+            ))
+        })?;
+        let path = parse_prim_path(path)?;
+        Ok(prim_in(self.layer(target), &path))
+    }
+
+    /// Whether `path` lies below a references or payload arc authored in this
+    /// document. The result only identifies the authored arc; the composed
+    /// target itself is resolved by OpenUSD through the live canonical stage.
+    pub fn path_is_under_composed_arc(&self, path: &str) -> Result<bool, DocumentError> {
+        let path = parse_prim_path(path)?;
+        Ok(self.path_is_under_composed_arc_path(&path))
+    }
+
+    /// Revision of the persisted authored layer.
+    pub fn base_revision(&self) -> u64 {
+        self.base_revision
+    }
+
+    /// Revision of the non-persisted runtime overlay layer.
+    pub fn runtime_revision(&self) -> u64 {
+        self.runtime_revision
+    }
+
+    /// Source parse diagnostic, when the document was opened with invalid USDA.
+    pub fn parse_error(&self) -> Option<&str> {
+        self.parse_error.as_deref()
+    }
+
+    /// The **composed** view: the runtime overlay merged over the base layer
+    /// (runtime opinions win, runtime-only prims included). This is what the
+    /// viewport renders — base authored content plus generated runtime state —
+    /// whereas [`source`](Self::source) (Save) stays base-only. References
+    /// survive as opinions; this is an sdf layer-stack merge, not render-time
+    /// PCP composition.
+    pub fn composed(&self) -> sdf::Data {
+        (*self.composed_arc()).clone()
+    }
+
+    /// The composed view as a shared [`Arc`], memoized by document identity and
+    /// authored-layer revisions. Prefer this over [`composed`](Self::composed) on hot paths
+    /// (the twin projection,
+    /// the doc-backed terrain re-bake) — repeated calls within one edit share the same
+    /// recompose instead of each paying a full O(stage) layer merge.
+    pub fn composed_arc(&self) -> std::sync::Arc<sdf::Data> {
+        let key = UsdCompositionKey {
+            document: self.id,
+            base_revision: self.base_revision,
+            runtime_revision: self.runtime_revision,
+        };
+        // A cache miss is always safe: the value is a derived memo and can be
+        // recomputed from the two authoritative layers.
+        {
+            let cache = self
+                .composed_cache
+                .lock()
+                .expect("USD composition cache mutex poisoned");
+            if let Some((cached_key, data)) = &*cache {
+                if *cached_key == key {
+                    return data.clone();
+                }
+            }
+        }
+        let data = std::sync::Arc::new(author::compose_layers(&self.base, &self.runtime));
+        *self
+            .composed_cache
+            .lock()
+            .expect("USD composition cache mutex poisoned") = Some((key, data.clone()));
+        data
+    }
+
+    /// The composed view serialized to USDA text — the source the viewport
+    /// re-parses so runtime-layer state becomes visible. Falls back to the raw
+    /// (base) source when the base is un-parseable.
+    pub fn composed_source(&self) -> String {
+        if let Some(raw) = &self.parse_error {
+            return raw.clone();
+        }
+        author::data_to_usda(&self.composed_arc()).unwrap_or_else(|e| {
+            warn!(
+                "[usd] failed to serialize composed document {}: {e}",
+                self.id.raw()
+            );
+            EMPTY_USDA.to_string()
+        })
+    }
+
+    /// Create a new editable untitled snapshot of this document.
+    ///
+    /// The base and runtime USD layers, revision history, dirty baseline, and
+    /// projection journals are copied as values. The derived composition memo
+    /// is created empty by Clone, so equal-generation forks cannot share a
+    /// composed result. The registry assigns the new id and Save-As later
+    /// establishes a file identity.
+    pub fn fork(&self, id: DocumentId, name: impl Into<String>) -> Result<Self, DocumentError> {
+        if id.is_unassigned() {
+            return Err(DocumentError::ValidationFailed(
+                "fork requires an assigned document id".into(),
+            ));
+        }
+        if id == self.id {
+            return Err(DocumentError::ValidationFailed(format!(
+                "fork id {id} is already owned by the source document"
+            )));
+        }
+        let mut fork = self.clone();
+        fork.id = id;
+        fork.origin = DocumentOrigin::untitled(name);
+        fork.last_saved_base_revision = None;
+        Ok(fork)
+    }
+
+    /// Replace the entire **runtime** layer with `data` — a session-restore
+    /// load (the persisted `.lunco` runtime overlay), NOT an edit. Bumps the
+    /// generation and records a [`UsdChange::FullReload`] so the viewport
+    /// rebuilds, but routes through neither the op layer nor the journal: it
+    /// *reconstructs* runtime state that was authored (and journaled) in a prior
+    /// session, rather than authoring it anew. Runtime state does not affect the
+    /// authored dirty flag because that flag tracks the base layer only.
+    pub fn restore_runtime(&mut self, data: sdf::Data) {
+        self.commit(TargetLayer::Runtime, data, UsdChange::FullReload);
+        // Not a typed op, but it did bump the generation — push a synthetic
+        // whole-source marker so the op-replay projector accounts for this
+        // generation (a full rebuild) instead of treating the op ring as short.
+        self.record_op(UsdOp::ReplaceSource {
+            edit_target: LayerId::runtime(),
+            text: String::new(),
+        });
+    }
+
+    /// Replace the **base** layer with `source` re-read from disk — a RE-OPEN of
+    /// a document that is still resident, NOT an edit. The runtime layer is kept
+    /// (the caller restores it separately), the generation bumps and a
+    /// [`UsdChange::FullReload`] is recorded so the viewport rebuilds.
+    ///
+    /// WHY THIS EXISTS. Opening a Twin whose document is already resident used to
+    /// reuse the in-memory document as-is, so a `.usda` edited on disk between
+    /// opens replayed the OLD scene and only an app restart picked the change up.
+    /// The stale text was upstream of the twin overlay and the asset store, which
+    /// is why clearing either never helped. Local sessions read disk; the document
+    /// is a projection of the file, not a cache of it.
+    ///
+    /// The text came FROM disk, so the document is clean at the new generation.
+    /// Returns `false` (leaving the layer untouched) if `source` doesn't parse —
+    /// a half-applied base would be worse than a stale one.
+    ///
+    /// NOT PUBLIC ON PURPOSE — go through
+    /// [`DocumentRegistry::<UsdDocument>::open_file`](crate::registry::DocumentRegistry::<UsdDocument>::open_file).
+    /// This silently discards unsaved base edits and undo cannot bring them
+    /// back, so the `is_dirty` check must not be a thing a caller can forget.
+    pub(crate) fn reload_base(&mut self, source: &str) -> bool {
+        match usda_to_data(source) {
+            Ok(data) => {
+                self.commit(TargetLayer::Base, data, UsdChange::FullReload);
+                // The commit bumped the generation WITHOUT going through a typed
+                // op, so record a synthetic whole-source marker. The op-replay
+                // projector accounts for generations via the op ring; a
+                // generation with no op makes the ring look SHORT and it replays
+                // from the wrong point. Same reason and same shape as
+                // `restore_runtime` — the base layer is `LayerId::root()`.
+                self.record_op(UsdOp::ReplaceSource {
+                    edit_target: LayerId::root(),
+                    text: String::new(),
+                });
+                self.parse_error = None;
+                // Matches disk as of this generation ⇒ clean.
+                self.last_saved_base_revision = Some(self.base_revision);
+                true
+            }
+            Err(e) => {
+                warn!(
+                    "[usd] document {} re-read from disk did not parse as USDA ({e}); \
+                     keeping the resident base layer",
+                    self.id.raw()
+                );
+                false
+            }
+        }
+    }
+
+    /// Replace the authored base and generated runtime layers from the file
+    /// source. This is only reached through the document registry's explicit
+    /// user-confirmed full-reset operation; ordinary reloads preserve runtime
+    /// state and never overwrite dirty authoring work.
+    pub(crate) fn reset_to_source(&mut self, source: &str) -> bool {
+        let Ok(base) = usda_to_data(source) else {
+            warn!(
+                "[usd] document {} full reset source did not parse as USDA; keeping the resident document",
+                self.id.raw()
+            );
+            return false;
+        };
+        self.base = base;
+        self.runtime = usda_to_data(EMPTY_USDA).unwrap_or_default();
+        self.base_revision += 1;
+        self.runtime_revision += 1;
+        self.generation += 1;
+        if self.changes.len() == CHANGE_HISTORY_CAPACITY {
+            self.changes.pop_front();
+        }
+        self.changes
+            .push_back((self.generation, UsdChange::FullReload));
+        self.record_op(UsdOp::ReplaceSource {
+            edit_target: LayerId::root(),
+            text: String::new(),
+        });
+        self.parse_error = None;
+        self.last_saved_base_revision = Some(self.base_revision);
+        true
+    }
+
+    /// Where this document came from (drives save behaviour, tab
+    /// title, read-only badge).
+    pub fn origin(&self) -> &DocumentOrigin {
+        &self.origin
+    }
+
+    /// Replace the origin in-place. Used by Save-As to rebind an
+    /// Untitled document to a fresh on-disk path; establishes the current
+    /// authored-base revision as the saved baseline.
+    pub fn set_origin(&mut self, origin: DocumentOrigin) {
+        self.origin = origin;
+        self.last_saved_base_revision = Some(self.base_revision);
+    }
+
+    /// Whether the document has unsaved changes.
+    pub fn is_dirty(&self) -> bool {
+        self.last_saved_base_revision
+            .is_none_or(|saved| self.base_revision > saved)
+    }
+
+    /// Mark the current state as the last-saved baseline. Called by
+    /// the Save command after a successful disk write.
+    pub fn mark_saved(&mut self) {
+        self.last_saved_base_revision = Some(self.base_revision);
+    }
+
+    /// Suffix of the change ring strictly after `since_generation`.
+    pub fn changes_since(&self, since_generation: u64) -> impl Iterator<Item = (u64, &UsdChange)> {
+        self.changes
+            .iter()
+            .filter(move |(g, _)| *g > since_generation)
+            .map(|(g, c)| (*g, c))
+    }
+
+    /// The typed ops applied strictly after `since_generation`, in order — the
+    /// live-stage projection replays these directly onto the `!Send` stage
+    /// (author-once). If the op ring dropped entries (more edits than its capacity
+    /// since `since_generation`), returns `None` so the caller falls back to a
+    /// full rebuild rather than silently missing deltas.
+    pub fn ops_since(&self, since_generation: u64) -> Option<Vec<UsdOp>> {
+        let expected = self.generation.saturating_sub(since_generation);
+        let ops: Vec<UsdOp> = self
+            .op_log
+            .iter()
+            .filter(|(g, _)| *g > since_generation)
+            .map(|(_, op)| op.clone())
+            .collect();
+        // Exact match: each generation records exactly one op, so a surplus
+        // means a double-recorded generation — surface it (full rebuild)
+        // rather than replay an op twice.
+        (ops.len() as u64 == expected).then_some(ops)
+    }
+
+    /// Record the typed op that produced the current generation, for
+    /// [`ops_since`](Self::ops_since). Called right after a successful
+    /// [`commit`](Self::commit). Non-op state changes push a synthetic marker.
+    fn record_op(&mut self, op: UsdOp) {
+        if self.op_log.len() == CHANGE_HISTORY_CAPACITY {
+            self.op_log.pop_front();
+        }
+        self.op_log.push_back((self.generation, op));
+    }
+
+    // ─── internal ──────────────────────────────────────────────────────
+
+    /// Borrow the data for layer `t`.
+    /// The linear unit of `attr` on `prim`, per the schema that declares it.
+    ///
+    /// Resolved by the prim's TYPE first, because a scalar length means different
+    /// things on different schemas — `radius` on a `Sphere` and on a `Cylinder` are
+    /// separate declarations, which is the reason the registry keys on the
+    /// declaring schema rather than the bare name.
+    ///
+    /// The namespaced fallback covers our own `lunco:*` properties, which come from
+    /// applied API schemas rather than the prim's type. Their names are globally
+    /// unique by construction (that is what the namespace is for), so resolving one
+    /// by name is unambiguous and saves walking the `apiSchemas` list op for a
+    /// lookup that could only ever have one answer.
+    fn linear_unit_of(&self, prim: &SdfPath, attr: &str) -> crate::schema::LinearUnit {
+        use crate::schema::{LinearUnit, SchemaRegistry};
+        let Ok(reg) = SchemaRegistry::global().read() else {
+            return LinearUnit::None;
+        };
+        if let Some(ty) = self.composed_arc().prim_type_name(prim) {
+            let u = reg.linear_unit(&ty, attr);
+            if u != LinearUnit::None {
+                return u;
+            }
+        }
+        if attr.contains(':') {
+            if let Some(spec) = reg.property(attr) {
+                return spec.linear;
+            }
+        }
+        LinearUnit::None
+    }
+
+    fn layer(&self, t: TargetLayer) -> &sdf::Data {
+        match t {
+            TargetLayer::Base => &self.base,
+            TargetLayer::Runtime => &self.runtime,
+        }
+    }
+
+    /// Keep a typed edit's declaration identical to every local opinion it
+    /// can override. USD value decoding erases roles such as `color3f` versus
+    /// `float3`, so comparing only the parsed [`sdf::Value`] would allow an
+    /// array/scalar or role change to enter the document and fail later in the
+    /// live stage. Referenced-only attributes have no local declaration here;
+    /// the mounted canonical stage validates those against its composed schema
+    /// before the command is admitted.
+    fn validate_attribute_type(
+        &self,
+        prim: &SdfPath,
+        name: &str,
+        requested: &str,
+    ) -> Result<(), DocumentError> {
+        let attr = prim.append_property(name).map_err(|error| {
+            DocumentError::ValidationFailed(format!(
+                "attribute `{prim}.{name}` has an invalid path: {error}"
+            ))
+        })?;
+        for (layer_name, layer) in [("root", &self.base), ("runtime", &self.runtime)] {
+            let Some(spec) = layer.spec(&attr) else {
+                continue;
+            };
+            if spec.ty != SpecType::Attribute {
+                return Err(DocumentError::ValidationFailed(format!(
+                    "`{prim}.{name}` is authored as {:?} in the {layer_name} layer, not an attribute",
+                    spec.ty
+                )));
+            }
+            let Some(sdf::Value::Token(type_name)) = spec.get("typeName") else {
+                return Err(DocumentError::ValidationFailed(format!(
+                    "`{prim}.{name}` has no USD type declaration in the {layer_name} layer"
+                )));
+            };
+            if type_name.as_str() != requested {
+                return Err(DocumentError::ValidationFailed(format!(
+                    "`{prim}.{name}` is declared as `{}` in the {layer_name} layer; typed edits must use `{requested}`",
+                    type_name.as_str()
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// The current serialized source of layer `t` (base honors the
+    /// un-parseable raw-text fallback; runtime is always real data).
+    fn layer_source(&self, t: TargetLayer) -> String {
+        match t {
+            TargetLayer::Base => self.source(),
+            TargetLayer::Runtime => author::data_to_usda(&self.runtime).unwrap_or_else(|e| {
+                warn!(
+                    "[usd] failed to serialize runtime layer {}: {e}",
+                    self.id.raw()
+                );
+                EMPTY_USDA.to_string()
+            }),
+        }
+    }
+
+    /// Commit a freshly authored [`sdf::Data`] into layer `t`: swap it in, bump
+    /// the generation, and record the change in the ring. The single place a
+    /// successful op mutates state.
+    fn commit(&mut self, t: TargetLayer, data: sdf::Data, change: UsdChange) {
+        match t {
+            TargetLayer::Base => {
+                self.base = data;
+                self.base_revision += 1;
+            }
+            TargetLayer::Runtime => {
+                self.runtime = data;
+                self.runtime_revision += 1;
+            }
+        }
+        self.generation += 1;
+        if self.changes.len() == CHANGE_HISTORY_CAPACITY {
+            self.changes.pop_front();
+        }
+        self.changes.push_back((self.generation, change));
+    }
+
+    /// The always-correct coarse inverse: restore layer `t`'s current
+    /// (pre-mutation) source verbatim via a `ReplaceSource` **targeting the
+    /// same layer**, so undo routes back to the layer the forward op touched.
+    /// Capture it *before* authoring the forward op.
+    fn coarse_inverse(&self, t: TargetLayer, id: &LayerId) -> UsdOp {
+        UsdOp::ReplaceSource {
+            edit_target: id.clone(),
+            text: self.layer_source(t),
+        }
+    }
+
+    /// Validate that `path` names a prim present in **either** layer (base or
+    /// runtime) — a runtime op may add a child or override an attribute under a
+    /// base-authored prim. Returns the parsed [`SdfPath`].
+    fn require_prim_anywhere(&self, path: &str) -> Result<SdfPath, DocumentError> {
+        let sdf = parse_prim_path(path)?;
+        if prim_in(&self.base, &sdf) || prim_in(&self.runtime, &sdf) {
+            Ok(sdf)
+        } else {
+            Err(DocumentError::ValidationFailed(format!(
+                "path `{path}` not found"
+            )))
+        }
+    }
+
+    /// A referenced or payloaded subtree is present in the composed stage but
+    /// deliberately absent from this document's authored `sdf::Data`. A runtime
+    /// attribute override on such a path is valid USD: the edit layer first
+    /// defines a local over opinion, then authors the attribute on it.
+    fn path_is_under_composed_arc_path(&self, path: &SdfPath) -> bool {
+        let mut ancestor = Some(path.clone());
+        while let Some(path) = ancestor {
+            if self.base.spec(&path).is_some_and(|spec| {
+                spec.get("references").is_some() || spec.get("payload").is_some()
+            }) {
+                return true;
+            }
+            ancestor = path.parent();
+        }
+        false
+    }
+
+    /// Validate that `path` names a prim authored in **this specific layer** —
+    /// you can only remove/move from a layer what that layer holds — and not one
+    /// whose ONLY spec in the layer lives inside a variant selection. A namespace
+    /// edit executes at the COMPOSED path, where no spec exists — it would
+    /// "succeed" while removing nothing. Editing inside a variant needs a variant
+    /// edit target, which the op model cannot express, so the op fails loudly
+    /// here instead.
+    fn require_movable_prim_in(
+        &self,
+        t: TargetLayer,
+        path: &str,
+    ) -> Result<SdfPath, DocumentError> {
+        let sdf = parse_prim_path(path)?;
+        let layer = self.layer(t);
+        if matches!(layer.spec(&sdf), Some(s) if s.ty == SpecType::Prim) {
+            return Ok(sdf);
+        }
+        if prim_in(layer, &sdf) {
+            return Err(DocumentError::ValidationFailed(format!(
+                "path `{path}` is authored only inside a variant selection; \
+                 removing or moving it requires a variant edit target, which \
+                 document ops cannot express"
+            )));
+        }
+        Err(DocumentError::ValidationFailed(format!(
+            "path `{path}` not found in target layer"
+        )))
+    }
+}
+
+/// Which of a document's two layers an op edits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TargetLayer {
+    /// The authored base layer (saved to disk).
+    Base,
+    /// The generated runtime overlay (not saved).
+    Runtime,
+}
+
+impl TargetLayer {
+    /// Resolve a [`LayerId`] to a concrete layer, or `None` for an unknown
+    /// identifier.
+    fn from_id(id: &LayerId) -> Option<Self> {
+        if id.is_root() {
+            Some(Self::Base)
+        } else if id.is_runtime() {
+            Some(Self::Runtime)
+        } else {
+            None
+        }
+    }
+}
+
+/// Parse a USD prim path string, mapping errors to a validation failure.
+fn parse_prim_path(path: &str) -> Result<SdfPath, DocumentError> {
+    SdfPath::new(path)
+        .map_err(|e| DocumentError::ValidationFailed(format!("invalid prim path `{path}`: {e}")))
+}
+
+fn validate_reference_asset_path(asset_path: &str) -> Result<String, DocumentError> {
+    let normalized = lunco_assets::asset_path::slashed(asset_path);
+    if normalized.is_empty() || normalized.contains('@') || normalized.contains('\0') {
+        return Err(DocumentError::ValidationFailed(format!(
+            "SetReferenceArcs requires a non-empty asset identity without `@` or NUL: `{asset_path}`"
+        )));
+    }
+    if let Some((scheme, rest)) = lunco_assets::asset_path::split_scheme(&normalized) {
+        if scheme.is_empty()
+            || rest.is_empty()
+            || rest
+                .split('/')
+                .any(|segment| segment == "." || segment == ".." || segment.contains('\0'))
+        {
+            return Err(DocumentError::ValidationFailed(format!(
+                "SetReferenceArcs asset identity is not safe: `{asset_path}`"
+            )));
+        }
+    } else {
+        let relative = normalized.strip_prefix('/').unwrap_or(&normalized);
+        if !lunco_assets::asset_path::is_safe_relative_path(relative) {
+            return Err(DocumentError::ValidationFailed(format!(
+                "SetReferenceArcs asset identity is not a safe asset path: `{asset_path}`"
+            )));
+        }
+    }
+    Ok(normalized)
+}
+
+fn normalize_reference_prim_path(path: Option<&str>) -> Result<Option<String>, DocumentError> {
+    let Some(path) = path.filter(|path| !path.is_empty()) else {
+        return Ok(None);
+    };
+    let parsed = parse_prim_path(path)?;
+    if !path.starts_with('/') || parsed.is_property_path() {
+        return Err(DocumentError::ValidationFailed(format!(
+            "SetReferenceArcs referenced target `{path}` must be an absolute prim path"
+        )));
+    }
+    Ok(Some(path.to_owned()))
+}
+
+fn normalize_default_prim_path(
+    path: Option<&str>,
+) -> Result<Option<(SdfPath, String)>, DocumentError> {
+    let Some(path) = path.filter(|path| !path.is_empty()) else {
+        return Ok(None);
+    };
+    let absolute = if path.starts_with('/') {
+        path.to_owned()
+    } else {
+        format!("/{path}")
+    };
+    let parsed = parse_prim_path(&absolute)?;
+    if parsed.is_abs_root() || parsed.is_property_path() {
+        return Err(DocumentError::ValidationFailed(format!(
+            "SetDefaultPrim target {path} must name a non-root prim"
+        )));
+    }
+    Ok(Some((parsed, absolute.trim_start_matches('/').to_owned())))
+}
+
+fn validate_prim_kind(kind: Option<&str>) -> Result<(), DocumentError> {
+    if let Some(kind) = kind {
+        if kind.is_empty() || !SdfPath::is_valid_identifier(kind) {
+            return Err(DocumentError::ValidationFailed(format!(
+                "SetPrimKind kind {kind} must be a non-empty USD identifier"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn reference_list_edit(edit: UsdReferenceListOp) -> author::ReferenceListEdit {
+    match edit {
+        UsdReferenceListOp::Prepend => author::ReferenceListEdit::Prepend,
+        UsdReferenceListOp::Append => author::ReferenceListEdit::Append,
+        UsdReferenceListOp::Add => author::ReferenceListEdit::Add,
+        UsdReferenceListOp::Delete => author::ReferenceListEdit::Delete,
+        UsdReferenceListOp::Explicit => author::ReferenceListEdit::Explicit,
+    }
+}
+
+fn reference_arc_from_sdf(reference: &sdf::Reference) -> Option<UsdReferenceArc> {
+    if reference.asset_path.is_empty()
+        || reference.layer_offset != sdf::LayerOffset::default()
+        || !reference.custom_data.is_empty()
+    {
+        return None;
+    }
+    Some(UsdReferenceArc {
+        asset_path: reference.asset_path.clone(),
+        prim_path: (!reference.prim_path.is_empty()).then(|| reference.prim_path.to_string()),
+    })
+}
+
+fn reference_list_inverse(
+    op: &sdf::ReferenceListOp,
+    edit_target: &LayerId,
+    path: &str,
+) -> Option<UsdOp> {
+    let (list_op, items) = if op.explicit {
+        (UsdReferenceListOp::Explicit, &op.explicit_items)
+    } else if !op.prepended_items.is_empty()
+        && op.appended_items.is_empty()
+        && op.added_items.is_empty()
+        && op.deleted_items.is_empty()
+        && op.ordered_items.is_empty()
+    {
+        (UsdReferenceListOp::Prepend, &op.prepended_items)
+    } else if !op.appended_items.is_empty()
+        && op.prepended_items.is_empty()
+        && op.added_items.is_empty()
+        && op.deleted_items.is_empty()
+        && op.ordered_items.is_empty()
+    {
+        (UsdReferenceListOp::Append, &op.appended_items)
+    } else if !op.added_items.is_empty()
+        && op.prepended_items.is_empty()
+        && op.appended_items.is_empty()
+        && op.deleted_items.is_empty()
+        && op.ordered_items.is_empty()
+    {
+        (UsdReferenceListOp::Add, &op.added_items)
+    } else if !op.deleted_items.is_empty()
+        && op.prepended_items.is_empty()
+        && op.appended_items.is_empty()
+        && op.added_items.is_empty()
+        && op.ordered_items.is_empty()
+    {
+        (UsdReferenceListOp::Delete, &op.deleted_items)
+    } else {
+        return None;
+    };
+    let references = items
+        .iter()
+        .map(reference_arc_from_sdf)
+        .collect::<Option<Vec<_>>>()?;
+    Some(UsdOp::SetReferenceArcs {
+        edit_target: edit_target.clone(),
+        path: path.to_owned(),
+        references,
+        list_op,
+    })
+}
+
+/// True when `data` holds a prim spec at `sdf`.
+///
+/// **A flat spec lookup is not the whole answer**, because a prim authored
+/// inside a variant set is stored under its SELECTION path
+/// (`/Traverse/Route{route=default}W1`) while the editor — and every op it
+/// emits — addresses the COMPOSED path (`/Traverse/Route/W1`). Validating with
+/// `data.spec()` alone therefore rejected "move this waypoint" for every prim
+/// that happens to live in a variant, which is most authored route/config
+/// content: the op was correct, the addressing was correct, and the document
+/// said "path not found".
+///
+/// So: exact hit first (the common case, one hash lookup), then a scan for a
+/// variant-embedded spec that strips to the same path. The scan only runs on the
+/// miss path, and a miss is an op that was about to be rejected anyway.
+fn prim_in(data: &sdf::Data, sdf: &SdfPath) -> bool {
+    if matches!(data.spec(sdf), Some(s) if s.ty == SpecType::Prim) {
+        return true;
+    }
+    data.iter().any(|(path, spec)| {
+        spec.ty == SpecType::Prim
+            && path.contains_prim_variant_selection()
+            && path.strip_all_variant_selections() == *sdf
+    })
+}
+
+/// The `xformOpOrder` tokens `data` holds for `prim`, flattening any list-op
+/// authoring. Empty when unauthored.
+/// Rescale a scalar attribute value in place, leaving every non-scalar shape alone.
+///
+/// Lengths reach USD as bare `float`/`double` — there is no role type for them —
+/// so the conversion cannot be chosen from the payload and is handed in by the
+/// caller, which resolved it from the schema.
+fn scale_scalar_value(v: sdf::Value, f: impl Fn(f64) -> f64) -> sdf::Value {
+    use sdf::Value as V;
+    match v {
+        V::Float(x) => V::Float(f(x as f64) as f32),
+        V::Double(x) => V::Double(f(x)),
+        V::FloatVec(xs) => V::FloatVec(xs.into_iter().map(|x| f(x as f64) as f32).collect()),
+        V::DoubleVec(xs) => V::DoubleVec(xs.into_iter().map(f).collect()),
+        other => other,
+    }
+}
+
+fn xform_op_order_tokens(data: &sdf::Data, prim: &SdfPath) -> Vec<String> {
+    let Ok(attr) = prim.append_property("xformOpOrder") else {
+        return Vec::new();
+    };
+    match data.field(&attr, "default").cloned() {
+        Some(sdf::Value::TokenVec(v)) => v.into_iter().map(Into::into).collect(),
+        Some(sdf::Value::StringVec(v)) => v,
+        Some(sdf::Value::TokenListOp(op)) => op.flatten().into_iter().map(Into::into).collect(),
+        Some(sdf::Value::StringListOp(op)) => op.flatten(),
+        _ => Vec::new(),
+    }
+}
+
+fn xform_op_order_for_edit(data: &sdf::Data, prim: &SdfPath, op_name: &str) -> (Vec<String>, bool) {
+    let order = xform_op_order_tokens(data, prim);
+    let append = !order.iter().any(|token| token == op_name);
+    (order, append)
+}
+
+fn author_xform_op_order(
+    stage: &openusd::usd::Stage,
+    path: &str,
+    mut order: Vec<String>,
+    op_name: &str,
+) -> Result<(), DocumentError> {
+    order.push(op_name.to_owned());
+    stage
+        .create_attribute(format!("{path}.xformOpOrder"), "token[]")
+        .map_err(author_err)?
+        .set(sdf::Value::token_vec(order))
+        .map_err(author_err)?;
+    Ok(())
+}
+
+/// The identity contract: one document per file, content refreshed from disk,
+/// unsaved edits never clobbered. Everything here already existed as inherent
+/// methods — this just hands them to the generic
+/// [`DocumentRegistry`](lunco_doc_bevy::DocumentRegistry) so USD stops carrying
+/// its own copy of the open-by-path rule.
+impl lunco_doc::FileBacked for UsdDocument {
+    fn with_origin(id: DocumentId, source: String, origin: DocumentOrigin) -> Self {
+        UsdDocument::with_origin(id, source, origin)
+    }
+
+    fn origin(&self) -> &DocumentOrigin {
+        &self.origin
+    }
+
+    fn is_dirty(&self) -> bool {
+        UsdDocument::is_dirty(self)
+    }
+
+    fn reload_base(&mut self, source: &str) -> bool {
+        UsdDocument::reload_base(self, source)
+    }
+
+    fn reset_to_source(&mut self, source: &str) -> bool {
+        UsdDocument::reset_to_source(self, source)
+    }
+}
+
+impl ForkableDocument for UsdDocument {
+    fn fork(&self, id: DocumentId, name: String) -> Result<Self, DocumentError> {
+        UsdDocument::fork(self, id, name)
+    }
+}
+
+impl Document for UsdDocument {
+    type Op = UsdOp;
+
+    fn id(&self) -> DocumentId {
+        self.id
+    }
+
+    fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    fn apply(&mut self, op: Self::Op) -> Result<Self::Op, DocumentError> {
+        // The document is the single source of truth for its own mutability —
+        // every dispatch path (UI, API, MCP, scripts) gets the same `ReadOnly`
+        // error and surfaces it through their normal error paths.
+        if !self.origin.accepts_mutations() {
+            return Err(DocumentError::ReadOnly);
+        }
+        // Resolve the edit target to a concrete layer (base or runtime).
+        // Unknown identifiers are rejected — no silent misrouting to root.
+        let id = match &op {
+            UsdOp::ReplaceSource { edit_target, .. }
+            | UsdOp::AddPrim { edit_target, .. }
+            | UsdOp::RemovePrim { edit_target, .. }
+            | UsdOp::SetTranslate { edit_target, .. }
+            | UsdOp::SetRotate { edit_target, .. }
+            | UsdOp::SetScale { edit_target, .. }
+            | UsdOp::SetAttribute { edit_target, .. }
+            | UsdOp::SetTimeSample { edit_target, .. }
+            | UsdOp::RemoveTimeSample { edit_target, .. }
+            | UsdOp::SetRelationship { edit_target, .. }
+            | UsdOp::SetConnection { edit_target, .. }
+            | UsdOp::SetDefaultPrim { edit_target, .. }
+            | UsdOp::SetPrimKind { edit_target, .. }
+            | UsdOp::MovePrim { edit_target, .. }
+            | UsdOp::SetApiSchemas { edit_target, .. }
+            | UsdOp::SetVariantSelection { edit_target, .. }
+            | UsdOp::SetPayload { edit_target, .. }
+            | UsdOp::SetReferenceArcs { edit_target, .. }
+            | UsdOp::SetActive { edit_target, .. } => edit_target.clone(),
+        };
+        let target = TargetLayer::from_id(&id).ok_or_else(|| {
+            DocumentError::ValidationFailed(format!(
+                "edit target {id:?} not a known layer (root | runtime)"
+            ))
+        })?;
+        // A document opened from un-parseable base source can only be repaired
+        // wholesale; structural ops have no valid base to validate against.
+        if self.parse_error.is_some() && !matches!(op, UsdOp::ReplaceSource { .. }) {
+            return Err(DocumentError::ValidationFailed(
+                "document source is un-parseable; replace it before editing".into(),
+            ));
+        }
+
+        // Author-once: remember the exact typed op so the live-stage projector
+        // replays it verbatim (no re-deriving the delta from `composed`). Recorded
+        // only on success — a rejected op never bumps the generation.
+        let logged_op = op.clone();
+        let result = match op {
+            UsdOp::ReplaceSource { text, .. } => {
+                let new_data = usda_to_data(&text)
+                    .map_err(|e| DocumentError::ValidationFailed(format!("ReplaceSource: {e}")))?;
+                let inverse = self.coarse_inverse(target, &id);
+                // Replacing the base layer repairs an un-parseable document.
+                if target == TargetLayer::Base {
+                    self.parse_error = None;
+                }
+                self.commit(target, new_data, UsdChange::FullReload);
+                Ok(inverse)
+            }
+
+            UsdOp::AddPrim {
+                parent_path,
+                name,
+                type_name,
+                reference,
+                reference_prim_path,
+                ..
+            } => {
+                let reference_prim_path = reference_prim_path.filter(|path| !path.is_empty());
+                // Parent must exist in either layer (root is implicit).
+                if parent_path != "/" && !parent_path.is_empty() {
+                    self.require_prim_anywhere(&parent_path)?;
+                }
+                // `name` is ONE prim identifier, not a path fragment: a stray
+                // `a/b` would silently define an extra hierarchy level (and a
+                // leading digit an unloadable file) once concatenated below.
+                if !SdfPath::is_valid_identifier(&name) {
+                    return Err(DocumentError::ValidationFailed(format!(
+                        "AddPrim: `{name}` is not a valid prim name (a single \
+                         identifier: letter or `_` first, then letters, digits, `_`)"
+                    )));
+                }
+                let prim_path = if parent_path == "/" || parent_path.is_empty() {
+                    format!("/{name}")
+                } else {
+                    format!("{}/{name}", parent_path.trim_end_matches('/'))
+                };
+                let prim_sdf = parse_prim_path(&prim_path)?;
+                // "Already authored" is judged against the TARGET layer — that
+                // is what the inverse will or won't be able to cleanly remove.
+                let existed = self.layer(target).spec(&prim_sdf).is_some();
+
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                let prim = stage.define_prim(prim_path.as_str()).map_err(author_err)?;
+                if let Some(tn) = &type_name {
+                    prim.set_type_name(tn.as_str()).map_err(author_err)?;
+                }
+                let mut new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                // Author the asset reference (Stage has no `add_reference`, so this
+                // is set at the sdf level) — turns the prim into a runtime spawn.
+                if reference_prim_path.is_some() && reference.is_none() {
+                    return Err(DocumentError::ValidationFailed(
+                        "AddPrim: reference_prim_path requires a reference asset".into(),
+                    ));
+                }
+                if let Some(asset_path) = &reference {
+                    author::author_reference(
+                        &mut new_data,
+                        &prim_sdf,
+                        asset_path,
+                        reference_prim_path.as_deref(),
+                    )
+                    .map_err(author_err)?;
+                }
+
+                // A brand-new prim in this layer is exactly undone by removing
+                // it (from the same layer); otherwise fall back to the snapshot.
+                let inverse = if existed {
+                    self.coarse_inverse(target, &id)
+                } else {
+                    UsdOp::RemovePrim {
+                        edit_target: id,
+                        path: prim_path.clone(),
+                    }
+                };
+                self.commit(target, new_data, UsdChange::Resync { path: prim_path });
+                Ok(inverse)
+            }
+
+            UsdOp::RemovePrim { path, .. } => {
+                // Can only remove what the target layer itself authored — and not
+                // a prim that layer authors only inside a variant selection.
+                self.require_movable_prim_in(target, &path)?;
+                let inverse = self.coarse_inverse(target, &id);
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                stage.remove_prim(path.as_str()).map_err(author_err)?;
+                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                self.commit(target, new_data, UsdChange::Resync { path });
+                Ok(inverse)
+            }
+
+            UsdOp::SetTranslate { path, value, .. } => {
+                let (prim_sdf, composed_order, append_op) =
+                    self.transform_edit_context(&path, "xformOp:translate")?;
+                // Pre-state is read from the TARGET layer: the inverse restores
+                // that layer's opinion, and `xformOpOrder` we author lands
+                // there too.
+                let layer = self.layer(target);
+                let translate_existed = prim_sdf
+                    .append_property("xformOp:translate")
+                    .ok()
+                    .and_then(|p| layer.spec(&p).map(|_| ()))
+                    .is_some();
+                let old_translate =
+                    layer.prim_attribute_value::<[f64; 3]>(&prim_sdf, "xformOp:translate");
+                // The op order is checked against the COMPOSED opinion: a weaker
+                // layer may already list ops this edit must not discard. When
+                // the op is missing, materialise that order plus the new op into
+                // the target layer — append, never clobber.
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                stage.override_prim(prim_sdf.clone()).map_err(author_err)?;
+                // CANONICAL IN, STAGE ON DISK. A `UsdOp`'s spatial values are always
+                // canonical (Y-up, metres) — that is what makes an op portable: the
+                // same journalled edit replays correctly against a centimetre stage
+                // and a metre one. The stage's own frame exists only inside the
+                // layer, so the conversion belongs here, at the boundary, and not at
+                // the dozen producers (gizmo, inspector, API, scripts) that would
+                // each have to remember it.
+                //
+                // Identity for canonical stages — every asset we author ourselves —
+                // so this changes nothing except for imported Omniverse/Isaac
+                // content, which is exactly where silent frame corruption would be
+                // hardest to spot.
+                let conv = authoring_stage_convention(&stage)?;
+                let authored = conv.stage_point_d(DVec3::from_array(value)).to_array();
+                stage
+                    .create_attribute(format!("{path}.xformOp:translate"), "double3")
+                    .map_err(author_err)?
+                    .set(authored)
+                    .map_err(author_err)?;
+                if append_op {
+                    author_xform_op_order(&stage, &path, composed_order, "xformOp:translate")?;
+                }
+                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+
+                // Typed inverse only when this purely overwrote an existing
+                // translate in this layer (no `xformOpOrder` was authored).
+                let inverse = if translate_existed && !append_op {
+                    old_translate
+                        // Back to canonical: `old_translate` was read raw out of the
+                        // layer, so it is in the STAGE's frame, while a `SetTranslate`
+                        // is defined to carry canonical values. Packaging it unconverted
+                        // made undo restore a stage-frame number as though it were
+                        // canonical — on a centimetre stage, an undo moved the prim to
+                        // 1/100th of where it had been.
+                        .map(|old| UsdOp::SetTranslate {
+                            edit_target: id.clone(),
+                            path: path.clone(),
+                            value: conv.point_d(DVec3::from_array(old)).to_array(),
+                        })
+                        .unwrap_or_else(|| self.coarse_inverse(target, &id))
+                } else {
+                    self.coarse_inverse(target, &id)
+                };
+                self.commit(
+                    target,
+                    new_data,
+                    UsdChange::InfoOnly {
+                        path,
+                        attr: "xformOp:translate".into(),
+                    },
+                );
+                Ok(inverse)
+            }
+
+            UsdOp::SetRotate { path, value, .. } => {
+                // Direct mirror of `SetTranslate` for `xformOp:rotateXYZ`
+                // (Euler XYZ degrees). Same target-layer pre-state read, same
+                // composed-order append rule.
+                let (prim_sdf, composed_order, append_op) =
+                    self.transform_edit_context(&path, "xformOp:rotateXYZ")?;
+                let layer = self.layer(target);
+                let rotate_existed = prim_sdf
+                    .append_property("xformOp:rotateXYZ")
+                    .ok()
+                    .and_then(|p| layer.spec(&p).map(|_| ()))
+                    .is_some();
+                let old_rotate =
+                    layer.prim_attribute_value::<[f64; 3]>(&prim_sdf, "xformOp:rotateXYZ");
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                stage.override_prim(prim_sdf.clone()).map_err(author_err)?;
+                // Canonical in, stage on disk — see `SetTranslate`.
+                //
+                // Rotations convert through a quaternion (a Euler triple has no
+                // meaningful axis remap of its own), and that round-trip is `f32`
+                // while the op carries `f64`. So it is SKIPPED outright when the
+                // conversion is the identity — the canonical stages we author
+                // ourselves keep their authored digits exactly, and only genuinely
+                // non-canonical stages pay the precision of the remap they need.
+                let conv = authoring_stage_convention(&stage)?;
+                let authored = conv.stage_euler_xyz_deg(value);
+                stage
+                    .create_attribute(format!("{path}.xformOp:rotateXYZ"), "double3")
+                    .map_err(author_err)?
+                    .set(authored)
+                    .map_err(author_err)?;
+                if append_op {
+                    author_xform_op_order(&stage, &path, composed_order, "xformOp:rotateXYZ")?;
+                }
+                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+
+                let inverse = if rotate_existed && !append_op {
+                    old_rotate
+                        // Stage frame on the way back out — see `SetTranslate`'s inverse.
+                        .map(|old| UsdOp::SetRotate {
+                            edit_target: id.clone(),
+                            path: path.clone(),
+                            value: conv.canonical_euler_xyz_deg(old),
+                        })
+                        .unwrap_or_else(|| self.coarse_inverse(target, &id))
+                } else {
+                    self.coarse_inverse(target, &id)
+                };
+                self.commit(
+                    target,
+                    new_data,
+                    UsdChange::InfoOnly {
+                        path,
+                        attr: "xformOp:rotateXYZ".into(),
+                    },
+                );
+                Ok(inverse)
+            }
+
+            UsdOp::SetScale { path, value, .. } => {
+                if value.iter().any(|component| !component.is_finite()) {
+                    return Err(DocumentError::ValidationFailed(format!(
+                        "SetScale `{path}` requires finite scale components"
+                    )));
+                }
+                let (prim_sdf, composed_order, append_op) =
+                    self.transform_edit_context(&path, "xformOp:scale")?;
+                let layer = self.layer(target);
+                let scale_existed = prim_sdf
+                    .append_property("xformOp:scale")
+                    .ok()
+                    .and_then(|p| layer.spec(&p).map(|_| ()))
+                    .is_some();
+                let old_scale = layer.prim_attribute_value::<[f64; 3]>(&prim_sdf, "xformOp:scale");
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                stage.override_prim(prim_sdf.clone()).map_err(author_err)?;
+                let conv = authoring_stage_convention(&stage)?;
+                let authored = conv.stage_scale_vec_d(DVec3::from_array(value)).to_array();
+                stage
+                    .create_attribute(format!("{path}.xformOp:scale"), "double3")
+                    .map_err(author_err)?
+                    .set(authored)
+                    .map_err(author_err)?;
+                if append_op {
+                    author_xform_op_order(&stage, &path, composed_order, "xformOp:scale")?;
+                }
+                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+
+                let inverse = if scale_existed && !append_op {
+                    old_scale
+                        .map(|old| UsdOp::SetScale {
+                            edit_target: id.clone(),
+                            path: path.clone(),
+                            value: conv.scale_vec_d(DVec3::from_array(old)).to_array(),
+                        })
+                        .unwrap_or_else(|| self.coarse_inverse(target, &id))
+                } else {
+                    self.coarse_inverse(target, &id)
+                };
+                self.commit(
+                    target,
+                    new_data,
+                    UsdChange::InfoOnly {
+                        path,
+                        attr: "xformOp:scale".into(),
+                    },
+                );
+                Ok(inverse)
+            }
+
+            UsdOp::SetAttribute {
+                path,
+                name,
+                type_name,
+                value,
+                ..
+            } => {
+                let (prim_sdf, define_local_over) = match self.require_prim_anywhere(&path) {
+                    Ok(prim) => (prim, false),
+                    Err(error) => {
+                        let prim = parse_prim_path(&path)?;
+                        if !self.path_is_under_composed_arc_path(&prim) {
+                            return Err(error);
+                        }
+                        (prim, true)
+                    }
+                };
+                self.validate_attribute_type(&prim_sdf, &name, &type_name)?;
+
+                // The single place attribute values are turned into USD values, so
+                // NO call site ever hand-escapes. Two rules by type:
+                //   • `string` → the value is RAW content, authored as `Value::String`
+                //     with no literal parsing. USDA's lexer keeps raw bytes between
+                //     delimiters (it does not unescape), and the writer picks a
+                //     delimiter the content can't close — so backslashes, quotes and
+                //     newlines round-trip verbatim. The one thing USDA cannot delimit
+                //     is a value containing BOTH `"""` and `'''`; reject that here, at
+                //     apply, not at save (a stranded unsavable document is worse).
+                //   • everything else → the value is a USD literal we parse.
+                let is_string = type_name == "string";
+                let val = if is_string {
+                    if value.contains("\"\"\"") && value.contains("'''") {
+                        return Err(DocumentError::ValidationFailed(format!(
+                            "SetAttribute `{name}` (string): value contains both `\"\"\"` and \
+                             `'''`, which USDA cannot delimit (its lexer does not unescape)"
+                        )));
+                    }
+                    openusd::sdf::Value::String(value)
+                } else {
+                    parse_attribute_value(&type_name, &value).map_err(|e| {
+                        DocumentError::ValidationFailed(format!(
+                            "SetAttribute `{name}` ({type_name}): {e}"
+                        ))
+                    })?
+                };
+
+                // Canonical in, stage on disk — the same contract `SetTranslate`
+                // keeps, applied here by the attribute's USD type ROLE. Dispatching
+                // on the type rather than the value is not a shortcut: `point3f`,
+                // `vector3f` and `color3f` all decode to the same `Vec3f`, and only
+                // the type says which of them scales with `metersPerUnit`.
+                //
+                // Runs on the TYPED value, after parsing and before authoring, so no
+                // literal is ever re-formatted to convert it — a string round-trip
+                // here would risk changing values it was only meant to move.
+                let conv_stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                let conv = authoring_stage_convention(&conv_stage)?;
+                let val = conv.stage_physics_joint_value(&name, &type_name, val);
+
+                // SCALAR LENGTHS, which no USD type can announce. `radius` is a bare
+                // `double`, so the fact that it scales with `metersPerUnit` lives in
+                // the SCHEMA and is resolved through the registry — never guessed
+                // from the attribute's name, which would convert every unrelated
+                // attribute that happened to share it.
+                //
+                // `stage_units_per_unit` is not always 1: `UsdGeomCamera` defines
+                // focal length and aperture in TENTHS of a world unit, so a bare
+                // "is a length" flag would still author those wrong by 10x.
+                let linear = self.linear_unit_of(&prim_sdf, &name);
+                let val = match linear {
+                    crate::schema::LinearUnit::Length {
+                        stage_units_per_unit,
+                    } if !conv.is_identity() => {
+                        scale_scalar_value(val, |m| conv.stage_length(m) / stage_units_per_unit)
+                    }
+                    _ => val,
+                };
+
+                // Typed inverse: restore the attribute's prior value in THIS layer,
+                // so undo replays incrementally (the projector's `apply_incremental_
+                // op_to_stage` path) instead of a `ReplaceSource` that forces a
+                // whole-layer rebuild. Only when the attribute already had a value
+                // here that round-trips; a newly-authored attribute (or an
+                // un-recoverable literal) falls back to the always-correct whole-
+                // source snapshot — which also correctly *removes* the new opinion on
+                // undo, something a typed `SetAttribute` cannot express. For a string
+                // the prior value is recovered RAW (matching the raw author above);
+                // for other types via `value_to_literal`.
+                let prior = prim_sdf
+                    .append_property(name.as_str())
+                    .ok()
+                    .and_then(|attr| self.layer(target).field(&attr, "default").cloned());
+                let recovered = if is_string {
+                    match prior {
+                        Some(openusd::sdf::Value::String(s)) => Some(s),
+                        _ => None,
+                    }
+                } else {
+                    // Back to canonical before it becomes an op literal: `prior` came
+                    // straight out of the layer, so it is in the stage's frame, and a
+                    // `SetAttribute` carries canonical values.
+                    prior
+                        .map(|old| conv.canonical_physics_joint_value(&name, &type_name, old))
+                        .map(|old| match linear {
+                            crate::schema::LinearUnit::Length {
+                                stage_units_per_unit,
+                            } if !conv.is_identity() => {
+                                scale_scalar_value(old, |v| conv.length(v * stage_units_per_unit))
+                            }
+                            _ => old,
+                        })
+                        .and_then(|old| author::value_to_literal(&type_name, old))
+                };
+                let inverse = match recovered {
+                    Some(v) => UsdOp::SetAttribute {
+                        edit_target: id,
+                        path: path.clone(),
+                        name: name.clone(),
+                        type_name: type_name.clone(),
+                        value: v,
+                    },
+                    None => self.coarse_inverse(target, &id),
+                };
+                // Variability and `custom` are declared by the SCHEMA, not by the
+                // call site — see `crate::schema`. Deciding them here, in the one
+                // place attributes are authored, is what makes it impossible for a
+                // caller to author `info:id` as `varying` (which is how it *was*
+                // authored, because nothing knew better) or to omit `custom` on a
+                // per-model `lunco:` param that no schema declares.
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                if define_local_over {
+                    stage.define_prim(prim_sdf.as_str()).map_err(author_err)?;
+                }
+                stage
+                    .create_attribute(format!("{path}.{name}"), type_name.as_str())
+                    .map_err(author_err)?
+                    .set_variability(crate::schema::variability_of(&name))
+                    .map_err(author_err)?
+                    .set_custom(crate::schema::is_custom(&name))
+                    .map_err(author_err)?
+                    .set(val)
+                    .map_err(author_err)?;
+                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                self.commit(target, new_data, UsdChange::InfoOnly { path, attr: name });
+                Ok(inverse)
+            }
+
+            UsdOp::SetTimeSample {
+                path,
+                name,
+                type_name,
+                time,
+                value,
+                ..
+            } => {
+                let prim_sdf = self.require_prim_anywhere(&path)?;
+                self.validate_attribute_type(&prim_sdf, &name, &type_name)?;
+                let val = parse_attribute_value(&type_name, &value).map_err(|e| {
+                    DocumentError::ValidationFailed(format!(
+                        "SetTimeSample `{name}` ({type_name}) @ {time}: {e}"
+                    ))
+                })?;
+                // Canonical in, stage on disk — the exact conversion `SetAttribute`
+                // applies (type-role remap, then the schema-declared scalar-length
+                // rule), on the keyframe path. Without it an attribute's `default`
+                // and its `timeSamples` land in different unit frames inside one
+                // serialized file on any non-canonical stage.
+                let conv_stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                let conv = authoring_stage_convention(&conv_stage)?;
+                let val = conv.stage_physics_joint_value(&name, &type_name, val);
+                let linear = self.linear_unit_of(&prim_sdf, &name);
+                let val = match linear {
+                    crate::schema::LinearUnit::Length {
+                        stage_units_per_unit,
+                    } if !conv.is_identity() => {
+                        scale_scalar_value(val, |m| conv.stage_length(m) / stage_units_per_unit)
+                    }
+                    _ => val,
+                };
+                // A time-sampled xform channel is not usable unless its token is
+                // present in the prim's xformOpOrder. Reuse the same composed-order
+                // append rule as SetTranslate/SetRotate/SetScale so keyframing a channel is
+                // a complete USD edit rather than a detached attribute that the
+                // transform evaluator ignores.
+                let (composed_order, append_xform_op) =
+                    if name.starts_with("xformOp:") && name != "xformOpOrder" {
+                        xform_op_order_for_edit(&self.composed_arc(), &prim_sdf, &name)
+                    } else {
+                        (Vec::new(), false)
+                    };
+                // Authoring a brand-new sample (no prior opinion at this exact
+                // time, in this layer) is exactly undone by removing it — a typed,
+                // cheap inverse. Overwriting an existing sample restores the prior
+                // value as a typed `SetTimeSample`: the value read from the layer
+                // is in the STAGE frame, so it converts back to canonical — the
+                // frame every op carries — before it becomes an op literal
+                // (mirroring `SetAttribute`'s inverse). Only a value
+                // `value_to_literal` cannot format on one line falls back to the
+                // full-source snapshot.
+                let prior_sample = prim_sdf
+                    .append_property(name.as_str())
+                    .ok()
+                    .and_then(|attr| self.layer(target).field(&attr, "timeSamples").cloned())
+                    .and_then(|v| match v {
+                        sdf::Value::TimeSamples(m) => m
+                            .into_iter()
+                            .find(|(t, _)| t.total_cmp(&time).is_eq())
+                            .map(|(_, old)| old),
+                        _ => None,
+                    })
+                    .map(|old| {
+                        let old = conv.canonical_physics_joint_value(&name, &type_name, old);
+                        match linear {
+                            crate::schema::LinearUnit::Length {
+                                stage_units_per_unit,
+                            } if !conv.is_identity() => {
+                                scale_scalar_value(old, |v| conv.length(v * stage_units_per_unit))
+                            }
+                            _ => old,
+                        }
+                    });
+                let inverse = if append_xform_op {
+                    // There is no typed operation for removing one xformOpOrder
+                    // token. The existing exact document snapshot inverse removes
+                    // the channel and its order entry together.
+                    self.coarse_inverse(target, &id)
+                } else {
+                    match prior_sample {
+                        Some(old) => match author::value_to_literal(&type_name, old) {
+                            Some(v) => UsdOp::SetTimeSample {
+                                edit_target: id,
+                                path: path.clone(),
+                                name: name.clone(),
+                                type_name: type_name.clone(),
+                                time,
+                                value: v,
+                            },
+                            None => self.coarse_inverse(target, &id),
+                        },
+                        None => UsdOp::RemoveTimeSample {
+                            edit_target: id,
+                            path: path.clone(),
+                            name: name.clone(),
+                            time,
+                        },
+                    }
+                };
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                stage
+                    .create_attribute(format!("{path}.{name}"), type_name.as_str())
+                    .map_err(author_err)?
+                    .set_at(val, openusd::usd::TimeCode::new(time))
+                    .map_err(author_err)?;
+                if append_xform_op {
+                    author_xform_op_order(&stage, &path, composed_order, &name)?;
+                }
+                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                self.commit(target, new_data, UsdChange::InfoOnly { path, attr: name });
+                Ok(inverse)
+            }
+
+            UsdOp::RemoveTimeSample {
+                path, name, time, ..
+            } => {
+                let prim_sdf = self.require_prim_anywhere(&path)?;
+                let attr_sdf = prim_sdf.append_property(name.as_str()).map_err(|e| {
+                    DocumentError::ValidationFailed(format!(
+                        "RemoveTimeSample: bad attribute `{name}`: {e}"
+                    ))
+                })?;
+                // Typed inverse: re-author the removed sample. Value and declared
+                // type are both read from the layer BEFORE mutating; the value is
+                // in the STAGE frame, so it converts back to canonical — the frame
+                // a `SetTimeSample` carries — before it becomes an op literal,
+                // matching `SetTimeSample`'s own inverse. Missing type or a value
+                // with no single-line literal → the always-correct full-source
+                // snapshot.
+                let prior_type = match self.layer(target).field(&attr_sdf, "typeName") {
+                    Some(sdf::Value::Token(t)) => Some(t.as_str().to_string()),
+                    _ => None,
+                };
+                let prior_value = self
+                    .layer(target)
+                    .field(&attr_sdf, "timeSamples")
+                    .cloned()
+                    .and_then(|v| match v {
+                        sdf::Value::TimeSamples(m) => m
+                            .into_iter()
+                            .find(|(t, _)| t.total_cmp(&time).is_eq())
+                            .map(|(_, old)| old),
+                        _ => None,
+                    });
+                let conv_stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                let conv = authoring_stage_convention(&conv_stage)?;
+                let linear = self.linear_unit_of(&prim_sdf, &name);
+                let recovered = prior_type.zip(prior_value).and_then(|(ty, old)| {
+                    let old = conv.canonical_physics_joint_value(&name, &ty, old);
+                    let old = match linear {
+                        crate::schema::LinearUnit::Length {
+                            stage_units_per_unit,
+                        } if !conv.is_identity() => {
+                            scale_scalar_value(old, |v| conv.length(v * stage_units_per_unit))
+                        }
+                        _ => old,
+                    };
+                    author::value_to_literal(&ty, old).map(|lit| (ty, lit))
+                });
+                let inverse = match recovered {
+                    Some((type_name, value)) => UsdOp::SetTimeSample {
+                        edit_target: id,
+                        path: path.clone(),
+                        name: name.clone(),
+                        type_name,
+                        time,
+                        value,
+                    },
+                    None => self.coarse_inverse(target, &id),
+                };
+                let mut new_data = self.layer(target).clone();
+                let removed = author::remove_time_sample(&mut new_data, &attr_sdf, time)
+                    .map_err(author_err)?;
+                if removed.is_none() {
+                    return Err(DocumentError::ValidationFailed(format!(
+                        "RemoveTimeSample: no sample on `{path}.{name}` at time {time}"
+                    )));
+                }
+                self.commit(target, new_data, UsdChange::InfoOnly { path, attr: name });
+                Ok(inverse)
+            }
+
+            UsdOp::SetRelationship {
+                path,
+                name,
+                targets,
+                ..
+            } => {
+                let prim_sdf = self.require_prim_anywhere(&path)?;
+                let target_paths = targets
+                    .iter()
+                    .map(|t| {
+                        SdfPath::new(t).map_err(|e| {
+                            DocumentError::ValidationFailed(format!(
+                                "SetRelationship `{name}`: invalid target `{t}`: {e}"
+                            ))
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                // Typed inverse: a prior *explicit* target list is exactly what a
+                // typed `SetRelationship` re-authors (targets are op fields — no
+                // literal round-trip involved). Unauthored, or a prepend/append
+                // list op a set-semantics op can't express, falls back to the
+                // snapshot — which also correctly *removes* the new opinion.
+                let prior = prim_sdf
+                    .append_property(name.as_str())
+                    .ok()
+                    .and_then(|rel| self.layer(target).field(&rel, "targetPaths").cloned());
+                let inverse = match prior {
+                    Some(sdf::Value::PathListOp(op)) if op.explicit => UsdOp::SetRelationship {
+                        edit_target: id,
+                        path: path.clone(),
+                        name: name.clone(),
+                        targets: op.explicit_items.iter().map(|p| p.to_string()).collect(),
+                    },
+                    _ => self.coarse_inverse(target, &id),
+                };
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                stage
+                    .create_relationship(format!("{path}.{name}"))
+                    .map_err(author_err)?
+                    .set_targets(target_paths)
+                    .map_err(author_err)?;
+                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                self.commit(target, new_data, UsdChange::InfoOnly { path, attr: name });
+                Ok(inverse)
+            }
+
+            UsdOp::SetConnection {
+                path,
+                name,
+                type_name,
+                sources,
+                ..
+            } => {
+                let prim_sdf = self.require_prim_anywhere(&path)?;
+                self.validate_attribute_type(&prim_sdf, &name, &type_name)?;
+                let source_paths = sources
+                    .iter()
+                    .map(|s| {
+                        SdfPath::new(s).map_err(|e| {
+                            DocumentError::ValidationFailed(format!(
+                                "SetConnection `{name}`: invalid source `{s}`: {e}"
+                            ))
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                // Typed inverse — the `SetRelationship` pattern with the
+                // attribute's `connectionPaths` list op instead.
+                let prior = prim_sdf
+                    .append_property(name.as_str())
+                    .ok()
+                    .and_then(|attr| self.layer(target).field(&attr, "connectionPaths").cloned());
+                let inverse = match prior {
+                    Some(sdf::Value::PathListOp(op)) if op.explicit => UsdOp::SetConnection {
+                        edit_target: id,
+                        path: path.clone(),
+                        name: name.clone(),
+                        type_name: type_name.clone(),
+                        sources: op.explicit_items.iter().map(|p| p.to_string()).collect(),
+                    },
+                    _ => self.coarse_inverse(target, &id),
+                };
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                // Create-if-absent (like SetAttribute) so a connection can be
+                // authored on a not-yet-materialised port, then author the
+                // `connectionPaths` list op (explicit; empty clears).
+                stage
+                    .create_attribute(format!("{path}.{name}"), type_name.as_str())
+                    .map_err(author_err)?
+                    .set_connections(source_paths)
+                    .map_err(author_err)?;
+                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                self.commit(target, new_data, UsdChange::InfoOnly { path, attr: name });
+                Ok(inverse)
+            }
+
+            UsdOp::SetDefaultPrim { default_prim, .. } => {
+                let normalized = normalize_default_prim_path(default_prim.as_deref())?;
+                if let Some((path, _)) = &normalized {
+                    self.require_prim_anywhere(path.as_str())?;
+                }
+                let prior = self
+                    .layer(target)
+                    .field(&SdfPath::abs_root(), sdf::FieldKey::DefaultPrim.as_str())
+                    .cloned();
+                let inverse = match prior {
+                    Some(sdf::Value::Token(token)) => {
+                        let canonical = normalize_default_prim_path(Some(token.as_str()))
+                            .ok()
+                            .flatten()
+                            .is_some_and(|(_, relative)| relative == token.as_str());
+                        if canonical {
+                            UsdOp::SetDefaultPrim {
+                                edit_target: id.clone(),
+                                default_prim: Some(token.to_string()),
+                            }
+                        } else {
+                            self.coarse_inverse(target, &id)
+                        }
+                    }
+                    None => UsdOp::SetDefaultPrim {
+                        edit_target: id.clone(),
+                        default_prim: None,
+                    },
+                    Some(_) => self.coarse_inverse(target, &id),
+                };
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                if let Some((_, relative)) = normalized {
+                    stage.set_default_prim(relative).map_err(author_err)?;
+                } else {
+                    let root_id = stage.root_layer().identifier().to_owned();
+                    let mut layer = stage
+                        .layer_mut(&root_id)
+                        .ok_or_else(|| author_err("document stage has no root layer"))?;
+                    layer
+                        .edit(|edit| edit.clear_default_prim())
+                        .map_err(author_err)?;
+                }
+                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                self.commit(target, new_data, UsdChange::Resync { path: "/".into() });
+                Ok(inverse)
+            }
+
+            UsdOp::SetPrimKind { path, kind, .. } => {
+                let prim_sdf = match self.require_prim_anywhere(&path) {
+                    Ok(prim) if !prim.is_property_path() => prim,
+                    Ok(_) => {
+                        return Err(DocumentError::ValidationFailed(format!(
+                            "SetPrimKind target {path} must name a prim, not a property"
+                        )));
+                    }
+                    Err(_)
+                        if self.path_is_under_composed_arc_path(
+                            &parse_prim_path(&path).unwrap_or_else(|_| SdfPath::abs_root()),
+                        ) =>
+                    {
+                        return Err(DocumentError::ValidationFailed(format!(
+                            "SetPrimKind target {path} is composed/read-only; author the owning prim or a local override"
+                        )));
+                    }
+                    Err(error) => return Err(error),
+                };
+                validate_prim_kind(kind.as_deref())?;
+                let prior = self
+                    .layer(target)
+                    .field(&prim_sdf, sdf::FieldKey::Kind.as_str())
+                    .cloned();
+                let inverse = match prior {
+                    Some(sdf::Value::Token(token))
+                        if validate_prim_kind(Some(token.as_str())).is_ok() =>
+                    {
+                        UsdOp::SetPrimKind {
+                            edit_target: id.clone(),
+                            path: path.clone(),
+                            kind: Some(token.to_string()),
+                        }
+                    }
+                    None => UsdOp::SetPrimKind {
+                        edit_target: id.clone(),
+                        path: path.clone(),
+                        kind: None,
+                    },
+                    Some(_) => self.coarse_inverse(target, &id),
+                };
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                if let Some(kind) = kind {
+                    stage.override_prim(path.as_str()).map_err(author_err)?;
+                    stage
+                        .prim(path.as_str())
+                        .set_kind(kind)
+                        .map_err(author_err)?;
+                } else if self.layer(target).spec(&prim_sdf).is_some() {
+                    let root_id = stage.root_layer().identifier().to_owned();
+                    let mut layer = stage
+                        .layer_mut(&root_id)
+                        .ok_or_else(|| author_err("document stage has no root layer"))?;
+                    layer
+                        .edit(|edit| {
+                            edit.data_mut()
+                                .erase_field(&prim_sdf, sdf::FieldKey::Kind.as_str());
+                            Ok(())
+                        })
+                        .map_err(author_err)?;
+                }
+                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                self.commit(target, new_data, UsdChange::Resync { path: path.clone() });
+                Ok(inverse)
+            }
+
+            UsdOp::MovePrim {
+                from_path, to_path, ..
+            } => {
+                // Only move what the target layer itself authored — and not a
+                // prim that layer authors only inside a variant selection.
+                self.require_movable_prim_in(target, &from_path)?;
+                let from_sdf = parse_prim_path(&from_path)?;
+                let to_sdf = parse_prim_path(&to_path)?;
+                // Exact reverse move — a typed, cheap inverse.
+                let inverse = UsdOp::MovePrim {
+                    edit_target: id,
+                    from_path: to_path,
+                    to_path: from_path,
+                };
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                let mut editor = openusd::usd::NamespaceEditor::new(&stage);
+                editor.move_prim(from_sdf, to_sdf);
+                editor.apply().map_err(author_err)?;
+                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                // A move changes prim paths on both ends; the translator re-keys
+                // entities by path, so a full reload is the honest change kind.
+                self.commit(target, new_data, UsdChange::FullReload);
+                Ok(inverse)
+            }
+
+            UsdOp::SetApiSchemas { path, schemas, .. } => {
+                let prim_sdf = self.require_prim_anywhere(&path)?;
+                // Typed inverse: a prior *prepend-only* schema list — the form the
+                // forward op authors — restores as a typed `SetApiSchemas`.
+                // Unauthored, or an explicit/append/delete opinion a prepend op
+                // can't reproduce, falls back to the snapshot.
+                let prior = self
+                    .layer(target)
+                    .field(&prim_sdf, sdf::FieldKey::ApiSchemas.as_str())
+                    .cloned();
+                let inverse = match prior {
+                    Some(sdf::Value::TokenListOp(op))
+                        if !op.explicit
+                            && op.explicit_items.is_empty()
+                            && op.added_items.is_empty()
+                            && op.appended_items.is_empty()
+                            && op.deleted_items.is_empty()
+                            && op.ordered_items.is_empty() =>
+                    {
+                        UsdOp::SetApiSchemas {
+                            edit_target: id,
+                            path: path.clone(),
+                            schemas: op
+                                .prepended_items
+                                .iter()
+                                .map(|t| t.as_str().to_string())
+                                .collect(),
+                        }
+                    }
+                    _ => self.coarse_inverse(target, &id),
+                };
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                let tokens: Vec<openusd::tf::Token> =
+                    schemas.iter().map(openusd::tf::Token::from).collect();
+                stage
+                    .prim(path.as_str())
+                    .set_metadata(
+                        sdf::FieldKey::ApiSchemas.as_str(),
+                        openusd::sdf::Value::TokenListOp(openusd::sdf::TokenListOp::prepended(
+                            tokens,
+                        )),
+                    )
+                    .map_err(author_err)?;
+                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                // Applied schemas decide which ECS components the translator
+                // attaches (rigid body, collider) — the prim must be re-projected.
+                self.commit(target, new_data, UsdChange::Resync { path });
+                Ok(inverse)
+            }
+
+            UsdOp::SetVariantSelection {
+                path,
+                variant_set,
+                variant,
+                ..
+            } => {
+                let prim_sdf = match self.require_prim_anywhere(&path) {
+                    Ok(prim) => prim,
+                    Err(error) => {
+                        let prim = parse_prim_path(&path)?;
+                        if !self.path_is_under_composed_arc_path(&prim) {
+                            return Err(error);
+                        }
+                        prim
+                    }
+                };
+                // Typed inverse: restore the prior selection of THIS variant set
+                // (the forward op is read-modify-write, so sibling sets are
+                // untouched either way). No prior selection for the set → the
+                // snapshot, the only way to express "unselected" on undo.
+                let prior = self
+                    .layer(target)
+                    .field(&prim_sdf, sdf::FieldKey::VariantSelection.as_str())
+                    .cloned();
+                let inverse = match prior {
+                    Some(sdf::Value::VariantSelectionMap(ref m))
+                        if m.contains_key(&variant_set) =>
+                    {
+                        UsdOp::SetVariantSelection {
+                            edit_target: id,
+                            path: path.clone(),
+                            variant_set: variant_set.clone(),
+                            variant: m[&variant_set].clone(),
+                        }
+                    }
+                    _ => self.coarse_inverse(target, &id),
+                };
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                // Read-modify-write the selection map so selecting `drivetrain`
+                // doesn't silently drop a sibling variant set's selection.
+                stage
+                    .prim(prim_sdf.clone())
+                    .update_metadata(sdf::FieldKey::VariantSelection.as_str(), |current| {
+                        let mut map = match current {
+                            Some(openusd::sdf::Value::VariantSelectionMap(m)) => m,
+                            _ => Default::default(),
+                        };
+                        map.insert(variant_set.clone(), variant.clone());
+                        openusd::sdf::Value::VariantSelectionMap(map)
+                    })
+                    .map_err(author_err)?;
+                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                self.commit(target, new_data, UsdChange::Resync { path });
+                Ok(inverse)
+            }
+
+            UsdOp::SetPayload {
+                path, asset_paths, ..
+            } => {
+                let prim_sdf = self.require_prim_anywhere(&path)?;
+                // Typed inverse: a prior explicit payload list whose entries
+                // carry nothing beyond an asset path — all a typed `SetPayload`
+                // can author. A prim path, a layer offset, or a non-explicit
+                // list op falls back to the snapshot rather than restore lossily.
+                let prior = self
+                    .layer(target)
+                    .field(&prim_sdf, sdf::FieldKey::Payload.as_str())
+                    .cloned();
+                let inverse = match prior {
+                    Some(sdf::Value::PayloadListOp(op))
+                        if op.explicit
+                            && op
+                                .explicit_items
+                                .iter()
+                                .all(|p| p.prim_path.is_empty() && p.layer_offset.is_none()) =>
+                    {
+                        UsdOp::SetPayload {
+                            edit_target: id,
+                            path: path.clone(),
+                            asset_paths: op
+                                .explicit_items
+                                .iter()
+                                .map(|p| p.asset_path.clone())
+                                .collect(),
+                        }
+                    }
+                    _ => self.coarse_inverse(target, &id),
+                };
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                let payloads: Vec<openusd::sdf::Payload> = asset_paths
+                    .iter()
+                    .map(|a| openusd::sdf::Payload {
+                        asset_path: a.clone(),
+                        ..Default::default()
+                    })
+                    .collect();
+                stage
+                    .prim(path.as_str())
+                    .set_metadata(
+                        sdf::FieldKey::Payload.as_str(),
+                        openusd::sdf::Value::PayloadListOp(openusd::sdf::PayloadListOp::explicit(
+                            payloads,
+                        )),
+                    )
+                    .map_err(author_err)?;
+                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                self.commit(target, new_data, UsdChange::Resync { path });
+                Ok(inverse)
+            }
+
+            UsdOp::SetReferenceArcs {
+                path,
+                references,
+                list_op,
+                ..
+            } => {
+                let prim_sdf = match self.require_prim_anywhere(&path) {
+                    Ok(prim) if !prim.is_property_path() => prim,
+                    Ok(_) => {
+                        return Err(DocumentError::ValidationFailed(format!(
+                            "SetReferenceArcs target `{path}` must name a prim, not a property"
+                        )));
+                    }
+                    Err(_)
+                        if self.path_is_under_composed_arc_path(
+                            &parse_prim_path(&path).unwrap_or_else(|_| SdfPath::abs_root()),
+                        ) =>
+                    {
+                        return Err(DocumentError::ValidationFailed(format!(
+                            "SetReferenceArcs target `{path}` is composed/read-only; author the owning prim or a local override"
+                        )));
+                    }
+                    Err(error) => return Err(error),
+                };
+                let arcs = references
+                    .iter()
+                    .map(|reference| {
+                        let asset_path = validate_reference_asset_path(&reference.asset_path)?;
+                        let prim_path =
+                            normalize_reference_prim_path(reference.prim_path.as_deref())?;
+                        Ok((asset_path, prim_path))
+                    })
+                    .collect::<Result<Vec<_>, DocumentError>>()?;
+
+                // A typed inverse can restore one complete list-op bucket. A
+                // prior list with offsets/custom data or multiple buckets is
+                // restored from the exact target-layer snapshot instead of
+                // losing authored USD information.
+                let prior = self
+                    .layer(target)
+                    .field(&prim_sdf, sdf::FieldKey::References.as_str())
+                    .cloned();
+                let inverse = prior
+                    .and_then(|value| match value {
+                        sdf::Value::ReferenceListOp(op) => reference_list_inverse(&op, &id, &path),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| self.coarse_inverse(target, &id));
+
+                let value = author::reference_list_value(&arcs, reference_list_edit(list_op))
+                    .map_err(author_err)?;
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                stage
+                    .prim(path.as_str())
+                    .set_metadata(sdf::FieldKey::References.as_str(), value)
+                    .map_err(author_err)?;
+                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                self.commit(target, new_data, UsdChange::Resync { path });
+                Ok(inverse)
+            }
+
+            UsdOp::SetActive { path, active, .. } => {
+                self.require_prim_anywhere(&path)?;
+                // NOT `SetActive { active: !active }`: that assumes the prim was in
+                // the opposite state. Deactivating an already-inactive prim would
+                // then "undo" into activating it. The snapshot inverse restores the
+                // target layer's real prior opinion, including *unauthored*.
+                let inverse = self.coarse_inverse(target, &id);
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                // A `SetActive` must be authorable onto a layer that does not yet
+                // carry a spec for the prim — most importantly the runtime overlay,
+                // which is how a scene-authored marker (`/Traverse/Route/W1`, lives
+                // in the scene/variant layer) gets an `active = false` opinion from
+                // a delete. `Prim::set_active` requires a spec to exist on this
+                // layer (it is not an upsert), so define it first — idempotent, and
+                // the same pattern `SetTranslate`/`AddPrim` use to author a stronger
+                // opinion over a referenced prim. Without this the op was rejected
+                // with "no prim spec at path on the edit target layer" and the
+                // marker could not be hidden at all.
+                stage.define_prim(path.as_str()).map_err(author_err)?;
+                stage
+                    .prim(path.as_str())
+                    .set_active(active)
+                    .map_err(author_err)?;
+                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                self.commit(target, new_data, UsdChange::Resync { path });
+                Ok(inverse)
+            }
+        };
+        if result.is_ok() {
+            self.record_op(logged_op);
+        }
+        result
+    }
+}
+
+/// Map an authoring error (`anyhow`/openusd `StageAuthoringError`) to a
+/// document validation failure.
+fn author_err<E: std::fmt::Display>(e: E) -> DocumentError {
+    DocumentError::ValidationFailed(format!("authoring failed: {e}"))
+}
+
+/// Read the composed authoring stage's convention once at the document boundary.
+/// Invalid explicit USD metadata rejects the edit; it must never be rewritten as
+/// a canonical identity because that would serialize a value in the wrong frame.
+fn authoring_stage_convention(
+    stage: &openusd::usd::Stage,
+) -> Result<ConventionTransform, DocumentError> {
+    StageMetrics::from_stage(stage)
+        .map(|metrics| ConventionTransform::from_stage_metrics(&metrics))
+        .map_err(author_err)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lunco_doc::{DocumentHost, Mutation};
+
+    // These assertions read the document's AUTHORED layer through `UsdDataExt`,
+    // and that is deliberate — do not "migrate" them to the composed `UsdRead`
+    // surface. A document test asserts what an op authored into which layer;
+    // composition would resolve references/variants on top and hide precisely
+    // the layer-targeting these tests exist to pin.
+
+    const TINY_USDA: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n    metersPerUnit = 1\n)\n\ndef Xform \"World\"\n{\n}\n";
+
+    fn prim_type(doc: &UsdDocument, path: &str) -> Option<String> {
+        doc.data().prim_type_name(&SdfPath::new(path).unwrap())
+    }
+    fn prim_exists(doc: &UsdDocument, path: &str) -> bool {
+        doc.data().spec(&SdfPath::new(path).unwrap()).is_some()
+    }
+
+    /// Whether a doc's serialized source **reparses cleanly** — the check that
+    /// catches malformed metadata a substring assertion misses (e.g. a payload
+    /// asset path wrapped `@@…@@` still `contains("hull")` but won't parse). A
+    /// fresh document from un-parseable source blocks every structural op but
+    /// `ReplaceSource`, so a probe `AddPrim` succeeding proves the source parsed.
+    fn reparses_cleanly(doc: &UsdDocument) -> bool {
+        let mut d2 = UsdDocument::with_origin(
+            DocumentId::new(9999),
+            doc.source(),
+            DocumentOrigin::writable_file("/tmp/roundtrip.usda"),
+        );
+        d2.apply(UsdOp::AddPrim {
+            edit_target: LayerId::root(),
+            parent_path: "/".into(),
+            name: "RtProbe".into(),
+            type_name: Some("Xform".into()),
+            reference: None,
+            reference_prim_path: None,
+        })
+        .is_ok()
+    }
+
+    /// A centimetre, Z-up stage must be authored in ITS OWN frame.
+    ///
+    /// The op carries canonical metres (Y-up); the layer must come back holding the
+    /// stage's own numbers. On a `metersPerUnit = 0.01` stage a canonical 1 m is
+    /// 100 stage units, and Z-up sends canonical +Y to stage +Z — so authoring
+    /// `[0, 1, 0]` must land `[0, 0, 100]`, not `[0, 1, 0]`.
+    ///
+    /// Without the conversion this writes the canonical triple straight through and
+    /// the prim sits 1 stage-unit (= 1 cm) off the origin, on the wrong axis.
+    #[test]
+    fn a_non_canonical_stage_is_authored_in_its_own_frame() {
+        let src = "#usda 1.0\n(\n    metersPerUnit = 0.01\n    upAxis = \"Z\"\n)\n\ndef Xform \"World\"\n{\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(77),
+            src,
+            DocumentOrigin::writable_file("/tmp/units_write.usda"),
+        );
+
+        doc.apply(UsdOp::SetTranslate {
+            edit_target: LayerId::root(),
+            path: "/World".into(),
+            value: [0.0, 1.0, 0.0],
+        })
+        .expect("translate applies");
+
+        let authored = doc
+            .data()
+            .prim_attribute_value::<[f64; 3]>(&SdfPath::new("/World").unwrap(), "xformOp:translate")
+            .expect("translate authored");
+
+        assert!(
+            authored[0].abs() < 1e-6
+                && authored[1].abs() < 1e-6
+                && (authored[2] - 100.0).abs() < 1e-3,
+            "canonical [0,1,0] m on a cm/Z-up stage must author as [0,0,100]; got {authored:?}"
+        );
+    }
+
+    /// A canonical stage must be untouched, to the digit.
+    ///
+    /// The conversion is the identity here, and the guard exists because a
+    /// round-trip that merely *approximates* the identity would quietly rewrite
+    /// every authored coordinate in every asset we ship the first time it is saved.
+    #[test]
+    fn a_canonical_stage_authors_the_value_verbatim() {
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(78),
+            TINY_USDA,
+            DocumentOrigin::writable_file("/tmp/units_identity.usda"),
+        );
+
+        let value = [1.234_567_891_23, -9.876_543_21, 0.000_000_5];
+        doc.apply(UsdOp::SetTranslate {
+            edit_target: LayerId::root(),
+            path: "/World".into(),
+            value,
+        })
+        .expect("translate applies");
+
+        let authored = doc
+            .data()
+            .prim_attribute_value::<[f64; 3]>(&SdfPath::new("/World").unwrap(), "xformOp:translate")
+            .expect("translate authored");
+        assert_eq!(
+            authored, value,
+            "a canonical stage must not perturb the authored value"
+        );
+    }
+
+    /// UNDO MUST LAND WHERE IT STARTED on a non-canonical stage.
+    ///
+    /// The inverse op is built from a value read raw out of the layer — i.e. in the
+    /// stage's frame — while a `SetTranslate` is defined to carry canonical values.
+    /// Unconverted, undo restored a stage-frame number as though it were canonical:
+    /// on a centimetre stage it moved the prim to 1/100th of where it had been, in
+    /// the wrong axis. This is the assertion that the two frames agree.
+    #[test]
+    fn undo_on_a_non_canonical_stage_restores_the_original_position() {
+        let src = "#usda 1.0\n(\n    metersPerUnit = 0.01\n    upAxis = \"Z\"\n)\n\ndef Xform \"World\"\n{\n    double3 xformOp:translate = (0, 0, 250)\n    uniform token[] xformOpOrder = [\"xformOp:translate\"]\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(79),
+            src,
+            DocumentOrigin::writable_file("/tmp/units_undo.usda"),
+        );
+
+        let inverse = doc
+            .apply(UsdOp::SetTranslate {
+                edit_target: LayerId::root(),
+                path: "/World".into(),
+                value: [0.0, 1.0, 0.0],
+            })
+            .expect("translate applies");
+
+        doc.apply(inverse).expect("undo applies");
+
+        let restored = doc
+            .data()
+            .prim_attribute_value::<[f64; 3]>(&SdfPath::new("/World").unwrap(), "xformOp:translate")
+            .expect("translate authored");
+        assert!(
+            restored[0].abs() < 1e-6
+                && restored[1].abs() < 1e-6
+                && (restored[2] - 250.0).abs() < 1e-3,
+            "undo must restore the stage's original (0,0,250); got {restored:?}"
+        );
+    }
+
+    /// A POINT scales with `metersPerUnit`; a NORMAL does not — and both are
+    /// `Vec3f` on the wire.
+    ///
+    /// This is the whole reason the conversion dispatches on the USD type name
+    /// rather than the value: `point3f`, `normal3f` and `color3f` are
+    /// indistinguishable once decoded. Treating them alike would either shrink
+    /// every normal by 100 on a centimetre stage or leave every point unscaled.
+    #[test]
+    fn a_point_scales_but_a_normal_only_rotates() {
+        let src = "#usda 1.0\n(\n    metersPerUnit = 0.01\n    upAxis = \"Z\"\n)\n\ndef Xform \"World\"\n{\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(80),
+            src,
+            DocumentOrigin::writable_file("/tmp/units_roles.usda"),
+        );
+
+        // Canonical +Y, one metre out.
+        doc.apply(UsdOp::SetAttribute {
+            edit_target: LayerId::root(),
+            path: "/World".into(),
+            name: "customPoint".into(),
+            type_name: "point3f".into(),
+            value: "(0, 1, 0)".into(),
+        })
+        .expect("point applies");
+
+        // Canonical +Y, a unit normal.
+        doc.apply(UsdOp::SetAttribute {
+            edit_target: LayerId::root(),
+            path: "/World".into(),
+            name: "customNormal".into(),
+            type_name: "normal3f".into(),
+            value: "(0, 1, 0)".into(),
+        })
+        .expect("normal applies");
+
+        let prim = SdfPath::new("/World").unwrap();
+        let p = doc
+            .data()
+            .prim_attribute_value::<[f32; 3]>(&prim, "customPoint")
+            .expect("point authored");
+        let n = doc
+            .data()
+            .prim_attribute_value::<[f32; 3]>(&prim, "customNormal")
+            .expect("normal authored");
+
+        // Z-up sends canonical +Y to stage +Z for both; only the point takes the
+        // 1 m → 100 cm scale.
+        assert!(
+            (p[2] - 100.0).abs() < 1e-2,
+            "a point must scale with metersPerUnit; got {p:?}"
+        );
+        assert!(
+            (n[2] - 1.0).abs() < 1e-4,
+            "a normal must rotate but NOT scale; got {n:?}"
+        );
+    }
+
+    /// A TIME SAMPLE must land in the same frame as a `default` — the exact
+    /// `SetAttribute` conversion, on the keyframe path. Without it the sample is
+    /// written canonically while the static opinion converts, and one attribute's
+    /// two forms disagree inside one serialized file.
+    #[test]
+    fn a_time_sample_on_a_non_canonical_stage_is_authored_in_its_own_frame() {
+        let src = "#usda 1.0\n(\n    metersPerUnit = 0.01\n    upAxis = \"Z\"\n)\n\ndef Xform \"World\"\n{\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(84),
+            src,
+            DocumentOrigin::writable_file("/tmp/units_sample.usda"),
+        );
+
+        let sample = |value: &str| UsdOp::SetTimeSample {
+            edit_target: LayerId::root(),
+            path: "/World".into(),
+            name: "customPoint".into(),
+            type_name: "point3f".into(),
+            time: 5.0,
+            value: value.into(),
+        };
+        // Canonical +Y, one metre out, keyframed at t=5.
+        doc.apply(sample("(0, 1, 0)")).expect("sample applies");
+
+        let p = doc
+            .data()
+            .prim_attribute_value_at::<[f32; 3]>(
+                &SdfPath::new("/World").unwrap(),
+                "customPoint",
+                5.0,
+            )
+            .expect("sample authored");
+        assert!(
+            p[1].abs() < 1e-4 && (p[2] - 100.0).abs() < 1e-2,
+            "canonical [0,1,0] m keyframed on a cm/Z-up stage must land as (0,0,100); got {p:?}"
+        );
+
+        // The inverse of an overwrite converts BACK to canonical; replaying it
+        // must land the layer where it started (stage frame, to the tolerance of
+        // the f32 rotation round-trip).
+        let inverse = doc.apply(sample("(0, 2, 0)")).expect("overwrite applies");
+        assert!(
+            matches!(&inverse, UsdOp::SetTimeSample { .. }),
+            "overwriting an existing sample must invert to a typed SetTimeSample, got {inverse:?}"
+        );
+        doc.apply(inverse).expect("undo applies");
+        let p = doc
+            .data()
+            .prim_attribute_value_at::<[f32; 3]>(
+                &SdfPath::new("/World").unwrap(),
+                "customPoint",
+                5.0,
+            )
+            .expect("sample restored");
+        assert!(
+            p[1].abs() < 1e-3 && (p[2] - 100.0).abs() < 1e-1,
+            "undo must restore the stage-frame sample; got {p:?}"
+        );
+    }
+
+    /// A scalar LENGTH is authored in the stage's units, though no USD type says so.
+    ///
+    /// `radius` is a bare `double` — the role system that carries `point3f` cannot
+    /// help here, and the fact only exists in the schema. On a centimetre stage a
+    /// canonical 2 m radius must land as 200.
+    #[test]
+    fn a_scalar_length_is_authored_in_stage_units() {
+        let src = "#usda 1.0\n(\n    metersPerUnit = 0.01\n)\n\ndef Sphere \"Ball\"\n{\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(81),
+            src,
+            DocumentOrigin::writable_file("/tmp/units_scalar.usda"),
+        );
+
+        doc.apply(UsdOp::SetAttribute {
+            edit_target: LayerId::root(),
+            path: "/Ball".into(),
+            name: "radius".into(),
+            type_name: "double".into(),
+            value: "2.0".into(),
+        })
+        .expect("radius applies");
+
+        let r = doc
+            .data()
+            .prim_attribute_value::<f64>(&SdfPath::new("/Ball").unwrap(), "radius")
+            .expect("radius authored");
+        assert!(
+            (r - 200.0).abs() < 1e-6,
+            "2 m on a cm stage must author as 200; got {r}"
+        );
+    }
+
+    /// The camera's TENTHS-of-a-unit quirk survives the conversion.
+    ///
+    /// `UsdGeomCamera` defines focal length and aperture in tenths of a world unit,
+    /// so a flag that merely said "this is a length" would author them 10x wrong.
+    /// The registry carries the factor, and this is what proves it is applied.
+    #[test]
+    fn the_cameras_tenths_of_a_unit_factor_is_honored() {
+        let src = "#usda 1.0\n(\n    metersPerUnit = 0.01\n)\n\ndef Camera \"Cam\"\n{\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(82),
+            src,
+            DocumentOrigin::writable_file("/tmp/units_camera.usda"),
+        );
+
+        // Canonical 0.05 m (50 mm) of focal length. On a cm stage that is 5 stage
+        // units, and focalLength counts in tenths of one — so 50.
+        doc.apply(UsdOp::SetAttribute {
+            edit_target: LayerId::root(),
+            path: "/Cam".into(),
+            name: "focalLength".into(),
+            type_name: "float".into(),
+            value: "0.05".into(),
+        })
+        .expect("focalLength applies");
+
+        let f = doc
+            .data()
+            .prim_attribute_value::<f32>(&SdfPath::new("/Cam").unwrap(), "focalLength")
+            .expect("focalLength authored");
+        assert!(
+            (f - 50.0).abs() < 1e-3,
+            "0.05 m on a cm stage in tenths-of-a-unit must author as 50; got {f}"
+        );
+    }
+
+    /// A dimensionless scalar must be left ALONE.
+    ///
+    /// The guard against over-reach: `fStop` is a ratio, and scaling it by the
+    /// stage's units would corrupt a value that was never spatial. Conversion is
+    /// opt-in per schema declaration, so anything unannotated passes through.
+    #[test]
+    fn a_dimensionless_scalar_is_not_converted() {
+        let src = "#usda 1.0\n(\n    metersPerUnit = 0.01\n)\n\ndef Camera \"Cam\"\n{\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(83),
+            src,
+            DocumentOrigin::writable_file("/tmp/units_ratio.usda"),
+        );
+
+        doc.apply(UsdOp::SetAttribute {
+            edit_target: LayerId::root(),
+            path: "/Cam".into(),
+            name: "fStop".into(),
+            type_name: "float".into(),
+            value: "2.8".into(),
+        })
+        .expect("fStop applies");
+
+        let v = doc
+            .data()
+            .prim_attribute_value::<f32>(&SdfPath::new("/Cam").unwrap(), "fStop")
+            .expect("fStop authored");
+        assert!(
+            (v - 2.8).abs() < 1e-6,
+            "a ratio must pass through untouched; got {v}"
+        );
+    }
+
+    #[test]
+    fn attach_component_sequence_applies_end_to_end() {
+        // The attach lowering's op *shape* is unit-tested in `crate::attach`; this
+        // proves the whole sequence actually APPLIES in order onto a real document —
+        // the joint prim is defined before its relationships target it, the point3f
+        // anchors author, and the result composes into a jointed assembly.
+        use crate::attach::{attach_component_ops, AttachJoint, AttachSpec, Axis};
+
+        let scene = "#usda 1.0\n(\n    metersPerUnit = 1\n)\ndef Xform \"Rig\"\n{\n    def Xform \"Chassis\"\n    {\n    }\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(50),
+            scene,
+            DocumentOrigin::writable_file("/tmp/attach.usda"),
+        );
+
+        let spec = AttachSpec::new(
+            LayerId::root(),
+            "/Rig/Chassis",
+            "Wheel",
+            "constraint_47",
+            "components/mobility/wheel.usda",
+            [0.5, -0.3, 1.2],
+            AttachJoint::Revolute { axis: Axis::X },
+        );
+        for op in attach_component_ops(&spec) {
+            doc.apply(op).expect("each attach op applies in sequence");
+        }
+
+        // The part and the joint are both authored…
+        assert!(
+            prim_exists(&doc, "/Rig/Chassis/Wheel"),
+            "part referenced in"
+        );
+        assert_eq!(
+            prim_type(&doc, "/Rig/Chassis/constraint_47").as_deref(),
+            Some("PhysicsRevoluteJoint"),
+            "joint prim defined with the requested type"
+        );
+        // …and the joint relates the two bodies, with the anchor derived from the
+        // placement (localPos0) — the whole point of the lowering.
+        let src = doc.source();
+        assert!(
+            src.contains("physics:body0") && src.contains("/Rig/Chassis"),
+            "body0 → host"
+        );
+        assert!(
+            src.contains("physics:body1") && src.contains("/Rig/Chassis/Wheel"),
+            "body1 → part"
+        );
+        assert!(src.contains("physics:localPos0"), "anchor authored");
+        assert!(src.contains("physics:axis"), "revolute axis authored");
+    }
+
+    #[test]
+    fn set_attribute_string_round_trips_realistic_rhai_verbatim() {
+        // `SetAttribute` with type `string` authors the value RAW: a rhai scenario's
+        // source must survive serialize→reparse byte-for-byte without the caller
+        // hand-escaping a USD literal. This is what real rhai looks like — embedded
+        // double quotes, backslashes, and newlines. (The openusd USDA lexer keeps raw
+        // bytes between triple-quote delimiters, so `\"` and `\` pass through verbatim
+        // — no escape processing to corrupt them.)
+        let src = "fn on_tick(me) {\n    let s = \"he said \\\"hi\\\"\";\n    let path = \"C:\\\\rover\";\n    notify(s + path, \"info\");\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(60),
+            "#usda 1.0\ndef Xform \"Rover\"\n{\n}\n",
+            DocumentOrigin::writable_file("/tmp/script.usda"),
+        );
+        doc.apply(UsdOp::SetAttribute {
+            edit_target: LayerId::root(),
+            path: "/Rover".into(),
+            name: "info:sourceCode".into(),
+            type_name: "string".into(),
+            value: src.to_string(),
+        })
+        .unwrap();
+
+        // Serialize, then reparse from scratch — the true round-trip a save+reload
+        // does. The recovered value must equal the original verbatim.
+        let reparsed = UsdDocument::with_origin(
+            DocumentId::new(61),
+            doc.source(),
+            DocumentOrigin::writable_file("/tmp/script2.usda"),
+        );
+        let got = reparsed
+            .data()
+            .prim_attribute_value::<String>(&SdfPath::new("/Rover").unwrap(), "info:sourceCode");
+        assert_eq!(
+            got.as_deref(),
+            Some(src),
+            "real rhai source must round-trip verbatim.\nserialized:\n{}",
+            doc.source()
+        );
+    }
+
+    #[test]
+    fn set_attribute_string_rejects_unserializable_both_triple_delimiters() {
+        // The one thing USDA cannot delimit: a value containing BOTH `"""` and
+        // `'''` (its lexer does not unescape, so neither triple-quote is safe). We
+        // reject at apply, not at save — a stranded unsavable document is worse than
+        // a clear up-front error. Real rhai never produces this.
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(63),
+            "#usda 1.0\ndef Xform \"Rover\"\n{\n}\n",
+            DocumentOrigin::writable_file("/tmp/script3.usda"),
+        );
+        let err = doc.apply(UsdOp::SetAttribute {
+            edit_target: LayerId::root(),
+            path: "/Rover".into(),
+            name: "info:sourceCode".into(),
+            type_name: "string".into(),
+            value: "a \"\"\" b ''' c".into(),
+        });
+        assert!(
+            matches!(err, Err(DocumentError::ValidationFailed(_))),
+            "both-triple-delimiter content must be rejected at apply, got {err:?}"
+        );
+        // And the document is untouched — the rejected op left no partial edit.
+        assert!(
+            !doc.source().contains("info:sourceCode"),
+            "a rejected op must not partially author"
+        );
+    }
+
+    #[test]
+    fn set_attribute_string_undoes() {
+        let mut host = DocumentHost::new(UsdDocument::with_origin(
+            DocumentId::new(62),
+            "#usda 1.0\ndef Xform \"Rover\"\n{\n}\n",
+            DocumentOrigin::writable_file("/tmp/s.usda"),
+        ));
+        host.apply(Mutation::local(UsdOp::SetAttribute {
+            edit_target: LayerId::root(),
+            path: "/Rover".into(),
+            name: "info:sourceCode".into(),
+            type_name: "string".into(),
+            value: "fn on_tick(me) {}".into(),
+        }))
+        .unwrap();
+        assert!(host.document().source().contains("on_tick"), "authored");
+        assert!(
+            reparses_cleanly(host.document()),
+            "authored string reparses cleanly"
+        );
+        host.undo().unwrap();
+        assert!(
+            !host.document().source().contains("on_tick"),
+            "undo removes the newly-authored attribute: {}",
+            host.document().source()
+        );
+    }
+
+    #[test]
+    fn untitled_starts_dirty_and_writable() {
+        let doc = UsdDocument::new(DocumentId::new(1), TINY_USDA);
+        assert!(doc.is_dirty());
+        assert!(doc.origin().accepts_mutations());
+        assert_eq!(doc.generation(), 0);
+        // Source serializes from canonical data and preserves structure.
+        assert!(doc.source().contains("def Xform \"World\""));
+    }
+
+    #[test]
+    fn from_file_origin_starts_clean() {
+        let doc = UsdDocument::with_origin(
+            DocumentId::new(2),
+            TINY_USDA,
+            DocumentOrigin::writable_file("/tmp/scene.usda"),
+        );
+        assert!(!doc.is_dirty());
+    }
+
+    #[test]
+    fn forks_isolate_layers_revisions_and_composed_cache() {
+        const SCENE: &str = "#usda 1.0\n(\n    metersPerUnit = 1\n)\ndef Sphere \"Ball\"\n{\n    double radius = 1\n}\n";
+        let source = UsdDocument::with_origin(
+            DocumentId::new(10),
+            SCENE,
+            DocumentOrigin::writable_file("/tmp/source.usda"),
+        );
+        let mut left = source.fork(DocumentId::new(11), "Left.usda").unwrap();
+        let mut right = source.fork(DocumentId::new(12), "Right.usda").unwrap();
+
+        assert_eq!(left.generation(), right.generation());
+        assert!(left.is_dirty() && right.is_dirty());
+        let ball = SdfPath::new("/Ball").unwrap();
+
+        left.apply(UsdOp::SetAttribute {
+            edit_target: LayerId::root(),
+            path: "/Ball".into(),
+            name: "radius".into(),
+            type_name: "double".into(),
+            value: "2".into(),
+        })
+        .unwrap();
+        right
+            .apply(UsdOp::SetAttribute {
+                edit_target: LayerId::root(),
+                path: "/Ball".into(),
+                name: "radius".into(),
+                type_name: "double".into(),
+                value: "3".into(),
+            })
+            .unwrap();
+
+        assert_eq!(left.generation(), right.generation());
+        assert_eq!(
+            left.composed_arc()
+                .prim_attribute_value::<f64>(&ball, "radius"),
+            Some(2.0)
+        );
+        assert_eq!(
+            right
+                .composed_arc()
+                .prim_attribute_value::<f64>(&ball, "radius"),
+            Some(3.0)
+        );
+        assert_eq!(
+            left.composed_arc()
+                .prim_attribute_value::<f64>(&ball, "radius"),
+            Some(2.0),
+            "a later equal-generation fork must not replace the first fork's memo"
+        );
+        assert_eq!(
+            source
+                .composed_arc()
+                .prim_attribute_value::<f64>(&ball, "radius"),
+            Some(1.0)
+        );
+
+        left.apply(UsdOp::AddPrim {
+            edit_target: LayerId::runtime(),
+            parent_path: "/".into(),
+            name: "RuntimeOnly".into(),
+            type_name: Some("Xform".into()),
+            reference: None,
+            reference_prim_path: None,
+        })
+        .unwrap();
+        assert!(left
+            .runtime_data()
+            .spec(&SdfPath::new("/RuntimeOnly").unwrap())
+            .is_some());
+        assert!(right
+            .runtime_data()
+            .spec(&SdfPath::new("/RuntimeOnly").unwrap())
+            .is_none());
+        assert!(source
+            .runtime_data()
+            .spec(&SdfPath::new("/RuntimeOnly").unwrap())
+            .is_none());
+
+        left.mark_saved();
+        assert!(!left.is_dirty());
+        assert!(right.is_dirty());
+        let cached = left.composed_arc();
+        let cached_weak = std::sync::Arc::downgrade(&cached);
+        drop(cached);
+        drop(left);
+        assert!(
+            cached_weak.upgrade().is_none(),
+            "dropping a fork must release its derived cache"
+        );
+    }
+
+    #[test]
+    fn fork_requires_new_identity_and_makes_readonly_sources_editable() {
+        let source = UsdDocument::with_origin(
+            DocumentId::new(10),
+            "#usda 1.0\ndef Xform \"World\" {}\n",
+            DocumentOrigin::bundled("World.usda"),
+        );
+
+        assert!(matches!(
+            source.fork(DocumentId::default(), "Invalid.usda"),
+            Err(DocumentError::ValidationFailed(_))
+        ));
+        assert!(matches!(
+            source.fork(DocumentId::new(10), "Invalid.usda"),
+            Err(DocumentError::ValidationFailed(_))
+        ));
+
+        let mut fork = source.fork(DocumentId::new(11), "World-copy.usda").unwrap();
+        assert!(fork.origin().is_untitled());
+        assert!(fork.origin().accepts_mutations());
+        fork.apply(UsdOp::AddPrim {
+            edit_target: LayerId::root(),
+            parent_path: "/".into(),
+            name: "EditableCopy".into(),
+            type_name: Some("Xform".into()),
+            reference: None,
+            reference_prim_path: None,
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn readonly_origin_rejects_ops() {
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(3),
+            TINY_USDA,
+            DocumentOrigin::readonly_file("/tmp/scene.usda"),
+        );
+        let err = doc
+            .apply(UsdOp::ReplaceSource {
+                edit_target: LayerId::root(),
+                text: "#usda 1.0\n".to_string(),
+            })
+            .unwrap_err();
+        assert_eq!(err, DocumentError::ReadOnly);
+        assert_eq!(doc.generation(), 0);
+    }
+
+    #[test]
+    fn replace_source_round_trips_via_undo_redo() {
+        let mut host = DocumentHost::new(UsdDocument::new(DocumentId::new(4), TINY_USDA));
+        let new_text = "#usda 1.0\ndef Xform \"Other\"\n{\n}\n";
+        host.apply(Mutation::local(UsdOp::ReplaceSource {
+            edit_target: LayerId::root(),
+            text: new_text.to_string(),
+        }))
+        .unwrap();
+        assert!(prim_exists(host.document(), "/Other"));
+        assert!(!prim_exists(host.document(), "/World"));
+        assert_eq!(host.generation(), 1);
+
+        host.undo().unwrap();
+        assert!(prim_exists(host.document(), "/World"));
+        assert!(!prim_exists(host.document(), "/Other"));
+        assert_eq!(host.generation(), 2);
+
+        host.redo().unwrap();
+        assert!(prim_exists(host.document(), "/Other"));
+        assert_eq!(host.generation(), 3);
+    }
+
+    #[test]
+    fn mark_saved_clears_dirty() {
+        let mut doc = UsdDocument::new(DocumentId::new(5), TINY_USDA);
+        assert!(doc.is_dirty());
+        doc.mark_saved();
+        assert!(!doc.is_dirty());
+        doc.apply(UsdOp::ReplaceSource {
+            edit_target: LayerId::root(),
+            text: "#usda 1.0\n".to_string(),
+        })
+        .unwrap();
+        assert!(doc.is_dirty());
+    }
+
+    #[test]
+    fn changes_since_returns_only_new_tail() {
+        let mut doc = UsdDocument::new(DocumentId::new(6), TINY_USDA);
+        doc.apply(UsdOp::ReplaceSource {
+            edit_target: LayerId::root(),
+            text: "#usda 1.0\n".to_string(),
+        })
+        .unwrap();
+        let after_first = doc.generation();
+        doc.apply(UsdOp::AddPrim {
+            edit_target: LayerId::root(),
+            parent_path: "/".into(),
+            name: "Thing".into(),
+            type_name: Some("Xform".into()),
+            reference: None,
+            reference_prim_path: None,
+        })
+        .unwrap();
+        let tail: Vec<_> = doc.changes_since(after_first).collect();
+        assert_eq!(tail.len(), 1);
+        assert!(matches!(tail[0].1, UsdChange::Resync { .. }));
+    }
+
+    /// Author-once: `ops_since` returns the exact typed ops the live-stage
+    /// projector replays — the suffix strictly after a generation, in order, with
+    /// each op verbatim (so the projector never re-derives the delta from state).
+    #[test]
+    fn ops_since_returns_typed_op_suffix() {
+        let mut doc = UsdDocument::new(DocumentId::new(30), TINY_USDA);
+        doc.apply(UsdOp::AddPrim {
+            edit_target: LayerId::root(),
+            parent_path: "/World".into(),
+            name: "Box".into(),
+            type_name: Some("Cube".into()),
+            reference: None,
+            reference_prim_path: None,
+        })
+        .unwrap();
+        let after_spawn = doc.generation();
+        doc.apply(UsdOp::SetTranslate {
+            edit_target: LayerId::root(),
+            path: "/World/Box".into(),
+            value: [1.0, 2.0, 3.0],
+        })
+        .unwrap();
+
+        // From the start: both ops, in order.
+        let all = doc.ops_since(0).expect("ring not overflowed");
+        assert_eq!(all.len(), 2);
+        assert!(matches!(all[0], UsdOp::AddPrim { ref name, .. } if name == "Box"));
+        assert!(matches!(all[1], UsdOp::SetTranslate { value, .. } if value == [1.0, 2.0, 3.0]));
+
+        // Strictly after the spawn: just the translate (verbatim value).
+        let tail = doc.ops_since(after_spawn).expect("ring not overflowed");
+        assert_eq!(tail.len(), 1);
+        assert!(matches!(tail[0], UsdOp::SetTranslate { value, .. } if value == [1.0, 2.0, 3.0]));
+
+        // A `since` far below current with entries dropped can't be trusted → None.
+        assert!(
+            doc.ops_since(0).is_some(),
+            "no overflow for a short history"
+        );
+    }
+
+    /// A rejected op neither bumps the generation nor records into the op log, so
+    /// the projector never replays a no-op.
+    #[test]
+    fn rejected_op_is_not_logged() {
+        let mut doc = UsdDocument::new(DocumentId::new(31), TINY_USDA);
+        // Unknown parent → validation failure, no commit.
+        let _ = doc.apply(UsdOp::AddPrim {
+            edit_target: LayerId::root(),
+            parent_path: "/Nope".into(),
+            name: "X".into(),
+            type_name: Some("Xform".into()),
+            reference: None,
+            reference_prim_path: None,
+        });
+        assert_eq!(doc.generation(), 0);
+        assert_eq!(
+            doc.ops_since(0).unwrap().len(),
+            0,
+            "rejected op is not in the op log"
+        );
+    }
+
+    /// Author-once's load-bearing invariant: **every generation bump records
+    /// exactly one op-log entry**, so `ops_since(0).len() == generation`. This
+    /// must hold across the *non-op* path too — [`restore_runtime`] bumps the
+    /// generation without a typed op, and relies on the synthetic marker to stay
+    /// in lockstep. If a future `commit` caller breaks this, `ops_since` under-
+    /// counts and the projector falls back to a full rebuild (fail-safe) rather
+    /// than under-applying — this test pins the lockstep so that stays a
+    /// deliberate choice, not an accident.
+    #[test]
+    fn op_log_stays_in_lockstep_with_generation() {
+        let mut doc = UsdDocument::new(DocumentId::new(32), TINY_USDA);
+        doc.apply(UsdOp::AddPrim {
+            edit_target: LayerId::root(),
+            parent_path: "/World".into(),
+            name: "a".into(),
+            type_name: Some("Xform".into()),
+            reference: None,
+            reference_prim_path: None,
+        })
+        .unwrap();
+        doc.apply(UsdOp::SetTranslate {
+            edit_target: LayerId::root(),
+            path: "/World/a".into(),
+            value: [1.0, 2.0, 3.0],
+        })
+        .unwrap();
+        // A non-op runtime restore also bumps the generation — the synthetic
+        // marker must keep the op log one-per-generation.
+        doc.restore_runtime(usda_to_data(TINY_USDA).unwrap());
+
+        let ops = doc
+            .ops_since(0)
+            .expect("op ring holds an entry for every generation");
+        assert_eq!(
+            ops.len() as u64,
+            doc.generation(),
+            "one op-log entry per generation bump (incl. the restore_runtime marker)"
+        );
+    }
+
+    /// Overwriting an **existing** attribute inverts to a *typed* `SetAttribute`
+    /// carrying the prior value — so undo replays incrementally rather than
+    /// forcing a whole-layer `ReplaceSource` rebuild. Applying that inverse
+    /// restores the original value.
+    #[test]
+    fn set_attribute_overwrite_inverts_to_typed_op() {
+        const SCENE: &str = "#usda 1.0\n(\n    metersPerUnit = 1\n)\ndef Sphere \"Ball\"\n{\n    double radius = 1\n}\n";
+        let mut doc = UsdDocument::new(DocumentId::new(40), SCENE);
+        let ball = SdfPath::new("/Ball").unwrap();
+
+        let inverse = doc
+            .apply(UsdOp::SetAttribute {
+                edit_target: LayerId::root(),
+                path: "/Ball".into(),
+                name: "radius".into(),
+                type_name: "double".into(),
+                value: "5".into(),
+            })
+            .unwrap();
+        assert_eq!(
+            doc.data().prim_attribute_value::<f64>(&ball, "radius"),
+            Some(5.0)
+        );
+        assert!(
+            matches!(&inverse, UsdOp::SetAttribute { name, .. } if name == "radius"),
+            "overwrite of an existing attribute must invert to a typed SetAttribute, got {inverse:?}"
+        );
+
+        // Replaying the inverse restores the prior value incrementally.
+        doc.apply(inverse).unwrap();
+        assert_eq!(
+            doc.data().prim_attribute_value::<f64>(&ball, "radius"),
+            Some(1.0)
+        );
+    }
+
+    /// ARRAY-valued attributes invert typed too: `value_to_literal` now formats
+    /// through the fork's single-line writer, so the multi-element case that
+    /// used to miss the literal scrape (and fall back to a whole-source
+    /// snapshot) carries a typed inverse like any scalar.
+    #[test]
+    fn set_attribute_array_overwrite_inverts_to_typed_op() {
+        const SCENE: &str =
+            "#usda 1.0\ndef Mesh \"Patch\"\n{\n    float[] widths = [0.5, 1.5]\n}\n";
+        let mut doc = UsdDocument::new(DocumentId::new(45), SCENE);
+        let before = doc.source();
+
+        let inverse = doc
+            .apply(UsdOp::SetAttribute {
+                edit_target: LayerId::root(),
+                path: "/Patch".into(),
+                name: "widths".into(),
+                type_name: "float[]".into(),
+                value: "[2.5, 3.5, 4.5]".into(),
+            })
+            .unwrap();
+        assert!(
+            matches!(&inverse, UsdOp::SetAttribute { value, .. } if value == "[0.5, 1.5]"),
+            "array overwrite must invert to a typed SetAttribute with the prior \
+             array literal, got {inverse:?}"
+        );
+        doc.apply(inverse).unwrap();
+        assert_eq!(doc.source(), before, "undo restores the prior array");
+    }
+
+    /// Authoring a **brand-new** attribute has no prior value to restore, so it
+    /// inverts to the always-correct whole-source snapshot — which also *removes*
+    /// the new opinion on undo (something a typed `SetAttribute` cannot express).
+    #[test]
+    fn set_attribute_create_inverts_to_coarse_snapshot() {
+        const SCENE: &str = "#usda 1.0\ndef Sphere \"Ball\"\n{\n}\n";
+        let mut doc = UsdDocument::new(DocumentId::new(41), SCENE);
+        let ball = SdfPath::new("/Ball").unwrap();
+
+        let inverse = doc
+            .apply(UsdOp::SetAttribute {
+                edit_target: LayerId::root(),
+                path: "/Ball".into(),
+                name: "radius".into(),
+                type_name: "double".into(),
+                value: "5".into(),
+            })
+            .unwrap();
+        assert!(
+            matches!(inverse, UsdOp::ReplaceSource { .. }),
+            "a newly-authored attribute inverts to a whole-source snapshot, got {inverse:?}"
+        );
+
+        // Undo removes the attribute entirely.
+        doc.apply(inverse).unwrap();
+        assert_eq!(
+            doc.data().prim_attribute_value::<f64>(&ball, "radius"),
+            None,
+            "undo of a newly-authored attribute removes it"
+        );
+    }
+
+    /// One time-sample op at time 5, for the sample-inverse tests.
+    fn time_sample_op(value: &str) -> UsdOp {
+        UsdOp::SetTimeSample {
+            edit_target: LayerId::root(),
+            path: "/World".into(),
+            name: "lunco:test:t".into(),
+            type_name: "double".into(),
+            time: 5.0,
+            value: value.into(),
+        }
+    }
+
+    /// Overwriting an **existing** time sample inverts to a typed
+    /// `SetTimeSample` carrying the prior value (a brand-new sample already
+    /// inverts to a typed `RemoveTimeSample`); undoing it restores the exact
+    /// prior source.
+    #[test]
+    fn set_time_sample_overwrite_inverts_to_typed_op() {
+        let mut doc = UsdDocument::new(DocumentId::new(42), TINY_USDA);
+        doc.apply(time_sample_op("1.5")).unwrap();
+        let before = doc.source();
+
+        let inverse = doc.apply(time_sample_op("2.5")).unwrap();
+        assert!(
+            matches!(&inverse, UsdOp::SetTimeSample { value, .. } if value == "1.5"),
+            "overwriting an existing sample must invert to a typed SetTimeSample, got {inverse:?}"
+        );
+        doc.apply(inverse).unwrap();
+        assert_eq!(doc.source(), before, "undo restores the prior sample");
+    }
+
+    /// `RemoveTimeSample` inverts to a typed `SetTimeSample` re-authoring the
+    /// removed value — no whole-source snapshot; undoing it restores the sample.
+    #[test]
+    fn remove_time_sample_inverts_to_typed_set_time_sample() {
+        let mut doc = UsdDocument::new(DocumentId::new(43), TINY_USDA);
+        doc.apply(time_sample_op("3.5")).unwrap();
+        let before = doc.source();
+
+        let inverse = doc
+            .apply(UsdOp::RemoveTimeSample {
+                edit_target: LayerId::root(),
+                path: "/World".into(),
+                name: "lunco:test:t".into(),
+                time: 5.0,
+            })
+            .unwrap();
+        assert!(
+            matches!(&inverse, UsdOp::SetTimeSample { value, type_name, .. }
+                if value == "3.5" && type_name == "double"),
+            "removing a sample must invert to a typed SetTimeSample, got {inverse:?}"
+        );
+        doc.apply(inverse).unwrap();
+        assert_eq!(doc.source(), before, "undo restores the removed sample");
+    }
+
+    /// Overwriting an **existing** relationship inverts to a typed
+    /// `SetRelationship` with the prior targets; creating one has no prior list
+    /// to restore, so it inverts to the coarse snapshot — which removes the new
+    /// opinion on undo.
+    #[test]
+    fn set_relationship_overwrite_inverts_to_typed_op() {
+        let mut doc = UsdDocument::new(DocumentId::new(44), TINY_USDA);
+        let rel = |targets: Vec<String>| UsdOp::SetRelationship {
+            edit_target: LayerId::root(),
+            path: "/World".into(),
+            name: "material:binding".into(),
+            targets,
+        };
+        let original = doc.source();
+        let create_inverse = doc.apply(rel(vec!["/World".into()])).unwrap();
+        assert!(
+            matches!(&create_inverse, UsdOp::ReplaceSource { .. }),
+            "a newly-authored relationship inverts to a snapshot, got {create_inverse:?}"
+        );
+        let before = doc.source();
+
+        let inverse = doc.apply(rel(vec![])).unwrap();
+        assert!(
+            matches!(&inverse, UsdOp::SetRelationship { targets, .. }
+                if targets == &["/World".to_string()]),
+            "overwriting an existing relationship must invert to a typed SetRelationship, got {inverse:?}"
+        );
+        doc.apply(inverse).unwrap();
+        assert_eq!(doc.source(), before, "undo restores the prior targets");
+        doc.apply(create_inverse).unwrap();
+        assert_eq!(
+            doc.source(),
+            original,
+            "coarse undo removes the created opinion"
+        );
+    }
+
+    /// The `SetRelationship` invariants, for the attribute-connection twin.
+    #[test]
+    fn set_connection_overwrite_inverts_to_typed_op() {
+        let mut doc = UsdDocument::new(DocumentId::new(45), TINY_USDA);
+        let conn = |sources: Vec<String>| UsdOp::SetConnection {
+            edit_target: LayerId::root(),
+            path: "/World".into(),
+            name: "inputs:v".into(),
+            type_name: "float".into(),
+            sources,
+        };
+        let original = doc.source();
+        let create_inverse = doc.apply(conn(vec!["/World.outputs:v".into()])).unwrap();
+        assert!(
+            matches!(&create_inverse, UsdOp::ReplaceSource { .. }),
+            "a newly-authored connection inverts to a snapshot, got {create_inverse:?}"
+        );
+        let before = doc.source();
+
+        let inverse = doc.apply(conn(vec![])).unwrap();
+        assert!(
+            matches!(&inverse, UsdOp::SetConnection { sources, .. }
+                if sources == &["/World.outputs:v".to_string()]),
+            "overwriting an existing connection must invert to a typed SetConnection, got {inverse:?}"
+        );
+        doc.apply(inverse).unwrap();
+        assert_eq!(doc.source(), before, "undo restores the prior sources");
+        doc.apply(create_inverse).unwrap();
+        assert_eq!(
+            doc.source(),
+            original,
+            "coarse undo removes the created opinion"
+        );
+    }
+
+    /// Overwriting an existing (explicit) `apiSchemas` list inverts to a typed
+    /// `SetApiSchemas` with the prior tokens; the first authoring inverts coarse.
+    #[test]
+    fn set_api_schemas_overwrite_inverts_to_typed_op() {
+        let mut doc = UsdDocument::new(DocumentId::new(46), TINY_USDA);
+        let api = |schemas: Vec<String>| UsdOp::SetApiSchemas {
+            edit_target: LayerId::root(),
+            path: "/World".into(),
+            schemas,
+        };
+        let original = doc.source();
+        let create_inverse = doc.apply(api(vec!["PhysicsRigidBodyAPI".into()])).unwrap();
+        assert!(
+            matches!(&create_inverse, UsdOp::ReplaceSource { .. }),
+            "first apiSchemas authoring inverts to a snapshot, got {create_inverse:?}"
+        );
+        let before = doc.source();
+
+        let inverse = doc.apply(api(vec!["PhysicsMassAPI".into()])).unwrap();
+        assert!(
+            matches!(&inverse, UsdOp::SetApiSchemas { schemas, .. }
+                if schemas == &["PhysicsRigidBodyAPI".to_string()]),
+            "overwriting a prior apiSchemas list must invert to a typed SetApiSchemas, got {inverse:?}"
+        );
+        doc.apply(inverse).unwrap();
+        assert_eq!(doc.source(), before, "undo restores the prior schema list");
+        doc.apply(create_inverse).unwrap();
+        assert_eq!(
+            doc.source(),
+            original,
+            "coarse undo removes the created opinion"
+        );
+    }
+
+    /// Re-selecting a variant inverts to a typed `SetVariantSelection` carrying
+    /// the prior selection; the set's first selection inverts coarse (the only
+    /// way to express "unselected").
+    #[test]
+    fn set_variant_selection_overwrite_inverts_to_typed_op() {
+        let mut doc = UsdDocument::new(DocumentId::new(47), TINY_USDA);
+        let select = |variant: &str| UsdOp::SetVariantSelection {
+            edit_target: LayerId::root(),
+            path: "/World".into(),
+            variant_set: "drivetrain".into(),
+            variant: variant.into(),
+        };
+        let original = doc.source();
+        let create_inverse = doc.apply(select("raycast")).unwrap();
+        assert!(
+            matches!(&create_inverse, UsdOp::ReplaceSource { .. }),
+            "a set's first selection inverts to a snapshot, got {create_inverse:?}"
+        );
+        let before = doc.source();
+
+        let inverse = doc.apply(select("physical")).unwrap();
+        assert!(
+            matches!(&inverse, UsdOp::SetVariantSelection { variant, .. } if variant == "raycast"),
+            "re-selecting must invert to a typed SetVariantSelection, got {inverse:?}"
+        );
+        doc.apply(inverse).unwrap();
+        assert_eq!(doc.source(), before, "undo restores the prior selection");
+        doc.apply(create_inverse).unwrap();
+        assert_eq!(
+            doc.source(),
+            original,
+            "coarse undo removes the created opinion"
+        );
+    }
+
+    /// Overwriting an existing payload list inverts to a typed `SetPayload`
+    /// with the prior asset paths; the first authoring inverts coarse.
+    #[test]
+    fn set_payload_overwrite_inverts_to_typed_op() {
+        let mut doc = UsdDocument::new(DocumentId::new(48), TINY_USDA);
+        let payload = |asset_paths: Vec<String>| UsdOp::SetPayload {
+            edit_target: LayerId::root(),
+            path: "/World".into(),
+            asset_paths,
+        };
+        let original = doc.source();
+        let create_inverse = doc.apply(payload(vec!["meshes/hull.usda".into()])).unwrap();
+        assert!(
+            matches!(&create_inverse, UsdOp::ReplaceSource { .. }),
+            "first payload authoring inverts to a snapshot, got {create_inverse:?}"
+        );
+        let before = doc.source();
+
+        let inverse = doc.apply(payload(vec![])).unwrap();
+        assert!(
+            matches!(&inverse, UsdOp::SetPayload { asset_paths, .. }
+                if asset_paths == &["meshes/hull.usda".to_string()]),
+            "overwriting an existing payload list must invert to a typed SetPayload, got {inverse:?}"
+        );
+        doc.apply(inverse).unwrap();
+        assert_eq!(doc.source(), before, "undo restores the prior payload list");
+        doc.apply(create_inverse).unwrap();
+        assert_eq!(
+            doc.source(),
+            original,
+            "coarse undo removes the created opinion"
+        );
+    }
+
+    #[test]
+    fn set_reference_arcs_preserves_weaker_layer_opinions() {
+        let source = "#usda 1.0\n\
+def Xform \"World\" (\n\
+    prepend references = @base.usda@</Base>\n\
+)\n\
+{\n}\n";
+        let mut doc = UsdDocument::new(DocumentId::new(49), source);
+        doc.apply(UsdOp::SetReferenceArcs {
+            edit_target: LayerId::runtime(),
+            path: "/World".into(),
+            references: vec![UsdReferenceArc {
+                asset_path: "lunco://components/rover.usda".into(),
+                prim_path: Some("/Rover".into()),
+            }],
+            list_op: UsdReferenceListOp::Prepend,
+        })
+        .expect("runtime reference prepend applies");
+
+        let path = SdfPath::new("/World").unwrap();
+        let composed = doc.composed_arc();
+        let Some(sdf::Value::ReferenceListOp(op)) =
+            composed.field(&path, sdf::FieldKey::References.as_str())
+        else {
+            panic!("expected composed reference list");
+        };
+        let items = op.flatten();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].asset_path, "lunco://components/rover.usda");
+        assert_eq!(items[0].prim_path.as_str(), "/Rover");
+        assert_eq!(items[1].asset_path, "base.usda");
+
+        doc.apply(UsdOp::SetReferenceArcs {
+            edit_target: LayerId::runtime(),
+            path: "/World".into(),
+            references: vec![UsdReferenceArc {
+                asset_path: "base.usda".into(),
+                prim_path: Some("/Base".into()),
+            }],
+            list_op: UsdReferenceListOp::Delete,
+        })
+        .expect("reference delete applies");
+        let composed = doc.composed_arc();
+        let Some(sdf::Value::ReferenceListOp(op)) =
+            composed.field(&path, sdf::FieldKey::References.as_str())
+        else {
+            panic!("expected deleted reference list");
+        };
+        assert!(op.flatten().is_empty());
+
+        doc.apply(UsdOp::SetReferenceArcs {
+            edit_target: LayerId::runtime(),
+            path: "/World".into(),
+            references: Vec::new(),
+            list_op: UsdReferenceListOp::Explicit,
+        })
+        .expect("explicit empty reference list applies");
+        let composed = doc.composed_arc();
+        let Some(sdf::Value::ReferenceListOp(op)) =
+            composed.field(&path, sdf::FieldKey::References.as_str())
+        else {
+            panic!("expected explicit clear reference list");
+        };
+        assert!(op.explicit && op.flatten().is_empty());
+    }
+
+    #[test]
+    fn set_reference_arcs_overwrite_undo_is_typed_and_round_trips() {
+        let mut doc = UsdDocument::new(DocumentId::new(50), TINY_USDA);
+        let explicit = |asset_path: &str| UsdOp::SetReferenceArcs {
+            edit_target: LayerId::root(),
+            path: "/World".into(),
+            references: vec![UsdReferenceArc {
+                asset_path: asset_path.into(),
+                prim_path: None,
+            }],
+            list_op: UsdReferenceListOp::Explicit,
+        };
+        let original = doc.source();
+        let first_inverse = doc.apply(explicit("base.usda")).unwrap();
+        assert!(matches!(first_inverse, UsdOp::ReplaceSource { .. }));
+        let before = doc.source();
+
+        let inverse = doc
+            .apply(UsdOp::SetReferenceArcs {
+                edit_target: LayerId::root(),
+                path: "/World".into(),
+                references: vec![UsdReferenceArc {
+                    asset_path: "override.usda".into(),
+                    prim_path: Some("/Root".into()),
+                }],
+                list_op: UsdReferenceListOp::Prepend,
+            })
+            .unwrap();
+        assert!(matches!(
+            &inverse,
+            UsdOp::SetReferenceArcs {
+                references,
+                list_op: UsdReferenceListOp::Explicit,
+                ..
+            } if references.len() == 1 && references[0].asset_path == "base.usda"
+        ));
+        let encoded = serde_json::to_value(&inverse).unwrap();
+        let decoded: UsdOp = serde_json::from_value(encoded).unwrap();
+        doc.apply(decoded).unwrap();
+        assert_eq!(doc.source(), before, "typed undo restores the prior list");
+        doc.apply(first_inverse).unwrap();
+        assert_eq!(
+            doc.source(),
+            original,
+            "coarse undo removes the first opinion"
+        );
+    }
+
+    #[test]
+    fn set_reference_arcs_rejects_unsafe_assets_and_composed_only_targets() {
+        let source = "#usda 1.0\ndef Xform \"World\" (\n\
+    prepend references = @base.usda@</Base>\n\
+)\n{\n}\n";
+        let mut doc = UsdDocument::new(DocumentId::new(51), source);
+        let invalid = doc
+            .apply(UsdOp::SetReferenceArcs {
+                edit_target: LayerId::root(),
+                path: "/World".into(),
+                references: vec![UsdReferenceArc {
+                    asset_path: "../escape.usda".into(),
+                    prim_path: None,
+                }],
+                list_op: UsdReferenceListOp::Explicit,
+            })
+            .unwrap_err();
+        assert!(invalid.to_string().contains("safe asset path"));
+
+        let read_only = doc
+            .apply(UsdOp::SetReferenceArcs {
+                edit_target: LayerId::root(),
+                path: "/World/Child".into(),
+                references: Vec::new(),
+                list_op: UsdReferenceListOp::Explicit,
+            })
+            .unwrap_err();
+        assert!(read_only.to_string().contains("composed/read-only"));
+    }
+
+    #[test]
+    fn set_default_prim_authors_layers_and_typed_undo() {
+        const SCENE: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\n\ndef Xform \"World\" {}\ndef Xform \"Rover\" {}\n";
+        let mut doc = UsdDocument::new(DocumentId::new(52), SCENE);
+        let root = SdfPath::abs_root();
+        let before = doc.source();
+
+        let inverse = doc
+            .apply(UsdOp::SetDefaultPrim {
+                edit_target: LayerId::root(),
+                default_prim: Some("/Rover".into()),
+            })
+            .unwrap();
+        assert!(matches!(
+            &inverse,
+            UsdOp::SetDefaultPrim {
+                default_prim: Some(value),
+                ..
+            } if value == "World"
+        ));
+        assert_eq!(
+            doc.data()
+                .field(&root, sdf::FieldKey::DefaultPrim.as_str())
+                .and_then(|value| match value {
+                    sdf::Value::Token(token) => Some(token.to_string()),
+                    _ => None,
+                }),
+            Some("Rover".into())
+        );
+        doc.apply(inverse).unwrap();
+        assert_eq!(doc.source(), before);
+
+        doc.apply(UsdOp::SetDefaultPrim {
+            edit_target: LayerId::runtime(),
+            default_prim: Some("Rover".into()),
+        })
+        .unwrap();
+        assert_eq!(
+            doc.composed_arc()
+                .field(&root, sdf::FieldKey::DefaultPrim.as_str())
+                .and_then(|value| match value {
+                    sdf::Value::Token(token) => Some(token.to_string()),
+                    _ => None,
+                }),
+            Some("Rover".into())
+        );
+        doc.apply(UsdOp::SetDefaultPrim {
+            edit_target: LayerId::runtime(),
+            default_prim: None,
+        })
+        .unwrap();
+        assert_eq!(doc.source(), before);
+    }
+
+    #[test]
+    fn set_default_prim_rejects_invalid_or_missing_targets() {
+        let mut doc = UsdDocument::new(DocumentId::new(53), TINY_USDA);
+        for default_prim in [
+            Some("/".into()),
+            Some("/World.radius".into()),
+            Some("/Missing".into()),
+        ] {
+            let generation = doc.generation();
+            let error = doc
+                .apply(UsdOp::SetDefaultPrim {
+                    edit_target: LayerId::root(),
+                    default_prim,
+                })
+                .unwrap_err();
+            assert!(matches!(error, DocumentError::ValidationFailed(_)));
+            assert_eq!(doc.generation(), generation);
+        }
+    }
+
+    #[test]
+    fn set_prim_kind_authors_layers_clears_and_rejects_invalid_targets() {
+        const SCENE: &str = "#usda 1.0\ndef Xform \"World\" (\n    kind = \"group\"\n) {}\n";
+        let mut doc = UsdDocument::new(DocumentId::new(54), SCENE);
+        let path = SdfPath::new("/World").unwrap();
+        let before = doc.source();
+
+        let inverse = doc
+            .apply(UsdOp::SetPrimKind {
+                edit_target: LayerId::runtime(),
+                path: "/World".into(),
+                kind: Some("component".into()),
+            })
+            .unwrap();
+        assert!(matches!(
+            &inverse,
+            UsdOp::SetPrimKind {
+                kind: None,
+                path: inverse_path,
+                ..
+            } if inverse_path == "/World"
+        ));
+        assert_eq!(
+            doc.runtime_data()
+                .field(&path, sdf::FieldKey::Kind.as_str())
+                .and_then(|value| match value {
+                    sdf::Value::Token(token) => Some(token.to_string()),
+                    _ => None,
+                }),
+            Some("component".into())
+        );
+        assert_eq!(
+            doc.composed_arc()
+                .field(&path, sdf::FieldKey::Kind.as_str())
+                .and_then(|value| match value {
+                    sdf::Value::Token(token) => Some(token.to_string()),
+                    _ => None,
+                }),
+            Some("component".into())
+        );
+        doc.apply(inverse).unwrap();
+        assert_eq!(doc.source(), before);
+
+        let invalid = doc
+            .apply(UsdOp::SetPrimKind {
+                edit_target: LayerId::root(),
+                path: "/World".into(),
+                kind: Some("not a kind".into()),
+            })
+            .unwrap_err();
+        assert!(invalid.to_string().contains("USD identifier"));
+
+        let read_only = doc
+            .apply(UsdOp::SetPrimKind {
+                edit_target: LayerId::root(),
+                path: "/World/Child".into(),
+                kind: Some("component".into()),
+            })
+            .unwrap_err();
+        assert!(read_only.to_string().contains("not found"));
+    }
+
+    #[test]
+    fn set_prim_kind_rejects_composed_only_prim() {
+        const SCENE: &str =
+            "#usda 1.0\ndef Xform \"World\" (\n    prepend references = @base.usda@</Base>\n) {}\n";
+        let mut doc = UsdDocument::new(DocumentId::new(55), SCENE);
+        let error = doc
+            .apply(UsdOp::SetPrimKind {
+                edit_target: LayerId::root(),
+                path: "/World/Child".into(),
+                kind: Some("component".into()),
+            })
+            .unwrap_err();
+        assert!(error.to_string().contains("composed/read-only"));
+    }
+
+    #[test]
+    fn unknown_edit_target_is_rejected() {
+        let mut doc = UsdDocument::new(DocumentId::new(7), TINY_USDA);
+        let err = doc
+            .apply(UsdOp::ReplaceSource {
+                edit_target: LayerId::new("sub.usda"),
+                text: "#usda 1.0\n".to_string(),
+            })
+            .unwrap_err();
+        assert!(matches!(err, DocumentError::ValidationFailed(_)));
+        assert_eq!(doc.generation(), 0);
+    }
+
+    #[test]
+    fn add_prim_appends_at_root_and_undoes() {
+        let mut host = DocumentHost::new(UsdDocument::new(DocumentId::new(8), TINY_USDA));
+        host.apply(Mutation::local(UsdOp::AddPrim {
+            edit_target: LayerId::root(),
+            parent_path: "/".into(),
+            name: "Rover".into(),
+            type_name: Some("Xform".into()),
+            reference: None,
+            reference_prim_path: None,
+        }))
+        .unwrap();
+        assert_eq!(
+            prim_type(host.document(), "/Rover").as_deref(),
+            Some("Xform")
+        );
+        // Typed inverse: AddPrim → RemovePrim removes exactly the new prim.
+        host.undo().unwrap();
+        assert!(!prim_exists(host.document(), "/Rover"));
+        assert!(prim_exists(host.document(), "/World"));
+    }
+
+    #[test]
+    fn add_prim_unknown_parent_validation_error() {
+        let mut doc = UsdDocument::new(DocumentId::new(9), TINY_USDA);
+        let err = doc
+            .apply(UsdOp::AddPrim {
+                edit_target: LayerId::root(),
+                parent_path: "/Nope".into(),
+                name: "Body".into(),
+                type_name: Some("Cube".into()),
+                reference: None,
+                reference_prim_path: None,
+            })
+            .unwrap_err();
+        assert!(matches!(err, DocumentError::ValidationFailed(_)));
+        assert_eq!(doc.generation(), 0);
+    }
+
+    #[test]
+    fn rover_built_from_blank_round_trips_with_undo() {
+        let mut host = DocumentHost::new(UsdDocument::new(DocumentId::new(10), EMPTY_USDA));
+
+        host.apply(Mutation::local(UsdOp::AddPrim {
+            edit_target: LayerId::root(),
+            parent_path: "/".into(),
+            name: "Rover".into(),
+            type_name: Some("Xform".into()),
+            reference: None,
+            reference_prim_path: None,
+        }))
+        .unwrap();
+        host.apply(Mutation::local(UsdOp::AddPrim {
+            edit_target: LayerId::root(),
+            parent_path: "/Rover".into(),
+            name: "WheelFL".into(),
+            type_name: Some("Cube".into()),
+            reference: None,
+            reference_prim_path: None,
+        }))
+        .unwrap();
+        host.apply(Mutation::local(UsdOp::SetTranslate {
+            edit_target: LayerId::root(),
+            path: "/Rover/WheelFL".into(),
+            value: [1.0, 0.0, 1.0],
+        }))
+        .unwrap();
+
+        let doc = host.document();
+        assert_eq!(prim_type(doc, "/Rover").as_deref(), Some("Xform"));
+        assert_eq!(prim_type(doc, "/Rover/WheelFL").as_deref(), Some("Cube"));
+        assert_eq!(
+            doc.data().prim_attribute_value::<[f64; 3]>(
+                &SdfPath::new("/Rover/WheelFL").unwrap(),
+                "xformOp:translate"
+            ),
+            Some([1.0, 0.0, 1.0])
+        );
+
+        // Undo every step → back to blank (no prims).
+        host.undo().unwrap();
+        host.undo().unwrap();
+        host.undo().unwrap();
+        assert!(!prim_exists(host.document(), "/Rover"));
+        assert!(!prim_exists(host.document(), "/Rover/WheelFL"));
+    }
+
+    #[test]
+    fn set_translate_does_not_clobber_nested_child_translate() {
+        // CQ-503: nested prims with the same attribute. Editing the parent's
+        // translate must leave the child's translate untouched.
+        let nested = "#usda 1.0\n(\n    metersPerUnit = 1\n)\ndef Xform \"A\"\n{\n    double3 xformOp:translate = (5, 5, 5)\n    uniform token[] xformOpOrder = [\"xformOp:translate\"]\n    def Xform \"B\"\n    {\n        double3 xformOp:translate = (9, 9, 9)\n        uniform token[] xformOpOrder = [\"xformOp:translate\"]\n    }\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(20),
+            nested,
+            DocumentOrigin::writable_file("/tmp/n.usda"),
+        );
+        doc.apply(UsdOp::SetTranslate {
+            edit_target: LayerId::root(),
+            path: "/A".into(),
+            value: [1.0, 2.0, 3.0],
+        })
+        .unwrap();
+        assert_eq!(
+            doc.data().prim_attribute_value::<[f64; 3]>(
+                &SdfPath::new("/A").unwrap(),
+                "xformOp:translate"
+            ),
+            Some([1.0, 2.0, 3.0])
+        );
+        assert_eq!(
+            doc.data().prim_attribute_value::<[f64; 3]>(
+                &SdfPath::new("/A/B").unwrap(),
+                "xformOp:translate"
+            ),
+            Some([9.0, 9.0, 9.0]),
+            "nested child translate must be untouched (CQ-503)"
+        );
+    }
+
+    /// `xformOpOrder` ACCUMULATES: authoring a second xform op appends to the
+    /// order in author order — it must not replace the list with a one-element
+    /// order, which silently discards the first op at composition time even
+    /// though its value attribute survives.
+    #[test]
+    fn set_translate_then_rotate_lists_both_ops_in_author_order() {
+        let scene = "#usda 1.0\n(\n    metersPerUnit = 1\n)\ndef Xform \"Rig\"\n{\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(60),
+            scene,
+            DocumentOrigin::writable_file("/tmp/order_tr.usda"),
+        );
+        doc.apply(UsdOp::SetTranslate {
+            edit_target: LayerId::root(),
+            path: "/Rig".into(),
+            value: [1.0, 2.0, 3.0],
+        })
+        .unwrap();
+        doc.apply(UsdOp::SetRotate {
+            edit_target: LayerId::root(),
+            path: "/Rig".into(),
+            value: [0.0, 90.0, 0.0],
+        })
+        .unwrap();
+
+        let rig = SdfPath::new("/Rig").unwrap();
+        assert_eq!(
+            xform_op_order_tokens(&doc.composed_arc(), &rig),
+            vec![
+                "xformOp:translate".to_string(),
+                "xformOp:rotateXYZ".to_string()
+            ],
+            "both ops listed, in author order"
+        );
+        // Both value attributes were authored too.
+        assert_eq!(
+            doc.data()
+                .prim_attribute_value::<[f64; 3]>(&rig, "xformOp:translate"),
+            Some([1.0, 2.0, 3.0])
+        );
+        assert_eq!(
+            doc.data()
+                .prim_attribute_value::<[f64; 3]>(&rig, "xformOp:rotateXYZ"),
+            Some([0.0, 90.0, 0.0])
+        );
+
+        // Re-setting an op already in the order overwrites the value WITHOUT
+        // duplicating its order entry.
+        doc.apply(UsdOp::SetRotate {
+            edit_target: LayerId::root(),
+            path: "/Rig".into(),
+            value: [0.0, 45.0, 0.0],
+        })
+        .unwrap();
+        assert_eq!(
+            xform_op_order_tokens(&doc.composed_arc(), &rig),
+            vec![
+                "xformOp:translate".to_string(),
+                "xformOp:rotateXYZ".to_string()
+            ],
+            "re-set of an existing op must not duplicate its xformOpOrder entry"
+        );
+        assert_eq!(
+            doc.data()
+                .prim_attribute_value::<[f64; 3]>(&rig, "xformOp:rotateXYZ"),
+            Some([0.0, 45.0, 0.0])
+        );
+    }
+
+    #[test]
+    fn set_scale_authors_standard_op_and_typed_undo() {
+        let scene = "#usda 1.0\n(\n    metersPerUnit = 1\n)\ndef Xform \"Rig\"\n{\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(64),
+            scene,
+            DocumentOrigin::writable_file("target/order_scale.usda"),
+        );
+        let rig = SdfPath::new("/Rig").unwrap();
+
+        let first_inverse = doc
+            .apply(UsdOp::SetScale {
+                edit_target: LayerId::root(),
+                path: "/Rig".into(),
+                value: [2.0, 3.0, 4.0],
+            })
+            .expect("initial scale applies");
+        assert_eq!(
+            xform_op_order_tokens(&doc.composed_arc(), &rig),
+            vec!["xformOp:scale".to_string()]
+        );
+        assert_eq!(
+            doc.data()
+                .prim_attribute_value::<[f64; 3]>(&rig, "xformOp:scale"),
+            Some([2.0, 3.0, 4.0])
+        );
+
+        let inverse = doc
+            .apply(UsdOp::SetScale {
+                edit_target: LayerId::root(),
+                path: "/Rig".into(),
+                value: [-2.0, 5.0, 6.0],
+            })
+            .expect("scale overwrite applies");
+        assert!(matches!(inverse, UsdOp::SetScale { value, .. } if value == [2.0, 3.0, 4.0]));
+        doc.apply(inverse).expect("typed scale undo applies");
+        assert_eq!(
+            doc.data()
+                .prim_attribute_value::<[f64; 3]>(&rig, "xformOp:scale"),
+            Some([2.0, 3.0, 4.0])
+        );
+        // The first edit introduced both the attribute and its order entry, so
+        // its inverse remains the existing exact source snapshot.
+        assert!(matches!(first_inverse, UsdOp::ReplaceSource { .. }));
+    }
+
+    /// The order is the AUTHOR order, not a canonical translate-first order:
+    /// rotate authored first stays first.
+    #[test]
+    fn xform_op_order_is_author_order_not_canonical() {
+        let scene = "#usda 1.0\n(\n    metersPerUnit = 1\n)\ndef Xform \"Rig\"\n{\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(61),
+            scene,
+            DocumentOrigin::writable_file("/tmp/order_rt.usda"),
+        );
+        doc.apply(UsdOp::SetRotate {
+            edit_target: LayerId::root(),
+            path: "/Rig".into(),
+            value: [0.0, 90.0, 0.0],
+        })
+        .unwrap();
+        doc.apply(UsdOp::SetTranslate {
+            edit_target: LayerId::root(),
+            path: "/Rig".into(),
+            value: [1.0, 2.0, 3.0],
+        })
+        .unwrap();
+        assert_eq!(
+            xform_op_order_tokens(&doc.composed_arc(), &SdfPath::new("/Rig").unwrap()),
+            vec![
+                "xformOp:rotateXYZ".to_string(),
+                "xformOp:translate".to_string()
+            ],
+            "rotate-first authoring lists rotate first"
+        );
+    }
+
+    /// The referenced-asset clobber case: the prim's composed `xformOpOrder`
+    /// already lists ops this edit did not author (an asset's own rotate/scale).
+    /// Authoring a translate must APPEND to that composed order — clobbering it
+    /// leaves the rotate/scale value attributes orphaned (authored but no longer
+    /// applied), which is exactly the silent visual regression this pins.
+    #[test]
+    fn set_translate_preserves_preexisting_composed_op_order() {
+        let scene = "#usda 1.0\n(\n    metersPerUnit = 1\n)\ndef Xform \"Part\"\n{\n    double3 xformOp:rotateXYZ = (0, 45, 0)\n    double3 xformOp:scale = (2, 2, 2)\n    uniform token[] xformOpOrder = [\"xformOp:rotateXYZ\", \"xformOp:scale\"]\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(62),
+            scene,
+            DocumentOrigin::writable_file("/tmp/order_ref.usda"),
+        );
+        doc.apply(UsdOp::SetTranslate {
+            edit_target: LayerId::root(),
+            path: "/Part".into(),
+            value: [10.0, 0.0, 0.0],
+        })
+        .unwrap();
+
+        let part = SdfPath::new("/Part").unwrap();
+        assert_eq!(
+            xform_op_order_tokens(&doc.composed_arc(), &part),
+            vec![
+                "xformOp:rotateXYZ".to_string(),
+                "xformOp:scale".to_string(),
+                "xformOp:translate".to_string(),
+            ],
+            "translate appends AFTER the pre-existing ops, none dropped"
+        );
+        // The pre-existing op values are untouched.
+        assert_eq!(
+            doc.data()
+                .prim_attribute_value::<[f64; 3]>(&part, "xformOp:rotateXYZ"),
+            Some([0.0, 45.0, 0.0])
+        );
+        assert_eq!(
+            doc.data()
+                .prim_attribute_value::<[f64; 3]>(&part, "xformOp:scale"),
+            Some([2.0, 2.0, 2.0])
+        );
+    }
+
+    /// Cross-layer variant of the clobber case: the composed order comes from the
+    /// BASE layer, and the edit targets the (stronger) RUNTIME layer. Since the
+    /// runtime layer's `xformOpOrder` opinion WINS composition wholesale, the op
+    /// must materialise base's order PLUS the new op into the runtime layer — a
+    /// bare `[rotateXYZ]` runtime order would discard the base translate.
+    #[test]
+    fn runtime_layer_rotate_materialises_base_order_plus_new_op() {
+        let scene = "#usda 1.0\n(\n    metersPerUnit = 1\n)\ndef Xform \"Part\"\n{\n    double3 xformOp:translate = (1, 2, 3)\n    uniform token[] xformOpOrder = [\"xformOp:translate\"]\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(63),
+            scene,
+            DocumentOrigin::writable_file("/tmp/order_rt_layer.usda"),
+        );
+        doc.apply(UsdOp::SetRotate {
+            edit_target: LayerId::runtime(),
+            path: "/Part".into(),
+            value: [0.0, 30.0, 0.0],
+        })
+        .unwrap();
+
+        let part = SdfPath::new("/Part").unwrap();
+        assert_eq!(
+            xform_op_order_tokens(&doc.composed_arc(), &part),
+            vec![
+                "xformOp:translate".to_string(),
+                "xformOp:rotateXYZ".to_string()
+            ],
+            "composed order keeps base's translate and appends the runtime rotate"
+        );
+        // The base layer's own opinion is untouched (Save serializes base only).
+        assert_eq!(
+            xform_op_order_tokens(doc.data(), &part),
+            vec!["xformOp:translate".to_string()],
+            "runtime edit must not rewrite the base layer's xformOpOrder"
+        );
+        assert_eq!(
+            doc.data()
+                .prim_attribute_value::<[f64; 3]>(&part, "xformOp:translate"),
+            Some([1.0, 2.0, 3.0])
+        );
+    }
+
+    #[test]
+    fn remove_prim_drops_block_and_undoes() {
+        let with_ball =
+            "#usda 1.0\ndef Xform \"World\"\n{\n    def Sphere \"Ball\"\n    {\n    }\n}\n";
+        let mut host = DocumentHost::new(UsdDocument::with_origin(
+            DocumentId::new(11),
+            with_ball,
+            DocumentOrigin::writable_file("/tmp/x.usda"),
+        ));
+        host.apply(Mutation::local(UsdOp::RemovePrim {
+            edit_target: LayerId::root(),
+            path: "/World/Ball".into(),
+        }))
+        .unwrap();
+        assert!(!prim_exists(host.document(), "/World/Ball"));
+        host.undo().unwrap();
+        assert_eq!(
+            prim_type(host.document(), "/World/Ball").as_deref(),
+            Some("Sphere")
+        );
+    }
+
+    #[test]
+    fn set_attribute_creates_and_records_typed_value() {
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(12),
+            "#usda 1.0\ndef Sphere \"Ball\"\n{\n}\n",
+            DocumentOrigin::writable_file("/tmp/a.usda"),
+        );
+        doc.apply(UsdOp::SetAttribute {
+            edit_target: LayerId::root(),
+            path: "/Ball".into(),
+            name: "primvars:displayColor".into(),
+            type_name: "color3f[]".into(),
+            value: "[(0.2, 0.4, 0.8)]".into(),
+        })
+        .unwrap();
+        let attr = SdfPath::new("/Ball.primvars:displayColor").unwrap();
+        assert!(matches!(
+            doc.data().field(&attr, "typeName"),
+            Some(sdf::Value::Token(type_name)) if type_name.as_str() == "color3f[]"
+        ));
+        assert!(matches!(
+            doc.data().field(&attr, "default"),
+            Some(sdf::Value::Vec3fVec(values)) if values.len() == 1
+        ));
+    }
+
+    #[test]
+    fn set_attribute_rejects_usd_role_or_array_shape_changes() {
+        let scene = "#usda 1.0\ndef Mesh \"Patch\"\n{\n    color3f[] primvars:displayColor = [(1, 0, 0)]\n    color3f inputs:color = (0, 1, 0)\n}\n";
+        let mut doc = UsdDocument::new(DocumentId::new(64), scene);
+        let before = doc.source();
+
+        for (name, type_name, value) in [
+            ("primvars:displayColor", "color3f", "(0, 0, 1)"),
+            ("inputs:color", "color3f[]", "[(0, 0, 1)]"),
+        ] {
+            let error = doc.apply(UsdOp::SetAttribute {
+                edit_target: LayerId::root(),
+                path: "/Patch".into(),
+                name: name.into(),
+                type_name: type_name.into(),
+                value: value.into(),
+            });
+            assert!(matches!(error, Err(DocumentError::ValidationFailed(_))));
+            assert_eq!(doc.generation(), 0);
+            assert_eq!(doc.source(), before);
+        }
+    }
+
+    #[test]
+    fn set_time_sample_authors_keyframes_and_interpolates() {
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(14),
+            "#usda 1.0\n(\n    metersPerUnit = 1\n)\ndef Xform \"Mover\"\n{\n}\n",
+            DocumentOrigin::writable_file("/tmp/anim.usda"),
+        );
+        // Two keyframes of the translate, authored as time samples. The first
+        // keyframe also declares the transform channel in `xformOpOrder`, so its
+        // inverse is a complete source snapshot; subsequent samples use the
+        // typed `RemoveTimeSample` inverse.
+        let mut inverses = Vec::new();
+        for (t, x) in [(0.0_f64, 0.0_f64), (10.0, 10.0)] {
+            inverses.push(
+                doc.apply(UsdOp::SetTimeSample {
+                    edit_target: LayerId::root(),
+                    path: "/Mover".into(),
+                    name: "xformOp:translate".into(),
+                    type_name: "double3".into(),
+                    time: t,
+                    value: format!("({x}, 0, 0)"),
+                })
+                .unwrap(),
+            );
+        }
+        let mover = SdfPath::new("/Mover").unwrap();
+        assert!(
+            matches!(inverses[0], UsdOp::ReplaceSource { .. }),
+            "the first xform keyframe must undo its sample and xformOpOrder together"
+        );
+        assert!(matches!(inverses[1], UsdOp::RemoveTimeSample { time, .. } if time == 10.0));
+        assert_eq!(
+            xform_op_order_tokens(doc.data(), &mover),
+            vec!["xformOp:translate"],
+            "a keyed xform channel must be part of the authored transform order"
+        );
+        // Time-aware read interpolates the authored curve.
+        assert_eq!(
+            doc.data()
+                .prim_attribute_value_at::<[f64; 3]>(&mover, "xformOp:translate", 5.0),
+            Some([5.0, 0.0, 0.0]),
+            "midpoint must linearly interpolate the two keyframes"
+        );
+        assert_eq!(
+            doc.data()
+                .prim_attribute_value_at::<[f64; 3]>(&mover, "xformOp:translate", 10.0),
+            Some([10.0, 0.0, 0.0])
+        );
+        // A sample-only attribute has no `default` opinion.
+        assert_eq!(
+            doc.data()
+                .prim_attribute_value::<[f64; 3]>(&mover, "xformOp:translate"),
+            None,
+            "time samples must not leak into the default opinion"
+        );
+        // Undo LIFO: the second typed inverse removes its sample, and the first
+        // snapshot removes both the first sample and the transform-order entry.
+        while let Some(inv) = inverses.pop() {
+            doc.apply(inv).unwrap();
+        }
+        assert_eq!(
+            doc.data()
+                .prim_attribute_value_at::<[f64; 3]>(&mover, "xformOp:translate", 5.0),
+            None,
+            "keyframes undone by the typed RemoveTimeSample inverses"
+        );
+    }
+
+    #[test]
+    fn move_prim_renames_and_reparents_with_typed_inverse() {
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(20),
+            "#usda 1.0\ndef Xform \"A\"\n{\n}\ndef Xform \"B\"\n{\n}\n",
+            DocumentOrigin::writable_file("/tmp/move.usda"),
+        );
+        let exists =
+            |doc: &UsdDocument, p: &str| doc.data().spec(&SdfPath::new(p).unwrap()).is_some();
+
+        // Reparent /A under /B → /B/A.
+        let inverse = doc
+            .apply(UsdOp::MovePrim {
+                edit_target: LayerId::root(),
+                from_path: "/A".into(),
+                to_path: "/B/A".into(),
+            })
+            .unwrap();
+        assert!(!exists(&doc, "/A"), "source path is vacated");
+        assert!(exists(&doc, "/B/A"), "prim now lives under its new parent");
+        // The typed inverse is the exact reverse move.
+        assert!(matches!(
+            &inverse,
+            UsdOp::MovePrim { from_path, to_path, .. } if from_path == "/B/A" && to_path == "/A"
+        ));
+        doc.apply(inverse).unwrap();
+        assert!(
+            exists(&doc, "/A") && !exists(&doc, "/B/A"),
+            "inverse restores the original tree"
+        );
+    }
+
+    #[test]
+    fn set_relationship_authors_targets() {
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(21),
+            "#usda 1.0\ndef Xform \"Geom\"\n{\n}\ndef Material \"Red\"\n{\n}\n",
+            DocumentOrigin::writable_file("/tmp/rel.usda"),
+        );
+        doc.apply(UsdOp::SetRelationship {
+            edit_target: LayerId::root(),
+            path: "/Geom".into(),
+            name: "material:binding".into(),
+            targets: vec!["/Red".into()],
+        })
+        .unwrap();
+        // The relationship spec is authored under the prim.
+        let rel = SdfPath::new("/Geom.material:binding").unwrap();
+        assert!(
+            doc.data().spec(&rel).is_some(),
+            "material:binding relationship authored on /Geom"
+        );
+    }
+
+    #[test]
+    fn set_connection_authors_and_clears_connection_paths() {
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(23),
+            "#usda 1.0\ndef Xform \"Load\"\n{\n}\ndef Xform \"Bus\"\n{\n}\n",
+            DocumentOrigin::writable_file("/tmp/conn.usda"),
+        );
+        // Wire the consuming input to a producing output. The attribute spec
+        // does not exist yet — the op must create it (create-if-absent).
+        doc.apply(UsdOp::SetConnection {
+            edit_target: LayerId::root(),
+            path: "/Load".into(),
+            name: "inputs:voltage".into(),
+            type_name: "float".into(),
+            sources: vec!["/Bus.outputs:v".into()],
+        })
+        .unwrap();
+        let attr = SdfPath::new("/Load.inputs:voltage").unwrap();
+        let conns = |doc: &UsdDocument| -> Vec<String> {
+            match doc
+                .data()
+                .spec(&attr)
+                .and_then(|s| s.get("connectionPaths"))
+            {
+                Some(sdf::Value::PathListOp(op)) => op
+                    .explicit_items
+                    .iter()
+                    .map(|p| p.as_str().to_string())
+                    .collect(),
+                _ => Vec::new(),
+            }
+        };
+        assert_eq!(
+            conns(&doc),
+            vec!["/Bus.outputs:v".to_string()],
+            "connectionPaths authored on the consuming input"
+        );
+        // Empty `sources` clears the connection (same op, one canonical form).
+        doc.apply(UsdOp::SetConnection {
+            edit_target: LayerId::root(),
+            path: "/Load".into(),
+            name: "inputs:voltage".into(),
+            type_name: "float".into(),
+            sources: vec![],
+        })
+        .unwrap();
+        assert!(
+            conns(&doc).is_empty(),
+            "empty sources clears the connection"
+        );
+    }
+
+    #[test]
+    fn remove_time_sample_errors_when_absent() {
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(22),
+            "#usda 1.0\ndef Xform \"Mover\"\n{\n}\n",
+            DocumentOrigin::writable_file("/tmp/rm.usda"),
+        );
+        // Author one keyframe, then remove the wrong time → error, not silent.
+        doc.apply(UsdOp::SetTimeSample {
+            edit_target: LayerId::root(),
+            path: "/Mover".into(),
+            name: "xformOp:translate".into(),
+            type_name: "double3".into(),
+            time: 0.0,
+            value: "(0, 0, 0)".into(),
+        })
+        .unwrap();
+        assert!(doc
+            .apply(UsdOp::RemoveTimeSample {
+                edit_target: LayerId::root(),
+                path: "/Mover".into(),
+                name: "xformOp:translate".into(),
+                time: 99.0,
+            })
+            .is_err());
+        // Removing the right time succeeds and clears the curve.
+        doc.apply(UsdOp::RemoveTimeSample {
+            edit_target: LayerId::root(),
+            path: "/Mover".into(),
+            name: "xformOp:translate".into(),
+            time: 0.0,
+        })
+        .unwrap();
+        let mover = SdfPath::new("/Mover").unwrap();
+        assert_eq!(
+            doc.data()
+                .prim_attribute_value_at::<[f64; 3]>(&mover, "xformOp:translate", 0.0),
+            None,
+            "the only sample was removed, so nothing resolves"
+        );
+    }
+
+    #[test]
+    fn unparseable_source_preserved_and_edits_blocked() {
+        let garbage = "this is not valid usda {{{";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(13),
+            garbage,
+            DocumentOrigin::writable_file("/tmp/bad.usda"),
+        );
+        // Raw text preserved for save.
+        assert_eq!(doc.source(), garbage);
+        // Structural edits blocked.
+        let err = doc
+            .apply(UsdOp::AddPrim {
+                edit_target: LayerId::root(),
+                parent_path: "/".into(),
+                name: "X".into(),
+                type_name: Some("Xform".into()),
+                reference: None,
+                reference_prim_path: None,
+            })
+            .unwrap_err();
+        assert!(matches!(err, DocumentError::ValidationFailed(_)));
+        // ReplaceSource repairs it.
+        doc.apply(UsdOp::ReplaceSource {
+            edit_target: LayerId::root(),
+            text: TINY_USDA.to_string(),
+        })
+        .unwrap();
+        assert!(prim_exists(&doc, "/World"));
+    }
+
+    // ─── C4: runtime layer ──────────────────────────────────────────────
+
+    fn runtime_prim_exists(doc: &UsdDocument, path: &str) -> bool {
+        doc.runtime_data()
+            .spec(&SdfPath::new(path).unwrap())
+            .is_some()
+    }
+
+    #[test]
+    fn runtime_op_lands_in_runtime_layer_and_leaves_base_untouched() {
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(30),
+            TINY_USDA,
+            DocumentOrigin::writable_file("/tmp/r.usda"),
+        );
+        // Add a child under the base-authored /World, targeting the runtime layer.
+        doc.apply(UsdOp::AddPrim {
+            edit_target: LayerId::runtime(),
+            parent_path: "/World".into(),
+            name: "Obstacle".into(),
+            type_name: Some("Sphere".into()),
+            reference: None,
+            reference_prim_path: None,
+        })
+        .unwrap();
+
+        // Prim is in the runtime layer...
+        assert!(runtime_prim_exists(&doc, "/World/Obstacle"));
+        // ...and NOT in the base layer.
+        assert!(!prim_exists(&doc, "/World/Obstacle"));
+    }
+
+    #[test]
+    fn save_serializes_base_only_excluding_runtime_state() {
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(31),
+            TINY_USDA,
+            DocumentOrigin::writable_file("/tmp/r.usda"),
+        );
+        doc.apply(UsdOp::AddPrim {
+            edit_target: LayerId::runtime(),
+            parent_path: "/World".into(),
+            name: "SpawnedRock".into(),
+            type_name: Some("Cube".into()),
+            reference: None,
+            reference_prim_path: None,
+        })
+        .unwrap();
+        // The saved source (base layer) must NOT contain the runtime prim.
+        let saved = doc.source();
+        assert!(
+            !saved.contains("SpawnedRock"),
+            "runtime state leaked into save:\n{saved}"
+        );
+        assert!(saved.contains("World"));
+    }
+
+    #[test]
+    fn runtime_op_undo_restores_runtime_not_base() {
+        let mut host = DocumentHost::new(UsdDocument::with_origin(
+            DocumentId::new(32),
+            TINY_USDA,
+            DocumentOrigin::writable_file("/tmp/r.usda"),
+        ));
+        host.apply(Mutation::local(UsdOp::AddPrim {
+            edit_target: LayerId::runtime(),
+            parent_path: "/World".into(),
+            name: "Obstacle".into(),
+            type_name: Some("Sphere".into()),
+            reference: None,
+            reference_prim_path: None,
+        }))
+        .unwrap();
+        assert!(runtime_prim_exists(host.document(), "/World/Obstacle"));
+
+        // Undo: the typed inverse is a RemovePrim TARGETING the runtime layer,
+        // so it removes from runtime and never touches base.
+        host.undo().unwrap();
+        assert!(!runtime_prim_exists(host.document(), "/World/Obstacle"));
+        assert!(
+            prim_exists(host.document(), "/World"),
+            "base layer intact across runtime undo"
+        );
+    }
+
+    #[test]
+    fn composed_view_includes_runtime_but_source_excludes_it() {
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(34),
+            TINY_USDA,
+            DocumentOrigin::writable_file("/tmp/r.usda"),
+        );
+        doc.apply(UsdOp::AddPrim {
+            edit_target: LayerId::runtime(),
+            parent_path: "/World".into(),
+            name: "Obstacle".into(),
+            type_name: Some("Sphere".into()),
+            reference: None,
+            reference_prim_path: None,
+        })
+        .unwrap();
+
+        // The composed view (what the viewport renders) sees the runtime prim.
+        let composed = doc.composed();
+        assert_eq!(
+            composed
+                .prim_type_name(&SdfPath::new("/World/Obstacle").unwrap())
+                .as_deref(),
+            Some("Sphere")
+        );
+        assert!(doc.composed_source().contains("Obstacle"));
+        // The saved source (base) does not.
+        assert!(!doc.source().contains("Obstacle"));
+    }
+
+    #[test]
+    fn spawn_op_authors_runtime_reference_excluded_from_save() {
+        // C4b spawn producer: a spawn = a runtime prim that `references` its
+        // asset (type comes from the reference, so `type_name: None`).
+        let mut host = DocumentHost::new(UsdDocument::with_origin(
+            DocumentId::new(36),
+            TINY_USDA,
+            DocumentOrigin::writable_file("/tmp/r.usda"),
+        ));
+        host.apply(Mutation::local(UsdOp::AddPrim {
+            edit_target: LayerId::runtime(),
+            parent_path: "/World".into(),
+            name: "rover_1".into(),
+            type_name: None,
+            reference: Some("vessels/rovers/skid_rover.usda".into()),
+            reference_prim_path: None,
+        }))
+        .unwrap();
+
+        // The reference opinion lives in the RUNTIME layer, not the base.
+        assert!(runtime_prim_exists(host.document(), "/World/rover_1"));
+        assert!(
+            !prim_exists(host.document(), "/World/rover_1"),
+            "spawn must not touch base"
+        );
+        // It rides into the composed view (what the viewport renders /
+        // re-instantiates) as a resolvable reference opinion...
+        let composed = host.document().composed_source();
+        assert!(
+            composed.contains("@vessels/rovers/skid_rover.usda@"),
+            "composed view must carry the spawn reference:\n{composed}"
+        );
+        // ...and is EXCLUDED from Save (base only).
+        assert!(
+            !host.document().source().contains("skid_rover"),
+            "spawn leaked into the saved base layer:\n{}",
+            host.document().source()
+        );
+
+        // Undo removes the spawn from runtime (typed AddPrim→RemovePrim inverse),
+        // leaving the base untouched.
+        host.undo().unwrap();
+        assert!(!runtime_prim_exists(host.document(), "/World/rover_1"));
+        assert!(
+            prim_exists(host.document(), "/World"),
+            "base intact across spawn undo"
+        );
+    }
+
+    /// Repro for the doc-backed live-edit path (E1b): a runtime-layer
+    /// `SetAttribute` that OVERRIDES an existing base attribute on a DEEPLY
+    /// NESTED prim must win in the composed view — this is exactly the
+    /// `SetObjectProperty`→USD authoring case (e.g. terrain crater `density`).
+    #[test]
+    fn runtime_set_attribute_overrides_nested_base_attr_in_composed() {
+        let base = "#usda 1.0\n(\n    defaultPrim = \"Root\"\n)\ndef Xform \"Root\"\n{\n    def Xform \"Mid\"\n    {\n        def Xform \"Leaf\"\n        {\n            custom float density = 1.5\n        }\n    }\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(40),
+            base,
+            DocumentOrigin::writable_file("/tmp/nested.usda"),
+        );
+        doc.apply(UsdOp::SetAttribute {
+            edit_target: LayerId::runtime(),
+            path: "/Root/Mid/Leaf".into(),
+            name: "density".into(),
+            type_name: "float".into(),
+            value: "4.0".into(),
+        })
+        .unwrap();
+        let composed = doc.composed();
+        assert_eq!(
+            composed
+                .prim_attribute_value::<f32>(&SdfPath::new("/Root/Mid/Leaf").unwrap(), "density"),
+            Some(4.0),
+            "runtime override must win in the composed sdf::Data"
+        );
+        assert!(
+            doc.composed_source().contains("density = 4"),
+            "composed USDA source must carry the override:\n{}",
+            doc.composed_source()
+        );
+    }
+
+    #[test]
+    fn runtime_set_attribute_can_override_a_referenced_prim() {
+        // A wrapper document owns only /Traverse; the terrain children arrive
+        // through its reference and therefore do not occur in the authored data.
+        // A runtime over opinion must still be able to control one of those
+        // composed children without flattening the referenced scene.
+        let base = "#usda 1.0\n\
+def Xform \"Traverse\" (\n\
+    prepend references = @./traverse.usda@</Traverse>\n\
+)\n{\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(42),
+            base,
+            DocumentOrigin::writable_file("/tmp/referenced-wrapper.usda"),
+        );
+        doc.apply(UsdOp::SetAttribute {
+            edit_target: LayerId::runtime(),
+            path: "/Traverse/Terrain/Overzoom".into(),
+            name: "lunco:layer:enabled".into(),
+            type_name: "bool".into(),
+            value: "false".into(),
+        })
+        .expect("runtime over opinion on a referenced child is valid");
+        let path = SdfPath::new("/Traverse/Terrain/Overzoom").unwrap();
+        assert_eq!(
+            doc.runtime_data()
+                .prim_attribute_value::<bool>(&path, "lunco:layer:enabled"),
+            Some(false),
+            "the override must be authored in the runtime layer"
+        );
+        assert!(
+            doc.source().contains("references"),
+            "the base wrapper must remain referenced rather than flattened"
+        );
+    }
+
+    /// Repro: a runtime-layer `AddPrim` under a NESTED (non-root) parent must
+    /// appear in the composed view — the runtime spawn case for a doc-backed scene.
+    #[test]
+    fn runtime_add_prim_under_nested_parent_in_composed() {
+        let base = "#usda 1.0\n(\n    defaultPrim = \"Root\"\n)\ndef Xform \"Root\"\n{\n    def Xform \"Mid\"\n    {\n    }\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(41),
+            base,
+            DocumentOrigin::writable_file("/tmp/nested2.usda"),
+        );
+        doc.apply(UsdOp::AddPrim {
+            edit_target: LayerId::runtime(),
+            parent_path: "/Root/Mid".into(),
+            name: "Probe".into(),
+            type_name: Some("Cube".into()),
+            reference: None,
+            reference_prim_path: None,
+        })
+        .unwrap();
+        let composed = doc.composed();
+        assert_eq!(
+            composed
+                .prim_type_name(&SdfPath::new("/Root/Mid/Probe").unwrap())
+                .as_deref(),
+            Some("Cube"),
+            "runtime child under a nested parent must appear in the composed view"
+        );
+    }
+
+    #[test]
+    fn base_and_runtime_ops_are_independent() {
+        let mut doc = UsdDocument::new(DocumentId::new(33), TINY_USDA);
+        // Author into base.
+        doc.apply(UsdOp::AddPrim {
+            edit_target: LayerId::root(),
+            parent_path: "/".into(),
+            name: "Rover".into(),
+            type_name: Some("Xform".into()),
+            reference: None,
+            reference_prim_path: None,
+        })
+        .unwrap();
+        // Author into runtime.
+        doc.apply(UsdOp::AddPrim {
+            edit_target: LayerId::runtime(),
+            parent_path: "/World".into(),
+            name: "Obstacle".into(),
+            type_name: Some("Sphere".into()),
+            reference: None,
+            reference_prim_path: None,
+        })
+        .unwrap();
+
+        // Base has Rover but not Obstacle; runtime has Obstacle but not Rover.
+        assert!(prim_exists(&doc, "/Rover"));
+        assert!(!prim_exists(&doc, "/World/Obstacle"));
+        assert!(runtime_prim_exists(&doc, "/World/Obstacle"));
+        assert!(!runtime_prim_exists(&doc, "/Rover"));
+    }
+
+    /// Variability and `custom` come from the schema, not the call site — so the
+    /// SAME `SetAttribute` op yields `uniform` for one attribute and `varying` for
+    /// another, and no caller has to know which. This is the fix for `info:id` and
+    /// `physics:axis` having been authored `varying`: they are `uniform` in their
+    /// schemas, nothing at the call site knew that, and the value silently diverged.
+    #[test]
+    fn set_attribute_authors_variability_and_custom_from_the_schema() {
+        let mut host = DocumentHost::new(UsdDocument::with_origin(
+            DocumentId::new(41),
+            "#usda 1.0\ndef Shader \"Surface\"\n{\n}\n",
+            DocumentOrigin::writable_file("/tmp/var.usda"),
+        ));
+        let set = |host: &mut DocumentHost<UsdDocument>, name: &str, ty: &str, value: &str| {
+            host.apply(Mutation::local(UsdOp::SetAttribute {
+                edit_target: LayerId::root(),
+                path: "/Surface".into(),
+                name: name.into(),
+                type_name: ty.into(),
+                value: value.into(),
+            }))
+            .unwrap();
+        };
+
+        // Core USD, declared `uniform` by UsdShadeShader.
+        set(&mut host, "info:id", "token", "\"UsdPreviewSurface\"");
+        // Ours, declared `uniform` by luncoSchema.
+        set(&mut host, "lunco:cameraMode", "token", "\"orbit\"");
+        // Ours, declared `varying` by luncoSchema.
+        set(&mut host, "lunco:env:exposureEv100", "float", "12.5");
+        // Ours, declared by NO schema — a per-model Modelica param, genuinely custom.
+        set(&mut host, "lunco:voltage", "float", "28.0");
+
+        let src = host.document().source();
+        assert!(
+            src.contains("uniform token info:id"),
+            "info:id is uniform per UsdShadeShader: {src}"
+        );
+        assert!(
+            src.contains("uniform token lunco:cameraMode"),
+            "lunco:cameraMode is uniform per luncoSchema: {src}"
+        );
+        assert!(
+            src.contains("float lunco:env:exposureEv100")
+                && !src.contains("uniform float lunco:env"),
+            "lunco:env:exposureEv100 is varying per luncoSchema: {src}"
+        );
+        assert!(
+            src.contains("custom float lunco:voltage"),
+            "a lunco: attr no schema declares must be authored `custom`: {src}"
+        );
+        // A core attr we have no schema for must NOT be claimed custom — that would
+        // be a lie about a perfectly ordinary schema property.
+        assert!(
+            !src.contains("custom token info:id"),
+            "info:id is a schema property, not custom: {src}"
+        );
+        assert!(
+            reparses_cleanly(host.document()),
+            "authored variability must reparse"
+        );
+    }
+
+    #[test]
+    fn set_api_schemas_authors_and_undoes() {
+        let mut host = DocumentHost::new(UsdDocument::with_origin(
+            DocumentId::new(40),
+            "#usda 1.0\ndef Xform \"Body\"\n{\n}\n",
+            DocumentOrigin::writable_file("/tmp/api.usda"),
+        ));
+        host.apply(Mutation::local(UsdOp::SetApiSchemas {
+            edit_target: LayerId::root(),
+            path: "/Body".into(),
+            schemas: vec!["PhysicsRigidBodyAPI".into(), "PhysicsCollisionAPI".into()],
+        }))
+        .unwrap();
+        assert!(
+            host.document().source().contains("PhysicsRigidBodyAPI")
+                && host.document().source().contains("PhysicsCollisionAPI"),
+            "apiSchemas authored: {}",
+            host.document().source()
+        );
+        assert!(
+            reparses_cleanly(host.document()),
+            "authored apiSchemas must reparse cleanly"
+        );
+        host.undo().unwrap();
+        assert!(
+            !host.document().source().contains("PhysicsRigidBodyAPI"),
+            "undo removes the schemas: {}",
+            host.document().source()
+        );
+    }
+
+    #[test]
+    fn set_active_false_then_undo_restores_absence() {
+        // The subtle one: undoing a deactivation must NOT author `active = true`
+        // (a `!active` inverse would). It restores the prior *unauthored* opinion.
+        let mut host = DocumentHost::new(UsdDocument::with_origin(
+            DocumentId::new(41),
+            "#usda 1.0\ndef Xform \"Part\"\n{\n}\n",
+            DocumentOrigin::writable_file("/tmp/active.usda"),
+        ));
+        host.apply(Mutation::local(UsdOp::SetActive {
+            edit_target: LayerId::root(),
+            path: "/Part".into(),
+            active: false,
+        }))
+        .unwrap();
+        assert!(
+            host.document().source().contains("active = false"),
+            "deactivation authored: {}",
+            host.document().source()
+        );
+        host.undo().unwrap();
+        assert!(
+            !host.document().source().contains("active"),
+            "undo restores the unauthored (neither true nor false) opinion: {}",
+            host.document().source()
+        );
+    }
+
+    #[test]
+    fn set_active_on_runtime_overlay_authors_over_a_base_layer_prim() {
+        // The delete-marker fix: a waypoint marker is authored in the base/scene
+        // layer (`/Traverse/Route/W1`), and the editor's runtime delete must hide
+        // it by authoring `active = false` onto the RUNTIME overlay. Before the
+        // fix `Prim::set_active` rejected this with "no prim spec at path on the
+        // edit target layer" — the marker could not be hidden at all. `define_prim`
+        // first (the same upsert `SetTranslate`/`AddPrim` use) lets the overlay
+        // carry the stronger opinion.
+        // The marker is authored in the BASE/scene layer (where a route's pins
+        // live), so the runtime overlay has no spec for it.
+        let scene = "#usda 1.0\n(\n    metersPerUnit = 1\n)\ndef Xform \"Traverse\"\n{\n    def Xform \"Route\"\n    {\n        def Xform \"W1\"\n        {\n        }\n    }\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(67),
+            scene,
+            DocumentOrigin::writable_file("/tmp/active_overlay.usda"),
+        );
+        // The runtime overlay carries no spec at /Traverse/Route/W1, yet the op
+        // must land there to hide the marker without mutating the scene.
+        doc.apply(UsdOp::SetActive {
+            edit_target: LayerId::runtime(),
+            path: "/Traverse/Route/W1".into(),
+            active: false,
+        })
+        .unwrap();
+
+        // The runtime overlay now carries a spec for the marker with active=false.
+        let marker = SdfPath::new("/Traverse/Route/W1").unwrap();
+        let runtime_active = doc
+            .runtime_data()
+            .spec(&marker)
+            .and_then(|spec| spec.get(sdf::FieldKey::Active.as_str()))
+            .and_then(|v| match v {
+                sdf::Value::Bool(b) => Some(*b),
+                _ => None,
+            });
+        assert_eq!(
+            runtime_active,
+            Some(false),
+            "runtime overlay carries the deactivation opinion"
+        );
+        // The base layer is untouched (Save serializes base only): a runtime hide
+        // must not mutate the source scene.
+        assert!(
+            !doc.source().contains("/Traverse/Route/W1"),
+            "runtime overlay must not rewrite the base layer: {}",
+            doc.source()
+        );
+    }
+
+    #[test]
+    fn set_variant_selection_preserves_sibling_set() {
+        // A prim carrying two variant sets: selecting one must not drop the other.
+        let src = "#usda 1.0\n(\n    metersPerUnit = 1\n)\ndef Xform \"Rover\" (\n    variants = {\n        string color = \"red\"\n    }\n)\n{\n}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(42),
+            src,
+            DocumentOrigin::writable_file("/tmp/var.usda"),
+        );
+        doc.apply(UsdOp::SetVariantSelection {
+            edit_target: LayerId::root(),
+            path: "/Rover".into(),
+            variant_set: "drivetrain".into(),
+            variant: "physical".into(),
+        })
+        .unwrap();
+        let s = doc.source();
+        assert!(
+            s.contains("drivetrain") && s.contains("physical"),
+            "new selection: {s}"
+        );
+        assert!(
+            s.contains("color") && s.contains("red"),
+            "sibling variant selection preserved (read-modify-write): {s}"
+        );
+        assert!(
+            reparses_cleanly(&doc),
+            "authored variant selection must reparse cleanly: {s}"
+        );
+    }
+
+    #[test]
+    fn set_variant_selection_authors_over_a_referenced_prim() {
+        // The Inspector addresses the composed instance path. The wrapper owns
+        // only /Scene; /Scene/Rover arrives through its reference and therefore
+        // has no authored spec in this document before the edit.
+        let scene = "#usda 1.0\n\
+def Xform \"Scene\" (\n\
+    prepend references = @./rover.usda@</Rover>\n\
+)\n\
+{\n\
+}\n";
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(44),
+            scene,
+            DocumentOrigin::writable_file("/tmp/variant_wrapper.usda"),
+        );
+        doc.apply(UsdOp::SetVariantSelection {
+            edit_target: LayerId::root(),
+            path: "/Scene/Rover".into(),
+            variant_set: "generation".into(),
+            variant: "solar".into(),
+        })
+        .expect("a composed referenced prim is a valid variant edit target");
+
+        let path = SdfPath::new("/Scene/Rover").unwrap();
+        let selection = doc
+            .data()
+            .field(&path, sdf::FieldKey::VariantSelection.as_str())
+            .expect("the local over carries the selection");
+        assert!(matches!(
+            selection,
+            sdf::Value::VariantSelectionMap(map)
+                if map.get("generation").is_some_and(|value| value == "solar")
+        ));
+        let authored = doc.source();
+        assert!(
+            authored.contains("over \"Rover\""),
+            "the composed target must be authored as an over, not flattened:\n{authored}"
+        );
+        assert!(
+            authored.contains("references"),
+            "authoring the selection must preserve the wrapper reference:\n{authored}"
+        );
+        assert!(
+            reparses_cleanly(&doc),
+            "the composed-path variant opinion must serialize as valid USDA:\n{authored}"
+        );
+    }
+
+    #[test]
+    fn set_payload_authors_and_undoes() {
+        let mut host = DocumentHost::new(UsdDocument::with_origin(
+            DocumentId::new(43),
+            "#usda 1.0\ndef Xform \"Heavy\"\n{\n}\n",
+            DocumentOrigin::writable_file("/tmp/pl.usda"),
+        ));
+        host.apply(Mutation::local(UsdOp::SetPayload {
+            edit_target: LayerId::root(),
+            path: "/Heavy".into(),
+            // RAW path, no `@…@` (those are USDA delimiters the writer adds) — same
+            // contract as AddPrim's reference. The `@…@` form serializes to `@@…@@`.
+            asset_paths: vec!["meshes/hull.usdc".into()],
+        }))
+        .unwrap();
+        assert!(
+            host.document().source().contains("hull.usdc"),
+            "payload authored: {}",
+            host.document().source()
+        );
+        // The substring check above passes even for a malformed `@@…@@` path; THIS
+        // is what proves the payload serialized to parseable USDA.
+        assert!(
+            reparses_cleanly(host.document()),
+            "authored payload must reparse cleanly: {}",
+            host.document().source()
+        );
+        host.undo().unwrap();
+        assert!(
+            !host.document().source().contains("hull.usdc"),
+            "undo clears the payload: {}",
+            host.document().source()
+        );
+    }
+
+    /// **A prim authored inside a `variantSet` must be editable at its COMPOSED
+    /// path.** This is the summer-space-school waypoint "Move does nothing" bug.
+    ///
+    /// `traverse.usda` authors its route markers inside
+    /// `variantSet "terrain" { "apollo15" { def Scope "Route" { def Xform "W1" ... } } }`,
+    /// so on the composed stage they are at `/Traverse/Route/W1` — which is the path
+    /// the editor holds and the path `UsdOp::SetTranslate` is given. But
+    /// `require_prim_anywhere` resolves through `prim_in` → `sdf::Data::spec`, a FLAT
+    /// layer lookup, and inside a layer the variant's contents live under a
+    /// variant-selection path, not under `/Traverse/Route/W1`. The lookup misses, the
+    /// op is rejected as "path not found", and the waypoint does not move — silently,
+    /// because `on_apply_usd_op` only logs the rejection at `warn`.
+    ///
+    /// Delete kept working precisely because it edits a DIFFERENT prim: the mission's
+    /// `info:sourceCode`, on a `/Traverse/Rover/Mission` authored outside every
+    /// variant block. That asymmetry is the whole signature of this bug.
+    #[test]
+    fn set_translate_reaches_a_prim_authored_inside_a_variant_set() {
+        let scene = concat!(
+            "#usda 1.0
+",
+            "(
+    defaultPrim = \"Traverse\"
+)
+",
+            "def Xform \"Traverse\" (
+",
+            "    variants = { string terrain = \"apollo15\" }
+",
+            "    prepend variantSets = \"terrain\"
+",
+            ")
+",
+            "{
+",
+            "    variantSet \"terrain\" = {
+",
+            "        \"apollo15\" {
+",
+            "            def Scope \"Route\"
+",
+            "            {
+",
+            "                def Xform \"W1\"
+",
+            "                {
+",
+            "                    double3 xformOp:translate = (1, 2, 3)
+",
+            "                    uniform token[] xformOpOrder = [\"xformOp:translate\"]
+",
+            "                }
+",
+            "            }
+",
+            "        }
+",
+            "    }
+",
+            "}
+",
+        );
+        let mut doc = UsdDocument::with_origin(
+            DocumentId::new(4242),
+            scene,
+            DocumentOrigin::writable_file("/tmp/variant_move.usda"),
+        );
+
+        let moved = doc.apply(UsdOp::SetTranslate {
+            edit_target: LayerId::runtime(),
+            path: "/Traverse/Route/W1".into(),
+            value: [10.0, 20.0, 30.0],
+        });
+
+        assert!(
+            moved.is_ok(),
+            "moving a variant-authored waypoint must be accepted, got {moved:?} —              the editor addresses prims by COMPOSED path, so document validation              cannot be a flat per-layer spec lookup"
+        );
+    }
+}

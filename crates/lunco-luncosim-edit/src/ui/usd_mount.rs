@@ -12,16 +12,17 @@
 //! The producer runs on the main thread (the composed stage is `!Send`) and stores
 //! only render-ready data; it is never authoritative — the stage is.
 //!
-//! [`resolve_mount_placement`]: lunco_usd::attach::resolve_mount_placement
-//! [`realign_component_ops`]: lunco_usd::attach::realign_component_ops
+//! [`resolve_mount_placement`]: lunco_usd_core::attach::resolve_mount_placement
+//! [`realign_component_ops`]: lunco_usd_core::attach::realign_component_ops
 
 use std::collections::HashMap;
 
 use bevy::prelude::*;
-use lunco_usd::attach::resolve_mount_placement;
-use lunco_usd::ui::viewport::{UsdPreviewId, UsdViewportState};
 use lunco_usd_bevy::mount::{read_attachment_joint, read_plug, read_sockets, MountDiagnostic};
-use lunco_usd_bevy::{CanonicalStages, SdfPath, UsdPrimPath, UsdStageAsset};
+use lunco_usd_bevy::{SdfPath, UsdPrimPath};
+use lunco_usd_bevy_core::{canonical::CanonicalStages, local_transform_at, UsdStageAsset};
+use lunco_usd_core::attach::resolve_mount_placement;
+use lunco_usd_ui::viewport::{UsdPreviewId, UsdViewportState};
 
 /// Position and orientation tolerance for the editor's no-op Snap state.
 const MOUNT_ALIGNMENT_TOLERANCE: f32 = 1.0e-3;
@@ -73,7 +74,7 @@ pub struct MountItem {
 pub struct UsdMountSessionView {
     pub preview: UsdPreviewId,
     pub doc: lunco_doc::DocumentId,
-    pub edit_target: lunco_usd::document::LayerId,
+    pub edit_target: lunco_usd_core::document::LayerId,
     pub generation: u64,
     pub entity: Option<Entity>,
     pub host_path: String,
@@ -194,34 +195,32 @@ pub fn produce_usd_mount_view(
                             // resolved placement; no runtime transform is an
                             // authoring source.
                             if let Ok(pp) = SdfPath::new(part) {
-                                aligned =
-                                    match lunco_usd_bevy::local_transform_at(&stage_view, &pp, 0.0)
-                                    {
-                                        Ok(Some(transform)) => {
-                                            let translation_error = (transform.translation
-                                                - Vec3::new(t[0] as f32, t[1] as f32, t[2] as f32))
-                                            .length();
-                                            let expected_rotation =
-                                                lunco_usd_bevy::euler_xyz_deg_to_quat(Vec3::new(
-                                                    r[0] as f32,
-                                                    r[1] as f32,
-                                                    r[2] as f32,
-                                                ));
-                                            let rotation_error =
-                                                transform.rotation.angle_between(expected_rotation);
-                                            translation_error < MOUNT_ALIGNMENT_TOLERANCE
-                                                && rotation_error < MOUNT_ALIGNMENT_TOLERANCE
-                                        }
-                                        Ok(None) => false,
-                                        Err(error) => {
-                                            bevy::log::warn!(
-                                                "mount alignment rejected for {}: {}",
-                                                pp.as_str(),
-                                                error
-                                            );
-                                            false
-                                        }
-                                    };
+                                aligned = match local_transform_at(&stage_view, &pp, 0.0) {
+                                    Ok(Some(transform)) => {
+                                        let translation_error = (transform.translation
+                                            - Vec3::new(t[0] as f32, t[1] as f32, t[2] as f32))
+                                        .length();
+                                        let expected_rotation =
+                                            lunco_usd_bevy::euler_xyz_deg_to_quat(Vec3::new(
+                                                r[0] as f32,
+                                                r[1] as f32,
+                                                r[2] as f32,
+                                            ));
+                                        let rotation_error =
+                                            transform.rotation.angle_between(expected_rotation);
+                                        translation_error < MOUNT_ALIGNMENT_TOLERANCE
+                                            && rotation_error < MOUNT_ALIGNMENT_TOLERANCE
+                                    }
+                                    Ok(None) => false,
+                                    Err(error) => {
+                                        bevy::log::warn!(
+                                            "mount alignment rejected for {}: {}",
+                                            pp.as_str(),
+                                            error
+                                        );
+                                        false
+                                    }
+                                };
                             }
                             placement = Some(t);
                             rotate_deg = Some(r);

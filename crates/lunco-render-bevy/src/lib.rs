@@ -112,7 +112,7 @@ impl Plugin for LuncoRenderPlugin {
             // answer to exactly that question: the USD loader fills it by walking
             // the standard UsdShade chain — `material:binding` → `Material` →
             // `outputs:surface.connect` → `Shader` → `inputs:*`
-            // (`lunco_usd_bevy::resolve_bound_shader`) — so the component holds the
+            // (`lunco_usd_bevy_core::resolve_bound_shader`) — so the component holds the
             // scene's authored `UsdPreviewSurface` intent in typed, render-free
             // form. Registering it is what turns that from an internal detail into
             // a UNIVERSAL read surface: one line, no new verb, no per-language

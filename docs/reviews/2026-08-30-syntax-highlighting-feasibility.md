@@ -24,7 +24,7 @@ syntax-highlighting change is included in the tutorials commit.
 
 The generic source viewer in
 `crates/lunco-workbench/src/source_viewer.rs` currently routes `rhai`,
-`btxml`, `wgsl`, `usda`, `usd`, and `usdc` to a plain monospace `TextEdit`.
+`wgsl`, `usda`, `usd`, and `usdc` to a plain monospace `TextEdit`.
 It does not route `.html` or `.css`, even though HUI uses those extensions.
 The Modelica editor has its own document buffer, selection, debounce, and
 diagnostic flow; it is not a drop-in replacement for the generic source

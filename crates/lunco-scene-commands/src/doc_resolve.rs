@@ -14,8 +14,9 @@ use bevy::prelude::*;
 use lunco_doc::DocumentOrigin;
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_materials::ParamValue;
-use lunco_usd::document::UsdDocument;
-use lunco_usd_bevy::{resolve_bound_shader, SdfPath, UsdPrimPath, UsdRead};
+use lunco_usd_bevy::{SdfPath, UsdPrimPath};
+use lunco_usd_bevy_core::{resolve_bound_shader, UsdRead, UsdStageAsset};
+use lunco_usd_core::document::UsdDocument;
 
 /// The exact USD destination and literal for one dynamic shader parameter.
 ///
@@ -55,7 +56,7 @@ pub fn resolve_shader_parameter_usd_target(
         format!("inputs:{name}")
     };
     let declared_type = world
-        .get_non_send::<lunco_usd_bevy::CanonicalStages>()
+        .get_non_send::<lunco_usd_bevy_core::canonical::CanonicalStages>()
         .and_then(|stages| stages.get(prim.stage_handle.id()))
         .and_then(|stage| stage.view().attr_type_name(&shader_sdf, &attribute_name));
     let type_name =
@@ -108,7 +109,7 @@ fn canonical_shader_parameter_literal(
         } else {
             candidate
         };
-        if lunco_usd_bevy::author::parse_attribute_value(type_name, &literal).is_ok() {
+        if lunco_usd_core::author::parse_attribute_value(type_name, &literal).is_ok() {
             return Ok(literal);
         }
     }
@@ -172,17 +173,19 @@ pub fn bound_shader_prim(world: &mut World, prim: &UsdPrimPath) -> Option<String
     let mesh_sdf = SdfPath::new(&prim.path).ok()?;
 
     let recipe = world
-        .get_resource::<Assets<lunco_usd_bevy::UsdStageAsset>>()
+        .get_resource::<Assets<UsdStageAsset>>()
         .and_then(|stages| stages.get(&prim.stage_handle))
         .and_then(|a| a.recipe.clone());
-    if let Some(mut canonical) = world.get_non_send_mut::<lunco_usd_bevy::CanonicalStages>() {
+    if let Some(mut canonical) =
+        world.get_non_send_mut::<lunco_usd_bevy_core::canonical::CanonicalStages>()
+    {
         if canonical.get(id).is_none() {
             if let Some(r) = recipe.as_ref() {
                 canonical.get_or_build(id, r);
             }
         }
     }
-    let canonical = world.get_non_send::<lunco_usd_bevy::CanonicalStages>()?;
+    let canonical = world.get_non_send::<lunco_usd_bevy_core::canonical::CanonicalStages>()?;
     let view = canonical.get(id)?.view();
     resolve_bound_shader(&view, &mesh_sdf).map(|p| p.to_string())
 }
@@ -197,17 +200,20 @@ pub fn geom_api_schemas(world: &mut World, prim: &UsdPrimPath) -> Vec<String> {
         return Vec::new();
     };
     let recipe = world
-        .get_resource::<Assets<lunco_usd_bevy::UsdStageAsset>>()
+        .get_resource::<Assets<UsdStageAsset>>()
         .and_then(|stages| stages.get(&prim.stage_handle))
         .and_then(|a| a.recipe.clone());
-    if let Some(mut canonical) = world.get_non_send_mut::<lunco_usd_bevy::CanonicalStages>() {
+    if let Some(mut canonical) =
+        world.get_non_send_mut::<lunco_usd_bevy_core::canonical::CanonicalStages>()
+    {
         if canonical.get(id).is_none() {
             if let Some(r) = recipe.as_ref() {
                 canonical.get_or_build(id, r);
             }
         }
     }
-    let Some(canonical) = world.get_non_send::<lunco_usd_bevy::CanonicalStages>() else {
+    let Some(canonical) = world.get_non_send::<lunco_usd_bevy_core::canonical::CanonicalStages>()
+    else {
         return Vec::new();
     };
     let Some(view) = canonical.get(id).map(|c| c.view()) else {

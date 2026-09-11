@@ -310,14 +310,32 @@ actually call, with the fields the deserializer actually accepts. See the
  Findings land in [`lunco_lint::LintReport`] (readable via the `LintReport`
  query) and are logged — errors at `error!`, warnings at `warn!`.
 
-- *defined in:* `crates/lunco-scene-commands/src/lint_command.rs`
+- *defined in:* `crates/lunco-scene-validation/src/lint_command.rs`
 
 | Field | Type | Description |
 |---|---|---|
 | `domain` | `String` |  Restrict to one lint domain (`"usd"`). Empty = every domain this scene  can produce facts for. Named rather than enumerated so a domain added  later needs no change to this verb. |
-| `scope` | `String` |  Inspection scope. Empty or `"loaded_stages"` keeps the existing live  stage behavior; `"twin"` inspects the active Twin's resolver namespaces. |
-| `policy` | `String` |  Twin namespace severity policy: `"warn"` (default) or `"error"`.  The policy is passed to authored Rhai; facts and collision ownership stay  in the generic Rust inspection path. |
+| `scope` | `String` |  Set to `"twin"` to inspect the active Twin's resolver namespaces. Empty or `"loaded_stages"` keeps the loaded-stage behavior. |
+| `policy` | `String` |  Twin scope only: `"warn"` (default) reports collisions as warnings; `"error"` makes them error findings. |
 | `doc_id` | `Option < u64 >` |  When present, lint exactly this open Editor document after its projected  stage reaches the document generation. Omitted keeps the loaded-scene  behavior for live simulation callers. |
+
+#### `ValidateTwin`
+
+Run the same Twin-wide namespace inspector as `RunLint`, using an explicit
+local folder and without requiring an active scene or ECS state. It reports
+Modelica classes, USD default/prim identities, Rhai tools, shader modules, and
+asset stems only when their names collide in a real resolver scope.
+
+- *defined in:* `crates/lunco-scene-validation/src/validate.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `path` | `String` | Required filesystem path to a Twin/folder. |
+| `policy` | `String` | Optional `"warn"` (default) or `"error"`; invalid values fail the report visibly. |
+
+```rhai
+query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
+```
 
 #### `SetCameraLookAt`
 
@@ -527,6 +545,28 @@ actually call, with the fields the deserializer actually accepts. See the
 | `doc_id` | `DocumentId` |  Target USD document. |
 | `spec` | `crate :: program :: ProgramAttachSpec` |  Complete program attachment intent. |
 
+#### `CloseUsdPreview`
+
+ Close one preview session and release all of its presentation resources.
+
+- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `preview` | `UsdPreviewId` |   |
+
+#### `CloseUsdPreviewView`
+
+ Close one presentation view. Closing the final view also closes its parent
+ preview session because a session without a presentation view cannot be
+ reached from the editor.
+
+- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view` | `UsdPreviewViewId` |   |
+
 #### `CommitUsdProposal`
 
  Merge one accepted proposal through the ordinary grouped USD edit path.
@@ -573,6 +613,106 @@ actually call, with the fields the deserializer actually accepts. See the
 | `doc_id` | `DocumentId` |  Target document. |
 | `spec` | `crate :: attach :: DetachSpec` |  Exact component attachment to remove. |
 
+#### `ExplodeUsdPreview`
+
+ Apply a transient, session-scoped explode pose to an explicit USD preview.
+ This command changes only projected Bevy transforms; it never enters the
+ USD document, journal, save state, or simulation projection.
+
+- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `preview` | `UsdPreviewId` |   |
+| `doc_id` | `DocumentId` |   |
+| `assembly` | `String` |  Exact composed `kind = "assembly"` prim path. |
+| `parts` | `Vec < String >` |  Exact composed prim paths below `assembly`. Rust sorts these paths for  stable offsets, so repeated calls do not depend on caller ordering. |
+| `action` | `UsdPreviewExplodeAction` |   |
+| `axis` | `Option < UsdPreviewExplodeAxis >` |  Required for `enable` and `update`; `null` is accepted for `reset`. |
+| `spacing` | `Option < f32 >` |  Required for `enable` and `update`; `null` is accepted for `reset`. |
+
+#### `FocusUsdPreview`
+
+ Focus an already-open preview session in the USD dock.
+
+- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `preview` | `UsdPreviewId` |   |
+
+#### `FocusUsdPreviewView`
+
+ Focus one presentation view and its parent USD preview session.
+
+- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view` | `UsdPreviewViewId` |   |
+
+#### `FrameUsdPreviewView`
+
+ Fit one preview view to the projected visual bounds of its USD stage.
+
+- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view` | `UsdPreviewViewId` |   |
+
+#### `OpenUsdPreview`
+
+ Open one explicit document and authored edit target in an isolated preview
+ session. Reopening the same `preview` id for its current document focuses
+ and updates that lease in place; another document replaces only that
+ explicit lease. Other sessions keep their roots, cameras, and stages
+ untouched.
+
+- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `preview` | `UsdPreviewId` |  Stable caller-owned identity of the preview session. |
+| `doc_id` | `DocumentId` |  The USD document to render. |
+| `edit_target` | `LayerId` |  The authored layer to use for editor mutations made from this preview. |
+
+#### `OpenUsdPreviewView`
+
+ Open an additional presentation view over an existing USD preview session.
+ The view id is explicit so persisted layouts and agents can address the
+ exact camera without relying on tab order or display names.
+
+- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `preview` | `UsdPreviewId` |   |
+| `view` | `UsdPreviewViewId` |   |
+
+#### `PanUsdPreviewView`
+
+ Pan one preview view in egui logical screen points. The view converts the
+ delta to its camera plane using the current projection and render-target
+ viewport.
+
+- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view` | `UsdPreviewViewId` |   |
+| `delta` | `[f32 ; 2]` |   |
+
+#### `ResetUsdPreviewView`
+
+ Restore one preview view's default orbit pose and fit it to its stage.
+
+- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view` | `UsdPreviewViewId` |   |
+
 #### `ReviewUsdProposal`
 
  Change review state without applying any USD operation.
@@ -614,6 +754,53 @@ actually call, with the fields the deserializer actually accepts. See the
 | `color` | `Option < [f32 ; 3] >` |  `inputs:color` — linear RGB tint multiplied into the image. |
 | `rotation` | `Option < [f32 ; 3] >` |  `xformOp:rotateXYZ`, **degrees** — spins the environment. The usual case  is yaw only (`[0, heading, 0]`). |
 | `skybox` | `Option < bool >` |  `lunco:dome:skybox` — `false` lights the scene from the HDRI but leaves  the sky black. The lunar case: real bounce light, no visible sky. |
+
+#### `SetUsdPreviewProjection`
+
+ Change the projection of one isolated USD preview view. This changes only
+ the editor camera; authored USD camera opinions stay read-only presentation
+ input and are never rewritten by a navigation gesture.
+
+- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view` | `UsdPreviewViewId` |   |
+| `projection` | `UsdPreviewProjection` |   |
+
+#### `SetUsdPreviewTextLayer`
+
+ Change which authored/composed snapshot the Text mode displays.
+
+- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view` | `UsdPreviewViewId` |   |
+| `layer` | `UsdPreviewTextLayer` |   |
+
+#### `SetUsdPreviewViewMode`
+
+ Change only the presentation mode of one existing USD preview view.
+
+- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view` | `UsdPreviewViewId` |   |
+| `mode` | `UsdPreviewViewMode` |   |
+
+#### `ZoomUsdPreviewView`
+
+ Zoom one preview view by a positive multiplicative factor. Perspective
+ views change orbit distance; orthographic views change projection scale.
+
+- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view` | `UsdPreviewViewId` |   |
+| `factor` | `f32` |   |
 
 ### `lunco-usd-bevy` <a id="lunco-usd-bevy"></a>
 
@@ -2045,6 +2232,20 @@ actually call, with the fields the deserializer actually accepts. See the
 | `entry` | `String` |  The rhai entry function name. |
 | `source` | `String` |  The rhai source defining `entry` (+ helpers). |
 | `deterministic` | `bool` |  Deterministic (fresh rhai scope per invoke). Convergent seams (merge, drive)  must be `true`; the host-only authorize gate may be `false`. |
+
+#### `SetScenarioRegistryFixture`
+
+ Toggle the explicit production-harness failure fixture.
+
+ This command is intentionally narrow: it changes only the menu's
+ presentation fixture and leaves every Twin/scene resource untouched. The
+ default `false` state has no effect on ordinary production runs.
+
+- *defined in:* `crates/lunco-luncosim-ui/src/ui/scenario_fixture.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `unavailable` | `bool` |  `true` injects the unavailable state; `false` restores normal discovery. |
 
 ### `lunco-telemetry` <a id="lunco-telemetry"></a>
 

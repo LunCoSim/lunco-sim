@@ -1,9 +1,14 @@
-use avian3d::prelude::*;
-use bevy::prelude::*;
+use avian3d::prelude::{Mass, RigidBody};
+use bevy::prelude::{App, AssetApp, AssetPlugin, Assets, Image, Mesh, MinimalPlugins, Name};
 use lunco_mobility::{Suspension, WheelRaycast};
-use lunco_usd_avian::*;
-use lunco_usd_bevy::*;
-use lunco_usd_sim::*;
+use lunco_usd_avian::UsdAvianPlugin;
+use lunco_usd_bevy::UsdPrimPath;
+use lunco_usd_bevy_core::{
+    canonical::{CanonicalStage, CanonicalStages},
+    compose::compose_file_to_stage,
+    UsdStageAsset,
+};
+use lunco_usd_sim::UsdSimPlugin;
 
 fn main() {
     let mut app = App::new();

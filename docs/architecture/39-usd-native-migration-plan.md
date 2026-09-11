@@ -22,7 +22,7 @@ one-line statement of what exists; everything else is remaining work.
 
 **Foundation already in place.** The canonical-stage substrate this plan targets has landed: a live
 `CanonicalStage` reads the composed `openusd::Stage` directly through a generic `UsdRead` seam
-(`lunco-usd-bevy/{canonical,read,view}.rs`), and both readers surface `connectionPaths`. The journal /
+(`lunco-usd-bevy-core/{canonical,read,view}.rs`), and both readers surface `connectionPaths`. The journal /
 sync / hooks / RBAC / ports substrate Phases 2/5 build on also exists in the base: domain-scoped op replay
 (`journal_plane::domain_ops_after`), the scripted merge-policy hook, machine-unique `AuthorTag` authors,
 `ApplyUsdOp`→journal `EntryKind::Op{domain:Usd}`, `SetPorts`, `lunco-hash`. So the migration is now the

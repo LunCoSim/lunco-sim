@@ -4,6 +4,27 @@
 
 This document is the step-by-step architectural guide for assembling mission-grade space vessels (wheeled rovers, powered descent landers, spider-rovers, and satellites) in LunCoSim using the 3-plane modular architecture.
 
+## 0. Start with the generic authoring facades
+
+The reusable build loop is documented in
+[`48-assembly-editor.md`](48-assembly-editor.md) and
+[`../scripting-guide.md#model-and-assembly-authoring-human-and-ai`](../scripting-guide.md#model-and-assembly-authoring-human-and-ai).
+For a new vehicle or lander, keep the Twin-specific manifest in Rhai and use
+the shared `model_authoring` library to inspect and plan it:
+
+```rhai
+let context = model_authoring::model_context(doc, "/Vehicle", "@root@");
+let ready = model_authoring::readiness_report(doc, "/Vehicle", "@root@", policy);
+let graph = model_authoring::port_graph(doc, "/Vehicle", "@root@");
+```
+
+Use `scene_recipe` for the surrounding scene and `wiring_plan` for the
+Modelica/Rhai/physics connections. Use `publish_component` to validate and
+prepare a reusable component before its explicit Save-As. All returned USD
+changes are dry and must go through the existing review/journal path. These
+facades do not know any vehicle name; the Twin owns
+dimensions, routes, thresholds, and component policy.
+
 ---
 
 ## 1. Core Architectural Principles

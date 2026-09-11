@@ -46,8 +46,6 @@ pub mod doc_resolve;
 /// `QueryEntity` — the READ side of the scene verbs, reporting the same semantic
 /// active physics frame [`commands::TransformEntity`] accepts.
 pub mod entity_query;
-/// `RunLint` — lint the loaded scene on demand, through the authored rules.
-pub mod lint_command;
 /// Shaders as a journaled, synced, live-editable domain (WGSL twin of rhai's
 /// `ScriptDocument`) — edits record to the Twin journal (`DomainKind::Shader`).
 pub mod shader_doc;
@@ -57,15 +55,9 @@ pub mod spawn_meta;
 /// the execution domain.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod test_discovery;
-/// Twin-wide namespace facts for explicit lint and preflight inspection.
-pub mod twin_lint;
 /// `QueryUsdPrim` — the AUTHORED read: composed USD attributes off the live
 /// stage, for asset invariants that scripts (not just Rust) can check.
 pub mod usd_prim_query;
-/// `ValidateAsset` — parse-only pre-flight for asset files (.mo/.usda/.wgsl/
-/// .rhai): no cosim, no scene load, no GPU. Also the `--validate` CLI leg.
-/// `ValidateTwin` — read-only Twin-wide resolver namespace pre-flight.
-pub mod validate;
 
 use bevy::prelude::*;
 

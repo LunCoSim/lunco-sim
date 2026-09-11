@@ -42,6 +42,26 @@ switch to it silently when a visual check is requested.
 | `rover_status` | rover-specific convenience readout. |
 | `capture_screenshot` (`CaptureScreenshot`) | raw PNG — save `-o /tmp/x.png`, then Read it. Confirms what numbers can't (did it tip over?). |
 
+## Inspect an authored assembly
+
+When the question is about a reusable USD assembly rather than only a spawned
+entity, use the namespaced Rhai `model_authoring` reads with the exact document
+id and root path:
+
+```rhai
+let context = model_authoring::model_context(doc, root, edit_target);
+let ready = model_authoring::readiness_report(doc, root, edit_target, policy);
+let graph = model_authoring::port_graph(doc, root, edit_target);
+```
+
+`context` is the complete composed tree and `ready` is the explicit
+topology/physicality/mount/connection/control/runtime preflight. These reads
+preserve the document generation and complement `InspectUsdViewport` and
+`LintReport`; they do not mutate or save the document. Use the returned exact
+paths for selection, reveal, framing, and follow-up typed commands. The
+[scripting guide](../../docs/scripting-guide.md#model-and-assembly-authoring-human-and-ai)
+documents the authoring facades and dry-plan boundaries.
+
 To perturb-then-observe: `set_input` / `SetPorts {target, writes:[[name,val]]}` to
 poke an input, `possess_vessel` to take control, then re-read.
 

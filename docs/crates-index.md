@@ -66,12 +66,16 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-usd`** | High-level USD orchestrator (`UsdPlugins`) and mapper for LunCo-specific engineering metadata (`lunco:*`). |
-| **`lunco-usd-bevy`** | Core visual bridge (`UsdBevyPlugin`): maps USD hierarchy, shapes, transforms, and `timeSamples` animation to Bevy entities/components. Owns composition/flattening (`compose.rs`, `flatten_stage`), USD `def Camera` translation + rover-mounted camera followers (`camera.rs`, `camera_mount.rs`), and the single-authority viewport-camera reconciler + `SetActiveCamera` switch (`camera_switch.rs`). Composed-stage and visual-projection tests live here. |
+| **`lunco-usd-core`** | Headless USD document, authoring, operation, schema, unit-conversion, and asset-closure substrate. No runtime, physics, rendering, or UI. |
+| **`lunco-usd`** | High-level runtime USD orchestrator (`UsdPlugins`) and mapper for LunCo-specific engineering metadata (`lunco:*`). |
+| **`lunco-usd-geometry`** | Render-free NURBS evaluators, trimmed-domain tessellation, and rotation-minimizing curve-sweep mesh data. Isolates heavy numeric geometry dependencies from the USD stage loader. |
+| **`lunco-usd-bevy-core`** | Headless composed-USD reader/view, stage composition, prepared stage assets, canonical live-stage ownership, authored-layer readers, instance identity, send-safe projection plans, program/variant resolution, material binding, transform decoding, and unit conversion. Uses Bevy's asset/ECS substrate but has no mesh, light, camera, renderer, window, or UI projection. |
+| **`lunco-usd-bevy`** | Visual Bevy adapter (`UsdBevyPlugin`): projects USD hierarchy, shapes, transforms, materials, and `timeSamples` animation into Bevy entities/components on top of `lunco-usd-bevy-core`. Owns mesh/lathe/curve projection, lighting, USD cameras, camera mounts, and the viewport-camera switch. |
 | **`lunco-usd-avian`** | Physics bridge (`UsdAvianPlugin`): maps `UsdPhysics` schemas (RigidBody, Colliders, all joint kinds + drive API) to Avian3D — the single home for joint construction. |
 | **`lunco-usd-sim`** | Simulation-schema bridge (`UsdSimPlugin`): intercepts specialized vehicle/cosim schemas (e.g., PhysX Vehicles) and maps them to LunCo models. Full USD→Bevy→Avian→simulation projection tests live here; direct Avian bridge mechanics stay in `lunco-usd-avian`. |
 | **`lunco-usd-terrain`** | Terrain bridge: projects authored terrain prims into `lunco-terrain-surface`'s `DemTerrainRequest` + composable `TerrainLayerStack` (craters / rocks / edits), and carries hand edits back as journaled, undoable USD ops on the document's **runtime** layer. Standard `UsdShade` owns terrain material intent. |
-| **`lunco-scene-commands`** | The scene/document **command layer**: every runtime mutation — spawn, move, delete, set-property, shader edit — authored as journaled USD ops on the open document's runtime layer. One path for all four callers (rhai, HTTP API, peer over the wire, editor gizmo); an edit that bypasses it escapes save, journal, undo and replication. |
+| **`lunco-scene-commands`** | The scene/document **command layer**: every runtime mutation — spawn, move, delete, set-property, shader edit — authored as journaled USD ops on the open document's runtime layer. One path for all four callers (rhai, HTTP API, peer over the wire, editor gizmo); an edit that bypasses it escapes save, journal, undo and replication. Validation is a separate production dependency so command changes do not rebuild the validator. |
+| **`lunco-scene-validation`** | Production asset, loaded-stage, and Twin pre-flight: `ValidateAsset`, `ValidateTwin`, live `RunLint`, USD lint-fact aggregation, and Twin namespace inspection. It owns composition/parse/lint integration while `lunco-scene-commands` owns scene mutation and catalog commands. |
 | **`lunco-materials`** | Shader appearance **intent**, render-free: `ShaderLook` (`.wgsl` path + open `dyn_params` + texture layers), the WGSL-reflected param schema, the CDLOD vertex attribute. Names no material type. |
 
 ---
@@ -119,7 +123,7 @@ Logic engines for dynamic simulation behavior, the tool registry, and industrial
 | **`lunco-tools-bevy`** | Bevy dispatch adapter for `lunco-tools` — the behaviour-tree execution half. Defines a bevy-aware `ExecutableTool` supertrait + `ClosureTool` (a closure that triggers its typed command directly via `&mut World`, no JSON/reflect). Observes `ToolFired`, downcasts to `ExecutableTool`, runs it. Instruments register via `register_closure_tool`. |
 | **`lunco-hooks`** | Language-agnostic hook registry: a *hook* is a named, deterministic-flagged decision point (`HookValue` in/out) whose implementation is pluggable. Backs first-class policies — journal **merge** order, RBAC **authorize** gate, and authored actuation policies — as data, not Rust branches. Dependency-free (no rhai/bevy). |
 | **`lunco-hooks-rhai`** | rhai backend for `lunco-hooks`: compiles a rhai `source` + `entry` fn and registers it under a hook id (`register_rhai_hook`), so any hook point can be authored in rhai and hot-replaced. |
-| **`lunco-lint`** | Universal lint substrate: `LintFinding`/`LintReport` and `run_lint(domain, facts)`, which asks the `lint.<domain>` hook what is wrong with a domain's FACTS. Rules are authored (`assets/scripting/policy/lint_<domain>.rhai`), never compiled here — this crate names no domain and knows nothing about USD, rhai or Modelica. Nothing lints on load; `RunLint` (lunco-scene-commands) and `ValidateAsset` are the two entry points. See `docs/architecture/lint-substrate.md`. |
+| **`lunco-lint`** | Universal lint substrate: `LintFinding`/`LintReport` and `run_lint(domain, facts)`, which asks the `lint.<domain>` hook what is wrong with a domain's FACTS. Rules are authored (`assets/scripting/policy/lint_<domain>.rhai`), never compiled here — this crate names no domain and knows nothing about USD, rhai or Modelica. Nothing lints on load; `RunLint` and `ValidateAsset` in `lunco-scene-validation` are the two entry points. See `docs/architecture/lint-substrate.md`. |
 | **`lunco-behavior`** | Dependency-free task-tree kernel (mechanism, no bevy/avian/rhai): `Ctx`-driven composites (`Sequence`/`Selector`/`Parallel`), reactive composites, loops, decorators, and timed/event leaves. `lunco-scripting` authors and owns the Rhai-facing task programs. Node catalogue: [docs/behaviour-trees.md](./behaviour-trees.md). |
 
 ---
@@ -130,7 +134,7 @@ Primary entry points and simulation assembly targets.
 | Crate | Binary | Responsibility |
 | :--- | :--- | :--- |
 | **`lunco-luncosim-exposures`** | — | Headless-safe runtime exposure projection plugin. Resolves authoritative ECS/domain state and authored telemetry into the shared `EngineExposures` registry for HTML, egui, API, telemetry, and remote consumers; it has no renderer or UI dependency. |
-| **`lunco-luncosim`** | `luncosim` | Ground-physics simulator (ground mobility + physics, loaded from USD): USD scene + Avian physics, luncosim edit tools, the embedded Modelica workbench, and the application-owned authored lesson menu. The production `luncosim test` command executes authored USD + Rhai scenario assertions headlessly through the same composition root. |
+| **`lunco-luncosim`** | `luncosim` | Headless-safe ground-physics composition root (USD + Avian + cosim + networking/API) plus the production authored-scene test runner. Windowed status, camera, terrain-shadow, environment-presentation, and offscreen-recording bridges live in `lunco-luncosim-ui`; the application still composes both through one core plugin. |
 | **`lunco-luncosim-server`** | `luncosim-server` | Headless launcher for LunCoSim (no winit/egui) with the API + networking host. Its own crate purely so it can default to headless. |
 | **`lunco-modelica-ui`** | `lunica` | The Modelica workbench application and UI facade. |
 | **`lunco-modelica-core`** | `lunica_worker`, `modelica_run`, `modelica_tester`, `msl_indexer`, `msl_parse_bench` | Headless Modelica worker and CLI/indexing tools; none link the workbench UI. |
@@ -239,11 +243,43 @@ Input mapping and translation. Owns the persisted `InputBindingsSettings` keymap
 
 ### USD Integration Layer
 
+**`lunco-usd-core`**
+Headless OpenUSD document, authoring, operation, schema, unit-conversion, and
+asset-closure substrate. It has no runtime projection, physics, rendering, or
+UI dependency.
+
 **`lunco-usd`**
-High-level USD orchestrator (`UsdPlugins`) and engineering metadata bridge. Maps LunCo-specific metadata (`lunco:*` namespace) from USD stages to Bevy components, enriching 3D models with simulation-critical data like Ephemeris IDs.
+High-level, UI-free USD orchestrator (`UsdPlugins`) and engineering metadata bridge. Maps LunCo-specific metadata (`lunco:*` namespace) from USD stages to Bevy components, enriching 3D models with simulation-critical data like Ephemeris IDs. Document commands and composition are available to headless consumers; interactive presentation lives in `lunco-usd-ui`.
+
+**`lunco-usd-geometry`**
+Render-free reusable geometry substrate for USD projections: NURBS curves and
+patches, trimmed-domain tessellation, and rotation-minimizing curve sweeps. Its
+heavy numeric dependencies are isolated from the stage loader so evaluator
+changes do not rebuild unrelated USD runtime code.
+
+**`lunco-usd-bevy-core`**
+Headless composed-USD substrate shared by visual, physics, and simulation
+projections. It owns the `UsdRead`/`StageView` contract, resolver-backed
+composition, `UsdStageAsset` loading, `CanonicalStage` live-stage ownership,
+authored-layer readers, instance identity markers, `UsdStageProjectionPlan`,
+program and variant resolution, standard material binding, canonical transform
+decoding, stage units, and related USD helpers. It deliberately contains no
+visual mesh, light, camera, renderer, window, or UI projection, so changes to
+those adapters do not rebuild this reader/composition package.
+
+**`lunco-usd-ui`**
+Interactive USD browser and preview presentation. Owns workbench sections, preview sessions/views, viewport queries, Save-As picker integration, and UI status/placeholder adapters while consuming the document and projection APIs from `lunco-usd`.
 
 **`lunco-usd-bevy`**
-Core OpenUSD visual bridge. Maps USD prim hierarchies, shapes, and transforms into Bevy entities/components, decodes the full xform-op stack (`local_transform_at`), and drives authored `timeSamples` animation (`sample_usd_animation`). Composition/flattening lives here (`compose.rs`, `flatten_stage`) — there is no separate `lunco-usd-composer` crate. Composed-stage and visual-projection tests stay with this owner. Also owns the **camera intent bridge**: USD `def Camera` → render-free intent, with `lunco-render-bevy` supplying the complete inactive `Camera3d` pipeline, rover-mounted grid-direct camera followers (`camera_mount.rs`), and the **single-authority viewport-camera reconciler** + explicit camera-selection commands (`camera_switch.rs`) that actuate `lunco_core::SceneViewport`. See [`17-view-and-intent.md §6`](architecture/17-view-and-intent.md).
+Visual OpenUSD bridge built on `lunco-usd-bevy-core`. It maps USD prim
+hierarchies and visual facts into Bevy entities/components, projects meshes,
+lights, render intent, cameras, and authored `timeSamples` animation. The
+camera intent bridge (USD `def Camera` → render-free intent), rover-mounted
+grid-direct followers, and the single-authority viewport-camera reconciler
+remain here; `lunco-render-bevy` supplies the concrete render pipeline. See
+[`17-view-and-intent.md §6`](architecture/17-view-and-intent.md).
+Headless consumers import the owning `lunco-usd-bevy-core` modules directly;
+this visual adapter is not a compatibility facade for the headless API.
 
 **`lunco-usd-avian`**
 Physics bridge for OpenUSD (`UsdAvianPlugin`). Maps `UsdPhysics` schemas — rigid bodies + mass-properties, all collider shapes, and **all joints** (revolute/prismatic/fixed/spherical/distance, D6-reduced) with `UsdPhysicsDriveAPI` motor drive — to Avian3D. The single home for Avian joint construction (incl. the programmatic wheel hinge).
@@ -330,7 +366,10 @@ Bevy dispatch adapter for `lunco-tools` — the engine-action execution half. De
 ### Applications
 
 **`lunco-luncosim`**
-The LunCoSim application — ground mobility + physics, loaded from USD (binary `luncosim`). A composition root rather than a UI host: `SandboxCorePlugin` (headless-safe sim/physics/cosim/USD/networking/API) plus an optional `SandboxUiPlugin` (egui workbench, windowed) or `SandboxHeadlessPlugin`. Assembles the USD scene, Avian physics, and the in-scene edit tools, and is the single shared entry point for both the `luncosim` GUI and `luncosim-server` headless binaries.
+The LunCoSim application — ground mobility + physics, loaded from USD (binary `luncosim`). A composition root rather than a UI host: `LunCoSimCorePlugin` (headless-safe sim/physics/cosim/USD/networking/API) plus an optional `LunCoSimUiPlugin` from `lunco-luncosim-ui` (egui workbench, windowed) or `LunCoSimHeadlessPlugin`. Assembles the USD scene, Avian physics, and the in-scene edit tools, and is the single shared entry point for both the `luncosim` GUI and `luncosim-server` headless binaries.
+
+**`lunco-luncosim-ui`**
+Windowed LunCoSim presentation and packaging boundary: egui workbench, interactive editor composition, status/camera/terrain/environment bridges, GPU-backed offscreen recording, native window icon generation, and the UI-owned `window_icon_bytes()` API. The headless application core and `luncosim-server` do not compile its GUI/build-time graphics dependencies.
 
 **`lunco-luncosim-exposures`**
 Production integration crate for the renderer-independent runtime exposure projection. `RuntimeExposuresPlugin` registers the single shared path from authoritative ECS/domain state and authored telemetry to `lunco_core::exposure::EngineExposures`; HTML, egui, API, telemetry, and remote clients consume that registry. It owns no UI, renderer, or tutorial policy, so changing exposure derivation does not recompile the application composition root.

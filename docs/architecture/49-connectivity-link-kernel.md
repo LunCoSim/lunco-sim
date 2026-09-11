@@ -237,7 +237,7 @@ an orbit. A rover-mounted antenna is the same, with neither — it is a scene-lo
 posed through the site frame. LEO / lunar-orbit satellites need no new concept: a
 satellite is just a `KeplerOrbit` endpoint.
 
-`LunCoLinkAPI` / `LunCoOccluderAPI` are declared in `lunco-usd/schema/schema.usda`, so
+`LunCoLinkAPI` / `LunCoOccluderAPI` are declared in `lunco-usd-core/schema/schema.usda`, so
 these attributes are discoverable (`discover_schema`, the inspector) rather than read
 positionally by a reader that alone knows they exist. Core USD has no connectivity or
 occlusion schema to reuse — this follows the `LunCoShadowAPI` precedent: name only what

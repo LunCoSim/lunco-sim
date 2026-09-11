@@ -165,6 +165,28 @@ For architecture decisions and standard-schema checks, read
 [`luncosim-architecture`](../luncosim-architecture/SKILL.md). It is the gate
 against special-case Rust, duplicate USD vocabulary, and compatibility paths.
 
+## Use the generic assembly checkpoint
+
+For a new rover, lander, or multi-domain scene, use the shared Rhai
+`model_authoring` facade before composing domain-specific policy:
+
+1. `model_context(doc, root, edit_target)` reads the complete composed tree and
+   preserves its generation.
+2. `readiness_report(doc, root, edit_target, policy)` combines the explicit
+   topology, physicality, mount, connection, control, and runtime checks.
+3. `scene_recipe` returns dry references, terrain, camera, initial-state, route,
+   and program records.
+4. `port_graph` and `wiring_plan` discover and validate standard USD
+   `inputs:`/`outputs:`/`connectors:` endpoints before typed `SetConnection` ops
+   are reviewed.
+5. `publish_component` validates a reusable component and returns an explicit
+   Save-As plan.
+
+Keep vehicle manifests, limits, and mission thresholds in the Twin's Rhai
+package. The facades do not create a Modelica compiler path, a vehicle schema,
+or a Rust builder. See the [scripting guide](../../docs/scripting-guide.md#model-and-assembly-authoring-human-and-ai)
+for signatures and apply boundaries.
+
 ## Componentized vehicle workflow
 
 Build a vehicle as a small set of contracts, not one monolithic USD file. Put

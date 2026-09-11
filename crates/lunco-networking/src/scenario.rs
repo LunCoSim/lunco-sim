@@ -274,7 +274,7 @@ pub struct AssetOfferMsg {
 // ── Resources ─────────────────────────────────────────────────────────────────
 
 /// Host-side: the scenario this server is currently running. Built by the app
-/// (`lunco-luncosim`'s `setup_sandbox`) after the Twin is opened — it walks the
+/// (`lunco-luncosim`'s `setup_luncosim`) after the Twin is opened — it walks the
 /// Twin's files, hashes each, and fills [`Self::manifest`]. The
 /// [`on_server_connected`](crate::server) observer sends it to each new client
 /// and [`broadcast_scenario_manifest`] pushes it to all clients when the

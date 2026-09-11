@@ -18,8 +18,10 @@
 use bevy::prelude::*;
 use std::collections::HashMap;
 
-use lunco_usd::ui::viewport::{UsdPreviewId, UsdViewportState};
-use lunco_usd_bevy::{CanonicalStages, SdfPath, UsdPrimPath, UsdRead, UsdStageAsset};
+use lunco_usd_bevy::SdfPath;
+use lunco_usd_bevy::UsdPrimPath;
+use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdRead, UsdStageAsset};
+use lunco_usd_ui::viewport::{UsdPreviewId, UsdViewportState};
 
 /// One ranged parameter derived from an attribute's `customData`.
 #[derive(Clone)]
@@ -54,7 +56,7 @@ pub struct UsdParam {
 pub struct UsdParamSessionView {
     pub preview: UsdPreviewId,
     pub doc: lunco_doc::DocumentId,
-    pub edit_target: lunco_usd::document::LayerId,
+    pub edit_target: lunco_usd_core::document::LayerId,
     pub generation: u64,
     pub entity: Option<Entity>,
     pub path: String,
@@ -83,7 +85,7 @@ impl UsdParamView {
 pub(crate) struct UsdParamDraft {
     pub generation: u64,
     pub values: HashMap<String, f64>,
-    pub scope: lunco_usd::edit_session::UsdEditScope,
+    pub scope: lunco_usd_core::edit_session::UsdEditScope,
 }
 
 impl Default for UsdParamDraft {
@@ -91,7 +93,7 @@ impl Default for UsdParamDraft {
         Self {
             generation: 0,
             values: HashMap::new(),
-            scope: lunco_usd::edit_session::UsdEditScope::Assembly,
+            scope: lunco_usd_core::edit_session::UsdEditScope::Assembly,
         }
     }
 }
@@ -212,7 +214,7 @@ pub fn produce_usd_param_view(
             // the shared fallback for standard LunCo properties.
             let Some(hint) = stage_view
                 .attr_ui_hint(&sdf, &attr)
-                .or_else(|| lunco_usd::schema::ui_hint_of(&attr))
+                .or_else(|| lunco_usd_core::schema::ui_hint_of(&attr))
             else {
                 continue;
             };
@@ -228,7 +230,7 @@ pub fn produce_usd_param_view(
             let type_name = hint
                 .type_name
                 .or_else(|| {
-                    lunco_usd::schema::SchemaRegistry::global()
+                    lunco_usd_core::schema::SchemaRegistry::global()
                         .read()
                         .ok()
                         .and_then(|r| r.property(&attr).map(|p| p.type_name.clone()))

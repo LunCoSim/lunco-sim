@@ -23,7 +23,8 @@ unless the typed owner is missing a generic USD capability.
 
 Frame is fixed: **Y-up, right-handed, −Z-forward, SI metres** (`docs/architecture/41-axes-and-units.md`).
 Author in that frame. `upAxis = "Z"` / `metersPerUnit != 1` are converted once at
-the importer (`crates/lunco-usd-bevy/src/units.rs`) — never branch on them.
+the shared USD boundary (`crates/lunco-usd-core/src/units.rs`; the runtime
+reader adapter is in `lunco-usd-bevy`) — never branch on them.
 
 Background: [`21-domain-usd.md`](../../docs/architecture/21-domain-usd.md),
 [`50-usd-driven-visuals.md`](../../docs/architecture/50-usd-driven-visuals.md).
@@ -94,6 +95,17 @@ document/edit-target/generation checkpoint with the standard property catalog;
 returns dry typed ops. Keep the bundle recipe in the owning Twin/model package,
 preserve existing topology and material ownership, and commit one reviewed
 proposal. Do not infer the recipe from child names or add a Rust registry.
+
+When the component is ready to become a reusable asset, call
+`model_authoring::publish_component(doc, root, edit_target, output,
+provenance)`. It checks the top-level component root, standard `kind` and
+`defaultPrim`, applied schemas, reference identities, and caller-supplied
+provenance, then returns ordinary metadata ops and an explicit `save_as`
+command. Review and apply the ops through `assembly_edit`; call
+`assembly_edit::save_as_document` explicitly after projection/lint. The helper
+does not invent a provenance schema, write USDA directly, or autosave.
+See [`scripting-guide.md`](../../docs/scripting-guide.md#model-and-assembly-authoring-human-and-ai)
+for the complete facade sequence.
 
 ## Skeleton
 
@@ -234,7 +246,7 @@ def NurbsPatch "Wall" {
 - Tessellation is fixed, not adaptive: `clamp(count * 6, 8, 128)` per direction.
 - Normals are analytic; a degenerate row (a dome apex) yields `+Y` rather than NaN.
 
-Every rejection path warns with a reason (`crates/lunco-usd-bevy/src/nurbs.rs`).
+Every rejection path warns with a reason (`crates/lunco-usd-geometry/src/nurbs.rs`).
 If a patch is missing from the render, **read the log first** — it will say which
 guard fired, and untrimmed patches log their vert count.
 
@@ -263,7 +275,7 @@ point3f[] trimCurve:points = [ (u, v, w), ... ]   # HOMOGENEOUS 2D
   normalised, and are deliberately not unit/axis converted.
 - **Winding does not matter.** Classification is even-odd with the domain
   rectangle as an implicit outer loop, so USD's unstated keep/discard rule never
-  has to be guessed (`crates/lunco-usd-bevy/src/trim.rs`).
+  has to be guessed (`crates/lunco-usd-geometry/src/trim.rs`).
 - Parameter space is **anisotropic and non-linear**. On a cylinder, u spans
   circumference while v spans height, and a rational arc parameterises
   non-uniformly — at the quarter point of a 90° span the true angle is 21.598°,
@@ -530,11 +542,11 @@ A twin is a folder with `twin.toml` (`name`, `[usd] default_scene`), addressed a
 
 A new property is **inert** until it reaches the registered layer:
 
-1. Edit `crates/lunco-usd/schema/schema.usda` — the source, **never read at runtime**
+1. Edit `crates/lunco-usd-core/schema/schema.usda` — the source, **never read at runtime**
 2. Run `python3 scripts/gen_schema.py` — regenerates
-   `crates/lunco-usd/schema/generatedSchema.usda`, the file actually compiled in
+   `crates/lunco-usd-core/schema/generatedSchema.usda`, the file actually compiled in
    (never hand-edit it)
-3. A new CLASS additionally needs a `crates/lunco-usd/schema/plugInfo.json`
+3. A new CLASS additionally needs a `crates/lunco-usd-core/schema/plugInfo.json`
    Types entry (`every_schema_class_is_registered_in_pluginfo` pins this)
 
 Registry tests pin source↔generated class parity and (for the wheel domain)

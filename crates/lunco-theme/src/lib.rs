@@ -131,7 +131,7 @@ pub fn theme_key(domain: &str, token: &str) -> (u64, u64) {
     (domain_id, token_id)
 }
 
-/// Version-agnostic color palette to avoid dependency conflicts.
+/// Catppuccin color palette represented in the active egui version.
 #[derive(Clone, Debug)]
 pub struct ColorPalette {
     pub rosewater: egui::Color32,
@@ -162,39 +162,127 @@ pub struct ColorPalette {
     pub crust: egui::Color32,
 }
 
+#[derive(Clone, Copy)]
+struct CatppuccinRgb {
+    rosewater: [u8; 3],
+    flamingo: [u8; 3],
+    pink: [u8; 3],
+    mauve: [u8; 3],
+    red: [u8; 3],
+    maroon: [u8; 3],
+    peach: [u8; 3],
+    yellow: [u8; 3],
+    green: [u8; 3],
+    teal: [u8; 3],
+    sky: [u8; 3],
+    sapphire: [u8; 3],
+    blue: [u8; 3],
+    lavender: [u8; 3],
+    text: [u8; 3],
+    subtext1: [u8; 3],
+    subtext0: [u8; 3],
+    overlay2: [u8; 3],
+    overlay1: [u8; 3],
+    overlay0: [u8; 3],
+    surface2: [u8; 3],
+    surface1: [u8; 3],
+    surface0: [u8; 3],
+    base: [u8; 3],
+    mantle: [u8; 3],
+    crust: [u8; 3],
+}
+
 impl ColorPalette {
-    pub fn from_catppuccin(f: catppuccin_egui::Theme) -> Self {
-        // Use component accessors to bridge different egui versions
+    fn from_catppuccin(f: CatppuccinRgb) -> Self {
+        let rgb = |[r, g, b]: [u8; 3]| egui::Color32::from_rgb(r, g, b);
         Self {
-            rosewater: egui::Color32::from_rgb(f.rosewater.r(), f.rosewater.g(), f.rosewater.b()),
-            flamingo: egui::Color32::from_rgb(f.flamingo.r(), f.flamingo.g(), f.flamingo.b()),
-            pink: egui::Color32::from_rgb(f.pink.r(), f.pink.g(), f.pink.b()),
-            mauve: egui::Color32::from_rgb(f.mauve.r(), f.mauve.g(), f.mauve.b()),
-            red: egui::Color32::from_rgb(f.red.r(), f.red.g(), f.red.b()),
-            maroon: egui::Color32::from_rgb(f.maroon.r(), f.maroon.g(), f.maroon.b()),
-            peach: egui::Color32::from_rgb(f.peach.r(), f.peach.g(), f.peach.b()),
-            yellow: egui::Color32::from_rgb(f.yellow.r(), f.yellow.g(), f.yellow.b()),
-            green: egui::Color32::from_rgb(f.green.r(), f.green.g(), f.green.b()),
-            teal: egui::Color32::from_rgb(f.teal.r(), f.teal.g(), f.teal.b()),
-            sky: egui::Color32::from_rgb(f.sky.r(), f.sky.g(), f.sky.b()),
-            sapphire: egui::Color32::from_rgb(f.sapphire.r(), f.sapphire.g(), f.sapphire.b()),
-            blue: egui::Color32::from_rgb(f.blue.r(), f.blue.g(), f.blue.b()),
-            lavender: egui::Color32::from_rgb(f.lavender.r(), f.lavender.g(), f.lavender.b()),
-            text: egui::Color32::from_rgb(f.text.r(), f.text.g(), f.text.b()),
-            subtext1: egui::Color32::from_rgb(f.subtext1.r(), f.subtext1.g(), f.subtext1.b()),
-            subtext0: egui::Color32::from_rgb(f.subtext0.r(), f.subtext0.g(), f.subtext0.b()),
-            overlay2: egui::Color32::from_rgb(f.overlay2.r(), f.overlay2.g(), f.overlay2.b()),
-            overlay1: egui::Color32::from_rgb(f.overlay1.r(), f.overlay1.g(), f.overlay1.b()),
-            overlay0: egui::Color32::from_rgb(f.overlay0.r(), f.overlay0.g(), f.overlay0.b()),
-            surface2: egui::Color32::from_rgb(f.surface2.r(), f.surface2.g(), f.surface2.b()),
-            surface1: egui::Color32::from_rgb(f.surface1.r(), f.surface1.g(), f.surface1.b()),
-            surface0: egui::Color32::from_rgb(f.surface0.r(), f.surface0.g(), f.surface0.b()),
-            base: egui::Color32::from_rgb(f.base.r(), f.base.g(), f.base.b()),
-            mantle: egui::Color32::from_rgb(f.mantle.r(), f.mantle.g(), f.mantle.b()),
-            crust: egui::Color32::from_rgb(f.crust.r(), f.crust.g(), f.crust.b()),
+            rosewater: rgb(f.rosewater),
+            flamingo: rgb(f.flamingo),
+            pink: rgb(f.pink),
+            mauve: rgb(f.mauve),
+            red: rgb(f.red),
+            maroon: rgb(f.maroon),
+            peach: rgb(f.peach),
+            yellow: rgb(f.yellow),
+            green: rgb(f.green),
+            teal: rgb(f.teal),
+            sky: rgb(f.sky),
+            sapphire: rgb(f.sapphire),
+            blue: rgb(f.blue),
+            lavender: rgb(f.lavender),
+            text: rgb(f.text),
+            subtext1: rgb(f.subtext1),
+            subtext0: rgb(f.subtext0),
+            overlay2: rgb(f.overlay2),
+            overlay1: rgb(f.overlay1),
+            overlay0: rgb(f.overlay0),
+            surface2: rgb(f.surface2),
+            surface1: rgb(f.surface1),
+            surface0: rgb(f.surface0),
+            base: rgb(f.base),
+            mantle: rgb(f.mantle),
+            crust: rgb(f.crust),
         }
     }
 }
+
+const MOCHA: CatppuccinRgb = CatppuccinRgb {
+    rosewater: [245, 224, 220],
+    flamingo: [242, 205, 205],
+    pink: [245, 194, 231],
+    mauve: [203, 166, 247],
+    red: [243, 139, 168],
+    maroon: [235, 160, 172],
+    peach: [250, 179, 135],
+    yellow: [249, 226, 175],
+    green: [166, 227, 161],
+    teal: [148, 226, 213],
+    sky: [137, 220, 235],
+    sapphire: [116, 199, 236],
+    blue: [137, 180, 250],
+    lavender: [180, 190, 254],
+    text: [205, 214, 244],
+    subtext1: [186, 194, 222],
+    subtext0: [166, 173, 200],
+    overlay2: [147, 153, 178],
+    overlay1: [127, 132, 156],
+    overlay0: [108, 112, 134],
+    surface2: [88, 91, 112],
+    surface1: [69, 71, 90],
+    surface0: [49, 50, 68],
+    base: [30, 30, 46],
+    mantle: [24, 24, 37],
+    crust: [17, 17, 27],
+};
+
+const LATTE: CatppuccinRgb = CatppuccinRgb {
+    rosewater: [220, 138, 120],
+    flamingo: [221, 120, 120],
+    pink: [234, 118, 203],
+    mauve: [136, 57, 239],
+    red: [210, 15, 57],
+    maroon: [230, 69, 83],
+    peach: [254, 100, 11],
+    yellow: [223, 142, 29],
+    green: [64, 160, 43],
+    teal: [23, 146, 153],
+    sky: [4, 165, 229],
+    sapphire: [32, 159, 181],
+    blue: [30, 102, 245],
+    lavender: [114, 135, 253],
+    text: [76, 79, 105],
+    subtext1: [92, 95, 119],
+    subtext0: [108, 111, 133],
+    overlay2: [124, 127, 147],
+    overlay1: [140, 143, 161],
+    overlay0: [156, 160, 176],
+    surface2: [172, 176, 190],
+    surface1: [188, 192, 204],
+    surface0: [204, 208, 218],
+    base: [239, 241, 245],
+    mantle: [230, 233, 239],
+    crust: [220, 224, 232],
+};
 
 /// Semantic design tokens for functional UI styling.
 #[derive(Clone, Debug)]
@@ -822,7 +910,7 @@ impl Default for Theme {
 
 impl Theme {
     pub fn dark() -> Self {
-        let colors = ColorPalette::from_catppuccin(catppuccin_egui::MOCHA);
+        let colors = ColorPalette::from_catppuccin(MOCHA);
         let tokens = DesignTokens::from_palette(&colors, ThemeMode::Dark);
         let schematic = SchematicTokens::from_palette(&colors);
         let journal = JournalTokens::from_palette(&colors);
@@ -844,7 +932,7 @@ impl Theme {
     }
 
     pub fn light() -> Self {
-        let colors = ColorPalette::from_catppuccin(catppuccin_egui::LATTE);
+        let colors = ColorPalette::from_catppuccin(LATTE);
         let tokens = DesignTokens::from_palette(&colors, ThemeMode::Light);
         let schematic = SchematicTokens::from_palette(&colors);
         let journal = JournalTokens::from_palette(&colors);

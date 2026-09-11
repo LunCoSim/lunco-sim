@@ -9,17 +9,17 @@
 //!
 //! The app is three named plugins, composed by a tiny shell — mirroring how the
 //! library crates split into core modules + a `*UiPlugin`:
-//!   - [`SandboxCorePlugin`] — sim / physics / cosim / USD / networking / API.
+//!   - [`LunCoSimCorePlugin`] — sim / physics / cosim / USD / networking / API.
 //!     Headless-safe, added unconditionally.
-//!   - [`ui::SandboxUiPlugin`] (`ui` feature) — egui workbench, picking, the
+//!   - [`lunco_luncosim_ui::LunCoSimUiPlugin`] (`ui` feature) — egui workbench, picking, the
 //!     in-scene editor, materials, panels, and explicit camera controls. Added only when
 //!     running windowed.
-//!   - [`SandboxHeadlessPlugin`] — the `ScheduleRunner` + the Modelica/spawn
+//!   - [`LunCoSimHeadlessPlugin`] — the `ScheduleRunner` + the Modelica/spawn
 //!     cores a server needs in the UI plugin's place. Added only when headless.
 //!
-//! GUI = `SandboxCorePlugin + SandboxUiPlugin`; headless =
-//! `SandboxCorePlugin + SandboxHeadlessPlugin`. Both bins compose the SAME
-//! `SandboxCorePlugin`, so they can never drift. The only place the GUI/headless
+//! GUI = `LunCoSimCorePlugin + LunCoSimUiPlugin`; headless =
+//! `LunCoSimCorePlugin + LunCoSimHeadlessPlugin`. Both bins compose the SAME
+//! `LunCoSimCorePlugin`, so they can never drift. The only place the GUI/headless
 //! decision touches plugin *configuration* is [`default_plugins`] (the window /
 //! render / winit backend must be chosen at `PluginGroup` build time) — that is
 //! inherently a shell concern.
@@ -42,16 +42,17 @@ use big_space::prelude::*;
 use lunco_hardware::LunCoHardwarePlugin;
 use lunco_mobility::LunCoMobilityPlugin;
 // USD core (scene load + collider build) is always needed; the Twin browser /
-// RTT viewport UI plugins are `ui`-only (added by `SandboxUiPlugin`).
+// RTT viewport UI plugins are `ui`-only (added by `LunCoSimUiPlugin`).
 #[cfg(feature = "networking")]
 use lunco_usd::LoadScene;
-use lunco_usd::{UsdPlugins, UsdPrimPath, UsdStageAsset};
+use lunco_usd::{UsdPlugins, UsdPrimPath};
 // USD policy and terrain presentation read the composed reader selected by the
 // shared USD projection boundary. Initial scene loads use the worker-produced
 // plan; authored generations use the live canonical stage. `UsdDataExt` remains
 // the separate authored-layer surface for document questions.
 use bevy::asset::AssetLoadFailedEvent;
-use lunco_usd_bevy::read::UsdReadObject;
+use lunco_usd_bevy_core::read::UsdReadObject;
+use lunco_usd_bevy_core::UsdStageAsset;
 
 /// Re-exported so the (bevy-free) bin crates can return it from `main` to
 /// propagate the process exit code (e.g. the startup-scene fail-loud guard).
@@ -74,7 +75,7 @@ use lunco_obstacle_field::ObstacleFieldPlugin;
 use lunco_terrain_globe::TerrainPlugin;
 use lunco_terrain_surface::TerrainSurfacePlugin;
 // `ModelicaSet` orders the cosim pipeline (always). The egui workbench plugin is
-// added by `SandboxUiPlugin`; headless adds `ModelicaCorePlugin` instead.
+// added by `LunCoSimUiPlugin`; headless adds `ModelicaCorePlugin` instead.
 use lunco_modelica_core::ModelicaSet;
 
 /// Chassis smoothness census (`LUNCO_JITTER_CSV`) — compares solver `Position`
@@ -83,10 +84,6 @@ use lunco_modelica_core::ModelicaSet;
 mod jitter_probe;
 /// Collapse repeated WARN/ERROR log lines into one line + a count (§6.4).
 mod log_dedup;
-#[cfg(feature = "ui")]
-mod terrain_horizon;
-#[cfg(feature = "ui")]
-mod ui;
 /// OS `luncosim://` scheme registration (desktop integration). Native + the
 /// networking feature only — there's nothing to dial without the wire.
 #[cfg(all(feature = "networking", not(target_family = "wasm")))]
@@ -122,14 +119,14 @@ pub fn run_headless() -> AppExit {
 /// The luncosim's process-start render choice. The binary selects it while
 /// `lunco-render-bevy` owns how the policy is rendered.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum SandboxRenderProfile {
+enum LunCoSimRenderProfile {
     #[default]
     Standard,
     Fast,
 }
 
-fn parse_render_profile(args: &[String]) -> Result<SandboxRenderProfile, String> {
-    let mut profile = SandboxRenderProfile::Standard;
+fn parse_render_profile(args: &[String]) -> Result<LunCoSimRenderProfile, String> {
+    let mut profile = LunCoSimRenderProfile::Standard;
     let mut index = 0;
     while index < args.len() {
         let value = if args[index] == "--render-profile" {
@@ -144,8 +141,8 @@ fn parse_render_profile(args: &[String]) -> Result<SandboxRenderProfile, String>
             continue;
         };
         profile = match value {
-            "standard" => SandboxRenderProfile::Standard,
-            "fast" => SandboxRenderProfile::Fast,
+            "standard" => LunCoSimRenderProfile::Standard,
+            "fast" => LunCoSimRenderProfile::Fast,
             _ => {
                 return Err(format!(
                     "invalid render profile `{value}`; expected `standard` or `fast`"
@@ -322,7 +319,7 @@ mod render_profile_tests {
             ],
             vec!["luncosim".to_string(), "--render-profile=fast".to_string()],
         ] {
-            assert_eq!(parse_render_profile(&args), Ok(SandboxRenderProfile::Fast));
+            assert_eq!(parse_render_profile(&args), Ok(LunCoSimRenderProfile::Fast));
         }
     }
 
@@ -639,16 +636,26 @@ fn run_with_mode(headless: bool) -> AppExit {
 
     #[cfg(feature = "ui")]
     if !headless && !offscreen {
-        app.add_plugins(ui::SandboxUiPlugin);
+        app.insert_resource(lunco_luncosim_ui::WindowIconBytes(
+            lunco_luncosim_ui::window_icon_bytes(),
+        ));
+        app.add_plugins(lunco_luncosim_ui::LunCoSimUiPlugin {
+            config: lunco_luncosim_ui::LunCoSimUiConfig {
+                product_version: PRODUCT_VERSION,
+                git_sha: GIT_SHA,
+                repository_url: REPOSITORY_URL,
+                initial_scene: app.world().resource::<ScenePath>().0.clone(),
+            },
+        });
     }
 
     #[cfg(all(feature = "ui", feature = "lunco-api"))]
     if offscreen {
-        app.add_plugins(SandboxOffscreenPlugin);
+        app.add_plugins(lunco_luncosim_ui::LunCoSimOffscreenPlugin);
     }
 
     if headless {
-        app.add_plugins(SandboxHeadlessPlugin { execution_mode });
+        app.add_plugins(LunCoSimHeadlessPlugin { execution_mode });
     }
 
     apply_render_quality_override(&mut app, render_quality);
@@ -696,29 +703,8 @@ fn apply_render_quality_override(_app: &mut App, _quality: Option<lunco_render::
 /// build time — a plugin added later cannot reconfigure `RenderPlugin`/
 /// `WindowPlugin`. Headless builds retain the simulation's asset/type plugins,
 /// but omit the renderer and its render-world consumers entirely. The
-/// [`ScheduleRunnerPlugin`] added by [`SandboxHeadlessPlugin`] ticks the app in
+/// [`ScheduleRunnerPlugin`] added by [`LunCoSimHeadlessPlugin`] ticks the app in
 /// winit's place.
-/// THE simulation app — asset sources, engine plugins, and every LunCo domain
-/// system. This is the whole application minus its user interface.
-///
-/// Every binary that runs the simulation builds it through here: the GUI
-/// ([`run`]), the headless server, and the headless scene-test runner. The UI is
-/// added ON TOP by `run` alone, which is the right direction of dependency — the
-/// simulation does not know the interface exists, and a test runner exercises the
-/// same app the user does rather than a re-assembled lookalike.
-///
-/// **This exists because assembling it by hand is a trap.** The asset-source
-/// registration below MUST happen before `AssetPlugin`, which snapshots the source
-/// registry when it is built. Miss it and you get an app with no `lunco://` or
-/// `twin://` scheme and no `TwinRoots` resource — which surfaces as
-/// `Res<TwinRoots> failed validation: Resource does not exist` from an observer far
-/// away, or, worse, as assets that silently never resolve. Four call sites had
-/// already open-coded this prelude and a fifth (the scene-test runner) hit the panic
-/// on its first run.
-///
-/// Do not "fix" a missing `TwinRoots` by initialising the resource on its own: that
-/// manufactures the resource WITHOUT the asset sources it is meant to accompany, and
-/// trades a loud panic for silent unresolved assets.
 /// The luncosim's gravity before any scene is loaded, and the value scene
 /// teardown restores when one unloads.
 ///
@@ -730,8 +716,19 @@ pub const SANDBOX_GRAVITY: lunco_environment::Gravity = lunco_environment::Gravi
     bevy::math::DVec3::NEG_Y,
 );
 
+/// Build the production simulation app: asset sources, engine plugins, and every
+/// LunCo domain system. Every binary that runs the simulation uses this path, so
+/// the GUI, headless server, and scene-test runner share one composition. The
+/// interactive UI is layered on by `run`; render-capable builds register the UI
+/// package's presentation bridges at this assembly boundary, while headless builds
+/// omit them.
+///
+/// **This exists because assembling it by hand is a trap.** Asset-source
+/// registration must happen before `AssetPlugin`, which snapshots the source
+/// registry when it is built. Missing that ordering leaves `lunco://`/`twin://`
+/// unresolved or produces a distant `TwinRoots` resource validation failure.
 pub fn build_sim_app(headless: bool, offscreen: bool) -> App {
-    build_sim_app_with_profile(headless, offscreen, None, SandboxRenderProfile::Standard)
+    build_sim_app_with_profile(headless, offscreen, None, LunCoSimRenderProfile::Standard)
 }
 
 /// Build the production simulation app with an optional fixed compute-pool size.
@@ -746,7 +743,7 @@ pub fn build_sim_app_with_threads(
         headless,
         offscreen,
         compute_threads,
-        SandboxRenderProfile::Standard,
+        LunCoSimRenderProfile::Standard,
     )
 }
 
@@ -878,7 +875,7 @@ fn build_sim_app_with_profile(
     headless: bool,
     offscreen: bool,
     compute_threads: Option<usize>,
-    render_profile: SandboxRenderProfile,
+    render_profile: LunCoSimRenderProfile,
 ) -> App {
     let mut app = App::new();
     // Register every LunCo asset source (lunco:// and twin://) +
@@ -921,11 +918,15 @@ fn build_sim_app_with_profile(
     app.add_plugins(plugins);
     // Flushes the WARN/ERROR dedup counters the `LogPlugin` filter accumulates.
     app.add_plugins(log_dedup::LogDedupPlugin);
-    app.add_plugins(SandboxCorePlugin {
+    app.add_plugins(LunCoSimCorePlugin {
         headless,
         #[cfg(feature = "ui")]
         render_profile,
     });
+    #[cfg(feature = "ui")]
+    if !headless {
+        lunco_luncosim_ui::register_presentation_bridges(&mut app);
+    }
     app
 }
 
@@ -935,11 +936,11 @@ fn build_sim_app_with_profile(
 /// windows. It delegates the actual OS gesture to winit, which requires this
 /// window to remain resizable.
 #[cfg(feature = "ui")]
-fn sandbox_window(
+fn luncosim_window(
     title: String,
     present_mode: bevy::window::PresentMode,
     vertical: bool,
-    render_profile: SandboxRenderProfile,
+    render_profile: LunCoSimRenderProfile,
 ) -> Window {
     let mut window = Window {
         // On wasm, attach to the `#bevy` canvas and mirror its CSS size.
@@ -951,7 +952,7 @@ fn sandbox_window(
         // Centralized merged-titlebar chrome + persisted geometry.
         ..lunco_workbench::restored_window(title)
     };
-    if render_profile == SandboxRenderProfile::Fast {
+    if render_profile == LunCoSimRenderProfile::Fast {
         // A smaller default framebuffer is the largest predictable saving on
         // integrated GPUs. The user can still resize the window; the profile does
         // not alter authored scene units or simulation precision.
@@ -973,45 +974,17 @@ fn sandbox_window(
     window
 }
 
-#[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
-fn apply_luncosim_window_icon(
-    windows: Query<Entity, With<bevy::window::PrimaryWindow>>,
-    winit_windows: Option<NonSend<bevy_winit::WinitWindows>>,
-    mut installed: Local<bool>,
-) {
-    if *installed {
-        return;
-    }
-    let Some(winit_windows) = winit_windows else {
-        return;
-    };
-    let rgba = include_bytes!(concat!(env!("OUT_DIR"), "/luncosim-icon.rgba"));
-    for entity in &windows {
-        let Some(window) = winit_windows.get_window(entity) else {
-            continue;
-        };
-        match winit::window::Icon::from_rgba(rgba.to_vec(), 64, 64) {
-            Ok(icon) => {
-                window.set_window_icon(Some(icon));
-                *installed = true;
-                info!("[window] installed LunCoSim icon");
-            }
-            Err(error) => warn!("[window] failed to install LunCoSim icon: {error}"),
-        }
-    }
-}
-
 #[cfg(all(test, feature = "ui"))]
 mod window_tests {
-    use super::{sandbox_window, SandboxRenderProfile};
+    use super::{luncosim_window, LunCoSimRenderProfile};
 
     #[test]
     fn custom_chrome_window_remains_resizable() {
-        let window = sandbox_window(
+        let window = luncosim_window(
             "luncosim test".to_string(),
             bevy::window::PresentMode::Fifo,
             false,
-            SandboxRenderProfile::Standard,
+            LunCoSimRenderProfile::Standard,
         );
 
         assert!(
@@ -1027,13 +1000,13 @@ mod window_tests {
 /// needs a different plugin set — but prefer `build_sim_app`, which also does the
 /// asset-source prelude this function cannot do (it returns a group, not an `App`).
 pub fn default_plugins(headless: bool, offscreen: bool) -> bevy::app::PluginGroupBuilder {
-    default_plugins_with_profile(headless, offscreen, SandboxRenderProfile::Standard)
+    default_plugins_with_profile(headless, offscreen, LunCoSimRenderProfile::Standard)
 }
 
 fn default_plugins_with_profile(
     headless: bool,
     offscreen: bool,
-    render_profile: SandboxRenderProfile,
+    render_profile: LunCoSimRenderProfile,
 ) -> bevy::app::PluginGroupBuilder {
     // `bevy::render` EXISTS ONLY IN A `ui` BUILD. The no-`ui` server does not link
     // bevy_render at all (that is the point of the render decoupling), so every
@@ -1168,7 +1141,7 @@ fn default_plugins_with_profile(
             .disable::<bevy::winit::WinitPlugin>()
     } else {
         group.set(WindowPlugin {
-            primary_window: Some(sandbox_window(
+            primary_window: Some(luncosim_window(
                 window_title,
                 present_mode,
                 vertical,
@@ -1310,7 +1283,7 @@ fn replay_scenario_journal(
     // Host-side only (inserted by `setup_host`) — the manifest this host serves.
     local_scenario: Option<Res<lunco_networking::scenario::ScenarioManifestResource>>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
-    mut registry: ResMut<lunco_doc_bevy::DocumentRegistry<lunco_usd::document::UsdDocument>>,
+    mut registry: ResMut<lunco_doc_bevy::DocumentRegistry<lunco_usd_core::document::UsdDocument>>,
     // Entry ids already projected onto the scene (once-per-entry guard).
     mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
     // The host's replay base, latched the first frame its manifest exists.
@@ -1999,7 +1972,7 @@ fn append_usd_policies(
 /// must not register policy hooks in the running simulation.
 fn extract_active_usd_policies(
     stages: &Assets<UsdStageAsset>,
-    canonical: &lunco_usd_bevy::CanonicalStages,
+    canonical: &lunco_usd_bevy_core::canonical::CanonicalStages,
     roots: impl IntoIterator<Item = AssetId<UsdStageAsset>>,
 ) -> Vec<AuthoredPolicy> {
     let mut out = Vec::new();
@@ -2084,7 +2057,7 @@ fn resolve_policy_source_file(
 #[allow(clippy::type_complexity)]
 fn project_usd_policies(
     stages: Res<Assets<UsdStageAsset>>,
-    canonical: NonSend<lunco_usd_bevy::CanonicalStages>,
+    canonical: NonSend<lunco_usd_bevy_core::canonical::CanonicalStages>,
     roots: Query<&lunco_usd_bevy::UsdPrimPath, With<lunco_usd_bevy::UsdSceneRoot>>,
     mut registry: ResMut<lunco_scripting::policy::ScriptedPolicyRegistry>,
     mut synthesizers: ResMut<lunco_usd_sim::domain_projection::SynthesizerRegistry>,
@@ -2187,157 +2160,6 @@ fn project_usd_policies(
     }
 }
 
-/// **Environment-settings projection** — the read half of persisting
-/// `SetEnvironmentLight` render knobs (exposure / bloom / ambient / earthshine)
-/// onto the `LunCoEnvironment` settings prim (see
-/// [`lunco_environment::LUNCO_ENVIRONMENT_PRIM_TYPE`]). On any composed-stage
-/// change, read that prim's `lunco:env:*` attrs and apply them **directly** to
-/// the live render state — never by re-triggering `SetEnvironmentLight`, which
-/// would re-persist and loop. So a persisted render tweak round-trips on reload
-/// and syncs to peers (the prim rides the USD journal → each peer recomposes →
-/// each peer's projector applies) with no bespoke broadcast. Change-gated on
-/// total stage generation + count, like [`project_usd_policies`]. UI-gated: the
-/// knobs are render/camera state; the headless server has no cameras to apply to.
-/// What the scene AUTHORED, held independently of what currently exists to
-/// apply it to.
-///
-/// [`project_env_settings`] is change-gated on stage generation, and cameras do
-/// not exist when a scene's stage first composes. Reading the prim and writing
-/// the camera in one memoised pass therefore lost the value entirely: the pass
-/// ran once against zero cameras, the generation never changed again, and the
-/// authored exposure was never applied — the scene rendered at Bevy's default
-/// EV 9.7 (~6 stops open) no matter what the USD said. Splitting the two makes
-/// the read authoritative and the application idempotent.
-#[cfg(feature = "ui")]
-#[derive(Resource, Default, Clone, Copy)]
-pub struct AuthoredEnv {
-    pub exposure_ev100: Option<f32>,
-}
-
-/// Clear scene-owned environment opinions before the next composition epoch.
-///
-/// `AuthoredEnv` deliberately outlives individual camera entities so cameras
-/// spawned after stage composition inherit a value authored by that scene. It
-/// must therefore be reset at the same lifecycle boundary as the scene, rather
-/// than relying on camera despawn or on the next scene happening to author a
-/// replacement value.
-#[cfg(feature = "ui")]
-fn reset_authored_env(mut authored: ResMut<AuthoredEnv>) {
-    *authored = AuthoredEnv::default();
-}
-
-/// Apply the authored environment exposure to every camera that exists RIGHT NOW.
-///
-/// Runs every frame and is a no-op when the values already match, so a camera
-/// spawned (or respawned, or reparented on possession) long after the scene
-/// loaded still gets the scene's exposure.
-#[cfg(feature = "ui")]
-fn apply_authored_env(
-    authored: Option<Res<AuthoredEnv>>,
-    mut q_exposure: Query<&mut bevy::camera::Exposure>,
-) {
-    let Some(authored) = authored else { return };
-    if let Some(ev) = authored.exposure_ev100 {
-        for mut e in &mut q_exposure {
-            if e.ev100 != ev {
-                e.ev100 = ev;
-            }
-        }
-    }
-}
-
-#[cfg(feature = "ui")]
-fn project_env_settings(
-    stages: Res<Assets<UsdStageAsset>>,
-    canonical: NonSend<lunco_usd_bevy::CanonicalStages>,
-    roots: Query<&lunco_usd_bevy::UsdPrimPath, With<lunco_usd_bevy::UsdSceneRoot>>,
-    mut authored: ResMut<AuthoredEnv>,
-    bloom_override: Option<ResMut<lunco_render::SceneBloomOverride>>,
-    // Ambient is NOT projected here any more — it is composed from authored
-    // `DomeLight` prims by `light.rs::on_usd_light_added`. See the note below.
-    _ambient: Option<ResMut<bevy::light::GlobalAmbientLight>>,
-    // Earthshine is likewise NOT projected here any more — it is an authored
-    // light prim, loaded like every other. See the note below.
-    // The exposure single-source-of-truth — see the `exposureEv100` branch.
-    mut lunar_sun: Option<ResMut<lunco_environment::LunarSun>>,
-    mut last: Local<Option<(usize, usize, u64)>>,
-) {
-    let root_ids: Vec<_> = roots.iter().map(|prim| prim.stage_handle.id()).collect();
-    let signal = (
-        root_ids.len(),
-        root_ids.iter().filter_map(|id| stages.get(*id)).count(),
-        root_ids
-            .iter()
-            .filter_map(|id| stages.get(*id).map(|_| canonical.generation_for(*id)))
-            .sum::<u64>(),
-    );
-    if *last == Some(signal) {
-        return;
-    }
-    *last = Some(signal);
-
-    let mut scene_bloom = None;
-    for stage_id in root_ids {
-        let Some(stage_asset) = stages.get(stage_id) else {
-            continue;
-        };
-        let (reader, _generation) = canonical.reader_for(stage_id, stage_asset);
-        for prim in reader.prim_paths() {
-            if reader.type_name(&prim).as_deref()
-                != Some(lunco_environment::LUNCO_ENVIRONMENT_PRIM_TYPE)
-            {
-                continue;
-            }
-            if reader.has_authored_attribute(&prim, "lunco:env:exposureEv100") {
-                if let Some(ev) = reader
-                    .real_f32(&prim, "lunco:env:exposureEv100")
-                    .filter(|ev| ev.is_finite())
-                {
-                    // RECORD it — `apply_authored_env` owns getting it onto cameras,
-                    // including cameras that do not exist yet. Also seed `LunarSun`,
-                    // the documented single source the sun spawn and the celestial
-                    // auto-exposure both read, so a scene that later gains a
-                    // celestial hierarchy ramps toward the authored value instead of
-                    // the studio default.
-                    authored.exposure_ev100 = Some(ev);
-                    if let Some(sun) = lunar_sun.as_mut() {
-                        sun.exposure_ev100 = ev;
-                    }
-                } else {
-                    warn!("ignoring invalid authored lunco:env:exposureEv100 on {prim}");
-                }
-            }
-            if let Some(bi) = reader.real_f32(&prim, "lunco:env:bloomIntensity") {
-                if reader.has_authored_attribute(&prim, "lunco:env:bloomIntensity")
-                    && bi.is_finite()
-                    && bi >= 0.0
-                {
-                    scene_bloom = Some(bi);
-                } else if reader.has_authored_attribute(&prim, "lunco:env:bloomIntensity") {
-                    warn!("ignoring invalid authored lunco:env:bloomIntensity on {prim}");
-                }
-            }
-            // `lunco:env:ambientBrightness` is DELETED, not deprecated. Uniform
-            // environment illumination is already standard USD — an untextured
-            // `UsdLuxDomeLight` — and `light.rs::on_usd_light_added` composes the
-            // scene ambient as the sum over authored domes, which is what UsdLux
-            // semantics require (lights add).
-            //
-            // Scenes author the bounce as a `DomeLight` prim now. There is
-            // deliberately no fallback read.
-            // Earthshine is not projected here either. It is an authored
-            // `DistantLight` under the body it reflects from, so its brightness
-            // and tint are `inputs:intensity` / `inputs:color` on that prim,
-            // read by the standard light loader.
-        }
-    }
-    if let Some(mut override_value) = bloom_override {
-        if override_value.intensity != scene_bloom {
-            override_value.intensity = scene_bloom;
-        }
-    }
-}
-
 /// Convenience command: author (or hot-replace) a rhai policy as a `LunCoPolicy`
 /// USD prim under `<mounted-root>/Policies/<name>` in ONE call, instead of
 /// hand-issuing the underlying `ApplyUsdOp`s. Because it authors USD doc ops, the policy **journals →
@@ -2379,7 +2201,8 @@ fn on_set_rhai_policy(
     asset_server: Res<AssetServer>,
     mut commands: Commands,
 ) {
-    use lunco_usd::{ApplyUsdOp, LayerId, UsdOp};
+    use lunco_usd::ApplyUsdOp;
+    use lunco_usd_core::{LayerId, UsdOp};
     let cmd = trigger.event();
     let roots: Vec<_> = roots.iter().collect();
     let [root] = roots.as_slice() else {
@@ -2491,117 +2314,13 @@ fn on_set_rhai_policy(
     );
 }
 
-/// Save a live-edited rhai scenario's current source back onto the `LunCoProgramAPI`
-/// prim it came from — the other half of scenario authoring.
-///
-/// The shared USD lowering selects `info:sourceCode` and clears the old `info:id` and
-/// `info:sourceAsset` arms. The `string` value is authored RAW, so the whole rhai source
-/// round-trips verbatim, journals like any edit, and reaches the `.usda` on `SaveDocument`.
-///
-/// It authors onto the PROGRAM, not onto the vessel running it
-/// ([`ScenarioProgramPrim`](lunco_core::ScenarioProgramPrim) carries the path): a
-/// vessel can run several programs, and a source written onto the vessel would sit on
-/// a prim that runs nothing.
-///
-/// Only doc-backed twin scenes have an editable document; a raw-file scene is
-/// **refused** (logged, not silently dropped) — matching the rule that the builder
-/// must only edit doc-backed scenes or it eats work on the next reload.
-#[lunco_core::Command]
-pub struct SaveScenario {
-    /// The scripted entity whose live scenario source to persist onto its prim.
-    /// Ownership-gated (same as `RunScenario`): saving a scenario is editing it.
-    #[authz_target]
-    pub target: Entity,
-}
-
-impl Default for SaveScenario {
-    // `#[Command]` needs a Default for Reflect; `Entity` has none. The placeholder
-    // is never dispatched — a real save always carries the selected entity.
-    fn default() -> Self {
-        Self {
-            target: Entity::PLACEHOLDER,
-        }
-    }
-}
-
-#[lunco_core::on_command(SaveScenario)]
-fn on_save_scenario(
-    trigger: On<SaveScenario>,
-    q_model: Query<&lunco_scripting::doc::ScriptedModel>,
-    q_prim: Query<&lunco_usd::UsdPrimPath>,
-    q_program: Query<&lunco_core::ScenarioProgramPrim>,
-    registry: Res<lunco_scripting::ScriptRegistry>,
-    backed: Res<lunco_usd::twin_projection::DocBackedTwinScenes>,
-    asset_server: Res<AssetServer>,
-    mut commands: Commands,
-) {
-    let target = trigger.event().target;
-
-    // 1. The live source the runtime is currently running for this entity.
-    let Ok(model) = q_model.get(target) else {
-        warn!("[save-scenario] entity {target} has no scenario attached");
-        return;
-    };
-    let Some(doc_id) = model.document_id else {
-        warn!("[save-scenario] entity {target}'s scenario has no document");
-        return;
-    };
-    let Some(host) = registry.documents.get(&lunco_doc::DocumentId::new(doc_id)) else {
-        warn!("[save-scenario] no script document {doc_id} for entity {target}");
-        return;
-    };
-    let source = host.document().source.clone();
-
-    // 2. The prim to author onto + the editable scene document behind it.
-    let Ok(upp) = q_prim.get(target) else {
-        warn!("[save-scenario] entity {target} is not a USD-backed prim — nothing to save onto");
-        return;
-    };
-    let Some(scene_doc) = lunco_usd::twin_projection::scene_document_for(
-        &backed,
-        &asset_server,
-        upp.stage_handle.id(),
-    ) else {
-        warn!(
-            "[save-scenario] the scene backing {target} is a raw-file scene (not doc-backed) — \
-             open it as a Twin to save scenarios in place"
-        );
-        return;
-    };
-
-    // 3. Convert the PROGRAM prim to the selected inline `sourceCode` arm (root
-    //    layer → durable in the .usda on SaveDocument). The shared lowering clears
-    //    the previous id/asset arms before selecting the new source, so the final
-    //    composed program has one unambiguous implementation.
-    let Ok(program) = q_program.get(target) else {
-        warn!(
-            "[save-scenario] entity {target} runs a scenario that came from no program prim \
-             (it was started at runtime, not authored in the scene) — nothing to save onto"
-        );
-        return;
-    };
-    commands.trigger(lunco_usd::ApplyUsdOps {
-        doc_id: scene_doc,
-        parent_gen: None,
-        label: "Save scenario source".into(),
-        ops: lunco_usd::program::inline_program_source_ops(
-            lunco_usd::LayerId::root(),
-            program.0.clone(),
-            source,
-        ),
-    });
-    info!(
-        "[save-scenario] {target}: scenario source written onto `{}` (doc {}) — journals; SaveDocument persists to disk",
-        program.0, scene_doc.0
-    );
-}
-
-lunco_core::register_commands!(on_set_rhai_policy, on_save_scenario);
+lunco_core::register_commands!(on_set_rhai_policy);
 
 #[cfg(all(test, feature = "networking", not(target_arch = "wasm32")))]
 mod policy_projection_tests {
     use super::{append_usd_policies, AuthoredPolicy};
-    use lunco_usd_bevy::{CanonicalStage, CanonicalStages, StageRecipe};
+    use lunco_usd_bevy_core::canonical::{CanonicalStage, CanonicalStages};
+    use lunco_usd_core::StageRecipe;
 
     fn extract_usd_policies(canonical: &CanonicalStages) -> Vec<AuthoredPolicy> {
         let mut out = Vec::new();
@@ -2719,7 +2438,7 @@ mod policy_projection_tests {
             .into_iter()
             .find(|p| p.to_string() == "/World/drive")
             .expect("policy prim present");
-        let new_src = lunco_usd_bevy::author::parse_attribute_value("string", "\"fn drive(c){2}\"")
+        let new_src = lunco_usd_core::author::parse_attribute_value("string", "\"fn drive(c){2}\"")
             .expect("parse");
         stages
             .get(id)
@@ -2744,10 +2463,10 @@ mod policy_projection_tests {
 /// here every plugin is pure-CPU sim/state. USD visual sync only writes the
 /// mesh/material asset stores (never touches a GPU device), so it is safe in
 /// headless mode.
-pub struct SandboxCorePlugin {
+pub struct LunCoSimCorePlugin {
     pub headless: bool,
     #[cfg(feature = "ui")]
-    render_profile: SandboxRenderProfile,
+    render_profile: LunCoSimRenderProfile,
 }
 
 /// The luncosim's one physics configuration.
@@ -2758,7 +2477,7 @@ pub struct SandboxCorePlugin {
 /// the authoritative stepped pose before the next bridge READ. The eased value
 /// is presentation-only between physics steps, and camera/billboard paths
 /// consume that same rendered pose.
-fn sandbox_physics_plugins() -> impl PluginGroup {
+fn luncosim_physics_plugins() -> impl PluginGroup {
     PhysicsPlugins::default()
         .with_collision_hooks::<lunco_usd::UsdCollisionFilter>()
         .set(avian3d::prelude::PhysicsInterpolationPlugin::interpolate_all())
@@ -2776,7 +2495,7 @@ mod physics_configuration_tests {
     fn physical_bodies_receive_render_interpolation() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .add_plugins(sandbox_physics_plugins());
+            .add_plugins(luncosim_physics_plugins());
 
         let body = app.world_mut().spawn(RigidBody::Dynamic).id();
 
@@ -2799,9 +2518,14 @@ mod physics_configuration_tests {
     }
 }
 
-impl Plugin for SandboxCorePlugin {
+impl Plugin for LunCoSimCorePlugin {
     fn build(&self, app: &mut App) {
         let args: Vec<String> = std::env::args().collect();
+
+        // Asset and loaded-stage validation is a shared headless/UI service;
+        // install it once with the simulator core rather than coupling it to
+        // the scene mutation command crate.
+        app.add_plugins(lunco_scene_validation::SceneValidationPlugin);
 
         // THE RENDER GATE — and the whole of it.
         //
@@ -2822,7 +2546,7 @@ impl Plugin for SandboxCorePlugin {
         // bevy_render → wgpu + naga), not merely from running it. The runtime
         // `!headless` check remains for a `ui`-built binary launched headless.
         // See docs/architecture/render-decoupling.md.
-        // Run-condition effectiveness reporting. In `SandboxCorePlugin` rather
+        // Run-condition effectiveness reporting. In `LunCoSimCorePlugin` rather
         // than the UI plugin because the gates it watches (celestial cadence,
         // view-model producers) exist headless too, and a gate that stops gating
         // costs the same on a server as it does in the GUI.
@@ -2832,7 +2556,7 @@ impl Plugin for SandboxCorePlugin {
         app.add_plugins(jitter_probe::JitterProbePlugin);
         // Render profile is installed before the render plugin below.
         #[cfg(feature = "ui")]
-        if self.render_profile == SandboxRenderProfile::Fast {
+        if self.render_profile == LunCoSimRenderProfile::Fast {
             app.insert_resource(lunco_render_bevy::RenderProfile::Fast);
             info!("[render] fast profile enabled");
         }
@@ -2942,7 +2666,7 @@ impl Plugin for SandboxCorePlugin {
             // app: authored `PhysicsFilteredPairsAPI` pairs (`lunco-usd-avian`'s
             // `UsdCollisionFilter`). Anything else that must veto a contact belongs
             // in that hook rather than in a second one — there is no second slot.
-            .add_plugins(sandbox_physics_plugins())
+            .add_plugins(luncosim_physics_plugins())
             // Whoever installs physics installs its readiness gate: terrain/obstacle
             // subsystems suspend *integration* (avian's `Time<Physics>`) while their
             // colliders bake, instead of pausing the world clock. See `lunco-physics`.
@@ -3040,8 +2764,8 @@ impl Plugin for SandboxCorePlugin {
                 brightness: 0.0,
                 ..Default::default()
             })
-            .add_systems(Startup, setup_sandbox)
-            .add_systems(Startup, load_startup_scene_on_boot.after(setup_sandbox))
+            .add_systems(Startup, setup_luncosim)
+            .add_systems(Startup, load_startup_scene_on_boot.after(setup_luncosim))
             // Fail loud if the requested `--scene` never loads (e.g. a wrong
             // path that resolves to a missing asset). Without this the app
             // silently boots a scene-less world (only procedural terrain /
@@ -3134,7 +2858,7 @@ impl Plugin for SandboxCorePlugin {
         // twin (`[journal] persist = true`); without it the journal is
         // session-only and nothing touches disk.
         if self.headless {
-            // The workspace session — `setup_sandbox`'s twin-load path and the
+            // The workspace session — `setup_luncosim`'s twin-load path and the
             // journal persistence both need it. The SAME plugin the GUI gets:
             // `WorkspacePlugin` lives in `lunco-workspace`, which this binary
             // already links, and it is headless by construction (bevy substrate
@@ -3161,7 +2885,7 @@ impl Plugin for SandboxCorePlugin {
             // ride along inside `lunco_scene_commands::commands::SpawnCommandPlugin`
             // (which still registers `apply_replicated_spawns`, the spawn half — see
             // `lunco_core::NetcodeSet` for how the two halves stay ordered). Added
-            // here, in `SandboxCorePlugin`, so BOTH the GUI and the headless server
+            // here, in `LunCoSimCorePlugin`, so BOTH the GUI and the headless server
             // get it exactly once; gated on `networking` like every other
             // `lunco_networking` use in this crate.
             app.add_plugins(lunco_networking::prediction::NetcodePredictionPlugin);
@@ -3251,145 +2975,6 @@ impl Plugin for SandboxCorePlugin {
             Update,
             project_usd_policies.after(lunco_scripting::source_asset::RhaiSourceAssetSet),
         );
-        // Terrain visual progress → status bar: stream residency and optional
-        // derived-map preparation use separate bus sources, so one cannot hide
-        // or complete the other. Pure derived reads of terrain resources.
-        // `StatusBus` is initialized by the UI plugin stack, which `--no-ui` skips
-        // at RUNTIME while the `ui` cargo feature stays compiled in — so gate on the
-        // resource, not the feature, or a headless host panics on param validation.
-        #[cfg(feature = "ui")]
-        app.init_resource::<TerrainStatusMirrorState>().add_systems(
-            lunco_core::SceneTeardown,
-            reset_terrain_status_mirror_on_scene_teardown,
-        );
-        #[cfg(feature = "ui")]
-        app.init_resource::<ModelicaStatusMirrorState>()
-            .add_systems(
-                lunco_core::SceneTeardown,
-                reset_modelica_status_mirror_on_scene_teardown,
-            );
-        #[cfg(feature = "ui")]
-        app.add_systems(
-            Update,
-            (
-                report_terrain_stream_status,
-                report_terrain_generation_status,
-            )
-                .run_if(resource_exists::<lunco_status_core::status_bus::StatusBus>),
-        );
-
-        // Scene-spawn progress → status bar, on the same terms and for the same
-        // reason as the terrain mirror above. This one is also load-bearing for
-        // OFFLINE RECORDING: `lunco-workbench`'s readiness gate
-        // (`screenshot.rs::scene_visuals_ready`) treats an active `"scene"` entry as
-        // "not presentable yet", which is how a shot avoids opening on half-spawned
-        // prims. The workbench cannot read `SceneLoadInFlight` itself — it is a
-        // UI-shell crate with no USD dependency — so the luncosim mirrors it here,
-        // exactly as it mirrors `TerrainStreamStatus`.
-        #[cfg(feature = "ui")]
-        app.add_systems(
-            Update,
-            report_scene_spawn_status
-                .after(lunco_usd_bevy::process_queued_usd_visuals)
-                .before(lunco_workbench::screenshot::OfflineRecordingReadinessSet)
-                .run_if(resource_exists::<lunco_status_core::status_bus::StatusBus>),
-        );
-
-        // A textured DomeLight has a second asynchronous visual phase after
-        // the USD prim itself spawns: its equirectangular image is projected
-        // into the cubemap consumed by Skybox/IBL. Mirror that phase onto the
-        // same bus so the offline recorder cannot start on a black sky.
-        #[cfg(feature = "ui")]
-        app.add_systems(
-            // Run after Update has applied USD prim spawns and the DomePlugin's
-            // projection pass.  The recorder consumes this status in Update on
-            // the following frame; keeping the publication at the end of the
-            // visualisation cycle closes the window where meshes existed but a
-            // newly-instantiated textured DomeLight had not yet been reported.
-            PostUpdate,
-            report_dome_environment_status
-                .run_if(resource_exists::<lunco_status_core::status_bus::StatusBus>),
-        );
-
-        // Modelica participant readiness → status bus. The screenshot gate must
-        // not start a take while a USD-defined visual participant is still
-        // loading or compiling: its authored output (the lander's plume
-        // photometry is one example) is not live yet. This is a derived mirror
-        // of participant state, not a recorder-specific timer.
-        #[cfg(feature = "ui")]
-        app.add_systems(
-            Update,
-            report_modelica_status
-                .run_if(resource_exists::<lunco_status_core::status_bus::StatusBus>),
-        );
-
-        // Hold each camera path at its first frame until the RECORDER rolls, so the
-        // captured shot starts at the path's own frame 0.
-        //
-        // `ui`-gated, and gated on the resource, for the SAME two reasons as the two
-        // status mirrors above — the previous unconditional registration was wrong on
-        // both counts:
-        //
-        // * COMPILE time: `OfflineRecordingState` lives in `lunco-workbench`, which is
-        //   `optional` + `ui`-only (it is the crate that owns the screenshot backend).
-        //   Naming it unconditionally broke `cargo check -p lunco-luncosim-server`
-        //   outright — the render-free server has no `lunco_workbench` in scope.
-        // * RUN time: `--no-ui` is a runtime choice on a binary that still has the `ui`
-        //   feature compiled in, and there the workbench plugin is never added, so a
-        //   bare `Res<OfflineRecordingState>` fails param validation and panics the app.
-        //
-        // There is no "headless capture" this locks out: the offline recorder IS the
-        // workbench's screenshot backend, so a build without the workbench has nothing
-        // to start a shot from. Interactive (non-recording) playback is the `CameraPath`
-        // transport command instead — see `camera_path_transport`.
-        #[cfg(feature = "ui")]
-        app.add_systems(
-            Update,
-            start_camera_paths_when_recording_starts
-                .run_if(resource_exists::<lunco_workbench::screenshot::OfflineRecordingState>),
-        );
-
-        // Recorder → terrain streaming: put tile streaming in lockstep with the frame
-        // for the duration of a capture. The REVERSE direction of the two status
-        // mirrors above, and here for the same reason — `lunco-workbench` owns the
-        // recorder but cannot name terrain, `lunco-terrain-surface` must not know what
-        // a recorder is, and this crate is the assembly point that sees both.
-        //
-        // Ordered BEFORE `update_lod_tiles` so the flag a frame streams under is the
-        // one that frame's recording state implies, not the previous frame's — an
-        // off-by-one here would leave exactly the first captured frame streaming on
-        // the wall clock, which is the frame everything else was made deterministic
-        // for.
-        #[cfg(feature = "ui")]
-        app.add_systems(
-            Update,
-            mirror_recording_to_terrain_lockstep
-                .before(lunco_terrain_surface::stream_viz::update_lod_tiles)
-                .run_if(resource_exists::<lunco_workbench::screenshot::OfflineRecordingState>),
-        );
-
-        // Far-field self-shadow for STREAMED terrains: bake the horizon
-        // heightfield from the surface oracle (no static mesh to rasterize) and
-        // mirror the environment's R8 sun-visibility cache onto the LOD tile
-        // materials. See `terrain_horizon`.
-        #[cfg(feature = "ui")]
-        terrain_horizon::register(app);
-
-        // Environment-settings projection: apply a persisted `LunCoEnvironment`
-        // prim's render knobs (exposure/bloom/ambient/earthshine) to the live
-        // render state on stage change. UI-gated (render/camera state); core
-        // persistence (authoring the prim) happens in `lunco-scene-commands`.
-        #[cfg(feature = "ui")]
-        app.init_resource::<AuthoredEnv>();
-        #[cfg(feature = "ui")]
-        app.add_systems(lunco_core::SceneTeardown, reset_authored_env);
-        // Read-on-stage-change, then apply-every-frame. The application is a
-        // separate system because cameras outlive neither the stage change nor
-        // each other: possession reparents them, the recorder spawns its own.
-        // Only the READ is change-gated.
-        #[cfg(feature = "ui")]
-        app.add_systems(Update, (project_env_settings, apply_authored_env).chain());
-
         // LogDiagnosticsPlugin is loud (a multi-line summary every second) — gate
         // it on `--log-diag`.
         if args.iter().any(|a| a == "--log-diag") {
@@ -3488,1565 +3073,13 @@ mod ground_collider_gate_tests {
     }
 }
 
-/// **Start each camera path when the RECORDER starts.** A shot begins when the
-/// camera rolls.
-///
-/// This replaced `start_camera_paths_when_terrain_ready`, which released on
-/// "terrain resident" — an asset event on the wall clock. That was wrong twice
-/// over, and the second one was expensive:
-///
-/// 1. **It made offline recording irreproducible.** MEASURED: two runs of
-///    `episode_02_rover.usda` differed at EVERY frame of EVERY shot, starting at
-///    frame 0 (viewport-crop RMSE 0.019-0.61, far above the perf-HUD text burnt
-///    into each frame). A path released on a wall-clock event has already advanced
-///    by an unknown amount of real time when capture begins, so the domain clock's
-///    value at frame 0 was accumulated real time, not a constant. `camera_path.rs`
-///    samples the curve as a pure function of that clock — pure of a floating
-///    origin is still floating. Pinning the per-frame delta downstream (which the
-///    recorder does) cannot fix an origin that moves.
-/// 2. **It mis-framed shots.** One measured run opened on the camera pitched up at
-///    empty starfield: the path had begun *before* the recorder and the opening
-///    beat was simply gone. The hold existed to prevent exactly that.
-///
-/// Releasing from the recorder's start edge makes the gate's own time 0 at frame 0
-/// by construction, after which it advances `1/fps` per captured frame — so the
-/// pose at frame N is `f(N/fps)`, identical across runs and machines.
-///
-/// **Continuation across shots is the idempotence.** `release_camera_path_gate` is
-/// a no-op on an already-running gate, and `Playback::head` keeps advancing between
-/// shots, so the campaign's single 58 s curve spanning six shots stays ONE
-/// continuous move — the release fires for real only on the first shot. It is not
-/// rewound per shot, which would give six identical stutters instead.
-///
-/// **Now possible: per-shot camera paths.** Every gate used to release
-/// simultaneously on one global terrain event, which is why the campaign is
-/// authored as a single continuous curve. With release owned by the recorder, a
-/// path could instead be bound to a specific shot and released only when that shot
-/// starts. Nothing here does that yet — noted so whoever authors shots next knows
-/// the constraint has lifted.
-///
-/// **Consequence — live preview.** Terrain-ready was also what started paths in an
-/// ordinary interactive session, where no recorder ever runs; those paths would
-/// otherwise stay held forever. That is now served by an EXPLICIT transport verb,
-/// the `CameraPath` command
-/// ([`camera_path_transport`](lunco_usd_bevy::camera_path::camera_path_transport)),
-/// addressed by the path prim's USD path. Still deliberately not a second
-/// *automatic* release: two things racing to start the same shot is the bug this
-/// replaced. One automatic start (the recorder, for capture) and one manual verb
-/// (the command, for preview and scrubbing), never a fallback chain between them.
-#[cfg(feature = "ui")]
-fn start_camera_paths_when_recording_starts(
-    recording: Res<lunco_workbench::screenshot::OfflineRecordingState>,
-    resolved: Res<lunco_time::ResolvedDomains>,
-    q_paths: Query<&lunco_usd_bevy::camera_path::CameraPath>,
-    q_driven: Query<&lunco_usd_bevy::camera_path::CameraPathDriven>,
-    mut gates: Query<(
-        &lunco_usd_bevy::camera_path::CameraPathGate,
-        &mut lunco_time::TimeDomain,
-    )>,
-    // Level-trigger until every authored camera path has produced a valid frame.
-    // Recording and USD composition are independent lifecycles; consuming the
-    // recording edge before a path has a live grid/target would permanently leave
-    // that path held or capture its spawn pose.
-    mut was_active: Local<bool>,
-) {
-    if !recording.active {
-        *was_active = false;
-        return;
-    }
-    if *was_active || gates.is_empty() {
-        return;
-    }
-
-    if q_paths.iter().any(|path| {
-        q_driven
-            .get(path.camera)
-            .map_or(true, |driven| !driven.primed)
-    }) {
-        return;
-    }
-
-    // Resolve every parent before releasing any gate. A partial release would
-    // give paths different time origins in the same take.
-    let parent_times: Vec<(Entity, f64)> = gates
-        .iter()
-        .map(|(gate, _)| (gate.parent, resolved.get(gate.parent)))
-        .filter_map(|(parent, time)| time.map(|time| (parent, time)))
-        .collect();
-    if parent_times.len() != gates.iter().count() {
-        return;
-    }
-    for (gate, mut domain) in &mut gates {
-        let Some((_, parent_t)) = parent_times
-            .iter()
-            .find(|(parent, _)| *parent == gate.parent)
-        else {
-            return;
-        };
-        // Change-detection: `Query::iter_mut` hands out `Mut`, so touching an
-        // already-running gate would mark it changed every frame. The release is
-        // idempotent, but do not pay for it on a running shot.
-        if domain.scale == 0.0 {
-            lunco_usd_bevy::camera_path::release_camera_path_gate(&mut domain, *parent_t);
-            info!("[camera-path] recording started — rolling shot from its first frame");
-        }
-    }
-    *was_active = true;
-}
-
-/// Mirror the recorder's `active` bit onto
-/// [`TerrainStreamLockstep`](lunco_terrain_surface::TerrainStreamLockstep), so terrain
-/// tile streaming runs in lockstep with the captured frame instead of against the
-/// wall clock for exactly as long as a recording is capturing.
-///
-/// The problem it closes: the readiness gate makes the scene presentable at frame 0,
-/// and recorder-owned camera-path release makes frame 0 bit-identical across runs —
-/// but neither holds streaming steady THROUGH a shot. As the camera moves the LOD
-/// selection changes, bakes are queued, and they land a scheduling-dependent number
-/// of frames later. MEASURED before this: two runs of `episode_02_rover.usda`
-/// differed on the frozen shots (01, 02, 03, 06) in 25-38 separate blocks of frames
-/// each, with the final frame matching every time — a transient, not accumulation,
-/// which is the signature of streaming catching up at a different rate.
-///
-/// See [`TerrainStreamLockstep`](lunco_terrain_surface::TerrainStreamLockstep) for
-/// what the flag changes and why it is a flag rather than the default.
-///
-/// Level-triggered, not edge-triggered (unlike
-/// [`start_camera_paths_when_recording_starts`], which needs an instant): the flag
-/// must be true for the whole capture and false after, including after a recording
-/// that ended by timing out. Writes only on an actual change so the resource's
-/// change-detection tick stays meaningful.
-#[cfg(feature = "ui")]
-fn mirror_recording_to_terrain_lockstep(
-    recording: Res<lunco_workbench::screenshot::OfflineRecordingState>,
-    mut lockstep: ResMut<lunco_terrain_surface::TerrainStreamLockstep>,
-) {
-    if lockstep.0 != recording.active {
-        lockstep.0 = recording.active;
-        info!(
-            "[terrain] streaming lockstep {} (offline recording {})",
-            if recording.active { "ON" } else { "OFF" },
-            if recording.active { "started" } else { "ended" },
-        );
-    }
-}
-
-/// Mirror [`lunco_terrain_surface::TerrainStreamStatus`] into the workbench
-/// [`StatusBus`](lunco_status_core::status_bus::StatusBus) so scene-open tile
-/// baking is visible ("streaming terrain N/M" + progress bar) instead of an
-/// unexplained black viewport. The active progress entry is the sole live
-/// streaming state; once it clears, publish the current terminal count so the
-/// status bar cannot fall back to an obsolete start message.
-#[cfg(feature = "ui")]
-fn report_terrain_stream_status(
-    status: Res<lunco_terrain_surface::TerrainStreamStatus>,
-    derived: Res<lunco_terrain_surface::TerrainDerivedStatus>,
-    // `Option`: the `ui` FEATURE is compile-time, but `--no-ui` headless is a
-    // RUNTIME choice on the same binary — the workbench (and its `StatusBus`)
-    // is simply not added there, and a bare `ResMut` panics the whole app.
-    bus: Option<ResMut<lunco_status_core::status_bus::StatusBus>>,
-    mut mirror: ResMut<TerrainStatusMirrorState>,
-) {
-    let Some(mut bus) = bus else { return };
-    const STREAM_SOURCE: &str = lunco_status_core::status_bus::TERRAIN_SOURCE;
-    const DERIVED_SOURCE: &str = lunco_status_core::status_bus::TERRAIN_DERIVED_SOURCE;
-    // A resident count can reach the selected count before the last bake or
-    // render-material publication finishes. Keep the typed live state active
-    // until both fulfilment dimensions settle; otherwise the readiness gate
-    // sees a false idle transition and the overlay disappears too early.
-    let streaming = status.wanted > 0 && (status.resident < status.wanted || status.pending > 0);
-    let completed = mirror.streaming
-        && status.wanted > 0
-        && status.resident >= status.wanted
-        && status.pending == 0;
-    if streaming {
-        let fully_selected = status.resident >= status.wanted;
-        let message = if fully_selected {
-            format!(
-                "Preparing terrain visuals {}/{} ({} pending)",
-                status.resident, status.wanted, status.pending
-            )
-        } else {
-            format!(
-                "Streaming terrain tiles {}/{}",
-                status.resident, status.wanted
-            )
-        };
-        // Do not show a completed progress bar while render readiness is still
-        // pending. Once all selected tiles are resident, the remaining work is
-        // not another selected tile count, so an indeterminate indicator is the
-        // truthful presentation until `pending == 0`.
-        let (done, total) = if fully_selected {
-            (0, 0)
-        } else {
-            (status.resident as u64, status.wanted as u64)
-        };
-        bus.set_progress(STREAM_SOURCE, message, done, total);
-    } else {
-        bus.remove_progress(STREAM_SOURCE);
-    }
-    if completed {
-        bus.push(
-            STREAM_SOURCE,
-            lunco_status_core::status_bus::StatusLevel::Info,
-            format!(
-                "Terrain streaming ready ({}/{})",
-                status.resident, status.wanted
-            ),
-        );
-    }
-    mirror.streaming = streaming;
-
-    if derived.active && !mirror.deriving {
-        bus.push(
-            DERIVED_SOURCE,
-            lunco_status_core::status_bus::StatusLevel::Info,
-            format!(
-                "Terrain visual preparation started ({}/{})",
-                derived.ready, derived.total
-            ),
-        );
-    }
-    if derived.active {
-        bus.set_progress(
-            DERIVED_SOURCE,
-            format!(
-                "Preparing terrain visuals {}/{}",
-                derived.ready, derived.total
-            ),
-            derived.ready as u64,
-            derived.total as u64,
-        );
-    } else {
-        bus.remove_progress(DERIVED_SOURCE);
-    }
-    mirror.deriving = derived.active;
-}
-
-#[cfg(all(test, feature = "ui"))]
-mod terrain_status_tests {
-    use super::*;
-
-    #[test]
-    fn terrain_progress_ends_with_current_terminal_status() {
-        let mut app = App::new();
-        app.insert_resource(lunco_terrain_surface::TerrainStreamStatus {
-            wanted: 2,
-            resident: 0,
-            pending: 2,
-            ..Default::default()
-        })
-        .insert_resource(lunco_terrain_surface::TerrainDerivedStatus::default())
-        .insert_resource(lunco_status_core::status_bus::StatusBus::default())
-        .insert_resource(TerrainStatusMirrorState::default())
-        .add_systems(Update, report_terrain_stream_status);
-
-        app.update();
-        {
-            let bus = app
-                .world()
-                .resource::<lunco_status_core::status_bus::StatusBus>();
-            let progress = bus
-                .active_progress()
-                .find(|event| event.source == lunco_status_core::status_bus::TERRAIN_SOURCE)
-                .expect("terrain streaming must expose live progress");
-            assert_eq!(progress.message, "Streaming terrain tiles 0/2");
-            assert!(bus.history().next().is_none());
-        }
-
-        *app.world_mut()
-            .resource_mut::<lunco_terrain_surface::TerrainStreamStatus>() =
-            lunco_terrain_surface::TerrainStreamStatus {
-                wanted: 2,
-                resident: 1,
-                pending: 1,
-                ..Default::default()
-            };
-        app.update();
-        {
-            let bus = app
-                .world()
-                .resource::<lunco_status_core::status_bus::StatusBus>();
-            let progress: Vec<_> = bus
-                .active_progress()
-                .filter(|event| event.source == lunco_status_core::status_bus::TERRAIN_SOURCE)
-                .collect();
-            assert_eq!(
-                progress.len(),
-                1,
-                "stream ticks must replace one live status"
-            );
-            assert_eq!(progress[0].message, "Streaming terrain tiles 1/2");
-            assert!(bus.history().next().is_none());
-        }
-
-        *app.world_mut()
-            .resource_mut::<lunco_terrain_surface::TerrainStreamStatus>() =
-            lunco_terrain_surface::TerrainStreamStatus {
-                wanted: 2,
-                resident: 2,
-                pending: 1,
-                ..Default::default()
-            };
-        app.update();
-        {
-            let bus = app
-                .world()
-                .resource::<lunco_status_core::status_bus::StatusBus>();
-            let progress = bus
-                .active_progress()
-                .find(|event| event.source == lunco_status_core::status_bus::TERRAIN_SOURCE)
-                .expect("render-pending terrain must keep live progress");
-            assert_eq!(
-                progress.message,
-                "Preparing terrain visuals 2/2 (1 pending)"
-            );
-            assert_eq!(progress.progress, Some((0, 0)));
-            assert!(bus.history().next().is_none());
-
-            *app.world_mut()
-                .resource_mut::<lunco_terrain_surface::TerrainStreamStatus>() =
-                lunco_terrain_surface::TerrainStreamStatus {
-                    wanted: 2,
-                    resident: 2,
-                    ..Default::default()
-                };
-        }
-        app.update();
-        {
-            let bus = app
-                .world()
-                .resource::<lunco_status_core::status_bus::StatusBus>();
-            assert!(bus
-                .active_progress()
-                .all(|event| event.source != lunco_status_core::status_bus::TERRAIN_SOURCE));
-            let history: Vec<_> = bus.history().collect();
-            assert_eq!(history.len(), 1);
-            assert_eq!(history[0].message, "Terrain streaming ready (2/2)");
-        }
-
-        app.update();
-        assert_eq!(
-            app.world()
-                .resource::<lunco_status_core::status_bus::StatusBus>()
-                .history()
-                .count(),
-            1,
-            "a settled terrain must not publish duplicate terminal events"
-        );
-    }
-}
-
-#[cfg(feature = "ui")]
-#[derive(Resource, Default)]
-struct TerrainStatusMirrorState {
-    streaming: bool,
-    deriving: bool,
-    generation: Option<(String, lunco_terrain_surface::TerrainGenPhase)>,
-}
-
-#[cfg(feature = "ui")]
-fn reset_terrain_status_mirror_on_scene_teardown(
-    mut mirror: ResMut<TerrainStatusMirrorState>,
-    bus: Option<ResMut<lunco_status_core::status_bus::StatusBus>>,
-) {
-    *mirror = TerrainStatusMirrorState::default();
-    let Some(mut bus) = bus else { return };
-    bus.remove_progress(lunco_status_core::status_bus::TERRAIN_SOURCE);
-    bus.remove_progress(lunco_status_core::status_bus::TERRAIN_DERIVED_SOURCE);
-}
-
-/// Mirror the DEM build lifecycle into the workbench status bus. Dataset
-/// provisioning is a separate, user-controlled lifecycle; once the declared
-/// source is available, this entry reports the actual local generation phase
-/// rather than leaving the old indeterminate preparation card as the only
-/// feedback.
-#[cfg(feature = "ui")]
-fn report_terrain_generation_status(
-    status: Res<lunco_terrain_surface::TerrainGenStatus>,
-    terrains: Query<(), With<lunco_terrain_surface::DemHeightField>>,
-    faults: Option<Res<lunco_core::RuntimeFaults>>,
-    bus: Option<ResMut<lunco_status_core::status_bus::StatusBus>>,
-    mut mirror: ResMut<TerrainStatusMirrorState>,
-) {
-    let Some(mut bus) = bus else { return };
-    const SOURCE: &str = lunco_status_core::status_bus::TERRAIN_BUILD_SOURCE;
-    if !status.active {
-        bus.remove_progress(SOURCE);
-        if mirror.generation.take().is_some()
-            && !faults.as_deref().is_some_and(|fault| {
-                fault
-                    .first
-                    .as_ref()
-                    .is_some_and(|f| f.kind == lunco_terrain_surface::TERRAIN_BUILD_FAULT_KIND)
-            })
-            && !terrains.is_empty()
-        {
-            bus.push(
-                SOURCE,
-                lunco_status_core::status_bus::StatusLevel::Info,
-                "Terrain ground ready",
-            );
-        }
-        return;
-    }
-
-    let site = if status.site.is_empty() {
-        String::new()
-    } else {
-        format!(" — {}", status.site)
-    };
-    let (done, total) = status
-        .fraction
-        .filter(|fraction| fraction.is_finite())
-        .map(|fraction| {
-            let total = 1_000_u64;
-            (
-                ((fraction.clamp(0.0, 1.0) * total as f32).round()) as u64,
-                total,
-            )
-        })
-        .unwrap_or((0, 0));
-    let key = (status.site.clone(), status.phase);
-    if mirror.generation.as_ref() != Some(&key) {
-        let site = if status.site.is_empty() {
-            String::new()
-        } else {
-            format!(" — {}", status.site)
-        };
-        bus.push(
-            SOURCE,
-            lunco_status_core::status_bus::StatusLevel::Info,
-            format!("{}{}", status.phase.label(), site),
-        );
-        mirror.generation = Some(key);
-    }
-    bus.set_progress(
-        SOURCE,
-        format!("{}{}", status.phase.label(), site),
-        done,
-        total,
-    );
-}
-
-/// Mirror USD scene-spawn progress into the workbench
-/// [`StatusBus`](lunco_status_core::status_bus::StatusBus) under
-/// [`SCENE_SOURCE`](lunco_status_core::status_bus::SCENE_SOURCE), the twin of
-/// [`report_terrain_stream_status`].
-///
-/// Two signals, because they cover different windows and neither subsumes the
-/// other:
-///
-/// * [`SceneLoadInFlight`](lunco_usd_sim::cosim::SceneLoadInFlight) — present from
-///   `LoadScene` until every visual projection phase for that stage has drained.
-///   This covers the gap BEFORE any prim entity exists, which an entity count
-///   alone reads as "nothing to wait for".
-/// * `UsdAwaitingStage` entities — prims queued on a stage that has not resolved.
-///   This covers spawns with no `LoadScene` guard behind them (deferred instance
-///   and reference spawns), which the resource alone would miss.
-/// * `UsdVisualMeshPending` entities — structural projection is complete, but
-///   CPU-generated geometry is still being committed from the async mesh pool.
-///   This is a separate visual-streaming phase, not a second scene load.
-///
-/// Consumed by the offline recorder's readiness gate as well as the status bar;
-/// see the registration site for why the mirror lives here rather than in
-/// `lunco-workbench`.
-#[cfg(feature = "ui")]
-fn report_scene_spawn_status(
-    in_flight: Option<Res<lunco_usd_sim::cosim::SceneLoadInFlight>>,
-    awaiting: Query<(), With<lunco_usd_bevy::UsdAwaitingStage>>,
-    projecting: Query<(), With<lunco_usd_bevy::UsdVisualProjectionQueued>>,
-    pending_meshes: Query<(), With<lunco_usd_bevy::UsdVisualMeshPending>>,
-    coordinator: Res<lunco_core::SceneTransitionCoordinator>,
-    // `Option` for the same reason as the terrain mirror: `--no-ui` is a RUNTIME
-    // choice on a binary that still has the `ui` feature compiled in.
-    bus: Option<ResMut<lunco_status_core::status_bus::StatusBus>>,
-) {
-    let Some(mut bus) = bus else { return };
-    const SOURCE: &str = lunco_status_core::status_bus::SCENE_SOURCE;
-    let pending = awaiting.iter().count();
-    let projecting = projecting.iter().count();
-    let pending_meshes = pending_meshes.iter().count();
-    if matches!(
-        coordinator.active(),
-        Some(lunco_core::SceneTransition::Clear)
-    ) {
-        bus.set_progress(SOURCE, "unloading current scene", 0, 0);
-        return;
-    }
-    if let Some(g) = in_flight {
-        let message = if projecting > 0 {
-            format!("projecting scene {} ({projecting} prims queued)", g.path)
-        } else if pending_meshes > 0 {
-            format!(
-                "loading scene {} (streaming {pending_meshes} meshes)",
-                g.path
-            )
-        } else {
-            format!("loading scene {}", g.path)
-        };
-        // `total = 0` is the bus's "indeterminate" encoding — the number of
-        // descendants can grow as each projected prim exposes its children.
-        bus.set_progress(SOURCE, message, 0, 0);
-    } else if pending > 0 {
-        bus.set_progress(
-            SOURCE,
-            format!("projecting scene ({projecting} queued, {pending} pending)"),
-            0,
-            0,
-        );
-    } else if pending_meshes > 0 {
-        bus.set_progress(
-            SOURCE,
-            format!("streaming scene visuals ({pending_meshes} meshes pending)"),
-            0,
-            0,
-        );
-    } else {
-        bus.remove_progress(SOURCE);
-    }
-}
-
-/// Mirror the asynchronous textured-DomeLight projection into the workbench
-/// status bus. A missing source image remains pending here and therefore causes
-/// the recorder to hit its loud readiness timeout instead of accepting a black
-/// environment as a valid render.
-#[cfg(feature = "ui")]
-fn report_dome_environment_status(
-    domes: Query<(
-        &lunco_usd_bevy::dome::UsdDomeEnvironment,
-        Option<&lunco_usd_bevy::dome::DomeCubemap>,
-        Option<&lunco_usd_bevy::dome::DomeProjection>,
-    )>,
-    bus: Option<ResMut<lunco_status_core::status_bus::StatusBus>>,
-) {
-    let Some(mut bus) = bus else { return };
-    const SOURCE: &str = lunco_status_core::status_bus::DOME_SOURCE;
-    let pending = domes.iter().any(|(_, cubemap, projection)| {
-        projection.is_some()
-            || cubemap.is_none()
-            || cubemap.is_some_and(|cubemap| cubemap.0 == Handle::default())
-    });
-    if pending {
-        bus.set_progress(SOURCE, "projecting textured DomeLight", 0, 0);
-    } else {
-        bus.remove_progress(SOURCE);
-    }
-}
-
-/// Mirror the aggregate USD-driven Modelica lifecycle into the same status
-/// channel consumed by offline recording readiness. One scene can create many
-/// participants; publishing one permanent event per participant left the last
-/// source filename looking like ongoing work after the scene had settled.
-#[cfg(feature = "ui")]
-fn report_modelica_status(
-    pending_sources: Query<(), With<lunco_usd_sim::cosim::PendingModelicaSource>>,
-    models: Query<&lunco_modelica_core::ModelicaModel, With<lunco_usd_sim::cosim::UsdSourcedCosim>>,
-    bus: Option<ResMut<lunco_status_core::status_bus::StatusBus>>,
-    mut mirror: ResMut<ModelicaStatusMirrorState>,
-) {
-    let Some(mut bus) = bus else { return };
-    const SOURCE: &str = lunco_status_core::status_bus::MODELICA_SOURCE;
-
-    let pending = pending_sources.iter().count();
-    // A successfully compiled model whose initial algebraic snapshot has not
-    // received its first solver tick is deliberately NOT included here.
-    // Offline recording freezes the simulation while it waits for this visual
-    // status, so treating that state as source compilation deadlocks the gate:
-    // the first tick that would make the participant Running can never happen.
-    // The authoritative source lifecycle is the Modelica model itself; the
-    // solver's first-step hold remains owned by the readiness subsystem.
-    let mut model_count = 0;
-    let mut compiling = 0;
-    let mut failed = 0;
-    for model in &models {
-        model_count += 1;
-        let ready = model.is_compiled && !model.is_compiling && model.last_error.is_none();
-        if !ready && model.last_error.is_none() {
-            compiling += 1;
-        } else if model.last_error.is_some() {
-            failed += 1;
-        }
-    }
-    let active = pending > 0 || compiling > 0;
-
-    if pending > 0 {
-        bus.set_progress(
-            SOURCE,
-            format!("loading {pending} Modelica source(s)"),
-            0,
-            0,
-        );
-    } else if compiling > 0 {
-        bus.set_progress(
-            SOURCE,
-            format!("compiling {compiling} Modelica participant(s)"),
-            0,
-            0,
-        );
-    } else {
-        bus.remove_progress(SOURCE);
-    }
-
-    if !active && failed == 0 && model_count > 0 && (mirror.was_active || mirror.model_count == 0) {
-        bus.push(
-            SOURCE,
-            lunco_status_core::status_bus::StatusLevel::Info,
-            format!("Modelica ready — {model_count} participant(s)"),
-        );
-    }
-    mirror.was_active = active;
-    mirror.model_count = model_count;
-}
-
-#[cfg(feature = "ui")]
-#[derive(Resource, Default)]
-struct ModelicaStatusMirrorState {
-    was_active: bool,
-    model_count: usize,
-}
-
-#[cfg(feature = "ui")]
-fn reset_modelica_status_mirror_on_scene_teardown(
-    mut mirror: ResMut<ModelicaStatusMirrorState>,
-    bus: Option<ResMut<lunco_status_core::status_bus::StatusBus>>,
-) {
-    *mirror = ModelicaStatusMirrorState::default();
-    if let Some(mut bus) = bus {
-        bus.remove_progress(lunco_status_core::status_bus::MODELICA_SOURCE);
-    }
-}
-
-#[cfg(all(test, feature = "ui"))]
-mod modelica_status_tests {
-    use super::*;
-
-    fn ready_model(name: &str) -> lunco_modelica_core::ModelicaModel {
-        let mut model = lunco_modelica_core::ModelicaModel::default();
-        model.model_name = name.to_owned();
-        model.is_compiled = true;
-        model
-    }
-
-    #[test]
-    fn modelica_readiness_is_one_stable_lifecycle_event() {
-        let mut app = App::new();
-        app.insert_resource(lunco_status_core::status_bus::StatusBus::default())
-            .init_resource::<ModelicaStatusMirrorState>()
-            .add_systems(Update, report_modelica_status);
-        let first = app
-            .world_mut()
-            .spawn((lunco_usd_sim::cosim::UsdSourcedCosim, ready_model("First")))
-            .id();
-        app.world_mut()
-            .spawn((lunco_usd_sim::cosim::UsdSourcedCosim, ready_model("Second")));
-
-        app.update();
-        app.update();
-        let bus = app
-            .world()
-            .resource::<lunco_status_core::status_bus::StatusBus>();
-        assert_eq!(bus.history().count(), 1);
-        assert_eq!(
-            bus.history().next().map(|event| event.message.as_str()),
-            Some("Modelica ready — 2 participant(s)")
-        );
-
-        app.world_mut()
-            .entity_mut(first)
-            .get_mut::<lunco_modelica_core::ModelicaModel>()
-            .expect("Modelica model")
-            .is_compiling = true;
-        app.update();
-        assert!(app
-            .world()
-            .resource::<lunco_status_core::status_bus::StatusBus>()
-            .active_progress()
-            .any(|event| event.source == lunco_status_core::status_bus::MODELICA_SOURCE));
-
-        app.world_mut()
-            .entity_mut(first)
-            .get_mut::<lunco_modelica_core::ModelicaModel>()
-            .expect("Modelica model")
-            .is_compiling = false;
-        app.update();
-        let bus = app
-            .world()
-            .resource::<lunco_status_core::status_bus::StatusBus>();
-        // Returning to the same ready snapshot after a compile transition
-        // must remain one stable lifecycle event. StatusBus coalesces
-        // consecutive identical discrete snapshots by contract.
-        assert_eq!(bus.history().count(), 1);
-        assert_eq!(bus.history_total(), 1);
-        assert!(bus
-            .active_progress()
-            .all(|event| { event.source != lunco_status_core::status_bus::MODELICA_SOURCE }));
-    }
-}
-
-/// The headless runner: the Modelica/spawn cores a windowed build gets
-/// transitively from its UI plugins, plus the `ScheduleRunnerPlugin` that ticks
-/// the app in winit's place. Added only when running headless.
-/// GPU-full WINDOWLESS recording mode (`--offscreen`): the render stack is real
-/// (wgpu device, render world, `LuncoRenderPlugin` visuals) but no window ever
-/// opens — the scene renders into an offscreen target image sized by
-/// `--record-size WxH` (default 1280x720, the same resolution the windowed
-/// luncosim opens at) and the offline recorder captures that image. Combined
-/// with `--record-offline out.mp4 --record-frames N` this is the one-command
-/// take: the process exits by itself once the recording drains.
-///
-/// Contrast with [`SandboxHeadlessPlugin`] (the `--no-ui` SERVER: no GPU at
-/// all): both modes use the same render-free simulation projection contract.
-#[cfg(all(feature = "ui", feature = "lunco-api"))]
-pub struct SandboxOffscreenPlugin;
-
-#[cfg(all(feature = "ui", feature = "lunco-api"))]
-impl Plugin for SandboxOffscreenPlugin {
-    fn build(&self, app: &mut App) {
-        // Same non-UI cores the headless server needs (see the twin comments in
-        // `SandboxHeadlessPlugin`): the Modelica compile channels and the
-        // spawn-command registry both normally arrive via UI plugins.
-        app.add_plugins(lunco_modelica_core::ModelicaCorePlugin);
-        app.add_plugins(lunco_scene_commands::commands::SpawnCommandPlugin);
-        // The trail has no egui or picking dependency, but it is still part of
-        // the rendered presentation and must be present in offscreen captures.
-        app.add_plugins(lunco_luncosim_edit::ui::VehicleTrailPlugin);
-
-        // The workspace session (WorkspaceResource + journal persistence) —
-        // the GUI gets this from `WorkbenchPlugin`, which this mode skips.
-        // `setup_sandbox`'s twin-load path panics without it.
-        app.add_plugins(lunco_workspace::WorkspacePlugin);
-
-        // `CloseWindow` is a presentation intent in the shared recording
-        // script. Offscreen has no OS window; the recorder's drained-state
-        // exit owns process lifetime, so acknowledge this explicit intent
-        // through the shared scenario-command policy instead of advertising a
-        // window command whose semantics would terminate before the video
-        // trailer is written.
-        app.insert_resource(lunco_scripting::bridge_core::IgnoredScenarioCommands::new(
-            ["CloseWindow"],
-        ));
-
-        // Recording owns its deterministic clock. Do not inherit a persisted
-        // editor cadence (especially the scene-test EXACT setting), which
-        // makes the expensive celestial cluster solve on every evaluation.
-        app.insert_resource(lunco_celestial::cadence::CelestialCadenceSettings::default());
-
-        // Presentation commands remain part of the scenario command surface
-        // without requiring the egui workbench in an offscreen run.
-        app.add_plugins(lunco_theme::ThemePlugin);
-        app.add_plugins(lunco_workbench::theme_command::ThemeCommandPlugin);
-        lunco_workbench::input_overlay::register_input_overlay_commands(app);
-
-        // The recorder has no OS window and therefore no egui host. It still
-        // renders Bevy UI into the same image as the authored scene camera;
-        // install the shared HUI/Flair exposure layer so film HUDs are
-        // captured as pixels rather than remaining editor-only overlays.
-        crate::ui::add_runtime_ui_layer(app);
-
-        // The offline recorder itself — normally added by `WorkbenchPlugin`,
-        // which this mode skips (egui needs a window).
-        app.init_resource::<lunco_status_core::status_bus::StatusBus>();
-        app.add_plugins(lunco_workbench::screenshot::ScreenshotPlugin);
-
-        // No winit event loop, so tick the app ourselves — flat out, zero wait:
-        // while recording, `drive_offline_clock` paces the sim (one 1/fps step
-        // per frame, back-pressure holds the clock), so a faster tick rate means
-        // faster-than-realtime capture, never a wrong-speed video.
-        app.add_plugins(bevy::app::ScheduleRunnerPlugin::run_loop(
-            std::time::Duration::ZERO,
-        ));
-
-        // One-shot contract: when the recording fully drains (frames delivered,
-        // saves done, video trailer written), exit the process.
-        app.insert_resource(lunco_workbench::screenshot::ExitAfterRecording);
-
-        app.add_systems(Startup, setup_offscreen_target);
-        app.add_systems(
-            Update,
-            (
-                retarget_cameras_to_offscreen,
-                activate_offscreen_camera,
-                maintain_offscreen_render_camera,
-            )
-                .chain(),
-        );
-
-        // Keep the windowless render contract observable at the render boundary: the main world
-        // cannot know whether visibility and phase binning actually admitted a mesh. The render
-        // acknowledgement is consumed by the recorder before it starts virtual time.
-        if let Some(render_app) = app.get_sub_app_mut(bevy::render::RenderApp) {
-            render_app.init_resource::<lunco_workbench::screenshot::OfflineRenderReadiness>();
-            render_app.add_systems(
-                bevy::render::ExtractSchedule,
-                copy_offscreen_render_readiness_to_main_world,
-            );
-            render_app.add_systems(
-                bevy::render::Render,
-                report_offscreen_render_view.in_set(bevy::render::RenderSystems::Prepare),
-            );
-        }
-
-        info!(
-            "[offscreen] GPU-full windowless recording mode: no window, scene renders to an offscreen target"
-        );
-    }
-}
-
-#[cfg(all(feature = "ui", feature = "lunco-api"))]
-fn report_offscreen_render_view(
-    cameras: Query<(
-        Entity,
-        &bevy::render::camera::ExtractedCamera,
-        Option<&bevy::render::view::ExtractedView>,
-        Option<&bevy::render::view::visibility::RenderVisibleEntities>,
-    )>,
-    opaque_phases: Option<
-        Res<
-            bevy::render::render_phase::ViewBinnedRenderPhases<
-                bevy::core_pipeline::core_3d::Opaque3d,
-            >,
-        >,
-    >,
-    alpha_mask_phases: Option<
-        Res<
-            bevy::render::render_phase::ViewBinnedRenderPhases<
-                bevy::core_pipeline::core_3d::AlphaMask3d,
-            >,
-        >,
-    >,
-    transparent_phases: Option<
-        Res<
-            bevy::render::render_phase::ViewSortedRenderPhases<
-                bevy::core_pipeline::core_3d::Transparent3d,
-            >,
-        >,
-    >,
-    pipeline_cache: Res<bevy::render::render_resource::PipelineCache>,
-    mut readiness: ResMut<lunco_workbench::screenshot::OfflineRenderReadiness>,
-    mut ready_reported: Local<bool>,
-) {
-    *readiness = Default::default();
-    for (_entity, camera, view, visible) in &cameras {
-        let visible_entities = visible.map_or(0, |visible| {
-            visible
-                .classes
-                .values()
-                .map(|class| class.entities_cpu_culling.len() + class.entities_gpu_culling.len())
-                .sum()
-        });
-        let opaque_bins = view
-            .and_then(|view| {
-                opaque_phases
-                    .as_deref()
-                    .and_then(|phases| phases.0.get(&view.retained_view_entity))
-            })
-            .map(|phase| {
-                phase.multidrawable_meshes.len()
-                    + phase.batchable_meshes.len()
-                    + phase.unbatchable_meshes.len()
-                    + phase.non_mesh_items.len()
-            })
-            .unwrap_or(0);
-        let opaque_pipelines_ready = view.and_then(|view| {
-            opaque_phases.as_deref().and_then(|phases| {
-                phases.0.get(&view.retained_view_entity).map(|phase| {
-                    let has_items = !phase.multidrawable_meshes.is_empty()
-                        || !phase.batchable_meshes.is_empty()
-                        || !phase.unbatchable_meshes.is_empty()
-                        || !phase.non_mesh_items.is_empty();
-                    has_items
-                        && phase
-                            .multidrawable_meshes
-                            .keys()
-                            .all(|key| pipeline_cache.get_render_pipeline(key.pipeline).is_some())
-                        && phase.batchable_meshes.keys().all(|(key, _)| {
-                            pipeline_cache.get_render_pipeline(key.pipeline).is_some()
-                        })
-                        && phase.unbatchable_meshes.keys().all(|(key, _)| {
-                            pipeline_cache.get_render_pipeline(key.pipeline).is_some()
-                        })
-                })
-            })
-        });
-        let alpha_mask_pipelines_ready = view.and_then(|view| {
-            alpha_mask_phases.as_deref().and_then(|phases| {
-                phases.0.get(&view.retained_view_entity).map(|phase| {
-                    let has_items = !phase.multidrawable_meshes.is_empty()
-                        || !phase.batchable_meshes.is_empty()
-                        || !phase.unbatchable_meshes.is_empty()
-                        || !phase.non_mesh_items.is_empty();
-                    has_items
-                        && phase
-                            .multidrawable_meshes
-                            .keys()
-                            .all(|key| pipeline_cache.get_render_pipeline(key.pipeline).is_some())
-                        && phase.batchable_meshes.keys().all(|(key, _)| {
-                            pipeline_cache.get_render_pipeline(key.pipeline).is_some()
-                        })
-                        && phase.unbatchable_meshes.keys().all(|(key, _)| {
-                            pipeline_cache.get_render_pipeline(key.pipeline).is_some()
-                        })
-                })
-            })
-        });
-        let transparent_items = view
-            .and_then(|view| {
-                transparent_phases
-                    .as_deref()
-                    .and_then(|phases| phases.0.get(&view.retained_view_entity))
-            })
-            .map_or(0, |phase| phase.items.len());
-        let transparent_pipelines_ready = view.and_then(|view| {
-            transparent_phases.as_deref().and_then(|phases| {
-                phases.0.get(&view.retained_view_entity).map(|phase| {
-                    !phase.items.is_empty()
-                        && phase
-                            .items
-                            .values()
-                            .all(|item| pipeline_cache.get_render_pipeline(item.pipeline).is_some())
-                })
-            })
-        });
-        let is_capture_view = matches!(
-            camera.output_mode,
-            bevy::camera::CameraOutputMode::Write { .. }
-        ) && camera
-            .target
-            .as_ref()
-            .is_some_and(|target| matches!(target, bevy::camera::NormalizedRenderTarget::Image(_)));
-        if is_capture_view {
-            if let Some(view) = view {
-                readiness.camera = Some(view.retained_view_entity.main_entity.id());
-                readiness.visible_entities = visible_entities;
-                readiness.opaque_items = opaque_bins;
-                readiness.transparent_items = transparent_items;
-                readiness.pipelines_ready = opaque_pipelines_ready.unwrap_or(false)
-                    || alpha_mask_pipelines_ready.unwrap_or(false)
-                    || transparent_pipelines_ready.unwrap_or(false);
-                if !*ready_reported && opaque_bins + transparent_items > 0 {
-                    info!(
-                        "[offscreen] capture view submitted scene items: main={:?} world_translation={:?} visible_entities={visible_entities} opaque_bins={opaque_bins} transparent_items={transparent_items} pipelines_ready={}",
-                        view.retained_view_entity.main_entity,
-                        view.world_from_view.translation(),
-                        readiness.pipelines_ready,
-                    );
-                    *ready_reported = true;
-                }
-            }
-        }
-    }
-}
-
-/// Copy the previous render-frame acknowledgement into the main world during
-/// extraction. `MainWorld` is available at this boundary, while render-phase
-/// bins are only available later in `RenderSystems::Prepare`; the two systems
-/// therefore form one explicit one-frame handoff rather than observing a main
-/// world approximation of render participation.
-#[cfg(all(feature = "ui", feature = "lunco-api"))]
-fn copy_offscreen_render_readiness_to_main_world(
-    mut main_world: ResMut<bevy::render::MainWorld>,
-    readiness: Res<lunco_workbench::screenshot::OfflineRenderReadiness>,
-) {
-    if let Some(mut main_readiness) =
-        main_world.get_resource_mut::<lunco_workbench::screenshot::OfflineRenderReadiness>()
-    {
-        *main_readiness = *readiness;
-    }
-}
-
-/// Create the offscreen render-target image and expose it to the recorder as
-/// [`lunco_workbench::screenshot::OfflineCaptureTarget`].
-#[cfg(all(feature = "ui", feature = "lunco-api"))]
-fn setup_offscreen_target(mut images: ResMut<Assets<bevy::image::Image>>, mut commands: Commands) {
-    let (width, height) = parse_record_size();
-    let mut image = bevy::image::Image::new_target_texture(
-        width,
-        height,
-        bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
-        None,
-    );
-    // `new_target_texture` sets RENDER_ATTACHMENT|TEXTURE_BINDING|COPY_DST;
-    // the screenshot readback additionally copies OUT of the texture.
-    image.texture_descriptor.usage |= bevy::render::render_resource::TextureUsages::COPY_SRC;
-    let handle = images.add(image);
-    info!("[offscreen] render target {width}x{height} (override with --record-size WxH)");
-    commands.insert_resource(lunco_workbench::screenshot::OfflineCaptureTarget(handle));
-}
-
-/// Point cameras that target a window at the offscreen image. The authored
-/// camera remains the explicit non-writing pose owner and the maintained image
-/// camera below is its render consumer. Runs every frame because cameras spawn
-/// throughout a session (scene loads, camera paths, possession).
-#[cfg(all(feature = "ui", feature = "lunco-api"))]
-fn retarget_cameras_to_offscreen(
-    target: Option<Res<lunco_workbench::screenshot::OfflineCaptureTarget>>,
-    mut cameras: Query<(
-        &mut bevy::camera::RenderTarget,
-        Option<&mut bevy::camera::Projection>,
-    )>,
-) {
-    let Some(target) = target else { return };
-    for (mut rt, projection) in &mut cameras {
-        if matches!(*rt, bevy::camera::RenderTarget::Window(_)) {
-            *rt = bevy::camera::RenderTarget::Image(target.0.clone().into());
-            // BEVY QUIRK (0.19): `camera_system` recomputes a camera's target
-            // info on window/image EVENTS, `is_added`, or PROJECTION changes —
-            // NOT on `RenderTarget` component changes. A camera whose
-            // projection bound while its target was still the nonexistent
-            // primary window resolves to nothing, and pointing it at the image
-            // afterwards leaves `computed_size = None` FOREVER — the render
-            // world silently skips it (black take, no log). Touching the
-            // projection's change tick forces the recompute.
-            if let Some(mut projection) = projection {
-                projection.set_changed();
-            }
-        }
-    }
-}
-
-/// Bevy's camera target is an immutable render-graph choice in practice: changing
-/// a live window camera to an image updates its projection metadata, but leaves
-/// the original camera's output path bound to the windowless swapchain setup.
-/// Keep the authored camera as the pose owner and render that pose through a
-/// camera created with the image target from birth.
-#[cfg(all(feature = "ui", feature = "lunco-api"))]
-#[derive(Component)]
-struct OffscreenRenderCamera(Entity);
-
-#[cfg(all(feature = "ui", feature = "lunco-api"))]
-fn skybox_matches(left: &bevy::light::Skybox, right: &bevy::light::Skybox) -> bool {
-    left.image == right.image
-        && left.brightness == right.brightness
-        && left.rotation == right.rotation
-}
-
-#[cfg(all(feature = "ui", feature = "lunco-api"))]
-fn generated_environment_map_matches(
-    left: &bevy::light::GeneratedEnvironmentMapLight,
-    right: &bevy::light::GeneratedEnvironmentMapLight,
-) -> bool {
-    left.environment_map == right.environment_map
-        && left.intensity == right.intensity
-        && left.rotation == right.rotation
-        && left.affects_lightmapped_mesh_diffuse == right.affects_lightmapped_mesh_diffuse
-}
-
-#[cfg(all(feature = "ui", feature = "lunco-api"))]
-fn sync_offscreen_environment(
-    commands: &mut Commands,
-    mirror_entity: Entity,
-    source_skybox: Option<&bevy::light::Skybox>,
-    source_environment: Option<&bevy::light::GeneratedEnvironmentMapLight>,
-    mut mirror_skybox: Option<&mut bevy::light::Skybox>,
-    mut mirror_environment: Option<&mut bevy::light::GeneratedEnvironmentMapLight>,
-    mirror_derived_environment: Option<&bevy::light::EnvironmentMapLight>,
-) {
-    let skybox_changed = match (source_skybox, mirror_skybox.as_deref()) {
-        (Some(source), Some(mirror)) => !skybox_matches(source, mirror),
-        (Some(_), None) | (None, Some(_)) => true,
-        (None, None) => false,
-    };
-    if skybox_changed {
-        match source_skybox {
-            Some(source) => {
-                if let Some(mirror) = mirror_skybox.as_deref_mut() {
-                    *mirror = source.clone();
-                } else {
-                    commands.entity(mirror_entity).insert(source.clone());
-                }
-            }
-            None => {
-                commands
-                    .entity(mirror_entity)
-                    .remove::<bevy::light::Skybox>();
-            }
-        }
-    }
-
-    let environment_changed = match (source_environment, mirror_environment.as_deref()) {
-        (Some(source), Some(mirror)) => !generated_environment_map_matches(source, mirror),
-        (Some(_), None) | (None, Some(_)) => true,
-        (None, None) => mirror_derived_environment.is_some(),
-    };
-    if environment_changed {
-        match source_environment {
-            Some(source) => {
-                if let Some(mirror) = mirror_environment.as_deref_mut() {
-                    *mirror = source.clone();
-                } else {
-                    commands.entity(mirror_entity).insert(source.clone());
-                }
-            }
-            None => {
-                commands.entity(mirror_entity).remove::<(
-                    bevy::light::GeneratedEnvironmentMapLight,
-                    bevy::light::EnvironmentMapLight,
-                )>();
-            }
-        }
-        if mirror_derived_environment.is_some() {
-            commands
-                .entity(mirror_entity)
-                .remove::<bevy::light::EnvironmentMapLight>();
-        }
-    }
-}
-
-#[cfg(all(feature = "ui", feature = "lunco-api"))]
-fn maintain_offscreen_render_camera(
-    target: Option<Res<lunco_workbench::screenshot::OfflineCaptureTarget>>,
-    sources: Query<
-        (
-            Entity,
-            &Transform,
-            &Projection,
-            &bevy::camera::Exposure,
-            &bevy::core_pipeline::tonemapping::Tonemapping,
-            &bevy::render::view::Msaa,
-            Option<&ChildOf>,
-            Option<&CellCoord>,
-            Option<&bevy::light::Skybox>,
-            Option<&bevy::light::GeneratedEnvironmentMapLight>,
-        ),
-        (
-            With<lunco_render::SceneCamera>,
-            With<lunco_core::LocalAvatar>,
-            Without<OffscreenRenderCamera>,
-        ),
-    >,
-    mut source_cameras: Query<
-        &mut Camera,
-        (
-            With<lunco_render::SceneCamera>,
-            Without<OffscreenRenderCamera>,
-        ),
-    >,
-    mut mirrors: Query<(
-        Entity,
-        &OffscreenRenderCamera,
-        &mut Transform,
-        &mut Projection,
-        &mut Camera,
-        Option<&mut bevy::camera::Exposure>,
-        Option<&mut bevy::core_pipeline::tonemapping::Tonemapping>,
-        Option<&mut bevy::render::view::Msaa>,
-        Option<&mut CellCoord>,
-        Option<&mut bevy::light::Skybox>,
-        Option<&mut bevy::light::GeneratedEnvironmentMapLight>,
-        Option<&bevy::light::EnvironmentMapLight>,
-    )>,
-    mut commands: Commands,
-) {
-    let Some(target) = target else { return };
-    let mut source_iter = sources.iter();
-    let Some((
-        source,
-        source_transform,
-        projection,
-        source_exposure,
-        source_tonemapping,
-        source_msaa,
-        parent,
-        cell,
-        source_skybox,
-        source_environment,
-    )) = source_iter.next()
-    else {
-        return;
-    };
-    if source_iter.next().is_some() {
-        warn!("[offscreen] LocalAvatar camera is ambiguous; no image render camera was created");
-        return;
-    }
-
-    let source_camera_settings = source_cameras.get_mut(source).ok().map(|mut camera| {
-        let settings = (
-            camera.viewport.clone(),
-            camera.msaa_writeback,
-            camera.clear_color.clone(),
-            camera.invert_culling,
-            camera.sub_camera_view.clone(),
-        );
-        camera.output_mode = bevy::camera::CameraOutputMode::Skip;
-        // Keep the authored camera active for the scene's camera-driven LOD and
-        // pose systems, but give the non-writing source a distinct priority so
-        // Bevy does not report two active cameras for the image target.
-        camera.order = -1;
-        settings
-    });
-
-    let mut found = false;
-    for (
-        mirror_entity,
-        mirror,
-        mut mirror_transform,
-        mut mirror_projection,
-        mut camera,
-        mirror_exposure,
-        mirror_tonemapping,
-        mirror_msaa,
-        mut mirror_cell,
-        mut mirror_skybox,
-        mut mirror_environment,
-        mirror_derived_environment,
-    ) in &mut mirrors
-    {
-        if mirror.0 != source {
-            camera.is_active = false;
-            continue;
-        }
-        found = true;
-        *mirror_transform = source_transform.clone();
-        *mirror_projection = projection.clone();
-        if let Some((viewport, msaa_writeback, clear_color, invert_culling, sub_camera_view)) =
-            &source_camera_settings
-        {
-            camera.viewport = viewport.clone();
-            camera.msaa_writeback = *msaa_writeback;
-            camera.clear_color = clear_color.clone();
-            camera.invert_culling = *invert_culling;
-            camera.sub_camera_view = sub_camera_view.clone();
-        }
-        if let Some(mut exposure) = mirror_exposure {
-            *exposure = *source_exposure;
-        } else {
-            commands.entity(mirror_entity).try_insert(*source_exposure);
-        }
-        if let Some(mut tonemapping) = mirror_tonemapping {
-            *tonemapping = *source_tonemapping;
-        } else {
-            commands
-                .entity(mirror_entity)
-                .try_insert(*source_tonemapping);
-        }
-        if let Some(mut msaa) = mirror_msaa {
-            *msaa = *source_msaa;
-        } else {
-            commands.entity(mirror_entity).try_insert(*source_msaa);
-        }
-        if let (Some(source_cell), Some(mirror_cell)) = (cell, mirror_cell.as_deref_mut()) {
-            *mirror_cell = *source_cell;
-        }
-        sync_offscreen_environment(
-            &mut commands,
-            mirror_entity,
-            source_skybox,
-            source_environment,
-            mirror_skybox.as_deref_mut(),
-            mirror_environment.as_deref_mut(),
-            mirror_derived_environment,
-        );
-        camera.is_active = true;
-    }
-    if !found {
-        let mut entity = commands.spawn((
-            Camera3d::default(),
-            OffscreenRenderCamera(source),
-            bevy::camera::RenderTarget::Image(target.0.clone().into()),
-            source_transform.clone(),
-            projection.clone(),
-            *source_exposure,
-            *source_tonemapping,
-            *source_msaa,
-        ));
-        if let Some(source_skybox) = source_skybox {
-            entity.insert(source_skybox.clone());
-        }
-        if let Some(source_environment) = source_environment {
-            entity.insert(source_environment.clone());
-        }
-        if let Some((viewport, msaa_writeback, clear_color, invert_culling, sub_camera_view)) =
-            &source_camera_settings
-        {
-            entity.insert(Camera {
-                viewport: viewport.clone(),
-                msaa_writeback: *msaa_writeback,
-                clear_color: clear_color.clone(),
-                invert_culling: *invert_culling,
-                sub_camera_view: sub_camera_view.clone(),
-                ..default()
-            });
-        }
-        if let Some(parent) = parent {
-            entity.insert(parent.clone());
-        }
-        if let Some(cell) = cell {
-            entity.insert(*cell);
-        }
-        info!("[offscreen] created image render camera from authored LocalAvatar {source}");
-    }
-}
-
-/// Windowed mode always has an active camera — the workbench VIEWPORT camera,
-/// which this mode skips along with the rest of the workbench. Every camera a
-/// scene brings spawns `is_active: false` by design (see the camera-ambiguity
-/// fix), so without this nothing renders and the recording is black frames.
-/// Offscreen recording has the same explicit camera contract as the windowed
-/// viewport. A path-driven camera, or an already active authored camera, may
-/// own the take. If neither is authored/active, all image cameras stay off and
-/// the once-per-run diagnostic explains the black recording; the recorder does
-/// not invent a primary camera by entity order.
-#[cfg(all(feature = "ui", feature = "lunco-api"))]
-fn unique_offscreen_camera(
-    candidates: Vec<Entity>,
-    role: &str,
-    warned: &mut bool,
-    ambiguous: &mut bool,
-) -> Option<Entity> {
-    match candidates.as_slice() {
-        [] => None,
-        [only] => Some(*only),
-        _ => {
-            *ambiguous = true;
-            if !*warned {
-                *warned = true;
-                warn!(
-                    "[offscreen] {role} is ambiguous ({} authored image cameras); recording stays black until exactly one is selected",
-                    candidates.len()
-                );
-            }
-            None
-        }
-    }
-}
-
-#[cfg(all(feature = "ui", feature = "lunco-api"))]
-fn activate_offscreen_camera(
-    mut cameras: Query<
-        (
-            Entity,
-            &mut Camera,
-            &bevy::camera::RenderTarget,
-            bevy::ecs::query::Has<Camera3d>,
-            bevy::ecs::query::Has<lunco_render::SceneCamera>,
-            Option<&lunco_usd_bevy::UsdPrimPath>,
-            bevy::ecs::query::Has<lunco_usd_bevy::camera_path::CameraPathDriven>,
-            bevy::ecs::query::Has<lunco_core::LocalAvatar>,
-            bevy::ecs::query::Has<bevy::camera::ShadowLodOrigin>,
-        ),
-        Without<OffscreenRenderCamera>,
-    >,
-    mirror_sources: Query<&OffscreenRenderCamera>,
-    selection: Res<lunco_usd_bevy::camera_switch::ViewportCameraSelection>,
-    mut commands: Commands,
-    mut warned: Local<bool>,
-) {
-    // The capture target has one owner. Do not preserve an arbitrary active
-    // Camera3d: the authored presentation camera must be the camera the
-    // recording path drives.
-    // That is the source of the sky-only first frame and the apparent sky/ground
-    // flicker in the marketing take.
-    //
-    // A path-driven camera is the authored presentation owner. It must win over
-    // an interactive/avatar camera even when that camera was active while the
-    // USD scene was loading: the path writer and capture owner must be the same
-    // entity or the take contains alternating views. This uses the existing
-    // camera-role component, not an episode-specific camera name.
-    let mut ambiguous = false;
-    let active_path = unique_offscreen_camera(
-        cameras
-            .iter()
-            .filter(
-                |(_, c, target, has_pipeline, has_scene, _, has_path, _, _)| {
-                    c.is_active
-                        && *has_pipeline
-                        && *has_scene
-                        && *has_path
-                        && matches!(target, bevy::camera::RenderTarget::Image(_))
-                },
-            )
-            .map(|(entity, ..)| entity)
-            .collect(),
-        "active cinematic camera",
-        &mut warned,
-        &mut ambiguous,
-    );
-    let path_driven = unique_offscreen_camera(
-        cameras
-            .iter()
-            .filter(
-                |(_, _, target, has_pipeline, has_scene, _, has_path, _, _)| {
-                    *has_pipeline
-                        && *has_scene
-                        && *has_path
-                        && matches!(target, bevy::camera::RenderTarget::Image(_))
-                },
-            )
-            .map(|(entity, ..)| entity)
-            .collect(),
-        "cinematic camera path",
-        &mut warned,
-        &mut ambiguous,
-    );
-    // If no cinematic path owns the presentation, preserve an explicit active
-    // authored camera. There is no entity-order fallback.
-    let active_authored = unique_offscreen_camera(
-        cameras
-            .iter()
-            .filter(
-                |(_, c, target, has_pipeline, has_scene, _, has_path, _, _)| {
-                    c.is_active
-                        && *has_pipeline
-                        && *has_scene
-                        && !*has_path
-                        && matches!(target, bevy::camera::RenderTarget::Image(_))
-                },
-            )
-            .map(|(entity, ..)| entity)
-            .collect(),
-        "active authored camera",
-        &mut warned,
-        &mut ambiguous,
-    );
-    // A camera-track cut is an explicit director selection, but it is not a
-    // `CameraPathDriven` curve. Preserve that selected authored camera after
-    // the window target is retargeted to the capture image; otherwise the
-    // offscreen owner would silently drop a valid mounted or authored track
-    // camera between the director and recorder boundaries.
-    let requested = unique_offscreen_camera(
-        cameras
-            .iter()
-            .filter(
-                |(entity, _, target, has_pipeline, has_scene, path, _, _, _)| {
-                    *has_pipeline
-                        && *has_scene
-                        && selection.matches_requested(*entity, *path)
-                        && matches!(target, bevy::camera::RenderTarget::Image(_))
-                },
-            )
-            .map(|(entity, ..)| entity)
-            .collect(),
-        "explicitly selected authored camera",
-        &mut warned,
-        &mut ambiguous,
-    );
-    // A scene without a cinematic track can still author one LocalAvatar camera
-    // as its initial presentation. It is an explicit identity marker, not an
-    // entity-order fallback, and is shared with the windowed camera contract.
-    let local_avatar = unique_offscreen_camera(
-        cameras
-            .iter()
-            .filter(
-                |(entity, _, target, has_pipeline, has_scene, _, _, has_avatar, _)| {
-                    *has_pipeline
-                        && *has_scene
-                        && *has_avatar
-                        && !mirror_sources.iter().any(|mirror| mirror.0 == *entity)
-                        && matches!(target, bevy::camera::RenderTarget::Image(_))
-                },
-            )
-            .map(|(entity, ..)| entity)
-            .collect(),
-        "authored LocalAvatar camera",
-        &mut warned,
-        &mut ambiguous,
-    );
-    let selected = (!ambiguous)
-        .then(|| {
-            active_path
-                .or(requested)
-                .or(path_driven)
-                .or(active_authored)
-                .or(local_avatar)
-        })
-        .flatten();
-
-    let mut has_image_camera = false;
-    for (
-        entity,
-        mut camera,
-        target,
-        has_pipeline,
-        has_scene,
-        _path,
-        _has_path,
-        _has_avatar,
-        has_lod_origin,
-    ) in &mut cameras
-    {
-        let is_image_camera =
-            has_pipeline && matches!(target, bevy::camera::RenderTarget::Image(_));
-        if !is_image_camera {
-            continue;
-        }
-        has_image_camera = true;
-
-        // A non-SceneCamera image target is never a capture owner. It is
-        // explicitly deactivated even when no authored camera exists yet, so
-        // an unrelated render camera cannot take over on the next frame. The
-        // target-born OffscreenRenderCamera is maintained separately above.
-        let keep = has_scene && Some(entity) == selected;
-        if camera.is_active != keep {
-            camera.is_active = keep;
-            if keep {
-                info!("[offscreen] selected authored scene camera {entity}");
-            } else {
-                info!("[offscreen] disabled competing image camera {entity}");
-            }
-        }
-        if keep {
-            // The recorder's PNG/readback target is SDR.  An authored HDR camera
-            // otherwise keeps a floating-point intermediate while the offscreen
-            // target remains Rgba8UnormSrgb; the window compositor performs that
-            // conversion, but the image target path does not.
-            commands.entity(entity).try_remove::<bevy::camera::Hdr>();
-            commands
-                .entity(entity)
-                .try_remove::<bevy::post_process::bloom::Bloom>();
-            if !has_lod_origin {
-                commands
-                    .entity(entity)
-                    .try_insert(bevy::camera::ShadowLodOrigin);
-            }
-        } else if has_lod_origin {
-            commands
-                .entity(entity)
-                .try_remove::<bevy::camera::ShadowLodOrigin>();
-        }
-    }
-
-    if selected.is_none() && !*warned && has_image_camera {
-        *warned = true;
-        warn!(
-            "[offscreen] no authored SceneCamera is ready; all competing image cameras are disabled and the recording remains black until a scene camera is bound"
-        );
-    } else if selected.is_none() && !*warned && !cameras.is_empty() {
-        *warned = true;
-        warn!(
-            "[offscreen] no renderable SceneCamera yet (binding pending or the scene authors none) — the recording stays black until one exists"
-        );
-    }
-}
-
-/// Parse `--record-size WxH`; default 1280x720 — the resolution the windowed
-/// luncosim authors for its window (see `default_plugins`), so offscreen
-/// recordings match windowed ones by default.
-#[cfg(all(feature = "ui", feature = "lunco-api"))]
-fn parse_record_size() -> (u32, u32) {
-    let args: Vec<String> = std::env::args().collect();
-    for i in 0..args.len() {
-        if args[i] == "--record-size" {
-            if let Some(spec) = args.get(i + 1) {
-                if let Some((w, h)) = spec.split_once('x') {
-                    if let (Ok(w), Ok(h)) = (w.trim().parse(), h.trim().parse()) {
-                        return (w, h);
-                    }
-                }
-                warn!("--record-size expects WxH (e.g. 1920x1080), got {spec:?} — using 1280x720");
-            }
-        }
-    }
-    (1280, 720)
-}
-
-pub struct SandboxHeadlessPlugin {
+pub struct LunCoSimHeadlessPlugin {
     /// Host execution policy. Max-speed mode uses an explicit fixed duration
     /// and a zero-wait runner; realtime mode remains wall-clock paced.
     pub execution_mode: lunco_core::SimulationExecutionMode,
 }
 
-impl Default for SandboxHeadlessPlugin {
+impl Default for LunCoSimHeadlessPlugin {
     fn default() -> Self {
         Self {
             execution_mode: lunco_core::SimulationExecutionMode::Realtime,
@@ -5054,7 +3087,7 @@ impl Default for SandboxHeadlessPlugin {
     }
 }
 
-impl Plugin for SandboxHeadlessPlugin {
+impl Plugin for LunCoSimHeadlessPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(self.execution_mode);
         // A scenario's presentation intents remain valid in a headless run, but
@@ -5116,7 +3149,7 @@ impl Plugin for SandboxHeadlessPlugin {
 
 /// Resource that holds the optional asset-source-relative path of the scene to
 /// load on Startup. `None` means an intentionally empty world shell. It is
-/// initialised from the `--scene` CLI arg by [`SandboxCorePlugin`].
+/// initialised from the `--scene` CLI arg by [`LunCoSimCorePlugin`].
 #[derive(Resource)]
 pub struct ScenePath(pub Option<String>);
 
@@ -5126,7 +3159,7 @@ pub struct ScenePath(pub Option<String>);
 // Grid internally; it is not a rigid body / GridAnchor, so that hazard doesn't
 // apply. Locally allowed.
 #[allow(clippy::disallowed_methods)]
-fn setup_sandbox(world: &mut World) {
+fn setup_luncosim(world: &mut World) {
     // The persistent world shell (BigSpace root + `WorldGrid` + the single
     // `FloatingOrigin`) is owned by `WorldShellPlugin`. `ensure_world_root` is a
     // defensive create-or-get so the shell exists before any scene loads.
@@ -5176,7 +3209,7 @@ fn load_startup_scene_on_boot(world: &mut World) {
 /// and mounts the selected scene through the normal doc-first path. Invalid or
 /// orphaned roots report an error and do not load a base-only scene. Web skips
 /// this — its autoload hook loads the deployment twin directly (see
-/// [`setup_sandbox`]).
+/// [`setup_luncosim`]).
 #[cfg(not(target_arch = "wasm32"))]
 fn load_startup_scene(world: &mut World, scene_path: String) {
     // Resolve the absolute path to find the enclosing Twin folder. This is

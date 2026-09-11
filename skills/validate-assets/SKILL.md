@@ -16,7 +16,7 @@ engine accept it?** — without a scene, a cosim, a GPU, or a window. It is the
 cheapest possible check and it is safe to run against a live luncosim
 **mid-simulation**: it only reads files.
 
-Implementation: [`crates/lunco-scene-commands/src/validate.rs`](../../crates/lunco-scene-commands/src/validate.rs).
+Implementation: [`crates/lunco-scene-validation/src/validate.rs`](../../crates/lunco-scene-validation/src/validate.rs).
 Related: [`author-usd-component`](../author-usd-component/SKILL.md) (author the
 file), [`use-asset-library`](../use-asset-library/SKILL.md) (get it discovered),
 [`build-vehicle`](../build-vehicle/SKILL.md) (wheels), [`test-via-api`](../test-via-api/SKILL.md)
@@ -108,6 +108,15 @@ query("LintReport");
 `RunLint` and `ValidateTwin` share the same Rust namespace facts and Rhai
 policy; the former uses the active Workspace Twin, while the latter is
 independent of ECS state and is suitable for CI.
+
+For a composed document, `ValidateAsset` is still the file-level gate. Use the
+live Rhai `model_authoring` facades for the next question: whether the exact
+assembly is understandable and ready to use. Call `model_context` first, then
+`readiness_report` with the Twin's explicit policy; use `port_graph`/
+`wiring_plan` for cross-domain endpoints and `publish_component` before an
+explicit Save-As. These facades validate composed document identity and
+generation and return dry plans; they do not replace `ValidateAsset`, mutate
+the stage, or silently save. See the [model-authoring guide](../../docs/scripting-guide.md#model-and-assembly-authoring-human-and-ai).
 
 ## What each extension actually checks
 

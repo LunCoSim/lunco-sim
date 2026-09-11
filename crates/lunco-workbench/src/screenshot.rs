@@ -919,7 +919,7 @@ pub fn output_is_video(path: &std::path::Path) -> bool {
 
 /// When present, offline recording captures THIS image each frame instead of
 /// the primary window — the offscreen (`--offscreen`) mode's render target.
-/// Inserted by the binary that owns the mode (`SandboxOffscreenPlugin`); the
+/// Inserted by the binary that owns the mode (`LunCoSimOffscreenPlugin`); the
 /// recorder itself stays target-agnostic.
 #[derive(Resource)]
 pub struct OfflineCaptureTarget(pub Handle<bevy::image::Image>);
@@ -1338,7 +1338,7 @@ struct PendingShotStart {
 /// on the whole bus would therefore stall every shot on unrelated work, adding
 /// minutes to an episode and hiding the actual visual blocker.
 ///
-/// These entries are published by `lunco-luncosim`, which mirrors state this crate
+/// These entries are published by `lunco-luncosim-ui`, which mirrors state this crate
 /// cannot name onto the bus: terrain by `report_terrain_stream_status` (from
 /// `lunco_terrain_surface::TerrainStreamStatus`) and scene by
 /// `report_scene_spawn_status` (from `lunco_usd_sim::cosim::SceneLoadInFlight` +

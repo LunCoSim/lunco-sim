@@ -10,9 +10,11 @@ license.workspace = true
 # This crate states appearance + camera INTENT (`lunco_render::{PbrLook,
 # SceneCamera}`, `lunco_materials::ShaderLook`); `lunco-render-bevy` binds it.
 # NO `mesh_picking` — see `lunco-usd-bevy`. This crate does no hit-testing.
-bevy = { workspace = true, features = ["bevy_gltf", "bevy_world_serialization", "bevy_mesh", "bevy_light"] }
+bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh", "bevy_light"] }
 openusd = { workspace = true }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
+lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-avian = { path = "../lunco-usd-avian" }
 # `ShaderLook` + `ParamValue` (the open, WGSL-reflected parameter set).
 # `lunco-materials` is render-free: `shader_material.rs` (the `AsBindGroup` that
@@ -52,8 +54,6 @@ lunco-scripting = { path = "../lunco-scripting" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-api = { path = "../lunco-api", default-features = false }
 lunco-assets = { workspace = true }
-rumoca-core = { workspace = true }
-rumoca-ir-ast = { workspace = true }
 avian3d = { workspace = true }
 big_space = { workspace = true }
 leafwing-input-manager = { workspace = true }

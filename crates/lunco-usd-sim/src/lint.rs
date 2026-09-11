@@ -7,7 +7,7 @@
 //! `assets/scripting/policy/lint_usd.rhai`.
 
 use lunco_hooks::HookValue as H;
-use lunco_usd_bevy::{StageView, UsdRead};
+use lunco_usd_bevy_core::{StageView, UsdRead};
 use openusd::sdf::Path as SdfPath;
 
 use crate::{
@@ -204,7 +204,8 @@ fn gear_drive_facts(reader: &StageView<'_>) -> Vec<H> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lunco_usd_bevy::{CanonicalStage, StageRecipe};
+    use lunco_usd_bevy_core::canonical::CanonicalStage;
+    use lunco_usd_core::StageRecipe;
 
     #[test]
     fn network_facts_use_the_runtime_role_classifier() {

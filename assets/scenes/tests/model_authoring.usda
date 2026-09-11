@@ -1,0 +1,68 @@
+#usda 1.0
+(
+    defaultPrim = "ModelAuthoring"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+def Xform "ModelAuthoring" (
+    kind = "component"
+)
+{
+    def DistantLight "TestLight"
+    {
+        float intensity = 1.0
+    }
+
+    def Xform "Chassis" (
+        kind = "component"
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        float physics:mass = 10
+        point3f physics:centerOfMass = (0, 0, 0)
+        float3 physics:diagonalInertia = (1, 1, 1)
+        double3 xformOp:translate = (0, 0.2, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float inputs:throttle = 0
+
+        def Cube "Body" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 1
+            double3 xformOp:scale = (2, 0.4, 1)
+            uniform token[] xformOpOrder = ["xformOp:scale"]
+            bool physics:collisionEnabled = true
+        }
+    }
+
+    def Xform "Controller"
+    {
+        uniform token info:implementationSource = "sourceCode"
+        uniform string info:sourceCode = "return ();"
+        float outputs:throttle = 0
+    }
+
+    def Xform "MotorModel"
+    {
+        uniform asset info:sourceAsset = @lunco://models/test/motor.mo@
+        float connectors:torque = 0
+    }
+
+    def Xform "DriveInput"
+    {
+        float inputs:throttle.connect = </ModelAuthoring/Controller.outputs:throttle>
+    }
+
+    def Scope "Scenario"
+    {
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            asset info:sourceAsset = @lunco://scenarios/tests/model_authoring.rhai@
+        }
+    }
+}

@@ -15,7 +15,7 @@ description = "Procedural crater + rock field generation for rover testing in Lu
 # floating-origin dependency. DO NOT add `bevy_pbr`, `avian3d` or `big_space`
 # back — if you need an appearance here you want a `lunco_render` intent
 # component on the consumer instead. See docs/architecture/render-decoupling.md.
-bevy = { workspace = true, features = ["bevy_mesh", "bevy_camera", "bevy_world_serialization", "bevy_light"] }
+bevy = { workspace = true, features = ["bevy_mesh"] }
 bevy_mesh = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 # `HeightGrid` implements the shared `HeightSource` trait (the impl lives with the

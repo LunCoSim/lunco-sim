@@ -14,6 +14,7 @@
 use bevy::prelude::*;
 use lunco_render::{PbrLook, SurfaceAlpha};
 use lunco_usd_bevy::*;
+use lunco_usd_core::StageRecipe;
 
 #[test]
 fn test_usd_material_binding_parsing() {

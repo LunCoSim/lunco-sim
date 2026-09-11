@@ -6,14 +6,14 @@
 //! handles come from [`lunco_doc::DocumentId::fresh`], shared across domains.
 //!
 //! USD's own half of the contract is [`lunco_doc::FileBacked`] on
-//! [`UsdDocument`](crate::document::UsdDocument) (`crate::document`) — how to
+//! [`UsdDocument`](lunco_usd_core::document::UsdDocument) (`lunco-usd-core`) — how to
 //! build, whether it's dirty, how to re-read it.
 
 #[cfg(test)]
 mod tests {
-    use crate::document::{LayerId, UsdDocument, UsdOp};
     use lunco_doc::{Document, OpenOutcome};
     use lunco_doc_bevy::DocumentRegistry;
+    use lunco_usd_core::document::{LayerId, UsdDocument, UsdOp};
 
     const TINY_USDA: &str = "#usda 1.0\ndef Xform \"World\" {}\n";
 

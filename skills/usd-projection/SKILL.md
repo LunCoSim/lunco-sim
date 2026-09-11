@@ -52,9 +52,9 @@ default-time `UsdRead` surface into `UsdStageProjectionPlan` on its worker. The
 `UsdVisualProjectionQueued` marker. `process_queued_usd_visuals` drains that
 queue with its configured per-frame budget, but the extractor reads only the
 owned plan during initial materialisation; it does not parse USD, walk a live
-stage, or resolve composed bindings on the UI thread. CPU geometry uses the
-existing async compute path and only Bevy asset insertion remains on the main
-thread. After the initial asset generation, explicit live edits use the
+stage, or resolve composed bindings on the UI thread. CPU mesh-data geometry
+uses the render-free `lunco-usd-geometry` package, while its existing async
+compute path and only Bevy asset insertion remain on the main thread. After the initial asset generation, explicit live edits use the
 canonical `StageView` and the same extractor contract.
 
 Doc-backed Twin admission is also asset-event driven. `UsdSourceText` is loaded
@@ -265,8 +265,8 @@ said.
 - `inputs:*` is the **UsdShade** namespace: it lives on a `Shader` prim, reached
   by `material:binding` → `outputs:surface`. A `float inputs:metallic` on a
   Sphere is not valid USD, and no DCC will read it back. Use
-  `lunco_usd::material::ensure_preview_surface_ops()` — it builds the
-  Material+Shader+binding for you, and it is deliberately in `lunco-usd` so
+  `lunco_usd_core::material::ensure_preview_surface_ops()` — it builds the
+  Material+Shader+binding for you, and it is deliberately in `lunco-usd-core` so
   every crate authors materials the same way.
 - `primvars:displayColor` / `displayOpacity` are the *only* Gprim display
   attributes. There is no "display emissive" — **emission requires a material**.
