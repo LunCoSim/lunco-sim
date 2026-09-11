@@ -50,6 +50,7 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use lunco_core::coords::world_pose;
@@ -200,6 +201,48 @@ impl LinkOccluder {
 #[reflect(Component)]
 pub struct LinkState {
     pub peers: Vec<LinkPeer>,
+}
+
+/// Authored link classes indexed once from the live [`LinkNode`] topology.
+///
+/// Port inspection asks every link entity which peer classes it can address.
+/// Keeping the global class set here makes that query proportional to the
+/// number of classes instead of rescanning every ECS entity for every link
+/// entity. The catalog is rebuilt only when a [`LinkNode`] is added, removed,
+/// or changed.
+#[derive(Resource, Debug, Default)]
+pub struct LinkClassCatalog {
+    counts: HashMap<String, usize>,
+    revision: u64,
+    initialized: bool,
+}
+
+/// Refresh the authored class index at the start of the frame so the link port
+/// backend can answer class discovery without an entity-by-entity world scan.
+pub(crate) fn refresh_link_class_catalog(
+    mut catalog: ResMut<LinkClassCatalog>,
+    nodes: Query<&LinkNode>,
+    changed: Query<(), Or<(Added<LinkNode>, Changed<LinkNode>)>>,
+    mut removed: RemovedComponents<LinkNode>,
+) {
+    let topology_changed =
+        !catalog.initialized || changed.iter().next().is_some() || removed.read().count() > 0;
+    if !topology_changed {
+        return;
+    }
+
+    let mut counts = HashMap::new();
+    for node in &nodes {
+        let Some(class) = node.class.as_deref().filter(|class| !class.is_empty()) else {
+            continue;
+        };
+        *counts.entry(sanitize_class(class)).or_default() += 1;
+    }
+    if counts != catalog.counts {
+        catalog.counts = counts;
+        catalog.revision = catalog.revision.wrapping_add(1);
+    }
+    catalog.initialized = true;
 }
 
 /// The pairwise geometry observation published independently of the authored
@@ -937,25 +980,46 @@ fn class_ports(p: &LinkPeer) -> impl Iterator<Item = (&'static str, f64)> + '_ {
 }
 
 /// Classes that can be addressed from this endpoint before the first geometry
-/// sweep has published `LinkState`.  A USD connection names the peer class, so
+/// sweep has published `LinkState`. A USD connection names the peer class, so
 /// the port identity is already known from the authored `LinkNode`s; the first
-/// sweep only supplies its value.  Keeping declaration and sample availability
+/// sweep only supplies its value. Keeping declaration and sample availability
 /// separate prevents a valid first-load wire from being sealed as dangling.
 fn authored_peer_classes(world: &World, entity: Entity) -> HashSet<String> {
-    let mut classes = HashSet::new();
-    for candidate in world.iter_entities() {
-        if candidate.id() == entity {
-            continue;
+    let Some(catalog) = world.get_resource::<LinkClassCatalog>() else {
+        return HashSet::new();
+    };
+    let own_class = world
+        .get::<LinkNode>(entity)
+        .and_then(|node| node.class.as_deref())
+        .filter(|class| !class.is_empty())
+        .map(sanitize_class);
+    catalog
+        .counts
+        .iter()
+        .filter(|(class, count)| own_class.as_deref() != Some(class.as_str()) || **count > 1)
+        .map(|(class, _)| class.clone())
+        .collect()
+}
+
+/// Return the identity key for the link backend without sampling geometry.
+/// Authored class topology is represented by the catalog revision; live state
+/// contributes only class and optional-field identity, never range or verdict.
+fn link_topology_key(world: &World, entity: Entity) -> u64 {
+    let mut key = world
+        .get_resource::<LinkClassCatalog>()
+        .map(|catalog| catalog.revision)
+        .unwrap_or(0);
+    if let Some(state) = world.get::<LinkState>(entity) {
+        let mut state_key = 0xcbf29ce484222325u64;
+        for (class, peer) in best_per_class(state) {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            sanitize_class(&class).hash(&mut hasher);
+            peer.elevation_deg.is_some().hash(&mut hasher);
+            state_key = state_key.wrapping_add(hasher.finish().rotate_left(19));
         }
-        if let Some(class) = candidate
-            .get::<LinkNode>()
-            .and_then(|node| node.class.as_deref())
-            .filter(|class| !class.is_empty())
-        {
-            classes.insert(sanitize_class(class));
-        }
+        key ^= state_key.rotate_left(29);
     }
-    classes
+    key
 }
 
 /// Link state as first-class **ports**, read on demand.
@@ -981,6 +1045,15 @@ fn authored_peer_classes(world: &World, entity: Entity) -> HashSet<String> {
 /// per-class reduction (connected beats nearer, then nearest) is unchanged — it is
 /// what lets a scalar Modelica port see an N-peer graph.
 pub const LINK_PORT_BACKEND: lunco_core::ports::PortBackend = lunco_core::ports::PortBackend {
+    list_entities: |world, out| {
+        out.extend(world.query_filtered::<Entity, With<LinkNode>>().iter(world));
+        out.extend(
+            world
+                .query_filtered::<Entity, With<LinkState>>()
+                .iter(world),
+        );
+    },
+    topology_key: link_topology_key,
     list: |world, entity, out| {
         let state = world.get::<LinkState>(entity);
         let live = state.map(best_per_class);
@@ -1154,6 +1227,13 @@ mod tests {
     #[test]
     fn class_ports_are_declared_before_the_first_geometry_sample() {
         let mut world = World::new();
+        world.insert_resource(LinkClassCatalog {
+            counts: [("rover".into(), 1), ("base".into(), 1)]
+                .into_iter()
+                .collect(),
+            revision: 1,
+            initialized: true,
+        });
         let rover = world
             .spawn(LinkNode {
                 class: Some("rover".into()),
@@ -1171,6 +1251,60 @@ mod tests {
         assert!(listed.iter().any(|port| port.name == "link_base_range_m"));
         assert!(listed.iter().any(|port| port.name == "link_base_connected"));
         assert_eq!(port(&world, rover, "link_base_range_m"), None);
+    }
+
+    #[test]
+    fn class_catalog_tracks_link_node_topology() {
+        let mut app = App::new();
+        app.init_resource::<LinkClassCatalog>();
+        app.add_systems(Update, refresh_link_class_catalog);
+
+        let rover = app
+            .world_mut()
+            .spawn(LinkNode {
+                class: Some("rover".into()),
+                ..default()
+            })
+            .id();
+        let base = app
+            .world_mut()
+            .spawn(LinkNode {
+                class: Some("base".into()),
+                ..default()
+            })
+            .id();
+        app.update();
+
+        let catalog = app.world().resource::<LinkClassCatalog>();
+        assert_eq!(catalog.counts.get("rover"), Some(&1));
+        assert_eq!(catalog.counts.get("base"), Some(&1));
+        let revision = catalog.revision;
+
+        app.world_mut()
+            .get_mut::<LinkNode>(base)
+            .unwrap()
+            .max_range_m += 1.0;
+        app.update();
+        assert_eq!(
+            app.world().resource::<LinkClassCatalog>().revision,
+            revision
+        );
+
+        app.world_mut().get_mut::<LinkNode>(base).unwrap().class = Some("rover".into());
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<LinkClassCatalog>()
+                .counts
+                .get("rover"),
+            Some(&2)
+        );
+
+        app.world_mut().despawn(rover);
+        app.update();
+        let catalog = app.world().resource::<LinkClassCatalog>();
+        assert_eq!(catalog.counts.get("rover"), Some(&1));
+        assert!(!catalog.counts.contains_key("base"));
     }
 
     /// A peer whose node authored no class has no port name, and must not be

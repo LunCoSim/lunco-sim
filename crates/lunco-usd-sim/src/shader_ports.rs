@@ -86,7 +86,9 @@
 //! `inputs:loadFrac` and `inputs:load_frac` both reach `load_frac`.
 
 use bevy::prelude::*;
-use lunco_core::ports::{PortBackend, PortDirection, PortMetadata, PortRef, PortRegistry};
+use lunco_core::ports::{
+    port_name_set_key, PortBackend, PortDirection, PortMetadata, PortRef, PortRegistry,
+};
 use lunco_materials::dyn_params::ParamValue;
 use lunco_materials::look::ShaderLook;
 use lunco_materials::naming::to_snake_case;
@@ -132,6 +134,20 @@ fn read_value(world: &World, entity: Entity, name: &str) -> Option<f32> {
 /// outputs) is what keeps `read_output_port` from resolving a material parameter as
 /// a connection SOURCE and silently forming a feedback wire.
 pub const SHADER_PARAM_BACKEND: PortBackend = PortBackend {
+    list_entities: |world, out| {
+        out.extend(
+            world
+                .query_filtered::<Entity, With<ShaderLook>>()
+                .iter(world),
+        );
+    },
+    topology_key: |world, entity| {
+        let Some(look) = world.get::<ShaderLook>(entity) else {
+            return 0;
+        };
+        port_name_set_key(look.driven.iter())
+            ^ port_name_set_key(look.values.keys()).rotate_left(23)
+    },
     list: |world, entity, out| {
         let Some(look) = world.get::<ShaderLook>(entity) else {
             return;

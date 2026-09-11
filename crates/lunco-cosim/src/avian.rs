@@ -498,6 +498,9 @@ pub fn contact_from_world(world: &World, entity: Entity) -> (bool, f64) {
 /// system, matching every other port in this module.
 pub const COLLIDER_CONTACT_GROUP: AvianGroup = AvianGroup {
     present: |w, e| w.get::<Collider>(e).is_some(),
+    entities: |world, out| {
+        out.extend(world.query_filtered::<Entity, With<Collider>>().iter(world));
+    },
     ports: &[
         AvianPort {
             name: "contact",
@@ -534,6 +537,13 @@ pub const COLLIDER_CONTACT_GROUP: AvianGroup = AvianGroup {
 /// direction are structural facts read from the USD prim.
 pub const FORCE_ACTUATOR_GROUP: AvianGroup = AvianGroup {
     present: |w, e| w.get::<ForceActuator>(e).is_some(),
+    entities: |world, out| {
+        out.extend(
+            world
+                .query_filtered::<Entity, With<ForceActuator>>()
+                .iter(world),
+        );
+    },
     ports: &[AvianPort {
         name: "force_command",
         dir: PortDirection::In,
@@ -546,6 +556,13 @@ pub const FORCE_ACTUATOR_GROUP: AvianGroup = AvianGroup {
 /// limit are structural facts read from the USD prim.
 pub const TORQUE_ACTUATOR_GROUP: AvianGroup = AvianGroup {
     present: |w, e| w.get::<TorqueActuator>(e).is_some(),
+    entities: |world, out| {
+        out.extend(
+            world
+                .query_filtered::<Entity, With<TorqueActuator>>()
+                .iter(world),
+        );
+    },
     ports: &[AvianPort {
         name: "torque_command",
         dir: PortDirection::In,
@@ -561,6 +578,13 @@ pub const TORQUE_ACTUATOR_GROUP: AvianGroup = AvianGroup {
 /// bodies only — absent on a kinematic body, so those ports simply don't list).
 pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
     present: |w, e| w.get::<RigidBody>(e).is_some(),
+    entities: |world, out| {
+        out.extend(
+            world
+                .query_filtered::<Entity, With<RigidBody>>()
+                .iter(world),
+        );
+    },
     ports: &[
         AvianPort {
             name: "position_x",
@@ -877,6 +901,16 @@ pub const KINEMATIC_POSITION_GROUP: AvianGroup = AvianGroup {
     present: |w, e| {
         w.get::<lunco_core::Mobility>(e)
             .is_some_and(|mobility| *mobility == lunco_core::Mobility::Kinematic)
+    },
+    entities: |world, out| {
+        out.extend(
+            world
+                .query::<(Entity, &lunco_core::Mobility)>()
+                .iter(world)
+                .filter_map(|(entity, mobility)| {
+                    (*mobility == lunco_core::Mobility::Kinematic).then_some(entity)
+                }),
+        );
     },
     ports: &[
         AvianPort {

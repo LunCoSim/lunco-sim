@@ -515,6 +515,18 @@ pub(crate) fn publish_workbench_snapshot(
             _ => None,
         }
     });
+    let visible_panels = layout
+        .dock
+        .iter_all_nodes()
+        .filter_map(|(_, node)| match node {
+            egui_dock::Node::Leaf(leaf) => leaf.tabs.get(leaf.active.0),
+            _ => None,
+        })
+        .map(|tab| match tab {
+            TabId::Singleton(id) => *id,
+            TabId::Instance { kind, .. } => *kind,
+        })
+        .collect();
     let registered_perspectives = layout
         .perspectives
         .iter()
@@ -534,6 +546,7 @@ pub(crate) fn publish_workbench_snapshot(
         layout.active_perspective,
         focused_tab,
         tabs,
+        visible_panels,
         registered_perspectives,
         docked_panels,
     );

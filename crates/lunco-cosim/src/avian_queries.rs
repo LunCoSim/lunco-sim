@@ -64,6 +64,13 @@ impl Default for RaycastObservation {
 /// ports and supplies the semantic names used by a mission model.
 pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
     present: |world, entity| world.get::<RaycastObservation>(entity).is_some(),
+    entities: |world, out| {
+        out.extend(
+            world
+                .query_filtered::<Entity, With<RaycastObservation>>()
+                .iter(world),
+        );
+    },
     ports: &[
         AvianPort {
             name: "ray_distance",

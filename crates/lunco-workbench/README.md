@@ -46,7 +46,7 @@ publishes `WorkbenchSnapshot` for consumers that need current layout facts.
 |------|------|
 | `lunco_workbench_core::Panel` / `PanelCtx` | Contract every dockable UI implements |
 | `lunco_workbench_core::PanelId` / `PanelSlot` | Stable panel identity and semantic dock region |
-| `WorkbenchSnapshot` | Published shell-independent view of active perspective, tabs, and docked panels |
+| `WorkbenchSnapshot` | Published shell-independent view of active perspective, tabs, docked panels, and each dock leaf's active visible tab |
 | `WorkbenchLayout` | Private shell resource tracking the concrete `egui_dock` tree |
 | [`WorkbenchPlugin`] | Installs the frame renderer + WorkspacePlugin into a Bevy app |
 | [`WorkbenchAppExt::register_panel`] | Ergonomic `app.register_panel(MyPanel)` extension |
