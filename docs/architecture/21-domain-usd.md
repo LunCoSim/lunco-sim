@@ -8,7 +8,7 @@
 > [`../../crates/lunco-usd-core/`](../../crates/lunco-usd-core/), [`../../crates/lunco-usd/`](../../crates/lunco-usd/) and companion crates
 > `lunco-usd-geometry`, `lunco-usd-avian`, `lunco-usd-bevy-core`,
 > `lunco-usd-bevy-scene`, `lunco-usd-bevy-camera`, `lunco-usd-bevy` and
-> `lunco-usd-bevy-lathe`, `lunco-usd-sim`.
+> `lunco-usd-bevy-lathe`, `lunco-usd-sim`, `lunco-usd-sim-domain`.
 
 Package ownership follows the same boundary: `lunco-usd-core` contains the
 headless document/authoring surface, schemas, and pure probes; `lunco-usd`
@@ -21,9 +21,10 @@ projection intent, camera paths, mounts, selection, and viewport reconciliation;
 `lunco-usd-bevy-lathe` owns the independent parametric NURBS/lathe mesh
 projection; `lunco-usd-bevy` owns the remaining visual projection and consumes
 the lathe package directly; and
-`lunco-usd-sim` owns USD-to-Avian/simulation examples and integration tests. This
-keeps runtime and simulation dependencies out of the authoring crate without
-introducing a test-only package.
+`lunco-usd-sim-domain` owns composed component-network and generic actuator
+projection, while `lunco-usd-sim` owns vehicle projection and cosimulation
+orchestration. This keeps the Modelica-domain source and tests out of the
+vehicle orchestration rebuild boundary without introducing a test-only package.
 
 ## Scope
 
@@ -701,6 +702,7 @@ as runtime. Ownership follows the narrowest production boundary:
 - `crates/lunco-usd-bevy-scene/src/{lib,geometry}.rs` — render-free ECS scene identity, lifecycle, ancestry, and shared USD geometry readers
 - `crates/lunco-usd-bevy-camera/src/{camera,camera_mount,camera_path,camera_switch,camera_track}.rs` — render-free camera projection, pose, path, selection, and track mechanisms
 - `crates/lunco-usd/tests/live_spawn_projection.rs` — document-backed USD authoring and raw asset composition facts
+- `crates/lunco-usd-sim-domain/src/lib.rs` — low-level component-network projection, synthesis, and actuator lowering mechanisms
 - `crates/lunco-usd-sim/tests/usd_connection_mechanics.rs` — generic connection derivation and transform mechanics
 - `assets/scenarios/tests/*.rhai` through the production `luncosim test` gate — composed USD → Bevy → Avian → simulation outcomes, including rover structure, wheel realization, wiring, EPS, and link visibility
 

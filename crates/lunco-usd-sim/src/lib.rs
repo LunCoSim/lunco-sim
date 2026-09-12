@@ -72,9 +72,7 @@ use lunco_controller::InputBindingsSettings;
 use lunco_core::architecture::{IntentAnalogState, Port, PortSurface};
 use lunco_core::coords::{GridPos, GridRot, VehicleFrame};
 use lunco_core::{Avatar, LocalAvatar};
-use lunco_cosim::{
-    avian_queries::RaycastObservation, ForceActuator, JointTorqueActuator, TorqueActuator,
-};
+use lunco_cosim::{avian_queries::RaycastObservation, JointTorqueActuator};
 use lunco_materials::ShaderLook;
 use lunco_mobility::wheel_kinematics::{body_point_velocity, wheel_hub_pose, wheel_roll_rate};
 use lunco_mobility::{
@@ -117,154 +115,6 @@ use wheel_params::{SuspensionParams, WheelParams};
 /// No custom `lunco:` tokens drive this dispatch.
 
 pub struct UsdSimPlugin;
-
-const FORCE_ACTUATOR_API: &str = "LunCoForceActuatorAPI";
-const FORCE_DIRECTION_ATTR: &str = "lunco:forceActuator:direction";
-const FORCE_MAX_ATTR: &str = "lunco:forceActuator:maxForce";
-const TORQUE_ACTUATOR_API: &str = "LunCoTorqueActuatorAPI";
-const TORQUE_AXIS_ATTR: &str = "lunco:torqueActuator:axis";
-const TORQUE_MAX_ATTR: &str = "lunco:torqueActuator:maxTorque";
-
-/// Find the USD rigid-body frame that owns a physical actuator. Ownership is
-/// structural: the actuator is a prim under the body, just like a collider or
-/// a joint endpoint. No vessel name or subsystem slot is embedded in Rust.
-fn actuator_body_path(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
-    actuator_path: &SdfPath,
-) -> Option<SdfPath> {
-    let mut current = actuator_path.parent();
-    while let Some(path) = current {
-        if path.is_abs_root() {
-            return None;
-        }
-        if reader.has_api_schema(&path, "PhysicsRigidBodyAPI") {
-            return Some(path);
-        }
-        current = path.parent();
-    }
-    None
-}
-
-/// Read a force actuator's generic description. Position comes from the
-/// composed prim transform; direction and force capacity are authored
-/// properties on the same prim. The direction is authored in the actuator
-/// prim's local frame (the USD schema contract) and is converted once into the
-/// owning body's frame before it enters the generic Avian actuator component.
-pub(crate) fn force_actuator_from_usd(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
-    actuator_path: &SdfPath,
-) -> Option<ForceActuator> {
-    if !reader.has_api_schema(actuator_path, FORCE_ACTUATOR_API) {
-        return None;
-    }
-    let Some(body_path) = actuator_body_path(reader, actuator_path) else {
-        warn!(
-            "[usd-cosim] force actuator {} has no PhysicsRigidBodyAPI ancestor; actuator ignored",
-            actuator_path
-        );
-        return None;
-    };
-    let Some(relative) =
-        lunco_usd_avian::transform_in_body_frame(reader, &body_path, actuator_path)
-    else {
-        warn!(
-            "[usd-cosim] force actuator {} could not derive its body-frame transform",
-            actuator_path
-        );
-        return None;
-    };
-    let direction = reader
-        .attr_value(actuator_path, FORCE_DIRECTION_ATTR)
-        .and_then(|value| {
-            value.clone().get::<[f32; 3]>().or_else(|| {
-                value
-                    .get::<[f64; 3]>()
-                    .map(|v| [v[0] as f32, v[1] as f32, v[2] as f32])
-            })
-        })
-        .map(Vec3::from_array)
-        .filter(|v| v.is_finite() && v.length_squared() > f32::EPSILON);
-    let Some(direction_in_prim_frame) = direction else {
-        warn!(
-            "[usd-cosim] force actuator {} has no finite non-zero {}",
-            actuator_path, FORCE_DIRECTION_ATTR
-        );
-        return None;
-    };
-    let direction_local = relative.rotation * direction_in_prim_frame;
-    if !direction_local.is_finite() || direction_local.length_squared() <= f32::EPSILON {
-        warn!(
-            "[usd-cosim] force actuator {} produced an invalid body-frame direction",
-            actuator_path
-        );
-        return None;
-    }
-    let Some(max_force_n) = reader
-        .real(actuator_path, FORCE_MAX_ATTR)
-        .filter(|v| v.is_finite() && *v > 0.0)
-    else {
-        warn!(
-            "[usd-cosim] force actuator {} has no positive {}",
-            actuator_path, FORCE_MAX_ATTR
-        );
-        return None;
-    };
-    Some(ForceActuator {
-        local_position: relative.translation,
-        direction_local,
-        max_force_n,
-    })
-}
-
-/// Read a torque actuator's generic description. Reaction wheels and control
-/// moment gyros use the same scalar torque command and axis contract.
-pub(crate) fn torque_actuator_from_usd(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
-    actuator_path: &SdfPath,
-) -> Option<TorqueActuator> {
-    if !reader.has_api_schema(actuator_path, TORQUE_ACTUATOR_API) {
-        return None;
-    }
-    if actuator_body_path(reader, actuator_path).is_none() {
-        warn!(
-            "[usd-cosim] torque actuator {} has no PhysicsRigidBodyAPI ancestor; actuator ignored",
-            actuator_path
-        );
-        return None;
-    }
-    let axis = reader
-        .attr_value(actuator_path, TORQUE_AXIS_ATTR)
-        .and_then(|value| {
-            value.clone().get::<[f32; 3]>().or_else(|| {
-                value
-                    .get::<[f64; 3]>()
-                    .map(|v| [v[0] as f32, v[1] as f32, v[2] as f32])
-            })
-        })
-        .map(Vec3::from_array)
-        .filter(|v| v.is_finite() && v.length_squared() > f32::EPSILON);
-    let Some(axis_local) = axis else {
-        warn!(
-            "[usd-cosim] torque actuator {} has no finite non-zero {}",
-            actuator_path, TORQUE_AXIS_ATTR
-        );
-        return None;
-    };
-    let Some(max_torque_nm) = reader
-        .real(actuator_path, TORQUE_MAX_ATTR)
-        .filter(|v| v.is_finite() && *v > 0.0)
-    else {
-        warn!(
-            "[usd-cosim] torque actuator {} has no positive {}",
-            actuator_path, TORQUE_MAX_ATTR
-        );
-        return None;
-    };
-    Some(TorqueActuator {
-        axis_local,
-        max_torque_nm,
-    })
-}
 
 /// Ordered phases of the USD-to-simulation projection.
 ///
@@ -611,13 +461,12 @@ impl Plugin for UsdSimPlugin {
 pub mod billboard;
 pub mod cosim;
 pub mod cosim_diagnostics;
-pub mod domain_projection;
 pub mod lint;
 /// USD-authored screen-constant markers (`lunco:marker:*`) — geometry that
 /// subtends a fixed angle so a physically sub-pixel thing still reads on screen.
 pub mod marker;
 pub mod readiness;
-pub use cosim::{CosimStatusProvider, UsdSourcedCosim};
+pub use cosim::CosimStatusProvider;
 
 /// Shader parameters as connection targets — the port backend for what
 /// `lunco-usd-sim-shader` authors.
@@ -1457,10 +1306,10 @@ fn process_usd_sim_prim_read(
     // torque actuator publish ordinary scalar input ports; the cosim backend
     // later resolves those commands to Avian's force/torque writer. RCS names,
     // reaction-wheel names, and controller ownership do not appear here.
-    if let Some(actuator) = force_actuator_from_usd(reader, &sdf_path) {
+    if let Some(actuator) = lunco_usd_sim_domain::force_actuator_from_usd(reader, &sdf_path) {
         commands.entity(entity).try_insert(actuator);
     }
-    if let Some(actuator) = torque_actuator_from_usd(reader, &sdf_path) {
+    if let Some(actuator) = lunco_usd_sim_domain::torque_actuator_from_usd(reader, &sdf_path) {
         commands.entity(entity).try_insert(actuator);
     }
     // Screen-constant marker, keyed on the size that IS the request: a prim

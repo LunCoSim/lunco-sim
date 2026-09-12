@@ -128,6 +128,7 @@ lunco-usd-core = { path = "../lunco-usd-core" }
 # `lunco-usd` already pulls this crate in, so naming it here only makes the type
 # reachable from this one.
 lunco-usd-sim = { path = "../lunco-usd-sim" }
+lunco-usd-sim-domain = { path = "../lunco-usd-sim-domain" }
 # USD→terrain projection: authored terrain prims → DEM request + layer stack, and
 # hand edits back onto the document's runtime layer. Render-free, so the headless
 # server gets its terrain collider without linking any UI.

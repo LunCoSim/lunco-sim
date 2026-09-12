@@ -7397,6 +7397,7 @@ dependencies = [
  "lunco-usd-bevy-scene",
  "lunco-usd-core",
  "lunco-usd-sim",
+ "lunco-usd-sim-domain",
  "lunco-usd-terrain",
  "lunco-web",
  "lunco-workbench",
@@ -7559,6 +7560,7 @@ dependencies = [
  "lunco-usd-bevy-scene",
  "lunco-usd-core",
  "lunco-usd-sim",
+ "lunco-usd-sim-domain",
  "lunco-usd-ui",
  "lunco-workbench",
  "lunco-workbench-core",
@@ -8264,6 +8266,7 @@ dependencies = [
  "lunco-usd-compose",
  "lunco-usd-core",
  "lunco-usd-sim",
+ "lunco-usd-sim-domain",
  "lunco-usd-sim-shader",
  "lunco-workspace",
  "openusd",
@@ -8459,6 +8462,7 @@ dependencies = [
  "lunco-usd-compose",
  "lunco-usd-core",
  "lunco-usd-sim-celestial",
+ "lunco-usd-sim-domain",
  "lunco-usd-sim-shader",
  "lunco-usd-sim-telemetry",
  "openusd",
@@ -8479,6 +8483,32 @@ dependencies = [
  "lunco-usd-bevy-scene",
  "lunco-usd-core",
  "openusd",
+]
+
+[[package]]
+name = "lunco-usd-sim-domain"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "lunco-api",
+ "lunco-assets",
+ "lunco-core",
+ "lunco-cosim",
+ "lunco-doc",
+ "lunco-hash",
+ "lunco-hooks",
+ "lunco-hooks-rhai",
+ "lunco-modelica-ast",
+ "lunco-modelica-core",
+ "lunco-signal",
+ "lunco-usd-avian",
+ "lunco-usd-bevy-core",
+ "lunco-usd-bevy-scene",
+ "lunco-usd-compose",
+ "lunco-usd-core",
+ "openusd",
+ "serde_json",
+ "web-time",
 ]
 
 [[package]]

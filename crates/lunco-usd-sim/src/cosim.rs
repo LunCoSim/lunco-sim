@@ -67,8 +67,11 @@ use lunco_usd_bevy_scene::{
 use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::{BTreeSet, HashMap};
 
-use crate::domain_projection::GeneratedModelicaSource;
 use crate::UsdSimProcessed;
+use lunco_usd_sim_domain::{
+    GeneratedModelicaSource, UsdModelicaPortContract, UsdModelicaSchedule, UsdSourcedCosim,
+    WiringDirty,
+};
 
 #[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum CosimUpdateSet {
@@ -201,12 +204,6 @@ pub const MODEL_DISPATCH_FAILED: &str = "MODEL_DISPATCH_FAILED";
 /// never admitted because the scene configuration itself is not executable.
 pub const MODEL_CONFIGURATION_INVALID: &str = "MODEL_CONFIGURATION_INVALID";
 
-/// Marker indicating a USD-driven cosim entity has been wired up by
-/// `process_usd_cosim_prims`. Prevents the system from re-processing
-/// the same entity on the same tick.
-#[derive(Component, Default)]
-pub struct UsdSourcedCosim;
-
 /// Scene-scoped diagnostics for Python programs that are authored in USD but
 /// cannot run in this binary. The prim itself carries the durable `Error`
 /// status; this resource only collects the paths so startup can report one
@@ -216,44 +213,6 @@ pub struct UsdSourcedCosim;
 pub(crate) struct PythonUnavailablePrograms {
     paths: BTreeSet<String>,
     reported: bool,
-}
-
-/// The scalar interface authored on a USD Modelica program.
-///
-/// USD declares the public causal boundary early so connection propagation can
-/// start while the source asset loads. The Modelica compiler remains the
-/// authority: after a successful compile, this contract is checked against the
-/// DAE-reported inputs and observed outputs before the model may step.
-#[derive(Component, Clone, Debug)]
-pub(crate) struct UsdModelicaPortContract {
-    inputs: BTreeSet<String>,
-    outputs: BTreeSet<String>,
-}
-
-/// The authored co-simulation schedule for a USD Modelica participant.
-///
-/// This is kept separate from the public port contract because the latter is
-/// about names/types while this is master-algorithm timing. It is projected once
-/// from the composed USD prim and carried into `ModelicaModel` when the source
-/// asset becomes executable.
-#[derive(Component, Clone, Copy, Debug)]
-pub(crate) struct UsdModelicaSchedule {
-    pub communication_period_secs: f64,
-}
-
-impl UsdModelicaPortContract {
-    /// The contract a USD-declared boundary makes, whatever declared it — a
-    /// program prim's `inputs:`/`outputs:` attributes, or a projected network's
-    /// wrapper boundary.
-    pub(crate) fn new(
-        inputs: impl IntoIterator<Item = String>,
-        outputs: impl IntoIterator<Item = String>,
-    ) -> Self {
-        Self {
-            inputs: inputs.into_iter().collect(),
-            outputs: outputs.into_iter().collect(),
-        }
-    }
 }
 
 /// A prim's USD-declared co-sim interface — its `inputs:`/`outputs:` scalar
@@ -1192,7 +1151,7 @@ fn process_usd_cosim_prim_read(
     }
 
     // A member of a component collection is compiled INTO its network's
-    // generated model by `domain_projection`. Compiling it here as well would
+    // generated model by `lunco-usd-sim-domain`. Compiling it here as well would
     // create a second, physically independent solver for one authored
     // component, whose outputs then feed the wire fabric.
     //
@@ -2322,14 +2281,6 @@ pub fn fire_connected_events(
 #[derive(Component, Default)]
 pub struct UsdWiredConnection;
 
-/// Set when a drained live edit — a journaled (hence distributed)
-/// `connectionPaths` change on an **already-spawned** prim — requires the wiring
-/// to be re-derived. Endpoint removals use the same flag because Bevy's removed
-/// component tracker is consumed by run conditions and cannot be read twice as
-/// an independent trigger.
-#[derive(Resource, Default)]
-pub struct WiringDirty(pub bool);
-
 /// Queries used by the wiring projection. Keeping them in one system parameter
 /// leaves the projection below the Bevy system-parameter arity limit while
 /// keeping each query's ownership and change-detection semantics explicit.
@@ -2843,7 +2794,7 @@ fn rewire_usd_connections(
             // Same reasoning, one level up — but for `outputs:` ONLY.
             //
             // An `outputs:` connection authored on a domain network root is read
-            // at parse time by `domain_projection` and becomes an equation inside
+            // at parse time by `lunco-usd-sim-domain` and becomes an equation inside
             // the generated model (`soc = <battery>.soc_out;`). Its source prim is
             // a MEMBER of that island with no `SimComponent` of its own, so a
             // root output is consumed by the generated equation rather than a
@@ -2861,7 +2812,7 @@ fn rewire_usd_connections(
             // skipping that would leave the island's demand inputs permanently
             // unwritten and every motor's electrical draw at zero.
             if attr.starts_with("outputs:")
-                && crate::domain_projection::is_runtime_domain_network_root(view, &sink_sdf)
+                && lunco_usd_sim_domain::is_runtime_domain_network_root(view, &sink_sdf)
                 && lunco_usd_bevy_core::program::is_network_boundary_output(view, &sink_sdf, &attr)
             {
                 continue;
@@ -2873,7 +2824,7 @@ fn rewire_usd_connections(
             // the first fixed tick. `Added<ModelicaModel>` above re-runs this pass
             // when the contract arrives.
             if attr.starts_with("inputs:")
-                && crate::domain_projection::is_runtime_domain_network_root(view, &sink_sdf)
+                && lunco_usd_sim_domain::is_runtime_domain_network_root(view, &sink_sdf)
                 && lunco_usd_bevy_core::program::internal_network_input_source(
                     view, &sink_sdf, sink_conn,
                 )
@@ -2882,7 +2833,7 @@ fn rewire_usd_connections(
                 continue;
             }
             if attr.starts_with("inputs:")
-                && crate::domain_projection::is_runtime_domain_network_root(view, &sink_sdf)
+                && lunco_usd_sim_domain::is_runtime_domain_network_root(view, &sink_sdf)
                 && !has_modelica
             {
                 continue;
@@ -5244,10 +5195,10 @@ pub(crate) fn install(app: &mut App) {
         .init_resource::<BindingEpochDirty>()
         .init_resource::<BindingModelStatuses>()
         .init_resource::<PythonUnavailablePrograms>()
-        .init_resource::<crate::domain_projection::MemberClasses>()
-        .init_resource::<crate::domain_projection::ProjectionDirty>()
-        .init_resource::<crate::domain_projection::PendingDomainProjections>()
-        .init_resource::<crate::domain_projection::SynthesizerRegistry>()
+        .init_resource::<lunco_usd_sim_domain::MemberClasses>()
+        .init_resource::<lunco_usd_sim_domain::ProjectionDirty>()
+        .init_resource::<lunco_usd_sim_domain::PendingDomainProjections>()
+        .init_resource::<lunco_usd_sim_domain::SynthesizerRegistry>()
         .init_resource::<UsdTelemetryProjectionIndex>()
         .init_resource::<PendingSceneStageOutcome>()
         .init_resource::<SceneTransitionCoordinator>();
@@ -5260,7 +5211,7 @@ pub(crate) fn install(app: &mut App) {
         .add_observer(request_binding_epoch_on_remove::<lunco_celestial::link::LinkNode>)
         .add_observer(request_binding_epoch::<ModelicaModel>)
         .add_observer(request_binding_epoch_on_remove::<ModelicaModel>)
-        .add_observer(crate::domain_projection::on_remove_generated_source)
+        .add_observer(lunco_usd_sim_domain::on_remove_generated_source)
         .add_observer(request_binding_epoch::<SimComponent>)
         .add_observer(mark_wiring_dirty_on_remove::<SimComponent>)
         .add_observer(mark_wiring_dirty_on_remove::<lunco_core::OutputPorts>)
@@ -5380,7 +5331,7 @@ pub(crate) fn install(app: &mut App) {
             // below instantiates what the file says rather than what its path
             // implies. Before it in the chain: a class landing this frame should
             // project this frame.
-            crate::domain_projection::resolve_member_classes,
+            lunco_usd_sim_domain::resolve_member_classes,
         )
             .chain()
             .in_set(CosimUpdateSet::Scene),
@@ -5393,7 +5344,7 @@ pub(crate) fn install(app: &mut App) {
         Update,
         dispatch_loaded_python_sources
             .after(process_usd_cosim_prims)
-            .before(crate::domain_projection::resolve_member_classes)
+            .before(lunco_usd_sim_domain::resolve_member_classes)
             .in_set(CosimUpdateSet::Scene),
     );
 
@@ -5409,34 +5360,34 @@ pub(crate) fn install(app: &mut App) {
 
     app.add_systems(
         Update,
-        crate::domain_projection::project_domain_islands
-            .run_if(crate::domain_projection::domain_projection_due)
+        lunco_usd_sim_domain::project_domain_islands
+            .run_if(lunco_usd_sim_domain::domain_projection_due)
             .in_set(CosimUpdateSet::Projection),
     );
     app.add_systems(
         Update,
-        crate::domain_projection::poll_domain_projection_tasks
-            .after(crate::domain_projection::project_domain_islands)
+        lunco_usd_sim_domain::poll_domain_projection_tasks
+            .after(lunco_usd_sim_domain::project_domain_islands)
             .in_set(CosimUpdateSet::Projection),
     );
     app.add_systems(
         Update,
         mark_usd_telemetry_projection_index_dirty
-            .after(crate::domain_projection::poll_domain_projection_tasks)
+            .after(lunco_usd_sim_domain::poll_domain_projection_tasks)
             .run_if(telemetry_projection_index_changed)
             .in_set(CosimUpdateSet::Projection),
     );
     app.add_systems(
         Update,
-        crate::domain_projection::sync_generated_network_documents
-            .after(crate::domain_projection::poll_domain_projection_tasks)
+        lunco_usd_sim_domain::sync_generated_network_documents
+            .after(lunco_usd_sim_domain::poll_domain_projection_tasks)
             .in_set(CosimUpdateSet::Projection),
     );
     app.add_systems(
         Update,
-        crate::domain_projection::publish_generated_sources
-            .after(crate::domain_projection::sync_generated_network_documents)
-            .run_if(crate::domain_projection::generated_sources_need_publish)
+        lunco_usd_sim_domain::publish_generated_sources
+            .after(lunco_usd_sim_domain::sync_generated_network_documents)
+            .run_if(lunco_usd_sim_domain::generated_sources_need_publish)
             .in_set(CosimUpdateSet::Projection),
     );
 
@@ -5570,7 +5521,7 @@ pub(crate) fn install(app: &mut App) {
                 reg.register(SceneCameraAuditProvider);
                 // The read path for `generated://…` models — the text a
                 // projected USD network was actually compiled from.
-                reg.register(crate::domain_projection::GeneratedSourceProvider);
+                reg.register(lunco_usd_sim_domain::GeneratedSourceProvider);
             }
         },
     );

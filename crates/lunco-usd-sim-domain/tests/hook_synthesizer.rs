@@ -7,7 +7,7 @@
 //! policy, and policy that needs a rebuild to change is policy in the wrong
 //! place.
 
-use lunco_usd_sim::domain_projection::{
+use lunco_usd_sim_domain::{
     network_facts, read_network, register_hook_synthesizer, MemberClasses, SynthContext,
     SynthOutcome, SynthesizerRegistry, DEFAULT_SYNTHESIZER,
 };

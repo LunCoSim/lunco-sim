@@ -19,6 +19,7 @@ lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-sim-celestial = { path = "../lunco-usd-sim-celestial" }
 lunco-usd-sim-shader = { path = "../lunco-usd-sim-shader" }
 lunco-usd-sim-telemetry = { path = "../lunco-usd-sim-telemetry" }
+lunco-usd-sim-domain = { path = "../lunco-usd-sim-domain" }
 lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-avian = { path = "../lunco-usd-avian" }
 # `ShaderLook` + `ParamValue` (the open, WGSL-reflected parameter set).
@@ -42,9 +43,6 @@ lunco-cosim = { path = "../lunco-cosim" }
 # PhysxPhysicsGearJoint projection. Rules remain authored in
 # assets/scripting/policy/lint_usd.rhai.
 lunco-hooks = { path = "../lunco-hooks" }
-# The workspace hashing substrate — the generated-model fingerprint that decides
-# whether a live edit recompiles (`domain_projection`).
-lunco-hash = { path = "../lunco-hash" }
 # Declares what a loading scene is still waiting on — see `src/readiness.rs`.
 lunco-readiness = { workspace = true }
 lunco-physics = { path = "../lunco-physics" }

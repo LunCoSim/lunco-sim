@@ -352,7 +352,7 @@ pub(crate) fn project_stage_changes(world: &mut World) {
     // publish a backend-neutral `ModelStateRevision`; the owning model adapter
     // decides whether that state needs a rebuild, reset, or only a live update.
     if connection_paths_changed || input_defaults_changed {
-        if let Some(mut dirty) = world.get_resource_mut::<lunco_usd_sim::cosim::WiringDirty>() {
+        if let Some(mut dirty) = world.get_resource_mut::<lunco_usd_sim_domain::WiringDirty>() {
             dirty.0 = true;
         }
     }

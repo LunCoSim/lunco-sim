@@ -130,7 +130,7 @@ fn variable_metadata_from_ast(ast: &StoredDefinition) -> HashMap<String, Modelic
 ///
 /// The ONE way any USD-driven path derives a `ModelicaModel` stub, whether the
 /// source was fetched as an asset (`cosim::dispatch_loaded_modelica_sources`)
-/// or emitted by the network projector (`domain_projection`). Both used to
+/// or emitted by the network projector (`lunco-usd-sim-domain`). Both used to
 /// open-code the same four extracts, and the copies drifted in exactly the
 /// place that matters — which inputs become ports.
 ///

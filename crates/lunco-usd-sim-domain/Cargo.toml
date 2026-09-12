@@ -1,0 +1,33 @@
+[package]
+name = "lunco-usd-sim-domain"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "USD component-network facts and Modelica domain projection"
+
+[dependencies]
+bevy = { workspace = true, features = ["bevy_asset"] }
+openusd = { workspace = true }
+serde_json = { workspace = true }
+web-time = { workspace = true }
+lunco-api = { path = "../lunco-api" }
+lunco-core = { path = "../lunco-core" }
+lunco-cosim = { path = "../lunco-cosim" }
+lunco-doc = { path = "../lunco-doc" }
+lunco-hash = { path = "../lunco-hash" }
+lunco-hooks = { path = "../lunco-hooks" }
+lunco-modelica-ast = { path = "../lunco-modelica-ast" }
+lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
+lunco-usd-avian = { path = "../lunco-usd-avian" }
+lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
+lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
+
+[dev-dependencies]
+lunco-assets = { workspace = true }
+lunco-hooks-rhai = { path = "../lunco-hooks-rhai" }
+lunco-signal = { path = "../lunco-signal" }
+lunco-usd-compose = { path = "../lunco-usd-compose" }
+lunco-usd-core = { path = "../lunco-usd-core" }
+
+[lints]
+workspace = true

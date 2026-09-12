@@ -14,6 +14,10 @@ This approach provides:
 
 ## Key Functions & Features
 
+The component-network/Modelica projection is owned by the render-free
+`lunco-usd-sim-domain` package. This crate remains the orchestration boundary
+for USD participants, wiring, vehicle realization, and scene lifecycle.
+
 ### 1. `UsdSimPlugin`
 The main plugin that observes USD prims and injects simulation-specific behaviors.
 

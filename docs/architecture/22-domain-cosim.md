@@ -11,6 +11,13 @@ This architecture doc summarizes the high-level model. For in-depth
 engineering docs (system ordering, panel registration, convention details),
 see **[`../../crates/lunco-cosim/README.md`](../../crates/lunco-cosim/README.md)**.
 
+The USD-specific boundary is split between
+[`lunco-usd-sim-domain`](../../crates/lunco-usd-sim-domain/) and
+[`lunco-usd-sim`](../../crates/lunco-usd-sim/): the former owns composed
+component-network facts, Modelica projection, authored synthesizer dispatch,
+and generic actuator lowering; the latter owns participant orchestration,
+wiring, vehicle realization, and scene lifecycle.
+
 ## Core concepts
 
 Defined in [`01-ontology.md`](01-ontology.md) section 4a:

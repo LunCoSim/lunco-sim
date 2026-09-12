@@ -28,10 +28,11 @@ use bevy::prelude::*;
 use lunco_modelica_core::ModelicaModel;
 use lunco_readiness::{kinds, ReadinessRegistry, ReadinessTicket, Subject};
 
-use crate::cosim::{SceneLoadInFlight, UsdSourcedCosim};
+use crate::cosim::SceneLoadInFlight;
 use lunco_cosim::SimComponent;
 use lunco_usd_avian::ShouldBeDynamic;
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneAwaitingStage};
+use lunco_usd_sim_domain::UsdSourcedCosim;
 
 /// The open world-scoped scene-load wait, if a scene is loading.
 #[derive(Resource)]

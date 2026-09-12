@@ -750,7 +750,7 @@ fn report_dome_environment_status(
 /// source filename looking like ongoing work after the scene had settled.
 fn report_modelica_status(
     pending_sources: Query<(), With<lunco_usd_sim::cosim::PendingModelicaSource>>,
-    models: Query<&lunco_modelica_core::ModelicaModel, With<lunco_usd_sim::cosim::UsdSourcedCosim>>,
+    models: Query<&lunco_modelica_core::ModelicaModel, With<lunco_usd_sim_domain::UsdSourcedCosim>>,
     bus: Option<ResMut<lunco_status_core::status_bus::StatusBus>>,
     mut mirror: ResMut<ModelicaStatusMirrorState>,
 ) {
@@ -843,10 +843,10 @@ mod modelica_status_tests {
             .add_systems(Update, report_modelica_status);
         let first = app
             .world_mut()
-            .spawn((lunco_usd_sim::cosim::UsdSourcedCosim, ready_model("First")))
+            .spawn((lunco_usd_sim_domain::UsdSourcedCosim, ready_model("First")))
             .id();
         app.world_mut()
-            .spawn((lunco_usd_sim::cosim::UsdSourcedCosim, ready_model("Second")));
+            .spawn((lunco_usd_sim_domain::UsdSourcedCosim, ready_model("Second")));
 
         app.update();
         app.update();

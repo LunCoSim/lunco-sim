@@ -10,6 +10,7 @@ use std::sync::Arc;
 use bevy::asset::AssetId;
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
+use lunco_cosim::{ForceActuator, TorqueActuator};
 use lunco_modelica_ast::ast_extract::{
     parse_model_interface, parse_model_interface_from_ast, ModelInterface, ModelicaVariableMetadata,
 };
@@ -21,7 +22,7 @@ use lunco_modelica_core::{
 #[cfg(test)]
 use lunco_usd_bevy_core::canonical::CanonicalStage;
 use lunco_usd_bevy_core::program::ProgramGraph;
-use lunco_usd_bevy_core::read::UsdReadObject as ComposedReader;
+use lunco_usd_bevy_core::read::{UsdReadObject, UsdReadObject as ComposedReader};
 use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdInstanceProjection, UsdStageAsset};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use openusd::sdf::Path as SdfPath;
@@ -47,17 +48,188 @@ pub fn is_runtime_domain_network_root(
         && view.text(prim, "purpose").as_deref() != Some("guide")
         && view.boolean(prim, "lunco:lintOnly") != Some(true)
 }
+
+/// Marker for a co-simulation participant projected from a USD prim.
+#[derive(Component, Default)]
+pub struct UsdSourcedCosim;
+
+/// The scalar interface authored on a USD Modelica program.
+#[derive(Component, Clone, Debug)]
+pub struct UsdModelicaPortContract {
+    pub inputs: BTreeSet<String>,
+    pub outputs: BTreeSet<String>,
+}
+
+impl UsdModelicaPortContract {
+    /// The contract a USD-declared boundary makes, whatever declared it.
+    pub fn new(
+        inputs: impl IntoIterator<Item = String>,
+        outputs: impl IntoIterator<Item = String>,
+    ) -> Self {
+        Self {
+            inputs: inputs.into_iter().collect(),
+            outputs: outputs.into_iter().collect(),
+        }
+    }
+}
+
+/// The authored co-simulation schedule for a USD Modelica participant.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct UsdModelicaSchedule {
+    pub communication_period_secs: f64,
+}
+
+/// Set when an authored connectionPaths edit requires USD wiring to be
+/// re-derived. Domain projection consumes the same lifecycle signal.
+#[derive(Resource, Default)]
+pub struct WiringDirty(pub bool);
+
+const FORCE_ACTUATOR_API: &str = "LunCoForceActuatorAPI";
+const FORCE_DIRECTION_ATTR: &str = "lunco:forceActuator:direction";
+const FORCE_MAX_ATTR: &str = "lunco:forceActuator:maxForce";
+const TORQUE_ACTUATOR_API: &str = "LunCoTorqueActuatorAPI";
+const TORQUE_AXIS_ATTR: &str = "lunco:torqueActuator:axis";
+const TORQUE_MAX_ATTR: &str = "lunco:torqueActuator:maxTorque";
+
+/// Find the USD rigid-body frame that owns a physical actuator.
+fn actuator_body_path(reader: &dyn UsdReadObject, actuator_path: &SdfPath) -> Option<SdfPath> {
+    let mut current = actuator_path.parent();
+    while let Some(path) = current {
+        if path.is_abs_root() {
+            return None;
+        }
+        if reader.has_api_schema(&path, "PhysicsRigidBodyAPI") {
+            return Some(path);
+        }
+        current = path.parent();
+    }
+    None
+}
+
+/// Read a force actuator's generic USD description into the Avian boundary.
+pub fn force_actuator_from_usd(
+    reader: &dyn UsdReadObject,
+    actuator_path: &SdfPath,
+) -> Option<ForceActuator> {
+    if !reader.has_api_schema(actuator_path, FORCE_ACTUATOR_API) {
+        return None;
+    }
+    let Some(body_path) = actuator_body_path(reader, actuator_path) else {
+        warn!(
+            "[usd-cosim] force actuator {} has no PhysicsRigidBodyAPI ancestor; actuator ignored",
+            actuator_path
+        );
+        return None;
+    };
+    let Some(relative) =
+        lunco_usd_avian::transform_in_body_frame(reader, &body_path, actuator_path)
+    else {
+        warn!(
+            "[usd-cosim] force actuator {} could not derive its body-frame transform",
+            actuator_path
+        );
+        return None;
+    };
+    let direction = reader
+        .attr_value(actuator_path, FORCE_DIRECTION_ATTR)
+        .and_then(|value| {
+            value.clone().get::<[f32; 3]>().or_else(|| {
+                value
+                    .get::<[f64; 3]>()
+                    .map(|v| [v[0] as f32, v[1] as f32, v[2] as f32])
+            })
+        })
+        .map(Vec3::from_array)
+        .filter(|v| v.is_finite() && v.length_squared() > f32::EPSILON);
+    let Some(direction_in_prim_frame) = direction else {
+        warn!(
+            "[usd-cosim] force actuator {} has no finite non-zero {}",
+            actuator_path, FORCE_DIRECTION_ATTR
+        );
+        return None;
+    };
+    let direction_local = relative.rotation * direction_in_prim_frame;
+    if !direction_local.is_finite() || direction_local.length_squared() <= f32::EPSILON {
+        warn!(
+            "[usd-cosim] force actuator {} produced an invalid body-frame direction",
+            actuator_path
+        );
+        return None;
+    }
+    let Some(max_force_n) = reader
+        .real(actuator_path, FORCE_MAX_ATTR)
+        .filter(|v| v.is_finite() && *v > 0.0)
+    else {
+        warn!(
+            "[usd-cosim] force actuator {} has no positive {}",
+            actuator_path, FORCE_MAX_ATTR
+        );
+        return None;
+    };
+    Some(ForceActuator {
+        local_position: relative.translation,
+        direction_local,
+        max_force_n,
+    })
+}
+
+/// Read a torque actuator's generic USD description into the Avian boundary.
+pub fn torque_actuator_from_usd(
+    reader: &dyn UsdReadObject,
+    actuator_path: &SdfPath,
+) -> Option<TorqueActuator> {
+    if !reader.has_api_schema(actuator_path, TORQUE_ACTUATOR_API) {
+        return None;
+    }
+    if actuator_body_path(reader, actuator_path).is_none() {
+        warn!(
+            "[usd-cosim] torque actuator {} has no PhysicsRigidBodyAPI ancestor; actuator ignored",
+            actuator_path
+        );
+        return None;
+    }
+    let axis = reader
+        .attr_value(actuator_path, TORQUE_AXIS_ATTR)
+        .and_then(|value| {
+            value.clone().get::<[f32; 3]>().or_else(|| {
+                value
+                    .get::<[f64; 3]>()
+                    .map(|v| [v[0] as f32, v[1] as f32, v[2] as f32])
+            })
+        })
+        .map(Vec3::from_array)
+        .filter(|v| v.is_finite() && v.length_squared() > f32::EPSILON);
+    let Some(axis_local) = axis else {
+        warn!(
+            "[usd-cosim] torque actuator {} has no finite non-zero {}",
+            actuator_path, TORQUE_AXIS_ATTR
+        );
+        return None;
+    };
+    let Some(max_torque_nm) = reader
+        .real(actuator_path, TORQUE_MAX_ATTR)
+        .filter(|v| v.is_finite() && *v > 0.0)
+    else {
+        warn!(
+            "[usd-cosim] torque actuator {} has no positive {}",
+            actuator_path, TORQUE_MAX_ATTR
+        );
+        return None;
+    };
+    Some(TorqueActuator {
+        axis_local,
+        max_torque_nm,
+    })
+}
 use lunco_usd_bevy_core::program::{
     is_modelica_identifier, modelica_identifier, modelica_path_identifier, modelica_source_ref,
     ACTUATOR_WRENCH_DOMAIN_SYNTHESIZER, DEFAULT_DOMAIN_SYNTHESIZER,
 };
 
-use crate::cosim::{UsdModelicaPortContract, UsdSourcedCosim, WiringDirty};
-
 fn retire_sim_interface(commands: &mut Commands, entity: Entity) {
     commands
         .entity(entity)
-        .remove::<(lunco_cosim::SimComponent, crate::cosim::UsdModelicaSchedule)>();
+        .remove::<(lunco_cosim::SimComponent, UsdModelicaSchedule)>();
 }
 
 /// Generated documents are runtime projections, unlike authored documents
@@ -337,7 +509,7 @@ pub const ACTUATOR_WRENCH_SYNTHESIZER: &str = ACTUATOR_WRENCH_DOMAIN_SYNTHESIZER
 /// API, ownership is derived from the composed member role schemas. Keeping
 /// this selection in one function makes the runtime projector and the linter
 /// agree on both the explicit-selector default and the role-derived owner.
-pub(crate) fn select_synthesizer_name(
+pub fn select_synthesizer_name(
     view: &dyn ComposedReader,
     root: &SdfPath,
 ) -> Result<String, String> {
@@ -1799,7 +1971,7 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
                 }]);
             }
             let command = command.to_string();
-            let Some(actuator) = crate::force_actuator_from_usd(view, &path) else {
+            let Some(actuator) = force_actuator_from_usd(view, &path) else {
                 return Err(vec![DomainProjectionError {
                     path: path.to_string(),
                     message: "actuator-wrench member is not a valid force actuator with a \
@@ -2534,7 +2706,7 @@ fn commit_domain_projection(
         UsdSourcedCosim,
         lunco_core::PortSurfacePending,
         UsdModelicaPortContract::new(synthesized.inputs.iter().cloned(), declared_output_ports),
-        crate::cosim::UsdModelicaSchedule {
+        UsdModelicaSchedule {
             communication_period_secs: synthesized.communication_period_secs,
         },
         DomainProjectionState { fingerprint },
@@ -4127,7 +4299,7 @@ fn projection_is_due_from_flags(
 /// Projection is an authoring/lifecycle transaction, not a frame service. Keep
 /// the trigger set beside [`project_domain_islands`] so the scheduler can avoid
 /// constructing its stage, identity, and synthesizer queries on stable frames.
-pub(crate) fn domain_projection_due(
+pub fn domain_projection_due(
     added: Query<(), Added<UsdPrimPath>>,
     identity_added: Query<(), Added<lunco_core::GlobalEntityId>>,
     dirty: Res<WiringDirty>,

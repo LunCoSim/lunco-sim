@@ -2061,7 +2061,7 @@ fn project_usd_policies(
     canonical: NonSend<lunco_usd_bevy_core::canonical::CanonicalStages>,
     roots: Query<&lunco_usd_bevy_scene::UsdPrimPath, With<lunco_usd_bevy_scene::UsdSceneRoot>>,
     mut registry: ResMut<lunco_scripting::policy::ScriptedPolicyRegistry>,
-    mut synthesizers: ResMut<lunco_usd_sim::domain_projection::SynthesizerRegistry>,
+    mut synthesizers: ResMut<lunco_usd_sim_domain::SynthesizerRegistry>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     asset_server: Res<AssetServer>,
     sources: Option<Res<Assets<lunco_scripting::source_asset::RhaiSource>>>,
@@ -2154,10 +2154,10 @@ fn project_usd_policies(
         .collect();
     lunco_scripting::policy::project_policies(desired, &mut registry, journal.as_deref());
     for name in previous_synthesizers.difference(&desired_synthesizers) {
-        lunco_usd_sim::domain_projection::unregister_hook_synthesizer(&mut synthesizers, name);
+        lunco_usd_sim_domain::unregister_hook_synthesizer(&mut synthesizers, name);
     }
     for name in desired_synthesizers {
-        lunco_usd_sim::domain_projection::register_hook_synthesizer(&mut synthesizers, name);
+        lunco_usd_sim_domain::register_hook_synthesizer(&mut synthesizers, name);
     }
 }
 

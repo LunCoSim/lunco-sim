@@ -114,7 +114,7 @@ The most important settled and mixed-window CPU attribution was:
 | `prepare_clusters` | 2.02% | approximately 0.975 ms mean; one approximately 39 ms outlier was observed |
 | `drive_engine_sync` | 1.96% | approximately 0.941 ms mean |
 | `publish_exposure` | 1.94% | approximately 0.930 ms mean |
-| `domain_projection::project_domain_islands` | 2.90% | approximately 1.397 ms mean in the mixed capture |
+| `lunco_usd_sim_domain::project_domain_islands` | 2.90% | approximately 1.397 ms mean in the mixed capture |
 
 Startup-only paths included `on_usd_prim_added` at approximately 8.84% and
 `terrain_tile_bake` at approximately 4.89%. They explain load/settling stalls,
@@ -507,7 +507,7 @@ USD-physics-admission issue recorded above.
 
 #### 2026-08-30 generated-domain projection trigger gating
 
-`domain_projection::project_domain_islands` was approximately **1.397 ms** in
+`lunco_usd_sim_domain::project_domain_islands` was approximately **1.397 ms** in
 the mixed Tracy attribution. Its own code already knew the exact lifecycle
 triggers and returned immediately on stable frames, but the production
 schedule still entered the system and constructed its large query set every
