@@ -1866,6 +1866,52 @@ mod real_reader_tests {
     }
 
     #[test]
+    fn runtime_provider_recognizes_standard_joint_prims() {
+        const JOINTS: &str = r#"#usda 1.0
+(
+    defaultPrim = "World"
+)
+def Xform "World"
+{
+    def PhysicsRevoluteJoint "Hinge"
+    {
+    }
+    def PhysicsPrismaticJoint "Slider"
+    {
+    }
+    def Xform "Plain"
+    {
+    }
+}
+"#;
+        let cs = test_stage_from_recipe(&StageRecipe::from_source("scene.usda", JOINTS));
+        let view = cs.view();
+        let hinge = SdfPath::new("/World/Hinge").unwrap();
+        let slider = SdfPath::new("/World/Slider").unwrap();
+        let plain = SdfPath::new("/World/Plain").unwrap();
+        let missing = SdfPath::new("/World/Missing").unwrap();
+
+        assert_eq!(
+            super::runtime_port_provider(&view, &hinge),
+            Some("PhysicsRevoluteJoint")
+        );
+        assert_eq!(
+            super::runtime_port_provider(&view, &slider),
+            Some("PhysicsPrismaticJoint")
+        );
+        assert_eq!(
+            super::runtime_port_provider(&view, &plain),
+            None,
+            "an ordinary prim is not a runtime port provider"
+        );
+        assert_eq!(
+            super::runtime_port_provider(&view, &missing),
+            None,
+            "a missing source prim never becomes a runtime provider"
+        );
+    }
+
+    #[test]
     fn attr_type_name_preserves_usd_roles_and_array_shape() {
         let source = r#"#usda 1.0
 (

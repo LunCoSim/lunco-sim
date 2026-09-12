@@ -145,6 +145,12 @@ fn on_tick(me) {
     if has_subject(findings, "/ConnectionPreflight/Sink.inputs:runtime_valid") {
         failures.push("valid runtime connection was reported as broken");
     }
+    if has_subject(findings, "/ConnectionPreflight/Sink.inputs:revolute_valid") {
+        failures.push("standard PhysicsRevoluteJoint angle connection was reported as broken");
+    }
+    if has_subject(findings, "/ConnectionPreflight/Sink.inputs:prismatic_valid") {
+        failures.push("standard PhysicsPrismaticJoint displacement connection was reported as broken");
+    }
     if report.errors != 5 {
         failures.push("total lint errors=" + report.errors + ", expected exactly 5 connection errors");
     }
