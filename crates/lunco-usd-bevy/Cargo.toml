@@ -42,7 +42,6 @@ lunco-time = { path = "../lunco-time" }
 lunco-render = { path = "../lunco-render" }
 lunco-materials = { path = "../lunco-materials" }
 big_space = { workspace = true }
-anyhow = { workspace = true }
 web-time = { workspace = true }
 
 [dev-dependencies]
