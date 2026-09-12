@@ -46,7 +46,7 @@ use lunco_doc_bevy::{
 };
 use lunco_storage::Storage; // brings `write_sync` / `read_sync` into scope
 use lunco_twin::{DocumentKindId, DocumentKindMeta, DocumentKindRegistry};
-use lunco_usd_bevy_core::{UsdRead, UsdStageAsset};
+use lunco_usd_bevy_core::{source::UsdSourceText, UsdRead, UsdStageAsset};
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneRoot};
 use lunco_usd_core::document::{LayerId, UsdOp};
 use lunco_usd_core::edit_session::{
@@ -448,7 +448,7 @@ impl Plugin for UsdCommandsPlugin {
             )
                 .chain()
                 .run_if(resource_exists::<AssetServer>)
-                .run_if(resource_exists::<Assets<lunco_usd_bevy::UsdSourceText>>),
+                .run_if(resource_exists::<Assets<UsdSourceText>>),
         );
         register_all_commands(app);
     }
@@ -486,7 +486,7 @@ fn open_usd_docs_on_twin_asset_mounted(
     // test-only branch preserves this observer's decision coverage in
     // MinimalPlugins apps without pretending to mount a scene there.
     asset_server: Option<Res<AssetServer>>,
-    usd_sources: Option<Res<Assets<lunco_usd_bevy::UsdSourceText>>>,
+    usd_sources: Option<Res<Assets<UsdSourceText>>>,
     mut pending_twin: ResMut<crate::twin_projection::PendingTwinDocs>,
     mut empty_reason: ResMut<EmptyViewportReason>,
     mut commands: Commands,
@@ -528,7 +528,7 @@ fn open_usd_docs_on_twin_asset_mounted(
                     scene,
                     twin.root.display()
                 );
-                let handle = asset_server.load::<lunco_usd_bevy::UsdSourceText>(scene_uri.clone());
+                let handle = asset_server.load::<UsdSourceText>(scene_uri.clone());
                 let source_ready = usd_sources
                     .as_ref()
                     .is_some_and(|sources| sources.get(handle.id()).is_some());
@@ -3024,7 +3024,7 @@ fn validate_attach_component(
             .local_path(&spec.asset)
             .map_err(|error| format!("could not resolve attachment asset {}: {error}", spec.asset))?
             .ok_or_else(|| format!("attachment asset {} has no local file", spec.asset))?;
-        let plug = lunco_usd_bevy::mount::read_asset_plug(&local_asset)
+        let plug = lunco_usd_bevy_core::mount::read_asset_plug(&local_asset)
             .ok_or_else(|| format!("attachment asset {} has no valid mount plug", spec.asset))?;
         if plug.kind != accepts {
             return Err(format!(

@@ -37,7 +37,6 @@
 //! event both publish the same queue marker; `process_queued_usd_visuals` is the
 //! single reader and marks each projected entity with `UsdSceneProjected`.
 
-use bevy::asset::{io::Reader, AssetLoader, LoadContext};
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use big_space::prelude::CellCoord;
@@ -54,7 +53,6 @@ use openusd::sdf::Value;
 pub mod scene_ports;
 use lunco_usd_bevy_lathe as lathe;
 use lunco_usd_bevy_light::light;
-pub mod mount;
 use lunco_usd_bevy_core::read::{
     attr_has_time_samples, read_authored_bool_strict, read_primvar_f32_strict,
     read_primvar_vec3_at, read_primvar_vec3_strict, read_token_at, read_vec3_f64, read_vec3_f64_at,
@@ -66,12 +64,14 @@ use lunco_usd_bevy_core::{
     canonical, program, read, UsdInstanceMember, UsdInstanceProjection, UsdInstanceRoot, UsdLoader,
     UsdStageAsset,
 };
+use lunco_usd_bevy_core::source::{UsdSourceText, UsdSourceTextLoader};
 use lunco_usd_bevy_core::{
-    canonical::{CanonicalStage, CanonicalStages},
-    compose_xform_order_at, is_descendant_or_self, local_transform_at, parent_prim_path,
-    read_transform_from_usd, resolve_bound_shader, resolve_stage_prim_path, stage_convention,
-    StageView, UsdRead,
+    canonical::CanonicalStages,
+    compose_xform_order_at, local_transform_at, parent_prim_path, read_transform_from_usd,
+    resolve_bound_shader, resolve_stage_prim_path, stage_convention, UsdRead,
 };
+#[cfg(test)]
+use lunco_usd_bevy_core::{canonical::CanonicalStage, StageView};
 use lunco_usd_bevy_scene::{
     is_preview_only, read_primitive_axis, read_shape_dims, read_usd_mesh_points,
     read_usd_mesh_topology, scene_root_ancestor, usd_axis_to_quat, GlbPlaceholder,
@@ -306,46 +306,6 @@ impl Plugin for UsdBevyPlugin {
                 )
                     .chain(),
             );
-    }
-}
-
-/// A USD layer's **raw source text**, read through the `AssetServer` without
-/// composition.
-///
-/// Distinct from [`UsdStageAsset`], which carries the prepared composed read
-/// surface and optional live-stage recipe: this is just the bytes of one
-/// `.usda` layer, decoded to a `String`. E1b uses
-/// it to open a scene document's base layer **through the same asset source the
-/// live world loads from** (e.g. `twin://`) — so the read is web-ready (it rides
-/// whatever the source supports) instead of going through native `std::fs`.
-#[derive(Asset, TypePath, Clone)]
-pub struct UsdSourceText(pub String);
-
-/// Loader producing [`UsdSourceText`] — reads bytes, decodes UTF-8, no
-/// composition. Shares the `.usda` extension with [`UsdLoader`]; the requested
-/// asset type (`load::<UsdSourceText>` vs `load::<UsdStageAsset>`) selects the
-/// loader.
-#[derive(Default, TypePath)]
-pub struct UsdSourceTextLoader;
-
-impl AssetLoader for UsdSourceTextLoader {
-    type Asset = UsdSourceText;
-    type Settings = ();
-    type Error = anyhow::Error;
-
-    async fn load(
-        &self,
-        reader: &mut dyn Reader,
-        _settings: &Self::Settings,
-        _load_context: &mut LoadContext<'_>,
-    ) -> Result<Self::Asset, Self::Error> {
-        let mut bytes = Vec::new();
-        reader.read_to_end(&mut bytes).await?;
-        Ok(UsdSourceText(String::from_utf8(bytes)?))
-    }
-
-    fn extensions(&self) -> &[&str] {
-        &["usda"]
     }
 }
 

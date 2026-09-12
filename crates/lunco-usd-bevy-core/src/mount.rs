@@ -402,7 +402,7 @@ pub fn read_plug(reader: &crate::StageView<'_>, part: &str) -> Option<MountPlug>
 /// The plug frame of a component **asset that is not yet on the live stage** — the
 /// piece the *new-attach* flow needs (unlike a retrofit, the plug lives inside the
 /// asset file, not in the composed scene). Composes the asset's full closure
-/// off-thread-safe via [`compose_file_to_stage`](crate::compose_file_to_stage)
+/// off-thread-safe via [`compose_file_to_stage`](crate::compose::compose_file_to_stage)
 /// (resolving its references, anchored at the file's own directory), then reads the
 /// plug off its `defaultPrim` — the part every `AttachSpec` references in.
 ///
@@ -412,8 +412,11 @@ pub fn read_plug(reader: &crate::StageView<'_>, part: &str) -> Option<MountPlug>
 /// Native-only: composition does file I/O.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_asset_plug(asset_path: &std::path::Path) -> Option<MountPlug> {
-    let stage = lunco_usd_bevy_core::compose::compose_file_to_stage(asset_path).ok()?;
-    let cs = crate::CanonicalStage::from_stage(stage, asset_path.to_string_lossy().to_string());
+    let stage = crate::compose::compose_file_to_stage(asset_path).ok()?;
+    let cs = crate::canonical::CanonicalStage::from_stage(
+        stage,
+        asset_path.to_string_lossy().to_string(),
+    );
     let view = cs.view();
     let default_prim = view.default_prim()?;
     read_plug(&view, &format!("/{default_prim}"))

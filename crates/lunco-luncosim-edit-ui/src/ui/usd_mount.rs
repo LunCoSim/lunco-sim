@@ -1,7 +1,7 @@
 //! USD **mount** view-model — the retrofit *snap* surface (doc 48 §3.1).
 //!
 //! For the selected host body, harvest the sockets it advertises
-//! ([`lunco_usd_bevy::mount::read_sockets`]) and, for each socket that names an
+//! ([`lunco_usd_bevy_core::mount::read_sockets`]) and, for each socket that names an
 //! already-attached part, read the part's plug frame and pre-compute the placement
 //! that makes the plug coincide with the socket ([`resolve_mount_placement`]). The
 //! Inspector's `mount_section` then renders one row per socket with a **Snap**
@@ -18,7 +18,9 @@
 use std::collections::HashMap;
 
 use bevy::prelude::*;
-use lunco_usd_bevy::mount::{read_attachment_joint, read_plug, read_sockets, MountDiagnostic};
+use lunco_usd_bevy_core::mount::{
+    read_attachment_joint, read_plug, read_sockets, MountDiagnostic,
+};
 use lunco_usd_bevy_core::{canonical::CanonicalStages, local_transform_at, UsdStageAsset};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_core::attach::resolve_mount_placement;

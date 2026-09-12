@@ -2629,7 +2629,7 @@ fn attach_component_at_socket(
             return;
         }
     };
-    let Some(plug) = lunco_usd_bevy::mount::read_asset_plug(&fs_path) else {
+    let Some(plug) = lunco_usd_bevy_core::mount::read_asset_plug(&fs_path) else {
         report_inspector_error(
             world,
             format!(
