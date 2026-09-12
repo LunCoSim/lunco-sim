@@ -70,6 +70,53 @@ pub struct PortInspectionRequest {
     expanded_entities: HashSet<Entity>,
 }
 
+/// Cached result of the panel's text filter. Matching is a presentation
+/// concern, so it is keyed by the projected port topology and normalized
+/// filter text rather than recomputed during every egui paint.
+#[derive(Default)]
+struct PortMatchCache {
+    topology_revision: Option<u64>,
+    filter: String,
+    matching_counts: Vec<usize>,
+    matching_indices: Vec<usize>,
+    matching_port_indices: Vec<Vec<usize>>,
+}
+
+fn build_port_match_cache(view: &PortView, filter: String) -> PortMatchCache {
+    let mut matching_counts = Vec::with_capacity(view.entities.len());
+    let mut matching_indices = Vec::new();
+    let mut matching_port_indices = Vec::with_capacity(view.entities.len());
+
+    for (entity_index, entity) in view.entities.iter().enumerate() {
+        let port_indices: Vec<usize> = if filter.is_empty() {
+            (0..entity.ports.len()).collect()
+        } else {
+            entity
+                .ports
+                .iter()
+                .enumerate()
+                .filter_map(|(port_index, row)| {
+                    port_matches(row, &entity.label, &filter).then_some(port_index)
+                })
+                .collect()
+        };
+        let matching_count = port_indices.len();
+        if matching_count > 0 {
+            matching_indices.push(entity_index);
+        }
+        matching_counts.push(matching_count);
+        matching_port_indices.push(port_indices);
+    }
+
+    PortMatchCache {
+        topology_revision: view.candidate_topology_revision,
+        filter,
+        matching_counts,
+        matching_indices,
+        matching_port_indices,
+    }
+}
+
 /// Rebuild the table at operator-readable cadence. A bounded 10 Hz sample is the
 /// honest shared gate for this diagnostic/control surface; the registry supplies
 /// backend-owned entity candidates so sampling does not probe every ECS entity.
@@ -291,6 +338,7 @@ pub struct PortPanel {
     filter: String,
     drafts: HashMap<(Entity, String), String>,
     expanded_entities: HashSet<Entity>,
+    matching_cache: Option<PortMatchCache>,
 }
 
 impl Panel for PortPanel {
@@ -365,27 +413,23 @@ impl PortPanel {
             .weak(),
         );
 
-        let filter = self.filter.trim().to_lowercase();
-        let matching_counts: Vec<_> = view
-            .entities
-            .iter()
-            .map(|entity| {
-                if filter.is_empty() {
-                    entity.ports.len()
-                } else {
-                    entity
-                        .ports
-                        .iter()
-                        .filter(|row| port_matches(row, &entity.label, &filter))
-                        .count()
-                }
-            })
-            .collect();
-        let matching_indices: Vec<_> = matching_counts
-            .iter()
-            .enumerate()
-            .filter_map(|(index, count)| (*count > 0).then_some(index))
-            .collect();
+        let normalized_filter = self.filter.trim().to_lowercase();
+        let topology_revision = view.candidate_topology_revision;
+        let cache_stale = self.matching_cache.as_ref().is_none_or(|cache| {
+            cache.topology_revision != topology_revision || cache.filter != normalized_filter
+        });
+        if cache_stale {
+            self.matching_cache = Some(build_port_match_cache(view, normalized_filter));
+        }
+        // Temporarily own the cache while painting so the expanded row controls
+        // can still mutate the panel's draft state without cloning the cached
+        // index vectors on every frame.
+        let cache = self
+            .matching_cache
+            .take()
+            .expect("port match cache is initialized above");
+        let matching_counts = &cache.matching_counts;
+        let matching_indices = &cache.matching_indices;
 
         // Expanded bodies are painted outside the virtualized header list. The
         // list therefore remains fixed-height even when a body contains a full
@@ -409,7 +453,7 @@ impl PortPanel {
                 ctx,
                 entity,
                 matching_counts[index],
-                &filter,
+                &cache.matching_port_indices[index],
                 self.expanded_entities.contains(&entity.entity) || auto_expand_single,
             ) {
                 next_expanded.insert(entity.entity);
@@ -417,7 +461,8 @@ impl PortPanel {
         }
 
         let collapsed_indices: Vec<_> = matching_indices
-            .into_iter()
+            .iter()
+            .copied()
             .filter(|index| !next_expanded.contains(&view.entities[*index].entity))
             .collect();
         let row_height = ui.text_style_height(&egui::TextStyle::Body);
@@ -441,6 +486,7 @@ impl PortPanel {
         let _ = ctx.resource_scope::<PortInspectionRequest, _>(|_, request| {
             request.expanded_entities = self.expanded_entities.clone();
         });
+        self.matching_cache = Some(cache);
     }
 
     fn render_entity(
@@ -449,7 +495,7 @@ impl PortPanel {
         ctx: &mut PanelCtx,
         entity: &PortEntity,
         matching_count: usize,
-        filter: &str,
+        matching_port_indices: &[usize],
         default_open: bool,
     ) -> bool {
         let title = format!("{}  ({matching_count})", entity.label);
@@ -473,11 +519,8 @@ impl PortPanel {
                         ui.strong("Control");
                         ui.end_row();
 
-                        for row in entity
-                            .ports
-                            .iter()
-                            .filter(|row| port_matches(row, &entity.label, filter))
-                        {
+                        for &port_index in matching_port_indices {
+                            let row = &entity.ports[port_index];
                             self.render_row(ui, ctx, row);
                             ui.end_row();
                         }
@@ -638,6 +681,51 @@ mod tests {
         assert!(port_matches(&row, "Rover", "controller"));
         assert!(port_matches(&row, "Rover", "throttle"));
         assert!(!port_matches(&row, "Rover", "lander"));
+    }
+
+    #[test]
+    fn port_match_cache_indexes_rows_for_reuse_across_paints() {
+        let row = PortRow {
+            entity: Entity::PLACEHOLDER,
+            owner: PortHandle::default(),
+            info: PortInfo {
+                name: "throttle".into(),
+                direction: PortDirection::In,
+                value: 0.0,
+                metadata: PortMetadata::scalar(
+                    PortDirection::In,
+                    None,
+                    Some(-1.0),
+                    Some(1.0),
+                    "rover controller",
+                    "operator",
+                    true,
+                ),
+            },
+            wired: false,
+            held: None,
+        };
+        let view = PortView {
+            entities: vec![PortEntity {
+                entity: Entity::PLACEHOLDER,
+                label: "Rover".into(),
+                api_id: None,
+                ports: vec![row],
+            }],
+            candidate_topology_revision: Some(7),
+            ..default()
+        };
+
+        let cache = build_port_match_cache(&view, "controller".into());
+        assert_eq!(cache.topology_revision, Some(7));
+        assert_eq!(cache.matching_indices, vec![0]);
+        assert_eq!(cache.matching_counts, vec![1]);
+        assert_eq!(cache.matching_port_indices, vec![vec![0]]);
+
+        let cache = build_port_match_cache(&view, "lander".into());
+        assert!(cache.matching_indices.is_empty());
+        assert_eq!(cache.matching_counts, vec![0]);
+        assert_eq!(cache.matching_port_indices, vec![Vec::<usize>::new()]);
     }
 
     #[test]

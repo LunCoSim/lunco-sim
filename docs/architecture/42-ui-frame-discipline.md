@@ -108,7 +108,11 @@ spatial transform/cell/grid changes, component additions/removals, and
 stationary-entity initialization. They do not gate the normal large-transform
 recentering path or add a second transform cache; a stable frame therefore
 avoids BigSpace's clean-frame worker setup without weakening transform
-correctness.
+correctness. The low-precision gate treats only changed `Grid`/`CellCoord`
+`GlobalTransform` roots as upstream inputs; descendant `GlobalTransform` writes
+are propagation outputs and must not reopen the next frame's walk. Spatial
+systems also compare derived `Transform` values before writing them, so a
+steady physics result does not manufacture a propagation invalidation.
 
 Generated Modelica projection follows the same frame-discipline contract. Its
 shared USD root predicate runs before synthesizer selection, and the projector
@@ -220,6 +224,14 @@ The same ownership rule applies to the measured presentation paths:
   paints a port grid only for an explicitly expanded entity. Its 10 Hz producer
   reads live values and wire/hold decorations only for those requested entities.
   A live physics value is not a reason to reconstruct or paint the whole table.
+  The panel's normalized filter result is indexed by topology revision and
+  filter text, so steady egui paints reuse matching entity/port indices instead
+  of lowercasing and rescanning every metadata row.
+- **Inspector view-model** compares the displayed values and the active-camera
+  identity directly. It does not use `SceneViewport::is_changed()` because the
+  camera reconciler legitimately mutably borrows that resource every frame;
+  that borrow tick is not a presentation change. Joint readouts remain bounded
+  to their declared 10 Hz refresh cadence.
 
 The same rule applies below the UI boundary. The Modelica engine-sync pass is
 woken by the document registry revision and still compares document generations

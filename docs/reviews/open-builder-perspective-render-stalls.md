@@ -160,3 +160,80 @@ shutdown. The run showed no new runtime failure from the invalidation path.
   physics-owner changes are included in the follow-up commit.
 - Keep the change scoped to the Builder stall, use the smallest owner test, and
   update this review plus Trello before moving the card to Review.
+
+## No-BigSpace application optimization follow-up (2026-09-12)
+
+The remaining frame-cost path was traced without changing the maintained
+BigSpace dependency. The application-side `low_precision_propagation_due`
+condition accepted every changed `GlobalTransform`, including descendant
+transforms written by BigSpace's own previous propagation pass. That was a
+false invalidation: the low-precision set was reopened by its own output even
+when no upstream root changed. The condition now mirrors BigSpace's low-pass
+root query and accepts changed `GlobalTransform` only on `Grid`/`CellCoord`
+roots; local transform and hierarchy changes, additions, and removals remain
+invalidating inputs.
+
+The mobility and mission presentation owners also had unconditional derived
+`Transform` assignments in fixed/update cadence systems. Raycast suspension,
+heading, wheel spin, spacecraft placement, and replicated proxy-wheel visuals
+now compare the desired value before writing it. Genuine motion still changes
+the component and propagates normally; an unchanged physics result no longer
+manufactures a spatial invalidation.
+
+The Builder port panel now caches normalized filter results and matching row
+indices by `PortTopologyRevision` and filter text. Stable egui paints reuse the
+cache instead of lowercasing and scanning every metadata row, while expanded
+rows still retain their live controls.
+
+The first Tracy validation also corrected the boundary design. The high- and
+low-precision BigSpace conditions fired on 297/300 and 298/300 evaluations in
+the moving rover scene. That is expected: physics changes authoritative spatial
+inputs every frame, so suppressing required propagation would be incorrect and
+the gate wrapper provided no useful steady-state saving. The Tracy-only wrapper
+was removed. The application boundary remains for precise invalidation, while
+BigSpace remains the sole propagation owner and moving physics is not gated
+away.
+
+Focused evidence for this follow-up:
+
+- `cargo test -p lunco-luncosim --lib big_space_propagation_gate_tests -j 4`
+  passed, including descendant-output rejection and real local-input admission.
+- `cargo test -p lunco-luncosim-edit-ui --lib ui::ports::tests -j 4` passed
+  (4 tests, including cached filter indices).
+- `cargo test -p lunco-mobility --lib suspension_visuals_tests -j 4` passed.
+- `cargo test -p lunco-mobility --lib wheel_spin -j 4` passed (3 tests).
+- `cargo check -p lunco-usd-sim -j 4` passed.
+- Initial Tracy validation found that the high- and low-precision wrappers
+  fired on roughly 99% of evaluations in the moving rover scene. That result
+  confirmed the remaining application-specific Builder work is in the
+  workbench/editor path, not a safe reason to disable physics propagation; the
+  wrapper was removed before the final capture below.
+
+## Corrected Inspector invalidation (2026-09-12)
+
+The corrected trace showed one remaining ineffective application gate:
+`inspector_inputs_changed` included `SceneViewport::is_changed()`. The camera
+reconciler has a legitimate `ResMut<SceneViewport>` borrow each frame, so that
+resource tick was always dirty even when `active_camera` was unchanged. The
+Inspector view-model now stores the active-camera identity and compares that
+value directly; the incidental resource tick is no longer an invalidation
+signal. A regression test verifies that mutably borrowing an unchanged
+viewport binding does not rerun the producer after its initial build.
+
+The final Tracy build/capture and clean Builder/View comparison are complete:
+
+- `cargo test -p lunco-luncosim-edit-ui --lib ui::inspector::tests -j 4`
+  passed, including the unchanged-binding gate regression.
+- `target/luncosim-builder-view-20260912-final.tracy` captured 30.35 s / 1,910
+  frames on the corrected Tracy build. BigSpace low precision measured 69.092
+  us mean (788.702 us maximum) and high precision 255.795 us mean (2.255 ms
+  maximum); the maximums include profiler overhead.
+- In the same capture, `populate_inspector_view` ran only 4 times and measured
+  119.331 us mean / 210.099 us maximum. `EguiPrimaryContextPass` measured
+  961.639 us mean / 20.323 ms maximum under profiler overhead.
+- The clean production run on API port 4115 exited through typed
+  `Exit(force=true)` with the port released. Avian total-step samples were
+  0.376–0.821 ms during the run, with no sustained 40 ms physics stall.
+
+The BigSpace source, grid representation, visual quality, and standard
+eight-substep physics contract remain unchanged.

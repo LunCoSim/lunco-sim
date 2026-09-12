@@ -800,14 +800,24 @@ fn local_origin_propagation_due(
 fn low_precision_propagation_due(
     changed_transforms: Query<(), Or<(Changed<Transform>, Added<Transform>)>>,
     changed_hierarchy: Query<(), Or<(Changed<ChildOf>, Changed<Children>)>>,
-    changed_global_transforms: Query<(), Or<(Changed<GlobalTransform>, Added<GlobalTransform>)>>,
+    // This is deliberately the same root predicate BigSpace uses for its low
+    // precision walk. A descendant `GlobalTransform` is an OUTPUT of that walk;
+    // treating it as an input makes the application reopen the walk because of
+    // BigSpace's own previous-frame writes.
+    changed_global_roots: Query<
+        (),
+        (
+            Or<(With<Grid>, With<CellCoord>)>,
+            Or<(Changed<GlobalTransform>, Added<GlobalTransform>)>,
+        ),
+    >,
     mut removed_transforms: RemovedComponents<Transform>,
     mut removed_hierarchy: RemovedComponents<ChildOf>,
     mut removed_global_transforms: RemovedComponents<GlobalTransform>,
 ) -> bool {
     !changed_transforms.is_empty()
         || !changed_hierarchy.is_empty()
-        || !changed_global_transforms.is_empty()
+        || !changed_global_roots.is_empty()
         || removed_transforms.read().next().is_some()
         || removed_hierarchy.read().next().is_some()
         || removed_global_transforms.read().next().is_some()
@@ -2519,6 +2529,49 @@ mod physics_configuration_tests {
     }
 }
 
+#[cfg(test)]
+mod big_space_propagation_gate_tests {
+    use super::*;
+
+    #[derive(Resource, Default)]
+    struct GateRuns(u32);
+
+    fn count_gate_run(mut runs: ResMut<GateRuns>) {
+        runs.0 += 1;
+    }
+
+    #[test]
+    fn low_precision_gate_ignores_descendant_global_transform_outputs() {
+        let mut app = App::new();
+        app.init_resource::<GateRuns>()
+            .add_systems(Update, count_gate_run.run_if(low_precision_propagation_due));
+
+        let root = app.world_mut().spawn(CellCoord::default()).id();
+        let descendant = app.world_mut().spawn(GlobalTransform::IDENTITY).id();
+
+        // The initial root admission opens the gate once.
+        app.update();
+        assert_eq!(app.world().resource::<GateRuns>().0, 1);
+
+        // A descendant GlobalTransform is BigSpace output, not an input to the
+        // low-precision root walk. Mutating it must not reopen the gate.
+        app.world_mut()
+            .entity_mut(descendant)
+            .insert(GlobalTransform::from_translation(Vec3::new(1.0, 0.0, 0.0)));
+        app.update();
+        assert_eq!(app.world().resource::<GateRuns>().0, 1);
+
+        // An actual local spatial input still opens the gate.
+        app.world_mut()
+            .get_mut::<Transform>(root)
+            .expect("CellCoord requires a local Transform")
+            .translation
+            .x += 1.0;
+        app.update();
+        assert_eq!(app.world().resource::<GateRuns>().0, 2);
+    }
+}
+
 impl Plugin for LunCoSimCorePlugin {
     fn build(&self, app: &mut App) {
         let args: Vec<String> = std::env::args().collect();
@@ -2773,11 +2826,10 @@ impl Plugin for LunCoSimCorePlugin {
             // obstacles), which masks the real error.
             .add_systems(Update, startup_scene_failguard)
             .add_observer(startup_twin_scan_failguard)
-            // BigSpace's internal stationary pruning still pays its channeled
-            // worker-scope setup on a fully clean frame. Gate the whole
-            // high-precision set at the application boundary using the same
-            // spatial invalidation inputs, so the maintained dependency stays
-            // the only propagation owner and clean frames do no fan-out.
+            // Keep the application-owned invalidation boundary around
+            // BigSpace's propagation sets. BigSpace remains the sole owner of
+            // propagation and moving physics inputs are allowed to reopen the
+            // sets; the boundary only rejects known non-input output changes.
             .configure_sets(
                 PostStartup,
                 BigSpaceSystems::LocalFloatingOrigins.run_if(local_origin_propagation_due),

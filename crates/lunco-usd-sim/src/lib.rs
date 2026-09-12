@@ -3294,8 +3294,11 @@ fn animate_proxy_physical_wheels(
                 // Roll about the wheel's axle (`axis_rot · Y`), composed over the
                 // cylinder base — reconstructs the host's `body_spin · axis_rot`.
                 let axle = (wheel.axis_rot * Vec3::Y).normalize();
-                visual_tf.rotation =
+                let rotation =
                     (Quat::from_axis_angle(axle, wheel.spin_angle) * wheel.axis_rot).normalize();
+                if visual_tf.rotation != rotation {
+                    visual_tf.rotation = rotation;
+                }
             }
         }
     }

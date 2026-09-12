@@ -461,7 +461,9 @@ pub fn update_spacecraft_position_system(
             continue;
         };
         let (new_cell, new_translation) = grid.translation_to_grid(rel_pos);
-        tf.translation = new_translation;
+        if tf.translation != new_translation {
+            tf.translation = new_translation;
+        }
         if *cell != new_cell {
             *cell = new_cell;
         }
@@ -478,7 +480,10 @@ pub fn update_spacecraft_position_system(
             // Bevy's look_to makes Local -Z point at the target.
             // Our panels are in the XY plane (width X, height Y), so they face +Z and -Z.
             // Pointing -Z at the sun ensures the panels are oriented correctly.
-            tf.look_to(to_sun, Vec3::Y);
+            let rotation = Transform::IDENTITY.looking_to(to_sun, Vec3::Y).rotation;
+            if tf.rotation != rotation {
+                tf.rotation = rotation;
+            }
         }
     }
 }

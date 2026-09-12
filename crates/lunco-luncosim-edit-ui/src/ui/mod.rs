@@ -90,11 +90,9 @@ pub trait ViewModelAppExt {
     ///
     /// Separate from [`add_view_model`](Self::add_view_model) so the
     /// effectiveness tracker keeps meaning what it says. Registering these with
-    /// an always-true gate made the tracker report them as "this run condition is
-    /// not gating" on every launch — three warnings a run, two of which described
-    /// a decision rather than a defect, which is exactly how a real one
-    /// (`populate_inspector_view` at 296/300) gets read past. Declaring the
-    /// intent in the CALL makes the log's remaining entries all actionable.
+    /// an always-true gate makes the tracker report them as "this run condition
+    /// is not gating" on every launch. Declaring the intent in the CALL makes
+    /// the log's remaining entries actionable.
     fn add_view_model_every_frame<P, M>(&mut self, producer: P) -> &mut Self
     where
         P: IntoScheduleConfigs<bevy::ecs::system::ScheduleSystem, M>;
