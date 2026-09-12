@@ -96,13 +96,13 @@ fn on_set_spawn_diagnostics(
 
 register_commands!(on_set_spawn_diagnostics,);
 
-use lunco_usd_bevy::SPAWN_GROUND_CLEARANCE;
+use lunco_usd_bevy_scene::collision::{collision_aabb, ObjectAabb, SPAWN_GROUND_CLEARANCE};
 
 /// Cached, real-time-derived spawn footprints per catalog entry.
 ///
 /// The footprint is computed once — when the entry's USD stage finishes loading
 /// during `SpawnState::Selecting` — by taking the asset's whole-assembly collision
-/// envelope in its own frame (see [`lunco_usd_bevy::collision_aabb`]). It
+/// envelope in its own frame (see [`lunco_usd_bevy_scene::collision::collision_aabb`]). It
 /// reads the same composed data that `sync_usd_visuals` instantiates and that the
 /// physics bodies are built from, so the placement solver accounts for nested
 /// articulated parts instead of burying them below the terrain. Cached so the
@@ -125,7 +125,7 @@ struct CachedFootprint {
 
 enum FootprintState {
     Pending,
-    Ready(lunco_usd_bevy::ObjectAabb),
+    Ready(ObjectAabb),
     Invalid,
 }
 
@@ -221,7 +221,7 @@ fn ensure_footprint(
                     };
                     cached.root_prim = format!("/{name}");
                 }
-                match lunco_usd_bevy::collision_aabb(&stage.view(), &cached.root_prim) {
+                match collision_aabb(&stage.view(), &cached.root_prim) {
                     Ok(Some(aabb)) => {
                         info!(
                             "[spawn] derived footprint for {}: half_w={:.3} half_l={:.3} rest_depth={:.3}",

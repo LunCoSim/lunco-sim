@@ -28,7 +28,7 @@
 //! at authored precision promoted to f64, without a coordinate-basis change.
 //! A request with `collision_bounds: true` adds the aggregate composed
 //! collision AABB in canonical stage coordinates. It is derived by the shared
-//! `lunco_usd_bevy::collision_aabb` reader, so nested compound
+//! `lunco_usd_bevy_scene::collision::collision_aabb` reader, so nested compound
 //! ownership, standard shape dimensions, purpose filtering, transforms, and
 //! malformed-data errors have one owner for API, Rhai, and other consumers.
 //! A request with `relationships: true` adds every composed relationship and
@@ -72,6 +72,7 @@ use lunco_usd_bevy_core::{
     canonical::CanonicalStages, effective_purpose, is_descendant_or_self, resolve_bound_shader,
     MaterialPurpose, UsdStageAsset,
 };
+use lunco_usd_bevy_scene::collision::{collision_aabb, prim_geometry_aabb, ObjectAabb};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_bevy_scene::UsdSceneRoot;
 use lunco_usd_core::document::UsdDocument;
@@ -189,7 +190,7 @@ fn nearest_rigid_body(view: &StageView<'_>, path: &SdfPath) -> Option<SdfPath> {
     None
 }
 
-fn aabb_json(aabb: lunco_usd_bevy::ObjectAabb) -> serde_json::Value {
+fn aabb_json(aabb: ObjectAabb) -> serde_json::Value {
     serde_json::json!({
         "min": [aabb.min.x, aabb.min.y, aabb.min.z],
         "max": [aabb.max.x, aabb.max.y, aabb.max.z],
@@ -271,7 +272,7 @@ fn topology_for_stage(view: &StageView<'_>, selected: &SdfPath) -> serde_json::V
             None if collider => Some(true),
             None => None,
         };
-        let bounds = match lunco_usd_bevy::prim_geometry_aabb(view, candidate.as_str()) {
+        let bounds = match prim_geometry_aabb(view, candidate.as_str()) {
             Ok(Some(aabb)) => aabb_json(aabb),
             Ok(None) => {
                 diagnostics.push(format!(
@@ -607,7 +608,7 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
 
             let collision_bounds = if include_collision_bounds {
                 match found {
-                    Some(cs) => match lunco_usd_bevy::collision_aabb(&cs.view(), path) {
+                    Some(cs) => match collision_aabb(&cs.view(), path) {
                         Ok(Some(aabb)) => Some(serde_json::json!({
                             "min": [aabb.min.x, aabb.min.y, aabb.min.z],
                             "max": [aabb.max.x, aabb.max.y, aabb.max.z],

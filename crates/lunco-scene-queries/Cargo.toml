@@ -19,7 +19,6 @@ lunco-physics = { path = "../lunco-physics" }
 lunco-scene-catalog = { path = "../lunco-scene-catalog" }
 lunco-usd = { path = "../lunco-usd", default-features = false }
 lunco-usd-avian = { path = "../lunco-usd-avian" }
-lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-core = { path = "../lunco-usd-core" }

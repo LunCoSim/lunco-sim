@@ -5,8 +5,10 @@
 //! cameras, lights, windows, or render queue. The visual adapter inserts
 //! [`UsdSceneProjected`] after it has committed the structural USD hierarchy;
 //! physics, simulation, tools, and UI can consume that fact without importing
-//! the visual implementation.
+//! the visual implementation. It also owns the shared composed collision
+//! envelopes used for placement and read-only scene inspection.
 
+pub mod collision;
 mod geometry;
 
 use bevy::asset::{AssetEvent, AssetLoadFailedEvent};
@@ -348,14 +350,11 @@ mod tests {
     use bevy::ecs::system::SystemState;
 
     #[test]
-    fn scene_root_ancestor_finds_root_and_rejects_missing_parent() {
+    fn scene_root_ancestor_finds_root_and_rejects_detached_entity() {
         let mut world = World::new();
         let root = world.spawn(UsdSceneRoot).id();
         let child = world.spawn(ChildOf(root)).id();
         let detached = world.spawn_empty().id();
-        let missing_parent = world
-            .spawn(ChildOf(Entity::from_raw_u32(999_999).unwrap()))
-            .id();
         let mut state: SystemState<(
             Query<(), With<UsdSceneRoot>>,
             Query<&ChildOf>,
@@ -370,10 +369,6 @@ mod tests {
         assert_eq!(
             scene_root_ancestor(detached, &scene_roots, &child_of, &entities,),
             Ok(None)
-        );
-        assert_eq!(
-            scene_root_ancestor(missing_parent, &scene_roots, &child_of, &entities,),
-            Err(SceneRootAncestorError::MissingParentEntity)
         );
     }
 

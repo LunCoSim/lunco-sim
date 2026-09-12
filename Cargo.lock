@@ -7443,8 +7443,8 @@ dependencies = [
  "lunco-scene-commands",
  "lunco-settings",
  "lunco-terrain-surface",
- "lunco-usd-bevy",
  "lunco-usd-bevy-core",
+ "lunco-usd-bevy-scene",
 ]
 
 [[package]]
@@ -7967,7 +7967,6 @@ dependencies = [
  "lunco-scene-catalog",
  "lunco-usd",
  "lunco-usd-avian",
- "lunco-usd-bevy",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
  "lunco-usd-core",

@@ -16,8 +16,8 @@ contains runtime orchestration and document commands; `lunco-usd-geometry`
 owns the reusable render-free NURBS, trim, and curve-sweep substrate;
 `lunco-usd-bevy-core` owns prepared/composed stage data;
 `lunco-usd-bevy-scene` owns render-free ECS scene identity, lifecycle, ancestry,
-projection ordering boundaries, visual-split markers, and shared geometry
-decoding; `lunco-usd-bevy-camera` owns render-free camera
+projection ordering boundaries, visual-split markers, shared geometry decoding,
+and composed collision/placement envelopes; `lunco-usd-bevy-camera` owns render-free camera
 projection intent, camera paths, mounts, selection, and viewport reconciliation;
 `lunco-usd-bevy-lathe` owns the independent parametric NURBS/lathe mesh
 projection; `lunco-usd-bevy-light` owns UsdLux light and dome projection;
@@ -702,7 +702,7 @@ the `ControlAnimation` command (API/MCP) and the Inspector **Animation** section
 All runtime acceptance tests load **real USD files** through the same pipeline
 as runtime. Ownership follows the narrowest production boundary:
 - `crates/lunco-usd-bevy-core/src/{asset,authoring,canonical,read,compose,view}.rs` — prepared asset, authored-layer, composed-stage, and live-stage substrate
-- `crates/lunco-usd-bevy-scene/src/{lib,geometry}.rs` — render-free ECS scene identity, lifecycle, ancestry, and shared USD geometry readers
+- `crates/lunco-usd-bevy-scene/src/{lib,geometry,collision}.rs` — render-free ECS scene identity, lifecycle, ancestry, shared USD geometry readers, and composed collision/placement envelopes
 - `crates/lunco-usd-bevy-camera/src/{camera,camera_mount,camera_path,camera_switch,camera_track}.rs` — render-free camera projection, pose, path, selection, and track mechanisms
 - `crates/lunco-usd-bevy-light/src/{light,dome}.rs` — UsdLux light readers, ambient-dome semantics, and HDRI environment projection
 - `crates/lunco-usd/tests/live_spawn_projection.rs` — document-backed USD authoring and raw asset composition facts

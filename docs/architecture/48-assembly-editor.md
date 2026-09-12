@@ -503,7 +503,7 @@ being converted into guessed bounds.
 For referenced, cylindrical, mesh, or compound parts, use
 `place_with_collision_clearance_plan`. It takes exact moving and blocker body
 paths and asks `QueryUsdPrim` for `collision_bounds: true`; that request uses the
-shared `lunco_usd_bevy::collision_aabb` owner in the canonical stage
+shared `lunco_usd_bevy_scene::collision::collision_aabb` owner in the canonical stage
 frame, so nested rigid parts are included in an assembly envelope. The tool only
 applies a candidate translation when all bodies share a translation-only parent
 chain, then checks the aggregate AABBs

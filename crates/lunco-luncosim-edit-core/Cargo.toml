@@ -26,8 +26,8 @@ avian3d = { workspace = true }
 big_space.workspace = true
 lunco-core = { path = "../lunco-core" }
 lunco-physics = { path = "../lunco-physics" }
-lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
+lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 # Terrain shader-mode selector (Lit / Debug-LOD / Plain) in the Inspector.
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-assets = { path = "../lunco-assets" }
