@@ -16,6 +16,9 @@ lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 lunco-usd-bevy-camera = { path = "../lunco-usd-bevy-camera" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
+lunco-usd-sim-celestial = { path = "../lunco-usd-sim-celestial" }
+lunco-usd-sim-shader = { path = "../lunco-usd-sim-shader" }
+lunco-usd-sim-telemetry = { path = "../lunco-usd-sim-telemetry" }
 lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-avian = { path = "../lunco-usd-avian" }
 # `ShaderLook` + `ParamValue` (the open, WGSL-reflected parameter set).
@@ -46,7 +49,6 @@ lunco-hash = { path = "../lunco-hash" }
 lunco-readiness = { workspace = true }
 lunco-physics = { path = "../lunco-physics" }
 lunco-signal = { path = "../lunco-signal" }
-lunco-telemetry = { path = "../lunco-telemetry" }
 # Modelica runtime bridge. Pure parse/AST extraction is kept in the smaller
 # `lunco-modelica-ast` package below; this dependency is the headless solver
 # worker and Bevy runtime integration, not the workbench UI facade.

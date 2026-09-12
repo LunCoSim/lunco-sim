@@ -2,7 +2,8 @@
 //!
 //! A tool library that exposes `on_click(context)` becomes an armable tool in
 //! the Tools palette. Arm it, click in the scene, and the tool's own Rhai
-//! handler receives the canonical click context. Nothing else is required:
+//! handler receives the canonical click context, including whether the click
+//! used the primary, secondary, or middle button. Nothing else is required:
 //! there is no registration call, no palette edit, no Rust per tool. Drop
 //! `assets/scripting/tools/<name>.rhai` with an `on_click` in it and the button
 //! is there next launch.
@@ -120,9 +121,6 @@ pub(crate) fn on_scene_click_script_tool(
     mut commands: Commands,
 ) {
     let Some(tool) = armed.0.clone() else { return };
-    if click.button != PointerButton::Primary {
-        return;
-    }
     // Shared egui-vs-scene guard, as used by selection and placement: a click on
     // panel chrome is not a click on the world.
     if egui_focus.wants_pointer {
@@ -135,7 +133,6 @@ pub(crate) fn on_scene_click_script_tool(
 
     let context = scene_tool_context(
         &click,
-        "primary",
         &keys,
         &world.q_selectable,
         &world.q_ids,
@@ -160,7 +157,6 @@ pub(crate) fn on_scene_click_script_tool(
 #[allow(clippy::too_many_arguments)]
 fn scene_tool_context(
     click: &Pointer<Click>,
-    button: &str,
     keys: &ButtonInput<KeyCode>,
     q_selectable: &Query<Entity, With<lunco_core::SelectableRoot>>,
     q_ids: &Query<&lunco_core::GlobalEntityId>,
@@ -223,6 +219,11 @@ fn scene_tool_context(
             TelemetryValue::Bool(keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight])),
         ),
     ]);
+    let button = match click.button {
+        PointerButton::Primary => "primary",
+        PointerButton::Secondary => "secondary",
+        PointerButton::Middle => "middle",
+    };
     let mut context = vec![
         (
             "button".to_string(),
@@ -347,7 +348,7 @@ pub(crate) fn on_scene_pointer_event(
     click: On<Pointer<Click>>,
     keys: Res<ButtonInput<KeyCode>>,
     armed: Res<lunco_core::ArmedScriptTool>,
-    spawn_state: Res<crate::SpawnState>,
+    spawn_state: Res<lunco_luncosim_edit_core::SpawnState>,
     terrain_active: Res<lunco_core::TerrainToolActive>,
     egui_focus: Res<lunco_core::EguiFocus>,
     mut dispatch: ResMut<ScenePointerDispatch>,
@@ -355,7 +356,10 @@ pub(crate) fn on_scene_pointer_event(
     mut commands: Commands,
 ) {
     if armed.armed()
-        || !matches!(spawn_state.as_ref(), crate::SpawnState::Idle)
+        || !matches!(
+            spawn_state.as_ref(),
+            lunco_luncosim_edit_core::SpawnState::Idle
+        )
         || terrain_active.0
         || egui_focus.wants_pointer
     {
@@ -378,11 +382,6 @@ pub(crate) fn on_scene_pointer_event(
     }
     let context = scene_tool_context(
         &click,
-        match click.button {
-            PointerButton::Primary => "primary",
-            PointerButton::Secondary => "secondary",
-            PointerButton::Middle => "middle",
-        },
         &keys,
         &world.q_selectable,
         &world.q_ids,

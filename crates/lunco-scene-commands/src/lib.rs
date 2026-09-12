@@ -23,8 +23,8 @@
 //! ## Render-free, UI-free
 //!
 //! This crate names no material type and no egui/winit/picking/gizmo crate, so the
-//! headless server links it **without** linking the editor (`lunco-luncosim-edit`,
-//! which now depends on *this* crate rather than containing it). The optional
+//! headless server links it **without** linking either editor package. The editor
+//! packages depend on this crate rather than containing the command layer. The optional
 //! `ui` feature exposes shared USD UI types through the editor dependency graph;
 //! it does not change document resolution or authoring semantics.
 //!
@@ -87,8 +87,8 @@ impl SelectedEntities {
 /// selection is command-layer state, and any host that links the command layer —
 /// the sandbox, the Modelica workbench, a headless server driven by
 /// `SelectEntity` over HTTP — should get the same scoping without re-implementing
-/// this. It was in `lunco-luncosim-edit` first, which meant every other host's
-/// telemetry panel silently had its "Selected only" toggle disabled forever.
+/// this. Every host that links the command layer therefore gets the same
+/// selection scoping without a UI dependency.
 ///
 /// Change-driven: writes only when the selection actually moved AND the mirror
 /// would differ, so the resource's own change tick stays meaningful downstream.

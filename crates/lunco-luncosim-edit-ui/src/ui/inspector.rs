@@ -1270,7 +1270,7 @@ pub fn delete_selected_on_intent(
         return;
     }
     if let Some(target) = selected.primary() {
-        commands.trigger(crate::commands::DeleteEntity {
+        commands.trigger(lunco_scene_commands::commands::DeleteEntity {
             target,
             intent: lunco_core::EditIntent::Persistent,
         });
@@ -1684,7 +1684,7 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
                             });
                             return;
                         };
-                        ctx.trigger(crate::commands::MoveEntity {
+                        ctx.trigger(lunco_scene_commands::commands::MoveEntity {
                             entity_id: gid.get(),
                             translation: new_t.to_array().map(f64::from),
                         });
@@ -1836,7 +1836,7 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
     // Delete button
     ui.separator();
     if ui.button("Delete Entity (Del)").clicked() {
-        ctx.trigger(crate::commands::DeleteEntity {
+        ctx.trigger(lunco_scene_commands::commands::DeleteEntity {
             target: entity,
             intent: lunco_core::EditIntent::Persistent,
         });
@@ -3485,7 +3485,7 @@ fn shader_tools_ui(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
                     .on_hover_text("Register any .wgsl dropped into the twin's shaders/ folder")
                     .clicked()
                 {
-                    ctx.trigger(crate::commands::RescanShaders {});
+                    ctx.trigger(lunco_scene_commands::commands::RescanShaders {});
                 }
                 if let Some(path) = current_shader_path(ctx, part) {
                     if ui
@@ -3493,7 +3493,7 @@ fn shader_tools_ui(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
                         .on_hover_text(format!("Remove {path} (file + picker)"))
                         .clicked()
                     {
-                        ctx.trigger(crate::commands::DeleteShader { path });
+                        ctx.trigger(lunco_scene_commands::commands::DeleteShader { path });
                     }
                 }
             });

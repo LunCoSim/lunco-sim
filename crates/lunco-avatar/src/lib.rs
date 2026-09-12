@@ -1212,7 +1212,7 @@ impl Plugin for LunCoAvatarPlugin {
         //
         // The observer reads two click-arbitration resources — `DragModeActive`
         // (gizmo drag in progress) and `SpawnToolActive` (click-to-place armed).
-        // Both are normally owned by the editor (`lunco-luncosim-edit`), but the
+        // Both are normally owned by the scene-edit core, but the
         // observer lives here and fires on the FIRST pointer event, so a binary
         // that uses the avatar without the editor (luncosim) would panic on the
         // missing `Res`. Guarantee them here — `init_resource` is idempotent, so

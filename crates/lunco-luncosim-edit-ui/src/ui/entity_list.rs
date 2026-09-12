@@ -1145,7 +1145,7 @@ fn entity_list_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
             .and_then(|r| r.api_id_for(entity))
             .map(|g| g.get());
         if let Some(id) = id {
-            ctx.trigger(crate::commands::FocusEntityById {
+            ctx.trigger(lunco_scene_commands::commands::FocusEntityById {
                 entity_id: id,
                 distance: 0.0,
             });

@@ -100,7 +100,7 @@ in practice.
 
 ## `lunco:anchor:*` does not disappear
 
-The USD anchor is load-bearing beyond the DEM: `lunco-usd-sim/src/celestial.rs`
+The USD anchor is load-bearing beyond the DEM: `lunco-usd-sim-celestial`
 uses it to place a **site** for sun/Earth geometry, and a scene may author an
 anchor with no terrain at all. The rule is therefore narrower than "delete it":
 

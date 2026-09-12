@@ -20,7 +20,8 @@
 > busy widgets and headless diagnostics. `lunco-workbench-core` is the stable
 > workbench contract crate and `lunco-workbench` is the concrete shell. Together
 > they are depended on by ~10 crates
-> (luncosim, lunco-luncosim, lunco-luncosim-edit, lunco-usd, lunco-modelica-ui,
+> (luncosim, lunco-luncosim, lunco-luncosim-edit-core, lunco-luncosim-edit-ui,
+> lunco-usd, lunco-modelica-ui,
 > lunco-celestial, lunco-avatar, lunco-networking, …).
 
 ## Contents
@@ -725,7 +726,7 @@ crates):
 | `download` | `lunco-settings` | Shared download concurrency, attempt budget, exponential backoff, and delay cap |
 | `journal` | `lunco-twin-journal` | Retention, blob commit policy (`twin.toml` may override) |
 | `input_bindings` | `lunco-controller` | Resolved keyboard and look-button bindings shared by avatar control, help, input injection, and Rhai tutorials |
-| `ui.entity_list.grid_scope` | `lunco-luncosim-edit` | Active-Twin entity-tree visibility: `current` for the active `ActivePhysicsFrame`, or `all` for every mounted BigSpace grid |
+| `ui.entity_list.grid_scope` | `lunco-luncosim-edit-ui` | Active-Twin entity-tree visibility: `current` for the active `ActivePhysicsFrame`, or `all` for every mounted BigSpace grid |
 
 #### 9b.3 Per-Twin overrides
 
@@ -820,7 +821,7 @@ simulation default.
 ```
   Apps
    ├── Panel crates (domain-specific UI)
-   │    lunco-modelica-ui/src/ui   lunco-luncosim-edit/ui   lunco-mission/ui
+   │    lunco-modelica-ui/src/ui   lunco-luncosim-edit-ui/src/ui   lunco-mission/ui
    │         │                     │                       │
    │         ▼                     ▼                       ▼
    ├── lunco-status-core  (cross-cutting status/lifecycle contract)

@@ -72,7 +72,9 @@ A scenario is a `.rhai` program with lifecycle hooks. Attach it to any entity:
 - **One-shot eval (no attach):** the `RunRhai { code }` command — runs once with
   full World access; stdout is returned in the original deferred response.
 - **Structured tool invocation:** `RunRhaiTool { tool, args }` queues a registered
-  `on_click(context)` tool. `args` uses the shared typed `TelemetryValue` model
+  `on_click(context)` tool. `args` uses the shared typed `TelemetryValue` model;
+  scene click contexts include `button` (`primary`, `secondary`, or `middle`)
+  so the Rhai tool owns button-specific policy.
   and is converted directly to a native Rhai value at the backend boundary;
   scene adapters never build source snippets or JSON literals for tool arguments.
 - **Direct (code/tests):** insert a `ScriptDocument` into `ScriptRegistry` +
@@ -186,7 +188,7 @@ Representative commands already covering the user's surface:
 | Rover/vehicle | `SetPorts` — writes named input ports (`throttle`/`steer`/`brake`); authored Modelica/Rhai programs publish final drive and wheel-heading outputs through the same generic port graph |
 | Camera/control | `PossessVessel`, `ReleaseVessel`, `FocusTarget`, `FollowTarget` (`lunco-avatar/src/commands.rs`) |
 | Scene/USD | `LoadScene`, `ClearScene` (`lunco-usd-sim/src/cosim.rs:814,884`) |
-| Scene editing | `SpawnEntity`, `MoveEntity`, `RotateEntity`, `TransformEntity`, `SetObjectProperty`, `SelectEntity` (`lunco-scene-commands/src/commands.rs`); `SelectUsdPrim` (`lunco-luncosim-edit/src/selection.rs`) |
+| Scene editing | `SpawnEntity`, `MoveEntity`, `RotateEntity`, `TransformEntity`, `SetObjectProperty`, `SelectEntity` (`lunco-scene-commands/src/commands.rs`); `SelectUsdPrim` (`lunco-luncosim-edit-ui/src/selection.rs`) |
 | USD geometry editing | `ApplyUsdOp` with `UsdOp::SetAttribute` (`lunco-usd`) — standard USD attributes such as `point3f[] points`; the `gizmo` and `nurbs` Rhai tools are policy libraries over this typed command |
 | Modelica/cosim | `CompileModel`, `SetModelInput`, run/step commands (`lunco-modelica-core/...`, UI adapters in `lunco-modelica-ui/...`) |
 | Celestial | `TeleportToSurface`, `LeaveSurface` (`lunco-celestial/src/commands.rs`) |

@@ -148,14 +148,19 @@ UI Panel (read-only query) ──Typed Command──▶ Observer (domain crate)
 ### 1. Organize files
 
 ```
-crates/lunco-luncosim-edit/
+crates/lunco-luncosim-edit-core/
 ├── src/
-│   ├── lib.rs              # SceneEditPlugin (logic only)
+│   ├── lib.rs              # SceneEditPlugin (headless-safe mechanisms)
 │   ├── spawn.rs
-│   └── ui/                 # ALL UI — independent plugin
-│       ├── mod.rs          # SceneEditUiPlugin
-│       ├── spawn_palette.rs
-│       └── inspector.rs
+│   └── terrain_tools.rs
+
+crates/lunco-luncosim-edit-ui/
+└── src/
+    ├── lib.rs              # UI adapters and InspectorTarget
+    └── ui/                 # SceneEditUiPlugin and panels
+        ├── mod.rs
+        ├── spawn_palette.rs
+        └── inspector.rs
 ```
 
 ### 2. Add dependencies
@@ -260,7 +265,7 @@ register_commands!(on_delete_entity);
 | `TELEPORT_SURFACE` | lunco-avatar | Teleport avatar to surface |
 | `LEAVE_SURFACE` | lunco-avatar | Return to orbit |
 | `DRIVE_ROVER` | lunco-mobility | Set wheel intents |
-| `SPAWN_ENTITY` | lunco-luncosim-edit | Spawn catalog item |
+| `SPAWN_ENTITY` | lunco-scene-commands | Spawn catalog item |
 
 ## Headless
 
@@ -328,7 +333,7 @@ crates/lunco-luncosim-ui/src/ui/
 ├── code_panel.rs            # Panel impl
 └── models_palette.rs        # Panel impl
 
-crates/lunco-luncosim-edit/src/ui/
+crates/lunco-luncosim-edit-ui/src/ui/
 ├── mod.rs                   # SceneEditUiPlugin
 ├── spawn_palette.rs         # Panel impl
 ├── inspector.rs             # Panel impl

@@ -1,0 +1,65 @@
+[package]
+name = "lunco-luncosim-edit-ui"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "LunCoSim's egui panels for in-scene editing"
+
+[dependencies]
+lunco-luncosim-edit-core = { path = "../lunco-luncosim-edit-core" }
+lunco-scene-commands = { path = "../lunco-scene-commands" }
+bevy = { workspace = true, features = [
+    "bevy_asset",
+    "bevy_mesh",
+    "bevy_light",
+    "bevy_shader",
+    "bevy_post_process",
+    "bevy_anti_alias",
+    "mesh_picking",
+    "bevy_gizmos",
+] }
+openusd = { workspace = true }
+bevy_egui = { workspace = true }
+lunco-theme = { path = "../lunco-theme" }
+transform-gizmo-bevy = { version = "0.9.0" }
+lunco-workbench = { path = "../lunco-workbench" }
+lunco-workbench-core = { path = "../lunco-workbench-core" }
+lunco-canvas = { path = "../lunco-canvas", features = ["ui"] }
+serde_json = { workspace = true }
+serde = { workspace = true }
+lunco-settings = { path = "../lunco-settings" }
+avian3d = { workspace = true }
+big_space.workspace = true
+lunco-core = { path = "../lunco-core" }
+lunco-physics = { path = "../lunco-physics" }
+lunco-celestial = { path = "../lunco-celestial", default-features = false }
+lunco-time = { path = "../lunco-time" }
+lunco-doc = { path = "../lunco-doc" }
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
+lunco-api = { path = "../lunco-api", default-features = false }
+lunco-controller = { path = "../lunco-controller" }
+lunco-mobility = { path = "../lunco-mobility" }
+lunco-obstacle-field = { path = "../lunco-obstacle-field" }
+lunco-modelica-ui = { path = "../lunco-modelica-ui", default-features = false, features = ["ui"] }
+lunco-modelica-ast = { path = "../lunco-modelica-ast" }
+lunco-usd = { path = "../lunco-usd", default-features = false }
+lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+lunco-usd-bevy-camera = { path = "../lunco-usd-bevy-camera" }
+lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
+lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
+lunco-usd-core = { path = "../lunco-usd-core" }
+lunco-usd-ui = { path = "../lunco-usd-ui" }
+lunco-workspace = { path = "../lunco-workspace" }
+lunco-usd-sim = { path = "../lunco-usd-sim" }
+lunco-cosim = { path = "../lunco-cosim" }
+lunco-environment = { path = "../lunco-environment" }
+lunco-materials = { path = "../lunco-materials" }
+lunco-render = { path = "../lunco-render" }
+lunco-terrain-surface = { path = "../lunco-terrain-surface" }
+lunco-avatar = { path = "../lunco-avatar", default-features = false, features = ["ui"] }
+lunco-assets = { path = "../lunco-assets" }
+lunco-tools = { path = "../lunco-tools" }
+lunco-scripting = { path = "../lunco-scripting" }
+
+[lints]
+workspace = true

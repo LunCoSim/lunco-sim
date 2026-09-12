@@ -1682,7 +1682,7 @@ fn reinstantiate_entity(world: &mut World, entity: Entity) {
         });
     if let Ok(mut em) = world.get_entity_mut(entity) {
         em.remove::<UsdSceneProjected>();
-        em.remove::<lunco_usd_sim::shader::UsdShaderResolved>();
+        em.remove::<lunco_usd_sim_shader::UsdShaderResolved>();
         em.despawn_related::<Children>();
         if let Some(pp) = em.take::<UsdPrimPath>() {
             em.insert((pp, UsdSceneAwaitingStage));

@@ -1,0 +1,39 @@
+[package]
+name = "lunco-luncosim-edit-core"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+
+[dependencies]
+# THE COMMAND LAYER, now its own crate. Spawn/move/delete/set-property, the spawn +
+# shader catalogs, the runtime-layer USD persisters, `SelectedEntities` — everything
+# a `--no-ui` server needs and an editor is merely one caller of. The editor DEPENDS
+# on it; the direction never reverses. Editor modules import its command and
+# catalog types directly from the owning crate.
+lunco-scene-commands = { path = "../lunco-scene-commands" }
+# This crate names no `bevy_pbr` material type. Appearance is stated as intent
+# and bound by `lunco-render-bevy`; see `docs/architecture/render-decoupling.md`.
+bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh", "bevy_light", "bevy_shader"] }
+# Appearance intent (render-free): `PbrLook`.
+lunco-render = { path = "../lunco-render" }
+# Scene-editing mechanisms use the shared settings and command/state contracts;
+# rendered panels and their presentation dependencies belong to the sibling UI
+# package.
+lunco-settings = { path = "../lunco-settings" }
+avian3d = { workspace = true }
+
+big_space.workspace = true
+lunco-core = { path = "../lunco-core" }
+lunco-physics = { path = "../lunco-physics" }
+# `JournalResource` — the run condition that attaches the shader-journal recorder
+# (`shader_doc::wire_shader_journal_handle`) when the journal appears. The
+# ShaderDocument domain itself moved to `lunco-scene-commands`.
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
+lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
+# Terrain shader-mode selector (Lit / Debug-LOD / Plain) in the Inspector.
+lunco-terrain-surface = { path = "../lunco-terrain-surface" }
+lunco-assets = { path = "../lunco-assets" }
+
+[lints]
+workspace = true

@@ -15,7 +15,7 @@
 //!
 //! Render-free by construction, so a headless server can project a USD terrain — and
 //! get its collider for deterministic physics — without linking a UI. The terrain's
-//! material is a `UsdShade` binding like any other (`lunco-usd-sim`'s shader pass), so
+//! material is a `UsdShade` binding like any other (`lunco-usd-sim-shader`'s pass), so
 //! nothing here names a material. `lunco-terrain-surface` stays USD-free in turn and
 //! is read through its [`LayerAttrSource`](lunco_terrain_surface::LayerAttrSource)
 //! port, implemented here by [`UsdLayerAttrs`].

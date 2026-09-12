@@ -144,7 +144,9 @@ pub fn index() -> Vec<ToolInfo> {
 
 /// The function a tool must expose to become a CLICK TOOL in the editor's Tools
 /// palette: `on_click(context)`, called with the structured scene context when
-/// the tool is armed and the user clicks the scene.
+/// the tool is armed and the user clicks the scene. The context includes a
+/// `button` field (`"primary"`, `"secondary"`, or `"middle"`) so authored
+/// tools can choose their mouse-button policy.
 ///
 /// Declared as a signature rather than a separate registration call so a tool
 /// opts into the UI by *being usable from it* — write the handler and the button

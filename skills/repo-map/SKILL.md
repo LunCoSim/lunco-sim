@@ -101,7 +101,7 @@ Use this to jump to the right one; read the index for the full responsibility.
 | **Vessel control & hardware** | mobility, robotics, avatar, FSW/OBC/hardware, controller | `lunco-mobility`, `lunco-controller`, `lunco-cosim` |
 | **USD integration** | OpenUSD↔Bevy: headless document/core, geometry, visuals, physics, sim schemas, materials | `lunco-usd-core`, `lunco-usd-geometry`, `lunco-usd`, `lunco-usd-bevy`, `lunco-usd-avian`, `lunco-materials` |
 | **Networking & API** | replication, HTTP API, telemetry, attributes | `lunco-networking`, `lunco-api`, `lunco-telemetry` |
-| **Workbench & UI** | IDE shell, widgets, viz, 2D canvas, edit tools, render, web boot | `lunco-workbench`, `lunco-ui`, `lunco-viz`, `lunco-canvas`, `lunco-luncosim-edit` |
+| **Workbench & UI** | IDE shell, widgets, viz, 2D canvas, edit tools, render, web boot | `lunco-workbench`, `lunco-ui`, `lunco-viz`, `lunco-canvas`, `lunco-luncosim-edit-core`, `lunco-luncosim-edit-ui` |
 | **Scripting & modeling** | Modelica, event-driven Rhai, tools, hooks, behavior trees, authored lessons | `lunco-modelica-core`, `lunco-modelica-ui`, `lunco-scripting`, `lunco-tools`, `lunco-hooks`, `lunco-behavior`, `lunco-luncosim` |
 | **Applications** | the entry-point binaries above | `luncosim`, `luncosim-server`, `lunica` |
 

@@ -108,6 +108,13 @@ const JOINT_MOTOR_MODEL: MotorModel = MotorModel::SpringDamper {
 /// the `In` port reads the current motor setpoint and writes drive the motor.
 pub const REVOLUTE_JOINT_GROUP: AvianGroup = AvianGroup {
     present: |w, e| w.get::<RevoluteJoint>(e).is_some(),
+    entities: |world, out| {
+        out.extend(
+            world
+                .query_filtered::<Entity, With<RevoluteJoint>>()
+                .iter(world),
+        );
+    },
     ports: &[
         AvianPort {
             name: JOINT_ANGLE_PORT,
@@ -181,6 +188,13 @@ const PRISMATIC_STATE_PORTS: &[AvianPort] = &[
 /// `PhysicsDriveAPI:linear` drive are the only owners of this degree of freedom.
 pub const PRISMATIC_JOINT_GROUP: AvianGroup = AvianGroup {
     present: |w, e| w.get::<PrismaticJoint>(e).is_some(),
+    entities: |world, out| {
+        out.extend(
+            world
+                .query_filtered::<Entity, With<PrismaticJoint>>()
+                .iter(world),
+        );
+    },
     ports: &[
         AvianPort {
             name: JOINT_DISPLACEMENT_PORT,

@@ -1,158 +1,135 @@
-# Periodic Builder Perspective Render Stalls
+# Builder perspective render-stall handoff
 
-> Status: Open diagnostic · Audience: maintainers of the USD projection,
-> Workbench perspectives, and Bevy render startup path · 2026-09-11
+Status: implementation complete in `main`; the original render-transition
+findings remain valid, and the Builder-only port path plus the independent
+physics stall have separate owners and fixes.
 
-## Finding
+## Report evidence
 
-The stalls seen after opening the Sunfall Twin in the Builder/3D perspective
-are primarily render-initialisation stalls, not telemetry-recording stalls.
-The current Tracy capture shows lazy Bevy render setup occurring in bursts as
-the perspective, its render target, and newly projected USD visuals become
-available. Several of those setup paths synchronously wait for GPU-side or
-driver-side state, so the whole `Render` schedule can miss multiple frame
-deadlines.
+The source report is Trello card #211, “Document periodic Builder perspective
+render stalls”. Its Tracy capture used the Sunfall Twin scene and recorded the
+visible stalls during render initialization rather than in telemetry or the
+steady-state UI:
 
-The word *periodic* describes the user-visible pattern, but the capture does
-not show a fixed-rate timer. It shows a finite sequence of event-driven bursts:
-the USD visual queue continues admitting scene work, then the renderer pays a
-one-time or transition cost when a new view/pipeline/cluster/surface state is
-first used. Normal frames run between those events. Once the captured scene
-settled, no further frame exceeded 16.67 ms in the trace tail.
+- `bevy_core_pipeline::upscaling::prepare_view_upscaling_pipelines`: 74.124 ms
+  at 9.135 s, including `block_on_render_pipeline`.
+- `bevy_pbr::cluster::gpu::prepare_clusters_for_gpu_clustering`: 53.584 ms at
+  9.219 s.
+- `bevy_render::view::window::prepare_windows`: 254.310 ms at 2.765 s and
+  29.702 ms at 9.295 s.
+- `create_surfaces`: 47.018 ms at 2.609 s and 28.164 ms at 3.056 s.
 
-## Scope and reproduction
+The largest render-schedule bursts were 103.025 ms at 2.57 s, 259.753 ms at
+2.764 s, 83.877 ms at 9.133 s, 60.814 ms at 9.217 s, and 40.610 ms at 9.294 s.
+The 9.13–9.30 s sequence is an event-driven chain of lazy render prerequisites
+(upscaling, GPU clusters, then window preparation), not evidence of a fixed
+timer.
 
-The evidence was collected with Tracy on the current `main` source:
+`process_queued_usd_visuals` in `crates/lunco-usd-bevy/src/lib.rs` is a bounded
+secondary feeder: the default budget is 8 ms; the report measured 182 passes,
+1.494 s total, 8.210 ms mean, and 26.848 ms maximum. Telemetry and ordinary UI
+paths were not dominant: `retain_physics_telemetry` totalled 8.222 ms across
+893 calls, while `populate_inspector_view` averaged 138.317 us and peaked at
+704.617 us. After about 9.4 s, the capture tail had Render max 10.940 ms,
+Update 4.313 ms, and PostUpdate 5.470 ms, with no continued >16.67 ms burst.
 
-- Source commit: `4664fc44338281376ae2abe77cffff0ff9b588a1`
-- Scene: `/home/rod/Documents/scenes/sunfall-run/my_survey.usda`
-- Runtime: `target/debug/luncosim --api 4134 --no-vsync --no-throttle
-  --log-diag --scene /home/rod/Documents/scenes/sunfall-run/my_survey.usda`
-- Display backend: X11; the binary reported `Tracing with Tracy is active`
-- Capture duration: 20.32 s; 1,697 frames; approximately 5.7 million zones
-- Tracy capture: [sunfall-main-4664-telemetry-on-20260911.tracy](/home/rod/Documents/luncosim-workspace/main/scripts/perf/captures/sunfall-main-4664-telemetry-on-20260911.tracy)
-- Report checkout: `/home/rod/Documents/luncosim-workspace/usd`, branch
-  `usd` at `2c49d3fc7`; pre-existing dirty work was preserved
+## Current owner map
 
-The absolute times below are profiling times. Tracy instrumentation adds
-overhead, so they are attribution evidence rather than clean product frame
-times. The ordering, ownership, and correlation are the useful parts.
+- `crates/lunco-workbench/src/viewport.rs` intentionally keeps the scene
+  `Camera3d` full-window in the docked Builder layout. `apply_workbench_viewport`
+  publishes `visible=true, rect=None`; the measured dock leaf is for
+  occlusion/picking and must not become a camera crop.
+- The same file’s `sync_egui_host_msaa` is change-driven and mirrors the active
+  scene camera’s MSAA/HDR into the persistent egui host because both cameras
+  share the window main texture.
+- `crates/lunco-usd-bevy/src/camera_switch.rs::reconcile_scene_viewport` is the
+  sole writer of window-camera `is_active` and `viewport`. It gates activation
+  on the render target, projection, positive physical size, and cluster
+  readiness.
 
-## Measured cause
+Do not change these ownership contracts until the explicit View → Builder
+transition has been measured for camera, viewport, render-target, egui-host,
+surface, and pipeline changes. The likely fix must remove avoidable transition
+churn at its owner, without suppressing invalid state or reducing render
+quality.
 
-| Trace owner | Evidence | Interpretation |
-|---|---:|---|
-| `bevy_core_pipeline::upscaling::prepare_view_upscaling_pipelines` | 74.124 ms at 9.135 s | A new/changed view pipeline was specialised and synchronously waited on through `block_on_render_pipeline`. |
-| `bevy_pbr::cluster::gpu::prepare_clusters_for_gpu_clustering` | 53.584 ms at 9.219 s | GPU-clustering buffers/readback state were prepared for a view; this is a render-preparation transition, not telemetry. |
-| `bevy_render::view::window::prepare_windows` | 254.310 ms at 2.765 s; 29.702 ms at 9.295 s | Window surface acquisition/reconfiguration was expensive during startup and a later surface transition. |
-| `bevy_render::view::window::create_surfaces` | 47.018 ms at 2.609 s; 28.164 ms at 3.056 s | Initial render surfaces were created/recreated while the window and view were coming up. |
-| `schedule{name=Render}` | 103.025 ms at 2.570 s; 259.753 ms at 2.764 s; 83.877 ms at 9.133 s; 60.814 ms at 9.217 s; 40.610 ms at 9.294 s | The user-visible stalls are render-schedule misses containing the setup work above. |
+## Root-cause investigation
 
-The burst at approximately 9.13–9.30 s is especially explanatory:
+The first production capture of the Builder-only panel path showed that the
+largest repeated work was `lunco_luncosim_edit::ui::ports::populate_port_view`,
+not a render-pipeline transition. Its first implementation called
+`PortRegistry::entity_port_infos` for every candidate on every 10 Hz sample.
+The link backend made that worse by scanning `World::iter_entities()` for every
+candidate while discovering authored peer classes. View does not open this panel,
+which explains the perspective-specific symptom.
 
-1. `Render` takes 83.9 ms while upscaling pipeline preparation takes 74.1 ms.
-2. The following transition takes 60.8 ms while GPU cluster preparation takes
-   53.6 ms.
-3. The next transition takes 40.6 ms while window preparation takes 29.7 ms.
+The first committed fix (`b63bf0370`) moved candidate discovery behind the
+backend-owned `PortRegistry::port_entities` boundary. A follow-up change indexes
+authored link classes on `LinkNode` lifecycle changes and adds owner-provided
+`PortBackend::topology_key` callbacks. The Builder view now rebuilds port rows and
+metadata only when topology or labels change; stable samples read only live
+values, wire state, and held values. This preserves dynamic physics values and
+does not suppress or fake missing ports.
 
-These are different lazy prerequisites becoming ready on successive frames,
-not one telemetry callback waking up at a regular interval.
+The post-discovery capture still measured 34–52 ms in the metadata path. The
+later capture isolated the physics outlier to
+`avian3d::collider_tree::optimization::block_on_optimize_trees`: Avian started
+an async collider-tree optimizer and then joined it inside `PhysicsSchedule`.
+That join reached 48.926 ms even when the Builder port producer was gated out,
+so the physics issue is intermittent scheduler contention, not a Builder-specific
+physics configuration.
 
-## Why the pattern looks periodic
+The final physics owner configuration disables Avian's async optimizer mode. The
+supported optimizer still runs with Avian's normal tree-quality algorithm, but
+its work is performed in the owning physics schedule instead of being joined
+from a worker at the end of the same schedule. The standard
+`lunco_physics::DEFAULT_SUBSTEP_COUNT` remains eight.
 
-The runtime has two interacting streams:
+The final Builder-specific owner was the panel's presentation path, not Avian.
+The panel was painting thousands of collapsed headers and matching all 72,131
+rows every frame, while its producer rediscovered 4,028 candidates every 100 ms.
+The replacement keeps the complete registry projection and command contract,
+but virtualizes fixed-height entity headers, paints only explicitly expanded
+port grids, requests live values only for those expanded entities, and uses the
+existing `UsdStageRevision` to invalidate candidate discovery. This is why View
+is unaffected: it does not open the Ports panel or execute its producer/paint
+path.
 
-```text
-async USD/stage work becomes ready
-    -> bounded visual projection admits a batch
-    -> render-world view/resource state changes
-    -> lazy pipeline, cluster, or surface setup runs
-    -> Render blocks for that prerequisite
-    -> ordinary frames resume until the next state change
-```
+The final Tracy capture (`scripts/perf/captures/builder-perspective-physics-owner-sync-final-20260912.tracy`)
+measured `PhysicsSchedule` at 1.528 ms mean and 3.639 ms maximum under
+profiler overhead; the optimizer itself peaked at 8.856 us and the former
+blocking join peaked at 3.427 us. The non-Tracy production transition run
+(`target/luncosim-view-builder-physics-final-20260912.log`) reported Avian total
+step samples from 0.247–0.703 ms while switching View → Builder → View, with
+settled rolling averages around 0.35–0.55 ms and no runtime errors.
 
-The USD side deliberately uses a bounded main-thread queue. In
-[`lunco-usd-bevy/src/lib.rs`](../../crates/lunco-usd-bevy/src/lib.rs),
-`UsdVisualProjectionSettings` defaults to an 8 ms projection budget, and
-`process_queued_usd_visuals` is the structural projection boundary. The
-capture recorded 182 `process_queued_usd_visuals` passes, with 1.494 s total,
-8.210 ms mean, and 26.848 ms maximum. This queue is a secondary contributor
-and the feeder for render-state changes; it is not the large blocking leaf in
-the observed stalls.
+## Validation record
 
-Because stage/asset readiness and GPU resource creation do not arrive at a
-constant cadence, the resulting gaps can look periodic in the UI while their
-actual intervals vary. The observed large events are clustered during startup
-and settling, rather than repeating at a stable 5 Hz, 60 Hz, or telemetry
-sampling interval.
+The production `target/debug/luncosim` was built with the opt-in Tracy feature
+and profiled with `../tracy/capture/build/tracy-capture` on an explicit free API
+port using the Sunfall scene from report #211. The run issued
+`ActivatePerspective` for `rover_build`, repeated the View / Builder switch
+after settling, and inspected each transition. The clean FPS run was separate
+from the Tracy run: its physics result meets the requested sub-1 ms budget,
+while the profiled result is diagnostic only and is not the product timing
+number.
 
-## Telemetry and UI exclusion
+The post-fix Tracy capture
+(`scripts/perf/captures/builder-stage-gated-main-20260912.tracy`) recorded 114
+port-producer calls: the initial topology projection took 34.346 ms under
+profiler overhead, then stable calls were 37–66 us. `render_workbench` averaged
+0.851 ms (8.813 ms maximum) and the egui pass averaged 1.046 ms (9.122 ms
+maximum). The clean production run
+(`target/builder-stage-gated-main.log`) reported Avian total-step samples of
+0.224–0.912 ms during the Builder interval; the standard eight substeps were
+unchanged. The isolated transition rebuild remains a one-time render/scene
+startup cost and is not the recurring Builder port stall.
 
-Physics telemetry was measured directly. The
-[`retain_physics_telemetry`](../../crates/lunco-usd-sim/src/physics_telemetry.rs)
-system consumed 8.222 ms total across 893 calls, with a 9.206 µs mean and a
-38.462 µs maximum. Its command wrapper had a 1.917 ms total and an 8.967 µs
-maximum. That is orders of magnitude below the 29–260 ms render stalls and
-does not explain their cadence.
+## Handoff constraints
 
-Other inspected paths were also not dominant:
-
-- `populate_inspector_view`: 217.296 ms total over 1,571 calls, 138.317 µs
-  mean, 704.617 µs maximum.
-- `run_egui_context_pass_loop_system`: 1.160 s total over 1,696 calls,
-  684 µs mean, 9.156 ms maximum.
-- `process_usd_sim_prims`: 242.99 ms total over 182 calls, 1.335 ms mean,
-  4.494 ms maximum.
-
-The telemetry recorder may make the workload look active, but it is not the
-owner of the periodic stalls in this capture.
-
-## Startup versus settled behaviour
-
-Startup contained the largest isolated event: `Render` reached 259.753 ms at
-2.764 s, coincident with a 254.310 ms `prepare_windows` event. Surface creation,
-shader extraction, and initial view setup were also present around 2.6–3.1 s.
-
-The later 9.13–9.30 s sequence is a settling/transition burst associated with
-the incoming visual state. After approximately 9.4 s:
-
-- `Render` maximum: 10.940 ms; no frame over 16.67 ms
-- `Update` maximum: 4.313 ms
-- `PostUpdate` maximum: 5.470 ms
-
-Therefore this run does not demonstrate an ongoing steady-state periodic
-stall after all visual work has settled. If stalls continue after that point
-in the user session, a capture must include that post-settle interaction to
-determine whether a separate invalidation source is involved.
-
-## Builder-specific interpretation
-
-If “Builder” means the Build/Assembly/Editor perspective shown in the UI, the
-perspective is a plausible trigger because entering or switching it can create
-or change a camera, preview/render target, viewport size, cluster configuration,
-and surface lifecycle. Those changes are exactly the kind of first-use state
-that the measured Bevy preparation systems handle lazily. The perspective does
-not need to record telemetry for this to happen.
-
-This run launched into the saved scene/perspective state; it did not contain a
-synthetic click on one named Builder button. The Builder attribution is thus a
-source-and-timeline inference from the render resources created during the
-perspective startup, not a claim that one specific UI callback was isolated.
-
-If “builder” means `cargo build`, that is unrelated to the runtime stalls. The
-profiled process was already a built executable; the stalls occurred during
-runtime render preparation.
-
-## Ownership and limits
-
-The immediate blocking owners are the pinned Bevy render systems in the
-upscaling, PBR cluster, and window/surface paths. The USD-side owner is the
-bounded visual projection queue, which supplies render-world changes but was
-not the largest blocking leaf. Physics telemetry is a fixed-step producer and
-is conclusively secondary in this trace.
-
-This report is a diagnosis only. No source, scene, telemetry, render-quality,
-or external Twin changes were made. The next measurement, if needed, should
-record an explicit Builder enter/switch and a fully settled post-load window so
-that a persistent invalidation can be distinguished from the finite startup
-burst documented here.
+- The `usd` worktree contains unrelated dirty waypoint-refactor work for
+  Trello #182; preserve it and do not use it as a scratch checkout.
+- The first fix is committed as `b63bf0370`; the topology/index/cache and
+  physics-owner changes are included in the follow-up commit.
+- Keep the change scoped to the Builder stall, use the smallest owner test, and
+  update this review plus Trello before moving the card to Review.

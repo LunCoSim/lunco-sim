@@ -1089,7 +1089,7 @@ pub fn run() -> u8 {
         #[cfg(feature = "ui")]
         if ticks == 10 {
             if let Some(ref target_prim) = cli.select_prim {
-                use lunco_luncosim_edit::selection::{compute_selection_aabb, Selected};
+                use lunco_luncosim_edit_ui::selection::{compute_selection_aabb, Selected};
                 use lunco_usd_bevy_scene::UsdPrimPath;
 
                 let target_ent = {

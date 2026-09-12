@@ -260,7 +260,9 @@ fn crate_of(rel: &Path) -> String {
 /// Friendly domain title per crate, with a stable display order.
 fn domain_title(crate_name: &str) -> (&'static str, u32) {
     match crate_name {
-        "lunco-scene-commands" | "lunco-luncosim-edit" => ("Scene editing & authoring", 10),
+        "lunco-scene-commands" | "lunco-luncosim-edit-core" | "lunco-luncosim-edit-ui" => {
+            ("Scene editing & authoring", 10)
+        }
         "lunco-usd" => ("USD / scenes", 11),
         "lunco-usd-bevy" | "lunco-usd-sim" | "lunco-usd-avian" => ("USD / scenes", 12),
         "lunco-modelica-core" | "lunco-modelica-ui" => ("Modelica modeling & simulation", 20),

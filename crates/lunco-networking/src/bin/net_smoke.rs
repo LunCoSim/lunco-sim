@@ -476,8 +476,8 @@ fn client_drive_cadence(
     ideal.0 += (throttle as f32) * FWD_SPEED * time.delta_secs();
 }
 
-/// Client-side snapshot apply (mirrors `lunco_luncosim_edit::apply_incoming_snapshots`
-/// minus the avian `Position` write the stand-in rover doesn't have).
+/// Client-side snapshot apply for this stand-in rover. The production path is
+/// `lunco_networking::prediction::apply_incoming_snapshots`.
 fn test_apply_snapshots(
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
     mut snaps: ResMut<lunco_networking::session::IncomingSnapshots>,

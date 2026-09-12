@@ -1,7 +1,7 @@
 //! The cosim engine's port **backends** and their registration into the shared
 //! [`PortRegistry`].
 //!
-//! The registry itself, the four query operations, and the value types
+//! The registry itself, its discovery/access operations, and the value types
 //! ([`PortRef`], [`PortBackend`], [`PortDirection`]) live in
 //! [`lunco_core::ports`] — the neutral substrate *below* every participant — so
 //! that wires, the API, the inspector, and every scripting runtime read/write
@@ -24,7 +24,7 @@ use bevy::prelude::*;
 
 use lunco_core::architecture::{InputPorts, OutputPorts, Port};
 use lunco_core::ports::{
-    push_map, PortBackend, PortDirection, PortMetadata, PortRef, PortRegistry,
+    port_name_set_key, push_map, PortBackend, PortDirection, PortMetadata, PortRef, PortRegistry,
 };
 
 use crate::{DeclaredOutputPorts, SimComponent};
@@ -59,6 +59,8 @@ pub struct AvianPort {
 pub struct AvianGroup {
     /// Does `entity` belong to this group (carry the gating component)?
     pub present: fn(&World, Entity) -> bool,
+    /// Append every entity that can belong to this group to `out`.
+    pub entities: fn(&mut World, &mut Vec<Entity>),
     /// The ports this kind exposes.
     pub ports: &'static [AvianPort],
 }
@@ -106,6 +108,22 @@ fn avian_list(world: &World, entity: Entity, out: &mut Vec<PortRef>) {
             });
         }
     }
+}
+
+fn avian_entities(world: &mut World, out: &mut Vec<Entity>) {
+    for group in AVIAN {
+        (group.entities)(world, out);
+    }
+}
+
+fn avian_topology_key(world: &World, entity: Entity) -> u64 {
+    AVIAN.iter().enumerate().fold(0u64, |key, (index, group)| {
+        if (group.present)(world, entity) {
+            key | (1u64 << index)
+        } else {
+            key
+        }
+    })
 }
 
 fn avian_unit(name: &str) -> Option<&'static str> {
@@ -263,6 +281,25 @@ fn avian_write_input(world: &mut World, entity: Entity, name: &str, value: f64) 
 
 /// Modelica `SimComponent` — map-based `inputs`/`outputs`.
 const SIMCOMPONENT_BACKEND: PortBackend = PortBackend {
+    list_entities: |world, out| {
+        out.extend(
+            world
+                .query_filtered::<Entity, With<SimComponent>>()
+                .iter(world),
+        );
+    },
+    topology_key: |world, entity| {
+        let Some(component) = world.get::<SimComponent>(entity) else {
+            return 0;
+        };
+        let inputs = port_name_set_key(component.inputs.keys());
+        let outputs = port_name_set_key(component.outputs.keys());
+        let declared = world
+            .get::<DeclaredOutputPorts>(entity)
+            .map(|ports| port_name_set_key(ports.names.iter()))
+            .unwrap_or(0);
+        inputs ^ outputs.rotate_left(21) ^ declared.rotate_left(42)
+    },
     list: |w, e, out| {
         if let Some(c) = w.get::<SimComponent>(e) {
             push_map(out, &c.outputs, PortDirection::Out);
@@ -324,6 +361,8 @@ const SIMCOMPONENT_BACKEND: PortBackend = PortBackend {
 /// up to six group-presence checks + a name scan — resolution collapses that to a
 /// single component access per tick.
 const AVIAN_BACKEND: PortBackend = PortBackend {
+    list_entities: avian_entities,
+    topology_key: avian_topology_key,
     list: avian_list,
     metadata: Some(avian_metadata),
     read_output: avian_read_output,
@@ -341,6 +380,10 @@ const AVIAN_BACKEND: PortBackend = PortBackend {
 /// on the far side of a [`crate::SimConnection`] exchanges `f64`, and so does the
 /// port it is wired to.
 const PORT_BACKEND: PortBackend = PortBackend {
+    list_entities: |world, out| {
+        out.extend(world.query_filtered::<Entity, With<Port>>().iter(world));
+    },
+    topology_key: |world, entity| u64::from(world.get::<Port>(entity).is_some()),
     list: |w, e, out| {
         if let Some(p) = w.get::<Port>(e) {
             out.push(PortRef {
@@ -399,6 +442,25 @@ const PORT_BACKEND: PortBackend = PortBackend {
 /// read-only here: commands enter through [`InputPorts`], and a producer owns
 /// the writes to its outputs.
 const OUTPUT_PORTS_BACKEND: PortBackend = PortBackend {
+    list_entities: |world, out| {
+        out.extend(
+            world
+                .query_filtered::<Entity, With<OutputPorts>>()
+                .iter(world),
+        );
+    },
+    topology_key: |world, entity| {
+        let Some(outputs) = world.get::<OutputPorts>(entity) else {
+            return 0;
+        };
+        let names = port_name_set_key(outputs.ports.keys());
+        let live = outputs
+            .ports
+            .values()
+            .filter(|port_entity| world.get::<Port>(**port_entity).is_some())
+            .count() as u64;
+        names ^ live.rotate_left(47)
+    },
     list: |world, entity, out| {
         let Some(outputs) = world.get::<OutputPorts>(entity) else {
             return;
@@ -452,6 +514,14 @@ const OUTPUT_PORTS_BACKEND: PortBackend = PortBackend {
 /// arbitrated by possession + RBAC upstream; the GNC is simply the floor beneath
 /// the whole session layer.
 const PILOTED_BACKEND: PortBackend = PortBackend {
+    list_entities: |world, out| {
+        out.extend(
+            world
+                .query_filtered::<Entity, With<InputPorts>>()
+                .iter(world),
+        );
+    },
+    topology_key: |world, entity| u64::from(world.get::<InputPorts>(entity).is_some()),
     list: |w, e, out| {
         // `GlobalEntityId` names every composed USD prim, not just a vehicle.
         // The `InputPorts` surface is the architecture's already-authoritative

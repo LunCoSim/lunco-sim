@@ -532,6 +532,123 @@ pub struct SceneEditUiPlugin;
 
 impl Plugin for SceneEditUiPlugin {
     fn build(&self, app: &mut App) {
+        // The interaction adapters are UI-owned because they depend on the
+        // rendered viewport and its egui preview lease. The generic editor
+        // mechanisms and command observers are installed by
+        // `lunco-luncosim-edit-core::SceneEditPlugin`.
+        app.add_plugins(transform_gizmo_bevy::TransformGizmoPlugin)
+            .init_resource::<crate::gizmo::GizmoDragSession>()
+            .init_resource::<crate::gizmo::GizmoVisibilityState>()
+            .init_resource::<crate::diagnostic_visuals::DiagnosticVisualStore>()
+            .init_resource::<lunco_core::ArmedScriptTool>()
+            .init_resource::<crate::script_tools::ScenePointerDispatch>()
+            .add_plugins(crate::perf_bridge::PerfBridgePlugin);
+        app.init_resource::<lunco_api::queries::ApiQueryRegistry>();
+        app.world_mut()
+            .resource_mut::<lunco_api::queries::ApiQueryRegistry>()
+            .register(crate::selection::InspectSelectionProvider);
+        app.world_mut()
+            .resource_mut::<lunco_api::queries::ApiQueryRegistry>()
+            .register(crate::diagnostic_visuals::DiagnosticVisualsQueryProvider);
+        app.add_systems(
+            Startup,
+            (
+                crate::gizmo::configure_gizmo_modes,
+                crate::physics_viz::configure_gizmo_overlay,
+            ),
+        );
+        app.register_type::<crate::physics_viz::PhysicsArrows>();
+        app.add_systems(
+            lunco_core::SceneTeardown,
+            crate::diagnostic_visuals::reset_diagnostic_visuals,
+        );
+        app.add_systems(
+            PostUpdate,
+            (
+                crate::diagnostic_visuals::revoke_invalid_leases,
+                crate::diagnostic_visuals::draw_diagnostic_visuals,
+            )
+                .chain()
+                .after(bevy::transform::TransformSystems::Propagate)
+                .after(lunco_core::SceneViewportSet::Reconcile)
+                .before(bevy::camera::CameraUpdateSystems),
+        );
+        app.add_systems(
+            Update,
+            (
+                crate::physics_viz::auto_mark_dynamic_bodies,
+                crate::physics_viz::draw_physics_arrows,
+                crate::joint_viz::draw_joint_viz,
+                crate::joint_viz::draw_wheel_force_viz,
+                crate::physics_gizmo::draw_physics_gizmo,
+                crate::physics_gizmo::draw_frame_gizmo,
+            ),
+        );
+        app.add_systems(Update, crate::selection::select_possessed_vessel);
+        app.add_systems(
+            Update,
+            (
+                crate::script_tools::disarm_script_tool_on_cancel,
+                crate::script_tools::forget_missing_script_tool,
+            ),
+        );
+        app.add_systems(
+            PostUpdate,
+            crate::script_tools::clear_scene_pointer_dispatch,
+        );
+        app.add_observer(spawn_palette::on_spawn_state_requested);
+        app.add_observer(terrain_tools::on_terrain_ui_action);
+        app.add_observer(crate::selection::on_select_entity_target);
+        app.add_systems(Update, crate::selection::handle_deselect_keys);
+        app.add_observer(crate::script_tools::on_scene_pointer_event);
+        app.add_observer(crate::selection::on_scene_click_select);
+        app.add_observer(crate::selection::on_usd_viewport_click);
+        app.add_observer(crate::script_tools::on_scene_click_script_tool);
+        crate::diagnostic_visuals::register_all_commands(app);
+        crate::selection::register_all_commands(app);
+        app.add_systems(Update, crate::selection::draw_selection_bounds);
+
+        app.add_systems(
+            Last,
+            (
+                crate::gizmo::capture_gizmo_start,
+                crate::gizmo::capture_final_gizmo_pose.after(crate::gizmo::capture_gizmo_start),
+                crate::gizmo::restore_gizmo_dynamic.after(crate::gizmo::capture_final_gizmo_pose),
+            ),
+        );
+        app.add_systems(
+            lunco_time::InteractionSchedule,
+            (
+                crate::gizmo::apply_gizmo_proxy_drag.after(lunco_time::InteractionRestoreSet),
+                lunco_physics::apply_kinematic_drives
+                    .after(crate::gizmo::apply_gizmo_proxy_drag)
+                    .before(lunco_time::InteractionRecordSet),
+            ),
+        );
+        app.add_systems(
+            PostUpdate,
+            crate::gizmo::sync_gizmo_camera
+                .after(lunco_core::SceneViewportSet::Reconcile)
+                .before(bevy::camera::CameraUpdateSystems),
+        );
+        app.add_systems(
+            PostUpdate,
+            (
+                crate::gizmo::spawn_gizmo_proxies,
+                crate::gizmo::despawn_gizmo_proxies,
+            )
+                .chain()
+                .after(bevy::transform::TransformSystems::Propagate),
+        );
+        app.add_systems(
+            PostUpdate,
+            crate::gizmo::sync_gizmo_proxies
+                .after(bevy::transform::TransformSystems::Propagate)
+                .after(crate::gizmo::despawn_gizmo_proxies),
+        );
+        app.add_systems(Update, crate::gizmo::drive_gizmo_drag);
+        app.add_systems(Update, crate::gizmo::sync_gizmo_dragging_marker);
+
         // Camera-path overlay: state + the gizmo pass that draws it, and the
         // tracker that tells the panel's transport which path clock to drive.
         // Gate inputs for `usd_selection_view_changed`. `SceneEditPlugin` also
@@ -768,10 +885,11 @@ impl Plugin for SceneEditUiPlugin {
         );
 
         // The universal port table is a live diagnostic/control surface. Its
-        // producer samples the shared registry at 10 Hz because some Avian
-        // outputs are native solver components without one common change marker;
-        // the panel itself remains a pure view and emits SetPorts/ReleasePort.
-        app.init_resource::<ports::PortView>();
+        // producer samples requested live values at 10 Hz, while backend-owned
+        // candidate discovery is invalidated by the scene projection revision.
+        // The panel itself remains a pure view and emits SetPorts/ReleasePort.
+        app.init_resource::<ports::PortView>()
+            .init_resource::<ports::PortInspectionRequest>();
         app.add_view_model(ports::populate_port_view, ports::port_view_due);
 
         // WP-8: the Inspector reads query-derived sun / camera / joint state

@@ -62,7 +62,7 @@ lunco-avatar = { path = "../lunco-avatar", default-features = false }
 # always-compiled registry component) for snapshot grid parenting — never
 # celestial's egui inspector (`ui` feature). Keeps the headless server egui-free.
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
-# NO `lunco-luncosim-edit` EDGE (review A6). The wire needs exactly two symbols the
+# NO editor-package EDGE. The wire needs exactly two symbols the
 # editor used to own — `SpawnEntity` (channel declaration) and `PendingCorrection`
 # (prediction diagnostics) — and both now live in `lunco-core`, where the wire and
 # the editor can share them. That one edge used to drag the whole editor closure

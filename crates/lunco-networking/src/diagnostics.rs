@@ -3,7 +3,7 @@
 //! These are **read-only observers of public ECS state** (no instrumentation of the
 //! hot netcode systems): they query rendered `GlobalTransform`, avian velocities,
 //! and `PendingCorrection` residuals, and report anomalies via `tracing`. The
-//! prediction SYSTEMS live in `lunco-luncosim-edit`, but every type they publish is
+//! prediction systems live in this package, but every type they publish is
 //! substrate in `lunco-core` — so this module observes the prediction without this
 //! crate depending on the editor at all (review A6).
 //!

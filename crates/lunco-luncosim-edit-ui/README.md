@@ -1,12 +1,16 @@
-# lunco-luncosim-edit
+# lunco-luncosim-edit-ui
 
-In-scene editing tools for the LunCoSim luncosim: spawn, selection, transform gizmos, and inspector panels.
+Rendered in-scene editing UI for LunCoSim. The headless ECS mechanisms live
+in [`lunco-luncosim-edit-core`](../lunco-luncosim-edit-core); this package
+owns the egui/workbench panels, transform-gizmo adapter, selection bridge, and
+debug visualization layers.
 
 ## Features
 
 - **Spawn System** — click-to-place rovers, props, and terrain with ghost preview
 - **Entity Selection** — Left-click replaces, Shift+Left-click extends, and Ctrl+Left-click removes from the selection; each uses the transform gizmo selection owner
 - **USD Preview Picking** — clicks in the isolated Editor image map through its focused offscreen camera and select the nearest authored prim-backed part
+- **Script-authored click tools** — Rhai tool libraries exposing `on_click(context)` appear in the Tools palette and receive the canonical scene click context
 - **Prims Navigation** — a newly selected prim opens its ancestors and scrolls into view; unchanged selections leave manual tree scrolling alone
 - **Transform Gizmo** — translate/rotate via `transform-gizmo-bevy`; live entities use BigSpace and the scene command, while USD previews use parent-local projection and `ApplyUsdOps`
 - **Inspector Panel** — schema-hinted USD fields with units and authored/inherited provenance; component edits are prepared as explicit, reviewable USD proposals
@@ -164,13 +168,12 @@ This follows the OpenUSD specification: `PhysicsRigidBodyAPI` on a parent aggreg
 
 | File | Purpose |
 |------|---------|
-| `lib.rs` | Plugin, resources (`SelectedEntity`, `SpawnState`) |
-| `catalog.rs` | `SpawnCatalog`, `SpawnableEntry`, `SpawnCategory` |
-| `spawn.rs` | Ghost preview, click-to-place system |
+| `lib.rs` | UI package modules and `InspectorTarget` |
+| `ui/mod.rs` | `SceneEditUiPlugin` and panel registration |
 | `selection.rs` | Semantic click selection, `GizmoTarget` management |
 | `gizmo.rs` | Kinematic-drive lifecycle and proxy editing |
 | `inspector.rs` | EGUI parameter panel |
 | `entity_list.rs` | Clickable list of scene entities |
 | `ui/spawn_palette.rs` | Spawn palette UI |
-| `commands.rs` | `SPAWN_ENTITY` command message handling |
-| `undo.rs` | Undo stack system |
+| `diagnostic_visuals.rs` | Camera/collider debug leases and visualization commands |
+| `physics_viz.rs`, `physics_gizmo.rs`, `joint_viz.rs` | Rendered physics diagnostics |

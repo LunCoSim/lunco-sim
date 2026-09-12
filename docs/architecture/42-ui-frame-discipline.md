@@ -78,10 +78,20 @@ topology/readiness decision; it is not an Apollo scene or name heuristic and
 it does not add an alternate lighting path.
 
 Panel view-models also gate on the Workbench's live dock state. A registered
-panel that is not docked has no visible consumer, so its producer must not
-rebuild a projection in the background. `WorkbenchSnapshot::is_panel_docked`
-is the shared visibility boundary for that decision; opening the panel makes
-its normal producer cadence eligible again.
+panel that is docked but not the active tab has no visible consumer, so its
+producer must not rebuild a projection in the background.
+`WorkbenchSnapshot::is_panel_visible` is the shared visibility boundary for
+that decision; selecting the panel makes its normal producer cadence eligible
+again. `is_panel_docked` remains the layout-presence query for shell operations.
+
+Physics has the same frame-budget boundary even though its consumer is not UI.
+Avian's collider-tree optimizer may use a worker task, but Avian joins that task
+inside `EndOptimize` of the nested `PhysicsSchedule`. A worker that is delayed
+by concurrent application work therefore becomes a blocking physics stall. The
+physics owner keeps Avian's supported synchronous optimizer setting, preserving
+the normal tree-quality algorithm while keeping its cost in the schedule that
+admits it; the eight-substep solver contract is unchanged. Diagnostics measure
+this schedule and must not be disabled to hide the cost.
 
 The empty scene-root mount path is resolved against the same live composed
 stage, through the USD boundary's shared `defaultPrim` resolver. Visual and
@@ -192,6 +202,18 @@ The same ownership rule applies to the measured presentation paths:
 - **Dock anchors** publish all authored slot unions from one dock-tree walk.
   Adding another anchor group must extend that pass rather than add another
   full layout traversal.
+- **Universal port inspection** uses `PortRegistry::port_entities`: each
+  registered backend enumerates its own authoritative component/surface
+  candidates, and the registry deduplicates them. The Builder Ports panel must
+  never discover owners by probing every ECS entity against every backend. The
+  existing `UsdStageRevision` gates candidate discovery in the mounted scene;
+  the lightweight registry-only test path retains its entity-count guard. Each
+  backend also supplies an identity-only `topology_key`; rows and metadata are
+  rebuilt only when the scene projection changes. The panel virtualizes its
+  fixed-height entity headers and paints a port grid only for an explicitly
+  expanded entity. Its 10 Hz producer reads live values and wire/hold
+  decorations only for those requested entities. A live physics value is not a
+  reason to reconstruct or paint the whole table.
 
 The same rule applies below the UI boundary. The Modelica engine-sync pass is
 woken by the document registry revision and still compares document generations
@@ -273,7 +295,7 @@ detail; the shape is the lesson.
 when it runs — the gate is a required argument, not something the author
 remembers to add. A producer that genuinely must run every frame passes
 `every_frame`, which puts the claim at the call site next to its reason, where
-review can see it. (`lunco-luncosim-edit/src/ui/mod.rs`)
+review can see it. (`lunco-luncosim-edit-ui/src/ui/mod.rs`)
 
 **Never gate on a hash of the thing you were deciding whether to build.**
 `produce_usd_canvas` spent 11 ms/frame building a graph and hashing it only to

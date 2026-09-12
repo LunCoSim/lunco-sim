@@ -20,6 +20,7 @@ lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-compose = { path = "../lunco-usd-compose" }
 lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-usd-sim = { path = "../lunco-usd-sim" }
+lunco-usd-sim-shader = { path = "../lunco-usd-sim-shader" }
 lunco-core = { path = "../lunco-core" }
 lunco-api = { path = "../lunco-api", default-features = false }
 lunco-render = { path = "../lunco-render" }

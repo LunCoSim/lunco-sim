@@ -55,7 +55,7 @@ mod light;
 /// Light and transform ports — the port backend for what `light`/`compose` spawn.
 pub mod scene_ports;
 pub use light::{read_dome_intensity, read_intensity_with_exposure, DomeIntensity, LightReadError};
-pub mod lathe;
+use lunco_usd_bevy_lathe as lathe;
 pub mod mount;
 pub use light::UsdAuthoredLight;
 use lunco_usd_bevy_core::read::{
@@ -89,10 +89,7 @@ use openusd::schemas::geom::tokens as gtok;
 // inspector's ambient slider) must solve for the one dome it owns. Exported
 // because the WRITER lives in `lunco-scene-commands`, while the semantics — what
 // counts as an ambient dome, and in what units — live here with the reader.
-pub use light::{
-    ambient_fill_intensity, ambient_fill_saturates, untextured_dome_intensity_sum,
-    DOME_TEXTURE_ATTR,
-};
+pub use light::{ambient_fill_intensity, ambient_fill_saturates, untextured_dome_intensity_sum};
 
 /// Bevy plugin for USD visual synchronization.
 ///
@@ -973,7 +970,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
             // consumed and thrown away, which is what makes the surface editable at
             // all — `NurbsSurface` and `UsdLathe` are reflected components, so the
             // existing scripting bridge writes them with no new verb, and
-            // `crate::lathe`'s `Changed`-filtered systems rebuild the mesh once per
+            // `lunco-usd-bevy-lathe`'s `Changed`-filtered systems rebuild the mesh once per
             // edit instead of once per frame.
             if !has_authored_nurbs_trim(reader, &sdf_path) {
                 if let Some((surface, lathe_params)) = read_patch_surface(reader, &sdf_path) {
@@ -5724,7 +5721,7 @@ fn build_usd_nurbs_patch_mesh(
             uvs.push(s.uv);
         }
         let mut indices = domain.indices;
-        crate::lathe::flip_if_left_handed(surface.left_handed, &mut normals, &mut indices);
+        lathe::flip_if_left_handed(surface.left_handed, &mut normals, &mut indices);
         let mut mesh = Mesh::new(
             PrimitiveTopology::TriangleList,
             RenderAssetUsages::default(),
