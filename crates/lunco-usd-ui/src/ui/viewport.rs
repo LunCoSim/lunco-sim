@@ -280,7 +280,7 @@ impl Plugin for UsdViewportPlugin {
                 drain_pending_usd_preview_text_reads,
                 reconcile_preview_projection_state
                     .run_if(preview_projection_inputs_changed)
-                    .after(lunco_usd_bevy::UsdVisualProjectionSet),
+                    .after(lunco_usd_bevy_scene::UsdVisualProjectionSet),
             ),
         );
         register_all_commands(app);

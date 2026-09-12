@@ -105,6 +105,35 @@ pub fn bump_usd_stage_revision(
 #[derive(Component, Debug, Clone, Copy)]
 pub struct UsdSceneProjected;
 
+/// Boundary after the USD asset has been synchronized into the live ECS scene.
+///
+/// The visual projector owns the producer system, while headless projections
+/// use this set for ordering without depending on the visual implementation.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct UsdSceneSyncSet;
+
+/// Boundary after bounded USD scene and geometry projection has committed.
+///
+/// Simulation, shader intent, and presentation readiness consume this shared
+/// contract instead of naming the visual projector's systems directly.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct UsdVisualProjectionSet;
+
+/// Render target selected by a simulation-side visual split.
+///
+/// A physical owner may retain the USD identity while its mesh is moved to a
+/// child with the presentation transform. The target remains render-free so
+/// shader and simulation projections do not depend on the visual crate.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct UsdVisualMeshTarget(pub Entity);
+
+/// Marks a render target whose appearance is owned by a custom shader.
+///
+/// This is an intent marker only. The render binder consumes it together with
+/// `ShaderLook`; the scene contract must not depend on `bevy_pbr`.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct UsdVisualShaderBound;
+
 /// Marks a scene prim whose stage has not finished loading.
 ///
 /// This is a scene-lifecycle fact rather than a visual implementation detail:

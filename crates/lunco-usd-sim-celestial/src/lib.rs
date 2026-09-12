@@ -57,7 +57,7 @@ impl Plugin for CelestialProjectionPlugin {
                 Update,
                 project_celestial_comms_prims
                     .run_if(any_unprojected_celestial)
-                    .after(lunco_usd_bevy::sync_usd_visuals)
+                    .after(lunco_usd_bevy_scene::UsdSceneSyncSet)
                     .in_set(CelestialProjectionSet::Projection),
             )
             .add_systems(

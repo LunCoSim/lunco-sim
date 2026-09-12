@@ -29,7 +29,7 @@ pub(crate) fn register(app: &mut App) {
     app.add_systems(
         Update,
         report_scene_spawn_status
-            .after(lunco_usd_bevy::process_queued_usd_visuals)
+            .after(lunco_usd_bevy_scene::UsdVisualProjectionSet)
             .before(lunco_capture::screenshot::OfflineRecordingReadinessSet)
             .run_if(resource_exists::<lunco_status_core::status_bus::StatusBus>),
     );

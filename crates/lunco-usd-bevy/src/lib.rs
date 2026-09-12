@@ -77,7 +77,8 @@ use lunco_usd_bevy_scene::{
     read_usd_mesh_points, read_usd_mesh_topology, scene_root_ancestor, usd_axis_to_quat,
     GlbPlaceholder, PlaceholderAssetUri, ShapeDims, UsdAnimated, UsdPreviewOnly, UsdPrimPath,
     UsdSceneAwaitingStage, UsdSceneGeometryPending, UsdScenePlugin, UsdSceneProjected,
-    UsdSceneProjectionFailed, UsdSceneProjectionQueued, UsdSceneRoot,
+    UsdSceneProjectionFailed, UsdSceneProjectionQueued, UsdSceneRoot, UsdSceneSyncSet,
+    UsdVisualMeshTarget, UsdVisualProjectionSet,
 };
 use lunco_usd_core::UsdDataExt;
 use openusd::schemas::geom::tokens as gtok;
@@ -86,13 +87,6 @@ use openusd::schemas::geom::tokens as gtok;
 /// Registers the `UsdStageAsset` type, the USD asset loader, and the `sync_usd_visuals`
 /// system that processes USD prims into Bevy entities with meshes and transforms.
 pub struct UsdBevyPlugin;
-
-/// Systems in this set finish the bounded USD visual queue for the current
-/// update. Consumers that expose a render-ready state must run after this set,
-/// so a document generation cannot be reported ready between structural
-/// projection and asynchronous CPU mesh commit.
-#[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
-pub struct UsdVisualProjectionSet;
 
 impl Plugin for UsdBevyPlugin {
     fn build(&self, app: &mut App) {
@@ -259,7 +253,8 @@ impl Plugin for UsdBevyPlugin {
                                 AssetEvent<UsdStageAsset>,
                             >,
                         )
-                        .after(canonical::sync_canonical_stages),
+                        .after(canonical::sync_canonical_stages)
+                        .in_set(UsdSceneSyncSet),
                     process_queued_usd_visuals
                         .run_if(any_queued_usd_visuals)
                         .after(sync_usd_visuals)
@@ -366,21 +361,6 @@ pub struct PendingUsdMesh {
     stage_generation: u64,
     profile: lunco_render::RenderQualityProfile,
 }
-
-/// Render entity selected by a simulation-side visual split.
-///
-/// A wheel keeps its USD entity as the physics owner, while the mesh belongs to
-/// a child with the presentation transform. CPU-generated geometry may finish
-/// after that split, so the mesh commit must use this explicit target instead of
-/// assuming the USD entity is still renderable.
-#[derive(Component, Debug, Clone, Copy)]
-pub struct UsdVisualMeshTarget(pub Entity);
-
-/// Marks the render target whose appearance is owned by a projected custom
-/// shader. The marker is render-free so the async PBR commit can avoid adding a
-/// second appearance intent without depending on the shader crate.
-#[derive(Component, Debug, Clone, Copy)]
-pub struct UsdVisualShaderBound;
 
 /// Marker: this prim's `xformOpOrder` begins with the `!resetXformStack!`
 /// sentinel, so UsdGeomXformable defines its local-to-world as its OWN op stack

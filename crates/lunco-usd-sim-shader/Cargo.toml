@@ -12,7 +12,6 @@ lunco-assets = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-materials = { path = "../lunco-materials" }
 lunco-render = { path = "../lunco-render" }
-lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 

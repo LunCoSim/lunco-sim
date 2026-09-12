@@ -30,7 +30,6 @@ lunco-scripting = { path = "../lunco-scripting" }
 lunco-signal = { path = "../lunco-signal" }
 lunco-time = { path = "../lunco-time" }
 lunco-usd-avian = { path = "../lunco-usd-avian" }
-lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 lunco-usd-bevy-camera = { path = "../lunco-usd-bevy-camera" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }

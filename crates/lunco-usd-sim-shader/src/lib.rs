@@ -62,7 +62,7 @@ pub fn apply_usd_shader_materials(
         (
             Entity,
             &UsdPrimPath,
-            Option<&lunco_usd_bevy::UsdVisualMeshTarget>,
+            Option<&lunco_usd_bevy_scene::UsdVisualMeshTarget>,
             Has<ProceduralSkybox>,
             Option<&UsdInstanceProjection>,
         ),
@@ -365,7 +365,7 @@ fn apply_usd_shader_material_read(
     entity_commands.remove::<PbrLook>().try_insert((
         look,
         lunco_core::PortSurfaceReady,
-        lunco_usd_bevy::UsdVisualShaderBound,
+        lunco_usd_bevy_scene::UsdVisualShaderBound,
     ));
 }
 

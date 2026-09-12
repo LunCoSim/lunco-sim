@@ -393,7 +393,7 @@ impl Plugin for UsdSimPlugin {
             .add_systems(
                 Update,
                 lunco_usd_sim_shader::apply_usd_shader_materials
-                    .after(lunco_usd_bevy::process_queued_usd_visuals)
+                    .after(lunco_usd_bevy_scene::UsdVisualProjectionSet)
                     .before(process_usd_sim_prims),
             )
             // `process_usd_sim_prims` does a per-stage joint scan + per-
@@ -408,7 +408,7 @@ impl Plugin for UsdSimPlugin {
                 Update,
                 (process_usd_sim_prims
                     .run_if(any_unprocessed_usd_sim)
-                    .after(lunco_usd_bevy::process_queued_usd_visuals),)
+                    .after(lunco_usd_bevy_scene::UsdVisualProjectionSet),)
                     .in_set(UsdSimSet::Projection),
             );
         // Dynamic admission must happen before the fixed loop. The body remains
@@ -538,7 +538,7 @@ fn process_usd_sim_prims(
             Option<&ShaderLook>,
             Option<&UsdInstanceProjection>,
             Has<UsdSceneGeometryPending>,
-            Has<lunco_usd_bevy::UsdVisualShaderBound>,
+            Has<lunco_usd_bevy_scene::UsdVisualShaderBound>,
         ),
         (
             With<lunco_usd_bevy_scene::UsdSceneProjected>,
@@ -2381,19 +2381,19 @@ fn spawn_wheel_visual(
         visual.try_insert(material);
     }
     if shader_bound {
-        visual.try_insert(lunco_usd_bevy::UsdVisualShaderBound);
+        visual.try_insert(lunco_usd_bevy_scene::UsdVisualShaderBound);
     }
 
     let visual_entity = visual.id();
     commands
         .entity(entity)
-        .try_insert(lunco_usd_bevy::UsdVisualMeshTarget(visual_entity));
+        .try_insert(lunco_usd_bevy_scene::UsdVisualMeshTarget(visual_entity));
     commands
         .entity(entity)
         .remove::<Mesh3d>()
         .remove::<PbrLook>()
         .remove::<ShaderLook>()
-        .remove::<lunco_usd_bevy::UsdVisualShaderBound>();
+        .remove::<lunco_usd_bevy_scene::UsdVisualShaderBound>();
     Some(visual_entity)
 }
 

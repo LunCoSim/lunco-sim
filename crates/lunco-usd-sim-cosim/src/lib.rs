@@ -634,7 +634,7 @@ pub(crate) fn process_usd_cosim_prims(
         // routes through Bevy's panic error handler, which aborts wasm; `try_insert`
         // silently drops the write on a despawned entity. Every entity-tied insert
         // queued by this pipeline uses the same despawn-safe form for the same
-        // reason. See `lunco_usd_bevy::sync_usd_visuals` for the policy.
+        // reason. The visual synchronization boundary owns that policy.
         commands.entity(entity).try_insert(UsdSourcedCosim);
         if reader.has_api_schema(&sdf_path, "LunCoEnvironmentProbeAPI") {
             let declared_outputs = environment_probe_interface();
@@ -4883,8 +4883,8 @@ pub fn despawn_usd_subtree(world: &mut World, root: Entity) {
 }
 
 /// Spawn one new USD child prim into a live scene, mirroring the child branch of
-/// [`lunco_usd_bevy::instantiate_usd_prim`] — the per-prim analogue of a full
-/// scene-root mount, used by E2 incremental spawn ([`lunco_usd::live_consume`])
+/// the visual projector's per-prim analogue of a full scene-root mount, used
+/// by E2 incremental spawn ([`lunco_usd::live_consume`])
 /// when a `Resync` reports a prim added to the composed document.
 ///
 /// The caller resolves the live parent from the canonical stage identity and
@@ -5138,7 +5138,7 @@ pub fn spawn_scene_root_with_stage(
 /// 1. explicit `override_in` (non-empty caller-supplied path) wins.
 /// 2. otherwise return the empty *deferred-resolution sentinel* — the
 ///    scene-root entity is spawned with an empty path, and
-///    `lunco_usd_bevy::instantiate_usd_prim` resolves it from the
+///    visual projection resolves it from the
 ///    stage's `defaultPrim` metadata once the asset has parsed
 ///    (a missing `defaultPrim` is a terminal scene error).
 ///
@@ -5299,14 +5299,14 @@ pub fn install(app: &mut App) {
             CosimUpdateSet::Wiring,
         )
             .chain()
-            .after(lunco_usd_bevy::process_queued_usd_visuals),
+            .after(lunco_usd_bevy_scene::UsdVisualProjectionSet),
     );
 
     app.add_systems(
         Update,
         (
             publish_loaded_scene_stage_outcomes
-                .after(lunco_usd_bevy::sync_usd_visuals)
+                .after(lunco_usd_bevy_scene::UsdSceneSyncSet)
                 .run_if(on_message::<AssetEvent<UsdStageAsset>>),
             publish_failed_scene_stage_outcomes
                 .run_if(on_message::<bevy::asset::AssetLoadFailedEvent<UsdStageAsset>>),
@@ -5781,7 +5781,7 @@ mod tests {
     // `resolve_root_prim` no longer touches the filesystem: an explicit
     // override wins, and an empty override yields the deferred-resolution
     // sentinel (empty string). The actual `defaultPrim` lookup is done
-    // from the parsed stage in `lunco_usd_bevy::instantiate_usd_prim`
+    // from the parsed stage in the visual projection pass
     // (covered by `stage_default_prim` tests there) — correct on wasm too.
 
     #[test]
