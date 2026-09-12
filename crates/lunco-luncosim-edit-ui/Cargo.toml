@@ -36,7 +36,7 @@ lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-time = { path = "../lunco-time" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
-lunco-api = { path = "../lunco-api", default-features = false }
+lunco-api = { path = "../lunco-api" }
 lunco-controller = { path = "../lunco-controller" }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-obstacle-field = { path = "../lunco-obstacle-field" }

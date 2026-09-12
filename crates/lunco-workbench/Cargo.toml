@@ -42,7 +42,7 @@ lunco-status-core = { path = "../lunco-status-core" }
 # The screenshot backend (`screenshot.rs`). OPTIONAL: only a binary that actually serves the
 # API needs `CaptureScreenshot`, and `lunco-api` itself is now render-free BY CONSTRUCTION —
 # the GPU half is here, in the one crate every screenshot-taking binary already links.
-lunco-api = { path = "../lunco-api", optional = true, default-features = false }
+lunco-api = { path = "../lunco-api", optional = true }
 image = { workspace = true, optional = true }
 # Needed only to name `wgpu::Error` in the uncaptured-error handler
 # (`render_robustness.rs`). No version unification risk: `29` resolves to the

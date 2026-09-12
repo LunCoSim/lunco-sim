@@ -19,7 +19,7 @@ pub mod status;
 // that selects `ui` WITHOUT `lunco-api` (e.g. `cargo test -p lunco-luncosim-edit-ui`,
 // which reaches this crate through the dependency graph) failed to compile on an
 // unresolved `lunco_api` import.
-#[cfg(feature = "lunco-api")]
+#[cfg(feature = "api")]
 pub mod util;
 
 // Re-export Command structs for easy access

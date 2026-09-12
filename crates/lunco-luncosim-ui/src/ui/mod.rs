@@ -329,7 +329,7 @@ impl Plugin for LunCoSimUiPlugin {
                 // In-app rhai REPL — runs snippets against the live app through the
                 // API bridge, on web + native. Gated on bridge availability.
                 #[cfg(any(
-                    feature = "lunco-api",
+                    feature = "api-transport",
                     feature = "transport-http"
                 ))]
                 app.register_panel(rhai_repl_panel::RhaiReplPanel::default());

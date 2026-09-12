@@ -18,7 +18,7 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use std::cell::RefCell;
 use wasm_bindgen::prelude::*;
 
-use crate::schema::{ApiRequest, ApiResponse};
+use lunco_api::schema::{ApiRequest, ApiResponse};
 use crate::transports::envelope::{ApiRequestUnified, ApiResponseEnvelope};
 use crate::transports::HttpBridge;
 
@@ -27,7 +27,6 @@ thread_local! {
     /// until the app is constructed — calls before then return "not ready".
     static WASM_BRIDGE: RefCell<Option<HttpBridge>> = const { RefCell::new(None) };
 }
-
 /// Register the bridge so `lunco_api` can reach it. Called once from the
 /// plugin on the wasm build.
 pub fn set_wasm_bridge(bridge: HttpBridge) {

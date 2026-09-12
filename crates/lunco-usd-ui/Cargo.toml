@@ -20,7 +20,7 @@ bevy = { workspace = true, features = [
     "bevy_anti_alias",
 ] }
 bevy_egui = { workspace = true }
-lunco-api = { path = "../lunco-api", default-features = false }
+lunco-api = { path = "../lunco-api" }
 lunco-assets = { path = "../lunco-assets" }
 lunco-core = { path = "../lunco-core" }
 lunco-doc = { path = "../lunco-doc" }

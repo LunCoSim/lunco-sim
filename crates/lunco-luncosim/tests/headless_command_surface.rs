@@ -30,7 +30,7 @@ fn resolves(app: &App, command: &str) -> bool {
 fn headless_app() -> App {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins)
-        .add_plugins(lunco_api::LunCoApiPlugin::default())
+        .add_plugins(lunco_api_transport::LunCoApiPlugin::default())
         .add_plugins(lunco_workspace::WorkspacePlugin);
     app
 }

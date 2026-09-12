@@ -181,7 +181,7 @@ fn main() {
         AuthorId::local(),
     ));
     app.add_plugins(lunco_core::LunCoCorePlugin);
-    app.add_plugins(lunco_api::LunCoApiPlugin::default());
+    app.add_plugins(lunco_api_transport::LunCoApiPlugin::default());
     app.add_plugins(LunCoNetworkingPlugin { mode: Some(mode) });
 
     // Register the command types so the wire reflect (de)serialize + trigger

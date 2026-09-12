@@ -6,11 +6,11 @@
 //! observer also live here, so every host uses the same API command path.
 
 use bevy::prelude::*;
-#[cfg(feature = "lunco-api")]
+#[cfg(feature = "api")]
 use lunco_api::executor::{finish_command_result, PendingApiRequest};
-#[cfg(feature = "lunco-api")]
+#[cfg(feature = "api")]
 use lunco_api::schema::ApiErrorCode;
-#[cfg(not(feature = "lunco-api"))]
+#[cfg(not(feature = "api"))]
 use lunco_core::CommandResults;
 use lunco_core::{on_command, register_commands, Ack, ActiveCommandId, Command, OpId};
 use lunco_doc::DocumentId;
@@ -33,7 +33,7 @@ pub struct SetModelInput {
     pub value: f64,
 }
 
-#[cfg(feature = "lunco-api")]
+#[cfg(feature = "api")]
 #[on_command(SetModelInput)]
 fn on_set_model_input(
     trigger: On<SetModelInput>,
@@ -65,7 +65,7 @@ fn on_set_model_input(
     });
 }
 
-#[cfg(not(feature = "lunco-api"))]
+#[cfg(not(feature = "api"))]
 #[on_command(SetModelInput)]
 fn on_set_model_input(
     trigger: On<SetModelInput>,

@@ -163,10 +163,9 @@ lunco-twin-journal = { path = "../lunco-twin-journal", optional = true }
 # lunco-doc-bevy, so naming it directly adds no build cost. Was under `ui` only because
 # one UI panel imported DocumentId (CQ: de-UI-gate the doc subsystem).
 lunco-workbench = { path = "../lunco-workbench", optional = true }
-# `default-features = false` so the native (`lunco-api`) and web (`web`)
-# features choose the transport: `transport-http` (axum/TcpListener) vs.
-# `transport-wasm` (the `window.lunco_api` JS bridge).
-lunco-api = { path = "../lunco-api", optional = true, default-features = false }
+# `default-features = false` lets the application choose the outward transport
+# explicitly: native `transport-http` or the target-selected wasm bridge.
+lunco-api-transport = { path = "../lunco-api-transport", optional = true, default-features = false }
 # `default-features = false`: networking's egui/workbench `ui` feature is opt-in
 # (CQ-601). The GUI build re-enables it via this crate's `ui` feature
 # (`lunco-networking?/ui`); the headless `server` build leaves it off.
@@ -192,7 +191,7 @@ velopack = { version = "=1.2.110-ge826545", optional = true, features = ["public
 ureq = { workspace = true, optional = true }
 
 [features]
-# `ui` + `lunco-api` are on by default so native `cargo run --bin luncosim`
+# `ui` + `api-transport` are on by default so native `cargo run --bin luncosim`
 # starts a local windowed simulation. Networking is deliberately opt-in: a normal
 # desktop run or automated scene test must not bind a multiplayer host port. Build
 # the wire explicitly with `--features networking`, or use the headless server
@@ -203,7 +202,7 @@ ureq = { workspace = true, optional = true }
 # player with no wire: `--no-default-features --features ui,celestial,lunco-api`.
 # The wasm build sets its own feature set (`--no-default-features`), so this
 # default does not affect it.
-default = ["ui", "celestial", "lunco-api", "transport-http"]
+default = ["ui", "celestial", "api-transport", "transport-http"]
 # Windowed GUI: the winit windowing backend + render-effect features + every
 # UI crate (egui workbench, material editors, doc/theme/ui). Off for a headless
 # server.
@@ -227,7 +226,7 @@ ui = [
     # egui presence/guided overlays + Network menu bridge — only when networking
     # is also enabled (`?`); the headless server's `server` feature omits this.
     "lunco-networking?/ui",
-    "lunco-api?/winit",
+    "lunco-api-transport?/winit",
     "dep:lunco-workbench",
     "dep:lunco-settings",
     "bevy/bevy_winit",
@@ -259,27 +258,27 @@ ui = [
 # `--no-default-features --features server`. Skips `celestial` (bundled Earth
 # texture + ephemeris, ~10s of MB) — the server only needs `GravityPlugin`,
 # always compiled.
-server = ["lunco-api", "transport-http", "networking"]
+server = ["api-transport", "transport-http", "networking"]
 # `celestial` pulls in lunco-celestial's bundled Earth texture + Artemis-II
 # ephemeris (10s of MB). Off for the wasm luncosim build — it only needs
 # `GravityPlugin`, which is always compiled.
 celestial = ["lunco-celestial/embed-assets"]
 luncosim = []
 # Compile the API in. Transport is chosen automatically: the native HTTP
-# server comes from `lunco-api/transport-http` (added to `default` above);
-# the wasm build (`build_web.sh --features lunco-api`) gets the
+# server comes from `lunco-api-transport/transport-http` (added to `default` above);
+# the wasm build gets the
 # `window.lunco_api` JS bridge automatically via `cfg(target_arch="wasm32")`.
-lunco-api = [
-    "dep:lunco-api",
-    "lunco-modelica-core/lunco-api",
-    "lunco-luncosim-ui?/lunco-api",
+api-transport = [
+    "dep:lunco-api-transport",
+    "lunco-modelica-core/api",
+    "lunco-luncosim-ui?/api-transport",
 ]
 # Native HTTP API transport (axum/TcpListener) — also the gate for the in-app
-# rhai REPL panel, which needs `lunco_api::ApiBridge` (present under this feature
+# rhai REPL panel, which needs `lunco_api_transport::ApiBridge` (present under this feature
 # on native, and always on wasm). In `default` + `server`; the wasm build gets
 # the bridge automatically via `cfg(target_arch="wasm32")`.
 transport-http = [
-    "lunco-api/transport-http",
+    "lunco-api-transport/transport-http",
     "lunco-networking?/transport-http",
     "lunco-luncosim-ui?/transport-http",
 ]
@@ -290,7 +289,7 @@ networking = [
     "lunco-networking/networking",
     "lunco-luncosim-exposures/networking",
     "lunco-luncosim-ui?/networking",
-    "lunco-api",
+    "api-transport",
     "dep:lunco-twin-journal",
 ]
 # Netcode jitter diagnostics — off by default (not in normal builds). Build with

@@ -215,9 +215,9 @@ already happened **twice in this repo**:
    winit + wgpu into the headless server. CI had even **rationalised the symptom** — `integration.yml`
    carried a comment explaining why Linux windowing headers were needed *"even for the headless
    binary."* Nobody suspected the comma.
-2. `lunco-celestial` → `lunco-api` (whose default `render` feature pulls `bevy_render`). This was found
-   **at the very end of the decoupling**, after every material, camera and shader had already been
-   moved — the same trap, one layer deeper, still invisible.
+2. `lunco-celestial` → the former render-enabled API package. The API is now
+   transport-free and no longer owns any render feature; native HTTP and browser
+   bindings are isolated in `lunco-api-transport`.
 
 And the last edge before that one was a **single billboard `Text2d` label on a spacecraft** — because
 `bevy_sprite_render` pulls `bevy_render`. Nobody would guess the server links a GPU driver because of a

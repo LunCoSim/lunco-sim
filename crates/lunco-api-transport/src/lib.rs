@@ -1,0 +1,355 @@
+//! # lunco-api-transport — outward API transports
+//!
+//! This package owns the native HTTP listener and the browser JavaScript bridge.
+//! The transport-agnostic command, query, discovery, and response contracts live
+//! in `lunco-api`; application roots depend on this package only when they need
+//! an outward transport.
+use bevy::prelude::*;
+use lunco_api::{
+    add_plugin_once, ensure_command_core,
+    discovery::ApiDiscoveryPlugin,
+    executor,
+    queries::{self, ApiQueryRegistryPlugin, ApiVisibilityPlugin},
+    schema,
+    subscription::ApiTelemetryPlugin,
+};
+pub mod transports;
+
+/// Configuration for the API plugin.
+#[derive(Debug, Clone)]
+pub struct LunCoApiConfig {
+    /// HTTP server configuration (None = no HTTP transport).
+    #[cfg(feature = "transport-http")]
+    pub http_config: Option<transports::HttpServerConfig>,
+}
+
+impl LunCoApiConfig {
+    /// Create configuration by parsing CLI arguments (`--api [PORT]`).
+    ///
+    /// If `--api` is present without a port, it defaults to
+    /// [`DEFAULT_API_PORT`](lunco_core::session::DEFAULT_API_PORT).
+    /// If `--api` is NOT present, returns configuration with HTTP disabled.
+    pub fn from_args() -> Self {
+        // The CLI port only matters when an outward HTTP transport is compiled
+        // in; without `transport-http` the config carries no fields, so parsing
+        // args here would be dead work (and an unused `port`).
+        #[cfg(feature = "transport-http")]
+        let http_config = {
+            let args: Vec<String> = std::env::args().collect();
+            let mut port = None;
+
+            for i in 0..args.len() {
+                if args[i] == "--api" {
+                    port = Some(lunco_core::session::DEFAULT_API_PORT);
+                    if i + 1 < args.len() {
+                        if let Ok(p) = args[i + 1].parse::<u16>() {
+                            port = Some(p);
+                        }
+                    }
+                    break;
+                }
+            }
+
+            port.map(|p| transports::HttpServerConfig { port: p })
+        };
+
+        Self {
+            #[cfg(feature = "transport-http")]
+            http_config,
+        }
+    }
+}
+
+impl Default for LunCoApiConfig {
+    fn default() -> Self {
+        Self::from_args()
+    }
+}
+
+/// Main API plugin.
+///
+/// Registers:
+/// - Entity registry (`GlobalEntityId` ↔ Entity mapping)
+/// - API executor (ApiRequest → ECS)
+/// - Telemetry subscription system
+/// - HTTP transport server (if enabled)
+pub struct LunCoApiPlugin {
+    /// HTTP transport config — only present when `transport-http` is compiled
+    /// in. Without it `LunCoApiConfig` has no fields and the plugin registers
+    /// only ECS-side plumbing, so there is nothing to store.
+    #[cfg(feature = "transport-http")]
+    config: LunCoApiConfig,
+}
+
+impl LunCoApiPlugin {
+    /// Create a new API plugin with the given configuration.
+    pub fn new(config: LunCoApiConfig) -> Self {
+        // Without an HTTP transport the config carries nothing actionable.
+        #[cfg(not(feature = "transport-http"))]
+        let _ = config;
+        Self {
+            #[cfg(feature = "transport-http")]
+            config,
+        }
+    }
+}
+
+/// Create with default configuration.
+///
+/// The `Default` TRAIT, not an inherent `default()`: an inherent method of that
+/// name shadows `Default::default` at every call site, so `LunCoApiPlugin::default()`
+/// silently resolved to whichever the compiler picked. Implementing the trait also
+/// makes the plugin usable anywhere a `T: Default` bound applies.
+impl Default for LunCoApiPlugin {
+    fn default() -> Self {
+        Self {
+            #[cfg(feature = "transport-http")]
+            config: LunCoApiConfig::default(),
+        }
+    }
+}
+
+impl Plugin for LunCoApiPlugin {
+    fn build(&self, app: &mut App) {
+        // Transport-free command core (always enabled). Added via guarded helpers
+        // so it COMPOSES with `LunCoScriptingPlugin`, which now self-supplies the
+        // same core (`ensure_command_core`) to stay independent of this HTTP-API
+        // plugin — either may be added first, and neither double-adds. Plain
+        // `add_plugins` panics on a duplicate, hence the `is_plugin_added` guards.
+        ensure_command_core(app);
+        add_plugin_once::<ApiQueryRegistryPlugin>(app, ApiQueryRegistryPlugin);
+        add_plugin_once::<ApiVisibilityPlugin>(app, ApiVisibilityPlugin);
+        add_plugin_once::<ApiDiscoveryPlugin>(app, ApiDiscoveryPlugin);
+        add_plugin_once::<ApiTelemetryPlugin>(app, ApiTelemetryPlugin);
+
+        // Built-in query providers — reachable over the API and via the
+        // scripting `query()` verb. Domain-owned providers register the same
+        // way from their owning crate.
+        queries::register_builtin_queries(
+            &mut app.world_mut().resource_mut::<queries::ApiQueryRegistry>(),
+        );
+
+        // The networking wire (codec, capture/apply, snapshots) lives in the
+        // optional `lunco-networking` crate and is registered by its plugin only
+        // when the `networking` feature is on. This crate stays transport- and
+        // networking-agnostic.
+
+        // Bridge transport (feature-gated). The ECS-side plumbing — receiver,
+        // router system, response observer — is identical whether the outward
+        // transport is the native HTTP server or the in-browser JS bridge.
+        // Only the final hand-off differs: `spawn_server` (TcpListener) vs.
+        // `set_wasm_bridge` (the `window.lunco_api` export).
+        #[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
+        {
+            use crate::{
+                http_bridge_request_router, http_response_observer, ApiHttpResponsePending,
+            };
+            use transports::HttpBridge;
+
+            // BOUNDED: an unbounded channel turns a slow drain into unbounded
+            // memory growth, and this queue is fed by external HTTP traffic. The
+            // router drains it every tick, so 256 sits far above any real backlog
+            // while still capping the worst case; senders await when it is full
+            // (see `HttpBridge::execute`).
+            let (tx, rx) = tokio::sync::mpsc::channel(256);
+            let bridge = HttpBridge::new(tx);
+
+            // Bind the winit wake-up hook through a shared slot. Plugin build
+            // order is not the event-loop lifecycle: the proxy may not exist
+            // when this transport is constructed. The binding system below
+            // installs it as soon as the real winit resource is available, so
+            // a reactive window cannot sleep through an API request.
+            #[cfg(all(feature = "transport-http", feature = "winit"))]
+            let waker_slot = transports::ApiWakerSlot::default();
+            #[cfg(all(feature = "transport-http", feature = "winit"))]
+            let bridge = bridge.with_waker_slot(waker_slot.clone());
+            #[cfg(all(feature = "transport-http", feature = "winit"))]
+            {
+                app.insert_resource(ApiWakerBinding(waker_slot))
+                    .add_systems(
+                        Update,
+                        bind_winit_api_waker.run_if(
+                            bevy::ecs::schedule::common_conditions::resource_exists::<
+                                ApiWakerBinding,
+                            >,
+                        ),
+                    );
+            }
+
+            app.insert_resource(ApiHttpBridgeReceiver(rx))
+                // In-process handle for in-app callers (REPL panel, menu actions).
+                .insert_resource(ApiBridge(bridge.clone()))
+                .init_resource::<ApiHttpResponsePending>()
+                .add_observer(http_response_observer)
+                .add_systems(Update, http_bridge_request_router);
+
+            // Native: spawn the blocking TcpListener HTTP server. wasm has no
+            // `spawn_server` (axum/tokio-net are native-only) — the browser uses
+            // the JS bridge below instead, so skip the call there even if
+            // `transport-http` happens to be enabled in the feature set.
+            // `redundant_clone` fires on `bridge.clone()` here, and it is wrong:
+            // clippy analyses ONE cfg at a time. In this one (native +
+            // transport-http) the wasm arm below is compiled out, so the clone
+            // looks like the last use — but moving instead would break the wasm
+            // build, where `set_wasm_bridge` needs it too. See the note below on
+            // why the clones exist across the whole feature matrix.
+            #[allow(clippy::redundant_clone)]
+            #[cfg(all(feature = "transport-http", not(target_arch = "wasm32")))]
+            if let Some(config) = &self.config.http_config {
+                if let Err(error) = transports::spawn_server(config.clone(), bridge.clone()) {
+                    let message = if error.kind() == std::io::ErrorKind::AddrInUse {
+                        format!("port is already in use ({error})")
+                    } else {
+                        error.to_string()
+                    };
+                    app.insert_resource(transports::HttpServerStartupError {
+                        port: config.port,
+                        message,
+                    });
+                }
+            }
+
+            // Wasm: register the bridge behind the `window.lunco_api` JS export.
+            #[cfg(target_arch = "wasm32")]
+            transports::set_wasm_bridge(bridge.clone());
+
+            // Consumed by whichever transport is active above; the clones keep
+            // this block valid across every feature combination.
+            let _ = bridge;
+        }
+    }
+
+    #[cfg(all(feature = "transport-http", feature = "winit"))]
+    fn finish(&self, app: &mut App) {
+        // Winit creates its proxy during plugin build, but all plugin finish
+        // hooks run only after every plugin has completed build. Bind here as
+        // the deterministic lifecycle point; the Update system remains as a
+        // late-binding guard for hosts that create the proxy later.
+        let (slot, proxy) = {
+            let world = app.world();
+            let (Some(binding), Some(proxy)) = (
+                world.get_resource::<ApiWakerBinding>(),
+                world.get_resource::<bevy::winit::EventLoopProxyWrapper>(),
+            ) else {
+                return;
+            };
+            (binding.0.clone(), (**proxy).clone())
+        };
+        slot.install(std::sync::Arc::new(move || {
+            let _ = proxy.send_event(bevy::winit::WinitUserEvent::WakeUp);
+        }));
+        app.world_mut().remove_resource::<ApiWakerBinding>();
+    }
+}
+
+// ── HTTP bridge (feature-gated) ───────────────────────────────────────────────
+
+/// In-process handle to the API bridge, stored as a resource so **in-app**
+/// callers (an egui REPL panel, a menu action) can dispatch the same
+/// `/api/commands` envelope the HTTP/JS transports use — without a socket. The
+/// handle is a cheap clonable mpsc sender; `execute()` awaits the ECS response
+/// on a `oneshot`, so callers run it from a spawned task until the response is
+/// ready.
+/// Present on every build that has a bridge (native `transport-http` + wasm).
+#[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
+#[derive(Resource, Clone)]
+pub struct ApiBridge(pub transports::HttpBridge);
+
+/// Build the `RunRhai` API request that carries `code`. Shared by the web
+/// `lunco_rhai` export and the in-app REPL panel so both submit the byte-identical
+/// envelope the HTTP API / native `sandbox rhai` client use. Generic over the
+/// command registry (no dependency on the `RunRhai` type) — the dispatch resolves
+/// `"RunRhai"` by name. Errors only on an internal JSON encode fault.
+#[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
+pub fn rhai_request(code: &str) -> Result<schema::ApiRequest, String> {
+    let json = serde_json::json!({
+        "type": "ExecuteCommand",
+        "command": "RunRhai",
+        "params": { "code": code }
+    })
+    .to_string();
+    serde_json::from_str::<transports::ApiRequestUnified>(&json)
+        .map_err(|e| format!("rhai_request: {e}"))?
+        .try_into()
+        .map_err(|e| format!("rhai_request: {e}"))
+}
+
+/// Receives bridge requests (HTTP or wasm) and injects them as ApiRequestEvent.
+#[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
+#[derive(Resource)]
+pub struct ApiHttpBridgeReceiver(tokio::sync::mpsc::Receiver<transports::BridgeMessage>);
+
+/// Pending response senders (correlation_id → oneshot).
+#[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
+#[derive(Resource, Default)]
+pub struct ApiHttpResponsePending(
+    std::collections::HashMap<u64, tokio::sync::oneshot::Sender<schema::ApiResponse>>,
+);
+
+/// Lifecycle hand-off for the native window wake hook. The resource is removed
+/// after binding, so the binding system is not part of the steady-state frame
+/// path. Headless and wasm hosts do not create this resource.
+#[cfg(all(feature = "transport-http", feature = "winit"))]
+#[derive(Resource)]
+struct ApiWakerBinding(transports::ApiWakerSlot);
+
+#[cfg(all(feature = "transport-http", feature = "winit"))]
+fn install_winit_api_waker(
+    slot: transports::ApiWakerSlot,
+    proxy: &bevy::winit::EventLoopProxyWrapper,
+) {
+    let proxy = (**proxy).clone();
+    slot.install(std::sync::Arc::new(move || {
+        // A send error means the event loop is already shutting down. The
+        // bridge's request future will then fail through its normal channel
+        // closure path; emitting a teardown warning here would be noise.
+        let _ = proxy.send_event(bevy::winit::WinitUserEvent::WakeUp);
+    }));
+}
+
+#[cfg(all(feature = "transport-http", feature = "winit"))]
+fn bind_winit_api_waker(
+    binding: Option<Res<ApiWakerBinding>>,
+    proxy: Option<Res<bevy::winit::EventLoopProxyWrapper>>,
+    mut commands: Commands,
+) {
+    let (Some(binding), Some(proxy)) = (binding, proxy) else {
+        return;
+    };
+    install_winit_api_waker(binding.0.clone(), &proxy);
+    commands.remove_resource::<ApiWakerBinding>();
+}
+
+/// System that polls the bridge receiver and triggers API requests.
+#[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
+pub fn http_bridge_request_router(
+    mut receiver: ResMut<ApiHttpBridgeReceiver>,
+    mut pending: ResMut<ApiHttpResponsePending>,
+    mut id_counter: Local<u64>,
+    mut commands: Commands,
+) {
+    while let Ok(msg) = receiver.0.try_recv() {
+        *id_counter += 1;
+        let correlation_id = *id_counter;
+        pending.0.insert(correlation_id, msg.reply);
+        commands.trigger(executor::ApiRequestEvent {
+            request: msg.request,
+            correlation_id,
+        });
+    }
+}
+
+/// Observer that catches ApiResponseEvent and resolves the pending reply.
+#[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
+pub fn http_response_observer(
+    trigger: On<executor::ApiResponseEvent>,
+    mut pending: ResMut<ApiHttpResponsePending>,
+) {
+    let event = trigger.event();
+    if let Some(sender) = pending.0.remove(&event.correlation_id) {
+        // Ignored by design: a send error means the receiver was dropped — the
+        // HTTP client disconnected or timed out before the response was ready.
+        // Nothing to do; the pending entry is already removed.
+        let _ = sender.send(event.response.clone());
+    }
+}

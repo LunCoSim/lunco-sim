@@ -153,8 +153,9 @@ authoring through explicit document ids).
 
 - rhai is a **default-on optional feature** (`default = ["rhai"]`); removable for
   a script-free build.
-- `lunco-api` dep MUST be `default-features = false` (its default `transport-http`
-  pulls tokio→mio and breaks wasm).
+- The scripting crate depends only on the transport-free `lunco-api` contracts;
+  application roots add `lunco-api-transport` separately when they expose HTTP
+  or the browser bridge.
 - wasm needs `--cfg getrandom_backend="wasm_js"` (set by `build_web.sh`).
 - A `Result`-returning `#[on_command]` records to `CommandResults` — that resource
   must exist.

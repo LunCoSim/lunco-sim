@@ -22,7 +22,7 @@ lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-usd-sim = { path = "../lunco-usd-sim" }
 lunco-usd-sim-shader = { path = "../lunco-usd-sim-shader" }
 lunco-core = { path = "../lunco-core" }
-lunco-api = { path = "../lunco-api", default-features = false }
+lunco-api = { path = "../lunco-api" }
 lunco-render = { path = "../lunco-render" }
 lunco-doc = { path = "../lunco-doc" }
 # Only the document-lifecycle events are needed here; document presentation

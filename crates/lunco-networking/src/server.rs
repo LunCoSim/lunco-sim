@@ -240,7 +240,7 @@ pub(crate) struct AssetHttpServer {
     /// What clients prepend to a CID. Ends with `/`.
     pub(crate) base_url: String,
     /// Shared CID-string → path index, read by the HTTP handler.
-    index: lunco_api::transports::assets::AssetIndex,
+    index: lunco_api_transport::transports::assets::AssetIndex,
 }
 
 #[cfg(feature = "transport-http")]
@@ -257,9 +257,9 @@ impl AssetHttpServer {
     ///   same-origin by construction, so nginx reverse-proxies that path here. It
     ///   must NOT be `/assets/` — that's bevy's web asset root (shaders, scenes).
     pub(crate) fn start(port: u16) -> Self {
-        let index: lunco_api::transports::assets::AssetIndex = Default::default();
+        let index: lunco_api_transport::transports::assets::AssetIndex = Default::default();
         let bind_host = std::env::var("LUNCO_ASSET_BIND").unwrap_or_else(|_| "0.0.0.0".to_string());
-        lunco_api::transports::assets::spawn_asset_server(
+        lunco_api_transport::transports::assets::spawn_asset_server(
             format!("{bind_host}:{port}"),
             index.clone(),
         );
@@ -413,7 +413,7 @@ pub(crate) fn setup_host(app: &mut App, port: u16) {
         let asset_port = std::env::var("LUNCO_ASSET_PORT")
             .ok()
             .and_then(|v| v.parse::<u16>().ok())
-            .unwrap_or(lunco_api::transports::assets::DEFAULT_ASSET_PORT);
+            .unwrap_or(lunco_api_transport::transports::assets::DEFAULT_ASSET_PORT);
         if asset_port != 0 {
             app.insert_resource(AssetHttpServer::start(asset_port));
         } else {

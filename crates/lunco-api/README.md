@@ -1,18 +1,14 @@
 # lunco-api
 
-Transport-agnostic API layer for LunCoSim. Exposes simulation state and typed commands via HTTP, with support for future transports (ROS2, IPC, DDS, WebSocket).
+Transport-agnostic API core for LunCoSim. It owns simulation state and typed
+command/query contracts; the native HTTP and browser transports live in the
+separate `lunco-api-transport` package.
 
 ## Architecture
 
 ```
 ┌────────────────────────────────────────────────────────────┐
-│  Transports                                                │
-│  HTTP (axum) │ ROS2 │ IPC │ DDS │ WebSocket                │
-└────────────────────┬───────────────────────────────────────┘
-                     │
-                     ▼
-┌────────────────────────────────────────────────────────────┐
-│  lunco-api-core                                            │
+│  lunco-api                                                 │
 │  ApiEntityRegistry  — GlobalEntityId (u64) ↔ Bevy Entity   │
 │  ApiExecutor        — ApiRequest → ECS                    │
 │  ApiDiscovery       — schema introspection via reflection  │
@@ -29,7 +25,7 @@ Transport-agnostic API layer for LunCoSim. Exposes simulation state and typed co
 ## Key Design
 
 - **No hardcoded commands**: Any registered `#[Command]` type is automatically discoverable via `AppTypeRegistry` reflection; arbitrary internal reflected events are excluded.
-- **Transport-independent**: HTTP is one optional transport. The core types know nothing about HTTP.
+- **Transport-independent**: The core types know nothing about HTTP, sockets, or browser bindings. Those are application-bound transport concerns.
 - **Headless-compatible**: Runs without GPU/graphics. Perfect for server deployments.
 
 ## Commands
@@ -37,6 +33,9 @@ Transport-agnostic API layer for LunCoSim. Exposes simulation state and typed co
 Commands are discovered automatically. The API scans `AppTypeRegistry` for reflected events carrying the marker emitted by `#[Command]`. A command must still be registered by its owning plugin so its observer and reflected type exist in the running host.
 
 ### HTTP Endpoint
+
+The endpoint is supplied by `lunco-api-transport`; this package only defines
+the request/response contract consumed by that transport.
 
 ```
 POST /api/commands
@@ -146,7 +145,7 @@ fn on_set_ports_api(trigger: On<ApiCommandEvent>, ...) {
 ## Usage
 
 ```rust
-use lunco_api::LunCoApiPlugin;
+use lunco_api_transport::LunCoApiPlugin;
 
 app.add_plugins(LunCoApiPlugin::default());
 // HTTP server starts on port 4101
@@ -155,7 +154,7 @@ app.add_plugins(LunCoApiPlugin::default());
 With custom config:
 
 ```rust
-use lunco_api::{LunCoApiPlugin, LunCoApiConfig, transports::HttpServerConfig};
+use lunco_api_transport::{LunCoApiConfig, LunCoApiPlugin, transports::HttpServerConfig};
 
 app.add_plugins(LunCoApiPlugin::new(LunCoApiConfig {
     http_config: Some(HttpServerConfig { port: 8080 }),
@@ -166,16 +165,24 @@ The requested loopback port is claimed while the host application is being
 built. If another process already owns it, the host exits before starting its
 window or simulation loop and reports the port-binding error.
 
-## Features
+## Package boundary
 
-| Feature | Description |
-|---|---|
-| `transport-http` | HTTP transport via axum (default) |
+`lunco-api` has no transport features and can be used by headless domain crates
+without Axum, Tokio networking, or browser bindings. Add `lunco-api-transport`
+only to an application root that exposes HTTP or the browser bridge:
+
+```toml
+lunco-api = { path = "../lunco-api" }
+lunco-api-transport = { path = "../lunco-api-transport" }
+```
+
+The transport package's `transport-http` feature enables the native listener;
+its wasm bridge is selected automatically by the target.
 
 ## Entity IDs
 
 The API addresses entities by **numeric** `GlobalEntityId` (a `u64`, defined in
-`lunco-core`), *not* a ULID string. The `ApiEntityRegistry` resource maintains a
+`lunco-core`). The `ApiEntityRegistry` resource maintains a
 bidirectional `GlobalEntityId ↔ Bevy Entity` map; `sync_api_registry` keeps it
 in step as entities carrying a `GlobalEntityId` component are added/removed.
 Entity fields in command params are plain JSON numbers:

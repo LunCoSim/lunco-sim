@@ -10,10 +10,10 @@ default = []
 # The in-process API bridge used by the optional Rhai REPL panel. The host
 # application forwards its API feature here so this crate remains a pure UI
 # dependency when the bridge is not part of the build.
-lunco-api = ["dep:lunco-api", "lunco-modelica-ui/lunco-api"]
+api-transport = ["dep:lunco-api", "dep:lunco-api-transport", "lunco-modelica-ui/api"]
 # Native HTTP transport for the REPL panel. The panel is still transport
 # agnostic; the feature only makes the host's bridge available on native.
-transport-http = ["lunco-api", "lunco-api/transport-http"]
+transport-http = ["api-transport", "lunco-api-transport/transport-http"]
 # Source-palette presentation for Python-backed programs.
 python = []
 # Downloaded Twin presentation in the Scenarios menu.
@@ -46,7 +46,8 @@ bevy_flair = { workspace = true }
 bevy_winit = { version = "0.19" }
 winit = { version = "0.30.13" }
 
-lunco-api = { path = "../lunco-api", default-features = false, optional = true }
+lunco-api = { path = "../lunco-api", optional = true }
+lunco-api-transport = { path = "../lunco-api-transport", default-features = false, optional = true }
 lunco-assets = { workspace = true }
 lunco-avatar = { path = "../lunco-avatar", default-features = false }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }

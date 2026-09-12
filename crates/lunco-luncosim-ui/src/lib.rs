@@ -5,14 +5,14 @@
 //! windowed-only update surface. The simulator core does not depend on these
 //! modules, so editing the UI does not rebuild the headless application core.
 
-#[cfg(feature = "lunco-api")]
+#[cfg(feature = "api-transport")]
 mod offscreen;
 mod presentation_bridge;
 mod save_scenario;
 mod terrain_horizon;
 mod ui;
 
-#[cfg(feature = "lunco-api")]
+#[cfg(feature = "api-transport")]
 pub use offscreen::LunCoSimOffscreenPlugin;
 pub(crate) use save_scenario::SaveScenario;
 

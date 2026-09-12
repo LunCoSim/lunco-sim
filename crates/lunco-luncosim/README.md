@@ -60,7 +60,7 @@ already manually clocked and runs at the speed the CPU permits.
 
 - `ui` (default) — winit windowing backend, render-effect features, and every
   UI crate (egui workbench, material/blueprint editors, doc/theme/ui).
-- `lunco-api` (default) — compiles the API in; native HTTP transport.
+- `api-transport` (default) — compiles the API contracts and native HTTP transport in.
 - `networking` (opt-in) — multiplayer over WebTransport (lightyear). Enable it
   explicitly with `--features networking`; ordinary GUI and test runs do not
   bind multiplayer ports.

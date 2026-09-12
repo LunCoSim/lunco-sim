@@ -56,7 +56,7 @@ lunco-modelica-core = { path = "../lunco-modelica-core", default-features = fals
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 lunco-scripting = { path = "../lunco-scripting" }
 lunco-doc = { path = "../lunco-doc" }
-lunco-api = { path = "../lunco-api", default-features = false }
+lunco-api = { path = "../lunco-api" }
 lunco-assets = { workspace = true }
 avian3d = { workspace = true }
 big_space = { workspace = true }

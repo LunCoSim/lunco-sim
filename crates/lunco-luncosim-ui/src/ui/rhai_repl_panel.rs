@@ -3,12 +3,12 @@
 //!
 //! It runs rhai through the exact same path as `window.lunco_rhai(...)`, the
 //! native `luncosim rhai` CLI client, and MCP: a `RunRhai` command over the
-//! in-process API bridge ([`lunco_api::ApiBridge`]). No sockets, no CLI — so it
+//! in-process API bridge ([`lunco_api_transport::ApiBridge`]). No sockets, no CLI — so it
 //! works in the browser where the TCP-client `rhai_repl` module cannot.
 //!
 //! Gated on the bridge's availability (`transport-http` on native, always on
 //! wasm) — see the `transport-http` feature in `Cargo.toml`.
-#![cfg(any(feature = "lunco-api", feature = "transport-http"))]
+#![cfg(any(feature = "api-transport", feature = "transport-http"))]
 
 use std::sync::{Arc, Mutex};
 
@@ -112,7 +112,7 @@ impl Panel for RhaiReplPanel {
 
         if (key_submit || btn_submit) && !self.input.trim().is_empty() {
             let code = std::mem::take(&mut self.input);
-            match ctx.resource::<lunco_api::ApiBridge>().cloned() {
+            match ctx.resource::<lunco_api_transport::ApiBridge>().cloned() {
                 Some(bridge) => spawn_rhai(bridge, code, self.inbox.clone()),
                 None => {
                     // Bridge not installed (a build without the API transport).
@@ -127,8 +127,8 @@ impl Panel for RhaiReplPanel {
 
 /// Submit `code` as a `RunRhai` command through the bridge on a detached task,
 /// pushing `(code, output)` into `inbox` when the ECS produces the response.
-fn spawn_rhai(bridge: lunco_api::ApiBridge, code: String, inbox: Inbox) {
-    let req = match lunco_api::rhai_request(&code) {
+fn spawn_rhai(bridge: lunco_api_transport::ApiBridge, code: String, inbox: Inbox) {
+    let req = match lunco_api_transport::rhai_request(&code) {
         Ok(r) => r,
         Err(e) => {
             if let Ok(mut v) = inbox.lock() {
@@ -156,7 +156,7 @@ fn spawn_rhai(bridge: lunco_api::ApiBridge, code: String, inbox: Inbox) {
 /// the same envelope the HTTP/JS transports use (forward-compatible with new
 /// variants). A bare string `data` (the common rhai stdout shape) is shown as-is.
 fn format_response(resp: lunco_api::schema::ApiResponse) -> String {
-    let env = lunco_api::transports::ApiResponseEnvelope::from(resp);
+    let env = lunco_api_transport::transports::ApiResponseEnvelope::from(resp);
     if let Some(err) = env.error {
         return format!("error: {err}");
     }

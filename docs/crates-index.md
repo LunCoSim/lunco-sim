@@ -93,7 +93,8 @@ External communication, ECS replication, telemetry extraction, and distributed a
 | Crate | Responsibility |
 | :--- | :--- |
 | **`lunco-networking`** | Multiplayer layer: transport-agnostic replication, authentication, and collaborative edit logs. Host-authoritative planes broadcast on connect + change: the **journal plane** (convergent op-log merge), the **scenario plane** (CID asset manifest + scenario sync), the **scripted-policy plane** (rhai merge/authorize/drive-kernel hooks distributed so every peer runs the identical one), and per-peer AOI snapshot routing. |
-| **`lunco-api`** | Transport-agnostic API core: introspection-based command discovery and ULID entity registry. |
+| **`lunco-api`** | Transport-free API core: typed command/query contracts, reflection-based discovery, entity identity, execution, and response/telemetry infrastructure. |
+| **`lunco-api-transport`** | Application-bound API transports: native Axum HTTP listener, asset endpoint, and wasm browser bridge over the `lunco-api` contracts. |
 | **`lunco-telemetry`** | Telemetry channels: per-channel rate + deadband, bound to a `TimeDomain` (so pause/warp come free), retained in `lunco-signal`'s ring buffer, plus the OpenMCT-shaped query surface (catalog / history / recording). |
 | **`lunco-signal`** | The signal DATA model — `SignalRegistry`, `SignalRef`, `ScalarHistory`, and the backend-neutral `SimRegistry`/`SimStream` snapshot publication path. **Render-free by construction**: split out of `lunco-viz` (which links bevy_egui → bevy_render) so a headless run can retain history without a GPU stack. `lunco-viz` re-exports the signal registry. |
 
@@ -343,7 +344,10 @@ Shader appearance **intent** — **render-free**. Holds `ShaderLook` (a `.wgsl` 
 Multiplayer transport adapter. Handles ECS replication, transport abstraction (UDP/WebSockets), and collaborative editing. Physics snapshots and camera/perspective state transfer f64 named-frame state; capture/apply automatically convert between each peer's private `ActivePhysicsFrame` and the semantic frame. No `CellCoord` is a public/wire reference-frame identity.
 
 **`lunco-api`**
-Transport-agnostic API core. Exposes simulation state and command discovery via HTTP, mapping ULID-based stable entity IDs to process-local Bevy entities for external control and inspection.
+Transport-free API core. Owns typed command/query contracts, reflection-based discovery and execution, and the process-local entity registry used by external control and inspection. Native HTTP and browser transports live in `lunco-api-transport`.
+
+**`lunco-api-transport`**
+Application-bound API transports. Owns the native Axum HTTP listener, asset endpoint, and wasm browser bridge while consuming the transport-free `lunco-api` contracts.
 
 **`lunco-telemetry`**
 Reflection-based data extraction engine. Automatically samples and standardizes internal physics and software values for broadcast to external monitoring systems or Mission Control bridges (YAMCS/XTCE).

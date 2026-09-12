@@ -42,7 +42,6 @@ pub use wasm::*;
 pub struct HttpServerConfig {
     pub port: u16,
 }
-
 /// A native HTTP listener failure that prevents the host from starting.
 ///
 /// The listener is claimed while the host application is still being built,
@@ -57,8 +56,8 @@ pub struct HttpServerStartupError {
 
 #[cfg(any(feature = "transport-http", target_arch = "wasm32"))]
 pub struct BridgeMessage {
-    pub request: crate::schema::ApiRequest,
-    pub reply: tokio::sync::oneshot::Sender<crate::schema::ApiResponse>,
+    pub request: lunco_api::schema::ApiRequest,
+    pub reply: tokio::sync::oneshot::Sender<lunco_api::schema::ApiResponse>,
 }
 
 /// Wakes the host event loop after pushing a message into the
@@ -124,8 +123,8 @@ impl HttpBridge {
 
     pub async fn execute(
         &self,
-        request: crate::schema::ApiRequest,
-    ) -> Result<crate::schema::ApiResponse, ()> {
+        request: lunco_api::schema::ApiRequest,
+    ) -> Result<lunco_api::schema::ApiResponse, ()> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         // AWAIT a full queue rather than dropping. This is the command funnel: a
         // dropped request is an unattributable failure — the caller sees a timeout

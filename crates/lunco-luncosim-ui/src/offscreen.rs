@@ -19,10 +19,10 @@ use big_space::prelude::*;
 ///
 /// The shared simulator core owns the headless server plugin; this module owns
 /// only the GPU recording path.
-#[cfg(feature = "lunco-api")]
+#[cfg(feature = "api-transport")]
 pub struct LunCoSimOffscreenPlugin;
 
-#[cfg(feature = "lunco-api")]
+#[cfg(feature = "api-transport")]
 impl Plugin for LunCoSimOffscreenPlugin {
     fn build(&self, app: &mut App) {
         // Same non-UI cores the headless server needs (see the twin comments in
@@ -115,7 +115,7 @@ impl Plugin for LunCoSimOffscreenPlugin {
     }
 }
 
-#[cfg(feature = "lunco-api")]
+#[cfg(feature = "api-transport")]
 fn report_offscreen_render_view(
     cameras: Query<(
         Entity,
@@ -265,7 +265,7 @@ fn report_offscreen_render_view(
 /// bins are only available later in `RenderSystems::Prepare`; the two systems
 /// therefore form one explicit one-frame handoff rather than observing a main
 /// world approximation of render participation.
-#[cfg(feature = "lunco-api")]
+#[cfg(feature = "api-transport")]
 fn copy_offscreen_render_readiness_to_main_world(
     mut main_world: ResMut<bevy::render::MainWorld>,
     readiness: Res<lunco_workbench::screenshot::OfflineRenderReadiness>,
@@ -279,7 +279,7 @@ fn copy_offscreen_render_readiness_to_main_world(
 
 /// Create the offscreen render-target image and expose it to the recorder as
 /// [`lunco_workbench::screenshot::OfflineCaptureTarget`].
-#[cfg(feature = "lunco-api")]
+#[cfg(feature = "api-transport")]
 fn setup_offscreen_target(mut images: ResMut<Assets<bevy::image::Image>>, mut commands: Commands) {
     let (width, height) = parse_record_size();
     let mut image = bevy::image::Image::new_target_texture(
@@ -300,7 +300,7 @@ fn setup_offscreen_target(mut images: ResMut<Assets<bevy::image::Image>>, mut co
 /// camera remains the explicit non-writing pose owner and the maintained image
 /// camera below is its render consumer. Runs every frame because cameras spawn
 /// throughout a session (scene loads, camera paths, possession).
-#[cfg(feature = "lunco-api")]
+#[cfg(feature = "api-transport")]
 fn retarget_cameras_to_offscreen(
     target: Option<Res<lunco_workbench::screenshot::OfflineCaptureTarget>>,
     mut cameras: Query<(
@@ -332,18 +332,18 @@ fn retarget_cameras_to_offscreen(
 /// the original camera's output path bound to the windowless swapchain setup.
 /// Keep the authored camera as the pose owner and render that pose through a
 /// camera created with the image target from birth.
-#[cfg(feature = "lunco-api")]
+#[cfg(feature = "api-transport")]
 #[derive(Component)]
 struct OffscreenRenderCamera(Entity);
 
-#[cfg(feature = "lunco-api")]
+#[cfg(feature = "api-transport")]
 fn skybox_matches(left: &bevy::light::Skybox, right: &bevy::light::Skybox) -> bool {
     left.image == right.image
         && left.brightness == right.brightness
         && left.rotation == right.rotation
 }
 
-#[cfg(feature = "lunco-api")]
+#[cfg(feature = "api-transport")]
 fn generated_environment_map_matches(
     left: &bevy::light::GeneratedEnvironmentMapLight,
     right: &bevy::light::GeneratedEnvironmentMapLight,
@@ -354,7 +354,7 @@ fn generated_environment_map_matches(
         && left.affects_lightmapped_mesh_diffuse == right.affects_lightmapped_mesh_diffuse
 }
 
-#[cfg(feature = "lunco-api")]
+#[cfg(feature = "api-transport")]
 fn sync_offscreen_environment(
     commands: &mut Commands,
     mirror_entity: Entity,
@@ -415,7 +415,7 @@ fn sync_offscreen_environment(
     }
 }
 
-#[cfg(feature = "lunco-api")]
+#[cfg(feature = "api-transport")]
 fn maintain_offscreen_render_camera(
     target: Option<Res<lunco_workbench::screenshot::OfflineCaptureTarget>>,
     sources: Query<
@@ -609,7 +609,7 @@ fn maintain_offscreen_render_camera(
 /// own the take. If neither is authored/active, all image cameras stay off and
 /// the once-per-run diagnostic explains the black recording; the recorder does
 /// not invent a primary camera by entity order.
-#[cfg(feature = "lunco-api")]
+#[cfg(feature = "api-transport")]
 fn unique_offscreen_camera(
     candidates: Vec<Entity>,
     role: &str,
@@ -633,7 +633,7 @@ fn unique_offscreen_camera(
     }
 }
 
-#[cfg(feature = "lunco-api")]
+#[cfg(feature = "api-transport")]
 fn activate_offscreen_camera(
     mut cameras: Query<
         (
@@ -844,7 +844,7 @@ fn activate_offscreen_camera(
 /// Parse `--record-size WxH`; default 1280x720 — the resolution the windowed
 /// luncosim authors for its window (see `default_plugins`), so offscreen
 /// recordings match windowed ones by default.
-#[cfg(feature = "lunco-api")]
+#[cfg(feature = "api-transport")]
 fn parse_record_size() -> (u32, u32) {
     let args: Vec<String> = std::env::args().collect();
     for i in 0..args.len() {

@@ -1,8 +1,8 @@
-use crate::{
-    schema::{ApiRequest, ApiResponse},
-    transports::envelope::{ApiRequestUnified, ApiResponseEnvelope},
-    transports::HttpBridge,
+use crate::transports::{
+    envelope::{ApiRequestUnified, ApiResponseEnvelope},
+    HttpBridge,
 };
+use lunco_api::schema::{ApiRequest, ApiResponse};
 use axum::{
     extract::{Json, State},
     http::{header, StatusCode},
@@ -19,7 +19,7 @@ pub async fn handle_api_commands(
             return (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 Json(ApiResponseEnvelope::from(ApiResponse::error(
-                    crate::schema::ApiErrorCode::DeserializationError,
+                    lunco_api::schema::ApiErrorCode::DeserializationError,
                     error,
                 ))),
             )
@@ -28,7 +28,6 @@ pub async fn handle_api_commands(
     };
     execute_api_request(bridge, api_req).await
 }
-
 /// `GET /api/health` — liveness. Answers from the transport thread without
 /// touching the world, so it stays truthful even while the app is busy: a reply
 /// means the process is up and the API port is served.

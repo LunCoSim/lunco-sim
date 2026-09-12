@@ -540,7 +540,7 @@ fn run_with_mode(headless: bool) -> AppExit {
     // image and the offline recorder captures that. Only meaningful in a `ui`
     // build (it needs the render stack) and mutually exclusive with headless
     // (which is the no-GPU server); headless wins if both are given.
-    let offscreen = cfg!(all(feature = "ui", feature = "lunco-api"))
+    let offscreen = cfg!(all(feature = "ui", feature = "api-transport"))
         && !headless
         && std::env::args().any(|a| a == "--offscreen");
     let args: Vec<String> = std::env::args().collect();
@@ -610,13 +610,13 @@ fn run_with_mode(headless: bool) -> AppExit {
     let mut app = build_sim_app_with_profile(headless, offscreen, None, render_profile);
 
     #[cfg(all(
-        feature = "lunco-api",
+        feature = "api-transport",
         feature = "transport-http",
         not(target_arch = "wasm32")
     ))]
     if let Some(error) = app
         .world_mut()
-        .remove_resource::<lunco_api::transports::HttpServerStartupError>()
+        .remove_resource::<lunco_api_transport::transports::HttpServerStartupError>()
     {
         eprintln!(
             "luncosim: cannot start HTTP API on 127.0.0.1:{}: {}",
@@ -650,7 +650,7 @@ fn run_with_mode(headless: bool) -> AppExit {
         });
     }
 
-    #[cfg(all(feature = "ui", feature = "lunco-api"))]
+    #[cfg(all(feature = "ui", feature = "api-transport"))]
     if offscreen {
         app.add_plugins(lunco_luncosim_ui::LunCoSimOffscreenPlugin);
     }
@@ -2567,7 +2567,7 @@ impl Plugin for LunCoSimCorePlugin {
             app.add_plugins(lunco_render_bevy::LuncoRenderPlugin);
         }
 
-        #[cfg(all(feature = "ui", feature = "lunco-api"))]
+        #[cfg(all(feature = "ui", feature = "api-transport"))]
         if !self.headless {
             let mut record_dir = None;
             let mut record_fps = 60;
@@ -2848,8 +2848,8 @@ impl Plugin for LunCoSimCorePlugin {
 
         // HTTP automation bridge — native `--api` server / wasm JS bridge. Linked
         // in the GUI and the headless compile server alike.
-        #[cfg(feature = "lunco-api")]
-        app.add_plugins(lunco_api::LunCoApiPlugin::default());
+        #[cfg(feature = "api-transport")]
+        app.add_plugins(lunco_api_transport::LunCoApiPlugin::default());
 
         // Twin history for headless (`lunco-luncosim-server` / any `--no-ui`
         // host): the SAME twin-folder-scoped persistence the GUI uses — load on

@@ -88,7 +88,6 @@ pub fn spawn_asset_server(addr: String, index: AssetIndex) {
         });
     });
 }
-
 /// `GET /scenario-assets/<cid>` → the blob's bytes, or 404.
 ///
 /// `cid` is used purely as a map key — never as a path component — so a crafted

@@ -48,12 +48,10 @@ rhai = { workspace = true, optional = true }
 # `GlobalEntityId` via `ApiEntityRegistry`. Optional + gated on `rhai` so the
 # python-only / script-free builds don't pull it. No cycle: lunco-api has no
 # dep on lunco-scripting (it discovers RunRhai by reflection).
-# `default-features = false` is REQUIRED: lunco-api's default `transport-http`
-# pulls tokio/full → mio, which breaks the wasm build. We only need the
-# reflect-dispatch types (ApiCommandEvent) + ApiEntityRegistry, which are
-# transport-free. (Feature unification still gives the native app its HTTP
-# transport via the binary's own lunco-api dep.)
-lunco-api = { path = "../lunco-api", default-features = false, optional = true }
+# Only the transport-free reflect-dispatch types (ApiCommandEvent) and
+# ApiEntityRegistry are needed here. Application roots add the outward
+# transport package separately.
+lunco-api = { path = "../lunco-api", optional = true }
 # rhai World-bridge only: `world_pos()` walks the big_space float-origin
 # hierarchy (Grid / CellCoord) via lunco-core's coords helpers.
 big_space = { workspace = true, optional = true }

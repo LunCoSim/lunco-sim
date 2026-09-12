@@ -34,7 +34,7 @@
 use crate::state::ModelicaDocumentRegistry;
 use bevy::prelude::*;
 use crossbeam_channel::unbounded;
-#[cfg(feature = "lunco-api")]
+#[cfg(feature = "api")]
 use lunco_api::executor::DeferredCommandAppExt;
 use lunco_assets::msl_dir;
 use rumoca_compile::{Session, SessionConfig};
@@ -1557,7 +1557,7 @@ pub use worker::{
     ModelicaResult, DEFAULT_COMMUNICATION_PERIOD_SECS,
 };
 
-#[cfg(feature = "lunco-api")]
+#[cfg(feature = "api")]
 pub mod api_queries;
 
 // Always built — the UI (palette, inspector, canvas) dispatches these
@@ -1657,7 +1657,7 @@ impl Plugin for ModelicaCorePlugin {
         // Register it here so headless and workbench hosts expose the same
         // reflected command contract.
         model_commands::register_all_commands(app);
-        #[cfg(feature = "lunco-api")]
+        #[cfg(feature = "api")]
         app.register_deferred_command::<model_commands::SetModelInput>();
         app.init_resource::<lunco_core::session::CommandPolicyRegistry>();
         app.world_mut()
@@ -1672,7 +1672,7 @@ impl Plugin for ModelicaCorePlugin {
         // Modelica's structured API providers are domain capability, not UI
         // capability. Register them in the shared core so headless production
         // hosts expose the same authoring and simulation surface as the GUI.
-        #[cfg(feature = "lunco-api")]
+        #[cfg(feature = "api")]
         app.add_plugins(api_queries::ModelicaApiQueriesPlugin);
     }
 }

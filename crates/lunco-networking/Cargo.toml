@@ -18,7 +18,7 @@ required-features = ["networking"]
 default = []
 # Turns the crate from a no-op facade into the real lightyear WebTransport
 # adapter. Gated per D7 (substrate is always-on; only the wire is optional).
-networking = ["dep:lightyear", "dep:serde", "dep:serde_json", "dep:bincode", "dep:interprocess", "dep:uuid", "dep:sha2", "dep:lunco-hash", "dep:crossbeam-channel", "dep:lunco-twin", "dep:lunco-twin-journal", "dep:lunco-scripting", "lunco-scripting/rhai", "dep:lunco-usd-compose"]
+networking = ["dep:lunco-api-transport", "dep:lightyear", "dep:serde", "dep:serde_json", "dep:bincode", "dep:interprocess", "dep:uuid", "dep:sha2", "dep:lunco-hash", "dep:crossbeam-channel", "dep:lunco-twin", "dep:lunco-twin-journal", "dep:lunco-scripting", "lunco-scripting/rhai", "dep:lunco-usd-compose"]
 # Client-prediction diagnostics (render-jitter / velocity / correction census in
 # `diagnostics.rs`). OFF by default → not compiled into normal/shipping builds.
 # Build with it when chasing netcode jitter; once compiled it's active unless
@@ -37,7 +37,7 @@ workbench = ["dep:lunco-workbench", "dep:lunco-workbench-core"]
 # stalls on multi-MB twins). Native-only in effect — the `lunco-api` asset server is
 # cfg'd off on wasm, and a browser peer is never the host. Without this the host
 # advertises no `asset_base_url` and clients use the in-session chunk fallback.
-transport-http = ["networking", "lunco-api/transport-http"]
+transport-http = ["networking", "lunco-api-transport/transport-http"]
 
 [dependencies]
 bevy = { workspace = true }
@@ -47,7 +47,8 @@ lunco-core = { path = "../lunco-core" }
 # `default-features = false`: we only use the registry/executor types + plugin,
 # never the native `transport-http` server (axum/tokio/mio — wasm-incompatible).
 # Native builds still get transport-http via lunco-luncosim's own default features.
-lunco-api = { path = "../lunco-api", default-features = false }
+lunco-api = { path = "../lunco-api" }
+lunco-api-transport = { path = "../lunco-api-transport", default-features = false, optional = true }
 # The generic vessel-control commands `SetPorts` and `ReleaseControl` live here;
 # the wire declares channels for them (replacing the old rover drive/brake pair).
 lunco-cosim = { path = "../lunco-cosim" }

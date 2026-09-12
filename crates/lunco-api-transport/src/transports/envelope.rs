@@ -4,7 +4,7 @@
 //! serde — no axum, no tokio — so they are shared by the native HTTP transport
 //! and the wasm JS bridge alike. Only the axum *handlers* live in `http.rs`.
 
-use crate::schema::{ApiRequest, ApiResponse};
+use lunco_api::schema::{ApiRequest, ApiResponse};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize)]
@@ -20,7 +20,6 @@ pub struct ApiResponseEnvelope {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_code: Option<u16>,
 }
-
 /// The single request envelope accepted by every API transport.
 ///
 /// A command is always explicitly tagged as `ExecuteCommand`; domain queries
@@ -93,7 +92,7 @@ impl From<ApiResponse> for ApiResponseEnvelope {
             ApiResponse::Screenshot { .. } => ApiResponseEnvelope {
                 data: None,
                 error: Some("unexpected screenshot response".into()),
-                error_code: Some(crate::schema::ApiErrorCode::InternalError as u16),
+                error_code: Some(lunco_api::schema::ApiErrorCode::InternalError as u16),
             },
         }
     }

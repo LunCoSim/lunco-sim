@@ -17,9 +17,8 @@ lunco-environment = { path = "../lunco-environment" }
 lunco-physics = { path = "../lunco-physics" }
 lunco-time = { path = "../lunco-time" }
 # Expose physics-backed spatial queries (Raycast/GroundHeight) through the
-# API query registry. default-features off keeps the HTTP transport (tokio/mio)
-# out so mobility stays wasm-clean.
-lunco-api = { path = "../lunco-api", default-features = false }
+# transport-free API query registry.
+lunco-api = { path = "../lunco-api" }
 serde_json = { workspace = true }
 
 [lints]

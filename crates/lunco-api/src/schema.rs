@@ -8,7 +8,6 @@
 //! reflected events carrying the `ApiCommandMarker` emitted by `#[Command]`.
 //! This keeps arbitrary internal reflected events off the public API surface.
 
-pub use lunco_core::GlobalEntityId as ApiEntityId;
 use serde::{Deserialize, Serialize};
 
 /// Telemetry subscription filter.

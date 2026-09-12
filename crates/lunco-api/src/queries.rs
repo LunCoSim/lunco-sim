@@ -114,9 +114,9 @@ impl ApiQueryRegistry {
     }
 }
 
-/// Plugin that adds the [`ApiQueryRegistry`] resource. Always installed
-/// by [`crate::LunCoApiPlugin`]; domain crates do not need to add this
-/// plugin themselves — they just mutate the registry.
+/// Plugin that adds the [`ApiQueryRegistry`] resource. The API transport
+/// plugin installs it; domain crates do not need to add this plugin themselves
+/// — they just mutate the registry.
 pub struct ApiQueryRegistryPlugin;
 
 impl Plugin for ApiQueryRegistryPlugin {
@@ -416,8 +416,8 @@ impl ApiVisibility {
     }
 }
 
-/// Plugin that adds the [`ApiVisibility`] resource. Always installed by
-/// [`crate::LunCoApiPlugin`].
+/// Plugin that adds the [`ApiVisibility`] resource. The API transport plugin
+/// installs it.
 pub struct ApiVisibilityPlugin;
 
 impl Plugin for ApiVisibilityPlugin {

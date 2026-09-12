@@ -6,7 +6,9 @@
 > reads exposed over HTTP at `/api/commands`. Start any binary with `--api` and
 > drive the sim from scripts, agents, or the MCP bridge.
 
-Transport-agnostic API layer for LunCoSim. Exposes simulation state and typed commands via HTTP.
+Transport-agnostic API contracts for LunCoSim. The `lunco-api` core owns
+commands, queries, discovery, execution, and response types; the
+`lunco-api-transport` package exposes them through HTTP or the browser bridge.
 
 ## Quick Start
 
@@ -534,18 +536,21 @@ value (the wasm/JS bridge, which has no status line, reads `error_code`):
 
 ## Entity IDs
 
-The API uses ULID-based stable IDs (`ApiEntityId`). Bevy `Entity` IDs are process-local and recycled; ULIDs survive across sessions.
+The API uses stable numeric `GlobalEntityId` values. Bevy `Entity` IDs are
+process-local and recycled; the authored/runtime identity is the value exposed
+as `api_id`.
 
-Entity fields in command params accept ULID strings:
+Entity fields in command params accept numeric `api_id` values:
 ```json
-{ "target": "01ARZ7NDEKTSV4M9" }
+{ "target": 42 }
 ```
 
 ## Adding the API to a New Binary
 
-1. Add dependency to `Cargo.toml`:
+1. Add the core and transport dependencies to `Cargo.toml`:
 ```toml
 lunco-api = { path = "../lunco-api" }
+lunco-api-transport = { path = "../lunco-api-transport" }
 ```
 
 2. Add `--api` CLI parsing:
@@ -572,9 +577,11 @@ let mut app = App::new();
 // ... your plugins ...
 
 if let Some(port) = parse_api_port() {
-    app.add_plugins(lunco_api::LunCoApiPlugin::new(lunco_api::LunCoApiConfig {
-        http_config: Some(lunco_api::transports::HttpServerConfig { port }),
-    }));
+    app.add_plugins(lunco_api_transport::LunCoApiPlugin::new(
+        lunco_api_transport::LunCoApiConfig {
+            http_config: Some(lunco_api_transport::transports::HttpServerConfig { port }),
+        },
+    ));
     eprintln!("🌐 API server enabled on http://127.0.0.1:{}", port);
 }
 
@@ -614,11 +621,17 @@ executor differentiates internally.
                      │ POST /api/commands
                      ▼
 ┌────────────────────────────────────────────────────────────┐
+│  lunco-api-transport                                       │
+│  ┌──────────────┐                                         │
+│  │ HTTP/Browser │                                         │
+│  └──────┬───────┘                                         │
+│         │ transport-neutral request/response              │
+│         ▼                                                  │
 │  lunco-api                                                 │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐ │
-│  │ HttpBridge   │→ │ ApiExecutor  │→ │ ApiQueryRegistry │ │  ← query?
-│  │ (axum)       │  │              │  │ → provider.exec  │ │    yes → returns data
-│  └──────────────┘  └─────┬────────┘  └──────────────────┘ │
+│  ┌──────────────┐  ┌──────────────────┐  ┌──────────────┐ │
+│  │ ApiExecutor  │→ │ ApiQueryRegistry │  │ ApiDiscovery │ │
+│  │              │  │ → provider.exec  │  │              │ │
+│  └──────────────┘  └─────┬────────────┘  └──────────────┘ │
 │                          │ no                              │
 │                          ▼                                 │
 │                    ┌──────────────────┐                    │
@@ -763,4 +776,4 @@ that want a runtime-toggleable opt-out.
 | Connection refused | Make sure sim was started with `--api` flag |
 | "Command not found" | Check `/api/commands/schema` for available commands |
 | "Entity not found" | `POST /api/commands` with `{"type":"ListEntities"}` for valid numeric api ids — there is no `GET /api/entities` route |
-| `lunco_api` not found in `Cargo.toml` | Add `lunco-api = { path = "../lunco-api" }` dependency |
+| `lunco_api_transport` not found in `Cargo.toml` | Add `lunco-api` and `lunco-api-transport`; the plugin is owned by the transport package |

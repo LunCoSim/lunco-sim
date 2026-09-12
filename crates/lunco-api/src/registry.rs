@@ -1,4 +1,4 @@
-//! Entity identity registry — maps stable ULID-based GlobalEntityId to Bevy Entity.
+//! Entity identity registry — maps stable GlobalEntityId values to Bevy entities.
 
 use bevy::prelude::*;
 use lunco_core::GlobalEntityId;

@@ -38,7 +38,7 @@ lunco-core = { path = "../lunco-core" }
 lunco-time = { path = "../lunco-time" }
 # Transport-free API registry only: physics owns active-frame proximity query
 # semantics and registers providers without pulling HTTP or networking.
-lunco-api = { path = "../lunco-api", default-features = false }
+lunco-api = { path = "../lunco-api" }
 # Language-neutral policy substrate for explicit initialization decisions.
 lunco-hooks = { path = "../lunco-hooks" }
 serde_json.workspace = true

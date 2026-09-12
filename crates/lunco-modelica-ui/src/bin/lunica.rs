@@ -213,8 +213,8 @@ fn main() {
 
     // HTTP automation bridge — native `--api` server / wasm JS bridge. Linked in
     // the GUI and the headless compile server alike (the latter's reason to exist).
-    #[cfg(feature = "lunco-api")]
-    app.add_plugins(lunco_api::LunCoApiPlugin::default());
+    #[cfg(feature = "api")]
+    app.add_plugins(lunco_api_transport::LunCoApiPlugin::default());
 
     // Cap FixedUpdate catchup after a slow frame. Bevy default: a 250ms
     // hitch breeds ~15 fixed ticks next frame, which makes that frame slow

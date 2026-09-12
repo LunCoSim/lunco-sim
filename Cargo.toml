@@ -49,6 +49,7 @@ members = [
     "crates/lunco-terrain-globe",
     "crates/lunco-terrain-core",
     "crates/lunco-api",
+    "crates/lunco-api-transport",
     "crates/lunco-cosim",
     "crates/lunco-environment",
     "crates/lunco-doc",

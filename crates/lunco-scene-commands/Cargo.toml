@@ -38,7 +38,7 @@ lunco-twin-journal = { path = "../lunco-twin-journal" }
 serde = { workspace = true }
 # `QueryEntity`'s response payload (entity_query.rs).
 serde_json = { workspace = true }
-lunco-api = { path = "../lunco-api", default-features = false }
+lunco-api = { path = "../lunco-api" }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-usd = { path = "../lunco-usd", default-features = false }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }

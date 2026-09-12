@@ -57,13 +57,8 @@ big_space = { workspace = true }
 # `EphemerisProvider` trait and a no-op default; apps that need real
 # planetary positions add the ephemeris crate's plugin.
 lunco-core = { path = "../lunco-core" }
-# `default-features = false` is LOAD-BEARING. lunco-api's defaults include its
-# `render` feature (the screenshot readback → `bevy/bevy_render` +
-# `bevy/bevy_core_pipeline`), and cargo unifies features across the graph — so
-# omitting it here re-links wgpu + naga into the `--no-ui` server through this
-# crate. Same trap as the `lunco-doc-bevy` one in `lunco-workspace`.
-# See docs/architecture/render-decoupling.md.
-lunco-api = { path = "../lunco-api", default-features = false }
+# API query registration uses only the transport-free command/query core.
+lunco-api = { path = "../lunco-api" }
 lunco-hooks = { path = "../lunco-hooks" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-time = { path = "../lunco-time" }

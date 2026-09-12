@@ -19,12 +19,9 @@ lunco-signal = { path = "../lunco-signal" }
 # same extension point Modelica's `SnapshotVariables` uses. Render-free. This is what lets
 # an OpenMCT-shaped client ask "what channels exist" and "what happened before I connected"
 # instead of only receiving a live firehose.
-# `default-features = false`: this crate needs only the query/schema surface, not the HTTP
-# transport (axum + tokio). It is no longer load-bearing for RENDER — `lunco-api`'s `render`
-# feature was removed from its defaults precisely because a plain `{ path = ... }` here
-# silently re-linked bevy_render → wgpu into the `--no-ui` server (the third crate to trip
-# that wire). See the note in lunco-api/Cargo.toml.
-lunco-api = { path = "../lunco-api", default-features = false }
+# This crate needs only the transport-free query/schema surface; native HTTP
+# and browser bindings belong to the application root.
+lunco-api = { path = "../lunco-api" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 
