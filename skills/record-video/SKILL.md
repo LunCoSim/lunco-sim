@@ -99,5 +99,6 @@ query("GetOfflineRecordingStatus")
   writer (doc §2).
 - `--no-vsync` does NOT speed up recording (measured slower: presenting
   flat-out starves the save workers).
-- Frame pacing, capture, and saving live in `lunco-workbench`'s screenshot
-  module; the CLI only arms the same recorder state the commands use.
+- Frame pacing, capture, and saving live in `lunco-capture`; the workbench and
+  offscreen host install the same capability, while the CLI only arms the
+  recorder state the commands use.

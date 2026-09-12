@@ -1,6 +1,6 @@
 //! Screenshot capture — the **render-bound half** of `CaptureScreenshot`.
 //!
-//! # Why it lives in the workbench
+//! # Why it is a separate application capability
 //!
 //! Taking a picture needs `bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured}`,
 //! which live in `bevy_render` → wgpu. That dependency used to sit inside `lunco-api`, behind
@@ -11,8 +11,8 @@
 //! invisible to code review; only `cargo tree` sees it. A feature you can forget is a trap
 //! that fires forever, so `lunco-api` no longer has one: it **cannot** link a renderer.
 //!
-//! The GPU half belongs wherever "this binary can render" is already true for **every**
-//! screenshot-taking binary — and that is this crate:
+//! The GPU half belongs in a small production capability crate shared by every
+//! screenshot-taking binary:
 //!
 //! - `lunco-workbench` already links `bevy_render` (it is the egui shell);
 //! - **both** GUI binaries add it (`lunco-luncosim` and `lunica`);
@@ -78,8 +78,8 @@ pub struct CaptureScreenshot {
     pub region: Vec<u32>,
 }
 
-/// Install the screenshot backend. Added by [`WorkbenchPlugin`](crate::WorkbenchPlugin), so
-/// every binary with a workbench can take a picture — 3D or egui-only alike.
+/// Install the screenshot backend. Hosts add this plugin when they expose the
+/// screenshot command surface, whether their rendered target is 3D or egui-only.
 pub struct ScreenshotPlugin;
 
 impl Plugin for ScreenshotPlugin {

@@ -450,7 +450,7 @@ impl Plugin for LunCoSimUiPlugin {
 fn update_runtime_ui_gates(
     layout: Option<Res<WorkbenchSnapshot>>,
     overlays: Option<Res<overlays::OverlaySettings>>,
-    recording: Option<Res<lunco_workbench::screenshot::OfflineRecordingState>>,
+    recording: Option<Res<lunco_capture::screenshot::OfflineRecordingState>>,
     mut gates: ResMut<runtime_exposure::RuntimeUiGates>,
     mut initialized: Local<bool>,
 ) {
@@ -471,7 +471,7 @@ fn update_runtime_ui_gates(
 }
 
 fn recording_offline(
-    recording: Option<Res<lunco_workbench::screenshot::OfflineRecordingState>>,
+    recording: Option<Res<lunco_capture::screenshot::OfflineRecordingState>>,
 ) -> bool {
     recording.is_some_and(|recording| recording.active)
 }

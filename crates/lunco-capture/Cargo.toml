@@ -1,0 +1,29 @@
+[package]
+name = "lunco-capture"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Render-bound screenshot and offline recording commands"
+
+[features]
+default = []
+api = ["dep:image", "dep:lunco-api"]
+
+[[test]]
+name = "capture_from_camera_test"
+required-features = ["api"]
+
+[dependencies]
+bevy = { workspace = true, features = ["bevy_asset", "bevy_image", "bevy_render", "bevy_window"] }
+image = { workspace = true, optional = true }
+lunco-api = { path = "../lunco-api", optional = true }
+lunco-core = { path = "../lunco-core" }
+lunco-render = { path = "../lunco-render" }
+lunco-status-core = { path = "../lunco-status-core" }
+lunco-storage = { path = "../lunco-storage" }
+lunco-tools-bevy = { path = "../lunco-tools-bevy" }
+serde_json = { workspace = true }
+web-time = { workspace = true }
+
+[lints]
+workspace = true

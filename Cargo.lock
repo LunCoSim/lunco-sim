@@ -7159,6 +7159,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-capture"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "image",
+ "lunco-api",
+ "lunco-core",
+ "lunco-render",
+ "lunco-status-core",
+ "lunco-storage",
+ "lunco-tools-bevy",
+ "serde_json",
+ "web-time",
+]
+
+[[package]]
 name = "lunco-celestial"
 version = "0.6.0-dev"
 dependencies = [
@@ -7358,6 +7374,7 @@ dependencies = [
  "lunco-api-transport",
  "lunco-assets",
  "lunco-avatar",
+ "lunco-capture",
  "lunco-celestial",
  "lunco-celestial-ephemeris",
  "lunco-controller",
@@ -7530,6 +7547,7 @@ dependencies = [
  "lunco-api-transport",
  "lunco-assets",
  "lunco-avatar",
+ "lunco-capture",
  "lunco-celestial",
  "lunco-core",
  "lunco-doc",
@@ -8653,11 +8671,10 @@ dependencies = [
  "bevy_egui",
  "crossbeam-channel",
  "egui_dock",
- "image",
  "js-sys",
  "leafwing-input-manager",
- "lunco-api",
  "lunco-assets",
+ "lunco-capture",
  "lunco-controller",
  "lunco-core",
  "lunco-doc",
@@ -8669,7 +8686,6 @@ dependencies = [
  "lunco-storage",
  "lunco-theme",
  "lunco-time",
- "lunco-tools-bevy",
  "lunco-twin",
  "lunco-workbench-core",
  "lunco-workspace",
@@ -8680,7 +8696,6 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "web-time",
  "wgpu",
 ]
 

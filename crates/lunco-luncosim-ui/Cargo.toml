@@ -49,6 +49,7 @@ winit = { version = "0.30.13" }
 lunco-api = { path = "../lunco-api", optional = true }
 lunco-api-transport = { path = "../lunco-api-transport", default-features = false, optional = true }
 lunco-assets = { workspace = true }
+lunco-capture = { path = "../lunco-capture", features = ["api"] }
 lunco-avatar = { path = "../lunco-avatar", default-features = false }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-core = { path = "../lunco-core" }

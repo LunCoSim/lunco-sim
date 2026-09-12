@@ -30,7 +30,7 @@ pub(crate) fn register(app: &mut App) {
         Update,
         report_scene_spawn_status
             .after(lunco_usd_bevy::process_queued_usd_visuals)
-            .before(lunco_workbench::screenshot::OfflineRecordingReadinessSet)
+            .before(lunco_capture::screenshot::OfflineRecordingReadinessSet)
             .run_if(resource_exists::<lunco_status_core::status_bus::StatusBus>),
     );
     app.add_systems(
@@ -45,13 +45,13 @@ pub(crate) fn register(app: &mut App) {
     app.add_systems(
         Update,
         start_camera_paths_when_recording_starts
-            .run_if(resource_exists::<lunco_workbench::screenshot::OfflineRecordingState>),
+            .run_if(resource_exists::<lunco_capture::screenshot::OfflineRecordingState>),
     );
     app.add_systems(
         Update,
         mirror_recording_to_terrain_lockstep
             .before(lunco_terrain_surface::stream_viz::update_lod_tiles)
-            .run_if(resource_exists::<lunco_workbench::screenshot::OfflineRecordingState>),
+            .run_if(resource_exists::<lunco_capture::screenshot::OfflineRecordingState>),
     );
     terrain_horizon::register(app);
     app.init_resource::<AuthoredEnv>();
@@ -253,7 +253,7 @@ fn project_env_settings(
 /// replaced. One automatic start (the recorder, for capture) and one manual verb
 /// (the command, for preview and scrubbing), never a fallback chain between them.
 fn start_camera_paths_when_recording_starts(
-    recording: Res<lunco_workbench::screenshot::OfflineRecordingState>,
+    recording: Res<lunco_capture::screenshot::OfflineRecordingState>,
     resolved: Res<lunco_time::ResolvedDomains>,
     q_paths: Query<&lunco_usd_bevy_camera::camera_path::CameraPath>,
     q_driven: Query<&lunco_usd_bevy_camera::camera_path::CameraPathDriven>,
@@ -334,7 +334,7 @@ fn start_camera_paths_when_recording_starts(
 /// that ended by timing out. Writes only on an actual change so the resource's
 /// change-detection tick stays meaningful.
 fn mirror_recording_to_terrain_lockstep(
-    recording: Res<lunco_workbench::screenshot::OfflineRecordingState>,
+    recording: Res<lunco_capture::screenshot::OfflineRecordingState>,
     mut lockstep: ResMut<lunco_terrain_surface::TerrainStreamLockstep>,
 ) {
     if lockstep.0 != recording.active {

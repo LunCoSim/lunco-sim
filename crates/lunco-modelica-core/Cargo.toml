@@ -15,8 +15,8 @@ default = ["api"]
 # `lunco-api-transport` when they expose native HTTP or the browser bridge.
 api = ["dep:lunco-api", "dep:lunco-workspace-api"]
 # Headless Modelica compile/run server: the HTTP API, no `ui`. Build the lunica
-# bin with `--no-default-features --features server`. No screenshot backend (`lunco-workbench/api`; the
-# server captures no screenshots) and no winit/egui.
+# bin with `--no-default-features --features server`. No rendered capture capability
+# (`lunco-capture/api`; the server captures no screenshots) and no winit/egui.
 server = ["api"]
 # Opt-in Tracy profiler hook. Off by default because tracy-client-sys needs a
 # C++ compile that breaks on wasm32 and on Windows MSVC 2019 (missing

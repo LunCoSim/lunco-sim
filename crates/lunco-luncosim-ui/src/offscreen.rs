@@ -69,7 +69,7 @@ impl Plugin for LunCoSimOffscreenPlugin {
         // The offline recorder itself — normally added by `WorkbenchPlugin`,
         // which this mode skips (egui needs a window).
         app.init_resource::<lunco_status_core::status_bus::StatusBus>();
-        app.add_plugins(lunco_workbench::screenshot::ScreenshotPlugin);
+        app.add_plugins(lunco_capture::screenshot::ScreenshotPlugin);
 
         // No winit event loop, so tick the app ourselves — flat out, zero wait:
         // while recording, `drive_offline_clock` paces the sim (one 1/fps step
@@ -81,7 +81,7 @@ impl Plugin for LunCoSimOffscreenPlugin {
 
         // One-shot contract: when the recording fully drains (frames delivered,
         // saves done, video trailer written), exit the process.
-        app.insert_resource(lunco_workbench::screenshot::ExitAfterRecording);
+        app.insert_resource(lunco_capture::screenshot::ExitAfterRecording);
 
         app.add_systems(Startup, setup_offscreen_target);
         app.add_systems(
@@ -98,7 +98,7 @@ impl Plugin for LunCoSimOffscreenPlugin {
         // cannot know whether visibility and phase binning actually admitted a mesh. The render
         // acknowledgement is consumed by the recorder before it starts virtual time.
         if let Some(render_app) = app.get_sub_app_mut(bevy::render::RenderApp) {
-            render_app.init_resource::<lunco_workbench::screenshot::OfflineRenderReadiness>();
+            render_app.init_resource::<lunco_capture::screenshot::OfflineRenderReadiness>();
             render_app.add_systems(
                 bevy::render::ExtractSchedule,
                 copy_offscreen_render_readiness_to_main_world,
@@ -145,7 +145,7 @@ fn report_offscreen_render_view(
         >,
     >,
     pipeline_cache: Res<bevy::render::render_resource::PipelineCache>,
-    mut readiness: ResMut<lunco_workbench::screenshot::OfflineRenderReadiness>,
+    mut readiness: ResMut<lunco_capture::screenshot::OfflineRenderReadiness>,
     mut ready_reported: Local<bool>,
 ) {
     *readiness = Default::default();
@@ -268,17 +268,17 @@ fn report_offscreen_render_view(
 #[cfg(feature = "api-transport")]
 fn copy_offscreen_render_readiness_to_main_world(
     mut main_world: ResMut<bevy::render::MainWorld>,
-    readiness: Res<lunco_workbench::screenshot::OfflineRenderReadiness>,
+    readiness: Res<lunco_capture::screenshot::OfflineRenderReadiness>,
 ) {
     if let Some(mut main_readiness) =
-        main_world.get_resource_mut::<lunco_workbench::screenshot::OfflineRenderReadiness>()
+        main_world.get_resource_mut::<lunco_capture::screenshot::OfflineRenderReadiness>()
     {
         *main_readiness = *readiness;
     }
 }
 
 /// Create the offscreen render-target image and expose it to the recorder as
-/// [`lunco_workbench::screenshot::OfflineCaptureTarget`].
+/// [`lunco_capture::screenshot::OfflineCaptureTarget`].
 #[cfg(feature = "api-transport")]
 fn setup_offscreen_target(mut images: ResMut<Assets<bevy::image::Image>>, mut commands: Commands) {
     let (width, height) = parse_record_size();
@@ -293,7 +293,7 @@ fn setup_offscreen_target(mut images: ResMut<Assets<bevy::image::Image>>, mut co
     image.texture_descriptor.usage |= bevy::render::render_resource::TextureUsages::COPY_SRC;
     let handle = images.add(image);
     info!("[offscreen] render target {width}x{height} (override with --record-size WxH)");
-    commands.insert_resource(lunco_workbench::screenshot::OfflineCaptureTarget(handle));
+    commands.insert_resource(lunco_capture::screenshot::OfflineCaptureTarget(handle));
 }
 
 /// Point cameras that target a window at the offscreen image. The authored
@@ -302,7 +302,7 @@ fn setup_offscreen_target(mut images: ResMut<Assets<bevy::image::Image>>, mut co
 /// throughout a session (scene loads, camera paths, possession).
 #[cfg(feature = "api-transport")]
 fn retarget_cameras_to_offscreen(
-    target: Option<Res<lunco_workbench::screenshot::OfflineCaptureTarget>>,
+    target: Option<Res<lunco_capture::screenshot::OfflineCaptureTarget>>,
     mut cameras: Query<(
         &mut bevy::camera::RenderTarget,
         Option<&mut bevy::camera::Projection>,
@@ -417,7 +417,7 @@ fn sync_offscreen_environment(
 
 #[cfg(feature = "api-transport")]
 fn maintain_offscreen_render_camera(
-    target: Option<Res<lunco_workbench::screenshot::OfflineCaptureTarget>>,
+    target: Option<Res<lunco_capture::screenshot::OfflineCaptureTarget>>,
     sources: Query<
         (
             Entity,

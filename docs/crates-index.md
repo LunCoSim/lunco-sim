@@ -113,7 +113,8 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 | Crate | Responsibility |
 | :--- | :--- |
 | **`lunco-workbench-core`** | Renderer-independent workbench contracts: `Panel`/`PanelCtx`, instance tabs, perspective layout plans, menu contributions, and the published `WorkbenchSnapshot`. It uses the Bevy ECS substrate and egui types but does not pull `bevy_render`, `bevy_egui`, `egui_dock`, storage, or window/render services. |
-| **`lunco-workbench`** | The concrete IDE-like shell: `egui_dock` layout materialization, `bevy_egui` rendering, panel registration, persistence, viewport integration, built-in browser panels, and shell-only commands/widgets. It publishes `WorkbenchSnapshot`, consumes `lunco-workbench-core`, and renders status data supplied by `lunco-status-core`. |
+| **`lunco-workbench`** | The concrete IDE-like shell: `egui_dock` layout materialization, `bevy_egui` rendering, panel registration, persistence, viewport integration, built-in browser panels, and shell-only commands/widgets. It publishes `WorkbenchSnapshot`, consumes `lunco-workbench-core`, installs capture only when its API surface is enabled, and renders status data supplied by `lunco-status-core`. |
+| **`lunco-capture`** | Render-bound screenshot and deterministic offline-recording capability: typed capture commands, GPU readback, frame pacing, PNG/video sinks, and recording status. It is an application capability shared by the workbench and windowless/offscreen hosts, not a workbench subsystem. |
 | **`lunco-ui`** | Reusable UI infrastructure: cached widgets, 3D world panels, command builders. |
 | **`lunco-viz`** | Domain-agnostic visualization: `SignalRegistry`, LinePlots, and future 3D/Rerun bridges. |
 | **`lunco-canvas`** | Stateful 2D scene editor substrate for diagrams and annotation overlays. |
@@ -400,6 +401,13 @@ perspective presets (Build, Simulate), Twin Browser, shared hierarchy-row
 presentation (`tree::{branch, leaf}`), and picker/command adapters. It does
 not own file bytes or backend I/O; those go through `lunco-storage`, while
 Twin discovery stays in `lunco-workspace`/`lunco-twin`.
+
+**`lunco-capture`**
+Render-bound application capability for screenshots and deterministic offline
+recording. It owns the typed capture commands, GPU readback, frame pacing, and
+PNG/video sinks. The workbench installs it for windowed API hosts; the
+offscreen application host installs the same capability without the workbench
+shell.
 
 **`lunco-status-core`**
 Renderer-independent status and lifecycle substrate. It owns the shared

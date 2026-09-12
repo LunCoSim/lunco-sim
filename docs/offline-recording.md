@@ -4,8 +4,9 @@ How the engine renders a **deterministic, frame-exact image sequence** — the m
 that decouples Bevy's update loop from the system clock, and the rhai surface
 (`prelude/recording.rhai` + `lib/shots.rhai`) that sequences shots on top of it.
 
-- **Recorder:** `lunco-workbench` — the capture systems, `drive_offline_clock`, the
-  screenshot readback.
+- **Recorder:** `lunco-capture` — capture commands, GPU readback, frame pacing, and
+  PNG/video sinks. `lunco-workbench` installs it for windowed hosts; the offscreen
+  host installs the same capability without the workbench shell.
 - **Prelude verbs:** [`prelude/recording.rhai`](../assets/scripting/prelude) —
   `shot_begin`, `shot_frame`, `shot_step`, `shot_end`, `recording_finish`, `shot_dir`.
 - **Sequencer:** [`lib/shots.rhai`](../assets/scripting/lib/shots.rhai) — an episode as a

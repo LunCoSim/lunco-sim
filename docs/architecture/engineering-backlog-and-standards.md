@@ -270,11 +270,11 @@ in CI.
 
 **Why:** `cargo check --workspace` unifies features across the graph, so a crate
 whose code depends on a feature it does not itself enable still compiles as long
-as SOME member turns that feature on. `lunco-workbench` was exactly this: a use
-of `screenshot::` while `pub mod screenshot` sits behind `#[cfg(feature =
-"api")]`. The workspace check was green; `cargo test -p lunco-workbench` was not.
-Nothing rules out more of these, and the failure only appears to someone
-depending on a single crate.
+as SOME member turns that feature on. This boundary is especially important for
+optional application capabilities such as `lunco-capture`; a crate-level check
+must cover both its shell-only and API-enabled configurations. Nothing rules out
+more of these, and the failure only appears to someone depending on a single
+crate.
 
 **Scope:** small — a CI matrix over members, or one `cargo hack` invocation.
 

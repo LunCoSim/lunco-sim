@@ -164,6 +164,7 @@ lunco-twin-journal = { path = "../lunco-twin-journal", optional = true }
 # lunco-doc-bevy, so naming it directly adds no build cost. Was under `ui` only because
 # one UI panel imported DocumentId (CQ: de-UI-gate the doc subsystem).
 lunco-workbench = { path = "../lunco-workbench", optional = true }
+lunco-capture = { path = "../lunco-capture", optional = true }
 # `default-features = false` lets the application choose the outward transport
 # explicitly: native `transport-http` or the target-selected wasm bridge.
 lunco-api-transport = { path = "../lunco-api-transport", optional = true, default-features = false }
@@ -216,9 +217,10 @@ default = ["ui", "celestial", "api-transport", "transport-http"]
 ui = [
     "dep:velopack",
     "dep:ureq",
-    # The screenshot backend lives in the workbench, which only a GUI build links at all.
-    # NOT on the `lunco-api` feature: the headless server enables that too, and hanging the
-    # workbench off it dragged egui + wgpu straight back into the --no-ui binary.
+    # Screenshot capture is a rendered application capability. Keep it on the UI
+    # edge so the headless API server does not acquire GPU readback or image I/O.
+    "dep:lunco-capture",
+    "lunco-capture/api",
     "lunco-workbench/api",
     "dep:lunco-render-bevy",
     "lunco-avatar/ui",

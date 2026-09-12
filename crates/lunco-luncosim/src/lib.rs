@@ -194,8 +194,8 @@ fn parse_render_quality(args: &[String]) -> Result<Option<lunco_render::Renderin
 #[cfg(feature = "ui")]
 fn parse_record_preset(
     args: &[String],
-) -> Result<lunco_workbench::screenshot::OfflineVideoPreset, String> {
-    let mut preset = lunco_workbench::screenshot::OfflineVideoPreset::default();
+) -> Result<lunco_capture::screenshot::OfflineVideoPreset, String> {
+    let mut preset = lunco_capture::screenshot::OfflineVideoPreset::default();
     let mut index = 0;
     while index < args.len() {
         let value = if args[index] == "--record-preset" {
@@ -209,7 +209,7 @@ fn parse_record_preset(
             index += 1;
             continue;
         };
-        preset = lunco_workbench::screenshot::OfflineVideoPreset::parse(value)?;
+        preset = lunco_capture::screenshot::OfflineVideoPreset::parse(value)?;
         index += 1;
     }
     Ok(preset)
@@ -626,7 +626,7 @@ fn run_with_mode(headless: bool) -> AppExit {
     }
 
     #[cfg(feature = "ui")]
-    app.insert_resource(lunco_workbench::screenshot::OfflineVideoSettings {
+    app.insert_resource(lunco_capture::screenshot::OfflineVideoSettings {
         preset: record_preset,
     });
 
@@ -2597,7 +2597,7 @@ impl Plugin for LunCoSimCorePlugin {
                 }
             }
             if let Some(n) = record_frames {
-                app.insert_resource(lunco_workbench::screenshot::OfflineRecordLimit(n));
+                app.insert_resource(lunco_capture::screenshot::OfflineRecordLimit(n));
             }
             if let Some(dir) = record_dir {
                 let path = std::path::PathBuf::from(dir);
@@ -2606,7 +2606,7 @@ impl Plugin for LunCoSimCorePlugin {
                 // would skip screenshot.rs's visual readiness gate and could
                 // capture a half-loaded scene (notably before an HDRI cubemap
                 // projection completes).
-                app.insert_resource(lunco_workbench::screenshot::OfflineRecordingRequest {
+                app.insert_resource(lunco_capture::screenshot::OfflineRecordingRequest {
                     output_dir: path,
                     fps: record_fps.max(1),
                 });

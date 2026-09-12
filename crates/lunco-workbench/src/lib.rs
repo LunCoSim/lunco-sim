@@ -92,11 +92,6 @@ pub mod input_overlay;
 pub mod perf_hud;
 pub mod perspective_command;
 pub mod picker;
-/// Screenshot capture — the render-bound half of `CaptureScreenshot`. Here, and not in
-/// `lunco-api`, so that crate cannot link a GPU stack; and not in `lunco-render-bevy`,
-/// because lunica screenshots its egui workbench with no 3D renderer.
-#[cfg(feature = "api")]
-pub mod screenshot;
 pub mod theme_command;
 pub mod twin_browser;
 pub mod uri;
@@ -895,7 +890,7 @@ impl Plugin for WorkbenchPlugin {
         // response that nothing would ever send.
         #[cfg(feature = "api")]
         {
-            app.add_plugins(screenshot::ScreenshotPlugin);
+            app.add_plugins(lunco_capture::screenshot::ScreenshotPlugin);
             if !app.is_plugin_added::<lunco_workspace_api::WorkspaceApiQueriesPlugin>() {
                 app.add_plugins(lunco_workspace_api::WorkspaceApiQueriesPlugin);
             }
@@ -3871,7 +3866,7 @@ fn render_layout(
     // the question "is a frame being captured?" — exists only under `api`.
     #[cfg(feature = "api")]
     if world
-        .get_resource::<screenshot::OfflineRecordingState>()
+        .get_resource::<lunco_capture::screenshot::OfflineRecordingState>()
         .is_some_and(|r| r.active)
         && !world
             .get_resource::<OfflineRecordingPresentation>()

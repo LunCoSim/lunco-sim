@@ -601,7 +601,7 @@ pub(crate) fn update_runtime_ui_recording_contract(
     exposures: Res<EngineExposures>,
     manifests: Res<Assets<RuntimeUiManifest>>,
     manifest_state: Res<RuntimeUiManifestState>,
-    recording: Option<Res<lunco_workbench::screenshot::OfflineRecordingState>>,
+    recording: Option<Res<lunco_capture::screenshot::OfflineRecordingState>>,
     mut contract: ResMut<RuntimeUiRecordingContract>,
 ) {
     let recording_active = recording.is_some_and(|state| state.active);

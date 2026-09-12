@@ -84,7 +84,7 @@ impl RenderProfile {
 /// `ShaderLook`; this crate only binds that intent to the generic GPU material.
 ///
 /// **Screenshots deliberately do NOT live here** — they live in
-/// `lunco_workbench::screenshot`. This crate is the 3D *material* binder, and `lunica`
+/// `lunco_capture::screenshot`. This crate is the 3D *material* binder, and `lunica`
 /// takes screenshots without ever adding it; putting capture here would silently kill the
 /// Modelica workbench's screenshots. The workbench is the smallest crate for which "this
 /// binary can render something" is already true, and both GUI binaries add it.

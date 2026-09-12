@@ -6,12 +6,12 @@
 
 use bevy::prelude::*;
 use bevy::render::view::screenshot::Screenshot;
-use lunco_workbench::screenshot::CaptureFromCamera;
+use lunco_capture::screenshot::CaptureFromCamera;
 
 /// Wire just the capture observers (no full `WorkbenchPlugin` — keeps the test
 /// focused + fast, and avoids standing up egui/winit).
 fn wire(app: &mut App) {
-    lunco_workbench::screenshot::register_all_commands(app);
+    lunco_capture::screenshot::register_all_commands(app);
 }
 
 #[test]

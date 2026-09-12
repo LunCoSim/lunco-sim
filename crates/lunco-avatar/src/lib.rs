@@ -60,7 +60,7 @@ use lunco_usd_bevy_scene::{is_preview_only, is_preview_only_entity, UsdPreviewOn
 pub mod commands;
 pub use commands::*;
 // Render-bound screenshots and deterministic offline recording are owned by
-// `lunco-workbench::screenshot`; this crate remains responsible for camera intent,
+// `lunco-capture`; this crate remains responsible for camera intent,
 // possession, and interaction, without linking the render-world readback pipeline.
 mod intents;
 
@@ -7992,7 +7992,7 @@ fn on_inspect_vessels(_t: On<InspectVessels>, mut commands: Commands) {
 
 // Wires the avatar's commands into `register_all_commands(app)`, called from
 // LunCoAvatarPlugin::build(). Render-bound capture commands are registered by
-// `lunco-workbench::screenshot` with the renderer that owns their implementation.
+// `lunco-capture` with the renderer that owns their implementation.
 register_commands!(
     on_show_notification,
     on_set_camera_input,

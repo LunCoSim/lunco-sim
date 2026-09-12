@@ -15,7 +15,7 @@ default = ["api", "transport-http", "ui", "scripting"]
 # no workbench shell. Consumers that need only the compiler (lunco-usd-sim on a
 # server) build with `default-features = false`.
 ui = [
-    # Screenshot backend — workbench-only, and NOT on `lunco-api` (a server build enables that).
+    # Workbench API queries are UI-only, and NOT on `lunco-api` (a server build enables that).
     "lunco-workbench/api",
     "dep:bevy_egui", "dep:lunco-theme", "dep:lunco-workbench", "dep:lunco-workbench-core", "dep:lunco-status-core", "dep:lunco-ui",
     "dep:lunco-viz", "dep:lunco-canvas", "dep:egui_plot", "dep:egui_commonmark",
@@ -39,8 +39,8 @@ api = ["dep:lunco-api", "dep:lunco-api-transport", "lunco-modelica-core/api"]
 # transport package's wasm bridge automatically and does not enable this feature.
 transport-http = ["api", "lunco-api-transport/transport-http"]
 # Headless Modelica compile/run server: the HTTP API, no `ui`. Build the lunica
-# bin with `--no-default-features --features server`. No screenshot backend (`lunco-workbench/api`; the
-# server captures no screenshots) and no winit/egui.
+# bin with `--no-default-features --features server`. No rendered capture capability
+# (`lunco-capture/api`; the server captures no screenshots) and no winit/egui.
 server = ["api", "lunco-api-transport/transport-http"]
 # In-app rhai scripting: run/hot-reload scenarios and drive the workbench from
 # scripts used by authored scenarios. INDEPENDENT of the API

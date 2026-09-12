@@ -189,7 +189,7 @@ had to remember `default-features = false`, and **three forgot** (`lunco-doc-bev
 `lunco-celestial`/the application lesson menu, `lunco-telemetry`) — each silently re-linking wgpu into the
 `--no-ui` server. **An unsafe default is a trap that fires forever.**
 
-The GPU half now lives in **`lunco-workbench::screenshot`**, and `lunco-api` has no `render` feature at
+The GPU half now lives in **`lunco-capture`**, and `lunco-api` has no `render` feature at
 all: it *cannot* link a renderer. Not `lunco-render-bevy`, because **`lunica` takes screenshots and has
 no 3D renderer** — it links `bevy_render` through egui but never adds `LuncoRenderPlugin`. The right
 home was the smallest crate for which "this binary can render *something*" is already true, and both
@@ -201,9 +201,10 @@ lands and only the executor knows the correlation id. That deferral is now **gen
 handler is responsible for emitting exactly one completion event; the executor does not invent a
 result when that contract is violated.
 
-**Feature placement trap:** enable `lunco-workbench/api` from a crate's **`ui`** feature, never from its
-`lunco-api` feature. The headless server enables `lunco-api` too, and hanging the workbench off it drags
-egui + wgpu straight back in. (This regression happened, and the guard caught it.)
+**Feature placement trap:** enable `lunco-capture/api` from a rendered host's **`ui`** feature, never
+from its `lunco-api` feature. The headless server enables `lunco-api` too, and enabling capture there
+drags GPU readback and image I/O straight back in. `lunco-workbench/api` remains the shell's separate
+workspace-query feature; it is enabled by the GUI host alongside `lunco-capture/api`.
 
 ## Why this needs a machine, not vigilance
 

@@ -70,6 +70,7 @@ members = [
     "crates/lunco-hooks-rhai",
     "crates/lunco-workbench",
     "crates/lunco-workbench-core",
+    "crates/lunco-capture",
     "crates/lunco-status-core",
     "crates/lunco-web",
     "crates/lunco-scripting",
