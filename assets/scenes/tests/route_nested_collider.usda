@@ -1,0 +1,94 @@
+#usda 1.0
+(
+    defaultPrim = "RouteNestedCollider"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Fast route regression. The route sensor overlaps a correctly jointed nested
+# chassis body at startup. Avian reports the child body as the entrant; the
+# generic route policy must follow its parent chain to the route subject.
+def Xform "RouteNestedCollider" (
+    prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
+    kind = "assembly"
+    doc = "Route policy regression for nested collider event payloads."
+)
+{
+    uniform bool lunco:spawnable = false
+
+    def Xform "Rover" (
+        prepend references = @lunco://vessels/rovers/skid_rover.usda@</SkidRover>
+    )
+    {
+        double3 xformOp:translate = (0.0, 0.75, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        # Keep the referenced rover's command surface live: route_follow's
+        # Modelica setpoints are generic writes on this subject.
+        over "Chassis"
+        {
+            bool physics:collisionEnabled = false
+        }
+
+        def Xform "NestedChassis" (
+            prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+        )
+        {
+            double3 xformOp:translate = (10.0, 0.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            float physics:mass = 1.0
+            bool physics:kinematicEnabled = true
+
+            def Cube "Shape" (
+                prepend apiSchemas = ["PhysicsCollisionAPI"]
+            )
+            {
+                double size = 0.8
+                bool physics:collisionEnabled = true
+            }
+        }
+
+        def PhysicsFixedJoint "ChassisMount"
+        {
+            rel physics:body0 = </RouteNestedCollider/Rover>
+            rel physics:body1 = </RouteNestedCollider/Rover/NestedChassis>
+        }
+    }
+
+    def Scope "Route"
+    {
+        def Scope "Program" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/route_follow.rhai@
+            rel inputs:subject = </RouteNestedCollider/Rover>
+            float inputs:enabled = 1.0
+        }
+
+        def Xform "P0" (
+            prepend references = @lunco://markers/route_point.usda@</RoutePoint>
+        )
+        {
+            double3 xformOp:translate = (10.0, 0.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            over "Trigger"
+            {
+                token lunco:triggerZone = "route_nested"
+            }
+        }
+    }
+
+    def Scope "Scenario"
+    {
+        custom string lunco:scenario = "route-nested-collider"
+
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/route_nested_collider.rhai@
+        }
+    }
+}

@@ -101,5 +101,8 @@ mechanisms that the production scene surface cannot isolate more directly.
   Modelica or the generic navigation mechanism.
 - Add a production Rhai scene test for an observable route/policy contract. Do
   not add a Rust fixture that recreates a route, a vehicle, or a mission tree.
+- Keep nested-collider event coverage in the production route path: the
+  `route_nested_collider` fixture proves that a generic sensor may report a
+  child collider while the route subject remains the owning rigid body.
 - Keep the marker asset reusable. A new route type needs a composition or
   generic schema extension only when existing USD facts cannot express it.

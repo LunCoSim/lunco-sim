@@ -38,6 +38,68 @@ def Xform "ConnectionPreflight"
         }
     }
 
+    # Standard joint prims publish their cosim ports from the projected Avian
+    # joint, not from authored `outputs:` attributes. Keep both native joint
+    # types in this fixture so the connection linter cannot mistake a valid
+    # standard provider for a missing authored property.
+    def Cube "RevoluteBody0" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        double size = 0.5
+        double3 xformOp:translate = (-3.0, 1.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float physics:mass = 1.0
+        bool physics:kinematicEnabled = true
+    }
+
+    def Cube "RevoluteBody1" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        double size = 0.5
+        double3 xformOp:translate = (-3.0, 1.0, 1.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float physics:mass = 1.0
+        bool physics:kinematicEnabled = true
+    }
+
+    def PhysicsRevoluteJoint "RuntimeHinge"
+    {
+        rel physics:body0 = </ConnectionPreflight/RevoluteBody0>
+        rel physics:body1 = </ConnectionPreflight/RevoluteBody1>
+        uniform token physics:axis = "Y"
+    }
+
+    def Cube "PrismaticBody0" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        double size = 0.5
+        double3 xformOp:translate = (3.0, 1.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float physics:mass = 1.0
+        bool physics:kinematicEnabled = true
+    }
+
+    def Cube "PrismaticBody1" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]
+    )
+    {
+        double size = 0.5
+        double3 xformOp:translate = (3.0, 2.0, 0.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        float physics:mass = 1.0
+        bool physics:kinematicEnabled = true
+    }
+
+    def PhysicsPrismaticJoint "RuntimeSlider"
+    {
+        rel physics:body0 = </ConnectionPreflight/PrismaticBody0>
+        rel physics:body1 = </ConnectionPreflight/PrismaticBody1>
+        uniform token physics:axis = "Y"
+    }
+
     def Xform "Sink"
     {
         float inputs:valid.connect = </ConnectionPreflight/Source.outputs:valid>
@@ -47,6 +109,8 @@ def Xform "ConnectionPreflight"
         float inputs:runtime_valid.connect = </ConnectionPreflight/RuntimeBody.outputs:position_x>
         float inputs:runtime_missing.connect = </ConnectionPreflight/RuntimeBody.outputs:positon_x>
         float inputs:runtime_invalid.connect = </ConnectionPreflight/RuntimeBody.position_x>
+        float inputs:revolute_valid.connect = </ConnectionPreflight/RuntimeHinge.outputs:angle>
+        float inputs:prismatic_valid.connect = </ConnectionPreflight/RuntimeSlider.outputs:displacement>
     }
 
     def DistantLight "TestLight"
