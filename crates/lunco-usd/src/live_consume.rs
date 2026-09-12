@@ -468,8 +468,9 @@ fn seat_authored_translate(world: &mut World, entity: Entity, v: Vec3) {
             // The fix does NOT belong here: this crate is deliberately physics-free
             // (avian is a dev-dependency only), so re-seating a body is
             // `lunco-usd-sim`'s to own, next to the rest of its avian mapping. A
-            // waypoint marker is not a body, so the path this was found on is
-            // covered; a scripted move of a bodied prim is not, yet.
+            // Non-body visuals are updated here. A scripted move of a rigid
+            // body is owned by the physics projection, which keeps its pose
+            // authority beside the Avian mapping.
         }
         None => {
             if let Some(mut tf) = world.entity_mut(entity).get_mut::<Transform>() {
@@ -919,7 +920,7 @@ pub(crate) fn reconcile_structural_live(
                 return;
             };
             match stages.get(id) {
-                Some(cs) => cs.view().has_prim(&sp),
+                Some(cs) => cs.view().has_prim(&sp) && cs.view().is_active(&sp),
                 None => return,
             }
         };

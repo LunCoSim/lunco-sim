@@ -1036,26 +1036,23 @@ pub(crate) fn wake_twin_projection_on_stage_event(
 /// (the Avian joint builder and the cosim wire reconcile) re-read on a subtree
 /// refresh, so the incremental path fully reconciles them.
 ///
-/// `SetApiSchemas`, `SetPrimKind`, and `SetActive` do NOT: their effect is which
-/// ECS *components* a prim carries (rigid body, collider) and whether its entity
-/// exists at all — and
-/// the incremental subtree refresh only re-derives an entity's *visual*, not its
-/// physics extraction or its presence. So they rebuild, which re-derives both
-/// correctly. This is not the hot path: `AttachComponent` emits neither, so
-/// building a vehicle from parts stays rebuild-free.
+/// `SetApiSchemas` and `SetPrimKind` do NOT: their effect is which ECS
+/// *components* a prim carries (rigid body, collider), and the incremental
+/// path cannot derive a changed component set in place. They rebuild, which
+/// re-derives the physical projection correctly. This is not the hot path:
+/// `AttachComponent` emits neither, so building a vehicle from parts stays
+/// rebuild-free.
 ///
-/// Active state changes are always structural: hiding a prim can remove physics
-/// components and entity presence, so the full projection path is required.
+/// Active state is structural, but the generic structural reconciler already
+/// owns exactly that operation: it despawns an inactive subtree and spawns it
+/// again when reactivated. Keeping `SetActive` incremental prevents a route
+/// annotation edit from rebuilding unrelated live vessels and their models.
 fn op_needs_rebuild(op: &UsdOp) -> bool {
     // The program API schema is the only metadata-only fast path. Kind and
     // defaultPrim changes rebuild so the projection reads the new composed
     // metadata from one authoritative document snapshot.
     if let UsdOp::SetApiSchemas { schemas, .. } = op {
         return !incremental_api_schemas(schemas);
-    }
-    // Active state changes prim presence and require the full projection path.
-    if matches!(op, UsdOp::SetActive { .. }) {
-        return true;
     }
     matches!(
         op,
@@ -1441,9 +1438,20 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                 warn!("[twin] author program API {path} failed");
             }
         }
-        // Coarse ops never reach here (the caller rebuilds for them) — that now
-        // includes SetApiSchemas / SetActive, whose ECS effect (physics component
-        // set / entity presence) the visual-only subtree refresh can't reconcile.
+        UsdOp::SetActive { path, active, .. } => {
+            let Ok(sp) = openusd::sdf::Path::new(path) else {
+                return;
+            };
+            let authored = world
+                .get_non_send::<CanonicalStages>()
+                .and_then(|s| s.get(scene_id))
+                .is_some_and(|cs| cs.projector().author_active(&sp, *active).is_ok());
+            if !authored {
+                warn!("[twin] author active={active} at {path} failed");
+            }
+        }
+        // Coarse ops never reach here (the caller rebuilds for them). Active
+        // state is handled above by the shared structural reconciler.
         _ => {}
     }
 }
@@ -2032,9 +2040,8 @@ mod tests {
             type_name: "float".into(),
             sources: vec![],
         }));
-        // Physical apiSchema / active REBUILD: their effect is a prim's ECS
-        // component set / entity presence, which the visual-only subtree refresh
-        // can't reconcile.
+        // Physical apiSchema changes still rebuild: their effect is a prim's ECS
+        // component set, which the structural reconciler cannot change in place.
         assert!(op_needs_rebuild(&UsdOp::SetApiSchemas {
             edit_target: et.clone(),
             path: "/W".into(),
@@ -2047,28 +2054,25 @@ mod tests {
             path: "/W/Mission".into(),
             schemas: vec!["LunCoProgramAPI".into()],
         }));
-        // A `SetActive` on a physics prim (a rover part) rebuilds: it changes
-        // entity presence / physics component set, which the visual-only subtree
-        // refresh can't reconcile.
-        assert!(op_needs_rebuild(&UsdOp::SetActive {
+        // Active state is handled by the generic structural reconciler for both
+        // physical and visual prims: it despawns absent entities and spawns them
+        // from the canonical stage when they become active.
+        assert!(!op_needs_rebuild(&UsdOp::SetActive {
             edit_target: et.clone(),
             path: "/Rover/Chassis".into(),
             active: false,
         }));
-        // Active state is structural for every prim and always rebuilds.
-        assert!(op_needs_rebuild(&UsdOp::SetActive {
+        assert!(!op_needs_rebuild(&UsdOp::SetActive {
             edit_target: et.clone(),
             path: "/Rover/Route/W3".into(),
             active: false,
         }));
-        // Reactivation is structural as well.
-        assert!(op_needs_rebuild(&UsdOp::SetActive {
+        assert!(!op_needs_rebuild(&UsdOp::SetActive {
             edit_target: et.clone(),
             path: "/Apollo15/Route/W0".into(),
             active: true,
         }));
-        // Every prim follows the same active-state contract.
-        assert!(op_needs_rebuild(&UsdOp::SetActive {
+        assert!(!op_needs_rebuild(&UsdOp::SetActive {
             edit_target: et.clone(),
             path: "/Rover/Wheels/W0".into(),
             active: false,

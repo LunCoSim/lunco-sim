@@ -1,0 +1,15 @@
+#usda 1.0
+(
+    defaultPrim = "RouteLifecycle"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Production Rhai acceptance for the reusable route/autopilot tool. The route
+# and subject are deliberately below a reference arc: this is the same USD
+# ownership shape as a Twin scene, not a flattened test-only copy.
+def Xform "RouteLifecycle" (
+    prepend references = @lunco://scenes/base/route_lifecycle_source.usda@</RouteLifecycleSource>
+)
+{
+}

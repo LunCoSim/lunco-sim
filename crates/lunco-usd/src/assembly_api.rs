@@ -819,6 +819,7 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
                     "composed_exists": true,
                     "authored_here": authored_here,
                     "authored_in_document": authored_in_document,
+                    "under_arc": under_arc,
                     "edit_scope": if authored_here {
                         "authored_layer"
                     } else if authored_in_document || under_arc {
@@ -863,6 +864,7 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
             "composed_exists": composed_exists,
             "authored_here": authored_here,
             "authored_in_document": authored_in_document,
+            "under_arc": under_arc,
             "edit_scope": if authored_here {
                 "authored_layer"
             } else if composed_exists && authored_in_document {

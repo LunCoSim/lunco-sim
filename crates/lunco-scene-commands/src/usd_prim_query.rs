@@ -426,9 +426,9 @@ fn runtime_binding_json(world: &World, entity: Option<Entity>) -> serde_json::Va
 }
 
 /// `QueryUsdPrim { doc_id?, path, attrs?, rels?, children?, collision_bounds?, topology? }`
-/// → composed attributes, requested relationships, optional direct children,
-/// optional aggregate collision bounds, optional scoped topology facts, and
-/// world pose.
+/// → composed attributes, active state, requested relationships, optional
+/// direct children, optional aggregate collision bounds, optional scoped
+/// topology facts, and world pose.
 pub struct QueryUsdPrimProvider;
 
 impl ApiQueryProvider for QueryUsdPrimProvider {
@@ -590,6 +590,7 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
             serde_json::Map<String, serde_json::Value>,
             Vec<String>,
             Vec<String>,
+            bool,
             Option<serde_json::Value>,
             Option<serde_json::Value>,
         )> = {
@@ -706,6 +707,7 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
                     connections,
                     schemas,
                     children,
+                    view.is_active(&prim),
                     collision_bounds.clone(),
                     include_topology.then(|| topology_for_stage(&view, &prim)),
                 )
@@ -719,6 +721,7 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
             connections,
             schemas,
             children,
+            active,
             collision_bounds,
             topology,
         )) = read
@@ -738,6 +741,7 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
             "type_name": type_name,
             "attrs": attrs,
             "spawned": spawned.is_some(),
+            "active": active,
         });
         if let Some(doc) = doc {
             out["doc_id"] = serde_json::json!(doc);
