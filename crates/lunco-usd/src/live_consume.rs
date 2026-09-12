@@ -206,6 +206,14 @@ fn find_program_owner(
         .map(|(entity, _, _)| entity)
 }
 
+fn mark_stage_projected(world: &mut World, stage_id: AssetId<UsdStageAsset>) {
+    if let Some(mut backed) =
+        world.get_resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
+    {
+        backed.mark_stage_projected(stage_id);
+    }
+}
+
 /// Re-project a live prim when a structural edit adds its simulation schemas.
 ///
 /// A referenced instance may first appear as a typeless root while its layer
@@ -312,6 +320,7 @@ pub(crate) fn project_stage_changes(world: &mut World) {
         }
 
         if resynced.is_empty() && info_only.is_empty() && authored_transform_edits.is_empty() {
+            mark_stage_projected(world, id);
             continue;
         }
         projected_anything = true;
@@ -342,6 +351,12 @@ pub(crate) fn project_stage_changes(world: &mut World) {
         // so a live edit shows up without reloading the scene.
         refresh_edited_prims_live(world, id, &info_only);
         reconcile_structural_live(world, id, &resynced);
+        // The write-side projector has already authored this batch onto the
+        // canonical stage. Publish the read-side generation only after this
+        // sink batch has been reconciled into the live ECS projection. A query
+        // that runs before this boundary receives an explicit "projection is
+        // not current" result instead of stale composed data.
+        mark_stage_projected(world, id);
     }
 
     // Connections are derived from native `connectionPaths` by

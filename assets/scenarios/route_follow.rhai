@@ -13,6 +13,13 @@ fn route_failure(message) {
     #{ ok: false, error: message }
 }
 
+fn route_view_failure(result, fallback) {
+    let error = if result == () || result.error == () { fallback } else { result.error };
+    let failure = route_failure(error);
+    if result != () && result.retryable == true { failure.retryable = true; }
+    failure
+}
+
 fn route_path(me) {
     let path = usd_path(me);
     if path == () { return (); }
@@ -179,11 +186,7 @@ fn refresh_route_view(me, state) {
         route_path: route_path(me),
     });
     if result == () || result.ok != true {
-        return if result == () {
-            route_failure("the route ribbon tool returned no result")
-        } else {
-            route_failure(result.error)
-        };
+        return route_view_failure(result, "the route ribbon tool returned no result");
     }
     // The ribbon itself is a runtime edit and may advance the document
     // generation. Capture the post-edit revision so the task does not issue
@@ -308,8 +311,10 @@ fn on_start(me) {
     this.route_error = "";
     let view = refresh_route_view(me, this);
     if view.ok != true {
-        notify_kind("Route program stopped: " + view.error, "error");
-        this.route_error = view.error;
+        if view.retryable != true {
+            notify_kind("Route program stopped: " + view.error, "error");
+            this.route_error = view.error;
+        }
     } else {
         this.route_revision = view.revision;
     }
@@ -364,6 +369,7 @@ fn task(me) {
     forever(step(|m| {
         let view = refresh_route_view(m, this);
         if view.ok != true {
+            if view.retryable == true { return false; }
             if this.route_error != view.error {
                 notify_kind("Route program stopped: " + view.error, "error");
                 this.route_error = view.error;

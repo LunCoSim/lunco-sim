@@ -181,7 +181,7 @@ fn on_tick(me) {
             context(this.doc, this.new_point, ()), ROUTE,
         );
         this.checks.push(t_true(selected == this.new_point,
-            "secondary-click policy resolves the direct route point"));
+            "secondary-click policy selects the direct route point"));
         let moved = waypoint_editor::on_move(context(this.doc, this.new_point, [4.0, 1.0, -32.0]));
         this.checks.push(t_true(moved.ok == true && moved.path == this.new_point,
             "route-point move is a typed USD edit"));

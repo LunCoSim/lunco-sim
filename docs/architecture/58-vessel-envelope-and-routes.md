@@ -167,8 +167,9 @@ The scene-level Rhai route program and composed USD points are the single source
 for the route that drives the subject. The reusable `waypoint_editor` Rhai tool
 derives one runtime `BasisCurves` annotation from those same active point
 children. It uses exact composed paths and writes the route view only after a
-route revision changes; it does not create a second authored route, a subject
-component, or a per-frame document write. Waypoint labels remain separate: the
+route revision changes and the canonical projection has settled; it does not
+create a second authored route, a subject component, or a per-frame document
+write. Waypoint labels remain separate: the
 marker prim authors `lunco:billboard*`, and the generic billboard renderer owns
 their screen-space presentation.
 
@@ -181,11 +182,12 @@ It is not a terrain mesh, a physics surface, or a camera-path preview. If fewer
 than two active points remain, the tool removes the runtime ribbon atomically.
 
 USD remains authoritative for point identity, composed transforms, active state,
-and mission topology. A missing subject, malformed point, or unavailable USD
-generation is a visible route-program error and leaves the subject safely
-braked; it never selects a stale derived route. Because the ribbon is generated
-in the runtime layer, closing the runtime view leaves the authored Twin and its
-route points unchanged.
+and mission topology. A transient generation gap while a typed edit is being
+projected is retried by the route program; a missing subject, malformed point,
+or persistent unavailable USD generation is a visible route-program error and
+leaves the subject safely braked. The route program never selects a stale
+derived route. Because the ribbon is generated in the runtime layer, closing
+the runtime view leaves the authored Twin and its route points unchanged.
 
 ## Difficulty tiers as a variantSet
 

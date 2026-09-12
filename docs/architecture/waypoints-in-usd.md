@@ -51,8 +51,8 @@ copy coordinates into Rust or into the subject. Multiple routes can coexist by
 using distinct scopes and subject relationships; enablement is a property of
 each program instance.
 
-The editor's route tool derives a ribbon from the same point children. It
-references the reusable
+The editor's route tool derives a ribbon from the same point children after the
+canonical USD projection has settled. It references the reusable
 [`assets/markers/route_ribbon.usda`](../../assets/markers/route_ribbon.usda)
 asset and writes only the generated `BasisCurves` opinions to the document's
 `@runtime@` layer. The Twin therefore contains no editor ribbon prim: removing

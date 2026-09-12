@@ -131,12 +131,14 @@ fn next_point_name(doc, route) {
     ()
 }
 
-// Read the route points once and optionally replace or omit one point. This
-// keeps a move/delete and its ribbon refresh in the same USD transaction.
+// Read the route points from one settled composed-stage generation. The
+// result is used only by the disposable ribbon tool; durable point edits are
+// intentionally committed in their own USD transaction.
 fn route_positions(doc, route, edited_path, replacement, appended) {
     let document_gen = generation(doc);
     if document_gen == () {
-        return #{ ok: false, error: "route document generation is unavailable" };
+        return #{ ok: false, retryable: true,
+            error: "route document generation is unavailable" };
     }
     let result = query("QueryUsdPrim", #{
         doc_id: doc,
@@ -145,10 +147,10 @@ fn route_positions(doc, route, edited_path, replacement, appended) {
     });
     let positions = [];
     if result == () || result.ok == false || result.children == () {
-        return #{ ok: false, error: "route stage is not synchronized" };
+        return #{ ok: false, retryable: true, error: "route stage is not synchronized" };
     }
     if result.generation != document_gen {
-        return #{ ok: false, error: "route stage is not synchronized" };
+        return #{ ok: false, retryable: true, error: "route stage is not synchronized" };
     }
     for child in result.children {
         let parts = child.split("/");
@@ -156,10 +158,12 @@ fn route_positions(doc, route, edited_path, replacement, appended) {
         if leaf == "Program" { continue; }
         let record = query("QueryUsdPrim", #{ doc_id: doc, path: child });
         if record == () || record.ok == false {
-            return #{ ok: false, error: "route point state is not synchronized" };
+            return #{ ok: false, retryable: true,
+                error: "route point state is not synchronized" };
         }
         if record.generation != document_gen {
-            return #{ ok: false, error: "route point state is not synchronized" };
+            return #{ ok: false, retryable: true,
+                error: "route point state is not synchronized" };
         }
         if record.active != true { continue; }
         if child == edited_path {
@@ -173,7 +177,8 @@ fn route_positions(doc, route, edited_path, replacement, appended) {
         });
         if point == () || point.ok == false || point.attrs == ()
             || point.attrs["xformOp:translate"] == () {
-            return #{ ok: false, error: "route point has no authored position" };
+            return #{ ok: false, retryable: true,
+                error: "route point has no authored position" };
         }
         positions.push(point.attrs["xformOp:translate"]);
     }
@@ -477,15 +482,9 @@ fn on_click(context) {
     if !point.ok { return failure(point.error); }
     let ops = setup.ops;
     for op in point.ops { ops.push(op); }
-    let positions = if setup.created {
-        #{ ok: true, points: [context.world_position] }
-    } else {
-        let read = route_positions(context.doc_id, route, (), (), context.world_position);
-        if read.ok != true { return failure(read.error); }
-        read
-    };
-    let view_ops = ribbon_ops(context.doc_id, route, positions.points);
-    for op in view_ops { ops.push(op); }
+    // Commit only the durable route facts. The route program invokes the
+    // disposable ribbon tool after the canonical projection settles, so an
+    // asynchronous stage update cannot mix old geometry with the new point.
     let result = apply_ops(context.doc_id, "Append route point", ops);
     if result.ok { result.path = point.path; }
     result
@@ -507,9 +506,6 @@ fn on_move(context) {
         path: point,
         value: context.world_position,
     }}];
-    let read = route_positions(context.doc_id, route, point, context.world_position, ());
-    if read.ok != true { return failure(read.error); }
-    for op in ribbon_ops(context.doc_id, route, read.points) { ops.push(op); }
     let result = apply_ops(context.doc_id, "Move route point", ops);
     if result.ok { result.path = point; }
     result
@@ -539,10 +535,7 @@ fn on_delete(context) {
             return failure("route point is composed read-only");
         }
     };
-    let read = route_positions(context.doc_id, route, point, (), ());
-    if read.ok != true { return failure(read.error); }
     let ops = [op];
-    for ribbon_op in ribbon_ops(context.doc_id, route, read.points) { ops.push(ribbon_op); }
     let result = apply_ops(context.doc_id, "Delete route point", ops);
     if result.ok { result.path = point; }
     result
