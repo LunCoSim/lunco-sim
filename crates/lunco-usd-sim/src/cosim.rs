@@ -544,7 +544,7 @@ fn record_scene_load_terminal_outcome(
     if let SceneStageAssetOutcome::Failed { error, .. } = outcome {
         pending.outcome = None;
         commands.remove_resource::<SceneLoadInFlight>();
-        commands.remove_resource::<lunco_usd_bevy::FailedSceneLoad>();
+        commands.remove_resource::<lunco_usd_bevy_scene::FailedSceneLoad>();
         commands.trigger(SceneTransitionFailed { transition, error });
         return;
     }
@@ -578,7 +578,7 @@ fn record_scene_load_terminal_outcome(
     }
     pending.outcome = None;
     commands.remove_resource::<SceneLoadInFlight>();
-    commands.remove_resource::<lunco_usd_bevy::FailedSceneLoad>();
+    commands.remove_resource::<lunco_usd_bevy_scene::FailedSceneLoad>();
     commands.trigger(SceneTransitionCompleted { transition });
 }
 
@@ -4671,7 +4671,7 @@ fn execute_admitted_clear_scene(
     // Without removing this identity, a late outcome from the outgoing stage
     // can close or assert against the replacement transaction.
     commands.remove_resource::<SceneLoadInFlight>();
-    commands.remove_resource::<lunco_usd_bevy::FailedSceneLoad>();
+    commands.remove_resource::<lunco_usd_bevy_scene::FailedSceneLoad>();
     clear_scene_entities(&mut commands, &scene);
     commands.queue(|world: &mut World| {
         world.trigger(SceneTransitionCompleted {

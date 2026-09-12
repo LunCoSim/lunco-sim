@@ -621,6 +621,21 @@ pub fn read_vec3_f64(reader: &dyn UsdReadObject, path: &SdfPath, attr: &str) -> 
     reader.vec3_f64(path, attr)
 }
 
+/// Read a composed USD vec3 as a Bevy Vec3.
+///
+/// This is the presentation-sized adapter over read_vec3_f64. Keeping the
+/// precision-preserving reader above and the f32 conversion here gives visual
+/// and non-visual consumers one canonical USD decoding path without making the
+/// core reader depend on a visual crate.
+pub fn get_attribute_as_vec3(
+    reader: &dyn UsdReadObject,
+    path: &SdfPath,
+    attr: &str,
+) -> Option<bevy::math::Vec3> {
+    read_vec3_f64(reader, path, attr)
+        .map(|v| bevy::math::Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32))
+}
+
 /// Read an array-valued `UsdGeomGprim` display primvar such as
 /// `primvars:displayColor`. The schema's `constant` interpolation means the
 /// first array element is the prim's value.

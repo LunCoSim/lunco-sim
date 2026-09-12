@@ -21,6 +21,8 @@ existing subsystems:
 
 - **`UsdBevyPlugin`** (from `lunco-usd-bevy`) — visual sync: spawns child
   entities for USD prims, attaches meshes + transforms + hierarchy.
+- **`UsdDiagnosticsPlugin`** (from `lunco-usd-bevy-diagnostics`) — visual
+  glTF placeholder hiding and failure-stub diagnostics.
 - **`UsdAvianPlugin`** (from `lunco-usd-avian`) — physics mapping: USD physics
   attributes → Avian3D `RigidBody` / `Collider` / `Mass` / `Damping`.
 - **`UsdSimPlugin`** (from `lunco-usd-sim`) — simulation mapping: detects sim

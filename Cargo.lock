@@ -8259,6 +8259,7 @@ dependencies = [
  "lunco-usd-avian",
  "lunco-usd-bevy",
  "lunco-usd-bevy-core",
+ "lunco-usd-bevy-diagnostics",
  "lunco-usd-bevy-scene",
  "lunco-usd-compose",
  "lunco-usd-core",
@@ -8294,7 +8295,6 @@ dependencies = [
 name = "lunco-usd-bevy"
 version = "0.1.0"
 dependencies = [
- "ab_glyph",
  "anyhow",
  "bevy",
  "bevy_mesh",
@@ -8304,7 +8304,6 @@ dependencies = [
  "lunco-core",
  "lunco-materials",
  "lunco-render",
- "lunco-settings",
  "lunco-time",
  "lunco-usd-bevy-camera",
  "lunco-usd-bevy-core",
@@ -8345,6 +8344,21 @@ dependencies = [
  "lunco-usd-core",
  "openusd",
  "tempfile",
+]
+
+[[package]]
+name = "lunco-usd-bevy-diagnostics"
+version = "0.1.0"
+dependencies = [
+ "ab_glyph",
+ "bevy",
+ "lunco-assets",
+ "lunco-render",
+ "lunco-settings",
+ "lunco-usd-bevy-core",
+ "lunco-usd-bevy-scene",
+ "openusd",
+ "wgpu-types",
 ]
 
 [[package]]

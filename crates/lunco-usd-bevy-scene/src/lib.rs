@@ -9,7 +9,7 @@
 
 mod geometry;
 
-use bevy::asset::AssetEvent;
+use bevy::asset::{AssetEvent, AssetLoadFailedEvent};
 use bevy::ecs::hierarchy::ChildOf;
 use bevy::prelude::*;
 use lunco_usd_bevy_core::{UsdInstanceProjection, UsdInstanceRoot, UsdStageAsset};
@@ -18,6 +18,27 @@ pub use geometry::{
     read_primitive_axis, read_shape_dims, read_usd_mesh_indexed, read_usd_mesh_points,
     read_usd_mesh_topology, usd_axis_to_quat, ShapeDims, UsdMeshTopology,
 };
+
+/// Installs render-free USD scene lifecycle bookkeeping.
+///
+/// The scene contract owns stage-load failure cleanup and revision invalidation;
+/// visual, physics, and simulation projections consume the resulting facts.
+pub struct UsdScenePlugin;
+
+impl Plugin for UsdScenePlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<UsdStageRevision>()
+            .add_systems(PreUpdate, bump_usd_stage_revision)
+            .add_systems(
+                Update,
+                fail_awaiting_stage_prims.run_if(
+                    bevy::ecs::schedule::common_conditions::on_message::<
+                        AssetLoadFailedEvent<UsdStageAsset>,
+                    >,
+                ),
+            );
+    }
+}
 
 /// The USD prim represented by a Bevy entity.
 ///
@@ -106,6 +127,58 @@ pub struct UsdSceneGeometryPending;
 #[derive(Component, Reflect, Debug, Clone, PartialEq, Eq)]
 #[reflect(Component)]
 pub struct UsdSceneProjectionFailed(pub String);
+
+/// Terminal asset failure recorded until the scene transaction consumes it.
+///
+/// This is a scene-lifecycle fact, not a visual diagnostic. Keeping it in the
+/// render-free scene package lets headless simulation and document commands
+/// close a failed mount without depending on placeholder presentation.
+#[derive(Resource, Debug, Clone)]
+pub struct FailedSceneLoad {
+    pub stage_id: bevy::asset::AssetId<UsdStageAsset>,
+    pub error: String,
+}
+
+/// Makes a failed stage load terminal for prims parked on it.
+fn fail_awaiting_stage_prims(
+    mut ev: MessageReader<AssetLoadFailedEvent<UsdStageAsset>>,
+    q: Query<(Entity, &UsdPrimPath), With<UsdSceneAwaitingStage>>,
+    mut commands: Commands,
+) {
+    for failure in ev.read() {
+        let parked: Vec<Entity> = q
+            .iter()
+            .filter(|(_, prim_path)| prim_path.stage_handle.id() == failure.id)
+            .map(|(entity, _)| entity)
+            .collect();
+        if parked.is_empty() {
+            continue;
+        }
+        error!(
+            "[usd-scene] stage {} failed to load ({}) — {} prim(s) waiting on it will never instantiate and are being dropped",
+            failure.path,
+            failure.error,
+            parked.len()
+        );
+        for entity in parked {
+            commands.entity(entity).try_despawn();
+        }
+        commands.insert_resource(FailedSceneLoad {
+            stage_id: failure.id,
+            error: failure.error.to_string(),
+        });
+    }
+}
+
+/// Marks a USD prim that owns a primitive fallback while a glTF scene payload
+/// is loading. The visual projector inserts this scene fact; the optional
+/// diagnostics plugin consumes it to hide or replace the fallback.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct GlbPlaceholder;
+
+/// Asset URI associated with a [`GlbPlaceholder`].
+#[derive(Component, Debug, Clone)]
+pub struct PlaceholderAssetUri(pub String);
 
 /// Marks an entity whose USD xform or appearance contains time-sampled data.
 ///
@@ -243,6 +316,7 @@ pub fn instance_key_from_projection(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::system::SystemState;
 
     #[test]
     fn scene_root_ancestor_finds_root_and_rejects_missing_parent() {
@@ -253,9 +327,12 @@ mod tests {
         let missing_parent = world
             .spawn(ChildOf(Entity::from_raw_u32(999_999).unwrap()))
             .id();
-        let mut scene_roots = world.query_filtered::<(), With<UsdSceneRoot>>();
-        let mut child_of = world.query::<&ChildOf>();
-        let mut entities = world.query::<Entity>();
+        let mut state: SystemState<(
+            Query<(), With<UsdSceneRoot>>,
+            Query<&ChildOf>,
+            Query<Entity>,
+        )> = SystemState::new(&mut world);
+        let (scene_roots, child_of, entities) = state.get(&mut world).unwrap();
 
         assert_eq!(
             scene_root_ancestor(child, &scene_roots, &child_of, &entities,),
@@ -277,12 +354,79 @@ mod tests {
         let root = world.spawn(UsdPreviewOnly).id();
         let child = world.spawn(ChildOf(root)).id();
         let detached = world.spawn_empty().id();
-        let mut child_of = world.query::<&ChildOf>();
-        let mut preview_roots = world.query_filtered::<(), With<UsdPreviewOnly>>();
+        let mut state: SystemState<(Query<&ChildOf>, Query<(), With<UsdPreviewOnly>>)> =
+            SystemState::new(&mut world);
+        let (child_of, preview_roots) = state.get(&mut world).unwrap();
 
         assert!(is_preview_only(child, &child_of, &preview_roots));
         assert!(!is_preview_only(detached, &child_of, &preview_roots));
         assert!(is_preview_only_entity(&world, child));
         assert!(!is_preview_only_entity(&world, detached));
+    }
+}
+
+#[cfg(test)]
+mod stage_failure_tests {
+    use super::*;
+    use bevy::asset::{AssetLoadError, AssetLoadFailedEvent, AssetPath};
+
+    fn app() -> App {
+        let mut app = App::new();
+        app.add_plugins(UsdScenePlugin)
+            .add_message::<AssetEvent<UsdStageAsset>>()
+            .add_message::<AssetLoadFailedEvent<UsdStageAsset>>();
+        app
+    }
+
+    fn parked(app: &mut App, handle: Handle<UsdStageAsset>) -> Entity {
+        app.world_mut()
+            .spawn((
+                UsdPrimPath {
+                    stage_handle: handle,
+                    path: "/Scene".into(),
+                },
+                UsdSceneAwaitingStage,
+            ))
+            .id()
+    }
+
+    fn fail(app: &mut App, handle: &Handle<UsdStageAsset>, path: &str) {
+        app.world_mut()
+            .resource_mut::<Messages<AssetLoadFailedEvent<UsdStageAsset>>>()
+            .write(AssetLoadFailedEvent {
+                id: handle.id(),
+                path: AssetPath::from(path.to_string()),
+                error: AssetLoadError::EmptyPath(AssetPath::from(path.to_string())),
+            });
+    }
+
+    #[test]
+    fn a_failed_stage_drops_the_prims_parked_on_it() {
+        let mut app = app();
+        let handle = Handle::<UsdStageAsset>::default();
+        let entity = parked(&mut app, handle.clone());
+
+        app.update();
+        assert!(app.world().get_entity(entity).is_ok());
+
+        fail(&mut app, &handle, "missing.usda");
+        app.update();
+        assert!(app.world().get_entity(entity).is_err());
+        assert!(app.world().contains_resource::<FailedSceneLoad>());
+    }
+
+    #[test]
+    fn a_different_stages_failure_leaves_this_prim_waiting() {
+        let mut app = app();
+        let mine = Handle::<UsdStageAsset>::default();
+        let entity = parked(&mut app, mine);
+
+        let other: Handle<UsdStageAsset> =
+            bevy::asset::uuid_handle!("5ce7e000-0000-4000-8000-000000000001");
+        fail(&mut app, &other, "someone_elses.usda");
+        app.update();
+
+        assert!(app.world().get_entity(entity).is_ok());
+        assert!(!app.world().contains_resource::<FailedSceneLoad>());
     }
 }

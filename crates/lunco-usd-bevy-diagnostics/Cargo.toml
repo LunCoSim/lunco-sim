@@ -1,0 +1,20 @@
+[package]
+name = "lunco-usd-bevy-diagnostics"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "USD asset failure and visual placeholder diagnostics"
+
+[dependencies]
+bevy = { workspace = true, features = ["bevy_asset", "bevy_gltf", "bevy_image", "bevy_mesh"] }
+ab_glyph = "0.2"
+lunco-assets = { workspace = true }
+lunco-render = { path = "../lunco-render" }
+lunco-settings = { path = "../lunco-settings" }
+lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
+lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
+openusd = { workspace = true }
+wgpu-types = "29"
+
+[lints]
+workspace = true

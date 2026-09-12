@@ -75,6 +75,7 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-usd-bevy-camera`** | Render-free USD camera adapter: standard `UsdGeomCamera` projection intent, mounted/cinematic camera pose, camera-track selection, and the single-authority viewport-camera reconciler. It depends on the core reader and scene contract, not on visual projection. |
 | **`lunco-usd-bevy-lathe`** | Independent parametric NURBS/lathe projection: reflected surface definitions, profile evaluation, and change-detected Bevy mesh regeneration. |
 | **`lunco-usd-bevy`** | Visual Bevy adapter (`UsdBevyPlugin`): projects USD hierarchy, shapes, transforms, materials, and `timeSamples` animation into Bevy entities/components on top of `lunco-usd-bevy-core`. Owns the remaining mesh/curve projection and lighting; installs the independent camera adapter but does not own camera mechanisms. |
+| **`lunco-usd-bevy-diagnostics`** | Optional visual USD asset-failure and placeholder diagnostics: glTF fallback hiding, load-time replacement stubs, and labeled failure geometry. Installed by `UsdPlugins`; kept separate from the visual projector. |
 | **`lunco-usd-avian`** | Physics bridge (`UsdAvianPlugin`): maps `UsdPhysics` schemas (RigidBody, Colliders, all joint kinds + drive API) to Avian3D — the single home for joint construction. |
 | **`lunco-usd-sim`** | Simulation-schema bridge (`UsdSimPlugin`): intercepts specialized vehicle/cosim schemas (e.g., PhysX Vehicles) and maps them to LunCo models. Full USD→Bevy→Avian→simulation projection tests live here; direct Avian bridge mechanics stay in `lunco-usd-avian`. |
 | **`lunco-usd-sim-celestial`** | Independent render-free projector for USD-authored celestial anchors, orbits, link nodes, occluders, and reflected-light metadata. It owns the celestial projection marker and does not depend on vehicle or cosimulation projection. |
@@ -291,6 +292,10 @@ readers. Avian, terrain, and other headless projections depend on this package
 without depending on the visual mesh/camera/light adapter; the visual crate
 uses the same contract when it binds presentation components.
 
+The package's `UsdScenePlugin` installs the render-free stage revision and
+failed-mount lifecycle systems. `FailedSceneLoad` is consumed by scene
+transactions, so headless simulation does not depend on visual diagnostics.
+
 **`lunco-usd-ui`**
 Interactive USD browser and preview presentation. Owns workbench sections, preview sessions/views, viewport queries, Save-As picker integration, and UI status/placeholder adapters while consuming the document and projection APIs from `lunco-usd`.
 
@@ -312,6 +317,13 @@ crate uses directly rather than re-exporting. See
 [`17-view-and-intent.md §6`](architecture/17-view-and-intent.md).
 Headless consumers import the owning `lunco-usd-bevy-core` modules directly;
 this visual adapter is not a compatibility facade for the headless API.
+
+**`lunco-usd-bevy-diagnostics`**
+Optional visual USD asset diagnostics installed by `UsdPlugins`. It owns
+glTF placeholder hiding/replacement and the CPU-baked labels on visual failure
+stubs. The visual projector only emits generic scene markers from
+`lunco-usd-bevy-scene`; stage-load failure state itself remains in that
+render-free package, so headless scene transactions do not pull in this crate.
 
 **`lunco-usd-bevy-lathe`**
 Production parametric NURBS/lathe projection. It retains the authored surface

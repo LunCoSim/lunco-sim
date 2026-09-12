@@ -15,6 +15,7 @@ big_space = { workspace = true }
 # for colliders), avian physics mapping, sim/scene + cosim LoadScene.
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
+lunco-usd-bevy-diagnostics = { path = "../lunco-usd-bevy-diagnostics" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-compose = { path = "../lunco-usd-compose" }

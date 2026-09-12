@@ -76,11 +76,11 @@ use lunco_usd_bevy_core::{
     stage_convention, Purpose, StageView, UsdRead, UsdReadObject,
 };
 use lunco_usd_bevy_scene::{
-    bump_usd_stage_revision, is_preview_only, read_primitive_axis, read_shape_dims,
-    read_usd_mesh_indexed, read_usd_mesh_points, read_usd_mesh_topology, scene_root_ancestor,
-    usd_axis_to_quat, ShapeDims, UsdAnimated, UsdPreviewOnly, UsdPrimPath, UsdSceneAwaitingStage,
-    UsdSceneGeometryPending, UsdSceneProjected, UsdSceneProjectionFailed, UsdSceneProjectionQueued,
-    UsdSceneRoot, UsdStageRevision,
+    is_preview_only, read_primitive_axis, read_shape_dims, read_usd_mesh_indexed,
+    read_usd_mesh_points, read_usd_mesh_topology, scene_root_ancestor, usd_axis_to_quat,
+    GlbPlaceholder, PlaceholderAssetUri, ShapeDims, UsdAnimated, UsdPreviewOnly, UsdPrimPath,
+    UsdSceneAwaitingStage, UsdSceneGeometryPending, UsdScenePlugin, UsdSceneProjected,
+    UsdSceneProjectionFailed, UsdSceneProjectionQueued, UsdSceneRoot,
 };
 use lunco_usd_core::UsdDataExt;
 use openusd::schemas::geom::tokens as gtok;
@@ -106,15 +106,11 @@ pub struct UsdVisualProjectionSet;
 
 impl Plugin for UsdBevyPlugin {
     fn build(&self, app: &mut App) {
-        // Failed-asset diagnostic labels load the shared fallback font on the
-        // browser, so this standalone scene plugin also installs the common
-        // network policy when no higher-level asset plugin is present.
-        lunco_settings::ensure_download_settings(app);
         // USD mesh and light projection consumes the authoritative graphics
         // settings. Initialise the documented default at this boundary so
         // projectors never invent a separate quality profile.
         app.init_resource::<lunco_render::RenderingQualitySettings>();
-        app.add_plugins(lunco_usd_bevy_camera::UsdCameraPlugin)
+        app.add_plugins((UsdScenePlugin, lunco_usd_bevy_camera::UsdCameraPlugin))
             .configure_sets(
                 Update,
                 lunco_usd_bevy_camera::UsdCameraProjectionSet.after(UsdVisualProjectionSet),
@@ -195,8 +191,6 @@ impl Plugin for UsdBevyPlugin {
             .register_type::<lathe::NurbsSurface>()
             .register_type::<lathe::UsdLathe>()
             .register_type::<lathe::LatheProfile>()
-            .init_resource::<DiagnosticLabelFont>()
-            .init_resource::<DiagnosticLabelConfig>()
             .init_resource::<UsdVisualProjectionSettings>()
             // The live canonical stages are main-thread `NonSend` resources
             // because OpenUSD `Stage` is `!Send`. Initial projection uses each
@@ -208,9 +202,6 @@ impl Plugin for UsdBevyPlugin {
             // spawn is observed here the frame AFTER it is applied and the
             // view-model re-derives one frame later — the right trade for a
             // panel, not for anything a simulation step depends on.
-            .init_resource::<UsdStageRevision>()
-            .add_systems(PreUpdate, bump_usd_stage_revision)
-            .add_systems(Startup, load_diagnostic_label_font)
             .add_observer(on_usd_prim_added)
             .add_observer(on_cell_coord_added)
             .add_observer(light::on_usd_light_added)
@@ -300,20 +291,11 @@ impl Plugin for UsdBevyPlugin {
                     // prims whose stage arrived, this one drains prims whose stage
                     // never will. Both must exist or the queue has an outcome it
                     // cannot leave.
-                    fail_awaiting_stage_prims.run_if(
-                        bevy::ecs::schedule::common_conditions::on_message::<
-                            bevy::asset::AssetLoadFailedEvent<UsdStageAsset>,
-                        >,
-                    ),
                     // Upgrades parked runtime-instance descendants to a
                     // hierarchical `Derived` id (gap G2/B.1) once their root id
                     // is allocated. Cheap: the query is empty unless a runtime
                     // spawn is mid-flight.
                     resolve_usd_instance_identities,
-                    hide_glb_placeholder_meshes,
-                    poll_diagnostic_label_font,
-                    reveal_placeholder_on_failure,
-                    bake_pending_labels,
                 ),
             )
             // Per-frame USD animation: drive `UsdAnimated` transforms from authored
@@ -918,7 +900,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
         // is present, we still build the primitive Cube/Sphere/Cylinder
         // mesh so the prim has a fallback visual until the glTF Scene
         // finishes loading. Once Bevy reports the Scene asset loaded,
-        // `hide_glb_placeholder_meshes` (below) hides the primitive
+        // the diagnostics plugin hides the primitive
         // Mesh3d so the photoreal glTF replaces it cleanly.
         //
         // Authors size the placeholder Cube ≈ glTF bbox; mismatched
@@ -1257,8 +1239,8 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                     let label = label.unwrap_or_else(|| "Scene0".to_string());
                     let path = format!("{asset_uri}#{label}");
                     let scene_h: Handle<WorldAsset> = asset_server.load(&path);
-                    // Mark the entity so `hide_glb_placeholder_meshes`
-                    // can drop the placeholder Mesh3d once this Scene
+                    // Mark the entity so the diagnostics plugin can drop the
+                    // placeholder Mesh3d once this Scene
                     // finishes loading. The marker is harmless if the
                     // entity has no Mesh3d (e.g. `def Xform` without a
                     // primitive fallback).
@@ -2047,77 +2029,6 @@ fn retry_awaiting_usd_visuals_after_quality_change(
     }
 }
 
-/// Terminal asset failure recorded by the USD asset boundary until the scene
-/// transaction consumes it. Keeping the stage identity here prevents the
-/// generic readiness/scene reconciler from mistaking a failed load for a
-/// successful drain.
-#[derive(Resource, Debug, Clone)]
-pub struct FailedSceneLoad {
-    pub stage_id: bevy::asset::AssetId<UsdStageAsset>,
-    pub error: String,
-}
-
-/// Makes a failed stage load TERMINAL for the prims parked on it.
-///
-/// [`sync_usd_visuals`] drains `UsdSceneAwaitingStage` on `LoadedWithDependencies`,
-/// which is the only outcome it models. A stage that fails to load never emits
-/// that event, so this boundary records the failure and closes the parked
-/// entities explicitly. The scene transaction can then publish its terminal
-/// failure and a later `LoadScene` can begin a new transaction.
-///
-/// A parked prim whose stage will never arrive cannot become anything, so it is
-/// despawned rather than left as an inert husk that later passes for a mounted
-/// scene. The failure is loud (`error!`) and consumed by the scene transaction
-/// owner, which publishes the typed `SceneTransitionFailed` edge after the
-/// parked entities have been reclaimed.
-fn fail_awaiting_stage_prims(
-    mut ev: MessageReader<bevy::asset::AssetLoadFailedEvent<UsdStageAsset>>,
-    q: Query<(Entity, &UsdPrimPath), With<UsdSceneAwaitingStage>>,
-    mut commands: Commands,
-) {
-    for failure in ev.read() {
-        let parked: Vec<Entity> = q
-            .iter()
-            .filter(|(_, prim_path)| prim_path.stage_handle.id() == failure.id)
-            .map(|(entity, _)| entity)
-            .collect();
-        if parked.is_empty() {
-            continue;
-        }
-        error!(
-            "[usd] stage `{}` failed to load ({}) — {} prim(s) waiting on it will \
-             never instantiate and are being dropped. The mount is abandoned; \
-             later scene loads are free to proceed.",
-            failure.path,
-            failure.error,
-            parked.len()
-        );
-        for entity in parked {
-            // A replacement LoadScene/ClearScene may have reclaimed the
-            // parked prim in the same command flush. Failure cleanup is
-            // idempotent at the entity boundary.
-            commands.entity(entity).try_despawn();
-        }
-        commands.insert_resource(FailedSceneLoad {
-            stage_id: failure.id,
-            error: failure.error.to_string(),
-        });
-    }
-}
-
-/// Upgrades parked runtime-instance descendants (gap G2/B.1) from their
-/// placeholder [`lunco_core::Provenance::Local`] to a deterministic
-/// [`lunco_core::Provenance::Derived`] once their instance root has been
-/// allocated a [`lunco_core::GlobalEntityId`].
-///
-/// The loader parks each descendant the instant it is instantiated — the root
-/// id is not minted yet at that point. Here we read the root's (authoritative
-/// on the server, replicated on clients) id and the member's prim path to mint
-/// `Derived{ parent: root_id, role: <path relative to root> }`. Two spawns of
-/// the same asset have distinct root ids, so their descendants get distinct
-/// ids; and because `derive_id` is a pure function of `(parent, role)`, every
-/// peer computes the same id with zero coordination.
-///
 /// Convergence is at most one frame behind the root's id allocation: the member
 /// stays parked (`Local` is a no-op in `assign_global_entity_ids`, so it is
 /// never given a colliding auto-allocated id) until this runs, after which the
@@ -3213,19 +3124,6 @@ pub fn bind_animated_to_preview(
         pb.start = lo;
         pb.end = hi;
     }
-}
-
-/// Reads a 3-component vector attribute (`color3f` / `double3` / `float3`
-/// and `Vec<f32>`/`Vec<f64>` array forms) from a USD prim as a Bevy
-/// `Vec3` (f32). Thin wrapper over [`read_vec3_f64`] — reused by
-/// downstream crates (e.g. `lunco-usd-sim`'s shader authoring) so there
-/// is one canonical vec3 reader. `None` if absent or unconvertible.
-pub fn get_attribute_as_vec3(
-    reader: &dyn read::UsdReadObject,
-    path: &SdfPath,
-    attr: &str,
-) -> Option<Vec3> {
-    read_vec3_f64(reader, path, attr).map(|v| Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32))
 }
 
 /// Apply one generic program resolution to its owning entity.
@@ -5891,504 +5789,6 @@ pub fn build_usd_mesh(reader: &impl UsdRead, path: &SdfPath) -> Option<Mesh> {
     Some(mesh)
 }
 
-/// Marker inserted on prim entities that own both a primitive Cube
-/// fallback mesh **and** a glTF [`WorldAssetRoot`]. Used by
-/// [`hide_glb_placeholder_meshes`] to find these entities cheaply.
-#[derive(Component)]
-pub struct GlbPlaceholder;
-
-/// Stores the URI of the GLB asset that this placeholder is waiting for.
-/// Used for diagnostic labels if the asset fails to load.
-#[derive(Component)]
-pub struct PlaceholderAssetUri(pub String);
-
-/// Marker for entities spawned as diagnostic stubs when asset loading fails.
-#[derive(Component)]
-pub struct DiagnosticStub;
-
-/// Marker for the textured quad that displays the failed asset's filename.
-#[derive(Component)]
-pub struct DiagnosticStubLabel;
-
-/// Attached to a freshly-spawned [`DiagnosticStub`] that still needs its
-/// filename baked onto its faces. A separate pass ([`bake_pending_labels`])
-/// does the baking once [`DiagnosticLabelFont`] is available — this decouples
-/// *when the asset fails* from *when the font is ready*, which matters on web
-/// where the font arrives asynchronously over HTTP.
-#[derive(Component)]
-pub struct PendingDiagnosticLabel {
-    /// Full label text (prefix + file name).
-    pub text: String,
-    /// World size of the diagnostic box, for fitting the label per face.
-    pub box_size: Vec3,
-}
-
-/// Tunable appearance of the failed-asset diagnostic stub. Insert your own
-/// before [`UsdBevyPlugin`] builds (or mutate the resource at runtime) to
-/// override any field — nothing here is a hard-coded magic constant.
-#[derive(Resource, Clone, Debug)]
-pub struct DiagnosticLabelConfig {
-    /// Glyph height used when rasterising the label, in texture pixels
-    /// (higher = crisper text, larger texture).
-    pub font_px: f32,
-    /// Transparent border around the text, in texture pixels.
-    pub padding_px: f32,
-    /// Text colour, RGB 0-255.
-    pub text_color: [u8; 3],
-    /// Backdrop colour painted behind the text, RGBA 0-255.
-    pub bg_color: [u8; 4],
-    /// Fraction (0..1) of each box face the label may cover.
-    pub face_coverage: f32,
-    /// Colour of the semi-transparent diagnostic box itself.
-    pub box_color: Color,
-    /// String prepended to the file name (e.g. `"Missing: "`).
-    pub prefix: String,
-    /// `true` → label on all six faces; `false` → only the +Z front face.
-    pub all_faces: bool,
-    /// Seconds a placeholder may wait for its glTF scene before the stub is
-    /// shown. Covers web, where a 404 may never report a clean `is_failed()`.
-    pub grace_secs: f32,
-}
-
-impl Default for DiagnosticLabelConfig {
-    fn default() -> Self {
-        Self {
-            font_px: 64.0,
-            padding_px: 24.0,
-            text_color: [255, 255, 255],
-            bg_color: [20, 0, 0, 140],
-            face_coverage: 0.85,
-            box_color: Color::srgba(1.0, 0.0, 0.0, 0.7),
-            prefix: "Missing: ".to_string(),
-            all_faces: true,
-            grace_secs: 8.0,
-        }
-    }
-}
-
-/// Caches the DejaVu Sans face used to bake filename labels into textures, so
-/// the `.ttf` is loaded at most once (not per failed asset). `None` until the
-/// font is loaded (native: read from storage at startup; web: fetched over
-/// HTTP). If it never loads, stubs still show the red box, just without text.
-#[derive(Resource, Default)]
-pub struct DiagnosticLabelFont(pub Option<std::sync::Arc<ab_glyph::FontVec>>);
-
-/// Holds the receiver from [`lunco_assets::font::load_dejavu_sans_bytes`]
-/// until the bytes land. The same channel mechanism works on native (bytes
-/// ready immediately) and web (bytes fetched async), so the plugin has no
-/// platform branches. Removed once the font installs.
-#[derive(Resource)]
-struct DiagnosticFontLoad(std::sync::Mutex<std::sync::mpsc::Receiver<Vec<u8>>>);
-
-/// Parses raw `.ttf` bytes into [`DiagnosticLabelFont`].
-fn install_diagnostic_font(font: &mut DiagnosticLabelFont, bytes: Vec<u8>) {
-    match ab_glyph::FontVec::try_from_vec(bytes) {
-        Ok(f) => font.0 = Some(std::sync::Arc::new(f)),
-        Err(e) => warn!("[usd-bevy] diagnostic label font parse failed: {e}"),
-    }
-}
-
-/// Startup: kick off the DejaVu Sans load via `lunco-assets` (which owns the
-/// native-read / web-fetch procedure) and stash the receiver for
-/// [`poll_diagnostic_label_font`] to drain.
-fn load_diagnostic_label_font(
-    mut commands: Commands,
-    settings: Res<lunco_settings::DownloadSettings>,
-) {
-    let rx = lunco_assets::font::load_dejavu_sans_bytes(&settings);
-    commands.insert_resource(DiagnosticFontLoad(std::sync::Mutex::new(rx)));
-}
-
-/// Drains the font-load channel and installs the face once the bytes arrive
-/// (frame 1 on native, whenever the fetch lands on web). Uniform across
-/// platforms; removes the loader resource when done.
-fn poll_diagnostic_label_font(
-    load: Option<Res<DiagnosticFontLoad>>,
-    mut font: ResMut<DiagnosticLabelFont>,
-    mut commands: Commands,
-) {
-    if font.0.is_some() {
-        return;
-    }
-    let Some(load) = load else { return };
-    let received = load.0.lock().ok().and_then(|rx| rx.try_recv().ok());
-    if let Some(bytes) = received {
-        info!(
-            "[usd-bevy] diagnostic label font loaded ({} bytes)",
-            bytes.len()
-        );
-        install_diagnostic_font(&mut font, bytes);
-        commands.remove_resource::<DiagnosticFontLoad>();
-    }
-}
-
-/// CPU-rasterises `text` into an RGBA [`Image`] per [`DiagnosticLabelConfig`]:
-/// coloured glyphs on a configurable backdrop. Baked once per failed asset —
-/// no camera, no render pass, no per-frame work. `None` if `text` is empty.
-fn rasterize_label(
-    text: &str,
-    font: &ab_glyph::FontVec,
-    cfg: &DiagnosticLabelConfig,
-) -> Option<Image> {
-    use ab_glyph::{point, Font, PxScale, ScaleFont};
-    // The POD texture descriptors, straight from `wgpu-types` — the same types
-    // `bevy_image` itself takes. NOT `bevy::render::render_resource`, which is a
-    // `bevy_render` re-export and would drag wgpu + naga into this crate.
-    use bevy::asset::RenderAssetUsages;
-    use wgpu_types::{Extent3d, TextureDimension, TextureFormat};
-
-    if text.is_empty() {
-        return None;
-    }
-    let px = cfg.font_px.max(1.0);
-    let pad = cfg.padding_px.max(0.0);
-    let scaled = font.as_scaled(PxScale::from(px));
-
-    // Measure advance width (with kerning) for the whole string.
-    let mut width = 0.0_f32;
-    let mut prev: Option<ab_glyph::GlyphId> = None;
-    for c in text.chars() {
-        let gid = font.glyph_id(c);
-        if let Some(p) = prev {
-            width += scaled.kern(p, gid);
-        }
-        width += scaled.h_advance(gid);
-        prev = Some(gid);
-    }
-    let ascent = scaled.ascent();
-    let descent = scaled.descent();
-    let img_w = (width + pad * 2.0).ceil().max(1.0) as usize;
-    let img_h = (ascent - descent + pad * 2.0).ceil().max(1.0) as usize;
-
-    // Configurable backdrop so the text reads over the box behind the quad.
-    let mut buf = vec![0u8; img_w * img_h * 4];
-    for px4 in buf.chunks_mut(4) {
-        px4.copy_from_slice(&cfg.bg_color);
-    }
-
-    // Draw each glyph in the configured text colour, coverage-blended.
-    let [tr, tg, tb] = cfg.text_color;
-    let tc = [tr as u16, tg as u16, tb as u16];
-    let mut caret = point(pad, pad + ascent);
-    let mut prev: Option<ab_glyph::GlyphId> = None;
-    for c in text.chars() {
-        let gid = font.glyph_id(c);
-        if let Some(p) = prev {
-            caret.x += scaled.kern(p, gid);
-        }
-        let glyph = gid.with_scale_and_position(PxScale::from(px), caret);
-        if let Some(outline) = font.outline_glyph(glyph) {
-            let bb = outline.px_bounds();
-            outline.draw(|gx, gy, cov| {
-                let x = bb.min.x as i32 + gx as i32;
-                let y = bb.min.y as i32 + gy as i32;
-                if x < 0 || y < 0 || x as usize >= img_w || y as usize >= img_h {
-                    return;
-                }
-                let idx = (y as usize * img_w + x as usize) * 4;
-                let a = (cov * 255.0) as u16;
-                for k in 0..3 {
-                    let bg = buf[idx + k] as u16;
-                    buf[idx + k] = ((tc[k] * a + bg * (255 - a)) / 255) as u8;
-                }
-                buf[idx + 3] = buf[idx + 3].max((cov * 255.0) as u8);
-            });
-        }
-        caret.x += scaled.h_advance(gid);
-        prev = Some(gid);
-    }
-
-    Some(Image::new(
-        Extent3d {
-            width: img_w as u32,
-            height: img_h as u32,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        buf,
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
-    ))
-}
-
-/// Bakes the filename texture onto every (or just the front) face of each
-/// pending diagnostic stub, once the label font is available. Runs each frame
-/// but only touches stubs that still carry [`PendingDiagnosticLabel`].
-fn bake_pending_labels(
-    mut commands: Commands,
-    cfg: Res<DiagnosticLabelConfig>,
-    font: Res<DiagnosticLabelFont>,
-    pending: Query<(Entity, &PendingDiagnosticLabel)>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut images: ResMut<Assets<Image>>,
-) {
-    let Some(font) = font.0.as_ref() else { return };
-    for (stub, pending) in pending.iter() {
-        let Some(image) = rasterize_label(&pending.text, font, &cfg) else {
-            commands.entity(stub).remove::<PendingDiagnosticLabel>();
-            continue;
-        };
-        let aspect = (image.width() as f32 / image.height().max(1) as f32).max(0.01);
-        let tex = images.add(image);
-        // One look shared across all faces — the binder's content-keyed cache
-        // gives every face the same material handle, as the hand-shared
-        // `label_mat` did. `double_sided` == the old `cull_mode: None`
-        // (readable from either side).
-        let label_look = PbrLook {
-            // WHITE, explicitly: `PbrLook::default()`'s base colour is mid-grey,
-            // which would tint the baked glyphs 50% dark. `StandardMaterial`'s
-            // default (what this used to build) is white.
-            base_color: LinearRgba::WHITE,
-            textures: PbrTextures {
-                base_color: Some(tex),
-                ..default()
-            },
-            alpha: SurfaceAlpha::Blend,
-            unlit: true,
-            double_sided: true,
-            ..default()
-        };
-        let s = pending.box_size;
-        let (hx, hy, hz) = (s.x / 2.0, s.y / 2.0, s.z / 2.0);
-        let eps = 0.01;
-        use std::f32::consts::{FRAC_PI_2, PI};
-        // Each face: outward offset + a rotation that turns the default
-        // +Z-facing `Rectangle` to face outward, plus the face's
-        // (horizontal, vertical) extent for sizing.
-        let faces: &[(Vec3, Quat, f32, f32)] = if cfg.all_faces {
-            &[
-                (Vec3::new(0.0, 0.0, hz + eps), Quat::IDENTITY, s.x, s.y), // +Z
-                (
-                    Vec3::new(0.0, 0.0, -hz - eps),
-                    Quat::from_rotation_y(PI),
-                    s.x,
-                    s.y,
-                ), // -Z
-                (
-                    Vec3::new(hx + eps, 0.0, 0.0),
-                    Quat::from_rotation_y(FRAC_PI_2),
-                    s.z,
-                    s.y,
-                ), // +X
-                (
-                    Vec3::new(-hx - eps, 0.0, 0.0),
-                    Quat::from_rotation_y(-FRAC_PI_2),
-                    s.z,
-                    s.y,
-                ), // -X
-                (
-                    Vec3::new(0.0, hy + eps, 0.0),
-                    Quat::from_rotation_x(-FRAC_PI_2),
-                    s.x,
-                    s.z,
-                ), // +Y
-                (
-                    Vec3::new(0.0, -hy - eps, 0.0),
-                    Quat::from_rotation_x(FRAC_PI_2),
-                    s.x,
-                    s.z,
-                ), // -Y
-            ]
-        } else {
-            &[(Vec3::new(0.0, 0.0, hz + eps), Quat::IDENTITY, s.x, s.y)]
-        };
-        let cover = cfg.face_coverage.clamp(0.05, 1.0);
-        commands.entity(stub).with_children(|p| {
-            for &(offset, rot, fw, fh) in faces {
-                // Fit the label inside the face, keeping the texture aspect.
-                let mut qw = (fw * cover).max(0.1);
-                let mut qh = qw / aspect;
-                if qh > fh * cover {
-                    qh = (fh * cover).max(0.05);
-                    qw = qh * aspect;
-                }
-                p.spawn((
-                    Name::new("DiagnosticStubLabel"),
-                    DiagnosticStubLabel,
-                    Mesh3d(meshes.add(Rectangle::new(qw, qh))),
-                    label_look.clone(),
-                    Transform::from_translation(offset).with_rotation(rot),
-                ));
-            }
-        });
-        commands.entity(stub).remove::<PendingDiagnosticLabel>();
-    }
-}
-
-/// Removes the primitive Cube/Sphere/Cylinder fallback mesh once its
-/// sibling [`WorldAssetRoot`] reports its glTF [`WorldAsset`] asset fully loaded.
-fn hide_glb_placeholder_meshes(
-    mut commands: Commands,
-    // `Option<...>` so the system no-ops (instead of panicking on param
-    // validation) in minimal apps that never `init_asset::<WorldAsset>()` — e.g.
-    // headless tests that add `UsdBevyPlugin` without the full scene pipeline.
-    // Production always registers `WorldAsset`, so behaviour there is unchanged.
-    events: Option<MessageReader<AssetEvent<WorldAsset>>>,
-    scene_roots: Query<(Entity, &WorldAssetRoot, Option<&ChildOf>), With<GlbPlaceholder>>,
-    children: Query<&Children>,
-    has_mesh: Query<(), With<Mesh3d>>,
-    mut visibility: Query<&mut Visibility>,
-) {
-    let Some(mut events) = events else { return };
-    for ev in events.read() {
-        if let AssetEvent::LoadedWithDependencies { id } = ev {
-            for (e, root, parent) in scene_roots.iter() {
-                if root.0.id() == *id {
-                    if let Ok(mut vis) = visibility.get_mut(e) {
-                        *vis = Visibility::Inherited;
-                    }
-                    // Dropping `Mesh3d` is what stops the placeholder drawing;
-                    // dropping `PbrLook` retires its appearance intent (the binder
-                    // owns the `MeshMaterial3d`, which is inert with no mesh).
-                    commands
-                        .entity(e)
-                        .remove::<Mesh3d>()
-                        .remove::<PbrLook>()
-                        .remove::<GlbPlaceholder>()
-                        .remove::<PlaceholderAssetUri>();
-
-                    if let Some(parent) = parent {
-                        if let Ok(siblings) = children.get(parent.0) {
-                            for sib in siblings.iter() {
-                                if sib != e && has_mesh.get(sib).is_ok() {
-                                    commands.entity(sib).remove::<Mesh3d>().remove::<PbrLook>();
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// Reveals a red, semi-transparent diagnostic box when a [`GlbPlaceholder`]'s
-/// glTF scene fails to load or never loads within
-/// [`DiagnosticLabelConfig::grace_secs`] (the web case, where a 404 may not
-/// surface a clean `is_failed()`). The filename label is baked on separately by
-/// [`bake_pending_labels`] once the font is ready, via [`PendingDiagnosticLabel`].
-pub fn reveal_placeholder_on_failure(
-    mut commands: Commands,
-    time: Res<Time>,
-    asset_server: Res<AssetServer>,
-    stages: Res<Assets<UsdStageAsset>>,
-    canonical: NonSend<CanonicalStages>,
-    cfg: Res<DiagnosticLabelConfig>,
-    scene_roots: Query<
-        (
-            Entity,
-            &WorldAssetRoot,
-            &GlobalTransform,
-            &PlaceholderAssetUri,
-            &UsdPrimPath,
-        ),
-        (With<GlbPlaceholder>, Without<DiagnosticStub>),
-    >,
-    mut meshes: ResMut<Assets<Mesh>>,
-    // Per-placeholder time spent waiting on its glTF scene. Used to trip the
-    // grace timeout on web, where a broken load may never report `is_failed()`.
-    mut waited: Local<std::collections::HashMap<Entity, f32>>,
-) {
-    for (e, root, _global_transform, uri, prim_path) in scene_roots.iter() {
-        let state = asset_server.load_state(root.0.id());
-        // The asset arrived — stop tracking; `hide_glb_placeholder_meshes`
-        // drops the marker on the next `LoadedWithDependencies` event.
-        if state.is_loaded() {
-            waited.remove(&e);
-            continue;
-        }
-        let elapsed = waited.entry(e).or_insert(0.0);
-        *elapsed += time.delta_secs();
-        let timed_out = *elapsed >= cfg.grace_secs;
-        if state.is_failed() || timed_out {
-            waited.remove(&e);
-            info!(
-                "[usd-bevy] asset {} for {:?} ({}), spawning diagnostic stub",
-                if timed_out {
-                    "did not load in time"
-                } else {
-                    "load FAILED"
-                },
-                root.0.id(),
-                uri.0,
-            );
-
-            // Default scale
-            let mut scale = Vec3::ONE;
-
-            // Attempt to resolve dimensions from USD prim attributes
-            if let Some(stage_asset) = stages.get(&prim_path.stage_handle) {
-                let (reader, _generation) =
-                    canonical.reader_for(prim_path.stage_handle.id(), stage_asset);
-
-                // Navigate up from the current prim to its parent to find the sibling "Placeholder"
-                let parent_path = prim_path.path.rsplit_once('/').map(|x| x.0).unwrap_or("");
-                let sibling_placeholder_path = format!("{}/Placeholder", parent_path);
-
-                // Helper to check attributes
-                let check_path = |path: &str| -> Option<Vec3> {
-                    if let Ok(sdf_path) = SdfPath::new(path) {
-                        get_attribute_as_vec3(&reader, &sdf_path, "xformOp:scale").or_else(|| {
-                            UsdRead::real(&reader, &sdf_path, "size")
-                                .map(|size| Vec3::splat(size as f32))
-                        })
-                    } else {
-                        None
-                    }
-                };
-
-                // Check sibling first, then parent prim path itself
-                if let Some(s) =
-                    check_path(&sibling_placeholder_path).or_else(|| check_path(&prim_path.path))
-                {
-                    debug!("[usd-bevy] Found scale: {:?}", s);
-                    scale = s;
-                } else {
-                    debug!(
-                        "[usd-bevy] No scale or size found on paths: {:?} or {:?}",
-                        sibling_placeholder_path, prim_path.path
-                    );
-                }
-            }
-
-            debug!("[usd-bevy] Computed stub scale: {:?}", scale);
-
-            // Just the filename — strip the `lunco://…/` path prefix and
-            // the `#Scene0` glTF sub-label.
-            let file_name = uri
-                .0
-                .rsplit('/')
-                .next()
-                .unwrap_or(&uri.0)
-                .split('#')
-                .next()
-                .unwrap_or(&uri.0);
-
-            commands.entity(e).try_insert((
-                Mesh3d(meshes.add(Cuboid::from_size(scale))),
-                PbrLook {
-                    base_color: cfg.box_color.to_linear(),
-                    emissive: LinearRgba::from(cfg.box_color),
-                    alpha: SurfaceAlpha::Blend, // Support transparency
-                    unlit: true,                // readable even with no scene lighting
-                    ..default()
-                },
-                // No `Transform` / `Visibility` insert here. `Mesh3d` pulls both in as
-                // required components, and re-inserting a `Transform` built from
-                // `GlobalTransform::compute_transform()` would overwrite the prim's LOCAL
-                // transform with a world-space one — wrong for any entity with a parent.
-                DiagnosticStub,
-                // The label is baked on once the font is ready (frame 1 on
-                // native, whenever the fetch lands on web).
-                PendingDiagnosticLabel {
-                    text: format!("{}{file_name}", cfg.prefix),
-                    box_size: scale,
-                },
-            ));
-        }
-    }
-}
-
 #[cfg(test)]
 mod instance_identity_tests {
     //! Gap G2/B.1: descendants of a runtime-spawned USD instance must derive a
@@ -7360,88 +6760,5 @@ mod default_prim_attr_tests {
     #[test]
     fn unparseable_text_is_none() {
         assert!(attr("this is not USDA", "lunco:testLabel").is_none());
-    }
-}
-
-#[cfg(test)]
-mod awaiting_stage_failure_tests {
-    //! A stage load that fails must END the wait it started.
-    //!
-    //! The regression these guard is the one that made an app unable to load any
-    //! scene after a single bad path: `sync_usd_visuals` only ever drains
-    //! `UsdSceneAwaitingStage` on success, so a failed load left its prims parked, and
-    //! "a prim is still awaiting this stage" is what keeps `SceneLoadInFlight`
-    //! set — which suppresses every subsequent `LoadScene`.
-    use super::*;
-    use bevy::asset::{AssetLoadError, AssetLoadFailedEvent, AssetPath};
-
-    /// Bare app: the system reads a message and a query, and writes commands.
-    /// Nothing here needs an asset pipeline, which is the point — the behaviour
-    /// under test is what happens when the pipeline has already given up.
-    fn app() -> App {
-        let mut app = App::new();
-        app.add_message::<AssetLoadFailedEvent<UsdStageAsset>>();
-        app.add_systems(Update, fail_awaiting_stage_prims);
-        app
-    }
-
-    fn parked(app: &mut App, handle: Handle<UsdStageAsset>) -> Entity {
-        app.world_mut()
-            .spawn((
-                UsdPrimPath {
-                    stage_handle: handle,
-                    path: "/Scene".into(),
-                },
-                UsdSceneAwaitingStage,
-            ))
-            .id()
-    }
-
-    fn fail(app: &mut App, handle: &Handle<UsdStageAsset>, path: &str) {
-        app.world_mut()
-            .resource_mut::<Messages<AssetLoadFailedEvent<UsdStageAsset>>>()
-            .write(AssetLoadFailedEvent {
-                id: handle.id(),
-                path: AssetPath::from(path.to_string()),
-                error: AssetLoadError::EmptyPath(AssetPath::from(path.to_string())),
-            });
-    }
-
-    #[test]
-    fn a_failed_stage_drops_the_prims_parked_on_it() {
-        let mut app = app();
-        let handle = Handle::<UsdStageAsset>::default();
-        let entity = parked(&mut app, handle.clone());
-
-        app.update();
-        assert!(
-            app.world().get_entity(entity).is_ok(),
-            "nothing has failed yet — the prim is still legitimately waiting"
-        );
-
-        fail(&mut app, &handle, "missing.usda");
-        app.update();
-        assert!(
-            app.world().get_entity(entity).is_err(),
-            "the stage will never arrive, so the prim can never instantiate; \
-             leaving it parked is what pinned `SceneLoadInFlight` forever"
-        );
-    }
-
-    #[test]
-    fn a_different_stages_failure_leaves_this_prim_waiting() {
-        let mut app = app();
-        let mine = Handle::<UsdStageAsset>::default();
-        let entity = parked(&mut app, mine);
-
-        let other: Handle<UsdStageAsset> =
-            bevy::asset::uuid_handle!("5ce7e000-0000-4000-8000-000000000001");
-        fail(&mut app, &other, "someone_elses.usda");
-        app.update();
-
-        assert!(
-            app.world().get_entity(entity).is_ok(),
-            "one scene failing must not tear down prims waiting on another stage"
-        );
     }
 }

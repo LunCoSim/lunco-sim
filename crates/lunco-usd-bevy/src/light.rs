@@ -57,6 +57,7 @@ use bevy::prelude::*;
 use lunco_render::{
     LightGraphicsDefaults, LunarSunShadow, RenderQualityProfile, ShadowRangeAuthorship,
 };
+use lunco_usd_bevy_core::read::get_attribute_as_vec3;
 use openusd::schemas::lux::tokens as ltok;
 use openusd::sdf::{Path as SdfPath, Value};
 
@@ -410,7 +411,7 @@ pub(crate) fn read_light_color(
     let color = if reader.has_authored_attribute(path, ltok::A_COLOR)
         || !reader.connections(path, ltok::A_COLOR).is_empty()
     {
-        let Some(color) = crate::get_attribute_as_vec3(reader, path, ltok::A_COLOR) else {
+        let Some(color) = get_attribute_as_vec3(reader, path, ltok::A_COLOR) else {
             error!(
                 "[usd-bevy] {} has authored inputs:color with an unsupported type",
                 path.as_str()

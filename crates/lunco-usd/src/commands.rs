@@ -698,7 +698,7 @@ fn execute_admitted_load_scene(
     // Admission is the commit point. Only now does this request own scene state;
     // a request queued behind another transaction must not mutate the active
     // transaction's diagnostics or viewport reason.
-    commands.remove_resource::<lunco_usd_bevy::FailedSceneLoad>();
+    commands.remove_resource::<lunco_usd_bevy_scene::FailedSceneLoad>();
     empty_reason.0 = None;
 
     // Blender-style no-op: same stage, same root prim, already mounted.

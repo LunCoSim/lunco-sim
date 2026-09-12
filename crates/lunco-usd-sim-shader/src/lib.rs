@@ -37,7 +37,7 @@ use lunco_materials::{
     to_snake_case, AttrRead, EngineSource, ParamValue, ProceduralSkybox, ShaderLook, TextureLayer,
 };
 use lunco_render::{PbrLook, SurfaceAlpha};
-use lunco_usd_bevy::get_attribute_as_vec3;
+use lunco_usd_bevy_core::read::get_attribute_as_vec3;
 use lunco_usd_bevy_core::read::{
     read_authored_bool_strict, read_primvar_f32_strict, read_primvar_vec3_strict, UsdReadObject,
 };

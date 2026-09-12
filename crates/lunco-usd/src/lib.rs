@@ -8,10 +8,11 @@
 //! The system consists of three cooperating plugins:
 //!
 //! - **UsdBevyPlugin** — Spawns child entities for USD prims, attaches meshes + transforms
+//! - **UsdDiagnosticsPlugin** — Handles visual glTF placeholder diagnostics
 //! - **UsdAvianPlugin** — Maps USD physics attributes to Avian3D components
 //! - **UsdSimPlugin** — Detects simulation schemas and creates wheel/FSW/joint components
 //!
-//! All three use deferred processing systems that run in the `Update` schedule **after**
+//! These plugins use deferred processing systems that run in the `Update` schedule **after**
 //! `sync_usd_visuals`, ensuring assets are fully loaded before any component mapping.
 //!
 //! See [docs/architecture/21-domain-usd.md](../../docs/architecture/21-domain-usd.md) for detailed architecture documentation.
@@ -62,15 +63,21 @@ pub use lunco_usd_sim::{GroundColliderPending, UsdSimProcessed};
 /// app.add_plugins(UsdPlugins);
 /// ```
 ///
-/// This is equivalent to adding all three subsystems individually:
+/// This is equivalent to adding the USD runtime subsystems individually:
 /// - `UsdBevyPlugin` — visual sync (meshes, transforms, hierarchy)
+/// - `UsdDiagnosticsPlugin` — visual asset failures and placeholder diagnostics
 /// - `UsdAvianPlugin` — physics mapping (RigidBody, Collider, Mass, Damping)
 /// - `UsdSimPlugin` — simulation mapping (WheelRaycast, FSW, authored ports)
 pub struct UsdPlugins;
 
 impl Plugin for UsdPlugins {
     fn build(&self, app: &mut App) {
-        app.add_plugins((lunco_usd_bevy::UsdBevyPlugin, UsdAvianPlugin, UsdSimPlugin));
+        app.add_plugins((
+            lunco_usd_bevy::UsdBevyPlugin,
+            lunco_usd_bevy_diagnostics::UsdDiagnosticsPlugin,
+            UsdAvianPlugin,
+            UsdSimPlugin,
+        ));
         // Document/file commands (ApplyUsdOp + OpenFile/NewDocument/SaveDocument
         // observers + the async load pipeline + twin-scene resolver) are
         // headless-safe domain-layer wiring. The egui browser/viewport panels

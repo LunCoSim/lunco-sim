@@ -25,6 +25,7 @@ members = [
     "crates/lunco-usd-bevy",
     "crates/lunco-usd-bevy-camera",
     "crates/lunco-usd-bevy-core",
+    "crates/lunco-usd-bevy-diagnostics",
     "crates/lunco-usd-bevy-scene",
     "crates/lunco-usd-bevy-lathe",
     "crates/lunco-usd-core",

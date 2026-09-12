@@ -285,8 +285,9 @@ section.
 ### Pipeline Phases
 
 1. **UsdBevyPlugin** — Spawns child entities for USD prims and attaches meshes + transforms.
-2. **UsdAvianPlugin** — Maps USD physics to Avian3D: rigid bodies (`PhysicsRigidBodyAPI`, with its `physics:rigidBodyEnabled`), mass-properties (`physics:mass`, `physics:diagonalInertia`, `physics:centerOfMass`), colliders (`physics:collisionEnabled`, all `UsdGeom` shapes), and **all joints** (see [Physics joints](#physics-joints)). The single home for Avian joint construction.
-3. **UsdSimPlugin** — Detects the standard vehicle/wheel schemas and authored port topology, then creates the topology-derived `lunco_core::MobilityRoot`, `WheelRaycast`, `OutputPorts`, generic joint/shaft endpoints, `DifferentialCoupling`, sensors, and co-simulation model/wires. Vehicle motion allocation and wheel heading are produced by the composed Modelica/Rhai network; Rust only realizes the resulting generic values (see [`22-domain-cosim.md`](22-domain-cosim.md)).
+2. **UsdDiagnosticsPlugin** — Handles visual glTF placeholder hiding and failure-stub diagnostics; render-free stage failure state belongs to the `UsdScenePlugin`.
+3. **UsdAvianPlugin** — Maps USD physics to Avian3D: rigid bodies (`PhysicsRigidBodyAPI`, with its `physics:rigidBodyEnabled`), mass-properties (`physics:mass`, `physics:diagonalInertia`, `physics:centerOfMass`), colliders (`physics:collisionEnabled`, all `UsdGeom` shapes), and **all joints** (see [Physics joints](#physics-joints)). The single home for Avian joint construction.
+4. **UsdSimPlugin** — Detects the standard vehicle/wheel schemas and authored port topology, then creates the topology-derived `lunco_core::MobilityRoot`, `WheelRaycast`, `OutputPorts`, generic joint/shaft endpoints, `DifferentialCoupling`, sensors, and co-simulation model/wires. Vehicle motion allocation and wheel heading are produced by the composed Modelica/Rhai network; Rust only realizes the resulting generic values (see [`22-domain-cosim.md`](22-domain-cosim.md)).
 
 ### Compound collision ownership
 

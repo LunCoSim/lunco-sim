@@ -369,8 +369,8 @@ fn reconcile_link_beams(
         // The part authors `lunco:placeholder = true` to say this, and the USD
         // loader maps that to `Visibility::Hidden`. That flag's DEFINED meaning,
         // though, is the glTF one — "primitive stand-in until an async payload
-        // loads", paired with `GlbPlaceholder` and revealed by
-        // `hide_glb_placeholder_meshes`. Borrowing it for "never draw, ever" makes
+        // loads", paired with GlbPlaceholder and handled by the USD
+        // diagnostics plugin. Borrowing it for "never draw, ever" makes
         // this driver's correctness depend on a flag that belongs to a different
         // feature and could reasonably change with it.
         //
