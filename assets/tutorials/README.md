@@ -21,6 +21,14 @@ name a `scene_asset`; both are resolved through the asset system. The menu uses
 start after its requested scene is composed. Other applications can reuse the
 same generic command with their own catalog or no menu at all.
 
+An opened Twin may contribute the same catalog shape at
+`sim/tutorials/catalog.json`. Its entries use paths relative to that Twin;
+the application resolves them to canonical `twin://<name>/…` addresses,
+loads the catalog off the UI thread, and groups those lessons with bundled
+tracks. A Twin lesson that needs a world must name its scene explicitly, so
+selecting it cannot accidentally keep an unrelated scene from the previous
+lesson.
+
 ## Authoring a lesson
 
 1. Add a `.rhai` file under a track directory. Use the shared scripting prelude
@@ -28,7 +36,9 @@ same generic command with their own catalog or no menu at all.
    observation. A script does not open USD layers directly.
 2. Add one catalog entry in `catalog.json`. Use a standard authored scene under
    `assets/` when the lesson needs a world; omit `scene_asset` for a UI-only
-   lesson.
+   lesson. Twin-owned lessons use the same fields in
+   `<twin>/sim/tutorials/catalog.json`, with Twin-relative source and scene
+   paths.
 
 Scene ownership remains with the USD scene command layer. `RunScenarioAsset`
 submits a `SceneTransitionIntent`; USD resolves and composes the scene, then

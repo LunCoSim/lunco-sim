@@ -720,6 +720,11 @@ pub fn on_scene_click_select(
     if armed_script_tool.armed() {
         return;
     }
+    // Alt alone is the generic scene-authoring modifier. The pointer event is
+    // still published for Rhai, but selection must not consume the same gesture.
+    if keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]) && !shift_held && !ctrl_held {
+        return;
+    }
 
     // Chrome and empty-space clicks carry no world hit. Keep the selection
     // unchanged; explicit Cancel/Escape owns deselection.

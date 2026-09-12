@@ -201,9 +201,10 @@ World-space vehicle trails are transient render presentation, not UI-owned state
 Read the vehicle root's solved Avian `Position` in the active physics/grid frame,
 project through `GridSurfaceQuery`, and use bounded history with explicit
 `SceneTeardown` cleanup. Do not derive trails from controller input, render
-`GlobalTransform`, authored route geometry, or a per-frame USD edit; reuse the
-shared ribbon mesh builder so turns and BigSpace frame changes use one geometry
-contract.
+`GlobalTransform`, authored route geometry, or a per-frame USD edit. Use the
+existing ribbon mesh builder so turns and BigSpace frame changes use one trail
+geometry contract; route presentation is a separate reusable USD `BasisCurves`
+tool in the document runtime layer.
 
 ## Runtime-authored HTML/CSS surfaces
 

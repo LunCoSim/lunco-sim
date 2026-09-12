@@ -1267,6 +1267,35 @@ fn process_usd_sim_prim_read(
     diagnostics: &mut Vec<lunco_core::RuntimeDiagnostic>,
 ) {
     let existing_tf = maybe_tf.cloned().unwrap_or_default();
+
+    // Navigation consumes the authored steering capability, not an asset name
+    // or a vehicle-specific branch. Project it on the simulation owner, which
+    // is the same entity resolved by the generic pose/navigation bridge.
+    // Omitted or invalid capability leaves navigation unavailable and therefore
+    // fail-closed; no vehicle class is guessed here.
+    match reader.text(&sdf_path, "lunco:steeringGeometry") {
+        Some(value) => match lunco_core::parse_steering_geometry(&value) {
+            Some(geometry) => {
+                commands.entity(entity).try_insert(geometry);
+            }
+            None => {
+                warn!(
+                    "USD prim {} has invalid `lunco:steeringGeometry` `{}`; navigation capability refused",
+                    sdf_path.as_str(),
+                    value
+                );
+                commands
+                    .entity(entity)
+                    .try_remove::<lunco_core::SteeringGeometry>();
+            }
+        },
+        None => {
+            commands
+                .entity(entity)
+                .try_remove::<lunco_core::SteeringGeometry>();
+        }
+    }
+
     match raycast_mass_contribution_from_usd(
         reader,
         &sdf_path,

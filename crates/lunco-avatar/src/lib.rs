@@ -4005,6 +4005,8 @@ pub fn avatar_raycast_possession(
     // observers consult the shared mode and modifier intent so one gesture has
     // one owner: View plain clicks possess, while modifiers select/remove.
     let modified = keys.any_pressed([
+        KeyCode::AltLeft,
+        KeyCode::AltRight,
         KeyCode::ShiftLeft,
         KeyCode::ShiftRight,
         KeyCode::ControlLeft,
@@ -4032,7 +4034,6 @@ pub fn avatar_raycast_possession(
     if armed_script_tool.armed() {
         return;
     }
-
     // This observer handles the plain click now (it passed every guard above), so
     // stop the auto-propagation to ancestor entities — otherwise a global
     // observer re-fires once per ancestor. The analytic spacecraft/celestial

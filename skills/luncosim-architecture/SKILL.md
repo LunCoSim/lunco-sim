@@ -110,16 +110,16 @@ manifest/Twin snapshot advances the listing generation, reopens the USD read
 set, and drops older metadata completions. This keeps a Twin opened during an
 initial scan complete without allowing stale work to populate its catalog.
 
-For derived 3D annotations such as a waypoint route, keep one change-gated
-projection snapshot between authored/runtime facts and presentation consumers.
-Resolve authored identities through the authoritative binding map, express all
-positions in the active physics frame, and sample the authoritative terrain at
-intermediate points before creating geometry. Project marker roots before building
-the snapshot so authored and runtime target labels share the same terrain pose.
-Keep marker-root placement, annotation mesh reconciliation, labels, and look tinting
-as separate owners that consume that snapshot. Stable frames must do no route parsing,
-binding lookup, terrain sampling, mesh generation, or marker writes; camera-dependent
-label projection is the only remaining per-frame presentation work.
+For derived 3D annotations such as a waypoint route, keep one reusable
+presentation tool between authored/runtime facts and presentation consumers.
+Resolve authored identities through the authoritative binding map and write the
+derived USD view to `@runtime@` only when the route changes or the view is first
+materialized. Use standard USD geometry and the existing renderer for depth and
+occlusion; do not create a Twin-specific ribbon prim or a per-frame document
+edit. Marker-root placement, annotation geometry, labels, and look remain
+separate owners. Stable frames must do no route parsing, binding lookup, mesh
+generation, or marker writes; camera-dependent label projection is the only
+remaining per-frame presentation work.
 
 Failure-path acceptance must use an owner-local, transient fixture or typed test
 command. For example, the Scenarios menu may inject its unavailable presentation

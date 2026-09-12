@@ -254,7 +254,7 @@ impl Plugin for UsdBevyPlugin {
             )
             .add_systems(
                 Update,
-                retessellate_curve_meshes_on_quality_change
+                refresh_curve_meshes_on_stage_or_quality_change
                     .after(retessellate_primitive_meshes_on_quality_change),
             )
             // HDRI environment: project an authored `DomeLight`'s equirect into
@@ -4503,17 +4503,20 @@ fn retessellate_primitive_meshes_on_quality_change(
     }
 }
 
-/// Rebuild curve-tube meshes when the user changes Graphics tessellation.
-/// Invalid settings leave the existing mesh in place and are reported; no lower
-/// quality profile is selected implicitly.
-fn retessellate_curve_meshes_on_quality_change(
+/// Rebuild curve-tube meshes when authored USD geometry or Graphics tessellation
+/// changes. The live-stage revision is the generic invalidation signal for
+/// authored curve points, topology, and widths; no route or waypoint knowledge
+/// belongs in this renderer-owned path. Invalid settings leave the existing mesh
+/// in place and are reported; no lower quality profile is selected implicitly.
+fn refresh_curve_meshes_on_stage_or_quality_change(
     mut meshes: ResMut<Assets<Mesh>>,
     q: Query<(&UsdPrimPath, &Mesh3d, Option<&Name>), With<UsdCurveMesh>>,
     quality: Res<lunco_render::RenderingQualitySettings>,
+    stage_revision: Res<UsdStageRevision>,
     stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<CanonicalStages>,
 ) {
-    if !quality.is_changed() {
+    if !quality.is_changed() && !stage_revision.is_changed() {
         return;
     }
     let profile = match quality.validated_profile() {

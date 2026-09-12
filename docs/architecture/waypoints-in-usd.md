@@ -15,6 +15,7 @@ autopilot programs.
 | Sensor overlap and `enter:<zone>` event production | Generic physics/sensor runtime |
 | Steering math and named-port writes | Generic navigation/port mechanisms |
 | Equations, actuator dynamics, and contact response | Modelica / Avian |
+| Route ribbon presentation | Reusable `waypoint_editor` Rhai tool + standard USD BasisCurves asset in the runtime layer |
 
 The standard reusable marker is
 [`assets/markers/route_point.usda`](../../assets/markers/route_point.usda).
@@ -50,6 +51,14 @@ copy coordinates into Rust or into the subject. Multiple routes can coexist by
 using distinct scopes and subject relationships; enablement is a property of
 each program instance.
 
+The editor's route tool derives a ribbon from the same point children. It
+references the reusable
+[`assets/markers/route_ribbon.usda`](../../assets/markers/route_ribbon.usda)
+asset and writes only the generated `BasisCurves` opinions to the document's
+`@runtime@` layer. The Twin therefore contains no editor ribbon prim: removing
+the runtime view leaves the authored route unchanged, and another Twin can use
+the same tool without importing a Twin-specific presentation object.
+
 ## Progression
 
 The generic sensor emits `enter:<zone>` and `exit:<zone>` events. The route
@@ -69,9 +78,10 @@ does not fall back to a vessel-owned route.
 
 The marker's dome is emissive, translucent, and shadowless. Its trigger is
 invisible and has its own authored radius. Billboard text and placement are
-read by the generic billboard renderer. Route execution does not recolor or
-rebuild marker geometry; a scenario may react to `route_point_reached` to update
-mission state or the HUD through its own policy.
+read by the generic billboard renderer. The ribbon is a separate, lightweight
+world-space annotation and does not participate in physics. Route execution
+does not recolor or rebuild marker geometry; a scenario may react to
+`route_point_reached` to update mission state or the HUD through its own policy.
 
 The visual contract is covered by
 [`assets/scenes/tests/waypoint_visual.usda`](../../assets/scenes/tests/waypoint_visual.usda)

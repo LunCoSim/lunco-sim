@@ -80,6 +80,7 @@ impl Plugin for SceneEditPlugin {
             .init_resource::<lunco_core::SpawnToolActive>()
             .init_resource::<lunco_core::TerrainToolActive>()
             .init_resource::<lunco_core::ArmedScriptTool>()
+            .init_resource::<script_tools::ScenePointerDispatch>()
             .init_resource::<gizmo::GizmoDragSession>()
             .init_resource::<gizmo::GizmoVisibilityState>()
             .init_resource::<terrain_tools::TerrainToolState>()
@@ -138,6 +139,7 @@ impl Plugin for SceneEditPlugin {
                 script_tools::forget_missing_script_tool,
             ),
         );
+        app.add_systems(PostUpdate, script_tools::clear_scene_pointer_dispatch);
 
         // Scene picking is bevy_picking-driven (egui occlusion handled by the
         // framework's egui picking backend). Streamed DEM ground contributes
@@ -145,6 +147,7 @@ impl Plugin for SceneEditPlugin {
         // owns a separate click path. Selection, placement and terrain-sculpt
         // observe the same `Pointer<Click>` and stand down when another tool
         // owns the click.
+        app.add_observer(script_tools::on_scene_pointer_event);
         app.add_observer(selection::on_scene_click_select);
         // The isolated USD preview is an egui image over an offscreen camera,
         // so its part clicks use the preview-local ray bridge rather than the

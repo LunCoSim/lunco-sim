@@ -649,7 +649,32 @@ fn emit_intent_edges(
     previous: &mut std::collections::HashMap<(Entity, UserIntent), bool>,
     commands: &mut Commands,
 ) {
-    let mut seen = Vec::new();
+    // `Action` is a semantic interaction edge, not a port write. It must be
+    // observed even when a control surface has no authored port named
+    // `action`; scene programs consume the edge and decide what it means.
+    let mut seen = vec![UserIntent::Action];
+    let active = intent_held(
+        target,
+        UserIntent::Action,
+        intents,
+        sim_intents,
+        egui_keyboard,
+    );
+    let prior = previous
+        .insert((target, UserIntent::Action), active)
+        .unwrap_or(false);
+    if active != prior {
+        commands.trigger(lunco_core::SemanticIntentEdge {
+            target,
+            intent: UserIntent::Action,
+            kind: if active {
+                lunco_core::SemanticIntentEdgeKind::Pressed
+            } else {
+                lunco_core::SemanticIntentEdgeKind::Released
+            },
+            correlation_id: OpId::new().0,
+        });
+    }
     for (intent, _, _) in &binding.binds {
         if seen.contains(intent) {
             continue;

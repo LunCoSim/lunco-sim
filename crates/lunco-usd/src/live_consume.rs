@@ -672,6 +672,9 @@ pub(crate) fn refresh_domes_live(world: &mut World, id: AssetId<UsdStageAsset>, 
 ///   changed channels in place. Re-instantiating on a transform edit
 ///   would rebuild the mesh and re-run the physics observers on every frame of a
 ///   gizmo drag.
+/// - **live curve geometry** — skipped. The generic USD visual projector rebuilds
+///   the existing curve mesh from the canonical stage revision in place, so a
+///   point/topology/width edit does not tear down the entity or its render binding.
 /// - **`Shader` / `Material` prims** — a material edit fans out through
 ///   `material:binding` to arbitrary meshes elsewhere in the scene, so the prim's
 ///   own subtree is not enough: refresh the scene's visuals.
@@ -780,6 +783,9 @@ pub(crate) fn refresh_edited_prims_live(
         if attr.starts_with("xformOp:") {
             continue;
         }
+        if curve_geometry_edit(world, id, prim, attr) {
+            continue;
+        }
         if !prims.iter().any(|s| s == prim) {
             prims.push(prim.to_string());
         }
@@ -828,6 +834,44 @@ pub(crate) fn refresh_edited_prims_live(
     for prim in subtrees {
         crate::twin_projection::refresh_prim_subtree(world, id, &prim);
     }
+}
+
+/// Whether an info-only edit changes the tessellated geometry of a USD curve.
+/// Curve entities stay live so the renderer can replace their mesh asset in
+/// place; material, visibility, and other appearance edits still use the normal
+/// prim refresh path.
+fn curve_geometry_edit(
+    world: &mut World,
+    stage_id: AssetId<UsdStageAsset>,
+    prim: &str,
+    attribute: &str,
+) -> bool {
+    const CURVE_GEOMETRY_ATTRIBUTES: &[&str] = &[
+        "points",
+        "curveVertexCounts",
+        "widths",
+        "type",
+        "wrap",
+        "basis",
+        "order",
+        "knots",
+        "pointWeights",
+    ];
+    if !CURVE_GEOMETRY_ATTRIBUTES.contains(&attribute) {
+        return false;
+    }
+    let Ok(path) = SdfPath::new(prim) else {
+        return false;
+    };
+    world
+        .get_non_send::<lunco_usd_bevy_core::canonical::CanonicalStages>()
+        .and_then(|stages| stages.get(stage_id))
+        .is_some_and(|stage| {
+            matches!(
+                stage.view().type_name(&path).as_deref(),
+                Some("BasisCurves") | Some("NurbsCurves")
+            )
+        })
 }
 
 /// Reconcile the live entities of the scene scoped to `id` against the **live
