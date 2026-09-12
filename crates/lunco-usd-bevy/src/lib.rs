@@ -78,7 +78,7 @@ use lunco_usd_bevy_scene::{
     PlaceholderAssetUri, ShapeDims, UsdAnimated, UsdPreviewOnly, UsdPrimPath,
     UsdSceneAwaitingStage, UsdSceneGeometryPending, UsdScenePlugin, UsdSceneProjected,
     UsdSceneProjectionFailed, UsdSceneProjectionQueued, UsdSceneRoot, UsdSceneSyncSet,
-    UsdVisualMeshTarget, UsdVisualProjectionSet,
+    UsdStageRevision, UsdVisualMeshTarget, UsdVisualProjectionSet,
 };
 use lunco_usd_core::UsdDataExt;
 use openusd::schemas::geom::tokens as gtok;

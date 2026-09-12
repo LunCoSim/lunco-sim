@@ -911,10 +911,13 @@ fn build_sim_app_with_profile(
         // a settled world pay the task fan-out cost continuously and competes
         // with the render and async terrain pools. Keep one shared production
         // envelope for GUI and headless hosts; scene tests still pass their
-        // explicit deterministic thread count above.
+        // explicit deterministic thread count above. Four compute workers are
+        // deliberate: this pool is the owner of BigSpace's short-lived
+        // propagation scope, and the bounded fan-out leaves CPU capacity for
+        // the render and async terrain pools.
         bevy::app::TaskPoolThreadAssignmentPolicy {
             min_threads: 1,
-            max_threads: 8,
+            max_threads: 4,
             percent: 1.0,
             on_thread_spawn: None,
             on_thread_destroy: None,
