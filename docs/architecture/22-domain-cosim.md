@@ -398,7 +398,7 @@ See [`../../crates/lunco-cosim/README.md#modelica-model-convention`](../../crate
 and [`20-domain-modelica.md`](20-domain-modelica.md) for the full story,
 including planned upstream fixes to the rumoca fork.
 
-## USD-driven authoring (`lunco_usd_sim::cosim`)
+## USD-driven authoring (`lunco_usd_sim_cosim`)
 
 Cosim programs and wires are declared in USD scenes — no per-scene Rust.
 A program is a PRIM, with typed ports that CONNECT — the same shape

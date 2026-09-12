@@ -28,7 +28,7 @@ use bevy::prelude::*;
 use lunco_modelica_core::ModelicaModel;
 use lunco_readiness::{kinds, ReadinessRegistry, ReadinessTicket, Subject};
 
-use crate::cosim::SceneLoadInFlight;
+use crate::SceneLoadInFlight;
 use lunco_cosim::SimComponent;
 use lunco_usd_avian::ShouldBeDynamic;
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneAwaitingStage};
@@ -289,15 +289,15 @@ impl Plugin for UsdReadinessPlugin {
         app.add_systems(
             lunco_core::SceneTeardown,
             |mut registry: ResMut<ReadinessRegistry>,
-             mut dirty: ResMut<crate::cosim::BindingEpochDirty>,
-             wait: Option<Res<crate::cosim::BindingEpochWait>>,
+             mut dirty: ResMut<crate::BindingEpochDirty>,
+             wait: Option<Res<crate::BindingEpochWait>>,
              physics_wait: Option<Res<PhysicsAdmissionWait>>,
              mut commands: Commands| {
                 registry.clear();
                 dirty.0 = true;
                 if let Some(w) = wait {
                     registry.finish(w.0);
-                    commands.remove_resource::<crate::cosim::BindingEpochWait>();
+                    commands.remove_resource::<crate::BindingEpochWait>();
                 }
                 commands.remove_resource::<SceneLoadWait>();
                 if let Some(wait) = physics_wait {

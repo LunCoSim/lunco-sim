@@ -6,7 +6,7 @@
 //! - [`collect_graph`] reads the complete live `StageView` over the canonical
 //!   stage into plain [`PrimNode`] / [`Wire`] structs. Thin glue over the same
 //!   read API + connection-string split the co-sim wiring derivation uses
-//!   (`lunco_usd_sim::cosim::rewire_usd_connections`).
+//!   (`lunco_usd_sim_cosim::rewire_usd_connections`).
 //! - [`project_schema`] is an explicit presentation projection for the Lunica
 //!   Schema perspective. It is driven by authored USD properties and never
 //!   changes the collected topology used by simulation.

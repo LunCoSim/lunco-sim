@@ -345,7 +345,7 @@ pub(crate) fn project_stage_changes(world: &mut World) {
     }
 
     // Connections are derived from native `connectionPaths` by
-    // `lunco_usd_sim::cosim::rewire_usd_connections`. Prim spawn/despawn triggers
+    // `lunco_usd_sim_cosim::rewire_usd_connections`. Prim spawn/despawn triggers
     // that system directly (change-detection); a `connectionPaths` **edit** on an
     // already-spawned prim is neither — use the typed native-field notice to
     // re-derive off the live stage. Standard authored `inputs:*` edits also
@@ -887,7 +887,7 @@ pub(crate) fn reconcile_structural_live(
                 {
                     pending.remove(id, path);
                 }
-                lunco_usd_sim::cosim::despawn_usd_subtree(world, entity);
+                lunco_usd_sim_cosim::despawn_usd_subtree(world, entity);
             }
             (true, None) => {
                 let parent_path =
@@ -928,7 +928,7 @@ pub(crate) fn reconcile_structural_live(
                         .and_then(|stage| stage.view().text(&sp, "lunco:catalogId"))
                         .filter(|value| !value.trim().is_empty())
                 });
-                if let Some(entity) = lunco_usd_sim::cosim::spawn_usd_child_under_parent(
+                if let Some(entity) = lunco_usd_sim_cosim::spawn_usd_child_under_parent(
                     world,
                     parent_entity,
                     path,
@@ -1259,7 +1259,7 @@ mod tests {
                 },
                 avian3d::prelude::RigidBody::Dynamic,
                 lunco_core::MobilityRoot,
-                lunco_usd_sim::UsdSimProcessed,
+                lunco_usd_sim_cosim::UsdSimProcessed,
             ))
             .id();
 
@@ -1269,7 +1269,7 @@ mod tests {
         );
         assert!(
             app.world()
-                .get::<lunco_usd_sim::UsdSimProcessed>(rover)
+                .get::<lunco_usd_sim_cosim::UsdSimProcessed>(rover)
                 .is_some(),
             "the admitted sim projection marker must remain live"
         );

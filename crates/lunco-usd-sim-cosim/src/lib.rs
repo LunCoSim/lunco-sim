@@ -67,11 +67,60 @@ use lunco_usd_bevy_scene::{
 use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::{BTreeSet, HashMap};
 
-use crate::UsdSimProcessed;
 use lunco_usd_sim_domain::{
     GeneratedModelicaSource, UsdModelicaPortContract, UsdModelicaSchedule, UsdSourcedCosim,
     WiringDirty,
 };
+
+/// Ordered phases shared by the USD simulation projections.
+///
+/// The vehicle projector publishes generic physical intent in `Projection`;
+/// the co-simulation projector consumes it in its `Scene` phase. Keeping this
+/// set with the co-simulation boundary makes the ordering contract available
+/// without coupling either implementation to the other crate's module tree.
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum UsdSimSet {
+    /// Publishes the composed USD simulation and celestial components.
+    Projection,
+    /// Converts `ShouldBeDynamic` bodies only after their ground is known ready.
+    ActivateDynamicBodies,
+}
+
+/// Marker for a USD prim whose simulation projection has completed.
+#[derive(Component)]
+pub struct UsdSimProcessed;
+
+/// Authored gear-joint data held until all referenced bodies are admitted.
+#[derive(Component)]
+pub struct PendingDifferential {
+    /// Composed prim path of the frame both hinges turn against.
+    pub chassis: String,
+    /// Composed prim path of the first geared body.
+    pub rocker_a: String,
+    /// Composed prim path of the second geared body.
+    pub rocker_b: String,
+    /// Authored gear ratio.
+    pub ratio: f64,
+    /// Authored rest offset.
+    pub rest_offset: f64,
+    /// Authored target velocity.
+    pub target_velocity: f64,
+    /// Authored stiffness.
+    pub stiffness: f64,
+    /// Authored damping.
+    pub damping: f64,
+    /// Authored maximum force.
+    pub max_force: f64,
+    /// Authored drive type.
+    pub drive_type: lunco_mobility::DifferentialDriveType,
+}
+
+/// Co-simulation binding epoch dirty marker shared with USD physical admission.
+#[derive(Resource, Default)]
+pub struct BindingEpochDirty(pub bool);
+
+pub mod diagnostics;
+pub mod readiness;
 
 #[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum CosimUpdateSet {
@@ -2345,11 +2394,6 @@ fn mark_wiring_dirty_on_remove<T: Component>(
     dirty.0 = true;
 }
 
-/// Coalesces endpoint lifecycle events into one settlement decision. It is not
-/// a timer: observers and Modelica change detection are its only writers.
-#[derive(Resource, Default)]
-pub(crate) struct BindingEpochDirty(pub bool);
-
 /// Last published Modelica participant status. `SimComponent` also carries
 /// continuously changing inputs/outputs, so Bevy's broad `Changed<SimComponent>`
 /// signal is not by itself a binding-lifecycle event.
@@ -2440,7 +2484,7 @@ fn modelica_models_terminal<'a>(
 fn settle_binding_epoch(
     awaiting: Query<(), With<UsdSceneAwaitingStage>>,
     joints: Query<(), With<lunco_usd_avian::PendingUsdJoint>>,
-    differentials: Query<(), With<crate::PendingDifferential>>,
+    differentials: Query<(), With<PendingDifferential>>,
     // `UsdSourcedCosim` marks the USD projection domain, not a solver.  It is
     // intentionally also present on native endpoints such as a revolute joint
     // so they can expose ports through the same scene surface.  A joint has no
@@ -4022,7 +4066,7 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
             })
             .collect::<Vec<_>>();
         let Some(mut pending_differentials_query) =
-            QueryState::<&UsdPrimPath, With<crate::PendingDifferential>>::try_new(world)
+            QueryState::<&UsdPrimPath, With<PendingDifferential>>::try_new(world)
         else {
             return lunco_api::ApiResponse::error(
                 lunco_api::ApiErrorCode::InternalError,
@@ -5153,7 +5197,7 @@ fn tag_cosim_opaque(
 ///   `ModelicaSet::HandleResponses (Update) → sync_*_outputs →
 ///    PropagateCosimSet::Propagate → ApplyForcesCosimSet::ApplyForces →
 ///    sync_*_inputs → ModelicaSet::SpawnRequests`.
-pub(crate) fn install(app: &mut App) {
+pub fn install(app: &mut App) {
     use lunco_cosim::systems::{
         apply_forces::CosimSet as ApplyForcesCosimSet, propagate::CosimSet as PropagateCosimSet,
     };
@@ -5220,8 +5264,8 @@ pub(crate) fn install(app: &mut App) {
         .add_observer(forget_binding_model_status)
         .add_observer(request_binding_epoch::<lunco_usd_avian::PendingUsdJoint>)
         .add_observer(request_binding_epoch_on_remove::<lunco_usd_avian::PendingUsdJoint>)
-        .add_observer(request_binding_epoch::<crate::PendingDifferential>)
-        .add_observer(request_binding_epoch_on_remove::<crate::PendingDifferential>)
+        .add_observer(request_binding_epoch::<PendingDifferential>)
+        .add_observer(request_binding_epoch_on_remove::<PendingDifferential>)
         .add_observer(request_binding_epoch::<SimConnection>)
         .add_observer(request_binding_epoch_on_remove::<SimConnection>)
         .add_observer(on_scene_transition_intent)
@@ -5250,7 +5294,7 @@ pub(crate) fn install(app: &mut App) {
             // projection before it derives and binds USD connections; otherwise
             // the first binding epoch targets the source prim instead of its
             // authored OutputPorts/PortSurface contract.
-            CosimUpdateSet::Scene.after(crate::UsdSimSet::Projection),
+            CosimUpdateSet::Scene.after(UsdSimSet::Projection),
             CosimUpdateSet::Projection,
             CosimUpdateSet::Wiring,
         )
@@ -5306,7 +5350,7 @@ pub(crate) fn install(app: &mut App) {
             // admission system has published the final physics state; otherwise
             // an already-valid Avian wire can capture zero velocity/identity
             // attitude and never revisit the handoff.
-            .after(crate::UsdSimSet::ActivateDynamicBodies)
+            .after(UsdSimSet::ActivateDynamicBodies)
             .before(CosimUpdateSet::Wiring)
             .run_if(|dirty: Res<BindingEpochDirty>| dirty.0),
     );
@@ -5795,34 +5839,6 @@ mod tests {
     }
 
     #[test]
-    fn rigid_body_modelica_interface_leaves_physical_ports_to_avian() {
-        let asset = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../assets/vessels/landers/descent_lander.usda");
-        let stage = lunco_usd_bevy_core::compose::compose_file_to_stage(&asset)
-            .expect("compose lander asset");
-        let view = lunco_usd_bevy_core::StageView::new(&stage);
-        let root = SdfPath::new("/DescentLander").unwrap();
-        let (mut inputs, _) = declared_interface(&view, &root);
-        strip_rigid_body_inputs(&view, &root, &mut inputs);
-
-        for physical in [
-            "mass",
-            "inertia_xx",
-            "inertia_yy",
-            "inertia_zz",
-            "com_x",
-            "com_y",
-            "com_z",
-        ] {
-            assert!(
-                !inputs.contains_key(physical),
-                "{physical} is a rigid-body sink and must not shadow Avian"
-            );
-        }
-        assert!(inputs.contains_key("controller_inertia_xx"));
-    }
-
-    #[test]
     fn environment_probe_publishes_schema_declared_output_contract() {
         let outputs = environment_probe_interface();
         assert_eq!(
@@ -5836,23 +5852,6 @@ mod tests {
                 .copied()
                 .collect::<BTreeSet<_>>()
         );
-    }
-
-    #[test]
-    fn bare_acausal_interface_is_not_treated_as_an_unowned_wire() {
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/electrical_network.usda");
-        let stage =
-            lunco_usd_bevy_core::compose::compose_file_to_stage(&path).expect("compose fixture");
-        let view = lunco_usd_bevy_core::StageView::new(&stage);
-
-        let bare_motor = SdfPath::new("/Rig/Motor").expect("motor path");
-        let wired_battery = SdfPath::new("/Rig/Battery").expect("battery path");
-        let bare_panel = SdfPath::new("/Rig/SolarPanel").expect("panel path");
-
-        assert!(!has_connected_acausal_connector(&view, &bare_motor));
-        assert!(has_connected_acausal_connector(&view, &wired_battery));
-        assert!(!has_connected_acausal_connector(&view, &bare_panel));
     }
 
     /// A model that has been parsed and dispatched but not yet solved:

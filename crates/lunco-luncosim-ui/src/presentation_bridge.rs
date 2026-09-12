@@ -649,7 +649,7 @@ fn report_terrain_generation_status(
 /// Two signals, because they cover different windows and neither subsumes the
 /// other:
 ///
-/// * [`SceneLoadInFlight`](lunco_usd_sim::cosim::SceneLoadInFlight) — present from
+/// * [`SceneLoadInFlight`](lunco_usd_sim_cosim::SceneLoadInFlight) — present from
 ///   `LoadScene` until every visual projection phase for that stage has drained.
 ///   This covers the gap BEFORE any prim entity exists, which an entity count
 ///   alone reads as "nothing to wait for".
@@ -664,7 +664,7 @@ fn report_terrain_generation_status(
 /// see the registration site for why the mirror lives here rather than in
 /// `lunco-workbench`.
 fn report_scene_spawn_status(
-    in_flight: Option<Res<lunco_usd_sim::cosim::SceneLoadInFlight>>,
+    in_flight: Option<Res<lunco_usd_sim_cosim::SceneLoadInFlight>>,
     awaiting: Query<(), With<lunco_usd_bevy_scene::UsdSceneAwaitingStage>>,
     projecting: Query<(), With<lunco_usd_bevy_scene::UsdSceneProjectionQueued>>,
     pending_meshes: Query<(), With<lunco_usd_bevy_scene::UsdSceneGeometryPending>>,
@@ -749,7 +749,7 @@ fn report_dome_environment_status(
 /// participants; publishing one permanent event per participant left the last
 /// source filename looking like ongoing work after the scene had settled.
 fn report_modelica_status(
-    pending_sources: Query<(), With<lunco_usd_sim::cosim::PendingModelicaSource>>,
+    pending_sources: Query<(), With<lunco_usd_sim_cosim::PendingModelicaSource>>,
     models: Query<&lunco_modelica_core::ModelicaModel, With<lunco_usd_sim_domain::UsdSourcedCosim>>,
     bus: Option<ResMut<lunco_status_core::status_bus::StatusBus>>,
     mut mirror: ResMut<ModelicaStatusMirrorState>,

@@ -80,7 +80,7 @@ lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-light = { path = "../lunco-usd-bevy-light" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-core = { path = "../lunco-usd-core" }
-lunco-usd-sim = { path = "../lunco-usd-sim" }
+lunco-usd-sim-cosim = { path = "../lunco-usd-sim-cosim" }
 lunco-usd-sim-domain = { path = "../lunco-usd-sim-domain" }
 lunco-usd-ui = { path = "../lunco-usd-ui" }
 lunco-workbench = { path = "../lunco-workbench", features = ["api"] }

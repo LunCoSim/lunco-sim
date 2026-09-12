@@ -1,0 +1,42 @@
+[package]
+name = "lunco-usd-sim-cosim"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "USD co-simulation, scene lifecycle, and readiness projection"
+
+[features]
+python = ["lunco-scripting/python"]
+
+[dependencies]
+avian3d = { workspace = true }
+bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh", "bevy_light"] }
+big_space = { workspace = true }
+lunco-api = { path = "../lunco-api" }
+lunco-assets = { workspace = true }
+lunco-celestial = { path = "../lunco-celestial", default-features = false }
+lunco-core = { path = "../lunco-core" }
+lunco-controller = { path = "../lunco-controller" }
+lunco-cosim = { path = "../lunco-cosim" }
+lunco-doc = { path = "../lunco-doc" }
+lunco-environment = { path = "../lunco-environment" }
+lunco-modelica-ast = { path = "../lunco-modelica-ast" }
+lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
+lunco-mobility = { path = "../lunco-mobility" }
+lunco-physics = { path = "../lunco-physics" }
+lunco-readiness = { workspace = true }
+lunco-render = { path = "../lunco-render" }
+lunco-scripting = { path = "../lunco-scripting" }
+lunco-signal = { path = "../lunco-signal" }
+lunco-time = { path = "../lunco-time" }
+lunco-usd-avian = { path = "../lunco-usd-avian" }
+lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+lunco-usd-bevy-camera = { path = "../lunco-usd-bevy-camera" }
+lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
+lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
+lunco-usd-sim-domain = { path = "../lunco-usd-sim-domain" }
+openusd = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

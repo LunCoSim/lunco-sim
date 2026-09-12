@@ -274,7 +274,7 @@ pub const CAMERA_SOURCE: &str = "camera";
 ///
 /// Shared for the same reason as [`TERRAIN_SOURCE`]: the publisher
 /// (`lunco-luncosim-ui`'s `report_scene_spawn_status`, mirroring
-/// `lunco_usd_sim::cosim::SceneLoadInFlight` + `UsdSceneAwaitingStage`) and the
+/// `lunco_usd_sim_cosim::SceneLoadInFlight` + `UsdSceneAwaitingStage`) and the
 /// screenshot readiness gate must agree on the spelling, and a silent
 /// disagreement degrades into recordings that open on a half-spawned scene.
 pub const SCENE_SOURCE: &str = "scene";

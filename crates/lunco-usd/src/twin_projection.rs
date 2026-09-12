@@ -59,7 +59,7 @@ use lunco_usd_bevy_core::{UsdInstanceProjection, UsdStageAsset};
 use lunco_usd_bevy_scene::{
     UsdPrimPath, UsdSceneAwaitingStage, UsdSceneProjected, UsdSceneProjectionQueued, UsdSceneRoot,
 };
-use lunco_usd_sim::cosim::LoadScene;
+use lunco_usd_sim_cosim::LoadScene;
 
 use crate::commands::{EmptyViewportReason, TWIN_SCENE_LOAD_FAILED};
 use lunco_doc::OpenOutcome;

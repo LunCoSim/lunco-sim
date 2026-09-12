@@ -147,7 +147,7 @@ use crate::LunCoSimHeadlessPlugin;
 use lunco_core::telemetry::{TelemetryEvent, TelemetryValue};
 use lunco_modelica_core::ModelicaModel;
 use lunco_usd_core::document::UsdDocument;
-use lunco_usd_sim::cosim::PendingModelicaSource;
+use lunco_usd_sim_cosim::PendingModelicaSource;
 use lunco_usd_sim_domain::UsdSourcedCosim;
 
 /// Safety bound on the manual step loop. 20 000 ticks ≈ 333 s of simulated time
@@ -703,15 +703,15 @@ fn log_participant_readiness_blockers(world: &mut World) {
 /// boolean would hide which owner failed to publish its completion marker.
 fn log_scene_readiness_blockers(world: &mut World) {
     let load_in_flight = world
-        .get_resource::<lunco_usd_sim::cosim::SceneLoadInFlight>()
+        .get_resource::<lunco_usd_sim_cosim::SceneLoadInFlight>()
         .is_some();
     let ground_pending = world
-        .get_resource::<lunco_usd::GroundColliderPending>()
+        .get_resource::<lunco_usd_sim::GroundColliderPending>()
         .is_some_and(|pending| pending.0);
     let mut prims = world.query::<(
         &lunco_usd_bevy_scene::UsdPrimPath,
         Has<lunco_usd_bevy_scene::UsdSceneProjected>,
-        Has<lunco_usd_sim::UsdSimProcessed>,
+        Has<lunco_usd_sim_cosim::UsdSimProcessed>,
     )>();
     let mut prim_count = 0usize;
     let mut visual_count = 0usize;
@@ -929,7 +929,7 @@ pub fn run() -> u8 {
             // one `UsdPrimPath` in the world.
             let load_done = app
                 .world()
-                .get_resource::<lunco_usd_sim::cosim::SceneLoadInFlight>()
+                .get_resource::<lunco_usd_sim_cosim::SceneLoadInFlight>()
                 .is_none();
             let load_finished = load_done
                 && app
@@ -943,12 +943,15 @@ pub fn run() -> u8 {
                 .world_mut()
                 .query_filtered::<(), (
                     With<lunco_usd_bevy_scene::UsdPrimPath>,
-                    Without<lunco_usd::UsdSimProcessed>,
+                    Without<lunco_usd_sim_cosim::UsdSimProcessed>,
                 )>()
                 .iter(app.world())
                 .next()
                 .is_none();
-            let gate_clear = !app.world().resource::<lunco_usd::GroundColliderPending>().0;
+            let gate_clear = !app
+                .world()
+                .resource::<lunco_usd_sim::GroundColliderPending>()
+                .0;
             if load_finished
                 && all_processed
                 && gate_clear
@@ -970,7 +973,7 @@ pub fn run() -> u8 {
 
     let scene_ready = app
         .world()
-        .get_resource::<lunco_usd_sim::cosim::SceneLoadInFlight>()
+        .get_resource::<lunco_usd_sim_cosim::SceneLoadInFlight>()
         .is_none()
         && app
             .world_mut()
@@ -982,12 +985,15 @@ pub fn run() -> u8 {
             .world_mut()
             .query_filtered::<(), (
                 With<lunco_usd_bevy_scene::UsdPrimPath>,
-                Without<lunco_usd::UsdSimProcessed>,
+                Without<lunco_usd_sim_cosim::UsdSimProcessed>,
             )>()
             .iter(app.world())
             .next()
             .is_none()
-        && !app.world().resource::<lunco_usd::GroundColliderPending>().0
+        && !app
+            .world()
+            .resource::<lunco_usd_sim::GroundColliderPending>()
+            .0
         && modelica_sources_terminal(app.world_mut());
     if !scene_ready {
         log_scene_readiness_blockers(app.world_mut());

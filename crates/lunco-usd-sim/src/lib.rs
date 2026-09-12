@@ -80,6 +80,7 @@ use lunco_mobility::{
     SuspensionSpring, WheelRaycast,
 };
 use lunco_render::{GraphicsCameraDefaults, PbrLook, SceneCamera};
+use lunco_usd_sim_cosim::{PendingDifferential, UsdSimProcessed, UsdSimSet};
 use openusd::schemas::physics::tokens as ptok;
 use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::{HashMap, HashSet};
@@ -115,20 +116,6 @@ use wheel_params::{SuspensionParams, WheelParams};
 /// No custom `lunco:` tokens drive this dispatch.
 
 pub struct UsdSimPlugin;
-
-/// Ordered phases of the USD-to-simulation projection.
-///
-/// `Projection` is the publication boundary for composed scene components;
-/// camera handoff systems are ordered after it. `ActivateDynamicBodies` places
-/// terrain readiness between terrain inspection and the first dynamic physics
-/// tick. Keeping both boundaries public prevents first-load ordering races.
-#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum UsdSimSet {
-    /// Publishes the composed USD simulation and celestial components.
-    Projection,
-    /// Converts `ShouldBeDynamic` bodies only after their ground is known ready.
-    ActivateDynamicBodies,
-}
 
 /// Immutable USD topology facts used by the simulation projector for one
 /// composed stage revision.  This is deliberately separate from ECS entities:
@@ -449,25 +436,20 @@ impl Plugin for UsdSimPlugin {
         // admitted light and would publish a horizontal semantic sun on the
         // following frame.
         install_authored_sun_state_seed(app);
-        // USD → cosim wiring through native `connectionPaths` — see `cosim.rs`.
-        cosim::install(app);
+        // USD → cosim wiring through native `connectionPaths`.
+        lunco_usd_sim_cosim::install(app);
         // `GET /api/diagnostics` read side — exposes the cosim dangling-wire report.
-        cosim_diagnostics::register(app);
+        lunco_usd_sim_cosim::diagnostics::register(app);
     }
 }
 
 /// USD-authored screen-facing text labels (`lunco:billboard*`) — a prim
 /// declares its own label content, including live geolocation.
 pub mod billboard;
-pub mod cosim;
-pub mod cosim_diagnostics;
 pub mod lint;
 /// USD-authored screen-constant markers (`lunco:marker:*`) — geometry that
 /// subtends a fixed angle so a physically sub-pixel thing still reads on screen.
 pub mod marker;
-pub mod readiness;
-pub use cosim::CosimStatusProvider;
-
 /// Shader parameters as connection targets — the port backend for what
 /// `lunco-usd-sim-shader` authors.
 pub mod shader_ports;
@@ -505,28 +487,6 @@ pub struct PhysicalWheel {
     /// reconstruct the wheel's position as `chassis_pos + chassis_rot · mount_local`
     /// instead of replicating a static mount offset.
     pub mount_local: Vec3,
-}
-
-/// An authored `PhysxPhysicsGearJoint`, held until the bodies it gears together have
-/// spawned + been admitted by Avian. `resolve_differential_coupling` matches the
-/// prim-path strings → entities, then attaches the [`DifferentialCoupling`].
-#[derive(Component)]
-pub struct PendingDifferential {
-    /// Composed prim path of the frame both hinges turn against — the gear's reaction
-    /// target (`physics:body0` of the hinges; a rover's chassis).
-    pub chassis: String,
-    /// Composed prim path of the body the first hinge turns.
-    pub rocker_a: String,
-    /// Composed prim path of the body the second hinge turns.
-    pub rocker_b: String,
-    /// Authored `physxGearJoint:gearRatio` — the `r` in `θ_a = r·θ_b`.
-    pub ratio: f64,
-    pub rest_offset: f64,
-    pub target_velocity: f64,
-    pub stiffness: f64,
-    pub damping: f64,
-    pub max_force: f64,
-    pub drive_type: DifferentialDriveType,
 }
 
 /// Process USD prims for sim mapping AFTER their assets are loaded.
@@ -3121,10 +3081,6 @@ fn animate_proxy_physical_wheels(
     }
 }
 
-/// Marker to indicate a prim has been processed by the sim system.
-#[derive(Component)]
-pub struct UsdSimProcessed;
-
 /// Allow a live prim to be projected again after its composed simulation
 /// schemas change.
 ///
@@ -3328,7 +3284,7 @@ fn activate_dynamic_bodies(
     )>,
     q_pending_diffs: Query<&UsdPrimPath, With<PendingDifferential>>,
     topology_index: Res<JointTopologyIndex>,
-    mut binding_epoch: ResMut<crate::cosim::BindingEpochDirty>,
+    mut binding_epoch: ResMut<lunco_usd_sim_cosim::BindingEpochDirty>,
 ) {
     // USD/Avian topology is built in the fixed schedule, while this admission
     // pass runs in Update. A body may not become dynamic until every authored
@@ -3603,7 +3559,7 @@ mod dynamic_activation_tests {
         let mut app = App::new();
         app.init_resource::<GroundColliderPending>()
             .init_resource::<JointTopologyIndex>()
-            .init_resource::<crate::cosim::BindingEpochDirty>()
+            .init_resource::<lunco_usd_sim_cosim::BindingEpochDirty>()
             .add_systems(Update, activate_dynamic_bodies);
 
         let stage = Handle::<UsdStageAsset>::default();
@@ -3668,7 +3624,7 @@ mod dynamic_activation_tests {
         let mut app = App::new();
         app.init_resource::<GroundColliderPending>()
             .init_resource::<JointTopologyIndex>()
-            .init_resource::<crate::cosim::BindingEpochDirty>()
+            .init_resource::<lunco_usd_sim_cosim::BindingEpochDirty>()
             .add_systems(Update, activate_dynamic_bodies);
 
         let stage = Handle::<UsdStageAsset>::default();

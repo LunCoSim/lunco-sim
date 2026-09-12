@@ -43,10 +43,10 @@ use lunco_hardware::LunCoHardwarePlugin;
 use lunco_mobility::LunCoMobilityPlugin;
 // USD core (scene load + collider build) is always needed; the Twin browser /
 // RTT viewport UI plugins are `ui`-only (added by `LunCoSimUiPlugin`).
-#[cfg(feature = "networking")]
-use lunco_usd::LoadScene;
 use lunco_usd::UsdPlugins;
 use lunco_usd_bevy_scene::UsdPrimPath;
+#[cfg(feature = "networking")]
+use lunco_usd_sim_cosim::LoadScene;
 // USD policy and terrain presentation read the composed reader selected by the
 // shared USD projection boundary. Initial scene loads use the worker-produced
 // plan; authored generations use the live canonical stage. `UsdDataExt` remains
@@ -2899,7 +2899,7 @@ impl Plugin for LunCoSimCorePlugin {
             // downloaded the host's advertised scenario, load its entry scene from
             // the cache mounted as a Twin root (read-only consume). The bridge lives here —
             // the assembly crate that owns both the wire (`lunco-networking`) and
-            // the scene loader (`lunco_usd::LoadScene`) — keeping each of those
+            // the scene loader (`lunco_usd_sim_cosim::LoadScene`) — keeping each of those
             // crates free of the other.
             app.add_systems(Update, load_ready_scenario);
             // Layer B: project peers' live journal edits onto the local scene
@@ -3011,7 +3011,7 @@ fn track_ground_collider_pending(
             With<lunco_usd_terrain::DemDatasetPending>,
         )>,
     >,
-    mut pending: ResMut<lunco_usd::GroundColliderPending>,
+    mut pending: ResMut<lunco_usd_sim::GroundColliderPending>,
 ) {
     pending.0 = !building.is_empty();
 }
@@ -3024,7 +3024,7 @@ mod ground_collider_gate_tests {
     fn only_an_active_dem_request_holds_dynamic_activation() {
         let mut app = App::new();
         app.insert_resource(Time::<()>::default())
-            .init_resource::<lunco_usd::GroundColliderPending>()
+            .init_resource::<lunco_usd_sim::GroundColliderPending>()
             .add_systems(Update, track_ground_collider_pending);
 
         // A loaded USD stage contains many prims that are not terrain. They do
@@ -3035,7 +3035,11 @@ mod ground_collider_gate_tests {
             path: "/Rover/Chassis".into(),
         });
         app.update();
-        assert!(!app.world().resource::<lunco_usd::GroundColliderPending>().0);
+        assert!(
+            !app.world()
+                .resource::<lunco_usd_sim::GroundColliderPending>()
+                .0
+        );
 
         let terrain = app
             .world_mut()
@@ -3049,19 +3053,27 @@ mod ground_collider_gate_tests {
             })
             .id();
         app.update();
-        assert!(app.world().resource::<lunco_usd::GroundColliderPending>().0);
+        assert!(
+            app.world()
+                .resource::<lunco_usd_sim::GroundColliderPending>()
+                .0
+        );
 
         app.world_mut()
             .entity_mut(terrain)
             .remove::<lunco_terrain_surface::DemTerrainRequest>();
         app.update();
-        assert!(!app.world().resource::<lunco_usd::GroundColliderPending>().0);
+        assert!(
+            !app.world()
+                .resource::<lunco_usd_sim::GroundColliderPending>()
+                .0
+        );
     }
 
     #[test]
     fn an_uninstalled_twin_dem_keeps_dynamic_activation_held() {
         let mut app = App::new();
-        app.init_resource::<lunco_usd::GroundColliderPending>()
+        app.init_resource::<lunco_usd_sim::GroundColliderPending>()
             .add_systems(Update, track_ground_collider_pending);
 
         let pending = app
@@ -3071,11 +3083,19 @@ mod ground_collider_gate_tests {
             ))
             .id();
         app.update();
-        assert!(app.world().resource::<lunco_usd::GroundColliderPending>().0);
+        assert!(
+            app.world()
+                .resource::<lunco_usd_sim::GroundColliderPending>()
+                .0
+        );
 
         app.world_mut().entity_mut(pending).despawn();
         app.update();
-        assert!(!app.world().resource::<lunco_usd::GroundColliderPending>().0);
+        assert!(
+            !app.world()
+                .resource::<lunco_usd_sim::GroundColliderPending>()
+                .0
+        );
     }
 }
 

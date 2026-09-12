@@ -53,7 +53,7 @@ use lunco_usd_core::edit_session::{
     validate_proposal, UsdEditScope, UsdEditSessions, UsdProposalId, UsdProposalState,
 };
 use lunco_usd_core::UsdDataExt;
-use lunco_usd_sim::cosim::{
+use lunco_usd_sim_cosim::{
     clear_scene_entities, resolve_root_prim, spawn_scene_root_world, validate_scene_address,
     ClearScene, LoadScene, SceneEntities, SceneLoadInFlight,
 };
@@ -769,7 +769,7 @@ fn execute_admitted_load_scene(
             .resource_mut::<crate::twin_projection::TwinProjectionWake>()
             .wake();
         if stage_already_loaded {
-            world.write_message(lunco_usd_sim::cosim::SceneStageAssetOutcome::Loaded {
+            world.write_message(lunco_usd_sim_cosim::SceneStageAssetOutcome::Loaded {
                 stage_id: new_id,
             });
         }

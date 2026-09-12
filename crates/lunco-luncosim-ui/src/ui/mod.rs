@@ -358,7 +358,7 @@ impl Plugin for LunCoSimUiPlugin {
                 ),
             )
             .add_observer(
-                |t: On<lunco_usd::LoadScene>,
+                |t: On<lunco_usd_sim_cosim::LoadScene>,
                  current: Option<ResMut<CurrentScenePath>>,
                  current_name: Option<ResMut<CurrentSceneName>>,
                  hud: Option<ResMut<lunco_workbench::guided_overlay::GuidedOverlay>>| {
@@ -1300,7 +1300,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                 // `LoadScene` deliberately no-ops for the active `(stage, root)`.
                 // RestartScene is the lifecycle verb that clears the current world,
                 // invalidates the stage asset, and mounts a newly read source.
-                ctx.trigger(lunco_usd::RestartScene::default());
+                ctx.trigger(lunco_usd_sim_cosim::RestartScene::default());
                 ui.close();
             }
         });
@@ -1377,7 +1377,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                                             continue;
                                         }
                                     };
-                                    ctx.trigger(lunco_usd::LoadScene {
+                                    ctx.trigger(lunco_usd_sim_cosim::LoadScene {
                                         path,
                                         root_prim: String::new(),
                                     });
@@ -1513,7 +1513,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                                 None => resp,
                             };
                             if resp.clicked() {
-                                ctx.trigger(lunco_usd::LoadScene {
+                                ctx.trigger(lunco_usd_sim_cosim::LoadScene {
                                     path: lunco_assets::engine_asset_uri(&asset.asset_path),
                                     root_prim: String::new(),
                                 });

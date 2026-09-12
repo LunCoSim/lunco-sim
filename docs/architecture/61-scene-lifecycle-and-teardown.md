@@ -24,7 +24,7 @@ subsystem is the worked example — everything it creates carries
 `CelestialDerived`, so a reload removes exactly what it added without teardown
 needing to know what a celestial scene contains.
 
-`clear_scene_entities` (`lunco-usd-sim::cosim`) drives this, and is shared by
+`clear_scene_entities` (`lunco-usd-sim-cosim`) drives this, and is shared by
 `LoadScene` (clear-before-reload) and `ClearScene` (clear-to-empty).
 
 `SceneMountState` records the roots admitted by the current transaction. A

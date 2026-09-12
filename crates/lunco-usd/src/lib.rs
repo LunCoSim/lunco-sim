@@ -18,6 +18,7 @@
 //! See [docs/architecture/21-domain-usd.md](../../docs/architecture/21-domain-usd.md) for detailed architecture documentation.
 
 use bevy::prelude::*;
+use lunco_usd_sim::UsdSimPlugin;
 
 // `commands` is the headless-safe document/file verb layer (ApplyUsdOp,
 // OpenFile/NewDocument/SaveDocument observers, the async load pipeline +
@@ -51,9 +52,6 @@ pub use lunco_usd_avian::{
 /// interprets USD sublayers, references, payloads, and variants into a stage.
 #[cfg(not(target_arch = "wasm32"))]
 pub use lunco_usd_compose::compose_file_to_stage;
-pub use lunco_usd_sim::cosim::{ClearScene, LoadScene, RestartScene};
-pub use lunco_usd_sim::UsdSimPlugin;
-pub use lunco_usd_sim::{GroundColliderPending, UsdSimProcessed};
 
 /// Master plugin that bundles all USD subsystems together.
 ///

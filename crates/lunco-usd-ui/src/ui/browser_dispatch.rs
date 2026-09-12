@@ -57,7 +57,7 @@ fn browser_document_path(
 
 /// Drain Twin-browser `OpenFile` actions whose path looks like USD and hand
 /// each off to the document pipeline ([`lunco_usd::commands::spawn_usd_load`]).
-/// This deliberately does not trigger [`lunco_usd::LoadScene`].
+/// This deliberately does not trigger [`lunco_usd_sim_cosim::LoadScene`].
 pub fn drain_browser_actions_for_usd(world: &mut World) {
     let actions: Vec<BrowserAction> = {
         // Bail gracefully when the workbench's outbox isn't present

@@ -158,7 +158,7 @@ The target sphere does not bob. The Oscillator compiles and runs (`compile Oscil
 
 **Fix:**
 
-- **`bind` must fail when its interpreter is absent.** In `lunco-usd-sim::cosim`, check `get_python_status()` before binding a `.py` program. On `Unavailable`, log `WARN`/`ERROR` naming the prim, the asset, and the reason, and do not report `bound`.
+- **`bind` must fail when its interpreter is absent.** In `lunco-usd-sim-cosim`, check `get_python_status()` before binding a `.py` program. On `Unavailable`, log `WARN`/`ERROR` naming the prim, the asset, and the reason, and do not report `bound`.
 - **Aggregate at startup.** One line after scene load: `N Python program(s) in this scene are inert — Python runtime unavailable`. A per-prim warning buried 300 lines up is not enough.
 - **Decide whether Windows nightlies ship a Python.** `crates/lunco-scripting/src/python/mod.rs` probes for a shared library and reports `Unavailable` when it finds none. If the answer is "no Python on Windows", then the Python prims in the default scene are shipping known-dead and should be moved to a scene that documents the requirement.
 
