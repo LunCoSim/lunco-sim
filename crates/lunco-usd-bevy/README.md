@@ -5,7 +5,7 @@ The core **OpenUSD Hierarchy and Visuals** bridge for Bevy.
 ## Rationale
 This crate provides the foundational integration between OpenUSD and Bevy. It handles the mapping of USD Prims to Bevy Entities and automatically synchronizes visual properties (shapes and transforms) from USDA files. 
 
-By separating visuals into this crate, we keep the core integration lightweight and allow physics (`lunco-usd-avian`) or simulation metadata (`lunco-usd`) to be added as modular layers. USD composition and default-time projection data are prepared by the async asset loader; the Bevy update schedule only binds that owned snapshot to ECS. The non-`Send` canonical OpenUSD stage is retained for authoring and live edits.
+By separating visuals into this crate, we keep the core integration lightweight and allow physics (`lunco-usd-avian`), lighting (`lunco-usd-bevy-light`), or simulation metadata (`lunco-usd`) to be added as modular layers. USD composition and default-time projection data are prepared by the async asset loader; the Bevy update schedule only binds that owned snapshot to ECS. The non-`Send` canonical OpenUSD stage is retained for authoring and live edits.
 
 ## Key Functions & Features
 
@@ -15,7 +15,7 @@ The main plugin that sets up the USDA visual synchronization system. Registers t
 systems that drive USDA visual synchronization.
 
 ### 2. Automatic Visual Mapping
-Maps standard USD types to Bevy primitives:
+Maps standard USD geometry types to Bevy primitives:
 *   `Cube` -> `Cuboid`
 *   `Sphere` -> `Sphere`
 *   `Cylinder` -> `Cylinder`
@@ -26,7 +26,8 @@ Automatically synchronizes the following USD attributes to Bevy `Transform`:
 *   `xformOp:scale` or `scale`
 
 ### 4. Color Support
-Automatically maps the standard USD `primvars:displayColor` attribute to Bevy `StandardMaterial`.
+Automatically maps the standard USD `primvars:displayColor` attribute to
+render intent consumed by `lunco-render-bevy`.
 
 ### 5. Types
 *   **`UsdPrimPath`**: Component linking a Bevy entity to its source prim in the USD Stage.
@@ -37,3 +38,5 @@ Register `UsdBevyPlugin`, load a `.usda` as a `UsdStageAsset` handle, and spawn
 entities tagged with `UsdPrimPath`; the load observer queues them and the
 bounded projection pass binds meshes, transforms, and materials from the
 prepared plan. Later authored edits use the live canonical stage explicitly.
+UsdLux lights and textured domes are installed by the sibling
+`lunco-usd-bevy-light` package at the `UsdBevyPlugin` integration boundary.

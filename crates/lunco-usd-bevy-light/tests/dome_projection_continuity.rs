@@ -14,7 +14,7 @@
 
 use bevy::color::LinearRgba;
 use bevy::math::Vec3;
-use lunco_usd_bevy::dome::{equirect_to_cubemap, Equirect};
+use lunco_usd_bevy_light::dome::{equirect_to_cubemap, Equirect};
 
 /// The analytic sky under test: a broad, smooth, low-amplitude band around a
 /// tilted great circle — the Milky Way's shape, and the exact signal that

@@ -1,0 +1,19 @@
+[package]
+name = "lunco-usd-bevy-light"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "USD light and dome projection for Bevy"
+
+[dependencies]
+bevy = { workspace = true, features = ["bevy_asset", "bevy_image", "bevy_light", "hdr", "ktx2", "zstd_rust"] }
+half = "2"
+lunco-core = { path = "../lunco-core" }
+lunco-render = { path = "../lunco-render" }
+lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
+lunco-usd-core = { path = "../lunco-usd-core" }
+openusd = { workspace = true }
+wgpu-types = "29"
+
+[lints]
+workspace = true

@@ -7,7 +7,7 @@
 > physical — lives as USD prims in USD stages. See
 > [`../../crates/lunco-usd-core/`](../../crates/lunco-usd-core/), [`../../crates/lunco-usd/`](../../crates/lunco-usd/) and companion crates
 > `lunco-usd-geometry`, `lunco-usd-avian`, `lunco-usd-avian-lint`, `lunco-usd-bevy-core`,
-> `lunco-usd-bevy-scene`, `lunco-usd-bevy-camera`, `lunco-usd-bevy` and
+> `lunco-usd-bevy-scene`, `lunco-usd-bevy-camera`, `lunco-usd-bevy-light`, `lunco-usd-bevy` and
 > `lunco-usd-bevy-lathe`, `lunco-usd-sim`, `lunco-usd-sim-domain`.
 
 Package ownership follows the same boundary: `lunco-usd-core` contains the
@@ -19,8 +19,9 @@ owns the reusable render-free NURBS, trim, and curve-sweep substrate;
 and shared geometry decoding; `lunco-usd-bevy-camera` owns render-free camera
 projection intent, camera paths, mounts, selection, and viewport reconciliation;
 `lunco-usd-bevy-lathe` owns the independent parametric NURBS/lathe mesh
-projection; `lunco-usd-bevy` owns the remaining visual projection and consumes
-the lathe package directly; and
+projection; `lunco-usd-bevy-light` owns UsdLux light and dome projection;
+`lunco-usd-bevy` owns the remaining visual projection and consumes the camera,
+light, and lathe packages directly; and
 `lunco-usd-avian-lint` owns composed `UsdPhysics` lint facts;
 `lunco-usd-sim-domain` owns composed component-network and generic actuator
 projection, while `lunco-usd-sim` owns vehicle projection and cosimulation
@@ -702,6 +703,7 @@ as runtime. Ownership follows the narrowest production boundary:
 - `crates/lunco-usd-bevy-core/src/{asset,authoring,canonical,read,compose,view}.rs` — prepared asset, authored-layer, composed-stage, and live-stage substrate
 - `crates/lunco-usd-bevy-scene/src/{lib,geometry}.rs` — render-free ECS scene identity, lifecycle, ancestry, and shared USD geometry readers
 - `crates/lunco-usd-bevy-camera/src/{camera,camera_mount,camera_path,camera_switch,camera_track}.rs` — render-free camera projection, pose, path, selection, and track mechanisms
+- `crates/lunco-usd-bevy-light/src/{light,dome}.rs` — UsdLux light readers, ambient-dome semantics, and HDRI environment projection
 - `crates/lunco-usd/tests/live_spawn_projection.rs` — document-backed USD authoring and raw asset composition facts
 - `crates/lunco-usd-avian-lint/src/lib.rs` — composed `UsdPhysics` fact production for the authored lint policy
 - `crates/lunco-usd-sim-domain/src/lib.rs` — low-level component-network projection, synthesis, and actuator lowering mechanisms

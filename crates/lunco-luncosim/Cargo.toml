@@ -45,7 +45,7 @@ required-features = ["ui"]
 # inventory registration closure into the final link, which tipped clang's
 # command line past its internal limit (link aborted with `std::length_error`).
 # Instead `UsdBevyPlugin` explicitly `register_type`s the bounded set of
-# glTF/USD scene component types — see `crates/lunco-usd-bevy/src/lib.rs`.
+# glTF/USD scene component types — see `crates/lunco-usd-bevy-core/src/lib.rs`.
 # `bevy_pbr` is UI-only: headless domain crates state `PbrLook`/`ShaderLook`
 # intent, and the binder that turns intent into a render asset lives behind the
 # `ui` feature with `lunco-render-bevy`. Keeping PBR out of this dependency line
@@ -118,7 +118,6 @@ lunco-usd = { path = "../lunco-usd", default-features = false }
 # Live canonical stage read path (`CanonicalStages` / `StageView` / `UsdRead`):
 # the USD-reading systems below consume the composed stage, while initial reads
 # use every asset's prepared projection plan.
-lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-core = { path = "../lunco-usd-core" }

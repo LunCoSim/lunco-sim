@@ -3225,7 +3225,7 @@ fn on_attach_program(trigger: On<AttachProgram>, mut commands: Commands) {
 // ─────────────────────────────────────────────────────────────────────
 
 /// Author the scene's HDRI environment: a `UsdLuxDomeLight` carrying
-/// `inputs:texture:file`. Projected by `lunco_usd_bevy::dome` into a skybox +
+/// `inputs:texture:file`. Projected by `lunco_usd_bevy_light::dome` into a skybox +
 /// image-based lighting.
 ///
 /// **This is the only way to change the environment at runtime.** It lowers to

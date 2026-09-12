@@ -7392,7 +7392,6 @@ dependencies = [
  "lunco-twin-journal",
  "lunco-usd",
  "lunco-usd-avian",
- "lunco-usd-bevy",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
  "lunco-usd-core",
@@ -7557,6 +7556,7 @@ dependencies = [
  "lunco-usd-bevy",
  "lunco-usd-bevy-camera",
  "lunco-usd-bevy-core",
+ "lunco-usd-bevy-light",
  "lunco-usd-bevy-scene",
  "lunco-usd-core",
  "lunco-usd-sim",
@@ -7926,6 +7926,7 @@ dependencies = [
  "lunco-usd",
  "lunco-usd-bevy",
  "lunco-usd-bevy-core",
+ "lunco-usd-bevy-light",
  "lunco-usd-bevy-scene",
  "lunco-usd-core",
  "lunco-workspace",
@@ -8262,6 +8263,7 @@ dependencies = [
  "lunco-usd-bevy",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-diagnostics",
+ "lunco-usd-bevy-light",
  "lunco-usd-bevy-scene",
  "lunco-usd-compose",
  "lunco-usd-core",
@@ -8314,8 +8316,6 @@ dependencies = [
  "bevy",
  "bevy_mesh",
  "big_space",
- "half",
- "lunco-assets",
  "lunco-core",
  "lunco-materials",
  "lunco-render",
@@ -8323,13 +8323,13 @@ dependencies = [
  "lunco-usd-bevy-camera",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-lathe",
+ "lunco-usd-bevy-light",
  "lunco-usd-bevy-scene",
  "lunco-usd-core",
  "lunco-usd-geometry",
  "openusd",
  "tempfile",
  "web-time",
- "wgpu-types",
 ]
 
 [[package]]
@@ -8386,6 +8386,20 @@ dependencies = [
  "lunco-usd-bevy-core",
  "lunco-usd-geometry",
  "openusd",
+]
+
+[[package]]
+name = "lunco-usd-bevy-light"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "half",
+ "lunco-core",
+ "lunco-render",
+ "lunco-usd-bevy-core",
+ "lunco-usd-core",
+ "openusd",
+ "wgpu-types",
 ]
 
 [[package]]
@@ -8469,6 +8483,7 @@ dependencies = [
  "lunco-usd-bevy",
  "lunco-usd-bevy-camera",
  "lunco-usd-bevy-core",
+ "lunco-usd-bevy-light",
  "lunco-usd-bevy-scene",
  "lunco-usd-compose",
  "lunco-usd-core",

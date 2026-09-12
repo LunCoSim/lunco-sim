@@ -79,7 +79,7 @@ a 128 klx-tuned EV16 camera.
 
 Uniform environment illumination is standard UsdLux — an untextured `UsdLuxDomeLight` — and
 `GlobalAmbientLight` is composed as the **sum** over those domes
-(`lunco-usd-bevy::light.rs::on_usd_light_added`). Summing is what UsdLux semantics require:
+(`lunco-usd-bevy-light::light::on_usd_light_added`). Summing is what UsdLux semantics require:
 lights add, and one light's presence must never delete another's contribution.
 
 Two consequences that are not obvious:

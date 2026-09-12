@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use bevy::asset::{io::Reader, AssetLoader, LoadContext};
+use bevy::asset::{io::Reader, AssetLoader, AssetServer, LoadContext};
 use bevy::prelude::{Asset, TypePath};
 
 use crate::compose::fetch_layer_closure;
@@ -50,6 +50,25 @@ impl UsdStageAsset {
             recipe: None,
             projection_plan: Arc::new(projection_plan),
         })
+    }
+}
+
+/// Resolve a USD asset path relative to the stage that authored it.
+///
+/// The canonical asset-path rule is shared with USD layer composition, so a
+/// texture, scenario, or layer reference spelled the same way resolves the
+/// same way. An in-memory stage has no asset-server anchor and therefore uses
+/// the root canonicalization rule.
+pub fn resolve_stage_asset_path(
+    asset_server: &AssetServer,
+    stage_id: bevy::asset::AssetId<UsdStageAsset>,
+    asset_path: &str,
+) -> String {
+    use lunco_assets::asset_path::{anchor_of, canonicalize, canonicalize_root};
+
+    match asset_server.get_path(stage_id) {
+        Some(stage_path) => canonicalize(asset_path, &anchor_of(&stage_path)),
+        None => canonicalize_root(asset_path),
     }
 }
 

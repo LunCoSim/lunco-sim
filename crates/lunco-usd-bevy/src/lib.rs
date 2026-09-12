@@ -50,14 +50,11 @@ use lunco_render::{PbrLook, PbrTextures, SurfaceAlpha};
 use openusd::sdf::Path as SdfPath;
 use openusd::sdf::Value;
 
-pub mod dome;
-mod light;
 /// Light and transform ports — the port backend for what `light`/`compose` spawn.
 pub mod scene_ports;
-pub use light::{read_dome_intensity, read_intensity_with_exposure, DomeIntensity, LightReadError};
 use lunco_usd_bevy_lathe as lathe;
+use lunco_usd_bevy_light::light;
 pub mod mount;
-pub use light::UsdAuthoredLight;
 use lunco_usd_bevy_core::read::{
     attr_has_time_samples, read_authored_bool_strict, read_primvar_f32_strict,
     read_primvar_vec3_at, read_primvar_vec3_strict, read_token_at, read_vec3_f64, read_vec3_f64_at,
@@ -66,8 +63,8 @@ use lunco_usd_bevy_core::read::{
 #[cfg(test)]
 use lunco_usd_bevy_core::DefaultPrim;
 use lunco_usd_bevy_core::{
-    canonical, program, read, units, UsdInstanceMember, UsdInstanceProjection, UsdInstanceRoot,
-    UsdLoader, UsdStageAsset,
+    canonical, program, read, UsdInstanceMember, UsdInstanceProjection, UsdInstanceRoot, UsdLoader,
+    UsdStageAsset,
 };
 use lunco_usd_bevy_core::{
     canonical::{CanonicalStage, CanonicalStages},
@@ -84,13 +81,6 @@ use lunco_usd_bevy_scene::{
 };
 use lunco_usd_core::UsdDataExt;
 use openusd::schemas::geom::tokens as gtok;
-// The ambient-fill solve. Uniform ambient is spelled as an untextured `DomeLight`
-// and composed as a SUM, so a command that wants to set the composed TOTAL (the
-// inspector's ambient slider) must solve for the one dome it owns. Exported
-// because the WRITER lives in `lunco-scene-commands`, while the semantics — what
-// counts as an ambient dome, and in what units — live here with the reader.
-pub use light::{ambient_fill_intensity, ambient_fill_saturates, untextured_dome_intensity_sum};
-
 /// Bevy plugin for USD visual synchronization.
 ///
 /// Registers the `UsdStageAsset` type, the USD asset loader, and the `sync_usd_visuals`
@@ -110,11 +100,15 @@ impl Plugin for UsdBevyPlugin {
         // settings. Initialise the documented default at this boundary so
         // projectors never invent a separate quality profile.
         app.init_resource::<lunco_render::RenderingQualitySettings>();
-        app.add_plugins((UsdScenePlugin, lunco_usd_bevy_camera::UsdCameraPlugin))
-            .configure_sets(
-                Update,
-                lunco_usd_bevy_camera::UsdCameraProjectionSet.after(UsdVisualProjectionSet),
-            );
+        app.add_plugins((
+            UsdScenePlugin,
+            lunco_usd_bevy_camera::UsdCameraPlugin,
+            lunco_usd_bevy_light::UsdLightPlugin,
+        ))
+        .configure_sets(
+            Update,
+            lunco_usd_bevy_camera::UsdCameraProjectionSet.after(UsdVisualProjectionSet),
+        );
 
         // The mission-time spine provides `WorldTime` (the world animation clock)
         // for `sample_usd_animation`. Guarded so a context that also adds it via
@@ -204,7 +198,6 @@ impl Plugin for UsdBevyPlugin {
             // panel, not for anything a simulation step depends on.
             .add_observer(on_usd_prim_added)
             .add_observer(on_cell_coord_added)
-            .add_observer(light::on_usd_light_added)
             // Rover/vehicle-mounted cameras: a nested `def Camera` is realised
             // as a grid-direct follower. `resolve` rigs it once during load; `follow`
             // tracks the mount each frame, before transform propagation.
@@ -245,9 +238,6 @@ impl Plugin for UsdBevyPlugin {
                 retessellate_curve_meshes_on_quality_change
                     .after(retessellate_primitive_meshes_on_quality_change),
             )
-            // HDRI environment: project an authored `DomeLight`'s equirect into
-            // a cubemap and bind it to the cameras (`dome.rs`).
-            .add_plugins(dome::DomePlugin)
             // `sync_usd_visuals` runs only on frames where a stage's
             // `LoadedWithDependencies` event was emitted. Idle frames
             // skip it entirely (run-condition short-circuits).
@@ -2054,34 +2044,6 @@ fn resolve_usd_instance_identities(
     }
 }
 
-/// Resolves an asset path relative to the stage it belongs to.
-///
-/// The rule is [`lunco_assets::asset_path::canonicalize`] — the same one USD layer
-/// composition uses, so a texture, scenario, or layer reference spelled the same
-/// way resolves the same way. Keeping the stage anchor lookup here prevents each
-/// projection from inventing a second source-resolution path.
-///
-/// A stage need not have been loaded from a path — one composed in memory
-/// (`StageRecipe::from_source`, runtime authoring) has none, which the provenance
-/// stamp above already accounts for. That is the SAME "no anchoring document"
-/// case openusd's resolver and rhai's importer hit, so it maps onto
-/// [`canonicalize_root`] here too rather than failing the whole lookup: a
-/// path-less stage referencing `@lunco://textures/foo.png@` still resolves,
-/// which is what a `has_scheme` special case used to (partially) buy.
-///
-/// [`canonicalize_root`]: lunco_assets::asset_path::canonicalize_root
-pub fn resolve_stage_asset_path(
-    asset_server: &AssetServer,
-    stage_id: bevy::asset::AssetId<UsdStageAsset>,
-    asset_path: &str,
-) -> String {
-    use lunco_assets::asset_path::{anchor_of, canonicalize, canonicalize_root};
-    match asset_server.get_path(stage_id) {
-        Some(stage_path) => canonicalize(asset_path, &anchor_of(&stage_path)),
-        None => canonicalize_root(asset_path),
-    }
-}
-
 /// Maps a `UsdUVTexture` `inputs:wrapS`/`inputs:wrapT` token to a Bevy sampler
 /// address mode. USD's `"useMetadata"` (and absent) use the documented
 /// projection default `Repeat` because the image-header metadata is not part
@@ -2329,7 +2291,11 @@ fn read_standard_material(
                 let asset_path = reader
                     .asset(&texture_path, "inputs:file")
                     .ok_or_else(|| MaterialReadError::new(input))?;
-                let resolved = resolve_stage_asset_path(asset_server, stage_id, &asset_path);
+                let resolved = lunco_usd_bevy_core::asset::resolve_stage_asset_path(
+                    asset_server,
+                    stage_id,
+                    &asset_path,
+                );
 
                 let is_srgb =
                     match read_material_token(reader, &texture_path, "inputs:sourceColorSpace")?
@@ -3141,8 +3107,13 @@ pub fn apply_program_resolution(
         let program::ProgramSource::Asset(asset) = &resolved.source else {
             return None;
         };
-        (resolved.backend == program::ProgramBackend::Rhai)
-            .then(|| resolve_stage_asset_path(world.resource::<AssetServer>(), stage_id, asset))
+        (resolved.backend == program::ProgramBackend::Rhai).then(|| {
+            lunco_usd_bevy_core::asset::resolve_stage_asset_path(
+                world.resource::<AssetServer>(),
+                stage_id,
+                asset,
+            )
+        })
     });
     let mut entity = world.entity_mut(entity);
     entity

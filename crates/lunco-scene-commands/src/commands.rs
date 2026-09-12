@@ -14,9 +14,9 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_core::{on_command, register_commands, Command, SpawnEntity};
-use lunco_scene_catalog::catalog::{spawn_usd_entry, SpawnAnchor, SpawnCatalog, SpawnSource};
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_doc_bevy::{RedoDocument, UndoDocument};
+use lunco_scene_catalog::catalog::{spawn_usd_entry, SpawnAnchor, SpawnCatalog, SpawnSource};
 use lunco_usd::commands::{ApplyUsdOp, ApplyUsdOps};
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneRoot};
 use lunco_usd_core::document::UsdDocument;
@@ -76,14 +76,12 @@ pub fn persist_detach_to_runtime_layer(
     if !cmd.intent.is_persistent() {
         return;
     }
-    let Some((doc, path)) =
-        lunco_scene_authoring::doc_resolve::authorable_prim(
-            cmd.target,
-            &q_prim,
-            &usd_registry,
-            workspace.as_deref(),
-        )
-    else {
+    let Some((doc, path)) = lunco_scene_authoring::doc_resolve::authorable_prim(
+        cmd.target,
+        &q_prim,
+        &usd_registry,
+        workspace.as_deref(),
+    ) else {
         return;
     };
 
@@ -1004,8 +1002,7 @@ pub fn persist_transform_to_runtime_layer(
         &q_prim,
         &usd_registry,
         workspace.as_deref(),
-    )
-    else {
+    ) else {
         return;
     };
     let Some((cell, local_translation)) = lunco_core::coords::position_in_grid_to_parent_local(
@@ -1104,8 +1101,7 @@ pub fn persist_move_to_runtime_layer(
         &q_prim,
         &usd_registry,
         workspace.as_deref(),
-    )
-    else {
+    ) else {
         return;
     };
 
@@ -1183,8 +1179,7 @@ pub fn persist_rotation_to_runtime_layer(
         &q_prim,
         &usd_registry,
         workspace.as_deref(),
-    )
-    else {
+    ) else {
         return;
     };
     let requested = DQuat::from_array(cmd.rotation);
@@ -1357,14 +1352,12 @@ pub fn persist_delete_to_runtime_layer(
     if !cmd.intent.is_persistent() {
         return;
     }
-    let Some((doc, path)) =
-        lunco_scene_authoring::doc_resolve::authorable_prim(
-            cmd.target,
-            &q_prim,
-            &usd_registry,
-            workspace.as_deref(),
-        )
-    else {
+    let Some((doc, path)) = lunco_scene_authoring::doc_resolve::authorable_prim(
+        cmd.target,
+        &q_prim,
+        &usd_registry,
+        workspace.as_deref(),
+    ) else {
         return;
     };
     if is_mount_component(&usd_registry, doc, &path) {
@@ -1412,14 +1405,12 @@ pub fn on_set_usd_connection(
     mut commands: Commands,
 ) {
     let cmd = trigger.event();
-    let Some((doc, path)) =
-        lunco_scene_authoring::doc_resolve::authorable_prim(
-            cmd.target,
-            &q_prim,
-            &usd_registry,
-            workspace.as_deref(),
-        )
-    else {
+    let Some((doc, path)) = lunco_scene_authoring::doc_resolve::authorable_prim(
+        cmd.target,
+        &q_prim,
+        &usd_registry,
+        workspace.as_deref(),
+    ) else {
         return;
     };
     commands.trigger(ApplyUsdOp {
@@ -1447,7 +1438,7 @@ pub fn on_set_usd_connection(
 /// sun tweak is lost on reload. This decoupled observer authors the changed
 /// fields as `SetAttribute`s onto the sun's `DistantLight` prim in
 /// `LayerId::runtime()`, using the SAME attribute names the loader
-/// (`lunco_usd_bevy::light`) already reads back — so illuminance / colour /
+/// (`lunco_usd_bevy_light::light`) already reads back — so illuminance / colour /
 /// shadow-range knobs round-trip on reload and ride the Twin journal like every
 /// other USD edit. (Live peer-sync then follows the USD projection, exactly as
 /// the move / property persisters do — no bespoke light broadcast.)
@@ -1471,7 +1462,7 @@ pub fn persist_environment_light_to_runtime_layer(
     q_sun: Query<
         (&UsdPrimPath, &Transform),
         (
-            With<lunco_usd_bevy::UsdAuthoredLight>,
+            With<lunco_usd_bevy_light::light::UsdAuthoredLight>,
             With<DirectionalLight>,
             Without<lunco_environment::Earthshine>,
         ),
@@ -1481,7 +1472,7 @@ pub fn persist_environment_light_to_runtime_layer(
     q_earthshine: Query<
         &UsdPrimPath,
         (
-            With<lunco_usd_bevy::UsdAuthoredLight>,
+            With<lunco_usd_bevy_light::light::UsdAuthoredLight>,
             With<DirectionalLight>,
             With<lunco_environment::Earthshine>,
         ),
@@ -1537,7 +1528,10 @@ pub fn persist_environment_light_to_runtime_layer(
         let fill_path = format!("{env_path}/AmbientFill");
         let composed = host.document().composed_arc();
         let fill_sdf = openusd::sdf::Path::new(&fill_path).ok();
-        match lunco_usd_bevy::untextured_dome_intensity_sum(&composed, fill_sdf.as_ref()) {
+        match lunco_usd_bevy_light::light::untextured_dome_intensity_sum(
+            &composed,
+            fill_sdf.as_ref(),
+        ) {
             Ok(others) => Some((requested, others, fill_path)),
             Err(_) => {
                 error!(
@@ -1716,7 +1710,7 @@ pub fn persist_environment_light_to_runtime_layer(
     // ── Ambient → a dedicated untextured `DomeLight`, not a custom attribute ──
     //
     // UsdLux has no "ambient light"; an untextured `DomeLight` is the standard
-    // spelling, and `lunco_usd_bevy::light::on_usd_light_added` composes
+    // spelling, and `lunco_usd_bevy_light::light::on_usd_light_added` composes
     // `GlobalAmbientLight::brightness` as the SUM over every such dome. That sum
     // is what the inspector's slider reads back.
     //
@@ -1731,9 +1725,9 @@ pub fn persist_environment_light_to_runtime_layer(
         // by an earlier drag — which lives only in the runtime overlay — is seen
         // and correctly EXCLUDED from "other domes" rather than subtracted from
         // itself, which would ratchet the value down on every drag.
-        let intensity = lunco_usd_bevy::ambient_fill_intensity(requested, others);
+        let intensity = lunco_usd_bevy_light::light::ambient_fill_intensity(requested, others);
 
-        if lunco_usd_bevy::ambient_fill_saturates(requested, others) {
+        if lunco_usd_bevy_light::light::ambient_fill_saturates(requested, others) {
             warn!(
                 "[scene-commands] ambient {requested} is below the {others} already \
                  contributed by other authored DomeLights; `{fill_path}` clamped to 0 \

@@ -338,7 +338,7 @@ mod authored_sun_tests {
             Transform::from_rotation(authored_rotation),
             GlobalTransform::default(),
             bevy::light::DirectionalLight::default(),
-            lunco_usd_bevy::UsdAuthoredLight,
+            lunco_usd_bevy_light::light::UsdAuthoredLight,
             ChildOf(frame),
         ));
 
@@ -3168,7 +3168,7 @@ fn seed_authored_sun_state(
     q_suns: Query<
         (&GlobalTransform, &bevy::light::DirectionalLight),
         (
-            With<lunco_usd_bevy::UsdAuthoredLight>,
+            With<lunco_usd_bevy_light::light::UsdAuthoredLight>,
             Without<lunco_environment::Earthshine>,
             Without<bevy::camera::visibility::RenderLayers>,
         ),

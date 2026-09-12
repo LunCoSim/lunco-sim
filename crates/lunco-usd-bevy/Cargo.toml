@@ -16,37 +16,22 @@ license.workspace = true
 # pure-Rust (ruzstd) one keeps `cargo test -p lunco-usd-bevy` standalone and
 # wasm-compatible.
 #
-# `hdr` / `ktx2`: the two image codecs a `UsdLuxDomeLight` needs (see `dome.rs`).
-# `hdr` is the Radiance `.hdr` equirect every HDRI library ships; `ktx2` reads a
-# pre-baked cubemap. Both are `bevy_image` codec features (`hdr = image/hdr`,
-# `ktx2 = dep:ktx2`) — NEITHER pulls `bevy_render`, so the render-free contract
-# above still holds. The IBL components themselves (`Skybox`,
-# `GeneratedEnvironmentMapLight`) live in `bevy_light`, already enabled.
 # NO `mesh_picking`: this crate contains no picking code (it builds scene data),
 # and the feature pulls the raycast BACKEND — cursor-driven hit-testing that a
 # `--no-ui` server has no cursor for. A GUI build still gets it, from the crates
 # that actually pick (`lunco-luncosim`, `lunco-luncosim-edit-core`, `luncosim`).
-bevy = { workspace = true, features = ["bevy_gltf", "bevy_mesh", "bevy_light", "zstd_rust", "hdr", "ktx2"] }
+bevy = { workspace = true, features = ["bevy_gltf", "bevy_mesh", "bevy_light", "zstd_rust"] }
 # `Mesh`, `Mesh3d`, `Indices`, `PrimitiveTopology` — render-FREE (depends only on
 # `wgpu-types`). Named directly so mesh building never reaches for
 # `bevy::render::render_resource`, which is a `bevy_render` (wgpu + naga)
 # re-export. See docs/architecture/render-decoupling.md.
 bevy_mesh = { workspace = true }
-# `Extent3d`/`TextureDimension`/`TextureFormat` for the CPU-rasterised diagnostic
-# label `Image`. These are the POD descriptors `bevy_image` itself takes from
-# `wgpu-types`; reaching for them via `bevy::render::render_resource` would pull
-# in wgpu + naga. `wgpu-types` is NOT `wgpu`.
-wgpu-types = "29"
-# `f16` for the `Rgba16Float` dome cubemap (`dome.rs`). Rgba16Float is the
-# widest float format wgpu guarantees is *filterable* — Rgba32Float is not, and
-# a skybox/IBL cubemap must be linearly sampled. Same crate bevy_image itself
-# uses to build its gradient cubemaps.
-half = "2"
 # Numeric geometry is isolated in `lunco-usd-geometry`. Keeping truck/spade out
 # of this manifest means evaluator changes rebuild that package, not this USD
 # stage loader and its runtime projection systems.
 lunco-usd-geometry = { path = "../lunco-usd-geometry" }
 lunco-usd-bevy-lathe = { path = "../lunco-usd-bevy-lathe" }
+lunco-usd-bevy-light = { path = "../lunco-usd-bevy-light" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-camera = { path = "../lunco-usd-bevy-camera" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
@@ -58,10 +43,6 @@ lunco-render = { path = "../lunco-render" }
 lunco-materials = { path = "../lunco-materials" }
 big_space = { workspace = true }
 anyhow = { workspace = true }
-# Asset identity/path canonicalisation for USD binary arcs. The diagnostic
-# package owns failed-asset font loading and placeholder presentation; this
-# visual projector only needs the shared asset resolver.
-lunco-assets = { workspace = true }
 web-time = { workspace = true }
 
 [dev-dependencies]

@@ -724,9 +724,9 @@ fn report_scene_spawn_status(
 /// environment as a valid render.
 fn report_dome_environment_status(
     domes: Query<(
-        &lunco_usd_bevy::dome::UsdDomeEnvironment,
-        Option<&lunco_usd_bevy::dome::DomeCubemap>,
-        Option<&lunco_usd_bevy::dome::DomeProjection>,
+        &lunco_usd_bevy_light::dome::UsdDomeEnvironment,
+        Option<&lunco_usd_bevy_light::dome::DomeCubemap>,
+        Option<&lunco_usd_bevy_light::dome::DomeProjection>,
     )>,
     bus: Option<ResMut<lunco_status_core::status_bus::StatusBus>>,
 ) {

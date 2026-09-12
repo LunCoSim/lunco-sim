@@ -74,7 +74,8 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-usd-bevy-scene`** | Render-free Bevy scene contract shared by visual and domain projections: `UsdPrimPath`, scene/revision lifecycle markers, preview/ancestry ownership, and canonical USD primitive/mesh geometry readers. It depends on the core reader and has no visual adapter or renderer dependency. |
 | **`lunco-usd-bevy-camera`** | Render-free USD camera adapter: standard `UsdGeomCamera` projection intent, mounted/cinematic camera pose, camera-track selection, and the single-authority viewport-camera reconciler. It depends on the core reader and scene contract, not on visual projection. |
 | **`lunco-usd-bevy-lathe`** | Independent parametric NURBS/lathe projection: reflected surface definitions, profile evaluation, and change-detected Bevy mesh regeneration. |
-| **`lunco-usd-bevy`** | Visual Bevy adapter (`UsdBevyPlugin`): projects USD hierarchy, shapes, transforms, materials, and `timeSamples` animation into Bevy entities/components on top of `lunco-usd-bevy-core`. Owns the remaining mesh/curve projection and lighting; installs the independent camera adapter but does not own camera mechanisms. |
+| **`lunco-usd-bevy`** | Visual Bevy adapter (`UsdBevyPlugin`): projects USD hierarchy, shapes, transforms, materials, and `timeSamples` animation into Bevy entities/components on top of `lunco-usd-bevy-core`. Owns the remaining mesh/curve projection and installs the independent camera and light adapters. |
+| **`lunco-usd-bevy-light`** | UsdLux light and textured dome projection: authored light components, ambient-dome semantics, HDRI equirectangular-to-cubemap conversion, and environment-camera binding. It is independent from the visual mesh projector. |
 | **`lunco-usd-bevy-diagnostics`** | Optional visual USD asset-failure and placeholder diagnostics: glTF fallback hiding, load-time replacement stubs, and labeled failure geometry. Installed by `UsdPlugins`; kept separate from the visual projector. |
 | **`lunco-usd-avian`** | Physics bridge (`UsdAvianPlugin`): maps `UsdPhysics` schemas (RigidBody, Colliders, all joint kinds + drive API) to Avian3D — the single home for joint construction. Runtime-only; lint fact production is in `lunco-usd-avian-lint`. |
 | **`lunco-usd-avian-lint`** | Render-free composed `UsdPhysics` fact producer for the authored Rhai lint policy. It reuses Avian's authoritative geometry/joint readers without making the runtime physics crate own lint orchestration. |
@@ -311,14 +312,21 @@ projection and does not depend on the visual adapter.
 **`lunco-usd-bevy`**
 Visual OpenUSD bridge built on `lunco-usd-bevy-core`. It maps USD prim
 hierarchies and visual facts into Bevy entities/components, projects meshes,
-lights, render intent, and authored `timeSamples` animation. It installs the
-camera adapter at the integration boundary; `lunco-render-bevy` supplies the
+render intent, and authored `timeSamples` animation. It installs the camera and
+light adapters at the integration boundary; `lunco-render-bevy` supplies the
 concrete render pipeline. Parametric NURBS/lathe definitions and their mesh
 regeneration live in the independent `lunco-usd-bevy-lathe` package, which this
 crate uses directly rather than re-exporting. See
 [`17-view-and-intent.md §6`](architecture/17-view-and-intent.md).
 Headless consumers import the owning `lunco-usd-bevy-core` modules directly;
 this visual adapter is not a compatibility facade for the headless API.
+
+**`lunco-usd-bevy-light`**
+Production UsdLux adapter for `DistantLight`, `DomeLight`, `SphereLight`, and
+`RectLight`. It owns the authored-light marker, ambient-dome aggregation, and
+the CPU HDRI projection used by skybox/environment-map components. The package
+depends on the composed USD reader and render intent, but not on the visual
+hierarchy/mesh projector, so light-reader changes do not rebuild that package.
 
 **`lunco-usd-bevy-diagnostics`**
 Optional visual USD asset diagnostics installed by `UsdPlugins`. It owns

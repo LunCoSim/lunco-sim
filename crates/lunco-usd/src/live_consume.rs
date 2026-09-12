@@ -575,11 +575,11 @@ mod translate_seat_tests {
 }
 
 /// Re-read every changed `DomeLight` prim and push its authored state back onto
-/// the live entity (`lunco_usd_bevy::dome`). The HDRI, its tint/intensity and
+/// the live entity (`lunco_usd_bevy_light::dome`). The HDRI, its tint/intensity and
 /// the skybox toggle are plain attributes, so only this sees them move.
 pub(crate) fn refresh_domes_live(world: &mut World, id: AssetId<UsdStageAsset>, paths: &[String]) {
-    use lunco_usd_bevy::dome;
     use lunco_usd_bevy_core::canonical::CanonicalStages;
+    use lunco_usd_bevy_light::dome;
     if paths.is_empty() {
         return;
     }
@@ -604,7 +604,7 @@ pub(crate) fn refresh_domes_live(world: &mut World, id: AssetId<UsdStageAsset>, 
     let domes: Vec<(
         String,
         Option<dome::UsdDomeEnvironment>,
-        Option<lunco_usd_bevy::DomeIntensity>,
+        Option<lunco_usd_bevy_light::light::DomeIntensity>,
     )> = {
         let Some(stages) = world.get_non_send::<CanonicalStages>() else {
             return;
@@ -637,7 +637,7 @@ pub(crate) fn refresh_domes_live(world: &mut World, id: AssetId<UsdStageAsset>, 
                 // The fallback if the author dropped the texture: a bare dome is
                 // a scalar ambient, read through the same photometry path as load.
                 let ambient = if env.is_none() {
-                    match lunco_usd_bevy::read_dome_intensity(&view, &sp, quality) {
+                    match lunco_usd_bevy_light::light::read_dome_intensity(&view, &sp, quality) {
                         Ok(intensity) => Some(intensity),
                         Err(_) => {
                             bevy::log::error!(

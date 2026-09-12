@@ -99,9 +99,9 @@ pub struct UsdDomeEnvironment {
 }
 
 fn read_dome_format(
-    reader: &impl crate::UsdRead,
+    reader: &impl lunco_usd_bevy_core::UsdRead,
     path: &openusd::sdf::Path,
-) -> Result<(), crate::LightReadError> {
+) -> Result<(), crate::light::LightReadError> {
     match reader.text(path, ltok::A_TEXTURE_FORMAT).as_deref() {
         Some("latlong") | Some("automatic") => Ok(()),
         Some(format) => {
@@ -110,7 +110,7 @@ fn read_dome_format(
                  the textured dome was not instantiated",
                 path.as_str()
             );
-            Err(crate::LightReadError)
+            Err(crate::light::LightReadError)
         }
         None if !reader.has_authored_attribute(path, ltok::A_TEXTURE_FORMAT) => Ok(()),
         None => {
@@ -118,7 +118,7 @@ fn read_dome_format(
                 "[usd-bevy] {} has authored DomeLight inputs:texture:format with an unsupported type",
                 path.as_str()
             );
-            Err(crate::LightReadError)
+            Err(crate::light::LightReadError)
         }
     }
 }
@@ -239,12 +239,12 @@ fn load_dome_texture(asset_server: &AssetServer, path: &str) -> Handle<Image> {
 /// (`lunco_usd::live_consume`). Two copies would drift, and the symptom would
 /// be a dome that loads one way from disk and another way after an edit.
 pub fn read_dome_environment(
-    reader: &impl crate::UsdRead,
+    reader: &impl lunco_usd_bevy_core::UsdRead,
     sdf_path: &openusd::sdf::Path,
     asset_server: &AssetServer,
-    stage_id: bevy::asset::AssetId<crate::UsdStageAsset>,
+    stage_id: bevy::asset::AssetId<lunco_usd_bevy_core::UsdStageAsset>,
     quality: RenderQualityProfile,
-) -> Result<Option<UsdDomeEnvironment>, crate::LightReadError> {
+) -> Result<Option<UsdDomeEnvironment>, crate::light::LightReadError> {
     let texture_authored = reader.has_authored_attribute(sdf_path, ltok::A_TEXTURE_FILE)
         || !reader
             .connections(sdf_path, ltok::A_TEXTURE_FILE)
@@ -255,11 +255,11 @@ pub fn read_dome_environment(
             "[usd-bevy] {} has authored DomeLight inputs:texture:file with an unsupported type",
             sdf_path.as_str()
         );
-        return Err(crate::LightReadError);
+        return Err(crate::light::LightReadError);
     }
     let texture_path = texture_value
         .filter(|p| !p.is_empty())
-        .map(|p| crate::resolve_stage_asset_path(asset_server, stage_id, &p));
+        .map(|p| lunco_usd_bevy_core::asset::resolve_stage_asset_path(asset_server, stage_id, &p));
     let Some(texture_path) = texture_path else {
         return Ok(None);
     };
@@ -714,7 +714,8 @@ def DomeLight "Dome"
 }
 "#,
         );
-        let stage = crate::canonical::CanonicalStage::from_recipe(&recipe).expect("build dome");
+        let stage = lunco_usd_bevy_core::canonical::CanonicalStage::from_recipe(&recipe)
+            .expect("build dome");
         let path = openusd::sdf::Path::new("/Dome").unwrap();
         assert!(read_dome_format(&stage.view(), &path).is_err());
     }

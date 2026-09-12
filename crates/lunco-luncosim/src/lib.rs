@@ -2016,7 +2016,8 @@ fn resolve_policy_source_file(
         warn!("[policy] sourcePath '{path}' authored but the RhaiSource asset loader is absent");
         return PolicySource::Failed;
     };
-    let asset_id = lunco_usd_bevy::resolve_stage_asset_path(asset_server, stage_id, path);
+    let asset_id =
+        lunco_usd_bevy_core::asset::resolve_stage_asset_path(asset_server, stage_id, path);
     let handle = pending.entry(asset_id.clone()).or_insert_with(|| {
         asset_server.load(bevy::asset::AssetPath::parse(&asset_id).into_owned())
     });
@@ -2104,7 +2105,11 @@ fn project_usd_policies(
         .iter()
         .filter_map(|a| {
             a.source_path.as_deref().map(|path| {
-                lunco_usd_bevy::resolve_stage_asset_path(&asset_server, a.stage_id, path)
+                lunco_usd_bevy_core::asset::resolve_stage_asset_path(
+                    &asset_server,
+                    a.stage_id,
+                    path,
+                )
             })
         })
         .collect();
@@ -3170,7 +3175,7 @@ fn setup_luncosim(world: &mut World) {
     // same USD loader as every other light — so a scene clear despawns it and a
     // scene load recreates it as ordinary scene content. There is no
     // Rust-spawned sun and no restore-on-switch machinery; see
-    // `lunco_usd_bevy::light` for the single light path and the
+    // `lunco_usd_bevy_light::light` for the single light path and the
     // post-load light-existence check that errors if a scene ships without one.
     let grid = lunco_core::ensure_world_root(world);
     // The shell owns topology; the application owns which grid Avian uses.
