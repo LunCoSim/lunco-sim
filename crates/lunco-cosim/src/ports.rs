@@ -14,7 +14,7 @@
 //! - **Avian** rigid bodies + revolute/prismatic joints — foreign components
 //!   exposed by an external spec ([`AvianPort`]/[`AvianGroup`]) rather than
 //!   `#[derive]`. Adding an avian kind is one entry in [`AVIAN`] plus its group
-//!   declaration.
+//!   predicate, identity key, and structural invalidation hook.
 //! - **SysML/hardware** single-value [`Port`]s — one bidirectional scalar each.
 //!
 //! Registration order *is* resolution precedence (first match wins): Modelica,
@@ -56,15 +56,29 @@ pub struct AvianPort {
 /// A group of avian ports gated on a component's presence — one avian kind
 /// (rigid body, revolute joint, prismatic joint, …). Declared in
 /// [`crate::avian`] / [`crate::joint`] and folded into the avian [`PortBackend`]
-/// below. Adding a kind (a raw physics query, a D6 joint, …) is one entry in [`AVIAN`] plus
-/// its group declaration — no new struct, observer, or system.
+/// below. Adding a kind (a raw physics query, a D6 joint, …) is one entry in [`AVIAN`]
+/// plus its group declaration, structural key, and invalidation hook.
 pub struct AvianGroup {
     /// Does `entity` belong to this group (carry the gating component)?
     pub present: fn(&World, Entity) -> bool,
     /// Append every entity that can belong to this group to `out`.
     pub entities: fn(&mut World, &mut Vec<Entity>),
+    /// Return the identity key for the ports emitted by this group on `entity`.
+    ///
+    /// The key is zero when the group is absent and must ignore live samples.
+    /// It must still include structural backing-component presence for ports
+    /// whose `read` callback can return `None`; the backend candidate key is
+    /// what lets the UI rebuild a row when that backing component appears or
+    /// disappears.
+    pub topology_key: fn(&World, Entity) -> u64,
     /// The ports this kind exposes.
     pub ports: &'static [AvianPort],
+    /// Install the lifecycle and structural checks that can change this group.
+    ///
+    /// Keeping this beside the group declaration makes adding a new Avian port
+    /// family an atomic change: its candidate predicate, ports, and invalidation
+    /// owner cannot drift into a separate application-composition list.
+    pub install_topology: fn(&mut App),
 }
 
 /// The avian backend table: every avian kind we expose, in one place.
@@ -86,6 +100,17 @@ pub(crate) const AVIAN: &[AvianGroup] = &[
     crate::joint::PRISMATIC_JOINT_GROUP,
     crate::avian_queries::RAYCAST_GROUP,
 ];
+
+/// Install every Avian group's own topology watcher.
+///
+/// The group table is the authoritative composition point for Avian ports. A
+/// group cannot be added without also providing the lifecycle/structural hook
+/// that keeps the durable UI invalidation generation correct.
+pub(crate) fn register_avian_port_topology(app: &mut App) {
+    for group in AVIAN {
+        (group.install_topology)(app);
+    }
+}
 
 fn avian_list(world: &World, entity: Entity, out: &mut Vec<PortRef>) {
     for group in AVIAN {
@@ -120,11 +145,7 @@ fn avian_entities(world: &mut World, out: &mut Vec<Entity>) {
 
 fn avian_topology_key(world: &World, entity: Entity) -> u64 {
     AVIAN.iter().enumerate().fold(0u64, |key, (index, group)| {
-        if (group.present)(world, entity) {
-            key | (1u64 << index)
-        } else {
-            key
-        }
+        key ^ (group.topology_key)(world, entity).rotate_left((index * 8) as u32)
     })
 }
 
@@ -658,6 +679,32 @@ pub(crate) fn check_connection_structure(
             revision.bump();
         }
     }
+}
+
+/// Install the lifecycle observers owned by the built-in cosimulation port
+/// providers.
+///
+/// Candidate membership is a component-lifecycle fact. In-place declarations
+/// are handled by the two structural checks registered by [`CoSimPlugin`]; the
+/// observers here only cover add/remove transitions. The Avian provider is
+/// composed from [`AvianGroup`] declarations, each of which installs its own
+/// component watchers and any value-to-membership check it requires.
+pub(crate) fn register_builtin_port_topology(app: &mut App) {
+    app.add_observer(lunco_core::ports::bump_port_topology_on_add::<InputPorts>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<InputPorts>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_add::<OutputPorts>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<OutputPorts>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_add::<PortSurface>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<PortSurface>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_add::<Port>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<Port>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_add::<SimComponent>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<SimComponent>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_add::<DeclaredOutputPorts>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<DeclaredOutputPorts>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_add::<crate::SimConnection>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<crate::SimConnection>);
+    register_avian_port_topology(app);
 }
 
 /// Register the cosim engine's builtin port backends into `registry`, in

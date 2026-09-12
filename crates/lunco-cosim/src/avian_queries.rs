@@ -71,6 +71,7 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
                 .iter(world),
         );
     },
+    topology_key: |world, entity| u64::from(world.get::<RaycastObservation>(entity).is_some()),
     ports: &[
         AvianPort {
             name: "ray_distance",
@@ -167,7 +168,13 @@ pub const RAYCAST_GROUP: AvianGroup = AvianGroup {
             write: None,
         },
     ],
+    install_topology: register_raycast_topology,
 };
+
+fn register_raycast_topology(app: &mut App) {
+    app.add_observer(lunco_core::ports::bump_port_topology_on_add::<RaycastObservation>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<RaycastObservation>);
+}
 
 /// Sample every mounted ray after Avian has written back the completed physics
 /// state.  The next co-simulation propagation consumes this observation; there

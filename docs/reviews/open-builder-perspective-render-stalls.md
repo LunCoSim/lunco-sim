@@ -2,9 +2,10 @@
 
 Status: implementation complete in `main`; the original render-transition
 findings remain valid, and the Builder-only port path plus the independent
-physics stall have separate owners and fixes. The latest follow-up replaces
-owner mutation hooks with structural checks for in-place declarations and
-connection rewires.
+physics stall have separate owners and fixes. The latest follow-up keeps
+invalidation at the provider boundary: structural keys now cover Avian backing
+components, value-to-membership transitions, and link-state identity without
+sampling live values.
 
 ## Report evidence
 
@@ -77,14 +78,16 @@ sample into a full candidate/metadata rebuild. View does not mount this panel.
 The proper boundary is a durable `PortTopologyRevision` published by the port
 providers. Lifecycle observers cover component membership; change-filtered
 structural checks compare identity-only fingerprints for in-place control
-surfaces, solver interfaces, shader projections, projected link shapes, and
-connection endpoints. Live values and connection affine transforms do not
-advance it. Mobility is not a live invalidation signal; its add/remove is
-covered only as component membership because that is the structural fact that
-changes candidate admission. The Builder panel rebuilds candidates only when
-that generation changes; stable samples read only live values, wire state, and
-held values. This preserves dynamic physics values and does not suppress or
-fake missing ports.
+surfaces, solver interfaces, shader projections, projected link shapes, Avian
+backing-component availability, value-to-membership transitions, and connection
+endpoints. Live values and connection affine transforms do not advance it.
+Mobility is structural only for the Kinematic position group: Dynamic↔Kinematic
+changes its candidate surface, while Dynamic↔Static does not. Avian groups keep
+their topology key and invalidation hook next to the group predicate, preventing
+the candidate key from remaining unchanged after a backing port disappears. The
+Builder panel rebuilds candidates only when that generation changes; stable
+samples read only live values, wire state, and held values. This preserves
+dynamic physics values and does not suppress or fake missing ports.
 
 The post-discovery capture still measured 34–52 ms in the metadata path. The
 later capture isolated the physics outlier to

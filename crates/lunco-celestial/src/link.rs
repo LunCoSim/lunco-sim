@@ -50,7 +50,6 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use std::collections::{HashMap, HashSet};
-use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use lunco_core::coords::world_pose;
@@ -1029,12 +1028,78 @@ fn authored_peer_classes(world: &World, entity: Entity) -> HashSet<String> {
         .and_then(|node| node.class.as_deref())
         .filter(|class| !class.is_empty())
         .map(sanitize_class);
+    authored_peer_classes_from_catalog(catalog, own_class.as_deref())
+}
+
+fn authored_peer_classes_from_catalog(
+    catalog: &LinkClassCatalog,
+    own_class: Option<&str>,
+) -> HashSet<String> {
     catalog
         .counts
         .iter()
-        .filter(|(class, count)| own_class.as_deref() != Some(class.as_str()) || **count > 1)
+        .filter(|(class, count)| own_class != Some(class.as_str()) || **count > 1)
         .map(|(class, _)| class.clone())
         .collect()
+}
+
+/// Return the identity key for the dynamic part of a link's port surface.
+///
+/// Range, verdict, light time, and coordinates are samples. The only `LinkState`
+/// facts that affect port identity are the peer class and whether elevation is
+/// available. Sorting the generated names makes this key independent of the
+/// iteration order of the temporary `HashMap` returned by `best_per_class`.
+fn link_state_topology_key_with_authored_classes(
+    state: &LinkState,
+    authored_classes: &HashSet<String>,
+) -> u64 {
+    let rows = link_port_rows_from_state(Some(state), authored_classes);
+    lunco_core::ports::port_name_set_key(rows.iter().map(|(name, _)| name))
+}
+
+/// Return the identity of the exact names emitted for one link entity.
+///
+/// Before the first geometry sample, authored peer classes still publish their
+/// range/connected declarations. A live state can therefore be only a partial
+/// description of the surface. Keep this union in the backend key so a state
+/// transition cannot leave an authored fallback row stale in the Builder.
+fn link_port_topology_key(world: &World, entity: Entity) -> u64 {
+    let authored_classes = authored_peer_classes(world, entity);
+    let rows = link_port_rows_from_state(world.get::<LinkState>(entity), &authored_classes);
+    lunco_core::ports::port_name_set_key(rows.iter().map(|(name, _)| name))
+}
+
+/// Build the exact names and values exposed for one link entity.
+///
+/// Keeping the fallback declaration and the live reduction in one helper makes
+/// the list callback and its structural key observe the same port contract.
+fn link_port_rows(world: &World, entity: Entity) -> Vec<(String, f64)> {
+    let authored_classes = authored_peer_classes(world, entity);
+    link_port_rows_from_state(world.get::<LinkState>(entity), &authored_classes)
+}
+
+fn link_port_rows_from_state(
+    state: Option<&LinkState>,
+    authored_classes: &HashSet<String>,
+) -> Vec<(String, f64)> {
+    let live = state.map(best_per_class);
+    let mut classes = authored_classes.clone();
+    if let Some(live) = &live {
+        classes.extend(live.keys().cloned());
+    }
+
+    let mut rows = Vec::new();
+    for class in classes {
+        if let Some(peer) = live.as_ref().and_then(|peers| peers.get(&class)) {
+            for (suffix, value) in class_ports(peer) {
+                rows.push((format!("link_{class}_{suffix}"), value));
+            }
+        } else {
+            rows.push((format!("link_{class}_range_m"), 0.0));
+            rows.push((format!("link_{class}_connected"), 0.0));
+        }
+    }
+    rows
 }
 
 /// Return the identity key for the link backend without sampling geometry.
@@ -1045,17 +1110,37 @@ fn link_topology_key(world: &World, entity: Entity) -> u64 {
         .get_resource::<LinkClassCatalog>()
         .map(|catalog| catalog.revision)
         .unwrap_or(0);
-    if let Some(state) = world.get::<LinkState>(entity) {
-        let mut state_key = 0xcbf29ce484222325u64;
-        for (class, peer) in best_per_class(state) {
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            sanitize_class(&class).hash(&mut hasher);
-            peer.elevation_deg.is_some().hash(&mut hasher);
-            state_key = state_key.wrapping_add(hasher.finish().rotate_left(19));
-        }
-        key ^= state_key.rotate_left(29);
-    }
+    key ^= link_port_topology_key(world, entity).rotate_left(29);
     key
+}
+
+/// Publish link-port invalidation only when a changed `LinkState` changes its
+/// identity surface. The solver updates this component with live geometry at
+/// its configured cadence; those writes must remain on the value-refresh path.
+pub(crate) fn check_link_state_structure(
+    changed: Query<(Entity, &LinkState, Option<&LinkNode>), Changed<LinkState>>,
+    catalog: Option<Res<LinkClassCatalog>>,
+    mut state: ResMut<lunco_core::ports::PortTopologyState>,
+    mut revision: ResMut<lunco_core::PortTopologyRevision>,
+) {
+    for (entity, link_state, node) in &changed {
+        let authored_classes = catalog
+            .as_deref()
+            .map(|catalog| {
+                let own_class = node
+                    .and_then(|node| node.class.as_deref())
+                    .filter(|class| !class.is_empty())
+                    .map(sanitize_class);
+                authored_peer_classes_from_catalog(catalog, own_class.as_deref())
+            })
+            .unwrap_or_default();
+        if state.changed::<LinkState>(
+            entity,
+            link_state_topology_key_with_authored_classes(link_state, &authored_classes),
+        ) {
+            revision.bump();
+        }
+    }
 }
 
 /// Link state as first-class **ports**, read on demand.
@@ -1091,33 +1176,12 @@ pub const LINK_PORT_BACKEND: lunco_core::ports::PortBackend = lunco_core::ports:
     },
     topology_key: link_topology_key,
     list: |world, entity, out| {
-        let state = world.get::<LinkState>(entity);
-        let live = state.map(best_per_class);
-        let mut classes = authored_peer_classes(world, entity);
-        if let Some(live) = &live {
-            classes.extend(live.keys().cloned());
-        }
-        for class in classes {
-            if let Some(peer) = live.as_ref().and_then(|peers| peers.get(&class)) {
-                for (suffix, value) in class_ports(peer) {
-                    out.push(lunco_core::ports::PortRef {
-                        name: format!("link_{class}_{suffix}"),
-                        direction: lunco_core::ports::PortDirection::Out,
-                        value,
-                    });
-                }
-            } else {
-                // The class is declared, but the first sweep has not produced a
-                // sample. Identity is valid now; the value is intentionally just
-                // an introspection placeholder and is never read as a sample.
-                for suffix in ["range_m", "connected"] {
-                    out.push(lunco_core::ports::PortRef {
-                        name: format!("link_{class}_{suffix}"),
-                        direction: lunco_core::ports::PortDirection::Out,
-                        value: 0.0,
-                    });
-                }
-            }
+        for (name, value) in link_port_rows(world, entity) {
+            out.push(lunco_core::ports::PortRef {
+                name,
+                direction: lunco_core::ports::PortDirection::Out,
+                value,
+            });
         }
     },
     metadata: Some(|_world, _entity, name, direction| {
@@ -1350,6 +1414,114 @@ mod tests {
         let catalog = app.world().resource::<LinkClassCatalog>();
         assert_eq!(catalog.counts.get("rover"), Some(&1));
         assert!(!catalog.counts.contains_key("base"));
+    }
+
+    #[test]
+    fn link_state_topology_ignores_samples_and_hash_map_iteration_order() {
+        let mut first = LinkState {
+            peers: vec![
+                peer(1, "earth", true, 100.0, 10.0),
+                peer(2, "relay", true, 200.0, 20.0),
+            ],
+        };
+        let second = LinkState {
+            peers: vec![
+                peer(2, "relay", true, 900.0, 20.0),
+                peer(1, "earth", true, 700.0, 10.0),
+            ],
+        };
+        assert_eq!(
+            link_state_topology_key_with_authored_classes(&first, &HashSet::new()),
+            link_state_topology_key_with_authored_classes(&second, &HashSet::new()),
+            "live ranges must not affect the identity key"
+        );
+
+        let mut app = App::new();
+        app.init_resource::<lunco_core::ports::PortTopologyState>();
+        app.init_resource::<lunco_core::PortTopologyRevision>();
+        app.add_systems(Update, check_link_state_structure);
+        let entity = app.world_mut().spawn(first.clone()).id();
+        app.update();
+        let seeded = app.world().resource::<lunco_core::PortTopologyRevision>().0;
+
+        first.peers[0].range_m = 500.0;
+        *app.world_mut().get_mut::<LinkState>(entity).unwrap() = first;
+        app.update();
+        assert_eq!(
+            app.world().resource::<lunco_core::PortTopologyRevision>().0,
+            seeded,
+            "live geometry changes must remain on the value-refresh path"
+        );
+
+        app.world_mut().get_mut::<LinkState>(entity).unwrap().peers[0].elevation_deg = None;
+        app.update();
+        assert_ne!(
+            app.world().resource::<lunco_core::PortTopologyRevision>().0,
+            seeded,
+            "a change in optional port presence must invalidate the projection"
+        );
+    }
+
+    #[test]
+    fn link_state_topology_respects_authored_fallback_rows() {
+        let mut catalog = LinkClassCatalog::default();
+        catalog.counts.insert("earth".into(), 1);
+        catalog.counts.insert("relay".into(), 1);
+
+        let mut relay = peer(2, "relay", false, 200.0, 20.0);
+        relay.elevation_deg = None;
+        let mut app = App::new();
+        app.insert_resource(catalog);
+        app.init_resource::<lunco_core::ports::PortTopologyState>();
+        app.init_resource::<lunco_core::PortTopologyRevision>();
+        app.add_systems(Update, check_link_state_structure);
+        let entity = app
+            .world_mut()
+            .spawn((
+                LinkNode {
+                    class: Some("earth".into()),
+                    ..default()
+                },
+                LinkState {
+                    peers: vec![peer(1, "earth", true, 100.0, 10.0)],
+                },
+            ))
+            .id();
+        app.update();
+        let seeded = app.world().resource::<lunco_core::PortTopologyRevision>().0;
+
+        // The authored catalog already declares relay's range/connected rows;
+        // receiving that live sample must not invalidate the same surface.
+        relay.elevation_deg = None;
+        app.world_mut()
+            .get_mut::<LinkState>(entity)
+            .unwrap()
+            .peers
+            .push(relay.clone());
+        app.update();
+        assert_eq!(
+            app.world().resource::<lunco_core::PortTopologyRevision>().0,
+            seeded,
+            "a live class that only fills an authored fallback must not rebuild"
+        );
+
+        relay.elevation_deg = Some(20.0);
+        app.world_mut()
+            .get_mut::<LinkState>(entity)
+            .unwrap()
+            .peers
+            .retain(|peer| peer.class.as_deref() != Some("relay"));
+        app.world_mut()
+            .get_mut::<LinkState>(entity)
+            .unwrap()
+            .peers
+            .push(relay);
+        app.update();
+        assert_ne!(
+            app.world().resource::<lunco_core::PortTopologyRevision>().0,
+            seeded,
+            "a live optional elevation row must invalidate the projection"
+        );
     }
 
     /// A peer whose node authored no class has no port name, and must not be

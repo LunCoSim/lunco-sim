@@ -37,11 +37,6 @@
 //! });
 //! ```
 
-use avian3d::prelude::{
-    AngularVelocity, Collider, ColliderMassProperties, ComputedAngularInertia,
-    ComputedCenterOfMass, ComputedMass, LinearVelocity, Position, PrismaticJoint, RevoluteJoint,
-    RigidBody, Rotation,
-};
 use bevy::prelude::*;
 
 pub mod avian;
@@ -228,102 +223,6 @@ impl Plugin for CoSimPlugin {
         app.add_systems(FixedFirst, connection::clear_control_write_fence);
         app.add_systems(lunco_core::SceneTeardown, reset_scene_state);
         app.add_observer(binding::on_add_connection)
-            // Port candidate membership is an owner-level topology fact. These
-            // observers advance the durable invalidation generation; the UI
-            // never has to enumerate all backends merely to discover that a
-            // component was added or removed.
-            .add_observer(lunco_core::ports::bump_port_topology_on_add::<
-                lunco_core::InputPorts,
-            >)
-            .add_observer(lunco_core::ports::bump_port_topology_on_remove::<
-                lunco_core::InputPorts,
-            >)
-            .add_observer(lunco_core::ports::bump_port_topology_on_add::<
-                lunco_core::OutputPorts,
-            >)
-            .add_observer(lunco_core::ports::bump_port_topology_on_remove::<
-                lunco_core::OutputPorts,
-            >)
-            .add_observer(lunco_core::ports::bump_port_topology_on_add::<
-                lunco_core::PortSurface,
-            >)
-            .add_observer(lunco_core::ports::bump_port_topology_on_remove::<
-                lunco_core::PortSurface,
-            >)
-            .add_observer(lunco_core::ports::bump_port_topology_on_add::<lunco_core::Port>)
-            .add_observer(lunco_core::ports::bump_port_topology_on_remove::<lunco_core::Port>)
-            .add_observer(lunco_core::ports::bump_port_topology_on_add::<SimComponent>)
-            .add_observer(lunco_core::ports::bump_port_topology_on_remove::<SimComponent>)
-            .add_observer(
-                lunco_core::ports::bump_port_topology_on_add::<DeclaredOutputPorts>,
-            )
-            .add_observer(
-                lunco_core::ports::bump_port_topology_on_remove::<DeclaredOutputPorts>,
-            )
-            .add_observer(lunco_core::ports::bump_port_topology_on_add::<SimConnection>)
-            .add_observer(lunco_core::ports::bump_port_topology_on_remove::<SimConnection>)
-            .add_observer(lunco_core::ports::bump_port_topology_on_add::<lunco_core::Mobility>)
-            .add_observer(
-                lunco_core::ports::bump_port_topology_on_remove::<lunco_core::Mobility>,
-            )
-            .add_observer(lunco_core::ports::bump_port_topology_on_add::<RigidBody>)
-            .add_observer(lunco_core::ports::bump_port_topology_on_remove::<RigidBody>)
-            .add_observer(lunco_core::ports::bump_port_topology_on_add::<Position>)
-            .add_observer(lunco_core::ports::bump_port_topology_on_remove::<Position>)
-            .add_observer(lunco_core::ports::bump_port_topology_on_add::<LinearVelocity>)
-            .add_observer(lunco_core::ports::bump_port_topology_on_remove::<LinearVelocity>)
-            .add_observer(lunco_core::ports::bump_port_topology_on_add::<Rotation>)
-            .add_observer(lunco_core::ports::bump_port_topology_on_remove::<Rotation>)
-            .add_observer(lunco_core::ports::bump_port_topology_on_add::<AngularVelocity>)
-            .add_observer(lunco_core::ports::bump_port_topology_on_remove::<AngularVelocity>)
-            .add_observer(
-                lunco_core::ports::bump_port_topology_on_add::<SolvedLinearAcceleration>,
-            )
-            .add_observer(
-                lunco_core::ports::bump_port_topology_on_remove::<SolvedLinearAcceleration>,
-            )
-            .add_observer(lunco_core::ports::bump_port_topology_on_add::<Collider>)
-            .add_observer(lunco_core::ports::bump_port_topology_on_remove::<Collider>)
-            .add_observer(
-                lunco_core::ports::bump_port_topology_on_add::<ColliderMassProperties>,
-            )
-            .add_observer(
-                lunco_core::ports::bump_port_topology_on_remove::<ColliderMassProperties>,
-            )
-            .add_observer(lunco_core::ports::bump_port_topology_on_add::<ComputedMass>)
-            .add_observer(lunco_core::ports::bump_port_topology_on_remove::<ComputedMass>)
-            .add_observer(
-                lunco_core::ports::bump_port_topology_on_add::<ComputedAngularInertia>,
-            )
-            .add_observer(
-                lunco_core::ports::bump_port_topology_on_remove::<ComputedAngularInertia>,
-            )
-            .add_observer(
-                lunco_core::ports::bump_port_topology_on_add::<ComputedCenterOfMass>,
-            )
-            .add_observer(
-                lunco_core::ports::bump_port_topology_on_remove::<ComputedCenterOfMass>,
-            )
-            .add_observer(
-                lunco_core::ports::bump_port_topology_on_add::<lunco_core::PhysicsStateReady>,
-            )
-            .add_observer(
-                lunco_core::ports::bump_port_topology_on_remove::<lunco_core::PhysicsStateReady>,
-            )
-            .add_observer(lunco_core::ports::bump_port_topology_on_add::<ForceActuator>)
-            .add_observer(lunco_core::ports::bump_port_topology_on_remove::<ForceActuator>)
-            .add_observer(lunco_core::ports::bump_port_topology_on_add::<TorqueActuator>)
-            .add_observer(lunco_core::ports::bump_port_topology_on_remove::<TorqueActuator>)
-            .add_observer(
-                lunco_core::ports::bump_port_topology_on_add::<avian_queries::RaycastObservation>,
-            )
-            .add_observer(
-                lunco_core::ports::bump_port_topology_on_remove::<avian_queries::RaycastObservation>,
-            )
-            .add_observer(lunco_core::ports::bump_port_topology_on_add::<RevoluteJoint>)
-            .add_observer(lunco_core::ports::bump_port_topology_on_remove::<RevoluteJoint>)
-            .add_observer(lunco_core::ports::bump_port_topology_on_add::<PrismaticJoint>)
-            .add_observer(lunco_core::ports::bump_port_topology_on_remove::<PrismaticJoint>)
             // Co-sim retains every `SimComponent` output itself, with source
             // metadata. Mark it at lifecycle time so generic port telemetry does
             // not create a second, ungrouped history for the same values.
@@ -348,6 +247,11 @@ impl Plugin for CoSimPlugin {
             .add_observer(mark_causal_state_sink::<ForceActuator>)
             .add_observer(mark_causal_state_sink::<TorqueActuator>)
             .add_observer(mark_joint_torque_port);
+        // Every built-in port owner installs its lifecycle hooks in the backend
+        // module. Avian groups additionally carry their hooks beside their
+        // predicates and port definitions, so adding a group cannot silently
+        // omit invalidation.
+        ports::register_builtin_port_topology(app);
         app.add_systems(
             Update,
             sync_model_endpoint_lifecycle
@@ -587,6 +491,122 @@ mod binding_lifecycle_tests {
         app.world_mut().despawn(entity);
         let after_remove = app.world().resource::<lunco_core::PortTopologyRevision>().0;
         assert_ne!(after_remove, after_shape_change);
+    }
+
+    #[test]
+    fn port_topology_revision_tracks_value_to_membership_mobility_changes() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_plugins(CoSimPlugin);
+
+        let entity = app
+            .world_mut()
+            .spawn((
+                lunco_core::Mobility::Dynamic,
+                avian3d::prelude::Position::default(),
+            ))
+            .id();
+        app.update();
+        let before_transition = app.world().resource::<lunco_core::PortTopologyRevision>().0;
+        let registry = app
+            .world()
+            .resource::<lunco_core::ports::PortRegistry>()
+            .clone();
+        assert!(registry
+            .entity_ports(app.world(), entity)
+            .iter()
+            .all(|port| port.name != "position_x" || port.direction != PortDirection::In));
+
+        *app.world_mut()
+            .get_mut::<lunco_core::Mobility>(entity)
+            .unwrap() = lunco_core::Mobility::Kinematic;
+        app.update();
+
+        let after_transition = app.world().resource::<lunco_core::PortTopologyRevision>().0;
+        assert_ne!(after_transition, before_transition);
+        assert!(registry
+            .entity_ports(app.world(), entity)
+            .iter()
+            .any(|port| { port.name == "position_x" && port.direction == PortDirection::In }));
+    }
+
+    #[test]
+    fn avian_topology_key_tracks_optional_backing_components_without_sampling_values() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_plugins(CoSimPlugin);
+
+        let entity = app
+            .world_mut()
+            .spawn((
+                avian3d::prelude::RigidBody::Dynamic,
+                avian3d::prelude::Position::default(),
+            ))
+            .id();
+        app.update();
+        let registry = app
+            .world()
+            .resource::<lunco_core::ports::PortRegistry>()
+            .clone();
+        let before_remove = app.world().resource::<lunco_core::PortTopologyRevision>().0;
+        let initial_key = registry.entity_port_topology_key(app.world(), entity);
+        assert!(registry
+            .entity_ports(app.world(), entity)
+            .iter()
+            .any(|port| port.name == "position_x"));
+
+        app.world_mut()
+            .entity_mut(entity)
+            .remove::<avian3d::prelude::Position>();
+        app.update();
+        let after_remove = app.world().resource::<lunco_core::PortTopologyRevision>().0;
+        assert_ne!(after_remove, before_remove);
+        assert_ne!(
+            registry.entity_port_topology_key(app.world(), entity),
+            initial_key,
+            "a backing-component removal must change the cached candidate key"
+        );
+        assert!(!registry
+            .entity_ports(app.world(), entity)
+            .iter()
+            .any(|port| port.name == "position_x"));
+
+        app.world_mut()
+            .entity_mut(entity)
+            .insert(avian3d::prelude::Position::default());
+        app.update();
+        let after_position = app.world().resource::<lunco_core::PortTopologyRevision>().0;
+        assert_ne!(after_position, after_remove);
+        assert_eq!(
+            registry.entity_port_topology_key(app.world(), entity),
+            initial_key,
+            "restoring the same structural surface must restore the same key"
+        );
+        assert!(registry
+            .entity_ports(app.world(), entity)
+            .iter()
+            .any(|port| port.name == "position_x"));
+
+        app.world_mut()
+            .get_mut::<avian3d::prelude::Position>(entity)
+            .unwrap()
+            .0
+            .x = 10.0;
+        app.update();
+        assert_eq!(
+            app.world().resource::<lunco_core::PortTopologyRevision>().0,
+            after_position,
+            "live Avian samples must not invalidate the declared surface"
+        );
+
+        app.world_mut()
+            .entity_mut(entity)
+            .remove::<avian3d::prelude::Position>();
+        app.update();
+        let after_second_remove = app.world().resource::<lunco_core::PortTopologyRevision>().0;
+        assert_ne!(after_second_remove, after_position);
+        assert!(!registry
+            .entity_ports(app.world(), entity)
+            .iter()
+            .any(|port| port.name == "position_x"));
     }
 
     #[test]

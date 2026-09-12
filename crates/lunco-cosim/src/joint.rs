@@ -53,6 +53,7 @@ use avian3d::prelude::{
 };
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
+use std::collections::HashSet;
 
 use crate::connection::PortDirection;
 use crate::ports::{AvianGroup, AvianPort};
@@ -115,6 +116,7 @@ pub const REVOLUTE_JOINT_GROUP: AvianGroup = AvianGroup {
                 .iter(world),
         );
     },
+    topology_key: revolute_joint_topology_key,
     ports: &[
         AvianPort {
             name: JOINT_ANGLE_PORT,
@@ -129,7 +131,41 @@ pub const REVOLUTE_JOINT_GROUP: AvianGroup = AvianGroup {
             write: Some(write_motor_angle),
         },
     ],
+    install_topology: register_revolute_joint_topology,
 };
+
+fn register_revolute_joint_topology(app: &mut App) {
+    app.add_observer(lunco_core::ports::bump_port_topology_on_add::<RevoluteJoint>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<RevoluteJoint>)
+        .add_systems(PostUpdate, check_revolute_joint_structure);
+}
+
+fn revolute_joint_topology_key(world: &World, entity: Entity) -> u64 {
+    let Some(joint) = world.get::<RevoluteJoint>(entity) else {
+        return 0;
+    };
+    let measured = world.get::<Rotation>(joint.body1).is_some()
+        && world.get::<Rotation>(joint.body2).is_some()
+        && joint.local_hinge_axis1().is_some();
+    1 | (u64::from(measured) << 1)
+}
+
+fn check_revolute_joint_structure(
+    changed: Query<(Entity, &RevoluteJoint), Changed<RevoluteJoint>>,
+    rotations: Query<(), With<Rotation>>,
+    mut state: ResMut<lunco_core::ports::PortTopologyState>,
+    mut revision: ResMut<lunco_core::PortTopologyRevision>,
+) {
+    for (entity, joint) in &changed {
+        let measured = rotations.get(joint.body1).is_ok()
+            && rotations.get(joint.body2).is_ok()
+            && joint.local_hinge_axis1().is_some();
+        let key = 1 | (u64::from(measured) << 1);
+        if state.changed::<RevoluteJoint>(entity, key) {
+            revision.bump();
+        }
+    }
+}
 
 /// Measured angle (`Out`): the twist of `body2`'s orientation relative to
 /// `body1` about the hinge axis. Reads avian's authoritative [`Rotation`]
@@ -195,6 +231,7 @@ pub const PRISMATIC_JOINT_GROUP: AvianGroup = AvianGroup {
                 .iter(world),
         );
     },
+    topology_key: prismatic_joint_topology_key,
     ports: &[
         AvianPort {
             name: JOINT_DISPLACEMENT_PORT,
@@ -211,7 +248,85 @@ pub const PRISMATIC_JOINT_GROUP: AvianGroup = AvianGroup {
         PRISMATIC_STATE_PORTS[1],
         PRISMATIC_STATE_PORTS[2],
     ],
+    install_topology: register_prismatic_joint_topology,
 };
+
+fn register_prismatic_joint_topology(app: &mut App) {
+    app.add_observer(lunco_core::ports::bump_port_topology_on_add::<PrismaticJoint>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<PrismaticJoint>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_add::<Mass>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<Mass>)
+        .add_systems(PostUpdate, check_prismatic_joint_structure);
+}
+
+fn prismatic_joint_topology_key(world: &World, entity: Entity) -> u64 {
+    let Some(joint) = world.get::<PrismaticJoint>(entity) else {
+        return 0;
+    };
+    let displacement = world.get::<Position>(joint.body1).is_some()
+        && world.get::<Position>(joint.body2).is_some()
+        && world.get::<Rotation>(joint.body1).is_some()
+        && world.get::<Rotation>(joint.body2).is_some();
+    let velocity = world.get::<Rotation>(joint.body1).is_some();
+    let force = joint.motor.enabled
+        && displacement
+        && world.get::<Mass>(joint.body2).is_some_and(|mass| {
+            lunco_physics::motor_model_force_coefficients(joint.motor.motor_model, mass.0 as f64)
+                .is_some()
+        });
+    1 | (u64::from(displacement) << 1) | (u64::from(velocity) << 2) | (u64::from(force) << 3)
+}
+
+fn check_prismatic_joint_structure(
+    changed_joints: Query<(Entity, &PrismaticJoint), Changed<PrismaticJoint>>,
+    changed_masses: Query<Entity, Changed<Mass>>,
+    joints: Query<(Entity, &PrismaticJoint)>,
+    rotations: Query<(), With<Rotation>>,
+    positions: Query<(), With<Position>>,
+    masses: Query<&Mass>,
+    mut state: ResMut<lunco_core::ports::PortTopologyState>,
+    mut revision: ResMut<lunco_core::PortTopologyRevision>,
+) {
+    let changed_mass_entities: HashSet<_> = changed_masses.iter().collect();
+    for (entity, joint) in changed_joints.iter() {
+        let key = prismatic_joint_topology_key_from_queries(joint, &rotations, &positions, &masses);
+        if state.changed::<PrismaticJoint>(entity, key) {
+            revision.bump();
+        }
+    }
+    if changed_mass_entities.is_empty() {
+        return;
+    }
+    for (entity, joint) in &joints {
+        if !changed_mass_entities.contains(&joint.body2) {
+            continue;
+        }
+        let key = prismatic_joint_topology_key_from_queries(joint, &rotations, &positions, &masses);
+        if state.changed::<PrismaticJoint>(entity, key) {
+            revision.bump();
+        }
+    }
+}
+
+fn prismatic_joint_topology_key_from_queries(
+    joint: &PrismaticJoint,
+    rotations: &Query<(), With<Rotation>>,
+    positions: &Query<(), With<Position>>,
+    masses: &Query<&Mass>,
+) -> u64 {
+    let displacement = positions.get(joint.body1).is_ok()
+        && positions.get(joint.body2).is_ok()
+        && rotations.get(joint.body1).is_ok()
+        && rotations.get(joint.body2).is_ok();
+    let velocity = rotations.get(joint.body1).is_ok();
+    let force = joint.motor.enabled
+        && displacement
+        && masses.get(joint.body2).is_ok_and(|mass| {
+            lunco_physics::motor_model_force_coefficients(joint.motor.motor_model, mass.0 as f64)
+                .is_some()
+        });
+    1 | (u64::from(displacement) << 1) | (u64::from(velocity) << 2) | (u64::from(force) << 3)
+}
 
 /// Measured displacement (`Out`): the signed offset (m) of `body2` relative to
 /// `body1` along the slider axis, projecting both anchors' world positions onto

@@ -209,8 +209,10 @@ The same ownership rule applies to the measured presentation paths:
   shared `PortTopologyRevision` is the durable invalidation contract. Lifecycle
   observers publish component membership changes, while change-filtered owner
   checks compare identity-only structural fingerprints for in-place port-map,
-  projected-surface, and connection-endpoint edits. Live value updates leave
-  the generation unchanged. The panel compares that generation and calls
+  projected-surface, connection-endpoint, and value-to-membership edits. Avian
+  groups declare their topology key and invalidation hook beside their membership
+  predicate, so a new group cannot be added without its structural owner. Live
+  value updates leave the generation unchanged. The panel compares that generation and calls
   `port_entities_with_topology_keys` only after an owner invalidation; it does
   not use the broad `UsdStageRevision` or global entity count as a topology
   signal. Each backend also supplies an identity-only `topology_key` for the
