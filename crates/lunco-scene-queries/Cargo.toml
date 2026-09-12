@@ -1,0 +1,30 @@
+[package]
+name = "lunco-scene-queries"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Shared read-only scene and composed-USD query providers"
+
+[dependencies]
+# Queries are a production API surface shared by Rhai, HTTP, MCP, and headless
+# hosts. Keep them independent from the much larger scene command handlers so
+# read-side changes do not rebuild the mutation layer.
+avian3d = { workspace = true }
+bevy = { workspace = true, features = ["bevy_asset"] }
+lunco-api = { path = "../lunco-api" }
+lunco-core = { path = "../lunco-core" }
+lunco-doc = { path = "../lunco-doc" }
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
+lunco-physics = { path = "../lunco-physics" }
+lunco-scene-catalog = { path = "../lunco-scene-catalog" }
+lunco-usd = { path = "../lunco-usd", default-features = false }
+lunco-usd-avian = { path = "../lunco-usd-avian" }
+lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
+lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
+lunco-usd-core = { path = "../lunco-usd-core" }
+openusd = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

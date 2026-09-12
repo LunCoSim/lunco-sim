@@ -15,6 +15,8 @@
 //!   [`commands::SpawnCommandPlugin`], the one plugin a headless server adds.
 //! - `lunco-scene-catalog` — the spawn and source catalogs, asynchronous asset
 //!   discovery, and the generic USD spawn constructor.
+//! - `lunco-scene-queries` — shared read-only entity and composed-USD query
+//!   providers for Rhai, HTTP, MCP, and headless hosts.
 //! - [`shader_doc`] — shaders as a journaled, live-editable document domain.
 //! - [`doc_resolve`] — which document backs this entity, and where its look lives.
 //!
@@ -40,9 +42,6 @@ pub mod commands;
 /// lived in the panel, which is what broke the `--no-ui` server build (`commands`
 /// reached into `crate::ui` for it).
 pub mod doc_resolve;
-/// `QueryEntity` — the READ side of the scene verbs, reporting the same semantic
-/// active physics frame [`commands::TransformEntity`] accepts.
-pub mod entity_query;
 /// Shaders as a journaled, synced, live-editable domain (WGSL twin of rhai's
 /// `ScriptDocument`) — edits record to the Twin journal (`DomainKind::Shader`).
 pub mod shader_doc;
@@ -51,9 +50,6 @@ pub mod shader_doc;
 /// the execution domain.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod test_discovery;
-/// `QueryUsdPrim` — the AUTHORED read: composed USD attributes off the live
-/// stage, for asset invariants that scripts (not just Rust) can check.
-pub mod usd_prim_query;
 
 use bevy::prelude::*;
 

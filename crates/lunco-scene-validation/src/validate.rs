@@ -31,7 +31,7 @@
 //! - `.rhai` — `rhai::Engine::compile` only; nothing is executed.
 //!
 //! Registered as [`ApiQueryProvider`]s (they return data, like
-//! [`crate::usd_prim_query`]), so one implementation answers rhai `query()`,
+//! `lunco_scene_queries::usd_prim_query`), so one implementation answers rhai `query()`,
 //! Python, raw HTTP and MCP:
 //! `{"type":"ExecuteCommand","command":"ValidateAsset","params":{"path":"lunco://models/X.mo"}}`.
 

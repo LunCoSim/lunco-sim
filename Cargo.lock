@@ -7896,6 +7896,7 @@ dependencies = [
  "lunco-physics",
  "lunco-render",
  "lunco-scene-catalog",
+ "lunco-scene-queries",
  "lunco-signal",
  "lunco-storage",
  "lunco-twin-journal",
@@ -7911,6 +7912,28 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "lunco-scene-queries"
+version = "0.1.0"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "lunco-api",
+ "lunco-core",
+ "lunco-doc",
+ "lunco-doc-bevy",
+ "lunco-physics",
+ "lunco-scene-catalog",
+ "lunco-usd",
+ "lunco-usd-avian",
+ "lunco-usd-bevy",
+ "lunco-usd-bevy-core",
+ "lunco-usd-bevy-scene",
+ "lunco-usd-core",
+ "openusd",
+ "serde_json",
 ]
 
 [[package]]

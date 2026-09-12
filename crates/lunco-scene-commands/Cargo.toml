@@ -31,22 +31,18 @@ lunco-doc = { path = "../lunco-doc" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-twin-journal = { path = "../lunco-twin-journal" }
 serde = { workspace = true }
-# `QueryEntity`'s response payload (entity_query.rs).
-serde_json = { workspace = true }
 lunco-api = { path = "../lunco-api" }
 lunco-scene-catalog = { path = "../lunco-scene-catalog" }
+lunco-scene-queries = { path = "../lunco-scene-queries" }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-usd = { path = "../lunco-usd", default-features = false }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-core = { path = "../lunco-usd-core" }
-# `QueryUsdPrim` addresses prims by `sdf::Path`, so the read side needs the same
-# path type the stage is keyed on — no conversion layer in between.
 openusd = { workspace = true }
 # Active-document resolution for C4b runtime-layer persistence (ECS-only, no UI).
 lunco-workspace = { path = "../lunco-workspace" }
-lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-hooks-rhai = { path = "../lunco-hooks-rhai" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-materials = { path = "../lunco-materials" }

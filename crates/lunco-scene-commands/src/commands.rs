@@ -3407,12 +3407,9 @@ impl Plugin for SpawnCommandPlugin {
         // verb is available consistently through the HTTP API, Rhai, and
         // `discover_schema`.
         register_all_commands(app);
-        // The READ verb for the same entities. Registered here so any binary with
-        // the scene verbs answers `QueryEntity` too — the headless server included.
-        crate::entity_query::register(app);
-        // The AUTHORED read beside the spawned one: composed USD attributes, so
-        // asset invariants are checkable from rhai/Python/HTTP and not just Rust.
-        crate::usd_prim_query::register(app);
+        // The read-only scene surface is a separate production package, so query
+        // changes do not rebuild this much larger mutation layer.
+        app.add_plugins(lunco_scene_queries::SceneQueryPlugin);
         // Selection → telemetry focus, so every host that has the scene verbs has
         // scoped telemetry (the sandbox, the workbench, a headless server driven
         // by `SelectEntity`). Render-free: `lunco-signal` is a ring buffer of
