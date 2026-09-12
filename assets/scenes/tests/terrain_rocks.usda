@@ -101,6 +101,7 @@ def Xform "TerrainRocksTest" (
             {
                 uniform asset info:wgsl:sourceAsset = @lunco://shaders/terrain_layered.wgsl@
                 uniform asset info:wgsl:vertexAsset = @lunco://shaders/terrain_geomorph.wgsl@
+                token outputs:surface
             }
         }
     }
