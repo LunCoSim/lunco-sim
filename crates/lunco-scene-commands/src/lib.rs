@@ -11,14 +11,14 @@
 //! save/journal/undo/network.
 //!
 //! - [`commands`] — the command set itself (`SpawnEntity`, `MoveEntity`,
-//!   `TransformEntity`, `DeleteEntity`, `SetObjectProperty`, `SetShaderSource`, …) plus
+//!   `TransformEntity`, `DeleteEntity`, and `SetUsdConnection`, …) plus
 //!   [`commands::SpawnCommandPlugin`], the one plugin a headless server adds.
 //! - `lunco-scene-catalog` — the spawn and source catalogs, asynchronous asset
 //!   discovery, and the generic USD spawn constructor.
 //! - `lunco-scene-queries` — shared read-only entity and composed-USD query
 //!   providers for Rhai, HTTP, MCP, and headless hosts.
-//! - [`shader_doc`] — shaders as a journaled, live-editable document domain.
-//! - [`doc_resolve`] — which document backs this entity, and where its look lives.
+//! - `lunco-scene-authoring` — document ownership, property persistence, and
+//!   live shader authoring as a journaled domain.
 //!
 //! ## Render-free, UI-free
 //!
@@ -37,14 +37,6 @@
 //! source path.
 
 pub mod commands;
-/// Headless-safe: resolve an entity's backing USD document + its bound shader prim.
-/// Shared by `commands` (the authoring tier) and the editor's Inspector panel — it
-/// lived in the panel, which is what broke the `--no-ui` server build (`commands`
-/// reached into `crate::ui` for it).
-pub mod doc_resolve;
-/// Shaders as a journaled, synced, live-editable domain (WGSL twin of rhai's
-/// `ScriptDocument`) — edits record to the Twin journal (`DomainKind::Shader`).
-pub mod shader_doc;
 /// Static discovery of authored scene tests and their headless/graphics kind.
 /// The scene supplies the USD program binding; the Rhai test source supplies
 /// the execution domain.

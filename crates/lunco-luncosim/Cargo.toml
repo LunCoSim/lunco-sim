@@ -136,6 +136,7 @@ lunco-usd-terrain = { path = "../lunco-usd-terrain" }
 # `commands::SpawnCommandPlugin` (runtime spawn/move + `NetReplicate` tagging) and
 # the journaled shader domain. Render-free, UI-free.
 lunco-scene-commands = { path = "../lunco-scene-commands" }
+lunco-scene-authoring = { path = "../lunco-scene-authoring" }
 lunco-scene-validation = { path = "../lunco-scene-validation" }
 # The UI-side editor adapter is optional and only used by the windowed app's
 # debug-scene selection helpers. The editor mechanisms are installed by

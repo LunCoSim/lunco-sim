@@ -3,19 +3,15 @@ name = "lunco-scene-commands"
 version = "0.1.0"
 edition = "2021"
 license.workspace = true
-description = "The scene/document command layer: runtime move, delete, property, camera, and shader edits authored as journaled USD ops on the open document's runtime layer. Render-free and UI-free, so the headless server links it without the editor."
+description = "The render-free scene/document mutation layer: runtime spawn, move, delete, camera, and USD edits authored on the open document's runtime layer"
 
 [dependencies]
 # NO `bevy_pbr` — this crate names no material type (`MeshMaterial3d`,
-# `StandardMaterial`, `ShaderMaterial`). Appearance is stated as INTENT
-# (`lunco_render::PbrLook`, `lunco_materials::ShaderLook`) and bound by
-# `lunco-render-bevy`; see `docs/architecture/render-decoupling.md`. The compiler
-# is the enforcement — put `bevy_pbr` back and the rule quietly rots.
+# `StandardMaterial`, `ShaderMaterial`). Appearance authoring lives in the
+# sibling `lunco-scene-authoring` package; this package owns runtime scene
+# mutation and remains render-free.
 #
 bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh", "bevy_light", "bevy_shader"] }
-# Appearance intent (render-free): `PbrLook`. Every PBR material site in this crate
-# goes through it instead of `Assets<StandardMaterial>`.
-lunco-render = { path = "../lunco-render" }
 avian3d = { workspace = true }
 
 big_space.workspace = true
@@ -26,15 +22,14 @@ lunco-core = { path = "../lunco-core" }
 lunco-signal = { path = "../lunco-signal" }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-doc = { path = "../lunco-doc" }
-# Shader source is a journaled DOMAIN (ShaderDocument): edits record to the Twin
-# journal (DomainKind::Shader) and hot-reload — like a rhai script / Modelica model.
+# Document-backed property and shader authoring is installed by the sibling
+# `lunco-scene-authoring` plugin; this crate only owns the remaining mutation
+# handlers and their runtime-layer observers.
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
-lunco-twin-journal = { path = "../lunco-twin-journal" }
-serde = { workspace = true }
 lunco-api = { path = "../lunco-api" }
 lunco-scene-catalog = { path = "../lunco-scene-catalog" }
+lunco-scene-authoring = { path = "../lunco-scene-authoring" }
 lunco-scene-queries = { path = "../lunco-scene-queries" }
-lunco-mobility = { path = "../lunco-mobility" }
 lunco-usd = { path = "../lunco-usd", default-features = false }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
@@ -45,11 +40,9 @@ openusd = { workspace = true }
 lunco-workspace = { path = "../lunco-workspace" }
 lunco-hooks-rhai = { path = "../lunco-hooks-rhai" }
 lunco-environment = { path = "../lunco-environment" }
-lunco-materials = { path = "../lunco-materials" }
 lunco-physics = { path = "../lunco-physics" }
 lunco-avatar = { path = "../lunco-avatar", default-features = false }
 lunco-assets = { path = "../lunco-assets" }
-lunco-storage = { path = "../lunco-storage" }
 rhai = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }

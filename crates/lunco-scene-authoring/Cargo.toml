@@ -1,0 +1,32 @@
+[package]
+name = "lunco-scene-authoring"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "USD-backed scene property and shader authoring commands"
+
+[dependencies]
+# This is the authoring tier for property/shader edits and document ownership
+# resolution. It deliberately does not depend on the scene mutation crate;
+# `lunco-scene-commands` installs it as a sibling plugin.
+bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh", "bevy_light", "bevy_shader"] }
+lunco-api = { path = "../lunco-api" }
+lunco-assets = { path = "../lunco-assets" }
+lunco-core = { path = "../lunco-core" }
+lunco-doc = { path = "../lunco-doc" }
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
+lunco-materials = { path = "../lunco-materials" }
+lunco-mobility = { path = "../lunco-mobility" }
+lunco-render = { path = "../lunco-render" }
+lunco-storage = { path = "../lunco-storage" }
+lunco-twin-journal = { path = "../lunco-twin-journal" }
+lunco-usd = { path = "../lunco-usd", default-features = false }
+lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
+lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
+lunco-usd-core = { path = "../lunco-usd-core" }
+lunco-workspace = { path = "../lunco-workspace" }
+openusd = { workspace = true }
+serde = { workspace = true }
+
+[lints]
+workspace = true

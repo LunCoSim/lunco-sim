@@ -20,9 +20,9 @@
 //! publishes it through `ListSpawnCatalog`; no Rust catalog entry is required.
 
 // The headless-safe half — spawn/picking tools, typed editor commands and
-// scene-facing ECS state — stays here. Egui panels, transform gizmos and
-// immediate-mode diagnostics live in the sibling UI package so this crate can
-// be used without a render or window stack.
+// scene-facing ECS state — stays here. Document-backed property/shader
+// authoring is installed by the scene command host; egui panels, transform
+// gizmos and immediate-mode diagnostics live in the sibling UI package.
 
 pub mod spawn;
 pub(crate) mod surface_pick;
@@ -31,7 +31,7 @@ pub mod terrain_tools;
 
 use bevy::prelude::*;
 use lunco_scene_catalog::catalog;
-use lunco_scene_commands::{commands, shader_doc, SelectedEntities};
+use lunco_scene_commands::{commands, SelectedEntities};
 
 /// Master plugin for all luncosim editing tools.
 pub struct SceneEditPlugin;
@@ -46,15 +46,7 @@ impl Plugin for SceneEditPlugin {
             .insert_resource(lunco_core::DragModeActive { active: false })
             .init_resource::<lunco_core::SpawnToolActive>()
             .init_resource::<lunco_core::TerrainToolActive>()
-            .init_resource::<terrain_tools::TerrainToolState>()
-            // Shader source is a journaled domain: edits record to the Twin
-            // journal + hot-reload. The recorder attaches when the journal appears.
-            .init_resource::<shader_doc::ShaderRegistry>();
-        app.add_systems(
-            Update,
-            shader_doc::wire_shader_journal_handle
-                .run_if(resource_added::<lunco_doc_bevy::JournalResource>),
-        );
+            .init_resource::<terrain_tools::TerrainToolState>();
 
         app.add_plugins(commands::SpawnCommandPlugin);
 

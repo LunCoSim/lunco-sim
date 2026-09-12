@@ -7378,6 +7378,7 @@ dependencies = [
  "lunco-readiness",
  "lunco-render",
  "lunco-render-bevy",
+ "lunco-scene-authoring",
  "lunco-scene-commands",
  "lunco-scene-validation",
  "lunco-scripting",
@@ -7418,7 +7419,6 @@ dependencies = [
  "big_space",
  "lunco-assets",
  "lunco-core",
- "lunco-doc-bevy",
  "lunco-physics",
  "lunco-render",
  "lunco-scene-catalog",
@@ -7456,6 +7456,7 @@ dependencies = [
  "lunco-obstacle-field",
  "lunco-physics",
  "lunco-render",
+ "lunco-scene-authoring",
  "lunco-scene-catalog",
  "lunco-scene-commands",
  "lunco-scripting",
@@ -7856,6 +7857,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-scene-authoring"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "lunco-api",
+ "lunco-assets",
+ "lunco-core",
+ "lunco-doc",
+ "lunco-doc-bevy",
+ "lunco-materials",
+ "lunco-mobility",
+ "lunco-render",
+ "lunco-storage",
+ "lunco-twin-journal",
+ "lunco-usd",
+ "lunco-usd-bevy-core",
+ "lunco-usd-bevy-scene",
+ "lunco-usd-core",
+ "lunco-workspace",
+ "openusd",
+ "serde",
+]
+
+[[package]]
 name = "lunco-scene-catalog"
 version = "0.1.0"
 dependencies = [
@@ -7891,17 +7916,12 @@ dependencies = [
  "lunco-doc-bevy",
  "lunco-environment",
  "lunco-hooks-rhai",
- "lunco-materials",
- "lunco-mobility",
  "lunco-physics",
- "lunco-render",
+ "lunco-scene-authoring",
  "lunco-scene-catalog",
  "lunco-scene-queries",
  "lunco-signal",
- "lunco-storage",
- "lunco-twin-journal",
  "lunco-usd",
- "lunco-usd-avian",
  "lunco-usd-bevy",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
@@ -7909,8 +7929,6 @@ dependencies = [
  "lunco-workspace",
  "openusd",
  "rhai",
- "serde",
- "serde_json",
  "tempfile",
 ]
 

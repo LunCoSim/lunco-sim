@@ -41,6 +41,7 @@ members = [
     "crates/lunco-scene-commands",
     "crates/lunco-scene-catalog",
     "crates/lunco-scene-queries",
+    "crates/lunco-scene-authoring",
     "crates/lunco-scene-validation",
     "crates/lunco-ui",
     "crates/lunco-assets",

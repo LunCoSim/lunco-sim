@@ -94,7 +94,7 @@ document ownership available to the asset differs.
   edits that must persist belong to an opened Twin/document.
 
 `SetObjectProperty` and its persistence observers live in
-`lunco-scene-commands/src/commands.rs`; they author the properties for which a
+`lunco-scene-authoring/src/properties.rs`; they author the properties for which a
 document-backed prim and a reader already exist, while render-only/transient
 properties remain live intent. There is no second scene loader or hidden
 base-only redirect.
@@ -103,7 +103,7 @@ base-only redirect.
 
 ## 2. What `SetObjectProperty` does today (review)
 
-`on_set_object_property` (`lunco-scene-commands/src/commands.rs:2228`) — resolves
+`on_set_object_property` (`lunco-scene-authoring/src/properties.rs`) — resolves
 `entity_id → Entity` via `ApiEntityRegistry`, then branches on `property`:
 
 | Property | Mutation | Authors USD? |
@@ -287,8 +287,8 @@ prim→entity.
 
 ## 6. Key references
 
-- `lunco-scene-commands/src/commands.rs` — `SetObjectProperty` struct and observers
-- `lunco-scene-commands/src/commands.rs` — `on_set_object_property`
+- `lunco-scene-authoring/src/properties.rs` — `SetObjectProperty` struct and observers
+- `lunco-scene-authoring/src/properties.rs` — `on_set_object_property`
 - `lunco-usd-core/src/document.rs` — `UsdOp::SetAttribute` apply (commit + inverse)
 - `lunco-usd/src/twin_projection.rs` — `sync_twin_overlays` and document-backed mounts
 - `lunco-usd/src/live_consume.rs` — `project_stage_changes` (E1/E2 consumer)

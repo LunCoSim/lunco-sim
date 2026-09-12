@@ -28,7 +28,7 @@ use lunco_obstacle_field::{plugin::UpdateObstacleFieldSpec, ObstacleFieldSpec, P
 use lunco_scene_commands::SelectedEntities;
 // Doc resolution + material-binding walk: headless-safe, shared verbatim with the
 // command layer (which is why they don't live in this panel — see `doc_resolve`).
-use lunco_scene_commands::doc_resolve::{
+use lunco_scene_authoring::doc_resolve::{
     bound_shader_prim, geom_api_schemas, resolve_doc_for_entity,
     resolve_shader_parameter_usd_target,
 };
@@ -3367,7 +3367,7 @@ fn swap_shader_on_entity(world: &mut World, part: Entity, path: &str) {
         .try_insert(look);
     // …and the material that binder ALREADY bound, or the same double-draw happens
     // once, statically. (Removed reflectively — this crate may not name `bevy_pbr`.)
-    lunco_scene_commands::commands::drop_bound_pbr_material(world, part);
+    lunco_scene_authoring::properties::drop_bound_pbr_material(world, part);
 
     // Propagate to USD — onto the `Shader` prim of the `Material` this geometry is
     // bound to. A shader is not a property of a mesh: it belongs to the material, and
@@ -3493,7 +3493,7 @@ fn shader_tools_ui(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
                         .on_hover_text(format!("Remove {path} (file + picker)"))
                         .clicked()
                     {
-                        ctx.trigger(lunco_scene_commands::commands::DeleteShader { path });
+                        ctx.trigger(lunco_scene_authoring::properties::DeleteShader { path });
                     }
                 }
             });
@@ -3504,19 +3504,19 @@ fn shader_tools_ui(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
 
 /// Create a shader from `template` (registers it), then bind it to `part`.
 fn create_and_apply(world: &mut World, part: Entity, name: &str, template: &str) {
-    world.trigger(lunco_scene_commands::commands::CreateShader {
+    world.trigger(lunco_scene_authoring::properties::CreateShader {
         name: name.to_string(),
         template: template.to_string(),
         source: String::new(),
         target: 0,
     });
-    let stem = lunco_scene_commands::commands::sanitize_stem(name);
+    let stem = lunco_scene_authoring::properties::sanitize_stem(name);
     apply_if_registered(world, part, &stem);
 }
 
 /// Import an external `.wgsl` (registers it), then bind it to `part`.
 fn import_and_apply(world: &mut World, part: Entity, src_path: &str) {
-    world.trigger(lunco_scene_commands::commands::ImportShader {
+    world.trigger(lunco_scene_authoring::properties::ImportShader {
         source_path: src_path.to_string(),
         name: String::new(),
         target: 0,
@@ -3524,7 +3524,7 @@ fn import_and_apply(world: &mut World, part: Entity, src_path: &str) {
     let stem = std::path::Path::new(src_path)
         .file_stem()
         .and_then(|s| s.to_str())
-        .map(lunco_scene_commands::commands::sanitize_stem)
+        .map(lunco_scene_authoring::properties::sanitize_stem)
         .unwrap_or_default();
     if !stem.is_empty() {
         apply_if_registered(world, part, &stem);
@@ -3535,7 +3535,7 @@ fn import_and_apply(world: &mut World, part: Entity, src_path: &str) {
 fn apply_if_registered(world: &mut World, part: Entity, stem: &str) {
     let shader_path = {
         let tr = world.get_resource::<lunco_assets::twin_source::TwinRoots>();
-        lunco_scene_commands::commands::shader_asset_path_for(tr, stem)
+        lunco_scene_authoring::properties::shader_asset_path_for(tr, stem)
     };
     let path = match shader_path {
         Ok(path) => path,

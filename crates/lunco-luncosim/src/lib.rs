@@ -1486,7 +1486,7 @@ fn replay_scenario_journal_shader(
     role: Res<lunco_core::NetworkRole>,
     remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
-    registry: Option<ResMut<lunco_scene_commands::shader_doc::ShaderRegistry>>,
+    registry: Option<ResMut<lunco_scene_authoring::shader_doc::ShaderRegistry>>,
     asset_server: Option<Res<AssetServer>>,
     shaders: Option<ResMut<Assets<bevy::shader::Shader>>>,
     mut applied: Local<std::collections::HashSet<lunco_twin_journal::EntryId>>,
@@ -1514,7 +1514,7 @@ fn replay_scenario_journal_shader(
     );
     for (id, op) in pending {
         if let Ok(shader_op) =
-            serde_json::from_value::<lunco_scene_commands::shader_doc::ShaderOp>(op)
+            serde_json::from_value::<lunco_scene_authoring::shader_doc::ShaderOp>(op)
         {
             if let Some((path, source)) = registry.apply_replayed(&shader_op) {
                 // Same hot-reload hook as the local edit: overwrite the asset id

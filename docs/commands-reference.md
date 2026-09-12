@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**112 commands** across **21** crates. All documented.
+**112 commands** across **22** crates. All documented.
 
 > **Regenerate:** dump the schema from a running app, then
 > `cargo run -p gen-command-docs -- --schema <schema.json>` (see the tool's `--help`).
@@ -23,8 +23,9 @@ actually call, with the fields the deserializer actually accepts. See the
 
 **Scene editing & authoring**
 
-- [`lunco-scene-commands`](#lunco-scene-commands) (17 commands)
+- [`lunco-scene-commands`](#lunco-scene-commands) (11 commands)
 - [`lunco-scene-catalog`](#lunco-scene-catalog) (2 commands)
+- [`lunco-scene-authoring`](#lunco-scene-authoring) (6 commands)
 
 **USD / scenes**
 
@@ -112,7 +113,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - *defined in:* `crates/lunco-scene-catalog/src/catalog.rs`
 - *fields:* none — call with `RescanSpawnCatalog` (no params)
 
-### `lunco-scene-commands` <a id="lunco-scene-commands"></a>
+### `lunco-scene-authoring` <a id="lunco-scene-authoring"></a>
 
 #### `CreateShader`
 
@@ -126,7 +127,7 @@ actually call, with the fields the deserializer actually accepts. See the
  {"type":"ExecuteCommand","command":"CreateShader","params":{"name":"custom","source":"<wgsl...>"}}
  ```
 
-- *defined in:* `crates/lunco-scene-commands/src/commands.rs`
+- *defined in:* `crates/lunco-scene-authoring/src/properties.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -134,6 +135,115 @@ actually call, with the fields the deserializer actually accepts. See the
 | `template` | `String` |  Template id when `source` is empty: `"solid"` (default) or `"checker"`. |
 | `source` | `String` |  Full WGSL source. Empty → generate from `template`. |
 | `target` | `u64` |  API id of an entity to apply the new shader to. `0` = create only. |
+
+#### `DeleteShader`
+
+ Delete a shader: unregister it from the picker [`ShaderCatalog`] and remove
+ its `.wgsl` from disk (the twin's `shaders/` folder, or `assets/shaders`).
+ Entities currently using it keep their in-memory material for the session.
+
+ ```json
+ {"type":"ExecuteCommand","command":"DeleteShader","params":{"path":"twin://moonbase/shaders/old.wgsl"}}
+ ```
+
+- *defined in:* `crates/lunco-scene-authoring/src/properties.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `path` | `String` |  Asset path to remove (`twin://name/shaders/x.wgsl` or `shaders/x.wgsl`). |
+
+#### `ImportShader`
+
+ Import an existing `.wgsl` file from anywhere on disk INTO the open Twin
+ (copies it to `<twin>/shaders/<name>.wgsl`), registers it in the picker, and
+ optionally binds it to a target entity. The file must be a prop-pickable
+ dynamic shader: a `Material` struct, and every `//!@engine` field it declares
+ must be prop-fillable per the engine-param registry.
+
+ ```json
+ {"type":"ExecuteCommand","command":"ImportShader","params":{"source_path":"/home/me/cool.wgsl","name":"cool","target":42}}
+ ```
+
+- *defined in:* `crates/lunco-scene-authoring/src/properties.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `source_path` | `String` |  Filesystem path of the `.wgsl` to import (absolute or cwd-relative). |
+| `name` | `String` |  Optional new stem; empty → keep the source file's own stem. |
+| `target` | `u64` |  API id of an entity to apply the imported shader to. `0` = import only. |
+
+#### `ReloadShader`
+
+ Force-reload shader assets from disk so live WGSL edits apply without
+ restarting the app. Bypasses the file watcher (unreliable in this build):
+ calls [`AssetServer::reload`], which re-runs the loader and triggers
+ dependent material pipelines to rebuild. Empty `path` → reload the standard
+ `assets/shaders/*` set; otherwise reload just that path (e.g.
+ `"shaders/wheel.wgsl"`).
+
+- *defined in:* `crates/lunco-scene-authoring/src/properties.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `path` | `String` |   |
+
+#### `SetObjectProperty`
+
+ Set a property on a scene object at runtime (live override — not persisted
+ to USD). One general command instead of many narrow ones; new properties
+ just add a `match` arm. Drive it from curl after a screenshot to iterate:
+
+ ```jsonc
+ {"type":"ExecuteCommand","command":"SetObjectProperty",
+  "params":{"entity_id":42,"property":"shader","value":"shaders/balloon.wgsl"}}
+ {"type":"ExecuteCommand","command":"SetObjectProperty",
+  "params":{"entity_id":42,"property":"wedge_count","value":"12"}}
+ {"type":"ExecuteCommand","command":"SetObjectProperty",
+  "params":{"entity_id":42,"property":"cell_a","value":"0.1,0.8,0.2"}}
+ ```
+
+ Recognised `property` values:
+ - `shader` → author a [`ShaderLook`] for that `.wgsl` (asset path); the render
+   binder turns it into a material.
+ - any parameter named by the shader's `Material` struct (e.g. `albedo`,
+   `wedge_count`, `cell_a`) → set that named value on the entity's `ShaderLook`
+   (requires `shader` set first, or a USD shader material). The shader's
+   reflected schema resolves the type; colours are `r,g,b`.
+ - `visible` → `true`/`false` toggles `Visibility`.
+ - Per-wheel tire-spin dynamics (target a single wheel entity by its `api_id`):
+   `brake_torque`, `slip_stiffness`, `bearing_damping`, `friction_mu`, `mass`,
+   `moi`, `wheel_radius`, `rest_length`, `spring_k`, `damping_c` → set that
+   `f64` field on the wheel's `WheelRaycast` live. Each wheel is its own entity,
+   so this gives independent per-wheel control. Motor torque and no-load speed
+   are owned by the composed Modelica motor prim; edit its authored
+   `inputs:stall_torque` / `inputs:no_load_speed` attributes instead of
+   addressing a wheel-local drive parameter.
+
+- *defined in:* `crates/lunco-scene-authoring/src/properties.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `entity_id` | `u64` |  API-stable global entity ID from `ListEntities`, resolved to the live  Bevy entity by `ApiEntityRegistry`. |
+| `property` | `String` |  Property name (see struct docs). |
+| `value` | `String` |  Value; comma-separated `r,g,b` for colors, a single float for params,  an asset path for `shader`, `true`/`false` for `visible`. |
+
+#### `SetShaderSource`
+
+ Replace a shader asset's WGSL **source in place** from text sent over the
+ API, recompiling it live without touching disk or restarting. Overwrites the
+ `Shader` asset currently at `path` (e.g. `"shaders/wheel.wgsl"`), so every
+ material using it re-specializes its pipeline next frame. Compile/validation
+ outcome surfaces in the render log (naga errors on a bad shader). Pairs with
+ [`ReloadShader`] (disk) — this one is for pushing edits directly.
+
+- *defined in:* `crates/lunco-scene-authoring/src/properties.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `path` | `String` |  Asset path of the shader to overwrite, e.g. `"shaders/wheel.wgsl"`. |
+| `source` | `String` |  New WGSL source text. |
+
+### `lunco-scene-commands` <a id="lunco-scene-commands"></a>
 
 #### `DeleteEntity`
 
@@ -152,22 +262,6 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `target` | `Entity` |  Entity to remove. |
 | `intent` | `lunco_core :: EditIntent` |  `Persistent` (the default) authors the removal into the document; an  `Interactive` delete is live-only and does not journal. |
-
-#### `DeleteShader`
-
- Delete a shader: unregister it from the picker [`ShaderCatalog`] and remove
- its `.wgsl` from disk (the twin's `shaders/` folder, or `assets/shaders`).
- Entities currently using it keep their in-memory material for the session.
-
- ```json
- {"type":"ExecuteCommand","command":"DeleteShader","params":{"path":"twin://moonbase/shaders/old.wgsl"}}
- ```
-
-- *defined in:* `crates/lunco-scene-commands/src/commands.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `path` | `String` |  Asset path to remove (`twin://name/shaders/x.wgsl` or `shaders/x.wgsl`). |
 
 #### `DetachJoint`
 
@@ -210,26 +304,6 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `path` | `String` |  Absolute composed USD prim path (for example `/World/Lander`). |
 
-#### `ImportShader`
-
- Import an existing `.wgsl` file from anywhere on disk INTO the open Twin
- (copies it to `<twin>/shaders/<name>.wgsl`), registers it in the picker, and
- optionally binds it to a target entity. The file must be a prop-pickable
- dynamic shader: a `Material` struct, and every `//!@engine` field it declares
- must be prop-fillable per the engine-param registry.
-
- ```json
- {"type":"ExecuteCommand","command":"ImportShader","params":{"source_path":"/home/me/cool.wgsl","name":"cool","target":42}}
- ```
-
-- *defined in:* `crates/lunco-scene-commands/src/commands.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `source_path` | `String` |  Filesystem path of the `.wgsl` to import (absolute or cwd-relative). |
-| `name` | `String` |  Optional new stem; empty → keep the source file's own stem. |
-| `target` | `u64` |  API id of an entity to apply the imported shader to. `0` = import only. |
-
 #### `MoveEntity`
 
  Move an existing entity to a position in the active physics frame.
@@ -256,21 +330,6 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `entity_id` | `u64` |  API-stable global entity ID from `ListEntities`, resolved to the live  Bevy entity by `ApiEntityRegistry`. |
 | `translation` | `[f64 ; 3]` |  Target translation in the semantic [`lunco_core::ActivePhysicsFrame`].  The concrete BigSpace grid, the entity's actual parent, and the cell/local  split are internal storage details resolved by the observer. The wire  representation is f64 so positions retain precision across API/network  round trips. |
-
-#### `ReloadShader`
-
- Force-reload shader assets from disk so live WGSL edits apply without
- restarting the app. Bypasses the file watcher (unreliable in this build):
- calls [`AssetServer::reload`], which re-runs the loader and triggers
- dependent material pipelines to rebuild. Empty `path` → reload the standard
- `assets/shaders/*` set; otherwise reload just that path (e.g.
- `"shaders/wheel.wgsl"`).
-
-- *defined in:* `crates/lunco-scene-commands/src/commands.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `path` | `String` |   |
 
 #### `RotateEntity`
 
@@ -360,62 +419,6 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 |---|---|---|
 | `eye` | `Vec3` |   |
 | `target` | `Vec3` |   |
-
-#### `SetObjectProperty`
-
- Set a property on a scene object at runtime (live override — not persisted
- to USD). One general command instead of many narrow ones; new properties
- just add a `match` arm. Drive it from curl after a screenshot to iterate:
-
- ```jsonc
- {"type":"ExecuteCommand","command":"SetObjectProperty",
-  "params":{"entity_id":42,"property":"shader","value":"shaders/balloon.wgsl"}}
- {"type":"ExecuteCommand","command":"SetObjectProperty",
-  "params":{"entity_id":42,"property":"wedge_count","value":"12"}}
- {"type":"ExecuteCommand","command":"SetObjectProperty",
-  "params":{"entity_id":42,"property":"cell_a","value":"0.1,0.8,0.2"}}
- ```
-
- Recognised `property` values:
- - `shader` → author a [`ShaderLook`] for that `.wgsl` (asset path); the render
-   binder turns it into a material.
- - any parameter named by the shader's `Material` struct (e.g. `albedo`,
-   `wedge_count`, `cell_a`) → set that named value on the entity's `ShaderLook`
-   (requires `shader` set first, or a USD shader material). The shader's
-   reflected schema resolves the type; colours are `r,g,b`.
- - `visible` → `true`/`false` toggles `Visibility`.
- - Per-wheel tire-spin dynamics (target a single wheel entity by its `api_id`):
-   `brake_torque`, `slip_stiffness`, `bearing_damping`, `friction_mu`, `mass`,
-   `moi`, `wheel_radius`, `rest_length`, `spring_k`, `damping_c` → set that
-   `f64` field on the wheel's `WheelRaycast` live. Each wheel is its own entity,
-   so this gives independent per-wheel control. Motor torque and no-load speed
-   are owned by the composed Modelica motor prim; edit its authored
-   `inputs:stall_torque` / `inputs:no_load_speed` attributes instead of
-   addressing a wheel-local drive parameter.
-
-- *defined in:* `crates/lunco-scene-commands/src/commands.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `entity_id` | `u64` |  API-stable global entity ID from `ListEntities`, resolved to the live  Bevy entity by `ApiEntityRegistry`. |
-| `property` | `String` |  Property name (see struct docs). |
-| `value` | `String` |  Value; comma-separated `r,g,b` for colors, a single float for params,  an asset path for `shader`, `true`/`false` for `visible`. |
-
-#### `SetShaderSource`
-
- Replace a shader asset's WGSL **source in place** from text sent over the
- API, recompiling it live without touching disk or restarting. Overwrites the
- `Shader` asset currently at `path` (e.g. `"shaders/wheel.wgsl"`), so every
- material using it re-specializes its pipeline next frame. Compile/validation
- outcome surfaces in the render log (naga errors on a bad shader). Pairs with
- [`ReloadShader`] (disk) — this one is for pushing edits directly.
-
-- *defined in:* `crates/lunco-scene-commands/src/commands.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `path` | `String` |  Asset path of the shader to overwrite, e.g. `"shaders/wheel.wgsl"`. |
-| `source` | `String` |  New WGSL source text. |
 
 #### `SetUsdConnection`
 

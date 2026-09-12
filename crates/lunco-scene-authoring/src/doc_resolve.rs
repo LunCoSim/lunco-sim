@@ -265,3 +265,20 @@ pub fn resolve_doc_for_entity(world: &World, entity: Entity) -> Option<lunco_doc
             })
         })
 }
+
+/// Resolve the active USD document and the entity's owned prim path for a
+/// journaled authoring operation.
+pub fn authorable_prim(
+    entity: Entity,
+    q_prim: &Query<&UsdPrimPath>,
+    usd_registry: &DocumentRegistry<UsdDocument>,
+    workspace: Option<&lunco_workspace::WorkspaceResource>,
+) -> Option<(lunco_doc::DocumentId, String)> {
+    let doc = workspace?.0.active_document?;
+    let host = usd_registry.host(doc)?;
+    let prim = q_prim.get(entity).ok()?;
+    let prim_sdf = SdfPath::new(&prim.path).ok()?;
+    let owned = host.document().data().spec(&prim_sdf).is_some()
+        || host.document().runtime_data().spec(&prim_sdf).is_some();
+    owned.then(|| (doc, prim.path.clone()))
+}

@@ -189,7 +189,7 @@ Representative commands already covering the user's surface:
 | Rover/vehicle | `SetPorts` — writes named input ports (`throttle`/`steer`/`brake`); authored Modelica/Rhai programs publish final drive and wheel-heading outputs through the same generic port graph |
 | Camera/control | `PossessVessel`, `ReleaseVessel`, `FocusTarget`, `FollowTarget` (`lunco-avatar/src/commands.rs`) |
 | Scene/USD | `LoadScene`, `ClearScene` (`lunco-usd-sim/src/cosim.rs:814,884`) |
-| Scene editing | `SpawnEntity`, `MoveEntity`, `RotateEntity`, `TransformEntity`, `SetObjectProperty`, `SelectEntity` (`lunco-scene-commands/src/commands.rs`); `SelectUsdPrim` (`lunco-luncosim-edit-ui/src/selection.rs`) |
+| Scene editing | `SpawnEntity`, `MoveEntity`, `RotateEntity`, `TransformEntity`, `SelectEntity` (`lunco-scene-commands/src/commands.rs`); `SetObjectProperty` (`lunco-scene-authoring/src/properties.rs`); `SelectUsdPrim` (`lunco-luncosim-edit-ui/src/selection.rs`) |
 | USD geometry editing | `ApplyUsdOp` with `UsdOp::SetAttribute` (`lunco-usd`) — standard USD attributes such as `point3f[] points`; the `gizmo` and `nurbs` Rhai tools are policy libraries over this typed command |
 | Modelica/cosim | `CompileModel`, `SetModelInput`, run/step commands (`lunco-modelica-core/...`, UI adapters in `lunco-modelica-ui/...`) |
 | Celestial | `TeleportToSurface`, `LeaveSurface` (`lunco-celestial/src/commands.rs`) |
