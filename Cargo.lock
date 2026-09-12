@@ -7975,7 +7975,7 @@ dependencies = [
  "lunco-tools",
  "lunco-twin",
  "lunco-usd",
- "lunco-usd-avian",
+ "lunco-usd-avian-lint",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
  "lunco-usd-compose",
@@ -8284,13 +8284,25 @@ dependencies = [
  "big_space",
  "lunco-core",
  "lunco-environment",
- "lunco-hooks",
- "lunco-lint",
  "lunco-physics",
  "lunco-terrain-globe",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
  "lunco-usd-core",
+ "openusd",
+]
+
+[[package]]
+name = "lunco-usd-avian-lint"
+version = "0.1.0"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "lunco-core",
+ "lunco-hooks",
+ "lunco-physics",
+ "lunco-usd-avian",
+ "lunco-usd-bevy-core",
  "openusd",
 ]
 
@@ -8441,7 +8453,6 @@ dependencies = [
  "lunco-cosim",
  "lunco-doc",
  "lunco-environment",
- "lunco-hash",
  "lunco-hooks",
  "lunco-hooks-rhai",
  "lunco-materials",

@@ -202,7 +202,7 @@ fn local_bounds(reader: &StageView<'_>, p: &SdfPath) -> Option<(Vec3, Vec3)> {
 /// and taking its local box as world would understate how low its corner hangs.
 fn world_aabb(reader: &StageView<'_>, p: &SdfPath) -> Option<(Vec3, Vec3)> {
     let (lo, hi) = local_bounds(reader, p)?;
-    let t = crate::world_transform(reader, p).ok()?;
+    let t = lunco_usd_avian::world_transform(reader, p).ok()?;
     let mut min = Vec3::splat(f32::INFINITY);
     let mut max = Vec3::splat(f32::NEG_INFINITY);
     for i in 0..8 {
@@ -364,7 +364,7 @@ fn vehicle_part_facts(
             let collision_attribute_authored =
                 reader.has_authored_attribute(path, ptok::A_COLLISION_ENABLED);
             let collision_state = if collision_api {
-                match super::read_authored_bool_or_default(
+                match lunco_usd_avian::read_authored_bool_or_default(
                     reader,
                     path,
                     ptok::A_COLLISION_ENABLED,
@@ -393,7 +393,10 @@ fn vehicle_part_facts(
             let covered =
                 wheel_projector || (collision_api && collision_state == "enabled" && !visual_only);
             let shape_valid = if covered && collision_api {
-                matches!(super::build_collider_from_usd(reader, path), Ok(Some(_)))
+                matches!(
+                    lunco_usd_avian::build_collider_from_usd(reader, path),
+                    Ok(Some(_))
+                )
             } else {
                 true
             };
@@ -509,7 +512,7 @@ fn telemetry_declaration_facts(reader: &StageView<'_>, paths: &[SdfPath]) -> Vec
 fn drive_facts(reader: &StageView<'_>, joint_paths: &[SdfPath]) -> Vec<H> {
     let mut drives = Vec::new();
     for path in joint_paths {
-        let Some(spec) = crate::read_joint_spec_for_lint(reader, path) else {
+        let Some(spec) = lunco_usd_avian::read_joint_spec_for_lint(reader, path) else {
             continue;
         };
         let Some(drive) = spec.drive else {

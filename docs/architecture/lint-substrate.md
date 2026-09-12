@@ -3,7 +3,7 @@
 > Status: Active · Audience: contributors adding lint facts or authoring lint rules
 
 Substrate `crates/lunco-lint`; USD facts
-`crates/lunco-usd-avian/src/lint.rs`; rules `assets/scripting/policy/lint_usd.rhai`;
+`crates/lunco-usd-avian-lint/src/lib.rs`; rules `assets/scripting/policy/lint_usd.rhai`;
 entry points `RunLint` (live scene), `ValidateAsset` (file), and `ValidateTwin`
 (Twin-wide resolver pre-flight).
 

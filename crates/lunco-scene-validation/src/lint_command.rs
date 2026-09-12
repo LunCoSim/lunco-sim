@@ -44,12 +44,13 @@ use serde_json::json;
 use std::collections::{BTreeMap, HashMap};
 
 /// Build the complete USD lint fact map from every owner of a USD simulation
-/// projection. Standard `Physics*Joint` facts come from `lunco-usd-avian`;
+/// projection. Standard `Physics*Joint` facts come from
+/// `lunco-usd-avian-lint`;
 /// `PhysxPhysicsGearJoint` facts come from the `lunco-usd-sim` reader that owns
 /// that projection. The policy sees one map and one authoritative value for
 /// each subject.
 pub(crate) fn usd_physics_facts(view: &StageView<'_>) -> H {
-    let mut facts = lunco_usd_avian::physics_facts(view);
+    let mut facts = lunco_usd_avian_lint::physics_facts(view);
     lunco_usd_sim::lint::append_network_synthesizer_facts(view, &mut facts);
     lunco_usd_sim::lint::append_gear_drive_facts(view, &mut facts);
     lunco_usd_sim::lint::append_wheel_attachment_facts(view, &mut facts);
@@ -62,11 +63,14 @@ pub(crate) fn usd_physics_facts(view: &StageView<'_>) -> H {
 /// Run the complete live USD lint pipeline over one composed stage.
 ///
 /// This aggregation point owns the cross-domain fact table: standard physics
-/// facts come from `lunco-usd-avian`, while USD-sim owns its gear, wheel, and
+/// facts come from `lunco-usd-avian-lint`, while USD-sim owns its gear, wheel, and
 /// synthesizer projections. Callers must use this entry point rather than
 /// linting a partial producer's facts.
 pub fn lint_stage(view: &StageView<'_>) -> Vec<lunco_lint::LintFinding> {
-    lunco_lint::run_lint(lunco_usd_avian::USD_LINT_DOMAIN, usd_physics_facts(view))
+    lunco_lint::run_lint(
+        lunco_usd_avian_lint::USD_LINT_DOMAIN,
+        usd_physics_facts(view),
+    )
 }
 
 /// Inspect the already projected port surface for one composed USD stage.
@@ -141,7 +145,7 @@ fn live_port_collision_findings(
                 }
             };
             findings.push(lunco_lint::LintFinding {
-                domain: lunco_usd_avian::USD_LINT_DOMAIN.to_owned(),
+                domain: lunco_usd_avian_lint::USD_LINT_DOMAIN.to_owned(),
                 rule: "port-owner-collision".to_owned(),
                 severity: lunco_lint::LintSeverity::Warn,
                 subject: entity_path.clone(),
@@ -259,7 +263,7 @@ fn lint_stage_with_runtime(
             entries.push(("runtime_connections".to_string(), runtime));
         }
     }
-    lunco_lint::run_lint(lunco_usd_avian::USD_LINT_DOMAIN, facts)
+    lunco_lint::run_lint(lunco_usd_avian_lint::USD_LINT_DOMAIN, facts)
 }
 
 /// Lint what is loaded now.
@@ -418,7 +422,7 @@ pub fn on_run_lint(
         return;
     }
     let domain = trigger.event().domain.trim().to_string();
-    if !domain.is_empty() && domain != lunco_usd_avian::USD_LINT_DOMAIN {
+    if !domain.is_empty() && domain != lunco_usd_avian_lint::USD_LINT_DOMAIN {
         warn!(
             "[lint] RunLint: no producer for domain '{domain}' in a loaded scene — \
              the USD domain is the one a live stage can supply facts for; \
@@ -517,7 +521,7 @@ pub fn on_run_lint(
 
     // Re-linting REPLACES this domain's findings: a rule that was fixed between
     // two runs must disappear, not accumulate a second copy.
-    report.clear_domain(lunco_usd_avian::USD_LINT_DOMAIN);
+    report.clear_domain(lunco_usd_avian_lint::USD_LINT_DOMAIN);
     report.pending = true;
 
     // Every loaded stage, composed. `get_or_build` is what the loader itself

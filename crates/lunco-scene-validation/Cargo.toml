@@ -21,7 +21,7 @@ lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 lunco-tools = { path = "../lunco-tools" }
 lunco-twin = { path = "../lunco-twin" }
 lunco-usd = { path = "../lunco-usd", default-features = false }
-lunco-usd-avian = { path = "../lunco-usd-avian" }
+lunco-usd-avian-lint = { path = "../lunco-usd-avian-lint" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-core = { path = "../lunco-usd-core" }

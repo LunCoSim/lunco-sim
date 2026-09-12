@@ -106,9 +106,6 @@ pub fn invalidate_usd_physics_projection(world: &mut World, entity: Entity) -> b
     true
 }
 
-pub mod lint;
-pub use lint::{physics_facts, USD_LINT_DOMAIN};
-
 pub mod filtered_pairs;
 pub use filtered_pairs::{
     enable_shared_tire_contact_hooks, FilteredPairs, JointCollisionPair, JointFilteredPairs,
@@ -280,18 +277,11 @@ impl Plugin for UsdAvianPlugin {
         // is only meaningful while that scene is loaded — carried into the next
         // scene it would make a fresh `PhysicsScene` look like a conflicting
         // duplicate of a prim that no longer exists.
-        // Findings name prims of the scene being replaced, so they go with it.
-        // Note there is NO automatic lint on load: linting is something you RUN
-        // (`RunLint`), not something that runs at you — see `lunco-lint`.
-        app.init_resource::<lunco_lint::LintReport>();
         app.init_resource::<CollisionGroupTables>();
         app.add_systems(
             lunco_core::SceneTeardown,
-            |mut commands: Commands,
-             mut lint: ResMut<lunco_lint::LintReport>,
-             mut groups: ResMut<CollisionGroupTables>| {
+            |mut commands: Commands, mut groups: ResMut<CollisionGroupTables>| {
                 commands.remove_resource::<lunco_environment::PhysicsSceneGravity>();
-                lint.clear_domain(lint::USD_LINT_DOMAIN);
                 // The groups belong to the scene being replaced. Carried over,
                 // they would put the next scene's colliders on layers nothing in
                 // it defines.
@@ -578,7 +568,7 @@ impl JointDrive {
     /// setpoint, and how fast it converges is a tuning choice rather than a property
     /// of the mechanism. That one gets [`MotorModel::SpringDamper`] at a fixed
     /// frequency, which is unconditionally stable under XPBD substepping at any mass.
-    fn motor_model(&self) -> Result<MotorModel, lunco_physics::ForceDriveMotorError> {
+    pub fn motor_model(&self) -> Result<MotorModel, lunco_physics::ForceDriveMotorError> {
         if self.stiffness.is_none() && self.damping.is_none() {
             return Ok(JOINT_DRIVE_MOTOR_MODEL);
         }
@@ -1159,7 +1149,7 @@ fn gather_compound_candidates(
 ///
 /// `UsdGeomCube` is cubic: `size` is its only dimension. A non-uniform box is
 /// `size` plus a non-uniform `xformOp:scale`, which the scale tail applies.
-fn build_collider_from_usd(
+pub fn build_collider_from_usd(
     reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     sdf_path: &SdfPath,
 ) -> Result<Option<Collider>, ColliderProjectionError> {
@@ -2369,7 +2359,7 @@ fn read_joint_spec(
 /// distinction is intentional: a malformed test asset must not become a live
 /// constraint merely because the test needs to prove that the linter catches
 /// it.
-pub(crate) fn read_joint_spec_for_lint(
+pub fn read_joint_spec_for_lint(
     reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     path: &SdfPath,
 ) -> Option<PendingUsdJoint> {
@@ -4204,7 +4194,7 @@ fn read_authored_quat(
 
 /// Read a boolean while preserving the distinction between an omitted standard
 /// default and an authored value of the wrong type.
-fn read_authored_bool_or_default(
+pub fn read_authored_bool_or_default(
     reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     path: &SdfPath,
     attr: &str,
