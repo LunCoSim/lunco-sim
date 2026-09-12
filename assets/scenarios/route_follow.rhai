@@ -4,8 +4,8 @@
 // children. The program references its subject through `inputs:subject`; the
 // subject does not own the route or this program. Route points are ordinary USD
 // prims with a generic trigger-zone sensor. Their enter event advances the
-// route, while the generic navigation command only computes the current
-// control setpoint.
+// route, while the subject's authored Modelica drive law consumes the current
+// waypoint setpoint.
 
 const ROUTE_PROGRAM = "/Program";
 
@@ -92,29 +92,42 @@ fn current_zone(me, state) {
     result.attrs["lunco:triggerZone"]
 }
 
+fn set_route_autopilot(subject, position) {
+    modelica_waypoint(subject, position, 0.6, 2.5, 0.0)
+}
+
+fn route_entrant_matches(subject, entrant) {
+    let current = entrant;
+    for depth in 0..32 {
+        if current == subject { return true; }
+        let next = parent(current);
+        if next == () || next < 0 { return false; }
+        current = next;
+    }
+    false
+}
+
 fn drive_current_point(me, state) {
     let subject = route_subject(me);
-    if !state.enabled {
-        if subject >= 0 { brake(subject); }
-        return;
-    }
+    if subject < 0 { return; }
+
+    // Possession is the manual-control authority gate. A human owner takes
+    // precedence over the unattended Modelica waypoint controller; leaving
+    // the existing autopilot target untouched lets it resume after release.
+    if controller(subject) != () { return; }
+
     let point = current_point(me, state);
-    if subject < 0 || point == () {
-        if subject >= 0 { brake(subject); }
+    if !state.enabled || point == () {
+        modelica_waypoint_stop(subject);
         return;
     }
     let target = find_path(point);
     let position = if target >= 0 { world_pos(target) } else { () };
     if position == () {
-        brake(subject);
-        return;
+        modelica_waypoint_stop(subject);
+    } else {
+        set_route_autopilot(subject, position);
     }
-    let command = nav_command(subject, position, 0.6, 2.5);
-    if command == () {
-        brake(subject);
-        return;
-    }
-    drive(subject, command.throttle, command.steer);
 }
 
 fn route_view_ready(me, state) {
@@ -201,7 +214,7 @@ fn advance_on_sensor(me, evt, state) {
     if !state.enabled { return (); }
     if !evt.name.starts_with("enter:") { return; }
     let subject = route_subject(me);
-    if subject < 0 || evt.value != subject { return; }
+    if subject < 0 || !route_entrant_matches(subject, evt.value) { return; }
     let point = current_point(me, state);
     if point == () { return; }
     let zone = current_zone(me, state);

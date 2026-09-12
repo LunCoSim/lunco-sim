@@ -984,13 +984,21 @@ pub fn read_token_timesamples(
 
 /// The authored provider schema that can publish runtime-discovered value ports.
 ///
-/// USD authored connections describe the topology, but Avian bodies,
+/// USD authored connections describe the topology, but Avian bodies, joints,
 /// environment probes, raycast providers, and Modelica program facets publish
 /// some values only after projection/compilation. Those values deliberately
 /// stay out of the authored USD property surface. A connection may therefore
 /// target an existing runtime provider without having an authored source
 /// attribute; an absent source prim is still always invalid.
 pub fn runtime_port_provider(view: &dyn UsdReadObject, prim: &SdfPath) -> Option<&'static str> {
+    if let Some(schema) = match view.type_name(prim).as_deref() {
+        Some("PhysicsRevoluteJoint") => Some("PhysicsRevoluteJoint"),
+        Some("PhysicsPrismaticJoint") => Some("PhysicsPrismaticJoint"),
+        _ => None,
+    } {
+        return Some(schema);
+    }
+
     const DIRECT_PROVIDERS: &[&str] = &[
         "PhysicsRigidBodyAPI",
         "LunCoEnvironmentProbeAPI",
