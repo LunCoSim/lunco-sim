@@ -18,7 +18,7 @@ use lunco_core::{on_command, register_commands, Command, SpawnEntity};
 // and its shader keys mutate `ShaderLook`; the render binders re-materialise on
 // `Changed<PbrLook>` / `Changed<ShaderLook>`. This file names no material type —
 // see `docs/architecture/render-decoupling.md`.
-use crate::catalog::{spawn_usd_entry, SpawnAnchor, SpawnCatalog, SpawnSource};
+use lunco_scene_catalog::catalog::{spawn_usd_entry, SpawnAnchor, SpawnCatalog, SpawnSource};
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_doc_bevy::{RedoDocument, UndoDocument};
 use lunco_materials::{ParamSchema, ParamValue, ShaderLook};
@@ -48,30 +48,6 @@ impl Default for DetachJoint {
             target: Entity::PLACEHOLDER,
             intent: lunco_core::EditIntent::Persistent,
         }
-    }
-}
-
-/// Force a re-scan of project USD files into the spawn catalog. Picks up
-/// `*.usda` dropped into an already-open Twin mid-session (twin-open is
-/// auto-scanned; this covers new files after that). Idempotent.
-#[Command(default)]
-pub struct RescanSpawnCatalog {}
-
-/// Observer for [`RescanSpawnCatalog`]. Forgets what has been read so far, so
-/// the dispatch below re-reads every asset — an edit to a file already scanned
-/// is exactly what a manual rescan is for. The reads land asynchronously; the
-/// catalogue fills in over the next frames (`drain_usd_scan`).
-#[on_command(RescanSpawnCatalog)]
-pub fn on_rescan_spawn_catalog(
-    _trigger: On<RescanSpawnCatalog>,
-    twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
-    manifest: Res<lunco_assets::discovery::AssetManifest>,
-    mut scan: ResMut<crate::catalog::CatalogScan>,
-) {
-    if let Some(roots) = twin_roots.as_deref() {
-        scan.forget();
-        crate::catalog::dispatch_catalog_listing(&manifest, roots, &mut scan, true, false, false);
-        info!("RESCAN_SPAWN_CATALOG: scheduled USD asset listing");
     }
 }
 
@@ -3302,73 +3278,6 @@ pub fn on_import_shader(
     }
 }
 
-/// Rescan the open Twins' `shaders/` folders (and `assets/shaders`) and register
-/// any prop-pickable `.wgsl` into the picker [`ShaderCatalog`]. Lets you drop a
-/// shader file into a Twin and pick it up without restarting.
-#[Command(default)]
-pub struct RescanShaders {}
-
-/// The ONE catalog-population system. Scans the engine library once, then
-/// re-scans whenever the set of open Twins changes (so a freshly-opened Twin's
-/// files appear) — twin-open is async, so a guarded `Update` check is more
-/// robust than racing the `TwinAdded` observer that registers the twin root.
-///
-/// # Driven by its inputs
-///
-/// This re-enumerates exactly when one of its two inputs changes: the engine-library
-/// [`AssetManifest`](lunco_assets::discovery::AssetManifest), or the set of open
-/// Twins. Every other frame it early-returns on a cheap comparison — no per-frame
-/// walk.
-///
-/// The catalog uses resource change detection instead of a write-once scan latch.
-/// This lets a manifest that arrives late trigger its first real scan.
-///
-/// The projections differ in what they need from a file. Shaders and program
-/// sources are catalogued by name, so `drain_catalog_listing` and its consumers
-/// publish them directly. Spawnables are catalogued by what the USD *says*
-/// (`lunco:spawnable`), which means reading it: the same drain only dispatches
-/// those reads, and `drain_usd_scan` folds them in as they land.
-pub fn maintain_catalogs(
-    twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
-    manifest: Res<lunco_assets::discovery::AssetManifest>,
-    mut scan: ResMut<crate::catalog::CatalogScan>,
-    mut last_twins: Local<Vec<String>>,
-) {
-    let Some(roots) = twin_roots.as_deref() else {
-        return;
-    };
-
-    let names = match roots.names() {
-        Ok(names) => names,
-        Err(error) => {
-            error!("CATALOG_SCAN: Twin registry unavailable: {error}");
-            return;
-        }
-    };
-    let twins_changed = names != *last_twins;
-    if !manifest.is_changed() && !twins_changed {
-        return;
-    }
-    *last_twins = names;
-
-    crate::catalog::dispatch_catalog_listing(&manifest, roots, &mut scan, true, true, true);
-    info!("CATALOG_SCAN: scheduled shared asset listing");
-}
-
-/// Observer for [`RescanShaders`] — manual full re-scan of the shader catalog.
-#[on_command(RescanShaders)]
-pub fn on_rescan_shaders(
-    _trigger: On<RescanShaders>,
-    twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
-    manifest: Res<lunco_assets::discovery::AssetManifest>,
-    mut scan: ResMut<crate::catalog::CatalogScan>,
-) {
-    if let Some(roots) = twin_roots.as_deref() {
-        crate::catalog::dispatch_catalog_listing(&manifest, roots, &mut scan, false, true, false);
-        info!("RESCAN_SHADERS: scheduled WGSL asset listing");
-    }
-}
-
 /// Delete a shader: unregister it from the picker [`ShaderCatalog`] and remove
 /// its `.wgsl` from disk (the twin's `shaders/` folder, or `assets/shaders`).
 /// Entities currently using it keep their in-memory material for the session.
@@ -3416,10 +3325,9 @@ pub fn on_delete_shader(
     }
 }
 
-/// Plugin that registers SPAWN_ENTITY / MOVE_ENTITY / SET_OBJECT_PROPERTY /
-/// FOCUS_ENTITY_BY_ID / SET_CAMERA_LOOK_AT / RELOAD_SHADER / SET_SHADER_SOURCE /
-/// CREATE_SHADER / IMPORT_SHADER / RESCAN_SHADERS / DELETE_SHADER command
-/// observers and the kinematic-pulse cleanup + twin shader auto-scan systems.
+/// Plugin that registers scene mutation, shader authoring, and camera command
+/// observers. Catalog resources, discovery, and catalog-only rescan commands
+/// are installed by [`lunco_scene_catalog::SceneCatalogPlugin`].
 pub struct SpawnCommandPlugin;
 
 /// Freeze physics and advance it deliberately, one frame at a time.
@@ -3480,8 +3388,6 @@ register_commands!(
     on_move_entity_command,
     on_rotate_entity_command,
     on_reload_shader,
-    on_rescan_shaders,
-    on_rescan_spawn_catalog,
     on_set_camera_look_at,
     on_set_object_property,
     on_set_shader_source,
@@ -3493,10 +3399,10 @@ register_commands!(
 
 impl Plugin for SpawnCommandPlugin {
     fn build(&self, app: &mut App) {
-        // Catalog/source reads may fetch browser-served assets. Keep the
-        // settings resource available when this headless-safe plugin is used
-        // without the GUI dataset plugin.
-        lunco_settings::ensure_download_settings(app);
+        // Catalog discovery is a separate production package. Its plugin is
+        // added here because every scene command host needs SpawnEntity's
+        // authoritative catalog, but its systems/resources remain owned there.
+        app.add_plugins(lunco_scene_catalog::SceneCatalogPlugin);
         // Every `#[Command]` this crate owns — type + observer in one call, so a
         // verb is available consistently through the HTTP API, Rhai, and
         // `discover_schema`.
@@ -3504,9 +3410,6 @@ impl Plugin for SpawnCommandPlugin {
         // The READ verb for the same entities. Registered here so any binary with
         // the scene verbs answers `QueryEntity` too — the headless server included.
         crate::entity_query::register(app);
-        // SpawnEntity consumes an entry id from this catalog; expose the exact
-        // discovered catalog to scripting and API clients from its owner.
-        crate::catalog::register_query(app);
         // The AUTHORED read beside the spawned one: composed USD attributes, so
         // asset invariants are checkable from rhai/Python/HTTP and not just Rust.
         crate::usd_prim_query::register(app);
@@ -3540,22 +3443,6 @@ impl Plugin for SpawnCommandPlugin {
         // Inspector highlight + gizmo) and live in the `ui`-gated `selection`
         // module; `SceneEditPlugin` registers them. The headless server has no
         // selection, so they're absent here by design.
-        // THE single catalog-population system: scans project USD → spawn
-        // catalog and WGSL → shader catalog via the shared `lunco_assets`
-        // discovery walk, once at first run and again only when the open-Twin
-        // set changes (guarded — no per-frame disk walk).
-        // Enumerate → dispatch reads → fold results in. `drain` runs after
-        // `maintain` so a read that completes between frames lands the moment
-        // the app looks, not a frame later.
-        app.add_systems(
-            Update,
-            (
-                maintain_catalogs,
-                crate::catalog::drain_catalog_listing,
-                crate::catalog::drain_usd_scan,
-            )
-                .chain(),
-        );
         app.add_systems(FixedPostUpdate, clear_kinematic_pulse_velocity);
         // Resources this plugin's OWN systems read, so it stands alone without the
         // UI-layer `SceneEditPlugin` / the render-layer `ShaderMaterialPlugin`
@@ -3565,18 +3452,10 @@ impl Plugin for SpawnCommandPlugin {
         // `AssetManifest` and `TwinRoots` resources consumed here.
         // `init_resource` is idempotent, so when those plugins also init these it's
         // a harmless no-op:
-        //   - `SpawnCatalog`   — read by `maintain_catalogs` + `apply_replicated_spawns`;
+        //   - `SpawnCatalog`   — read by the catalog and `apply_replicated_spawns`;
         //   - `SelectedEntity` — read by `on_select_entity`;
-        //   - `ShaderCatalog`  — read by `maintain_catalogs` (per-frame) + the shader
-        //     command observers. Lives in `lunco_materials`; an empty one is fine on
-        //     a server (shader discovery populates it but nothing renders it).
-        app.init_resource::<crate::catalog::SpawnCatalog>();
-        // `CatalogScan` — the async read pipeline `maintain_catalogs` dispatches
-        // into. `AssetMetaStore` — what the scanned files said about themselves;
-        // the catalogue is derived from it, and the Scenarios menu reads its
-        // standard USD `doc` metadata straight out (no second cache, no second parse).
-        app.init_resource::<crate::catalog::CatalogScan>();
-        app.init_resource::<crate::catalog::AssetMetaStore>();
+        //   - `ShaderCatalog`  — owned and populated by `SceneCatalogPlugin`;
+        //     shader command observers consume it but do not scan it themselves.
         app.init_resource::<crate::SelectedEntities>();
         // A selection names entities of the scene that made it. Those ids die
         // with that scene, and Bevy reuses generations — so a selection carried
@@ -3591,7 +3470,6 @@ impl Plugin for SpawnCommandPlugin {
                 }
             },
         );
-        app.init_resource::<lunco_materials::ShaderCatalog>();
         // Client: instantiate host-replicated spawns before prediction consumes
         // the resulting entities. The shared `lunco_core::NetcodeSet` preserves
         // this ordering across the crate boundary.

@@ -323,7 +323,7 @@ impl Plugin for LunCoSimUiPlugin {
                 app.add_systems(
                     Update,
                     models_palette::drain_program_catalog
-                        .after(lunco_scene_commands::catalog::drain_catalog_listing),
+                        .after(lunco_scene_catalog::catalog::drain_catalog_listing),
                 );
                 app.add_observer(models_palette::clear_program_catalog_on_twin_closed);
                 // In-app rhai REPL — runs snippets against the live app through the
@@ -1480,7 +1480,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
         // The store fills asynchronously, so a scene not yet read simply
         // shows no tooltip this frame and gets one on the next redraw.
         let descs: Vec<Option<String>> = {
-            let Some(store) = ctx.resource::<lunco_scene_commands::catalog::AssetMetaStore>()
+            let Some(store) = ctx.resource::<lunco_scene_catalog::catalog::AssetMetaStore>()
             else {
                 return;
             };

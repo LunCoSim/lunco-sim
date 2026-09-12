@@ -13,10 +13,8 @@
 //! - [`commands`] — the command set itself (`SpawnEntity`, `MoveEntity`,
 //!   `TransformEntity`, `DeleteEntity`, `SetObjectProperty`, `SetShaderSource`, …) plus
 //!   [`commands::SpawnCommandPlugin`], the one plugin a headless server adds.
-//! - [`catalog`] — the spawn catalog (what can be spawned) and the shader catalog,
-//!   scanned from the engine's `*.usda` library.
-//! - [`spawn_meta`] — the ONE parser for `lunco:spawnable` and standard USD
-//!   `doc` metadata, shared by the catalog and its UI consumers.
+//! - `lunco-scene-catalog` — the spawn and source catalogs, asynchronous asset
+//!   discovery, and the generic USD spawn constructor.
 //! - [`shader_doc`] — shaders as a journaled, live-editable document domain.
 //! - [`doc_resolve`] — which document backs this entity, and where its look lives.
 //!
@@ -36,7 +34,6 @@
 //! share a file stem, the catalog keeps both and suffixes the later ID with its
 //! source path.
 
-pub mod catalog;
 pub mod commands;
 /// Headless-safe: resolve an entity's backing USD document + its bound shader prim.
 /// Shared by `commands` (the authoring tier) and the editor's Inspector panel — it
@@ -49,7 +46,6 @@ pub mod entity_query;
 /// Shaders as a journaled, synced, live-editable domain (WGSL twin of rhai's
 /// `ScriptDocument`) — edits record to the Twin journal (`DomainKind::Shader`).
 pub mod shader_doc;
-pub mod spawn_meta;
 /// Static discovery of authored scene tests and their headless/graphics kind.
 /// The scene supplies the USD program binding; the Rhai test source supplies
 /// the execution domain.

@@ -9,7 +9,7 @@
 //! The command uses the canonical API envelope:
 //! `{"type":"ExecuteCommand","command":"QueryEntity","params":{"id":…}}`.
 
-use crate::catalog::SpawnCatalog;
+use lunco_scene_catalog::catalog::SpawnCatalog;
 use bevy::ecs::query::QueryState;
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
@@ -138,7 +138,7 @@ pub fn register(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::{SpawnOrigin, SpawnSource, SpawnableEntry};
+    use lunco_scene_catalog::catalog::{SpawnOrigin, SpawnSource, SpawnableEntry};
     use big_space::prelude::{CellCoord, Grid};
 
     fn query_test_app() -> App {

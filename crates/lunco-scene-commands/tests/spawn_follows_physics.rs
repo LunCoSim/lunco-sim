@@ -4,13 +4,14 @@
 //! a real big_space world root, and asserts the spawned body's `Transform` tracked
 //! its `Position` after ~2 s — the observable behaviour, not a component shape.
 //!
-//! The anchoring shape itself is pinned in `catalog::spawn_anchor_tests`; this
+//! The anchoring shape itself is pinned in `lunco-scene-catalog`'s
+//! `spawn_anchor_tests`; this
 //! test exercises the same grid-direct root through the Avian transform path.
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
-use lunco_scene_commands::catalog::{
+use lunco_scene_catalog::catalog::{
     spawn_usd_entry, SpawnAnchor, SpawnOrigin, SpawnSource, SpawnableEntry,
 };
 use lunco_usd_bevy_core::{UsdInstanceRoot, UsdStageAsset};

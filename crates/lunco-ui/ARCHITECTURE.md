@@ -265,7 +265,7 @@ register_commands!(on_delete_entity);
 | `TELEPORT_SURFACE` | lunco-avatar | Teleport avatar to surface |
 | `LEAVE_SURFACE` | lunco-avatar | Return to orbit |
 | `DRIVE_ROVER` | lunco-mobility | Set wheel intents |
-| `SPAWN_ENTITY` | lunco-scene-commands | Spawn catalog item |
+| `SPAWN_ENTITY` | lunco-scene-commands + lunco-scene-catalog | Spawn catalog item |
 
 ## Headless
 

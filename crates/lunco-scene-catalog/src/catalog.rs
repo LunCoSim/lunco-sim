@@ -31,6 +31,7 @@
 //! catalog while the remaining files are still being fetched.
 
 use bevy::prelude::*;
+use lunco_core::{on_command, Command};
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
 use lunco_usd_bevy_core::UsdInstanceRoot;
@@ -569,6 +570,73 @@ pub fn dispatch_catalog_listing(
     #[cfg(target_arch = "wasm32")]
     wasm_bindgen_futures::spawn_local(fut);
     true
+}
+
+/// The single catalog-population system. It re-enumerates when either the
+/// engine manifest or the open-Twin set changes; idle frames do no filesystem
+/// work.
+pub fn maintain_catalogs(
+    twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
+    manifest: Res<lunco_assets::discovery::AssetManifest>,
+    mut scan: ResMut<CatalogScan>,
+    mut last_twins: Local<Vec<String>>,
+) {
+    let Some(roots) = twin_roots.as_deref() else {
+        return;
+    };
+
+    let names = match roots.names() {
+        Ok(names) => names,
+        Err(error) => {
+            error!("CATALOG_SCAN: Twin registry unavailable: {error}");
+            return;
+        }
+    };
+    let twins_changed = names != *last_twins;
+    if !manifest.is_changed() && !twins_changed {
+        return;
+    }
+    *last_twins = names;
+
+    dispatch_catalog_listing(&manifest, roots, &mut scan, true, true, true);
+    info!("CATALOG_SCAN: scheduled shared asset listing");
+}
+
+/// Force a re-scan of project USD files into the spawn catalog.
+#[Command(default)]
+pub struct RescanSpawnCatalog {}
+
+/// Observer for [`RescanSpawnCatalog`].
+#[on_command(RescanSpawnCatalog)]
+pub fn on_rescan_spawn_catalog(
+    _trigger: On<RescanSpawnCatalog>,
+    twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
+    manifest: Res<lunco_assets::discovery::AssetManifest>,
+    mut scan: ResMut<CatalogScan>,
+) {
+    if let Some(roots) = twin_roots.as_deref() {
+        scan.forget();
+        dispatch_catalog_listing(&manifest, roots, &mut scan, true, false, false);
+        info!("RESCAN_SPAWN_CATALOG: scheduled USD asset listing");
+    }
+}
+
+/// Re-read shader file names from the open Twins and engine asset library.
+#[Command(default)]
+pub struct RescanShaders {}
+
+/// Observer for [`RescanShaders`].
+#[on_command(RescanShaders)]
+pub fn on_rescan_shaders(
+    _trigger: On<RescanShaders>,
+    twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
+    manifest: Res<lunco_assets::discovery::AssetManifest>,
+    mut scan: ResMut<CatalogScan>,
+) {
+    if let Some(roots) = twin_roots.as_deref() {
+        dispatch_catalog_listing(&manifest, roots, &mut scan, false, true, false);
+        info!("RESCAN_SHADERS: scheduled WGSL asset listing");
+    }
 }
 
 /// Publish completed listings and start the USD metadata reads they describe.

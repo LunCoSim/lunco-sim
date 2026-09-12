@@ -8,6 +8,7 @@ description = "LunCoSim's egui panels for in-scene editing"
 [dependencies]
 lunco-luncosim-edit-core = { path = "../lunco-luncosim-edit-core" }
 lunco-scene-commands = { path = "../lunco-scene-commands" }
+lunco-scene-catalog = { path = "../lunco-scene-catalog" }
 bevy = { workspace = true, features = [
     "bevy_asset",
     "bevy_mesh",

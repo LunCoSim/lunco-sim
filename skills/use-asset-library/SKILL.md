@@ -155,7 +155,7 @@ def Xform "Widget" ( kind = "component" prepend apiSchemas = ["LunCoCatalogAPI"]
 }
 ```
 
-**How it reaches the palette** (`crates/lunco-scene-commands/src/catalog.rs`):
+**How it reaches the palette** (`crates/lunco-scene-catalog/src/catalog.rs`):
 
 | Palette field | Derived from |
 |---|---|

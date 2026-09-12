@@ -1,0 +1,31 @@
+[package]
+name = "lunco-scene-catalog"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "USD-backed scene and asset catalogs for LunCoSim"
+
+[dependencies]
+# Catalog discovery and runtime USD spawns are render-free. Keep this package
+# independent from the scene command handlers so catalog changes do not rebuild
+# the much larger command crate.
+bevy = { workspace = true, features = ["bevy_asset"] }
+big_space.workspace = true
+lunco-api = { path = "../lunco-api" }
+lunco-assets = { path = "../lunco-assets" }
+lunco-core = { path = "../lunco-core" }
+lunco-materials = { path = "../lunco-materials" }
+lunco-scene-validation = { path = "../lunco-scene-validation" }
+lunco-settings = { path = "../lunco-settings" }
+lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
+lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
+serde_json = { workspace = true }
+crossbeam-channel = { workspace = true }
+futures-lite = { workspace = true }
+
+# A browser fetch is !Send and must stay on the JS event loop.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen-futures = { workspace = true }
+
+[lints]
+workspace = true

@@ -3485,7 +3485,7 @@ fn shader_tools_ui(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
                     .on_hover_text("Register any .wgsl dropped into the twin's shaders/ folder")
                     .clicked()
                 {
-                    ctx.trigger(lunco_scene_commands::commands::RescanShaders {});
+                    ctx.trigger(lunco_scene_catalog::catalog::RescanShaders {});
                 }
                 if let Some(path) = current_shader_path(ctx, part) {
                     if ui

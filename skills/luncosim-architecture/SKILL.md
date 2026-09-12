@@ -103,7 +103,7 @@ declare the interface before wiring or stepping it.
 ### Shared asset catalog discovery
 
 Asset enumeration belongs to `lunco_assets::discovery` and runs through the
-shared asynchronous catalog listing owned by `lunco-scene-commands`. USD,
+shared asynchronous catalog listing owned by `lunco-scene-catalog`. USD,
 WGSL, Modelica, and Python projections are published from one root snapshot;
 they must not add a second filesystem walk or a UI-thread scan. A new
 manifest/Twin snapshot advances the listing generation, reopens the USD read

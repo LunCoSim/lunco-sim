@@ -142,10 +142,10 @@ pub(crate) enum AttachState {
 
 /// Publish the program source projection from the shared catalog listing.
 pub(crate) fn drain_program_catalog(
-    mut scan: ResMut<lunco_scene_commands::catalog::CatalogScan>,
+    mut scan: ResMut<lunco_scene_catalog::catalog::CatalogScan>,
     mut catalog: ResMut<ProgramCatalog>,
 ) {
-    let Some(result) = lunco_scene_commands::catalog::take_program_listing(&mut scan) else {
+    let Some(result) = lunco_scene_catalog::catalog::take_program_listing(&mut scan) else {
         return;
     };
     match result {

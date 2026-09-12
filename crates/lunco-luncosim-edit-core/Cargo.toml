@@ -11,6 +11,7 @@ license.workspace = true
 # on it; the direction never reverses. Editor modules import its command and
 # catalog types directly from the owning crate.
 lunco-scene-commands = { path = "../lunco-scene-commands" }
+lunco-scene-catalog = { path = "../lunco-scene-catalog" }
 # This crate names no `bevy_pbr` material type. Appearance is stated as intent
 # and bound by `lunco-render-bevy`; see `docs/architecture/render-decoupling.md`.
 bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh", "bevy_light", "bevy_shader"] }
@@ -27,7 +28,8 @@ lunco-core = { path = "../lunco-core" }
 lunco-physics = { path = "../lunco-physics" }
 # `JournalResource` — the run condition that attaches the shader-journal recorder
 # (`shader_doc::wire_shader_journal_handle`) when the journal appears. The
-# ShaderDocument domain itself moved to `lunco-scene-commands`.
+# ShaderDocument domain remains in `lunco-scene-commands` until its schema owner
+# is split from the loaded-shader parameter path.
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }

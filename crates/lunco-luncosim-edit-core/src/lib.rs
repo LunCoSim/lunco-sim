@@ -30,7 +30,8 @@ pub mod terrain_picking;
 pub mod terrain_tools;
 
 use bevy::prelude::*;
-use lunco_scene_commands::{catalog, commands, shader_doc, SelectedEntities};
+use lunco_scene_catalog::catalog;
+use lunco_scene_commands::{commands, shader_doc, SelectedEntities};
 
 /// Master plugin for all luncosim editing tools.
 pub struct SceneEditPlugin;

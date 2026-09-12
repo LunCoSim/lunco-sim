@@ -23,7 +23,8 @@ actually call, with the fields the deserializer actually accepts. See the
 
 **Scene editing & authoring**
 
-- [`lunco-scene-commands`](#lunco-scene-commands) (19 commands)
+- [`lunco-scene-commands`](#lunco-scene-commands) (17 commands)
+- [`lunco-scene-catalog`](#lunco-scene-catalog) (2 commands)
 
 **USD / scenes**
 
@@ -90,6 +91,26 @@ actually call, with the fields the deserializer actually accepts. See the
 ---
 
 ## Scene editing & authoring
+
+### `lunco-scene-catalog` <a id="lunco-scene-catalog"></a>
+
+#### `RescanShaders`
+
+ Rescan the open Twins' `shaders/` folders (and `assets/shaders`) and register
+ any prop-pickable `.wgsl` into the picker [`ShaderCatalog`]. Lets you drop a
+ shader file into a Twin and pick it up without restarting.
+
+- *defined in:* `crates/lunco-scene-catalog/src/catalog.rs`
+- *fields:* none — call with `RescanShaders` (no params)
+
+#### `RescanSpawnCatalog`
+
+ Force a re-scan of project USD files into the spawn catalog. Picks up
+ `*.usda` dropped into an already-open Twin mid-session (twin-open is
+ auto-scanned; this covers new files after that). Idempotent.
+
+- *defined in:* `crates/lunco-scene-catalog/src/catalog.rs`
+- *fields:* none — call with `RescanSpawnCatalog` (no params)
 
 ### `lunco-scene-commands` <a id="lunco-scene-commands"></a>
 
@@ -250,24 +271,6 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `path` | `String` |   |
-
-#### `RescanShaders`
-
- Rescan the open Twins' `shaders/` folders (and `assets/shaders`) and register
- any prop-pickable `.wgsl` into the picker [`ShaderCatalog`]. Lets you drop a
- shader file into a Twin and pick it up without restarting.
-
-- *defined in:* `crates/lunco-scene-commands/src/commands.rs`
-- *fields:* none — call with `RescanShaders` (no params)
-
-#### `RescanSpawnCatalog`
-
- Force a re-scan of project USD files into the spawn catalog. Picks up
- `*.usda` dropped into an already-open Twin mid-session (twin-open is
- auto-scanned; this covers new files after that). Idempotent.
-
-- *defined in:* `crates/lunco-scene-commands/src/commands.rs`
-- *fields:* none — call with `RescanSpawnCatalog` (no params)
 
 #### `RotateEntity`
 

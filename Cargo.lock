@@ -7421,6 +7421,7 @@ dependencies = [
  "lunco-doc-bevy",
  "lunco-physics",
  "lunco-render",
+ "lunco-scene-catalog",
  "lunco-scene-commands",
  "lunco-settings",
  "lunco-terrain-surface",
@@ -7455,6 +7456,7 @@ dependencies = [
  "lunco-obstacle-field",
  "lunco-physics",
  "lunco-render",
+ "lunco-scene-catalog",
  "lunco-scene-commands",
  "lunco-scripting",
  "lunco-settings",
@@ -7539,6 +7541,7 @@ dependencies = [
  "lunco-modelica-ui",
  "lunco-networking",
  "lunco-render",
+ "lunco-scene-catalog",
  "lunco-scene-commands",
  "lunco-scripting",
  "lunco-settings",
@@ -7853,14 +7856,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-scene-catalog"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "big_space",
+ "crossbeam-channel",
+ "futures-lite",
+ "lunco-api",
+ "lunco-assets",
+ "lunco-core",
+ "lunco-materials",
+ "lunco-scene-validation",
+ "lunco-settings",
+ "lunco-usd-bevy-core",
+ "lunco-usd-bevy-scene",
+ "serde_json",
+ "wasm-bindgen-futures",
+]
+
+[[package]]
 name = "lunco-scene-commands"
 version = "0.1.0"
 dependencies = [
  "avian3d",
  "bevy",
  "big_space",
- "crossbeam-channel",
- "futures-lite",
  "lunco-api",
  "lunco-assets",
  "lunco-avatar",
@@ -7874,8 +7895,7 @@ dependencies = [
  "lunco-mobility",
  "lunco-physics",
  "lunco-render",
- "lunco-scene-validation",
- "lunco-settings",
+ "lunco-scene-catalog",
  "lunco-signal",
  "lunco-storage",
  "lunco-twin-journal",
@@ -7891,7 +7911,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "wasm-bindgen-futures",
 ]
 
 [[package]]

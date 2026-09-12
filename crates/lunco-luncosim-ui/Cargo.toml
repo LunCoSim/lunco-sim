@@ -63,6 +63,7 @@ lunco-modelica-ui = { path = "../lunco-modelica-ui", default-features = false, f
 lunco-networking = { path = "../lunco-networking", default-features = false, optional = true }
 lunco-render = { path = "../lunco-render" }
 lunco-scene-commands = { path = "../lunco-scene-commands" }
+lunco-scene-catalog = { path = "../lunco-scene-catalog" }
 lunco-scripting = { path = "../lunco-scripting" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-status-core = { path = "../lunco-status-core" }

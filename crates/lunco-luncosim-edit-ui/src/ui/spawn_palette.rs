@@ -8,7 +8,7 @@ use bevy_egui::egui;
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
 use lunco_luncosim_edit_core::SpawnState;
-use lunco_scene_commands::catalog::{AssetMetaStore, SpawnCatalog, SpawnSource};
+use lunco_scene_catalog::catalog::{AssetMetaStore, SpawnCatalog, SpawnSource};
 
 /// Replace the spawn-palette state after the panel's paint pass.
 #[derive(Event)]

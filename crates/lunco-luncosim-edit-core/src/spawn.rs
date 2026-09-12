@@ -14,7 +14,7 @@ use crate::surface_pick::{
     cursor_surface_hit, SurfacePickPolicy, EDITOR_PLACEMENT_RAY_MAX_DISTANCE,
 };
 use crate::SpawnState;
-use lunco_scene_commands::catalog::{SpawnCatalog, SpawnSource};
+use lunco_scene_catalog::catalog::{SpawnCatalog, SpawnSource};
 
 /// Ghost entity shown at the spawn placement point.
 #[derive(Component)]
