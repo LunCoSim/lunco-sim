@@ -60,7 +60,7 @@ target/debug/lunica --api 4101
 **Utility / dev bins** (all in `lunco-modelica-core` unless noted): `modelica_run`
 (headless Modelica CLI → CSV), `msl_indexer` (rebuild the MSL search index — re-run
 after an MSL change), `lunica_worker` (wasm compile worker, bundled not run),
-`build_msl_assets` (`lunco-assets`), `net_smoke` (`lunco-networking`, transport smoke
+`build_msl_assets` (`lunco-modelica-assets`), `net_smoke` (`lunco-networking`, transport smoke
 test). Authored luncosim behavior tests run through `luncosim test` plus their Rhai scenarios.
 Details:
 [`docs/apps/README.md`](../../docs/apps/README.md).

@@ -409,7 +409,8 @@ never enter a release by accident.
 Target names distinguish delivery profiles where the same binary has different
 packaging owners: `lunica-native`, `luncosim-native`, `lunica-web`, and
 `luncosim-web`. The web build still creates its dedicated MSL bundle through
-`build_msl_assets`; raw MSL entries therefore target native packaging only.
+`lunco-modelica-assets`'s `build_msl_assets`; raw MSL entries therefore target
+native packaging only.
 
 The downloader qualifies bundle keys as `<group>/<key>` for actionable errors,
 but leaves those keys out of opaque on-cache scratch filenames. The process ID

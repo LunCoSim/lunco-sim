@@ -126,7 +126,8 @@ Three classes of crate legitimately bypass `AssetServer`:
   call their APIs. `lunco-storage` supplies the native backend and the wasm
   backend where the same logical operation exists.
 - **Build scripts.** `*-build.rs` runs on the host at compile time.
-- **Native-only binaries.** Worker subprocesses like `build_msl_assets`
+- **Native-only binaries.** Worker subprocesses like `lunco-modelica-assets`'s
+  `build_msl_assets`
   that never compile to wasm32.
 
 To bypass the lint, the crate's `lib.rs` (or binary's `main.rs`) carries

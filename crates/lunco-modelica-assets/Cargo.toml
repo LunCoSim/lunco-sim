@@ -1,0 +1,24 @@
+[package]
+name = "lunco-modelica-assets"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Native Modelica asset packaging tools for LunCoSim"
+
+[[bin]]
+name = "build_msl_assets"
+path = "src/bin/build_msl_assets.rs"
+
+[dependencies]
+lunco-assets = { path = "../lunco-assets" }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tar = { workspace = true }
+zstd = { workspace = true }
+rayon = { workspace = true }
+rumoca-phase-parse = { workspace = true }
+rumoca-ir-ast = { workspace = true }
+bincode = { workspace = true }
+
+[lints]
+workspace = true

@@ -459,7 +459,7 @@ or remove the `brotli_static on;` line and rely on gzip.
 | `thread::spawn` / `failed to spawn thread`  | raw `std::thread::spawn` on wasm            | `AsyncComputeTaskPool::get().spawn(async {…}).detach()`   |
 | Blank/dark canvas, no UI                    | wasm loaded, Bevy not painted yet           | check console for plugin-build panics; loader hides on first egui frame |
 | 404 on `lunica.js`                          | stale `dist/` after a layout change         | re-run `./scripts/build_web.sh build …`                   |
-| `[MSL] failed: …` in status bar             | `dist/<bin>/msl/manifest.json` missing/corrupt | re-run build (`build_msl_assets` regenerates)          |
+| `[MSL] failed: …` in status bar             | `dist/<bin>/msl/manifest.json` missing/corrupt | re-run `cargo run -p lunco-modelica-assets --bin build_msl_assets`          |
 | Model errors `unresolved type reference: Modelica.*` | compile fired before MSL ready     | wait for "MSL · ready" then Compile again                 |
 | `wasm-opt` step says `not installed`        | binaryen not on PATH                        | see Prerequisites; install or skip                        |
 | Compile spinner forever, no `[worker]` logs | worker bundle didn't init                   | missing/broken `worker_bootstrap.js` (see Bootstrap)      |

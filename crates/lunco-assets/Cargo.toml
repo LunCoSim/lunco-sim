@@ -14,7 +14,7 @@ description = "Unified asset management for LunCoSim — cache resolution, versi
 # `lunco://` AssetReaders (twin_source.rs uses `bevy::asset::io::*`). The
 # workspace bevy default is substrate-only (no render/asset) since the render
 # gating, so declare the feature here rather than relying on a consumer to
-# unify it in — otherwise the standalone `build_msl_assets` host bin fails to
+# unify it in — otherwise the standalone asset-manager binary fails to
 # compile (E0433: `bevy::asset` not found).
 bevy = { workspace = true, features = ["bevy_asset"] }
 # The `twin://` AssetReader routes byte reads through the storage backend
@@ -52,12 +52,6 @@ sha2 = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 
-# Native-only helper binary that packs MSL into a versioned, compressed
-# bundle for the web build. Path-gated to keep wasm32 builds away from it.
-[[bin]]
-name = "build_msl_assets"
-path = "src/bin/build_msl_assets.rs"
-
 # Writes the engine-library `manifest.json` the web bundle ships (the browser has
 # no `readdir`). Calls `discovery::scan_library` — the SAME scanner the native
 # runtime uses — so the packaging step cannot disagree with the runtime about what
@@ -85,20 +79,9 @@ lunco-geotiff = { path = "../lunco-geotiff" }
 flate2 = "1.0"
 bzip2 = "0.4"
 tar = { workspace = true }
-# zstd compressor for the MSL asset bundle the build_msl_assets binary
-# emits into `dist/<bin>/msl/`. Web runtime uses a pure-Rust decoder
-# (ruzstd) — see lunco-modelica-core's wasm32 deps.
-zstd = { workspace = true }
-# `build_msl_assets` parses every MSL .mo file and ships a bincode'd
-# `Vec<(String, StoredDefinition)>` next to the source bundle so the
-# wasm runtime can skip the per-file parse (which is ~600 ms/file in
-# release wasm — unworkable for 2670 files).
-rumoca-phase-parse = { workspace = true }
-rumoca-ir-ast = { workspace = true }
-bincode = { workspace = true }
 # Parallelises the ~2670-file MSL pre-parse across all cores. Native-only
-# (this binary never compiles to wasm), so the unbounded default pool is
-# fine — unlike the runtime, which caps rayon to keep cores free for render.
+# (download processing also uses it), so the unbounded default pool is fine —
+# unlike the runtime, which caps rayon to keep cores free for render.
 rayon = { workspace = true }
 resvg = { workspace = true }
 tiny-skia = { workspace = true }

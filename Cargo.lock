@@ -7069,7 +7069,6 @@ name = "lunco-assets"
 version = "0.1.0"
 dependencies = [
  "bevy",
- "bincode 2.0.1",
  "bzip2",
  "crossbeam-channel",
  "dirs",
@@ -7085,8 +7084,6 @@ dependencies = [
  "lunco-workspace",
  "rayon",
  "resvg 0.47.0",
- "rumoca-ir-ast",
- "rumoca-phase-parse",
  "ruzstd 0.7.3",
  "serde",
  "serde_json",
@@ -7103,7 +7100,6 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "which",
- "zstd",
 ]
 
 [[package]]
@@ -7584,6 +7580,21 @@ dependencies = [
  "lunco-physics",
  "lunco-time",
  "serde_json",
+]
+
+[[package]]
+name = "lunco-modelica-assets"
+version = "0.1.0"
+dependencies = [
+ "bincode 2.0.1",
+ "lunco-assets",
+ "rayon",
+ "rumoca-ir-ast",
+ "rumoca-phase-parse",
+ "serde_json",
+ "sha2 0.11.0",
+ "tar",
+ "zstd",
 ]
 
 [[package]]

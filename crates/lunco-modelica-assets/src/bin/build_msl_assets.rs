@@ -20,7 +20,7 @@
 //! ## Usage
 //!
 //! ```bash
-//! cargo run -p lunco-assets --bin build_msl_assets -- \
+//! cargo run -p lunco-modelica-assets --bin build_msl_assets -- \
 //!     --out dist/lunica/msl
 //! ```
 //!
@@ -28,7 +28,7 @@
 //! resolve on web exactly like native does from `cache_dir()`):
 //!
 //! ```bash
-//! cargo run -p lunco-assets --bin build_msl_assets -- \
+//! cargo run -p lunco-modelica-assets --bin build_msl_assets -- \
 //!     --out dist/lunica/msl \
 //!     --extra-root ~/.cache/lunco/thermofluidstream \
 //!     --discover-extras

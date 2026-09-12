@@ -1015,7 +1015,7 @@ build_msl_bundle() {
 
     rm -rf "$msl_dir"
     mkdir -p "$msl_dir"
-    cargo run --release -q -p lunco-assets --bin build_msl_assets -- \
+    cargo run --release -q -p lunco-modelica-assets --bin build_msl_assets -- \
         --out "$msl_dir" "${extra_args[@]}"
 
     if [ $? -ne 0 ]; then

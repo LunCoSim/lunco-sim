@@ -44,7 +44,7 @@ Modelica application, use the `lunica` target in the table below.
 | `modelica_run` | `lunco-modelica-core` | `cargo run -p lunco-modelica-core --bin modelica_run` | Headless Modelica CLI — compile a model, step it for a fixed duration, optionally dump per-step variables to CSV. |
 | `msl_indexer` | `lunco-modelica-core` | `cargo run -p lunco-modelica-core --bin msl_indexer` | Builds the Modelica Standard Library search index. Same entry the workbench drives in-process. Re-run after an MSL rebuild. |
 | `lunica_worker` | `lunco-modelica-core` | (wasm only) | Off-thread rumoca compile worker for the web build. Not run directly — bundled by `scripts/build_web.sh`. |
-| `build_msl_assets` | `lunco-assets` | `cargo run -p lunco-assets --bin build_msl_assets` | Bundles the MSL into shippable assets. |
+| `build_msl_assets` | `lunco-modelica-assets` | `cargo run -p lunco-modelica-assets --bin build_msl_assets` | Bundles the MSL into shippable assets. |
 | `net_smoke` | `lunco-networking` | `scripts/net_smoke.sh` | Networking transport smoke test. |
 
 `lunco-modelica-core` also carries the headless tester and parse benchmark

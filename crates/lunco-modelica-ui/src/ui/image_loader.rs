@@ -28,7 +28,7 @@
 //! both targets, with no `#[cfg]` in the load path.
 //!
 //! **Known gap (not in this crate):** the *web* MSL bundle currently carries
-//! only `.mo` sources — `crates/lunco-assets/src/bin/build_msl_assets.rs`
+//! only `.mo` sources — `crates/lunco-modelica-assets/src/bin/build_msl_assets.rs`
 //! explicitly skips `Resources/` (images, matrix data). Until that bundler ships
 //! them, `msl_read` returns `None` in the browser and Documentation images fall
 //! back to their `alt` text, exactly as before. The fix is one step in the

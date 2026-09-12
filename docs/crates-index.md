@@ -19,6 +19,7 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 | **`lunco-doc-bevy`** | Bevy ECS integration for the Document System: lifecycle events, `JournalResource` (Bevy wrapper around the canonical Twin journal), `BevyJournalSink` for remote-replay, `EditorIntent` keybindings, `Presence` collab seed. |
 | **`lunco-storage`** | I/O abstraction layer (`Storage` trait — Native FS, Memory, future WASM/Remote backends). The single write path; raw `std::fs` is disallowed. |
 | **`lunco-assets`** | Unified asset management: cache resolution across worktrees, versioned downloads (`Assets.toml`, SHA-256), and texture processing. |
+| **`lunco-modelica-assets`** | Native Modelica asset packaging: bundles MSL source and pre-parsed Rumoca definitions for the web runtime; keeps MSL build-only dependencies out of the generic asset manager. |
 | **`lunco-hash`** | Hashing substrate: Fast tier (FNV-1a) for change/cache keys and CID tier (CIDv1 raw+sha2-256) for on-disk/on-wire content-addressing. Draws a firewall between ephemeral process keys and cross-peer persisted content. |
 | **`lunco-precompute`** | Content-addressed precompute disk cache (`bake_or_load`): runs expensive pure functions once, persists results keyed by content hash (via `lunco-hash` + `lunco-storage`), and loads them on subsequent runs/peers. |
 | **`lunco-settings`** | Centralised user-settings: one JSON file (`<OS config dir>/lunco/settings.json`), namespaced sections, auto-persist on change; also owns the shared `DownloadSettings` retry/backoff policy. |
@@ -146,7 +147,7 @@ Primary entry points and simulation assembly targets.
 | **`lunco-modelica-ui`** | `lunica` | The Modelica workbench application and UI facade. |
 | **`lunco-modelica-core`** | `lunica_worker`, `modelica_run`, `modelica_tester`, `msl_indexer`, `msl_parse_bench` | Headless Modelica worker and CLI/indexing tools; none link the workbench UI. |
 
-> Other binaries: `build_msl_assets` (`lunco-assets`), `net_smoke` (`lunco-networking`), `dem_worker` (`lunco-terrain-bake`, the off-thread DEM bake Web Worker — staged next to the wasm by `build_web.sh`).
+> Other binaries: `build_msl_assets` (`lunco-modelica-assets`), `net_smoke` (`lunco-networking`), `dem_worker` (`lunco-terrain-bake`, the off-thread DEM bake Web Worker — staged next to the wasm by `build_web.sh`).
 
 ---
 

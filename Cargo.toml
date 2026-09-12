@@ -42,6 +42,7 @@ members = [
     "crates/lunco-scene-validation",
     "crates/lunco-ui",
     "crates/lunco-assets",
+    "crates/lunco-modelica-assets",
     "crates/lunco-materials",
     "crates/lunco-networking",
     "crates/lunco-command-macro",
