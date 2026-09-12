@@ -30,8 +30,8 @@ fn target_record(doc, path, edit_target) {
     }
 }
 
-fn generation(doc, path) {
-    let result = query("QueryUsdPrim", #{ doc_id: doc, path: path });
+fn generation(doc) {
+    let result = query("InspectUsdDocument", #{ doc_id: doc });
     if result == () || result.ok == false || result.generation == () {
         return ();
     }
@@ -43,11 +43,11 @@ fn prim_exists(doc, path) {
     result != () && result.ok != false
 }
 
-fn apply_ops(doc, generation_path, label, ops) {
+fn apply_ops(doc, label, ops) {
     if ops.len() == 0 { return #{ ok: true, changed: false }; }
     let result = cmd("ApplyUsdOps", #{
         doc_id: doc,
-        parent_gen: generation(doc, generation_path),
+        parent_gen: generation(doc),
         label: label,
         ops: ops,
     });
@@ -134,36 +134,51 @@ fn next_point_name(doc, route) {
 // Read the route points once and optionally replace or omit one point. This
 // keeps a move/delete and its ribbon refresh in the same USD transaction.
 fn route_positions(doc, route, edited_path, replacement, appended) {
+    let document_gen = generation(doc);
+    if document_gen == () {
+        return #{ ok: false, error: "route document generation is unavailable" };
+    }
     let result = query("QueryUsdPrim", #{
         doc_id: doc,
         path: route,
         children: true,
     });
     let positions = [];
-    if result != () && result.ok != false && result.children != () {
-        for child in result.children {
-            let parts = child.split("/");
-            let leaf = parts[parts.len() - 1];
-            if leaf == "Program" { continue; }
-            let record = query("QueryUsdPrim", #{ doc_id: doc, path: child });
-            if record == () || record.ok == false || record.active != true { continue; }
-            if child == edited_path {
-                if replacement != () { positions.push(replacement); }
-                continue;
-            }
-            let point = query("QueryUsdPrim", #{
-                doc_id: doc,
-                path: child,
-                attrs: ["xformOp:translate"],
-            });
-            if point != () && point.ok != false && point.attrs != ()
-                && point.attrs["xformOp:translate"] != () {
-                positions.push(point.attrs["xformOp:translate"]);
-            }
+    if result == () || result.ok == false || result.children == () {
+        return #{ ok: false, error: "route stage is not synchronized" };
+    }
+    if result.generation != document_gen {
+        return #{ ok: false, error: "route stage is not synchronized" };
+    }
+    for child in result.children {
+        let parts = child.split("/");
+        let leaf = parts[parts.len() - 1];
+        if leaf == "Program" { continue; }
+        let record = query("QueryUsdPrim", #{ doc_id: doc, path: child });
+        if record == () || record.ok == false {
+            return #{ ok: false, error: "route point state is not synchronized" };
         }
+        if record.generation != document_gen {
+            return #{ ok: false, error: "route point state is not synchronized" };
+        }
+        if record.active != true { continue; }
+        if child == edited_path {
+            if replacement != () { positions.push(replacement); }
+            continue;
+        }
+        let point = query("QueryUsdPrim", #{
+            doc_id: doc,
+            path: child,
+            attrs: ["xformOp:translate"],
+        });
+        if point == () || point.ok == false || point.attrs == ()
+            || point.attrs["xformOp:translate"] == () {
+            return #{ ok: false, error: "route point has no authored position" };
+        }
+        positions.push(point.attrs["xformOp:translate"]);
     }
     if appended != () { positions.push(appended); }
-    positions
+    #{ ok: true, points: positions }
 }
 
 fn point_literal(point) {
@@ -322,9 +337,10 @@ fn ensure_ribbon(context) {
     if context == () || context.doc_id == () || context.route_path == () {
         return failure("route view has no explicit document or route path");
     }
-    let points = route_positions(context.doc_id, context.route_path, (), (), ());
-    let ops = ribbon_ops(context.doc_id, context.route_path, points);
-    apply_ops(context.doc_id, context.route_path, "Update route ribbon", ops)
+    let read = route_positions(context.doc_id, context.route_path, (), (), ());
+    if read.ok != true { return read; }
+    let ops = ribbon_ops(context.doc_id, context.route_path, read.points);
+    apply_ops(context.doc_id, "Update route ribbon", ops)
 }
 
 fn route_setup(doc, route, subject) {
@@ -414,7 +430,7 @@ fn route_setup(doc, route, subject) {
             return #{ ok: false, error: "route is already assigned to another subject" };
         }
     }
-    #{ ok: true, ops: ops }
+    #{ ok: true, created: !existing.exists, ops: ops }
 }
 
 fn marker_ops(doc, route, position) {
@@ -461,9 +477,16 @@ fn on_click(context) {
     if !point.ok { return failure(point.error); }
     let ops = setup.ops;
     for op in point.ops { ops.push(op); }
-    let positions = route_positions(context.doc_id, route, (), (), context.world_position);
-    for op in ribbon_ops(context.doc_id, route, positions) { ops.push(op); }
-    let result = apply_ops(context.doc_id, route, "Append route point", ops);
+    let positions = if setup.created {
+        #{ ok: true, points: [context.world_position] }
+    } else {
+        let read = route_positions(context.doc_id, route, (), (), context.world_position);
+        if read.ok != true { return failure(read.error); }
+        read
+    };
+    let view_ops = ribbon_ops(context.doc_id, route, positions.points);
+    for op in view_ops { ops.push(op); }
+    let result = apply_ops(context.doc_id, "Append route point", ops);
     if result.ok { result.path = point.path; }
     result
 }
@@ -484,9 +507,10 @@ fn on_move(context) {
         path: point,
         value: context.world_position,
     }}];
-    let positions = route_positions(context.doc_id, route, point, context.world_position, ());
-    for op in ribbon_ops(context.doc_id, route, positions) { ops.push(op); }
-    let result = apply_ops(context.doc_id, route, "Move route point", ops);
+    let read = route_positions(context.doc_id, route, point, context.world_position, ());
+    if read.ok != true { return failure(read.error); }
+    for op in ribbon_ops(context.doc_id, route, read.points) { ops.push(op); }
+    let result = apply_ops(context.doc_id, "Move route point", ops);
     if result.ok { result.path = point; }
     result
 }
@@ -515,10 +539,11 @@ fn on_delete(context) {
             return failure("route point is composed read-only");
         }
     };
-    let positions = route_positions(context.doc_id, route, point, (), ());
+    let read = route_positions(context.doc_id, route, point, (), ());
+    if read.ok != true { return failure(read.error); }
     let ops = [op];
-    for ribbon_op in ribbon_ops(context.doc_id, route, positions) { ops.push(ribbon_op); }
-    let result = apply_ops(context.doc_id, route, "Delete route point", ops);
+    for ribbon_op in ribbon_ops(context.doc_id, route, read.points) { ops.push(ribbon_op); }
+    let result = apply_ops(context.doc_id, "Delete route point", ops);
     if result.ok { result.path = point; }
     result
 }

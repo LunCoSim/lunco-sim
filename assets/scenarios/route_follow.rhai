@@ -159,7 +159,11 @@ fn route_revision(me) {
     let route = route_path(me);
     let doc = route_document(me);
     if route == () || doc == () { return (); }
-    let result = query("QueryUsdPrim", #{ doc_id: doc, path: route });
+    // The document generation is the route invalidation clock. Read it from
+    // the document registry instead of QueryUsdPrim: the canonical stage may
+    // be briefly behind after a typed edit, and a generation read must not
+    // depend on that asynchronous projection settling.
+    let result = query("InspectUsdDocument", #{ doc_id: doc });
     if result == () || result.ok == false || result.generation == () { return (); }
     result.generation
 }
@@ -175,7 +179,11 @@ fn refresh_route_view(me, state) {
         route_path: route_path(me),
     });
     if result == () || result.ok != true {
-        return route_failure("the route ribbon could not be projected");
+        return if result == () {
+            route_failure("the route ribbon tool returned no result")
+        } else {
+            route_failure(result.error)
+        };
     }
     // The ribbon itself is a runtime edit and may advance the document
     // generation. Capture the post-edit revision so the task does not issue
