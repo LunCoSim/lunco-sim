@@ -204,12 +204,16 @@ The same ownership rule applies to the measured presentation paths:
   full layout traversal.
 - **Universal port inspection** uses `PortRegistry::port_entities`: each
   registered backend enumerates its own authoritative component/surface
-  candidates, and the registry deduplicates them before the bounded live sample.
-  The Builder Ports panel must never discover owners by probing every ECS entity
-  against every backend. Each backend also supplies an identity-only
-  `topology_key`; the panel rebuilds rows and metadata only when that key or the
-  candidate label changes, then reads live values through the registry at its
-  10 Hz cadence. A live physics value is not a reason to reconstruct the table.
+  candidates, and the registry deduplicates them. The Builder Ports panel must
+  never discover owners by probing every ECS entity against every backend. The
+  existing `UsdStageRevision` gates candidate discovery in the mounted scene;
+  the lightweight registry-only test path retains its entity-count guard. Each
+  backend also supplies an identity-only `topology_key`; rows and metadata are
+  rebuilt only when the scene projection changes. The panel virtualizes its
+  fixed-height entity headers and paints a port grid only for an explicitly
+  expanded entity. Its 10 Hz producer reads live values and wire/hold
+  decorations only for those requested entities. A live physics value is not a
+  reason to reconstruct or paint the whole table.
 
 The same rule applies below the UI boundary. The Modelica engine-sync pass is
 woken by the document registry revision and still compares document generations

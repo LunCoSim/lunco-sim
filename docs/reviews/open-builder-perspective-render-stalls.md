@@ -1,8 +1,8 @@
 # Builder perspective render-stall handoff
 
-Status: implementation complete in the `tutorials` worktree; the original
-render-transition findings remain valid, and the Builder-only port path plus
-the independent physics stall have separate owners and fixes.
+Status: implementation complete in `main`; the original render-transition
+findings remain valid, and the Builder-only port path plus the independent
+physics stall have separate owners and fixes.
 
 ## Report evidence
 
@@ -85,6 +85,16 @@ its work is performed in the owning physics schedule instead of being joined
 from a worker at the end of the same schedule. The standard
 `lunco_physics::DEFAULT_SUBSTEP_COUNT` remains eight.
 
+The final Builder-specific owner was the panel's presentation path, not Avian.
+The panel was painting thousands of collapsed headers and matching all 72,131
+rows every frame, while its producer rediscovered 4,028 candidates every 100 ms.
+The replacement keeps the complete registry projection and command contract,
+but virtualizes fixed-height entity headers, paints only explicitly expanded
+port grids, requests live values only for those expanded entities, and uses the
+existing `UsdStageRevision` to invalidate candidate discovery. This is why View
+is unaffected: it does not open the Ports panel or execute its producer/paint
+path.
+
 The final Tracy capture (`scripts/perf/captures/builder-perspective-physics-owner-sync-final-20260912.tracy`)
 measured `PhysicsSchedule` at 1.528 ms mean and 3.639 ms maximum under
 profiler overhead; the optimizer itself peaked at 8.856 us and the former
@@ -103,6 +113,17 @@ after settling, and inspected each transition. The clean FPS run was separate
 from the Tracy run: its physics result meets the requested sub-1 ms budget,
 while the profiled result is diagnostic only and is not the product timing
 number.
+
+The post-fix Tracy capture
+(`scripts/perf/captures/builder-stage-gated-main-20260912.tracy`) recorded 114
+port-producer calls: the initial topology projection took 34.346 ms under
+profiler overhead, then stable calls were 37–66 us. `render_workbench` averaged
+0.851 ms (8.813 ms maximum) and the egui pass averaged 1.046 ms (9.122 ms
+maximum). The clean production run
+(`target/builder-stage-gated-main.log`) reported Avian total-step samples of
+0.224–0.912 ms during the Builder interval; the standard eight substeps were
+unchanged. The isolated transition rebuild remains a one-time render/scene
+startup cost and is not the recurring Builder port stall.
 
 ## Handoff constraints
 

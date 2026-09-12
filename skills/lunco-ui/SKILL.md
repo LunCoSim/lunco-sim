@@ -49,8 +49,10 @@ sample at a bounded cadence when the data has no shared change marker. Writable
 rows emit the existing typed command and validate against the metadata contract;
 the panel must not infer policy from names or mutate port storage directly. If
 the view caches metadata, its invalidation must use the owner-provided
-`PortBackend::topology_key`; the normal sample path reads live values through
-the registry rather than rerunning backend list/metadata callbacks.
+`PortBackend::topology_key` and the owning scene revision. Large inspection
+surfaces must virtualize their fixed-height browser rows and request live values
+only for expanded/visible bodies; the normal sample path reads those values
+through the registry rather than rerunning backend list/metadata callbacks.
 
 `default_slot()` seeds layout intent only before the first perspective is
 active. After that, the active `Perspective` owns its slot declarations;
