@@ -213,6 +213,7 @@ pub struct LinkState {
 #[derive(Resource, Debug, Default)]
 pub struct LinkClassCatalog {
     counts: HashMap<String, usize>,
+    members: HashMap<Entity, String>,
     revision: u64,
     initialized: bool,
 }
@@ -221,9 +222,10 @@ pub struct LinkClassCatalog {
 /// backend can answer class discovery without an entity-by-entity world scan.
 pub(crate) fn refresh_link_class_catalog(
     mut catalog: ResMut<LinkClassCatalog>,
-    nodes: Query<&LinkNode>,
+    nodes: Query<(Entity, &LinkNode)>,
     changed: Query<(), Or<(Added<LinkNode>, Changed<LinkNode>)>>,
     mut removed: RemovedComponents<LinkNode>,
+    mut topology: Option<ResMut<lunco_core::PortTopologyRevision>>,
 ) {
     let topology_changed =
         !catalog.initialized || changed.iter().next().is_some() || removed.read().count() > 0;
@@ -232,15 +234,22 @@ pub(crate) fn refresh_link_class_catalog(
     }
 
     let mut counts = HashMap::new();
-    for node in &nodes {
+    let mut members = HashMap::new();
+    for (entity, node) in &nodes {
         let Some(class) = node.class.as_deref().filter(|class| !class.is_empty()) else {
             continue;
         };
-        *counts.entry(sanitize_class(class)).or_default() += 1;
+        let class = sanitize_class(class);
+        *counts.entry(class.clone()).or_default() += 1;
+        members.insert(entity, class);
     }
-    if counts != catalog.counts {
+    if counts != catalog.counts || members != catalog.members {
         catalog.counts = counts;
+        catalog.members = members;
         catalog.revision = catalog.revision.wrapping_add(1);
+        if let Some(topology) = topology.as_mut() {
+            topology.bump();
+        }
     }
     catalog.initialized = true;
 }
@@ -443,6 +452,7 @@ pub(crate) fn update_links(
     mut q_geometry: Query<&mut LinkGeometryState>,
     mut state: ResMut<LinkSolverState>,
     mut commands: Commands,
+    mut topology: Option<ResMut<lunco_core::PortTopologyRevision>>,
 ) {
     let (Some(config), Some(world_time)) = (config, world_time) else {
         return;
@@ -749,15 +759,22 @@ pub(crate) fn update_links(
 
     // Publish direct policy state only for direct endpoints, and publish the
     // shared geometry state for every endpoint including Wi-Fi-only radios.
+    let mut port_topology_changed = false;
     for endpoint in &endpoints {
         if endpoint.direct_node.is_some() {
             let peers = per_node.remove(&endpoint.entity).unwrap_or_default();
-            if let Ok(mut st) = q_state.get_mut(endpoint.entity) {
-                st.peers = peers;
-            } else {
-                commands
-                    .entity(endpoint.entity)
-                    .try_insert(LinkState { peers });
+            match q_state.get_mut(endpoint.entity) {
+                Ok(mut st) => {
+                    if link_port_shape(&st.peers) != link_port_shape(&peers) {
+                        port_topology_changed = true;
+                    }
+                    st.peers = peers;
+                }
+                Err(_) => {
+                    commands
+                        .entity(endpoint.entity)
+                        .try_insert(LinkState { peers });
+                }
             }
         }
         let peers = per_geometry.remove(&endpoint.entity).unwrap_or_default();
@@ -769,6 +786,21 @@ pub(crate) fn update_links(
                 .try_insert(LinkGeometryState { peers });
         }
     }
+    if port_topology_changed {
+        if let Some(topology) = topology.as_mut() {
+            topology.bump();
+        }
+    }
+}
+
+/// The identity portion of a link endpoint's public port surface. Range and
+/// connectivity are live samples; only the published class set and the
+/// presence of an elevation value can add or remove a port name.
+fn link_port_shape(peers: &[LinkPeer]) -> HashSet<(String, bool)> {
+    best_per_class_peers(peers)
+        .into_iter()
+        .map(|(class, peer)| (sanitize_class(&class), peer.elevation_deg.is_some()))
+        .collect()
 }
 
 /// True when one endpoint is authored inside the other endpoint's subtree.
@@ -934,8 +966,12 @@ fn link_event(name: &str, (a, b): (u64, u64), jd: f64) -> TelemetryEvent {
 /// Writes every solve (not change-driven) because a model's own output sync rewrites its
 /// outputs map — same reasoning as the gravity and solar bridges.
 fn best_per_class(state: &LinkState) -> std::collections::HashMap<String, &LinkPeer> {
+    best_per_class_peers(&state.peers)
+}
+
+fn best_per_class_peers(peers: &[LinkPeer]) -> std::collections::HashMap<String, &LinkPeer> {
     let mut best: std::collections::HashMap<String, &LinkPeer> = Default::default();
-    for p in &state.peers {
+    for p in peers {
         // A peer with no class is unreachable by an authored wire (there is no port
         // name for it) — `LinkState` still carries it for script/UI.
         let Some(class) = p.class.as_deref() else {
@@ -1231,6 +1267,7 @@ mod tests {
             counts: [("rover".into(), 1), ("base".into(), 1)]
                 .into_iter()
                 .collect(),
+            members: Default::default(),
             revision: 1,
             initialized: true,
         });
@@ -1298,6 +1335,14 @@ mod tests {
                 .counts
                 .get("rover"),
             Some(&2)
+        );
+
+        let revision_after_count_change = app.world().resource::<LinkClassCatalog>().revision;
+        app.world_mut().get_mut::<LinkNode>(rover).unwrap().class = Some("base".into());
+        app.update();
+        assert!(
+            app.world().resource::<LinkClassCatalog>().revision > revision_after_count_change,
+            "a per-node class swap must invalidate even when aggregate class counts return to the prior shape"
         );
 
         app.world_mut().despawn(rover);

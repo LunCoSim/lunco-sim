@@ -88,6 +88,7 @@ pub use navigation::{approach_factor, nav_setpoint, steering_command, Navigation
 pub use pacing::{
     KeepAwake, SimulationBarrier, SimulationBarrierParticipants, SimulationExecutionMode,
 };
+pub use ports::PortTopologyRevision;
 pub use telemetry::*;
 // Explicit re-export: bevy 0.19's prelude also names a `Severity`, and the
 // crate-root `use bevy::prelude::*` below shadows the glob above for external

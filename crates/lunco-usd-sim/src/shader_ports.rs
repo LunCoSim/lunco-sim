@@ -88,6 +88,7 @@
 use bevy::prelude::*;
 use lunco_core::ports::{
     port_name_set_key, PortBackend, PortDirection, PortMetadata, PortRef, PortRegistry,
+    PortTopologyRevision, PortTopologyState,
 };
 use lunco_materials::dyn_params::ParamValue;
 use lunco_materials::look::ShaderLook;
@@ -145,8 +146,7 @@ pub const SHADER_PARAM_BACKEND: PortBackend = PortBackend {
         let Some(look) = world.get::<ShaderLook>(entity) else {
             return 0;
         };
-        port_name_set_key(look.driven.iter())
-            ^ port_name_set_key(look.values.keys()).rotate_left(23)
+        shader_topology_key(look)
     },
     list: |world, entity, out| {
         let Some(look) = world.get::<ShaderLook>(entity) else {
@@ -211,6 +211,25 @@ pub const SHADER_PARAM_BACKEND: PortBackend = PortBackend {
     write_slot: None,
 };
 
+fn shader_topology_key(look: &ShaderLook) -> u64 {
+    port_name_set_key(look.driven.iter()) ^ port_name_set_key(look.values.keys()).rotate_left(23)
+}
+
+/// Detect an in-place change to the shader parameter surface. `ShaderLook` also
+/// carries `live`, so this change-filtered structural comparison is what keeps
+/// per-tick uniform writes from invalidating the port projection.
+fn check_shader_port_structure(
+    changed: Query<(Entity, &ShaderLook), Changed<ShaderLook>>,
+    mut state: ResMut<PortTopologyState>,
+    mut revision: ResMut<PortTopologyRevision>,
+) {
+    for (entity, look) in &changed {
+        if state.changed::<ShaderLook>(entity, shader_topology_key(look)) {
+            revision.bump();
+        }
+    }
+}
+
 /// Register the shader-parameter backend.
 ///
 /// Registration order is resolution precedence, and plugin order is not a contract —
@@ -220,6 +239,11 @@ pub const SHADER_PARAM_BACKEND: PortBackend = PortBackend {
 /// so there is nothing for it to shadow.
 pub fn build(app: &mut App) {
     app.init_resource::<PortRegistry>()
+        .init_resource::<lunco_core::PortTopologyRevision>()
+        .init_resource::<lunco_core::ports::PortTopologyState>()
+        .add_observer(lunco_core::ports::bump_port_topology_on_add::<ShaderLook>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<ShaderLook>)
+        .add_systems(PostUpdate, check_shader_port_structure)
         .world_mut()
         .resource_mut::<PortRegistry>()
         .register(SHADER_PARAM_BACKEND);

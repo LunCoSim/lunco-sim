@@ -307,7 +307,15 @@ impl Plugin for ScenePortsPlugin {
 pub fn build(app: &mut App) {
     app.add_observer(mark_point_light_surface_ready)
         .add_observer(mark_spot_light_surface_ready)
+        .add_observer(lunco_core::ports::bump_port_topology_on_add::<PointLight>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<PointLight>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_add::<SpotLight>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<SpotLight>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_add::<Transform>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<Transform>)
         .init_resource::<PortRegistry>()
+        .init_resource::<lunco_core::PortTopologyRevision>()
+        .init_resource::<lunco_core::ports::PortTopologyState>()
         .world_mut()
         .resource_mut::<PortRegistry>()
         .register(SCENE_PROPERTY_BACKEND);
