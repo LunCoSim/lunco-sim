@@ -1238,7 +1238,10 @@ fn apply_wheel_suspension(
             // COMPRESSION — zero at rest, positive as the strut packs up.
             if let Some(visual_entity) = wheel.visual_entity {
                 if let Ok(mut visual_tf) = q_visual.get_mut(visual_entity) {
-                    visual_tf.translation.y = (susp.rest_length - current_distance) as f32;
+                    let translation_y = (susp.rest_length - current_distance) as f32;
+                    if visual_tf.translation.y != translation_y {
+                        visual_tf.translation.y = translation_y;
+                    }
                 }
             }
         }
@@ -1505,7 +1508,10 @@ fn apply_wheel_heading(
         // Rotate about the authored wheel-local heading axis. The input is the
         // final angle in radians, not a normalized vehicle command.
         let axis = wheel.heading_axis.as_vec3().normalize();
-        transform.rotation = base_rotation * Quat::from_axis_angle(axis, heading.value as f32);
+        let rotation = base_rotation * Quat::from_axis_angle(axis, heading.value as f32);
+        if transform.rotation != rotation {
+            transform.rotation = rotation;
+        }
     }
 }
 
@@ -2606,15 +2612,23 @@ fn update_suspension_visuals(
             }
 
             if let Ok((mut tf, piston)) = q_piston.get_mut(child) {
-                tf.translation.y = (piston.initial_y as f64 + delta_y) as f32;
+                let translation_y = (piston.initial_y as f64 + delta_y) as f32;
+                if tf.translation.y != translation_y {
+                    tf.translation.y = translation_y;
+                }
             } else if let Ok(mut tf) = q_spring.get_mut(child) {
                 let rest_susp_length = strut_offset(susp.rest_length, wheel.wheel_radius);
                 if rest_susp_length > 1e-4 {
                     let current_susp_length = (current_distance - wheel.wheel_radius).max(0.0);
                     let scale_y = (current_susp_length / rest_susp_length) as f32;
-                    tf.scale.y = scale_y;
+                    if tf.scale.y != scale_y {
+                        tf.scale.y = scale_y;
+                    }
                     // The coil spans hub → strut top, so it sits at their midpoint.
-                    tf.translation.y = ((hub_y + top_y) / 2.0) as f32;
+                    let translation_y = ((hub_y + top_y) / 2.0) as f32;
+                    if tf.translation.y != translation_y {
+                        tf.translation.y = translation_y;
+                    }
                 }
             }
         }

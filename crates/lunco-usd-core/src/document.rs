@@ -1731,10 +1731,25 @@ impl Document for UsdDocument {
                 ..
             } => {
                 let reference_prim_path = reference_prim_path.filter(|path| !path.is_empty());
-                // Parent must exist in either layer (root is implicit).
-                if parent_path != "/" && !parent_path.is_empty() {
-                    self.require_prim_anywhere(&parent_path)?;
-                }
+                // A child under a referenced/payloaded parent is a valid local
+                // USD opinion even though that parent has no spec in this
+                // document's authored layers. Materialize the parent as an
+                // `over` below so the child can be defined without flattening
+                // or opening the referenced source document.
+                let composed_parent = if parent_path != "/" && !parent_path.is_empty() {
+                    match self.require_prim_anywhere(&parent_path) {
+                        Ok(_) => false,
+                        Err(error) => {
+                            let parent = parse_prim_path(&parent_path)?;
+                            if !self.path_is_under_composed_arc_path(&parent) {
+                                return Err(error);
+                            }
+                            true
+                        }
+                    }
+                } else {
+                    false
+                };
                 // `name` is ONE prim identifier, not a path fragment: a stray
                 // `a/b` would silently define an extra hierarchy level (and a
                 // leading digit an unloadable file) once concatenated below.
@@ -1755,6 +1770,11 @@ impl Document for UsdDocument {
                 let existed = self.layer(target).spec(&prim_sdf).is_some();
 
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                if composed_parent {
+                    stage
+                        .override_prim(parent_path.as_str())
+                        .map_err(author_err)?;
+                }
                 let prim = stage.define_prim(prim_path.as_str()).map_err(author_err)?;
                 if let Some(tn) = &type_name {
                     prim.set_type_name(tn.as_str()).map_err(author_err)?;

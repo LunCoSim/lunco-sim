@@ -90,11 +90,9 @@ pub trait ViewModelAppExt {
     ///
     /// Separate from [`add_view_model`](Self::add_view_model) so the
     /// effectiveness tracker keeps meaning what it says. Registering these with
-    /// an always-true gate made the tracker report them as "this run condition is
-    /// not gating" on every launch — three warnings a run, two of which described
-    /// a decision rather than a defect, which is exactly how a real one
-    /// (`populate_inspector_view` at 296/300) gets read past. Declaring the
-    /// intent in the CALL makes the log's remaining entries all actionable.
+    /// an always-true gate makes the tracker report them as "this run condition
+    /// is not gating" on every launch. Declaring the intent in the CALL makes
+    /// the log's remaining entries actionable.
     fn add_view_model_every_frame<P, M>(&mut self, producer: P) -> &mut Self
     where
         P: IntoScheduleConfigs<bevy::ecs::system::ScheduleSystem, M>;
@@ -541,6 +539,7 @@ impl Plugin for SceneEditUiPlugin {
             .init_resource::<crate::gizmo::GizmoVisibilityState>()
             .init_resource::<crate::diagnostic_visuals::DiagnosticVisualStore>()
             .init_resource::<lunco_core::ArmedScriptTool>()
+            .init_resource::<crate::script_tools::ScenePointerDispatch>()
             .add_plugins(crate::perf_bridge::PerfBridgePlugin);
         app.init_resource::<lunco_api::queries::ApiQueryRegistry>();
         app.world_mut()
@@ -591,10 +590,15 @@ impl Plugin for SceneEditUiPlugin {
                 crate::script_tools::forget_missing_script_tool,
             ),
         );
+        app.add_systems(
+            PostUpdate,
+            crate::script_tools::clear_scene_pointer_dispatch,
+        );
         app.add_observer(spawn_palette::on_spawn_state_requested);
         app.add_observer(terrain_tools::on_terrain_ui_action);
         app.add_observer(crate::selection::on_select_entity_target);
         app.add_systems(Update, crate::selection::handle_deselect_keys);
+        app.add_observer(crate::script_tools::on_scene_pointer_event);
         app.add_observer(crate::selection::on_scene_click_select);
         app.add_observer(crate::selection::on_usd_viewport_click);
         app.add_observer(crate::script_tools::on_scene_click_script_tool);
@@ -879,11 +883,13 @@ impl Plugin for SceneEditUiPlugin {
         );
 
         // The universal port table is a live diagnostic/control surface. Its
-        // producer samples the shared registry at 10 Hz; each backend supplies
-        // its own entity candidates, so a Builder sample does not scan the full
-        // ECS world. The panel itself remains a pure view and emits
-        // SetPorts/ReleasePort.
-        app.init_resource::<ports::PortView>();
+        // producer samples requested live values at 10 Hz, while the shared
+        // port-surface generation invalidates candidate discovery only at an
+        // owner mutation boundary. The panel itself remains a pure view and
+        // emits SetPorts/ReleasePort.
+        app.init_resource::<ports::PortView>()
+            .init_resource::<ports::PortInspectionRequest>()
+            .init_resource::<lunco_core::PortTopologyRevision>();
         app.add_view_model(ports::populate_port_view, ports::port_view_due);
 
         // WP-8: the Inspector reads query-derived sun / camera / joint state

@@ -999,13 +999,21 @@ pub fn read_token_timesamples(
 
 /// The authored provider schema that can publish runtime-discovered value ports.
 ///
-/// USD authored connections describe the topology, but Avian bodies,
+/// USD authored connections describe the topology, but Avian bodies, joints,
 /// environment probes, raycast providers, and Modelica program facets publish
 /// some values only after projection/compilation. Those values deliberately
 /// stay out of the authored USD property surface. A connection may therefore
 /// target an existing runtime provider without having an authored source
 /// attribute; an absent source prim is still always invalid.
 pub fn runtime_port_provider(view: &dyn UsdReadObject, prim: &SdfPath) -> Option<&'static str> {
+    if let Some(schema) = match view.type_name(prim).as_deref() {
+        Some("PhysicsRevoluteJoint") => Some("PhysicsRevoluteJoint"),
+        Some("PhysicsPrismaticJoint") => Some("PhysicsPrismaticJoint"),
+        _ => None,
+    } {
+        return Some(schema);
+    }
+
     const DIRECT_PROVIDERS: &[&str] = &[
         "PhysicsRigidBodyAPI",
         "LunCoEnvironmentProbeAPI",
@@ -1869,6 +1877,52 @@ mod real_reader_tests {
         assert_eq!(
             view.text(&world, "a_val").as_deref(),
             Some("terrain/connecting_ridge")
+        );
+    }
+
+    #[test]
+    fn runtime_provider_recognizes_standard_joint_prims() {
+        const JOINTS: &str = r#"#usda 1.0
+(
+    defaultPrim = "World"
+)
+def Xform "World"
+{
+    def PhysicsRevoluteJoint "Hinge"
+    {
+    }
+    def PhysicsPrismaticJoint "Slider"
+    {
+    }
+    def Xform "Plain"
+    {
+    }
+}
+"#;
+        let cs = test_stage_from_recipe(&StageRecipe::from_source("scene.usda", JOINTS));
+        let view = cs.view();
+        let hinge = SdfPath::new("/World/Hinge").unwrap();
+        let slider = SdfPath::new("/World/Slider").unwrap();
+        let plain = SdfPath::new("/World/Plain").unwrap();
+        let missing = SdfPath::new("/World/Missing").unwrap();
+
+        assert_eq!(
+            super::runtime_port_provider(&view, &hinge),
+            Some("PhysicsRevoluteJoint")
+        );
+        assert_eq!(
+            super::runtime_port_provider(&view, &slider),
+            Some("PhysicsPrismaticJoint")
+        );
+        assert_eq!(
+            super::runtime_port_provider(&view, &plain),
+            None,
+            "an ordinary prim is not a runtime port provider"
+        );
+        assert_eq!(
+            super::runtime_port_provider(&view, &missing),
+            None,
+            "a missing source prim never becomes a runtime provider"
         );
     }
 

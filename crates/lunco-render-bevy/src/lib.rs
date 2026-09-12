@@ -351,7 +351,10 @@ fn bind_pbr_look(
     apply_shadow_flag(&mut commands, e, look);
 }
 
-/// Re-bind when a look is edited in place (the Inspector, a script, a USD reload).
+/// Re-bind when a look or mesh is edited in place (the Inspector, a script, a
+/// USD reload). A live USD refresh may reuse the entity and replace its mesh
+/// while retaining an unchanged look; observing `Mesh3d` closes that lifecycle
+/// seam without making USD projection know about a concrete render material.
 ///
 /// Change-driven: `Changed<PbrLook>` only, so a static scene costs nothing.
 ///
@@ -373,7 +376,7 @@ fn rebind_changed_pbr_look(
             Option<&MeshMaterial3d<StandardMaterial>>,
             Option<&PbrLookBinding>,
         ),
-        Changed<PbrLook>,
+        Or<(Changed<PbrLook>, Changed<Mesh3d>)>,
     >,
     profile: Res<RenderProfile>,
     mut cache: ResMut<PbrLookCache>,

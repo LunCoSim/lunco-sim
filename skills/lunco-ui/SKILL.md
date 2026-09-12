@@ -49,8 +49,14 @@ sample at a bounded cadence when the data has no shared change marker. Writable
 rows emit the existing typed command and validate against the metadata contract;
 the panel must not infer policy from names or mutate port storage directly. If
 the view caches metadata, its invalidation must use the owner-provided
-`PortBackend::topology_key`; the normal sample path reads live values through
-the registry rather than rerunning backend list/metadata callbacks.
+`PortBackend::topology_key` and the durable owner-published
+`PortTopologyRevision`. Providers publish it from component lifecycle
+observers and change-filtered structural identity checks; Avian groups declare
+their identity key and invalidation hook beside their membership predicate. Do
+not use a broad scene revision or entity-count poll as a port-topology signal.
+Large inspection surfaces must virtualize their fixed-height browser rows and request live values
+only for expanded/visible bodies; the normal sample path reads those values
+through the registry rather than rerunning backend list/metadata callbacks.
 
 `default_slot()` seeds layout intent only before the first perspective is
 active. After that, the active `Perspective` owns its slot declarations;
@@ -204,9 +210,10 @@ World-space vehicle trails are transient render presentation, not UI-owned state
 Read the vehicle root's solved Avian `Position` in the active physics/grid frame,
 project through `GridSurfaceQuery`, and use bounded history with explicit
 `SceneTeardown` cleanup. Do not derive trails from controller input, render
-`GlobalTransform`, authored route geometry, or a per-frame USD edit; reuse the
-shared ribbon mesh builder so turns and BigSpace frame changes use one geometry
-contract.
+`GlobalTransform`, authored route geometry, or a per-frame USD edit. Use the
+existing ribbon mesh builder so turns and BigSpace frame changes use one trail
+geometry contract; route presentation is a separate reusable USD `BasisCurves`
+tool in the document runtime layer.
 
 ## Runtime-authored HTML/CSS surfaces
 

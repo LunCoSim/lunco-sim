@@ -237,8 +237,9 @@ to `[RIGID_BODY_GROUP, REVOLUTE_JOINT_GROUP]` (`lunco-cosim/src/ports.rs`).
 - **Prismatic `displacement` port** — `PRISMATIC_JOINT_GROUP` (`lunco-cosim/src/
   joint.rs`), the translational mirror of the revolute `angle` group: `In` drives
   the Avian `LinearMotor` (position control), `Out` measures the signed slider
-  offset (anchors projected onto the world axis). One entry in the `AVIAN` table —
-  no new struct/observer/system, exactly the extension the table was built for.
+  offset (anchors projected onto the world axis). One entry in the `AVIAN` table
+  carries the group predicate, identity key, and structural invalidation hook, so
+  the port surface and its invalidation owner remain one declaration.
 - **USD / Omniverse drive schema** — `lunco-usd-avian` now reads the standard
   `UsdPhysicsDriveAPI` at load: the `linear` instance on a prismatic joint, the
   `angular` instance on a revolute one (`drive:{linear,angular}:physics:

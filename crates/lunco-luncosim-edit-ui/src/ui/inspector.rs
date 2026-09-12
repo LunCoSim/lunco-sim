@@ -52,6 +52,17 @@ fn report_inspector_error(world: &mut World, message: impl Into<String>) {
     });
 }
 
+/// Apply authored shader values. The shader owner structural check observes
+/// the changed component after this mutation and advances the shared topology
+/// generation only when the declared parameter surface changes.
+fn apply_shader_parameter_edits(world: &mut World, entity: Entity, edits: &[(String, ParamValue)]) {
+    if let Some(mut look) = world.get_mut::<ShaderLook>(entity) {
+        for (name, value) in edits {
+            look.values.insert(name.clone(), *value);
+        }
+    }
+}
+
 #[derive(Event, Clone, Copy, Debug)]
 pub(crate) enum InspectorComponentEdit {
     Mass {
@@ -562,11 +573,7 @@ pub(crate) fn on_shader_parameters_requested(
                 report_inspector_error(world, "Selected shader target is not document-backed");
                 return;
             }
-            if let Some(mut look) = world.get_mut::<ShaderLook>(request.entity) {
-                for (name, value) in &request.edits {
-                    look.values.insert(name.clone(), *value);
-                }
-            }
+            apply_shader_parameter_edits(world, request.entity, &request.edits);
             return;
         };
 
@@ -597,11 +604,7 @@ pub(crate) fn on_shader_parameters_requested(
             }
         }
 
-        if let Some(mut look) = world.get_mut::<ShaderLook>(request.entity) {
-            for (name, value) in &request.edits {
-                look.values.insert(name.clone(), *value);
-            }
-        }
+        apply_shader_parameter_edits(world, request.entity, &request.edits);
         if !ops.is_empty() {
             world.trigger(ApplyUsdOps {
                 doc_id: doc,
@@ -814,12 +817,14 @@ pub struct JointReadout {
 /// Change-driven view-model for the Inspector (WP-8). The Environment,
 /// Camera, and Joint sections read query-derived world state that
 /// [`PanelCtx`] deliberately can't gather during paint (no `query`, no
-/// `&World`); [`populate_inspector_view`] flattens it here each frame and
-/// the panel reads it via `ctx.resource`.
+/// `&World`); [`populate_inspector_view`] flattens it at its change-driven
+/// update boundary and the panel reads it via `ctx.resource`.
 #[derive(Resource, Default)]
 pub struct InspectorView {
     /// The primary selection used to derive the joint readout.
     pub selected: Option<Entity>,
+    /// The presentation camera used to derive exposure and bloom readouts.
+    pub active_camera: Option<Entity>,
     /// The unique authored scene sun, if the scene has one.
     pub sun: Option<SunReadout>,
     /// Global ambient brightness, if the resource exists.
@@ -979,6 +984,7 @@ pub fn populate_inspector_view(world: &mut World) {
 
     let mut view = world.resource_mut::<InspectorView>();
     view.selected = selected;
+    view.active_camera = active_camera;
     view.sun = sun;
     view.ambient_brightness = ambient_brightness;
     view.earthshine_lux = earthshine_lux;
@@ -1116,7 +1122,8 @@ pub(crate) fn inspector_inputs_changed(
         };
         ev_moved || bloom_moved
     };
-    let viewport_changed = viewport.as_ref().is_some_and(|vp| vp.is_changed());
+    let active_camera = viewport.as_deref().and_then(|vp| vp.active_camera);
+    let camera_binding_changed = view.active_camera != active_camera;
 
     // A joint's measured angle is a continuously changing Avian value, but the
     // Inspector is a human readout rather than a telemetry oscilloscope. Poll
@@ -1144,11 +1151,53 @@ pub(crate) fn inspector_inputs_changed(
         || ambient_changed
         || sun_moved
         || camera_changed
-        || viewport_changed
+        || camera_binding_changed
         || removed
         || joint_due;
     *first = true;
     run
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Resource, Default)]
+    struct ProducerRuns(u32);
+
+    fn touch_viewport(mut viewport: ResMut<lunco_core::SceneViewport>) {
+        // A mutable resource borrow marks the resource changed even though its
+        // presentation binding remains identical. The Inspector gate must use
+        // the binding value, not this incidental change tick.
+        let _ = &mut *viewport;
+    }
+
+    fn count_producer_run(mut runs: ResMut<ProducerRuns>) {
+        runs.0 += 1;
+    }
+
+    #[test]
+    fn inspector_gate_ignores_unchanged_viewport_binding() {
+        let mut app = App::new();
+        app.insert_resource(Time::<()>::default())
+            .insert_resource(SelectedEntities::default())
+            .insert_resource(InspectorView::default())
+            .insert_resource(lunco_core::SceneViewport::default())
+            .init_resource::<ProducerRuns>()
+            .add_systems(
+                Update,
+                (
+                    touch_viewport,
+                    count_producer_run.run_if(inspector_inputs_changed),
+                )
+                    .chain(),
+            );
+
+        app.update();
+        app.update();
+
+        assert_eq!(app.world().resource::<ProducerRuns>().0, 1);
+    }
 }
 
 /// Inspector panel — editable entity parameters.

@@ -50,7 +50,10 @@ Every participant's state is exposed as **named scalar ports** through the share
 **`PortRegistry`** — the single surface wires, the HTTP API (`ListPorts`/`ReadPorts`/
 `GetPort`/`SetPorts`), the inspector, rhai, and Python all use. Avian rigid bodies, joints,
 and sensors are exposed declaratively via the `AVIAN` spec table (an `AvianGroup`
-per kind), not a mirror component. The available ports:
+per kind), not a mirror component. Each group owns its identity-only topology key
+and its lifecycle/structural invalidation hook, including checks for in-place
+values that change membership. Live samples are excluded from the key. The
+available ports:
 
 | Kind | Ports |
 |---|---|
@@ -62,7 +65,7 @@ per kind), not a mirror component. The available ports:
 | **Modelica / hardware** | model `input`/`output` vars; `value` / `raw` |
 | **Imperative producer** | authored `inputs:*` commands and read-only `outputs:*` values through `InputPorts` / `OutputPorts` |
 
-Full closures + the "add a kind = one `AvianGroup` entry" pattern live in
+Full closures plus the group key/invalidation contract live in
 [`../../crates/lunco-cosim/README.md`](../../crates/lunco-cosim/README.md). USD
 authoring of joints + sensors is in [`21-domain-usd.md`](21-domain-usd.md);
 vehicle/lander modeling that builds on this surface is in

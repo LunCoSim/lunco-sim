@@ -88,6 +88,7 @@ pub use navigation::{approach_factor, nav_setpoint, steering_command, Navigation
 pub use pacing::{
     KeepAwake, SimulationBarrier, SimulationBarrierParticipants, SimulationExecutionMode,
 };
+pub use ports::PortTopologyRevision;
 pub use telemetry::*;
 // Explicit re-export: bevy 0.19's prelude also names a `Severity`, and the
 // crate-root `use bevy::prelude::*` below shadows the glob above for external
@@ -1145,6 +1146,11 @@ pub(crate) fn register_core_resources(app: &mut App) {
         .init_resource::<CommandResults>()
         .init_resource::<ActiveCommandId>()
         .init_resource::<CausalTrace>()
+        // Port identity is a core substrate shared by every provider and UI
+        // consumer. Keeping the invalidation generation and its structural
+        // state here removes plugin-order dependence from lifecycle observers.
+        .init_resource::<PortTopologyRevision>()
+        .init_resource::<ports::PortTopologyState>()
         .init_resource::<exposure::EngineExposures>()
         .init_resource::<exposure::ExposureRefresh>()
         .init_resource::<RuntimeFaults>()
@@ -1357,6 +1363,8 @@ mod ph1_identity_tests {
         assert!(w.get_resource::<session::OwnedInputLog>().is_some());
         assert!(w.get_resource::<session::AppliedInputSeq>().is_some());
         assert!(w.get_resource::<CausalTrace>().is_some());
+        assert!(w.get_resource::<PortTopologyRevision>().is_some());
+        assert!(w.get_resource::<ports::PortTopologyState>().is_some());
     }
 
     #[test]

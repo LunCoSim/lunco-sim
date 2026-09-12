@@ -230,6 +230,27 @@ def Xform "LanderTest" (
             float inputs:command_tilt_limit_rad.connect = </LanderTest/Lander.inputs:command_tilt_limit_rad>
         }
 
+        # These event projections belong to the mission because this layer is
+        # the owner that composes the optional GNC component. The reusable
+        # airframe only owns touchdown; placing GNC-dependent events there
+        # would leave a standalone descent_lander with dangling source paths.
+        def LunCoEvent "EngineCutoff"
+        {
+            float inputs:trigger.connect = </LanderTest/Lander/GNC.outputs:landing_engine_cutoff_request>
+            uniform token lunco:event:name = "lander_engine_cutoff"
+            uniform token lunco:event:severity = "info"
+            uniform bool lunco:event:latched = true
+            uniform double lunco:event:qualificationTime = 0.0
+        }
+        def LunCoEvent "FlightHandoff"
+        {
+            float inputs:trigger.connect = </LanderTest/Lander/GNC.outputs:landing_handoff_request>
+            uniform token lunco:event:name = "lander_flight_handoff"
+            uniform token lunco:event:severity = "info"
+            uniform bool lunco:event:latched = true
+            uniform double lunco:event:qualificationTime = 0.0
+        }
+
     }
 
     # ── The rover attached to the lander ──

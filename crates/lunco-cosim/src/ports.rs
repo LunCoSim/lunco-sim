@@ -14,17 +14,19 @@
 //! - **Avian** rigid bodies + revolute/prismatic joints — foreign components
 //!   exposed by an external spec ([`AvianPort`]/[`AvianGroup`]) rather than
 //!   `#[derive]`. Adding an avian kind is one entry in [`AVIAN`] plus its group
-//!   declaration.
+//!   predicate, identity key, and structural invalidation hook.
 //! - **SysML/hardware** single-value [`Port`]s — one bidirectional scalar each.
 //!
 //! Registration order *is* resolution precedence (first match wins): Modelica,
 //! avian, then the single-value ports — see [`register_builtin_port_backends`].
 
 use bevy::prelude::*;
+use std::hash::{Hash, Hasher};
 
-use lunco_core::architecture::{InputPorts, OutputPorts, Port};
+use lunco_core::architecture::{InputPorts, OutputPorts, Port, PortSurface};
 use lunco_core::ports::{
-    port_name_set_key, push_map, PortBackend, PortDirection, PortMetadata, PortRef, PortRegistry,
+    port_entity_map_key, port_name_set_key, push_map, PortBackend, PortDirection, PortMetadata,
+    PortRef, PortRegistry, PortTopologyRevision, PortTopologyState,
 };
 
 use crate::{DeclaredOutputPorts, SimComponent};
@@ -54,15 +56,29 @@ pub struct AvianPort {
 /// A group of avian ports gated on a component's presence — one avian kind
 /// (rigid body, revolute joint, prismatic joint, …). Declared in
 /// [`crate::avian`] / [`crate::joint`] and folded into the avian [`PortBackend`]
-/// below. Adding a kind (a raw physics query, a D6 joint, …) is one entry in [`AVIAN`] plus
-/// its group declaration — no new struct, observer, or system.
+/// below. Adding a kind (a raw physics query, a D6 joint, …) is one entry in [`AVIAN`]
+/// plus its group declaration, structural key, and invalidation hook.
 pub struct AvianGroup {
     /// Does `entity` belong to this group (carry the gating component)?
     pub present: fn(&World, Entity) -> bool,
     /// Append every entity that can belong to this group to `out`.
     pub entities: fn(&mut World, &mut Vec<Entity>),
+    /// Return the identity key for the ports emitted by this group on `entity`.
+    ///
+    /// The key is zero when the group is absent and must ignore live samples.
+    /// It must still include structural backing-component presence for ports
+    /// whose `read` callback can return `None`; the backend candidate key is
+    /// what lets the UI rebuild a row when that backing component appears or
+    /// disappears.
+    pub topology_key: fn(&World, Entity) -> u64,
     /// The ports this kind exposes.
     pub ports: &'static [AvianPort],
+    /// Install the lifecycle and structural checks that can change this group.
+    ///
+    /// Keeping this beside the group declaration makes adding a new Avian port
+    /// family an atomic change: its candidate predicate, ports, and invalidation
+    /// owner cannot drift into a separate application-composition list.
+    pub install_topology: fn(&mut App),
 }
 
 /// The avian backend table: every avian kind we expose, in one place.
@@ -84,6 +100,17 @@ pub(crate) const AVIAN: &[AvianGroup] = &[
     crate::joint::PRISMATIC_JOINT_GROUP,
     crate::avian_queries::RAYCAST_GROUP,
 ];
+
+/// Install every Avian group's own topology watcher.
+///
+/// The group table is the authoritative composition point for Avian ports. A
+/// group cannot be added without also providing the lifecycle/structural hook
+/// that keeps the durable UI invalidation generation correct.
+pub(crate) fn register_avian_port_topology(app: &mut App) {
+    for group in AVIAN {
+        (group.install_topology)(app);
+    }
+}
 
 fn avian_list(world: &World, entity: Entity, out: &mut Vec<PortRef>) {
     for group in AVIAN {
@@ -118,11 +145,7 @@ fn avian_entities(world: &mut World, out: &mut Vec<Entity>) {
 
 fn avian_topology_key(world: &World, entity: Entity) -> u64 {
     AVIAN.iter().enumerate().fold(0u64, |key, (index, group)| {
-        if (group.present)(world, entity) {
-            key | (1u64 << index)
-        } else {
-            key
-        }
+        key ^ (group.topology_key)(world, entity).rotate_left((index * 8) as u32)
     })
 }
 
@@ -280,6 +303,18 @@ fn avian_write_input(world: &mut World, entity: Entity, name: &str, value: f64) 
 }
 
 /// Modelica `SimComponent` — map-based `inputs`/`outputs`.
+fn sim_component_topology_key(
+    component: &SimComponent,
+    declared: Option<&DeclaredOutputPorts>,
+) -> u64 {
+    let inputs = port_name_set_key(component.inputs.keys());
+    let outputs = port_name_set_key(component.outputs.keys());
+    let declared = declared
+        .map(|ports| port_name_set_key(ports.names.iter()))
+        .unwrap_or(0);
+    inputs ^ outputs.rotate_left(21) ^ declared.rotate_left(42)
+}
+
 const SIMCOMPONENT_BACKEND: PortBackend = PortBackend {
     list_entities: |world, out| {
         out.extend(
@@ -292,13 +327,7 @@ const SIMCOMPONENT_BACKEND: PortBackend = PortBackend {
         let Some(component) = world.get::<SimComponent>(entity) else {
             return 0;
         };
-        let inputs = port_name_set_key(component.inputs.keys());
-        let outputs = port_name_set_key(component.outputs.keys());
-        let declared = world
-            .get::<DeclaredOutputPorts>(entity)
-            .map(|ports| port_name_set_key(ports.names.iter()))
-            .unwrap_or(0);
-        inputs ^ outputs.rotate_left(21) ^ declared.rotate_left(42)
+        sim_component_topology_key(component, world.get::<DeclaredOutputPorts>(entity))
     },
     list: |w, e, out| {
         if let Some(c) = w.get::<SimComponent>(e) {
@@ -453,7 +482,7 @@ const OUTPUT_PORTS_BACKEND: PortBackend = PortBackend {
         let Some(outputs) = world.get::<OutputPorts>(entity) else {
             return 0;
         };
-        let names = port_name_set_key(outputs.ports.keys());
+        let names = output_ports_topology_key(outputs);
         let live = outputs
             .ports
             .values()
@@ -500,6 +529,31 @@ const OUTPUT_PORTS_BACKEND: PortBackend = PortBackend {
     read_slot: None,
     write_slot: None,
 };
+
+fn output_ports_topology_key(outputs: &OutputPorts) -> u64 {
+    port_entity_map_key(outputs.ports.iter())
+}
+
+fn port_surface_topology_key(surface: &PortSurface) -> u64 {
+    port_entity_map_key(surface.ports.iter())
+}
+
+/// Return the identity of a connection's endpoints and port directions.
+///
+/// The affine transform is intentionally excluded: changing `scale` or
+/// `offset` changes propagation values, not the connection topology or the
+/// port candidate surface. Endpoint/name/direction edits are structural and
+/// must reopen the durable port projection gate even when the component stays
+/// on the same entity.
+fn connection_topology_key(connection: &crate::SimConnection) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    connection.start_element.hash(&mut hasher);
+    connection.start_connector.hash(&mut hasher);
+    connection.start_is_input.hash(&mut hasher);
+    connection.end_element.hash(&mut hasher);
+    connection.end_connector.hash(&mut hasher);
+    hasher.finish()
+}
 
 /// Control-authority sensor: a read-only `piloted` port, 1.0 while the vessel is
 /// possessed by ANY external session — a human user OR an autopilot (both are
@@ -571,6 +625,86 @@ fn piloted_value(w: &World, e: Entity) -> f64 {
     } else {
         0.0
     }
+}
+
+/// Detect in-place changes to the map-backed port owners without sampling every
+/// owner. Bevy's change filter identifies the small set of components touched by
+/// a producer; the structural key then ignores their live values. This is the
+/// durable check for map-backed surfaces, while component add/remove observers
+/// cover candidate membership and foreign Avian components.
+pub(crate) fn check_port_owner_structure(
+    input_ports: Query<(Entity, &InputPorts), Changed<InputPorts>>,
+    components: Query<
+        (Entity, &SimComponent, Option<&DeclaredOutputPorts>),
+        Or<(Changed<SimComponent>, Changed<DeclaredOutputPorts>)>,
+    >,
+    output_ports: Query<(Entity, &OutputPorts), Changed<OutputPorts>>,
+    port_surfaces: Query<(Entity, &PortSurface), Changed<PortSurface>>,
+    mut state: ResMut<PortTopologyState>,
+    mut revision: ResMut<PortTopologyRevision>,
+) {
+    for (entity, inputs) in &input_ports {
+        if state.changed::<InputPorts>(entity, port_name_set_key(inputs.values.keys())) {
+            revision.bump();
+        }
+    }
+    for (entity, component, declared) in &components {
+        if state.changed::<SimComponent>(entity, sim_component_topology_key(component, declared)) {
+            revision.bump();
+        }
+    }
+    for (entity, outputs) in &output_ports {
+        if state.changed::<OutputPorts>(entity, output_ports_topology_key(outputs)) {
+            revision.bump();
+        }
+    }
+    for (entity, surface) in &port_surfaces {
+        if state.changed::<PortSurface>(entity, port_surface_topology_key(surface)) {
+            revision.bump();
+        }
+    }
+}
+
+/// Detect in-place edits to authored connection endpoints. Add/remove
+/// observers cover connection membership; this check covers rewiring a
+/// `SimConnection` component without replacing it. Affine value changes are
+/// deliberately excluded because they do not change topology.
+pub(crate) fn check_connection_structure(
+    changed: Query<(Entity, &crate::SimConnection), Changed<crate::SimConnection>>,
+    mut state: ResMut<PortTopologyState>,
+    mut revision: ResMut<PortTopologyRevision>,
+) {
+    for (entity, connection) in &changed {
+        if state.changed::<crate::SimConnection>(entity, connection_topology_key(connection)) {
+            revision.bump();
+        }
+    }
+}
+
+/// Install the lifecycle observers owned by the built-in cosimulation port
+/// providers.
+///
+/// Candidate membership is a component-lifecycle fact. In-place declarations
+/// are handled by the two structural checks registered by [`CoSimPlugin`]; the
+/// observers here only cover add/remove transitions. The Avian provider is
+/// composed from [`AvianGroup`] declarations, each of which installs its own
+/// component watchers and any value-to-membership check it requires.
+pub(crate) fn register_builtin_port_topology(app: &mut App) {
+    app.add_observer(lunco_core::ports::bump_port_topology_on_add::<InputPorts>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<InputPorts>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_add::<OutputPorts>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<OutputPorts>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_add::<PortSurface>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<PortSurface>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_add::<Port>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<Port>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_add::<SimComponent>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<SimComponent>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_add::<DeclaredOutputPorts>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<DeclaredOutputPorts>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_add::<crate::SimConnection>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<crate::SimConnection>);
+    register_avian_port_topology(app);
 }
 
 /// Register the cosim engine's builtin port backends into `registry`, in

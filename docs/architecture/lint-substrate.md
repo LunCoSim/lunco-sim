@@ -357,7 +357,8 @@ of a link inside a link attached to nothing.
   `scenarios/tests/connection_preflight.rhai` — a small standard-USD fixture
   proving terminal command rejection, authored source diagnostics, and the
   exact live runtime-port/direction checks through the production scene-test
-  binary.
+  binary. It covers both direct body providers and standard revolute/prismatic
+  joint providers, including missing source prims.
 - `assets/scenes/tests/parts_attached.usda` and
   `assets/scenes/tests/parts_attached_ackermann.usda` — the **behavioural**
   counterpart: each pair drives for 12 s, and no descendant may move more than

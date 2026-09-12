@@ -501,6 +501,7 @@ pub const COLLIDER_CONTACT_GROUP: AvianGroup = AvianGroup {
     entities: |world, out| {
         out.extend(world.query_filtered::<Entity, With<Collider>>().iter(world));
     },
+    topology_key: collider_contact_topology_key,
     ports: &[
         AvianPort {
             name: "contact",
@@ -531,7 +532,22 @@ pub const COLLIDER_CONTACT_GROUP: AvianGroup = AvianGroup {
             write: None,
         },
     ],
+    install_topology: register_collider_contact_topology,
 };
+
+fn register_collider_contact_topology(app: &mut App) {
+    app.add_observer(lunco_core::ports::bump_port_topology_on_add::<Collider>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<Collider>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_add::<ColliderMassProperties>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<ColliderMassProperties>);
+}
+
+fn collider_contact_topology_key(world: &World, entity: Entity) -> u64 {
+    let Some(_) = world.get::<Collider>(entity) else {
+        return 0;
+    };
+    1 | (u64::from(world.get::<ColliderMassProperties>(entity).is_some()) << 1)
+}
 
 /// A USD-authored force actuator. Its command is scalar force; position and
 /// direction are structural facts read from the USD prim.
@@ -544,13 +560,20 @@ pub const FORCE_ACTUATOR_GROUP: AvianGroup = AvianGroup {
                 .iter(world),
         );
     },
+    topology_key: |world, entity| u64::from(world.get::<ForceActuator>(entity).is_some()),
     ports: &[AvianPort {
         name: "force_command",
         dir: PortDirection::In,
         read: Some(|w, e| Some(w.get::<PendingActuatorCommand>(e).map_or(0.0, |p| p.value))),
         write: Some(with_pending_actuator_command),
     }],
+    install_topology: register_force_actuator_topology,
 };
+
+fn register_force_actuator_topology(app: &mut App) {
+    app.add_observer(lunco_core::ports::bump_port_topology_on_add::<ForceActuator>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<ForceActuator>);
+}
 
 /// A USD-authored torque actuator. Its command is scalar torque; its axis and
 /// limit are structural facts read from the USD prim.
@@ -563,13 +586,20 @@ pub const TORQUE_ACTUATOR_GROUP: AvianGroup = AvianGroup {
                 .iter(world),
         );
     },
+    topology_key: |world, entity| u64::from(world.get::<TorqueActuator>(entity).is_some()),
     ports: &[AvianPort {
         name: "torque_command",
         dir: PortDirection::In,
         read: Some(|w, e| Some(w.get::<PendingActuatorCommand>(e).map_or(0.0, |p| p.value))),
         write: Some(with_pending_actuator_command),
     }],
+    install_topology: register_torque_actuator_topology,
 };
+
+fn register_torque_actuator_topology(app: &mut App) {
+    app.add_observer(lunco_core::ports::bump_port_topology_on_add::<TorqueActuator>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<TorqueActuator>);
+}
 
 /// The rigid-body port group: position/velocity outputs + force inputs.
 ///
@@ -585,6 +615,7 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
                 .iter(world),
         );
     },
+    topology_key: rigid_body_topology_key,
     ports: &[
         AvianPort {
             name: "position_x",
@@ -883,7 +914,62 @@ pub const RIGID_BODY_GROUP: AvianGroup = AvianGroup {
             write: Some(|w, e, v| write_com_axis(w, e, 2, v)),
         },
     ],
+    install_topology: register_rigid_body_topology,
 };
+
+fn register_rigid_body_topology(app: &mut App) {
+    app.add_observer(lunco_core::ports::bump_port_topology_on_add::<RigidBody>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<RigidBody>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_add::<Position>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<Position>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_add::<LinearVelocity>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<LinearVelocity>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_add::<Rotation>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<Rotation>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_add::<AngularVelocity>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<AngularVelocity>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_add::<SolvedLinearAcceleration>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<SolvedLinearAcceleration>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_add::<ComputedMass>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<ComputedMass>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_add::<ComputedAngularInertia>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<ComputedAngularInertia>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_add::<ComputedCenterOfMass>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<ComputedCenterOfMass>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_add::<lunco_core::PhysicsStateReady>)
+        .add_observer(
+            lunco_core::ports::bump_port_topology_on_remove::<lunco_core::PhysicsStateReady>,
+        );
+}
+
+fn rigid_body_topology_key(world: &World, entity: Entity) -> u64 {
+    let Some(_) = world.get::<RigidBody>(entity) else {
+        return 0;
+    };
+    let mut key = 1;
+    if world.get::<Position>(entity).is_some() {
+        key |= 1 << 1;
+    }
+    if world.get::<LinearVelocity>(entity).is_some() {
+        key |= 1 << 2;
+    }
+    if world.get::<Rotation>(entity).is_some() {
+        key |= 1 << 3;
+    }
+    if world.get::<AngularVelocity>(entity).is_some() {
+        key |= 1 << 4;
+    }
+    if world.get::<ComputedMass>(entity).is_some() {
+        key |= 1 << 5;
+    }
+    if world.get::<ComputedAngularInertia>(entity).is_some() {
+        key |= 1 << 6;
+    }
+    if world.get::<ComputedCenterOfMass>(entity).is_some() {
+        key |= 1 << 7;
+    }
+    key
+}
 
 /// Position inputs for an authored kinematic body.
 ///
@@ -912,6 +998,7 @@ pub const KINEMATIC_POSITION_GROUP: AvianGroup = AvianGroup {
                 }),
         );
     },
+    topology_key: kinematic_position_topology_key,
     ports: &[
         AvianPort {
             name: "position_x",
@@ -932,7 +1019,40 @@ pub const KINEMATIC_POSITION_GROUP: AvianGroup = AvianGroup {
             write: Some(|w, e, value| write_kinematic_position_axis(w, e, value, 2)),
         },
     ],
+    install_topology: register_kinematic_position_topology,
 };
+
+fn register_kinematic_position_topology(app: &mut App) {
+    app.add_observer(lunco_core::ports::bump_port_topology_on_add::<lunco_core::Mobility>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<lunco_core::Mobility>)
+        .add_systems(PostUpdate, check_kinematic_position_structure);
+}
+
+fn kinematic_position_topology_key(world: &World, entity: Entity) -> u64 {
+    if !world
+        .get::<lunco_core::Mobility>(entity)
+        .is_some_and(|mobility| *mobility == lunco_core::Mobility::Kinematic)
+    {
+        return 0;
+    }
+    1 | (u64::from(world.get::<Position>(entity).is_some()) << 1)
+}
+
+/// A Mobility value is structural for this group: only the `Kinematic` value
+/// admits the position-input ports. Dynamic and static values are both absent
+/// from the group, so transitions between those two values do not invalidate.
+fn check_kinematic_position_structure(
+    changed: Query<(Entity, &lunco_core::Mobility), Changed<lunco_core::Mobility>>,
+    mut state: ResMut<lunco_core::ports::PortTopologyState>,
+    mut revision: ResMut<lunco_core::PortTopologyRevision>,
+) {
+    for (entity, mobility) in &changed {
+        let key = u64::from(*mobility == lunco_core::Mobility::Kinematic);
+        if state.changed::<lunco_core::Mobility>(entity, key) {
+            revision.bump();
+        }
+    }
+}
 
 fn write_kinematic_position_axis(
     world: &mut World,

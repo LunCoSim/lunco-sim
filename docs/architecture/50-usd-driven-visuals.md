@@ -4,8 +4,9 @@
 
 A sensor beam or an exhaust plume may be authored USD geometry whose size tracks a live
 simulation value. A route ribbon is a different class: it is a derived editor annotation
-whose geometry is generated from USD mission topology and live projected poses. It must
-not be written back to the authored stage every frame.
+whose geometry is generated from USD mission topology. The reusable route tool writes its
+current `BasisCurves` view to the document's runtime layer on route changes; it never
+changes the authored Twin and never writes a document opinion every frame.
 
 Three rules, in order of how often they are broken:
 
@@ -32,26 +33,20 @@ by the annotation system. The two ownership models must not be mixed.
 
 ## Route ribbons are derived annotations
 
-The route-point prims and the Rhai task program are the authored facts. The route ribbon is a
-view of those facts plus live execution state, so it is generated as transient Bevy
-geometry. It is not a second USD route, a per-frame USD edit, or a screen-space gizmo.
-`RouteVisualProjection` is the one derived view: its change-gated producer resolves
-every authored route point through the exact composed USD path binding, samples every route
-leg on the authoritative terrain surface, and publishes the active-frame geometry.
-The marker-root surface projection runs before that producer and is a separate
-change-gated owner; the route mesh consumes the resulting snapshot. The waypoint
-appearance is authored USD plus the runtime USD opinion applied by the Rhai route-point
-helper after a structured arrival event. The clearance is owned by the annotation
-renderer; it never reuses a waypoint sphere's radius or local transform. The complete
-ordered route remains visible while the same state transition advances the active-leg
-highlight, preserving USD as the sole owner of scene facts.
+The route-point prims and the Rhai task program are the authored facts. The
+`waypoint_editor` tool derives a route view from those facts and materializes a
+single standard `BasisCurves` prim from
+[`assets/markers/route_ribbon.usda`](../../assets/markers/route_ribbon.usda)
+in `@runtime@`. This keeps the visual contract in USD, lets the existing USD
+renderer draw it with real depth, and keeps all route-specific policy in Rhai.
+The runtime view is rebuilt only after a route edit or when the route program
+starts; it is not a per-frame USD edit, a second route, or a screen-space gizmo.
 
-The route's presentation is deliberately subordinate to the vessel: the derived
-triangle strip is narrow, surface-separated, unlit, and uses muted green for the
-complete route with a brighter blue only for the active authored leg. Waypoint
-labels are a separate generic screen-space overlay. They wrap to a bounded width,
-stay inside the viewport, and select non-overlapping camera-facing slots; route
-geometry never becomes a second label or camera-dependent route owner.
+The complete ordered route remains visible while the route program separately
+owns enablement and progression. Waypoint labels remain a separate generic
+screen-space overlay. They wrap to a bounded width and stay inside the
+viewport; route geometry never becomes a second label or camera-dependent route
+owner.
 
 ## Motion trails are bounded physics history
 
@@ -72,11 +67,10 @@ per lane, and uses the combined point+normal `GridSurfaceQuery` sample when an
 analytic DEM owns the location. A missing surface sample fails that lane closed
 rather than drawing a detached chord through unknown ground.
 
-Each trail lane reuses the route ribbon's world-space triangle-strip builder, with its
-own width and clearance. The shared builder projects the tangent into each support
+Each trail lane uses the existing world-space triangle-strip builder, with its
+own width and clearance. The builder projects the tangent into each support
 plane, offsets clearance along the support normal, and writes that normal to the
-mesh; routes and trails therefore share one surface-frame geometry owner. It is
-transient Bevy presentation parented to the active
+mesh. A trail remains transient Bevy presentation parented to the active
 physics frame; it is not USD topology, terrain deformation, telemetry, or a per-frame
 document edit. Scene teardown clears both the mesh and history, and an active-frame
 change starts a new history, so a later Twin or grid cannot inherit a stale path.

@@ -550,6 +550,19 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
             );
         }
         let live_stage = live_stages.drain().next();
+        // A live Twin scene may be backed by an explicit USD document. Expose
+        // that identity on the generic live query so authored programs can
+        // update a runtime overlay without guessing which editor document is
+        // mounted. Raw-file scenes correctly remain document-less.
+        let live_document = if doc.is_none() {
+            live_stage.and_then(|stage| {
+                let backed = world.get_resource::<DocBackedTwinScenes>()?;
+                let asset_server = world.get_resource::<AssetServer>()?;
+                lunco_usd::twin_projection::scene_document_for(backed, asset_server, stage)
+            })
+        } else {
+            None
+        };
 
         let Some(mut spawned_query) = QueryState::<(Entity, &UsdPrimPath)>::try_new(world) else {
             return ApiResponse::error(
@@ -734,6 +747,8 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
                 out["world_position"] = serde_json::json!([position.x, position.y, position.z]);
                 out["position_frame"] = serde_json::json!("canonical_stage");
             }
+        } else if let Some(doc) = live_document {
+            out["doc_id"] = serde_json::json!(doc);
         }
         if requested_relationships.is_some() || include_relationships {
             out["relationships"] = serde_json::Value::Object(relationships);

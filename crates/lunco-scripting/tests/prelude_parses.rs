@@ -259,12 +259,9 @@ fn set_property_helper_uses_the_reflected_command_fields() {
 /// surfaces only when a student launches that specific lesson and gets nothing.
 ///
 /// **Scope — bundled only.** This enumerates `assets/tutorials/`, so it covers the
-/// tracks this app ships and nothing else. A TWIN's curriculum (the Summer Space
-/// School lives at `<twin>/sim/tutorials/`, outside this repo) is loaded at runtime
-/// by `sync_twin_tutorials` and CANNOT be reached from here — including its
-/// `teleop_policy.rhai`, which fails closed, so a parse error there would not
-/// disable the tele-op refusal but make it refuse *everything*. Twin content needs
-/// its own check in the twin; do not assume this test speaks for it.
+/// tracks this app ships and nothing else. A Twin's catalog and sources live at
+/// `<twin>/sim/tutorials/`, outside this repo, and need the Twin's own smoke gate;
+/// do not assume this test speaks for external content.
 #[test]
 fn bundled_tutorial_scripts_all_parse() {
     let engine = runtime_engine();

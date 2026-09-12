@@ -330,7 +330,10 @@ pub(crate) fn update_wheel_spin(
             if let Ok(mut visual_tf) = q_visual.get_mut(visual_entity) {
                 let steer = local_tf.rotation;
                 let base = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
-                visual_tf.rotation = (steer * wheel.spin_quat() * base).normalize();
+                let rotation = (steer * wheel.spin_quat() * base).normalize();
+                if visual_tf.rotation != rotation {
+                    visual_tf.rotation = rotation;
+                }
             }
         }
     }
