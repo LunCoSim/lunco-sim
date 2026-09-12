@@ -52,6 +52,17 @@ fn report_inspector_error(world: &mut World, message: impl Into<String>) {
     });
 }
 
+/// Apply authored shader values. The shader owner structural check observes
+/// the changed component after this mutation and advances the shared topology
+/// generation only when the declared parameter surface changes.
+fn apply_shader_parameter_edits(world: &mut World, entity: Entity, edits: &[(String, ParamValue)]) {
+    if let Some(mut look) = world.get_mut::<ShaderLook>(entity) {
+        for (name, value) in edits {
+            look.values.insert(name.clone(), *value);
+        }
+    }
+}
+
 #[derive(Event, Clone, Copy, Debug)]
 pub(crate) enum InspectorComponentEdit {
     Mass {
@@ -562,11 +573,7 @@ pub(crate) fn on_shader_parameters_requested(
                 report_inspector_error(world, "Selected shader target is not document-backed");
                 return;
             }
-            if let Some(mut look) = world.get_mut::<ShaderLook>(request.entity) {
-                for (name, value) in &request.edits {
-                    look.values.insert(name.clone(), *value);
-                }
-            }
+            apply_shader_parameter_edits(world, request.entity, &request.edits);
             return;
         };
 
@@ -597,11 +604,7 @@ pub(crate) fn on_shader_parameters_requested(
             }
         }
 
-        if let Some(mut look) = world.get_mut::<ShaderLook>(request.entity) {
-            for (name, value) in &request.edits {
-                look.values.insert(name.clone(), *value);
-            }
-        }
+        apply_shader_parameter_edits(world, request.entity, &request.edits);
         if !ops.is_empty() {
             world.trigger(ApplyUsdOps {
                 doc_id: doc,

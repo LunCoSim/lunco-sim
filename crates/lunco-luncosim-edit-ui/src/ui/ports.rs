@@ -10,7 +10,9 @@ use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_core::ports::{PortDirection, PortHandle, PortInfo, PortMetadata, PortRegistry};
+use lunco_core::ports::{
+    PortDirection, PortHandle, PortInfo, PortMetadata, PortRegistry, PortTopologyRevision,
+};
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchSnapshot};
 
 /// Stable id of the universal port inspection panel.
@@ -53,14 +55,8 @@ pub struct PortView {
     pub sampled_at: f64,
     /// Backend-owned identity keys for the current candidate set.
     candidate_topology_keys: HashMap<Entity, u64>,
-    /// Labels are cached with the port rows so a name change also rebuilds the
-    /// metadata projection without sampling every backend each tick.
-    candidate_labels: HashMap<Entity, (String, Option<u64>)>,
-    /// Scene projection revision for the cached candidate set.
-    candidate_stage_revision: Option<u64>,
-    /// Entity count at the last candidate discovery. This keeps lightweight
-    /// standalone registry users correct when no USD stage revision exists.
-    candidate_entity_count: Option<u32>,
+    /// Last owner-published port-surface generation projected into `entities`.
+    candidate_topology_revision: Option<u64>,
 }
 
 /// Entities whose port bodies were actually visible in the last egui pass.
@@ -169,9 +165,7 @@ pub fn populate_port_view(world: &mut World) {
         let mut view = world.resource_mut::<PortView>();
         view.entities.clear();
         view.candidate_topology_keys.clear();
-        view.candidate_labels.clear();
-        view.candidate_stage_revision = None;
-        view.candidate_entity_count = None;
+        view.candidate_topology_revision = None;
         return;
     };
     let requested_entities = world
@@ -202,21 +196,10 @@ pub fn populate_port_view(world: &mut World) {
         });
 
     let sampled_at = world.resource::<Time>().elapsed_secs_f64();
-    let stage_revision = world
-        .get_resource::<lunco_usd_bevy_scene::UsdStageRevision>()
-        .map(|revision| revision.0);
-    let entity_count = world.entities().len();
+    let topology_revision = world.resource::<PortTopologyRevision>().0;
     let discover_candidates = {
         let view = world.resource::<PortView>();
-        // The USD projection already publishes the authoritative invalidation
-        // signal for composed-scene identity and topology. Do not recreate that
-        // work by enumerating every backend on the 10 Hz value-sampling cadence.
-        // A registry-only World has no such signal, so retain the old polling
-        // behavior there and keep the lightweight entity-count guard for stage
-        // users that add or remove runtime entities.
-        stage_revision.is_none()
-            || view.candidate_stage_revision != stage_revision
-            || view.candidate_entity_count != Some(entity_count)
+        view.candidate_topology_revision != Some(topology_revision)
     };
 
     if !discover_candidates {
@@ -267,11 +250,9 @@ pub fn populate_port_view(world: &mut World) {
         .collect();
     let mut rows = Vec::with_capacity(candidates.len());
     let mut candidate_topology_keys = HashMap::with_capacity(candidates.len());
-    let mut candidate_labels = HashMap::with_capacity(candidates.len());
     for (entity, label, api_id, key) in candidates {
         let topology_unchanged = old_topology_keys.get(&entity).copied() == Some(key);
         candidate_topology_keys.insert(entity, key);
-        candidate_labels.insert(entity, (label.clone(), api_id));
 
         let Some(mut port_entity) = existing_entities.remove(&entity) else {
             let ports = build_port_rows(&registry, world, entity, &wired, &holds);
@@ -301,9 +282,7 @@ pub fn populate_port_view(world: &mut World) {
     let mut view = world.resource_mut::<PortView>();
     view.entities = rows;
     view.candidate_topology_keys = candidate_topology_keys;
-    view.candidate_labels = candidate_labels;
-    view.candidate_stage_revision = stage_revision;
-    view.candidate_entity_count = Some(entity_count);
+    view.candidate_topology_revision = Some(topology_revision);
     view.sampled_at = sampled_at;
 }
 
@@ -684,7 +663,7 @@ mod tests {
         world.init_resource::<PortInspectionRequest>();
         world.insert_resource(PortRegistry::default());
         world.insert_resource(Time::<()>::default());
-        world.insert_resource(lunco_usd_bevy_scene::UsdStageRevision::default());
+        world.init_resource::<PortTopologyRevision>();
         let owned = world
             .spawn((
                 Name::new("owned"),
@@ -717,5 +696,21 @@ mod tests {
             world.resource::<PortView>().entities[0].ports[0].info.value,
             0.75
         );
+
+        let second = world
+            .spawn((Name::new("second"), lunco_core::InputPorts::new(&["arm"])))
+            .id();
+        populate_port_view(&mut world);
+        assert_eq!(
+            world.resource::<PortView>().entities.len(),
+            1,
+            "candidate discovery must not fall back to entity-count polling"
+        );
+
+        world.resource_mut::<PortTopologyRevision>().bump();
+        populate_port_view(&mut world);
+        let view = world.resource::<PortView>();
+        assert_eq!(view.entities.len(), 2);
+        assert!(view.entities.iter().any(|entity| entity.entity == second));
     }
 }

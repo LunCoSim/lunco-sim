@@ -28,7 +28,11 @@ path instead of scanning every ECS entity and probing every backend.
 For bounded-cadence views, each backend also supplies an identity-only
 `topology_key`; consumers cache the `entity_port_infos` metadata while reading
 live values through the registry on each sample. Values therefore stay current
-without rebuilding the port table when only physics or solver state changes.
+without rebuilding the port table when only physics or solver state changes. The
+owner publishes `PortTopologyRevision` from lifecycle observers and
+change-filtered structural checks. Avian groups keep their topology key and
+invalidation hook beside their membership predicate, including any optional
+backing-component presence that changes the emitted rows.
 
 | Backend | Ports |
 | --- | --- |
@@ -41,10 +45,11 @@ without rebuilding the port table when only physics or solver state changes.
 | **Hardware** (`Port`) | `value` (f64) |
 
 Avian's foreign components are exposed declaratively via the `AVIAN` spec table
-(`ports.rs`) — adding a kind (a new joint or raw physics query) is one AvianGroup entry,
-no observer or sync system. **Adding a port group:** declare the `AvianGroup`
-(present-predicate + entity enumerator + `AvianPort`s with read/write closures)
-and list it in `AVIAN`.
+(`ports.rs`). **Adding a port group:** declare the `AvianGroup` (present-predicate,
+entity enumerator, identity-only topology key, and `AvianPort`s with read/write
+closures), provide its lifecycle/structural invalidation hook, and list it in
+`AVIAN`. The group key must match the rows emitted by its port definitions; live
+samples never belong in that key.
 
 A [`SimConnection`] connects any output port to any input port. The cosim master
 runs in `FixedUpdate`:

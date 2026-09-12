@@ -49,8 +49,12 @@ sample at a bounded cadence when the data has no shared change marker. Writable
 rows emit the existing typed command and validate against the metadata contract;
 the panel must not infer policy from names or mutate port storage directly. If
 the view caches metadata, its invalidation must use the owner-provided
-`PortBackend::topology_key` and the owning scene revision. Large inspection
-surfaces must virtualize their fixed-height browser rows and request live values
+`PortBackend::topology_key` and the durable owner-published
+`PortTopologyRevision`. Providers publish it from component lifecycle
+observers and change-filtered structural identity checks; Avian groups declare
+their identity key and invalidation hook beside their membership predicate. Do
+not use a broad scene revision or entity-count poll as a port-topology signal.
+Large inspection surfaces must virtualize their fixed-height browser rows and request live values
 only for expanded/visible bodies; the normal sample path reads those values
 through the registry rather than rerunning backend list/metadata callbacks.
 

@@ -206,6 +206,8 @@ impl Plugin for CoSimPlugin {
         // read/write through this one registry. Registration order = resolution
         // precedence (Modelica, avian, then single-value hardware ports).
         app.init_resource::<lunco_core::ports::PortRegistry>()
+            .init_resource::<lunco_core::PortTopologyRevision>()
+            .init_resource::<lunco_core::ports::PortTopologyState>()
             .init_resource::<BindingRevision>();
         // Machine-readable dangling-wire report, refreshed each propagation tick
         // and surfaced via the API's `GET /api/diagnostics` (`GetBrokenConnections`).
@@ -245,10 +247,27 @@ impl Plugin for CoSimPlugin {
             .add_observer(mark_causal_state_sink::<ForceActuator>)
             .add_observer(mark_causal_state_sink::<TorqueActuator>)
             .add_observer(mark_joint_torque_port);
+        // Every built-in port owner installs its lifecycle hooks in the backend
+        // module. Avian groups additionally carry their hooks beside their
+        // predicates and port definitions, so adding a group cannot silently
+        // omit invalidation.
+        ports::register_builtin_port_topology(app);
         app.add_systems(
             Update,
             sync_model_endpoint_lifecycle
                 .run_if(|q: Query<(), Changed<SimComponent>>| !q.is_empty()),
+        );
+        // Map-backed port owners can change their declared names in place while
+        // also updating live values. Compare their identity keys after all
+        // frame/physics writers have run; this is a structural check, not a
+        // 10 Hz candidate poll. Connection membership is handled by lifecycle
+        // observers and endpoint rewrites by the companion structural check.
+        app.add_systems(
+            PostUpdate,
+            (
+                ports::check_port_owner_structure,
+                ports::check_connection_structure,
+            ),
         );
         // One authoritative binding boundary per frame. Observers and async
         // projections only request a reconciliation; running it after `Update`
@@ -431,6 +450,214 @@ impl Plugin for CoSimPlugin {
 mod binding_lifecycle_tests {
     use super::*;
     use avian3d::prelude::RevoluteJoint;
+
+    #[test]
+    fn port_topology_revision_tracks_owner_lifecycle_not_live_values() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_plugins(CoSimPlugin);
+
+        let before_add = app.world().resource::<lunco_core::PortTopologyRevision>().0;
+        let entity = app
+            .world_mut()
+            .spawn(lunco_core::InputPorts::new(&["throttle"]))
+            .id();
+        let after_add = app.world().resource::<lunco_core::PortTopologyRevision>().0;
+        assert_ne!(after_add, before_add);
+        app.update();
+        let after_initial_check = app.world().resource::<lunco_core::PortTopologyRevision>().0;
+        assert_eq!(after_initial_check, after_add);
+
+        let registry = app
+            .world()
+            .resource::<lunco_core::ports::PortRegistry>()
+            .clone();
+        assert!(registry.write_port(app.world_mut(), entity, "throttle", 0.5));
+        app.update();
+        assert_eq!(
+            app.world().resource::<lunco_core::PortTopologyRevision>().0,
+            after_initial_check,
+            "live port writes must not invalidate the declared surface"
+        );
+
+        app.world_mut()
+            .get_mut::<lunco_core::InputPorts>(entity)
+            .unwrap()
+            .values
+            .insert("arm".into(), 0.0);
+        app.update();
+        let after_shape_change = app.world().resource::<lunco_core::PortTopologyRevision>().0;
+        assert_ne!(after_shape_change, after_initial_check);
+
+        app.world_mut().despawn(entity);
+        let after_remove = app.world().resource::<lunco_core::PortTopologyRevision>().0;
+        assert_ne!(after_remove, after_shape_change);
+    }
+
+    #[test]
+    fn port_topology_revision_tracks_value_to_membership_mobility_changes() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_plugins(CoSimPlugin);
+
+        let entity = app
+            .world_mut()
+            .spawn((
+                lunco_core::Mobility::Dynamic,
+                avian3d::prelude::Position::default(),
+            ))
+            .id();
+        app.update();
+        let before_transition = app.world().resource::<lunco_core::PortTopologyRevision>().0;
+        let registry = app
+            .world()
+            .resource::<lunco_core::ports::PortRegistry>()
+            .clone();
+        assert!(registry
+            .entity_ports(app.world(), entity)
+            .iter()
+            .all(|port| port.name != "position_x" || port.direction != PortDirection::In));
+
+        *app.world_mut()
+            .get_mut::<lunco_core::Mobility>(entity)
+            .unwrap() = lunco_core::Mobility::Kinematic;
+        app.update();
+
+        let after_transition = app.world().resource::<lunco_core::PortTopologyRevision>().0;
+        assert_ne!(after_transition, before_transition);
+        assert!(registry
+            .entity_ports(app.world(), entity)
+            .iter()
+            .any(|port| { port.name == "position_x" && port.direction == PortDirection::In }));
+    }
+
+    #[test]
+    fn avian_topology_key_tracks_optional_backing_components_without_sampling_values() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_plugins(CoSimPlugin);
+
+        let entity = app
+            .world_mut()
+            .spawn((
+                avian3d::prelude::RigidBody::Dynamic,
+                avian3d::prelude::Position::default(),
+            ))
+            .id();
+        app.update();
+        let registry = app
+            .world()
+            .resource::<lunco_core::ports::PortRegistry>()
+            .clone();
+        let before_remove = app.world().resource::<lunco_core::PortTopologyRevision>().0;
+        let initial_key = registry.entity_port_topology_key(app.world(), entity);
+        assert!(registry
+            .entity_ports(app.world(), entity)
+            .iter()
+            .any(|port| port.name == "position_x"));
+
+        app.world_mut()
+            .entity_mut(entity)
+            .remove::<avian3d::prelude::Position>();
+        app.update();
+        let after_remove = app.world().resource::<lunco_core::PortTopologyRevision>().0;
+        assert_ne!(after_remove, before_remove);
+        assert_ne!(
+            registry.entity_port_topology_key(app.world(), entity),
+            initial_key,
+            "a backing-component removal must change the cached candidate key"
+        );
+        assert!(!registry
+            .entity_ports(app.world(), entity)
+            .iter()
+            .any(|port| port.name == "position_x"));
+
+        app.world_mut()
+            .entity_mut(entity)
+            .insert(avian3d::prelude::Position::default());
+        app.update();
+        let after_position = app.world().resource::<lunco_core::PortTopologyRevision>().0;
+        assert_ne!(after_position, after_remove);
+        assert_eq!(
+            registry.entity_port_topology_key(app.world(), entity),
+            initial_key,
+            "restoring the same structural surface must restore the same key"
+        );
+        assert!(registry
+            .entity_ports(app.world(), entity)
+            .iter()
+            .any(|port| port.name == "position_x"));
+
+        app.world_mut()
+            .get_mut::<avian3d::prelude::Position>(entity)
+            .unwrap()
+            .0
+            .x = 10.0;
+        app.update();
+        assert_eq!(
+            app.world().resource::<lunco_core::PortTopologyRevision>().0,
+            after_position,
+            "live Avian samples must not invalidate the declared surface"
+        );
+
+        app.world_mut()
+            .entity_mut(entity)
+            .remove::<avian3d::prelude::Position>();
+        app.update();
+        let after_second_remove = app.world().resource::<lunco_core::PortTopologyRevision>().0;
+        assert_ne!(after_second_remove, after_position);
+        assert!(!registry
+            .entity_ports(app.world(), entity)
+            .iter()
+            .any(|port| port.name == "position_x"));
+    }
+
+    #[test]
+    fn port_topology_revision_tracks_connection_structure_not_affine_values() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_plugins(CoSimPlugin);
+
+        let source = app.world_mut().spawn_empty().id();
+        let target = app.world_mut().spawn_empty().id();
+        let before_add = app.world().resource::<lunco_core::PortTopologyRevision>().0;
+        let edge = app
+            .world_mut()
+            .spawn(SimConnection {
+                start_element: source,
+                start_connector: "output".into(),
+                start_is_input: false,
+                end_element: target,
+                end_connector: "input".into(),
+                scale: 1.0,
+                offset: 0.0,
+            })
+            .id();
+        let after_add = app.world().resource::<lunco_core::PortTopologyRevision>().0;
+        assert_ne!(after_add, before_add);
+        app.update();
+        let after_initial_check = app.world().resource::<lunco_core::PortTopologyRevision>().0;
+        assert_eq!(after_initial_check, after_add);
+
+        app.world_mut()
+            .get_mut::<SimConnection>(edge)
+            .unwrap()
+            .scale = 2.0;
+        app.update();
+        assert_eq!(
+            app.world().resource::<lunco_core::PortTopologyRevision>().0,
+            after_initial_check,
+            "changing an affine value must not invalidate connection topology"
+        );
+
+        app.world_mut()
+            .get_mut::<SimConnection>(edge)
+            .unwrap()
+            .end_connector = "other_input".into();
+        app.update();
+        let after_rewire = app.world().resource::<lunco_core::PortTopologyRevision>().0;
+        assert_ne!(after_rewire, after_initial_check);
+
+        app.world_mut().despawn(edge);
+        let after_remove = app.world().resource::<lunco_core::PortTopologyRevision>().0;
+        assert_ne!(after_remove, after_rewire);
+    }
 
     #[test]
     fn model_ready_transition_binds_waiting_edge_in_the_same_update() {

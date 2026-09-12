@@ -2,7 +2,10 @@
 
 Status: implementation complete in `main`; the original render-transition
 findings remain valid, and the Builder-only port path plus the independent
-physics stall have separate owners and fixes.
+physics stall have separate owners and fixes. The latest follow-up keeps
+invalidation at the provider boundary: structural keys now cover Avian backing
+components, value-to-membership transitions, and link-state identity without
+sampling live values.
 
 ## Report evidence
 
@@ -66,10 +69,25 @@ which explains the perspective-specific symptom.
 The first committed fix (`b63bf0370`) moved candidate discovery behind the
 backend-owned `PortRegistry::port_entities` boundary. A follow-up change indexes
 authored link classes on `LinkNode` lifecycle changes and adds owner-provided
-`PortBackend::topology_key` callbacks. The Builder view now rebuilds port rows and
-metadata only when topology or labels change; stable samples read only live
-values, wire state, and held values. This preserves dynamic physics values and
-does not suppress or fake missing ports.
+`PortBackend::topology_key` callbacks. That still left the invalidation gate
+wrong: `UsdStageRevision` describes the whole projected scene, not the port
+surface, and the registry-only fallback polled global entity count. Any unrelated
+scene projection or entity churn could therefore turn the panel's 10 Hz live
+sample into a full candidate/metadata rebuild. View does not mount this panel.
+
+The proper boundary is a durable `PortTopologyRevision` published by the port
+providers. Lifecycle observers cover component membership; change-filtered
+structural checks compare identity-only fingerprints for in-place control
+surfaces, solver interfaces, shader projections, projected link shapes, Avian
+backing-component availability, value-to-membership transitions, and connection
+endpoints. Live values and connection affine transforms do not advance it.
+Mobility is structural only for the Kinematic position group: Dynamic↔Kinematic
+changes its candidate surface, while Dynamic↔Static does not. Avian groups keep
+their topology key and invalidation hook next to the group predicate, preventing
+the candidate key from remaining unchanged after a backing port disappears. The
+Builder panel rebuilds candidates only when that generation changes; stable
+samples read only live values, wire state, and held values. This preserves
+dynamic physics values and does not suppress or fake missing ports.
 
 The post-discovery capture still measured 34–52 ms in the metadata path. The
 later capture isolated the physics outlier to
@@ -91,9 +109,9 @@ rows every frame, while its producer rediscovered 4,028 candidates every 100 ms.
 The replacement keeps the complete registry projection and command contract,
 but virtualizes fixed-height entity headers, paints only explicitly expanded
 port grids, requests live values only for those expanded entities, and uses the
-existing `UsdStageRevision` to invalidate candidate discovery. This is why View
-is unaffected: it does not open the Ports panel or execute its producer/paint
-path.
+owner-published `PortTopologyRevision` to invalidate candidate discovery. This
+is why View is unaffected: it does not open the Ports panel or execute its
+producer/paint path.
 
 The final Tracy capture (`scripts/perf/captures/builder-perspective-physics-owner-sync-final-20260912.tracy`)
 measured `PhysicsSchedule` at 1.528 ms mean and 3.639 ms maximum under
@@ -124,6 +142,15 @@ maximum). The clean production run
 0.224–0.912 ms during the Builder interval; the standard eight substeps were
 unchanged. The isolated transition rebuild remains a one-time render/scene
 startup cost and is not the recurring Builder port stall.
+
+The structural-invalidation follow-up was checked with the affected-crate
+`cargo check`, the complete `lunco-cosim` library suite (48 passed), the
+Builder port-view regression, and the link-class catalog regression. A fresh
+production build of `target/debug/luncosim` loaded
+`assets/scenes/luncosim/solar_rover_demo.usda` headlessly on API port 4108;
+`GET /api/health` returned `{"status":"ok"}`, and the session was closed with
+the typed `Exit(force=true)` command. The process and port were absent after
+shutdown. The run showed no new runtime failure from the invalidation path.
 
 ## Handoff constraints
 

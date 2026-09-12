@@ -210,6 +210,8 @@ impl Plugin for CelestialPlugin {
             app.add_plugins(lunco_time::TimePlugin);
         }
         app.init_resource::<CelestialConfig>();
+        app.init_resource::<lunco_core::PortTopologyRevision>()
+            .init_resource::<lunco_core::ports::PortTopologyState>();
         // Globe LOD consumes the shared presentation binding, not Bevy's
         // render activation flag. Keep the binding substrate available in
         // standalone celestial hosts as well as the full USD application.
@@ -243,6 +245,8 @@ impl Plugin for CelestialPlugin {
         app.init_resource::<link::LinkConfig>();
         app.init_resource::<link::LinkSolverState>();
         app.init_resource::<link::LinkClassCatalog>();
+        app.init_resource::<lunco_core::PortTopologyRevision>();
+        app.init_resource::<lunco_core::ports::PortTopologyState>();
         app.register_type::<link::LinkConfig>();
         app.register_type::<link::LinkNode>();
         app.register_type::<link::LinkOccluder>();
@@ -251,7 +255,12 @@ impl Plugin for CelestialPlugin {
         app.register_type::<wifi::WifiNode>();
         app.register_type::<wifi::WifiState>();
         link::register_all_commands(app);
+        app.add_observer(lunco_core::ports::bump_port_topology_on_add::<link::LinkNode>)
+            .add_observer(lunco_core::ports::bump_port_topology_on_remove::<link::LinkNode>)
+            .add_observer(lunco_core::ports::bump_port_topology_on_add::<link::LinkState>)
+            .add_observer(lunco_core::ports::bump_port_topology_on_remove::<link::LinkState>);
         app.add_systems(PreUpdate, link::refresh_link_class_catalog);
+        app.add_systems(PostUpdate, link::check_link_state_structure);
         // `update_links` is a REGULAR (non-exclusive) system — it writes through
         // Commands and adds no extra command-flush sync point. (An earlier
         // exclusive version, needed to call the TerrainRaycast provider with

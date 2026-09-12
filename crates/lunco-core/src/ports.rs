@@ -38,10 +38,80 @@
 //! resolution precedence (first match wins).
 
 use bevy::prelude::*;
+use std::any::TypeId;
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
 
 use crate::InputPorts;
+
+/// Durable invalidation generation for the shared runtime port surface.
+///
+/// Port identity is not a sampled value. A consumer may be hidden when an
+/// owner changes its declared ports, so a transient event would be lossy. The
+/// owner-side structural checks advance this monotonic generation after a
+/// component's identity key changes; consumers retain the last generation they
+/// projected and rebuild only when it differs. Live port values must not advance
+/// it.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PortTopologyRevision(pub u64);
+
+impl PortTopologyRevision {
+    /// Advance the invalidation generation after a declared port surface change.
+    #[inline]
+    pub fn bump(&mut self) {
+        self.0 = self.0.wrapping_add(1);
+    }
+}
+
+/// Last structural identity observed for each port-owner component and entity.
+///
+/// A port owner may update one ECS component for both live samples and declared
+/// names. The owner-side change check records only the identity key, so a live
+/// update still marks the component changed but does not invalidate the port
+/// projection. Entity membership is handled by the lifecycle observers below.
+#[derive(Resource, Default)]
+pub struct PortTopologyState {
+    keys: HashMap<(TypeId, Entity), u64>,
+}
+
+impl PortTopologyState {
+    /// Record one structural key and report whether an already-observed key
+    /// differs. The first observation seeds the cache; the lifecycle observer
+    /// has already published the add as the structural invalidation.
+    pub fn changed<T: 'static>(&mut self, entity: Entity, key: u64) -> bool {
+        self.keys
+            .insert((TypeId::of::<T>(), entity), key)
+            .is_some_and(|previous| previous != key)
+    }
+
+    /// Forget a removed owner component so an entity id cannot retain a stale
+    /// identity if that id is later reused by Bevy.
+    pub fn forget<T: 'static>(&mut self, entity: Entity) {
+        self.keys.remove(&(TypeId::of::<T>(), entity));
+    }
+}
+
+/// Advance the port-surface generation when a component-owned backend candidate
+/// is added. The owning plugin supplies the observer for the component types it
+/// registers in its backend.
+pub fn bump_port_topology_on_add<T: Component>(
+    _trigger: On<Add, T>,
+    mut revision: ResMut<PortTopologyRevision>,
+) {
+    revision.bump();
+}
+
+/// Advance the port-surface generation when a component-owned backend candidate
+/// is removed. `On<Remove, T>` also covers entity teardown, so a hidden panel
+/// cannot retain a despawned candidate until its next full sample.
+pub fn bump_port_topology_on_remove<T: Component>(
+    trigger: On<Remove, T>,
+    mut revision: ResMut<PortTopologyRevision>,
+    mut state: ResMut<PortTopologyState>,
+) {
+    state.forget::<T>(trigger.entity);
+    revision.bump();
+}
 
 /// Direction (causality) of a port.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Reflect)]
@@ -254,6 +324,27 @@ where
     key ^ count.rotate_left(41)
 }
 
+/// Return an order-independent cache key for a named port-to-entity map.
+///
+/// Entity identity is part of a projected surface's structure: replacing the
+/// endpoint behind an unchanged name must invalidate consumers just as adding
+/// or removing the name does. Values are not part of this key.
+pub fn port_entity_map_key<'a, I>(entries: I) -> u64
+where
+    I: IntoIterator<Item = (&'a String, &'a Entity)>,
+{
+    let mut key = 0xcbf29ce484222325u64;
+    let mut count = 0u64;
+    for (name, entity) in entries {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        name.hash(&mut hasher);
+        entity.hash(&mut hasher);
+        key = key.wrapping_add(hasher.finish().rotate_left(17));
+        count = count.wrapping_add(1);
+    }
+    key ^ count.rotate_left(41)
+}
+
 /// One port-bearing backend, expressed as an entity enumerator plus operations
 /// over `(World, Entity)`.
 ///
@@ -274,8 +365,10 @@ pub struct PortBackend {
     /// Return a key for this backend's port identity on `entity`.
     ///
     /// The key must ignore live values and change when the backend's port names
-    /// or directions change. It lets consumers cache metadata while still
-    /// observing dynamic authored surfaces.
+    /// or directions change. The owning plugin's change-filtered structural
+    /// check publishes [`PortTopologyRevision`] when that key changes; the key
+    /// is evaluated only on the changed-owner path. It lets consumers cache
+    /// metadata while still observing dynamic authored surfaces.
     pub topology_key: fn(&World, Entity) -> u64,
     /// Append this backend's ports on `entity` (outputs then inputs) to `out`.
     pub list: fn(&World, Entity, &mut Vec<PortRef>),
