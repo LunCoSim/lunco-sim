@@ -71,7 +71,7 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-usd`** | High-level runtime USD orchestrator (`UsdPlugins`) and mapper for LunCo-specific engineering metadata (`lunco:*`). |
 | **`lunco-usd-geometry`** | Render-free NURBS evaluators, trimmed-domain tessellation, and rotation-minimizing curve-sweep mesh data. Isolates heavy numeric geometry dependencies from the USD stage loader. |
 | **`lunco-usd-bevy-core`** | Headless composed-USD reader/view, stage composition, prepared stage assets, canonical live-stage ownership, authored-layer readers, instance identity, send-safe projection plans, program/variant resolution, material binding, transform decoding, and unit conversion. Uses Bevy's asset/ECS substrate but has no mesh, light, camera, renderer, window, or UI projection. |
-| **`lunco-usd-bevy-scene`** | Render-free Bevy scene contract shared by visual and domain projections: `UsdPrimPath`, scene/revision lifecycle markers, preview/ancestry ownership, and canonical USD primitive/mesh geometry readers. It depends on the core reader and has no visual adapter or renderer dependency. |
+| **`lunco-usd-bevy-scene`** | Render-free Bevy scene contract shared by visual and domain projections: `UsdPrimPath`, scene/revision lifecycle markers, projection ordering boundaries, visual-split markers, preview/ancestry ownership, and canonical USD primitive/mesh geometry readers. It depends on the core reader and has no visual adapter or renderer dependency. |
 | **`lunco-usd-bevy-camera`** | Render-free USD camera adapter: standard `UsdGeomCamera` projection intent, mounted/cinematic camera pose, camera-track selection, and the single-authority viewport-camera reconciler. It depends on the core reader and scene contract, not on visual projection. |
 | **`lunco-usd-bevy-lathe`** | Independent parametric NURBS/lathe projection: reflected surface definitions, profile evaluation, and change-detected Bevy mesh regeneration. |
 | **`lunco-usd-bevy`** | Visual Bevy adapter (`UsdBevyPlugin`): projects USD hierarchy, shapes, transforms, materials, and `timeSamples` animation into Bevy entities/components on top of `lunco-usd-bevy-core`. Owns the remaining mesh/curve projection and installs the independent camera and light adapters. |
@@ -290,7 +290,8 @@ those adapters do not rebuild this reader/composition package.
 
 **`lunco-usd-bevy-scene`**
 Render-free ECS contract between USD projection domains. It owns `UsdPrimPath`,
-`UsdSceneProjected`, `UsdSceneRoot`, `UsdPreviewOnly`, `UsdAnimated`, and the
+`UsdSceneProjected`, `UsdSceneRoot`, `UsdPreviewOnly`, `UsdAnimated`, the
+projection ordering boundaries, visual-split markers, and the
 stage revision/ancestry helpers, plus the shared USD primitive and indexed-mesh
 readers. Avian, terrain, and other headless projections depend on this package
 without depending on the visual mesh/camera/light adapter; the visual crate

@@ -16,7 +16,8 @@ contains runtime orchestration and document commands; `lunco-usd-geometry`
 owns the reusable render-free NURBS, trim, and curve-sweep substrate;
 `lunco-usd-bevy-core` owns prepared/composed stage data;
 `lunco-usd-bevy-scene` owns render-free ECS scene identity, lifecycle, ancestry,
-and shared geometry decoding; `lunco-usd-bevy-camera` owns render-free camera
+projection ordering boundaries, visual-split markers, and shared geometry
+decoding; `lunco-usd-bevy-camera` owns render-free camera
 projection intent, camera paths, mounts, selection, and viewport reconciliation;
 `lunco-usd-bevy-lathe` owns the independent parametric NURBS/lathe mesh
 projection; `lunco-usd-bevy-light` owns UsdLux light and dome projection;
