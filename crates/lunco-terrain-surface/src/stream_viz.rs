@@ -34,8 +34,6 @@
 //!
 //! The companion canonical-res collider ring is [`crate::collider_ring`].
 
-#[cfg(test)]
-use bevy::camera::Viewport;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
@@ -3290,6 +3288,7 @@ pub(crate) fn bind_shadow_cache_to_tiles(
 #[cfg(test)]
 mod draw_partition_tests {
     use super::*;
+    use bevy::camera::Viewport;
 
     fn terrain_quality() -> lunco_render::RenderQualityProfile {
         lunco_render::RenderingQualitySettings::default().profile()
