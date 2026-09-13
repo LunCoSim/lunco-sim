@@ -560,8 +560,14 @@ fn on_tick(me) {
             this.doc, "@root@", ASSEMBLY, "BadAsset", "Xform",
             "components/mobility/wheel.usda", (), (), (), (), (),
         );
+        let twin_asset = assembly_builder::referenced_instance_plan(
+            this.doc, "@root@", ASSEMBLY, "TwinRamp", "Xform",
+            "twin://ExampleTwin/components/mobility/wheel.usda",
+            (), (), (), (), (),
+        );
         if !plan.ok || plan.kind != "referenced_instance" || plan.ops.len() != 3
-            || missing_parent.ok || invalid_asset.ok {
+            || missing_parent.ok || invalid_asset.ok || !twin_asset.ok
+            || twin_asset.ops.len() != 1 {
             fail(this, "component-instance plan did not build or reject its explicit contract");
             return;
         }
