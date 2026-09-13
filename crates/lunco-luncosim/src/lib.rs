@@ -43,7 +43,8 @@ use lunco_hardware::LunCoHardwarePlugin;
 use lunco_mobility::LunCoMobilityPlugin;
 // USD core (scene load + collider build) is always needed; the Twin browser /
 // RTT viewport UI plugins are `ui`-only (added by `LunCoSimUiPlugin`).
-use lunco_usd::UsdPlugins;
+use lunco_usd_avian::{BigSpacePhysicsBridgePlugin, UsdCollisionFilter};
+use lunco_usd_bevy_runtime::UsdPlugins;
 use lunco_usd_bevy_scene::UsdPrimPath;
 #[cfg(feature = "networking")]
 use lunco_usd_sim_cosim::LoadScene;
@@ -2498,7 +2499,7 @@ pub struct LunCoSimCorePlugin {
 /// consume that same rendered pose.
 fn luncosim_physics_plugins() -> impl PluginGroup {
     PhysicsPlugins::default()
-        .with_collision_hooks::<lunco_usd::UsdCollisionFilter>()
+        .with_collision_hooks::<UsdCollisionFilter>()
         .set(avian3d::prelude::PhysicsInterpolationPlugin::interpolate_all())
 }
 
@@ -2743,7 +2744,7 @@ impl Plugin for LunCoSimCorePlugin {
             // this bridge is shadow-gated: a body syncs only when an external
             // writer actually moved it. Must be added AFTER PhysicsPlugins
             // (it overrides PhysicsTransformConfig).
-            .add_plugins(lunco_usd::BigSpacePhysicsBridgePlugin)
+            .add_plugins(BigSpacePhysicsBridgePlugin)
             // `lunco_physics::PhysicsGatePlugin` owns the single solver-resolution
             // contract and installs eight Avian substeps for every host. Keeping
             // this choice at the physics owner prevents the GUI, server, and web

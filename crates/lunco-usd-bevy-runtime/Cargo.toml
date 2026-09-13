@@ -1,0 +1,17 @@
+[package]
+name = "lunco-usd-bevy-runtime"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Application-level composition of the USD visual, diagnostics, physics, and simulation runtime"
+
+[dependencies]
+bevy = { workspace = true }
+lunco-usd = { path = "../lunco-usd", default-features = false }
+lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+lunco-usd-bevy-diagnostics = { path = "../lunco-usd-bevy-diagnostics" }
+lunco-usd-avian = { path = "../lunco-usd-avian" }
+lunco-usd-sim = { path = "../lunco-usd-sim" }
+
+[lints]
+workspace = true

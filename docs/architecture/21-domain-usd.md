@@ -7,12 +7,14 @@
 > physical — lives as USD prims in USD stages. See
 > [`../../crates/lunco-usd-core/`](../../crates/lunco-usd-core/), [`../../crates/lunco-usd/`](../../crates/lunco-usd/) and companion crates
 > `lunco-usd-geometry`, `lunco-usd-avian`, `lunco-usd-avian-lint`, `lunco-usd-bevy-core`,
-> `lunco-usd-bevy-scene`, `lunco-usd-bevy-camera`, `lunco-usd-bevy-light`, `lunco-usd-bevy` and
+> `lunco-usd-bevy-runtime`, `lunco-usd-bevy-scene`, `lunco-usd-bevy-camera`, `lunco-usd-bevy-light`, `lunco-usd-bevy` and
 > `lunco-usd-bevy-lathe`, `lunco-usd-sim`, `lunco-usd-sim-domain`.
 
 Package ownership follows the same boundary: `lunco-usd-core` contains the
 headless document/authoring surface, schemas, and pure probes; `lunco-usd`
-contains runtime orchestration and document commands; `lunco-usd-geometry`
+contains UI-free runtime orchestration and document commands;
+`lunco-usd-bevy-runtime` owns the complete application plugin bundle;
+`lunco-usd-geometry`
 owns the reusable render-free NURBS, trim, and curve-sweep substrate;
 `lunco-usd-bevy-core` owns prepared/composed stage data;
 `lunco-usd-bevy-scene` owns render-free ECS scene identity, lifecycle, ancestry,

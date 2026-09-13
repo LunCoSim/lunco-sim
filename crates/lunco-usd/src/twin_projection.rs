@@ -54,9 +54,7 @@ use bevy::asset::AssetId;
 use bevy::prelude::*;
 use lunco_assets::twin_source::TwinRoots;
 use lunco_doc::{Document, DocumentId};
-use lunco_usd_bevy_core::{
-    source::UsdSourceText, UsdInstanceProjection, UsdStageAsset,
-};
+use lunco_usd_bevy_core::{source::UsdSourceText, UsdInstanceProjection, UsdStageAsset};
 use lunco_usd_bevy_scene::{
     UsdPrimPath, UsdSceneAwaitingStage, UsdSceneProjected, UsdSceneProjectionQueued, UsdSceneRoot,
 };

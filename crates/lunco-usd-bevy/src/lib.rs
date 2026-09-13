@@ -51,27 +51,27 @@ use openusd::sdf::Value;
 
 /// Light and transform ports — the port backend for what `light`/`compose` spawn.
 pub mod scene_ports;
-use lunco_usd_bevy_lathe as lathe;
-use lunco_usd_bevy_light::light;
 use lunco_usd_bevy_core::read::{
     attr_has_time_samples, read_authored_bool_strict, read_primvar_f32_strict,
     read_primvar_vec3_at, read_primvar_vec3_strict, read_token_at, read_vec3_f64, read_vec3_f64_at,
     stage_time_codes_per_second,
 };
+use lunco_usd_bevy_core::source::{UsdSourceText, UsdSourceTextLoader};
 #[cfg(test)]
 use lunco_usd_bevy_core::DefaultPrim;
 use lunco_usd_bevy_core::{
     canonical, program, read, UsdInstanceMember, UsdInstanceProjection, UsdInstanceRoot, UsdLoader,
     UsdStageAsset,
 };
-use lunco_usd_bevy_core::source::{UsdSourceText, UsdSourceTextLoader};
-use lunco_usd_bevy_core::{
-    canonical::CanonicalStages,
-    compose_xform_order_at, local_transform_at, parent_prim_path, read_transform_from_usd,
-    resolve_bound_shader, resolve_stage_prim_path, stage_convention, UsdRead,
-};
 #[cfg(test)]
 use lunco_usd_bevy_core::{canonical::CanonicalStage, StageView};
+use lunco_usd_bevy_core::{
+    canonical::CanonicalStages, compose_xform_order_at, local_transform_at, parent_prim_path,
+    read_transform_from_usd, resolve_bound_shader, resolve_stage_prim_path, stage_convention,
+    UsdRead,
+};
+use lunco_usd_bevy_lathe as lathe;
+use lunco_usd_bevy_light::light;
 use lunco_usd_bevy_scene::{
     is_preview_only, read_primitive_axis, read_shape_dims, read_usd_mesh_points,
     read_usd_mesh_topology, scene_root_ancestor, usd_axis_to_quat, GlbPlaceholder,
@@ -80,7 +80,6 @@ use lunco_usd_bevy_scene::{
     UsdSceneProjectionFailed, UsdSceneProjectionQueued, UsdSceneRoot, UsdSceneSyncSet,
     UsdStageRevision, UsdVisualMeshTarget, UsdVisualProjectionSet,
 };
-use lunco_usd_core::UsdDataExt;
 use openusd::schemas::geom::tokens as gtok;
 /// Bevy plugin for USD visual synchronization.
 ///
@@ -2506,93 +2505,6 @@ fn apply_standard_material_intent(
     Ok(())
 }
 
-/// Reads a 3-component vector attribute from a USD prim.
-///
-/// Handles all common USD vector types:
-/// - `color3f` → `Value::Vec3f`
-/// - `double3` → `Value::Vec3d`
-/// - `float3` → `Value::Vec3f`
-/// - `Vec<f32>` / `Vec<f64>` array forms
-///
-/// Returns `None` if the attribute doesn't exist or can't be converted.
-/// Reads a string-typed attribute from a USD prim.
-///
-/// Accepts every reasonable string-shaped USD value:
-/// - `Value::String` — authored as `string foo = "..."`.
-/// - `Value::Token` — authored as `token foo = "..."` (also the
-///   parser's choice for several `lunco:*` attributes).
-/// - `Value::AssetPath` — authored as `asset foo = @...@`, preserving the
-///   standard USD asset-path type for user-facing attributes.
-///
-/// `prim_attribute_value::<String>` covers `String`/`Token` only,
-/// so we go through `reader.get` for the attribute path directly
-/// to also catch `AssetPath`.
-/// Read the stage's `defaultPrim` metadata from the live composed
-/// [`StageView`] pseudo-root. Returns the bare prim name (no leading slash),
-/// or `None` when the stage declares no `defaultPrim`. The metadata lives on
-/// the pseudo-root spec at the absolute root path.
-/// The `defaultPrim` authored on a **layer** (`sdf::Data`), without composition.
-///
-/// The authored-layer twin of [`stage_default_prim`], which reads the *composed*
-/// stage. A document's own root layer is the right place to ask "what prim do I
-/// mount?" when authoring into it — no references need resolving to answer that,
-/// and the two must not be conflated: runtime reads the composed stage, while
-/// authoring asks the root layer directly.
-/// True if the prim at `path` applies the named API schema, by exact
-/// token match against its `apiSchemas` list (or list-op). Canonical
-/// shared helper — `lunco-usd-avian` and `lunco-usd-sim` both call
-/// this instead of keeping their own (previously diverged) copies.
-///
-/// Handles every form `apiSchemas` can take: a single `Token`/`String`,
-/// a `TokenVec`, or a `TokenListOp` (explicit/prepended/appended/added).
-pub fn has_api_schema(reader: &lunco_usd_core::UsdData, path: &SdfPath, schema_name: &str) -> bool {
-    let Some(val) = reader.field(path, "apiSchemas") else {
-        return false;
-    };
-    match val {
-        Value::Token(s) => s.as_str() == schema_name,
-        Value::String(s) => s == schema_name,
-        Value::TokenVec(ss) => ss.iter().any(|s| s.as_str() == schema_name),
-        Value::TokenListOp(op) => op
-            .explicit_items
-            .iter()
-            .chain(op.prepended_items.iter())
-            .chain(op.appended_items.iter())
-            .chain(op.added_items.iter())
-            .any(|s| s.as_str() == schema_name),
-        _ => false,
-    }
-}
-
-/// First target path of relationship `rel_name` on `prim_path`, as a
-/// string (`None` if the relationship is absent/empty). Canonical
-/// shared helper — replaces the byte-identical copies that lived in
-/// `lunco-usd-avian` and `lunco-usd-sim`.
-pub fn read_rel_target(
-    reader: &lunco_usd_core::UsdData,
-    prim_path: &SdfPath,
-    rel_name: &str,
-) -> Option<String> {
-    let rel_path_str = format!("{}.{}", prim_path.as_str(), rel_name);
-    let Ok(rel_sdf) = SdfPath::new(&rel_path_str) else {
-        return None;
-    };
-    for field in &["targetPaths", "connectionPaths"] {
-        if let Some(Value::PathListOp(op)) = reader.field(&rel_sdf, field) {
-            if let Some(target) = op
-                .explicit_items
-                .first()
-                .or_else(|| op.prepended_items.first())
-                .or_else(|| op.appended_items.first())
-                .or_else(|| op.added_items.first())
-            {
-                return Some(target.as_str().to_string());
-            }
-        }
-    }
-    None
-}
-
 /// The xform ops the animation sampler drives, in compose order (T, R, S).
 pub const ANIMATED_XFORM_OPS: [&str; 3] =
     ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"];
@@ -3032,167 +2944,6 @@ pub fn bind_animated_to_preview(
     }
 }
 
-/// Apply one generic program resolution to its owning entity.
-///
-/// The program prim is the authored source identity; the owning entity carries
-/// the runtime source marker. Keeping this operation generic lets the live USD
-/// edit bridge update Rhai programs in place without rebuilding the owner.
-pub fn apply_program_resolution(
-    world: &mut World,
-    entity: Entity,
-    stage_id: bevy::asset::AssetId<UsdStageAsset>,
-    resolved: Option<program::ResolvedProgram>,
-) {
-    let rhai_asset = resolved.as_ref().and_then(|resolved| {
-        let program::ProgramSource::Asset(asset) = &resolved.source else {
-            return None;
-        };
-        (resolved.backend == program::ProgramBackend::Rhai).then(|| {
-            lunco_usd_bevy_core::asset::resolve_stage_asset_path(
-                world.resource::<AssetServer>(),
-                stage_id,
-                asset,
-            )
-        })
-    });
-    let mut entity = world.entity_mut(entity);
-    entity
-        .remove::<lunco_core::programs::ProgramDriverId>()
-        .remove::<lunco_core::EmbeddedScenarioSource>()
-        .remove::<lunco_core::EmbeddedScenarioPath>();
-
-    match resolved {
-        Some(program::ResolvedProgram {
-            backend: program::ProgramBackend::Builtin,
-            source: program::ProgramSource::Id(id),
-        }) => {
-            entity.insert(lunco_core::programs::ProgramDriverId(id));
-        }
-        Some(program::ResolvedProgram {
-            backend: program::ProgramBackend::Rhai,
-            source: program::ProgramSource::Code(source),
-        }) => {
-            entity.insert(lunco_core::EmbeddedScenarioSource(source));
-        }
-        Some(program::ResolvedProgram {
-            backend: program::ProgramBackend::Rhai,
-            source: program::ProgramSource::Asset(_),
-        }) => {
-            let Some(asset) = rhai_asset else {
-                warn!(
-                    "[usd] Rhai program asset could not be resolved for {:?}",
-                    entity.id()
-                );
-                return;
-            };
-            entity.insert(lunco_core::EmbeddedScenarioPath(asset));
-        }
-        Some(resolved) => {
-            warn!(
-                "[usd] non-generic program {:?} reached generic projection: {:?}",
-                entity.id(),
-                resolved.backend
-            );
-        }
-        None => {}
-    }
-}
-
-/// Re-read the generic program children of one existing owner.
-///
-/// This is the structural counterpart to source hot-reload: adding or removing
-/// a program prim changes the owner's executable policy, but must not recreate
-/// the owner's physics or visual subtree.
-pub fn refresh_program_owner(
-    world: &mut World,
-    stage_id: bevy::asset::AssetId<UsdStageAsset>,
-    owner: Entity,
-) {
-    let Some(owner_path) = world
-        .get::<UsdPrimPath>(owner)
-        .map(|path| path.path.clone())
-    else {
-        return;
-    };
-    let Some((program_path, resolved, params)) = ({
-        let Some(stages) = world.get_non_send::<CanonicalStages>() else {
-            return;
-        };
-        let Some(stage) = stages.get(stage_id) else {
-            return;
-        };
-        let view = stage.view();
-        let owner = SdfPath::new(&owner_path).expect("projected USD path is valid");
-        let network_members = program::modelica_network_member_paths(&view);
-        let mut candidates: Vec<SdfPath> = UsdRead::children(&view, &owner)
-            .into_iter()
-            .filter(|child| UsdRead::is_active(&view, child))
-            .filter(|child| UsdRead::has_api_schema(&view, child, "LunCoProgramAPI"))
-            .collect();
-        if UsdRead::type_name(&view, &owner).as_deref() != Some("Scope")
-            && UsdRead::has_api_schema(&view, &owner, "LunCoProgramAPI")
-        {
-            candidates.push(owner.clone());
-        }
-
-        let mut programs = Vec::new();
-        for child in candidates {
-            if network_members.contains(child.as_str()) {
-                continue;
-            }
-            let resolved = match program::resolve_program(&view, &child) {
-                Ok(resolved) if program::is_generic_program_backend(resolved.backend) => resolved,
-                Ok(_) => continue,
-                Err(issue) => {
-                    warn!(
-                        "[usd] program {} is unresolved at {}: {}",
-                        child.as_str(),
-                        issue.property,
-                        issue.message
-                    );
-                    continue;
-                }
-            };
-            let params = UsdRead::attr_names(&view, &child)
-                .iter()
-                .filter_map(|name| {
-                    let key = name.strip_prefix("lunco:param:")?;
-                    Some((key.to_string(), UsdRead::real(&view, &child, name)?))
-                })
-                .collect::<std::collections::HashMap<_, _>>();
-            programs.push((child.to_string(), resolved, params));
-        }
-        if programs.len() > 1 {
-            warn!(
-                "[usd] {} has {} generic executable program children; none was attached",
-                owner_path,
-                programs.len()
-            );
-            None
-        } else {
-            programs.into_iter().next()
-        }
-    }) else {
-        let mut entity = world.entity_mut(owner);
-        entity
-            .remove::<lunco_core::ScriptParams>()
-            .remove::<lunco_core::ScenarioProgramPrim>();
-        drop(entity);
-        apply_program_resolution(world, owner, stage_id, None);
-        return;
-    };
-
-    let mut entity = world.entity_mut(owner);
-    if params.is_empty() {
-        entity.remove::<lunco_core::ScriptParams>();
-    } else {
-        entity.insert(lunco_core::ScriptParams(params));
-    }
-    entity.insert(lunco_core::ScenarioProgramPrim(program_path));
-    drop(entity);
-    apply_program_resolution(world, owner, stage_id, Some(resolved));
-}
-
 /// Attach the generic script/driver programs a prim carries to `entity`.
 ///
 /// Program resolution happens before the one-program-per-owner check. Modelica
@@ -3291,7 +3042,12 @@ fn attach_programs<R: UsdRead>(
             .try_insert(lunco_core::ScenarioProgramPrim(child.as_str().to_string()));
 
         commands.queue(move |world: &mut World| {
-            apply_program_resolution(world, entity, stage_id, Some(resolved));
+            lunco_usd_bevy_core::program::apply_program_resolution(
+                world,
+                entity,
+                stage_id,
+                Some(resolved),
+            );
         });
     }
 }

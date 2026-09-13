@@ -423,7 +423,8 @@ radius. Ordered by leverage.
   in several domains.
 - **Delete:** the decorative-label status of the existing `LunCo*API` tokens — identity is "does this prim
   bind a program and declare ports", read off real applied schemas, never a heuristic.
-- **Blast radius:** small; `has_api_schema` already exists (`lunco-usd-bevy:1619`).
+- **Blast radius:** small; the composed-stage reader already exposes
+  `UsdRead::has_api_schema` from `lunco-usd-bevy-core`.
 
 ### A6 — `kind` everywhere + `PhysicsArticulationRootAPI` for robot bases
 
@@ -708,8 +709,9 @@ construction.**
 `flatten_stage` (`compose.rs:135`) today copies attribute `default` + `timeSamples` and relationship
 `targetPaths` — but **never** attribute `connectionPaths` (grep: zero `connect` in the file). Since the
 ECS projection reads *flattened* `sdf::Data`, authored connections on referenced components are **dropped**.
-The reader side is already ready — `read_rel_target` (`lib.rs:1647`) probes both `targetPaths` *and*
-`connectionPaths` — so **only the flatten emitter is missing**. Add a copy+translate branch mirroring the
+The reader side is already ready — `UsdRead::rel_target` in
+`lunco-usd-bevy-core` probes both `targetPaths` *and* `connectionPaths` — so
+**only the flatten emitter is missing**. Add a copy+translate branch mirroring the
 `targetPaths` one. Bonus: connections are `PathListOp` **list-ops**, which *compose across references*
 natively — this actually **removes** the reason the current CSV hack exists (`cosim.rs:18-21`: "`string[]`
 arrays don't compose across references"). The USD-native form is *more* composable, not less.

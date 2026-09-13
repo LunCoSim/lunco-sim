@@ -3,7 +3,7 @@
 //! inspector, and theme tokens.
 //!
 //! **Layer 4 (UI).** Per `AGENTS.md` §4.1, [`UsdUiPlugin`] is added
-//! independently of [`UsdPlugins`](lunco_usd::UsdPlugins) — headless apps
+//! independently of the complete USD runtime bundle — headless apps
 //! and the sandbox bin run without it; workbench bins opt in.
 //!
 //! ## Lifecycle wiring

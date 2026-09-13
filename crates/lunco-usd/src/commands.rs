@@ -93,8 +93,8 @@ impl EmptyViewportReason {
 /// observers, and the pending-event drain system.
 ///
 /// **Layer 2 (domain).** No UI, no Bevy renderer touches — added by
-/// [`UsdPlugins`](crate::UsdPlugins) so any binary that pulls in USD
-/// gets the document surface, even headless / sandbox bins.
+/// the application-level USD runtime bundle so any binary that pulls in USD
+/// gets the document surface, even headless bins.
 pub struct UsdCommandsPlugin;
 
 /// Promote an authored document when the live twin projection is installed.
@@ -2740,7 +2740,11 @@ fn validate_detach_component(
     if composed.spec(&joint).is_none() {
         return Err(format!("joint {} does not exist", spec.joint_path));
     }
-    if !lunco_usd_bevy::has_api_schema(&composed, &component, "LunCoMountAttachmentAPI") {
+    if !lunco_usd_core::usd_data::has_authored_api_schema(
+        &composed,
+        &component,
+        "LunCoMountAttachmentAPI",
+    ) {
         return Err(format!(
             "component {} does not apply LunCoMountAttachmentAPI",
             spec.component_path
@@ -2765,7 +2769,11 @@ fn validate_detach_component(
             host_path.as_str()
         ));
     }
-    if !lunco_usd_bevy::has_api_schema(&composed, &host_path, "PhysicsRigidBodyAPI") {
+    if !lunco_usd_core::usd_data::has_authored_api_schema(
+        &composed,
+        &host_path,
+        "PhysicsRigidBodyAPI",
+    ) {
         return Err(format!(
             "host {} does not apply PhysicsRigidBodyAPI",
             host_path
@@ -2789,7 +2797,11 @@ fn validate_detach_component(
                 host_path, socket_target
             )
         })?;
-        if !lunco_usd_bevy::has_api_schema(&composed, &socket, "LunCoMountSocketAPI") {
+        if !lunco_usd_core::usd_data::has_authored_api_schema(
+            &composed,
+            &socket,
+            "LunCoMountSocketAPI",
+        ) {
             continue;
         }
         let parts = relationship_targets(&composed, &socket, "lunco:mount:part")?;
@@ -2898,7 +2910,11 @@ fn validate_attach_component(
     if composed.spec(&host_path).is_none() {
         return Err(format!("host body {} does not exist", spec.host_path));
     }
-    if !lunco_usd_bevy::has_api_schema(&composed, &host_path, "PhysicsRigidBodyAPI") {
+    if !lunco_usd_core::usd_data::has_authored_api_schema(
+        &composed,
+        &host_path,
+        "PhysicsRigidBodyAPI",
+    ) {
         return Err(format!(
             "host {} does not apply PhysicsRigidBodyAPI",
             spec.host_path
@@ -2930,7 +2946,11 @@ fn validate_attach_component(
     let Some(socket_path) = spec.socket_path.as_deref() else {
         return Ok(());
     };
-    if !lunco_usd_bevy::has_api_schema(&composed, &host_path, "LunCoMountHostAPI") {
+    if !lunco_usd_core::usd_data::has_authored_api_schema(
+        &composed,
+        &host_path,
+        "LunCoMountHostAPI",
+    ) {
         return Err(format!(
             "host {} does not apply LunCoMountHostAPI",
             spec.host_path
@@ -2950,7 +2970,8 @@ fn validate_attach_component(
             "socket {socket_path} does not exist in document {doc}"
         ));
     }
-    if !lunco_usd_bevy::has_api_schema(&composed, &socket, "LunCoMountSocketAPI") {
+    if !lunco_usd_core::usd_data::has_authored_api_schema(&composed, &socket, "LunCoMountSocketAPI")
+    {
         return Err(format!(
             "socket {socket_path} does not apply LunCoMountSocketAPI"
         ));

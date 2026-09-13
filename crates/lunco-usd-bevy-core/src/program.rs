@@ -17,6 +17,8 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 // contract. A prepared asset plan implements it without retaining OpenUSD
 // handles, while live edits continue to use StageView.
 use crate::read::UsdReadObject;
+use bevy::asset::{AssetId, AssetServer};
+use bevy::prelude::{Entity, World};
 use openusd::sdf::Path as SdfPath;
 
 /// Why a prim that claims to be a Modelica program facet cannot be used as one.
@@ -72,6 +74,69 @@ pub struct ResolvedProgram {
     pub backend: ProgramBackend,
     /// The selected source arm and its value.
     pub source: ProgramSource,
+}
+
+/// Apply one resolved generic program to its owning ECS entity.
+///
+/// The USD program contract is shared by the initial visual projection and
+/// the live document bridge. The owner-specific refresh logic remains in the
+/// USD runtime crate, but this marker projection belongs beside the shared
+/// program resolution types so both paths use one implementation.
+pub fn apply_program_resolution(
+    world: &mut World,
+    entity: Entity,
+    stage_id: AssetId<crate::UsdStageAsset>,
+    resolved: Option<ResolvedProgram>,
+) {
+    let rhai_asset = resolved.as_ref().and_then(|resolved| {
+        let ProgramSource::Asset(asset) = &resolved.source else {
+            return None;
+        };
+        (resolved.backend == ProgramBackend::Rhai).then(|| {
+            crate::asset::resolve_stage_asset_path(world.resource::<AssetServer>(), stage_id, asset)
+        })
+    });
+    let mut entity = world.entity_mut(entity);
+    entity
+        .remove::<lunco_core::programs::ProgramDriverId>()
+        .remove::<lunco_core::EmbeddedScenarioSource>()
+        .remove::<lunco_core::EmbeddedScenarioPath>();
+
+    match resolved {
+        Some(ResolvedProgram {
+            backend: ProgramBackend::Builtin,
+            source: ProgramSource::Id(id),
+        }) => {
+            entity.insert(lunco_core::programs::ProgramDriverId(id));
+        }
+        Some(ResolvedProgram {
+            backend: ProgramBackend::Rhai,
+            source: ProgramSource::Code(source),
+        }) => {
+            entity.insert(lunco_core::EmbeddedScenarioSource(source));
+        }
+        Some(ResolvedProgram {
+            backend: ProgramBackend::Rhai,
+            source: ProgramSource::Asset(_),
+        }) => {
+            let Some(asset) = rhai_asset else {
+                bevy::log::warn!(
+                    "[usd] Rhai program asset could not be resolved for {:?}",
+                    entity.id()
+                );
+                return;
+            };
+            entity.insert(lunco_core::EmbeddedScenarioPath(asset));
+        }
+        Some(resolved) => {
+            bevy::log::warn!(
+                "[usd] non-generic program {:?} reached generic projection: {:?}",
+                entity.id(),
+                resolved.backend
+            );
+        }
+        None => {}
+    }
 }
 
 fn asset_path_without_fragment(path: &str) -> &str {

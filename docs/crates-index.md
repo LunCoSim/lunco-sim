@@ -68,7 +68,8 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | Crate | Responsibility |
 | :--- | :--- |
 | **`lunco-usd-core`** | Headless USD document, authoring, operation, schema, unit-conversion, and asset-closure substrate. No runtime, physics, rendering, or UI. |
-| **`lunco-usd`** | High-level runtime USD orchestrator (`UsdPlugins`) and mapper for LunCo-specific engineering metadata (`lunco:*`). |
+| **`lunco-usd`** | UI-free USD runtime orchestration, document commands, and engineering metadata mapping. |
+| **`lunco-usd-bevy-runtime`** | Application-level USD plugin bundle composing visual, diagnostics, physics, simulation, and document-command projections. |
 | **`lunco-usd-geometry`** | Render-free NURBS evaluators, trimmed-domain tessellation, and rotation-minimizing curve-sweep mesh data. Isolates heavy numeric geometry dependencies from the USD stage loader. |
 | **`lunco-usd-bevy-core`** | Headless composed-USD reader/view, stage composition, prepared stage assets, canonical live-stage ownership, authored-layer readers, instance identity, send-safe projection plans, program/variant resolution, material binding, transform decoding, and unit conversion. Uses Bevy's asset/ECS substrate but has no mesh, light, camera, renderer, window, or UI projection. |
 | **`lunco-usd-bevy-scene`** | Render-free Bevy scene contract shared by visual and domain projections: `UsdPrimPath`, scene/revision lifecycle markers, projection ordering boundaries, visual-split markers, preview/ancestry ownership, canonical USD primitive/mesh geometry readers, and composed collision/placement envelopes. It depends on the core reader and has no visual adapter or renderer dependency. |
@@ -76,7 +77,7 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-usd-bevy-lathe`** | Independent parametric NURBS/lathe projection: reflected surface definitions, profile evaluation, and change-detected Bevy mesh regeneration. |
 | **`lunco-usd-bevy`** | Visual Bevy adapter (`UsdBevyPlugin`): projects USD hierarchy, shapes, transforms, materials, and `timeSamples` animation into Bevy entities/components on top of `lunco-usd-bevy-core`. Owns the remaining mesh/curve projection and installs the independent camera and light adapters. |
 | **`lunco-usd-bevy-light`** | UsdLux light and textured dome projection: authored light components, ambient-dome semantics, HDRI equirectangular-to-cubemap conversion, and environment-camera binding. It is independent from the visual mesh projector. |
-| **`lunco-usd-bevy-diagnostics`** | Optional visual USD asset-failure and placeholder diagnostics: glTF fallback hiding, load-time replacement stubs, and labeled failure geometry. Installed by `UsdPlugins`; kept separate from the visual projector. |
+| **`lunco-usd-bevy-diagnostics`** | Optional visual USD asset-failure and placeholder diagnostics: glTF fallback hiding, load-time replacement stubs, and labeled failure geometry. Installed by `lunco-usd-bevy-runtime`; kept separate from the visual projector. |
 | **`lunco-usd-avian`** | Physics bridge (`UsdAvianPlugin`): maps `UsdPhysics` schemas (RigidBody, Colliders, all joint kinds + drive API) to Avian3D — the single home for joint construction. Runtime-only; lint fact production is in `lunco-usd-avian-lint`. |
 | **`lunco-usd-avian-lint`** | Render-free composed `UsdPhysics` fact producer for the authored Rhai lint policy. It reuses Avian's authoritative geometry/joint readers without making the runtime physics crate own lint orchestration. |
 | **`lunco-usd-sim`** | Simulation-schema bridge (`UsdSimPlugin`): intercepts specialized vehicle/cosim schemas (e.g., PhysX Vehicles) and maps them to LunCo models. Full USD→Bevy→Avian→simulation projection tests live here; direct Avian bridge mechanics stay in `lunco-usd-avian`. |
@@ -266,7 +267,19 @@ asset-closure substrate. It has no runtime projection, physics, rendering, or
 UI dependency.
 
 **`lunco-usd`**
-High-level, UI-free USD orchestrator (`UsdPlugins`) and engineering metadata bridge. Maps LunCo-specific metadata (`lunco:*` namespace) from USD stages to Bevy components, enriching 3D models with simulation-critical data like Ephemeris IDs. Document commands and composition are available to headless consumers; interactive presentation lives in `lunco-usd-ui`.
+UI-free USD runtime orchestration and engineering metadata bridge. Maps
+LunCo-specific metadata (`lunco:*` namespace) from USD stages to Bevy
+components, enriching 3D models with simulation-critical data like Ephemeris
+IDs. Its document commands and composition are available to headless
+consumers; complete application plugin composition lives in
+`lunco-usd-bevy-runtime`, while interactive presentation lives in
+`lunco-usd-ui`.
+
+**`lunco-usd-bevy-runtime`**
+Application-level composition boundary. Installs the visual USD projector,
+visual diagnostics, Avian physics, USD simulation, and UI-free USD document
+commands as one complete runtime bundle. It contains no domain logic of its
+own; applications that need a smaller closure install the individual plugins.
 
 **`lunco-usd-geometry`**
 Render-free reusable geometry substrate for USD projections: NURBS curves and
@@ -333,7 +346,7 @@ depends on the composed USD reader and render intent, but not on the visual
 hierarchy/mesh projector, so light-reader changes do not rebuild that package.
 
 **`lunco-usd-bevy-diagnostics`**
-Optional visual USD asset diagnostics installed by `UsdPlugins`. It owns
+Optional visual USD asset diagnostics installed by `lunco-usd-bevy-runtime`. It owns
 glTF placeholder hiding/replacement and the CPU-baked labels on visual failure
 stubs. The visual projector only emits generic scene markers from
 `lunco-usd-bevy-scene`; stage-load failure state itself remains in that

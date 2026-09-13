@@ -24,6 +24,7 @@ members = [
     "crates/lunco-usd-avian",
     "crates/lunco-usd-avian-lint",
     "crates/lunco-usd-bevy",
+    "crates/lunco-usd-bevy-runtime",
     "crates/lunco-usd-bevy-light",
     "crates/lunco-usd-bevy-camera",
     "crates/lunco-usd-bevy-core",

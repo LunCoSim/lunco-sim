@@ -14,10 +14,11 @@ assemble sublayers, references, payloads, and variants into an inert stage.
 Composition does **not** start Modelica, Rhai, behavior trees, physics, or
 rendering. Those are independent projections after a stage is available.
 
-## `UsdPlugins`
+## Complete runtime composition
 
-A convenience bundle (`app.add_plugins(UsdPlugins)`) that wires the real,
-existing subsystems:
+The complete application bundle is owned by the production
+`lunco-usd-bevy-runtime` package (`app.add_plugins(UsdPlugins)`). The
+individual packages remain independently installable:
 
 - **`UsdBevyPlugin`** (from `lunco-usd-bevy`) — visual sync: spawns child
   entities for USD prims, attaches meshes + transforms + hierarchy.
@@ -30,8 +31,8 @@ existing subsystems:
 - **`UsdCommandsPlugin`** (this crate, `commands` module) — the **headless-safe**
   document/file verb layer: `ApplyUsdOp`, `OpenFile` / `NewDocument` /
   `SaveDocument` observers, the async load pipeline, and the twin-scene
-  resolver. Added unconditionally so server / sandbox / networking bins get the
-  full USD document surface (egui-free).
+  resolver. The runtime bundle installs it for complete applications; headless
+  document consumers can install it directly without the visual stack.
 
 Assembly agents and editor view models use the registered read queries
 `InspectUsdDocument`, `InspectUsdEditSession`, `ResolveUsdTarget`, and
@@ -61,7 +62,7 @@ explicit document operation.
 ## UI plugins (`lunco-usd-ui`)
 
 The separate `lunco-usd-ui` package adds the egui browser/viewport panels and
-is installed by app composition (not by `UsdPlugins`):
+is installed by app composition (not by the complete runtime bundle):
 
 - **`UsdUiPlugin`** — Twin browser / loaded-stages / dispatch panels.
 - **`UsdViewportPlugin`** — `UsdViewportPanel` plus the instance-backed

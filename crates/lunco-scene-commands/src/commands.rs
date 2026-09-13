@@ -1278,7 +1278,11 @@ fn is_mount_component(
     };
     registry.host(doc).is_some_and(|host| {
         let composed = host.document().composed();
-        lunco_usd_bevy::has_api_schema(&composed, &path, "LunCoMountAttachmentAPI")
+        lunco_usd_core::usd_data::has_authored_api_schema(
+            &composed,
+            &path,
+            "LunCoMountAttachmentAPI",
+        )
     })
 }
 

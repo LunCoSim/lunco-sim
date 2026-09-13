@@ -1,6 +1,7 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
-use lunco_usd::*;
+use lunco_usd_bevy_runtime::UsdPlugins;
+use lunco_usd_bevy_scene::UsdPrimPath;
 
 fn main() {
     App::new()

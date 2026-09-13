@@ -797,7 +797,7 @@ pub(crate) fn refresh_edited_prims_live(
     }
 
     for (owner, resolved) in program_updates {
-        lunco_usd_bevy::apply_program_resolution(world, owner, id, resolved);
+        lunco_usd_bevy_core::program::apply_program_resolution(world, owner, id, resolved);
     }
 
     if prims.is_empty() {
@@ -912,7 +912,7 @@ pub(crate) fn reconcile_structural_live(
                 })
         };
         if let Some(owner) = program_owner {
-            lunco_usd_bevy::refresh_program_owner(world, id, owner);
+            crate::program_runtime::refresh_program_owner(world, id, owner);
         }
         let exists = {
             let Some(stages) = world.get_non_send::<CanonicalStages>() else {

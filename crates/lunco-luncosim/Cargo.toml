@@ -115,6 +115,7 @@ lunco-scripting = { path = "../lunco-scripting" }
 # USD core (scene load + collider build) is always needed; its Twin-browser /
 # viewport egui UI is supplied by the application UI shell.
 lunco-usd = { path = "../lunco-usd", default-features = false }
+lunco-usd-bevy-runtime = { path = "../lunco-usd-bevy-runtime" }
 # Live canonical stage read path (`CanonicalStages` / `StageView` / `UsdRead`):
 # the USD-reading systems below consume the composed stage, while initial reads
 # use every asset's prepared projection plan.

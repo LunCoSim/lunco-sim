@@ -60,6 +60,31 @@ pub trait UsdDataExt {
     fn prim_is_active(&self, prim: &Path) -> bool;
 }
 
+/// Whether a prim in an authored layer applies the named API schema.
+///
+/// This deliberately reads the layer's own `apiSchemas` opinion. Runtime
+/// queries over a composed stage use the composed-stage reader instead;
+/// authoring and validation code must not silently substitute one read surface
+/// for the other.
+pub fn has_authored_api_schema(reader: &sdf::Data, path: &Path, schema_name: &str) -> bool {
+    let Some(value) = reader.field(path, "apiSchemas") else {
+        return false;
+    };
+    match value {
+        Value::Token(value) => value.as_str() == schema_name,
+        Value::String(value) => value == schema_name,
+        Value::TokenVec(values) => values.iter().any(|value| value.as_str() == schema_name),
+        Value::TokenListOp(op) => op
+            .explicit_items
+            .iter()
+            .chain(op.prepended_items.iter())
+            .chain(op.appended_items.iter())
+            .chain(op.added_items.iter())
+            .any(|value| value.as_str() == schema_name),
+        _ => false,
+    }
+}
+
 impl UsdDataExt for sdf::Data {
     fn field(&self, path: &Path, key: &str) -> Option<&Value> {
         self.spec(path).and_then(|s| s.get(key))
