@@ -156,7 +156,10 @@ to implement a panel or perspective.
    rows expand or collapse their complete diagnostics when the row is clicked
    and expose that affordance
    through the row cursor and tooltip, while attention rows retain their typed
-   action control. Active progress entries are included from the same StatusBus
+   action control. The performance HUD reserves room for the FPS, frame-time,
+   and published physics-step fields before allocating its optional p99 detail
+   and sparkline; the complete metric line remains available through its
+   tooltip. Active progress entries are included from the same StatusBus
    reader. Consecutive identical discrete snapshots are coalesced by StatusBus
    before the renderers read them. Warning and error rows copy the unmodified
    message without depending on the window width;

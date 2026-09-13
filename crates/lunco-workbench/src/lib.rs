@@ -5383,44 +5383,38 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
         if perf_enabled {
             let perf_width = status_bar_perf_width(ui.available_width(), right_widths.perf);
             if perf_width > 0.0 {
-                let perf_text = {
-                    let phys = perf_stats
-                        .physics_ms
-                        .map(|ms| format!(" · phys {:>4.1}ms", ms))
-                        .unwrap_or_default();
-                    let p99 = perf_hud::frame_ms_stats(&frame_history)
-                        .map(|(_, _, p99)| format!(" · p99 {:>5.1}ms", p99))
-                        .unwrap_or_default();
-                    // Fixed-width fields so the HUD doesn't shift when
-                    // FPS crosses 99→100 or frame_ms crosses 9→10. Values
-                    // are right-justified inside their fields by the
-                    // padding spec; monospace alone isn't enough because
-                    // the *number of characters* changes.
-                    format!(
-                        "FPS {:>5.1} · {:>5.1}ms{}{}",
-                        perf_stats.fps, perf_stats.frame_ms, p99, phys,
-                    )
-                };
+                let p99 = perf_hud::frame_ms_stats(&frame_history).map(|(_, _, p99)| p99);
+                let (required_text, perf_text) = perf_hud_text(
+                    perf_stats.fps,
+                    perf_stats.frame_ms,
+                    perf_stats.physics_ms,
+                    p99,
+                );
                 ui.allocate_ui_with_layout(
                     egui::vec2(perf_width, 18.0),
                     egui::Layout::right_to_left(egui::Align::Center),
                     |ui| {
-                        let sparkline_width = if frame_history.is_empty() {
-                            0.0
-                        } else {
-                            120.0_f32.min(perf_width)
-                        };
+                        let item_spacing = ui.spacing().item_spacing.x;
+                        let required_width = perf_text_width(ui, &required_text);
+                        let sparkline_width = perf_hud_sparkline_width(
+                            perf_width,
+                            required_width,
+                            item_spacing,
+                            !frame_history.is_empty(),
+                        );
                         let label_width =
-                            (ui.available_width() - sparkline_width - ui.spacing().item_spacing.x)
-                                .max(1.0);
+                            (ui.available_width() - sparkline_width - item_spacing).max(1.0);
                         let displayed_perf_text =
-                            truncate_perf_text_to_width(ui, &perf_text, label_width);
+                            fit_perf_text_to_width(ui, &required_text, &perf_text, label_width);
+                        // `fit_perf_text_to_width` applies the HUD's
+                        // required-before-optional policy. A second generic
+                        // truncator would reintroduce an ellipsis after the
+                        // policy selected a complete required line.
                         ui.add_sized(
                             [label_width, 18.0],
                             egui::Label::new(
                                 egui::RichText::new(displayed_perf_text).small().monospace(),
-                            )
-                            .truncate(),
+                            ),
                         )
                         .on_hover_text(&perf_text);
                         draw_frame_time_sparkline(ui, &frame_history, theme, sparkline_width);
@@ -5829,6 +5823,9 @@ const STATUS_BAR_GUIDED_MAX_WIDTH: f32 = 190.0;
 const STATUS_BAR_SCENE_MAX_WIDTH: f32 = 150.0;
 const STATUS_BAR_NET_MAX_WIDTH: f32 = 220.0;
 const STATUS_BAR_PERF_MAX_WIDTH: f32 = 480.0;
+/// The normal compact-window budget reserved for the FPS/frame/physics fields.
+/// Optional p99 detail and the sparkline yield before these values are clipped.
+const STATUS_BAR_PERF_REQUIRED_WIDTH: f32 = 360.0;
 const STATUS_BAR_PERF_EDGE_INSET: f32 = 8.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -5857,32 +5854,83 @@ fn status_bar_perf_width(available_width: f32, requested_width: f32) -> f32 {
     )
 }
 
-fn truncate_perf_text_to_width(ui: &egui::Ui, text: &str, max_width: f32) -> String {
+fn perf_hud_text(
+    fps: f32,
+    frame_ms: f32,
+    physics_ms: Option<f32>,
+    p99_ms: Option<f32>,
+) -> (String, String) {
+    // Keep the required metrics together at the front. The width-aware
+    // renderer can then discard optional p99 detail without ellipsizing the
+    // FPS/frame/physics readout.
+    let mut required = format!("FPS {:>5.1} · {:>5.1}ms", fps, frame_ms);
+    if let Some(ms) = physics_ms {
+        required.push_str(&format!(" · phys {:>4.1}ms", ms));
+    }
+
+    let mut full = required.clone();
+    if let Some(ms) = p99_ms {
+        full.push_str(&format!(" · p99 {:>5.1}ms", ms));
+    }
+    (required, full)
+}
+
+fn perf_hud_sparkline_width(
+    perf_width: f32,
+    required_width: f32,
+    item_spacing: f32,
+    has_history: bool,
+) -> f32 {
+    if !has_history {
+        return 0.0;
+    }
+    (perf_width - required_width - item_spacing)
+        .max(0.0)
+        .min(120.0)
+}
+
+fn perf_text_width(ui: &egui::Ui, text: &str) -> f32 {
+    let font = egui::FontId::monospace(egui::TextStyle::Small.resolve(ui.style()).size);
+    ui.painter()
+        .layout_no_wrap(text.to_owned(), font, ui.visuals().text_color())
+        .size()
+        .x
+}
+
+fn fit_perf_text_to_width(ui: &egui::Ui, required: &str, full: &str, max_width: f32) -> String {
+    fit_text_to_width(required, full, max_width, |text| perf_text_width(ui, text))
+}
+
+fn fit_text_to_width(
+    required: &str,
+    full: &str,
+    max_width: f32,
+    text_width: impl Fn(&str) -> f32,
+) -> String {
     if max_width <= 0.0 {
         return String::new();
     }
-    let font = egui::FontId::monospace(egui::TextStyle::Small.resolve(ui.style()).size);
-    let color = ui.visuals().text_color();
-    let width = |value: &str| {
-        ui.painter()
-            .layout_no_wrap(value.to_owned(), font.clone(), color)
-            .size()
-            .x
-    };
-    if width(text) <= max_width {
-        return text.to_owned();
+    if text_width(full) <= max_width {
+        return full.to_owned();
     }
+    // Optional detail is intentionally omitted as a whole. This is the
+    // important distinction from generic truncation: a required metric line
+    // that fits must never acquire an ellipsis merely because p99 does not.
+    if text_width(required) <= max_width {
+        return required.to_owned();
+    }
+
     let ellipsis = "…";
-    let ellipsis_width = width(ellipsis);
+    let ellipsis_width = text_width(ellipsis);
     if ellipsis_width > max_width {
         return String::new();
     }
-    let mut chars: Vec<char> = text.chars().collect();
+    let mut chars: Vec<char> = required.chars().collect();
     while !chars.is_empty() {
         chars.pop();
         let mut candidate: String = chars.iter().collect();
         candidate.push_str(ellipsis);
-        if width(&candidate) <= max_width {
+        if text_width(&candidate) <= max_width {
             return candidate;
         }
     }
@@ -5939,18 +5987,31 @@ fn status_bar_right_widths(
         0.0
     };
     let max_controls = guided + scene + net + perf;
-    let budget = (available_width - STATUS_BAR_MIN_SCOPE_WIDTH).max(1.0);
-    let scale = if max_controls > 0.0 {
-        ((budget - overhead).max(1.0) / max_controls).min(1.0)
+    let budget = (available_width - STATUS_BAR_MIN_SCOPE_WIDTH - overhead).max(0.0);
+    let perf_proportional = if max_controls > 0.0 {
+        (budget * perf / max_controls).min(perf)
+    } else {
+        0.0
+    };
+    let perf = if perf > 0.0 {
+        budget
+            .min(perf)
+            .max(perf_proportional.max(STATUS_BAR_PERF_REQUIRED_WIDTH.min(budget)))
+    } else {
+        0.0
+    };
+    let other_controls = guided + scene + net;
+    let other_scale = if other_controls > 0.0 {
+        ((budget - perf).max(0.0) / other_controls).min(1.0)
     } else {
         0.0
     };
 
     StatusBarRightWidths {
-        guided: guided * scale,
-        scene: scene * scale,
-        net: net * scale,
-        perf: perf * scale,
+        guided: guided * other_scale,
+        scene: scene * other_scale,
+        net: net * other_scale,
+        perf,
         overhead,
     }
 }
@@ -7113,6 +7174,44 @@ mod tests {
         assert_eq!(status_bar_perf_width(472.0, 480.0), 464.0);
         assert_eq!(status_bar_perf_width(640.0, 480.0), 480.0);
         assert_eq!(status_bar_perf_width(4.0, 480.0), 0.0);
+    }
+
+    #[test]
+    fn perf_hud_keeps_required_metrics_before_optional_detail() {
+        let (required, full) = perf_hud_text(22.3, 44.8, Some(0.5), Some(492.4));
+
+        assert!(full.starts_with(&required));
+        assert!(required.contains("FPS"));
+        assert!(required.contains("44.8ms"));
+        assert!(required.contains("phys"));
+        assert!(full.find("phys").unwrap() < full.find("p99").unwrap());
+    }
+
+    #[test]
+    fn perf_hud_drops_optional_detail_before_ellipsizing_required_metrics() {
+        let (required, full) = perf_hud_text(22.3, 44.8, Some(0.5), Some(492.4));
+        let width = |text: &str| text.chars().count() as f32;
+
+        assert_eq!(
+            fit_text_to_width(&required, &full, required.chars().count() as f32, width),
+            required
+        );
+    }
+
+    #[test]
+    fn perf_hud_sparkline_yields_space_to_required_metrics() {
+        assert_eq!(perf_hud_sparkline_width(360.0, 220.0, 8.0, true), 120.0);
+        assert_eq!(perf_hud_sparkline_width(300.0, 220.0, 8.0, true), 72.0);
+        assert_eq!(perf_hud_sparkline_width(220.0, 220.0, 8.0, true), 0.0);
+        assert_eq!(perf_hud_sparkline_width(360.0, 220.0, 8.0, false), 0.0);
+    }
+
+    #[test]
+    fn status_bar_right_controls_prioritize_readable_perf_metrics() {
+        let compact = status_bar_right_widths(960.0, true, true, true, true);
+
+        assert!(compact.perf >= STATUS_BAR_PERF_REQUIRED_WIDTH);
+        assert!(compact.total() <= 800.0);
     }
 
     #[test]
