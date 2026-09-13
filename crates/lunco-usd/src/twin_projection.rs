@@ -1064,7 +1064,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                 },
                 None => false,
             };
-            // The per-frame sampler (`sample_usd_animation`) reads the live stage,
+            // The per-frame sampler in `lunco-usd-bevy-animation` reads the live stage,
             // so a key on an ALREADY-animated prim shows up next tick with no
             // refresh. But the FIRST key turns a static prim animated — its entity
             // isn't `UsdAnimated` yet, so re-instantiate the subtree to let the

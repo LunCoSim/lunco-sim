@@ -2,7 +2,7 @@
 //!
 //! Detects USD simulation schemas (NVIDIA PhysX Vehicles) and maps them to LunCoSim
 //! simulation components. This is the **third** plugin in the USD processing pipeline,
-//! running after `UsdBevyPlugin` and alongside `UsdAvianPlugin`.
+//! running after `UsdVisualPlugin` and alongside `UsdAvianPlugin`.
 //!
 //! ## Detected Schemas
 //!

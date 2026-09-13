@@ -7,7 +7,7 @@
 > physical — lives as USD prims in USD stages. See
 > [`../../crates/lunco-usd-core/`](../../crates/lunco-usd-core/), [`../../crates/lunco-usd/`](../../crates/lunco-usd/) and companion crates
 > `lunco-usd-geometry`, `lunco-usd-avian`, `lunco-usd-avian-lint`, `lunco-usd-bevy-core`,
-> `lunco-usd-bevy-runtime`, `lunco-usd-bevy-scene`, `lunco-usd-bevy-twin`, `lunco-usd-bevy-camera`, `lunco-usd-bevy-light`, `lunco-usd-bevy` and
+> `lunco-usd-bevy-runtime`, `lunco-usd-bevy-scene`, `lunco-usd-bevy-twin`, `lunco-usd-bevy-camera`, `lunco-usd-bevy-light`, `lunco-usd-bevy-animation`, `lunco-usd-bevy` and
 > `lunco-usd-bevy-lathe`, `lunco-usd-sim`, `lunco-usd-sim-domain`.
 
 Package ownership follows the same boundary: `lunco-usd-core` contains the
@@ -27,6 +27,7 @@ the event-driven wake signal; `lunco-usd` owns the stage-loading,
 canonical-stage, and live ECS projection systems that consume that state;
 `lunco-usd-bevy-lathe` owns the independent parametric NURBS/lathe mesh
 projection; `lunco-usd-bevy-light` owns UsdLux light and dome projection;
+`lunco-usd-bevy-animation` owns the render-free time-sample projection;
 `lunco-usd-bevy` owns the remaining visual projection and consumes the camera,
 light, and lathe packages directly; and
 `lunco-usd-avian-lint` owns composed `UsdPhysics` lint facts;
@@ -296,10 +297,11 @@ section.
 
 ### Pipeline Phases
 
-1. **UsdBevyPlugin** — Spawns child entities for USD prims and attaches meshes + transforms.
-2. **UsdDiagnosticsPlugin** — Handles visual glTF placeholder hiding and failure-stub diagnostics; render-free stage failure state belongs to the `UsdScenePlugin`.
-3. **UsdAvianPlugin** — Maps USD physics to Avian3D: rigid bodies (`PhysicsRigidBodyAPI`, with its `physics:rigidBodyEnabled`), mass-properties (`physics:mass`, `physics:diagonalInertia`, `physics:centerOfMass`), colliders (`physics:collisionEnabled`, all `UsdGeom` shapes), and **all joints** (see [Physics joints](#physics-joints)). The single home for Avian joint construction.
-4. **UsdSimPlugin** — Detects the standard vehicle/wheel schemas and authored port topology, then creates the topology-derived `lunco_core::MobilityRoot`, `WheelRaycast`, `OutputPorts`, generic joint/shaft endpoints, `DifferentialCoupling`, sensors, and co-simulation model/wires. Vehicle motion allocation and wheel heading are produced by the composed Modelica/Rhai network; Rust only realizes the resulting generic values (see [`22-domain-cosim.md`](22-domain-cosim.md)).
+1. **UsdVisualPlugin** — Spawns child entities for USD prims and attaches meshes + transforms.
+2. **UsdAnimationPlugin** — Binds projected animated prims to the shared time domains and samples authored `timeSamples` into transform and material intent.
+3. **UsdDiagnosticsPlugin** — Handles visual glTF placeholder hiding and failure-stub diagnostics; render-free stage failure state belongs to the `UsdScenePlugin`.
+4. **UsdAvianPlugin** — Maps USD physics to Avian3D: rigid bodies (`PhysicsRigidBodyAPI`, with its `physics:rigidBodyEnabled`), mass-properties (`physics:mass`, `physics:diagonalInertia`, `physics:centerOfMass`), colliders (`physics:collisionEnabled`, all `UsdGeom` shapes), and **all joints** (see [Physics joints](#physics-joints)). The single home for Avian joint construction.
+5. **UsdSimPlugin** — Detects the standard vehicle/wheel schemas and authored port topology, then creates the topology-derived `lunco_core::MobilityRoot`, `WheelRaycast`, `OutputPorts`, generic joint/shaft endpoints, `DifferentialCoupling`, sensors, and co-simulation model/wires. Vehicle motion allocation and wheel heading are produced by the composed Modelica/Rhai network; Rust only realizes the resulting generic values (see [`22-domain-cosim.md`](22-domain-cosim.md)).
 
 ### Compound collision ownership
 
@@ -714,6 +716,8 @@ as runtime. Ownership follows the narrowest production boundary:
 - `crates/lunco-usd-bevy-twin/src/lib.rs` — render-free Twin/document leases, stage-to-document lookup, ownership events, and projection wake state
 - `crates/lunco-usd-bevy-camera/src/{camera,camera_mount,camera_path,camera_switch,camera_track}.rs` — render-free camera projection, pose, path, selection, and track mechanisms
 - `crates/lunco-usd-bevy-light/src/{light,dome}.rs` — UsdLux light readers, ambient-dome semantics, and HDRI environment projection
+- `crates/lunco-usd-bevy-core/src/animation.rs` — low-level time-sample topology, value decoding, rotation, and transform-reader mechanisms
+- `crates/lunco-usd-bevy-animation/src/lib.rs` — production animation planning, time-domain binding, and ECS sampling systems
 - `crates/lunco-usd/tests/live_spawn_projection.rs` — document-backed USD authoring and raw asset composition facts
 - `crates/lunco-usd-avian-lint/src/lib.rs` — composed `UsdPhysics` fact production for the authored lint policy
 - `crates/lunco-usd-sim-domain/src/lib.rs` — low-level component-network projection, synthesis, and actuator lowering mechanisms
@@ -721,6 +725,7 @@ as runtime. Ownership follows the narrowest production boundary:
 - `assets/scenarios/tests/*.rhai` through the production `luncosim test` gate — composed USD → Bevy → Avian → simulation outcomes, including rover structure, wheel realization, wiring, EPS, and link visibility
 - `crates/lunco-usd-bevy-core/src/point_instancer.rs` — required/optional PointInstancer arrays, prototype ordering, transforms, ids, masking, and negative malformed-data cases
 - `assets/scenes/tests/point_instancer.usda` + `assets/scenarios/tests/point_instancer.rhai` — production composed-stage acceptance for the standard PointInstancer authoring contract
+- `assets/scenes/tests/parametric_surface.usda` + `assets/scenarios/tests/parametric_surface.rhai` — production composed-stage acceptance for shipped `LunCoLatheAPI` reflector and nozzle assets
 
 ---
 

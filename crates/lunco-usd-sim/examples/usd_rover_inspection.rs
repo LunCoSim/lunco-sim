@@ -19,7 +19,7 @@ fn main() {
     app.init_asset::<Mesh>();
     app.init_asset::<Image>();
     // The avian/sim extractors read the LIVE canonical stage; without
-    // `UsdBevyPlugin` this harness must provide the resource itself.
+    // `UsdVisualPlugin` this harness must provide the resource itself.
     app.init_non_send::<CanonicalStages>();
 
     app.add_plugins((UsdAvianPlugin, UsdSimPlugin));

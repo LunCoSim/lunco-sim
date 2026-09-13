@@ -7,7 +7,7 @@
 use bevy::prelude::*;
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd::commands::UsdCommandsPlugin;
-use lunco_usd_bevy::UsdBevyPlugin;
+use lunco_usd_bevy::UsdVisualPlugin;
 use lunco_usd_bevy_core::UsdStageAsset;
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_core::commands::ApplyUsdOp;
@@ -38,7 +38,7 @@ fn test_apply_usd_op_integration() {
     app.init_asset::<Image>();
 
     // 2. Add USD plugins
-    app.add_plugins(UsdBevyPlugin);
+    app.add_plugins(UsdVisualPlugin);
     app.add_plugins(UsdCommandsPlugin);
     app.init_resource::<lunco_core::CommandResults>()
         .init_resource::<lunco_core::ActiveCommandId>();

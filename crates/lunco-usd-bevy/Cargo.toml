@@ -37,7 +37,6 @@ lunco-usd-bevy-camera = { path = "../lunco-usd-bevy-camera" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 openusd = { workspace = true }
 lunco-core = { path = "../lunco-core" }
-lunco-time = { path = "../lunco-time" }
 lunco-render = { path = "../lunco-render" }
 lunco-materials = { path = "../lunco-materials" }
 big_space = { workspace = true }

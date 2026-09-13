@@ -94,7 +94,7 @@ hooks, RNG, and the `?workspace=…&open=…` URL boot path.
   glibc's global-lock contention against avian's contact-graph rebuild.
 - The workspace bevy baseline is `default-features = false`, so
   `reflect_auto_register` is OFF (it overflowed clang's link command line).
-  Scene component types are explicitly registered by `UsdBevyPlugin` — see
+  Scene component types are explicitly registered by `UsdVisualPlugin` — see
   `crates/lunco-usd-bevy/src/lib.rs`.
 - `luncosim://` deep-link scheme handling + single-instance gate is native +
   `networking` only; filesystem writes route through `lunco-storage`.

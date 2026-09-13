@@ -70,7 +70,7 @@ TimeDomain / Playback
         -> projection / write
 ```
 
-`lunco-usd-bevy::sample_usd_animation` binds ordinary USD animation to the
+`lunco-usd-bevy-animation::UsdAnimationPlugin` binds ordinary USD animation to the
 `AnimationPreview` driven domain and writes the supported visual channels. The
 preview domain can play, pause, seek, rate-scale, and loop without touching the
 physics transport.

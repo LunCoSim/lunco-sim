@@ -73,3 +73,52 @@ impl DefaultPrim {
             .or_else(|| self.scalar::<f64>(attr).map(|value| value as f32))
     }
 }
+
+#[cfg(test)]
+mod default_prim_attr_tests {
+    //! [`DefaultPrim`] — parse a single layer and read a `string`/`token`
+    //! attribute off its `defaultPrim`.
+    use super::DefaultPrim;
+
+    fn attr(text: &str, name: &str) -> Option<String> {
+        DefaultPrim::parse(text)?.text(name)
+    }
+
+    const SCENE: &str = "#usda 1.0\n\
+        (\n\
+            defaultPrim = \"SandboxScene\"\n\
+            upAxis = \"Y\"\n\
+        )\n\
+        def Xform \"SandboxScene\"\n{\n\
+            custom bool lunco:spawnable = false\n\
+            custom string lunco:testLabel = \"Two cubes joined together.\"\n\
+            def Cube \"Ground\"\n{\n}\n\
+        }\n";
+
+    #[test]
+    fn reads_string_attr_off_default_prim() {
+        assert_eq!(
+            attr(SCENE, "lunco:testLabel").as_deref(),
+            Some("Two cubes joined together.")
+        );
+    }
+
+    #[test]
+    fn missing_attr_is_none() {
+        assert!(attr(SCENE, "lunco:notAuthored").is_none());
+    }
+
+    #[test]
+    fn no_default_prim_is_none() {
+        // Layer with no `defaultPrim` metadata — even if the attribute exists
+        // on a prim, we don't know which prim is the root.
+        let src =
+            "#usda 1.0\ndef Xform \"Orphan\"\n{\n    custom string lunco:testLabel = \"x\"\n}\n";
+        assert!(attr(src, "lunco:testLabel").is_none());
+    }
+
+    #[test]
+    fn unparseable_text_is_none() {
+        assert!(attr("this is not USDA", "lunco:testLabel").is_none());
+    }
+}

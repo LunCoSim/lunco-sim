@@ -44,6 +44,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 tempfile = { workspace = true }
 
 [lints]

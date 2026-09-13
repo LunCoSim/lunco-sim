@@ -202,7 +202,7 @@ impl Plugin for CelestialPlugin {
 
         // The unified mission-time spine (doc 19 — T1): MissionClock + transport +
         // the derived `WorldTime` view. Guarded so a context that also adds it via
-        // another plugin (e.g. `UsdBevyPlugin` for the animation sampler) is fine.
+        // another plugin (e.g. `UsdAnimationPlugin` for the animation sampler) is fine.
         // `TimePlugin` now owns the wall-clock seed itself (Startup), so every
         // spine context anchors at the real launch instant — no celestial-only
         // seed system anymore.

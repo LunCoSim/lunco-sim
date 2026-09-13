@@ -8369,7 +8369,6 @@ dependencies = [
  "lunco-core",
  "lunco-materials",
  "lunco-render",
- "lunco-time",
  "lunco-usd-bevy-camera",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-lathe",
@@ -8379,6 +8378,18 @@ dependencies = [
  "lunco-usd-geometry",
  "openusd",
  "web-time",
+]
+
+[[package]]
+name = "lunco-usd-bevy-animation"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "lunco-render",
+ "lunco-time",
+ "lunco-usd-bevy-core",
+ "lunco-usd-bevy-scene",
+ "openusd",
 ]
 
 [[package]]
@@ -8460,6 +8471,7 @@ dependencies = [
  "lunco-usd",
  "lunco-usd-avian",
  "lunco-usd-bevy",
+ "lunco-usd-bevy-animation",
  "lunco-usd-bevy-diagnostics",
  "lunco-usd-sim",
 ]
@@ -8471,6 +8483,7 @@ dependencies = [
  "bevy",
  "lunco-core",
  "lunco-usd-bevy-core",
+ "lunco-usd-core",
  "openusd",
 ]
 
@@ -8697,6 +8710,7 @@ dependencies = [
  "lunco-storage",
  "lunco-theme",
  "lunco-usd",
+ "lunco-usd-bevy",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
  "lunco-usd-bevy-twin",

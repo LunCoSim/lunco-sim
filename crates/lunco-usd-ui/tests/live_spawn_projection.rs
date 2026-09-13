@@ -9,7 +9,7 @@
 use bevy::prelude::*;
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd::commands::UsdCommandsPlugin;
-use lunco_usd_bevy::UsdBevyPlugin;
+use lunco_usd_bevy::UsdVisualPlugin;
 use lunco_usd_bevy_core::read::read_primvar_vec3;
 use lunco_usd_bevy_core::{StageView, UsdStageAsset};
 use lunco_usd_bevy_scene::UsdPrimPath;
@@ -59,7 +59,7 @@ fn boot_app() -> App {
     app.init_asset::<UsdStageAsset>();
     app.init_asset::<Mesh>();
     app.init_asset::<Image>();
-    app.add_plugins(UsdBevyPlugin);
+    app.add_plugins(UsdVisualPlugin);
     app.add_plugins(UsdCommandsPlugin);
     app.init_resource::<lunco_core::CommandResults>()
         .init_resource::<lunco_core::ActiveCommandId>();

@@ -9,6 +9,7 @@ mod material_binding;
 mod purpose;
 mod transform;
 
+pub mod animation;
 pub mod asset;
 pub mod authoring;
 pub mod canonical;

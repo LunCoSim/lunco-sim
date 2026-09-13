@@ -106,7 +106,7 @@ pub(crate) fn add_prepared_canonical_from_file(
     let canonical = CanonicalStage::from_recipe(&recipe).expect("build live USD stage");
     app.world_mut()
         .get_non_send_mut::<CanonicalStages>()
-        .expect("CanonicalStages resource (UsdBevyPlugin)")
+        .expect("CanonicalStages resource (UsdVisualPlugin)")
         .insert(handle.id(), canonical);
     handle
 }

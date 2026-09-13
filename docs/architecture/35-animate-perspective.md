@@ -47,10 +47,10 @@ the timeline as data.
 | Seekable playhead w/ range + loop | `Playback { head, mode, rate, start, end, looping }` + `step_playhead` (`lunco-time/src/domain.rs:79,156`) | scrubs backward |
 | Transport command surface | `ControlAnimation { playing, seek_secs, rate }` (`domain.rs:318`); world clock `SetTimeTransport` (`domain.rs:360`) | API+MCP+UI+rhai |
 | Per-object independent clocks | `TimeDomain` / `TimeBinding` / `ResolvedDomains` (`domain.rs:50,118,126`) | |
-| Preview domain auto-bind + range | `AnimationPreview` (`domain.rs:294`); `bind_animated_to_preview` grows `Playback.start/end` from clip spans (`usd-bevy/src/lib.rs:1938`) | |
-| USD animation sampling | `sample_usd_animation` (`usd-bevy/src/lib.rs:1796`) reads domain time → evaluates `xformOp:*` / visibility / displayColor `timeSamples` → `Transform` | |
-| Clip span per prim | `animated_time_range(reader, path) -> (f64,f64)` (`usd-bevy/src/lib.rs:1733`) | |
-| Seconds ↔ timecode | `stage_time_codes_per_second` (`usd-bevy/src/lib.rs:1691`) | |
+| Preview domain auto-bind + range | `AnimationPreview` (`domain.rs:294`); `bind_animated_to_preview` grows `Playback.start/end` from clip spans (`lunco-usd-bevy-animation/src/lib.rs`) | |
+| USD animation sampling | `sample_usd_animation` (`lunco-usd-bevy-animation/src/lib.rs`) reads domain time → evaluates `xformOp:*` / visibility / displayColor `timeSamples` → `Transform` | |
+| Clip span per prim | `animated_time_range(reader, path) -> (f64,f64)` (`lunco-usd-bevy-core/src/animation.rs`) | |
+| Seconds ↔ timecode | `stage_time_codes_per_second` (`lunco-usd-bevy-core/src/read.rs`) | |
 | **Typed reversible keyframe write** | `UsdOp::SetTimeSample` / `RemoveTimeSample` (`lunco-usd-core/src/document.rs`) — each the other's inverse, with first-xform `xformOpOrder` authoring | Editor Inspector and `assembly_edit` use the existing operations; the full timeline remains future work |
 | Journaled/undoable apply | `ApplyUsdOp { doc_id, parent_gen, op }` → `wire_usd_journal_recorders` records lossless (fwd,inv) pair | shared undo (UI+CLI+agent) |
 | Attribute literal → typed value | `parse_attribute_value` (`usd-core/src/author.rs:186`) | UI only supplies a string |
@@ -134,7 +134,7 @@ def Scope "CameraTrack" (
 }
 ```
 
-**Sampler** (`lunco-usd-bevy-camera`, sibling to `sample_usd_animation`): a change-gated
+**Sampler** (`lunco-usd-bevy-camera`, sibling to `lunco-usd-bevy-animation`'s `sample_usd_animation`): a change-gated
 system that, when the resolved domain time crosses a key boundary of an
 `activeCamera` channel, fires `ActivateCamera::director` (resolve name→entity
 once, cache). Reuses the single-authority `reconcile_scene_viewport` path — no

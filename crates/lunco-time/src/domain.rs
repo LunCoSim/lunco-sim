@@ -299,7 +299,7 @@ pub struct LastClockT {
 }
 
 /// System set wrapping [`advance_and_resolve_domains`] so cross-crate consumers
-/// (the USD sampler in `lunco-usd-bevy`) order their reads `.after` it.
+/// (the USD sampler in `lunco-usd-bevy-animation`) order their reads `.after` it.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DomainResolveSet;
 
@@ -606,7 +606,7 @@ pub fn spawn_driven_domain(
 // --- animation preview transport (doc 19 — T7) -------------------------------
 
 /// The singleton **animation preview** domain: a driven domain that USD-animated
-/// entities bind to by default (see `lunco-usd-bevy`'s `sample_usd_animation`
+/// entities bind to by default (see `lunco-usd-bevy-animation`'s `sample_usd_animation`
 /// auto-bind). It advances with the sim while `Playing` — so authored animation
 /// plays in lock-step with the world by default — but its [`Playback`] head can
 /// be paused, seeked, or rate-scaled to scrub a clip **without touching the

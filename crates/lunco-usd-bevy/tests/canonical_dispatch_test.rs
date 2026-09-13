@@ -117,7 +117,7 @@ fn app() -> App {
     app.init_asset::<UsdStageAsset>();
     app.init_asset::<Mesh>();
     app.init_asset::<Image>();
-    app.add_plugins(lunco_usd_bevy::UsdBevyPlugin);
+    app.add_plugins(lunco_usd_bevy::UsdVisualPlugin);
     app
 }
 
