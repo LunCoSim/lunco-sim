@@ -37,12 +37,6 @@
 //! source path.
 
 pub mod commands;
-/// Static discovery of authored scene tests and their headless/graphics kind.
-/// The scene supplies the USD program binding; the Rhai test source supplies
-/// the execution domain.
-#[cfg(not(target_arch = "wasm32"))]
-pub mod test_discovery;
-
 use bevy::prelude::*;
 
 /// Tracks which entities are currently selected.

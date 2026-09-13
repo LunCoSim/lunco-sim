@@ -52,7 +52,7 @@ fn usda_files(dir: &Path) -> Vec<(String, PathBuf)> {
 fn every_test_scene_carries_a_scenario() {
     let dir = assets_dir().join("scenes/tests");
     let scenes = usda_files(&dir);
-    let discovered = lunco_scene_commands::test_discovery::discover_scene_tests(&dir)
+    let discovered = lunco_scene_validation::test_discovery::discover_scene_tests(&dir)
         .expect("every scene must bind a valid test Rhai observer");
 
     assert!(
