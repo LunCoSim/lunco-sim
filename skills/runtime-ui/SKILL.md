@@ -49,6 +49,23 @@ rectangle as its anchor, and the same
 selection command typed and do not add a second camera registry or a HUI
 dynamic-list shim.
 
+Twin-authored actions are open-ended semantic identifiers. Built-ins such as
+`camera.picker.toggle` stay in the host; every other identifier is forwarded as
+the typed `runtime.ui.action` event and is handled by Rhai. The reusable
+`program-browser` surface publishes bounded scalar slots for generic
+`LunCoProgramAPI` children. `program_editor` owns selection, editor focus,
+atomic source switching, and creation for any authored program, regardless of
+whether its owner is a rover, lander, route, or another model. Rich source
+text entry remains in the existing Rhai editor/REPL until HUI gains a tested
+typed input and repeated-list contract.
+
+For dynamic semantic controls, use the HUI convention
+`on_press="runtime_ui_authored_action" tag:data-action="{action}"`. The
+`data-action` property is supplied by the scalar Rhai view model and becomes a
+typed `runtime.ui.action` event. This permits Twin-defined actions and bounded
+dynamic controls without registering one Rust callback per item. Do not use
+JavaScript or encode action payloads as JSON.
+
 Project-owned visibility policy belongs in the active Twin manifest's generic
 `[settings]` table. A surface declares `setting` plus `setting_default` in
 `runtime_surfaces.json`; Rhai reads/writes the same scope with
@@ -177,8 +194,9 @@ Add a surface entry to `assets/ui/runtime_surfaces.json`:
 ```
 
 Surface `id` values and callback names must be unique within the manifest. The
-loader rejects unknown fields, unsafe asset paths, invalid geometry, and
-actions outside the host's closed semantic action set.
+loader rejects unknown fields, unsafe asset paths, and invalid geometry.
+Authored semantic actions are accepted and delivered to Rhai; do not add a Rust
+enum arm for each Twin, route, rover, or lander.
 
 Binding target names must be declared template properties. `map` translates
 exact rendered strings, which is useful for `true`/`false`, body ids, `display`,
@@ -218,8 +236,8 @@ semantic action string; the runtime emits a typed action event; the host
 observer maps that action to an existing typed command/event. A template must
 not mutate resources or call a domain API directly.
 
-The closed action set includes `camera.picker.toggle` for the authored
-camera-status trigger. The complete camera-status surface is the authored
+Built-in actions include `camera.picker.toggle` for the authored camera-status
+trigger. The complete camera-status surface is the authored
 button, so its label, camera name, and padding share one interaction target.
 That action only opens the camera picker; because HUI
 has no dynamic repeated-list or payload-action contract, the existing egui host
@@ -230,9 +248,10 @@ bound, and emits `SetUserCamera` with the full USD identity. Reuse that view mod
 typed command path instead of adding a second camera registry or a HUI list
 shim.
 
-If a new action is truly needed, add the canonical typed command/observer and
-register it in the owning domain. Do not add a legacy callback alias or a
-widget-specific Rust shim merely to make one template work.
+If a new domain action is needed, author its semantic identifier and handle it
+in the owning Rhai program through the existing typed command/query/event
+surface. Do not add a legacy callback alias or a widget-specific Rust shim
+merely to make one template work.
 
 ## Reload loop
 

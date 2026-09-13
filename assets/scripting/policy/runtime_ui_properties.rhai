@@ -57,5 +57,32 @@ fn runtime_ui_properties(facts) {
     result.angular_velocity = vector_text(facts.angular_velocity);
     result.telemetry_summary = telemetry_text(facts.telemetry);
     result.simulation_summary = participant_text(facts.participants);
+    result.scope = if facts.scope == () || facts.scope == "" { "NO PROGRAM SCOPE" } else { facts.scope };
+    let programs = if facts.programs == () { [] } else { facts.programs };
+    result.program_count = programs.len().to_string() + " PROGRAMS";
+    for index in 0..4 {
+        result["program_" + index.to_string() + "_path"] = "—";
+        result["program_" + index.to_string() + "_source"] = "—";
+        result["program_" + index.to_string() + "_status"] = "—";
+        result["program_" + index.to_string() + "_select_action"] = "program.select." + index.to_string();
+        result["program_" + index.to_string() + "_edit_action"] = "program.edit." + index.to_string();
+        result["program_" + index.to_string() + "_visible"] = false;
+    }
+    let visible_program_count = programs.len();
+    if visible_program_count > 4 { visible_program_count = 4; }
+    for index in 0..visible_program_count {
+        let program = programs[index];
+        let prefix = "program_" + index.to_string();
+        result[prefix + "_path"] = program.path;
+        result[prefix + "_source"] = if program.source == () || program.source == "" {
+            program.implementation_source
+        } else {
+            program.source
+        };
+        result[prefix + "_status"] = program.status;
+        result[prefix + "_visible"] = true;
+    }
+    result.current_program = if programs.len() > 0 { programs[0].path } else { "" };
+    result.current_source = if programs.len() > 0 { programs[0].source } else { "" };
     result
 }

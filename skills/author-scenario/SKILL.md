@@ -20,10 +20,22 @@ For live route edits, Rhai owns the route policy and calls the generic typed USD
 operation command. The reusable `waypoint_editor` tool authors ordinary scene
 route points, uses a local `active=false` opinion when a point comes from a
 reference arc, and updates the disposable runtime ribbon from the committed
-USD route. The subject remains live: route edits do not rebuild or reset its
-physics, Modelica state, pose, or possession. Do not implement this policy with
-a polling `on_tick` loop or move USD identity resolution, terrain sampling,
-collision events, or fixed-step steering into Rhai.
+USD route. The subject and route owner remain live: route edits do not rebuild
+or reset their physics, Modelica state, pose, possession, or Rhai `this` state.
+The authored `inputs:enabled` value is only an initial policy; F changes the
+scenario's runtime state and must not write it back to USD. Do not implement
+this policy with a polling `on_tick` loop or move USD identity resolution,
+terrain sampling, collision events, or fixed-step steering into Rhai.
+
+Reusable authored programs are managed through the generic Rhai
+`program_editor` tool. It lists `LunCoProgramAPI` children, selects or opens a
+program in the existing editor, atomically switches its `info:sourceAsset` arm,
+and can attach a new source-backed program without knowing whether the owner is
+a rover, lander, route, or another model. Twin policy may enable the standard
+`program-browser` surface on any USD scope with
+`program_editor::enable_hud(doc, scope, visibility)`. The surface emits typed
+semantic actions; it does not contain vessel-specific Rust or an ad-hoc text
+input protocol.
 
 > **Host = mechanism, script = policy.** A scenario touches the world only
 > through the same command/query API the HTTP API, MCP, and UI use — so it

@@ -52,20 +52,36 @@ fn route_children(me) {
 }
 
 fn route_subject(me) {
+    route_subject_state(me).subject
+}
+
+fn route_subject_state(me) {
     let route = route_path(me);
     let doc = route_document(me);
-    if route == () || doc == () { return -1; }
+    if route == () || doc == () {
+        return #{ subject: -1, retryable: true,
+            error: "the route document is not synchronized" };
+    }
     let result = query("QueryUsdPrim", #{
         doc_id: doc,
         path: route + ROUTE_PROGRAM,
         rels: ["inputs:subject"],
     });
     if result == () || result.ok == false || result.relationships == () {
-        return -1;
+        return #{ subject: -1, retryable: true,
+            error: "the authored inputs:subject relationship is not synchronized" };
     }
     let targets = result.relationships["inputs:subject"];
-    if targets == () || targets.len() == 0 { return -1; }
-    find_path(targets[0])
+    if targets == () || targets.len() == 0 {
+        return #{ subject: -1, retryable: false,
+            error: "the authored inputs:subject relationship is unavailable" };
+    }
+    let subject = find_path(targets[0]);
+    if subject < 0 {
+        return #{ subject: -1, retryable: true,
+            error: "the route subject has no live projection" };
+    }
+    #{ subject: subject, retryable: false, error: "" }
 }
 
 fn route_enabled_from_usd(me) {
@@ -134,13 +150,16 @@ fn current_zone(me, state) {
 }
 
 fn drive_current_point(me, state) {
-    let subject = route_subject(me);
+    let subject_state = route_subject_state(me);
+    let subject = subject_state.subject;
     if !state.enabled {
         if subject >= 0 { brake(subject); }
         return;
     }
     if subject < 0 {
-        return route_failure("the authored inputs:subject relationship is unavailable");
+        let failure = route_failure(subject_state.error);
+        failure.retryable = subject_state.retryable;
+        return failure;
     }
     let point = current_point(me, state);
     if point == () {
@@ -259,6 +278,40 @@ fn route_pointer(me, evt) {
     }
 }
 
+// The runtime program HUD emits generic semantic actions. This route policy
+// owns the route-specific scope binding; the editor library remains generic.
+fn runtime_program_action(me, action) {
+    if action == () { return; }
+    let route = route_path(me);
+    let doc = route_document(me);
+    if route == () || doc == () { return; }
+    if action == "program.add" {
+        if !is_unattended() { cmd("FocusPanel", #{ id: "rhai_repl" }); }
+        notify_kind("Add a program with program_editor::add(doc, host, name, source)", "info");
+        return;
+    }
+    if action == "program.path.add" {
+        if !is_unattended() { cmd("FocusPanel", #{ id: "rhai_repl" }); }
+        notify_kind("Add a path point with Alt-click on the scene", "info");
+        return;
+    }
+    let parts = action.split(".");
+    if parts.len() != 3 || (parts[0] != "program")
+        || (parts[1] != "select" && parts[1] != "edit") {
+        return;
+    }
+    let index = parse_int(parts[2]);
+    if index < 0 { return; }
+    let listed = program_editor::list(doc, route);
+    if !listed.ok || index >= listed.programs.len() { return; }
+    let path = listed.programs[index].path;
+    if parts[1] == "edit" {
+        program_editor::edit(path);
+    } else {
+        program_editor::select(path);
+    }
+}
+
 fn advance_on_sensor(me, evt, state) {
     // Discrete control is a semantic input edge. The controller publishes it
     // for every authored control surface, even when no port named `action`
@@ -321,6 +374,10 @@ fn on_start(me) {
 }
 
 fn on_event(me, evt) {
+    if evt.name == "runtime.ui.action" {
+        runtime_program_action(me, evt.value);
+        return;
+    }
     route_pointer(me, evt);
     let transition = advance_on_sensor(me, evt, this);
     if transition == () { return; }
@@ -384,6 +441,7 @@ fn task(me) {
         }
         let drive_result = drive_current_point(m, this);
         if drive_result != () && drive_result.ok == false {
+            if drive_result.retryable == true { return false; }
             if this.route_error != drive_result.error {
                 notify_kind("Route program stopped: " + drive_result.error, "error");
                 this.route_error = drive_result.error;

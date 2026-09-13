@@ -152,6 +152,48 @@
       "placement": { "mode": "viewport" }
     },
     {
+      "id": "program-browser",
+      "template": "ui/program_browser.html",
+      "stylesheet": "ui/program_browser.css",
+      "namespace": "program-browser",
+      "bindings": {
+        "scope": { "source": "scope" },
+        "program_count": { "source": "program_count" },
+        "program_0_path": { "source": "program_0_path" },
+        "program_0_source": { "source": "program_0_source" },
+        "program_0_status": { "source": "program_0_status" },
+        "program_0_select_action": { "source": "program_0_select_action" },
+        "program_0_edit_action": { "source": "program_0_edit_action" },
+        "program_0_display": { "source": "program_0_visible", "map": { "true": "flex", "false": "none" } },
+        "program_1_path": { "source": "program_1_path" },
+        "program_1_source": { "source": "program_1_source" },
+        "program_1_status": { "source": "program_1_status" },
+        "program_1_select_action": { "source": "program_1_select_action" },
+        "program_1_edit_action": { "source": "program_1_edit_action" },
+        "program_1_display": { "source": "program_1_visible", "map": { "true": "flex", "false": "none" } },
+        "program_2_path": { "source": "program_2_path" },
+        "program_2_source": { "source": "program_2_source" },
+        "program_2_status": { "source": "program_2_status" },
+        "program_2_select_action": { "source": "program_2_select_action" },
+        "program_2_edit_action": { "source": "program_2_edit_action" },
+        "program_2_display": { "source": "program_2_visible", "map": { "true": "flex", "false": "none" } },
+        "program_3_path": { "source": "program_3_path" },
+        "program_3_source": { "source": "program_3_source" },
+        "program_3_status": { "source": "program_3_status" },
+        "program_3_select_action": { "source": "program_3_select_action" },
+        "program_3_edit_action": { "source": "program_3_edit_action" },
+        "program_3_display": { "source": "program_3_visible", "map": { "true": "flex", "false": "none" } }
+      },
+      "interactive": true,
+      "placement": {
+        "mode": "window",
+        "anchor": "top_left",
+        "offset": [16.0, 52.0],
+        "width": 332.0,
+        "height": 260.0
+      }
+    },
+    {
       "id": "camera-status",
       "template": "ui/camera_status.html",
       "stylesheet": "ui/camera_status.css",

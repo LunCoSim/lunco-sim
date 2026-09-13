@@ -47,14 +47,21 @@ custom property named `--ui-<property-name>`. The registry stores typed values,
 not CSS or HUI types. A manifest binding may map exact rendered values such as
 `true`, `false`, or `301` into presentation values.
 
-HUI callbacks are semantic runtime actions. Each surface has a stable manifest
-`id`, and the manifest maps each unique callback name to a closed host action
-(`view.surface`, `view.body.moon`, `view.body.earth`, `overlay.terrain.dismiss`,
-`autopilot.toggle`, or `camera.picker.toggle`). The adapter emits a typed action
-event, and the host translates that action through the existing command/event
-path. Templates
-never inspect HTML ids or call domain resources. Unknown fields/actions and
-unsafe asset paths are rejected before mounting.
+HUI callbacks are semantic runtime actions. Built-in actions remain registered
+by the runtime, while Twin-authored actions are forwarded as typed
+`runtime.ui.action` events for Rhai policy. A dynamic control can use one
+shared callback and a HUI tag property:
+`on_press="runtime_ui_authored_action" tag:data-action="{action}"`.
+The pressed node supplies the action value; the template does not inspect HTML
+ids or call domain resources. This is the reusable path for program selection,
+route editing, and other Twin-defined tools without a Rust callback per item.
+Unknown fields/actions and unsafe asset paths are rejected before mounting.
+
+The generic `program-browser` surface demonstrates this contract. A Twin or
+Rhai policy enables it on a USD scope, while the runtime exposes only the
+direct `LunCoProgramAPI` children and Rhai owns adding, selecting, editing, or
+switching a program source. The surface uses bounded rows because HUI 0.7 has
+no retained repeated-list primitive; it does not duplicate program state.
 
 The camera-status card binds the deterministic compact `active_label` projection;
 the full `active_name` remains available to runtime consumers. The complete

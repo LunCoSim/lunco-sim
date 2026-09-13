@@ -117,6 +117,15 @@ never the response to editing a task program, adding a route point, dragging a
 pin, or changing a program string. The stage is the source of truth; the ECS is
 disposable projection state.
 
+Program source selection is one atomic authored USD transaction. The editor
+validates an existing `LunCoProgramAPI`, clears the non-selected source arms,
+and writes `info:implementationSource` last. The live consumer then re-resolves
+the same program owner in place. A Twin can switch a Rhai, Modelica, or Python
+source at runtime without recreating its subject; the production acceptance
+gate is the Rhai `route_lifecycle` scene test. The generic `program_editor` tool
+owns this composition, while Twin policy chooses which program and source are
+appropriate.
+
 The important lifecycle rule is a fixed projection boundary: all operations in
 one user intent are applied before the live consumer reconciles them. This
 prevents a program from appearing without its authored port contract, a program

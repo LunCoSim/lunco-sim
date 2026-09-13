@@ -486,11 +486,12 @@ fn on_runtime_ui_action(
     trigger: On<runtime_exposure::RuntimeUiAction>,
     q_avatar: Query<Entity, (With<lunco_core::Avatar>, With<lunco_core::LocalAvatar>)>,
     q_bodies: Query<(Entity, &lunco_core::CelestialBody)>,
+    q_tags: Query<&bevy_hui::prelude::Tags>,
     orbital_pin: Option<Res<lunco_celestial::OrbitalViewPin>>,
     mut camera_picker: ResMut<CameraPickerState>,
     mut commands: Commands,
 ) {
-    match trigger.event().action {
+    match &trigger.event().action {
         runtime_exposure::RuntimeUiActionKind::ViewSurface => {
             if !orbital_pin.is_some_and(|pin| pin.active) {
                 return;
@@ -525,6 +526,30 @@ fn on_runtime_ui_action(
         }
         runtime_exposure::RuntimeUiActionKind::ToggleCameraPicker => {
             camera_picker.toggle();
+        }
+        runtime_exposure::RuntimeUiActionKind::Authored(action) => {
+            // The UI bridge remains domain-neutral. A Twin/Rhai program owns
+            // the meaning of an authored action and reaches USD or simulation
+            // state through the normal typed command/query/event surface.
+            let action = if action.is_empty() {
+                q_tags
+                    .get(trigger.event().source)
+                    .ok()
+                    .and_then(|tags| tags.tags().get("data-action"))
+                    .cloned()
+            } else {
+                Some(action.clone())
+            };
+            let Some(action) = action.filter(|action| !action.trim().is_empty()) else {
+                return;
+            };
+            commands.trigger(lunco_core::TelemetryEvent {
+                name: "runtime.ui.action".to_owned(),
+                source: 0,
+                severity: lunco_core::Severity::Info,
+                data: lunco_core::TelemetryValue::String(action),
+                timestamp: 0.0,
+            });
         }
     }
 }
@@ -821,7 +846,10 @@ fn register_camera_menu(world: &mut World) {
         ];
         for (label, action) in actions {
             if ui.button(label).clicked() {
-                ctx.trigger(runtime_exposure::RuntimeUiAction { action });
+                ctx.trigger(runtime_exposure::RuntimeUiAction {
+                    action,
+                    source: Entity::PLACEHOLDER,
+                });
                 ui.close();
             }
         }

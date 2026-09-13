@@ -1,0 +1,107 @@
+@import "ui/runtime_fonts.css";
+@import "ui/runtime_theme.css";
+
+#program-browser-root {
+  --ui-program-0-display: none;
+  --ui-program-1-display: none;
+  --ui-program-2-display: none;
+  --ui-program-3-display: none;
+  width: 332px;
+  max-width: 332px;
+  padding: 10px;
+  gap: 6px;
+  border-width: 1px;
+  border-color: var(--panel-border);
+  border-radius: 8px;
+  background-color: var(--panel-background);
+  color: var(--text-color);
+  font-family: "LunCo UI";
+  overflow: hidden;
+}
+
+#program-browser-header,
+#program-browser-actions,
+.program-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#program-browser-header {
+  justify-content: space-between;
+  padding-bottom: 5px;
+  border-bottom-width: 1px;
+  border-bottom-color: var(--panel-border);
+}
+
+#program-browser-title {
+  color: var(--accent-color);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+#program-browser-scope,
+#program-browser-count,
+.program-source,
+.program-status {
+  color: var(--muted-color);
+  font-size: 10px;
+  overflow: hidden;
+  -bevy-line-break: no-wrap;
+}
+
+#program-browser-scope,
+.program-path,
+.program-source {
+  flex-grow: 1;
+  flex-shrink: 1;
+  flex-basis: 0px;
+  min-width: 0px;
+  max-width: 100%;
+}
+
+.program-row {
+  min-height: 42px;
+  padding: 5px;
+  border-width: 1px;
+  border-color: var(--panel-border);
+  border-radius: 4px;
+}
+
+#program-row-0 { display: var(--ui-program-0-display); }
+#program-row-1 { display: var(--ui-program-1-display); }
+#program-row-2 { display: var(--ui-program-2-display); }
+#program-row-3 { display: var(--ui-program-3-display); }
+
+.program-copy {
+  flex-grow: 1;
+  flex-shrink: 1;
+  flex-basis: 0px;
+  min-width: 0px;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.program-path {
+  color: var(--text-color);
+  font-size: 11px;
+  font-weight: 700;
+  overflow: hidden;
+  -bevy-line-break: no-wrap;
+}
+
+button {
+  padding: 4px 6px;
+  border-width: 1px;
+  border-color: var(--panel-border);
+  border-radius: 4px;
+  background-color: var(--button-background);
+  color: var(--text-color);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+#program-browser-actions {
+  padding-top: 3px;
+}

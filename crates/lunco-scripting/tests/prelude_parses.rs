@@ -199,6 +199,7 @@ fn assembly_tool_libraries_are_discoverable() {
         "assembly_ui",
         "authoring_inspection",
         "model_authoring",
+        "program_editor",
     ] {
         let (_, source) = lunco_assets::scripting::tool_libraries()
             .into_iter()
