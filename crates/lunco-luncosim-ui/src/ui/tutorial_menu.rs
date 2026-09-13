@@ -61,6 +61,21 @@ fn load_catalog() -> TutorialMenuCatalog {
     }
 }
 
+/// Group catalog indices by their first-seen track while preserving the
+/// authored track and lesson order. The indices keep the catalog entries as
+/// the single source of lesson metadata and avoid cloning them for menus.
+fn tutorial_track_groups(entries: &[TutorialMenuEntry]) -> Vec<(String, Vec<usize>)> {
+    let mut groups = Vec::<(String, Vec<usize>)>::new();
+    for (index, entry) in entries.iter().enumerate() {
+        if let Some((_, indices)) = groups.iter_mut().find(|(track, _)| track == &entry.track) {
+            indices.push(index);
+        } else {
+            groups.push((entry.track.clone(), vec![index]));
+        }
+    }
+    groups
+}
+
 fn register_tutorial_menu(world: &mut World) {
     let Some(mut menus) = world.get_resource_mut::<WorkbenchMenuRegistry>() else {
         return;
@@ -103,39 +118,75 @@ fn register_tutorial_menu(world: &mut World) {
         );
         ui.separator();
 
-        let mut tracks = Vec::<String>::new();
-        for entry in &catalog.entries {
-            if !tracks.iter().any(|track| track == &entry.track) {
-                tracks.push(entry.track.clone());
-            }
-        }
-
         egui::ScrollArea::vertical()
             .max_height(SCENARIO_MENU_HEIGHT)
-            .auto_shrink([false, false])
+            .auto_shrink([false, true])
             .show(ui, |ui| {
-                for track in tracks {
-                    ui.strong(&track);
-                    for entry in catalog.entries.iter().filter(|entry| entry.track == track) {
-                        let label = format!("{}  ·  {}", entry.title, entry.difficulty);
-                        let response = ui.add_sized(
-                            [ui.available_width(), 0.0],
-                            egui::Button::new(label).wrap(),
-                        );
-                        let response = response.on_hover_text(entry.blurb.as_str());
-                        if response.clicked() {
-                            ctx.trigger(RunScenarioAsset {
-                                target: Entity::PLACEHOLDER,
-                                source_asset: entry.source_asset.clone(),
-                                params: String::new(),
-                                scene_asset: entry.scene_asset.clone(),
-                                reload_policy: ScenarioReloadPolicy::Restart,
+                for (track, indices) in tutorial_track_groups(&catalog.entries) {
+                    ui.menu_button(format!("{track}  ({})", indices.len()), |ui| {
+                        ui.set_min_width(SCENARIO_MENU_MIN_WIDTH);
+                        ui.set_max_width(SCENARIO_MENU_MAX_WIDTH);
+                        egui::ScrollArea::vertical()
+                            .max_height(SCENARIO_MENU_HEIGHT)
+                            .auto_shrink([false, true])
+                            .show(ui, |ui| {
+                                for index in indices {
+                                    let entry = &catalog.entries[index];
+                                    let label = format!("{}  ·  {}", entry.title, entry.difficulty);
+                                    let response = ui.add_sized(
+                                        [ui.available_width(), 0.0],
+                                        egui::Button::new(label).wrap(),
+                                    );
+                                    let response = response.on_hover_text(entry.blurb.as_str());
+                                    if response.clicked() {
+                                        ctx.trigger(RunScenarioAsset {
+                                            target: Entity::PLACEHOLDER,
+                                            source_asset: entry.source_asset.clone(),
+                                            params: String::new(),
+                                            scene_asset: entry.scene_asset.clone(),
+                                            reload_policy: ScenarioReloadPolicy::Restart,
+                                        });
+                                        ui.close();
+                                    }
+                                }
                             });
-                            ui.close();
-                        }
-                    }
-                    ui.add_space(6.0);
+                    });
                 }
             });
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{tutorial_track_groups, TutorialMenuEntry};
+
+    fn entry(track: &str, title: &str) -> TutorialMenuEntry {
+        TutorialMenuEntry {
+            track: track.to_owned(),
+            title: title.to_owned(),
+            blurb: String::new(),
+            difficulty: "beginner".to_owned(),
+            source_asset: format!("lunco://tutorials/{track}/{title}.rhai"),
+            scene_asset: String::new(),
+        }
+    }
+
+    #[test]
+    fn tutorial_tracks_preserve_first_seen_groups_and_lesson_order() {
+        let entries = vec![
+            entry("Sandbox", "First Drive"),
+            entry("Modelica", "Overview"),
+            entry("Sandbox", "Build a Scene"),
+            entry("Navigation", "View and Build"),
+        ];
+
+        assert_eq!(
+            tutorial_track_groups(&entries),
+            vec![
+                ("Sandbox".to_owned(), vec![0, 2]),
+                ("Modelica".to_owned(), vec![1]),
+                ("Navigation".to_owned(), vec![3]),
+            ]
+        );
+    }
 }

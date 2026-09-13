@@ -8,9 +8,11 @@ remain tutorial-agnostic.
 
 ## In-app lessons
 
-The app menu reads `assets/tutorials/catalog.json`. A selected entry submits the
-generic `RunScenarioAsset` command with a script, optional scene, parameters,
-and `ScenarioReloadPolicy::Restart`. The command does not open a layer itself:
+The app menu reads `assets/tutorials/catalog.json` and exposes one submenu per
+entry's `track`; lesson rows remain in authored catalog order inside that
+submenu. A selected entry submits the generic `RunScenarioAsset` command with a
+script, optional scene, parameters, and `ScenarioReloadPolicy::Restart`. The
+command does not open a layer itself:
 it submits a `SceneTransitionIntent`, USD composes the requested scene, and the
 generic scenario driver starts after the scene/readiness lifecycle completes.
 
