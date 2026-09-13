@@ -1059,6 +1059,28 @@ component-subtree removal through the same one-change-set boundary. It never
 guesses a joint from a component name and never silently deletes external
 Modelica/electrical/data links. Undo restores the complete topology.
 
+## Measurement and review evidence
+
+Human review does not need a vehicle-specific measurement component or a Rust
+CAD layer. The built-in `authoring_measurements` Rhai library evaluates
+caller-supplied distance and collision-extent requirements through
+`QueryUsdPrim`. Each result retains the exact subjects, document identity,
+canonical frame, units, expected value, tolerance, method, and source; the
+aggregate report includes every check and exposes only failed or unavailable
+checks as findings. A missing subject, missing collision representation, or
+unsupported unit is therefore an explicit unavailable result rather than a
+passing default.
+
+The Editor's **Authoring Review** panel is the human consumer of the existing
+runtime owners. It keeps selection, control authority, and camera target
+separate, presents retained runtime diagnostics with one-click subject
+selection where a live projection exists, and toggles the existing diagnostic
+visual leases for joints, frames, mass, forces, wheel forces, and collision
+geometry. It does not infer authored dimensions or create a second diagnostic
+store. Candidate diffs, grouped findings, authored provenance, and exact
+preview navigation remain Rhai/typed-query policy and use the same
+document/path identity tuple.
+
 ## Physics invariants
 
 - A movable mounted part needs a rigid body and a joint. A nested visual or

@@ -54,6 +54,18 @@ surfaces must virtualize their fixed-height browser rows and request live values
 only for expanded/visible bodies; the normal sample path reads those values
 through the registry rather than rerunning backend list/metadata callbacks.
 
+The Editor's `authoring_review` panel is the shared human-facing evidence
+surface for authored/runtime inspection. Its target chain must keep `selected`,
+`controlled`, and the active camera target as separate rows; do not collapse
+them into a vehicle-specific status or infer control from selection. Render
+retained `RuntimeDiagnostics` with the producer, severity, exact subject, and
+message, and route a subject action through the canonical typed selection
+command when a live `GlobalEntityId` exists. Inspection checkboxes use the
+existing `DiagnosticVisualStore` leases for joints, frames, mass, forces, wheel
+forces, and collision geometry. The panel is presentation only: measurements,
+tolerances, provenance, candidate grouping, and preview/document navigation
+remain authored Rhai over typed USD queries.
+
 `default_slot()` seeds layout intent only before the first perspective is
 active. After that, the active `Perspective` owns its slot declarations;
 late panel registration adds the renderer without changing the current

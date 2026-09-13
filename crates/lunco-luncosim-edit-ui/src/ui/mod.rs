@@ -21,6 +21,9 @@ use lunco_workbench_core::{
 
 pub mod asset_visibility;
 pub(crate) mod authoring_paths;
+/// Unified human-facing authoring evidence: target chain, diagnostics, and
+/// reusable temporary inspection layers.
+pub mod authoring_review;
 /// Screen-space labels a prim authored for itself (`lunco:billboard*`).
 pub mod billboard_overlay;
 /// Cinematic camera authoring — capture the current view as a `def Camera`
@@ -692,6 +695,7 @@ impl Plugin for SceneEditUiPlugin {
             .register_panel(connection_canvas::UsdCanvasPanel)
             .register_panel(usd_prim_tree::UsdPrimTreePanel)
             .register_panel(command_deck::CommandDeck)
+            .register_panel(authoring_review::AuthoringReviewPanel)
             .register_panel(joint_state::JointStatePanel)
             .register_panel(ViewportPanel)
             // Order matters for auto-activation — View first so it's
@@ -1003,6 +1007,12 @@ impl Plugin for SceneEditUiPlugin {
         app.init_resource::<command_deck::CommandDeckView>();
         app.add_view_model_every_frame(command_deck::populate_command_deck_view);
 
+        // One generic human-facing evidence surface. It reads the existing
+        // selection, possession, camera, runtime-diagnostic, and diagnostic
+        // lease owners; it does not add a second policy or status store.
+        app.init_resource::<authoring_review::AuthoringReviewView>();
+        app.add_view_model_every_frame(authoring_review::populate_authoring_review_view);
+
         // Joint State view-model: the selected vessel's joints and wheels are
         // live physics (θ / ω / τ change every tick), so this is an explicit
         // every-frame producer — bounded by the vessel's joint count, the same
@@ -1231,8 +1241,11 @@ impl Perspective for EditorPerspective {
             center: PerspectiveSlotPlan::new()
                 .tabs([lunco_usd_ui::USD_VIEWPORT_PANEL_ID, PanelId("rhai_editor")]),
             // The Inspector alone on the right — parameter editing is the point here.
-            right_inspector: PerspectiveSlotPlan::new()
-                .tabs([PanelId("sandbox_inspector"), PanelId("sandbox_environment")]),
+            right_inspector: PerspectiveSlotPlan::new().tabs([
+                PanelId("sandbox_inspector"),
+                PanelId("authoring_review"),
+                PanelId("sandbox_environment"),
+            ]),
             ..Default::default()
         };
         plan.active_center_tab = Some(0);

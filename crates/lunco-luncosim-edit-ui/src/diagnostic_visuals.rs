@@ -214,6 +214,25 @@ impl DiagnosticVisualStore {
         })
     }
 
+    /// Return the active explicit lease for one target and diagnostic kind.
+    ///
+    /// The UI uses the opaque handle to release a targeted collider/camera
+    /// overlay. The lease remains owned by this store; callers never mutate
+    /// its target or lifecycle directly.
+    pub fn targeted_lease(&self, target: Entity, kind: DiagnosticVisualKind) -> Option<u64> {
+        self.leases.values().find_map(|lease| {
+            (lease.target == Some(target)
+                && lease.kind == kind
+                && lease.generation == self.generation)
+                .then_some(lease.id)
+        })
+    }
+
+    /// Whether an explicit diagnostic lease is active for `target`.
+    pub fn targeted_enabled(&self, target: Entity, kind: DiagnosticVisualKind) -> bool {
+        self.targeted_lease(target, kind).is_some()
+    }
+
     pub fn generation(&self) -> u64 {
         self.generation
     }

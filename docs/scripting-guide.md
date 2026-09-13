@@ -798,6 +798,26 @@ let selected = query("QueryUsdPrim", #{
 });
 ```
 
+For numeric authoring evidence, use the built-in `authoring_measurements`
+Rhai library. It evaluates explicit requirements over the same composed USD
+query and never guesses geometry or selects a document implicitly:
+
+```rhai
+let report = authoring_measurements::requirement_report(doc, [
+    #{ kind: "distance", from: "/Assembly/FrameA", to: "/Assembly/FrameB",
+       units: "mm", expected: 250.0, tolerance: 0.5 },
+    #{ kind: "extent", path: "/Assembly/Body", axis: 1,
+       units: "m", expected: 1.2, tolerance: 0.01 },
+]);
+```
+
+Every requirement is evaluated and retained in `report.checks`. The compact
+`report.findings` list contains only `failed` or `unavailable` checks, so a
+missing prim, missing collision representation, unsupported unit, or stale
+document cannot appear as a passing measurement. Results carry the exact
+paths, frame, units, tolerance, method, and source for a review panel or
+agent to act on.
+
 `selected.topology` is one read-only record. Its `selection.scope` is the
 nearest rigid-body ancestor, or the selected prim when no body owns it.
 `parts` combines visual and collision facts instead of making callers join two
