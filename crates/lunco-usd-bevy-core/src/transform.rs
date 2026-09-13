@@ -1,9 +1,23 @@
-use bevy::prelude::{Mat4, Transform};
+use bevy::prelude::{EulerRot, Mat4, Quat, Transform, Vec3};
 use openusd::sdf::{Path as SdfPath, Value};
 
 use crate::read::{UsdRead, UsdReadObject};
 use crate::units::stage_convention;
 use crate::view::StageView;
+
+/// Convert a USD `rotateXYZ` value authored in degrees into a Bevy quaternion.
+///
+/// USD's rotation values use degrees and the `XYZ` operation applies fixed
+/// axes. Keeping this conversion in the render-free transform substrate gives
+/// authoring and visual adapters one canonical rotation convention.
+pub fn euler_xyz_deg_to_quat(deg: Vec3) -> Quat {
+    Quat::from_euler(
+        EulerRot::XYZEx,
+        deg.x.to_radians(),
+        deg.y.to_radians(),
+        deg.z.to_radians(),
+    )
+}
 
 /// A USD transform stack was authored but could not be composed safely.
 #[derive(Clone, Debug, PartialEq, Eq)]

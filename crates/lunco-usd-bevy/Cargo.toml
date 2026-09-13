@@ -37,7 +37,6 @@ lunco-usd-bevy-camera = { path = "../lunco-usd-bevy-camera" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 openusd = { workspace = true }
 lunco-core = { path = "../lunco-core" }
-lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-time = { path = "../lunco-time" }
 lunco-render = { path = "../lunco-render" }
 lunco-materials = { path = "../lunco-materials" }
@@ -45,7 +44,7 @@ big_space = { workspace = true }
 web-time = { workspace = true }
 
 [dev-dependencies]
-tempfile = { workspace = true }
+lunco-usd-core = { path = "../lunco-usd-core" }
 
 
 [lints]

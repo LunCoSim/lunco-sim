@@ -37,8 +37,8 @@ pub use purpose::{
 pub use read::{UsdRead, UsdReadObject, UsdReadSource};
 pub(crate) use transform::{compose_live_xform_order_at, stage_prim_is_invisible_or_guide};
 pub use transform::{
-    compose_xform_order_at, local_transform_at, read_transform_from_usd, read_xform_op_order,
-    TransformReadError, RESET_XFORM_STACK,
+    compose_xform_order_at, euler_xyz_deg_to_quat, local_transform_at, read_transform_from_usd,
+    read_xform_op_order, TransformReadError, RESET_XFORM_STACK,
 };
 pub use units::stage_convention;
 pub use view::StageView;

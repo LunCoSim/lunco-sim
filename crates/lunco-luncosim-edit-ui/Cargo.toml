@@ -45,7 +45,6 @@ lunco-obstacle-field = { path = "../lunco-obstacle-field" }
 lunco-modelica-ui = { path = "../lunco-modelica-ui", default-features = false, features = ["ui"] }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 lunco-usd = { path = "../lunco-usd", default-features = false }
-lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 lunco-usd-geometry = { path = "../lunco-usd-geometry" }
 lunco-usd-bevy-camera = { path = "../lunco-usd-bevy-camera" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
