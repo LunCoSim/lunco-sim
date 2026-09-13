@@ -21,7 +21,7 @@
 #
 # Every `inputs:` below is an UNCONNECTED port with a constant, and that is exactly
 # what makes it a model parameter ("has no wire is exactly what makes an input a
-# parameter" — `lunco-usd-sim/src/cosim.rs`). It is the same convention UsdShade uses
+# parameter" — `lunco-usd-sim-cosim/src/lib.rs`). It is the same convention UsdShade uses
 # for a shader's `inputs:`, so there is no `lunco:radio:*` vocabulary to learn: the
 # port names ARE the model's variable names, and the model is the spec.
 #

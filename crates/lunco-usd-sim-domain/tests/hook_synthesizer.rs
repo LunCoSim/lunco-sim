@@ -7,9 +7,10 @@
 //! policy, and policy that needs a rebuild to change is policy in the wrong
 //! place.
 
+use lunco_usd_bevy_core::program::DEFAULT_DOMAIN_SYNTHESIZER;
 use lunco_usd_sim_domain::{
     network_facts, read_network, register_hook_synthesizer, MemberClasses, SynthContext,
-    SynthOutcome, SynthesizerRegistry, DEFAULT_SYNTHESIZER,
+    SynthOutcome, SynthesizerRegistry,
 };
 use openusd::sdf::Path as SdfPath;
 use std::path::PathBuf;
@@ -404,7 +405,7 @@ fn shipped_default_policy_emits_visual_and_executable_topology() {
 
     let registry = SynthesizerRegistry::default();
     let synthesizer = registry
-        .get(DEFAULT_SYNTHESIZER)
+        .get(DEFAULT_DOMAIN_SYNTHESIZER)
         .expect("the default owner is the Rhai synthesizer")
         .clone();
     let stage = stage("electrical_network.usda");

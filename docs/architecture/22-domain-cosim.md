@@ -12,11 +12,14 @@ engineering docs (system ordering, panel registration, convention details),
 see **[`../../crates/lunco-cosim/README.md`](../../crates/lunco-cosim/README.md)**.
 
 The USD-specific boundary is split between
-[`lunco-usd-sim-domain`](../../crates/lunco-usd-sim-domain/) and
-[`lunco-usd-sim`](../../crates/lunco-usd-sim/): the former owns composed
-component-network facts, Modelica projection, authored synthesizer dispatch,
-and generic actuator lowering; the latter owns participant orchestration,
-wiring, vehicle realization, and scene lifecycle.
+[`lunco-usd-sim-domain`](../../crates/lunco-usd-sim-domain/),
+[`lunco-usd-sim`](../../crates/lunco-usd-sim/), and
+[`lunco-usd-sim-cosim`](../../crates/lunco-usd-sim-cosim/): the domain package
+owns composed component-network facts, Modelica projection, and authored
+synthesizer dispatch; the vehicle package owns vehicle realization; and the
+cosim package owns participant orchestration, wiring, readiness, and scene
+lifecycle. Shared USD-simulation markers and ordering are in the small
+`lunco-usd-sim-core` protocol package.
 
 ## Core concepts
 
@@ -405,8 +408,8 @@ including planned upstream fixes to the rumoca fork.
 
 Cosim programs and wires are declared in USD scenes — no per-scene Rust.
 A program is a PRIM, with typed ports that CONNECT — the same shape
-`UsdShade` gives a shader. The translator (`lunco-usd-sim/src/cosim.rs`,
-registered by `UsdSimPlugin`) reads:
+`UsdShade` gives a shader. The translator (`lunco-usd-sim-cosim`, registered by
+`UsdSimCosimPlugin`) reads:
 
 | Property | What it does |
 |---|---|
@@ -520,7 +523,7 @@ orchestration and test policy.
 
 ## Runtime scene control
 
-The `LoadScene` typed command (registered by `UsdSimPlugin`) reloads or
+The `LoadScene` typed command (registered by `UsdSimCosimPlugin`) reloads or
 replaces the active scene without restarting the binary:
 
 ```bash
@@ -542,7 +545,8 @@ log polling.
 ## See also
 
 - [`../../crates/lunco-cosim/README.md`](../../crates/lunco-cosim/README.md) — engineering docs
-- [`../../crates/lunco-usd-sim/README.md`](../../crates/lunco-usd-sim/README.md) — USD translator details (the cosim attributes above)
+- [`../../crates/lunco-usd-sim/README.md`](../../crates/lunco-usd-sim/README.md) — vehicle translator details
+- [`../../crates/lunco-usd-sim-cosim/`](../../crates/lunco-usd-sim-cosim/) — USD program, wiring, and scene-lifecycle translator
 - [`20-domain-modelica.md`](20-domain-modelica.md) — Modelica-specific design
 - [`23-domain-environment.md`](23-domain-environment.md) — environment/gravity integration
 - `specs/014-modelica-simulation` — detailed Modelica spec

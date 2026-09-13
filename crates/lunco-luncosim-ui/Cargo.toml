@@ -52,6 +52,7 @@ winit = { version = "0.30.13" }
 lunco-api = { path = "../lunco-api", optional = true }
 lunco-api-transport = { path = "../lunco-api-transport", default-features = false, optional = true }
 lunco-assets = { workspace = true }
+lunco-cosim = { path = "../lunco-cosim" }
 lunco-capture = { path = "../lunco-capture", features = ["api"] }
 lunco-avatar = { path = "../lunco-avatar", default-features = false }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
@@ -83,7 +84,6 @@ lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
 lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-sim-cosim = { path = "../lunco-usd-sim-cosim" }
-lunco-usd-sim-domain = { path = "../lunco-usd-sim-domain" }
 lunco-usd-ui = { path = "../lunco-usd-ui" }
 lunco-workbench = { path = "../lunco-workbench", features = ["api"] }
 lunco-workbench-core = { path = "../lunco-workbench-core" }

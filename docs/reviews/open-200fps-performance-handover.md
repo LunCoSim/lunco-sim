@@ -526,7 +526,7 @@ gain is claimed from the blocked run.
 The first trigger gate exposed a second cost: while runtime instance identities
 were being minted, one `Added<GlobalEntityId>` caused the projector to walk all
 USD prims and re-run ownership resolution for each one. The projector now
-keeps the existing full pass only for `WiringDirty` and member-source
+keeps the existing full pass only for `UsdWiringDirty` and member-source
 resolution, and processes only prims with an added USD path or identity for
 identity-driven work. The shared `is_domain_network_root` predicate remains
 the first composed-stage check before synthesizer selection.

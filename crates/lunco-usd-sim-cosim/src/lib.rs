@@ -33,7 +33,10 @@ use lunco_core::{
     SceneTransitionAdmitted, SceneTransitionCompleted, SceneTransitionCoordinator,
     SceneTransitionFailed, SceneTransitionIntent, SceneTransitionRequest, WorldGrid,
 };
-use lunco_cosim::{ConnectionBinding, DeclaredOutputPorts, SimComponent, SimConnection, SimStatus};
+use lunco_cosim::{
+    BindingEpochDirty, ConnectionBinding, DeclaredOutputPorts, SimComponent, SimConnection,
+    SimStatus, UsdSourcedCosim,
+};
 use lunco_doc::DocumentId;
 #[cfg(feature = "python")]
 use lunco_doc::DocumentOrigin;
@@ -56,7 +59,7 @@ use lunco_usd_bevy_core::read::read_authored_bool_strict;
 use lunco_usd_bevy_core::read::UsdReadObject;
 use lunco_usd_bevy_core::{
     canonical::CanonicalStages, UsdInstanceMember, UsdInstanceProjection, UsdInstanceRoot,
-    UsdStageAsset,
+    UsdStageAsset, UsdWiringDirty,
 };
 use lunco_usd_bevy_scene::{
     UsdPrimPath, UsdSceneAwaitingStage, UsdSceneGeometryPending, UsdSceneProjectionQueued,
@@ -65,57 +68,11 @@ use lunco_usd_bevy_scene::{
 use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::{BTreeSet, HashMap};
 
-use lunco_usd_sim_domain::{
-    GeneratedModelicaSource, UsdModelicaPortContract, UsdModelicaSchedule, UsdSourcedCosim,
-    WiringDirty,
-};
+use lunco_usd_sim_core::{PendingDifferential, UsdSimProcessed, UsdSimSet};
+use lunco_usd_sim_domain::{GeneratedModelicaSource, UsdModelicaPortContract, UsdModelicaSchedule};
 
-/// Ordered phases shared by the USD simulation projections.
-///
-/// The vehicle projector publishes generic physical intent in `Projection`;
-/// the co-simulation projector consumes it in its `Scene` phase. Keeping this
-/// set with the co-simulation boundary makes the ordering contract available
-/// without coupling either implementation to the other crate's module tree.
-#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum UsdSimSet {
-    /// Publishes the composed USD simulation and celestial components.
-    Projection,
-    /// Converts `ShouldBeDynamic` bodies only after their ground is known ready.
-    ActivateDynamicBodies,
-}
-
-/// Marker for a USD prim whose simulation projection has completed.
-#[derive(Component)]
-pub struct UsdSimProcessed;
-
-/// Authored gear-joint data held until all referenced bodies are admitted.
-#[derive(Component)]
-pub struct PendingDifferential {
-    /// Composed prim path of the frame both hinges turn against.
-    pub chassis: String,
-    /// Composed prim path of the first geared body.
-    pub rocker_a: String,
-    /// Composed prim path of the second geared body.
-    pub rocker_b: String,
-    /// Authored gear ratio.
-    pub ratio: f64,
-    /// Authored rest offset.
-    pub rest_offset: f64,
-    /// Authored target velocity.
-    pub target_velocity: f64,
-    /// Authored stiffness.
-    pub stiffness: f64,
-    /// Authored damping.
-    pub damping: f64,
-    /// Authored maximum force.
-    pub max_force: f64,
-    /// Authored drive type.
-    pub drive_type: lunco_mobility::DifferentialDriveType,
-}
-
-/// Co-simulation binding epoch dirty marker shared with USD physical admission.
-#[derive(Resource, Default)]
-pub struct BindingEpochDirty(pub bool);
+/// Installs the USD-to-co-simulation projection and scene lifecycle systems.
+pub struct UsdSimCosimPlugin;
 
 pub mod diagnostics;
 pub mod readiness;
@@ -596,7 +553,7 @@ pub(crate) fn process_usd_cosim_prims(
     // use the live canonical stage selected by the shared reader boundary.
     canonical: NonSend<CanonicalStages>,
     asset_server: Res<AssetServer>,
-    mut wiring_dirty: ResMut<WiringDirty>,
+    mut wiring_dirty: ResMut<UsdWiringDirty>,
     mut python_unavailable: ResMut<PythonUnavailablePrograms>,
 ) {
     // Which prims a component collection already owns, per stage. Computed once
@@ -1110,7 +1067,7 @@ fn process_usd_cosim_prim_read(
     network_members: &BTreeSet<String>,
     commands: &mut Commands,
     asset_server: &AssetServer,
-    wiring_dirty: &mut WiringDirty,
+    wiring_dirty: &mut UsdWiringDirty,
     python_unavailable: &mut PythonUnavailablePrograms,
 ) {
     if reader.type_name(sdf_path).as_deref() == Some("LunCoEvent") {
@@ -2379,7 +2336,7 @@ fn wiring_due(
             Added<lunco_core::PortSurfaceReady>,
         )>,
     >,
-    dirty: Res<WiringDirty>,
+    dirty: Res<UsdWiringDirty>,
     role: Option<Res<lunco_core::NetworkRole>>,
 ) -> bool {
     !arrivals.is_empty() || dirty.0 || role.is_some_and(|role| role.is_changed())
@@ -2387,7 +2344,7 @@ fn wiring_due(
 
 fn mark_wiring_dirty_on_remove<T: Component>(
     _trigger: On<Remove, T>,
-    mut dirty: ResMut<WiringDirty>,
+    mut dirty: ResMut<UsdWiringDirty>,
 ) {
     dirty.0 = true;
 }
@@ -2561,7 +2518,7 @@ fn settle_binding_epoch(
 ///   removed. Covers initial scene load, async payload/vessel spawn,
 ///   source-after-sink ordering, and a generated island publishing its boundary
 ///   contract; visual-only prims are not wiring endpoints.
-/// - **live edit** — [`WiringDirty`], set by the op-driven projection
+/// - **live edit** — [`UsdWiringDirty`], set by the op-driven projection
 ///   ([`lunco_usd::live_consume`]) when a `connectionPaths` change is drained
 ///   from the live stage (an edit that is not itself a prim spawn/despawn).
 ///
@@ -2570,7 +2527,7 @@ fn settle_binding_epoch(
 /// diagnostic the deleted `process_usd_cosim_wire_read` emitted.
 /// Rebuild the derived USD `connectionPaths` wiring cache in a focused host.
 ///
-/// `UsdSimPlugin` installs this system as part of its normal update pipeline.
+/// `UsdSimCosimPlugin` installs this system as part of its normal update pipeline.
 /// This narrow installer is also useful to headless integration hosts that
 /// provide the wiring resources and want to exercise this owner without
 /// assembling the complete application plugin graph.
@@ -2601,7 +2558,7 @@ fn rewire_usd_connections(
             Added<lunco_core::PortSurfaceReady>,
         )>,
     >,
-    mut dirty: ResMut<WiringDirty>,
+    mut dirty: ResMut<UsdWiringDirty>,
     // Wiring consumes a projected endpoint, not an initial path stub. The
     // grouped query parameter keeps this system within Bevy's arity limit;
     // the endpoint marker remains the authoritative admission contract.
@@ -5157,8 +5114,9 @@ pub fn resolve_root_prim(_asset_path: &str, override_in: &str) -> String {
     String::new()
 }
 
-/// Plugin install hook — registers translator systems, per-tick sync
-/// systems, and the API query provider. Called from `UsdSimPlugin::build`.
+/// Registers translator systems, per-tick sync systems, and the API query
+/// provider. This is a separate application plugin so the vehicle projector
+/// does not depend on this heavy co-simulation implementation package.
 ///
 /// Opaque-body guard (prediction-membership design in git history): stamp
 /// [`lunco_core::NotPredictable`] on every cosim-driven physics body — one with a
@@ -5195,381 +5153,383 @@ fn tag_cosim_opaque(
 ///   `ModelicaSet::HandleResponses (Update) → sync_*_outputs →
 ///    PropagateCosimSet::Propagate → ApplyForcesCosimSet::ApplyForces →
 ///    sync_*_inputs → ModelicaSet::SpawnRequests`.
-pub fn install(app: &mut App) {
-    use lunco_cosim::systems::{
-        apply_forces::CosimSet as ApplyForcesCosimSet, propagate::CosimSet as PropagateCosimSet,
-    };
-    use lunco_modelica_core::ModelicaSet;
+impl Plugin for UsdSimCosimPlugin {
+    fn build(&self, app: &mut App) {
+        use lunco_cosim::systems::{
+            apply_forces::CosimSet as ApplyForcesCosimSet, propagate::CosimSet as PropagateCosimSet,
+        };
+        use lunco_modelica_core::ModelicaSet;
 
-    // Script execution is part of the fixed co-simulation transaction. Its
-    // input snapshot is taken after propagation/actuation, its output becomes
-    // visible on the next tick, and the transaction completes before the
-    // Modelica master dispatches the next communication point.
-    app.configure_sets(
-        FixedUpdate,
-        lunco_scripting::ScriptingSet.before(ModelicaSet::SpawnRequests),
-    );
+        // Script execution is part of the fixed co-simulation transaction. Its
+        // input snapshot is taken after propagation/actuation, its output becomes
+        // visible on the next tick, and the transaction completes before the
+        // Modelica master dispatches the next communication point.
+        app.configure_sets(
+            FixedUpdate,
+            lunco_scripting::ScriptingSet.before(ModelicaSet::SpawnRequests),
+        );
 
-    // Scene-owned scripting state must end at the same boundary as the USD
-    // entities that gave it meaning. This runs before clear_scene_entities'
-    // deferred despawns, so the outgoing hook still sees the outgoing world.
-    app.add_systems(lunco_core::SceneTeardown, stop_scene_owned_scripts);
+        // Scene-owned scripting state must end at the same boundary as the USD
+        // entities that gave it meaning. This runs before clear_scene_entities'
+        // deferred despawns, so the outgoing hook still sees the outgoing world.
+        app.add_systems(lunco_core::SceneTeardown, stop_scene_owned_scripts);
 
-    // Ensure the source asset types this module's systems read/allocate are
-    // registered. Idempotent — production registers these via the Modelica /
-    // scripting plugins; doing it here lets minimal apps (headless tests using
-    // `MinimalPlugins` without those plugins) run the cosim systems without
-    // panicking on a missing `Assets<…>` resource.
-    app.init_asset::<ModelicaSource>();
-    #[cfg(feature = "python")]
-    app.init_asset::<PythonSource>();
-    // The USD simulation projection owns these derived registries and
-    // writes them even in a headless host.  Production Modelica setup also
-    // initializes them, but minimal USD/physics apps intentionally omit
-    // that plugin; keeping the resources here makes the projection
-    // plugin's system contract complete and idempotent.
-    app.init_resource::<lunco_modelica_core::state::ModelicaDocumentRegistry>()
-        .init_resource::<lunco_modelica_core::state::GeneratedModelicaSources>()
-        .init_resource::<lunco_cosim::BindingRevision>()
-        .init_resource::<lunco_core::SimulationBarrierParticipants>()
-        .init_resource::<lunco_scripting::ScriptRegistry>()
-        .init_resource::<WiringDirty>()
-        .init_resource::<BindingEpochDirty>()
-        .init_resource::<BindingModelStatuses>()
-        .init_resource::<PythonUnavailablePrograms>()
-        .init_resource::<lunco_usd_sim_domain::MemberClasses>()
-        .init_resource::<lunco_usd_sim_domain::ProjectionDirty>()
-        .init_resource::<lunco_usd_sim_domain::PendingDomainProjections>()
-        .init_resource::<lunco_usd_sim_domain::SynthesizerRegistry>()
-        .init_resource::<UsdTelemetryProjectionIndex>()
-        .init_resource::<PendingSceneStageOutcome>()
-        .init_resource::<SceneTransitionCoordinator>();
-    app.add_observer(request_binding_epoch::<UsdPrimPath>)
-        .add_observer(request_binding_epoch_on_remove::<UsdPrimPath>)
-        // Link port names are derived from the classes of the other authored
-        // LinkNodes. A node arriving after its wire must therefore reopen the
-        // same binding transaction as any other projected endpoint.
-        .add_observer(request_binding_epoch::<lunco_celestial::link::LinkNode>)
-        .add_observer(request_binding_epoch_on_remove::<lunco_celestial::link::LinkNode>)
-        .add_observer(request_binding_epoch::<ModelicaModel>)
-        .add_observer(request_binding_epoch_on_remove::<ModelicaModel>)
-        .add_observer(lunco_usd_sim_domain::on_remove_generated_source)
-        .add_observer(request_binding_epoch::<SimComponent>)
-        .add_observer(mark_wiring_dirty_on_remove::<SimComponent>)
-        .add_observer(mark_wiring_dirty_on_remove::<lunco_core::OutputPorts>)
-        .add_observer(mark_wiring_dirty_on_remove::<lunco_core::PortSurface>)
-        .add_observer(mark_wiring_dirty_on_remove::<lunco_core::PortSurfaceReady>)
-        .add_observer(forget_binding_model_status)
-        .add_observer(request_binding_epoch::<lunco_usd_avian::PendingUsdJoint>)
-        .add_observer(request_binding_epoch_on_remove::<lunco_usd_avian::PendingUsdJoint>)
-        .add_observer(request_binding_epoch::<PendingDifferential>)
-        .add_observer(request_binding_epoch_on_remove::<PendingDifferential>)
-        .add_observer(request_binding_epoch::<SimConnection>)
-        .add_observer(request_binding_epoch_on_remove::<SimConnection>)
-        .add_observer(on_scene_transition_intent)
-        .add_observer(execute_admitted_restart_scene)
-        .add_observer(execute_admitted_clear_scene)
-        .add_observer(on_scene_transition_completed)
-        .add_observer(on_scene_transition_failed);
-    // USD source-load and contract failures use the same core notice stream as
-    // the Modelica compiler, so the workbench console has one observable error
-    // surface. `add_message` is idempotent when the Modelica plugin registered
-    // it already.
-    app.add_message::<lunco_modelica_core::ModelicaNotice>();
-    app.add_message::<SceneStageAssetOutcome>();
+        // Ensure the source asset types this module's systems read/allocate are
+        // registered. Idempotent — production registers these via the Modelica /
+        // scripting plugins; doing it here lets minimal apps (headless tests using
+        // `MinimalPlugins` without those plugins) run the cosim systems without
+        // panicking on a missing `Assets<…>` resource.
+        app.init_asset::<ModelicaSource>();
+        #[cfg(feature = "python")]
+        app.init_asset::<PythonSource>();
+        // The USD simulation projection owns these derived registries and
+        // writes them even in a headless host.  Production Modelica setup also
+        // initializes them, but minimal USD/physics apps intentionally omit
+        // that plugin; keeping the resources here makes the projection
+        // plugin's system contract complete and idempotent.
+        app.init_resource::<lunco_modelica_core::state::ModelicaDocumentRegistry>()
+            .init_resource::<lunco_modelica_core::state::GeneratedModelicaSources>()
+            .init_resource::<lunco_cosim::BindingRevision>()
+            .init_resource::<lunco_core::SimulationBarrierParticipants>()
+            .init_resource::<lunco_scripting::ScriptRegistry>()
+            .init_resource::<UsdWiringDirty>()
+            .init_resource::<BindingEpochDirty>()
+            .init_resource::<BindingModelStatuses>()
+            .init_resource::<PythonUnavailablePrograms>()
+            .init_resource::<lunco_usd_sim_domain::MemberClasses>()
+            .init_resource::<lunco_usd_sim_domain::ProjectionDirty>()
+            .init_resource::<lunco_usd_sim_domain::PendingDomainProjections>()
+            .init_resource::<lunco_usd_sim_domain::SynthesizerRegistry>()
+            .init_resource::<UsdTelemetryProjectionIndex>()
+            .init_resource::<PendingSceneStageOutcome>()
+            .init_resource::<SceneTransitionCoordinator>();
+        app.add_observer(request_binding_epoch::<UsdPrimPath>)
+            .add_observer(request_binding_epoch_on_remove::<UsdPrimPath>)
+            // Link port names are derived from the classes of the other authored
+            // LinkNodes. A node arriving after its wire must therefore reopen the
+            // same binding transaction as any other projected endpoint.
+            .add_observer(request_binding_epoch::<lunco_celestial::link::LinkNode>)
+            .add_observer(request_binding_epoch_on_remove::<lunco_celestial::link::LinkNode>)
+            .add_observer(request_binding_epoch::<ModelicaModel>)
+            .add_observer(request_binding_epoch_on_remove::<ModelicaModel>)
+            .add_observer(lunco_usd_sim_domain::on_remove_generated_source)
+            .add_observer(request_binding_epoch::<SimComponent>)
+            .add_observer(mark_wiring_dirty_on_remove::<SimComponent>)
+            .add_observer(mark_wiring_dirty_on_remove::<lunco_core::OutputPorts>)
+            .add_observer(mark_wiring_dirty_on_remove::<lunco_core::PortSurface>)
+            .add_observer(mark_wiring_dirty_on_remove::<lunco_core::PortSurfaceReady>)
+            .add_observer(forget_binding_model_status)
+            .add_observer(request_binding_epoch::<lunco_usd_avian::PendingUsdJoint>)
+            .add_observer(request_binding_epoch_on_remove::<lunco_usd_avian::PendingUsdJoint>)
+            .add_observer(request_binding_epoch::<PendingDifferential>)
+            .add_observer(request_binding_epoch_on_remove::<PendingDifferential>)
+            .add_observer(request_binding_epoch::<SimConnection>)
+            .add_observer(request_binding_epoch_on_remove::<SimConnection>)
+            .add_observer(on_scene_transition_intent)
+            .add_observer(execute_admitted_restart_scene)
+            .add_observer(execute_admitted_clear_scene)
+            .add_observer(on_scene_transition_completed)
+            .add_observer(on_scene_transition_failed);
+        // USD source-load and contract failures use the same core notice stream as
+        // the Modelica compiler, so the workbench console has one observable error
+        // surface. `add_message` is idempotent when the Modelica plugin registered
+        // it already.
+        app.add_message::<lunco_modelica_core::ModelicaNotice>();
+        app.add_message::<SceneStageAssetOutcome>();
 
-    // A scene that is still spawning, and an object whose model has not
-    // compiled, are the two things this module knows are not ready. Declaring
-    // them is part of driving them — see `crate::readiness`.
-    app.add_plugins(crate::readiness::UsdReadinessPlugin);
+        // A scene that is still spawning, and an object whose model has not
+        // compiled, are the two things this module knows are not ready. Declaring
+        // them is part of driving them — see `crate::readiness`.
+        app.add_plugins(crate::readiness::UsdReadinessPlugin);
 
-    app.configure_sets(
-        Update,
-        (
-            // Physics projection publishes the generic body/joint/wheel
-            // surfaces (including synthesized wheel ports) in deferred ECS
-            // commands.  Co-sim scene discovery must observe that completed
-            // projection before it derives and binds USD connections; otherwise
-            // the first binding epoch targets the source prim instead of its
-            // authored OutputPorts/PortSurface contract.
-            CosimUpdateSet::Scene.after(UsdSimSet::Projection),
-            CosimUpdateSet::Projection,
-            CosimUpdateSet::Wiring,
-        )
-            .chain()
-            .after(lunco_usd_bevy_scene::UsdVisualProjectionSet),
-    );
+        app.configure_sets(
+            Update,
+            (
+                // Physics projection publishes the generic body/joint/wheel
+                // surfaces (including synthesized wheel ports) in deferred ECS
+                // commands.  Co-sim scene discovery must observe that completed
+                // projection before it derives and binds USD connections; otherwise
+                // the first binding epoch targets the source prim instead of its
+                // authored OutputPorts/PortSurface contract.
+                CosimUpdateSet::Scene.after(UsdSimSet::Projection),
+                CosimUpdateSet::Projection,
+                CosimUpdateSet::Wiring,
+            )
+                .chain()
+                .after(lunco_usd_bevy_scene::UsdVisualProjectionSet),
+        );
 
-    app.add_systems(
-        Update,
-        (
-            publish_loaded_scene_stage_outcomes
-                .after(lunco_usd_bevy_scene::UsdSceneSyncSet)
-                .run_if(on_message::<AssetEvent<UsdStageAsset>>),
-            publish_failed_scene_stage_outcomes
-                .run_if(on_message::<bevy::asset::AssetLoadFailedEvent<UsdStageAsset>>),
-        ),
-    );
+        app.add_systems(
+            Update,
+            (
+                publish_loaded_scene_stage_outcomes
+                    .after(lunco_usd_bevy_scene::UsdSceneSyncSet)
+                    .run_if(on_message::<AssetEvent<UsdStageAsset>>),
+                publish_failed_scene_stage_outcomes
+                    .run_if(on_message::<bevy::asset::AssetLoadFailedEvent<UsdStageAsset>>),
+            ),
+        );
 
-    app.add_systems(
-        First,
-        (
-            // `chain` inserts the synchronization point that makes the admitted
-            // request visible here. Its trailing schedule flush applies the
-            // replacement teardown before PreUpdate/Update consumers can query
-            // the outgoing scene.
-            dispatch_admitted_scene_transition.run_if(has_admitted_scene_transition),
-            // Admitted-transition observers enqueue teardown and mount work;
-            // make that whole queue land at this lifecycle boundary instead of
-            // relying on Main's final implicit flush.
-            ApplyDeferred,
-        )
-            .chain(),
-    );
+        app.add_systems(
+            First,
+            (
+                // `chain` inserts the synchronization point that makes the admitted
+                // request visible here. Its trailing schedule flush applies the
+                // replacement teardown before PreUpdate/Update consumers can query
+                // the outgoing scene.
+                dispatch_admitted_scene_transition.run_if(has_admitted_scene_transition),
+                // Admitted-transition observers enqueue teardown and mount work;
+                // make that whole queue land at this lifecycle boundary instead of
+                // relying on Main's final implicit flush.
+                ApplyDeferred,
+            )
+                .chain(),
+        );
 
-    app.add_systems(
-        Last,
-        // The terminal outcome is consumed at the end of the projection frame.
-        // By `Last`, all USD, simulation, camera, render-binding, transform and
-        // physics projection systems have run. A loaded outcome is retained by
-        // `PendingSceneStageOutcome` while the bounded visual queue drains, so
-        // this tiny state check is the only multi-frame lifecycle bookkeeping;
-        // no heavyweight readiness scan runs on the UI thread.
-        record_scene_load_terminal_outcome,
-    );
+        app.add_systems(
+            Last,
+            // The terminal outcome is consumed at the end of the projection frame.
+            // By `Last`, all USD, simulation, camera, render-binding, transform and
+            // physics projection systems have run. A loaded outcome is retained by
+            // `PendingSceneStageOutcome` while the bounded visual queue drains, so
+            // this tiny state check is the only multi-frame lifecycle bookkeeping;
+            // no heavyweight readiness scan runs on the UI thread.
+            record_scene_load_terminal_outcome,
+        );
 
-    app.add_systems(
-        Update,
-        settle_binding_epoch
-            .after(CosimUpdateSet::Projection)
-            // Dynamic bodies are held kinematic while USD joints and the
-            // authored initial velocity are admitted.  The sealed epoch is
-            // the initial-sample boundary, so it must be decided after that
-            // admission system has published the final physics state; otherwise
-            // an already-valid Avian wire can capture zero velocity/identity
-            // attitude and never revisit the handoff.
-            .after(UsdSimSet::ActivateDynamicBodies)
-            .before(CosimUpdateSet::Wiring)
-            .run_if(|dirty: Res<BindingEpochDirty>| dirty.0),
-    );
-    app.add_systems(
-        Update,
-        request_binding_epoch_on_model_change
-            .after(CosimUpdateSet::Wiring)
-            .run_if(|changed: Query<(), Changed<SimComponent>>| !changed.is_empty()),
-    );
+        app.add_systems(
+            Update,
+            settle_binding_epoch
+                .after(CosimUpdateSet::Projection)
+                // Dynamic bodies are held kinematic while USD joints and the
+                // authored initial velocity are admitted.  The sealed epoch is
+                // the initial-sample boundary, so it must be decided after that
+                // admission system has published the final physics state; otherwise
+                // an already-valid Avian wire can capture zero velocity/identity
+                // attitude and never revisit the handoff.
+                .after(UsdSimSet::ActivateDynamicBodies)
+                .before(CosimUpdateSet::Wiring)
+                .run_if(|dirty: Res<BindingEpochDirty>| dirty.0),
+        );
+        app.add_systems(
+            Update,
+            request_binding_epoch_on_model_change
+                .after(CosimUpdateSet::Wiring)
+                .run_if(|changed: Query<(), Changed<SimComponent>>| !changed.is_empty()),
+        );
 
-    app.add_systems(
-        Update,
-        (
-            // Gated on `any unprocessed cosim prim`: stay dormant
-            // after scene-load is complete. Same archetype-check
-            // pattern used for `process_usd_sim_prims`.
-            process_usd_cosim_prims.run_if(any_unprocessed_usd_cosim),
-            // Project authored `lunco:telemetry:*` declarations once the live
-            // composed stage is available. This is independent of co-sim model
-            // discovery so physical/avian and Modelica channels use one sampler.
-            // Reads the class each member's `.mo` declares, so the projector
-            // below instantiates what the file says rather than what its path
-            // implies. Before it in the chain: a class landing this frame should
-            // project this frame.
-            lunco_usd_sim_domain::resolve_member_classes,
-        )
-            .chain()
-            .in_set(CosimUpdateSet::Scene),
-    );
+        app.add_systems(
+            Update,
+            (
+                // Gated on `any unprocessed cosim prim`: stay dormant
+                // after scene-load is complete. Same archetype-check
+                // pattern used for `process_usd_sim_prims`.
+                process_usd_cosim_prims.run_if(any_unprocessed_usd_cosim),
+                // Project authored `lunco:telemetry:*` declarations once the live
+                // composed stage is available. This is independent of co-sim model
+                // discovery so physical/avian and Modelica channels use one sampler.
+                // Reads the class each member's `.mo` declares, so the projector
+                // below instantiates what the file says rather than what its path
+                // implies. Before it in the chain: a class landing this frame should
+                // project this frame.
+                lunco_usd_sim_domain::resolve_member_classes,
+            )
+                .chain()
+                .in_set(CosimUpdateSet::Scene),
+        );
 
-    // Python source-load drain runs every Update only when the Python feature
-    // is compiled in; the source asset may take multiple frames to load.
-    #[cfg(feature = "python")]
-    app.add_systems(
-        Update,
-        dispatch_loaded_python_sources
-            .after(process_usd_cosim_prims)
-            .before(lunco_usd_sim_domain::resolve_member_classes)
-            .in_set(CosimUpdateSet::Scene),
-    );
+        // Python source-load drain runs every Update only when the Python feature
+        // is compiled in; the source asset may take multiple frames to load.
+        #[cfg(feature = "python")]
+        app.add_systems(
+            Update,
+            dispatch_loaded_python_sources
+                .after(process_usd_cosim_prims)
+                .before(lunco_usd_sim_domain::resolve_member_classes)
+                .in_set(CosimUpdateSet::Scene),
+        );
 
-    app.add_systems(
-        Update,
-        report_python_unavailable.after(CosimUpdateSet::Scene),
-    );
-    app.add_systems(lunco_core::SceneTeardown, reset_python_unavailable);
-    app.add_systems(
-        lunco_core::SceneTeardown,
-        reset_usd_telemetry_projection_index,
-    );
+        app.add_systems(
+            Update,
+            report_python_unavailable.after(CosimUpdateSet::Scene),
+        );
+        app.add_systems(lunco_core::SceneTeardown, reset_python_unavailable);
+        app.add_systems(
+            lunco_core::SceneTeardown,
+            reset_usd_telemetry_projection_index,
+        );
 
-    app.add_systems(
-        Update,
-        lunco_usd_sim_domain::project_domain_islands
-            .run_if(lunco_usd_sim_domain::domain_projection_due)
-            .in_set(CosimUpdateSet::Projection),
-    );
-    app.add_systems(
-        Update,
-        lunco_usd_sim_domain::poll_domain_projection_tasks
-            .after(lunco_usd_sim_domain::project_domain_islands)
-            .in_set(CosimUpdateSet::Projection),
-    );
-    app.add_systems(
-        Update,
-        mark_usd_telemetry_projection_index_dirty
-            .after(lunco_usd_sim_domain::poll_domain_projection_tasks)
-            .run_if(telemetry_projection_index_changed)
-            .in_set(CosimUpdateSet::Projection),
-    );
-    app.add_systems(
-        Update,
-        lunco_usd_sim_domain::sync_generated_network_documents
-            .after(lunco_usd_sim_domain::poll_domain_projection_tasks)
-            .in_set(CosimUpdateSet::Projection),
-    );
-    app.add_systems(
-        Update,
-        lunco_usd_sim_domain::publish_generated_sources
-            .after(lunco_usd_sim_domain::sync_generated_network_documents)
-            .run_if(lunco_usd_sim_domain::generated_sources_need_publish)
-            .in_set(CosimUpdateSet::Projection),
-    );
+        app.add_systems(
+            Update,
+            lunco_usd_sim_domain::project_domain_islands
+                .run_if(lunco_usd_sim_domain::domain_projection_due)
+                .in_set(CosimUpdateSet::Projection),
+        );
+        app.add_systems(
+            Update,
+            lunco_usd_sim_domain::poll_domain_projection_tasks
+                .after(lunco_usd_sim_domain::project_domain_islands)
+                .in_set(CosimUpdateSet::Projection),
+        );
+        app.add_systems(
+            Update,
+            mark_usd_telemetry_projection_index_dirty
+                .after(lunco_usd_sim_domain::poll_domain_projection_tasks)
+                .run_if(telemetry_projection_index_changed)
+                .in_set(CosimUpdateSet::Projection),
+        );
+        app.add_systems(
+            Update,
+            lunco_usd_sim_domain::sync_generated_network_documents
+                .after(lunco_usd_sim_domain::poll_domain_projection_tasks)
+                .in_set(CosimUpdateSet::Projection),
+        );
+        app.add_systems(
+            Update,
+            lunco_usd_sim_domain::publish_generated_sources
+                .after(lunco_usd_sim_domain::sync_generated_network_documents)
+                .run_if(lunco_usd_sim_domain::generated_sources_need_publish)
+                .in_set(CosimUpdateSet::Projection),
+        );
 
-    // Wiring is derived from native `connectionPaths`: rebuilds the
-    // `SimConnection` set whenever prims spawn/despawn (structural) or a
-    // `connectionPaths` edit is drained (`WiringDirty`); dormant otherwise.
-    // Register the stages separately because `run_if` turns a system into a
-    // schedule config and cannot participate in this Bevy version's chained
-    // system tuple. The explicit dependencies retain the same ownership order
-    // without relying on tuple arity or a second compatibility path.
-    // Keep the deferred flushes inside the wiring transaction. Bevy 0.19's
-    // native `chain` configuration inserts the required synchronization after
-    // each command-producing stage. Registering an explicit `ApplyDeferred`
-    // system here is incorrect: the schedule also inserts automatic flush
-    // points for other ordered command systems, and the type-based system set
-    // then becomes ambiguous during schedule initialization (most visibly in
-    // offscreen recording startup).
-    //
-    // Parameters: the authored constants the wiring pass gathered off the
-    // unconnected `inputs:` ports, pushed into the model once it exists. After
-    // the wrap, because it needs the `SimComponent` to write into.
-    //
-    // Modelica compilation consumes compile-time parameter overrides from the
-    // composed USD `inputs:` surface. It therefore belongs after the wiring
-    // projection, not alongside source discovery in `Scene`: on a fast local
-    // asset load, dispatching earlier compiled with the Modelica declaration's
-    // zero default before `UsdInputDefaults` existed on the entity. The model
-    // then had a truthful-looking solver but the wrong initial state, and no
-    // later runtime input could repair that compile-time initialization value.
-    //
-    // Python has no compile-time parameter phase and remains in `Scene`; its
-    // loaded source only installs the already-published generic interface.
-    app.add_systems(
-        Update,
-        (
-            rewire_usd_connections.run_if(wiring_due),
-            wrap_modelica_into_simcomponent.run_if(any_unwrapped_modelica),
-            request_modelica_parameter_recompile,
-            seed_usd_input_defaults,
-            dispatch_loaded_modelica_sources,
-            // The wrapper publishes the generic SimComponent surface and the
-            // authored output contract in this same lifecycle transaction.
-            // Project authored telemetry only after that publication, so the
-            // fixed-step sampler never observes a generated endpoint between
-            // its Modelica identity and its public port surface.
-            project_usd_telemetry
-                .after(wrap_modelica_into_simcomponent)
-                .after(mark_usd_telemetry_projection_index_dirty)
-                .run_if(telemetry_projection_needed),
-        )
-            // Rewire commands must land before the wrapper query, and the
-            // wrapper's component insertion must land before defaults are
-            // seeded. Native deferred synchronization preserves both
-            // ownership boundaries without a duplicate ApplyDeferred node.
-            .chain()
-            .in_set(CosimUpdateSet::Wiring),
-    );
-    // §6 opaque guard: once a body is cosim-driven, mark it unpredictable after
-    // the fresh SimComponent and authored defaults are visible.
-    app.add_systems(
-        Update,
-        tag_cosim_opaque
-            .after(seed_usd_input_defaults)
-            .in_set(CosimUpdateSet::Wiring),
-    );
-    // The Modelica worker must know which entities are on the shared causal
-    // path before the next FixedUpdate. This is a graph projection, not a
-    // per-frame solver heuristic; it stays dormant until topology or endpoint
-    // lifecycle changes.
-    app.add_systems(
-        Update,
-        derive_causal_barrier_participants
-            .after(CosimUpdateSet::Wiring)
-            .run_if(causal_participants_changed),
-    );
+        // Wiring is derived from native `connectionPaths`: rebuilds the
+        // `SimConnection` set whenever prims spawn/despawn (structural) or a
+        // `connectionPaths` edit is drained (`UsdWiringDirty`); dormant otherwise.
+        // Register the stages separately because `run_if` turns a system into a
+        // schedule config and cannot participate in this Bevy version's chained
+        // system tuple. The explicit dependencies retain the same ownership order
+        // without relying on tuple arity or a second compatibility path.
+        // Keep the deferred flushes inside the wiring transaction. Bevy 0.19's
+        // native `chain` configuration inserts the required synchronization after
+        // each command-producing stage. Registering an explicit `ApplyDeferred`
+        // system here is incorrect: the schedule also inserts automatic flush
+        // points for other ordered command systems, and the type-based system set
+        // then becomes ambiguous during schedule initialization (most visibly in
+        // offscreen recording startup).
+        //
+        // Parameters: the authored constants the wiring pass gathered off the
+        // unconnected `inputs:` ports, pushed into the model once it exists. After
+        // the wrap, because it needs the `SimComponent` to write into.
+        //
+        // Modelica compilation consumes compile-time parameter overrides from the
+        // composed USD `inputs:` surface. It therefore belongs after the wiring
+        // projection, not alongside source discovery in `Scene`: on a fast local
+        // asset load, dispatching earlier compiled with the Modelica declaration's
+        // zero default before `UsdInputDefaults` existed on the entity. The model
+        // then had a truthful-looking solver but the wrong initial state, and no
+        // later runtime input could repair that compile-time initialization value.
+        //
+        // Python has no compile-time parameter phase and remains in `Scene`; its
+        // loaded source only installs the already-published generic interface.
+        app.add_systems(
+            Update,
+            (
+                rewire_usd_connections.run_if(wiring_due),
+                wrap_modelica_into_simcomponent.run_if(any_unwrapped_modelica),
+                request_modelica_parameter_recompile,
+                seed_usd_input_defaults,
+                dispatch_loaded_modelica_sources,
+                // The wrapper publishes the generic SimComponent surface and the
+                // authored output contract in this same lifecycle transaction.
+                // Project authored telemetry only after that publication, so the
+                // fixed-step sampler never observes a generated endpoint between
+                // its Modelica identity and its public port surface.
+                project_usd_telemetry
+                    .after(wrap_modelica_into_simcomponent)
+                    .after(mark_usd_telemetry_projection_index_dirty)
+                    .run_if(telemetry_projection_needed),
+            )
+                // Rewire commands must land before the wrapper query, and the
+                // wrapper's component insertion must land before defaults are
+                // seeded. Native deferred synchronization preserves both
+                // ownership boundaries without a duplicate ApplyDeferred node.
+                .chain()
+                .in_set(CosimUpdateSet::Wiring),
+        );
+        // §6 opaque guard: once a body is cosim-driven, mark it unpredictable after
+        // the fresh SimComponent and authored defaults are visible.
+        app.add_systems(
+            Update,
+            tag_cosim_opaque
+                .after(seed_usd_input_defaults)
+                .in_set(CosimUpdateSet::Wiring),
+        );
+        // The Modelica worker must know which entities are on the shared causal
+        // path before the next FixedUpdate. This is a graph projection, not a
+        // per-frame solver heuristic; it stays dormant until topology or endpoint
+        // lifecycle changes.
+        app.add_systems(
+            Update,
+            derive_causal_barrier_participants
+                .after(CosimUpdateSet::Wiring)
+                .run_if(causal_participants_changed),
+        );
 
-    app.add_systems(
-        FixedUpdate,
-        (
-            validate_usd_modelica_port_contracts.before(sync_modelica_outputs),
-            // Scenario hooks read the public SimComponent surface directly.
-            // Make the publication edge explicit: without this dependency a
-            // fast cached compile could open the scenario gate and let Rhai
-            // observe the wrapper before the first Modelica snapshot had been
-            // copied into it. Cold runs happened to order the two systems the
-            // other way, which made the first telemetry sample nondeterministic.
-            sync_modelica_outputs
-                .before(lunco_scripting::ScriptingSet)
-                .before(PropagateCosimSet::Propagate),
-            // Script backends consume the input snapshot and publish their
-            // output snapshot as one fixed-step transaction. Script outputs
-            // are published before the propagation phase, then the backend
-            // executes after this tick's propagated inputs. That gives the
-            // explicit one-tick causal delay required for a conservative
-            // discrete co-simulation exchange and avoids an algebraic
-            // same-tick script/physics cycle.
-            sync_script_inputs
-                .after(PropagateCosimSet::Propagate)
-                .after(ApplyForcesCosimSet::ApplyForces)
-                .before(lunco_scripting::ScriptingSet)
-                .before(ModelicaSet::SpawnRequests),
-            sync_script_outputs
-                .before(lunco_scripting::ScriptingSet)
-                .before(PropagateCosimSet::Propagate),
-            sync_modelica_inputs
-                .after(ApplyForcesCosimSet::ApplyForces)
-                .before(ModelicaSet::SpawnRequests),
-            // Modelica `when` bridge: edge-detect on fresh outputs, after they sync.
-            fire_connected_events
-                .after(sync_modelica_outputs)
-                .after(sync_script_outputs)
-                .before(PropagateCosimSet::Propagate),
-        ),
-    );
+        app.add_systems(
+            FixedUpdate,
+            (
+                validate_usd_modelica_port_contracts.before(sync_modelica_outputs),
+                // Scenario hooks read the public SimComponent surface directly.
+                // Make the publication edge explicit: without this dependency a
+                // fast cached compile could open the scenario gate and let Rhai
+                // observe the wrapper before the first Modelica snapshot had been
+                // copied into it. Cold runs happened to order the two systems the
+                // other way, which made the first telemetry sample nondeterministic.
+                sync_modelica_outputs
+                    .before(lunco_scripting::ScriptingSet)
+                    .before(PropagateCosimSet::Propagate),
+                // Script backends consume the input snapshot and publish their
+                // output snapshot as one fixed-step transaction. Script outputs
+                // are published before the propagation phase, then the backend
+                // executes after this tick's propagated inputs. That gives the
+                // explicit one-tick causal delay required for a conservative
+                // discrete co-simulation exchange and avoids an algebraic
+                // same-tick script/physics cycle.
+                sync_script_inputs
+                    .after(PropagateCosimSet::Propagate)
+                    .after(ApplyForcesCosimSet::ApplyForces)
+                    .before(lunco_scripting::ScriptingSet)
+                    .before(ModelicaSet::SpawnRequests),
+                sync_script_outputs
+                    .before(lunco_scripting::ScriptingSet)
+                    .before(PropagateCosimSet::Propagate),
+                sync_modelica_inputs
+                    .after(ApplyForcesCosimSet::ApplyForces)
+                    .before(ModelicaSet::SpawnRequests),
+                // Modelica `when` bridge: edge-detect on fresh outputs, after they sync.
+                fire_connected_events
+                    .after(sync_modelica_outputs)
+                    .after(sync_script_outputs)
+                    .before(PropagateCosimSet::Propagate),
+            ),
+        );
 
-    app.add_systems(
-        Startup,
-        |reg: Option<ResMut<lunco_api::ApiQueryRegistry>>| {
-            if let Some(mut reg) = reg {
-                // Canonical uniform port reads (writes use the reflected
-                // `lunco_cosim::SetPorts` command).
-                reg.register(ListPortsProvider);
-                reg.register(GetPortProvider);
-                reg.register(CausalTraceProvider);
-                // Richer per-entity cosim introspection (not an alias of the above).
-                reg.register(CosimStatusProvider);
-                reg.register(BindingStatusProvider);
-                // Lifecycle diagnostics must inspect raw ECS candidates: the normal
-                // entity list is identity-deduplicated and cannot reveal two
-                // projections of the same USD camera path.
-                reg.register(SceneCameraAuditProvider);
-                // The read path for `generated://…` models — the text a
-                // projected USD network was actually compiled from.
-                reg.register(lunco_usd_sim_domain::GeneratedSourceProvider);
-            }
-        },
-    );
+        app.add_systems(
+            Startup,
+            |reg: Option<ResMut<lunco_api::ApiQueryRegistry>>| {
+                if let Some(mut reg) = reg {
+                    // Canonical uniform port reads (writes use the reflected
+                    // `lunco_cosim::SetPorts` command).
+                    reg.register(ListPortsProvider);
+                    reg.register(GetPortProvider);
+                    reg.register(CausalTraceProvider);
+                    // Richer per-entity cosim introspection (not an alias of the above).
+                    reg.register(CosimStatusProvider);
+                    reg.register(BindingStatusProvider);
+                    // Lifecycle diagnostics must inspect raw ECS candidates: the normal
+                    // entity list is identity-deduplicated and cannot reveal two
+                    // projections of the same USD camera path.
+                    reg.register(SceneCameraAuditProvider);
+                    // The read path for `generated://…` models — the text a
+                    // projected USD network was actually compiled from.
+                    reg.register(lunco_usd_sim_domain::GeneratedSourceProvider);
+                }
+            },
+        );
 
-    // Registers the LoadScene type + observer (see register_commands! below).
-    register_all_commands(app);
+        // Registers the LoadScene type + observer (see register_commands! below).
+        register_all_commands(app);
+    }
 }
 
 register_commands!(on_clear_scene, on_restart_scene,);
@@ -5589,7 +5549,7 @@ mod tests {
     #[test]
     fn wiring_gate_is_dormant_until_a_real_trigger() {
         let mut app = App::new();
-        app.init_resource::<WiringDirty>()
+        app.init_resource::<UsdWiringDirty>()
             .init_resource::<WiringRuns>()
             .add_systems(Update, count_wiring_runs.run_if(wiring_due));
 
@@ -5607,11 +5567,11 @@ mod tests {
         app.update();
         assert_eq!(app.world().resource::<WiringRuns>().0, 1);
 
-        app.world_mut().resource_mut::<WiringDirty>().0 = true;
+        app.world_mut().resource_mut::<UsdWiringDirty>().0 = true;
         app.update();
         assert_eq!(app.world().resource::<WiringRuns>().0, 2);
 
-        app.world_mut().resource_mut::<WiringDirty>().0 = false;
+        app.world_mut().resource_mut::<UsdWiringDirty>().0 = false;
         app.update();
         assert_eq!(app.world().resource::<WiringRuns>().0, 2);
     }

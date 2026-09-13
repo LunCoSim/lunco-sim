@@ -27,6 +27,7 @@ pub mod view;
 
 pub use asset::{UsdLoader, UsdStageAsset};
 pub use authoring::{layer_default_prim, DefaultPrim};
+pub use canonical::UsdWiringDirty;
 pub use instance::{UsdInstanceMember, UsdInstanceProjection, UsdInstanceRoot};
 pub use material_binding::{
     parent_prim_path, resolve_bound_material, resolve_bound_shader, MaterialPurpose,

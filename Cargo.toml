@@ -43,6 +43,7 @@ members = [
     "crates/lunco-usd-compose",
     "crates/lunco-usd-geometry",
     "crates/lunco-usd-sim",
+    "crates/lunco-usd-sim-core",
     "crates/lunco-usd-sim-cosim",
     "crates/lunco-usd-sim-domain",
     "crates/lunco-usd-sim-celestial",
@@ -219,6 +220,8 @@ bevy = { version = "0.19.1", default-features = false, features = [
     "serialize",                   # serde Serialize/Deserialize for Entity, Vec3, Quat, Handle, etc.
                                    # Enables `#[Command]` to always derive serde without per-field worry.
 ] }
+# ECS-only substrate for small protocol crates that do not need the Bevy facade.
+bevy_ecs = { version = "0.19.1", default-features = false, features = ["std"] }
 lunco-assets = { path = "crates/lunco-assets" }
 sysmlv2-semantics = "=0.1.1"
 sysmlv2-syntax = "=0.1.2"

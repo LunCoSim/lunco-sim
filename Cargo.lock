@@ -7442,8 +7442,8 @@ dependencies = [
  "lunco-usd-bevy-scene",
  "lunco-usd-core",
  "lunco-usd-sim",
+ "lunco-usd-sim-core",
  "lunco-usd-sim-cosim",
- "lunco-usd-sim-domain",
  "lunco-workbench",
  "serde_json",
  "ureq",
@@ -7626,6 +7626,7 @@ dependencies = [
  "lunco-capture",
  "lunco-celestial",
  "lunco-core",
+ "lunco-cosim",
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-environment",
@@ -7653,7 +7654,6 @@ dependencies = [
  "lunco-usd-bevy-twin",
  "lunco-usd-core",
  "lunco-usd-sim-cosim",
- "lunco-usd-sim-domain",
  "lunco-usd-ui",
  "lunco-workbench",
  "lunco-workbench-core",
@@ -8389,8 +8389,8 @@ dependencies = [
  "lunco-usd-core",
  "lunco-usd-queries",
  "lunco-usd-sim",
+ "lunco-usd-sim-core",
  "lunco-usd-sim-cosim",
- "lunco-usd-sim-domain",
  "lunco-usd-sim-shader",
  "lunco-workspace",
  "openusd",
@@ -8406,6 +8406,7 @@ dependencies = [
  "bevy",
  "big_space",
  "lunco-core",
+ "lunco-cosim",
  "lunco-environment",
  "lunco-physics",
  "lunco-terrain-globe",
@@ -8558,6 +8559,7 @@ dependencies = [
  "lunco-usd-bevy-animation",
  "lunco-usd-bevy-diagnostics",
  "lunco-usd-sim",
+ "lunco-usd-sim-cosim",
 ]
 
 [[package]]
@@ -8665,8 +8667,7 @@ dependencies = [
  "lunco-usd-compose",
  "lunco-usd-core",
  "lunco-usd-sim-celestial",
- "lunco-usd-sim-cosim",
- "lunco-usd-sim-domain",
+ "lunco-usd-sim-core",
  "lunco-usd-sim-shader",
  "lunco-usd-sim-telemetry",
  "openusd",
@@ -8688,6 +8689,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-usd-sim-core"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "lunco-mobility",
+]
+
+[[package]]
 name = "lunco-usd-sim-cosim"
 version = "0.1.0"
 dependencies = [
@@ -8702,7 +8711,6 @@ dependencies = [
  "lunco-cosim",
  "lunco-doc",
  "lunco-environment",
- "lunco-mobility",
  "lunco-modelica-ast",
  "lunco-modelica-core",
  "lunco-physics",
@@ -8715,6 +8723,8 @@ dependencies = [
  "lunco-usd-bevy-camera",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
+ "lunco-usd-core",
+ "lunco-usd-sim-core",
  "lunco-usd-sim-domain",
  "openusd",
  "serde_json",

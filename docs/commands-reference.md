@@ -908,7 +908,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  loading its new scene.) Also useful standalone over the API / MCP as
  a "clear the world" verb.
 
-- *defined in:* `crates/lunco-usd-sim/src/cosim.rs`
+- *defined in:* `crates/lunco-usd-sim-cosim/src/lib.rs`
 - *fields:* none — call with `ClearScene` (no params)
 
 #### `LoadScene`
@@ -940,7 +940,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  Without these ownership boundaries, repeated reloads accumulate stale
  workers or make an unrelated interactive document disappear.
 
-- *defined in:* `crates/lunco-usd-sim/src/cosim.rs`
+- *defined in:* `crates/lunco-usd-sim-cosim/src/lib.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -963,7 +963,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  Paired with `pause()` this is the "reload-then-freeze" one-liner the workflow
  wanted (`restart_scene(); pause();`).
 
-- *defined in:* `crates/lunco-usd-sim/src/cosim.rs`
+- *defined in:* `crates/lunco-usd-sim-cosim/src/lib.rs`
 
 | Field | Type | Description |
 |---|---|---|

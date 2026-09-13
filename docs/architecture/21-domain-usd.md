@@ -8,7 +8,8 @@
 > [`../../crates/lunco-usd-core/`](../../crates/lunco-usd-core/), [`../../crates/lunco-usd/`](../../crates/lunco-usd/) and companion crates
 > `lunco-usd-geometry`, `lunco-usd-avian`, `lunco-usd-avian-lint`, `lunco-usd-bevy-core`,
 > `lunco-usd-bevy-runtime`, `lunco-usd-bevy-scene`, `lunco-usd-bevy-twin`, `lunco-usd-bevy-camera`, `lunco-usd-bevy-light`, `lunco-usd-bevy-animation`, `lunco-usd-bevy` and
-> `lunco-usd-bevy-lathe`, `lunco-usd-bevy-mesh`, `lunco-usd-queries`, `lunco-usd-sim`, `lunco-usd-sim-domain`.
+> `lunco-usd-bevy-lathe`, `lunco-usd-bevy-mesh`, `lunco-usd-queries`, `lunco-usd-sim`,
+> `lunco-usd-sim-core`, `lunco-usd-sim-cosim`, `lunco-usd-sim-domain`.
 
 Package ownership follows the same boundary: `lunco-usd-core` contains the
 headless document/authoring surface, schemas, pure probes, and shared USD
@@ -41,10 +42,13 @@ NurbsPatch visual mesh projection plus quality invalidation;
 material intent while consuming the camera, light, lathe, and mesh packages
 directly; and
 `lunco-usd-avian-lint` owns composed `UsdPhysics` lint facts;
-`lunco-usd-sim-domain` owns composed component-network and generic actuator
-projection, while `lunco-usd-sim` owns vehicle projection and cosimulation
-orchestration. This keeps the Modelica-domain source and tests out of the
-vehicle orchestration rebuild boundary without introducing a test-only package.
+`lunco-usd-avian` owns generic USD actuator lowering;
+`lunco-usd-sim-core` owns the small shared USD-simulation protocol;
+`lunco-usd-sim-domain` owns composed component-network and Modelica projection;
+`lunco-usd-sim` owns vehicle projection; and `lunco-usd-sim-cosim` owns
+participant discovery, wiring, readiness, and scene lifecycle. The application
+bundle installs the two implementation plugins explicitly, so vehicle changes
+do not make the vehicle package depend on the 6.5k-line cosim implementation.
 
 Public command and document-lifecycle coverage for the runtime boundary lives
 in `crates/lunco-usd/tests/commands.rs`, so changes to those tests do not
@@ -330,7 +334,7 @@ section.
 2. **UsdAnimationPlugin** — Binds projected animated prims to the shared time domains and samples authored `timeSamples` into transform and material intent.
 3. **UsdDiagnosticsPlugin** — Handles visual glTF placeholder hiding and failure-stub diagnostics; render-free stage failure state belongs to the `UsdScenePlugin`.
 4. **UsdAvianPlugin** — Maps USD physics to Avian3D: rigid bodies (`PhysicsRigidBodyAPI`, with its `physics:rigidBodyEnabled`), mass-properties (`physics:mass`, `physics:diagonalInertia`, `physics:centerOfMass`), colliders (`physics:collisionEnabled`, all `UsdGeom` shapes), and **all joints** (see [Physics joints](#physics-joints)). The single home for Avian joint construction.
-5. **UsdSimPlugin** — Detects the standard vehicle/wheel schemas and authored port topology, then creates the topology-derived `lunco_core::MobilityRoot`, `WheelRaycast`, `OutputPorts`, generic joint/shaft endpoints, `DifferentialCoupling`, sensors, and co-simulation model/wires. Vehicle motion allocation and wheel heading are produced by the composed Modelica/Rhai network; Rust only realizes the resulting generic values (see [`22-domain-cosim.md`](22-domain-cosim.md)).
+5. **UsdSimPlugin** — Detects the standard vehicle/wheel schemas and authored vehicle topology, then creates the topology-derived `lunco_core::MobilityRoot`, `WheelRaycast`, `OutputPorts`, generic joint/shaft endpoints, `DifferentialCoupling`, and sensors. **UsdSimCosimPlugin** separately discovers programs, publishes model surfaces, and derives co-simulation wires. Vehicle motion allocation and wheel heading are produced by the composed Modelica/Rhai network; Rust only realizes the resulting generic values (see [`22-domain-cosim.md`](22-domain-cosim.md)).
 
 ### Compound collision ownership
 
@@ -756,8 +760,8 @@ the shipped asset corpus. Ownership follows the narrowest production boundary:
 - `crates/lunco-usd/tests/live_spawn_projection.rs` — document-backed USD authoring and raw asset composition facts
 - `crates/lunco-usd-avian-lint/src/lib.rs` — composed `UsdPhysics` fact production for the authored lint policy
 - `crates/lunco-usd-avian/src/lib.rs` — low-level Avian collider/joint extraction mechanisms with in-memory USDA fixtures; shipped asset and runtime ownership stays in the Rhai scene-test gate
-- `crates/lunco-usd-sim-domain/src/lib.rs` — low-level component-network projection, synthesis, and actuator lowering mechanisms
-- `crates/lunco-usd-sim/tests/usd_connection_mechanics.rs` — generic connection derivation and transform mechanics
+- `crates/lunco-usd-sim-domain/src/lib.rs` — low-level component-network projection and synthesis mechanisms
+- `crates/lunco-usd-sim-cosim/tests/usd_connection_mechanics.rs` — generic connection derivation and transform mechanics
 - `assets/scenarios/tests/*.rhai` through the production `luncosim test` gate — composed USD → Bevy → Avian → simulation outcomes, including rover structure, wheel realization, wiring, EPS, link visibility, catalog discovery, and mounted component/material contracts; shipped rover composition/migration assertions also live here through `QueryUsdPrim`
 - `crates/lunco-usd-bevy-core/src/point_instancer.rs` — required/optional PointInstancer arrays, prototype ordering, transforms, ids, masking, and negative malformed-data cases
 - `assets/scenes/tests/point_instancer.usda` + `assets/scenarios/tests/point_instancer.rhai` — production composed-stage acceptance for the standard PointInstancer authoring contract

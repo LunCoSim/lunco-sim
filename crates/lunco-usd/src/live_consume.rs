@@ -359,7 +359,7 @@ pub(crate) fn project_stage_changes(world: &mut World) {
     // publish a backend-neutral `ModelStateRevision`; the owning model adapter
     // decides whether that state needs a rebuild, reset, or only a live update.
     if connection_paths_changed || input_defaults_changed {
-        if let Some(mut dirty) = world.get_resource_mut::<lunco_usd_sim_domain::WiringDirty>() {
+        if let Some(mut dirty) = world.get_resource_mut::<lunco_usd_bevy_core::UsdWiringDirty>() {
             dirty.0 = true;
         }
     }
@@ -1311,7 +1311,7 @@ mod tests {
                 },
                 avian3d::prelude::RigidBody::Dynamic,
                 lunco_core::MobilityRoot,
-                lunco_usd_sim_cosim::UsdSimProcessed,
+                lunco_usd_sim_core::UsdSimProcessed,
             ))
             .id();
 
@@ -1321,7 +1321,7 @@ mod tests {
         );
         assert!(
             app.world()
-                .get::<lunco_usd_sim_cosim::UsdSimProcessed>(rover)
+                .get::<lunco_usd_sim_core::UsdSimProcessed>(rover)
                 .is_some(),
             "the admitted sim projection marker must remain live"
         );

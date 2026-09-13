@@ -112,7 +112,7 @@ live stage on the UI thread.
   no current asset needs it, all migrated wires are identity).
 - **P1.3 [in place] — connection derivation *on the reconcile*, not a load-time scan.** `rewire_usd_connections`
   rebuilds the derived `SimConnection` set from `connectionPaths` when prim entities spawn/despawn (structural)
-  or a connection edit is drained (`WiringDirty`) — never a marker-scan that cannot see edits. Initial
+  or a connection edit is drained (`UsdWiringDirty`) — never a marker-scan that cannot see edits. Initial
   structural reads use the prepared plan; after a connection edit is drained, `CanonicalStages::reader_for_entity`
   selects the live generation. For each changed
   sink prim it despawns that prim's `SimConnection`s, then enumerates its `inputs:*` attrs and for each source

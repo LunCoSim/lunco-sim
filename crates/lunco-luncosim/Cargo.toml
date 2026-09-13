@@ -74,6 +74,7 @@ lunco-assets = { workspace = true }
 lunco-twin = { path = "../lunco-twin" }
 serde_json = { workspace = true }
 lunco-cosim = { path = "../lunco-cosim" }
+lunco-usd-sim-core = { path = "../lunco-usd-sim-core" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-readiness = { workspace = true }
 lunco-scene-validation = { path = "../lunco-scene-validation" }
@@ -82,7 +83,6 @@ lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-sim = { path = "../lunco-usd-sim" }
 lunco-usd-sim-cosim = { path = "../lunco-usd-sim-cosim" }
-lunco-usd-sim-domain = { path = "../lunco-usd-sim-domain" }
 # The production `luncosim test` subcommand uses the editor's selection query
 # to report visual parity diagnostics; it is UI-only and never enters core.
 lunco-luncosim-edit-ui = { path = "../lunco-luncosim-edit-ui", optional = true }

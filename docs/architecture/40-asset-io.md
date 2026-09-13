@@ -48,7 +48,7 @@ asks for a `Handle<T>`, observes `Assets<T>::get(&handle)` becoming
 wasm look identical at the call site.
 
 ```rust
-// In a domain crate (e.g. lunco-usd-sim/src/cosim.rs):
+// In a domain crate (e.g. lunco-usd-sim-cosim/src/lib.rs):
 let h: Handle<ModelicaSource> = asset_server.load("models/Balloon.mo");
 commands.entity(e).insert(PendingModelicaSource(h));
 
@@ -192,7 +192,7 @@ no manual hunt.
 |---|---|
 | `lunco-usd-bevy-core/UsdLoader` | ✅ Bevy AssetLoader |
 | `lunco-usd-bevy-core/compose.rs` compose (resolver-backed stage, injected fetcher) | ✅ injected fetcher, wasm path pre-fetches via `LoadContext::read_asset_bytes` |
-| `lunco-usd-sim/cosim.rs` modelica/python source reads | ✅ migrated to AssetServer (see `ModelicaSource` / feature-gated `PythonSource`) |
+| `lunco-usd-sim-cosim/src/lib.rs` modelica/python source reads | ✅ migrated to AssetServer (see `ModelicaSource` / feature-gated `PythonSource`) |
 | `lunco-usd-ui/src/ui/browser_dispatch.rs` twin browser open | ✅ routed through the shared `OpenFile` USD document command |
 | `lunco-usd/src/commands.rs` usd document load | ✅ reads through the storage abstraction |
 | `lunco-modelica-core/msl_remote.rs` bundled MSL fetch | ⚠️ uses bespoke `web_sys::fetch`; folding into `EmbeddedAssetSource` / `HttpAssetSource` is a follow-up |

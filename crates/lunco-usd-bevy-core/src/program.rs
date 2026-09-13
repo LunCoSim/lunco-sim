@@ -468,6 +468,22 @@ pub fn derive_synthesizer_name(view: &dyn UsdReadObject, root: &SdfPath) -> Resu
     Ok(DEFAULT_DOMAIN_SYNTHESIZER.to_string())
 }
 
+/// Select the owner of a composed component collection.
+///
+/// An authored `LunCoDomainSynthesisAPI` is an explicit contract. Without
+/// that API, ownership is derived from the composed member role schemas. This
+/// USD-facing selector belongs beside the role classifier so runtime
+/// projection and lint facts cannot drift apart.
+pub fn select_synthesizer_name(view: &dyn UsdReadObject, root: &SdfPath) -> Result<String, String> {
+    if view.has_api_schema(root, "LunCoDomainSynthesisAPI") {
+        return Ok(view
+            .text(root, "lunco:synthesizer")
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| DEFAULT_DOMAIN_SYNTHESIZER.to_string()));
+    }
+    derive_synthesizer_name(view, root)
+}
+
 /// Every Modelica program prim on the stage that belongs to SOME component
 /// collection.
 ///

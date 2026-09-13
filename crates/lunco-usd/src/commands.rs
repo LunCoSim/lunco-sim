@@ -444,7 +444,7 @@ impl Plugin for UsdCommandsPlugin {
 ///
 /// - **Has `[usd] default_scene`** → construct its `twin://` address and
 ///   [`LoadScene`] it. `LoadScene` clears the old scene, then mounts this
-///   one as the single active stage; [`UsdSimPlugin`](lunco_usd_sim::UsdSimPlugin)
+///   one as the single active stage; [`UsdSimCosimPlugin`](lunco_usd_sim_cosim::UsdSimCosimPlugin)
 ///   derives its native `connectionPaths` wiring from the composed prims.
 /// - **No starting scene** (Twin without `default_scene`, or a plain
 ///   folder with no manifest — including one with **no `.usda` at all**)

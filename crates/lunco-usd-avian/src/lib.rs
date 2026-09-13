@@ -76,6 +76,8 @@ pub use openusd::schemas::physics::DriveType;
 pub mod big_space_bridge;
 pub use big_space_bridge::{BigSpacePhysicsBridgePlugin, PhysicsBridgeSystems};
 
+pub mod actuator;
+
 /// Marks an Avian entity synthesized for the currently mounted USD scene.
 ///
 /// Authored physics prims carry [`UsdPrimPath`] and are owned by that stage.

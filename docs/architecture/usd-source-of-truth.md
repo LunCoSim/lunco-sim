@@ -148,7 +148,7 @@ namespace.
 - **`UsdPrimPath { stage_handle: Handle<UsdStageAsset>, path: String }`**
   (`lunco-usd-bevy-scene`) is the per-entity link back to its prim.
 - Reverse lookup (prim path → entity) exists only as an **ad-hoc, per-call HashMap**
-  (`lunco-usd-sim/src/cosim.rs:483`), not a maintained index.
+  (`lunco-usd-sim-cosim/src/lib.rs`), not a maintained index.
 - Reading composed attrs: `UsdDataExt` (`lunco-usd-core/src/usd_data.rs`) —
   `prim_children`, `prim_attribute_value::<T>`, `field`, `prim_type_name`.
 - Shader projection reads authored `inputs:*` from the composed bound Shader;
@@ -251,7 +251,7 @@ marks an attr `structural` to opt into that path instead of the fast one.
 
 ### Step 4: a maintained prim → entity index
 
-Promote the ad-hoc `by_path` HashMap (`lunco-usd-sim/src/cosim.rs:483`) to a resource:
+Promote the ad-hoc `by_path` HashMap (`lunco-usd-sim-cosim/src/lib.rs`) to a resource:
 
 ```rust
 #[derive(Resource, Default)]
@@ -301,6 +301,6 @@ prim→entity.
 - `lunco-usd/src/commands.rs` — scene command admission and document registration
 - `lunco-usd-bevy-core/src/asset.rs` — `UsdStageAsset`; `lunco-usd-bevy-scene/src/lib.rs` — `UsdPrimPath`
 - `lunco-usd-core/src/usd_data.rs` — `UsdDataExt` (read composed attrs)
-- `lunco-usd-sim/src/cosim.rs` — `LoadScene` / `spawn_scene_root_with_stage`; ad-hoc prim→entity index
+- `lunco-usd-sim-cosim/src/lib.rs` — `LoadScene` / `spawn_scene_root_with_stage`; ad-hoc prim→entity index
 - `lunco-usd-terrain/src/lib.rs` — `refresh_layered_terrain_layers` (the
   per-domain projection-on-`Modified` precedent)
