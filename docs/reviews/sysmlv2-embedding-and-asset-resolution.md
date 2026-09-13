@@ -48,6 +48,66 @@ walker, a BREP/CAD pipeline, or automatic requirement-test discovery. Those
 pieces can consume the stable projections above without changing the parser or
 document contracts.
 
+## Rhai-to-SysML verification migration
+
+The existing Rhai scene tests should not be translated line-for-line. They
+contain three different kinds of material:
+
+| Existing material | Destination |
+|---|---|
+| Requirement wording, stable ID, threshold, subject, and traceability | SysML `requirement def`/usage plus `doc`, attributes, constraints, `satisfy`, and realization links |
+| Verification intent and requirement under test | SysML `verification def`/usage with `subject` and `verify` |
+| Scene setup, command sequencing, sampling, public queries, anti-trivial guards, and measurement | Existing USD fixture and Rhai backend over production APIs |
+| Solver/parser/schema/lifecycle mechanism assertions | Existing Rust owner tests |
+
+The stable key is the qualified SysML name. A human label such as `GR-001`
+can remain in `doc` until a standard metadata projection is implemented; do
+not add a LunCo-only annotation to the portable source. A run must produce a
+separate result artifact, not mutate the `.sysml` file. The minimum result
+shape is:
+
+```json
+{
+  "verification": "GriffinRequirements::Verify_GR001",
+  "requirement": "GriffinRequirements::GR001_MassBudget",
+  "source_revision": 12,
+  "verdict": "pass",
+  "observations": [{"name": "mass", "value": 438.2, "unit": "kg"}],
+  "evidence": [{"source": "usd", "path": "/Griffin/Rover"}],
+  "diagnostics": []
+}
+```
+
+This maps to `VerificationCases::VerdictKind` (`pass`, `fail`,
+`inconclusive`, `error`) and can be persisted in the journal/run directory.
+`TESTS_OK`/`TESTS_FAIL` remains a compatibility envelope while the new CLI/API
+selector and JSON report are introduced.
+
+### Required implementation slices
+
+1. Extend `lunco-sysml-ast` with requirement and verification records, subject
+   bindings, constraint/doc spans, and typed `satisfy`/`verify`/realization
+   links. Preserve source-set revision and diagnostics.
+2. Build one Twin-indexed `.sysml`/`.kerml` source set from `Twin::files()` and
+   resolve it once; never add a second filesystem walker or feed cache paths to
+   the parser.
+3. Add a Twin-owned verification registry from qualified verification name to
+   the existing production scene and Rhai backend source. Missing mappings are
+   terminal errors.
+4. Add a typed Rhai result sink and a production runner/CLI that selects one
+   verification case, executes the existing scene process, and emits the JSON
+   result above plus a human summary.
+5. Add shadow-mode comparison against the legacy Rhai verdict, then switch the
+   production gate and delete duplicate assertions only after positive,
+   negative, anti-trivial-motion, stale-generation, and evidence checks pass.
+
+Thresholds may move from Rhai into SysML attributes/constraints only when the
+parser preserves their values and units. Runtime measurement and actuation
+remain Rhai/public-query responsibilities; SysML is not a second simulator.
+This preserves the ownership split: SysML states intent, USD owns geometry and
+identity, Modelica owns continuous behavior, and Rhai executes policy and
+collects evidence.
+
 ## What the existing domains already establish
 
 ### Modelica
@@ -288,9 +348,16 @@ absolute cache path.
   verification hook is wired into the production `luncosim test` command yet;
   `ValidateAsset` is now the read-only pre-flight entry point for one SysML
   source file.
-- `docs/architecture/24-domain-sysml.md` still needs reconciliation with the
-  new parser adapter; the scope remains structure + requirements, not full
-  SysML behavior execution.
+- The AST projection currently exposes generic elements/references rather than
+  structured requirement/verification records; extraction of subjects,
+  constraints, and trace links is the next implementation slice.
+- No verification-case registry, typed verdict sink, cross-file `RefIndex`
+  adapter, async source-set worker, or production requirement selector exists
+  yet. `ValidateAsset` remains the read-only pre-flight entry point for one
+  source file.
+- The architecture and Rhai test-strategy documents now define the migration
+  contract; no existing Rhai gate has been switched until the shadow-mode and
+  evidence requirements above are met.
 
 ## Griffin workflow
 
