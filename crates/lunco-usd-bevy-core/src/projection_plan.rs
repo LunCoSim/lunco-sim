@@ -533,42 +533,9 @@ impl UsdRead for UsdStageProjectionPlan {
     }
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
 mod tests {
     use super::*;
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn sandbox_recipe() -> StageRecipe {
-        use std::collections::HashMap;
-        use std::path::Path;
-
-        let scene = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../assets/scenes/luncosim/sandbox_scene.usda");
-        let assets_root = lunco_assets::shipped_asset_root(&scene).expect("shipped asset root");
-        let relative = scene
-            .strip_prefix(assets_root)
-            .expect("sandbox is below shipped asset root");
-        let root_id = lunco_assets::engine_asset_uri(&lunco_assets::asset_path::slashed(relative));
-        let mut bytes = HashMap::from([(
-            root_id.clone(),
-            lunco_assets::read_asset_file_bytes(&scene).expect("read sandbox scene"),
-        )]);
-        let mut queue = vec![root_id.clone()];
-        while let Some(id) = queue.pop() {
-            let raw = bytes.get(&id).expect("queued layer bytes").clone();
-            for child in lunco_usd_compose::child_layer_ids(&id, &raw).expect("read layer arcs") {
-                if bytes.contains_key(&child) {
-                    continue;
-                }
-                let child_bytes =
-                    lunco_assets::read_asset_bytes_with_twin_root(&child, Some(assets_root), None)
-                        .expect("read composed sandbox dependency");
-                bytes.insert(child.clone(), child_bytes);
-                queue.push(child);
-            }
-        }
-        StageRecipe { root_id, bytes }
-    }
 
     #[test]
     fn snapshots_composed_hierarchy_and_time_samples() {
@@ -709,21 +676,49 @@ def Xform \"Rover\"\n\
         assert!(!instance.has_prim(&SdfPath::new("/Rover").unwrap()));
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn prepared_reader_preserves_sandbox_network_and_material_reads() {
-        use crate::{StageView, UsdRead};
-        use openusd::usd::Stage;
-
-        let recipe = sandbox_recipe();
+    fn prepared_reader_matches_live_composed_network_and_material_reads() {
+        let recipe = StageRecipe::from_source(
+            "scene.usda",
+            r#"#usda 1.0
+(
+    defaultPrim = "Test"
+)
+def Xform "Test"
+{
+    def Xform "Vehicle" (
+        prepend apiSchemas = ["CollectionAPI:components"]
+    )
+    {
+        uniform token collection:components:expansionRule = "explicitOnly"
+        prepend rel collection:components:includes = [</Test/Vehicle/Chassis>]
+        def Xform "Chassis" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            float inputs:voltage
+            float outputs:power = 42
+            rel material:binding = </Test/Vehicle/Looks/Chassis>
+        }
+        def Xform "Thermal" (
+            prepend apiSchemas = ["CollectionAPI:components"]
+        )
+        {
+            uniform token collection:components:expansionRule = "explicitOnly"
+            prepend rel collection:components:includes = [</Test/Vehicle/Chassis>]
+        }
+        def Scope "Looks"
+        {
+            def Material "Chassis" {}
+        }
+    }
+}
+"#,
+        );
         let plan = UsdStageProjectionPlan::from_recipe(&recipe).expect("projection plan builds");
-        let live = Stage::builder()
-            .resolver(lunco_usd_compose::LuncoUsdResolver::new(
-                recipe.bytes.clone(),
-            ))
-            .open(&recipe.root_id)
-            .expect("live stage builds");
-        let live = StageView::new(&live);
+        let (live_stage, _) =
+            crate::compose::build_stage_with_resolver(&recipe).expect("live stage builds");
+        let live = StageView::new(&live_stage);
 
         for path in live.prim_paths() {
             assert_eq!(
@@ -733,12 +728,8 @@ def Xform \"Rover\"\n\
             );
         }
 
-        for root in [
-            "/SandboxScene/Skid_Physical_1",
-            "/SandboxScene/Skid_Battery_Thermal_1",
-            "/SandboxScene/Skid_Battery_Thermal_1/Thermal",
-        ] {
-            let root = SdfPath::new(root).expect("sandbox root path");
+        for root in ["/Test/Vehicle", "/Test/Vehicle/Thermal"] {
+            let root = SdfPath::new(root).expect("test root path");
             assert_eq!(
                 live.collection_members(&root, "components"),
                 plan.collection_members(&root, "components"),

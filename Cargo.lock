@@ -8493,7 +8493,6 @@ dependencies = [
  "lunco-usd-compose",
  "lunco-usd-core",
  "openusd",
- "tempfile",
 ]
 
 [[package]]
