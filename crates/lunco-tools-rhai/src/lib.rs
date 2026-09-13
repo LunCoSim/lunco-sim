@@ -300,7 +300,7 @@ pub fn validate_rhai_tool_with_engine(
     let tool = RhaiTool::new(name, source);
     let functions = tool.functions();
     let tool: Arc<dyn Tool> = Arc::new(tool);
-    let module = build_module(&tool, &engine)?
+    let module = build_module(&tool, engine)?
         .ok_or_else(|| format!("tool '{name}' does not expose a Rhai module"))?;
     let _ = module;
     Ok(functions)

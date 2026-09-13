@@ -228,7 +228,7 @@ mod tests {
         assert_eq!(roots.root_for(&assigned), Ok(Some(root.clone())));
         assert_eq!(
             app.world().resource::<MountedAuthorities>().0,
-            vec![(twin_id, assigned.clone())]
+            vec![(twin_id, assigned)]
         );
 
         let was_active = app.world().resource::<WorkspaceResource>().active_twin == Some(twin_id);

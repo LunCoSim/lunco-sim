@@ -433,7 +433,7 @@ mod tests {
         registry.push_scalar(SignalRef::new(right, "contact"), 0.0, 0.0);
         world.insert_resource(registry);
 
-        let response = ListTelemetryChannelsProvider.execute(&mut world, &serde_json::Value::Null);
+        let response = ListTelemetryChannelsProvider.execute(&world, &serde_json::Value::Null);
         let ApiResponse::Ok {
             data: Some(data), ..
         } = response
@@ -475,7 +475,7 @@ mod tests {
         );
         world.insert_resource(registry);
 
-        let response = ListTelemetryChannelsProvider.execute(&mut world, &serde_json::Value::Null);
+        let response = ListTelemetryChannelsProvider.execute(&world, &serde_json::Value::Null);
         let ApiResponse::Ok {
             data: Some(data), ..
         } = response

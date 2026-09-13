@@ -1565,9 +1565,8 @@ pub fn network_facts(
                 units
                     .into_iter()
                     .map(|unit| {
-                        let unit_name = unit.name.clone();
                         H::map([
-                            ("name", H::str(unit_name.clone())),
+                            ("name", H::str(unit.name)),
                             ("instance", H::str(unit.instance.clone())),
                             (
                                 "components",
@@ -2515,7 +2514,7 @@ fn commit_domain_projection(
     };
     let generated_source = GeneratedModelicaSource {
         network_root: prim.path.clone(),
-        doc_uri: doc_uri.clone(),
+        doc_uri,
         source: source_for_diagnostics,
         component_paths: synthesized.component_paths,
         members: synthesized.members,
@@ -2584,23 +2583,25 @@ pub fn project_domain_islands(
     let started = web_time::Instant::now();
     let (added, identity_added) = triggers;
     let mut projected = 0usize;
-    let mut projection_dirty = projection.p0();
-    if !projection_is_due_from_flags(
-        !added.is_empty(),
-        !identity_added.is_empty(),
-        dirty.0,
-        projection_dirty.0,
-    ) {
-        return;
-    }
-    // Identity assignment is per prim during a runtime-instance spawn. Do
-    // not turn one descendant's identity transition into a re-synthesis of
-    // every existing prim: only a wiring/source invalidation needs the full
-    // stage projection. The query iteration remains cheap, while the stage
-    // and policy reads below are reserved for the changed entities.
-    let full_reprojection = dirty.0 || projection_dirty.0;
-    projection_dirty.0 = false;
-    drop(projection_dirty);
+    let full_reprojection = {
+        let mut projection_dirty = projection.p0();
+        if !projection_is_due_from_flags(
+            !added.is_empty(),
+            !identity_added.is_empty(),
+            dirty.0,
+            projection_dirty.0,
+        ) {
+            return;
+        }
+        // Identity assignment is per prim during a runtime-instance spawn. Do
+        // not turn one descendant's identity transition into a re-synthesis of
+        // every existing prim: only a wiring/source invalidation needs the full
+        // stage projection. The query iteration remains cheap, while the stage
+        // and policy reads below are reserved for the changed entities.
+        let full_reprojection = dirty.0 || projection_dirty.0;
+        projection_dirty.0 = false;
+        full_reprojection
+    };
     let mut pending = projection.p1();
     if full_reprojection {
         // A pending task captured the previous class/source and wiring view.

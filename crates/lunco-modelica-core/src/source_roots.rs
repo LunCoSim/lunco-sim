@@ -736,6 +736,44 @@ pub fn ensure_loaded(
     true
 }
 
+/// Diagnostic log: walk the given AST, find every source-root
+/// dependency, classify each against the registry, and emit a
+/// one-line summary.
+pub fn log_compile_deps(registry: &SourceRootRegistry, model_name: &str, ast: &StoredDefinition) {
+    let deps = scan_source_root_deps(ast);
+    if deps.is_empty() {
+        bevy::log::info!(
+            "[source-roots] compile `{}`: no external library deps",
+            model_name,
+        );
+        return;
+    }
+    let mut ready = Vec::new();
+    let mut not_loaded = Vec::new();
+    let mut loading = Vec::new();
+    let mut failed = Vec::new();
+    let mut unknown = Vec::new();
+    for root in &deps {
+        match registry.state(root) {
+            Some(LoadState::Ready) => ready.push(root.clone()),
+            Some(LoadState::NotLoaded) => not_loaded.push(root.clone()),
+            Some(LoadState::Loading { .. }) => loading.push(root.clone()),
+            Some(LoadState::Failed(_)) => failed.push(root.clone()),
+            None => unknown.push(root.clone()),
+        }
+    }
+    bevy::log::info!(
+        "[source-roots] compile `{}` deps: ready={:?} not_loaded={:?} \
+         loading={:?} failed={:?} unknown={:?}",
+        model_name,
+        ready,
+        not_loaded,
+        loading,
+        failed,
+        unknown,
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -811,42 +849,4 @@ externals = [{ name = "Shared", path = "shared" }]
             vec![twin.root.join("examples"), twin.root.join("models/Vehicle")]
         );
     }
-}
-
-/// Diagnostic log: walk the given AST, find every source-root
-/// dependency, classify each against the registry, and emit a
-/// one-line summary.
-pub fn log_compile_deps(registry: &SourceRootRegistry, model_name: &str, ast: &StoredDefinition) {
-    let deps = scan_source_root_deps(ast);
-    if deps.is_empty() {
-        bevy::log::info!(
-            "[source-roots] compile `{}`: no external library deps",
-            model_name,
-        );
-        return;
-    }
-    let mut ready = Vec::new();
-    let mut not_loaded = Vec::new();
-    let mut loading = Vec::new();
-    let mut failed = Vec::new();
-    let mut unknown = Vec::new();
-    for root in &deps {
-        match registry.state(root) {
-            Some(LoadState::Ready) => ready.push(root.clone()),
-            Some(LoadState::NotLoaded) => not_loaded.push(root.clone()),
-            Some(LoadState::Loading { .. }) => loading.push(root.clone()),
-            Some(LoadState::Failed(_)) => failed.push(root.clone()),
-            None => unknown.push(root.clone()),
-        }
-    }
-    bevy::log::info!(
-        "[source-roots] compile `{}` deps: ready={:?} not_loaded={:?} \
-         loading={:?} failed={:?} unknown={:?}",
-        model_name,
-        ready,
-        not_loaded,
-        loading,
-        failed,
-        unknown,
-    );
 }

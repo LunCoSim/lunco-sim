@@ -463,9 +463,7 @@ impl UsdRead for UsdStageProjectionPlan {
     }
 
     fn attr_value_at(&self, prim: &SdfPath, name: &str, time: f64) -> Option<Value> {
-        let Some(prim_plan) = self.prim(prim) else {
-            return None;
-        };
+        let prim_plan = self.prim(prim)?;
         if let Some(samples) = prim_plan.time_sample_values.get(name) {
             return openusd::usd::evaluate(samples, time, openusd::usd::InterpolationType::Linear);
         }

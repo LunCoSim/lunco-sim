@@ -573,7 +573,7 @@ impl PortPanel {
         let key = (row.entity, info.name.clone());
         let draft = self
             .drafts
-            .entry(key.clone())
+            .entry(key)
             .or_insert_with(|| format!("{:.9}", row.held.unwrap_or(info.value)));
         let validation = draft
             .parse::<f64>()

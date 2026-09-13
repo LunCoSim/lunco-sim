@@ -105,10 +105,11 @@ impl ModelicaSignalLayout {
     /// boundary once; copied unit variables and internal connector/state
     /// variables are therefore unambiguously implementation values.
     pub fn exposure(&self, variable: &str) -> SignalExposure {
-        self.public_exact_paths
-            .contains(variable)
-            .then_some(SignalExposure::Public)
-            .unwrap_or(SignalExposure::Internal)
+        if self.public_exact_paths.contains(variable) {
+            SignalExposure::Public
+        } else {
+            SignalExposure::Internal
+        }
     }
 
     /// Resolve authored Modelica identity for a solver variable.
@@ -383,10 +384,12 @@ mod tests {
 
     #[test]
     fn runtime_state_is_retained_without_a_plot_binding() {
-        let mut model = ModelicaModel::default();
-        model.model_name = "LunCo.Test.Sensor".into();
-        model.source_uri = "lunco://models/LunCo/Test/Sensor.mo".into();
-        model.current_time = 0.0;
+        let mut model = ModelicaModel {
+            model_name: "LunCo.Test.Sensor".into(),
+            source_uri: "lunco://models/LunCo/Test/Sensor.mo".into(),
+            current_time: 0.0,
+            ..Default::default()
+        };
         model.variables.insert("soc".to_string(), 0.95);
         let (mut app, entity) = app_with_model(model);
 
@@ -576,9 +579,11 @@ mod tests {
 
     #[test]
     fn a_new_solver_session_clears_previous_history() {
-        let mut model = ModelicaModel::default();
-        model.session_id = 1;
-        model.current_time = 1.0;
+        let mut model = ModelicaModel {
+            session_id: 1,
+            current_time: 1.0,
+            ..Default::default()
+        };
         model.variables.insert("x".to_string(), 4.0);
         let (mut app, entity) = app_with_model(model);
         let signal = SignalRef::new(entity, "x");

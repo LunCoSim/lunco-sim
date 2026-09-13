@@ -91,7 +91,9 @@ fn live_port_collision_findings(
             continue;
         };
         if prim.stage_handle.id() == stage_id {
-            entities.entry(prim.path.clone()).or_insert(entity.id());
+            entities
+                .entry(prim.path.clone())
+                .or_insert_with(|| entity.id());
         }
     }
 
@@ -180,7 +182,9 @@ fn live_runtime_connection_facts(
             continue;
         };
         if prim.stage_handle.id() == stage_id {
-            entities.entry(prim.path.clone()).or_insert(entity.id());
+            entities
+                .entry(prim.path.clone())
+                .or_insert_with(|| entity.id());
         }
     }
 
@@ -796,6 +800,8 @@ mod tests {
 
     const MODELICA_BACKEND: PortBackend = PortBackend {
         list: modelica_list,
+        list_entities: |_world, _out| {},
+        topology_key: |_world, _entity| 0,
         metadata: Some(modelica_metadata),
         read_output: |_world, _entity, _name| None,
         read_input: |_world, _entity, _name| Some(0.0),
@@ -808,6 +814,8 @@ mod tests {
 
     const RUNTIME_ACTUATOR_BACKEND: PortBackend = PortBackend {
         list: runtime_actuator_list,
+        list_entities: |_world, _out| {},
+        topology_key: |_world, _entity| 0,
         metadata: Some(runtime_actuator_metadata),
         read_output: |_world, _entity, _name| Some(0.0),
         read_input: |_world, _entity, _name| Some(0.0),

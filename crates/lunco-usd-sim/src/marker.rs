@@ -119,7 +119,7 @@ pub fn scale_screen_constant_markers(
     let Ok(cam) = lunco_core::coords::world_position_seeded(
         *cam_entity,
         *cam_cell,
-        *cam_tf,
+        cam_tf,
         &q_parents,
         &q_grids,
         &q_spatial,

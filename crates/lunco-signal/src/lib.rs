@@ -254,10 +254,11 @@ pub enum SignalExposure {
 /// metadata only tells presentation consumers that several addresses belong in
 /// one semantic group, and whether a row is a component or a derived summary.
 /// Producers own this relationship; consumers must not infer it from names.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SignalPresentation {
     /// A standalone scalar channel.
+    #[default]
     Scalar,
     /// One named component of a vector or compound value.
     Component {
@@ -275,12 +276,6 @@ pub enum SignalPresentation {
         /// Human-readable formula or definition, such as `magnitude`.
         formula: String,
     },
-}
-
-impl Default for SignalPresentation {
-    fn default() -> Self {
-        Self::Scalar
-    }
 }
 
 /// Descriptive metadata. Optional and non-load-bearing — viz kinds render without it,

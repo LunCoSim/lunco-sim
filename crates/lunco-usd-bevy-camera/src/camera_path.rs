@@ -471,7 +471,7 @@ pub fn resolve_camera_paths(
         ) {
             Ok(Some(times)) => times,
             Ok(None) => Vec::new(),
-            Err(()) => {
+            Err(_) => {
                 error!(
                     "[camera-path] {} has authored aim times with an unsupported value type",
                     prim.path
@@ -486,7 +486,7 @@ pub fn resolve_camera_paths(
         ) {
             Ok(Some(modes)) => modes,
             Ok(None) => Vec::new(),
-            Err(()) => {
+            Err(_) => {
                 error!(
                     "[camera-path] {} has authored aim modes with an unsupported value type",
                     prim.path
@@ -636,7 +636,7 @@ pub fn resolve_camera_paths(
                 openusd::schemas::geom::tokens::A_CURVE_VERTEX_COUNTS,
             ) {
                 Ok(Some(counts)) if !counts.is_empty() => counts,
-                Ok(Some(_)) | Ok(None) | Err(()) => {
+                Ok(Some(_)) | Ok(None) | Err(_) => {
                     error!(
                         "[camera-path] {} has unusable authored curveVertexCounts",
                         prim.path
@@ -701,7 +701,7 @@ pub fn resolve_camera_paths(
             &["linear", "cubic"],
         ) {
             Ok(value) => value,
-            Err(()) => continue,
+            Err(_) => continue,
         };
         let basis = if curve_type == "linear" {
             CurveBasis::Linear
@@ -715,7 +715,7 @@ pub fn resolve_camera_paths(
             ) {
                 Ok(value) if value == "bezier" => CurveBasis::Bezier,
                 Ok(_) => CurveBasis::CatmullRom,
-                Err(()) => continue,
+                Err(_) => continue,
             }
         };
         let wrap = match lunco_usd_bevy_core::read::read_curve_token(
@@ -726,7 +726,7 @@ pub fn resolve_camera_paths(
             &["nonperiodic", "periodic", "pinned"],
         ) {
             Ok(value) => value,
-            Err(()) => continue,
+            Err(_) => continue,
         };
         if wrap == "pinned" {
             error!(
@@ -797,7 +797,7 @@ pub fn resolve_camera_paths(
             &["sim", "real"],
         ) {
             Ok(value) => value == "real",
-            Err(()) => continue,
+            Err(_) => continue,
         };
         let parent = if on_wall {
             clocks.interaction
@@ -1643,7 +1643,7 @@ mod tests {
         assert_eq!(path.aim_transition_at(6.4), None);
         assert_eq!(
             path.aim_transition_at(6.5),
-            Some((AimMode::Tangent, AimMode::Target(target.clone()), 0.0))
+            Some((AimMode::Tangent, AimMode::Target(target), 0.0))
         );
         let (_, _, alpha) = path.aim_transition_at(7.25).unwrap();
         assert!((alpha - 0.5).abs() < 1e-6);

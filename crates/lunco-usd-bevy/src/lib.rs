@@ -1653,15 +1653,14 @@ fn hide_point_instancer_prototypes(
     for instancer in &instancers {
         for prototype in &instancer.prototype_paths {
             for (path, mut visibility) in &mut prims {
-                if path.path == *prototype
+                if (path.path == *prototype
                     || path
                         .path
                         .strip_prefix(prototype)
-                        .is_some_and(|suffix| suffix.starts_with('/'))
+                        .is_some_and(|suffix| suffix.starts_with('/')))
+                    && *visibility != Visibility::Hidden
                 {
-                    if *visibility != Visibility::Hidden {
-                        *visibility = Visibility::Hidden;
-                    }
+                    *visibility = Visibility::Hidden;
                 }
             }
         }
@@ -3613,7 +3612,7 @@ pub fn refresh_program_owner(
         if UsdRead::type_name(&view, &owner).as_deref() != Some("Scope")
             && UsdRead::has_api_schema(&view, &owner, "LunCoProgramAPI")
         {
-            candidates.push(owner.clone());
+            candidates.push(owner);
         }
 
         let mut programs = Vec::new();
@@ -3654,23 +3653,25 @@ pub fn refresh_program_owner(
             programs.into_iter().next()
         }
     }) else {
-        let mut entity = world.entity_mut(owner);
-        entity
-            .remove::<lunco_core::ScriptParams>()
-            .remove::<lunco_core::ScenarioProgramPrim>();
-        drop(entity);
+        {
+            let mut entity = world.entity_mut(owner);
+            entity
+                .remove::<lunco_core::ScriptParams>()
+                .remove::<lunco_core::ScenarioProgramPrim>();
+        }
         apply_program_resolution(world, owner, stage_id, None);
         return;
     };
 
-    let mut entity = world.entity_mut(owner);
-    if params.is_empty() {
-        entity.remove::<lunco_core::ScriptParams>();
-    } else {
-        entity.insert(lunco_core::ScriptParams(params));
+    {
+        let mut entity = world.entity_mut(owner);
+        if params.is_empty() {
+            entity.remove::<lunco_core::ScriptParams>();
+        } else {
+            entity.insert(lunco_core::ScriptParams(params));
+        }
+        entity.insert(lunco_core::ScenarioProgramPrim(program_path));
     }
-    entity.insert(lunco_core::ScenarioProgramPrim(program_path));
-    drop(entity);
     apply_program_resolution(world, owner, stage_id, Some(resolved));
 }
 
@@ -5135,7 +5136,7 @@ fn build_usd_curve_mesh(
     let widths = match read::read_curve_real_array(reader, path, gtok::A_WIDTHS) {
         Ok(Some(widths)) if !widths.is_empty() => widths,
         Ok(Some(_)) | Ok(None) => return None,
-        Err(()) => {
+        Err(_) => {
             error!(
                 "[usd-bevy] {} has authored curve widths with an unsupported value type",
                 path.as_str()
@@ -5178,7 +5179,7 @@ fn build_usd_curve_mesh(
             );
             return None;
         }
-        Err(()) => {
+        Err(_) => {
             error!(
                 "[usd-bevy] {} has authored curveVertexCounts with an unsupported value type",
                 path.as_str()
@@ -5220,7 +5221,7 @@ fn build_usd_curve_mesh(
                     );
                     return None;
                 }
-                Err(()) => {
+                Err(_) => {
                     error!(
                     "[usd-bevy] {} has authored NurbsCurves order with an unsupported value type",
                     path.as_str()
@@ -5243,7 +5244,7 @@ fn build_usd_curve_mesh(
             openusd::schemas::geom::tokens::A_KNOTS,
         ) {
             Ok(Some(knots)) if !knots.is_empty() => knots,
-            Ok(Some(_)) | Ok(None) | Err(()) => {
+            Ok(Some(_)) | Ok(None) | Err(_) => {
                 error!(
                     "[usd-bevy] {} has no usable authored NurbsCurves knots",
                     path.as_str()
@@ -5265,7 +5266,7 @@ fn build_usd_curve_mesh(
                 return None;
             }
             Ok(None) => Vec::new(),
-            Err(()) => {
+            Err(_) => {
                 error!(
                     "[usd-bevy] {} has authored pointWeights with an unsupported value type",
                     path.as_str()
@@ -5283,7 +5284,7 @@ fn build_usd_curve_mesh(
             &["linear", "cubic"],
         ) {
             Ok(token) => token,
-            Err(()) => return None,
+            Err(_) => return None,
         };
         let basis = if ty == "linear" {
             CurveBasis::Linear
@@ -5297,7 +5298,7 @@ fn build_usd_curve_mesh(
             ) {
                 Ok(token) if token == "bezier" => CurveBasis::Bezier,
                 Ok(_) => CurveBasis::CatmullRom,
-                Err(()) => return None,
+                Err(_) => return None,
             }
         };
         let wrap = match read::read_curve_token(
@@ -5308,7 +5309,7 @@ fn build_usd_curve_mesh(
             &["nonperiodic", "periodic", "pinned"],
         ) {
             Ok(wrap) => wrap,
-            Err(()) => return None,
+            Err(_) => return None,
         };
         (
             basis,
@@ -5572,7 +5573,7 @@ fn read_patch_surface(
     }
     let u_knots = match read::read_curve_real_array(reader, path, gtok::A_U_KNOTS) {
         Ok(Some(knots)) if knots.len() == u_count + u_order => knots,
-        Ok(Some(_)) | Ok(None) | Err(()) => {
+        Ok(Some(_)) | Ok(None) | Err(_) => {
             error!(
                 "[usd-bevy] {} has no usable authored uKnots for its NurbsPatch",
                 path.as_str()
@@ -5582,7 +5583,7 @@ fn read_patch_surface(
     };
     let v_knots = match read::read_curve_real_array(reader, path, gtok::A_V_KNOTS) {
         Ok(Some(knots)) if knots.len() == v_count + v_order => knots,
-        Ok(Some(_)) | Ok(None) | Err(()) => {
+        Ok(Some(_)) | Ok(None) | Err(_) => {
             error!(
                 "[usd-bevy] {} has no usable authored vKnots for its NurbsPatch",
                 path.as_str()
@@ -5600,7 +5601,7 @@ fn read_patch_surface(
             return None;
         }
         Ok(None) => Vec::new(),
-        Err(()) => {
+        Err(_) => {
             error!(
                 "[usd-bevy] {} has pointWeights with an unsupported value type",
                 path.as_str()
@@ -5616,7 +5617,7 @@ fn read_patch_surface(
         &["rightHanded", "leftHanded"],
     ) {
         Ok(orientation) => orientation == "leftHanded",
-        Err(()) => return None,
+        Err(_) => return None,
     };
 
     Some((
@@ -5931,7 +5932,7 @@ fn build_usd_nurbs_patch_mesh(
         let ranges = match read::read_double2_array_strict(reader, path, "trimCurve:ranges") {
             Ok(Some(ranges)) => ranges,
             Ok(None) => Vec::new(),
-            Err(()) => {
+            Err(_) => {
                 error!(
                     "[usd-bevy] {} has malformed trimCurve:ranges; refusing the patch",
                     path.as_str()

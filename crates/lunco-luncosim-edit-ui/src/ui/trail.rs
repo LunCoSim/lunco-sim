@@ -281,7 +281,7 @@ fn physical_wheel_contact_point(
                 continue;
             };
             for point in &manifold.points {
-                let impulse = point.normal_impulse as f64;
+                let impulse = point.normal_impulse;
                 if impulse.is_finite() && impulse > 0.0 && point.point.is_finite() {
                     weighted += point.point * impulse;
                     weighted_normal += normal * impulse;
@@ -338,7 +338,7 @@ pub(crate) fn ensure_vehicle_trail_history(
     for vehicle in q_vehicles.iter() {
         commands
             .entity(vehicle)
-            .insert(VehicleTrailHistory::default());
+            .try_insert(VehicleTrailHistory::default());
     }
 }
 

@@ -91,7 +91,7 @@ pub fn modelica_facts_from_interface(
 
 fn sorted_entries(values: &std::collections::HashMap<String, f64>) -> Vec<(&String, &f64)> {
     let mut entries: Vec<_> = values.iter().collect();
-    entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+    entries.sort_by_key(|(left, _)| *left);
     entries
 }
 
@@ -325,17 +325,17 @@ fn collect_from_statement(
         .map(|l| i64::from(l.start_line))
         .unwrap_or(0);
     match statement {
-        Statement::Assignment { comp, value } => {
-            if allow_expression && expression_is_conditional(value) {
-                let name = comp.to_string();
-                out.push(ConditionalConstruct {
-                    kind: declared_kind(class, &name),
-                    name,
-                    form: CondForm::IfExpression,
-                    section,
-                    line,
-                });
-            }
+        Statement::Assignment { comp, value }
+            if allow_expression && expression_is_conditional(value) =>
+        {
+            let name = comp.to_string();
+            out.push(ConditionalConstruct {
+                kind: declared_kind(class, &name),
+                name,
+                form: CondForm::IfExpression,
+                section,
+                line,
+            });
         }
         Statement::If {
             cond_blocks,

@@ -589,7 +589,7 @@ fn finish_compile_work(
                     source: Arc::from(source),
                     extra_sources: raw_extras,
                     parameter_overrides,
-                    doc_uri: doc_uri.clone(),
+                    doc_uri,
                     compiled: comp_res.clone(),
                     unit_hash,
                     library_gen,

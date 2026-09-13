@@ -1014,9 +1014,10 @@ mod tests {
     fn engine_sync_due_wakes_after_edit_debounce() {
         let handle = ModelicaEngineHandle::default();
         let registry = crate::state::ModelicaDocumentRegistry::default();
-        let mut cursor = EngineSyncCursor::default();
-        cursor.next_debounce_at =
-            Some(web_time::Instant::now() - std::time::Duration::from_millis(1));
+        let cursor = EngineSyncCursor {
+            next_debounce_at: Some(web_time::Instant::now() - std::time::Duration::from_millis(1)),
+            ..Default::default()
+        };
         let pacing = ParsePacing::default();
 
         assert!(engine_sync_is_due(&handle, &registry, &cursor, &pacing));

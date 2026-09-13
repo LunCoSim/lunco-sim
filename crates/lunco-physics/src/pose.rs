@@ -319,10 +319,8 @@ mod tests {
             .resource_mut::<ApiEntityRegistry>()
             .assign(body, lunco_core::GlobalEntityId::from_raw(42));
 
-        let response = NearestProvider.execute(
-            &mut world,
-            &serde_json::json!({"point": [12.0, -1901.0, -4.0]}),
-        );
+        let response =
+            NearestProvider.execute(&world, &serde_json::json!({"point": [12.0, -1901.0, -4.0]}));
         let ApiResponse::Ok {
             data: Some(data), ..
         } = response

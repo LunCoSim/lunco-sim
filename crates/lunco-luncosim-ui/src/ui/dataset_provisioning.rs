@@ -137,7 +137,7 @@ fn open_modal(request: ProvisioningRequest, modals: &mut ModalQueue) -> ActivePr
             let Ok(mut suppress) = suppress_prompt.lock() else {
                 return;
             };
-            ui.checkbox(&mut *suppress, "Don't ask again for this project");
+            ui.checkbox(&mut suppress, "Don't ask again for this project");
         }
     }));
     let title = if is_engine {
@@ -176,11 +176,9 @@ fn status_text(dataset: &ProvisionedDataset) -> String {
 }
 
 fn show_next(state: &mut DatasetProvisioningState, modals: &mut ModalQueue) {
-    if state.active.is_none() {
-        if !state.pending.is_empty() {
-            let request = state.pending.remove(0);
-            state.active = Some(open_modal(request, modals));
-        }
+    if state.active.is_none() && !state.pending.is_empty() {
+        let request = state.pending.remove(0);
+        state.active = Some(open_modal(request, modals));
     }
 }
 
@@ -309,7 +307,7 @@ pub(crate) fn on_set_missing_asset_prompt_suppressed(
     if manifest.suppress_missing_asset_prompt() == event.suppressed {
         return;
     }
-    manifest.downloads = event.suppressed.then(|| lunco_twin::DownloadManifest {
+    manifest.downloads = event.suppressed.then_some(lunco_twin::DownloadManifest {
         suppress_missing_prompt: true,
     });
     if let Err(error) = twin.save_manifest() {

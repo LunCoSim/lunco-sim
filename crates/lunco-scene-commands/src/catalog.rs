@@ -1066,8 +1066,10 @@ mod tests {
                 description: None,
             },
         };
-        let mut scan = CatalogScan::default();
-        scan.batch_remaining = 2;
+        let scan = CatalogScan {
+            batch_remaining: 2,
+            ..default()
+        };
         // Deliberately deliver the Twin result first, as an async completion
         // race would. The drain's source sort must still give the library
         // source the stable unsuffixed ID.
@@ -1126,7 +1128,7 @@ mod tests {
             ],
         });
 
-        let response = SpawnCatalogProvider.execute(&mut world, &serde_json::Value::Null);
+        let response = SpawnCatalogProvider.execute(&world, &serde_json::Value::Null);
         let data = match response {
             ApiResponse::Ok { data: Some(data) } => data,
             other => panic!("expected catalog response, got {other:?}"),

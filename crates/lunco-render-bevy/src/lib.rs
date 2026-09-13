@@ -80,8 +80,8 @@ impl RenderProfile {
 ///   `ShaderMaterial` and the `StandardMaterial` darkening of shadowed props (from
 ///   `lunco-environment`);
 /// - `env_light` — the `bloom` arm of `SetEnvironmentLight` (from `lunco-environment`);
-/// Terrain-derived map selection remains render-free on the terrain's
-/// `ShaderLook`; this crate only binds that intent to the generic GPU material.
+///   Terrain-derived map selection remains render-free on the terrain's
+///   `ShaderLook`; this crate only binds that intent to the generic GPU material.
 ///
 /// **Screenshots deliberately do NOT live here** — they live in
 /// `lunco_workbench::screenshot`. This crate is the 3D *material* binder, and `lunica`

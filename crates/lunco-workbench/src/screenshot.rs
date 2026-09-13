@@ -200,7 +200,7 @@ fn dispatch_pending_texture_readbacks(
     mut commands: Commands,
 ) {
     for (entity, pending) in &pending {
-        commands.entity(entity).insert((
+        commands.entity(entity).try_insert((
             Readback::texture(pending.target.clone()),
             pending.request.clone(),
         ));
@@ -346,7 +346,7 @@ fn forward_texture_readback(
     // captured entities, preventing another readback after this completion.
     commands
         .entity(event.entity)
-        .insert(bevy::render::view::screenshot::Captured);
+        .try_insert(bevy::render::view::screenshot::Captured);
     commands.trigger(ScreenshotCaptured {
         entity: event.entity,
         image,
@@ -507,9 +507,7 @@ fn on_capture_from_camera(
             .iter()
             .filter(|(_, camera, _, _, _)| camera.is_active)
             .map(|(entity, ..)| entity);
-        let Some(entity) = active.next() else {
-            return None;
-        };
+        let entity = active.next()?;
         active.next().is_none().then_some(entity)
     };
     let camera_entity = match target {
@@ -1475,9 +1473,7 @@ fn scene_visuals_ready(
         {
             return Some(format!(
                 "offscreen scene camera has no submitted mesh phase items (visible={}, opaque={}, transparent={})",
-                readiness.visible_entities,
-                readiness.opaque_items,
-                readiness.transparent_items,
+                readiness.visible_entities, readiness.opaque_items, readiness.transparent_items,
             ));
         }
     }

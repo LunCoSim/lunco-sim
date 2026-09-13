@@ -2073,14 +2073,7 @@ fn extract_avian_prim(
         let compound_shapes = match collect_child_colliders_from_usd(reader, sdf_path) {
             Ok(shapes) => shapes,
             Err(error) => {
-                reject_collider_projection(
-                    commands,
-                    entity,
-                    sdf_path,
-                    faults.as_deref_mut(),
-                    holds.as_deref_mut(),
-                    error,
-                );
+                reject_collider_projection(commands, entity, sdf_path, faults, holds, error);
                 return;
             }
         };
@@ -2093,8 +2086,8 @@ fn extract_avian_prim(
                     commands,
                     entity,
                     sdf_path,
-                    faults.as_deref_mut(),
-                    holds.as_deref_mut(),
+                    faults,
+                    holds,
                     ColliderProjectionError::Backend {
                         prim: sdf_path.to_string(),
                         detail:
@@ -2106,14 +2099,7 @@ fn extract_avian_prim(
             }
         } else {
             if let Err(error) = add_collider_from_usd(commands, entity, reader, sdf_path) {
-                reject_collider_projection(
-                    commands,
-                    entity,
-                    sdf_path,
-                    faults.as_deref_mut(),
-                    holds.as_deref_mut(),
-                    error,
-                );
+                reject_collider_projection(commands, entity, sdf_path, faults, holds, error);
                 return;
             }
         }
@@ -2169,14 +2155,7 @@ fn extract_avian_prim(
                 .entity(entity)
                 .try_insert((RigidBody::Static, lunco_core::Mobility::Static));
             if let Err(error) = add_collider_from_usd(commands, entity, reader, sdf_path) {
-                reject_collider_projection(
-                    commands,
-                    entity,
-                    sdf_path,
-                    faults.as_deref_mut(),
-                    holds.as_deref_mut(),
-                    error,
-                );
+                reject_collider_projection(commands, entity, sdf_path, faults, holds, error);
                 return;
             }
             apply_collision_groups(commands, entity, groups, sdf_path);
@@ -2491,9 +2470,9 @@ fn read_joint_spec_with_policy(
         let target0 = targets0.first();
         let target1 = targets1.first();
         let (b0, b1) = match (target0, target1) {
-            (Some(t0), Some(t1)) => (resolve(&t0)?, resolve(&t1)?),
-            (Some(t0), None) => (resolve(&t0)?, String::new()),
-            (None, Some(t1)) => (String::new(), resolve(&t1)?),
+            (Some(t0), Some(t1)) => (resolve(t0)?, resolve(t1)?),
+            (Some(t0), None) => (resolve(t0)?, String::new()),
+            (None, Some(t1)) => (String::new(), resolve(t1)?),
             (None, None) => return None,
         };
         let lp0_auth = read_authored_vec3(reader, path, ptok::A_LOCAL_POS_0)
@@ -6220,7 +6199,7 @@ def Cube "Part" (
         let recipe = StageRecipe {
             root_id: root_id.clone(),
             bytes: HashMap::from([
-                (root_id.clone(), scene.as_bytes().to_vec()),
+                (root_id, scene.as_bytes().to_vec()),
                 (child_id, child.as_bytes().to_vec()),
             ]),
         };

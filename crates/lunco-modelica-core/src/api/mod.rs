@@ -973,9 +973,9 @@ fn api_graphic_to_pretty(g: &ApiGraphic) -> GraphicSpec {
     }
 }
 
-pub(crate) fn internal_op_to_api(op: &ModelicaOp) -> Option<ApiOp> {
+pub(crate) fn internal_op_to_api(op: &ModelicaOp) -> ApiOp {
     match op {
-        ModelicaOp::AddComponent { class, decl } => Some(ApiOp::AddComponent {
+        ModelicaOp::AddComponent { class, decl } => ApiOp::AddComponent {
             class: class.clone(),
             type_name: decl.type_name.clone(),
             name: decl.name.clone(),
@@ -991,12 +991,12 @@ pub(crate) fn internal_op_to_api(op: &ModelicaOp) -> Option<ApiOp> {
                 .placement
                 .map(internal_placement_to_api)
                 .unwrap_or_default(),
-        }),
-        ModelicaOp::RemoveComponent { class, name } => Some(ApiOp::RemoveComponent {
+        },
+        ModelicaOp::RemoveComponent { class, name } => ApiOp::RemoveComponent {
             class: class.clone(),
             name: name.clone(),
-        }),
-        ModelicaOp::AddConnection { class, eq } => Some(ApiOp::AddConnection {
+        },
+        ModelicaOp::AddConnection { class, eq } => ApiOp::AddConnection {
             class: class.clone(),
             from_component: eq.from.component.clone(),
             from_port: eq.from.port.clone(),
@@ -1007,48 +1007,48 @@ pub(crate) fn internal_op_to_api(op: &ModelicaOp) -> Option<ApiOp> {
                 .as_ref()
                 .map(|l| l.points.iter().flat_map(|(x, y)| [*x, *y]).collect())
                 .unwrap_or_default(),
-        }),
-        ModelicaOp::RemoveConnection { class, from, to } => Some(ApiOp::RemoveConnection {
+        },
+        ModelicaOp::RemoveConnection { class, from, to } => ApiOp::RemoveConnection {
             class: class.clone(),
             from_component: from.component.clone(),
             from_port: from.port.clone(),
             to_component: to.component.clone(),
             to_port: to.port.clone(),
-        }),
+        },
         ModelicaOp::SetConnectionLine {
             class,
             from,
             to,
             points,
-        } => Some(ApiOp::SetConnectionLine {
+        } => ApiOp::SetConnectionLine {
             class: class.clone(),
             from_component: from.component.clone(),
             from_port: from.port.clone(),
             to_component: to.component.clone(),
             to_port: to.port.clone(),
             line_points: points.iter().flat_map(|(x, y)| [*x, *y]).collect(),
-        }),
+        },
         ModelicaOp::SetPlacement {
             class,
             name,
             placement,
-        } => Some(ApiOp::SetPlacement {
+        } => ApiOp::SetPlacement {
             class: class.clone(),
             name: name.clone(),
             placement: internal_placement_to_api(*placement),
-        }),
+        },
         ModelicaOp::SetParameter {
             class,
             component,
             param,
             value,
-        } => Some(ApiOp::SetParameter {
+        } => ApiOp::SetParameter {
             class: class.clone(),
             component: component.clone(),
             param: param.clone(),
             value: value.clone(),
-        }),
-        ModelicaOp::AddPlotNode { class, plot } => Some(ApiOp::AddPlotNode {
+        },
+        ModelicaOp::AddPlotNode { class, plot } => ApiOp::AddPlotNode {
             class: class.clone(),
             signal: plot.signal.clone(),
             title: plot.title.clone(),
@@ -1056,11 +1056,11 @@ pub(crate) fn internal_op_to_api(op: &ModelicaOp) -> Option<ApiOp> {
             y1: plot.y1,
             x2: plot.x2,
             y2: plot.y2,
-        }),
-        ModelicaOp::RemovePlotNode { class, signal_path } => Some(ApiOp::RemovePlotNode {
+        },
+        ModelicaOp::RemovePlotNode { class, signal_path } => ApiOp::RemovePlotNode {
             class: class.clone(),
             signal: signal_path.clone(),
-        }),
+        },
         ModelicaOp::SetPlotNodeExtent {
             class,
             signal_path,
@@ -1068,23 +1068,23 @@ pub(crate) fn internal_op_to_api(op: &ModelicaOp) -> Option<ApiOp> {
             y1,
             x2,
             y2,
-        } => Some(ApiOp::SetPlotNodeExtent {
+        } => ApiOp::SetPlotNodeExtent {
             class: class.clone(),
             signal: signal_path.clone(),
             x1: *x1,
             y1: *y1,
             x2: *x2,
             y2: *y2,
-        }),
+        },
         ModelicaOp::SetPlotNodeTitle {
             class,
             signal_path,
             title,
-        } => Some(ApiOp::SetPlotNodeTitle {
+        } => ApiOp::SetPlotNodeTitle {
             class: class.clone(),
             signal: signal_path.clone(),
             title: title.clone(),
-        }),
+        },
         ModelicaOp::SetDiagramTextExtent {
             class,
             index,
@@ -1092,49 +1092,47 @@ pub(crate) fn internal_op_to_api(op: &ModelicaOp) -> Option<ApiOp> {
             y1,
             x2,
             y2,
-        } => Some(ApiOp::SetDiagramTextExtent {
+        } => ApiOp::SetDiagramTextExtent {
             class: class.clone(),
             index: *index as u32,
             x1: *x1,
             y1: *y1,
             x2: *x2,
             y2: *y2,
-        }),
-        ModelicaOp::SetDiagramTextString { class, index, text } => {
-            Some(ApiOp::SetDiagramTextString {
-                class: class.clone(),
-                index: *index as u32,
-                text: text.clone(),
-            })
-        }
-        ModelicaOp::RemoveDiagramText { class, index } => Some(ApiOp::RemoveDiagramText {
+        },
+        ModelicaOp::SetDiagramTextString { class, index, text } => ApiOp::SetDiagramTextString {
             class: class.clone(),
             index: *index as u32,
-        }),
-        ModelicaOp::EditText { range, replacement } => Some(ApiOp::EditText {
+            text: text.clone(),
+        },
+        ModelicaOp::RemoveDiagramText { class, index } => ApiOp::RemoveDiagramText {
+            class: class.clone(),
+            index: *index as u32,
+        },
+        ModelicaOp::EditText { range, replacement } => ApiOp::EditText {
             range_start: range.start as u32,
             range_end: range.end as u32,
             replacement: replacement.clone(),
-        }),
-        ModelicaOp::ReplaceSource { new } => Some(ApiOp::ReplaceSource {
+        },
+        ModelicaOp::ReplaceSource { new } => ApiOp::ReplaceSource {
             source: new.clone(),
-        }),
+        },
         ModelicaOp::AddClass {
             parent,
             name,
             kind,
             description,
             partial,
-        } => Some(ApiOp::AddClass {
+        } => ApiOp::AddClass {
             parent: parent.clone(),
             name: name.clone(),
             kind: class_kind_to_api(*kind),
             description: description.clone(),
             partial: *partial,
-        }),
-        ModelicaOp::RemoveClass { qualified } => Some(ApiOp::RemoveClass {
+        },
+        ModelicaOp::RemoveClass { qualified } => ApiOp::RemoveClass {
             qualified: qualified.clone(),
-        }),
+        },
         ModelicaOp::AddShortClass {
             parent,
             name,
@@ -1142,7 +1140,7 @@ pub(crate) fn internal_op_to_api(op: &ModelicaOp) -> Option<ApiOp> {
             base,
             prefixes,
             modifications,
-        } => Some(ApiOp::AddShortClass {
+        } => ApiOp::AddShortClass {
             parent: parent.clone(),
             name: name.clone(),
             kind: class_kind_to_api(*kind),
@@ -1155,8 +1153,8 @@ pub(crate) fn internal_op_to_api(op: &ModelicaOp) -> Option<ApiOp> {
                     value: value.clone(),
                 })
                 .collect(),
-        }),
-        ModelicaOp::AddVariable { class, decl } => Some(ApiOp::AddVariable {
+        },
+        ModelicaOp::AddVariable { class, decl } => ApiOp::AddVariable {
             class: class.clone(),
             name: decl.name.clone(),
             type_name: decl.type_name.clone(),
@@ -1173,37 +1171,37 @@ pub(crate) fn internal_op_to_api(op: &ModelicaOp) -> Option<ApiOp> {
                 .collect(),
             value: decl.value.clone().unwrap_or_default(),
             description: decl.description.clone(),
-        }),
-        ModelicaOp::RemoveVariable { class, name } => Some(ApiOp::RemoveVariable {
+        },
+        ModelicaOp::RemoveVariable { class, name } => ApiOp::RemoveVariable {
             class: class.clone(),
             name: name.clone(),
-        }),
-        ModelicaOp::AddEquation { class, eq } => Some(ApiOp::AddEquation {
+        },
+        ModelicaOp::AddEquation { class, eq } => ApiOp::AddEquation {
             class: class.clone(),
             lhs: eq.lhs.clone().unwrap_or_default(),
             rhs: eq.rhs.clone(),
-        }),
-        ModelicaOp::AddIconGraphic { class, graphic } => Some(ApiOp::AddIconGraphic {
+        },
+        ModelicaOp::AddIconGraphic { class, graphic } => ApiOp::AddIconGraphic {
             class: class.clone(),
             graphic: graphic_to_api(graphic),
-        }),
-        ModelicaOp::AddDiagramGraphic { class, graphic } => Some(ApiOp::AddDiagramGraphic {
+        },
+        ModelicaOp::AddDiagramGraphic { class, graphic } => ApiOp::AddDiagramGraphic {
             class: class.clone(),
             graphic: graphic_to_api(graphic),
-        }),
+        },
         ModelicaOp::SetExperimentAnnotation {
             class,
             start_time,
             stop_time,
             tolerance,
             interval,
-        } => Some(ApiOp::SetExperimentAnnotation {
+        } => ApiOp::SetExperimentAnnotation {
             class: class.clone(),
             start_time: *start_time,
             stop_time: *stop_time,
             tolerance: *tolerance,
             interval: *interval,
-        }),
+        },
         ModelicaOp::SetConnectionLineStyle {
             class,
             from,
@@ -1211,7 +1209,7 @@ pub(crate) fn internal_op_to_api(op: &ModelicaOp) -> Option<ApiOp> {
             color,
             thickness,
             smooth_bezier,
-        } => Some(ApiOp::SetConnectionLineStyle {
+        } => ApiOp::SetConnectionLineStyle {
             class: class.clone(),
             from_component: from.component.clone(),
             from_port: from.port.clone(),
@@ -1220,14 +1218,14 @@ pub(crate) fn internal_op_to_api(op: &ModelicaOp) -> Option<ApiOp> {
             color: *color,
             thickness: *thickness,
             smooth_bezier: *smooth_bezier,
-        }),
-        ModelicaOp::ReverseConnection { class, from, to } => Some(ApiOp::ReverseConnection {
+        },
+        ModelicaOp::ReverseConnection { class, from, to } => ApiOp::ReverseConnection {
             class: class.clone(),
             from_component: from.component.clone(),
             from_port: from.port.clone(),
             to_component: to.component.clone(),
             to_port: to.port.clone(),
-        }),
+        },
     }
 }
 
@@ -1346,7 +1344,7 @@ fn graphic_to_api(graphic: &GraphicSpec) -> ApiGraphic {
 }
 
 pub fn trigger_apply_ops(world: &mut World, doc: lunco_doc::DocumentId, ops: Vec<ModelicaOp>) {
-    let api_ops: Vec<ApiOp> = ops.iter().filter_map(internal_op_to_api).collect();
+    let api_ops: Vec<ApiOp> = ops.iter().map(internal_op_to_api).collect();
     if api_ops.is_empty() {
         return;
     }

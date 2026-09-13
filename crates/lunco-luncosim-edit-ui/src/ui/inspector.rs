@@ -467,36 +467,32 @@ fn preview_authoring_context(
     world: &mut World,
     entity: Entity,
 ) -> Option<(lunco_doc::DocumentId, LayerId, u64)> {
-    let sessions: Vec<_> = world
+    world
         .resource::<lunco_usd_ui::viewport::UsdViewportState>()
         .sessions()
         .filter(|session| session.projection_ready())
-        .map(|session| {
-            (
-                session.scene_root(),
-                session.doc(),
-                session.edit_target().clone(),
-                session.projected_generation(),
-            )
-        })
-        .collect();
-    let mut parents = world.query::<&ChildOf>();
-    sessions
-        .into_iter()
-        .find(|(root, _, _, _)| {
-            if entity == *root {
-                return true;
+        .find_map(|session| {
+            let root = session.scene_root();
+            if entity == root {
+                return Some((
+                    session.doc(),
+                    session.edit_target().clone(),
+                    session.projected_generation(),
+                ));
             }
             let mut current = entity;
-            while let Ok(parent) = parents.get(world, current) {
+            while let Some(parent) = world.get::<ChildOf>(current) {
                 current = parent.parent();
-                if current == *root {
-                    return true;
+                if current == root {
+                    return Some((
+                        session.doc(),
+                        session.edit_target().clone(),
+                        session.projected_generation(),
+                    ));
                 }
             }
-            false
+            None
         })
-        .map(|(_, doc, target, generation)| (doc, target, generation))
 }
 
 /// All USD Inspector writes use the preview's explicit layer and generation.

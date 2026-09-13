@@ -695,7 +695,7 @@ fn mark_shader_look_ready(
         let Some(material) = materials.get(&material_handle.0) else {
             continue;
         };
-        if material_is_render_ready(material, &shaders, &images, &schemas) {
+        if material_is_render_ready(material, &shaders, &images, schemas) {
             commands.entity(entity).try_insert(ShaderLookReady);
         }
     }
@@ -760,8 +760,10 @@ mod tests {
                 "// no dynamic Material struct",
                 "test.wgsl",
             ));
-        let mut material = ShaderMaterial::default();
-        material.shader = shader;
+        let mut material = ShaderMaterial {
+            shader,
+            ..Default::default()
+        };
         let schemas = ShaderSchemas::default();
 
         assert!(material_is_render_ready(
@@ -1002,7 +1004,7 @@ mod tests {
             .spawn((
                 ShaderLook::new("shaders/starfield.wgsl"),
                 ProceduralSkybox,
-                MeshMaterial3d(existing.clone()),
+                MeshMaterial3d(existing),
             ))
             .id();
         let after_look = app

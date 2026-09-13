@@ -144,7 +144,7 @@ fn mark_usd_telemetry_projection_index_dirty(
             commands.entity(entity).remove::<UsdTelemetryProjected>();
         }
         for entity in &channels {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
     }
 }
@@ -3802,10 +3802,10 @@ impl lunco_api::ApiQueryProvider for CausalTraceProvider {
                         }
                         let native_type = revolute
                             .then_some("revolute")
-                            .or(prismatic.then_some("prismatic"))
-                            .or(fixed.then_some("fixed"))
-                            .or(spherical.then_some("spherical"))
-                            .or(distance.then_some("distance"));
+                            .or_else(|| prismatic.then_some("prismatic"))
+                            .or_else(|| fixed.then_some("fixed"))
+                            .or_else(|| spherical.then_some("spherical"))
+                            .or_else(|| distance.then_some("distance"));
                         Some(serde_json::json!({
                             "joint": joint.to_bits(),
                             "path": path.map(|path| path.path.as_str()),

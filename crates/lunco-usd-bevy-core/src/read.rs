@@ -806,6 +806,13 @@ pub fn read_vec3_f64_at(
     None
 }
 
+/// Error returned when a curve attribute is missing, malformed, or out of range.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CurveAttributeError {
+    /// The authored value is missing, has the wrong USD type, or is out of range.
+    InvalidValue,
+}
+
 /// Read a USD integer array while preserving the distinction between an
 /// omitted optional value and an authored value of the wrong type.
 ///
@@ -815,7 +822,7 @@ pub fn read_curve_int_array(
     reader: &impl UsdRead,
     path: &SdfPath,
     attr: &str,
-) -> Result<Option<Vec<i32>>, ()> {
+) -> Result<Option<Vec<i32>>, CurveAttributeError> {
     match reader.attr_value(path, attr) {
         Some(Value::IntVec(values)) => Ok(Some(values)),
         Some(Value::Int64Vec(values)) => Ok(Some(
@@ -823,10 +830,10 @@ pub fn read_curve_int_array(
                 .iter()
                 .map(|value| i32::try_from(*value))
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(|_| ())?,
+                .map_err(|_| CurveAttributeError::InvalidValue)?,
         )),
-        Some(_) => Err(()),
-        None if reader.has_authored_attribute(path, attr) => Err(()),
+        Some(_) => Err(CurveAttributeError::InvalidValue),
+        None if reader.has_authored_attribute(path, attr) => Err(CurveAttributeError::InvalidValue),
         None => Ok(None),
     }
 }
@@ -837,12 +844,12 @@ pub fn read_curve_real_array(
     reader: &impl UsdRead,
     path: &SdfPath,
     attr: &str,
-) -> Result<Option<Vec<f64>>, ()> {
+) -> Result<Option<Vec<f64>>, CurveAttributeError> {
     match reader.attr_value(path, attr) {
         Some(Value::DoubleVec(values)) => Ok(Some(values)),
         Some(Value::FloatVec(values)) => Ok(Some(values.into_iter().map(f64::from).collect())),
-        Some(_) => Err(()),
-        None if reader.has_authored_attribute(path, attr) => Err(()),
+        Some(_) => Err(CurveAttributeError::InvalidValue),
+        None if reader.has_authored_attribute(path, attr) => Err(CurveAttributeError::InvalidValue),
         None => Ok(None),
     }
 }
@@ -853,13 +860,13 @@ pub fn read_curve_token_array(
     reader: &impl UsdRead,
     path: &SdfPath,
     attr: &str,
-) -> Result<Option<Vec<String>>, ()> {
+) -> Result<Option<Vec<String>>, CurveAttributeError> {
     match reader.attr_value(path, attr) {
         Some(Value::TokenVec(values)) => Ok(Some(
             values.into_iter().map(|value| value.to_string()).collect(),
         )),
-        Some(_) => Err(()),
-        None if reader.has_authored_attribute(path, attr) => Err(()),
+        Some(_) => Err(CurveAttributeError::InvalidValue),
+        None if reader.has_authored_attribute(path, attr) => Err(CurveAttributeError::InvalidValue),
         None => Ok(None),
     }
 }
@@ -873,7 +880,7 @@ pub fn read_curve_token(
     attr: &str,
     schema_default: &str,
     allowed: &[&str],
-) -> Result<String, ()> {
+) -> Result<String, CurveAttributeError> {
     match reader.attr_value(path, attr) {
         Some(Value::Token(value)) => {
             let value = value.to_string();
@@ -886,7 +893,7 @@ pub fn read_curve_token(
                     attr,
                     value
                 );
-                Err(())
+                Err(CurveAttributeError::InvalidValue)
             }
         }
         Some(_) => {
@@ -895,7 +902,7 @@ pub fn read_curve_token(
                 path.as_str(),
                 attr
             );
-            Err(())
+            Err(CurveAttributeError::InvalidValue)
         }
         None if reader.has_authored_attribute(path, attr) => {
             error!(
@@ -903,7 +910,7 @@ pub fn read_curve_token(
                 path.as_str(),
                 attr
             );
-            Err(())
+            Err(CurveAttributeError::InvalidValue)
         }
         None => Ok(schema_default.to_string()),
     }
@@ -916,7 +923,7 @@ pub fn read_double2_array_strict(
     reader: &impl UsdRead,
     path: &SdfPath,
     attr: &str,
-) -> Result<Option<Vec<[f64; 2]>>, ()> {
+) -> Result<Option<Vec<[f64; 2]>>, CurveAttributeError> {
     match reader.attr_value(path, attr) {
         Some(Value::Vec2dVec(values)) => Ok(Some(
             values.iter().map(|value| [value[0], value[1]]).collect(),
@@ -927,8 +934,8 @@ pub fn read_double2_array_strict(
                 .map(|value| [value[0] as f64, value[1] as f64])
                 .collect(),
         )),
-        Some(_) => Err(()),
-        None if reader.has_authored_attribute(path, attr) => Err(()),
+        Some(_) => Err(CurveAttributeError::InvalidValue),
+        None if reader.has_authored_attribute(path, attr) => Err(CurveAttributeError::InvalidValue),
         None => Ok(None),
     }
 }

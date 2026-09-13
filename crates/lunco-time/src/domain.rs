@@ -1401,7 +1401,7 @@ mod tests {
         app.world_mut().trigger(ResetTime {});
 
         assert!(app.world().resource::<Time<Virtual>>().is_paused());
-        assert_eq!(app.world().resource::<crate::PendingScenePause>().0, false);
+        assert!(!app.world().resource::<crate::PendingScenePause>().0);
     }
 
     #[test]

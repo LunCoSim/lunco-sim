@@ -135,17 +135,18 @@ pub fn filter_pair(commands: &mut Commands, joint: Entity, a: Entity, b: Entity)
 pub fn release_joint_pair(commands: &mut Commands, joint: Entity, a: Entity, b: Entity) {
     for (from, to) in [(a, b), (b, a)] {
         commands.queue(move |world: &mut World| {
-            let Some(mut pairs) = world.get_mut::<JointFilteredPairs>(from) else {
-                return;
-            };
-            if let Some(owners) = pairs.0.get_mut(&to) {
-                owners.remove(&joint);
-                if owners.is_empty() {
-                    pairs.0.remove(&to);
+            let empty = {
+                let Some(mut pairs) = world.get_mut::<JointFilteredPairs>(from) else {
+                    return;
+                };
+                if let Some(owners) = pairs.0.get_mut(&to) {
+                    owners.remove(&joint);
+                    if owners.is_empty() {
+                        pairs.0.remove(&to);
+                    }
                 }
-            }
-            let empty = pairs.0.is_empty();
-            drop(pairs);
+                pairs.0.is_empty()
+            };
             if empty {
                 if let Ok(mut entity) = world.get_entity_mut(from) {
                     entity.remove::<JointFilteredPairs>();

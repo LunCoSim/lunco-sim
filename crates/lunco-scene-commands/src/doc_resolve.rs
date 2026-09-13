@@ -131,35 +131,6 @@ fn usd_numeric_component_count(type_name: &str) -> Option<usize> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::canonical_shader_parameter_literal;
-    use lunco_materials::ParamValue;
-
-    #[test]
-    fn shader_parameter_literal_uses_declared_usd_role_and_shape() {
-        let color = ParamValue::Vec4([0.1, 0.2, 0.3, 1.0]);
-        assert_eq!(
-            canonical_shader_parameter_literal("color3f", &color).unwrap(),
-            "(0.1, 0.2, 0.3)"
-        );
-        assert_eq!(
-            canonical_shader_parameter_literal("color3f[]", &color).unwrap(),
-            "[(0.1, 0.2, 0.3)]"
-        );
-        assert_eq!(
-            canonical_shader_parameter_literal("float4", &color).unwrap(),
-            "(0.1, 0.2, 0.3, 1)"
-        );
-    }
-
-    #[test]
-    fn shader_parameter_literal_rejects_declared_shape_mismatch() {
-        let value = ParamValue::Vec2([0.1, 0.2]);
-        assert!(canonical_shader_parameter_literal("float3", &value).is_err());
-    }
-}
-
 /// The `UsdPreviewSurface` Shader prim bound to `prim`'s geometry, or `None` when it
 /// has no material yet.
 ///
@@ -264,4 +235,33 @@ pub fn resolve_doc_for_entity(world: &World, entity: Entity) -> Option<lunco_doc
                 })
             })
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::canonical_shader_parameter_literal;
+    use lunco_materials::ParamValue;
+
+    #[test]
+    fn shader_parameter_literal_uses_declared_usd_role_and_shape() {
+        let color = ParamValue::Vec4([0.1, 0.2, 0.3, 1.0]);
+        assert_eq!(
+            canonical_shader_parameter_literal("color3f", &color).unwrap(),
+            "(0.1, 0.2, 0.3)"
+        );
+        assert_eq!(
+            canonical_shader_parameter_literal("color3f[]", &color).unwrap(),
+            "[(0.1, 0.2, 0.3)]"
+        );
+        assert_eq!(
+            canonical_shader_parameter_literal("float4", &color).unwrap(),
+            "(0.1, 0.2, 0.3, 1)"
+        );
+    }
+
+    #[test]
+    fn shader_parameter_literal_rejects_declared_shape_mismatch() {
+        let value = ParamValue::Vec2([0.1, 0.2]);
+        assert!(canonical_shader_parameter_literal("float3", &value).is_err());
+    }
 }

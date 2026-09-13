@@ -829,10 +829,11 @@ mod modelica_status_tests {
     use super::*;
 
     fn ready_model(name: &str) -> lunco_modelica_core::ModelicaModel {
-        let mut model = lunco_modelica_core::ModelicaModel::default();
-        model.model_name = name.to_owned();
-        model.is_compiled = true;
-        model
+        lunco_modelica_core::ModelicaModel {
+            model_name: name.to_owned(),
+            is_compiled: true,
+            ..default()
+        }
     }
 
     #[test]

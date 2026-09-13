@@ -32,7 +32,7 @@ struct SelectionEntity {
     assembly_path: Option<String>,
 }
 
-fn preview_id(params: &serde_json::Value) -> Result<Option<UsdPreviewId>, ApiResponse> {
+fn preview_id(params: &serde_json::Value) -> Result<Option<UsdPreviewId>, Box<ApiResponse>> {
     let Some(value) = params.get("preview") else {
         return Ok(None);
     };
@@ -40,10 +40,10 @@ fn preview_id(params: &serde_json::Value) -> Result<Option<UsdPreviewId>, ApiRes
         .as_u64()
         .or_else(|| value.as_str().and_then(|value| value.parse().ok()))
         .ok_or_else(|| {
-            ApiResponse::error(
+            Box::new(ApiResponse::error(
                 ApiErrorCode::DeserializationError,
                 "InspectUsdSelection: `preview` must be a u64",
-            )
+            ))
         })?;
     Ok(Some(UsdPreviewId(id)))
 }
@@ -195,7 +195,7 @@ impl ApiQueryProvider for InspectUsdSelectionProvider {
         };
         let requested_preview = match preview_id(params) {
             Ok(preview) => preview,
-            Err(error) => return error,
+            Err(error) => return *error,
         };
         let preview = requested_preview.or_else(|| viewport.focused_preview_id());
 

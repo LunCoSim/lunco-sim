@@ -380,7 +380,7 @@ pub fn lunco_asset_source(assets_dir: &Path) -> AssetSourceBuilder {
         .into_iter()
         .map(|p| p.to_string_lossy().into_owned())
         .collect::<Vec<_>>();
-    let reader_roots = roots.clone();
+    let reader_roots = roots;
     AssetSourceBuilder::new(move || {
         Box::new(FallbackReader {
             readers: reader_roots

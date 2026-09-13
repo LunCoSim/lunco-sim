@@ -190,7 +190,7 @@ pub fn resolve_program(
                 source: ProgramSource::Asset(asset),
             })
         }
-        other if other.is_empty() => Err(source_issue(
+        "" => Err(source_issue(
             prim,
             "info:implementationSource",
             "info:implementationSource is empty",

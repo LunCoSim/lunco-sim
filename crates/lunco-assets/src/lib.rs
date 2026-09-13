@@ -489,7 +489,7 @@ pub fn assets_dir_abs() -> PathBuf {
         return cwd.join(assets_dir());
     }
 
-    PathBuf::from(assets_dir())
+    assets_dir()
 }
 
 #[cfg(not(target_arch = "wasm32"))]

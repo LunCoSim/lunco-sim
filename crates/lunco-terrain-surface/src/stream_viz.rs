@@ -1743,7 +1743,7 @@ fn spawn_tile(
         ChildOf(grid_entity),
     ));
     if overlay.mode > 0.5 {
-        tile.insert(TerrainDiagnosticTile);
+        tile.try_insert(TerrainDiagnosticTile);
     }
     enforce_streamed_shadow_ownership(&mut tile);
     tile.id()
@@ -2123,6 +2123,7 @@ pub fn update_lod_tiles(
     let terrain_count = terrain_queries.p0().iter().count().max(1);
 
     let mut terrains = terrain_queries.p0();
+    {
     for (
         terrain,
         hf,
@@ -3101,16 +3102,17 @@ pub fn update_lod_tiles(
             },
         );
     }
-    drop(terrains);
+    }
 
     let mut looks = terrain_queries.p1();
+    {
     for &(entity, edges) in stitch_updates.iter() {
         if let Ok(mut look) = looks.get_mut(entity) {
             set_param(&mut look, "stitch_edges", ParamValue::Vec4(edges));
             stitch_applied.insert(entity, edges);
         }
     }
-    drop(looks);
+    }
 
     if !stitch_applied.is_empty() {
         let mut terrains = terrain_queries.p0();
@@ -3590,8 +3592,6 @@ mod draw_partition_tests {
         set_param(&mut shader_look, "map_texel_size_m", ParamValue::F32(7.0));
         set_param(&mut shader_look, "derived_surface_on", ParamValue::F32(1.0));
         set_param(&mut shader_look, "derived_normal_on", ParamValue::F32(1.0));
-        drop(tile_entity);
-
         let mut tiles = LodTiles::default();
         tiles.tiles.insert(
             QuadCoord::ROOT,

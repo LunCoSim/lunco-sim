@@ -320,9 +320,7 @@ fn nearest_grid(
         if grids.contains(&current) {
             return Some(current);
         }
-        let Some(parent) = child_of.get(&current).copied() else {
-            return None;
-        };
+        let parent = child_of.get(&current).copied()?;
         current = parent;
     }
     None
@@ -380,7 +378,7 @@ fn disambiguate_labels(
 
     let mut labels = HashMap::new();
     for (base, mut members) in groups {
-        members.sort_by(|(_, a), (_, b)| a.cmp(b));
+        members.sort_by_key(|(_, a)| *a);
         if members.len() == 1 {
             labels.insert(members[0].0, base.to_string());
         } else {
@@ -790,158 +788,6 @@ pub(crate) fn on_twin_closed(trigger: On<TwinClosed>, mut view: ResMut<EntityTre
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[derive(Resource, Default)]
-    struct GateRuns(u32);
-
-    fn count_gate_run(mut runs: ResMut<GateRuns>) {
-        runs.0 += 1;
-    }
-
-    #[test]
-    fn topology_gate_rebuilds_when_a_named_selectable_arrives_after_initial_fill() {
-        let mut app = App::new();
-        app.init_resource::<EntityListSettings>()
-            .init_resource::<EntityTreeView>()
-            .init_resource::<GateRuns>()
-            .add_systems(Update, count_gate_run.run_if(scene_topology_changed));
-
-        app.update();
-        assert_eq!(app.world().resource::<GateRuns>().0, 1);
-
-        app.world_mut()
-            .spawn((Name::new("Rover"), lunco_core::SelectableRoot));
-        app.update();
-
-        assert_eq!(app.world().resource::<GateRuns>().0, 2);
-    }
-
-    #[test]
-    fn duplicate_labels_are_ordered_by_stable_source_key() {
-        let first = Entity::from_raw_u32(1).unwrap();
-        let second = Entity::from_raw_u32(2).unwrap();
-        let named = vec![
-            (second, "Rocker Bogie".to_string(), "/Scene/B".to_string()),
-            (first, "Rocker Bogie".to_string(), "/Scene/A".to_string()),
-        ];
-        let shown = HashMap::from([(first, true), (second, true)]);
-
-        let labels = disambiguate_labels(&named, &shown);
-
-        assert_eq!(labels[&first], "Rocker Bogie (1)");
-        assert_eq!(labels[&second], "Rocker Bogie (2)");
-    }
-
-    #[test]
-    fn hidden_duplicates_do_not_change_visible_labels() {
-        let visible = Entity::from_raw_u32(1).unwrap();
-        let hidden = Entity::from_raw_u32(2).unwrap();
-        let named = vec![
-            (visible, "Antenna".to_string(), "/Scene/A".to_string()),
-            (hidden, "Antenna".to_string(), "/Scene/B".to_string()),
-        ];
-        let shown = HashMap::from([(visible, true), (hidden, false)]);
-
-        let labels = disambiguate_labels(&named, &shown);
-
-        assert_eq!(labels[&visible], "Antenna");
-        assert!(!labels.contains_key(&hidden));
-    }
-
-    #[test]
-    fn missing_grid_scope_uses_the_documented_current_default() {
-        assert_eq!(entity_grid_scope(None), Ok(EntityGridScope::Current));
-    }
-
-    #[test]
-    fn grid_scope_accepts_only_the_canonical_values() {
-        assert_eq!(
-            parse_entity_grid_scope(&lunco_workspace::TwinSettingValue::Text("current".into())),
-            Ok(EntityGridScope::Current)
-        );
-        assert_eq!(
-            parse_entity_grid_scope(&lunco_workspace::TwinSettingValue::Text("all".into())),
-            Ok(EntityGridScope::All)
-        );
-        assert!(parse_entity_grid_scope(&lunco_workspace::TwinSettingValue::Bool(true)).is_err());
-        assert!(
-            parse_entity_grid_scope(&lunco_workspace::TwinSettingValue::Text("other".into()))
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn nearest_grid_walks_through_unnamed_wrappers() {
-        let grid = Entity::from_raw_u32(1).unwrap();
-        let other_grid = Entity::from_raw_u32(4).unwrap();
-        let wrapper = Entity::from_raw_u32(2).unwrap();
-        let entity = Entity::from_raw_u32(3).unwrap();
-        let other_entity = Entity::from_raw_u32(5).unwrap();
-        let parents = HashMap::from([(wrapper, grid), (entity, wrapper)]);
-        let other_parents = HashMap::from([(other_entity, other_grid)]);
-        let grids = HashSet::from([grid, other_grid]);
-
-        assert_eq!(nearest_grid(entity, &parents, &grids), Some(grid));
-        assert!(in_scope(
-            entity,
-            GridScopeState {
-                scope: EntityGridScope::Current,
-                active_twin: None,
-                current_grid: Some(grid),
-            },
-            &parents,
-            &grids,
-        ));
-        assert!(!in_scope(
-            other_entity,
-            GridScopeState {
-                scope: EntityGridScope::Current,
-                active_twin: None,
-                current_grid: Some(grid),
-            },
-            &other_parents,
-            &grids,
-        ));
-        assert!(in_scope(
-            other_entity,
-            GridScopeState {
-                scope: EntityGridScope::All,
-                active_twin: None,
-                current_grid: Some(grid),
-            },
-            &other_parents,
-            &grids,
-        ));
-    }
-
-    #[test]
-    fn active_twin_close_clears_derived_scope_state() {
-        let mut app = App::new();
-        app.init_resource::<EntityTreeView>()
-            .add_observer(on_twin_closed);
-        {
-            let mut view = app.world_mut().resource_mut::<EntityTreeView>();
-            view.built = true;
-            view.active_twin = Some(lunco_workspace::TwinId::new(7));
-            view.scope_error = Some("stale".into());
-        }
-
-        app.world_mut().trigger(TwinClosed {
-            twin: lunco_workspace::TwinId::new(7),
-            root: std::path::PathBuf::from("/outgoing"),
-            was_active: true,
-        });
-
-        let view = app.world().resource::<EntityTreeView>();
-        assert!(!view.built);
-        assert_eq!(view.active_twin, None);
-        assert_eq!(view.scope_error, None);
-    }
-}
-
 /// Entity list panel — hierarchy tree of scene entities.
 pub struct EntityList;
 
@@ -1150,5 +996,157 @@ fn entity_list_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
                 distance: 0.0,
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Resource, Default)]
+    struct GateRuns(u32);
+
+    fn count_gate_run(mut runs: ResMut<GateRuns>) {
+        runs.0 += 1;
+    }
+
+    #[test]
+    fn topology_gate_rebuilds_when_a_named_selectable_arrives_after_initial_fill() {
+        let mut app = App::new();
+        app.init_resource::<EntityListSettings>()
+            .init_resource::<EntityTreeView>()
+            .init_resource::<GateRuns>()
+            .add_systems(Update, count_gate_run.run_if(scene_topology_changed));
+
+        app.update();
+        assert_eq!(app.world().resource::<GateRuns>().0, 1);
+
+        app.world_mut()
+            .spawn((Name::new("Rover"), lunco_core::SelectableRoot));
+        app.update();
+
+        assert_eq!(app.world().resource::<GateRuns>().0, 2);
+    }
+
+    #[test]
+    fn duplicate_labels_are_ordered_by_stable_source_key() {
+        let first = Entity::from_raw_u32(1).unwrap();
+        let second = Entity::from_raw_u32(2).unwrap();
+        let named = vec![
+            (second, "Rocker Bogie".to_string(), "/Scene/B".to_string()),
+            (first, "Rocker Bogie".to_string(), "/Scene/A".to_string()),
+        ];
+        let shown = HashMap::from([(first, true), (second, true)]);
+
+        let labels = disambiguate_labels(&named, &shown);
+
+        assert_eq!(labels[&first], "Rocker Bogie (1)");
+        assert_eq!(labels[&second], "Rocker Bogie (2)");
+    }
+
+    #[test]
+    fn hidden_duplicates_do_not_change_visible_labels() {
+        let visible = Entity::from_raw_u32(1).unwrap();
+        let hidden = Entity::from_raw_u32(2).unwrap();
+        let named = vec![
+            (visible, "Antenna".to_string(), "/Scene/A".to_string()),
+            (hidden, "Antenna".to_string(), "/Scene/B".to_string()),
+        ];
+        let shown = HashMap::from([(visible, true), (hidden, false)]);
+
+        let labels = disambiguate_labels(&named, &shown);
+
+        assert_eq!(labels[&visible], "Antenna");
+        assert!(!labels.contains_key(&hidden));
+    }
+
+    #[test]
+    fn missing_grid_scope_uses_the_documented_current_default() {
+        assert_eq!(entity_grid_scope(None), Ok(EntityGridScope::Current));
+    }
+
+    #[test]
+    fn grid_scope_accepts_only_the_canonical_values() {
+        assert_eq!(
+            parse_entity_grid_scope(&lunco_workspace::TwinSettingValue::Text("current".into())),
+            Ok(EntityGridScope::Current)
+        );
+        assert_eq!(
+            parse_entity_grid_scope(&lunco_workspace::TwinSettingValue::Text("all".into())),
+            Ok(EntityGridScope::All)
+        );
+        assert!(parse_entity_grid_scope(&lunco_workspace::TwinSettingValue::Bool(true)).is_err());
+        assert!(
+            parse_entity_grid_scope(&lunco_workspace::TwinSettingValue::Text("other".into()))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn nearest_grid_walks_through_unnamed_wrappers() {
+        let grid = Entity::from_raw_u32(1).unwrap();
+        let other_grid = Entity::from_raw_u32(4).unwrap();
+        let wrapper = Entity::from_raw_u32(2).unwrap();
+        let entity = Entity::from_raw_u32(3).unwrap();
+        let other_entity = Entity::from_raw_u32(5).unwrap();
+        let parents = HashMap::from([(wrapper, grid), (entity, wrapper)]);
+        let other_parents = HashMap::from([(other_entity, other_grid)]);
+        let grids = HashSet::from([grid, other_grid]);
+
+        assert_eq!(nearest_grid(entity, &parents, &grids), Some(grid));
+        assert!(in_scope(
+            entity,
+            GridScopeState {
+                scope: EntityGridScope::Current,
+                active_twin: None,
+                current_grid: Some(grid),
+            },
+            &parents,
+            &grids,
+        ));
+        assert!(!in_scope(
+            other_entity,
+            GridScopeState {
+                scope: EntityGridScope::Current,
+                active_twin: None,
+                current_grid: Some(grid),
+            },
+            &other_parents,
+            &grids,
+        ));
+        assert!(in_scope(
+            other_entity,
+            GridScopeState {
+                scope: EntityGridScope::All,
+                active_twin: None,
+                current_grid: Some(grid),
+            },
+            &other_parents,
+            &grids,
+        ));
+    }
+
+    #[test]
+    fn active_twin_close_clears_derived_scope_state() {
+        let mut app = App::new();
+        app.init_resource::<EntityTreeView>()
+            .add_observer(on_twin_closed);
+        {
+            let mut view = app.world_mut().resource_mut::<EntityTreeView>();
+            view.built = true;
+            view.active_twin = Some(lunco_workspace::TwinId::new(7));
+            view.scope_error = Some("stale".into());
+        }
+
+        app.world_mut().trigger(TwinClosed {
+            twin: lunco_workspace::TwinId::new(7),
+            root: std::path::PathBuf::from("/outgoing"),
+            was_active: true,
+        });
+
+        let view = app.world().resource::<EntityTreeView>();
+        assert!(!view.built);
+        assert_eq!(view.active_twin, None);
+        assert_eq!(view.scope_error, None);
     }
 }

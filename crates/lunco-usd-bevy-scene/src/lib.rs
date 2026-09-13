@@ -273,6 +273,7 @@ pub fn instance_key_from_projection(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::system::SystemState;
 
     #[test]
     fn scene_root_ancestor_finds_root_and_rejects_missing_parent() {
@@ -283,9 +284,12 @@ mod tests {
         let missing_parent = world
             .spawn(ChildOf(Entity::from_raw_u32(999_999).unwrap()))
             .id();
-        let mut scene_roots = world.query_filtered::<(), With<UsdSceneRoot>>();
-        let mut child_of = world.query::<&ChildOf>();
-        let mut entities = world.query::<Entity>();
+        let mut state: SystemState<(
+            Query<(), With<UsdSceneRoot>>,
+            Query<&ChildOf>,
+            Query<Entity>,
+        )> = SystemState::new(&mut world);
+        let (scene_roots, child_of, entities) = state.get(&world).expect("valid queries");
 
         assert_eq!(
             scene_root_ancestor(child, &scene_roots, &child_of, &entities,),
@@ -307,8 +311,9 @@ mod tests {
         let root = world.spawn(UsdPreviewOnly).id();
         let child = world.spawn(ChildOf(root)).id();
         let detached = world.spawn_empty().id();
-        let mut child_of = world.query::<&ChildOf>();
-        let mut preview_roots = world.query_filtered::<(), With<UsdPreviewOnly>>();
+        let mut state: SystemState<(Query<&ChildOf>, Query<(), With<UsdPreviewOnly>>)> =
+            SystemState::new(&mut world);
+        let (child_of, preview_roots) = state.get(&world).expect("valid queries");
 
         assert!(is_preview_only(child, &child_of, &preview_roots));
         assert!(!is_preview_only(detached, &child_of, &preview_roots));

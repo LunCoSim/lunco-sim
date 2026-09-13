@@ -30,7 +30,7 @@ use lunco_cosim::{SUN_MOUNT_X_CONNECTOR, SUN_MOUNT_Y_CONNECTOR, SUN_MOUNT_Z_CONN
 /// Render lights and co-simulation ports are projections of this resource;
 /// neither is read back as a source of truth. `None` means the provider has not
 /// produced a valid direction for the current scene/epoch.
-#[derive(Resource, Debug, Clone, PartialEq)]
+#[derive(Resource, Debug, Clone, PartialEq, Default)]
 pub struct SunState {
     /// Unit direction from the observed site toward the sun, in the active
     /// site's ENU axes. Consumers must project it through the bound active
@@ -40,16 +40,6 @@ pub struct SunState {
     pub irradiance_lux: Option<f32>,
     /// Monotonic semantic revision for change-gated projections.
     pub revision: u64,
-}
-
-impl Default for SunState {
-    fn default() -> Self {
-        Self {
-            direction_to_sun: None,
-            irradiance_lux: None,
-            revision: 0,
-        }
-    }
 }
 
 impl SunState {
@@ -106,20 +96,11 @@ impl SunState {
 /// light's finalized `GlobalTransform`, so horizon baking and shader wiring
 /// consume the same render-space direction as Bevy's shadow extractor. It is
 /// never used as a provider input.
-#[derive(Resource, Debug, Clone, Copy, PartialEq)]
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Default)]
 pub struct SunRenderState {
     /// Unit direction toward the Sun in the canonical render/world frame.
     pub direction_to_sun_world: Option<Vec3>,
     pub revision: u64,
-}
-
-impl Default for SunRenderState {
-    fn default() -> Self {
-        Self {
-            direction_to_sun_world: None,
-            revision: 0,
-        }
-    }
 }
 
 impl SunRenderState {
@@ -430,7 +411,6 @@ pub fn project_sun_state_to_light(
         }
         return;
     }
-    drop(suns);
     let mut diagnostics = diagnostics;
     replace_sun_diagnostic(&mut diagnostics, None);
     let Some(direction_to_sun) = sun.as_deref().and_then(|state| state.direction_to_sun) else {

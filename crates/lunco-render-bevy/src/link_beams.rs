@@ -87,7 +87,6 @@ fn authored_binary_param(params: Option<&ScriptParams>, key: &str) -> Option<boo
 ///
 /// When a camera is available this replaces `stubLen`; the authored `stubLen`
 /// is used when there is no view-relative scale to measure.
-
 /// Tags a spawned beam with its peer and the state it currently shows, so the reconciler
 /// can recolour it on a flip or despawn it when the peer drops out — and so
 /// [`aim_link_beams`] can re-point it every frame without consulting anything else.

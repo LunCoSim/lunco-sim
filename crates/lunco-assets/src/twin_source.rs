@@ -186,7 +186,7 @@ fn resolve_twin_relative_path_with_cache(
         return Ok(Some(cached.clone()));
     }
     #[cfg(not(target_arch = "wasm32"))]
-    match crate::existing_path_within_root(&shared, relative) {
+    match crate::existing_path_within_root(shared, relative) {
         Ok(Some(path)) => return Ok(Some(path)),
         Ok(None) => {}
         Err(error) => {
@@ -518,10 +518,10 @@ impl TwinRoots {
 fn storage_read_error(path: &Path, error: lunco_storage::StorageError) -> AssetReaderError {
     match error {
         lunco_storage::StorageError::NotFound => AssetReaderError::NotFound(path.to_path_buf()),
-        error => AssetReaderError::from(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("could not read Twin asset `{}`: {error}", path.display()),
-        )),
+        error => AssetReaderError::from(std::io::Error::other(format!(
+            "could not read Twin asset `{}`: {error}",
+            path.display()
+        ))),
     }
 }
 
@@ -591,10 +591,7 @@ impl TwinReader {
 }
 
 fn asset_reader_error(error: TwinRootsError) -> AssetReaderError {
-    AssetReaderError::from(std::io::Error::new(
-        std::io::ErrorKind::Other,
-        error.to_string(),
-    ))
+    AssetReaderError::from(std::io::Error::other(error.to_string()))
 }
 
 impl AssetReader for TwinReader {
@@ -805,7 +802,7 @@ mod tests {
 
         assert_eq!(
             roots.resolve_file(&name, Path::new("terrain/luna2")),
-            Ok(Some(cached.clone())),
+            Ok(Some(cached)),
             "logical Twin paths must resolve downloaded assets through the cache"
         );
 
@@ -836,7 +833,7 @@ mod tests {
 
         assert_eq!(
             roots.resolve_directory(&name, Path::new("terrain/luna2")),
-            Ok(Some(cached.clone())),
+            Ok(Some(cached)),
             "processed Twin directories must resolve through the asset boundary"
         );
     }

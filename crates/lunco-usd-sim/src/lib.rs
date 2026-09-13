@@ -115,7 +115,6 @@ use wheel_params::{SuspensionParams, WheelParams};
 /// - Otherwise → raycast path.
 ///
 /// No custom `lunco:` tokens drive this dispatch.
-
 pub struct UsdSimPlugin;
 
 const FORCE_ACTUATOR_API: &str = "LunCoForceActuatorAPI";

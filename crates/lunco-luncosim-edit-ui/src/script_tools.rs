@@ -258,7 +258,7 @@ fn scene_tool_context(
             ));
         }
     }
-    if let Some(path) = q_prim.get(click.entity).ok() {
+    if let Ok(path) = q_prim.get(click.entity) {
         context.push((
             "hit_path".to_string(),
             TelemetryValue::String(path.path.clone()),

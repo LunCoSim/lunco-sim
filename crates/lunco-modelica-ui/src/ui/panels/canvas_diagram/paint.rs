@@ -65,24 +65,6 @@ pub(super) fn wire_color_for(connector_type: &str) -> egui::Color32 {
     wire_style_for(connector_type).color
 }
 
-#[cfg(test)]
-mod tests {
-    use super::wire_style_for;
-
-    #[test]
-    fn physical_connector_styles_are_distinct_and_named() {
-        let electrical = wire_style_for("Modelica.Electrical.Analog.Interfaces.Pin");
-        let mechanical = wire_style_for("Modelica.Mechanics.Rotational.Interfaces.Flange_a");
-        let thermal = wire_style_for("Modelica.Thermal.HeatTransfer.Interfaces.HeatPort_a");
-
-        assert_eq!(electrical.domain, "electrical");
-        assert_eq!(mechanical.domain, "mechanical");
-        assert_eq!(thermal.domain, "thermal");
-        assert_ne!(electrical.color, mechanical.color);
-        assert_ne!(mechanical.color, thermal.color);
-    }
-}
-
 /// Perpendicular distance from point `p` to segment `a`→`b`, in
 /// screen pixels. Used for hit-testing wire hover.
 pub(super) fn dist_point_to_segment(p: egui::Pos2, a: egui::Pos2, b: egui::Pos2) -> f32 {
@@ -218,4 +200,22 @@ pub(super) fn segment_dist_sq(
     let dx = p.x - foot_x;
     let dy = p.y - foot_y;
     dx * dx + dy * dy
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wire_style_for;
+
+    #[test]
+    fn physical_connector_styles_are_distinct_and_named() {
+        let electrical = wire_style_for("Modelica.Electrical.Analog.Interfaces.Pin");
+        let mechanical = wire_style_for("Modelica.Mechanics.Rotational.Interfaces.Flange_a");
+        let thermal = wire_style_for("Modelica.Thermal.HeatTransfer.Interfaces.HeatPort_a");
+
+        assert_eq!(electrical.domain, "electrical");
+        assert_eq!(mechanical.domain, "mechanical");
+        assert_eq!(thermal.domain, "thermal");
+        assert_ne!(electrical.color, mechanical.color);
+        assert_ne!(mechanical.color, thermal.color);
+    }
 }

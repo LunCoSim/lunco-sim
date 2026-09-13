@@ -83,7 +83,7 @@ impl AssetLoader for UsdLoader {
         };
 
         let recipe = fetch_layer_closure(load_context, &root_asset_path, bytes).await?;
-        Ok(UsdStageAsset::from_recipe(recipe)?)
+        UsdStageAsset::from_recipe(recipe)
     }
 
     fn extensions(&self) -> &[&str] {

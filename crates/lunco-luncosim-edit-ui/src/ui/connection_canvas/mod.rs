@@ -210,10 +210,7 @@ pub fn produce_usd_canvas(
     let open: std::collections::HashSet<_> = viewport.sessions().map(|s| s.id()).collect();
     views.sessions.retain(|preview, _| open.contains(preview));
     for session in viewport.sessions() {
-        let state = views
-            .sessions
-            .entry(session.id())
-            .or_insert_with(UsdCanvasSessionState::default);
+        let state = views.sessions.entry(session.id()).or_default();
         produce_usd_canvas_session(session, &q, &q_parents, &stages, &mut canonical, state);
     }
 }

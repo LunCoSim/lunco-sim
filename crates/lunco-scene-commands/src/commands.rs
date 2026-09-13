@@ -2529,23 +2529,30 @@ pub fn on_set_object_property(
         key => {
             // param/color → set the named value on the entity's shader look. The
             // binder swaps in the material for the new look (`Changed<ShaderLook>`).
-            let Ok(mut look) = q_shader_look.get_mut(target) else {
-                warn!(
-                    "SET_PROPERTY: entity {} has no shader look — set 'shader' first",
-                    cmd.entity_id
-                );
-                return;
-            };
-            // USD authors params camelCase, WGSL declares them snake_case.
-            let name = lunco_materials::to_snake_case(key);
-            let schema = shader_schema(&look.shader, &asset_server, &shaders);
-            match shader_param_value(schema.as_ref(), &name, &cmd.value) {
-                Some(v) => {
-                    look.values.insert(name.clone(), v);
-                    drop(look);
-                    author_shader_parameter_to_usd(&mut commands, target, name, v);
+            let authored = {
+                let Ok(mut look) = q_shader_look.get_mut(target) else {
+                    warn!(
+                        "SET_PROPERTY: entity {} has no shader look — set 'shader' first",
+                        cmd.entity_id
+                    );
+                    return;
+                };
+                // USD authors params camelCase, WGSL declares them snake_case.
+                let name = lunco_materials::to_snake_case(key);
+                let schema = shader_schema(&look.shader, &asset_server, &shaders);
+                match shader_param_value(schema.as_ref(), &name, &cmd.value) {
+                    Some(v) => {
+                        look.values.insert(name.clone(), v);
+                        Some((name, v))
+                    }
+                    None => {
+                        warn!("SET_PROPERTY: unknown property '{}'", key);
+                        None
+                    }
                 }
-                None => warn!("SET_PROPERTY: unknown property '{}'", key),
+            };
+            if let Some((name, value)) = authored {
+                author_shader_parameter_to_usd(&mut commands, target, name, value);
             }
         }
     }

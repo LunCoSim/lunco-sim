@@ -448,7 +448,7 @@ fn shipped_default_policy_emits_visual_and_executable_topology() {
         .expect("the Rhai-owned source and visual annotations remain valid Modelica");
     assert!(
         lunco_modelica_core::diagram::find_class_by_qualified_name(&ast, "Rig_System")
-            .and_then(|class| {
+            .map(|class| {
                 assert!(
                     lunco_modelica_core::annotations::extract_icon(&class.annotation).is_some(),
                     "the generated root needs a compact standard Icon"
@@ -482,7 +482,6 @@ fn shipped_default_policy_emits_visual_and_executable_topology() {
                         }),
                     "root members must be placed generated units"
                 );
-                Some(())
             })
             .is_some(),
         "the policy must emit a discoverable root visual hierarchy"

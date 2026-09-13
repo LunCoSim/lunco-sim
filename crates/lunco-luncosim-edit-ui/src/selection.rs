@@ -1133,7 +1133,7 @@ mod tests {
             .world_mut()
             .spawn((
                 UsdPrimPath {
-                    stage_handle: stage_a.clone(),
+                    stage_handle: stage_a,
                     path: "/World/Chassis".into(),
                 },
                 ChildOf(root_a),

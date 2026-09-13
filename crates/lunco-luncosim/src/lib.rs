@@ -2331,6 +2331,7 @@ lunco_core::register_commands!(on_set_rhai_policy);
 mod policy_projection_tests {
     use super::{append_usd_policies, AuthoredPolicy};
     use lunco_usd_bevy_core::canonical::{CanonicalStage, CanonicalStages};
+    use lunco_usd_bevy_core::UsdRead;
     use lunco_usd_core::StageRecipe;
 
     fn extract_usd_policies(canonical: &CanonicalStages) -> Vec<AuthoredPolicy> {

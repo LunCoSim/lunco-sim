@@ -1257,7 +1257,6 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
             params.insert("value".into(), value);
             let result = bridge_core::cmd(&RhaiBuilder, "SetTwinSetting", map_to_json(params));
             result
-                .clone()
                 .try_cast::<Map>()
                 .and_then(|map| map.get("ok").and_then(|value| value.as_bool().ok()))
                 .unwrap_or(false)
@@ -2088,7 +2087,7 @@ impl crate::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                 eval_ast,
                 self_gid,
                 &mut st.this,
-                evt.clone(),
+                evt,
             )
         } else {
             None
