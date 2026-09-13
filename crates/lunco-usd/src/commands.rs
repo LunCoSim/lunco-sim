@@ -482,10 +482,9 @@ impl Plugin for UsdCommandsPlugin {
 fn open_usd_docs_on_twin_asset_mounted(
     trigger: On<lunco_assets::TwinAssetMounted>,
     workspace: Res<WorkspaceResource>,
-    // Optional because headless hosts may not install the asset pipeline. The
-    // authoritative doc-backed mount below is the only production path; the
-    // test-only branch preserves this observer's decision coverage in
-    // MinimalPlugins apps without pretending to mount a scene there.
+    // Optional because a document-only host may not install the asset pipeline.
+    // The authoritative doc-backed mount below is the only scene-loading path;
+    // without it, report the missing production prerequisite visibly.
     asset_server: Option<Res<AssetServer>>,
     usd_sources: Option<Res<Assets<UsdSourceText>>>,
     mut pending_twin: ResMut<crate::twin_projection::PendingTwinDocs>,
@@ -537,14 +536,10 @@ fn open_usd_docs_on_twin_asset_mounted(
                     .get_load_state(handle.id())
                     .is_some_and(|state| state.is_failed());
                 let source_id = handle.id();
-                #[cfg(test)]
-                let pending_twin_name = twin_name.clone();
-                #[cfg(not(test))]
-                let pending_twin_name = twin_name;
                 pending_twin.push(
                     handle,
                     source_ready,
-                    pending_twin_name,
+                    twin_name.clone(),
                     scene.to_string(),
                     twin.root.join(scene),
                     twin.root.clone(),
@@ -556,20 +551,6 @@ fn open_usd_docs_on_twin_asset_mounted(
                     );
                 }
             }
-            #[cfg(test)]
-            if asset_server.is_none() || usd_sources.is_none() {
-                info!(
-                    "[twin:test] recording starting scene `twin://{}/{}` (twin `{}`)",
-                    twin_name,
-                    scene,
-                    twin.root.display()
-                );
-                commands.trigger(LoadScene {
-                    path: scene_uri,
-                    root_prim: String::new(),
-                });
-            }
-            #[cfg(not(test))]
             if asset_server.is_none() || usd_sources.is_none() {
                 let detail = format!(
                     "cannot load `{}`: the USD asset pipeline is not installed",
@@ -4514,216 +4495,6 @@ mod tests {
                 }
             }
         });
-    }
-
-    /// What the twin-open observer decided to do with the viewport.
-    #[derive(Resource, Default)]
-    struct SceneCmds {
-        /// `LoadScene.path` values emitted (one per scene loaded).
-        loads: Vec<String>,
-        /// Count of `ClearScene` emitted.
-        clears: usize,
-    }
-
-    /// Build a temp Twin folder (two `.usda`, one `.mo`, given
-    /// `twin.toml`), drive a `TwinAdded`, and report which scene
-    /// command the observer emitted. `LoadScene`/`ClearScene` handlers
-    /// live in `UsdSimPlugin` (not added here); counting observers
-    /// capture the observer's decision directly.
-    #[cfg(test)]
-    fn scene_cmds_for_twin(toml_body: &str, dir_name: &str) -> SceneCmds {
-        use lunco_twin::TwinMode;
-        use lunco_workspace::WorkspaceResource;
-
-        let tmp = std::env::temp_dir().join(dir_name);
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
-        std::fs::write(tmp.join("twin.toml"), toml_body).unwrap();
-        std::fs::write(tmp.join("scene_a.usda"), "#usda 1.0\ndef Xform \"A\" {}\n").unwrap();
-        std::fs::write(tmp.join("scene_b.usda"), "#usda 1.0\ndef Xform \"B\" {}\n").unwrap();
-        std::fs::write(
-            tmp.join("controller.mo"),
-            "model Controller end Controller;\n",
-        )
-        .unwrap();
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.init_resource::<WorkspaceResource>();
-        app.init_resource::<lunco_assets::twin_source::TwinRoots>();
-        app.add_plugins(UsdCommandsPlugin);
-        app.init_resource::<SceneCmds>();
-        app.add_observer(|t: On<LoadScene>, mut c: ResMut<SceneCmds>| {
-            c.loads.push(t.event().path.clone());
-        });
-        app.add_observer(|_t: On<ClearScene>, mut c: ResMut<SceneCmds>| {
-            c.clears += 1;
-        });
-        app.update();
-
-        let twin = match TwinMode::open(&tmp).expect("twin opens") {
-            TwinMode::Twin(t) | TwinMode::Folder(t) => t,
-            other => panic!("expected Twin/Folder variant, got {:?}", other),
-        };
-        let twin_id = app
-            .world_mut()
-            .resource_mut::<WorkspaceResource>()
-            .add_twin(twin);
-        app.world_mut()
-            .trigger(lunco_workspace::TwinAdded { twin: twin_id });
-        for _ in 0..4 {
-            app.update();
-        }
-        let out = std::mem::take(app.world_mut().resource_mut::<SceneCmds>().as_mut());
-        let _ = std::fs::remove_dir_all(&tmp);
-        out
-    }
-
-    /// Drive `TwinAdded` for a folder containing **no `.usda` files**
-    /// (and no `twin.toml`), returning the observer's decision.
-    #[cfg(test)]
-    fn scene_cmds_for_empty_folder(dir_name: &str) -> SceneCmds {
-        use lunco_twin::TwinMode;
-        use lunco_workspace::WorkspaceResource;
-
-        let tmp = std::env::temp_dir().join(dir_name);
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
-        std::fs::write(tmp.join("notes.txt"), "no scenes here\n").unwrap();
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.init_resource::<WorkspaceResource>();
-        app.init_resource::<lunco_assets::twin_source::TwinRoots>();
-        app.add_plugins(UsdCommandsPlugin);
-        app.init_resource::<SceneCmds>();
-        app.add_observer(|t: On<LoadScene>, mut c: ResMut<SceneCmds>| {
-            c.loads.push(t.event().path.clone());
-        });
-        app.add_observer(|_t: On<ClearScene>, mut c: ResMut<SceneCmds>| {
-            c.clears += 1;
-        });
-        app.update();
-
-        let twin = match TwinMode::open(&tmp).expect("folder opens") {
-            TwinMode::Twin(t) | TwinMode::Folder(t) => t,
-            other => panic!("expected Folder variant, got {:?}", other),
-        };
-        let twin_id = app
-            .world_mut()
-            .resource_mut::<WorkspaceResource>()
-            .add_twin(twin);
-        app.world_mut()
-            .trigger(lunco_workspace::TwinAdded { twin: twin_id });
-        for _ in 0..4 {
-            app.update();
-        }
-        let out = std::mem::take(app.world_mut().resource_mut::<SceneCmds>().as_mut());
-        let _ = std::fs::remove_dir_all(&tmp);
-        out
-    }
-
-    #[test]
-    fn twin_added_loads_only_declared_starting_scene() {
-        // `[usd] default_scene` names the one scene to load (clear +
-        // replace). scene_b is an asset library — must NOT load.
-        let cmds = scene_cmds_for_twin(
-            "name = \"t\"\nversion = \"0.1.0\"\n\n[usd]\ndefault_scene = \"scene_a.usda\"\n",
-            "lunco_usd_twin_starting_scene_test",
-        );
-        assert_eq!(cmds.loads.len(), 1, "exactly one scene loaded");
-        assert!(
-            cmds.loads[0].ends_with("scene_a.usda"),
-            "the declared starting scene, got {:?}",
-            cmds.loads
-        );
-        assert_eq!(
-            cmds.clears, 0,
-            "LoadScene clears internally — no extra ClearScene"
-        );
-    }
-
-    #[test]
-    fn twin_added_without_default_scene_clears_viewport() {
-        // No `default_scene` (also covers a folder with no `.usda`):
-        // clear to an empty viewport, load nothing.
-        let cmds = scene_cmds_for_twin(
-            "name = \"t\"\nversion = \"0.1.0\"\n",
-            "lunco_usd_twin_no_scene_test",
-        );
-        assert!(
-            cmds.loads.is_empty(),
-            "no scene loaded, got {:?}",
-            cmds.loads
-        );
-        assert_eq!(cmds.clears, 1, "viewport cleared to empty");
-    }
-
-    #[test]
-    fn open_folder_with_no_usda_shows_nothing() {
-        // Folder with no `.usda` and no `twin.toml`: clear to empty,
-        // load nothing — the viewport must show nothing.
-        let cmds = scene_cmds_for_empty_folder("lunco_usd_empty_folder_test");
-        assert!(
-            cmds.loads.is_empty(),
-            "nothing to load, got {:?}",
-            cmds.loads
-        );
-        assert_eq!(cmds.clears, 1, "empty folder clears the viewport");
-    }
-
-    /// Opening a folder with NO `twin.toml` (the "wrong folder" mistake)
-    /// must record a diagnostic reason naming that cause, so the viewport
-    /// placeholder can tell the user WHY it is empty instead of a generic
-    /// hint. Drives the REAL `open_usd_docs_on_twin_asset_mounted` observer.
-    #[test]
-    fn folder_with_no_manifest_records_wrong_folder_reason() {
-        use lunco_twin::TwinMode;
-        use lunco_workspace::WorkspaceResource;
-
-        let tmp = std::env::temp_dir().join("lunco_usd_no_manifest_reason");
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
-        std::fs::write(tmp.join("readme.txt"), "not a twin\n").unwrap();
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.init_resource::<WorkspaceResource>();
-        app.init_resource::<lunco_assets::twin_source::TwinRoots>();
-        app.add_plugins(UsdCommandsPlugin);
-        app.update();
-
-        let twin = match TwinMode::open(&tmp).expect("folder opens") {
-            TwinMode::Folder(t) => t,
-            other => panic!("a folder with no twin.toml is Folder, got {:?}", other),
-        };
-        let twin_id = app
-            .world_mut()
-            .resource_mut::<WorkspaceResource>()
-            .add_twin(twin);
-        app.world_mut()
-            .trigger(lunco_workspace::TwinAdded { twin: twin_id });
-        for _ in 0..4 {
-            app.update();
-        }
-
-        let reason = app
-            .world()
-            .get_resource::<EmptyViewportReason>()
-            .expect("EmptyViewportReason is always present")
-            .0
-            .as_ref()
-            .expect("a no-twin.toml folder must record a reason");
-        assert!(
-            reason.contains("no twin.toml"),
-            "reason should name the missing manifest, got: {reason}"
-        );
-        assert!(
-            reason.contains("wrong folder"),
-            "reason should hint the likely cause, got: {reason}"
-        );
-
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

@@ -81,6 +81,9 @@ document ownership available to the asset differs.
   `lunco-usd/src/live_consume.rs`: `sync_twin_overlays` publishes the composed
   `base ⊕ runtime` source and applies incremental authored changes; the live
   consumer drains the OpenUSD change sink and reconciles the ECS projection.
+- The public Twin-start decision is covered by the existing
+  `lunco-usd/tests/twin_scene_commands.rs` integration target, which installs
+  the same asset-source and USD loaders as production.
 
 **This is already "USD is source of truth → project to ECS."**
 
