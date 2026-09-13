@@ -31,16 +31,20 @@ use std::io;
 /// A semantic action emitted by an authored runtime surface.
 ///
 /// HUI deliberately passes only the pressed element to a bound function. The
-/// bridge parses the authored action into a closed semantic enum and turns that
-/// callback into a typed event, so application code never needs to inspect HTML
-/// ids or mutate simulation state from a template callback.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// bridge keeps built-in actions typed and transports Twin-authored identifiers
+/// as typed events, so application code never needs to inspect HTML ids or
+/// mutate simulation state from a template callback.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum RuntimeUiActionKind {
     ViewSurface,
     ViewBodyMoon,
     ViewBodyEarth,
     DismissTerrainOverlay,
     ToggleCameraPicker,
+    /// A Twin-authored semantic action. The runtime UI layer transports the
+    /// identifier, but does not interpret its domain meaning; Rhai policy owns
+    /// the resulting command or USD edit.
+    Authored(String),
 }
 
 impl RuntimeUiActionKind {
@@ -51,15 +55,18 @@ impl RuntimeUiActionKind {
             "view.body.earth" => Ok(Self::ViewBodyEarth),
             "overlay.terrain.dismiss" => Ok(Self::DismissTerrainOverlay),
             "camera.picker.toggle" => Ok(Self::ToggleCameraPicker),
-            _ => Err(format!("unknown runtime UI action `{value}`")),
+            _ if value.trim().is_empty() => Err("runtime UI action must not be empty".into()),
+            _ => Ok(Self::Authored(value.to_owned())),
         }
     }
 }
 
-#[derive(Event, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Event, Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RuntimeUiAction {
-    /// Closed semantic action authored by the surface adapter.
+    /// Built-in or Twin-authored semantic action emitted by the surface.
     pub action: RuntimeUiActionKind,
+    /// HUI node that emitted the action.
+    pub source: Entity,
 }
 
 #[derive(Message, Clone, Copy, Debug)]
@@ -123,8 +130,26 @@ pub(crate) fn register_action(
 ) {
     functions.register(
         callback,
-        move |In(_source): In<Entity>, mut world: bevy::ecs::world::DeferredWorld| {
-            world.trigger(RuntimeUiAction { action });
+        move |In(source): In<Entity>, mut world: bevy::ecs::world::DeferredWorld| {
+            world.trigger(RuntimeUiAction {
+                action: action.clone(),
+                source,
+            });
+        },
+    );
+}
+
+/// Bind the HUI `tag:data-action` convention once. The action value is a
+/// dynamic template property, so Twin/Rhai can choose it without adding a
+/// manifest callback or a Rust enum arm.
+pub(crate) fn register_dynamic_action(functions: &mut HtmlFunctions) {
+    functions.register(
+        "runtime_ui_authored_action",
+        |In(source): In<Entity>, mut world: bevy::ecs::world::DeferredWorld| {
+            world.trigger(RuntimeUiAction {
+                action: RuntimeUiActionKind::Authored(String::new()),
+                source,
+            });
         },
     );
 }
@@ -1008,6 +1033,8 @@ pub(crate) fn sync_runtime_ui_manifest(
         error!("runtime UI manifest rejected: {error}");
         return;
     }
+
+    register_dynamic_action(&mut functions);
 
     let ids = manifest
         .surfaces
@@ -2653,10 +2680,13 @@ mod tests {
             }"#,
         )
         .expect("JSON shape should parse");
-        let error = unknown_action
+        unknown_action
             .validate()
-            .expect_err("unsupported action must be rejected");
-        assert!(error.contains("unknown runtime UI action"));
+            .expect("Twin-authored semantic actions must be accepted");
+        assert!(matches!(
+            RuntimeUiActionKind::parse("not.allowed"),
+            Ok(RuntimeUiActionKind::Authored(action)) if action == "not.allowed"
+        ));
     }
 
     #[test]

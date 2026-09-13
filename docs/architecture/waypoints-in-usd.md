@@ -69,10 +69,15 @@ cursor. Physics reports the sensor event; it does not publish a route-specific
 “target reached” fact and it does not decide mission progression.
 
 The route task remains live while the scene is running. Editing point placement,
-point order, the subject relationship, or the program's enabled input is seen
-through the normal USD/program reload path. An unresolved point or subject
-causes a visible safe stop and diagnostic; it is not treated as the origin and
-does not fall back to a vessel-owned route.
+point order, or the subject relationship is observed through the normal USD
+projection path. Those edits update route facts and presentation only; they do
+not re-project or recreate the live route owner, subject, physics, Modelica
+state, or possession. The program's `this.enabled`, cursor, and current point
+are runtime state in the Rhai scenario instance. The authored
+`inputs:enabled` value is only the initial scene policy and is never written
+back when the operator presses F. If a point edit briefly leaves a target
+unprojected, the task waits for the generic projection to settle; it does not
+persist runtime state into USD or emit a false stop.
 
 ## Presentation
 

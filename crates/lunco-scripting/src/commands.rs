@@ -498,7 +498,12 @@ pub fn attach_embedded_scenarios(
             &lunco_core::EmbeddedScenarioSource,
             Option<&ScenarioAssetId>,
         ),
-        Without<ScriptedModel>,
+        // The marker is removed after this system attaches the source, so an
+        // existing model here means the authored program changed in place. The
+        // attach funnel reuses its document id and advances its generation;
+        // ScenarioDriver then performs the normal stop -> compile -> start
+        // transition without recreating the owning USD entity.
+        (),
     >,
     mut registry: ResMut<ScriptRegistry>,
     q_existing: Query<&ScriptedModel>,

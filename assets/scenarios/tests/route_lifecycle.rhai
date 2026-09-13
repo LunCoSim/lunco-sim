@@ -121,6 +121,10 @@ fn on_start(me) {
     this.possessed = 0;
     this.reached = 0;
     this.reached_index = ();
+    this.active_edit = false;
+    this.hold_started = 0;
+    this.program_switch_complete = false;
+    this.program_switch_subject = -1;
 }
 
 fn on_event(me, evt) {
@@ -131,6 +135,7 @@ fn on_event(me, evt) {
         this.reached += 1;
         this.reached_index = evt.value;
     }
+    if evt.name == "program_switch_hold_started" { this.hold_started += 1; }
 }
 
 fn finish(me) {
@@ -169,13 +174,102 @@ fn on_tick(me) {
             "route program uses the sourceAsset-only USD contract"));
         this.checks.push(t_true(true,
             "route program materializes an oriented ribbon from authored points"));
+        let listed = program_editor::list(this.doc, ROUTE);
+        this.checks.push(t_true(listed.ok && listed.programs.len() == 1
+            && listed.programs[0].path == ROUTE + "/Program",
+            "generic program discovery lists the authored executable"));
+        let hud = program_editor::enable_hud(this.doc, ROUTE, "always");
+        this.checks.push(t_true(hud.ok, "Rhai can opt any USD program scope into the standard HUD"));
+        if !hud.ok { finish(this); return; }
+        this.phase = 50;
+        return;
+    }
+
+    if this.phase == 50 {
+        let hud_record = query("QueryUsdPrim", #{
+            doc_id: this.doc,
+            path: ROUTE,
+            attrs: ["lunco:ui:surfaceId", "lunco:ui:visibilityMode"],
+        });
+        if hud_record == () || hud_record.ok == false || hud_record.attrs == ()
+            || hud_record.attrs["lunco:ui:surfaceId"] == ()
+            || hud_record.attrs["lunco:ui:visibilityMode"] == () {
+            return;
+        }
+        this.checks.push(t_true(hud_record != () && hud_record.ok != false
+            && hud_record.attrs["lunco:ui:surfaceId"] == "program-browser"
+            && hud_record.attrs["lunco:ui:visibilityMode"] == "always",
+            "HUD activation is authored through the typed USD document"));
         for check in invalid_edit_checks(this.doc) { this.checks.push(check); }
         this.phase = 1;
         return;
     }
 
     if this.phase == 1 {
+        if !this.program_switch_complete {
+            this.program_switch_subject = find(SUBJECT_PATH);
+            let switched = program_editor::switch_source(
+                this.doc,
+                ROUTE + "/Program",
+                "lunco://scenarios/tests/program_switch_hold.rhai",
+            );
+            if !switched.ok { this.checks.push(t_true(false, switched.error)); finish(this); return; }
+            this.phase = 100;
+            return;
+        }
         emit("scene.pointer", context(this.doc, (), [0.0, 1.0, -32.0]));
+        this.phase = 2;
+        return;
+    }
+
+    if this.phase == 100 {
+        let program = query("QueryUsdPrim", #{
+            doc_id: this.doc,
+            path: ROUTE + "/Program",
+            attrs: ["info:implementationSource", "info:sourceAsset"],
+        });
+        if program == () || program.ok == false || program.attrs == ()
+            || program.attrs["info:sourceAsset"] != "lunco://scenarios/tests/program_switch_hold.rhai"
+            || this.hold_started == 0 {
+            return;
+        }
+        this.checks.push(t_true(true,
+            "runtime USD source switching activates a new authored Rhai program"));
+        this.checks.push(t_true(find(SUBJECT_PATH) == this.program_switch_subject,
+            "switching a program preserves the subject entity identity"));
+        let restored = program_editor::switch_source(
+            this.doc,
+            ROUTE + "/Program",
+            "lunco://scenarios/route_follow.rhai",
+        );
+        if !restored.ok { this.checks.push(t_true(false, restored.error)); finish(this); return; }
+        this.phase = 101;
+        return;
+    }
+
+    if this.phase == 101 {
+        let program = query("QueryUsdPrim", #{
+            doc_id: this.doc,
+            path: ROUTE + "/Program",
+            attrs: ["info:implementationSource", "info:sourceAsset"],
+        });
+        if program == () || program.ok == false || program.attrs == ()
+            || program.attrs["info:sourceAsset"] != "lunco://scenarios/route_follow.rhai" {
+            return;
+        }
+        this.checks.push(t_true(true,
+            "the original program source can be restored without rebuilding its subject"));
+        this.checks.push(t_true(find(SUBJECT_PATH) == this.program_switch_subject,
+            "program replacement does not recreate the physical subject"));
+        let added = waypoint_editor::on_click(
+            context(this.doc, (), [0.0, 1.0, -32.0]),
+        );
+        if !added.ok {
+            this.checks.push(t_true(false, added.error));
+            finish(this);
+            return;
+        }
+        this.program_switch_complete = true;
         this.phase = 2;
         return;
     }
@@ -271,12 +365,25 @@ fn on_tick(me) {
     }
 
     if this.phase == 10 {
-        if point_count(this.doc) != 2 || ribbon_count(this.doc) != 2 { return; }
-        this.checks.push(t_true(true,
-            "modifier-combined Alt-click does not append a route point"));
+        if !this.active_edit {
+            if point_count(this.doc) != 2 || ribbon_count(this.doc) != 2 { return; }
+            this.checks.push(t_true(true,
+                "modifier-combined Alt-click does not append a route point"));
+            let added = waypoint_editor::on_click(
+                context(this.doc, (), [0.0, 1.0, -24.0]),
+            );
+            this.checks.push(t_true(added.ok == true,
+                "editing a route while it is running appends a point"));
+            this.active_edit = true;
+            return;
+        }
+        if point_count(this.doc) != 3 || ribbon_count(this.doc) != 3 { return; }
+        if this.started == 0 || this.stopped != 0 { return; }
         let throttle = port(this.subject, "throttle");
-        if this.started == 0 || this.possessed == 0 || throttle == ()
-            || throttle.abs() < 0.01 { return; }
+        if throttle == () || throttle.abs() < 0.01 { return; }
+        this.checks.push(t_true(true,
+            "an active route keeps running through a live point edit"));
+        if this.possessed == 0 { return; }
         this.checks.push(t_true(true,
             "F starts the route through generic possession authority"));
         this.checks.push(t_true(true,

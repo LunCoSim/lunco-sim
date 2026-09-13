@@ -115,7 +115,7 @@ The fields are:
 | `template`, `stylesheet` | Asset paths under the normal Bevy asset root. |
 | `namespace` | Exact key in `EngineExposures`; use a capability name, not a widget name. |
 | `bindings` | Optional map from template property name to exposure property name. A `map` translates exact rendered values such as `true` or `301` into CSS values. |
-| `actions` | Maps a unique HUI callback name to one of the host's closed semantic actions (`view.surface`, `view.body.moon`, `view.body.earth`, `overlay.terrain.dismiss`, `autopilot.toggle`, or `camera.picker.toggle`). |
+| `actions` | Maps a unique HUI callback name to a built-in semantic action or a Twin-authored action identifier. Built-ins are handled by the host; other identifiers become the typed `runtime.ui.action` event for Rhai policy. |
 | `visible_in_perspective` | Optional workbench perspective restriction. |
 | `gate` | Optional named host gate. Unknown gates are closed. |
 | `setting` | Optional namespaced boolean in the active Twin's `[settings]` table. The surface is hidden when the value is false. |
@@ -125,8 +125,10 @@ The fields are:
 | `placement` | The outer rectangle and its relationship to the workbench. |
 
 The manifest loader rejects unknown fields, duplicate surface IDs/namespaces or
-callbacks, unsafe relative paths, empty contract names, unsupported actions, and
-non-finite or non-positive window geometry before any surface is mounted.
+callbacks, unsafe relative paths, empty contract names, and non-finite or
+non-positive window geometry before any surface is mounted. Authored semantic
+actions are intentionally open-ended; their meaning belongs to the active Twin
+Rhai program, not to the runtime UI crate.
 
 Window surfaces may opt into movement with `draggable: true`. The manifest
 remains the default and visibility authority; the workbench stores only a
@@ -274,8 +276,16 @@ control.
 HUI supports more template features, but features outside this contract need a
 real surface test before they become a shared interface convention. A surface
 callback receives only the pressed entity. The manifest turns it into a
-`RuntimeUiAction`; Rust then maps that semantic action to the existing typed
-command/event path.
+`RuntimeUiAction`; built-ins remain in the host, while a Twin-authored action
+is forwarded as a typed `runtime.ui.action` event. Rhai owns program/path
+selection, editor focus, source switching, and USD transactions; the template
+never writes simulation state.
+
+For dynamic controls, HUI supports the project convention
+`on_press="runtime_ui_authored_action" tag:data-action="{action}"`. The
+`data-action` value is a dynamic scalar property supplied by the active
+exposure/Rhai policy, and the typed event resolves it from the pressed HUI
+node. This supports Twin-defined actions without JavaScript or a JSON payload.
 
 There is no DOM query, JavaScript execution, direct resource mutation, or
 widget-specific Rust callback in an authored template. Inputs, forms, text

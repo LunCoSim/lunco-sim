@@ -1067,19 +1067,18 @@ pub(crate) fn wake_twin_projection_on_stage_event(
 /// (the Avian joint builder and the cosim wire reconcile) re-read on a subtree
 /// refresh, so the incremental path fully reconciles them.
 ///
-/// `SetApiSchemas` and `SetPrimKind` do NOT: their effect is which ECS
+/// Physical `SetApiSchemas` and `SetPrimKind` do NOT: their effect is which ECS
 /// *components* a prim carries (rigid body, collider), and the incremental
-/// path cannot derive a changed component set in place. They rebuild, which
-/// re-derives the physical projection correctly. This is not the hot path:
-/// `AttachComponent` emits neither, so building a vehicle from parts stays
-/// rebuild-free.
+/// path cannot derive a changed component set in place. Metadata-only schemas
+/// use the live authoring path, so enabling a Twin-authored UI or program
+/// surface does not tear down unrelated simulation state.
 ///
 /// Active state is structural, but the generic structural reconciler already
 /// owns exactly that operation: it despawns an inactive subtree and spawns it
 /// again when reactivated. Keeping `SetActive` incremental prevents a route
 /// annotation edit from rebuilding unrelated live vessels and their models.
 fn op_needs_rebuild(op: &UsdOp) -> bool {
-    // The program API schema is the only metadata-only fast path. Kind and
+    // Metadata-only API schemas stay on the live incremental path. Kind and
     // defaultPrim changes rebuild so the projection reads the new composed
     // metadata from one authoritative document snapshot.
     if let UsdOp::SetApiSchemas { schemas, .. } = op {
@@ -1107,7 +1106,7 @@ fn incremental_api_schemas(schemas: &[String]) -> bool {
     schemas.iter().all(|schema| {
         matches!(
             schema.as_str(),
-            "LunCoProgramAPI" | "LunCoMountAttachmentAPI"
+            "LunCoProgramAPI" | "LunCoMountAttachmentAPI" | "LunCoUiSchemaAPI"
         )
     })
 }
@@ -1466,7 +1465,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                 .and_then(|s| s.get(scene_id))
                 .is_some_and(|cs| cs.projector().author_api_schemas(&sp, schemas).is_ok());
             if !authored {
-                warn!("[twin] author program API {path} failed");
+                warn!("[twin] author metadata API schemas at {path} failed");
             }
         }
         UsdOp::SetActive { path, active, .. } => {
@@ -2078,12 +2077,17 @@ mod tests {
             path: "/W".into(),
             schemas: vec!["PhysicsRigidBodyAPI".into()],
         }));
-        // A program API is metadata on an existing `Mission` scope and remains
-        // on the live incremental path.
+        // Metadata-only APIs on an existing scope remain on the live
+        // incremental path.
         assert!(!op_needs_rebuild(&UsdOp::SetApiSchemas {
             edit_target: et.clone(),
             path: "/W/Mission".into(),
             schemas: vec!["LunCoProgramAPI".into()],
+        }));
+        assert!(!op_needs_rebuild(&UsdOp::SetApiSchemas {
+            edit_target: et.clone(),
+            path: "/W/Mission".into(),
+            schemas: vec!["LunCoUiSchemaAPI".into()],
         }));
         // Active state is handled by the generic structural reconciler for both
         // physical and visual prims: it despawns absent entities and spawns them

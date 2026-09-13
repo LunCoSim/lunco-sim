@@ -79,7 +79,10 @@ fn runtime_ui_visibility(facts: &HookValue, surface_id: &str) -> bool {
             match visible {
                 Some(visible) => visible,
                 _ => {
-                    warn!(surface_id, "[runtime-ui] visibility policy must return a map with boolean `visible`; surface hidden");
+                    warn!(
+                        surface_id,
+                        "[runtime-ui] visibility policy must return a map with boolean `visible`; surface hidden"
+                    );
                     false
                 }
             }
@@ -193,6 +196,11 @@ fn runtime_ui_facts(
         })
         .filter(|label| !label.is_empty())
         .unwrap_or_else(|| "selected".to_owned());
+
+    let root_path = root
+        .and_then(|root| q_paths.get(root).ok())
+        .map(|(_, path)| path.path.clone());
+    let programs = authored_program_facts(root_path.as_deref(), q_sim, q_paths, stages, canonical);
 
     let status = root
         .and_then(|root| q_sim.get(root).ok())
@@ -335,6 +343,12 @@ fn runtime_ui_facts(
         ("visibility_mode", HookValue::str(visibility_mode)),
         ("available", HookValue::Bool(root.is_some())),
         ("label", HookValue::str(label)),
+        (
+            "scope",
+            root_path
+                .map(HookValue::str)
+                .unwrap_or_else(|| HookValue::str("")),
+        ),
         ("status", HookValue::str(status.0)),
         ("error", status.1.map_or(HookValue::Unit, HookValue::str)),
         ("position", position),
@@ -346,7 +360,78 @@ fn runtime_ui_facts(
             "participants",
             HookValue::Array(participants.into_iter().map(|(_, facts)| facts).collect()),
         ),
+        ("programs", HookValue::Array(programs)),
     ])
+}
+
+/// Read the generic executable programs directly authored below one surface
+/// root. This is presentation data only: source selection and program edits
+/// remain Rhai/typed-USD operations, while the runtime bridge merely exposes a
+/// bounded, model-neutral snapshot for any HUD or remote client.
+fn authored_program_facts(
+    root_path: Option<&str>,
+    q_sim: &Query<(Entity, &SimComponent)>,
+    q_paths: &Query<(Entity, &lunco_usd_bevy_scene::UsdPrimPath)>,
+    stages: &Assets<UsdStageAsset>,
+    canonical: &CanonicalStages,
+) -> Vec<HookValue> {
+    let Some(root_path) = root_path else {
+        return Vec::new();
+    };
+    let Some((_, root_prim)) = q_paths.iter().find(|(_, path)| path.path == root_path) else {
+        return Vec::new();
+    };
+    let Some(stage_asset) = stages.get(&root_prim.stage_handle) else {
+        return Vec::new();
+    };
+    let (reader, _) = canonical.reader_for(root_prim.stage_handle.id(), stage_asset);
+    let reader: &dyn UsdReadObject = &reader;
+    let Ok(root) = SdfPath::new(root_path) else {
+        return Vec::new();
+    };
+    let mut programs = reader
+        .children(&root)
+        .into_iter()
+        .filter(|path| reader.has_api_schema(path, "LunCoProgramAPI"))
+        .take(16)
+        .map(|path| {
+            let path_text = path.as_str().to_owned();
+            let status = q_sim
+                .iter()
+                .find(|(entity, _)| {
+                    q_paths
+                        .get(*entity)
+                        .is_ok_and(|(_, prim)| prim.path == path_text)
+                })
+                .map(|(_, sim)| sim_status_facts(&sim.status).0)
+                .unwrap_or_else(|| "authored".to_owned());
+            let facts = HookValue::map([
+                ("path", HookValue::str(path_text.clone())),
+                (
+                    "implementation_source",
+                    HookValue::str(
+                        reader
+                            .text(&path, "info:implementationSource")
+                            .unwrap_or_default(),
+                    ),
+                ),
+                (
+                    "source",
+                    HookValue::str(
+                        reader
+                            .asset(&path, "info:sourceAsset")
+                            .or_else(|| reader.text(&path, "info:id"))
+                            .or_else(|| reader.text(&path, "info:sourceCode"))
+                            .unwrap_or_default(),
+                    ),
+                ),
+                ("status", HookValue::str(status)),
+            ]);
+            (path_text, facts)
+        })
+        .collect::<Vec<_>>();
+    programs.sort_by(|(left, _), (right, _)| left.cmp(right));
+    programs.into_iter().map(|(_, facts)| facts).collect()
 }
 
 fn scalar_hook_map(values: &HashMap<String, f64>) -> HookValue {

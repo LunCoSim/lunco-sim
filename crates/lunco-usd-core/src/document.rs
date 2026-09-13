@@ -2570,7 +2570,16 @@ impl Document for UsdDocument {
             }
 
             UsdOp::SetApiSchemas { path, schemas, .. } => {
-                let prim_sdf = self.require_prim_anywhere(&path)?;
+                let prim_sdf = match self.require_prim_anywhere(&path) {
+                    Ok(prim) => prim,
+                    Err(error) => {
+                        let prim = parse_prim_path(&path)?;
+                        if !self.path_is_under_composed_arc_path(&prim) {
+                            return Err(error);
+                        }
+                        prim
+                    }
+                };
                 // Typed inverse: a prior *prepend-only* schema list — the form the
                 // forward op authors — restores as a typed `SetApiSchemas`.
                 // Unauthored, or an explicit/append/delete opinion a prepend op
@@ -2601,10 +2610,17 @@ impl Document for UsdDocument {
                     _ => self.coarse_inverse(target, &id),
                 };
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                // A referenced or payloaded prim is present in the composed
+                // stage but not in this edit layer. Define the local over
+                // before writing its API schema list, just as SetActive does
+                // for a local active opinion.
+                if !prim_in(self.layer(target), &prim_sdf) {
+                    stage.define_prim(prim_sdf.as_str()).map_err(author_err)?;
+                }
                 let tokens: Vec<openusd::tf::Token> =
                     schemas.iter().map(openusd::tf::Token::from).collect();
                 stage
-                    .prim(path.as_str())
+                    .prim(prim_sdf.as_str())
                     .set_metadata(
                         sdf::FieldKey::ApiSchemas.as_str(),
                         openusd::sdf::Value::TokenListOp(openusd::sdf::TokenListOp::prepended(

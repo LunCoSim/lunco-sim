@@ -1,0 +1,78 @@
+<template>
+  <property name="scope">NO PROGRAM SCOPE</property>
+  <property name="program_count">0 PROGRAMS</property>
+  <property name="program_0_path">—</property>
+  <property name="program_0_source">—</property>
+  <property name="program_0_status">—</property>
+  <property name="program_0_select_action">program.select.0</property>
+  <property name="program_0_edit_action">program.edit.0</property>
+  <property name="program_0_display">none</property>
+  <property name="program_1_path">—</property>
+  <property name="program_1_source">—</property>
+  <property name="program_1_status">—</property>
+  <property name="program_1_select_action">program.select.1</property>
+  <property name="program_1_edit_action">program.edit.1</property>
+  <property name="program_1_display">none</property>
+  <property name="program_2_path">—</property>
+  <property name="program_2_source">—</property>
+  <property name="program_2_status">—</property>
+  <property name="program_2_select_action">program.select.2</property>
+  <property name="program_2_edit_action">program.edit.2</property>
+  <property name="program_2_display">none</property>
+  <property name="program_3_path">—</property>
+  <property name="program_3_source">—</property>
+  <property name="program_3_status">—</property>
+  <property name="program_3_select_action">program.select.3</property>
+  <property name="program_3_edit_action">program.edit.3</property>
+  <property name="program_3_display">none</property>
+
+  <node id="program-browser-root">
+    <node id="program-browser-header">
+      <text id="program-browser-title">PROGRAMS</text>
+      <text id="program-browser-scope">{scope}</text>
+    </node>
+    <text id="program-browser-count">{program_count}</text>
+
+    <node id="program-row-0" class="program-row">
+      <node class="program-copy">
+        <text class="program-path">{program_0_path}</text>
+        <text class="program-source">{program_0_source}</text>
+        <text class="program-status">{program_0_status}</text>
+      </node>
+      <button id="program-select-0" on_press="runtime_ui_authored_action" tag:data-action="{program_0_select_action}"><text>SELECT</text></button>
+      <button id="program-edit-0" on_press="runtime_ui_authored_action" tag:data-action="{program_0_edit_action}"><text>EDIT</text></button>
+    </node>
+    <node id="program-row-1" class="program-row">
+      <node class="program-copy">
+        <text class="program-path">{program_1_path}</text>
+        <text class="program-source">{program_1_source}</text>
+        <text class="program-status">{program_1_status}</text>
+      </node>
+      <button id="program-select-1" on_press="runtime_ui_authored_action" tag:data-action="{program_1_select_action}"><text>SELECT</text></button>
+      <button id="program-edit-1" on_press="runtime_ui_authored_action" tag:data-action="{program_1_edit_action}"><text>EDIT</text></button>
+    </node>
+    <node id="program-row-2" class="program-row">
+      <node class="program-copy">
+        <text class="program-path">{program_2_path}</text>
+        <text class="program-source">{program_2_source}</text>
+        <text class="program-status">{program_2_status}</text>
+      </node>
+      <button id="program-select-2" on_press="runtime_ui_authored_action" tag:data-action="{program_2_select_action}"><text>SELECT</text></button>
+      <button id="program-edit-2" on_press="runtime_ui_authored_action" tag:data-action="{program_2_edit_action}"><text>EDIT</text></button>
+    </node>
+    <node id="program-row-3" class="program-row">
+      <node class="program-copy">
+        <text class="program-path">{program_3_path}</text>
+        <text class="program-source">{program_3_source}</text>
+        <text class="program-status">{program_3_status}</text>
+      </node>
+      <button id="program-select-3" on_press="runtime_ui_authored_action" tag:data-action="{program_3_select_action}"><text>SELECT</text></button>
+      <button id="program-edit-3" on_press="runtime_ui_authored_action" tag:data-action="{program_3_edit_action}"><text>EDIT</text></button>
+    </node>
+
+    <node id="program-browser-actions">
+      <button id="program-add" on_press="runtime_ui_authored_action" tag:data-action="program.add"><text>ADD PROGRAM</text></button>
+      <button id="program-path-add" on_press="runtime_ui_authored_action" tag:data-action="program.path.add"><text>ADD PATH</text></button>
+    </node>
+  </node>
+</template>
