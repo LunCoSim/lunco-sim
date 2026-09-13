@@ -108,6 +108,13 @@ and reuse of the existing Rhai scene runner and result protocol. No
 requirement-specific Rust test module, Rust-side threshold, or second runner
 should be introduced.
 
+The current compact bridge is `query("ValidateSysml", #{path: ...})`. It uses
+the same `lunco-scene-validation` parser/resolver as `ValidateAsset`, but
+returns only `requirements`, `attributes`, diagnostics, and `source_revision`.
+Rhai therefore reads the canonical SysML source through the existing asset
+validation path without copying its full element graph or walking the Twin
+filesystem a second time.
+
 The rule is: move a Rust assertion only after an authored fixture can fail for
 the same reason through the public runtime path. A Rust test that supplies a
 spy command, fake world, private component, or direct function call is not a

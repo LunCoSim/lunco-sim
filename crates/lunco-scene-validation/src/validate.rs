@@ -171,10 +171,38 @@ fn validate_sysml(reference: &str, path: &Path, text: &str) -> ValidationReport 
     report.info = json!({
         "elements": analysis.elements(),
         "references": analysis.references(),
+        // Expose scalar literals as a compact, generic projection. Rhai tests
+        // can consume authored thresholds without a second file walker or
+        // Griffin-specific Rust policy; the parser/resolver remains the
+        // authority and this map carries no executable semantics.
+        "attributes": sysml_attribute_literals(text),
         "source_revision": analysis.source_revision(),
         "stdlib": analysis.includes_stdlib(),
     });
     report.finish()
+}
+
+fn sysml_attribute_literals(text: &str) -> serde_json::Map<String, serde_json::Value> {
+    let mut attributes = serde_json::Map::new();
+    for line in text.lines() {
+        let Some(rest) = line.trim().strip_prefix("attribute ") else {
+            continue;
+        };
+        let Some((declaration, literal)) = rest.split_once('=') else {
+            continue;
+        };
+        let Some(name) = declaration.split(':').next().map(str::trim) else {
+            continue;
+        };
+        if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            continue;
+        }
+        let literal = literal.trim().trim_end_matches(';').trim();
+        if !literal.is_empty() {
+            attributes.insert(name.to_string(), json!(literal));
+        }
+    }
+    attributes
 }
 
 /// One Twin-level lint finding in the pre-flight response.
@@ -737,6 +765,65 @@ impl ApiQueryProvider for ValidateAssetProvider {
     }
 }
 
+/// Compact SysML requirement projection for authored Rhai tests.
+///
+/// `ValidateAsset` intentionally returns the complete semantic element list
+/// for tooling. That payload is too large for the bounded Rhai value surface,
+/// so this read-only provider reuses the same validator and returns only
+/// requirement/verification names, scalar literals, diagnostics, and the
+/// source revision.
+struct ValidateSysmlProvider;
+
+impl ApiQueryProvider for ValidateSysmlProvider {
+    fn name(&self) -> &'static str {
+        "ValidateSysml"
+    }
+
+    fn execute(&self, _world: &World, params: &serde_json::Value) -> ApiResponse {
+        let Some(path) = params.get("path").and_then(|p| p.as_str()) else {
+            return ApiResponse::error(
+                ApiErrorCode::DeserializationError,
+                "ValidateSysml requires params.path (string): a filesystem path",
+            );
+        };
+        let report = validate_asset(path);
+        let elements = report
+            .info
+            .get("elements")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let requirements: Vec<String> = elements
+            .iter()
+            .filter_map(|element| {
+                let kind = element.get("kind")?.as_str()?;
+                if kind == "RequirementDefinition"
+                    || kind == "RequirementUsage"
+                    || kind == "VerificationCaseDefinition"
+                {
+                    element
+                        .get("qualified_name")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let value = json!({
+            "path": report.path,
+            "kind": report.kind,
+            "ok": report.ok,
+            "errors": report.errors,
+            "warnings": report.warnings,
+            "requirements": requirements,
+            "attributes": report.info.get("attributes").cloned().unwrap_or_else(|| json!({})),
+            "source_revision": report.info.get("source_revision").cloned().unwrap_or(json!(0)),
+        });
+        ApiResponse::ok(value)
+    }
+}
+
 /// `ValidateTwin { path, policy? }` → [`TwinValidationReport`].
 struct ValidateTwinProvider;
 
@@ -765,12 +852,16 @@ impl ApiQueryProvider for ValidateTwinProvider {
 }
 
 /// Register the providers. Called by [`crate::SceneValidationPlugin`], so any
-/// host that installs validation answers `ValidateAsset` and `ValidateTwin`.
+/// host that installs validation answers `ValidateAsset`, `ValidateSysml`, and
+/// `ValidateTwin`.
 pub fn register(app: &mut App) {
     app.init_resource::<ApiQueryRegistry>();
     app.world_mut()
         .resource_mut::<ApiQueryRegistry>()
         .register(ValidateAssetProvider);
+    app.world_mut()
+        .resource_mut::<ApiQueryRegistry>()
+        .register(ValidateSysmlProvider);
     app.world_mut()
         .resource_mut::<ApiQueryRegistry>()
         .register(ValidateTwinProvider);
