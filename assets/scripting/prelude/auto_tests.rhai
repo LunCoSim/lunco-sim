@@ -172,7 +172,6 @@ fn report_structured_verdict(report, title, channel) {
         if report.source_revision != () { source_revision = report.source_revision; }
         if report.results != () { result_count = report.results.len(); }
         if report.failures != () {
-            raw_failures = report.failures;
             for failure in report.failures {
                 if type_of(failure) == "map" {
                     let line = "";
@@ -181,8 +180,12 @@ fn report_structured_verdict(report, title, channel) {
                     if failure.path != () { line += failure.path + ": "; }
                     if failure.error != () { line += failure.error; }
                     failures.push(line);
+                    raw_failures.push(failure);
                 } else {
-                    failures.push(failure);
+                    if failure != "" {
+                        failures.push(failure);
+                        raw_failures.push(failure);
+                    }
                 }
             }
         }
