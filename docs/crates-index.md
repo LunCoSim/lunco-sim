@@ -67,7 +67,7 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-usd-core`** | Headless USD document, authoring, operation, schema, unit-conversion, and asset-closure substrate. No runtime, physics, rendering, or UI. |
+| **`lunco-usd-core`** | Headless USD document, authoring, shared `ApplyUsdOp`/`ApplyUsdOps` command contracts, operation, schema, unit-conversion, and asset-closure substrate. No runtime, physics, rendering, or UI. |
 | **`lunco-usd`** | UI-free USD runtime orchestration, document commands, and engineering metadata mapping. |
 | **`lunco-usd-bevy-runtime`** | Application-level USD plugin bundle composing visual, diagnostics, physics, simulation, and document-command projections. |
 | **`lunco-usd-geometry`** | Render-free NURBS evaluators, trimmed-domain tessellation, and rotation-minimizing curve-sweep mesh data. Isolates heavy numeric geometry dependencies from the USD stage loader. |
@@ -263,9 +263,9 @@ Input mapping and translation. Owns the persisted `InputBindingsSettings` keymap
 ### USD Integration Layer
 
 **`lunco-usd-core`**
-Headless OpenUSD document, authoring, operation, schema, unit-conversion, and
-asset-closure substrate. It has no runtime projection, physics, rendering, or
-UI dependency.
+Headless OpenUSD document, authoring, shared USD mutation command contracts,
+operation, schema, unit-conversion, and asset-closure substrate. It has no
+runtime projection, command observers, physics, rendering, or UI dependency.
 
 **`lunco-usd`**
 UI-free USD runtime orchestration and engineering metadata bridge. Maps

@@ -259,7 +259,7 @@ fn apply_animation_ops(
     let Some(doc) = view.doc else {
         return;
     };
-    ctx.trigger(lunco_usd::commands::ApplyUsdOps {
+    ctx.trigger(lunco_usd_core::commands::ApplyUsdOps {
         doc_id: doc,
         parent_gen: Some(view.generation),
         label: label.to_owned(),

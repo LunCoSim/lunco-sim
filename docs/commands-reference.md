@@ -479,18 +479,20 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
 ## USD / scenes
 
-### `lunco-usd` <a id="lunco-usd"></a>
+### `lunco-usd-core` <a id="lunco-usd-core"></a>
 
 #### `ApplyUsdOp`
 
- Apply a [`UsdOp`] to the named document via the typed-command bus.
+ Apply a [`UsdOp`] to the named document via the typed-command bus. The shared
+ command contract is defined by `lunco-usd-core`; the runtime observer is
+ installed by `lunco-usd::commands::UsdCommandsPlugin`.
 
  Same shape as `lunco-modelica-core`'s op-dispatch commands: UI clicks,
  HTTP API calls, and scripts all dispatch this; the observer
  routes it through [`DocumentRegistry::<UsdDocument>::apply`] so undo/redo,
  change notification, and read-only enforcement stay in one place.
 
-- *defined in:* `crates/lunco-usd/src/commands.rs`
+- *defined in:* `crates/lunco-usd-core/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -500,14 +502,16 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
 #### `ApplyUsdOps`
 
- Apply one authored intent that lowers to several USD operations.
+ Apply one authored intent that lowers to several USD operations. The shared
+ command contract is defined by `lunco-usd-core`; the runtime observer is
+ installed by `lunco-usd::commands::UsdCommandsPlugin`.
 
  This is the command boundary for program construction, component assembly,
  and other compound edits: UI, Rhai and API callers all submit the same typed
  operation list, which is journalled as one undo unit and observed by the live
  projector only after the document reaches its complete shape.
 
-- *defined in:* `crates/lunco-usd/src/commands.rs`
+- *defined in:* `crates/lunco-usd-core/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|

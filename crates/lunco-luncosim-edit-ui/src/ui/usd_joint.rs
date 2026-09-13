@@ -540,7 +540,7 @@ fn apply_attribute(
     let (Some(doc), Some(edit_target)) = (view.doc, view.edit_target.clone()) else {
         return;
     };
-    ctx.trigger(lunco_usd::commands::ApplyUsdOp {
+    ctx.trigger(lunco_usd_core::commands::ApplyUsdOp {
         doc_id: doc,
         parent_gen: Some(view.generation),
         op: UsdOp::SetAttribute {
@@ -562,7 +562,7 @@ fn apply_relationship(
     let (Some(doc), Some(edit_target)) = (view.doc, view.edit_target.clone()) else {
         return;
     };
-    ctx.trigger(lunco_usd::commands::ApplyUsdOp {
+    ctx.trigger(lunco_usd_core::commands::ApplyUsdOp {
         doc_id: doc,
         parent_gen: Some(view.generation),
         op: UsdOp::SetRelationship {

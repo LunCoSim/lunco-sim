@@ -10,10 +10,11 @@
 //! individual visual, physics, and simulation projections remain independently
 //! installable.
 
-// `commands` is the headless-safe document/file verb layer (ApplyUsdOp,
-// OpenFile/NewDocument/SaveDocument observers, the async load pipeline +
-// twin-scene resolver). The browser and viewport presentation lives in
-// `lunco-usd-ui`; `document` is the USD document model and the shared
+// `commands` is the headless-safe document/file verb implementation. The
+// shared ApplyUsdOp/ApplyUsdOps contracts live in lunco-usd-core; this module
+// owns their observers, OpenFile/NewDocument/SaveDocument, the async load
+// pipeline, and the twin-scene resolver. The browser and viewport presentation
+// lives in `lunco-usd-ui`; `document` is the USD document model and the shared
 // `DocumentRegistry<UsdDocument>` owns document identity. Edits author through
 // OpenUSD's Stage by SDF path (`lunco_usd_core::author`).
 pub mod assembly_api;
@@ -29,10 +30,6 @@ pub mod registry;
 pub mod runtime_persistence;
 pub mod twin_projection;
 
-pub use commands::{
-    ApplyUsdOp, ApplyUsdOps, AttachProgram, CommitUsdProposal, CreateUsdProposal,
-    ReviewUsdProposal, UsdCommandsPlugin, UsdProposalReviewAction, USD_DOCUMENT_KIND,
-};
 /// Asset-backed OpenUSD assembly. This is the public composition boundary:
 /// `lunco-assets` supplies canonical identities and bytes, while this crate
 /// interprets USD sublayers, references, payloads, and variants into a stage.

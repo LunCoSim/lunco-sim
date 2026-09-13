@@ -12,6 +12,7 @@ description = "Headless OpenUSD document, authoring, schema, and operation subst
 bevy = { workspace = true }
 anyhow = { workspace = true }
 openusd = { workspace = true }
+lunco-core = { path = "../lunco-core" }
 lunco-assets = { path = "../lunco-assets" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-twin-journal = { path = "../lunco-twin-journal" }

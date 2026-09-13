@@ -8488,6 +8488,7 @@ dependencies = [
  "anyhow",
  "bevy",
  "lunco-assets",
+ "lunco-core",
  "lunco-doc",
  "lunco-twin-journal",
  "lunco-usd-compose",

@@ -1,7 +1,7 @@
 //! Models palette — discover source-backed programs and attach them through the
 //! typed USD authoring command.
 //!
-//! The palette is a front end for [`lunco_usd::AttachProgram`]. It never writes
+//! The palette is a front end for [`lunco_usd::commands::AttachProgram`]. It never writes
 //! ECS marker components and it never creates a second simulation path. A
 //! discovered source with no contract is still attachable as an effects-only
 //! program; the author must then declare ports and wires through the USD editor,
@@ -369,7 +369,7 @@ pub(crate) fn on_scene_click_attach(
         return;
     };
 
-    commands.trigger(lunco_usd::AttachProgram {
+    commands.trigger(lunco_usd::commands::AttachProgram {
         doc_id: doc,
         spec: choice.attachment_spec(&prim.path),
     });

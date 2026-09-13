@@ -1274,7 +1274,7 @@ fn on_set_rhai_policy(
     asset_server: Res<AssetServer>,
     mut commands: Commands,
 ) {
-    use lunco_usd::ApplyUsdOp;
+    use lunco_usd_core::commands::ApplyUsdOp;
     use lunco_usd_core::{LayerId, UsdOp};
     let cmd = trigger.event();
     let roots: Vec<_> = roots.iter().collect();

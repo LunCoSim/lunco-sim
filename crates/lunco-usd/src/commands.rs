@@ -48,6 +48,7 @@ use lunco_storage::Storage; // brings `write_sync` / `read_sync` into scope
 use lunco_twin::{DocumentKindId, DocumentKindMeta, DocumentKindRegistry};
 use lunco_usd_bevy_core::{source::UsdSourceText, UsdRead, UsdStageAsset};
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneRoot};
+use lunco_usd_core::commands::{ApplyUsdOp, ApplyUsdOps};
 use lunco_usd_core::document::{LayerId, UsdOp};
 use lunco_usd_core::edit_session::{
     validate_proposal, UsdEditScope, UsdEditSessions, UsdProposalId, UsdProposalState,
@@ -1986,46 +1987,6 @@ fn on_commit_usd_proposal(
             ApiErrorCode::CommandRejected,
         );
     });
-}
-
-// ─────────────────────────────────────────────────────────────────────
-// ApplyUsdOp — typed entry for programmatic / UI-driven edits
-// ─────────────────────────────────────────────────────────────────────
-
-/// Apply a [`UsdOp`] to the named document via the typed-command bus.
-///
-/// Same shape as `lunco-modelica-core`'s op-dispatch commands: UI clicks,
-/// HTTP API calls, and scripts all dispatch this; the observer
-/// routes it through [`DocumentRegistry::<UsdDocument>::apply`] so undo/redo,
-/// change notification, and read-only enforcement stay in one place.
-#[Command(default)]
-pub struct ApplyUsdOp {
-    /// Target document.
-    pub doc_id: DocumentId,
-    /// Generation the caller edited from. When present, the operation is
-    /// rejected if the document advanced before it arrived.
-    pub parent_gen: Option<u64>,
-    /// Operation to apply.
-    pub op: UsdOp,
-}
-
-/// Apply one authored intent that lowers to several USD operations.
-///
-/// This is the command boundary for program construction, component assembly,
-/// and other compound edits: UI, Rhai and API callers all submit the same typed
-/// operation list, which is journalled as one undo unit and observed by the live
-/// projector only after the document reaches its complete shape.
-#[Command(default)]
-pub struct ApplyUsdOps {
-    /// Target document.
-    pub doc_id: DocumentId,
-    /// Generation the caller edited from. When present, the complete compound
-    /// edit is rejected if the document advanced before it arrived.
-    pub parent_gen: Option<u64>,
-    /// Human-readable undo/journal label.
-    pub label: String,
-    /// Ordered primitive USD operations comprising the one intent.
-    pub ops: Vec<UsdOp>,
 }
 
 #[on_command(ApplyUsdOps)]
