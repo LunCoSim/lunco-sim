@@ -104,6 +104,18 @@ impl ValueBuilder for RhaiBuilder {
     }
 }
 
+fn sysml_report_json_value(path: &str) -> ImmutableString {
+    match bridge_core::query_raw("ValidateSysml", serde_json::json!({ "path": path })) {
+        Ok(Some(value)) => serde_json::to_string(&value).unwrap_or_else(|error| {
+            serde_json::json!({ "ok": false, "error": error.to_string() }).to_string()
+        }),
+        Ok(None) => serde_json::json!({ "ok": false, "error": "ValidateSysml returned no data" })
+            .to_string(),
+        Err(error) => serde_json::json!({ "ok": false, "error": error }).to_string(),
+    }
+    .into()
+}
+
 /// Map a rhai value to the engine-wide TelemetryValue for emit. Scalars, arrays,
 /// and maps retain their structure; unit is a bare pulse.
 fn rhai_to_telemetry(value: &Dynamic) -> TelemetryValue {
@@ -1336,6 +1348,20 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
         bridge_core::query(&RhaiBuilder, name.as_str(), serde_json::json!({}))
     });
 
+    // SysML is a normal read-only query surface. These JSON helpers are a
+    // small production bridge for authored tests that want a stable snapshot
+    // without constructing a second parser or walking the Twin root. The
+    // provider owns parsing, source identity, and revision; Rhai owns the
+    // selected verification policy and verdict.
+    engine.register_fn(
+        "sysml_report_json",
+        |path: ImmutableString| -> ImmutableString { sysml_report_json_value(path.as_str()) },
+    );
+    engine.register_fn(
+        "sysml_requirement_report_json",
+        |path: ImmutableString| -> ImmutableString { sysml_report_json_value(path.as_str()) },
+    );
+
     // find(name) -> id (i64), or -1 if no entity has that canonical Name.
     engine.register_fn("find", |name: ImmutableString| -> i64 {
         bridge_core::find(name.as_str())
@@ -1459,6 +1485,9 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
     // sibling file without hardcoding a machine-specific absolute path:
     // `twin_root() + "/shots"`. See `bridge_core::twin_root`.
     engine.register_fn("twin_root", || -> String { bridge_core::twin_root() });
+    // twin_name() -> String — stable `twin://` authority of the active Twin
+    // ("" if none), for source-set and asset-provider queries.
+    engine.register_fn("twin_name", || -> String { bridge_core::twin_name() });
 
     // is_unattended() -> bool — is there NOBODY at the controls? A scenario
     // branches on it to decide whether to drive ITSELF:

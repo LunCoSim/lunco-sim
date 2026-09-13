@@ -27,9 +27,9 @@ fn absolute_prim(path, label) {
 
 fn clean_asset_path(asset, label) {
     if asset == () || type_of(asset) != "string" || asset == ""
-        || !asset.starts_with("lunco://") || asset.contains("@")
+        || (!asset.starts_with("lunco://") && !asset.starts_with("twin://")) || asset.contains("@")
         || asset.contains(" ") {
-        return failure("validation", label + " must be a non-empty lunco:// asset identity");
+        return failure("validation", label + " must be a non-empty lunco:// or twin:// asset identity");
     }
     #{ ok: true, value: asset }
 }

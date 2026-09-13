@@ -1415,6 +1415,34 @@ pub fn twin_root() -> String {
     .unwrap_or_default()
 }
 
+/// `twin_name()` — stable `twin://` authority of the ACTIVE Twin, or `""`.
+///
+/// This is the URI counterpart to [`twin_root`].  Rhai policy should use this
+/// name when asking a provider to resolve Twin-owned source sets so the same
+/// script works after the project moves to another machine.
+#[cfg(feature = "rhai")]
+pub fn twin_name() -> String {
+    with_world(|world| {
+        let workspace = world.get_resource::<lunco_workspace::WorkspaceResource>()?;
+        let id = workspace.0.active_twin?;
+        let twin = workspace.0.twin(id)?;
+        Some(
+            twin.manifest
+                .as_ref()
+                .map(|manifest| manifest.name.clone())
+                .filter(|name| !name.is_empty())
+                .or_else(|| {
+                    twin.root
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                })
+                .unwrap_or_default(),
+        )
+    })
+    .flatten()
+    .unwrap_or_default()
+}
+
 /// `get_twin_setting("ui.camera_status")` — read a scalar setting from the
 /// active Twin manifest. Missing keys, plain folders, and no active Twin are
 /// represented as the backend's unit value by the caller.

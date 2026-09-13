@@ -15,6 +15,7 @@ lunco-doc = { path = "../lunco-doc" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-hooks = { path = "../lunco-hooks" }
 lunco-hooks-rhai = { path = "../lunco-hooks-rhai" }
+lunco-hash = { path = "../lunco-hash" }
 lunco-lint = { path = "../lunco-lint" }
 lunco-materials = { path = "../lunco-materials" }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }

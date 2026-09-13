@@ -325,6 +325,12 @@ const VERBS: &[(&str, &str, &str, &str)] = &[
         "READ. Absolute root of the active Twin, or an empty string.",
     ),
     (
+        "twin_name",
+        "twin_name()",
+        "string",
+        "READ. Stable twin:// authority of the active Twin, or an empty string.",
+    ),
+    (
         "is_unattended",
         "is_unattended()",
         "bool",

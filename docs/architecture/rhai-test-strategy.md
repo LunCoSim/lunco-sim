@@ -39,9 +39,10 @@ many Rhai files:
 
 The SysML source is the portable contract. A run result is a separate
 versioned artifact (and eventually a journal record), never an edit to the
-requirement file. The current `lunco-sysml-rhai` crate is only a read-only
-snapshot/report adapter; it does not yet discover verification cases or submit
-typed verdicts to the production runner. See
+requirement file. The `lunco-sysml-rhai` crate is a read-only
+snapshot/report adapter: it exposes typed requirement and verification records,
+while the production `ValidateSysml` query discovers a manifest-declared Twin
+source set. It does not submit typed verdicts to the production runner yet. See
 [`24-domain-sysml.md`](24-domain-sysml.md#sysml-v2-requirement-and-verification-contract)
 for the source shape and implementation gates.
 
@@ -53,7 +54,8 @@ Before converting a current Rhai test, the runtime needs all of the following:
    constraints, and `satisfy`/`verify`/realization links, with source spans and
    a source-set revision.
 2. One Twin-indexed source set that discovers `.sysml`/`.kerml` through the
-   existing asset identities and resolves it once with the standard library.
+   existing asset identities and resolves it once with the standard library
+   (`ValidateSysml` accepts `twin://name` for this path).
 3. A Twin-owned verification registry mapping a qualified SysML verification
    name to the existing scene and Rhai backend. Missing mappings fail loudly.
 4. A typed Rhai result sink carrying the verification key, requirement key,
@@ -91,15 +93,15 @@ input contract:
 ```rhai
 let model = from_json(sysml_requirement_report_json());
 let req = model.requirements.filter(|r| r.qualified_name ==
-    "GriffinRequirements::GR001_MassBudget");
+    "ExampleRequirements::REQ001_MassBudget");
 assert(req.len() == 1, "GR001 must resolve exactly once");
 
 // Existing production helpers perform the observation; this script owns the
 // verdict and evidence, while the numeric requirement lives in SysML.
-let rover = find("/Griffin/Rover");
+let rover = find("/Vehicle/Rover");
 let mass = get(rover, "Mass.mass");
-assert(mass <= 450.0, "GR-001 mass budget exceeded");
-print("VERIFICATION GriffinRequirements::Verify_GR001 PASS");
+assert(mass <= 450.0, "REQ-001 mass budget exceeded");
+print("VERIFICATION ExampleRequirements::Verify_REQ001 PASS");
 ```
 
 The Rust surface needed to support this is intentionally small: one
@@ -109,11 +111,18 @@ requirement-specific Rust test module, Rust-side threshold, or second runner
 should be introduced.
 
 The current compact bridge is `query("ValidateSysml", #{path: ...})`. It uses
-the same `lunco-scene-validation` parser/resolver as `ValidateAsset`, but
-returns only `requirements`, `attributes`, diagnostics, and `source_revision`.
-Rhai therefore reads the canonical SysML source through the existing asset
-validation path without copying its full element graph or walking the Twin
-filesystem a second time.
+the same `lunco-scene-validation` parser/resolver as `ValidateAsset`; a
+`twin://name` path uses the indexed Twin source set and manifest `[sysml]`
+roots. The bounded result contains typed `attributes`, requirement and
+verification records, source files, diagnostics, and `source_revision`. Rhai
+therefore reads the canonical SysML source through the existing asset path
+without copying the full element graph or walking the Twin filesystem a
+second time.
+
+Acceptance contracts are Twin-authored: a Twin keeps its `.sysml` source,
+scenario `.rhai`, and any fixture-local policy together. Core ships only the
+generic query and typed projection; core runtime code must not contain
+product-specific requirement IDs, thresholds, scenes, or acceptance assertions.
 
 The rule is: move a Rust assertion only after an authored fixture can fail for
 the same reason through the public runtime path. A Rust test that supplies a

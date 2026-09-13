@@ -107,7 +107,8 @@ Views observing a `SysmlDocument`:
 
 **Today:** `lunco-sysml-ast` embeds the pinned `sysmlv2-semantics` parser and
 its `sysmlv2-stdlib` data. The crate exposes a stable LunCoSim projection of
-source-backed elements, resolved references, and syntax/name/collision
+source-backed elements, typed attributes/literals, requirement records,
+verification records, resolved references, and syntax/name/collision
 diagnostics; the upstream model remains private to the AST boundary.
 
 **Supported subset (initial):**
@@ -133,13 +134,19 @@ diagnostics; the upstream model remains private to the AST boundary.
 
 The runtime currently accepts source-level replace/range edits. Structured
 requirement/part operations and verification execution remain follow-up work;
-the read-only Rhai adapter can report requirements without mutating the model.
-For production checks, the scene-validation plugin also registers the compact
-`ValidateSysml { path }` query. It reuses the generic `ValidateAsset` parser
-and resolver, then returns only requirement/verification qualified names,
-authored scalar literals, diagnostics, and the source revision. This keeps the
-Rhai boundary bounded and avoids a second filesystem walker or
-Griffin-specific Rust projection.
+the read-only Rhai adapter reports requirements without mutating the model.
+For production checks, the scene-validation plugin registers the compact
+`ValidateSysml { path }` query. A filesystem path or `twin://name/relative`
+validates one source; `twin://name` loads the manifest-declared, indexed Twin
+source set. The query returns typed attributes, requirement/verification
+records, source files, diagnostics, and a deterministic source revision. This
+keeps the Rhai boundary bounded and avoids a second filesystem walker or
+product-specific Rust projection.
+
+Acceptance remains Twin-authored: each Twin keeps its SysML requirements, USD
+fixture, and Rhai scenario together. Core runtime code contains only this
+generic read-side bridge; product names in this document are examples, not
+shipped acceptance assets or assertions.
 
 ## 6. SysML v2 requirement and verification contract
 
@@ -150,25 +157,25 @@ standard SysML verification definition/usage that names the requirement it
 answers. `satisfy`, `verify`, and realization references carry the traceability
 that is currently implicit in Rhai filenames and comments.
 
-The first Griffin subset should use only portable SysML constructs:
+The first Twin subset should use only portable SysML constructs:
 
 ```sysml
-package GriffinRequirements {
+package ExampleRequirements {
     private import ScalarValues::Real;
-    part def GriffinRover;
+    part def ExampleRover;
 
-    requirement def GR001_MassBudget {
-        doc /* GR-001: the flight rover mass shall not exceed 450 kg. */
+    requirement def REQ001_MassBudget {
+        doc /* REQ-001: the flight rover mass shall not exceed 450 kg. */
         attribute maxMass : Real = 450.0;
     }
 
-    requirement gr001 : GR001_MassBudget {
-        subject rover : GriffinRover;
+    requirement req001 : REQ001_MassBudget {
+        subject rover : ExampleRover;
     }
 
-    verification def Verify_GR001 {
-        subject rover : GriffinRover;
-        verify gr001;
+    verification def Verify_REQ001 {
+        subject rover : ExampleRover;
+        verify req001;
     }
 }
 ```
@@ -176,11 +183,15 @@ package GriffinRequirements {
 The example is deliberately limited to definitions, usages, subjects, scalar
 attributes, and `verify`; every committed fixture must also pass
 `lunco-sysml-ast` validation. The qualified SysML name is the stable key. A
-human identifier such as `GR-001` belongs in the requirement documentation (or
+human identifier such as `REQ-001` belongs in the requirement documentation (or
 in a future standard metadata projection), not in a LunCo-specific annotation
 that would break interchange.
 
 ### What must be added before a Rhai test can be rewritten
+
+The first two slices are now available: the AST exposes typed requirement and
+verification records, and `ValidateSysml` loads the Twin manifest's indexed
+source set. The remaining slices are the integration roadmap.
 
 1. **Semantic projection.** Extend `lunco-sysml-ast` beyond generic elements
    with requirement records (qualified name, subject, doc/constraint spans),
@@ -231,17 +242,18 @@ that would break interchange.
 
 The SysML v2 integration foundation is implemented in the terrain worktree:
 the pure AST projection, Bevy source/document plugin, canonical journal domain,
-`.sysml`/`.kerml` classification, pre-flight validation, and read-only Rhai
-requirement report are available behind the opt-in `sysml` feature. Twin-wide
-source discovery, RefIndex links, structured authoring, and visual panels are
-follow-up work.
+`.sysml`/`.kerml` classification, `[sysml]` Twin manifest source roots,
+manifest-aware source discovery, pre-flight validation, and read-only Rhai
+requirement/verification reports are available behind the opt-in `sysml`
+feature. RefIndex links, structured authoring, visual panels, a verification
+registry, and a CLI selector remain follow-up work.
 
 ## 8. What this does NOT do
 
 Explicit non-goals, to avoid scope creep:
 
-- **`.sysml` files are NOT the Twin manifest.** `twin.toml` owns tool
-  configuration — see [`13-twin-and-workflow.md`](13-twin-and-workflow.md).
+- **`.sysml` files are NOT the Twin manifest.** `twin.toml` owns source-set
+  configuration (`[sysml]`) — see [`13-twin-and-workflow.md`](13-twin-and-workflow.md).
 - **SysML does NOT replace Modelica.** Behavior stays in Modelica; SysML
   references Modelica realizations.
 - **SysML does NOT replace USD.** Geometry stays in USD; SysML references

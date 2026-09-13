@@ -567,7 +567,8 @@ fn editable_property_patch_plan(doc, edit_target, path, edits, parent_gen) {
 /// The parent and target are inspected before a plan is returned, so a recipe
 /// cannot silently create a duplicate or write below a missing frame. The
 /// typed document owner still validates the reference, composition, and
-/// operation ordering when the plan is reviewed.
+/// operation ordering when the plan is reviewed. Both package (`lunco://`)
+/// and Twin-local (`twin://`) asset identities are accepted.
 fn referenced_instance_plan(doc, edit_target, parent, name, type_name, asset,
     translation, rotation, scale, api_schemas, attributes) {
     referenced_instance_targeted_plan(
@@ -595,9 +596,12 @@ fn referenced_instance_targeted_plan(doc, edit_target, parent, name, type_name, 
     if type_name == "" {
         return plan_error("referenced_instance_plan requires an explicit USD type");
     }
-    if !asset.starts_with("lunco://") || asset.len() <= "lunco://".len()
+    let is_lunco_asset = asset.starts_with("lunco://");
+    let is_twin_asset = asset.starts_with("twin://");
+    if (!is_lunco_asset && !is_twin_asset)
+        || asset.len() <= if is_lunco_asset { "lunco://".len() } else { "twin://".len() }
         || asset.contains(" ") || asset.contains("@") {
-        return plan_error("referenced_instance_plan asset must be a non-empty lunco:// URI without USDA delimiters");
+        return plan_error("referenced_instance_plan asset must be a non-empty lunco:// or twin:// URI without USDA delimiters");
     }
     if reference_prim_path != () && (!reference_prim_path.starts_with("/")
         || reference_prim_path.ends_with("/")) {

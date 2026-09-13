@@ -1,6 +1,6 @@
 # SysML v2 embedding in the terrain worktree
 
-**Status:** Foundation implemented; Twin source discovery and UI projections remain follow-up work
+**Status:** Foundation and Twin source discovery implemented; verification registry, CLI selection, and UI projections remain follow-up work
 **Reviewed:** 2026-09-13
 **Worktree:** `terrain` (`terrain-streaming`)
 
@@ -42,14 +42,15 @@ The first production slice now exists behind the opt-in `sysml` feature:
   ownership stay in the existing Rhai test runner.
 - `lunco-scene-validation` registers a compact `ValidateSysml` API query for
   authored tests. It reuses `ValidateAsset`'s parser/resolver and projects
-  requirement/verification names, scalar literals, diagnostics, and the
-  source revision only; no second source walker or Griffin-specific Rust
-  policy is introduced.
+  typed attributes/literals, requirement/verification records, diagnostics,
+  source files, and a lossless source revision; no arbitrary second source
+  walker or product-specific Rust policy is introduced.
 - `lunco-luncosim-core`, the GUI shell, and the headless server expose the
   `sysml` feature gate; default builds remain unchanged.
 
-This deliberately does not add a full SysML editor, a filesystem source-root
-walker, a BREP/CAD pipeline, or automatic requirement-test discovery. Those
+This deliberately does not add a full SysML editor, an arbitrary filesystem
+source-root walker, a BREP/CAD pipeline, or automatic requirement-test
+discovery. Twin manifest discovery reuses the indexed file set; the remaining
 pieces can consume the stable projections above without changing the parser or
 document contracts.
 
@@ -65,7 +66,7 @@ contain three different kinds of material:
 | Scene setup, command sequencing, sampling, public queries, anti-trivial guards, and measurement | Existing USD fixture and Rhai backend over production APIs |
 | Solver/parser/schema/lifecycle mechanism assertions | Existing Rust owner tests |
 
-The stable key is the qualified SysML name. A human label such as `GR-001`
+The stable key is the qualified SysML name. A human label such as `REQ-001`
 can remain in `doc` until a standard metadata projection is implemented; do
 not add a LunCo-only annotation to the portable source. A run must produce a
 separate result artifact, not mutate the `.sysml` file. The minimum result
@@ -73,12 +74,12 @@ shape is:
 
 ```json
 {
-  "verification": "GriffinRequirements::Verify_GR001",
-  "requirement": "GriffinRequirements::GR001_MassBudget",
+  "verification": "ExampleRequirements::Verify_REQ001",
+  "requirement": "ExampleRequirements::REQ001_MassBudget",
   "source_revision": 12,
   "verdict": "pass",
   "observations": [{"name": "mass", "value": 438.2, "unit": "kg"}],
-  "evidence": [{"source": "usd", "path": "/Griffin/Rover"}],
+  "evidence": [{"source": "usd", "path": "/Vehicle/Rover"}],
   "diagnostics": []
 }
 ```
@@ -89,6 +90,10 @@ This maps to `VerificationCases::VerdictKind` (`pass`, `fail`,
 selector and JSON report are introduced.
 
 ### Required implementation slices
+
+Slices 1 and 2 below are implemented in this worktree. They remain listed as
+the contract checklist so future changes can be checked against the same
+boundary; slices 3–5 are the remaining integration work.
 
 1. Extend `lunco-sysml-ast` with requirement and verification records, subject
    bindings, constraint/doc spans, and typed `satisfy`/`verify`/realization
@@ -291,7 +296,7 @@ Expose a single application feature, analogous to `python`, `networking`, and
 sysml = ["dep:lunco-sysml", "dep:lunco-sysml-rhai"]
 ```
 
-The initial feature can be opt-in for lean server builds. Once Griffin
+The initial feature can be opt-in for lean server builds. Once a Twin's
 requirements are required by the normal production test path, include `sysml`
 in that profile. Keep any UI panels behind the existing `ui` feature; parsing
 and requirement reports must work headlessly.
@@ -345,9 +350,9 @@ absolute cache path.
 
 ## Remaining gaps after the foundation
 
-- `TwinManifest` has no `[sysml]` field even though the architecture document
-  specifies one; `deny_unknown_fields` means that optional section still needs
-  a manifest/schema decision.
+- `TwinManifest` now accepts an optional `[sysml]` section (`root` and
+  `paths`), and `Twin::discover_sysml_sources()` filters the existing file
+  index deterministically. It does not parse or walk the filesystem again.
 - The engine asset manifest lists `usda`, `wgsl`, and `rhai`, not `sysml`.
   Add SysML to the shipped manifest only if the engine library contains SysML
   assets. Twin-local documents already come from the Twin index.
@@ -355,37 +360,38 @@ absolute cache path.
   automatically. A caller still supplies the existing canonical asset/source
   event to `DocumentRegistry::open_file`.
 - No cross-file `RefIndex` adapter, async source-set worker, or requirement
-  verification hook is wired into the production `luncosim test` command yet;
-  `ValidateAsset` is now the read-only pre-flight entry point for one SysML
-  source file.
-- The AST projection currently exposes generic elements/references rather than
-  structured requirement/verification records; extraction of subjects,
-  constraints, and trace links is the next implementation slice.
-- No verification-case registry, Rhai key/revision handoff, cross-file
-  `RefIndex` adapter, async source-set worker, or production requirement
-  selector exists yet. `ValidateAsset` remains the read-only pre-flight entry
-  point for one source file.
-- The architecture and Rhai test-strategy documents now define the migration
-  contract; no existing Rhai gate has been switched until the shadow-mode and
-  evidence requirements above are met.
+  verification hook is wired into the production `luncosim test` command yet.
+  The read-only `ValidateSysml` query now accepts either one source or a
+  manifest-aware `twin://name` source set.
+- The AST projection now exposes typed attributes, subjects, documentation,
+  and `verify`/`satisfy`/realization fields for requirement and verification
+  records. Full constraint/expression evaluation remains out of scope for the
+  first subset.
+- No verification-case registry, CLI requirement selector, or typed verdict
+  sink exists yet; the Twin-local Rhai gate still owns execution and emits the
+  compatibility verdict channel.
+- The example Twin gate now reads its normative thresholds and traceability from
+  SysML while Rhai remains the executable observer. A broader automatic
+  verification selector still waits on the registry, typed verdict sink, and
+  shadow-mode/evidence requirements above.
 
-## Griffin workflow
+## Twin workflow
 
-Griffin should keep its current ownership split:
+Each Twin should keep this ownership split:
 
 - SysML: architecture, requirement IDs, satisfy/verify/realization links;
 - USD: geometry, prim identity, frames, topology, and dimensions;
 - Modelica: continuous equations and state;
 - Rhai: executable checks, mission policy, and the final verdict.
 
-The existing `GR-xxx` checks can be linked from SysML without duplicating their
+Existing `REQ-xxx` checks can be linked from SysML without duplicating their
 numeric policy. A SysML requirement record should point to a Rhai verification
 hook and, where needed, an explicit USD prim or Modelica realization. Planned
 checks must remain non-passing until a production Rhai run produces evidence.
 
 ## Acceptance sequence
 
-The first implementation should be validated with one small Griffin fixture:
+The first implementation should be validated with one small Twin fixture:
 
 1. load `.sysml` through `twin://`;
 2. verify source identity, origin, and generation;

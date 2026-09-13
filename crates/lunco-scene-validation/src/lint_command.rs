@@ -834,7 +834,7 @@ mod tests {
         CanonicalStage::from_recipe(&StageRecipe::from_source(
             "port_owner_collision.usda",
             "#usda 1.0\n\
-             def Xform \"Griffin1\" {\n\
+             def Xform \"Lander1\" {\n\
                  float inputs:release\n\
              }\n",
         ))
@@ -855,13 +855,13 @@ mod tests {
             .view()
             .prim_paths()
             .iter()
-            .any(|path| path.to_string() == "/Griffin1"));
+            .any(|path| path.to_string() == "/Lander1"));
 
         let mut world = World::new();
         world.spawn((
             UsdPrimPath {
                 stage_handle: Handle::default(),
-                path: "/Griffin1".into(),
+                path: "/Lander1".into(),
             },
             ModelicaInput,
             RuntimeActuator {
@@ -876,14 +876,14 @@ mod tests {
         let finding = &findings[0];
         assert_eq!(finding.rule, "port-owner-collision");
         assert_eq!(finding.severity, lunco_lint::LintSeverity::Warn);
-        assert_eq!(finding.subject, "/Griffin1");
+        assert_eq!(finding.subject, "/Lander1");
         assert!(finding
             .message
             .contains("PORT_OWNER_COLLISION: `release` has 2 input owners"));
         assert!(finding.message.contains("Modelica/OBC"));
         assert!(finding.message.contains("hardware port"));
-        assert!(finding.message.contains("/Griffin1.inputs:release"));
-        assert!(finding.message.contains("/Griffin1.inputs/outputs:release"));
+        assert!(finding.message.contains("/Lander1.inputs:release"));
+        assert!(finding.message.contains("/Lander1.inputs/outputs:release"));
         assert!(finding.message.contains("registry precedence 1"));
         assert!(finding.message.contains("registry precedence 2"));
         assert!(finding
@@ -896,7 +896,7 @@ mod tests {
         let stage = CanonicalStage::from_recipe(&StageRecipe::from_source(
             "port_owner_collision_clean.usda",
             "#usda 1.0\n\
-             def Xform \"Griffin1\" {\n\
+             def Xform \"Lander1\" {\n\
                  float inputs:release\n\
                  float outputs:dock_release\n\
              }\n",
@@ -906,13 +906,13 @@ mod tests {
             .view()
             .prim_paths()
             .iter()
-            .any(|path| path.to_string() == "/Griffin1"));
+            .any(|path| path.to_string() == "/Lander1"));
 
         let mut world = World::new();
         world.spawn((
             UsdPrimPath {
                 stage_handle: Handle::default(),
-                path: "/Griffin1".into(),
+                path: "/Lander1".into(),
             },
             ModelicaInput,
             RuntimeActuator {

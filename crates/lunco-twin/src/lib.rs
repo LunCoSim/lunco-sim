@@ -75,7 +75,7 @@ pub use error::TwinError;
 pub use file_kind::{FileEntry, FileKind};
 pub use manifest::{
     glob_matches, DownloadManifest, JournalManifest, ModelicaExternal, ModelicaManifest,
-    TwinChildRef, TwinManifest, TwinSettingValue, UsdManifest, DEFAULT_SCENE_GLOBS,
+    SysmlManifest, TwinChildRef, TwinManifest, TwinSettingValue, UsdManifest, DEFAULT_SCENE_GLOBS,
     MANIFEST_FILENAME,
 };
 
@@ -274,6 +274,25 @@ impl TwinMode {
                 }
             }
 
+            if let Some(sysml) = &manifest.sysml {
+                if let Some(root) = &sysml.root {
+                    if !is_safe_relative_path(root) {
+                        return Err(TwinError::PathOutsideRoot {
+                            path: twin.root.join(root),
+                            root: twin.root.clone(),
+                        });
+                    }
+                }
+                for path in &sysml.paths {
+                    if !is_safe_relative_path(path) {
+                        return Err(TwinError::PathOutsideRoot {
+                            path: twin.root.join(path),
+                            root: twin.root.clone(),
+                        });
+                    }
+                }
+            }
+
             // Recursively open children with local paths. External URL
             // children are left for the future remote-twin pipeline;
             // they stay on the manifest but don't produce a loaded
@@ -421,6 +440,7 @@ impl Twin {
                         default_scene: Some(rel),
                         scenes: None,
                     }),
+                    sysml: None,
                     modelica: None,
                     journal: None,
                     downloads: None,
@@ -556,6 +576,57 @@ impl Twin {
         roots
     }
 
+    /// Return the Twin-relative SysML/KerML sources in deterministic order.
+    ///
+    /// The indexed files remain the source of truth.  A manifest `[sysml]`
+    /// section only narrows the search to declared `paths` and optionally
+    /// places `root` first; it never causes the Twin layer to read or parse a
+    /// document.  This keeps source-set discovery reusable by the SysML
+    /// adapter and by asset-resolution code without introducing a second
+    /// filesystem walk.
+    pub fn discover_sysml_sources(&self) -> Vec<PathBuf> {
+        let Some(sysml) = self
+            .manifest
+            .as_ref()
+            .and_then(|manifest| manifest.sysml.as_ref())
+        else {
+            return self
+                .files
+                .iter()
+                .filter(|entry| is_sysml_path(&entry.relative_path))
+                .map(|entry| entry.relative_path.clone())
+                .collect();
+        };
+
+        let paths: Vec<&Path> = if sysml.paths.is_empty() {
+            vec![Path::new(".")]
+        } else {
+            sysml.paths.iter().map(PathBuf::as_path).collect()
+        };
+        let mut sources: Vec<PathBuf> = self
+            .files
+            .iter()
+            .filter(|entry| is_sysml_path(&entry.relative_path))
+            .filter(|entry| {
+                paths.iter().any(|root| {
+                    *root == Path::new(".")
+                        || entry.relative_path == *root
+                        || entry.relative_path.starts_with(root)
+                })
+            })
+            .map(|entry| entry.relative_path.clone())
+            .collect();
+        sources.sort();
+
+        if let Some(root) = &sysml.root {
+            if let Some(index) = sources.iter().position(|path| path == root) {
+                let entry = sources.remove(index);
+                sources.insert(0, entry);
+            }
+        }
+        sources
+    }
+
     /// Sub-Twins loaded from the manifest's `[[twin.children]]` with a
     /// local `path`. Read-only accessor so callers can't skip the
     /// open/load invariant. External-URL children are on the manifest
@@ -656,6 +727,14 @@ impl Twin {
         self.manifest = Some(manifest);
         Ok(())
     }
+}
+
+fn is_sysml_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("sysml") || extension.eq_ignore_ascii_case("kerml")
+        })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -784,6 +863,7 @@ version = "0.1.0"
             default_perspective: None,
             children: vec![],
             usd: None,
+            sysml: None,
             modelica: None,
             journal: None,
             downloads: None,
