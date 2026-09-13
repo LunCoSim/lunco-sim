@@ -7443,7 +7443,6 @@ dependencies = [
  "lunco-terrain-surface",
  "lunco-twin",
  "lunco-twin-journal",
- "lunco-usd",
  "lunco-usd-avian",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-runtime",
@@ -7516,7 +7515,6 @@ dependencies = [
  "lunco-time",
  "lunco-tools",
  "lunco-usd",
- "lunco-usd-bevy",
  "lunco-usd-bevy-camera",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
@@ -8380,7 +8378,6 @@ dependencies = [
  "lunco-usd-core",
  "lunco-usd-geometry",
  "openusd",
- "tempfile",
  "web-time",
 ]
 
