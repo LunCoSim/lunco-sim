@@ -152,8 +152,9 @@ Primary entry points and simulation assembly targets.
 | Crate | Binary | Responsibility |
 | :--- | :--- | :--- |
 | **`lunco-luncosim-exposures`** | — | Headless-safe runtime exposure projection plugin. Resolves authoritative ECS/domain state and authored telemetry into the shared `EngineExposures` registry for HTML, egui, API, telemetry, and remote consumers; it has no renderer or UI dependency. |
-| **`lunco-luncosim`** | `luncosim` | Headless-safe ground-physics composition root (USD + Avian + cosim + networking/API) plus the production authored-scene test runner. Windowed status, camera, terrain-shadow, environment-presentation, and offscreen-recording bridges live in `lunco-luncosim-ui`; the application still composes both through one core plugin. |
-| **`lunco-luncosim-server`** | `luncosim-server` | Headless launcher for LunCoSim (no winit/egui) with the API + networking host. Its own crate purely so it can default to headless. |
+| **`lunco-luncosim`** | `luncosim` | Windowed application shell and production authored-scene test command. It configures the renderer/window and composes `lunco-luncosim-core` with `lunco-luncosim-ui`. |
+| **`lunco-luncosim-core`** | — | Headless-safe simulation runtime shared by the GUI shell, `luncosim-server`, and scene-test runner. |
+| **`lunco-luncosim-server`** | `luncosim-server` | Thin headless launcher that depends directly on `lunco-luncosim-core` with API + networking enabled; the GUI shell is not linked. |
 | **`lunco-modelica-ui`** | `lunica` | The Modelica workbench application and UI facade. |
 | **`lunco-modelica-core`** | `lunica_worker`, `modelica_run`, `modelica_tester`, `msl_indexer`, `msl_parse_bench` | Headless Modelica worker and CLI/indexing tools; none link the workbench UI. |
 
@@ -487,7 +488,10 @@ Bevy dispatch adapter for `lunco-tools` — the engine-action execution half. De
 ### Applications
 
 **`lunco-luncosim`**
-The LunCoSim application — ground mobility + physics, loaded from USD (binary `luncosim`). A composition root rather than a UI host: `LunCoSimCorePlugin` (headless-safe sim/physics/cosim/USD/networking/API) plus an optional `LunCoSimUiPlugin` from `lunco-luncosim-ui` (egui workbench, windowed) or `LunCoSimHeadlessPlugin`. Assembles the USD scene, Avian physics, and the in-scene edit tools, and is the single shared entry point for both the `luncosim` GUI and `luncosim-server` headless binaries.
+The windowed `luncosim` application shell: command-line dispatch, renderer/window configuration, desktop integration, offscreen capture, and composition of `lunco-luncosim-core` with `lunco-luncosim-ui`. Its authored scene-test runner remains here because it is a production binary command, not a Rust test-only crate.
+
+**`lunco-luncosim-core`**
+Headless-safe LunCoSim runtime substrate shared by the GUI shell, `luncosim-server`, and authored scene-test runner: persistent world shell, Avian physics, USD loading/projection, Modelica/cosim, networking/API, exposure projection, persistence, and the schedule runner. It has no renderer, egui, workbench, picking, or tutorial policy.
 
 **`lunco-luncosim-ui`**
 Windowed LunCoSim presentation and packaging boundary: egui workbench, interactive editor composition, status/camera/terrain/environment bridges, GPU-backed offscreen recording, native window icon generation, and the UI-owned `window_icon_bytes()` API. The headless application core and `luncosim-server` do not compile its GUI/build-time graphics dependencies.
@@ -496,4 +500,4 @@ Windowed LunCoSim presentation and packaging boundary: egui workbench, interacti
 Production integration crate for the renderer-independent runtime exposure projection. `RuntimeExposuresPlugin` registers the single shared path from authoritative ECS/domain state and authored telemetry to `lunco_core::exposure::EngineExposures`; HTML, egui, API, telemetry, and remote clients consume that registry. It owns no UI, renderer, or tutorial policy, so changing exposure derivation does not recompile the application composition root.
 
 **`lunco-luncosim-server`**
-Headless launcher for the luncosim — the same app as `luncosim`, built without the GUI (no winit/egui) and with the API + networking host enabled. Exists as its own crate purely so it can default to headless (Cargo default features are per-package).
+Headless launcher for the luncosim core — a three-line binary that depends directly on `lunco-luncosim-core`, with the API + networking host enabled. The GUI shell is not in its dependency closure.

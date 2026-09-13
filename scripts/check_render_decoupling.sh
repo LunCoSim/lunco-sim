@@ -107,11 +107,16 @@ for crate in "${BANNED[@]}"; do
     fi
 done
 
-# The rule that keeps it that way: bevy_pbr is confined to the binding layer.
+# The rule that keeps it that way: bevy_pbr is confined to explicit render
+# boundaries. The workbench is a GUI render host too; it is not reachable from
+# the headless server, so it is a sanctioned enabler alongside the material
+# binder and the GUI application's dev/example targets.
 #
-# Two sanctioned enablers besides it, both non-negotiable and both documented:
+# Three sanctioned render hosts besides the material binder, all documented:
 #   * `luncosim`  — always a windowed GUI app, so the full render + windowing
 #                   stack is unconditional there by design.
+#   * `lunco-workbench` — the rendered GUI shell; it validates Bevy's PBR shadow
+#                        limits while it owns the workbench presentation.
 #   * `lunco-usd` — enables it under [dev-dependencies] ONLY, so that
 #                   `cargo check -p lunco-usd --all-targets` is honest; the
 #                   library itself is render-free. Without that line the
@@ -122,15 +127,15 @@ done
 # feature, which is a reviewable event, rather than waiting for the graph to
 # already be poisoned.
 echo
-echo "── bevy_pbr feature is confined to the binding layer ───────"
-ALLOWED_RE='lunco-render-bevy|luncosim|lunco-usd'
+echo "── bevy_pbr feature is confined to render boundaries ───────"
+ALLOWED_RE='lunco-render-bevy|luncosim|lunco-workbench|lunco-usd'
 offenders="$(grep -l '^bevy = .*"bevy_pbr"' crates/*/Cargo.toml 2>/dev/null \
     | grep -Ev "crates/($ALLOWED_RE)/Cargo.toml" || true)"
 if [ -n "$offenders" ]; then
-    echo "  FAIL  a crate outside the binding layer enables bevy_pbr:"
+    echo "  FAIL  a crate outside a render boundary enables bevy_pbr:"
     echo "$offenders" | sed 's/^/        /'
     echo "        Domain crates state appearance INTENT (lunco-render);"
-    echo "        lunco-render-bevy is the only crate that binds a material."
+    echo "        Keep the headless server's normal dependency graph render-free."
     fail=1
 else
     echo "  ok    no unsanctioned bevy_pbr enabler"

@@ -10,19 +10,12 @@ name = "luncosim-server"
 path = "src/main.rs"
 
 [dependencies]
-# The entire app (and the global allocator) lives in `lunco-luncosim`'s library;
-# this crate is a 3-line launcher. `default-features = false` drops `ui`
-# (winit/egui/workbench); `server` compiles in the HTTP API + networking host.
-# So `cargo run -p lunco-luncosim-server` is headless with NO flags — the whole
-# reason this crate exists. The API is compiled in but not LISTENING until you
-# pass `-- --api [PORT]`.
-lunco-luncosim = { path = "../lunco-luncosim", default-features = false, features = ["server"] }
+# Link the production headless runtime directly. The GUI shell is not part of
+# this dependency closure, so window/render/CLI changes do not rebuild the server.
+lunco-luncosim-core = { path = "../lunco-luncosim-core", default-features = false, features = ["server"] }
 
 [features]
 default = []
-# Optional: a windowed build of this same bin. Normally you'd just run
-# `-p lunco-luncosim` for the GUI; this is here for symmetry / debugging.
-ui = ["lunco-luncosim/ui"]
 
 [lints]
 workspace = true

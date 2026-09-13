@@ -17,10 +17,9 @@
 //! this crate grew a drawer of one-off probes: each one hand-built a headless world
 //! because there was no way to headlessly run a REAL authored scene.
 //!
-//! `luncosim test` composes the **same app the `--no-ui`
-//! server composes** (`LunCoSimCorePlugin { headless: true }` +
-//! `LunCoSimHeadlessPlugin` — literally the two plugins `run_with_mode(true)`
-//! uses), steps it by hand as fast as the CPU allows, watches the scenario's
+//! `luncosim test` composes the **same app the server composes**
+//! (`lunco-luncosim-core::build_headless_app_with_threads` plus
+//! `LunCoSimHeadlessPlugin`), steps it by hand as fast as the CPU allows, watches the scenario's
 //! telemetry verdict, and exits with a status code.
 //!
 //! ```text
@@ -143,8 +142,8 @@ use std::time::{Duration, Instant};
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 
-use crate::LunCoSimHeadlessPlugin;
 use lunco_core::telemetry::{TelemetryEvent, TelemetryValue};
+use lunco_luncosim_core::LunCoSimHeadlessPlugin;
 use lunco_modelica_core::ModelicaModel;
 use lunco_usd_core::document::UsdDocument;
 use lunco_usd_sim_cosim::PendingModelicaSource;
@@ -803,25 +802,16 @@ pub fn run() -> u8 {
 
     let dt = Duration::from_secs_f64(1.0 / cli.tick_hz);
 
-    // THE app the GUI and the headless server run, assembled exactly as
-    // `lunco_luncosim::build_sim_app(true, false)` does it — asset sources first
+    // The app the GUI and the headless server run, assembled exactly as
+    // `lunco_luncosim_core::build_headless_app_with_threads` does it — asset sources first
     // (they MUST precede `AssetPlugin`, which snapshots the source registry), then
     // the engine plugin group, then `LunCoSimCorePlugin`.
     //
-    // Re-assembling that prelude here is exactly the mistake this runner made on its
-    // first draft: it hand-mirrored the plugin list, omitted the asset-source
-    // registration, and aborted with `Res<TwinRoots> failed validation: Resource does
-    // not exist` — a resource that ships WITH the `twin://` scheme it belongs to. A
-    // test runner that assembles its own lookalike app stops testing the real one.
-    //
-    // We inline the three lines of `build_sim_app` instead of calling it for ONE
-    // reason: `TaskPoolPlugin` is configured at PluginGroup-build time and cannot be
-    // reconfigured by a plugin added afterwards, so `--threads` has to reach into the
-    // group. Every part still comes from the shipped public helpers
-    // (`register_lunco_asset_sources`, `default_plugins`), so nothing is guessed —
-    // the ONLY divergence from `build_sim_app` is the compute-pool override below.
-    let mut app =
-        crate::build_sim_app_with_threads(true, false, (cli.threads > 0).then_some(cli.threads));
+    // The core builder receives the compute-pool override at plugin-group build
+    // time, keeping scene tests on the same production composition as the server.
+    let mut app = lunco_luncosim_core::build_headless_app_with_threads(
+        (cli.threads > 0).then_some(cli.threads),
+    );
     app.add_plugins(LunCoSimHeadlessPlugin::default());
 
     // ── Determinism, installed AFTER the core plugin so it wins ──────────────

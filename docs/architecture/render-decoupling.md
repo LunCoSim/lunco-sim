@@ -96,7 +96,9 @@ doctrine applied to the last place that dodged it.
 ## The three intents
 
 `lunco-render` (render-free) and `lunco-materials` (render-free) hold the whole vocabulary.
-`lunco-render-bevy` is the **only** crate in the graph that names `bevy_pbr`, and it binds them.
+`lunco-render-bevy` is the material-binding crate. The GUI-only `lunco-workbench` also names
+Bevy's PBR limits for its rendered shadow-settings surface, but it is not reachable from the
+headless server.
 
 | intent | in | binds to | notes |
 |---|---|---|---|
@@ -226,16 +228,18 @@ text label. **Only `cargo tree` sees any of this.**
 
 Hence [`scripts/check_render_decoupling.sh`](../../scripts/check_render_decoupling.sh):
 it asserts the server links none of `wgpu`/`bevy_render`/`bevy_pbr`/`bevy_core_pipeline`/`egui`/`winit`,
-and that no crate other than `lunco-render-bevy` enables `bevy_pbr`. The review's central lesson was
+and that `bevy_pbr` remains confined to the explicit render boundaries (`lunco-render-bevy`,
+`lunco-workbench`, the GUI application, and USD visual dev targets). The review's central lesson was
 *the craft is high, the enforcement is absent.* This is the enforcement.
 
 ## What this is not
 
-It is **not** a "headless renderer" or a second render path. `lunco-render-bevy` is the only consumer of
-`bevy_pbr`, and the GUI build renders exactly as before. The one observable difference is that material
+It is **not** a "headless renderer" or a second render path. `lunco-render-bevy` remains the only
+material binder using `bevy_pbr`, and the GUI build renders exactly as before. The one observable difference is that material
 binding happens in an observer, a frame-boundary after the spawn — if any code depended on the material
 existing in the same tick as the mesh, that was a latent ordering bug worth surfacing anyway.
 
-The GUI is **not** feature-gated into the domain: there is exactly **one** `#[cfg(feature = "ui")]` in
-the whole scheme, in `LunCoSimCorePlugin::build`, and it exists only because `lunco-render-bevy` is an
-optional dependency. The simulation crates contain none.
+The GUI is **not** feature-gated into the domain. Renderer/window selection is
+owned by the `lunco-luncosim` application shell, while
+`lunco-luncosim-core` contains no UI feature or renderer dependency. The
+simulation crates contain no GUI conditionals.

@@ -296,5 +296,5 @@ prim→entity.
 - `lunco-usd-bevy-core/src/asset.rs` — `UsdStageAsset`; `lunco-usd-bevy-scene/src/lib.rs` — `UsdPrimPath`
 - `lunco-usd-core/src/usd_data.rs` — `UsdDataExt` (read composed attrs)
 - `lunco-usd-sim/src/cosim.rs` — `LoadScene` / `spawn_scene_root_with_stage`; ad-hoc prim→entity index
-- `lunco-luncosim/src/lib.rs:621` — `refresh_layered_terrain_layers` (per-domain
-  projection-on-`Modified` precedent)
+- `lunco-usd-terrain/src/lib.rs` — `refresh_layered_terrain_layers` (the
+  per-domain projection-on-`Modified` precedent)

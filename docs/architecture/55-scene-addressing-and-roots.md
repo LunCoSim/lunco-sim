@@ -45,7 +45,7 @@ The current entry points are deliberately split by ownership:
   registered scene schemes and rejects bare or filesystem paths.
 - `lunco_assets::engine_asset_uri` — converts an in-tree library reference to
   its canonical `lunco://` address at command boundaries.
-- `load_startup_scene` (`lunco-luncosim/src/lib.rs`) and the USD `on_open_file`
+- `load_startup_scene` (`lunco-luncosim-core/src/lib.rs`) and the USD `on_open_file`
   observer (`lunco-usd/src/commands.rs`) both resolve the owning root and enter
   the same asynchronous Twin scan; its completion registers the root and
   enters the same doc-first `LoadScene` path.
@@ -114,7 +114,7 @@ the root. No `twin.toml` is required, and its siblings resolve correctly.
 pub fn root_for_file(file: &Path) -> PathBuf   // nearest twin.toml ancestor, else parent
 ```
 
-Implemented. `load_startup_scene` and the interactive open path both use this
+Implemented. The core `load_startup_scene` and the interactive open path both use this
 resolver; neither performs its own ancestor walk.
 
 ### 3. Identity is `(assigned_authority, rel)`

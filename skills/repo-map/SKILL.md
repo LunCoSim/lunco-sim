@@ -131,4 +131,4 @@ Use this to jump to the right one; read the index for the full responsibility.
 - **API port is 4101** by default; always pass an explicit free port when another
   session owns it.
 - **Don't `pkill`** a running app to restart — use the API `Exit` command (see `test-via-api`).
-- Composition roots: `lunco-luncosim` = `LunCoSimCorePlugin` (+ optional `lunco-luncosim-ui`/headless plugin), shared by both `luncosim` and `luncosim-server`. USD stage composition is owned by `lunco-usd-bevy::flatten_stage`.
+- Composition roots: `lunco-luncosim-core` owns the headless-safe runtime; `lunco-luncosim` composes it with `lunco-luncosim-ui` for the GUI; `lunco-luncosim-server` launches core directly. USD stage composition is owned by `lunco-usd-bevy::flatten_stage`.

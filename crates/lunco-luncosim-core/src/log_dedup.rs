@@ -90,7 +90,7 @@ impl Visit for MsgVisitor {
 }
 
 /// Per-layer filter that suppresses repeated WARN/ERROR lines within [`WINDOW`].
-pub(crate) struct DedupFilter;
+pub struct DedupFilter;
 
 impl<S> Filter<S> for DedupFilter {
     fn enabled(&self, _meta: &Metadata<'_>, _cx: &Context<'_, S>) -> bool {
@@ -145,7 +145,7 @@ impl<S> Filter<S> for DedupFilter {
 
 /// Registers the summary-flush system. The filter itself is installed on the
 /// fmt layer in `LogPlugin` (see `crate::default_plugins`).
-pub(crate) struct LogDedupPlugin;
+pub struct LogDedupPlugin;
 
 impl Plugin for LogDedupPlugin {
     fn build(&self, app: &mut App) {

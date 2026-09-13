@@ -1,0 +1,78 @@
+[package]
+name = "lunco-luncosim-core"
+version = "0.6.0-dev"
+edition = "2021"
+license.workspace = true
+description = "Headless-safe LunCoSim application runtime and simulation composition"
+
+[lib]
+name = "lunco_luncosim_core"
+path = "src/lib.rs"
+
+[dependencies]
+bevy = { workspace = true, features = ["bevy_gltf", "bevy_mesh", "bevy_light", "bevy_window"] }
+avian3d = { workspace = true }
+big_space = { workspace = true }
+lunco-physics = { workspace = true }
+lunco-core = { path = "../lunco-core" }
+lunco-hardware = { path = "../lunco-hardware" }
+lunco-telemetry = { path = "../lunco-telemetry" }
+lunco-mobility = { path = "../lunco-mobility" }
+lunco-controller = { path = "../lunco-controller" }
+lunco-avatar = { path = "../lunco-avatar", default-features = false }
+lunco-celestial = { path = "../lunco-celestial", default-features = false }
+lunco-celestial-ephemeris = { path = "../lunco-celestial-ephemeris" }
+lunco-terrain-globe = { path = "../lunco-terrain-globe" }
+lunco-obstacle-field = { path = "../lunco-obstacle-field" }
+lunco-terrain-surface = { path = "../lunco-terrain-surface" }
+lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
+lunco-luncosim-exposures = { path = "../lunco-luncosim-exposures", default-features = false }
+lunco-experiments = { path = "../lunco-experiments" }
+serde_json = { workspace = true }
+lunco-cosim = { path = "../lunco-cosim" }
+lunco-usd-avian = { path = "../lunco-usd-avian" }
+lunco-environment = { path = "../lunco-environment" }
+lunco-scripting = { path = "../lunco-scripting" }
+lunco-usd = { path = "../lunco-usd", default-features = false }
+lunco-usd-bevy-runtime = { path = "../lunco-usd-bevy-runtime" }
+lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
+lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
+lunco-usd-core = { path = "../lunco-usd-core" }
+lunco-usd-sim = { path = "../lunco-usd-sim" }
+lunco-usd-sim-cosim = { path = "../lunco-usd-sim-cosim" }
+lunco-usd-sim-domain = { path = "../lunco-usd-sim-domain" }
+lunco-usd-terrain = { path = "../lunco-usd-terrain" }
+lunco-scene-commands = { path = "../lunco-scene-commands" }
+lunco-scene-authoring = { path = "../lunco-scene-authoring" }
+lunco-scene-validation = { path = "../lunco-scene-validation" }
+lunco-web = { workspace = true }
+lunco-assets = { workspace = true }
+lunco-workspace = { path = "../lunco-workspace" }
+lunco-twin = { path = "../lunco-twin" }
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
+lunco-storage = { path = "../lunco-storage" }
+lunco-api-transport = { path = "../lunco-api-transport", optional = true, default-features = false }
+lunco-networking = { path = "../lunco-networking", optional = true, default-features = false }
+lunco-twin-journal = { path = "../lunco-twin-journal", optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+mimalloc = "0.1"
+
+[features]
+default = []
+server = ["api-transport", "transport-http", "networking"]
+celestial = ["lunco-celestial/embed-assets"]
+api-transport = ["dep:lunco-api-transport", "lunco-modelica-core/api"]
+transport-http = ["lunco-api-transport/transport-http", "lunco-networking?/transport-http"]
+networking = [
+    "dep:lunco-networking",
+    "lunco-networking/networking",
+    "lunco-luncosim-exposures/networking",
+    "api-transport",
+    "dep:lunco-twin-journal",
+]
+net-diag = ["networking", "lunco-networking/net-diag"]
+python = ["lunco-scripting/python", "lunco-usd-sim-cosim/python"]
+
+[lints]
+workspace = true
