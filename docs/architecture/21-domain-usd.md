@@ -758,7 +758,7 @@ the shipped asset corpus. Ownership follows the narrowest production boundary:
 - `crates/lunco-usd-avian/src/lib.rs` — low-level Avian collider/joint extraction mechanisms with in-memory USDA fixtures; shipped asset and runtime ownership stays in the Rhai scene-test gate
 - `crates/lunco-usd-sim-domain/src/lib.rs` — low-level component-network projection, synthesis, and actuator lowering mechanisms
 - `crates/lunco-usd-sim/tests/usd_connection_mechanics.rs` — generic connection derivation and transform mechanics
-- `assets/scenarios/tests/*.rhai` through the production `luncosim test` gate — composed USD → Bevy → Avian → simulation outcomes, including rover structure, wheel realization, wiring, EPS, and link visibility
+- `assets/scenarios/tests/*.rhai` through the production `luncosim test` gate — composed USD → Bevy → Avian → simulation outcomes, including rover structure, wheel realization, wiring, EPS, link visibility, catalog discovery, and mounted component/material contracts
 - `crates/lunco-usd-bevy-core/src/point_instancer.rs` — required/optional PointInstancer arrays, prototype ordering, transforms, ids, masking, and negative malformed-data cases
 - `assets/scenes/tests/point_instancer.usda` + `assets/scenarios/tests/point_instancer.rhai` — production composed-stage acceptance for the standard PointInstancer authoring contract
 - `assets/scenes/tests/parametric_surface.usda` + `assets/scenarios/tests/parametric_surface.rhai` — production composed-stage acceptance for shipped `LunCoLatheAPI` reflector and nozzle assets
