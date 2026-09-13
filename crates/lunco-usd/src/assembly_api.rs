@@ -5,7 +5,6 @@
 //! projection. It does not maintain a second asset graph or infer an active
 //! document from UI state.
 
-use bevy::asset::AssetServer;
 use bevy::prelude::World;
 use lunco_api::queries::ApiQueryProvider;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
@@ -89,26 +88,6 @@ fn document_snapshot(
     }))
 }
 
-/// Resolve an explicitly mapped document to its canonical composed stage.
-/// Callers requiring the current document generation must check the projection
-/// cursor on `DocBackedTwinScenes` before consuming this derived stage.
-pub fn canonical_stage_for_document(
-    world: &World,
-    doc: DocumentId,
-) -> Option<&lunco_usd_bevy_core::canonical::CanonicalStage> {
-    let (name, rel) = world
-        .get_resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>()?
-        .coords_of(doc)?;
-    let twin_path = lunco_assets::twin_uri(&name, &rel);
-    let stage_id = world
-        .get_resource::<AssetServer>()?
-        .get_handle::<lunco_usd_bevy_core::UsdStageAsset>(twin_path)?
-        .id();
-    world
-        .get_non_send::<lunco_usd_bevy_core::canonical::CanonicalStages>()?
-        .get(stage_id)
-}
-
 fn composed_attribute_inspection(
     world: &World,
     doc: DocumentId,
@@ -163,7 +142,7 @@ fn composed_attribute_inspection(
 
     // Paths introduced by references and other external composition arcs are
     // available only on the fully resolved live stage.
-    if let Some(stage) = canonical_stage_for_document(world, doc) {
+    if let Some(stage) = lunco_usd_bevy_twin::canonical_stage_for_document(world, doc) {
         let reader = stage.view();
         let attributes = reader
             .attr_names(path)
@@ -250,7 +229,7 @@ fn canonical_reference_json(
     doc: DocumentId,
     path: &SdfPath,
 ) -> Option<serde_json::Value> {
-    let stage = canonical_stage_for_document(world, doc)?;
+    let stage = lunco_usd_bevy_twin::canonical_stage_for_document(world, doc)?;
     let prim = stage.stage().prim(path.clone());
     if !prim.is_valid().ok()? {
         return None;
@@ -456,8 +435,8 @@ impl ApiQueryProvider for InspectUsdDocumentProvider {
         };
         let journal = journal_position(world, doc);
         let root_path = SdfPath::abs_root();
-        let canonical_default_prim =
-            canonical_stage_for_document(world, doc).and_then(|stage| stage.view().default_prim());
+        let canonical_default_prim = lunco_usd_bevy_twin::canonical_stage_for_document(world, doc)
+            .and_then(|stage| stage.view().default_prim());
 
         let mut response = serde_json::json!({
             "doc_id": doc,
@@ -513,8 +492,8 @@ impl ApiQueryProvider for InspectUsdDocumentProvider {
             if let Some(canonical) = canonical_reference_json(world, doc, &path) {
                 references["canonical_stage"] = canonical;
             }
-            let canonical_kind =
-                canonical_stage_for_document(world, doc).and_then(|stage| stage.view().kind(&path));
+            let canonical_kind = lunco_usd_bevy_twin::canonical_stage_for_document(world, doc)
+                .and_then(|stage| stage.view().kind(&path));
             response["prim"] = serde_json::json!({
                 "path": raw_path,
                 "exists": exists,
@@ -792,7 +771,7 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
             }
         };
 
-        if let Some(stage) = canonical_stage_for_document(world, doc) {
+        if let Some(stage) = lunco_usd_bevy_twin::canonical_stage_for_document(world, doc) {
             let prim = stage.stage().prim(path.clone());
             let composed_exists = match prim.is_valid() {
                 Ok(exists) => exists,

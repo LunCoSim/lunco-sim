@@ -1682,7 +1682,7 @@ fn proposal_diagnostics(diagnostics: &[String]) -> String {
 /// flattened scene or a second filesystem resolver. The document replaces the
 /// recipe root with its current opinions for each synchronous operation.
 fn refresh_authoring_recipe(world: &mut World, doc: DocumentId) {
-    let recipe = crate::assembly_api::canonical_stage_for_document(world, doc).map(|stage| {
+    let recipe = lunco_usd_bevy_twin::canonical_stage_for_document(world, doc).map(|stage| {
         lunco_usd_core::StageRecipe {
             root_id: stage.scene_layer.clone(),
             bytes: stage.layer_bytes_snapshot(),
@@ -2319,7 +2319,7 @@ fn validate_live_attribute_types(
         })
         .collect();
 
-    let Some(stage) = crate::assembly_api::canonical_stage_for_document(world, doc) else {
+    let Some(stage) = lunco_usd_bevy_twin::canonical_stage_for_document(world, doc) else {
         let Some(composed) = world
             .get_resource::<DocumentRegistry<UsdDocument>>()
             .and_then(|registry| registry.host(doc))

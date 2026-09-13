@@ -15,7 +15,10 @@ use std::path::{Path, PathBuf};
 use bevy::asset::{AssetId, AssetServer};
 use bevy::prelude::*;
 use lunco_doc::DocumentId;
-use lunco_usd_bevy_core::UsdStageAsset;
+use lunco_usd_bevy_core::{
+    canonical::{CanonicalStage, CanonicalStages},
+    UsdStageAsset,
+};
 
 /// A USD document transitioned from a Twin-only scene lease to a user-facing
 /// session lease.
@@ -278,6 +281,24 @@ pub fn scene_document_for(
     let rel_path = asset_path.path().to_string_lossy();
     let (name, rel) = lunco_assets::split_twin_rel(&rel_path)?;
     backed.doc_for(name, rel)
+}
+
+/// Resolve a document-backed Twin scene to its already-mounted canonical USD
+/// stage.
+///
+/// The Twin map owns the document-to-`twin://` identity, while the USD Bevy
+/// core owns canonical stage storage. This function only joins those existing
+/// owners; it does not load, compose, or project a stage.
+pub fn canonical_stage_for_document(world: &World, doc: DocumentId) -> Option<&CanonicalStage> {
+    let (name, rel) = world
+        .get_resource::<DocBackedTwinScenes>()?
+        .coords_of(doc)?;
+    let twin_path = lunco_assets::twin_uri(&name, &rel);
+    let stage_id = world
+        .get_resource::<AssetServer>()?
+        .get_handle::<UsdStageAsset>(twin_path)?
+        .id();
+    world.get_non_send::<CanonicalStages>()?.get(stage_id)
 }
 
 /// Event-driven invalidation state for the live Twin projection owner.

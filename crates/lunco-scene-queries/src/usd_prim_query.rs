@@ -75,7 +75,7 @@ use lunco_usd_bevy_core::{
 use lunco_usd_bevy_scene::collision::{collision_aabb, prim_geometry_aabb, ObjectAabb};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_bevy_scene::UsdSceneRoot;
-use lunco_usd_bevy_twin::{scene_document_for, DocBackedTwinScenes};
+use lunco_usd_bevy_twin::{canonical_stage_for_document, scene_document_for, DocBackedTwinScenes};
 use lunco_usd_core::author::open_doc_stage;
 use lunco_usd_core::document::UsdDocument;
 use openusd::sdf::{Path as SdfPath, Value};
@@ -737,7 +737,7 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
             let canonical = world
                 .get_non_send::<CanonicalStages>()
                 .and_then(|stages| match doc {
-                    Some(doc) => lunco_usd::assembly_api::canonical_stage_for_document(world, doc),
+                    Some(doc) => canonical_stage_for_document(world, doc),
                     None => live_stage.and_then(|id| stages.get(id)),
                 });
 

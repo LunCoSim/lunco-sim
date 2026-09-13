@@ -295,7 +295,7 @@ prim→entity.
 - `lunco-scene-authoring/src/properties.rs` — `SetObjectProperty` struct and observers
 - `lunco-scene-authoring/src/properties.rs` — `on_set_object_property`
 - `lunco-usd-core/src/document.rs` — `UsdOp::SetAttribute` apply (commit + inverse)
-- `lunco-usd-bevy-twin/src/lib.rs` — document-backed Twin identity, leases, and stage lookup
+- `lunco-usd-bevy-twin/src/lib.rs` — document-backed Twin identity, leases, document-to-mounted-stage lookup, and stage ownership state
 - `lunco-usd/src/twin_projection.rs` — `sync_twin_overlays` and document-backed mounts
 - `lunco-usd/src/live_consume.rs` — `project_stage_changes` (E1/E2 consumer)
 - `lunco-usd/src/commands.rs` — scene command admission and document registration
