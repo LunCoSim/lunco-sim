@@ -53,6 +53,18 @@ terrain selection into Rust. USD-authored `UsdShade` source and map roles remain
 the source of intent, while the existing terrain reconciler supplies only the
 engine-derived products that USD did not author.
 
+### Shadow ownership
+
+Static terrain that opts into `HorizonShadowTerrain` remains both a native
+directional-shadow caster and receiver. Bevy's cascaded shadow map owns the
+mesh-accurate near field and carries dynamic-object shadows onto the surface;
+the heightfield cache or march fades in outside the authored CSM range. The
+static terrain shaders use `csm_far` as that handoff boundary, so the two
+systems do not multiply the same terrain self-shadow in their overlap. Streamed
+tiles use the same receiver contract but are `NotShadowCaster` because their
+resident tile set is too large to add to every cascade; their horizon cache is
+their terrain self-shadow source at all distances.
+
 ### Distance and evidence contract
 
 | Distance | Required appearance | Allowed work |

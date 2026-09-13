@@ -16,6 +16,7 @@
 //! | photometry defaults agree | the same site would read differently depending on whether its terrain streamed |
 //! | linked terrain stages share one `Material` ABI | the fragment packed values at offsets the geomorph vertex interpreted as unrelated controls |
 //! | DEM normals cross one local-to-world boundary | coarse LODs became dark/black when a body-fixed site rotated relative to the render frame |
+//! | static terrain keeps the CSM receiver handoff | the horizon binder disabled native terrain reception even though the static shaders still applied CSM lighting |
 //!
 //! Source-level on purpose: this crate deliberately carries no `wgpu`/`naga` (see
 //! its Cargo.toml), and every defect above is visible in the text. A GPU-side
@@ -287,6 +288,39 @@ fn photometry_defaults_agree_across_every_terrain_path() {
                 ),
             }
         }
+    }
+}
+
+/// Static horizon terrain uses native CSM for near-field and dynamic-object
+/// shadows, then hands terrain self-shadowing to the heightfield cache outside
+/// the cascade. Keep that ownership split identical across all static shader
+/// paths; otherwise changing a material shader silently removes terrain
+/// shadows or multiplies two independent visibility terms.
+#[test]
+fn static_terrain_shadow_paths_keep_csm_receiver_handoff() {
+    for file in [
+        "terrain_layered.wgsl",
+        "regolith.wgsl",
+        "terrain_shadow.wgsl",
+    ] {
+        let code = code_only(&read(file));
+        assert!(
+            code.contains("pbr_input.flags = mesh[in.instance_index].flags"),
+            "{file} must preserve the mesh shadow-receiver flags for native CSM"
+        );
+        assert!(
+            code.contains("pbr_functions::apply_pbr_lighting"),
+            "{file} must apply native CSM lighting before the horizon term"
+        );
+        assert!(
+            code.contains("smoothstep(csm_far, csm_far * 1.1"),
+            "{file} must start the heightfield shadow handoff outside the CSM range"
+        );
+        assert!(
+            !code.contains("smoothstep(csm_far * 0.5")
+                && !code.contains("smoothstep(csm_far * 0.9"),
+            "{file} retains the obsolete overlapping half-cascade handoff"
+        );
     }
 }
 

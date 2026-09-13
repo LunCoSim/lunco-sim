@@ -50,10 +50,9 @@
 //!
 //!    The terrain stays a **CSM caster**: within the sun's cascade range the
 //!    shadow map renders the actual mesh, giving mesh-accurate self-shadow
-//!    and contact shadows. The march fades in only beyond ~half the cascade
-//!    range (`csm_far` carries the CSM far bound), so its heightfield-
-//!    texel-quantized edges never show up close and near pixels skip the
-//!    march entirely.
+//!    and contact shadows. The march fades in just outside the cascade range
+//!    (`csm_far` carries the CSM far bound), so its heightfield-texel-quantized
+//!    edges never show up close and near pixels skip the march entirely.
 //! 2b. **Shadow cache** (sun-driven, off-thread on native): the per-pixel
 //!     march is expensive — the configured number of steps × the configured cache
 //!     supersample count per fragment
@@ -86,7 +85,7 @@ use crate::SunRenderState;
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
 use bevy::image::ImageSampler;
-use bevy::light::{CascadeShadowConfig, NotShadowReceiver};
+use bevy::light::CascadeShadowConfig;
 use bevy::math::Affine3A;
 use bevy::mesh::{Indices, VertexAttributeValues};
 use bevy::platform::time::Instant;
@@ -700,11 +699,10 @@ fn bake_heightfield(positions: &[[f32; 3]], indices: &[u32], resolution: u32) ->
 
 /// Collects finished bakes: installs the `HorizonMap` (CPU field + R32Float
 /// GPU texture) and gives the mesh planar UVs (how shaders address the
-/// heightfield). The terrain deliberately STAYS a CSM caster, so it continues
-/// to occlude dynamic PBR objects such as the rover. It is not a CSM receiver:
-/// its material owns the authoritative heightfield self-shadow. Combining the
-/// two double-darkens grazing-sun terrain and exposes the cascade mesh's
-/// saw-tooth terminator. Material wiring happens render-side
+/// heightfield). A static terrain remains in the native directional-shadow
+/// caster/receiver set: CSM owns the mesh-accurate near field and shadows cast
+/// by dynamic objects, while the heightfield path takes over beyond the CSM
+/// range. Material wiring happens render-side
 /// (`lunco-render-bevy::horizon_shade::wire_terrain_materials`).
 pub fn finish_horizon_bakes(
     mut commands: Commands,
@@ -758,10 +756,13 @@ fn install_horizon_map(
             mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
         }
     }
-    // The heightfield shader is the single terrain self-shadow authority. The
-    // terrain remains a CSM caster, but must not receive the coarse cascade
-    // before its own visibility factor is applied.
-    commands.entity(entity).try_insert(NotShadowReceiver);
+    // This static mesh uses native CSM for the near field and dynamic-object
+    // shadows. Remove a stale engine marker if this entity is reused after an
+    // older horizon binding; the shader's csm_far handoff prevents the horizon
+    // visibility term from double-darkening the same terrain pixels.
+    commands
+        .entity(entity)
+        .try_remove::<bevy::light::NotShadowReceiver>();
     install_horizon_map_from_field(commands, images, entity, field, millis);
 }
 
@@ -1155,6 +1156,32 @@ impl Plugin for HorizonShadowPlugin {
 mod tests {
     use super::*;
 
+    #[derive(Resource)]
+    struct HorizonInstallTarget(Entity);
+
+    fn install_horizon_fixture(
+        mut commands: Commands,
+        mut meshes: ResMut<Assets<Mesh>>,
+        mut images: ResMut<Assets<Image>>,
+        target: Res<HorizonInstallTarget>,
+        mesh_query: Query<&Mesh3d>,
+    ) {
+        let entity = target.0;
+        let mesh = mesh_query
+            .get(entity)
+            .expect("the horizon fixture must keep its mesh");
+        install_horizon_map(
+            &mut commands,
+            &mut meshes,
+            &mut images,
+            entity,
+            mesh,
+            make_field(2, Vec2::ZERO, Vec2::ONE, vec![0.0; 4]),
+            0,
+        );
+        commands.remove_resource::<HorizonInstallTarget>();
+    }
+
     fn make_field(res: u32, min: Vec2, size: Vec2, heights: Vec<f32>) -> HeightField {
         assert_eq!(heights.len(), (res * res) as usize);
         HeightField {
@@ -1179,6 +1206,42 @@ mod tests {
         assert_eq!(sun_diameter_deg(Some(&SunAngularDiameter(-1.0))), None);
         assert_eq!(sun_diameter_deg(Some(&SunAngularDiameter(f32::NAN))), None);
         assert_eq!(sun_diameter_deg(Some(&SunAngularDiameter(181.0))), None);
+    }
+
+    #[test]
+    fn horizon_install_restores_native_terrain_shadow_reception() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(bevy::asset::AssetPlugin::default())
+            .init_asset::<Image>()
+            .init_asset::<Mesh>();
+
+        let mesh = Mesh::new(
+            bevy::mesh::PrimitiveTopology::TriangleList,
+            RenderAssetUsages::default(),
+        )
+        .with_inserted_attribute(
+            Mesh::ATTRIBUTE_POSITION,
+            vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+        )
+        .with_inserted_indices(Indices::U32(vec![0, 1, 2]));
+        let mesh_handle = app.world_mut().resource_mut::<Assets<Mesh>>().add(mesh);
+        let entity = app
+            .world_mut()
+            .spawn((Mesh3d(mesh_handle), bevy::light::NotShadowReceiver))
+            .id();
+        app.insert_resource(HorizonInstallTarget(entity));
+        app.add_systems(Update, install_horizon_fixture);
+
+        app.update();
+
+        assert!(app.world().entity(entity).contains::<HorizonMap>());
+        assert!(
+            !app.world()
+                .entity(entity)
+                .contains::<bevy::light::NotShadowReceiver>(),
+            "static horizon terrain must receive native CSM and dynamic-object shadows"
+        );
     }
 
     /// Zenith sun (straight up): every texel is fully lit — the march

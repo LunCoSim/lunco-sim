@@ -325,7 +325,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     let csm_far = mat.csm_far;
     var march_blend = 1.0;
     if (csm_far > 0.0) {
-        march_blend = smoothstep(csm_far * 0.5, csm_far * 0.9, dist);
+        march_blend = smoothstep(csm_far, csm_far * 1.1, dist);
     }
     if (march_blend > 0.0) {
         let sun_vis = sun_visibility_resolved(
