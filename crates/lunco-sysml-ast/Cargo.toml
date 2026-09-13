@@ -7,9 +7,9 @@ description = "Pure SysML v2 parsing, resolution, and source diagnostics"
 
 [dependencies]
 serde = { workspace = true }
-sysmlv2-semantics = { workspace = true }
-sysmlv2-syntax = { workspace = true }
-sysmlv2-stdlib = { workspace = true }
+sysml_semantics = { package = "sysmlv2-semantics", version = "=0.1.1" }
+sysml_syntax = { package = "sysmlv2-syntax", version = "=0.1.2" }
+sysml_stdlib = { package = "sysmlv2-stdlib", version = "=0.1.0" }
 
 [lints]
 workspace = true

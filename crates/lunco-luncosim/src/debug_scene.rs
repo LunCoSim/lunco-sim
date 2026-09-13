@@ -1330,7 +1330,7 @@ pub fn run() -> u8 {
 fn list_scene_tests() -> u8 {
     let scenes_dir = lunco_assets::assets_dir_abs().join("scenes/tests");
     let assets_root = lunco_assets::assets_dir_abs();
-    let tests = match lunco_scene_commands::test_discovery::discover_scene_tests(&scenes_dir) {
+    let tests = match lunco_scene_validation::test_discovery::discover_scene_tests(&scenes_dir) {
         Ok(tests) => tests,
         Err(error) => {
             eprintln!("scene test discovery failed: {error}");

@@ -187,6 +187,9 @@ recipes and their acceptance scenes stay in the owning Twin.
    `luncosim test --list` discovers every scene under `assets/scenes/tests/`
    through composed USD, resolves its test Rhai source, and classifies the
    execution domain from the source's top-level literal `TEST_KIND` constant.
+   The production discovery API lives in `lunco-scene-validation`, alongside
+   the asset and stage validation it reuses; the scene mutation crate does not
+   own test inventory.
    Omission means deterministic headless execution; `TEST_KIND = "graphics"`
    selects the GPU-backed renderer, while `TEST_KIND = "editor"` selects the
    production windowed host for document/preview/selection workflows.

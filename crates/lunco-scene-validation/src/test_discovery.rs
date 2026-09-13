@@ -42,6 +42,7 @@ pub enum SceneTestKind {
 }
 
 impl SceneTestKind {
+    /// Returns the stable command-line spelling used by `luncosim test --list`.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Headless => HEADLESS_TEST_KIND,
@@ -54,7 +55,9 @@ impl SceneTestKind {
 /// One scene and the execution domain declared by its authored test program.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SceneTest {
+    /// The authored USD scene that binds the test observer.
     pub scene_path: PathBuf,
+    /// The runtime domain selected by the observer's static declaration.
     pub kind: SceneTestKind,
 }
 

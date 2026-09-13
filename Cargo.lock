@@ -7432,12 +7432,10 @@ dependencies = [
  "lunco-readiness",
  "lunco-render",
  "lunco-render-bevy",
- "lunco-scene-commands",
  "lunco-scene-validation",
  "lunco-scripting",
  "lunco-settings",
  "lunco-storage",
- "lunco-sysml-rhai",
  "lunco-terrain-surface",
  "lunco-twin",
  "lunco-usd-avian",
@@ -7610,7 +7608,6 @@ name = "lunco-luncosim-server"
 version = "0.6.0-dev"
 dependencies = [
  "lunco-luncosim-core",
- "lunco-sysml-rhai",
 ]
 
 [[package]]
@@ -8017,7 +8014,6 @@ dependencies = [
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-environment",
- "lunco-hooks-rhai",
  "lunco-physics",
  "lunco-scene-authoring",
  "lunco-scene-catalog",
@@ -8031,7 +8027,6 @@ dependencies = [
  "lunco-usd-core",
  "lunco-workspace",
  "openusd",
- "rhai",
  "tempfile",
 ]
 

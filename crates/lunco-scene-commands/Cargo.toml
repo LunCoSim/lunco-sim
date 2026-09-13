@@ -39,12 +39,10 @@ lunco-usd-core = { path = "../lunco-usd-core" }
 openusd = { workspace = true }
 # Active-document resolution for C4b runtime-layer persistence (ECS-only, no UI).
 lunco-workspace = { path = "../lunco-workspace" }
-lunco-hooks-rhai = { path = "../lunco-hooks-rhai" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-physics = { path = "../lunco-physics" }
 lunco-avatar = { path = "../lunco-avatar", default-features = false }
 lunco-assets = { path = "../lunco-assets" }
-rhai = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 
