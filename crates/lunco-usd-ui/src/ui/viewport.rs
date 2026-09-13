@@ -75,7 +75,6 @@ use lunco_render::{
     RenderQualityProfile, RenderingQualitySettings,
 };
 use lunco_settings::{AppSettingsExt, SettingsSection};
-use lunco_usd_bevy::PendingUsdMesh;
 use lunco_usd_bevy_core::{is_descendant_or_self, UsdStageAsset};
 use lunco_usd_bevy_scene::{
     UsdPreviewOnly, UsdPrimPath, UsdSceneAwaitingStage, UsdSceneGeometryPending, UsdSceneProjected,
@@ -1355,7 +1354,6 @@ fn reconcile_preview_projection_state(
             Has<UsdSceneAwaitingStage>,
             Has<UsdSceneProjectionQueued>,
             Has<UsdSceneGeometryPending>,
-            Has<PendingUsdMesh>,
         ),
         With<UsdPreviewOnly>,
     >,
@@ -1366,7 +1364,6 @@ fn reconcile_preview_projection_state(
         Has<UsdSceneAwaitingStage>,
         Has<UsdSceneProjectionQueued>,
         Has<UsdSceneGeometryPending>,
-        Has<PendingUsdMesh>,
         Has<UsdSceneProjectionFailed>,
     )>,
     parents: Query<&ChildOf>,
@@ -1385,14 +1382,13 @@ fn reconcile_preview_projection_state(
 
     for (preview, doc, root, stage_id) in sessions {
         let root_ready = roots.get(root).is_ok_and(
-            |(_, path, synced, failed, awaiting, queued, mesh_pending, pending_mesh)| {
+            |(_, path, synced, failed, awaiting, queued, mesh_pending)| {
                 path.stage_handle.id() == stage_id
                     && synced
                     && !failed
                     && !awaiting
                     && !queued
                     && !mesh_pending
-                    && !pending_mesh
             },
         );
         let descendants_ready = root_ready
@@ -1406,11 +1402,9 @@ fn reconcile_preview_projection_state(
                     path.stage_handle.id() == stage_id
                         && preview_entity_belongs_to_root(*entity, root, &parents)
                 })
-                .all(
-                    |(_, _, synced, awaiting, queued, mesh_pending, pending_mesh, failed)| {
-                        synced && !awaiting && !queued && !mesh_pending && !pending_mesh && !failed
-                    },
-                );
+                .all(|(_, _, synced, awaiting, queued, mesh_pending, failed)| {
+                    synced && !awaiting && !queued && !mesh_pending && !failed
+                });
         let generation = registry.host(doc).map(|host| host.document().generation());
         let Some(session) = state.session_mut(preview) else {
             continue;

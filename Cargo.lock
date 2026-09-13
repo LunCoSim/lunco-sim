@@ -8697,7 +8697,6 @@ dependencies = [
  "lunco-storage",
  "lunco-theme",
  "lunco-usd",
- "lunco-usd-bevy",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
  "lunco-usd-bevy-twin",
