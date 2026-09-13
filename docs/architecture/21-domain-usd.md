@@ -738,8 +738,10 @@ the `ControlAnimation` command (API/MCP) and the Inspector **Animation** section
 (T5/T7) for the clock model.
 
 ### Testing
-All runtime acceptance tests load **real USD files** through the same pipeline
-as runtime. Ownership follows the narrowest production boundary:
+Production runtime acceptance tests load **real USD files** through the same
+pipeline as runtime. Low-level projection tests use synthetic USDA composed
+in-memory so they isolate the reader/mechanism without coupling Rust tests to
+the shipped asset corpus. Ownership follows the narrowest production boundary:
 - `crates/lunco-usd-bevy-core/src/{asset,authoring,canonical,read,compose,view}.rs` — prepared asset, authored-layer, composed-stage, and live-stage substrate
 - `crates/lunco-usd-bevy-core/tests/stage_reads.rs` — public composed-stage, `StageView`, and prepared-reader integration contracts
 - `crates/lunco-usd-bevy-scene/src/{lib,geometry,collision}.rs` — render-free ECS scene identity, lifecycle, ancestry, shared USD geometry readers, and composed collision/placement envelopes
@@ -753,6 +755,7 @@ as runtime. Ownership follows the narrowest production boundary:
 - `crates/lunco-usd-queries/tests/query_api.rs` — public inspection, edit-session, assembly-target, and document-sync query contracts
 - `crates/lunco-usd/tests/live_spawn_projection.rs` — document-backed USD authoring and raw asset composition facts
 - `crates/lunco-usd-avian-lint/src/lib.rs` — composed `UsdPhysics` fact production for the authored lint policy
+- `crates/lunco-usd-avian/src/lib.rs` — low-level Avian collider/joint extraction mechanisms with in-memory USDA fixtures; shipped asset and runtime ownership stays in the Rhai scene-test gate
 - `crates/lunco-usd-sim-domain/src/lib.rs` — low-level component-network projection, synthesis, and actuator lowering mechanisms
 - `crates/lunco-usd-sim/tests/usd_connection_mechanics.rs` — generic connection derivation and transform mechanics
 - `assets/scenarios/tests/*.rhai` through the production `luncosim test` gate — composed USD → Bevy → Avian → simulation outcomes, including rover structure, wheel realization, wiring, EPS, and link visibility

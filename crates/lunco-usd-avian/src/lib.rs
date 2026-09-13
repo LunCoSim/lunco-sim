@@ -4640,12 +4640,7 @@ pub struct AuthoredInitialVelocity {
     pub angular: Option<DVec3>,
 }
 
-// USDA fixtures are written to a temp dir and composed from disk. Native-only
-// test code: the `disallowed_methods` ban on `std::fs` guards wasm *runtime*
-// paths (clippy.toml names `tests/` as exempt; cargo has no path-scoped lint
-// config, so the exemption is written out).
-#[cfg(all(test, not(target_arch = "wasm32")))]
-#[allow(clippy::disallowed_methods)]
+#[cfg(test)]
 mod collider_parity_tests {
     //! The collider read path, driven off the
     //! live `StageView` over the canonical stage. Exercises the geometry read
@@ -4653,9 +4648,14 @@ mod collider_parity_tests {
 
     use super::build_collider_from_usd;
     use bevy::math::DVec3;
-    use lunco_usd_bevy_core::compose::compose_file_to_stage;
-    use lunco_usd_bevy_core::StageView;
+    use lunco_usd_bevy_core::canonical::CanonicalStage;
+    use lunco_usd_core::StageRecipe;
     use openusd::sdf::Path as SdfPath;
+
+    fn stage_from_source(source: &str) -> CanonicalStage {
+        CanonicalStage::from_recipe(&StageRecipe::from_source("test.usda", source))
+            .expect("compose in-memory USDA fixture")
+    }
 
     // A UsdGeomMesh pyramid: default → exact trimesh; `physics:approximation =
     // "convexHull"` (standard UsdPhysicsMeshCollisionAPI) → a convex hull. The
@@ -4687,12 +4687,8 @@ mod collider_parity_tests {
 
     #[test]
     fn mesh_collision_approximation_selects_convex_hull() {
-        let dir = std::env::temp_dir().join("lunco_collider_approx");
-        std::fs::create_dir_all(&dir).unwrap();
-        let f = dir.join("mesh.usda");
-        std::fs::write(&f, MESH_FIXTURE).unwrap();
-        let stage = compose_file_to_stage(&f).expect("compose stage");
-        let view = StageView::new(&stage);
+        let stage = stage_from_source(MESH_FIXTURE);
+        let view = stage.view();
 
         let trimesh = build_collider_from_usd(&view, &SdfPath::new("/Tri").unwrap())
             .expect("valid transform")
@@ -4733,12 +4729,8 @@ def Cube "Malformed" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
     uniform token[] xformOpOrder = ["xformOp:scale:missing"]
 }
 "#;
-        let dir = std::env::temp_dir().join("lunco_collider_composed_scale");
-        std::fs::create_dir_all(&dir).unwrap();
-        let f = dir.join("scale.usda");
-        std::fs::write(&f, SOURCE).unwrap();
-        let stage = compose_file_to_stage(&f).expect("compose stage");
-        let view = StageView::new(&stage);
+        let stage = stage_from_source(SOURCE);
+        let view = stage.view();
 
         let scaled = build_collider_from_usd(&view, &SdfPath::new("/Scaled").unwrap())
             .expect("named scale is a valid composed transform")
@@ -4751,8 +4743,7 @@ def Cube "Malformed" ( prepend apiSchemas = ["PhysicsCollisionAPI"] )
     }
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
-#[allow(clippy::disallowed_methods)] // temp-dir USDA fixtures; see `collider_parity_tests`
+#[cfg(test)]
 mod extract_parity_tests {
     //! End-to-end physics extraction off the live `StageView`: the REAL
     //! `extract_avian_prim` on a rover chassis with a child collider at an
@@ -4764,9 +4755,15 @@ mod extract_parity_tests {
     use avian3d::prelude::*;
     use bevy::ecs::world::CommandQueue;
     use bevy::prelude::*;
-    use lunco_usd_bevy_core::compose::compose_file_to_stage;
+    use lunco_usd_bevy_core::canonical::CanonicalStage;
     use lunco_usd_bevy_core::StageView;
+    use lunco_usd_core::StageRecipe;
     use openusd::sdf::Path as SdfPath;
+
+    fn stage_from_source(source: &str) -> CanonicalStage {
+        CanonicalStage::from_recipe(&StageRecipe::from_source("test.usda", source))
+            .expect("compose in-memory USDA fixture")
+    }
 
     // A rover chassis (RigidBodyAPI, mass 500) with a child Cube collider
     // (CollisionAPI) offset by an authored xformOp:translate — the compound path.
@@ -4833,13 +4830,8 @@ def Xform "World"
 
     #[test]
     fn extract_avian_from_stageview_builds_full_dynamic_body() {
-        let dir = std::env::temp_dir().join("lunco_extract_parity");
-        std::fs::create_dir_all(&dir).unwrap();
-        let f = dir.join("rover.usda");
-        std::fs::write(&f, FIXTURE).unwrap();
-
-        let stage = compose_file_to_stage(&f).expect("compose stage");
-        let view = StageView::new(&stage);
+        let stage = stage_from_source(FIXTURE);
+        let view = stage.view();
         let rover = SdfPath::new("/Rover").unwrap();
 
         let live = run_extract(&view, &rover);
@@ -4861,13 +4853,8 @@ def Xform "World"
 
     #[test]
     fn authored_flat_terrain_keeps_its_standard_support_collider() {
-        let dir = std::env::temp_dir().join("lunco_extract_parity");
-        std::fs::create_dir_all(&dir).unwrap();
-        let f = dir.join("flat_terrain.usda");
-        std::fs::write(&f, FLAT_TERRAIN_FIXTURE).unwrap();
-
-        let stage = compose_file_to_stage(&f).expect("compose stage");
-        let view = StageView::new(&stage);
+        let stage = stage_from_source(FLAT_TERRAIN_FIXTURE);
+        let view = stage.view();
         let live = run_extract(&view, &SdfPath::new("/Ground").unwrap());
 
         assert_eq!(live.0, Some(RigidBody::Static));
@@ -4881,12 +4868,8 @@ def Xform "World"
     #[test]
     fn omitted_mass_is_left_to_avian_computed_mass() {
         let source = FIXTURE.replace("    double physics:mass = 500\n", "");
-        let dir = std::env::temp_dir().join("lunco_extract_parity");
-        std::fs::create_dir_all(&dir).unwrap();
-        let f = dir.join("rover_automatic_mass.usda");
-        std::fs::write(&f, source).unwrap();
-        let stage = compose_file_to_stage(&f).expect("compose stage");
-        let view = StageView::new(&stage);
+        let stage = stage_from_source(&source);
+        let view = stage.view();
 
         let live = run_extract(&view, &SdfPath::new("/Rover").unwrap());
 
@@ -4932,12 +4915,8 @@ def Xform "World"
         ];
 
         for (name, source) in cases {
-            let dir = std::env::temp_dir().join("lunco_extract_parity");
-            std::fs::create_dir_all(&dir).unwrap();
-            let f = dir.join(format!("rover_{name}.usda"));
-            std::fs::write(&f, source).unwrap();
-            let stage = compose_file_to_stage(&f).expect("compose stage");
-            let view = StageView::new(&stage);
+            let stage = stage_from_source(&source);
+            let view = stage.view();
 
             let live = run_extract(&view, &SdfPath::new("/Rover").unwrap());
             assert_eq!(
@@ -4982,12 +4961,8 @@ def Xform "World"
         ];
 
         for (name, source) in cases {
-            let dir = std::env::temp_dir().join("lunco_material_parity");
-            std::fs::create_dir_all(&dir).unwrap();
-            let f = dir.join(format!("{name}.usda"));
-            std::fs::write(&f, source).unwrap();
-            let stage = compose_file_to_stage(&f).expect("compose material stage");
-            let view = StageView::new(&stage);
+            let stage = stage_from_source(&source);
+            let view = stage.view();
             assert!(
                 read_physics_material(&view, &SdfPath::new("/World/Ground").unwrap()).is_err(),
                 "malformed material value in {name} must not disappear into Avian defaults"
@@ -4997,12 +4972,8 @@ def Xform "World"
 
     #[test]
     fn standalone_static_colliders_receive_their_bound_physics_material() {
-        let dir = std::env::temp_dir().join("lunco_material_parity");
-        std::fs::create_dir_all(&dir).unwrap();
-        let f = dir.join("valid_material.usda");
-        std::fs::write(&f, MATERIAL_FIXTURE).unwrap();
-        let stage = compose_file_to_stage(&f).expect("compose material stage");
-        let view = StageView::new(&stage);
+        let stage = stage_from_source(MATERIAL_FIXTURE);
+        let view = stage.view();
         {
             let mut world = World::new();
             let entity = world.spawn_empty().id();
@@ -5031,8 +5002,7 @@ def Xform "World"
     }
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
-#[allow(clippy::disallowed_methods)] // temp-dir USDA fixtures; see `collider_parity_tests`
+#[cfg(test)]
 mod joint_reader_tests {
     //! The joint projector reads the STANDARD UsdPhysics joint schema through
     //! the composed reader into the
@@ -5043,9 +5013,14 @@ mod joint_reader_tests {
     use super::{read_joint_spec, read_joint_spec_for_lint};
     use avian3d::prelude::MotorModel;
     use bevy::math::DVec3;
-    use lunco_usd_bevy_core::compose::compose_file_to_stage;
-    use lunco_usd_bevy_core::StageView;
+    use lunco_usd_bevy_core::canonical::CanonicalStage;
+    use lunco_usd_core::StageRecipe;
     use openusd::sdf::Path as SdfPath;
+
+    fn stage_from_source(source: &str) -> CanonicalStage {
+        CanonicalStage::from_recipe(&StageRecipe::from_source("test.usda", source))
+            .expect("compose in-memory USDA fixture")
+    }
 
     const FIXTURE: &str = r#"#usda 1.0
 (
@@ -5073,13 +5048,9 @@ def PhysicsRevoluteJoint "Hinge" (
 
     #[test]
     fn reads_standard_revolute_joint_off_live_stage() {
-        let dir = std::env::temp_dir().join("lunco_joint_typed");
-        std::fs::create_dir_all(&dir).unwrap();
-        let f = dir.join("hinge.usda");
-        std::fs::write(&f, FIXTURE).unwrap();
-        let stage = compose_file_to_stage(&f).expect("compose stage");
+        let stage = stage_from_source(FIXTURE);
 
-        let j = read_joint_spec(&StageView::new(&stage), &SdfPath::new("/Hinge").unwrap())
+        let j = read_joint_spec(&stage.view(), &SdfPath::new("/Hinge").unwrap())
             .expect("standard revolute joint reads through the composed reader");
 
         assert_eq!(j.joint_type, "PhysicsRevoluteJoint");
@@ -5137,7 +5108,7 @@ def PhysicsRevoluteJoint \"Hinge\" ( prepend apiSchemas = [\"PhysicsDriveAPI:ang
     float drive:angular:physics:damping = 30.0\n\
 }\n";
         let stage = write_and_compose("angular_inertia.usda", source);
-        let joint = read_joint_spec(&StageView::new(&stage), &SdfPath::new("/Hinge").unwrap())
+        let joint = read_joint_spec(&stage.view(), &SdfPath::new("/Hinge").unwrap())
             .expect("angular force drive reads");
         let drive = joint.drive.expect("drive is authored");
         let expected_inertia = 1.0 / (1.0 / 110.0 + 1.0 / 5.0);
@@ -5191,13 +5162,9 @@ def PhysicsPrismaticJoint "Spring" (
     float drive:linear:physics:stiffness = 4000.0
 }
 "#;
-        let dir = std::env::temp_dir().join("lunco_joint_typed");
-        std::fs::create_dir_all(&dir).unwrap();
-        let f = dir.join("raked.usda");
-        std::fs::write(&f, RAKED).unwrap();
-        let stage = compose_file_to_stage(&f).expect("compose stage");
+        let stage = stage_from_source(RAKED);
 
-        let j = read_joint_spec(&StageView::new(&stage), &SdfPath::new("/Spring").unwrap())
+        let j = read_joint_spec(&stage.view(), &SdfPath::new("/Spring").unwrap())
             .expect("raked prismatic joint reads through the composed reader");
 
         // The axis token itself is cardinal — the rake is not in here.
@@ -5246,14 +5213,8 @@ def PhysicsPrismaticJoint "Spring" (
 
     #[test]
     fn non_joint_prim_reads_none() {
-        let dir = std::env::temp_dir().join("lunco_joint_typed");
-        std::fs::create_dir_all(&dir).unwrap();
-        let f = dir.join("nojoint.usda");
-        std::fs::write(&f, "#usda 1.0\ndef Xform \"Plain\" {}\n").unwrap();
-        let stage = compose_file_to_stage(&f).expect("compose stage");
-        assert!(
-            read_joint_spec(&StageView::new(&stage), &SdfPath::new("/Plain").unwrap()).is_none()
-        );
+        let stage = stage_from_source("#usda 1.0\ndef Xform \"Plain\" {}\n");
+        assert!(read_joint_spec(&stage.view(), &SdfPath::new("/Plain").unwrap()).is_none());
     }
 
     #[test]
@@ -5344,8 +5305,7 @@ def PhysicsPrismaticJoint "FixtureSpring" (
         for (name, source) in cases {
             let stage = write_and_compose(&format!("{name}.usda"), &source);
             assert!(
-                read_joint_spec(&StageView::new(&stage), &SdfPath::new("/Hinge").unwrap())
-                    .is_none(),
+                read_joint_spec(&stage.view(), &SdfPath::new("/Hinge").unwrap()).is_none(),
                 "authored malformed field in {name} must reject the joint"
             );
         }
@@ -5368,7 +5328,7 @@ def PhysicsRevoluteJoint "Hinge"
 "#;
         let stage = write_and_compose("multiple_body_targets.usda", MULTIPLE_TARGETS);
         assert!(
-            read_joint_spec(&StageView::new(&stage), &SdfPath::new("/Hinge").unwrap()).is_none(),
+            read_joint_spec(&stage.view(), &SdfPath::new("/Hinge").unwrap()).is_none(),
             "a joint endpoint must name exactly one body target"
         );
     }
@@ -5389,7 +5349,7 @@ def PhysicsSphericalJoint "Ball"
 }
 "#;
         let stage = write_and_compose("unlimited_spherical.usda", SPHERICAL);
-        let joint = read_joint_spec(&StageView::new(&stage), &SdfPath::new("/Ball").unwrap())
+        let joint = read_joint_spec(&stage.view(), &SdfPath::new("/Ball").unwrap())
             .expect("spherical joint reads");
         assert_eq!(
             joint.swing_limit, None,
@@ -5414,7 +5374,7 @@ def PhysicsJoint "Generic"
 "#;
         let stage = write_and_compose("unconfigured_generic.usda", GENERIC);
         assert!(
-            read_joint_spec(&StageView::new(&stage), &SdfPath::new("/Generic").unwrap()).is_none(),
+            read_joint_spec(&stage.view(), &SdfPath::new("/Generic").unwrap()).is_none(),
             "an unconstrained generic joint has multiple free DOFs and cannot reduce to fixed"
         );
     }
@@ -5447,13 +5407,9 @@ def PhysicsRevoluteJoint "Hinge"
 
     #[test]
     fn zup_centimetre_stage_converts_joint_axis_and_authored_anchors() {
-        let dir = std::env::temp_dir().join("lunco_joint_typed");
-        std::fs::create_dir_all(&dir).unwrap();
-        let f = dir.join("hinge_zup_cm.usda");
-        std::fs::write(&f, ZUP_CM_FIXTURE).unwrap();
-        let stage = compose_file_to_stage(&f).expect("compose stage");
+        let stage = stage_from_source(ZUP_CM_FIXTURE);
 
-        let j = read_joint_spec(&StageView::new(&stage), &SdfPath::new("/Hinge").unwrap())
+        let j = read_joint_spec(&stage.view(), &SdfPath::new("/Hinge").unwrap())
             .expect("revolute joint reads off a Z-up stage");
 
         // Tolerance is 1e-6, not machine epsilon: `ConventionTransform` stores its
@@ -5489,12 +5445,8 @@ def PhysicsRevoluteJoint "Hinge"
         (a - b).length() < 1e-5
     }
 
-    fn write_and_compose(name: &str, body: &str) -> openusd::usd::Stage {
-        let dir = std::env::temp_dir().join("lunco_joint_derive");
-        std::fs::create_dir_all(&dir).unwrap();
-        let f = dir.join(name);
-        std::fs::write(&f, body).unwrap();
-        compose_file_to_stage(&f).expect("compose stage")
+    fn write_and_compose(_name: &str, body: &str) -> CanonicalStage {
+        stage_from_source(body)
     }
 
     const DERIVE_FIXTURE: &str = "#usda 1.0\n(\n\
@@ -5517,11 +5469,8 @@ def Xform \"Rover\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
         // origin in the root frame (its translate), lp1 = origin. This is what lets
         // `physical_drivetrain.usda` state each wheel's position once, not twice.
         let stage = write_and_compose("derive.usda", &DERIVE_FIXTURE.replace("AUTHORED", ""));
-        let j = read_joint_spec(
-            &StageView::new(&stage),
-            &SdfPath::new("/Rover/Hinge").unwrap(),
-        )
-        .expect("revolute joint reads");
+        let j = read_joint_spec(&stage.view(), &SdfPath::new("/Rover/Hinge").unwrap())
+            .expect("revolute joint reads");
         assert!(
             close(j.local_pos0, DVec3::new(0.9, -0.65, 1.225)),
             "lp0 derived from wheel translate: {:?}",
@@ -5541,11 +5490,8 @@ def Xform \"Rover\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
                 "        point3f physics:localPos0 = (1, 2, 3)\n",
             ),
         );
-        let j = read_joint_spec(
-            &StageView::new(&stage),
-            &SdfPath::new("/Rover/Hinge").unwrap(),
-        )
-        .expect("revolute joint reads");
+        let j = read_joint_spec(&stage.view(), &SdfPath::new("/Rover/Hinge").unwrap())
+            .expect("revolute joint reads");
         assert_eq!(
             j.local_pos0,
             DVec3::new(1.0, 2.0, 3.0),
@@ -5582,7 +5528,7 @@ def Xform \"Host\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
     fn joint_endpoint_that_is_not_a_body_resolves_to_its_nearest_ancestor_body() {
         let stage = write_and_compose("mount.usda", MOUNT_FIXTURE);
         let j = read_joint_spec(
-            &StageView::new(&stage),
+            &stage.view(),
             &SdfPath::new("/Host/Mount/YawJoint").unwrap(),
         )
         .expect("revolute joint reads");
@@ -5611,7 +5557,7 @@ def Xform \"Host\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
             ),
         );
         let j = read_joint_spec(
-            &StageView::new(&stage),
+            &stage.view(),
             &SdfPath::new("/Host/Mount/YawJoint").unwrap(),
         )
         .expect("a joint mounted on a static body still reads");
@@ -5635,67 +5581,12 @@ def Xform \"Host\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
         );
         assert!(
             read_joint_spec(
-                &StageView::new(&stage),
+                &stage.view(),
                 &SdfPath::new("/Host/Mount/YawJoint").unwrap()
             )
             .is_none(),
             "physics:jointEnabled = false must suppress the joint"
         );
-    }
-
-    #[test]
-    fn wheel_revolute_joints_are_owned_by_the_wheel_projector() {
-        let stage = compose_file_to_stage(
-            &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../assets/scenes/tests/drivetrain_parity.usda"),
-        )
-        .expect("compose drivetrain parity");
-        let view = StageView::new(&stage);
-        let path = SdfPath::new("/DrivetrainParity/RoverPhysical/Wheel_FL_Hinge")
-            .expect("wheel hinge path");
-        assert!(
-            super::joint_targets_simulated_wheel(&view, &path),
-            "the standard body1 relationship and wheel schema must assign this joint to the wheel projector"
-        );
-        assert!(
-            read_joint_spec(&StageView::new(&stage), &path).is_none(),
-            "generic Avian projection must not duplicate a wheel joint owned by lunco-usd-sim"
-        );
-    }
-
-    #[test]
-    fn rocker_bogie_hinge_joints_derive_end_to_end() {
-        // The HARD retrofit, through the real load path. `rocker_bogie.usda` now omits
-        // every anchor. Its FOUR structural hinges flow through `read_joint_spec`
-        // and must be DERIVED — including the two SIBLING bogie hinges (`BogieHinge*`:
-        // body0 does NOT contain body1) and a scaled hierarchy — reproducing the values
-        // the file used to hand-author (byte-identical → unchanged physics).
-        //
-        // (The six WHEEL joints are `physxVehicleWheel`-tagged and owned by
-        // `lunco-usd-sim`, which builds them from the wheel's own transform —
-        // `mount_local = existing_tf.translation`, never reading `localPos0`. So those
-        // dropped anchors were already dead there; nothing to derive here.)
-        let f = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../assets/vessels/rovers/rocker_bogie.usda");
-        let stage = compose_file_to_stage(&f).expect("compose rocker_bogie");
-        for (name, lp0) in [
-            ("HingeL", [-0.99, -0.2, 0.0]), // chassis ↔ rocker (ancestor)
-            ("HingeR", [0.99, -0.2, 0.0]),
-            ("BogieHingeL", [0.0, -0.2, 0.6]), // rocker ↔ bogie (SIBLING)
-            ("BogieHingeR", [0.0, -0.2, 0.6]),
-        ] {
-            let j = read_joint_spec(
-                &StageView::new(&stage),
-                &SdfPath::new(&format!("/RockerBogie/{name}")).unwrap(),
-            )
-            .unwrap_or_else(|| panic!("{name} reads + derives"));
-            assert!(
-                close(j.local_pos0, DVec3::new(lp0[0], lp0[1], lp0[2])),
-                "{name}: derived {:?} != Perseverance-class authored {lp0:?}",
-                j.local_pos0
-            );
-            assert_eq!(j.local_pos1, DVec3::ZERO, "{name}: lp1 = origin");
-        }
     }
 
     #[test]
@@ -5744,7 +5635,7 @@ def Xform \"Host\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
         for (w, lp0) in mounts {
             let name = format!("{w}_Hinge");
             let j = read_joint_spec(
-                &StageView::new(&stage),
+                &stage.view(),
                 &SdfPath::new(&format!("/Rover/{name}")).unwrap(),
             )
             .unwrap_or_else(|| panic!("{name} reads"));
