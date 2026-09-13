@@ -536,6 +536,51 @@ commands; they do not own layout or create parallel document/view state.
 Discover reflected command shapes with `DiscoverSchema` rather than inventing
 JSON for a new command.
 
+## Use the generic authoring evidence tools
+
+For reviewable model-authoring feedback, use the registered Rhai
+`authoring_inspection` library rather than adding an assembly-specific panel,
+diagnostic schema, or Rust policy. Its read/presentation functions are:
+
+- `authoring_inspection::candidate_diff(before_doc, after_doc, paths)` compares
+  only the exact affected USD paths from the proposal or edit session. It
+  reports field changes, material/collision/joint/frame/port/topology
+  consequences, and the document-scoped lint state. Do not compare complete
+  USDA strings or infer changes from screenshots.
+- `authoring_inspection::group_diagnostics(findings)` groups the existing
+  findings by owner and severity while retaining every raw finding and
+  subject. `authoring_inspection::navigate_diagnostic(preview, view, finding)`
+  selects the finding's absolute `subject` through the canonical preview
+  selection owner and frames that exact path with
+  `FrameUsdPreviewSelection`. It never searches the live scene by display name.
+- `authoring_inspection::inspection_snapshot(doc, root, path)` returns one
+  read-only record containing visual, collision, joint, frame, material,
+  provenance, schema, and connection evidence. Missing collision or provenance
+  is represented explicitly with `present: false` and a reason; do not fill it
+  with guessed geometry or metadata.
+- `authoring_inspection::inspection_mode(doc, root, path, enabled)` composes
+  that snapshot with the generic `SetDiagnosticLayers` presentation command.
+  The mode is view-only and its layers are runtime diagnostics, not authored
+  USD facts or a second scene graph.
+
+Persist a view-only camera through the typed `assembly_edit` wrappers
+`save_inspection_preset`, `apply_inspection_preset`,
+`delete_inspection_preset`, and `inspection_presets`. Presets belong to the
+shared settings boundary, not the USD document or journal. Use the exact
+`UsdPreviewViewId`, and verify `InspectUsdViewport.active_preset`; the query
+`InspectUsdInspectionPresets` is the authoritative persisted list. Saving or
+applying a preset must not author a camera prim, change selection, or replace
+the preview lease. Keep the workflow bounded by the existing preset limit and
+surface rejected names or missing views as errors.
+
+The same document id, preview lease, view id, and projection generation must
+flow through every read and presentation command. Wait for
+`InspectUsdViewport.projection_ready` before querying or framing a path, and
+rerun the evidence read after an authored change. The production
+`selection_ai_workflow` scenario is the regression surface for positive and
+negative candidate diffs, diagnostic navigation, inspection snapshots, mode
+toggles, and preset save/apply/delete behavior.
+
 ## Choose the USD ownership scope
 
 Resolve the target before authoring. Select the smallest scope that owns the

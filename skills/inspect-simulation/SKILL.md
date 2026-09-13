@@ -33,6 +33,7 @@ switch to it silently when a visual check is requested.
 | `query_entity` (`QueryEntity {id}`) | one entity's pose/name/type blob. |
 | `QueryUsdPrim` | composed USD attributes and the resolved world position for a prim; use it to verify `xformOpOrder`, placement heading and mounted-part dimensions. Add `topology:true` for one scoped visual/collider/material/joint/bounds/projection record. |
 | `InspectUsdViewport` | the explicit focused USD preview/view handles, document IDs, edit targets, projection generations, and `projection_ready` state; use this to identify the exact editor item visible in a screenshot and wait for a ready preview before editing. |
+| `InspectUsdInspectionPresets` | persisted view-only USD inspection camera presets; use it to verify the named settings state and the active preset without treating camera presentation as authored USD. |
 | `read_ports` | **live telemetry.** With `api_id`: that entity's ports `[{name,value,direction,kind}]`. Without: EVERY port-bearing entity (large — pass `name_filter` substring and/or `ports:[…]` to narrow). One-shot. |
 | `read_port` `{api_id, port}` | a single named port value. |
 | `watch_ports` `{api_id, …}` | a **time-series** of ports (use when you need change over time, not a single sample). |
@@ -61,6 +62,34 @@ preserve the document generation and complement `InspectUsdViewport` and
 paths for selection, reveal, framing, and follow-up typed commands. The
 [scripting guide](../../docs/scripting-guide.md#model-and-assembly-authoring-human-and-ai)
 documents the authoring facades and dry-plan boundaries.
+
+For generic authoring evidence, use the `authoring_inspection` Rhai library
+with the same exact document and preview identities:
+
+```rhai
+let diff = authoring_inspection::candidate_diff(before_doc, after_doc, affected_paths);
+let groups = authoring_inspection::group_diagnostics(lint_findings);
+let evidence = authoring_inspection::inspection_snapshot(doc, root, path);
+let mode = authoring_inspection::inspection_mode(doc, root, path, true);
+```
+
+`candidate_diff` is path-scoped and reports consequences plus lint readiness;
+`group_diagnostics` preserves raw findings; and `inspection_snapshot` keeps
+visual, collision, joints, frames, materials, provenance, schemas, and
+connections in one read-only record. Absence is evidence, not permission to
+invent a bound or provenance. To act on one finding, pass its absolute
+`subject` to `authoring_inspection::navigate_diagnostic(preview, view,
+finding)`; it uses the canonical selection owner and exact
+`FrameUsdPreviewSelection` path.
+
+For screenshots, query `InspectUsdViewport` first, require
+`projection_ready:true`, and correlate the returned `UsdPreviewId` and
+`UsdPreviewViewId` with the screenshot. View-only camera state is persisted
+through the `assembly_edit` wrappers `save_inspection_preset`,
+`apply_inspection_preset`, `delete_inspection_preset`, and
+`inspection_presets`; verify it with `InspectUsdInspectionPresets` and the
+viewport's `active_preset`. These presets do not modify USD or simulation
+state.
 
 To perturb-then-observe: `set_input` / `SetPorts {target, writes:[[name,val]]}` to
 poke an input, `possess_vessel` to take control, then re-read.

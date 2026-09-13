@@ -100,6 +100,36 @@ second program registry. An empty port contract is a valid source-only
 attachment, but it is not a running scalar cosim participant; the author must
 declare the interface before wiring or stepping it.
 
+### Generic authoring evidence
+
+Authoring review is a Rhai policy over generic typed substrate. The shipped
+`authoring_inspection` library owns candidate comparison, diagnostic grouping,
+diagnostic navigation, unified inspection records, and inspection-mode policy;
+it does not know about rovers, landers, or other product nouns. Rust only
+provides the reusable mechanisms: document-scoped `QueryUsdPrim` and
+`InspectUsdDocument` reads, exact preview selection/framing, generic
+`SetDiagnosticLayers`, and settings-backed view-only camera presets.
+
+Keep the ownership split explicit:
+
+- USD remains authoritative for identity, topology, standard visual/collision
+  facts, joints, frames, materials, connections, and provenance.
+- Rhai chooses the affected paths, groups findings, decides which diagnostic
+  layers to show, and composes the evidence record for a human or AI review.
+- The Editor owns selection and preview leases; `FrameUsdPreviewSelection`
+  frames one exact composed path and must not fall back to a whole-stage frame
+  when the requested path is unavailable.
+- Shared settings own persisted view-only camera presets. Presets never become
+  USD camera prims, journal entries, or another scene graph.
+
+Use exact `DocumentId`, `UsdPreviewId`, `UsdPreviewViewId`, edit target, and
+projection generation at every boundary. A document-local Editor fork may be
+queried through its composed document stage even when it has no mounted Twin
+projection; a stale mapped Twin document must still fail visibly. Missing
+collision or provenance is an explicit diagnostic record, not a fabricated
+default. Keep positive and negative contracts in the production Rhai scene
+gate; do not duplicate these observable assertions in Rust unit tests.
+
 ### Shared asset catalog discovery
 
 Asset enumeration belongs to `lunco_assets::discovery` and runs through the
