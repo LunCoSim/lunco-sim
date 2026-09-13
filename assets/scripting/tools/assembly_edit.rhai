@@ -480,8 +480,9 @@ fn payload(doc, edit_target, path, asset_paths, parent_gen) {
 }
 
 /// Author one typed USD reference list-op on an existing prim. Each entry is
-/// #{ asset_path: "lunco://…", prim_path: () } (or an explicit absolute prim
-/// path); use `"Explicit"` with an empty list to clear this layer's opinion.
+/// #{ asset_path: "lunco://…" or "twin://…", prim_path: () } (or an explicit
+/// absolute prim path); use `"Explicit"` with an empty list to clear this
+/// layer's opinion.
 /// Prepend/Append/Add/Delete preserve weaker-layer arcs according to USD list
 /// composition. Resolve the target first so composed-only prims are rejected
 /// visibly rather than guessed.
