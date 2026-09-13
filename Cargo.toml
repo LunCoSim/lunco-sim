@@ -29,6 +29,7 @@ members = [
     "crates/lunco-usd-avian-lint",
     "crates/lunco-usd-bevy",
     "crates/lunco-usd-bevy-mesh",
+    "crates/lunco-usd-queries",
     "crates/lunco-usd-bevy-animation",
     "crates/lunco-usd-bevy-runtime",
     "crates/lunco-usd-bevy-light",

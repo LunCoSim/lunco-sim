@@ -8,12 +8,14 @@
 > [`../../crates/lunco-usd-core/`](../../crates/lunco-usd-core/), [`../../crates/lunco-usd/`](../../crates/lunco-usd/) and companion crates
 > `lunco-usd-geometry`, `lunco-usd-avian`, `lunco-usd-avian-lint`, `lunco-usd-bevy-core`,
 > `lunco-usd-bevy-runtime`, `lunco-usd-bevy-scene`, `lunco-usd-bevy-twin`, `lunco-usd-bevy-camera`, `lunco-usd-bevy-light`, `lunco-usd-bevy-animation`, `lunco-usd-bevy` and
-> `lunco-usd-bevy-lathe`, `lunco-usd-bevy-mesh`, `lunco-usd-sim`, `lunco-usd-sim-domain`.
+> `lunco-usd-bevy-lathe`, `lunco-usd-bevy-mesh`, `lunco-usd-queries`, `lunco-usd-sim`, `lunco-usd-sim-domain`.
 
 Package ownership follows the same boundary: `lunco-usd-core` contains the
 headless document/authoring surface, schemas, pure probes, and shared USD
 command/event contracts; `lunco-usd` contains UI-free runtime orchestration
-and the observers that execute those contracts;
+and the observers that execute those contracts; `lunco-usd-queries` owns the
+UI-free public query providers for document inspection, edit sessions,
+document synchronization, and explicit assembly-target resolution;
 `lunco-usd-bevy-runtime` owns the complete application plugin bundle;
 `lunco-usd-geometry`
 owns the reusable render-free BasisCurves evaluator, NURBS, trim, and
@@ -50,6 +52,10 @@ recompile the command library's normal target. Private pending-load and
 grouped-edit seams remain beside their owning implementation because they
 cannot be observed through the public contract. Shared contract helpers are
 tested in `lunco-usd-core/tests/`.
+
+The public query contracts live beside their owning package in
+`crates/lunco-usd-queries/tests/query_api.rs`; they do not require the larger
+runtime-orchestration package to compile.
 
 ## Scope
 
@@ -735,7 +741,7 @@ as runtime. Ownership follows the narrowest production boundary:
 - `crates/lunco-usd-bevy-mesh/tests/meshes.rs` — low-level USD geometry-to-Bevy mesh tests owned by the mesh package
 - `crates/lunco-usd-bevy-core/src/animation.rs` — low-level time-sample topology, value decoding, rotation, and transform-reader mechanisms
 - `crates/lunco-usd-bevy-animation/src/lib.rs` — production animation planning, time-domain binding, and ECS sampling systems
-- `crates/lunco-usd/tests/assembly_api.rs` — public inspection, assembly-target, and document-sync query contracts
+- `crates/lunco-usd-queries/tests/query_api.rs` — public inspection, edit-session, assembly-target, and document-sync query contracts
 - `crates/lunco-usd/tests/live_spawn_projection.rs` — document-backed USD authoring and raw asset composition facts
 - `crates/lunco-usd-avian-lint/src/lib.rs` — composed `UsdPhysics` fact production for the authored lint policy
 - `crates/lunco-usd-sim-domain/src/lib.rs` — low-level component-network projection, synthesis, and actuator lowering mechanisms

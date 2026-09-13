@@ -8,12 +8,12 @@ use bevy::prelude::World;
 use lunco_api::queries::ApiQueryProvider;
 use lunco_doc::PathlessOrigin;
 use lunco_doc_bevy::DocumentRegistry;
-use lunco_usd::assembly_api::{
+use lunco_usd_core::document::{LayerId, UsdDocument, UsdOp};
+use lunco_usd_core::edit_session::{validate_proposal, UsdEditScope, UsdEditSessions};
+use lunco_usd_queries::{
     InspectUsdDocumentProvider, InspectUsdEditSessionProvider, ResolveUsdTargetProvider,
     SyncUsdDocumentProvider,
 };
-use lunco_usd_core::document::{LayerId, UsdDocument, UsdOp};
-use lunco_usd_core::edit_session::{validate_proposal, UsdEditScope, UsdEditSessions};
 
 fn proposal_test_op(name: &str) -> UsdOp {
     UsdOp::AddPrim {

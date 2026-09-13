@@ -68,6 +68,7 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | Crate | Responsibility |
 | :--- | :--- |
 | **`lunco-usd-core`** | Headless USD document, authoring, shared `ApplyUsdOp`/`ApplyUsdOps` command contracts, operation, schema, unit-conversion, and asset-closure substrate. No runtime, physics, rendering, or UI. |
+| **`lunco-usd-queries`** | UI-free public USD query providers for document inspection, edit-session state, explicit assembly-target resolution, and document synchronization. Tests live with this owning package. |
 | **`lunco-usd`** | UI-free USD runtime orchestration, document commands, and engineering metadata mapping. |
 | **`lunco-usd-bevy-runtime`** | Application-level USD plugin bundle composing visual, diagnostics, physics, simulation, and document-command projections. |
 | **`lunco-usd-geometry`** | Render-free USD geometry substrate: BasisCurves evaluation, NURBS evaluators, trimmed-domain tessellation, and rotation-minimizing curve-sweep mesh data. Isolates heavy numeric geometry dependencies from stage and camera policy. |
@@ -274,10 +275,18 @@ runtime projection, command observers, physics, rendering, or UI dependency.
 UI-free USD runtime orchestration and engineering metadata bridge. Maps
 LunCo-specific metadata (`lunco:*` namespace) from USD stages to Bevy
 components, enriching 3D models with simulation-critical data like Ephemeris
-IDs. Its document commands and composition are available to headless
-consumers; complete application plugin composition lives in
+IDs. Its document commands are available to headless consumers; complete
+application plugin composition lives in
 `lunco-usd-bevy-runtime`, while interactive presentation lives in
 `lunco-usd-ui`.
+
+**`lunco-usd-queries`**
+UI-free public query providers for the USD document boundary. It owns
+`InspectUsdDocument`, `InspectUsdEditSession`, `ResolveUsdTarget`, and
+`SyncUsdDocument`, reading the authoritative document registry, edit-session
+state, journal, and mounted stage without depending on runtime orchestration
+or UI presentation. Its public query contracts are tested in
+`crates/lunco-usd-queries/tests/query_api.rs`.
 
 **`lunco-usd-bevy-runtime`**
 Application-level composition boundary. Installs the visual USD projector,
