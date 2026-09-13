@@ -97,7 +97,7 @@ pub fn canonical_stage_for_document(
     doc: DocumentId,
 ) -> Option<&lunco_usd_bevy_core::canonical::CanonicalStage> {
     let (name, rel) = world
-        .get_resource::<crate::twin_projection::DocBackedTwinScenes>()?
+        .get_resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>()?
         .coords_of(doc)?;
     let twin_path = lunco_assets::twin_uri(&name, &rel);
     let stage_id = world

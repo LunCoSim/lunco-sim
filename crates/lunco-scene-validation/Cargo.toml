@@ -20,10 +20,10 @@ lunco-materials = { path = "../lunco-materials" }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 lunco-tools = { path = "../lunco-tools" }
 lunco-twin = { path = "../lunco-twin" }
-lunco-usd = { path = "../lunco-usd", default-features = false }
 lunco-usd-avian-lint = { path = "../lunco-usd-avian-lint" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
+lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
 lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-compose = { path = "../lunco-usd-compose" }
 lunco-usd-sim = { path = "../lunco-usd-sim" }

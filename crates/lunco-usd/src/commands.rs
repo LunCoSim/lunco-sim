@@ -107,10 +107,10 @@ pub struct UsdCommandsPlugin;
 /// is no scene lease to promote and no ownership event to publish.
 fn claim_user_document_if_projected(world: &mut World, doc: DocumentId) {
     let claimed = world
-        .get_resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
+        .get_resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
         .is_some_and(|mut backed| backed.claim_user(doc));
     if claimed {
-        world.trigger(crate::twin_projection::UsdDocumentUserOwned { doc });
+        world.trigger(lunco_usd_bevy_twin::UsdDocumentUserOwned { doc });
     }
 }
 
@@ -121,7 +121,7 @@ fn claim_user_document_if_projected(world: &mut World, doc: DocumentId) {
 fn claim_user_document_on_opened(
     trigger: On<DocumentOpened>,
     registry: Res<DocumentRegistry<UsdDocument>>,
-    mut backed: ResMut<crate::twin_projection::DocBackedTwinScenes>,
+    mut backed: ResMut<lunco_usd_bevy_twin::DocBackedTwinScenes>,
     mut commands: Commands,
 ) {
     let doc = trigger.event().doc;
@@ -129,7 +129,7 @@ fn claim_user_document_on_opened(
         return;
     }
     if backed.claim_user(doc) {
-        commands.trigger(crate::twin_projection::UsdDocumentUserOwned { doc });
+        commands.trigger(lunco_usd_bevy_twin::UsdDocumentUserOwned { doc });
     }
 }
 
@@ -245,7 +245,7 @@ fn clear_usd_edit_session_on_document_closed(
 /// be rediscovered by a later stage-path lookup.
 fn forget_backed_document_on_closed(
     trigger: On<DocumentClosed>,
-    mut backed: ResMut<crate::twin_projection::DocBackedTwinScenes>,
+    mut backed: ResMut<lunco_usd_bevy_twin::DocBackedTwinScenes>,
     twins: Res<lunco_assets::twin_source::TwinRoots>,
 ) {
     if let Some((name, _rel)) = backed.forget_document(trigger.event().doc) {
@@ -261,7 +261,7 @@ fn forget_backed_document_on_closed(
 fn clear_scene_on_twin_closed(
     trigger: On<TwinClosed>,
     mut pending_twin: ResMut<crate::twin_projection::PendingTwinDocs>,
-    mut backed: ResMut<crate::twin_projection::DocBackedTwinScenes>,
+    mut backed: ResMut<lunco_usd_bevy_twin::DocBackedTwinScenes>,
     mut registry: ResMut<DocumentRegistry<UsdDocument>>,
     mut commands: Commands,
 ) {
@@ -388,8 +388,8 @@ impl Plugin for UsdCommandsPlugin {
         // E1b: make the default twin scene doc-backed by serving its composed
         // source as a `twin://` byte-overlay (web-ready via the async loader).
         app.init_resource::<crate::twin_projection::PendingTwinDocs>();
-        app.init_resource::<crate::twin_projection::DocBackedTwinScenes>();
-        app.init_resource::<crate::twin_projection::TwinProjectionWake>();
+        app.init_resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>();
+        app.init_resource::<lunco_usd_bevy_twin::TwinProjectionWake>();
         app.add_message::<crate::twin_projection::TwinProjectionSettle>();
         app.add_observer(crate::twin_projection::wake_twin_projection_on_document_changed);
         app.add_observer(claim_user_document_on_opened);
@@ -771,7 +771,7 @@ fn execute_admitted_load_scene(
     commands.queue(move |world: &mut World| {
         spawn_scene_root_world(world, &path, &root_prim);
         world
-            .resource_mut::<crate::twin_projection::TwinProjectionWake>()
+            .resource_mut::<lunco_usd_bevy_twin::TwinProjectionWake>()
             .wake();
         if stage_already_loaded {
             world.write_message(lunco_usd_sim_cosim::SceneStageAssetOutcome::Loaded {
@@ -820,7 +820,7 @@ fn on_restart_scene_refresh_active_document(
     asset_server: Option<Res<AssetServer>>,
     q_usd: Query<(&UsdPrimPath, Has<UsdSceneRoot>)>,
     mut registry: ResMut<DocumentRegistry<UsdDocument>>,
-    backed: Option<Res<crate::twin_projection::DocBackedTwinScenes>>,
+    backed: Option<Res<lunco_usd_bevy_twin::DocBackedTwinScenes>>,
     twins: Option<Res<lunco_assets::twin_source::TwinRoots>>,
     role: Option<Res<lunco_core::NetworkRole>>,
 ) {
@@ -2132,7 +2132,7 @@ fn on_apply_usd_op(
 pub fn on_undo_usd_document(
     trigger: On<UndoDocument>,
     mut registry: ResMut<DocumentRegistry<UsdDocument>>,
-    mut backed: ResMut<crate::twin_projection::DocBackedTwinScenes>,
+    mut backed: ResMut<lunco_usd_bevy_twin::DocBackedTwinScenes>,
     mut commands: Commands,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
 ) {
@@ -2154,7 +2154,7 @@ pub fn on_undo_usd_document(
             // projection then re-derives the scene.
             registry.mark_changed(doc);
             if backed.claim_user(doc) {
-                commands.trigger(crate::twin_projection::UsdDocumentUserOwned { doc });
+                commands.trigger(lunco_usd_bevy_twin::UsdDocumentUserOwned { doc });
             }
             bevy::log::info!("[usd] undo applied on {doc}");
         }
@@ -2169,7 +2169,7 @@ pub fn on_undo_usd_document(
 pub fn on_redo_usd_document(
     trigger: On<RedoDocument>,
     mut registry: ResMut<DocumentRegistry<UsdDocument>>,
-    mut backed: ResMut<crate::twin_projection::DocBackedTwinScenes>,
+    mut backed: ResMut<lunco_usd_bevy_twin::DocBackedTwinScenes>,
     mut commands: Commands,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
 ) {
@@ -2188,7 +2188,7 @@ pub fn on_redo_usd_document(
         Ok(true) => {
             registry.mark_changed(doc);
             if backed.claim_user(doc) {
-                commands.trigger(crate::twin_projection::UsdDocumentUserOwned { doc });
+                commands.trigger(lunco_usd_bevy_twin::UsdDocumentUserOwned { doc });
             }
             bevy::log::info!("[usd] redo applied on {doc}");
         }
@@ -2350,7 +2350,7 @@ fn validate_live_attribute_types(
     };
     let view = stage.view();
     let stage_path = world
-        .get_resource::<crate::twin_projection::DocBackedTwinScenes>()
+        .get_resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
         .and_then(|scenes| scenes.coords_of(doc))
         .map(|(name, rel)| lunco_assets::twin_uri(&name, &rel));
     let stage_id = stage_path
@@ -3257,7 +3257,7 @@ pub struct SetDomeLight {
 #[on_command(SetDomeLight)]
 fn on_set_dome_light(
     trigger: On<SetDomeLight>,
-    backed: Option<Res<crate::twin_projection::DocBackedTwinScenes>>,
+    backed: Option<Res<lunco_usd_bevy_twin::DocBackedTwinScenes>>,
     asset_server: Res<AssetServer>,
     roots: Query<&UsdPrimPath, With<UsdSceneRoot>>,
     mut commands: Commands,
@@ -3289,7 +3289,7 @@ fn on_set_dome_light(
         Some(doc) => doc,
         None => {
             let Some(doc) = backed.as_ref().and_then(|b| {
-                crate::twin_projection::scene_document_for(b, &asset_server, root.stage_handle.id())
+                lunco_usd_bevy_twin::scene_document_for(b, &asset_server, root.stage_handle.id())
             }) else {
                 bevy::log::warn!(
                     "[SetDomeLight] the running scene is a raw-file scene (not doc-backed), so it \

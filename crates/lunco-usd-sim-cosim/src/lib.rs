@@ -5018,7 +5018,7 @@ pub fn spawn_scene_root_world(
 ///
 /// It is the only entity that knows **both** halves of "where does a scene-level
 /// edit go?": its [`UsdPrimPath::stage_handle`] resolves to the editable document
-/// (via `lunco_usd::twin_projection::scene_document_for`), and its
+/// (via `lunco_usd_bevy_twin::scene_document_for`), and its
 /// [`UsdPrimPath::path`] is the *mounted root prim* — `/SandboxScene`, `/World`,
 /// `/HdriTest`, whatever this scene's `defaultPrim` happens to be.
 ///

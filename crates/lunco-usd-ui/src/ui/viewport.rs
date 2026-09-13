@@ -2337,16 +2337,16 @@ fn on_open_usd_preview(trigger: On<OpenUsdPreview>, mut commands: Commands) {
         });
         request_preview_text_read(world, preview);
         world
-            .resource_mut::<lunco_usd::twin_projection::DocBackedTwinScenes>()
+            .resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
             .track_preview(doc, name, rel);
         world
-            .resource_mut::<lunco_usd::twin_projection::DocBackedTwinScenes>()
+            .resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
             .acquire_preview(doc);
         let claimed = world
-            .resource_mut::<lunco_usd::twin_projection::DocBackedTwinScenes>()
+            .resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
             .claim_user(doc);
         if claimed {
-            world.trigger(lunco_usd::twin_projection::UsdDocumentUserOwned { doc });
+            world.trigger(lunco_usd_bevy_twin::UsdDocumentUserOwned { doc });
         }
         mount_preview_session(world, preview);
     });
@@ -3356,7 +3356,7 @@ fn on_twin_closed_for_viewport(trigger: On<TwinClosed>, mut commands: Commands) 
                 continue;
             }
             let needs_rehome = world
-                .resource::<lunco_usd::twin_projection::DocBackedTwinScenes>()
+                .resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
                 .coords_of(doc)
                 .map(|(name, _)| matches!(world.resource::<TwinRoots>().root_for(&name), Ok(None)))
                 .unwrap_or(true);
@@ -3364,7 +3364,7 @@ fn on_twin_closed_for_viewport(trigger: On<TwinClosed>, mut commands: Commands) 
                 continue;
             }
             world
-                .resource_mut::<lunco_usd::twin_projection::DocBackedTwinScenes>()
+                .resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
                 .detach_projection(doc);
             let sessions = world
                 .resource::<UsdViewportState>()
@@ -3439,9 +3439,9 @@ fn mount_preview_session(world: &mut World, preview: UsdPreviewId) {
         .resource::<AssetServer>()
         .load::<UsdStageAsset>(lunco_assets::twin_uri(&name, &rel));
     world
-        .resource_mut::<lunco_usd::twin_projection::DocBackedTwinScenes>()
+        .resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
         .track_preview(doc, name, rel);
-    lunco_usd::twin_projection::wake_twin_projection(world);
+    lunco_usd_bevy_twin::wake_twin_projection(world);
     let Some(scene_root) = world
         .resource::<UsdViewportState>()
         .session(preview)
@@ -3542,7 +3542,7 @@ fn close_preview_view(world: &mut World, view: UsdPreviewViewId) {
 
 fn release_preview_projection(world: &mut World, doc: DocumentId) {
     let Some((name, _rel)) = world
-        .resource_mut::<lunco_usd::twin_projection::DocBackedTwinScenes>()
+        .resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
         .release_preview(doc)
     else {
         return;
@@ -3566,7 +3566,7 @@ fn release_preview_projection(world: &mut World, doc: DocumentId) {
 fn viewport_twin_coords(world: &mut World, doc: DocumentId) -> Option<(String, String)> {
     // Already doc-backed (e.g. the default twin scene)? Reuse its overlay + asset.
     if let Some(coords) = world
-        .resource::<lunco_usd::twin_projection::DocBackedTwinScenes>()
+        .resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
         .coords_of(doc)
     {
         match world.resource::<TwinRoots>().root_for(&coords.0) {
@@ -3581,7 +3581,7 @@ fn viewport_twin_coords(world: &mut World, doc: DocumentId) -> Option<(String, S
             }
         }
         world
-            .resource_mut::<lunco_usd::twin_projection::DocBackedTwinScenes>()
+            .resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
             .detach_projection(doc);
     }
     let host = world

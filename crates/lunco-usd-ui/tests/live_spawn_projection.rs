@@ -330,12 +330,12 @@ fn simultaneous_assembly_previews_keep_identical_paths_isolated() {
     assert!(app.world().get_entity(second_root).is_err());
     assert!(app
         .world()
-        .resource::<lunco_usd::twin_projection::DocBackedTwinScenes>()
+        .resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
         .coords_of(second_doc)
         .is_none());
     assert!(app
         .world()
-        .resource::<lunco_usd::twin_projection::DocBackedTwinScenes>()
+        .resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
         .coords_of(first_doc)
         .is_some());
 }

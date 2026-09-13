@@ -34,6 +34,7 @@ lunco-usd = { path = "../lunco-usd", default-features = false }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-light = { path = "../lunco-usd-bevy-light" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
+lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
 lunco-usd-core = { path = "../lunco-usd-core" }
 openusd = { workspace = true }
 # Active-document resolution for C4b runtime-layer persistence (ECS-only, no UI).

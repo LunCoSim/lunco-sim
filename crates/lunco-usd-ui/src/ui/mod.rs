@@ -27,7 +27,7 @@ use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_workbench::{BrowserSectionRegistry, ViewportPlaceholder};
 use lunco_workbench_core::PanelId;
 
-use lunco_usd::twin_projection::UsdDocumentUserOwned;
+use lunco_usd_bevy_twin::UsdDocumentUserOwned;
 use lunco_usd_core::document::UsdDocument;
 use lunco_workspace::WorkspaceResource;
 
@@ -385,7 +385,7 @@ fn badge_externally_changed_usd_docs(
 fn register_workspace_stage_on_doc_opened(
     trigger: On<DocumentOpened>,
     registry: Res<DocumentRegistry<UsdDocument>>,
-    backed: Res<lunco_usd::twin_projection::DocBackedTwinScenes>,
+    backed: Res<lunco_usd_bevy_twin::DocBackedTwinScenes>,
     mut loaded: ResMut<LoadedUsdStages>,
 ) {
     let doc = trigger.event().doc;
@@ -461,7 +461,7 @@ mod tests {
             .0
         };
         app.world_mut()
-            .resource_mut::<lunco_usd::twin_projection::DocBackedTwinScenes>()
+            .resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
             .claim_user(doc_id);
         // Drain pending events → DocumentOpened trigger → observer
         // registers the WorkspaceStage. Two updates so the trigger
@@ -496,7 +496,7 @@ mod tests {
             .0
         };
         app.world_mut()
-            .resource_mut::<lunco_usd::twin_projection::DocBackedTwinScenes>()
+            .resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
             .track(
                 doc_id,
                 "/tmp/twin".into(),
@@ -527,7 +527,7 @@ mod tests {
                 .0
         };
         app.world_mut()
-            .resource_mut::<lunco_usd::twin_projection::DocBackedTwinScenes>()
+            .resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
             .claim_user(doc_id);
         app.update();
         app.update();

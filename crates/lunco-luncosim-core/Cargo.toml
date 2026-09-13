@@ -33,10 +33,10 @@ lunco-cosim = { path = "../lunco-cosim" }
 lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-scripting = { path = "../lunco-scripting" }
-lunco-usd = { path = "../lunco-usd", default-features = false }
 lunco-usd-bevy-runtime = { path = "../lunco-usd-bevy-runtime" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
+lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
 lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-sim = { path = "../lunco-usd-sim" }
 lunco-usd-sim-cosim = { path = "../lunco-usd-sim-cosim" }
