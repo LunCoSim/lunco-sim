@@ -72,11 +72,12 @@ use lunco_usd_bevy_core::{
     read_transform_from_usd, resolve_bound_shader, resolve_stage_prim_path, stage_convention,
     UsdRead, UsdReadObject,
 };
+#[cfg(test)]
+use lunco_usd_bevy_scene::read_usd_mesh_indexed;
 use lunco_usd_bevy_lathe as lathe;
 use lunco_usd_bevy_light::light;
 use lunco_usd_bevy_scene::{
-    bump_usd_stage_revision, is_preview_only, read_primitive_axis, read_shape_dims,
-    read_usd_mesh_indexed, read_usd_mesh_points,
+    is_preview_only, read_primitive_axis, read_shape_dims, read_usd_mesh_points,
     read_usd_mesh_topology, scene_root_ancestor, usd_axis_to_quat, GlbPlaceholder,
     PlaceholderAssetUri, ShapeDims, UsdAnimated, UsdPointInstance, UsdPointInstancer,
     UsdPreviewOnly, UsdPrimPath,
