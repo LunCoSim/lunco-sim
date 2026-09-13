@@ -206,6 +206,14 @@ fn find_program_owner(
         .map(|(entity, _, _)| entity)
 }
 
+fn mark_stage_projected(world: &mut World, stage_id: AssetId<UsdStageAsset>) {
+    if let Some(mut backed) =
+        world.get_resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
+    {
+        backed.mark_stage_projected(stage_id);
+    }
+}
+
 /// Re-project a live prim when a structural edit adds its simulation schemas.
 ///
 /// A referenced instance may first appear as a typeless root while its layer
@@ -312,6 +320,7 @@ pub(crate) fn project_stage_changes(world: &mut World) {
         }
 
         if resynced.is_empty() && info_only.is_empty() && authored_transform_edits.is_empty() {
+            mark_stage_projected(world, id);
             continue;
         }
         projected_anything = true;
@@ -342,6 +351,12 @@ pub(crate) fn project_stage_changes(world: &mut World) {
         // so a live edit shows up without reloading the scene.
         refresh_edited_prims_live(world, id, &info_only);
         reconcile_structural_live(world, id, &resynced);
+        // The write-side projector has already authored this batch onto the
+        // canonical stage. Publish the read-side generation only after this
+        // sink batch has been reconciled into the live ECS projection. A query
+        // that runs before this boundary receives an explicit "projection is
+        // not current" result instead of stale composed data.
+        mark_stage_projected(world, id);
     }
 
     // Connections are derived from native `connectionPaths` by
@@ -468,8 +483,9 @@ fn seat_authored_translate(world: &mut World, entity: Entity, v: Vec3) {
             // The fix does NOT belong here: this crate is deliberately physics-free
             // (avian is a dev-dependency only), so re-seating a body is
             // `lunco-usd-sim`'s to own, next to the rest of its avian mapping. A
-            // waypoint marker is not a body, so the path this was found on is
-            // covered; a scripted move of a bodied prim is not, yet.
+            // Non-body visuals are updated here. A scripted move of a rigid
+            // body is owned by the physics projection, which keeps its pose
+            // authority beside the Avian mapping.
         }
         None => {
             if let Some(mut tf) = world.entity_mut(entity).get_mut::<Transform>() {
@@ -919,7 +935,7 @@ pub(crate) fn reconcile_structural_live(
                 return;
             };
             match stages.get(id) {
-                Some(cs) => cs.view().has_prim(&sp),
+                Some(cs) => cs.view().has_prim(&sp) && cs.view().is_active(&sp),
                 None => return,
             }
         };

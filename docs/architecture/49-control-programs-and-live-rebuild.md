@@ -109,10 +109,13 @@ ApplyUsdOps / AttachProgram
 ```
 
 A full scene rebuild is reserved for changes whose composed meaning is
-non-local—variant/payload composition or a physical schema/active-state change
-that changes the ECS component set. It is never the response to editing a task
-program, adding a route point, dragging a pin, or changing a program string. The stage is
-the source of truth; the ECS is disposable projection state.
+non-local—variant/payload composition or a physical schema change that changes
+the ECS component set. Active-state edits use the same generic structural
+reconciler to despawn or respawn only the affected subtree, so deactivating a
+referenced route point does not reset an unrelated vessel. A full rebuild is
+never the response to editing a task program, adding a route point, dragging a
+pin, or changing a program string. The stage is the source of truth; the ECS is
+disposable projection state.
 
 The important lifecycle rule is a fixed projection boundary: all operations in
 one user intent are applied before the live consumer reconciles them. This

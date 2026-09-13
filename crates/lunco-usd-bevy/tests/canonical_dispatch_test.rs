@@ -61,6 +61,14 @@ def Xform "World"
         point3f[] points = [(0, 0, 0), (0, 0, 1), (1, 0, 1), (1, 0, 2)]
         float[] widths = [0.08]
     }
+    def BasisCurves "Ribbon"
+    {
+        uniform token type = "linear"
+        int[] curveVertexCounts = [4]
+        point3f[] points = [(0, 0, 0), (0, 0, 1), (1, 0, 1), (1, 0, 2)]
+        float[] widths = [0.2]
+        normal3f[] normals = [(0, 1, 0), (0, 1, 0), (0, 1, 0), (0, 1, 0)]
+    }
     def BasisCurves "CameraRail"
     {
         uniform token type = "cubic"
@@ -414,7 +422,23 @@ fn recipe_asset_instantiates_from_prepared_projection_plan() {
     let conduit_e = entity_at(&mut app, "/World/Conduit").expect("Conduit prim entity");
     assert!(
         app.world().get::<Mesh3d>(conduit_e).is_some(),
-        "a BasisCurves with `widths` must sweep to a Mesh3d"
+        "an unoriented BasisCurves with `widths` must sweep to a Mesh3d"
+    );
+
+    let ribbon_e = entity_at(&mut app, "/World/Ribbon").expect("Ribbon prim entity");
+    let ribbon_mesh = app
+        .world()
+        .get::<Mesh3d>(ribbon_e)
+        .expect("an oriented BasisCurves with `widths` must project to a Mesh3d");
+    let ribbon_mesh = app
+        .world()
+        .resource::<Assets<Mesh>>()
+        .get(&ribbon_mesh.0)
+        .expect("oriented ribbon mesh asset");
+    assert_eq!(
+        ribbon_mesh.count_vertices(),
+        8,
+        "oriented BasisCurves must use two strip vertices per control point"
     );
 
     // (f) …and `widths` is exactly what discriminates geometry from a pure PATH.

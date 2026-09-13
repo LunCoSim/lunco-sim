@@ -50,8 +50,12 @@ The task/mission semantics are exercised by the production
 `assets/scenarios/tests/scripting_task_contract.rhai`; the Rust harness no
 longer embeds one test script per task combinator. Route composition and progression are authored by the scene-level
 `assets/scenarios/route_follow.rhai` program and observed by the production
-scene scenarios. There is no Rust test or Rust runtime path for a vessel-owned
-waypoint list.
+scene scenarios. The `route_lifecycle` scene gate covers the current route
+contract in one deterministic Rhai acceptance pass: source-asset program
+attachment, add/move/delete (including referenced-point deactivation), empty
+and recovered ribbons, semantic start/stop, invalid edits, and sensor-driven
+arrival. There is no Rust test or Rust runtime path for a vessel-owned waypoint
+list.
 
 The same boundary applies to authored physics and editor outcomes: when a
 public USD/query/event surface can observe the claim, the acceptance assertion

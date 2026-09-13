@@ -5,9 +5,9 @@
     metersPerUnit = 1
 )
 
-# A reusable standard USD curve surface for route visualisation. The route tool
-# supplies points and topology; the USD renderer owns the fast BasisCurves
-# projection. This asset contains no route or vessel semantics.
+# A reusable standard USD oriented curve for route visualisation. The route tool
+# supplies points, topology, and surface orientation; the USD renderer owns the
+# fast flat-strip projection. This asset contains no route or vessel semantics.
 def Xform "RouteRibbon"
 {
     def Scope "Looks"
@@ -40,14 +40,20 @@ def Xform "RouteRibbon"
     {
         token type = "linear"
         token wrap = "nonperiodic"
-        double3 xformOp:translate = (0, 1.0, 0)
+        # Keep the annotation just above a flat support surface. The route tool
+        # owns point topology; this presentation offset stays with the reusable
+        # visual asset instead of becoming route policy.
+        double3 xformOp:translate = (0, 0.08, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         int[] curveVertexCounts = [2]
         point3f[] points = [(0, 0, 0), (0, 0, 1)]
-        float[] widths = [0.65]
+        # UsdGeomCurves interprets widths as full ribbon width when normals are
+        # authored, rather than as the diameter of an unoriented tube.
+        float[] widths = [0.24]
+        normal3f[] normals = [(0, 1, 0), (0, 1, 0)]
         rel material:binding = </RouteRibbon/Looks/RouteRibbon_Mat>
         bool doubleSided = true
-        color3f[] primvars:displayColor = [(0.20, 0.85, 1.0)]
+        color3f[] primvars:displayColor = [(0.20, 1.0, 0.55)]
         float[] primvars:displayOpacity = [0.85]
         bool lunco:surface:additive = true
         bool primvars:doNotCastShadows = true

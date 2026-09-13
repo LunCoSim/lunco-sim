@@ -51,8 +51,8 @@ copy coordinates into Rust or into the subject. Multiple routes can coexist by
 using distinct scopes and subject relationships; enablement is a property of
 each program instance.
 
-The editor's route tool derives a ribbon from the same point children. It
-references the reusable
+The editor's route tool derives a ribbon from the same point children after the
+canonical USD projection has settled. It references the reusable
 [`assets/markers/route_ribbon.usda`](../../assets/markers/route_ribbon.usda)
 asset and writes only the generated `BasisCurves` opinions to the document's
 `@runtime@` layer. The Twin therefore contains no editor ribbon prim: removing
@@ -79,7 +79,8 @@ does not fall back to a vessel-owned route.
 The marker's dome is emissive, translucent, and shadowless. Its trigger is
 invisible and has its own authored radius. Billboard text and placement are
 read by the generic billboard renderer. The ribbon is a separate, lightweight
-world-space annotation and does not participate in physics. Route execution
+world-space annotation: standard `normals` make its narrow `widths` a flat strip
+rather than a tube. It does not participate in physics. Route execution
 does not recolor or rebuild marker geometry; a scenario may react to
 `route_point_reached` to update mission state or the HUD through its own policy.
 

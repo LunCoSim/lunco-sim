@@ -529,25 +529,19 @@ impl CanonicalStage {
     }
 
     /// Author `active` onto the prim's spec on the root edit target. This is the
-    /// live-stage counterpart of the document's `SetActive` op, so a runtime hide
-    /// of a purely-visual prim (a waypoint marker: an opaque emissive dome + a
-    /// non-solid Sensor, no rigid body / collider) reaches the live world without
-    /// a whole-scene reload — the projection bridge despawns the prim's subtree via
-    /// a `refresh_prim_subtree`. Firing the sink lets
-    /// `project_stage_changes` in `lunco-usd` reconcile ECS.
+    /// live-stage counterpart of the document's `SetActive` op. A hide or
+    /// reactivation reaches the live world without a whole-scene reload: the
+    /// projection bridge applies the sink's structural change to the affected
+    /// subtree. Firing the sink lets `project_stage_changes` in `lunco-usd`
+    /// reconcile ECS.
     ///
-    /// Callers must still decide whether the prim's ECS consequence can be
-    /// reconciled incrementally: a `SetActive` on a physics prim changes its
-    /// presence / component set, which the visual-only subtree refresh cannot
-    /// express, and must take the rebuild path. See
-    /// `twin_projection::op_needs_rebuild`.
+    /// The shared structural reconciler observes the active flag and reconciles
+    /// entity presence and projection for the affected subtree.
     pub(crate) fn author_active(&self, prim: &SdfPath, active: bool) -> anyhow::Result<()> {
         use anyhow::anyhow;
         // `Prim::set_active` requires a spec to exist on this layer's edit target.
-        // A waypoint marker is authored in the base/scene layer, so the live
-        // canonical stage (whose edit target is its own root layer) has no spec
-        // for it yet — the same situation `document.rs::SetActive` fixes with
-        // `define_prim`. Upsert the spec first (idempotent), then set the flag.
+        // Upsert the spec first (idempotent), then set the flag so this works for
+        // both locally authored and composed prims.
         self.stage
             .define_prim(prim.clone())
             .map_err(|e| anyhow!("define_prim before author_active at {prim}: {e}"))?;
@@ -712,8 +706,7 @@ impl StageProjector<'_> {
 
     /// Replay a `SetActive` op — see [`CanonicalStage::author_active`]. Callers
     /// classify whether the prim's ECS consequence (entity presence / physics
-    /// component set) can be reconciled without a rebuild: only purely-visual
-    /// prims (waypoint markers) may take the incremental path.
+    /// component set) can be reconciled through the shared structural path.
     pub fn author_active(&self, prim: &SdfPath, active: bool) -> anyhow::Result<()> {
         self.0.author_active(prim, active)
     }
@@ -1470,9 +1463,8 @@ mod authoring_tests {
 
     #[test]
     fn author_active_flips_the_live_prim_active_flag() {
-        // The live-stage counterpart of `UsdOp::SetActive`: a runtime hide of a
-        // purely-visual prim (a waypoint marker) composes on the live stage so the
-        // projection can drop its visual subtree without a rebuild.
+        // The live-stage counterpart of `UsdOp::SetActive`: active state composes
+        // on the live stage so structural reconciliation can update its subtree.
         let recipe = StageRecipe::from_source("rig.usda", RIG);
         let mut cs = CanonicalStage::from_recipe(&recipe).expect("build rig");
         let _ = cs.drain_changes();
@@ -1488,9 +1480,8 @@ mod authoring_tests {
             !cs.view().is_active(&chassis),
             "author_active(false) composes on the live stage"
         );
-        // The prim is still DEFINED (just inactive) — this is what keeps the
-        // structural reconcile's `has_prim` true so the incremental path doesn't
-        // fight a concurrent spawn/despawn.
+        // The prim is still DEFINED (just inactive), preserving the local USD
+        // opinion while the structural reconciler removes its live subtree.
         assert!(
             cs.view().has_prim(&chassis),
             "deactivation does not remove the prim spec"
@@ -1501,11 +1492,10 @@ mod authoring_tests {
     }
 
     // SetApiSchemas has no incremental consumer on purpose: its ECS effect
-    // (physics component set) can't be reconciled by the visual-only subtree
-    // refresh, so it takes the projector's rebuild path (except for the
-    // `LunCoProgramAPI` metadata case). `SetActive` has a live author
-    // (`author_active`) but is only routed incrementally for purely-visual
-    // waypoint-marker prims; any other `SetActive` rebuilds. Their document-level
-    // authoring + inverse are covered in `lunco_usd_core::document::tests`, and their
-    // rebuild routing in `lunco_usd::twin_projection::tests`.
+    // (physics component set) can't be reconciled by the structural refresh,
+    // so it takes the projector's rebuild path (except for the
+    // `LunCoProgramAPI` metadata case). Active-state authoring and structural
+    // reconciliation are covered by the generic canonical-stage and projection
+    // tests above; document-level authoring + inverse remain in
+    // `lunco_usd_core::document::tests`.
 }

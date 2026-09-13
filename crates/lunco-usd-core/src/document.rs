@@ -1545,12 +1545,11 @@ fn reference_list_inverse(
 ///
 /// **A flat spec lookup is not the whole answer**, because a prim authored
 /// inside a variant set is stored under its SELECTION path
-/// (`/Traverse/Route{route=default}W1`) while the editor — and every op it
-/// emits — addresses the COMPOSED path (`/Traverse/Route/W1`). Validating with
-/// `data.spec()` alone therefore rejected "move this waypoint" for every prim
-/// that happens to live in a variant, which is most authored route/config
-/// content: the op was correct, the addressing was correct, and the document
-/// said "path not found".
+/// (`/Traverse/Assembly{variant=default}Part`) while the editor — and every op
+/// it emits — addresses the COMPOSED path (`/Traverse/Assembly/Part`).
+/// Validating with `data.spec()` alone therefore rejects edits to any prim that
+/// happens to live in a variant: the operation and its composed address are
+/// correct, but the authored selection path is different.
 ///
 /// So: exact hit first (the common case, one hash lookup), then a scan for a
 /// variant-embedded spec that strips to the same path. The scan only runs on the
@@ -2792,7 +2791,17 @@ impl Document for UsdDocument {
             }
 
             UsdOp::SetActive { path, active, .. } => {
-                self.require_prim_anywhere(&path)?;
+                let prim_path = match self.require_prim_anywhere(&path) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        let prim_path = parse_prim_path(&path)?;
+                        if self.path_is_under_composed_arc_path(&prim_path) {
+                            prim_path
+                        } else {
+                            return Err(error);
+                        }
+                    }
+                };
                 // NOT `SetActive { active: !active }`: that assumes the prim was in
                 // the opposite state. Deactivating an already-inactive prim would
                 // then "undo" into activating it. The snapshot inverse restores the
@@ -2800,18 +2809,14 @@ impl Document for UsdDocument {
                 let inverse = self.coarse_inverse(target, &id);
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
                 // A `SetActive` must be authorable onto a layer that does not yet
-                // carry a spec for the prim — most importantly the runtime overlay,
-                // which is how a scene-authored marker (`/Traverse/Route/W1`, lives
-                // in the scene/variant layer) gets an `active = false` opinion from
-                // a delete. `Prim::set_active` requires a spec to exist on this
-                // layer (it is not an upsert), so define it first — idempotent, and
-                // the same pattern `SetTranslate`/`AddPrim` use to author a stronger
-                // opinion over a referenced prim. Without this the op was rejected
-                // with "no prim spec at path on the edit target layer" and the
-                // marker could not be hidden at all.
-                stage.define_prim(path.as_str()).map_err(author_err)?;
+                // carry a spec for the prim — most importantly a local override
+                // over a referenced route point. `Prim::set_active` requires a
+                // spec to exist on this layer (it is not an upsert), so define it
+                // first, just as `SetTranslate`/`AddPrim` do for stronger local
+                // opinions.
+                stage.define_prim(prim_path.as_str()).map_err(author_err)?;
                 stage
-                    .prim(path.as_str())
+                    .prim(prim_path.as_str())
                     .set_active(active)
                     .map_err(author_err)?;
                 let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
@@ -5408,16 +5413,9 @@ def Xform \"Traverse\" (\n\
     }
 
     #[test]
-    fn set_active_on_runtime_overlay_authors_over_a_base_layer_prim() {
-        // The delete-marker fix: a waypoint marker is authored in the base/scene
-        // layer (`/Traverse/Route/W1`), and the editor's runtime delete must hide
-        // it by authoring `active = false` onto the RUNTIME overlay. Before the
-        // fix `Prim::set_active` rejected this with "no prim spec at path on the
-        // edit target layer" — the marker could not be hidden at all. `define_prim`
-        // first (the same upsert `SetTranslate`/`AddPrim` use) lets the overlay
-        // carry the stronger opinion.
-        // The marker is authored in the BASE/scene layer (where a route's pins
-        // live), so the runtime overlay has no spec for it.
+    fn set_active_on_runtime_overlay_authors_over_a_composed_prim() {
+        // A composed prim can have no spec in the runtime overlay. Define the
+        // local spec first, then author the stronger active-state opinion there.
         let scene = "#usda 1.0\n(\n    metersPerUnit = 1\n)\ndef Xform \"Traverse\"\n{\n    def Xform \"Route\"\n    {\n        def Xform \"W1\"\n        {\n        }\n    }\n}\n";
         let mut doc = UsdDocument::with_origin(
             DocumentId::new(67),
@@ -5425,7 +5423,7 @@ def Xform \"Traverse\" (\n\
             DocumentOrigin::writable_file("/tmp/active_overlay.usda"),
         );
         // The runtime overlay carries no spec at /Traverse/Route/W1, yet the op
-        // must land there to hide the marker without mutating the scene.
+        // must land there without mutating the authored scene layer.
         doc.apply(UsdOp::SetActive {
             edit_target: LayerId::runtime(),
             path: "/Traverse/Route/W1".into(),
@@ -5433,7 +5431,7 @@ def Xform \"Traverse\" (\n\
         })
         .unwrap();
 
-        // The runtime overlay now carries a spec for the marker with active=false.
+        // The runtime overlay now carries a spec with active=false.
         let marker = SdfPath::new("/Traverse/Route/W1").unwrap();
         let runtime_active = doc
             .runtime_data()
@@ -5573,21 +5571,11 @@ def Xform \"Scene\" (\n\
     }
 
     /// **A prim authored inside a `variantSet` must be editable at its COMPOSED
-    /// path.** This is the summer-space-school waypoint "Move does nothing" bug.
+    /// path.**
     ///
-    /// `traverse.usda` authors its route markers inside
-    /// `variantSet "terrain" { "apollo15" { def Scope "Route" { def Xform "W1" ... } } }`,
-    /// so on the composed stage they are at `/Traverse/Route/W1` — which is the path
-    /// the editor holds and the path `UsdOp::SetTranslate` is given. But
-    /// `require_prim_anywhere` resolves through `prim_in` → `sdf::Data::spec`, a FLAT
-    /// layer lookup, and inside a layer the variant's contents live under a
-    /// variant-selection path, not under `/Traverse/Route/W1`. The lookup misses, the
-    /// op is rejected as "path not found", and the waypoint does not move — silently,
-    /// because `on_apply_usd_op` only logs the rejection at `warn`.
-    ///
-    /// Delete kept working precisely because it edits a DIFFERENT prim: the mission's
-    /// `info:sourceCode`, on a `/Traverse/Rover/Mission` authored outside every
-    /// variant block. That asymmetry is the whole signature of this bug.
+    /// A variant's contents are stored under a selection path in the authored
+    /// layer, while the composed stage exposes the stable path held by the
+    /// editor. `prim_in` must recognize both forms before accepting the edit.
     #[test]
     fn set_translate_reaches_a_prim_authored_inside_a_variant_set() {
         let scene = concat!(
@@ -5648,7 +5636,7 @@ def Xform \"Scene\" (\n\
 
         assert!(
             moved.is_ok(),
-            "moving a variant-authored waypoint must be accepted, got {moved:?} —              the editor addresses prims by COMPOSED path, so document validation              cannot be a flat per-layer spec lookup"
+            "moving a variant-authored prim must be accepted, got {moved:?}"
         );
     }
 }

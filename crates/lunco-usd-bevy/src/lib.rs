@@ -926,12 +926,10 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
             prim_type.as_deref(),
             Some("BasisCurves") | Some("NurbsCurves")
         ) {
-            // A curve prim with `widths` is a TUBE — swept geometry, not a line.
-            // `build_usd_curve_mesh` returns `None` when `widths` is unauthored,
-            // which is what keeps a pure path (a camera rail carrying
-            // `lunco:path:camera`, see `camera_path.rs`) from silently becoming a
-            // visible pipe. So the two readings coexist without a gate: a camera
-            // path authors no `widths`, a conduit does.
+            // A curve prim with `widths` is a renderable surface: an unoriented
+            // curve is a swept tube, while a curve with standard normals is a
+            // flat ribbon. A pure path (for example a camera rail carrying
+            // `lunco:path:camera`) authors no `widths` and remains non-rendered.
             build_usd_curve_mesh(reader, &sdf_path, quality).map(|m| {
                 commands.entity(entity).try_insert(UsdCurveMesh);
                 meshes.add(m)
@@ -3432,7 +3430,7 @@ mod reset_xform_stack_tests {
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
 struct UsdPrimitiveMesh(ShapeDims);
 
-/// Rendering-only marker for a USD curve tube. The authored curve remains
+/// Rendering-only marker for a USD curve mesh. The authored curve remains
 /// addressable through [`UsdPrimPath`], so a Graphics quality change can rebuild
 /// the mesh from the composed stage without duplicating USD geometry data in ECS.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
@@ -3523,7 +3521,7 @@ fn retessellate_primitive_meshes_on_quality_change(
     }
 }
 
-/// Rebuild curve-tube meshes when authored USD geometry or Graphics tessellation
+/// Rebuild USD curve meshes when authored USD geometry or Graphics tessellation
 /// changes. The live-stage revision is the generic invalidation signal for
 /// authored curve points, topology, and widths; no route or waypoint knowledge
 /// belongs in this renderer-owned path. Invalid settings leave the existing mesh
@@ -3825,13 +3823,12 @@ fn read_mesh_normals(
     ))
 }
 
-/// Build a swept-tube mesh from a `UsdGeomBasisCurves` prim.
+/// Build a mesh from a `UsdGeomBasisCurves` or `UsdGeomNurbsCurves` prim.
 ///
-/// A curve prim with `widths` is a **tube**, not a line: `widths` is a diameter in
-/// object space, so the curve is a centerline and the profile is a circle. See
-/// [`lunco_usd_geometry::curve_sweep`] for why the frames are rotation-minimizing rather than
-/// Frenet (short version: Frenet is undefined on straight runs, and flips as it
-/// approaches them — a habitat is mostly straight pipe).
+/// An unoriented curve with `widths` is a swept tube whose widths are diameters.
+/// An oriented curve with standard `normals` is a flat ribbon whose widths are
+/// strip widths. Both paths share the same centerline evaluation and are kept
+/// here as one generic USD geometry reader.
 ///
 /// Batches are honoured: `curveVertexCounts` partitions `points` into several
 /// curves on one prim, and each is swept and merged into a single mesh so the
@@ -3846,8 +3843,10 @@ fn build_usd_curve_mesh(
     path: &SdfPath,
     quality: lunco_render::RenderQualityProfile,
 ) -> Option<Mesh> {
+    use bevy::math::DVec3;
     use lunco_usd_bevy_camera::camera_path::CurveBasis;
     use lunco_usd_geometry::curve_sweep::sweep_tube;
+    use lunco_usd_geometry::ribbon::{build_ribbon_mesh, RibbonPoint};
 
     // Canonical-frame points — same conversion the mesh path takes.
     let points = read_usd_mesh_points(reader, path)?;
@@ -3876,6 +3875,26 @@ fn build_usd_curve_mesh(
             return None;
         }
     };
+
+    // USD `widths` means a ribbon width when the curve is oriented by its
+    // standard `normals` attribute, and a tube diameter otherwise. Keep that
+    // distinction at the generic USD geometry boundary so authored route,
+    // camera, and annotation curves all receive the same interpretation.
+    let oriented_normals = read_mesh_normals(reader, path).map(|(normals, _)| {
+        normals
+            .into_iter()
+            .map(Vec3::from_array)
+            .collect::<Vec<_>>()
+    });
+    if let Some(normals) = &oriented_normals {
+        if normals.len() != points.len() || normals.iter().any(|normal| !normal.is_finite()) {
+            error!(
+                "[usd-bevy] {} has curve normals that do not match its point topology",
+                path.as_str()
+            );
+            return None;
+        }
+    }
 
     // Radii are a LENGTH, so they scale with `metersPerUnit` — `conv.length`,
     // not `conv.point`. (`read_usd_mesh_points` already converted the centerline.)
@@ -4075,7 +4094,9 @@ fn build_usd_curve_mesh(
         }
     }
 
-    if quality.curve_samples_per_segment == 0 || quality.curve_radial_segments < 3 {
+    if quality.curve_samples_per_segment == 0
+        || (oriented_normals.is_none() && quality.curve_radial_segments < 3)
+    {
         return None;
     }
 
@@ -4120,6 +4141,12 @@ fn build_usd_curve_mesh(
                 .copied()
                 .collect::<Vec<_>>()
         };
+        let seg_normals = oriented_normals.as_ref().map(|normals| {
+            normals[cursor..cursor + n]
+                .iter()
+                .copied()
+                .collect::<Vec<_>>()
+        });
         cursor += n;
 
         let centerline: Vec<Vec3> = if is_nurbs {
@@ -4204,22 +4231,41 @@ fn build_usd_curve_mesh(
                 .collect()
         };
 
-        let Some(tube) = sweep_tube(
-            &centerline,
-            &seg_radii,
-            quality.curve_radial_segments,
-            periodic,
-        ) else {
-            error!(
-                "[usd-bevy] {} has a curve segment that cannot be swept into a mesh",
-                path.as_str()
-            );
-            return None;
+        let segment_mesh = if let Some(seg_normals) = seg_normals {
+            let seg_normals = if centerline.len() == cvs.len() {
+                seg_normals
+            } else {
+                let last = cvs.len() - 1;
+                (0..centerline.len())
+                    .map(|i| {
+                        let t = i as f32 / (centerline.len() - 1).max(1) as f32 * last as f32;
+                        let (a, f) = (t.floor() as usize, t.fract());
+                        let b = (a + 1).min(last);
+                        seg_normals[a].lerp(seg_normals[b], f).normalize_or_zero()
+                    })
+                    .collect()
+            };
+            let points = centerline
+                .iter()
+                .zip(seg_normals)
+                .map(|(position, normal)| RibbonPoint {
+                    position: position.as_dvec3(),
+                    normal: normal.as_dvec3(),
+                })
+                .collect::<Vec<_>>();
+            build_ribbon_mesh(&points, DVec3::ZERO, &seg_radii, 0.0, periodic)?
+        } else {
+            sweep_tube(
+                &centerline,
+                &seg_radii,
+                quality.curve_radial_segments,
+                periodic,
+            )?
         };
         merged = Some(match merged {
-            None => tube,
+            None => segment_mesh,
             Some(mut acc) => {
-                acc.merge(&tube).ok()?;
+                acc.merge(&segment_mesh).ok()?;
                 acc
             }
         });

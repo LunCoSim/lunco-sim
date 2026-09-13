@@ -753,7 +753,8 @@ document through `DocBackedTwinScenes` and rejects closed, unmapped, or stale
 document projections. Queries without `doc_id` require one mounted live stage;
 preview copies and detached cached stages cannot satisfy them. Preview focus
 does not select a query's document. It reads explicit composed paths and
-returns structured reports for topology/relationship expectations, reciprocal
+returns each prim's composed `active` state plus structured reports for
+topology/relationship expectations, reciprocal
 mount metadata, joint bodies/axes/optional authored frames, rigid-body/joint
 coverage, and mass/inertia plus explicit collider coverage. Its
 `explode_plan` returns non-mutating local preview deltas for the existing USD

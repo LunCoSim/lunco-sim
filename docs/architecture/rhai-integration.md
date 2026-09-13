@@ -353,23 +353,24 @@ typed task-kind parser and the existing `lunco-behavior` composites.
 
 ## 5. Navigation primitives
 
-`SetPorts` is the only high-level actuator (writes `throttle`/`steer` inputs → authored
-program outputs → port propagation → wheel physics); everything goal-shaped builds on it. The native set
-(registered as rhai verbs), all deterministic, emitting `SetPorts` each tick:
+`SetPorts` is the high-level actuator surface (writes `throttle`/`steer` inputs →
+authored program outputs → port propagation → wheel physics). The generic Rhai
+`nav_to` helper composes the reusable navigation calculation with that surface;
+continuous control remains in the authored Modelica drivetrain. A scene-level
+route program can therefore read any ordered USD point scope and react to
+generic sensor events without a native route component or a vessel-owned
+waypoint list:
 
-```rust
-distance(a, b) -> f64                 // world_vector(a,b).length()  (coords.rs:109)
-heading_error(rover, target) -> f64   // chassis forward vs vector-to-target
-arrived(rover, pos, tol) -> bool      // distance < tol
-steer_toward(rover, target)           // P-controller: heading->steer, dist->throttle, emit SetPorts
+```rhai
+let command = nav_command(subject, world_pos(point), 0.6, 2.5);
+if command != () { drive(subject, command.throttle, command.steer); }
 ```
-`world_position`/`world_vector` already exist (`lunco-core/src/coords.rs:63,109`)
-and handle the floating-origin (big_space) correctly — use them, don't read raw
-`Transform`.
 
-A native `PathFollower { waypoints, index, tol }` component can execute the
-declarative plan (model A) entirely in Rust at native speed; the script just
-authors the waypoint list.
+`world_pos`/`world_vector` and the vector helpers handle the floating-origin
+(`big_space`) frame correctly — use them instead of reading raw `Transform`.
+Route sequencing, enable/disable state, point edits, and route presentation are
+authored Rhai policy over USD queries and typed commands. There is no native
+`PathFollower` component and no second Rust autopilot path.
 
 ---
 
@@ -394,8 +395,9 @@ The system is organized into four layers, each building on the one below:
 2. **Persistent scenario runtime** — `ScenarioRuntime` AST+Scope,
    native task/mission drivers plus `on_start`/`on_event`, hot-reload via
    `ScriptDocument`.
-3. **Navigation primitives** — `distance`/`arrived`/`steer_toward` +
-   `PathFollower`; the checkpoint/goal scenario runs end to end.
+3. **Navigation primitives** — `nav_command`/`nav_to` plus the generic
+   `drive`/`brake` surface; the route lifecycle scenario runs add, move, delete,
+   enable/disable, ribbon refresh, and sensor-arrival cases end to end.
 4. **Authoring polish** — declarative-plan executor, scenario examples,
    editor/Inspector params, telemetry→`on_event` wiring.
 

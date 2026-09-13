@@ -26,9 +26,8 @@ use lunco_mobility::{
     raycast_contact_point, JointedWheelTire, Suspension, WheelBodyMount, WheelRaycast,
 };
 use lunco_render::{PbrLook, SurfaceAlpha};
+use lunco_usd_geometry::ribbon::{build_ribbon_mesh, RibbonPoint};
 use lunco_usd_sim::PhysicalWheel;
-
-use super::ribbon::{build_ribbon_mesh, RibbonPoint};
 
 /// Minimum horizontal travel before a new history sample is admitted.
 const TRAIL_SAMPLE_SPACING_M: f64 = 0.5;
@@ -607,8 +606,9 @@ pub(crate) fn sync_vehicle_trail_meshes(
             let Some(new_mesh) = build_ribbon_mesh(
                 &lane.points,
                 anchor,
-                TRAIL_HALF_WIDTH_M,
+                &[TRAIL_HALF_WIDTH_M],
                 TRAIL_SURFACE_CLEARANCE_M,
+                false,
             ) else {
                 if let Some((entity, ..)) = previous {
                     commands.entity(entity).try_despawn();
@@ -813,8 +813,9 @@ mod tests {
         let mesh = build_ribbon_mesh(
             &points,
             points[0].position,
-            TRAIL_HALF_WIDTH_M,
+            &[TRAIL_HALF_WIDTH_M],
             TRAIL_SURFACE_CLEARANCE_M,
+            false,
         )
         .expect("a four-point trail has ribbon geometry");
         assert_eq!(mesh.count_vertices(), points.len() * 2);
@@ -837,7 +838,8 @@ mod tests {
                 normal,
             },
         ];
-        let mesh = build_ribbon_mesh(&points, DVec3::ZERO, 0.2, 0.1).expect("ramp ribbon");
+        let mesh =
+            build_ribbon_mesh(&points, DVec3::ZERO, &[0.2], 0.1, false).expect("ramp ribbon");
         let bevy::mesh::VertexAttributeValues::Float32x3(positions) = mesh
             .attribute(Mesh::ATTRIBUTE_POSITION)
             .expect("ribbon positions")

@@ -20,7 +20,7 @@
 //!    [`UsdDocument`](lunco_usd_core::document::UsdDocument) for it (origin = the on-disk path, so Save
 //!    and dedup work), restore its persisted `.lunco/runtime` overlay, publish
 //!    the composed source as the twin overlay, record it in
-//!    [`DocBackedTwinScenes`] (synced at the current generation), and only then
+//!    [`DocBackedTwinScenes`] (synced after the canonical stage sink is drained), and only then
 //!    fire `LoadScene` — the single mount composes `base ⊕ runtime`.
 //! 3. [`sync_twin_overlays`] — on an authored document or stage-lifecycle event
 //!    (initial mount, open-time `restore_runtime`, or a later spawn/move), refresh the
@@ -160,8 +160,10 @@ impl PendingTwinDocs {
     }
 }
 
-/// The twin-source coordinates + last-synced generation for a doc-backed twin
-/// scene, so [`sync_twin_overlays`] re-serializes only when the document moved.
+/// The twin-source coordinates + projection cursors for a doc-backed twin
+/// scene. The applied cursor prevents replaying the same document ops; the
+/// synced cursor is advanced only after the canonical-stage sink has been
+/// drained into ECS, so composed readers never observe a half-projected edit.
 struct TwinSceneRef {
     /// Workspace Twin roots that own this live projection. This is distinct
     /// from the document origin: a user-opened document may outlive its Twins,
@@ -173,7 +175,15 @@ struct TwinSceneRef {
     /// synthetic document projection has no Twin root, so this count is the
     /// lifetime owner for its `TwinRoots` registration.
     preview_leases: usize,
+    /// Last document generation whose typed ops were applied to the canonical
+    /// stage. This is the write-side cursor used by `sync_twin_overlays`.
+    applied_generation: Option<u64>,
+    /// Last document generation whose canonical-stage changes were consumed by
+    /// `project_stage_changes`. This is the read-side cursor exposed to queries.
     synced_generation: Option<u64>,
+    /// Canonical stage receiving this document's applied ops. Set when the
+    /// document-backed scene is mounted and the live stage is available.
+    stage_id: Option<AssetId<UsdStageAsset>>,
     /// Generation the **persistence overlay** was last serialized at. Tracked apart
     /// from `synced_generation` so the expensive whole-stage serialization happens
     /// at the explicit settle boundary, not for every brush stroke, while live
@@ -210,10 +220,25 @@ impl DocBackedTwinScenes {
         self.map.get(&doc).map(|s| (s.name.clone(), s.rel.clone()))
     }
 
-    /// Last document generation applied to its canonical stage. An absent
-    /// cursor means the document has not completed projection admission.
+    /// Last document generation whose canonical-stage changes were consumed by
+    /// the live projection. An absent cursor means the document has not
+    /// completed projection admission.
     pub fn synced_generation(&self, doc: DocumentId) -> Option<u64> {
         self.map.get(&doc).and_then(|scene| scene.synced_generation)
+    }
+
+    /// Mark the canonical-stage sink for `stage_id` as consumed. The applied
+    /// cursor remains independent so the projection owner never replays a
+    /// document edit merely because ECS reconciliation happens one schedule
+    /// after stage authoring.
+    pub(crate) fn mark_stage_projected(&mut self, stage_id: AssetId<UsdStageAsset>) {
+        if let Some(scene) = self
+            .map
+            .values_mut()
+            .find(|scene| scene.stage_id == Some(stage_id))
+        {
+            scene.synced_generation = scene.applied_generation;
+        }
     }
 
     /// Claim a document for the user-facing document session. Returns `true`
@@ -259,7 +284,9 @@ impl DocBackedTwinScenes {
                 name,
                 rel,
                 preview_leases: 0,
+                applied_generation: None,
                 synced_generation: None,
+                stage_id: None,
                 overlay_synced_generation: None,
             },
         );
@@ -279,7 +306,9 @@ impl DocBackedTwinScenes {
                 name,
                 rel,
                 preview_leases: 0,
+                applied_generation: None,
                 synced_generation: None,
+                stage_id: None,
                 overlay_synced_generation: None,
             },
         );
@@ -651,7 +680,7 @@ pub(crate) fn drain_pending_twin_docs(
             crate::runtime_persistence::restore_doc_runtime(ws, &mut registry, doc);
         }
         // Publish the composed source as the twin overlay so the stage build
-        // reads `base ⊕ runtime`, and mark the scene synced at this generation —
+        // reads `base ⊕ runtime`, and mark both projection cursors at this generation —
         // every op through it is reflected by the mount itself, so
         // `sync_twin_overlays` only has to project edits made AFTER open.
         let (cur_gen, composed) = match registry.host(doc) {
@@ -672,6 +701,7 @@ pub(crate) fn drain_pending_twin_docs(
         backed.track(doc, item.root.clone(), item.name.clone(), item.rel.clone());
         wake.wake();
         if let Some(scene) = backed.map.get_mut(&doc) {
+            scene.applied_generation = Some(cur_gen);
             scene.synced_generation = Some(cur_gen);
             scene.overlay_synced_generation = Some(cur_gen);
         }
@@ -781,7 +811,7 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
                 *doc,
                 s.name.clone(),
                 s.rel.clone(),
-                s.synced_generation,
+                s.applied_generation,
                 s.overlay_synced_generation,
             )
         })
@@ -805,7 +835,7 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
         let (name, rel) = lunco_assets::split_twin_rel(&rel)?;
         world.resource::<DocBackedTwinScenes>().doc_for(name, rel)
     });
-    for (doc, name, rel, synced, overlay_synced) in entries {
+    for (doc, name, rel, applied, overlay_synced) in entries {
         let preview_owned = world
             .resource::<DocBackedTwinScenes>()
             .has_preview_lease(doc);
@@ -827,7 +857,7 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
                 continue;
             }
         };
-        if Some(cur_gen) == synced {
+        if Some(cur_gen) == applied {
             // Live projection is already up to date. Persistence is handled by
             // the explicit one-frame settle message, not by rechecking this
             // document on every render frame.
@@ -850,10 +880,10 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
         let ops = world
             .resource::<DocumentRegistry<UsdDocument>>()
             .host(doc)
-            .and_then(|h| h.document().ops_since(synced.unwrap_or(0)));
-        let has_work = synced.is_none() || ops.as_ref().map(|o| !o.is_empty()).unwrap_or(true);
+            .and_then(|h| h.document().ops_since(applied.unwrap_or(0)));
+        let has_work = applied.is_none() || ops.as_ref().map(|o| !o.is_empty()).unwrap_or(true);
 
-        if synced.is_none() {
+        if applied.is_none() {
             // First mount MUST publish the overlay so the async stage load composes
             // base ⊕ runtime from it. The prepared asset plan already contains
             // this composed document, so initial projection does not need a live
@@ -946,9 +976,10 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             .map
             .get_mut(&doc)
         {
-            s.synced_generation = Some(cur_gen);
+            s.applied_generation = Some(cur_gen);
+            s.stage_id = Some(scene_id);
         }
-        if synced.is_some() && Some(cur_gen) != overlay_synced {
+        if applied.is_some() && Some(cur_gen) != overlay_synced {
             world.write_message(TwinProjectionSettle {
                 doc,
                 generation: cur_gen,
@@ -1035,26 +1066,23 @@ pub(crate) fn wake_twin_projection_on_stage_event(
 /// (the Avian joint builder and the cosim wire reconcile) re-read on a subtree
 /// refresh, so the incremental path fully reconciles them.
 ///
-/// `SetApiSchemas`, `SetPrimKind`, and `SetActive` do NOT: their effect is which
-/// ECS *components* a prim carries (rigid body, collider) and whether its entity
-/// exists at all — and
-/// the incremental subtree refresh only re-derives an entity's *visual*, not its
-/// physics extraction or its presence. So they rebuild, which re-derives both
-/// correctly. This is not the hot path: `AttachComponent` emits neither, so
-/// building a vehicle from parts stays rebuild-free.
+/// `SetApiSchemas` and `SetPrimKind` do NOT: their effect is which ECS
+/// *components* a prim carries (rigid body, collider), and the incremental
+/// path cannot derive a changed component set in place. They rebuild, which
+/// re-derives the physical projection correctly. This is not the hot path:
+/// `AttachComponent` emits neither, so building a vehicle from parts stays
+/// rebuild-free.
 ///
-/// Active state changes are always structural: hiding a prim can remove physics
-/// components and entity presence, so the full projection path is required.
+/// Active state is structural, but the generic structural reconciler already
+/// owns exactly that operation: it despawns an inactive subtree and spawns it
+/// again when reactivated. Keeping `SetActive` incremental prevents a route
+/// annotation edit from rebuilding unrelated live vessels and their models.
 fn op_needs_rebuild(op: &UsdOp) -> bool {
     // The program API schema is the only metadata-only fast path. Kind and
     // defaultPrim changes rebuild so the projection reads the new composed
     // metadata from one authoritative document snapshot.
     if let UsdOp::SetApiSchemas { schemas, .. } = op {
         return !incremental_api_schemas(schemas);
-    }
-    // Active state changes prim presence and require the full projection path.
-    if matches!(op, UsdOp::SetActive { .. }) {
-        return true;
     }
     matches!(
         op,
@@ -1440,9 +1468,20 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                 warn!("[twin] author program API {path} failed");
             }
         }
-        // Coarse ops never reach here (the caller rebuilds for them) — that now
-        // includes SetApiSchemas / SetActive, whose ECS effect (physics component
-        // set / entity presence) the visual-only subtree refresh can't reconcile.
+        UsdOp::SetActive { path, active, .. } => {
+            let Ok(sp) = openusd::sdf::Path::new(path) else {
+                return;
+            };
+            let authored = world
+                .get_non_send::<CanonicalStages>()
+                .and_then(|s| s.get(scene_id))
+                .is_some_and(|cs| cs.projector().author_active(&sp, *active).is_ok());
+            if !authored {
+                warn!("[twin] author active={active} at {path} failed");
+            }
+        }
+        // Coarse ops never reach here (the caller rebuilds for them). Active
+        // state is handled above by the shared structural reconciler.
         _ => {}
     }
 }
@@ -2031,9 +2070,8 @@ mod tests {
             type_name: "float".into(),
             sources: vec![],
         }));
-        // Physical apiSchema / active REBUILD: their effect is a prim's ECS
-        // component set / entity presence, which the visual-only subtree refresh
-        // can't reconcile.
+        // Physical apiSchema changes still rebuild: their effect is a prim's ECS
+        // component set, which the structural reconciler cannot change in place.
         assert!(op_needs_rebuild(&UsdOp::SetApiSchemas {
             edit_target: et.clone(),
             path: "/W".into(),
@@ -2046,28 +2084,25 @@ mod tests {
             path: "/W/Mission".into(),
             schemas: vec!["LunCoProgramAPI".into()],
         }));
-        // A `SetActive` on a physics prim (a rover part) rebuilds: it changes
-        // entity presence / physics component set, which the visual-only subtree
-        // refresh can't reconcile.
-        assert!(op_needs_rebuild(&UsdOp::SetActive {
+        // Active state is handled by the generic structural reconciler for both
+        // physical and visual prims: it despawns absent entities and spawns them
+        // from the canonical stage when they become active.
+        assert!(!op_needs_rebuild(&UsdOp::SetActive {
             edit_target: et.clone(),
             path: "/Rover/Chassis".into(),
             active: false,
         }));
-        // Active state is structural for every prim and always rebuilds.
-        assert!(op_needs_rebuild(&UsdOp::SetActive {
+        assert!(!op_needs_rebuild(&UsdOp::SetActive {
             edit_target: et.clone(),
             path: "/Rover/Route/W3".into(),
             active: false,
         }));
-        // Reactivation is structural as well.
-        assert!(op_needs_rebuild(&UsdOp::SetActive {
+        assert!(!op_needs_rebuild(&UsdOp::SetActive {
             edit_target: et.clone(),
             path: "/Apollo15/Route/W0".into(),
             active: true,
         }));
-        // Every prim follows the same active-state contract.
-        assert!(op_needs_rebuild(&UsdOp::SetActive {
+        assert!(!op_needs_rebuild(&UsdOp::SetActive {
             edit_target: et.clone(),
             path: "/Rover/Wheels/W0".into(),
             active: false,
