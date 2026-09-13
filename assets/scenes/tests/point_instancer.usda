@@ -1,0 +1,40 @@
+#usda 1.0
+(
+    defaultPrim = "PointInstancerTest"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# A minimal standards-based PointInstancer fixture. The prototype is a direct
+# Gprim so the projection can share its Bevy mesh/material handles across the
+# two authored instances while preserving the USD array and mask semantics.
+def Xform "PointInstancerTest"
+{
+    def Cube "BladePrototype"
+    {
+        double size = 0.5
+        color3f[] primvars:displayColor = [(0.2, 0.8, 0.3)]
+    }
+
+    def PointInstancer "Blades"
+    {
+        rel prototypes = [</PointInstancerTest/BladePrototype>]
+        int[] protoIndices = [0, 0]
+        point3f[] positions = [(-1, 0, 0), (1, 0, 0)]
+        quath[] orientations = [(1, 0, 0, 0), (1, 0, 0, 0)]
+        float3[] scales = [(1, 1, 1), (1, 2, 1)]
+        int64[] ids = [101, 202]
+        int64[] invisibleIds = [202]
+    }
+
+    def Scope "Scenario"
+    {
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/point_instancer.rhai@
+        }
+    }
+}

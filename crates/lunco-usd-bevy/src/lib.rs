@@ -58,6 +58,7 @@ pub use light::{read_dome_intensity, read_intensity_with_exposure, DomeIntensity
 use lunco_usd_bevy_lathe as lathe;
 pub mod mount;
 pub use light::UsdAuthoredLight;
+use lunco_usd_bevy_core::point_instancer::read_point_instancer;
 use lunco_usd_bevy_core::read::{
     attr_has_time_samples, read_authored_bool_strict, read_primvar_f32_strict,
     read_primvar_vec3_at, read_primvar_vec3_strict, read_token_at, read_vec3_f64, read_vec3_f64_at,
@@ -78,9 +79,9 @@ use lunco_usd_bevy_core::{
 use lunco_usd_bevy_scene::{
     bump_usd_stage_revision, is_preview_only, read_primitive_axis, read_shape_dims,
     read_usd_mesh_indexed, read_usd_mesh_points, read_usd_mesh_topology, scene_root_ancestor,
-    usd_axis_to_quat, ShapeDims, UsdAnimated, UsdPreviewOnly, UsdPrimPath, UsdSceneAwaitingStage,
-    UsdSceneGeometryPending, UsdSceneProjected, UsdSceneProjectionFailed, UsdSceneProjectionQueued,
-    UsdSceneRoot, UsdStageRevision,
+    usd_axis_to_quat, ShapeDims, UsdAnimated, UsdPointInstance, UsdPointInstancer, UsdPreviewOnly,
+    UsdPrimPath, UsdSceneAwaitingStage, UsdSceneGeometryPending, UsdSceneProjected,
+    UsdSceneProjectionFailed, UsdSceneProjectionQueued, UsdSceneRoot, UsdStageRevision,
 };
 use lunco_usd_core::UsdDataExt;
 use openusd::schemas::geom::tokens as gtok;
@@ -285,6 +286,15 @@ impl Plugin for UsdBevyPlugin {
                         .in_set(UsdVisualProjectionSet),
                     poll_pending_usd_meshes
                         .run_if(any_pending_usd_meshes)
+                        .after(process_queued_usd_visuals)
+                        .in_set(UsdVisualProjectionSet),
+                    resolve_point_instancer_meshes
+                        .after(poll_pending_usd_meshes)
+                        .in_set(UsdVisualProjectionSet),
+                    hide_point_instancer_prototypes
+                        .after(process_queued_usd_visuals)
+                        .in_set(UsdVisualProjectionSet),
+                    ensure_point_instancer_prototypes
                         .after(process_queued_usd_visuals)
                         .in_set(UsdVisualProjectionSet),
                     retry_awaiting_usd_visuals_after_quality_change
@@ -741,6 +751,65 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
 
         // Get prim type (Cube, Cylinder, Sphere, etc.)
         let prim_type = reader.type_name(&sdf_path);
+
+        // `UsdGeomPointInstancer` is an aggregate, not a Gprim. Its required
+        // arrays and prototype relationship are decoded by the shared USD
+        // reader, then projected into render-free instance children. The
+        // children receive their prototype mesh/material handles after the
+        // normal prototype prim has finished loading, which lets Bevy's
+        // automatic instancing batch equal copies without changing authored
+        // prototype-local coordinates.
+        if prim_type.as_deref() == Some("PointInstancer") {
+            if let Some(attribute) = point_instancer_array_time_samples(reader, &sdf_path) {
+                let message = format!(
+                    "{} has time-sampled {attribute}; animated PointInstancer arrays are not yet supported by the visual projection",
+                    sdf_path.as_str()
+                );
+                error!("[usd-bevy] {message}");
+                commands.entity(entity).try_insert((
+                    UsdSceneProjectionFailed(message.clone()),
+                    Visibility::Hidden,
+                ));
+                lunco_core::trigger_error(commands, "usd-visual-sync-failed", message);
+                return;
+            }
+            let instances = match read_point_instancer(reader, &sdf_path, 0.0) {
+                Ok(instances) => instances,
+                Err(error) => {
+                    let message = format!(
+                        "{} has malformed UsdGeomPointInstancer data: {error}",
+                        sdf_path.as_str()
+                    );
+                    error!("[usd-bevy] {message}");
+                    commands.entity(entity).try_insert((
+                        UsdSceneProjectionFailed(message.clone()),
+                        Visibility::Hidden,
+                    ));
+                    lunco_core::trigger_error(commands, "usd-visual-sync-failed", message);
+                    return;
+                }
+            };
+            if let Err(error) = project_point_instancer(
+                reader,
+                entity,
+                &sdf_path,
+                &prim_path.stage_handle,
+                instances,
+                commands,
+            ) {
+                let message = format!(
+                    "{} cannot project its UsdGeomPointInstancer prototypes: {error}",
+                    sdf_path.as_str()
+                );
+                error!("[usd-bevy] {message}");
+                commands.entity(entity).try_insert((
+                    UsdSceneProjectionFailed(message.clone()),
+                    Visibility::Hidden,
+                ));
+                lunco_core::trigger_error(commands, "usd-visual-sync-failed", message);
+                return;
+            }
+        }
 
         // A procedural camera background is an Xform-level appearance intent,
         // not a USD gprim. Read the authored contract once at the USD
@@ -1418,6 +1487,227 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
             is_grid_entity,
             commands,
         );
+    }
+}
+
+/// The initial visual projection is deliberately static. Reject time-sampled
+/// PointInstancer arrays instead of sampling their default/initial value and
+/// silently freezing a standards-valid animated asset.
+fn point_instancer_array_time_samples<R: UsdRead>(
+    reader: &R,
+    path: &SdfPath,
+) -> Option<&'static str> {
+    [
+        "positions",
+        "protoIndices",
+        "orientations",
+        "orientationsf",
+        "scales",
+        "ids",
+        "invisibleIds",
+    ]
+    .into_iter()
+    .find(|attribute| reader.has_time_samples(path, attribute))
+}
+
+/// Project a standard point instancer into render-free children.
+///
+/// The first production renderer supported by this crate can share one mesh
+/// and one material across direct-Gprim prototypes. A prototype subtree is
+/// valid OpenUSD, but needs a flattened multi-mesh render batch and is rejected
+/// here with an explicit projection failure until that renderer boundary is
+/// implemented. This keeps unsupported authored structure visible instead of
+/// silently drawing only part of a prototype.
+fn project_point_instancer<R: UsdRead>(
+    reader: &R,
+    parent: Entity,
+    path: &SdfPath,
+    stage_handle: &Handle<UsdStageAsset>,
+    instances: Vec<lunco_usd_bevy_core::point_instancer::UsdPointInstancePlan>,
+    commands: &mut Commands,
+) -> anyhow::Result<()> {
+    let prototype_paths = reader
+        .rel_targets(path, "prototypes")
+        .into_iter()
+        .map(|prototype| prototype.to_string())
+        .collect::<Vec<_>>();
+    let convention = stage_convention(reader as &dyn UsdReadObject)
+        .map_err(|error| anyhow::anyhow!("invalid stage convention: {error}"))?;
+
+    for prototype in &prototype_paths {
+        let prototype_path = SdfPath::new(prototype)
+            .map_err(|error| anyhow::anyhow!("invalid prototype target {prototype}: {error}"))?;
+        let prototype_type = reader.type_name(&prototype_path).unwrap_or_default();
+        if !matches!(
+            prototype_type.as_str(),
+            "Mesh"
+                | "Cube"
+                | "Sphere"
+                | "Cylinder"
+                | "Cone"
+                | "Capsule"
+                | "Plane"
+                | "NurbsPatch"
+                | "BasisCurves"
+                | "NurbsCurves"
+        ) {
+            anyhow::bail!(
+                "prototype {prototype} has type `{prototype_type}`; only direct renderable Gprims are currently supported"
+            );
+        }
+        if prim_is_animated(reader, &prototype_path) {
+            anyhow::bail!(
+                "prototype {prototype} is animated; animated PointInstancer prototypes are not yet supported by the visual projection"
+            );
+        }
+        if let Some(child) = reader.children(&prototype_path).into_iter().next() {
+            anyhow::bail!(
+                "prototype {prototype} has child {child}; arbitrary prototype subtrees require a multi-mesh instancing batch"
+            );
+        }
+    }
+
+    commands.entity(parent).try_insert(UsdPointInstancer {
+        stage_handle: stage_handle.clone(),
+        prototype_paths,
+    });
+    for instance in instances {
+        let prototype_path = SdfPath::new(&instance.prototype_path).map_err(|error| {
+            anyhow::anyhow!(
+                "invalid prototype path {}: {error}",
+                instance.prototype_path
+            )
+        })?;
+        let prototype_type = reader.type_name(&prototype_path).unwrap_or_default();
+        let mut transform = instance.transform;
+        if matches!(
+            prototype_type.as_str(),
+            "Cylinder" | "Cone" | "Capsule" | "Plane"
+        ) {
+            if let Some(axis) = read_primitive_axis(reader, &prototype_path, &prototype_type) {
+                transform.rotation *=
+                    convention.orient(usd_axis_to_quat(&axis).unwrap_or(Quat::IDENTITY));
+            }
+        }
+        commands.spawn((
+            Name::new(format!("{}[{}]", path.as_str(), instance.index)),
+            ChildOf(parent),
+            transform,
+            GlobalTransform::default(),
+            if instance.visible {
+                Visibility::Visible
+            } else {
+                Visibility::Hidden
+            },
+            InheritedVisibility::VISIBLE,
+            ViewVisibility::default(),
+            UsdPointInstance {
+                stage_id: stage_handle.id(),
+                index: instance.index,
+                id: instance.id,
+                prototype_path: instance.prototype_path,
+            },
+        ));
+    }
+    Ok(())
+}
+
+/// Copy a ready prototype mesh and appearance intent onto point-instancer
+/// children. Handles are deliberately shared: Bevy's automatic instancing
+/// requires equal `Handle<Mesh>` and `Handle<Material>` values, while the
+/// authored `UsdPointInstance` id remains independent of unstable GPU batch
+/// ordering.
+fn resolve_point_instancer_meshes(
+    mut commands: Commands,
+    prototypes: Query<(&UsdPrimPath, Option<&Mesh3d>, Option<&PbrLook>)>,
+    instances: Query<(Entity, &UsdPointInstance), Without<Mesh3d>>,
+) {
+    let mut ready = std::collections::HashMap::new();
+    for (path, mesh, look) in &prototypes {
+        if let (Some(mesh), Some(look)) = (mesh, look) {
+            ready.insert(
+                (path.stage_handle.id(), path.path.clone()),
+                (mesh.0.clone(), look.clone()),
+            );
+        }
+    }
+    for (entity, instance) in &instances {
+        let Some((mesh, look)) = ready.get(&(instance.stage_id, instance.prototype_path.clone()))
+        else {
+            continue;
+        };
+        commands
+            .entity(entity)
+            .try_insert((Mesh3d(mesh.clone()), look.clone()));
+    }
+}
+
+/// Keep prototype source prims out of the visible scene traversal. OpenUSD
+/// permits prototypes anywhere in the scenegraph, so this is relationship-
+/// driven rather than a name/path convention. Descendants inherit the hidden
+/// prototype root's visibility in Bevy.
+fn hide_point_instancer_prototypes(
+    instancers: Query<&UsdPointInstancer>,
+    mut prims: Query<(&UsdPrimPath, &mut Visibility)>,
+) {
+    for instancer in &instancers {
+        for prototype in &instancer.prototype_paths {
+            for (path, mut visibility) in &mut prims {
+                if path.path == *prototype
+                    || path
+                        .path
+                        .strip_prefix(prototype)
+                        .is_some_and(|suffix| suffix.starts_with('/'))
+                {
+                    if *visibility != Visibility::Hidden {
+                        *visibility = Visibility::Hidden;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Materialize a hidden source projection when a relationship targets a prim
+/// outside the currently mounted traversal subtree. OpenUSD permits prototype
+/// roots anywhere in the scenegraph; this keeps that legal arrangement working
+/// without fabricating a second mesh or altering the authored path.
+fn ensure_point_instancer_prototypes(
+    instancers: Query<(Entity, &UsdPointInstancer)>,
+    prims: Query<&UsdPrimPath>,
+    mut commands: Commands,
+) {
+    let mut existing = prims
+        .iter()
+        .map(|path| (path.stage_handle.id(), path.path.clone()))
+        .collect::<std::collections::HashSet<_>>();
+    for (parent, instancer) in &instancers {
+        for prototype in &instancer.prototype_paths {
+            let key = (instancer.stage_handle.id(), prototype.clone());
+            if !existing.insert(key) {
+                continue;
+            }
+            queue_usd_child_spawn(
+                &mut commands,
+                parent,
+                (
+                    Name::new(prototype.clone()),
+                    UsdPrimPath {
+                        stage_handle: instancer.stage_handle.clone(),
+                        path: prototype.clone(),
+                    },
+                    Transform::default(),
+                    GlobalTransform::default(),
+                    Visibility::Visible,
+                    InheritedVisibility::VISIBLE,
+                    ViewVisibility::default(),
+                    UsdSceneAwaitingStage,
+                    UsdSceneProjectionQueued,
+                ),
+                (),
+                None,
+            );
+        }
     }
 }
 

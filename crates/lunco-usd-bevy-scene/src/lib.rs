@@ -9,7 +9,7 @@
 
 mod geometry;
 
-use bevy::asset::AssetEvent;
+use bevy::asset::{AssetEvent, AssetId};
 use bevy::ecs::hierarchy::ChildOf;
 use bevy::prelude::*;
 use lunco_usd_bevy_core::{UsdInstanceProjection, UsdInstanceRoot, UsdStageAsset};
@@ -31,6 +31,36 @@ pub struct UsdPrimPath {
     pub stage_handle: Handle<UsdStageAsset>,
     /// Absolute USD prim path within the stage.
     pub path: String,
+}
+
+/// A render-free projection of one entry in a standard
+/// [`UsdGeomPointInstancer`]. It is not a USD prim and therefore intentionally
+/// has no [`UsdPrimPath`]; the parent instancer owns the authored identity while
+/// this component carries the ordered array index and prototype target needed
+/// by the visual adapter.
+#[derive(Component, Debug, Clone)]
+pub struct UsdPointInstance {
+    /// Stage containing the prototype target.
+    pub stage_id: AssetId<UsdStageAsset>,
+    /// Zero-based position in the authored `positions`/`protoIndices` arrays.
+    pub index: usize,
+    /// Stable authored id, or the array index when `ids` is omitted.
+    pub id: i64,
+    /// Ordered `prototypes` relationship target.
+    pub prototype_path: String,
+}
+
+/// The aggregate visual projection of a standard `UsdGeomPointInstancer`.
+///
+/// The prototype paths are retained only as a lookup key for the renderer;
+/// authored positions, ids, and transforms remain on the child
+/// [`UsdPointInstance`] projections.
+#[derive(Component, Debug, Clone)]
+pub struct UsdPointInstancer {
+    /// Stage containing the relationship targets.
+    pub stage_handle: Handle<UsdStageAsset>,
+    /// Ordered targets from the authored `prototypes` relationship.
+    pub prototype_paths: Vec<String>,
 }
 
 impl Default for UsdPrimPath {

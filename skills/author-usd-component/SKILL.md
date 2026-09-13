@@ -202,8 +202,15 @@ domain facets, set the referencing visual prim's standard `visibility` to
 rigid body. Do not duplicate the electrical/environment component or give the
 replacement its own body. This keeps USD topology and runtime ownership intact.
 
-**Not supported at all:** `Points`, `GeomSubset`, `PointInstancer`,
-`instanceable`, `subdivisionScheme` (a `catmullClark` mesh renders as its raw
+`UsdGeomPointInstancer` is supported for static direct renderable Gprim prototypes:
+author the standard `prototypes`, `protoIndices`, `positions`, and optional
+`orientations`/`orientationsf`, `scales`, `ids`, and `invisibleIds` properties.
+The visual projection shares the prototype mesh/material handles so Bevy can
+automatically batch equal instances. Time-sampled instance arrays and animated
+prototypes are rejected visibly until runtime sampling is implemented. Arbitrary
+prototype subtrees are rejected visibly until the multi-mesh render batch is implemented. Native
+`instanceable = true` scenegraph instancing, `Points`, `GeomSubset`, and
+`subdivisionScheme` remain unsupported (`catmullClark` renders as its raw
 control cage).
 
 ### Mesh rules

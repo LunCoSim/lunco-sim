@@ -422,7 +422,7 @@ The two spellings are proven to agree: `scenes/tests/filtered_pairs.usda` and
 `scenes/tests/collision_groups.usda` are the same rig, referenced, filtered the
 two different ways, sharing one control and one scenario.
 
-### TODO — standard schema this engine does not read yet
+### Standard schema support boundaries
 
 Kept as a list rather than as folklore, because the cost of not knowing is
 authoring that looks meaningful and does nothing. Anything here is a candidate;
@@ -431,7 +431,7 @@ nothing here is a bug.
 | schema | status | why it is not read |
 |---|---|---|
 | `PhysicsArticulationRootAPI` | authored, **deliberately** inert | avian has no reduced-coordinate articulation, so there is no honest translation. Authored on `skid_rover`, `rocker_bogie`, `physical_drivetrain` and kept for PhysX round-trip — a tool reading these files back out wants it. |
-| `UsdGeomPointInstancer` | not read | scattered rocks and vessel fleets are spawned prim-by-prim. USD's own instancing is the answer to that cost and nothing uses it yet. |
+| `UsdGeomPointInstancer` | composed reader + visual projection | Required arrays, ordered `prototypes`, prototype-root transforms, and `invisibleIds` are read with the OpenUSD contract. Static direct renderable Gprim prototypes share their Bevy mesh/material handles, so Bevy automatic instancing can batch them. Animated arrays/prototypes and arbitrary prototype subtrees fail visibly until their runtime samplers and multi-mesh render batch exist. |
 | `instanceable = true` + prototypes | not read | same story one level down: every spawned copy is a full prim tree. |
 | `UsdCollectionAPI` (general) | read only where `PhysicsCollisionGroup` applies it | membership resolution lives in `collision_groups.rs`. A general collection reader would also serve material binding and light linking. |
 | `UsdGeomSubset` | not read | per-face material / collider subsets. No use case in the fleet yet. |
@@ -702,6 +702,8 @@ as runtime. Ownership follows the narrowest production boundary:
 - `crates/lunco-usd/tests/live_spawn_projection.rs` — document-backed USD authoring and raw asset composition facts
 - `crates/lunco-usd-sim/tests/usd_connection_mechanics.rs` — generic connection derivation and transform mechanics
 - `assets/scenarios/tests/*.rhai` through the production `luncosim test` gate — composed USD → Bevy → Avian → simulation outcomes, including rover structure, wheel realization, wiring, EPS, and link visibility
+- `crates/lunco-usd-bevy-core/src/point_instancer.rs` — required/optional PointInstancer arrays, prototype ordering, transforms, ids, masking, and negative malformed-data cases
+- `assets/scenes/tests/point_instancer.usda` + `assets/scenarios/tests/point_instancer.rhai` — production composed-stage acceptance for the standard PointInstancer authoring contract
 
 ---
 

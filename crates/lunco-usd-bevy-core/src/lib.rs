@@ -14,6 +14,7 @@ pub mod authoring;
 pub mod canonical;
 pub mod compose;
 pub mod instance;
+pub mod point_instancer;
 pub mod program;
 pub mod projection_plan;
 pub mod read;
