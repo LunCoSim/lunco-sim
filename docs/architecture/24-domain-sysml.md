@@ -1,12 +1,12 @@
 # 24 — SysML Domain
 
-> Status: Design · Audience: contributors planning SysML v2 structure & requirements (stub, not yet built)
+> Status: Foundation implemented · Audience: contributors extending SysML v2 structure & requirements
 >
-> **Stub.** SysML v2 is the source of truth for **system structure and
-> requirements** — a peer domain inside a Twin, co-equal with Modelica
-> (behavior) and USD (geometry). Not the Twin container itself; see
-> [`13-twin-and-workflow.md`](13-twin-and-workflow.md) for the two-file
-> strategy.
+SysML v2 is the source of truth for **system structure and
+requirements** — a peer domain inside a Twin, co-equal with Modelica
+(behavior) and USD (geometry). Not the Twin container itself; see
+[`13-twin-and-workflow.md`](13-twin-and-workflow.md) for the two-file
+strategy.
 
 ## 1. Scope
 
@@ -45,6 +45,7 @@ A `system.sysml` describing a simple lunar-rover architecture:
 
 ```sysml
 package LunarBaseAlpha {
+    private import ScalarValues::Real;
     version "0.3.0";
 
     part def LunarBase : System {
@@ -82,20 +83,15 @@ Under [`10-document-system.md`](10-document-system.md) terms:
 
 ```rust
 pub struct SysmlDocument {
-    // AST from our SysML v2 parser
-    ast: SysmlAst,
+    // Serializable projection from lunco-sysml-ast
+    analysis: Arc<SysmlAnalysis>,
+    source: String,
     generation: u64,
 }
 
 pub enum SysmlOp {
-    AddPart       { path, type_name },
-    RemovePart    { path },
-    AddPort       { part, port_name, port_type },
-    AddConnection { from: PortRef, to: PortRef },
-    AddRequirement { id, doc_text },
-    SetAttribute  { path, attr, value },
-    AddRealization{ part, kind: RealizationKind, target: DocumentRef },
-    // ...
+    ReplaceSource { new: String },
+    EditText { range: Range<usize>, replacement: String },
 }
 ```
 
@@ -109,10 +105,10 @@ Views observing a `SysmlDocument`:
 
 ## 5. Parser strategy
 
-**Today:** no Rust production SysML v2 parser exists. LunCoSim will
-author a **subset parser** covering the features the domain actually
-needs — probably 500–1500 lines of Rust. The AST is designed to be
-swap-able with a full parser when the ecosystem matures.
+**Today:** `lunco-sysml-ast` embeds the pinned `sysmlv2-semantics` parser and
+its `sysmlv2-stdlib` data. The crate exposes a stable LunCoSim projection of
+source-backed elements, resolved references, and syntax/name/collision
+diagnostics; the upstream model remains private to the AST boundary.
 
 **Supported subset (initial):**
 
@@ -135,14 +131,106 @@ swap-able with a full parser when the ecosystem matures.
 - Allocations, refinements
 - Analysis/verification execution
 
-Users hitting an unsupported feature get a clear "not yet supported —
-feature X at line N" error.
+The runtime currently accepts source-level replace/range edits. Structured
+requirement/part operations and verification execution remain follow-up work;
+the read-only Rhai adapter can report requirements without mutating the model.
 
-## 6. Status
+## 6. SysML v2 requirement and verification contract
 
-The SysML v2 integration design is complete, with foundational ties established to `10-document-system.md` and `13-twin-and-workflow.md`. Parser implementation, `SysmlDocument` Bevy bindings, and visual diagram/requirements panels are planned as follow-up work after the Modelica domain patterns are fully validated.
+SysML becomes the normative home for a test's *intent*; it does not become a
+second physics engine or a replacement for the production scene runner. A
+requirement is a standard SysML definition/usage, and a verification case is a
+standard SysML verification definition/usage that names the requirement it
+answers. `satisfy`, `verify`, and realization references carry the traceability
+that is currently implicit in Rhai filenames and comments.
 
-## 7. What this does NOT do
+The first Griffin subset should use only portable SysML constructs:
+
+```sysml
+package GriffinRequirements {
+    private import ScalarValues::Real;
+    part def GriffinRover;
+
+    requirement def GR001_MassBudget {
+        doc /* GR-001: the flight rover mass shall not exceed 450 kg. */
+        attribute maxMass : Real = 450.0;
+    }
+
+    requirement gr001 : GR001_MassBudget {
+        subject rover : GriffinRover;
+    }
+
+    verification def Verify_GR001 {
+        subject rover : GriffinRover;
+        verify gr001;
+    }
+}
+```
+
+The example is deliberately limited to definitions, usages, subjects, scalar
+attributes, and `verify`; every committed fixture must also pass
+`lunco-sysml-ast` validation. The qualified SysML name is the stable key. A
+human identifier such as `GR-001` belongs in the requirement documentation (or
+in a future standard metadata projection), not in a LunCo-specific annotation
+that would break interchange.
+
+### What must be added before a Rhai test can be rewritten
+
+1. **Semantic projection.** Extend `lunco-sysml-ast` beyond generic elements
+   with requirement records (qualified name, subject, doc/constraint spans),
+   verification records, and typed `satisfy`/`verify`/realization links. Keep
+   source ranges and the source-set revision so reports can identify the exact
+   model that was tested.
+2. **Twin source-set discovery.** Consume the existing `Twin::files()` index,
+   load all reachable `.sysml`/`.kerml` sources through canonical `twin://`
+   identities, and resolve the complete requirement/verification graph once.
+   Do not add a second filesystem walker or pass cache paths to the parser.
+3. **Verification registry.** Map a qualified verification-case name to an
+   existing production scene and Rhai backend source. The mapping belongs in
+   Twin-owned configuration/index data; the SysML file remains standard and
+   portable. A missing mapping is an explicit `error`, never an ignored test.
+4. **Minimal Rhai bridge.** Keep Rhai read-only for SysML facts and policy.
+   Expose the resolved requirement/verification snapshot, the selected
+   qualified key, and the source revision; let the existing Rhai test emit a
+   small result map containing `pass`, `fail`, `inconclusive`, or `error`,
+   observations, evidence paths, and diagnostics. Map that map to
+   `VerificationCases::VerdictKind` in the existing test/report boundary. Do
+   not add a Rust assertion per requirement.
+5. **Production discovery and CLI.** Extend the existing `luncosim test`
+   discovery/runner to select a SysML verification case and invoke its Rhai
+   observer in the same production process. Emit machine-readable JSON (with a
+   human summary); `TESTS_OK` remains a compatibility envelope during
+   migration, not the normative model.
+
+### Migration rules
+
+- Inventory each current Rhai assertion as a requirement, a verification
+  observation, or a mechanism test. Only the first two move to SysML.
+- Create SysML definitions/usages and a verification case beside the existing
+  USD fixture and Rhai observer. Run both in shadow mode and compare verdicts
+  before changing the gate.
+- Move thresholds and acceptance text into SysML attributes/constraints where
+  the selected parser can preserve them. Keep measurement, command sequencing,
+  and runtime reads in the Rhai backend; it consumes the SysML case and emits
+  observations rather than redefining the requirement. This is a Rhai test
+  migration, not a new Rust test framework.
+- Switch the production gate to the typed SysML verdict only after positive,
+  negative, anti-trivial-motion, stale-generation, and evidence-path checks
+  pass. Then remove duplicate Rhai assertions in the same change.
+- Leave parser, USD schema, Modelica solver, Avian mechanics, command,
+  lifecycle, and authority tests in Rust. SysML is not a wrapper around a Rust
+  test, and a Rhai string executed by Rust is not a production migration.
+
+## 7. Status
+
+The SysML v2 integration foundation is implemented in the terrain worktree:
+the pure AST projection, Bevy source/document plugin, canonical journal domain,
+`.sysml`/`.kerml` classification, pre-flight validation, and read-only Rhai
+requirement report are available behind the opt-in `sysml` feature. Twin-wide
+source discovery, RefIndex links, structured authoring, and visual panels are
+follow-up work.
+
+## 8. What this does NOT do
 
 Explicit non-goals, to avoid scope creep:
 
@@ -155,7 +243,7 @@ Explicit non-goals, to avoid scope creep:
 - **Full SysML v2 support is not a v1 goal.** The subset covers the
   critical-path features; the rest grows with demand.
 
-## 8. See also
+## 9. See also
 
 - [`00-overview.md`](00-overview.md) — three-tier architecture
 - [`01-ontology.md`](01-ontology.md) — Port, Connection, Attribute definitions (SysML-aligned)

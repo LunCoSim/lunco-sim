@@ -24,6 +24,90 @@ the authored fixture supplies entity paths and thresholds. Rust remains the
 owner of the solver and low-level telemetry, so a Rhai acceptance helper never
 changes collision policy or becomes a second physics model.
 
+## SysML v2 migration boundary
+
+The target architecture separates three things that are currently mixed in
+many Rhai files:
+
+| Concern | SysML v2 | Rhai / production runtime |
+|---|---|---|
+| Normative statement and identifier | `requirement def`/usage, `doc`, attributes and constraints | Reads the resolved requirement; does not redefine it |
+| Traceability | `satisfy`, `verify`, and standard realization references | Resolves USD prims, Modelica participants and source revisions |
+| Verification intent | `verification def`/usage, subject and verified requirement | Selects the existing scene/backend and declares required observations |
+| Measurement and actuation | Not a second simulator | Public USD queries, commands, telemetry, Modelica ports and physics facts |
+| Verdict | `VerificationCases::VerdictKind` projection | Executes and records `pass`, `fail`, `inconclusive`, or `error` |
+
+The SysML source is the portable contract. A run result is a separate
+versioned artifact (and eventually a journal record), never an edit to the
+requirement file. The current `lunco-sysml-rhai` crate is only a read-only
+snapshot/report adapter; it does not yet discover verification cases or submit
+typed verdicts to the production runner. See
+[`24-domain-sysml.md`](24-domain-sysml.md#sysml-v2-requirement-and-verification-contract)
+for the source shape and implementation gates.
+
+### Required migration surface
+
+Before converting a current Rhai test, the runtime needs all of the following:
+
+1. A semantic projection for requirements, verification cases, subjects,
+   constraints, and `satisfy`/`verify`/realization links, with source spans and
+   a source-set revision.
+2. One Twin-indexed source set that discovers `.sysml`/`.kerml` through the
+   existing asset identities and resolves it once with the standard library.
+3. A Twin-owned verification registry mapping a qualified SysML verification
+   name to the existing scene and Rhai backend. Missing mappings fail loudly.
+4. A typed Rhai result sink carrying the verification key, requirement key,
+   revision, verdict, observations, evidence paths, and diagnostics. The
+   existing `TESTS_OK`/`TESTS_FAIL` text remains a compatibility envelope only.
+5. A production CLI/API selector for one verification case or requirement,
+   plus JSON output suitable for CI and a human-readable summary.
+
+### Staged conversion of an existing Rhai test
+
+1. Classify every assertion as a normative requirement, a runtime observation,
+   or a mechanism test. Keep mechanism tests in Rust.
+2. Add the SysML requirement and verification definition beside the unchanged
+   USD fixture and Rhai observer. Use the qualified SysML name as the stable
+   key; keep any human `GR-xxx` label in `doc` until a standard metadata
+   projection exists.
+3. Run the legacy Rhai gate and the SysML-selected gate in shadow mode. Compare
+   verdict, source revision, measured values, and evidence paths; do not accept
+   a green result caused by missing subjects, zero samples, or an unresolved
+   mapping.
+4. Move thresholds and acceptance prose into SysML attributes/constraints when
+   the parser preserves them. Leave command sequencing, sampling, USD/Modelica
+   reads, and anti-trivial movement guards in the Rhai backend.
+5. Make the typed SysML verdict the gate only after positive and negative
+   fixtures, stale-generation rejection, evidence capture, and production
+   readiness all pass. Remove the duplicate Rhai assertion in the same change.
+
+Do not wrap an existing Rust test in Rhai, copy a threshold into both files,
+or let a missing verification mapping silently pass. This migration changes
+the ownership of the contract, not merely the spelling of the test.
+
+The intended authored test shape is therefore still Rhai, with SysML as its
+input contract:
+
+```rhai
+let model = from_json(sysml_requirement_report_json());
+let req = model.requirements.filter(|r| r.qualified_name ==
+    "GriffinRequirements::GR001_MassBudget");
+assert(req.len() == 1, "GR001 must resolve exactly once");
+
+// Existing production helpers perform the observation; this script owns the
+// verdict and evidence, while the numeric requirement lives in SysML.
+let rover = find("/Griffin/Rover");
+let mass = get(rover, "Mass.mass");
+assert(mass <= 450.0, "GR-001 mass budget exceeded");
+print("VERIFICATION GriffinRequirements::Verify_GR001 PASS");
+```
+
+The Rust surface needed to support this is intentionally small: one
+read-only SysML snapshot/query registration, one source-revision/key handoff,
+and reuse of the existing Rhai scene runner and result protocol. No
+requirement-specific Rust test module, Rust-side threshold, or second runner
+should be introduced.
+
 The rule is: move a Rust assertion only after an authored fixture can fail for
 the same reason through the public runtime path. A Rust test that supplies a
 spy command, fake world, private component, or direct function call is not a

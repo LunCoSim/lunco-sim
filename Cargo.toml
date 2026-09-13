@@ -22,6 +22,9 @@ members = [
     "crates/lunco-modelica-ui",
     "crates/lunco-modelica-core",
     "crates/lunco-modelica-ast",
+    "crates/lunco-sysml-ast",
+    "crates/lunco-sysml",
+    "crates/lunco-sysml-rhai",
     "crates/lunco-usd-avian",
     "crates/lunco-usd-avian-lint",
     "crates/lunco-usd-bevy",
@@ -214,6 +217,9 @@ bevy = { version = "0.19.1", default-features = false, features = [
                                    # Enables `#[Command]` to always derive serde without per-field worry.
 ] }
 lunco-assets = { path = "crates/lunco-assets" }
+sysmlv2-semantics = "=0.1.1"
+sysmlv2-syntax = "=0.1.2"
+sysmlv2-stdlib = "=0.1.0"
 # NOTE: `debug-plugin` is deliberately OFF. It pulls bevy_gizmos → bevy_render →
 # wgpu/naga/x11rb into every consumer, including the `--no-ui` server and the
 # wasm worker — the same feature-unification trap as A1. Nothing in the tree

@@ -28,6 +28,8 @@
 //! - `.wgsl` — reflect the `Material` param schema (`ParamSchema::parse`).
 //!   Full naga module validation is deliberately absent: naga is not a direct
 //!   dependency of this crate and the light path adds none.
+//! - `.sysml`/`.kerml` — the shared SysML parser/resolver, with no document
+//!   mutation or requirement execution.
 //! - `.rhai` — `rhai::Engine::compile` only; nothing is executed.
 //!
 //! Registered as [`ApiQueryProvider`]s (they return data, like
@@ -49,7 +51,7 @@ use std::path::{Path, PathBuf};
 pub struct ValidationReport {
     /// The path as the caller gave it.
     pub path: String,
-    /// Asset kind, from the extension: `modelica` | `usd` | `wgsl` | `rhai`.
+    /// Asset kind, from the extension: `modelica` | `usd` | `sysml` | `wgsl` | `rhai`.
     pub kind: String,
     /// True iff `errors` is empty — the file would survive the load path.
     pub ok: bool,
@@ -139,13 +141,40 @@ pub fn validate_asset(reference: &str) -> ValidationReport {
     let report = match ext.as_str() {
         "mo" => validate_modelica(reference, &path, &text),
         "usda" => validate_usda(reference, &path, &text),
+        "sysml" | "kerml" => validate_sysml(reference, &path, &text),
         "wgsl" => validate_wgsl(reference, &text),
         "rhai" => validate_rhai(reference, &text),
         other => ValidationReport::new(reference, "unknown").error(format!(
-            "unsupported extension `.{other}` — supported: .mo, .usda, .wgsl, .rhai"
+            "unsupported extension `.{other}` — supported: .mo, .usda, .sysml, .kerml, .wgsl, .rhai"
         )),
     };
     apply_lint_policy(report, &text)
+}
+
+// ─── .sysml / .kerml ───────────────────────────────────────────────────────
+
+/// Parse and resolve one SysML source file through the same pure AST boundary
+/// used by the runtime document. Standard-library diagnostics are excluded from
+/// the report because this pre-flight call concerns only the supplied file.
+fn validate_sysml(reference: &str, path: &Path, text: &str) -> ValidationReport {
+    let mut report = ValidationReport::new(reference, "sysml");
+    let analysis = lunco_sysml_ast::SysmlAnalysis::from_files([(
+        path.to_string_lossy().to_string(),
+        text.to_owned(),
+    )]);
+    for diagnostic in analysis.diagnostics() {
+        report.errors.push(format!(
+            "{}:{}..{}: {}",
+            diagnostic.file, diagnostic.start, diagnostic.end, diagnostic.message
+        ));
+    }
+    report.info = json!({
+        "elements": analysis.elements(),
+        "references": analysis.references(),
+        "source_revision": analysis.source_revision(),
+        "stdlib": analysis.includes_stdlib(),
+    });
+    report.finish()
 }
 
 /// One Twin-level lint finding in the pre-flight response.
@@ -762,6 +791,14 @@ mod tests {
         path
     }
 
+    fn temp_sysml(name: &str, body: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join("lunco-validate-sysml");
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join(name);
+        std::fs::write(&path, body).expect("write temp sysml");
+        path
+    }
+
     /// A control scope whose children are named `intent`, one per line.
     fn controls_usda(intents: &[&str]) -> String {
         let mut s = String::from("#usda 1.0\n\ndef \"RoverControls\"\n{\n");
@@ -842,5 +879,19 @@ def Xform \"Battery\" (\n\
     fn unknown_extension_lists_supported() {
         let report = validate_asset("no/such/file.xyz");
         assert!(!report.ok);
+    }
+
+    #[test]
+    fn valid_sysml_produces_elements_and_no_diagnostics() {
+        let path = temp_sysml(
+            "griffin.sysml",
+            "package Griffin { requirement def MassRequirement {} }",
+        );
+        let report = validate_asset(path.to_str().unwrap());
+        assert!(report.ok, "{:?}", report.errors);
+        assert_eq!(report.kind, "sysml");
+        assert!(report.info["elements"]
+            .as_array()
+            .is_some_and(|elements| !elements.is_empty()));
     }
 }

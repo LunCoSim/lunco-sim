@@ -1,0 +1,15 @@
+[package]
+name = "lunco-sysml-ast"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Pure SysML v2 parsing, resolution, and source diagnostics"
+
+[dependencies]
+serde = { workspace = true }
+sysmlv2-semantics = { workspace = true }
+sysmlv2-syntax = { workspace = true }
+sysmlv2-stdlib = { workspace = true }
+
+[lints]
+workspace = true
