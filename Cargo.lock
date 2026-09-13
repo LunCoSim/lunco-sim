@@ -8438,7 +8438,6 @@ name = "lunco-usd-bevy"
 version = "0.1.0"
 dependencies = [
  "bevy",
- "bevy_mesh",
  "big_space",
  "lunco-core",
  "lunco-materials",
@@ -8447,9 +8446,9 @@ dependencies = [
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-lathe",
  "lunco-usd-bevy-light",
+ "lunco-usd-bevy-mesh",
  "lunco-usd-bevy-scene",
  "lunco-usd-core",
- "lunco-usd-geometry",
  "openusd",
  "web-time",
 ]
@@ -8536,6 +8535,21 @@ dependencies = [
  "lunco-usd-core",
  "openusd",
  "wgpu-types",
+]
+
+[[package]]
+name = "lunco-usd-bevy-mesh"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy_mesh",
+ "lunco-render",
+ "lunco-usd-bevy-core",
+ "lunco-usd-bevy-lathe",
+ "lunco-usd-bevy-scene",
+ "lunco-usd-core",
+ "lunco-usd-geometry",
+ "openusd",
 ]
 
 [[package]]

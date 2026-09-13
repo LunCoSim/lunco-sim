@@ -21,20 +21,12 @@ license.workspace = true
 # `--no-ui` server has no cursor for. A GUI build still gets it, from the crates
 # that actually pick (`lunco-luncosim`, `lunco-luncosim-edit-core`, `luncosim`).
 bevy = { workspace = true, features = ["bevy_gltf", "bevy_mesh", "bevy_light", "zstd_rust"] }
-# `Mesh`, `Mesh3d`, `Indices`, `PrimitiveTopology` — render-FREE (depends only on
-# `wgpu-types`). Named directly so mesh building never reaches for
-# `bevy::render::render_resource`, which is a `bevy_render` (wgpu + naga)
-# re-export. See docs/architecture/render-decoupling.md.
-bevy_mesh = { workspace = true }
-# Numeric geometry is isolated in `lunco-usd-geometry`. Keeping truck/spade out
-# of this manifest means evaluator changes rebuild that package, not this USD
-# stage loader and its runtime projection systems.
-lunco-usd-geometry = { path = "../lunco-usd-geometry" }
 lunco-usd-bevy-lathe = { path = "../lunco-usd-bevy-lathe" }
 lunco-usd-bevy-light = { path = "../lunco-usd-bevy-light" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-camera = { path = "../lunco-usd-bevy-camera" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
+lunco-usd-bevy-mesh = { path = "../lunco-usd-bevy-mesh" }
 openusd = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-render = { path = "../lunco-render" }
@@ -44,7 +36,6 @@ web-time = { workspace = true }
 
 [dev-dependencies]
 lunco-usd-core = { path = "../lunco-usd-core" }
-
 
 [lints]
 workspace = true

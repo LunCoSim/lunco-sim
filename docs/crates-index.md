@@ -76,7 +76,8 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-usd-bevy-twin`** | Render-free Twin-backed USD document identity: document-to-`twin://` lookup, workspace/preview leases, projection cursors, user-ownership events, and the live-projection wake signal. It owns no stage loading, composition, rendering, or UI. |
 | **`lunco-usd-bevy-camera`** | Render-free USD camera adapter: standard `UsdGeomCamera` projection intent, mounted/cinematic camera pose, camera-track selection, and the single-authority viewport-camera reconciler. It consumes the shared BasisCurves evaluator from `lunco-usd-geometry` and does not own geometry math or visual projection. |
 | **`lunco-usd-bevy-lathe`** | Independent parametric NURBS/lathe projection: reflected surface definitions, profile evaluation, and change-detected Bevy mesh regeneration. |
-| **`lunco-usd-bevy`** | Visual Bevy adapter (`UsdVisualPlugin`): projects USD hierarchy, shapes, transforms, and material intent into Bevy entities/components on top of `lunco-usd-bevy-core`. Owns the remaining visual orchestration while consuming geometry from `lunco-usd-geometry` and installs the independent camera and light adapters. |
+| **`lunco-usd-bevy`** | Visual Bevy adapter (`UsdVisualPlugin`): projects USD hierarchy, shapes, transforms, and material intent into Bevy entities/components on top of `lunco-usd-bevy-core`. Owns async projection orchestration while consuming mesh geometry from `lunco-usd-bevy-mesh` and installing the independent camera and light adapters. |
+| **`lunco-usd-bevy-mesh`** | Render-free USD visual mesh projection for built-in primitives, native `UsdGeomMesh`, `BasisCurves`/`NurbsCurves`, and `NurbsPatch`, including quality invalidation and low-level geometry tests. |
 | **`lunco-usd-bevy-animation`** | Render-free animation adapter (`UsdAnimationPlugin`): binds projected USD prims to the shared time domains, plans authored `timeSamples` topology, and samples transform/visibility/material intent. It depends on the core reader and visual scene contract, not on mesh projection. |
 | **`lunco-usd-bevy-light`** | UsdLux light and textured dome projection: authored light components, ambient-dome semantics, HDRI equirectangular-to-cubemap conversion, and environment-camera binding. It is independent from the visual mesh projector. |
 | **`lunco-usd-bevy-diagnostics`** | Optional visual USD asset-failure and placeholder diagnostics: glTF fallback hiding, load-time replacement stubs, and labeled failure geometry. Installed by `lunco-usd-bevy-runtime`; kept separate from the visual projector. |
@@ -342,8 +343,8 @@ does not own BasisCurves geometry math.
 
 **`lunco-usd-bevy`**
 Visual OpenUSD bridge built on `lunco-usd-bevy-core` and
-`lunco-usd-geometry`. It maps USD prim hierarchies and visual facts into Bevy
-entities/components, orchestrates mesh and render-intent projection, and
+`lunco-usd-bevy-mesh`. It maps USD prim hierarchies and visual facts into Bevy
+entities/components, orchestrates async mesh and render-intent projection, and
 installs the camera and light adapters at the integration boundary;
 `lunco-render-bevy` supplies the concrete render pipeline. Parametric
 NURBS/lathe definitions and their mesh regeneration live in the independent
@@ -382,6 +383,13 @@ the definition or graphics quality changes. Its geometry and tests are isolated
 from the USD hierarchy loader, so a lathe edit does not recompile the main
 visual projection package. It depends on the render-free geometry and intent
 packages and has no dependency back into `lunco-usd-bevy`.
+
+**`lunco-usd-bevy-mesh`**
+Render-free visual geometry projection for USD built-in primitives, native
+`UsdGeomMesh`, `BasisCurves`/`NurbsCurves`, and `NurbsPatch`. It owns mesh
+tessellation, quality invalidation, and the low-level geometry tests. The
+hierarchy loader retains async projection orchestration and material intent but
+does not depend directly on the heavy geometry evaluator stack.
 
 **`lunco-usd-avian`**
 Physics bridge for OpenUSD (`UsdAvianPlugin`). Maps `UsdPhysics` schemas — rigid bodies + mass-properties, all collider shapes, and **all joints** (revolute/prismatic/fixed/spherical/distance, D6-reduced) with `UsdPhysicsDriveAPI` motor drive — to Avian3D. The single home for Avian joint construction (incl. the programmatic wheel hinge). Runtime-only; lint fact extraction is isolated in `lunco-usd-avian-lint`.

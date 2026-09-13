@@ -8,7 +8,7 @@
 > [`../../crates/lunco-usd-core/`](../../crates/lunco-usd-core/), [`../../crates/lunco-usd/`](../../crates/lunco-usd/) and companion crates
 > `lunco-usd-geometry`, `lunco-usd-avian`, `lunco-usd-avian-lint`, `lunco-usd-bevy-core`,
 > `lunco-usd-bevy-runtime`, `lunco-usd-bevy-scene`, `lunco-usd-bevy-twin`, `lunco-usd-bevy-camera`, `lunco-usd-bevy-light`, `lunco-usd-bevy-animation`, `lunco-usd-bevy` and
-> `lunco-usd-bevy-lathe`, `lunco-usd-sim`, `lunco-usd-sim-domain`.
+> `lunco-usd-bevy-lathe`, `lunco-usd-bevy-mesh`, `lunco-usd-sim`, `lunco-usd-sim-domain`.
 
 Package ownership follows the same boundary: `lunco-usd-core` contains the
 headless document/authoring surface, schemas, pure probes, and shared USD
@@ -31,10 +31,13 @@ the event-driven wake signal and document-to-mounted-stage lookup;
 `lunco-usd-bevy-core` owns canonical-stage storage, while `lunco-usd` owns
 stage loading and the live ECS projection systems that consume that state;
 `lunco-usd-bevy-lathe` owns the independent parametric NURBS/lathe mesh
-projection; `lunco-usd-bevy-light` owns UsdLux light and dome projection;
+projection; `lunco-usd-bevy-mesh` owns built-in, native-mesh, curve, and
+NurbsPatch visual mesh projection plus quality invalidation;
+`lunco-usd-bevy-light` owns UsdLux light and dome projection;
 `lunco-usd-bevy-animation` owns the render-free time-sample projection;
-`lunco-usd-bevy` owns the remaining visual projection and consumes the camera,
-light, and lathe packages directly; and
+`lunco-usd-bevy` owns hierarchy, transform, async projection orchestration, and
+material intent while consuming the camera, light, lathe, and mesh packages
+directly; and
 `lunco-usd-avian-lint` owns composed `UsdPhysics` lint facts;
 `lunco-usd-sim-domain` owns composed component-network and generic actuator
 projection, while `lunco-usd-sim` owns vehicle projection and cosimulation
@@ -728,6 +731,8 @@ as runtime. Ownership follows the narrowest production boundary:
 - `crates/lunco-usd-bevy-twin/src/lib.rs` — render-free Twin/document leases, document-to-mounted-stage lookup, ownership events, and projection wake state
 - `crates/lunco-usd-bevy-camera/src/{camera,camera_mount,camera_path,camera_switch,camera_track}.rs` — render-free camera projection, pose, path, selection, and track mechanisms; curve math is in `lunco-usd-geometry/src/curve.rs`
 - `crates/lunco-usd-bevy-light/src/{light,dome}.rs` — UsdLux light readers, ambient-dome semantics, and HDRI environment projection
+- `crates/lunco-usd-bevy-mesh/src/lib.rs` — built-in, native-mesh, curve, and NurbsPatch mesh projection plus quality invalidation
+- `crates/lunco-usd-bevy-mesh/tests/meshes.rs` — low-level USD geometry-to-Bevy mesh tests owned by the mesh package
 - `crates/lunco-usd-bevy-core/src/animation.rs` — low-level time-sample topology, value decoding, rotation, and transform-reader mechanisms
 - `crates/lunco-usd-bevy-animation/src/lib.rs` — production animation planning, time-domain binding, and ECS sampling systems
 - `crates/lunco-usd/tests/assembly_api.rs` — public inspection, assembly-target, and document-sync query contracts
