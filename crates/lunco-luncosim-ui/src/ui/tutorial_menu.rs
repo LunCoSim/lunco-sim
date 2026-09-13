@@ -75,6 +75,32 @@ fn load_catalog() -> TutorialMenuCatalog {
     }
 }
 
+fn tutorial_groups(
+    bundled: Vec<TutorialMenuEntry>,
+    twin_entries: BTreeMap<String, Vec<TutorialMenuEntry>>,
+) -> BTreeMap<(u8, String, String), Vec<TutorialMenuEntry>> {
+    let mut groups = BTreeMap::<(u8, String, String), Vec<TutorialMenuEntry>>::new();
+    for entry in bundled {
+        groups
+            .entry((0, String::new(), entry.track.clone()))
+            .or_default()
+            .push(entry);
+    }
+    for (twin, entries) in twin_entries {
+        for mut entry in entries {
+            entry.source_asset = twin_asset_uri(&twin, &entry.source_asset);
+            if !entry.scene_asset.is_empty() {
+                entry.scene_asset = twin_asset_uri(&twin, &entry.scene_asset);
+            }
+            groups
+                .entry((1, twin.clone(), entry.track.clone()))
+                .or_default()
+                .push(entry);
+        }
+    }
+    groups
+}
+
 fn register_tutorial_menu(world: &mut World) {
     let Some(mut menus) = world.get_resource_mut::<WorkbenchMenuRegistry>() else {
         return;
@@ -134,29 +160,11 @@ fn register_tutorial_menu(world: &mut World) {
         );
         ui.separator();
 
-        let mut groups = BTreeMap::<(u8, String, String), Vec<TutorialMenuEntry>>::new();
-        for entry in bundled {
-            groups
-                .entry((0, String::new(), entry.track.clone()))
-                .or_default()
-                .push(entry);
-        }
-        for (twin, entries) in twin_entries {
-            for mut entry in entries {
-                entry.source_asset = twin_asset_uri(&twin, &entry.source_asset);
-                if !entry.scene_asset.is_empty() {
-                    entry.scene_asset = twin_asset_uri(&twin, &entry.scene_asset);
-                }
-                groups
-                    .entry((1, twin.clone(), entry.track.clone()))
-                    .or_default()
-                    .push(entry);
-            }
-        }
+        let groups = tutorial_groups(bundled, twin_entries);
 
         egui::ScrollArea::vertical()
             .max_height(SCENARIO_MENU_HEIGHT)
-            .auto_shrink([false, false])
+            .auto_shrink([false, true])
             .show(ui, |ui| {
                 for ((kind, twin, track), entries) in groups {
                     let heading = if kind == 0 {
@@ -164,28 +172,33 @@ fn register_tutorial_menu(world: &mut World) {
                     } else {
                         format!("{twin} · {track}")
                     };
-                    egui::CollapsingHeader::new(format!("{heading} ({})", entries.len()))
-                        .default_open(false)
-                        .show(ui, |ui| {
-                            for entry in entries {
-                                let label = format!("{}  ·  {}", entry.title, entry.difficulty);
-                                let response = ui.add_sized(
-                                    [ui.available_width(), 0.0],
-                                    egui::Button::new(label).wrap(),
-                                );
-                                let response = response.on_hover_text(entry.blurb.as_str());
-                                if response.clicked() {
-                                    ctx.trigger(RunScenarioAsset {
-                                        target: Entity::PLACEHOLDER,
-                                        source_asset: entry.source_asset.clone(),
-                                        params: String::new(),
-                                        scene_asset: entry.scene_asset.clone(),
-                                        reload_policy: ScenarioReloadPolicy::Restart,
-                                    });
-                                    ui.close();
+                    ui.menu_button(format!("{heading} ({})", entries.len()), |ui| {
+                        ui.set_min_width(SCENARIO_MENU_MIN_WIDTH);
+                        ui.set_max_width(SCENARIO_MENU_MAX_WIDTH);
+                        egui::ScrollArea::vertical()
+                            .max_height(SCENARIO_MENU_HEIGHT)
+                            .auto_shrink([false, true])
+                            .show(ui, |ui| {
+                                for entry in entries {
+                                    let label = format!("{}  ·  {}", entry.title, entry.difficulty);
+                                    let response = ui.add_sized(
+                                        [ui.available_width(), 0.0],
+                                        egui::Button::new(label).wrap(),
+                                    );
+                                    let response = response.on_hover_text(entry.blurb.as_str());
+                                    if response.clicked() {
+                                        ctx.trigger(RunScenarioAsset {
+                                            target: Entity::PLACEHOLDER,
+                                            source_asset: entry.source_asset.clone(),
+                                            params: String::new(),
+                                            scene_asset: entry.scene_asset.clone(),
+                                            reload_policy: ScenarioReloadPolicy::Restart,
+                                        });
+                                        ui.close();
+                                    }
                                 }
-                            }
-                        });
+                            });
+                    });
                 }
             });
     });
@@ -266,5 +279,52 @@ fn sync_twin_tutorial_catalogs(
                 error!("[tutorials] could not load Twin catalog: {error}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{tutorial_groups, TutorialMenuEntry};
+
+    fn entry(track: &str, title: &str) -> TutorialMenuEntry {
+        TutorialMenuEntry {
+            track: track.to_owned(),
+            title: title.to_owned(),
+            blurb: String::new(),
+            difficulty: "beginner".to_owned(),
+            source_asset: format!("lunco://tutorials/{track}/{title}.rhai"),
+            scene_asset: String::new(),
+        }
+    }
+
+    #[test]
+    fn tutorial_groups_preserve_track_and_lesson_order() {
+        let mut twin_entries = std::collections::BTreeMap::new();
+        twin_entries.insert(
+            "Demo Twin".to_owned(),
+            vec![entry("Rover", "Twin Lesson 1"), entry("Rover", "Twin Lesson 2")],
+        );
+        let groups = tutorial_groups(
+            vec![
+            entry("Sandbox", "First Drive"),
+            entry("Modelica", "Overview"),
+            entry("Sandbox", "Build a Scene"),
+            entry("Navigation", "View and Build"),
+            ],
+            twin_entries,
+        );
+
+        let bundled = groups.get(&(0, String::new(), "Sandbox".to_owned())).unwrap();
+        assert_eq!(
+            bundled.iter().map(|entry| entry.title.as_str()).collect::<Vec<_>>(),
+            vec!["First Drive", "Build a Scene"]
+        );
+        let twin = groups
+            .get(&(1, "Demo Twin".to_owned(), "Rover".to_owned()))
+            .unwrap();
+        assert_eq!(
+            twin.iter().map(|entry| entry.title.as_str()).collect::<Vec<_>>(),
+            vec!["Twin Lesson 1", "Twin Lesson 2"]
+        );
     }
 }

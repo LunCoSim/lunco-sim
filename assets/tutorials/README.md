@@ -15,11 +15,13 @@ assets/tutorials/
   sandbox/                     # scene-building and co-simulation scenarios
 ```
 
-The catalog is presentation data. Each entry names a `source_asset` and may
-name a `scene_asset`; both are resolved through the asset system. The menu uses
-`reload_policy: "restart"` so selecting a lesson always gets a fresh scenario
-start after its requested scene is composed. Other applications can reuse the
-same generic command with their own catalog or no menu at all.
+The catalog is presentation data. Each entry names a `source_asset`, may name a
+`scene_asset`, and belongs to a `track`; the application presents each track as
+a submenu and keeps the entries in authored order. Both assets are resolved
+through the asset system. The menu uses `reload_policy: "restart"` so selecting
+a lesson always gets a fresh scenario start after its requested scene is
+composed. Other applications can reuse the same generic command with their own
+catalog or no menu at all.
 
 An opened Twin may contribute the same catalog shape at
 `sim/tutorials/catalog.json`. Its entries use paths relative to that Twin;

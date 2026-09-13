@@ -35,6 +35,9 @@ examples under `assets/tutorials/`.
 }
 ```
 
+The `track` value determines the submenu containing the lesson. Reuse an
+existing track when the lesson belongs to that learning path.
+
 The menu submits the generic `RunScenarioAsset` command. It uses
 `ScenarioReloadPolicy::Restart` for a predictable fresh start. Other apps can
 reuse the command without importing tutorial code.
