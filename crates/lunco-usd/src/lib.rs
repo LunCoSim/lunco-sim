@@ -17,7 +17,6 @@
 // lives in `lunco-usd-ui`; `document` is the USD document model and the shared
 // `DocumentRegistry<UsdDocument>` owns document identity. Edits author through
 // OpenUSD's Stage by SDF path (`lunco_usd_core::author`).
-pub mod assembly_api;
 pub mod commands;
 pub mod live_consume;
 pub(crate) mod program_runtime;
@@ -29,9 +28,3 @@ pub(crate) mod program_runtime;
 pub mod registry;
 pub mod runtime_persistence;
 pub(crate) mod twin_projection;
-
-/// Asset-backed OpenUSD assembly. This is the public composition boundary:
-/// `lunco-assets` supplies canonical identities and bytes, while this crate
-/// interprets USD sublayers, references, payloads, and variants into a stage.
-#[cfg(not(target_arch = "wasm32"))]
-pub use lunco_usd_compose::compose_file_to_stage;

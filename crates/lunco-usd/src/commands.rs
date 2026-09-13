@@ -266,10 +266,10 @@ impl Plugin for UsdCommandsPlugin {
         let mut query_registry = app
             .world_mut()
             .resource_mut::<lunco_api::queries::ApiQueryRegistry>();
-        query_registry.register(crate::assembly_api::InspectUsdDocumentProvider);
-        query_registry.register(crate::assembly_api::InspectUsdEditSessionProvider);
-        query_registry.register(crate::assembly_api::ResolveUsdTargetProvider);
-        query_registry.register(crate::assembly_api::SyncUsdDocumentProvider);
+        query_registry.register(lunco_usd_queries::InspectUsdDocumentProvider);
+        query_registry.register(lunco_usd_queries::InspectUsdEditSessionProvider);
+        query_registry.register(lunco_usd_queries::ResolveUsdTargetProvider);
+        query_registry.register(lunco_usd_queries::SyncUsdDocumentProvider);
         app.init_resource::<lunco_core::SceneTransitionCoordinator>();
         app.add_observer(clear_scene_on_twin_closed);
         app.add_systems(

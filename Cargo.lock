@@ -8390,8 +8390,8 @@ dependencies = [
  "lunco-usd-bevy-light",
  "lunco-usd-bevy-scene",
  "lunco-usd-bevy-twin",
- "lunco-usd-compose",
  "lunco-usd-core",
+ "lunco-usd-queries",
  "lunco-usd-sim",
  "lunco-usd-sim-cosim",
  "lunco-usd-sim-domain",
@@ -8624,6 +8624,22 @@ dependencies = [
  "bevy_mesh",
  "spade",
  "truck-geometry",
+]
+
+[[package]]
+name = "lunco-usd-queries"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "lunco-api",
+ "lunco-doc",
+ "lunco-doc-bevy",
+ "lunco-usd-bevy-core",
+ "lunco-usd-bevy-twin",
+ "lunco-usd-compose",
+ "lunco-usd-core",
+ "openusd",
+ "serde_json",
 ]
 
 [[package]]
