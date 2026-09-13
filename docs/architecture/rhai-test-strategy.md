@@ -114,10 +114,19 @@ The current compact bridge is `query("ValidateSysml", #{path: ...})`. It uses
 the same `lunco-scene-validation` parser/resolver as `ValidateAsset`; a
 `twin://name` path uses the indexed Twin source set and manifest `[sysml]`
 roots. The bounded result contains typed `attributes`, requirement and
-verification records, source files, diagnostics, and `source_revision`. Rhai
-therefore reads the canonical SysML source through the existing asset path
-without copying the full element graph or walking the Twin filesystem a
-second time.
+verification records, source files, diagnostics, and `source_revision`. It
+also exposes a qualified attribute map and reports short-name collisions, so a
+Rhai consumer can use a convenient local key when it is unique and fall back
+to the lossless qualified key when definitions reuse a name. Rhai therefore
+reads the canonical SysML source through the existing asset path without
+copying the full element graph or walking the Twin filesystem a second time.
+
+For component-level suites, `sysml_requirements::evaluate(source, checks)`
+returns one structured result per check. The shared
+`report_structured_verdict(report, title, channel)` prelude helper emits those
+results and failures as a telemetry evidence map, then retains the normal
+greppable PASS/FAIL line. Evidence collection stays generic while the Twin
+still owns its check table and scene observations.
 
 Acceptance contracts are Twin-authored: a Twin keeps its `.sysml` source,
 scenario `.rhai`, and any fixture-local policy together. Core ships only the

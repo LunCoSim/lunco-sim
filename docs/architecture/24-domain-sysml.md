@@ -139,8 +139,11 @@ For production checks, the scene-validation plugin registers the compact
 `ValidateSysml { path }` query. A filesystem path or `twin://name/relative`
 validates one source; `twin://name` loads the manifest-declared, indexed Twin
 source set. The query returns typed attributes, requirement/verification
-records, source files, diagnostics, and a deterministic source revision. This
-keeps the Rhai boundary bounded and avoids a second filesystem walker or
+records, source files, diagnostics, and a deterministic source revision. It
+also exposes a qualified attribute map and reports short-name collisions, so a
+Rhai consumer can use a convenient local key when it is unique and fall back
+to the lossless qualified key when definitions reuse a name. This keeps the
+Rhai boundary bounded and avoids a second filesystem walker or
 product-specific Rust projection.
 
 Acceptance remains Twin-authored: each Twin keeps its SysML requirements, USD

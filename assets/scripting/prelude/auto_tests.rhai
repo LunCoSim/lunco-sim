@@ -157,6 +157,46 @@ fn report_verdict(fails, title, channel) {
     false
 }
 
+/// Emit a machine-readable requirement verdict before printing the stable
+/// PASS/FAIL line.  The generic SysML evaluator returns structured result
+/// maps; this adapter preserves them on the telemetry bus while keeping the
+/// historical string verdict for the test runner and humans.  Any Twin can
+/// use it for component-level evidence without adding a custom Rust runner.
+fn report_structured_verdict(report, title, channel) {
+    let failures = [];
+    let raw_failures = [];
+    let ok = report != () && report.ok == true;
+    let source_revision = "";
+    let result_count = 0;
+    if report != () {
+        if report.source_revision != () { source_revision = report.source_revision; }
+        if report.results != () { result_count = report.results.len(); }
+        if report.failures != () {
+            raw_failures = report.failures;
+            for failure in report.failures {
+                if type_of(failure) == "map" {
+                    let line = "";
+                    if failure.id != () { line += failure.id + " "; }
+                    if failure.component != () { line += failure.component + " "; }
+                    if failure.path != () { line += failure.path + ": "; }
+                    if failure.error != () { line += failure.error; }
+                    failures.push(line);
+                } else {
+                    failures.push(failure);
+                }
+            }
+        }
+    }
+    if failures.is_empty() && !ok { failures.push("requirement evaluation unavailable"); }
+    let evidence = #{ok: ok, title: title, channel: channel,
+        source_revision: source_revision, result_count: result_count,
+        failure_count: raw_failures.len(), failures: raw_failures};
+    emit(channel + "_EVIDENCE", evidence);
+    print(channel + "_EVIDENCE source_revision=" + source_revision
+        + " results=" + result_count + " failures=" + raw_failures.len());
+    report_verdict(failures, title, channel)
+}
+
 /// Fail immediately, before the run wastes its ticks.
 ///
 /// For the setup failures that otherwise look like a clean run forever: a

@@ -187,6 +187,11 @@ fn finish_sysml_report(
         // Expose the typed semantic projection. Rhai tests consume this
         // snapshot without walking source text or reimplementing parsing.
         "attributes": sysml_attributes_json(&analysis),
+        // The short-name map is convenient for authored Twin contracts.  The
+        // qualified projection is the lossless lookup for workspaces where
+        // two definitions intentionally reuse a local attribute name.
+        "attributes_qualified": sysml_attributes_qualified_json(&analysis),
+        "attribute_collisions": sysml_attribute_collisions_json(&analysis),
         "attribute_records": analysis.attributes(),
         "requirement_records": analysis.requirements(),
         "verification_cases": analysis.verifications(),
@@ -203,32 +208,68 @@ fn finish_sysml_report(
 fn sysml_attributes_json(analysis: &lunco_sysml_ast::SysmlAnalysis) -> serde_json::Value {
     let mut attributes = serde_json::Map::new();
     for attribute in analysis.attributes() {
-        let value = attribute.value.as_ref().map(|literal| {
-            let number = literal
-                .number
-                .as_deref()
-                .and_then(|text| text.parse::<f64>().ok())
-                .filter(|number| number.is_finite());
-            json!({
-                "literal": literal.literal,
-                "kind": literal.kind,
-                "number": number,
-            })
-        });
+        attributes.insert(attribute.name.clone(), sysml_attribute_record(attribute));
+    }
+    serde_json::Value::Object(attributes)
+}
+
+fn sysml_attributes_qualified_json(
+    analysis: &lunco_sysml_ast::SysmlAnalysis,
+) -> serde_json::Value {
+    let mut attributes = serde_json::Map::new();
+    for attribute in analysis.attributes() {
         attributes.insert(
-            attribute.name.clone(),
-            json!({
-                "owner": attribute.owner,
-                "qualified_name": attribute.qualified_name,
-                "type_name": attribute.type_name,
-                "value": value,
-                "file": attribute.file,
-                "start": attribute.start,
-                "end": attribute.end,
-            }),
+            attribute.qualified_name.clone(),
+            sysml_attribute_record(attribute),
         );
     }
     serde_json::Value::Object(attributes)
+}
+
+fn sysml_attribute_collisions_json(
+    analysis: &lunco_sysml_ast::SysmlAnalysis,
+) -> serde_json::Value {
+    let mut names = std::collections::BTreeMap::<String, Vec<String>>::new();
+    for attribute in analysis.attributes() {
+        names
+            .entry(attribute.name.clone())
+            .or_default()
+            .push(attribute.qualified_name.clone());
+    }
+    let collisions = names
+        .into_iter()
+        .filter_map(|(name, qualified_names)| {
+            (qualified_names.len() > 1).then_some(json!({
+                "name": name,
+                "qualified_names": qualified_names,
+            }))
+        })
+        .collect::<Vec<_>>();
+    serde_json::Value::Array(collisions)
+}
+
+fn sysml_attribute_record(attribute: &lunco_sysml_ast::SysmlAttribute) -> serde_json::Value {
+    let value = attribute.value.as_ref().map(|literal| {
+        let number = literal
+            .number
+            .as_deref()
+            .and_then(|text| text.parse::<f64>().ok())
+            .filter(|number| number.is_finite());
+        json!({
+            "literal": literal.literal,
+            "kind": literal.kind,
+            "number": number,
+        })
+    });
+    json!({
+        "owner": attribute.owner,
+        "qualified_name": attribute.qualified_name,
+        "type_name": attribute.type_name,
+        "value": value,
+        "file": attribute.file,
+        "start": attribute.start,
+        "end": attribute.end,
+    })
 }
 
 /// One Twin-level lint finding in the pre-flight response.
@@ -824,6 +865,16 @@ impl ApiQueryProvider for ValidateSysmlProvider {
             "source_files": report.info.get("source_files").cloned().unwrap_or_else(|| json!([])),
             "requirements": requirements,
             "attributes": report.info.get("attributes").cloned().unwrap_or_else(|| json!({})),
+            "attributes_qualified": report
+                .info
+                .get("attributes_qualified")
+                .cloned()
+                .unwrap_or_else(|| json!({})),
+            "attribute_collisions": report
+                .info
+                .get("attribute_collisions")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
             "attribute_records": report.info.get("attribute_records").cloned().unwrap_or_else(|| json!([])),
             "requirement_records": report.info.get("requirement_records").cloned().unwrap_or_else(|| json!([])),
             "verification_cases": verification_cases,
@@ -1114,5 +1165,29 @@ def Xform \"Battery\" (\n\
         assert!(report.info["elements"]
             .as_array()
             .is_some_and(|elements| !elements.is_empty()));
+    }
+
+    #[test]
+    fn sysml_attribute_projection_keeps_qualified_names_and_collisions() {
+        let path = temp_sysml(
+            "qualified_attributes.sysml",
+            "package Example {
+                part def Lander { attribute mass : Real = 1.0; }
+                part def Rover { attribute mass : Real = 2.0; }
+            }",
+        );
+        let report = validate_asset(path.to_str().unwrap());
+        assert!(report.ok, "{:?}", report.errors);
+        assert!(report.info["attributes_qualified"]
+            .get("Example::Lander::mass")
+            .is_some());
+        assert!(report.info["attributes_qualified"]
+            .get("Example::Rover::mass")
+            .is_some());
+        let collisions = report.info["attribute_collisions"]
+            .as_array()
+            .expect("collision array");
+        assert_eq!(collisions.len(), 1, "{:?}", report.info);
+        assert_eq!(collisions[0]["name"], "mass");
     }
 }
