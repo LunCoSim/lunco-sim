@@ -81,6 +81,7 @@ Queries return structured data from the simulation. They use the same `POST /api
 | `ListOpenDocuments` | `{}` | List all documents currently open in the workspace, including origin and dirty state. |
 | `ListRecentFiles` | `{}` | List recently opened files and Twins from `recents.json`. |
 | `ListTwin` | `{"offset": u64, "limit": u64}` | List files in the currently active Twin folder. |
+| `ListSpawnCatalog` | `{}` | List authored spawnable USD entries, including their standard `doc` description, provenance, and spawn source. |
 | `ListMsl` | `{"cursor": string, "limit": u64, "filter": {...}}` | Search and list the Modelica Standard Library (MSL). |
 | `ListCompileCandidates` | `{"doc_id": u64}` | List all non-package classes in a document that can be compiled. |
 | `QueryExperimentBounds` | `{"doc_id": u64, "class": string?}` | Resolve simulation bounds (start, end, dt) for a class. |

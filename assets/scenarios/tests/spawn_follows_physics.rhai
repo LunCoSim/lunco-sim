@@ -36,6 +36,11 @@ fn on_tick(me) {
                 if entry.entry_id == "modelica_balloon" {
                     catalog_has_balloon = true;
                 }
+                if entry.description == () || entry.description.len() == 0 {
+                    this.done = true;
+                    fail("spawn catalog entry has no authored USD doc: " + entry.entry_id);
+                    return;
+                }
             }
         }
         if !catalog_has_balloon {
