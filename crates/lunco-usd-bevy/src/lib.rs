@@ -325,7 +325,7 @@ impl Plugin for UsdBevyPlugin {
 /// The task owns only Send-safe extracted data. The live OpenUSD stage remains
 /// on the main thread and is never captured by the worker.
 #[derive(Component)]
-pub struct PendingUsdMesh {
+struct PendingUsdMesh {
     task: Task<Option<Mesh>>,
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
     path: SdfPath,
