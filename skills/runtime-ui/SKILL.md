@@ -60,11 +60,15 @@ text entry remains in the existing Rhai editor/REPL until HUI gains a tested
 typed input and repeated-list contract.
 
 For dynamic semantic controls, use the HUI convention
-`on_press="runtime_ui_authored_action" tag:data-action="{action}"`. The
-`data-action` property is supplied by the scalar Rhai view model and becomes a
+`on_press="runtime_ui_authored_action" tag:action="{action}"`. The
+`action` tag property is supplied by the scalar Rhai view model and becomes a
 typed `runtime.ui.action` event. This permits Twin-defined actions and bounded
 dynamic controls without registering one Rust callback per item. Do not use
 JavaScript or encode action payloads as JSON.
+
+Use stable `id` attributes and `#id` selectors for authored HUI nodes. Flair
+supports class selectors, but HUI 0.7 does not turn an HTML `class` attribute
+into a `ClassList`; it treats that attribute as an unknown style property.
 
 Project-owned visibility policy belongs in the active Twin manifest's generic
 `[settings]` table. A surface declares `setting` plus `setting_default` in

@@ -535,7 +535,7 @@ fn on_runtime_ui_action(
                 q_tags
                     .get(trigger.event().source)
                     .ok()
-                    .and_then(|tags| tags.tags().get("data-action"))
+                    .and_then(|tags| tags.tags().get("action"))
                     .cloned()
             } else {
                 Some(action.clone())

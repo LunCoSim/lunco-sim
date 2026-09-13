@@ -51,11 +51,16 @@ HUI callbacks are semantic runtime actions. Built-in actions remain registered
 by the runtime, while Twin-authored actions are forwarded as typed
 `runtime.ui.action` events for Rhai policy. A dynamic control can use one
 shared callback and a HUI tag property:
-`on_press="runtime_ui_authored_action" tag:data-action="{action}"`.
+`on_press="runtime_ui_authored_action" tag:action="{action}"`.
 The pressed node supplies the action value; the template does not inspect HTML
 ids or call domain resources. This is the reusable path for program selection,
 route editing, and other Twin-defined tools without a Rust callback per item.
 Unknown fields/actions and unsafe asset paths are rejected before mounting.
+
+Use stable `id` attributes for authored HUI nodes and `#id` selectors in their
+stylesheets. Flair supports class selectors, but HUI 0.7 does not turn an HTML
+`class` attribute into a `ClassList`; the loader treats that attribute as an
+unknown style property and rejects the template.
 
 The generic `program-browser` surface demonstrates this contract. A Twin or
 Rhai policy enables it on a USD scope, while the runtime exposes only the

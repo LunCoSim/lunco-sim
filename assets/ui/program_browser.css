@@ -21,7 +21,10 @@
 
 #program-browser-header,
 #program-browser-actions,
-.program-row {
+#program-row-0,
+#program-row-1,
+#program-row-2,
+#program-row-3 {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -43,8 +46,14 @@
 
 #program-browser-scope,
 #program-browser-count,
-.program-source,
-.program-status {
+#program-source-0,
+#program-source-1,
+#program-source-2,
+#program-source-3,
+#program-status-0,
+#program-status-1,
+#program-status-2,
+#program-status-3 {
   color: var(--muted-color);
   font-size: 10px;
   overflow: hidden;
@@ -52,8 +61,14 @@
 }
 
 #program-browser-scope,
-.program-path,
-.program-source {
+#program-path-0,
+#program-path-1,
+#program-path-2,
+#program-path-3,
+#program-source-0,
+#program-source-1,
+#program-source-2,
+#program-source-3 {
   flex-grow: 1;
   flex-shrink: 1;
   flex-basis: 0px;
@@ -61,7 +76,10 @@
   max-width: 100%;
 }
 
-.program-row {
+#program-row-0,
+#program-row-1,
+#program-row-2,
+#program-row-3 {
   min-height: 42px;
   padding: 5px;
   border-width: 1px;
@@ -74,7 +92,10 @@
 #program-row-2 { display: var(--ui-program-2-display); }
 #program-row-3 { display: var(--ui-program-3-display); }
 
-.program-copy {
+#program-copy-0,
+#program-copy-1,
+#program-copy-2,
+#program-copy-3 {
   flex-grow: 1;
   flex-shrink: 1;
   flex-basis: 0px;
@@ -83,7 +104,10 @@
   overflow: hidden;
 }
 
-.program-path {
+#program-path-0,
+#program-path-1,
+#program-path-2,
+#program-path-3 {
   color: var(--text-color);
   font-size: 11px;
   font-weight: 700;

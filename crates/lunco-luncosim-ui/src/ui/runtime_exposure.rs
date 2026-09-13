@@ -139,7 +139,7 @@ pub(crate) fn register_action(
     );
 }
 
-/// Bind the HUI `tag:data-action` convention once. The action value is a
+/// Bind the HUI `tag:action` convention once. The action value is a
 /// dynamic template property, so Twin/Rhai can choose it without adding a
 /// manifest callback or a Rust enum arm.
 pub(crate) fn register_dynamic_action(functions: &mut HtmlFunctions) {

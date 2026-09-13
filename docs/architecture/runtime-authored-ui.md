@@ -282,8 +282,8 @@ selection, editor focus, source switching, and USD transactions; the template
 never writes simulation state.
 
 For dynamic controls, HUI supports the project convention
-`on_press="runtime_ui_authored_action" tag:data-action="{action}"`. The
-`data-action` value is a dynamic scalar property supplied by the active
+`on_press="runtime_ui_authored_action" tag:action="{action}"`. The
+`action` tag value is a dynamic scalar property supplied by the active
 exposure/Rhai policy, and the typed event resolves it from the pressed HUI
 node. This supports Twin-defined actions without JavaScript or a JSON payload.
 
@@ -329,6 +329,11 @@ its mirrored `--ui-<property-name>` custom property:
 The bridge projects each bound value both to the HUI template property and to a
 CSS variable named `--ui-<property-name>` (underscores become hyphens). Mapping
 values can themselves be CSS values, for example `var(--accent-color)`.
+
+Authored HUI nodes use stable `id` attributes and `#id` selectors. Flair also
+supports class selectors, but HUI 0.7 does not create a `ClassList` from an
+HTML `class` attribute; it parses that attribute as an unknown style property
+and rejects the template.
 
 ### 4. Publish capabilities
 
