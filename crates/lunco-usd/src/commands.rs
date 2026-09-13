@@ -48,10 +48,14 @@ use lunco_storage::Storage; // brings `write_sync` / `read_sync` into scope
 use lunco_twin::{DocumentKindId, DocumentKindMeta, DocumentKindRegistry};
 use lunco_usd_bevy_core::{source::UsdSourceText, UsdRead, UsdStageAsset};
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneRoot};
-use lunco_usd_core::commands::{ApplyUsdOp, ApplyUsdOps};
+use lunco_usd_core::commands::{
+    is_usd_path, ApplyUsdOp, ApplyUsdOps, AttachComponent, AttachProgram, CommitUsdProposal,
+    CreateUsdProposal, DetachComponent, EmptyViewportReason, ReviewUsdProposal, UsdDocumentReady,
+    UsdProposalReviewAction, USD_DOCUMENT_KIND,
+};
 use lunco_usd_core::document::{LayerId, UsdOp};
 use lunco_usd_core::edit_session::{
-    validate_proposal, UsdEditScope, UsdEditSessions, UsdProposalId, UsdProposalState,
+    validate_proposal, UsdEditSessions, UsdProposalId, UsdProposalState,
 };
 use lunco_usd_core::UsdDataExt;
 use lunco_usd_sim_cosim::{
@@ -62,33 +66,10 @@ use lunco_workspace::open::{spawn_twin_scan, PendingTwinOpens, TwinOpenMode};
 use lunco_workspace::{TwinClosed, WorkspaceResource};
 use openusd::schemas::lux::tokens as ltok;
 
-/// Stable id for the USD document kind in
-/// [`DocumentKindRegistry`].
-pub const USD_DOCUMENT_KIND: &str = "usd";
-
-/// A *reason* the viewport is empty, set at the moment a scene-clearing
-/// action knows one — e.g. opening a folder whose `twin.toml` declares no
-/// `default_scene` (the usual cause: you opened the WRONG FOLDER, one level
-/// too shallow, so the real twin's manifest is not where the engine looked).
-///
-/// The USD UI presents this diagnostic in its placeholder while headless
-/// consumers can inspect it directly. It is cleared the instant a real scene
-/// mounts. Headless-safe: it is a plain `Resource` with no UI dependency, so
-/// test/`scene_test` bins pay nothing.
-#[derive(Resource, Default)]
-pub struct EmptyViewportReason(pub Option<String>);
-
 /// Telemetry mnemonic for a default Twin scene whose authoritative source did
 /// not become available. This is a scene-load failure, not a simulation fault:
 /// the viewport remains empty and a later Twin replacement is still admitted.
 pub(crate) const TWIN_SCENE_LOAD_FAILED: &str = "TWIN_SCENE_LOAD_FAILED";
-
-impl EmptyViewportReason {
-    /// Record a diagnostic message naming why the viewport was just emptied.
-    fn set(&mut self, msg: impl Into<String>) {
-        self.0 = Some(msg.into());
-    }
-}
 
 /// Plugin that registers the USD document kind, the typed-command
 /// observers, and the pending-event drain system.
@@ -100,11 +81,9 @@ pub struct UsdCommandsPlugin;
 
 /// Promote an authored document when the live twin projection is installed.
 ///
-/// `apply_ops_as_change_set` is also the reusable headless document-editing
-/// boundary, so a caller that only installs `DocumentRegistry` must not panic
-/// merely because no live twin projection exists. In the production USD
-/// command plugin this resource is always initialized; when it is absent there
-/// is no scene lease to promote and no ownership event to publish.
+/// The grouped document-editing path must also work for callers that only
+/// install `DocumentRegistry`; a missing live Twin projection is not an error
+/// for a headless document edit.
 fn claim_user_document_if_projected(world: &mut World, doc: DocumentId) {
     let claimed = world
         .get_resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
@@ -373,7 +352,7 @@ impl Plugin for UsdCommandsPlugin {
                 else {
                     return;
                 };
-                empty_reason.set(format!(
+                empty_reason.0 = Some(format!(
                     "`{path}` could not be loaded: {}",
                     trigger.event().error
                 ));
@@ -557,7 +536,7 @@ fn open_usd_docs_on_twin_asset_mounted(
                     scene_uri
                 );
                 warn!("[twin] {detail}");
-                empty_reason.set(detail.clone());
+                empty_reason.0 = Some(detail.clone());
                 lunco_core::trigger_error(&mut commands, TWIN_SCENE_LOAD_FAILED, detail);
             }
         }
@@ -592,7 +571,7 @@ fn open_usd_docs_on_twin_asset_mounted(
                     "no twin.toml"
                 }
             );
-            empty_reason.set(reason);
+            empty_reason.0 = Some(reason);
             commands.trigger(ClearScene {});
         }
     }
@@ -998,7 +977,7 @@ fn spawn_twin_from_scene(scene: &Path, pending: &mut PendingTwinOpens, log_tag: 
 // Living in `UsdCommandsPlugin` means HTTP API / MCP / `Open`-URI dispatch
 // register USD documents even in headless / sandbox bins that never add
 // `UsdUiPlugin`. The UI's `browser_dispatch` keeps only the browser-panel
-// `BrowserAction` → `spawn_usd_load` translation.
+// `BrowserAction` → `OpenFile` translation.
 // ─────────────────────────────────────────────────────────────────────
 
 /// Pending file-read kicked off by [`spawn_usd_load`]. Polled by
@@ -1030,17 +1009,6 @@ struct PendingUsdDiscard {
 #[derive(Resource, Default)]
 struct PendingUsdDiscards {
     tasks: Vec<PendingUsdDiscard>,
-}
-
-/// Emitted after a USD file has been admitted to the canonical document
-/// registry. UI adapters use it to claim a preview and present any
-/// non-fatal reload outcome; headless consumers can ignore it.
-#[derive(Event, Clone, Copy, Debug)]
-pub struct UsdDocumentReady {
-    /// The admitted document.
-    pub doc: DocumentId,
-    /// Whether the registry allocated, refreshed, or retained the document.
-    pub outcome: OpenOutcome,
 }
 
 /// Observer for the workbench's typed [`OpenFile`] command. Picks up
@@ -1594,64 +1562,6 @@ fn on_save_as_document(
         bevy::log::info!("[SaveAsUsd] {doc_id} saved to {}", path.display());
         commands.trigger(lunco_doc_bevy::DocumentSaved::local(doc_id));
     }
-}
-
-// ─────────────────────────────────────────────────────────────────────
-// Assembly Editor proposals — validate/review/commit at the USD owner
-// ─────────────────────────────────────────────────────────────────────
-
-/// Prepare a typed USD edit plan for review without mutating the document.
-///
-/// `parent_gen` is required here even though direct edits may omit their
-/// causal predecessor: a proposal is explicitly reviewable work and must
-/// never be accepted against an unknown base.
-#[Command]
-pub struct CreateUsdProposal {
-    /// Document that owns the authored target.
-    pub doc_id: DocumentId,
-    /// Explicit source-asset, assembly, or instance-override scope.
-    pub scope: UsdEditScope,
-    /// Human-readable intent and eventual journal change-set label.
-    pub label: String,
-    /// Generation read by the proposal author.
-    pub parent_gen: u64,
-    /// Complete typed plan, kept out of the document until commit.
-    pub ops: Vec<UsdOp>,
-}
-
-/// Review-only actions for a pending proposal. Accepting a proposal is the
-/// separate [`CommitUsdProposal`] operation because it is the exact boundary
-/// that enters the document's journal and undo history.
-#[derive(Debug, Clone, Copy, Reflect, serde::Serialize, serde::Deserialize)]
-pub enum UsdProposalReviewAction {
-    /// Keep the plan but remove it from the active review queue.
-    Mute,
-    /// Return a muted plan to active review. Conflicts must be rebuilt from a
-    /// fresh generation and cannot be unmuted into a silent overwrite.
-    Unmute,
-    /// Discard the plan without touching authored USD.
-    Reject,
-}
-
-/// Change review state without applying any USD operation.
-#[Command]
-pub struct ReviewUsdProposal {
-    /// Proposal allocated by [`CreateUsdProposal`].
-    pub proposal: UsdProposalId,
-    /// Review decision.
-    pub action: UsdProposalReviewAction,
-}
-
-/// Merge one accepted proposal through the ordinary grouped USD edit path.
-///
-/// This is the only operation that removes a proposal by applying its plan.
-/// `apply_ops_as_change_set_result` performs the same atomic validation,
-/// journal change-set, undo grouping, and live projection notification as all
-/// direct Assembly Editor edits.
-#[Command]
-pub struct CommitUsdProposal {
-    /// Proposal to accept and merge into its explicit document target.
-    pub proposal: UsdProposalId,
 }
 
 fn proposal_ack(
@@ -2550,7 +2460,7 @@ fn validate_authored_attribute_types(
     Ok(())
 }
 
-pub fn apply_ops_as_change_set(
+pub(crate) fn apply_ops_as_change_set(
     world: &mut World,
     doc: DocumentId,
     label: impl Into<String>,
@@ -3009,19 +2919,6 @@ fn validate_attach_component(
     Ok(())
 }
 
-/// Attach one component asset to a host body as one journalled USD change set.
-///
-/// The spec contains the explicit child identity, generated joint identity,
-/// placement, and optional socket occupancy. Validation and lowering happen at
-/// the USD authoring boundary, so the attach is atomic and undoable.
-#[Command(default)]
-pub struct AttachComponent {
-    /// Target document.
-    pub doc_id: DocumentId,
-    /// The attachment to perform.
-    pub spec: lunco_usd_core::attach::AttachSpec,
-}
-
 #[on_command(AttachComponent)]
 fn on_attach_component(
     trigger: On<AttachComponent>,
@@ -3068,17 +2965,6 @@ fn on_attach_component(
             }
         }
     });
-}
-
-/// Remove one attached component as one atomic authored intent. The caller
-/// supplies the exact component/joint/socket identities; Rust validates their
-/// ownership and topology, then reuses the generic compound journal boundary.
-#[Command(default)]
-pub struct DetachComponent {
-    /// Target document.
-    pub doc_id: DocumentId,
-    /// Exact component attachment to remove.
-    pub spec: lunco_usd_core::attach::DetachSpec,
 }
 
 #[on_command(DetachComponent)]
@@ -3133,24 +3019,6 @@ fn on_detach_component(
 // ─────────────────────────────────────────────────────────────────────
 // AttachProgram — source-backed simulation program authoring
 // ─────────────────────────────────────────────────────────────────────
-
-/// Attach one source-backed simulation program to an existing USD prim.
-///
-/// The command lowers the complete `LunCoProgramAPI` contract — source asset,
-/// declared scalar ports, constants, connections, and realtime-safety promise —
-/// to one journaled USD change set. The Models palette, Rhai, HTTP, and future
-/// editor surfaces all use this command; none inserts ECS marker components.
-///
-/// An empty `inputs`/`outputs` contract is valid for an effects-only program,
-/// but it is not a running scalar co-simulation participant. Add explicit ports
-/// and connections when the source must exchange values with Rust or Modelica.
-#[Command(default)]
-pub struct AttachProgram {
-    /// Target USD document.
-    pub doc_id: DocumentId,
-    /// Complete program attachment intent.
-    pub spec: lunco_usd_core::program::ProgramAttachSpec,
-}
 
 #[on_command(AttachProgram)]
 fn on_attach_program(trigger: On<AttachProgram>, mut commands: Commands) {
@@ -3415,18 +3283,6 @@ fn drain_usd_pending_events(
 // helpers
 // ─────────────────────────────────────────────────────────────────────
 
-/// True if `path`'s extension is one of `usda` / `usdc` / `usd`.
-/// Used by the `OpenFile` observer to skip non-USD paths.
-pub fn is_usd_path(path: &str) -> bool {
-    let lower = path.to_ascii_lowercase();
-    matches!(
-        std::path::Path::new(&lower)
-            .extension()
-            .and_then(|s| s.to_str()),
-        Some("usda") | Some("usdc") | Some("usd")
-    )
-}
-
 #[cfg(test)]
 mod change_set_tests {
     //! **H10** — a multi-op command undoes as ONE unit.
@@ -3591,23 +3447,6 @@ mod change_set_tests {
 mod tests {
     use super::*;
 
-    fn install_command_result_resources(app: &mut App) {
-        app.init_resource::<CommandResults>()
-            .init_resource::<ActiveCommandId>();
-    }
-
-    #[test]
-    fn is_usd_path_recognises_extensions() {
-        assert!(is_usd_path("/tmp/scene.usda"));
-        assert!(is_usd_path("/tmp/scene.usd"));
-        assert!(is_usd_path("scene.USD"));
-        assert!(is_usd_path("foo/bar.usdc"));
-        assert!(!is_usd_path("foo/bar.usdz"));
-        assert!(!is_usd_path("/tmp/model.mo"));
-        assert!(!is_usd_path("README.md"));
-        assert!(!is_usd_path(""));
-    }
-
     #[test]
     fn pending_browser_load_is_cancelled_with_its_closed_twin() {
         let root = Path::new("/twins/rover");
@@ -3655,725 +3494,5 @@ mod tests {
             was_active: false,
         });
         assert!(app.world().resource::<PendingUsdLoads>().tasks.is_empty());
-    }
-
-    /// Smoke-test: building the plugin into a minimal app inserts
-    /// the registry, the document kind, and survives one frame.
-    #[test]
-    fn plugin_boots_and_registers_kind() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.add_plugins(UsdCommandsPlugin);
-        app.update();
-
-        assert!(app
-            .world()
-            .contains_resource::<DocumentRegistry<UsdDocument>>());
-        let kinds = app.world().resource::<DocumentKindRegistry>();
-        let meta = kinds
-            .meta(&DocumentKindId::new(USD_DOCUMENT_KIND))
-            .expect("usd kind registered");
-        assert_eq!(meta.display_name, "USD Stage");
-        assert_eq!(meta.extensions, vec!["usda", "usdc", "usd"]);
-        assert!(app
-            .world()
-            .resource::<lunco_api::queries::ApiQueryRegistry>()
-            .names()
-            .any(|name| name == "InspectUsdDocument"));
-        assert!(app
-            .world()
-            .resource::<lunco_api::queries::ApiQueryRegistry>()
-            .names()
-            .any(|name| name == "InspectUsdEditSession"));
-        assert!(app
-            .world()
-            .resource::<lunco_api::queries::ApiQueryRegistry>()
-            .names()
-            .any(|name| name == "ResolveUsdTarget"));
-        assert!(app
-            .world()
-            .resource::<lunco_api::queries::ApiQueryRegistry>()
-            .names()
-            .any(|name| name == "SyncUsdDocument"));
-    }
-
-    fn proposal_test_op(name: &str) -> UsdOp {
-        UsdOp::AddPrim {
-            edit_target: LayerId::root(),
-            parent_path: "/Assembly".to_owned(),
-            name: name.to_owned(),
-            type_name: Some("Xform".to_owned()),
-            reference: None,
-            reference_prim_path: None,
-        }
-    }
-
-    fn proposal_test_app() -> (App, DocumentId) {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.add_plugins(UsdCommandsPlugin);
-        install_command_result_resources(&mut app);
-        app.update();
-        let doc = app
-            .world_mut()
-            .resource_mut::<DocumentRegistry<UsdDocument>>()
-            .allocate(
-                "#usda 1.0\ndef Xform \"Assembly\" {}\n".to_owned(),
-                lunco_doc::PathlessOrigin::untitled("Proposal.usda"),
-            );
-        app.update();
-        (app, doc)
-    }
-
-    #[test]
-    fn proposal_commands_keep_review_separate_from_usd_and_commit_as_one_edit() {
-        let (mut app, doc) = proposal_test_app();
-        let op = proposal_test_op("Chassis");
-        app.world_mut().trigger(CreateUsdProposal {
-            doc_id: doc,
-            scope: UsdEditScope::Assembly,
-            label: "Add chassis".to_owned(),
-            parent_gen: 0,
-            ops: vec![op],
-        });
-        app.update();
-
-        let proposal = {
-            let sessions = app.world().resource::<UsdEditSessions>();
-            assert_eq!(sessions.for_document(doc).count(), 1);
-            let proposal = sessions.for_document(doc).next().expect("proposal");
-            assert_eq!(proposal.parent_generation, 0);
-            assert_eq!(proposal.ops.len(), 1);
-            proposal.id
-        };
-        assert!(!app
-            .world()
-            .resource::<DocumentRegistry<UsdDocument>>()
-            .host(doc)
-            .expect("document")
-            .document()
-            .source()
-            .contains("Chassis"));
-
-        app.world_mut().trigger(ReviewUsdProposal {
-            proposal,
-            action: UsdProposalReviewAction::Mute,
-        });
-        app.update();
-        assert_eq!(
-            app.world()
-                .resource::<UsdEditSessions>()
-                .for_document(doc)
-                .filter(|proposal| proposal.state == UsdProposalState::Muted)
-                .count(),
-            1
-        );
-        app.world_mut().trigger(ReviewUsdProposal {
-            proposal,
-            action: UsdProposalReviewAction::Unmute,
-        });
-        app.update();
-        assert_eq!(
-            app.world()
-                .resource::<UsdEditSessions>()
-                .for_document(doc)
-                .filter(|proposal| proposal.state == UsdProposalState::Pending)
-                .count(),
-            1
-        );
-
-        app.world_mut().trigger(CommitUsdProposal { proposal });
-        app.update();
-        let registry = app.world().resource::<DocumentRegistry<UsdDocument>>();
-        let host = registry.host(doc).expect("committed document");
-        assert_eq!(host.generation(), 1);
-        assert!(host.document().source().contains("Chassis"));
-        assert!(app
-            .world()
-            .resource::<UsdEditSessions>()
-            .proposal(proposal)
-            .is_none());
-
-        app.world_mut().trigger(UndoDocument { doc_id: doc });
-        app.update();
-        assert!(!app
-            .world()
-            .resource::<DocumentRegistry<UsdDocument>>()
-            .host(doc)
-            .expect("undo document")
-            .document()
-            .source()
-            .contains("Chassis"));
-    }
-
-    #[test]
-    fn proposal_commit_marks_a_stale_plan_as_conflict_without_overwriting_edits() {
-        let (mut app, doc) = proposal_test_app();
-        app.world_mut().trigger(CreateUsdProposal {
-            doc_id: doc,
-            scope: UsdEditScope::Assembly,
-            label: "Add stale chassis".to_owned(),
-            parent_gen: 0,
-            ops: vec![proposal_test_op("Chassis")],
-        });
-        app.update();
-        let proposal = app
-            .world()
-            .resource::<UsdEditSessions>()
-            .for_document(doc)
-            .next()
-            .expect("proposal")
-            .id;
-
-        app.world_mut()
-            .resource_mut::<DocumentRegistry<UsdDocument>>()
-            .apply(doc, proposal_test_op("ExistingEdit"))
-            .expect("independent edit");
-        app.world_mut().trigger(CommitUsdProposal { proposal });
-        app.update();
-
-        let sessions = app.world().resource::<UsdEditSessions>();
-        let conflicted = sessions.proposal(proposal).expect("conflict retained");
-        assert_eq!(conflicted.state, UsdProposalState::Conflict);
-        assert!(conflicted
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.contains("stale document generation")));
-        let source = app
-            .world()
-            .resource::<DocumentRegistry<UsdDocument>>()
-            .host(doc)
-            .expect("document")
-            .document()
-            .source();
-        assert!(source.contains("ExistingEdit"));
-        assert!(!source.contains("Chassis"));
-    }
-
-    #[test]
-    fn rejecting_a_proposal_removes_only_review_state() {
-        let (mut app, doc) = proposal_test_app();
-        app.world_mut().trigger(CreateUsdProposal {
-            doc_id: doc,
-            scope: UsdEditScope::Assembly,
-            label: "Reject chassis".to_owned(),
-            parent_gen: 0,
-            ops: vec![proposal_test_op("Chassis")],
-        });
-        app.update();
-        let proposal = app
-            .world()
-            .resource::<UsdEditSessions>()
-            .for_document(doc)
-            .next()
-            .expect("proposal")
-            .id;
-
-        app.world_mut().trigger(ReviewUsdProposal {
-            proposal,
-            action: UsdProposalReviewAction::Reject,
-        });
-        app.update();
-
-        assert!(app
-            .world()
-            .resource::<UsdEditSessions>()
-            .proposal(proposal)
-            .is_none());
-        assert_eq!(
-            app.world()
-                .resource::<DocumentRegistry<UsdDocument>>()
-                .host(doc)
-                .expect("document")
-                .generation(),
-            0
-        );
-    }
-
-    #[test]
-    fn closing_a_document_drops_its_review_session() {
-        let (mut app, doc) = proposal_test_app();
-        app.world_mut().trigger(CreateUsdProposal {
-            doc_id: doc,
-            scope: UsdEditScope::Assembly,
-            label: "Close chassis review".to_owned(),
-            parent_gen: 0,
-            ops: vec![proposal_test_op("Chassis")],
-        });
-        app.update();
-        assert_eq!(
-            app.world()
-                .resource::<UsdEditSessions>()
-                .for_document(doc)
-                .count(),
-            1
-        );
-
-        app.world_mut()
-            .trigger(lunco_doc_bevy::DocumentClosed::local(doc));
-        app.update();
-        assert_eq!(
-            app.world()
-                .resource::<UsdEditSessions>()
-                .for_document(doc)
-                .count(),
-            0
-        );
-    }
-
-    #[test]
-    fn file_discard_invalidates_review_before_source_read_completes() {
-        let temp = tempfile::tempdir().expect("discard source directory");
-        let path = temp.path().join("Assembly.usda");
-        let source = "#usda 1.0\ndef Xform \"Assembly\" {}\n";
-        std::fs::write(&path, source).expect("discard source");
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.add_plugins(UsdCommandsPlugin);
-        install_command_result_resources(&mut app);
-        app.update();
-        let doc = app
-            .world_mut()
-            .resource_mut::<DocumentRegistry<UsdDocument>>()
-            .open_file(path.display().to_string(), source.to_owned())
-            .0;
-        app.update();
-
-        app.world_mut().trigger(CreateUsdProposal {
-            doc_id: doc,
-            scope: UsdEditScope::Assembly,
-            label: "Discard chassis review".to_owned(),
-            parent_gen: 0,
-            ops: vec![proposal_test_op("Chassis")],
-        });
-        app.update();
-        assert_eq!(
-            app.world()
-                .resource::<UsdEditSessions>()
-                .for_document(doc)
-                .count(),
-            1
-        );
-
-        app.world_mut().trigger(DiscardDocument { doc_id: doc });
-        app.update();
-        assert_eq!(
-            app.world()
-                .resource::<UsdEditSessions>()
-                .for_document(doc)
-                .count(),
-            0
-        );
-    }
-
-    #[test]
-    fn fork_and_discard_use_document_lifecycle_commands() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.add_plugins(UsdCommandsPlugin);
-        install_command_result_resources(&mut app);
-        app.update();
-
-        let source = {
-            let mut registry = app
-                .world_mut()
-                .resource_mut::<DocumentRegistry<UsdDocument>>();
-            registry.allocate(
-                "#usda 1.0\ndef Xform \"Rig\" { def Xform \"Chassis\" {} }\n".to_owned(),
-                lunco_doc::PathlessOrigin::untitled("Source.usda"),
-            )
-        };
-        app.update();
-
-        app.world_mut().trigger(ForkDocument {
-            source_doc_id: source,
-            name: "Fork.usda".to_owned(),
-        });
-        app.update();
-        let ids: Vec<_> = app
-            .world()
-            .resource::<DocumentRegistry<UsdDocument>>()
-            .ids()
-            .collect();
-        assert_eq!(ids.len(), 2);
-        let fork = *ids.iter().find(|id| **id != source).expect("fork id");
-        let registry = app.world().resource::<DocumentRegistry<UsdDocument>>();
-        assert_eq!(
-            registry.host(fork).expect("fork host").document().source(),
-            registry
-                .host(source)
-                .expect("source host")
-                .document()
-                .source()
-        );
-        assert!(registry
-            .host(fork)
-            .expect("fork host")
-            .document()
-            .origin()
-            .is_untitled());
-
-        app.world_mut().trigger(DiscardDocument { doc_id: fork });
-        app.update();
-        assert!(!app
-            .world()
-            .resource::<DocumentRegistry<UsdDocument>>()
-            .contains(fork));
-        assert!(app
-            .world()
-            .resource::<DocumentRegistry<UsdDocument>>()
-            .contains(source));
-    }
-
-    fn wait_for_one_usd_document(app: &mut App) {
-        for _ in 0..1_000 {
-            app.update();
-            if app
-                .world()
-                .resource::<DocumentRegistry<UsdDocument>>()
-                .ids()
-                .count()
-                == 1
-            {
-                return;
-            }
-            std::thread::yield_now();
-        }
-    }
-
-    #[test]
-    fn open_file_for_usd_path_creates_document() {
-        // Write a tiny .usda to a tempfile we can resolve.
-        let tmp_dir = std::env::temp_dir();
-        let tmp_path = tmp_dir.join("lunco_usd_open_file_test.usda");
-        std::fs::write(&tmp_path, "#usda 1.0\ndef Xform \"X\" {}\n").unwrap();
-
-        // `UsdCommandsPlugin` now owns the whole open pipeline (observer +
-        // PendingUsdLoads + drain) — no UI plugin needed. `MinimalPlugins`
-        // supplies the `AsyncComputeTaskPool` the read runs on.
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.add_plugins(UsdCommandsPlugin);
-        app.update();
-
-        app.world_mut().trigger(OpenFile {
-            path: tmp_path.to_string_lossy().to_string(),
-        });
-        // Flush the queued world-command (spawns the async read task), then
-        // wait for the actual document-allocation result.
-        wait_for_one_usd_document(&mut app);
-
-        let reg = app.world().resource::<DocumentRegistry<UsdDocument>>();
-        assert_eq!(
-            reg.ids().count(),
-            1,
-            "exactly one USD doc opened (no duplicate)"
-        );
-
-        let _ = std::fs::remove_file(&tmp_path);
-    }
-
-    #[test]
-    fn open_file_file_uri_creates_document() {
-        let tmp_path = std::env::temp_dir().join("lunco_usd_open_file_uri_test.usda");
-        std::fs::write(&tmp_path, "#usda 1.0\ndef Xform \"X\" {}\n").unwrap();
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.add_plugins(UsdCommandsPlugin);
-        app.update();
-
-        app.world_mut().trigger(OpenFile {
-            path: format!("file://{}", tmp_path.display()),
-        });
-        wait_for_one_usd_document(&mut app);
-
-        assert_eq!(
-            app.world()
-                .resource::<DocumentRegistry<UsdDocument>>()
-                .ids()
-                .count(),
-            1,
-            "file:// USD paths must use the filesystem document reader"
-        );
-        let _ = std::fs::remove_file(&tmp_path);
-    }
-
-    #[test]
-    fn open_file_for_non_usd_path_is_noop() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.add_plugins(UsdCommandsPlugin);
-        app.update();
-
-        app.world_mut().trigger(OpenFile {
-            path: "/tmp/some_model.mo".to_string(),
-        });
-        for _ in 0..5 {
-            app.update();
-        }
-
-        let reg = app.world().resource::<DocumentRegistry<UsdDocument>>();
-        assert_eq!(reg.ids().count(), 0, "non-USD path must not allocate");
-    }
-
-    #[test]
-    fn apply_usd_op_builds_a_rover_through_typed_command_bus() {
-        use lunco_doc::Document;
-        use lunco_usd_core::document::{LayerId, UsdOp};
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.add_plugins(UsdCommandsPlugin);
-        install_command_result_resources(&mut app);
-        app.update();
-
-        // Allocate a blank document.
-        let doc_id = {
-            let mut reg = app
-                .world_mut()
-                .resource_mut::<DocumentRegistry<UsdDocument>>();
-            reg.allocate(
-                "#usda 1.0\n(\n    metersPerUnit = 1\n)\n".to_string(),
-                lunco_doc::PathlessOrigin::untitled("UntitledRover.usda"),
-            )
-        };
-        app.update();
-
-        // Drive a sequence of ApplyUsdOp commands — same path UI
-        // toolbars and the HTTP API will use.
-        let ops = [
-            UsdOp::AddPrim {
-                edit_target: LayerId::root(),
-                parent_path: "/".into(),
-                name: "Rover".into(),
-                type_name: Some("Xform".into()),
-                reference: None,
-                reference_prim_path: None,
-            },
-            UsdOp::AddPrim {
-                edit_target: LayerId::root(),
-                parent_path: "/Rover".into(),
-                name: "Body".into(),
-                type_name: Some("Cube".into()),
-                reference: None,
-                reference_prim_path: None,
-            },
-            UsdOp::AddPrim {
-                edit_target: LayerId::root(),
-                parent_path: "/Rover".into(),
-                name: "WheelFL".into(),
-                type_name: Some("Cube".into()),
-                reference: None,
-                reference_prim_path: None,
-            },
-            UsdOp::SetTranslate {
-                edit_target: LayerId::root(),
-                path: "/Rover/WheelFL".into(),
-                value: [1.0, 0.0, 1.0],
-            },
-        ];
-        for op in ops {
-            app.world_mut().trigger(ApplyUsdOp {
-                doc_id,
-                parent_gen: None,
-                op,
-            });
-            app.update();
-        }
-        // One more tick to flush any final queued world commands.
-        app.update();
-
-        use lunco_usd_core::UsdDataExt;
-        use openusd::sdf::Path as SdfPath;
-        let reg = app.world().resource::<DocumentRegistry<UsdDocument>>();
-        let host = reg.host(doc_id).expect("doc still alive");
-        // Assert on the canonical data (the document is data-canonical now;
-        // exact serialized-text formatting is openusd's business, not ours).
-        let data = host.document().data();
-        // `UsdDataExt` on purpose: this asserts what the ops AUTHORED into the
-        // document layer, not what a stage composes out of it.
-        assert_eq!(
-            data.prim_type_name(&SdfPath::new("/Rover").unwrap())
-                .as_deref(),
-            Some("Xform")
-        );
-        assert_eq!(
-            data.prim_type_name(&SdfPath::new("/Rover/Body").unwrap())
-                .as_deref(),
-            Some("Cube")
-        );
-        assert_eq!(
-            data.prim_type_name(&SdfPath::new("/Rover/WheelFL").unwrap())
-                .as_deref(),
-            Some("Cube")
-        );
-        assert_eq!(
-            data.prim_attribute_value::<[f64; 3]>(
-                &SdfPath::new("/Rover/WheelFL").unwrap(),
-                "xformOp:translate"
-            ),
-            Some([1.0, 0.0, 1.0])
-        );
-        // Generation advanced once per op.
-        assert_eq!(host.document().generation(), 4);
-    }
-
-    /// Phase A1: every `ApplyUsdOp` that lands records one **lossless**
-    /// `EntryKind::Op` into the canonical Twin journal — the recorded op
-    /// deserializes back to the exact `UsdOp` (not a hand summary), and a
-    /// real `UsdOp` inverse rides alongside it.
-    #[test]
-    fn apply_usd_op_records_lossless_journal_entries() {
-        use lunco_twin_journal::{DomainKind, EntryKind};
-        use lunco_usd_core::document::{LayerId, UsdOp};
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.add_plugins(UsdCommandsPlugin);
-        install_command_result_resources(&mut app);
-        // The Twin-journal plugin isn't part of `UsdCommandsPlugin`; install
-        // the resource directly so the apply funnel has somewhere to record.
-        app.insert_resource(lunco_doc_bevy::JournalResource::default());
-        app.update();
-
-        let doc_id = {
-            let mut reg = app
-                .world_mut()
-                .resource_mut::<DocumentRegistry<UsdDocument>>();
-            reg.allocate(
-                "#usda 1.0\n".to_string(),
-                lunco_doc::PathlessOrigin::untitled("UntitledJournal.usda"),
-            )
-        };
-        app.update();
-
-        let forward_ops = [
-            UsdOp::AddPrim {
-                edit_target: LayerId::root(),
-                parent_path: "/".into(),
-                name: "Rover".into(),
-                type_name: Some("Xform".into()),
-                reference: None,
-                reference_prim_path: None,
-            },
-            UsdOp::SetTranslate {
-                edit_target: LayerId::root(),
-                path: "/Rover".into(),
-                value: [2.0, 0.0, 5.0],
-            },
-        ];
-        for op in forward_ops.clone() {
-            app.world_mut().trigger(ApplyUsdOp {
-                doc_id,
-                parent_gen: None,
-                op,
-            });
-            app.update();
-        }
-        app.update();
-
-        let journal = app.world().resource::<lunco_doc_bevy::JournalResource>();
-        journal.with_read(|j| {
-            let ops: Vec<_> = j
-                .entries_for_doc(doc_id)
-                .filter_map(|e| match &e.kind {
-                    EntryKind::Op {
-                        domain,
-                        op,
-                        inverse,
-                    } => Some((domain.clone(), op.clone(), inverse.clone())),
-                    _ => None,
-                })
-                .collect();
-            assert_eq!(ops.len(), 2, "one Op entry recorded per applied UsdOp");
-            for (i, (domain, op_val, inv_val)) in ops.iter().enumerate() {
-                assert_eq!(*domain, DomainKind::Usd);
-                // Lossless: the recorded op deserializes back to the exact UsdOp.
-                let decoded: UsdOp = serde_json::from_value(op_val.clone())
-                    .expect("recorded op round-trips to UsdOp");
-                assert_eq!(format!("{decoded:?}"), format!("{:?}", forward_ops[i]));
-                // The inverse is a real UsdOp too. Phase C3 records TYPED
-                // inverses where exact: AddPrim of a brand-new prim inverts to
-                // a RemovePrim; SetTranslate that synthesizes `xformOpOrder`
-                // falls back to a coarse full-source ReplaceSource snapshot.
-                let inv: UsdOp = serde_json::from_value(inv_val.clone())
-                    .expect("recorded inverse round-trips to UsdOp");
-                match i {
-                    0 => assert!(
-                        matches!(inv, UsdOp::RemovePrim { .. }),
-                        "AddPrim of a new prim inverts to a typed RemovePrim, got {inv:?}"
-                    ),
-                    1 => assert!(
-                        matches!(inv, UsdOp::ReplaceSource { .. }),
-                        "SetTranslate inverts to a coarse ReplaceSource, got {inv:?}"
-                    ),
-                    _ => unreachable!(),
-                }
-            }
-        });
-    }
-
-    #[test]
-    fn new_document_with_usd_kind_creates_untitled() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.add_plugins(UsdCommandsPlugin);
-        app.update();
-
-        app.world_mut().trigger(NewDocument {
-            kind: USD_DOCUMENT_KIND.to_string(),
-        });
-        app.update();
-        app.update();
-
-        let reg = app.world().resource::<DocumentRegistry<UsdDocument>>();
-        assert_eq!(reg.ids().count(), 1);
-        let id = reg.ids().next().unwrap();
-        assert!(reg.host(id).unwrap().document().origin().is_untitled());
-    }
-
-    #[test]
-    fn save_as_untitled_usd_writes_source_and_rebinds_origin() {
-        let tmp = tempfile::tempdir().expect("save destination");
-        let target = tmp.path().join("scene.usda");
-        let source = "#usda 1.0\ndef Xform \"World\" {}\n";
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.add_plugins(UsdCommandsPlugin);
-        app.update();
-
-        let doc = {
-            let mut registry = app
-                .world_mut()
-                .resource_mut::<DocumentRegistry<UsdDocument>>();
-            registry.allocate(
-                source.to_string(),
-                lunco_doc::PathlessOrigin::untitled("UntitledStage.usda"),
-            )
-        };
-        app.world_mut().trigger(lunco_doc_bevy::SaveAsDocument {
-            doc_id: doc,
-            path: target.display().to_string(),
-        });
-        app.update();
-
-        let registry = app.world().resource::<DocumentRegistry<UsdDocument>>();
-        assert_eq!(
-            std::fs::read_to_string(&target).unwrap(),
-            registry.host(doc).unwrap().document().source()
-        );
-        assert_eq!(
-            registry
-                .host(doc)
-                .unwrap()
-                .document()
-                .origin()
-                .canonical_path(),
-            Some(target.as_path())
-        );
-        assert!(!registry.host(doc).unwrap().document().is_dirty());
     }
 }

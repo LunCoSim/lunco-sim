@@ -40,16 +40,15 @@ lunco-assets = { path = "../lunco-assets" }
 # Editor-session binding (WorkspaceResource + events). ECS-only, no UI — the
 # binding moved here from lunco-workbench so non-ui consumers can read it.
 lunco-workspace = { path = "../lunco-workspace" }
-serde = { workspace = true }
 # `serde_json::Value` for the hot-exit `DocumentSnapshot.view_state`
 # field (USD leaves it null; Modelica fills it with a canvas Viewport).
 serde_json = { workspace = true }
 
 [dev-dependencies]
 # These are used by package-local mechanism tests in `src/` (live entity
-# consumption and temporary document persistence), not by cross-domain
-# integration targets. The latter live in `lunco-usd-sim/tests` or the
-# application package when they cross the full runtime boundary.
+# consumption, grouped edits, and temporary document persistence). Public USD
+# command/lifecycle coverage lives in `tests/commands.rs`; cross-domain
+# behavior remains in the owning scene-test or application package.
 avian3d = { workspace = true }
 tempfile = { workspace = true }
 [lints]

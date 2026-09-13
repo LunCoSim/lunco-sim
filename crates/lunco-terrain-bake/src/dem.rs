@@ -27,11 +27,6 @@ use std::io::Cursor;
 
 use lunco_obstacle_field::field::HeightGrid;
 
-// `HeightGrid: HeightSource` is now implemented in `lunco-obstacle-field` (with
-// the type, per the orphan rule); only the tests below name the trait directly.
-#[cfg(test)]
-use lunco_terrain_core::source::HeightSource;
-
 /// Read a heightmap's georeferencing — extent, pixel size, where on the body
 /// the crop sits, and which lunar frame those coordinates are in
 /// (`GeoTransform::frame`; `None` when the raster does not declare one —
@@ -340,6 +335,7 @@ impl From<lunco_geotiff::GrayDecodeError> for DemError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lunco_terrain_core::source::HeightSource;
     use tiff::encoder::{colortype, TiffEncoder};
 
     /// The real Apollo-15 shape: a clean nodata margin on ONE side (the crop

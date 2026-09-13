@@ -1027,7 +1027,7 @@ The attach flow is:
    the lowering records it on the child through
    `lunco:mount:attachmentJoint`.
 4. Apply the complete operation set through the USD command's one journal change
-   set (`apply_ops_as_change_set`).
+   set (`ApplyUsdOps`).
 
 Program attachment follows the same author-once rule. `AttachProgram` validates a
 complete `ProgramAttachSpec` and lowers it to one USD change set. An empty port

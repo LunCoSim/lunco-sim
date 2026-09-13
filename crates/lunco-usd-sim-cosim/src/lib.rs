@@ -52,8 +52,6 @@ use lunco_scripting::{
     SceneOwnedScript, ScriptRegistry,
 };
 use lunco_usd_bevy_camera::camera_mount::MountedCamera;
-#[cfg(test)]
-use lunco_usd_bevy_camera::camera_switch::CameraContractStatus;
 use lunco_usd_bevy_core::read::read_authored_bool_strict;
 use lunco_usd_bevy_core::read::UsdReadObject;
 use lunco_usd_bevy_core::{
@@ -5579,6 +5577,7 @@ register_commands!(on_clear_scene, on_restart_scene,);
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lunco_usd_bevy_camera::camera_switch::CameraContractStatus;
 
     #[derive(Resource, Default)]
     struct WiringRuns(usize);

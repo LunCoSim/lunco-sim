@@ -135,7 +135,7 @@ pub enum TwinMode {
 }
 
 /// Twin-relative folder holding the generated runtime overlay — live spawns and
-/// moved transforms, written per document by `lunco_usd::runtime_persistence`.
+/// moved transforms, written per document by `lunco_usd_core::runtime`.
 ///
 /// Hidden, unlike the journal's visible `history/`, because it is a derived,
 /// disposable cache rather than a durable record.

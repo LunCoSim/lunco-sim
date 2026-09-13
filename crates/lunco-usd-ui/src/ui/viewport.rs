@@ -68,8 +68,6 @@ use lunco_assets::twin_source::TwinRoots;
 use lunco_core::{on_command, register_commands, Ack, ActiveCommandId, Command, OpId};
 use lunco_doc::{Document, DocumentId, DocumentOrigin};
 use lunco_doc_bevy::{DocumentChanged, DocumentClosed};
-#[cfg(test)]
-use lunco_render::SceneCamera;
 use lunco_render::{
     scene_camera_look_with_profile, GraphicsCameraDefaults, LightGraphicsDefaults,
     RenderQualityProfile, RenderingQualitySettings,
@@ -466,7 +464,7 @@ fn drain_pending_usd_preview_text_reads(world: &mut World) {
 /// focus its identifiable USD view tab. The document and root edit target
 /// remain explicit, while repeated clicks reuse the same document and view.
 fn on_usd_document_ready(
-    trigger: On<lunco_usd::commands::UsdDocumentReady>,
+    trigger: On<lunco_usd_core::commands::UsdDocumentReady>,
     registry: Res<DocumentRegistry<UsdDocument>>,
     viewport: Res<UsdViewportState>,
     workspace: Option<Res<WorkspaceResource>>,
@@ -4551,6 +4549,7 @@ impl InstancePanel for UsdPreviewViewPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lunco_render::SceneCamera;
     use lunco_usd::commands::UsdCommandsPlugin;
     use lunco_usd_core::document::UsdOp;
     use lunco_workbench::{BrowserAction, BrowserActions};
@@ -5164,7 +5163,7 @@ mod tests {
             .0;
         app.update();
         app.world_mut()
-            .trigger(lunco_usd::commands::UsdDocumentReady {
+            .trigger(lunco_usd_core::commands::UsdDocumentReady {
                 doc,
                 outcome: lunco_doc::OpenOutcome::Allocated,
             });
@@ -5179,7 +5178,7 @@ mod tests {
             .scene_root();
 
         app.world_mut()
-            .trigger(lunco_usd::commands::UsdDocumentReady {
+            .trigger(lunco_usd_core::commands::UsdDocumentReady {
                 doc,
                 outcome: lunco_doc::OpenOutcome::Allocated,
             });
@@ -5357,12 +5356,12 @@ mod tests {
         };
         app.update();
         app.world_mut()
-            .trigger(lunco_usd::commands::UsdDocumentReady {
+            .trigger(lunco_usd_core::commands::UsdDocumentReady {
                 doc: first_doc,
                 outcome: lunco_doc::OpenOutcome::Allocated,
             });
         app.world_mut()
-            .trigger(lunco_usd::commands::UsdDocumentReady {
+            .trigger(lunco_usd_core::commands::UsdDocumentReady {
                 doc: second_doc,
                 outcome: lunco_doc::OpenOutcome::Allocated,
             });

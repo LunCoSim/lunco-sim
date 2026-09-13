@@ -28,6 +28,7 @@ use lunco_workbench::{BrowserSectionRegistry, ViewportPlaceholder};
 use lunco_workbench_core::PanelId;
 
 use lunco_usd_bevy_twin::UsdDocumentUserOwned;
+use lunco_usd_core::commands::{EmptyViewportReason, UsdDocumentReady, USD_DOCUMENT_KIND};
 use lunco_usd_core::document::UsdDocument;
 use lunco_workspace::WorkspaceResource;
 
@@ -138,10 +139,10 @@ pub const GENERIC_EMPTY_HINT: &str = "No visual scene is loaded.";
 
 /// Keep the workbench placeholder synchronized with USD's mounted scene and
 /// the domain-owned empty-scene diagnostic. The placeholder is presentation;
-/// [`lunco_usd::commands::EmptyViewportReason`] remains the only reason owner.
+/// [`EmptyViewportReason`] remains the only reason owner.
 fn update_viewport_placeholder(
     scene: Query<(), With<UsdPrimPath>>,
-    empty_reason: Res<lunco_usd::commands::EmptyViewportReason>,
+    empty_reason: Res<EmptyViewportReason>,
     placeholder: Option<ResMut<ViewportPlaceholder>>,
 ) {
     let Some(mut placeholder) = placeholder else {
@@ -166,7 +167,7 @@ fn update_viewport_placeholder(
 /// Present non-fatal document-load outcomes on the UI status bus. The USD
 /// command layer emits the typed event even in headless applications.
 fn on_usd_document_ready_status(
-    trigger: On<lunco_usd::commands::UsdDocumentReady>,
+    trigger: On<UsdDocumentReady>,
     registry: Res<DocumentRegistry<UsdDocument>>,
     mut bus: Option<ResMut<StatusBus>>,
 ) {
@@ -300,7 +301,7 @@ fn sync_workspace_on_doc_opened(
     };
     workspace.add_document(lunco_workspace::DocumentEntry {
         id: doc,
-        kind: lunco_workspace::DocumentKindId::new(lunco_usd::commands::USD_DOCUMENT_KIND),
+        kind: lunco_workspace::DocumentKindId::new(USD_DOCUMENT_KIND),
         title: origin.display_name(),
         origin,
         context_twin,

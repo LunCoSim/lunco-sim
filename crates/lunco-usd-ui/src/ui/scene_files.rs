@@ -49,6 +49,7 @@ use lunco_workbench::twin_browser::BrowserQuery;
 use lunco_workbench::twin_browser::BrowserScope;
 use lunco_workbench::{BrowserAction, BrowserCtx, BrowserSection};
 
+use lunco_usd_core::commands::is_usd_path;
 use lunco_usd_core::document::UsdDocument;
 
 /// What kind of file a row is — decides its group and its click action.
@@ -70,7 +71,7 @@ pub enum SceneFileKind {
 
 impl SceneFileKind {
     fn of(path: &Path) -> Self {
-        if lunco_usd::commands::is_usd_path(&path.to_string_lossy()) {
+        if is_usd_path(&path.to_string_lossy()) {
             return Self::Layer;
         }
         match path

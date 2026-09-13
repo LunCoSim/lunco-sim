@@ -207,8 +207,8 @@ to forbid.
   cursor over the journal.
 
   > **`ChangeSet` grouping is already live for multi-op USD commands.**
-  > `lunco_usd::commands::apply_ops_as_change_set(world, doc, label, ops)` wraps a
-  > whole lowering in one `JournalResource::change_set`, so a command that lowers to
+  > `lunco_usd_core::commands::ApplyUsdOps` wraps a whole lowering in one
+  > `JournalResource::change_set`, so a command that lowers to
   > several `UsdOp`s is **one undo unit**. `AttachComponent` is the canonical user:
   > undo removes the part, its placement, its joint and the joint's anchors
   > *together*.

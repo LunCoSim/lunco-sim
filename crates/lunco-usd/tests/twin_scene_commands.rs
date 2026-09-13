@@ -6,11 +6,12 @@
 
 use bevy::asset::{AssetApp, AssetPlugin};
 use bevy::prelude::*;
-use lunco_usd::commands::{EmptyViewportReason, UsdCommandsPlugin};
+use lunco_usd::commands::UsdCommandsPlugin;
 use lunco_usd_bevy_core::{
     source::{UsdSourceText, UsdSourceTextLoader},
     UsdLoader, UsdStageAsset,
 };
+use lunco_usd_core::commands::EmptyViewportReason;
 use lunco_usd_sim_cosim::{ClearScene, LoadScene};
 use lunco_workspace::WorkspaceResource;
 

@@ -30,8 +30,6 @@ use std::collections::HashMap;
 
 use anyhow::{anyhow, Result};
 use bevy::asset::{AssetPath, LoadContext};
-#[cfg(test)]
-use openusd::sdf::Path as SdfPath;
 use openusd::usd::Stage;
 
 use lunco_assets::asset_path::canonicalize_root;
@@ -154,6 +152,7 @@ pub fn compose_file_to_stage_with_assets(
 mod inherits_compose_tests {
     use super::*;
     use crate::{StageView, UsdRead};
+    use openusd::sdf::Path as SdfPath;
 
     /// De-risk the control-profile design: a `class` carrying a `Controls` child
     /// scope, `inherits`-ed by a vessel prim, must land those child prims (with
