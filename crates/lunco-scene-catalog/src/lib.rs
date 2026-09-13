@@ -1,7 +1,7 @@
 //! USD-backed scene catalogs and runtime spawn construction.
 //!
 //! This package owns asset enumeration, USD metadata reads, shader/source
-//! listings, and the generic constructor for a runtime USD instance. Keeping
+//! listings, metadata queries, and the generic constructor for a runtime USD instance. Keeping
 //! those concerns outside `lunco-scene-commands` means catalog changes do not
 //! rebuild the larger command-handler crate, while the command plugin can still
 //! install this package as a normal production dependency.

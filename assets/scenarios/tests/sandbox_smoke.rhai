@@ -216,6 +216,24 @@ fn wiring_contract() {
     network && oscillator_to_amplifier && amplifier_to_target
 }
 
+// The Scenarios menu and scripts consume the same USD `doc` projection. Keep
+// the shipped sandbox scenes authored and discoverable without a Rust test
+// walking the asset directory behind the production catalog's back.
+fn asset_metadata_contract() {
+    let metadata = query("ListUsdAssetMetadata", #{});
+    if metadata == () || metadata.ready != true { return false; }
+    let checked = 0;
+    for entry in metadata.entries {
+        if entry.path.starts_with("scenes/luncosim/") {
+            checked += 1;
+            if entry.description == () || entry.description.len() == 0 {
+                return false;
+            }
+        }
+    }
+    checked >= 4
+}
+
 fn scene_contract() {
     let ground = query("QueryUsdPrim", #{
         path: "/SandboxScene/Ground",
@@ -265,8 +283,10 @@ fn scene_contract() {
     let livery_color = if query_ok(livery) { livery.attrs["primvars:displayColor"] } else { () };
     let livery_ok = livery_color != () && livery_color.len() == 1
         && close_vec(livery_color[0], [0.85, 0.15, 0.12], 0.001);
+    let asset_metadata_ok = asset_metadata_contract();
+    print("[sandbox-smoke] asset_metadata=" + asset_metadata_ok);
     ground_ok && ramp_ok && rovers && suspension_visuals_ok && livery_ok
-        && wiring_contract() && composition_contract()
+        && wiring_contract() && composition_contract() && asset_metadata_ok
 }
 
 fn on_start(me) {
