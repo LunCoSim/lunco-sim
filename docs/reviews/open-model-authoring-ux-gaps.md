@@ -29,11 +29,13 @@ must currently reconstruct a multi-step workflow from many separate queries and
 tool libraries.
 
 The highest-value additions from this report are now delivered in the generic
-`model_authoring` Rhai library: one complete assembly context, one readiness
+`model_authoring` and `authoring_inspection` Rhai libraries: one complete
+assembly context, one readiness
 report, one generic scene recipe, one typed port/wiring planner, and one
 component publication validator. They return dry plans and path-addressed
 findings, while Rust remains limited to the generic composed USD query fields
-needed by those facades.
+needed by those facades, plus reusable typed preview framing, diagnostic-layer
+leases, and persisted view-only camera settings.
 
 The UX should keep one explicit identity tuple throughout authoring and
 runtime evidence:
@@ -66,9 +68,9 @@ context(root) -> readiness(root) -> component/assembly plan
   -> scene recipe -> wiring check -> bounded Rhai run
 ```
 
-The current primitives plus `model_authoring` cover the deterministic authoring
-loop. Remaining work is human-facing evidence presentation and candidate diff,
-not another assembly-specific API:
+The current primitives plus `model_authoring` and `authoring_inspection` cover
+the deterministic authoring loop. Remaining work is a human-facing consumer
+of those records, not another assembly-specific API:
 
 | Workflow need | Existing owners to compose | Smallest useful addition |
 |---|---|---|
@@ -77,9 +79,13 @@ not another assembly-specific API:
 | Create a simulation scene | `assembly_edit`, reference/variant plans, `waypoint_editor`, camera and program attach commands | `model_authoring::scene_recipe` delivered for references, placement, start state, terrain/environment, camera, route, and program hand-offs |
 | Connect Modelica/Rhai/physics | USD `inputs:`/`outputs:`, `AttachProgram`, typed `SetConnection`, lint | `model_authoring::port_graph`/`wiring_plan` delivered with endpoint direction/type validation and one typed connection plan |
 | Publish a reusable part | `component_bundle_plan`, typed references/metadata, explicit Save-As | `model_authoring::publish_component` delivered for root, `defaultPrim`, `kind`, schemas, references, provenance, and explicit Save-As |
-| Compare alternatives | `DocumentRegistry::fork`, isolated preview, typed plans | Path-based before/after diff including topology, mass, frames, joints, ports, and lint consequences |
+| Compare alternatives | `DocumentRegistry::fork`, isolated preview, typed plans | `authoring_inspection::candidate_diff` compares exact affected paths and reports topology, collision, frame, material, port, and lint consequences |
+| Act on diagnostics | selection owner, prim-tree reveal, preview framing | `authoring_inspection::navigate_diagnostic` selects/reveals and frames the exact authored subject |
+| Inspect one model | `QueryUsdPrim`, `InspectUsdDocument`, diagnostic leases | `authoring_inspection::inspection_mode` combines visual, collision, joint/frame, material, connection, schema, and provenance evidence |
+| Organize findings | `LintReport` and structured subjects | `authoring_inspection::group_diagnostics` groups by owner/severity while retaining raw findings |
+| Revisit a view | shared settings document and preview camera | named view-only inspection presets are persisted through `lunco-settings` |
 
-All five primary additions are Rhai-only. They fail loudly, carry the
+The authored policy additions are Rhai-only. They fail loudly, carry the
 explicit document/edit-target/generation tuple, and return the existing command
 names an agent can call next.
 
@@ -311,16 +317,16 @@ path for Twin-local recipes; do not add a vehicle plugin or a Rust
 implementation of a Twin recipe. A future same-session loading failure should
 be tracked separately from this authoring slice.
 
-### P1 — Disposable candidate preview and diff — partially implemented
+### P1 — Disposable candidate preview and diff — delivered
 
 `DocumentRegistry::fork`, isolated preview leases, and the non-mutating
 `assembly_ui` explode presentation already provide the candidate lifecycle.
-What is still missing is a concise before/after change view that lists affected
-paths and the resulting material, collision, joint, and lint consequences.
-
-Show changed paths and before/after values together with material, collision,
-joint, and lint consequences. Do not create a parallel scene graph or a
-temporary hand-written USDA writer.
+`authoring_inspection::candidate_diff` now supplies the concise before/after
+view over the proposal's exact affected paths. It includes changed values,
+topology/collision/material/port consequences, and the current document-scoped
+lint report. Missing paths remain visible as created/deleted evidence instead
+of being silently discarded. No parallel scene graph or temporary USDA writer
+is involved.
 
 ### P2 — Release and motion evidence — regression, not a current feature blocker
 
@@ -334,17 +340,29 @@ The same regression is reusable for any mounted payload, deployable, door, arm,
 or wheel assembly. If a future model exposes a real generic runtime gap, add
 the smallest owner-side mechanism then; it is not a reason for a vehicle API.
 
-### P2 — Stable camera and inspection presets — partially implemented
+### P2 — Stable camera and inspection presets — delivered
 
 `Frame`, `Reset`, projected bounds, and explicit preview/session camera
-ownership are implemented. The remaining feature is discoverable, persisted
-view-only presets (assembly, selected part, orthographic views, active-target
-follow) plus a visible active-camera state. These are useful for vehicle
-visual review but do not block the first numeric landing proof.
+ownership are implemented. `FrameUsdPreviewSelection` now frames an exact
+composed subtree, and the preview toolbar exposes named persisted view-only
+presets with an active-preset indicator. Presets are stored in the shared
+settings document and never author USD camera opinions.
 
-### P2 — Structured diagnostic grouping — open
+### P1 — Diagnostic navigation and structured inspection — delivered
 
-Group diagnostics by owner and severity, for example:
+`authoring_inspection::navigate_diagnostic` routes a finding's exact subject
+through the canonical selection owner (which reveals the prim tree) and then
+frames the same path in the explicit preview lease. `inspection_mode` returns
+one read-only record for visual geometry, collision bounds, joints, frames,
+materials, connections, schemas, and source references, and enables the
+reusable physics diagnostic layers through one generic command. The policy and
+grouping stay in Rhai; Rust only exposes the typed presentation seams.
+
+`group_diagnostics` groups diagnostics by owner and severity while retaining
+the raw findings, so the actionable path and next action remain available.
+The existing raw report remains the source of truth.
+
+The grouping shape is:
 
 ```text
 Composition
@@ -410,21 +428,18 @@ these owners in a vehicle-specific tool or in Rust.
 
 ## Recommended next order
 
-The requested generic authoring slice is complete. The next useful work is
-human UX built on its records, in this order:
+The generic authoring evidence surfaces are complete. The next useful work is
+to consume these records in a human-facing diagnostics panel, while keeping
+the existing selection, preview, lint, and settings owners authoritative:
 
-1. Add a path-based candidate diff over the existing forked preview. Show
-   before/after values and topology, mass, frames, joints, ports, and lint
-   consequences without adding a second scene graph.
-2. Add diagnostic-to-selection/reveal/frame actions in the focused preview so
-   readiness and lint findings are directly actionable.
-3. Add one discoverable inspection mode combining render/collision geometry,
-   joint frames, mounts, materials, source provenance, and the selected
-   physical owner.
-4. Add persisted view-only inspection presets after the common evidence
-   records are stable.
+1. Render `candidate_diff` and `group_diagnostics` in the authoring review
+   surface with one-click navigation.
+2. Render `inspection_mode` as a compact evidence panel beside the preview;
+   the Rhai record remains the machine-facing contract.
+3. Add only missing generic presentation capabilities discovered by that
+   consumer; Twin-specific policy remains in Rhai.
 
-These should consume `model_context`, `readiness_report`, and the existing
+These consume `model_context`, `readiness_report`, and the existing
 preview/selection owners. Vehicle-specific routes, dimensions, thresholds, and
 component recipes stay in the Twin's Rhai package.
 

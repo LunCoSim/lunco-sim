@@ -85,6 +85,15 @@ they never author USD camera or transform opinions. Pan uses the active
 projection and measured render-target viewport to map logical pointer deltas to
 the camera plane.
 
+`FrameUsdPreviewSelection` adds path-scoped framing without weakening preview
+identity: the exact `UsdPreviewId`, view id, and absolute composed path are
+validated before bounds are read. The toolbar also exposes named view-only
+inspection presets through `SaveUsdInspectionPreset`,
+`ApplyUsdInspectionPreset`, and `DeleteUsdInspectionPreset`. Presets are stored
+in the shared `lunco-settings` document and are independent of authored USD
+cameras; `InspectUsdInspectionPresets` and `InspectUsdViewport` expose their
+state to Rhai and remote clients.
+
 The same view can switch between `Visual` and `Text` with
 `SetUsdPreviewViewMode`. Visual mode renders the existing projected stage;
 Text mode shows a read-only, asynchronous snapshot of either the authored

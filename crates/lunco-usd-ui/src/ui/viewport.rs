@@ -74,6 +74,7 @@ use lunco_render::{
     scene_camera_look_with_profile, GraphicsCameraDefaults, LightGraphicsDefaults,
     RenderQualityProfile, RenderingQualitySettings,
 };
+use lunco_settings::{AppSettingsExt, SettingsSection};
 use lunco_usd_bevy::PendingUsdMesh;
 use lunco_usd_bevy_core::{is_descendant_or_self, UsdStageAsset};
 use lunco_usd_bevy_scene::{
@@ -89,6 +90,7 @@ use lunco_workbench_core::{
 };
 use lunco_workspace::{document_belongs_to_twin_root, TwinClosed, WorkspaceResource};
 use openusd::sdf::Path as SdfPath;
+use serde::{Deserialize, Serialize};
 
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_usd_core::document::{LayerId, UsdDocument};
@@ -140,6 +142,7 @@ impl ApiQueryProvider for InspectUsdViewportProvider {
                             "target": view.orbit().target.to_array(),
                             "distance": view.orbit().distance,
                             "orthographic_scale": view.orthographic_scale(),
+                            "active_preset": view.active_preset.as_deref(),
                         })
                     })
                     .collect();
@@ -256,6 +259,13 @@ pub struct UsdViewportPlugin;
 impl Plugin for UsdViewportPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<UsdViewportState>();
+        app.register_settings_section::<UsdInspectionSettings>();
+        app.init_resource::<lunco_api::queries::ApiQueryRegistry>();
+        let mut query_registry = app
+            .world_mut()
+            .resource_mut::<lunco_api::queries::ApiQueryRegistry>();
+        query_registry.register(InspectUsdViewportProvider);
+        query_registry.register(InspectUsdInspectionPresetsProvider);
         app.init_resource::<PendingUsdPreviewTextReads>();
         app.init_resource::<UsdPreviewRenderBudget>();
         app.init_resource::<UsdPreviewFrameVisibility>();
@@ -943,6 +953,11 @@ pub struct UsdPreviewView {
     /// whole panel rect, gives input consumers one authoritative mapping for
     /// preview picking and gizmo handles.
     interactive_rect: Option<PanelRect>,
+    /// Exact composed path awaiting a bounds frame. The path is resolved
+    /// against this view's preview lease, never against the live scene.
+    frame_target: Option<String>,
+    /// Name of the persisted presentation preset currently applied.
+    active_preset: Option<String>,
 }
 
 impl UsdPreviewView {
@@ -992,6 +1007,10 @@ impl UsdPreviewView {
 
     pub fn interactive_rect(&self) -> Option<PanelRect> {
         self.interactive_rect
+    }
+
+    pub fn active_preset(&self) -> Option<&str> {
+        self.active_preset.as_deref()
     }
 }
 
@@ -1742,6 +1761,8 @@ fn create_preview_view(
         mode: UsdPreviewViewMode::default(),
         text_layer: UsdPreviewTextLayer::default(),
         interactive_rect: None,
+        frame_target: None,
+        active_preset: None,
     })
 }
 
@@ -1754,6 +1775,7 @@ fn frame_preview_views(
     q_children: Query<&Children>,
     q_added_bounds: Query<Entity, Or<(Added<Aabb>, Added<Mesh3d>)>>,
     q_bounds: Query<(&GlobalTransform, &Aabb)>,
+    q_paths: Query<(Entity, &UsdPrimPath)>,
     mut q_cameras: Query<(&mut Transform, &mut Projection)>,
 ) {
     let scan_all = state.is_changed();
@@ -1765,13 +1787,18 @@ fn frame_preview_views(
         .views()
         .filter(|view| view.auto_frame)
         .filter_map(|view| {
-            state
-                .session(view.preview())
-                .map(|session| (view.id, view.camera, session.scene_root()))
+            state.session(view.preview()).map(|session| {
+                (
+                    view.id,
+                    view.camera,
+                    session.scene_root(),
+                    view.frame_target.clone(),
+                )
+            })
         })
         .collect();
 
-    for (view_id, camera, root) in pending {
+    for (view_id, camera, root, frame_target) in pending {
         if !scan_all
             && !q_added_bounds
                 .iter()
@@ -1779,7 +1806,27 @@ fn frame_preview_views(
         {
             continue;
         }
-        let Some((center, radius)) = preview_visual_bounds(view_id, &state, &q_children, &q_bounds)
+        let bounds_root = if let Some(path) = frame_target.as_deref() {
+            let Some(stage_id) = state
+                .view(view_id)
+                .and_then(|view| state.session(view.preview()))
+                .map(|session| session.stage_handle().id())
+            else {
+                continue;
+            };
+            let Some((entity, _)) = q_paths
+                .iter()
+                .find(|(_, prim)| prim.stage_handle.id() == stage_id && prim.path == path)
+            else {
+                // Keep the target pending until the exact prim is projected;
+                // framing the whole assembly here would hide a stale path.
+                continue;
+            };
+            entity
+        } else {
+            root
+        };
+        let Some((center, radius)) = preview_visual_bounds(bounds_root, &q_children, &q_bounds)
         else {
             continue;
         };
@@ -1811,6 +1858,7 @@ fn frame_preview_views(
         view.orbit.distance = distance;
         *transform = view.orbit.transform();
         view.auto_frame = false;
+        view.frame_target = None;
     }
 }
 
@@ -1831,15 +1879,10 @@ fn is_descendant_of(entity: Entity, ancestor: Entity, q_children: &Query<&Childr
 }
 
 fn preview_visual_bounds(
-    view_id: UsdPreviewViewId,
-    state: &UsdViewportState,
+    root: Entity,
     q_children: &Query<&Children>,
     q_bounds: &Query<(&GlobalTransform, &Aabb)>,
 ) -> Option<(Vec3, f32)> {
-    let root = state
-        .view(view_id)
-        .and_then(|view| state.session(view.preview()))
-        .map(UsdPreviewSession::scene_root)?;
     let mut stack = vec![root];
     let mut min = Vec3A::splat(f32::INFINITY);
     let mut max = Vec3A::splat(f32::NEG_INFINITY);
@@ -2149,6 +2192,16 @@ pub struct FrameUsdPreviewView {
     pub view: UsdPreviewViewId,
 }
 
+/// Fit one preview view to the visual bounds of an exact composed prim
+/// subtree. Selection/reveal remains owned by the Editor selection surface;
+/// this command only changes presentation camera state.
+#[Command]
+pub struct FrameUsdPreviewSelection {
+    pub preview: UsdPreviewId,
+    pub view: UsdPreviewViewId,
+    pub path: String,
+}
+
 /// Restore one preview view's default orbit pose and fit it to its stage.
 #[Command]
 pub struct ResetUsdPreviewView {
@@ -2170,6 +2223,109 @@ pub struct PanUsdPreviewView {
 pub struct ZoomUsdPreviewView {
     pub view: UsdPreviewViewId,
     pub factor: f32,
+}
+
+/// One named, view-only camera/inspection presentation preset. Presets are
+/// intentionally independent of authored USD cameras and never mutate a
+/// document.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UsdInspectionPreset {
+    pub name: String,
+    pub projection: UsdPreviewProjection,
+    pub target: [f32; 3],
+    pub yaw: f32,
+    pub pitch: f32,
+    pub distance: f32,
+    pub orthographic_scale: f32,
+}
+
+/// Persisted presentation presets for the USD editor. This is one slice of
+/// the shared settings document, not a feature-local file.
+#[derive(Resource, Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct UsdInspectionSettings {
+    pub presets: Vec<UsdInspectionPreset>,
+}
+
+impl SettingsSection for UsdInspectionSettings {
+    const KEY: &'static str = "usd_inspection";
+
+    fn validate_section(&self) -> Result<(), String> {
+        if self.presets.len() > 32 {
+            return Err("at most 32 USD inspection presets are supported".to_string());
+        }
+        for preset in &self.presets {
+            if preset.name.trim().is_empty() || preset.name.len() > 96 {
+                return Err("USD inspection preset names must be 1..=96 characters".to_string());
+            }
+            let values = [
+                preset.target[0],
+                preset.target[1],
+                preset.target[2],
+                preset.yaw,
+                preset.pitch,
+                preset.distance,
+                preset.orthographic_scale,
+            ];
+            if !values.iter().all(|value| value.is_finite())
+                || preset.distance <= 0.0
+                || preset.orthographic_scale <= 0.0
+            {
+                return Err(format!(
+                    "USD inspection preset '{}' is not finite",
+                    preset.name
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Save the current presentation pose under one explicit settings name.
+#[Command]
+pub struct SaveUsdInspectionPreset {
+    pub view: UsdPreviewViewId,
+    pub name: String,
+}
+
+/// Apply one persisted presentation preset to an explicit preview view.
+#[Command]
+pub struct ApplyUsdInspectionPreset {
+    pub view: UsdPreviewViewId,
+    pub name: String,
+}
+
+/// Delete one persisted presentation preset.
+#[Command]
+pub struct DeleteUsdInspectionPreset {
+    pub name: String,
+}
+
+/// Read the persisted USD inspection preset names and current view state.
+pub struct InspectUsdInspectionPresetsProvider;
+
+impl ApiQueryProvider for InspectUsdInspectionPresetsProvider {
+    fn name(&self) -> &'static str {
+        "InspectUsdInspectionPresets"
+    }
+
+    fn execute(&self, world: &World, _params: &serde_json::Value) -> ApiResponse {
+        let presets = world
+            .get_resource::<UsdInspectionSettings>()
+            .map(|settings| {
+                settings
+                    .presets
+                    .iter()
+                    .map(|preset| {
+                        serde_json::json!({
+                            "name": preset.name,
+                            "projection": preset.projection.as_str(),
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        ApiResponse::ok(serde_json::json!({ "presets": presets }))
+    }
 }
 
 /// Apply a transient, session-scoped explode pose to an explicit USD preview.
@@ -2585,6 +2741,205 @@ fn on_frame_usd_preview_view(trigger: On<FrameUsdPreviewView>, mut commands: Com
                 "usd-preview-frame-failed",
                 format!("view {} is not open", view.0),
             );
+        }
+    });
+}
+
+#[on_command(FrameUsdPreviewSelection)]
+fn on_frame_usd_preview_selection(trigger: On<FrameUsdPreviewSelection>, mut commands: Commands) {
+    let command = trigger.event().clone();
+    commands.queue(move |world: &mut World| {
+        let valid = world
+            .resource::<UsdViewportState>()
+            .view(command.view)
+            .is_some_and(|view| view.preview() == command.preview);
+        if !valid {
+            report_preview_error(
+                world,
+                "usd-preview-frame-selection-failed",
+                format!(
+                    "view {} is not open for preview {}",
+                    command.view.0, command.preview.0
+                ),
+            );
+            return;
+        }
+        if command.path.is_empty() || !command.path.starts_with('/') {
+            report_preview_error(
+                world,
+                "usd-preview-frame-selection-failed",
+                "frame target must be an absolute USD prim path".to_string(),
+            );
+            return;
+        }
+        let mut viewport = world.resource_mut::<UsdViewportState>();
+        let view = viewport
+            .view_mut(command.view)
+            .expect("preview view was validated above");
+        view.frame_target = Some(command.path);
+        view.auto_frame = true;
+    });
+}
+
+fn preset_from_view(view: &UsdPreviewView, name: String) -> UsdInspectionPreset {
+    UsdInspectionPreset {
+        name,
+        projection: view.projection,
+        target: view.orbit.target.to_array(),
+        yaw: view.orbit.yaw,
+        pitch: view.orbit.pitch,
+        distance: view.orbit.distance,
+        orthographic_scale: view.orthographic_scale,
+    }
+}
+
+fn apply_preset_to_view(view: &mut UsdPreviewView, preset: &UsdInspectionPreset) {
+    view.projection = preset.projection;
+    view.orbit.target = Vec3::from_array(preset.target);
+    view.orbit.yaw = preset.yaw;
+    view.orbit.pitch = preset
+        .pitch
+        .clamp(-view.orbit.pitch_clamp, view.orbit.pitch_clamp);
+    view.orbit.distance = preset
+        .distance
+        .clamp(view.orbit.min_distance, view.orbit.max_distance);
+    view.orthographic_scale = preset.orthographic_scale.clamp(
+        view.orbit.min_orthographic_scale,
+        view.orbit.max_orthographic_scale,
+    );
+    view.active_preset = Some(preset.name.clone());
+}
+
+#[on_command(SaveUsdInspectionPreset)]
+fn on_save_usd_inspection_preset(trigger: On<SaveUsdInspectionPreset>, mut commands: Commands) {
+    let command = trigger.event().clone();
+    commands.queue(move |world: &mut World| {
+        let name = command.name.trim();
+        if name.is_empty() || name.len() > 96 {
+            report_preview_error(
+                world,
+                "usd-inspection-preset-save-failed",
+                "preset name must be 1..=96 characters".to_string(),
+            );
+            return;
+        }
+        let Some(preset) = world
+            .resource::<UsdViewportState>()
+            .view(command.view)
+            .map(|view| preset_from_view(view, name.to_string()))
+        else {
+            report_preview_error(
+                world,
+                "usd-inspection-preset-save-failed",
+                format!("view {} is not open", command.view.0),
+            );
+            return;
+        };
+        let mut settings = world.resource_mut::<UsdInspectionSettings>();
+        if let Some(existing) = settings
+            .presets
+            .iter_mut()
+            .find(|existing| existing.name == preset.name)
+        {
+            *existing = preset.clone();
+        } else if settings.presets.len() < 32 {
+            settings.presets.push(preset.clone());
+        } else {
+            report_preview_error(
+                world,
+                "usd-inspection-preset-save-failed",
+                "the persisted USD inspection preset limit (32) is reached".to_string(),
+            );
+            return;
+        }
+        if let Some(view) = world
+            .resource_mut::<UsdViewportState>()
+            .view_mut(command.view)
+        {
+            view.active_preset = Some(preset.name);
+        }
+    });
+}
+
+#[on_command(ApplyUsdInspectionPreset)]
+fn on_apply_usd_inspection_preset(trigger: On<ApplyUsdInspectionPreset>, mut commands: Commands) {
+    let command = trigger.event().clone();
+    commands.queue(move |world: &mut World| {
+        let Some(preset) = world
+            .resource::<UsdInspectionSettings>()
+            .presets
+            .iter()
+            .find(|preset| preset.name == command.name)
+            .cloned()
+        else {
+            report_preview_error(
+                world,
+                "usd-inspection-preset-apply-failed",
+                format!("preset '{}' is not persisted", command.name),
+            );
+            return;
+        };
+        let Some(camera) = world
+            .resource::<UsdViewportState>()
+            .view(command.view)
+            .map(UsdPreviewView::camera)
+        else {
+            report_preview_error(
+                world,
+                "usd-inspection-preset-apply-failed",
+                format!("view {} is not open", command.view.0),
+            );
+            return;
+        };
+        {
+            let mut viewport = world.resource_mut::<UsdViewportState>();
+            let view = viewport
+                .view_mut(command.view)
+                .expect("preview view was validated above");
+            apply_preset_to_view(view, &preset);
+        }
+        let orbit_transform = world
+            .resource::<UsdViewportState>()
+            .view(command.view)
+            .map(|view| view.orbit.transform());
+        if let Some(orbit_transform) = orbit_transform {
+            if let Some(mut transform) = world.get_mut::<Transform>(camera) {
+                *transform = orbit_transform;
+            }
+        }
+        if let Some(view) = world.resource::<UsdViewportState>().view(command.view) {
+            let projection = view.projection;
+            let scale = view.orthographic_scale;
+            if let Some(mut camera_projection) = world.get_mut::<Projection>(camera) {
+                *camera_projection = preview_projection(projection, scale);
+            }
+        }
+    });
+}
+
+#[on_command(DeleteUsdInspectionPreset)]
+fn on_delete_usd_inspection_preset(trigger: On<DeleteUsdInspectionPreset>, mut commands: Commands) {
+    let name = trigger.event().name.clone();
+    commands.queue(move |world: &mut World| {
+        let before = {
+            let mut settings = world.resource_mut::<UsdInspectionSettings>();
+            let before = settings.presets.len();
+            settings.presets.retain(|preset| preset.name != name);
+            before
+        };
+        let removed = before != world.resource::<UsdInspectionSettings>().presets.len();
+        if !removed {
+            report_preview_error(
+                world,
+                "usd-inspection-preset-delete-failed",
+                format!("preset '{}' is not persisted", name),
+            );
+            return;
+        }
+        for view in world.resource_mut::<UsdViewportState>().views.values_mut() {
+            if view.active_preset.as_deref() == Some(name.as_str()) {
+                view.active_preset = None;
+            }
         }
     });
 }
@@ -3309,9 +3664,13 @@ register_commands!(
     on_set_usd_preview_text_layer,
     on_set_usd_preview_projection,
     on_frame_usd_preview_view,
+    on_frame_usd_preview_selection,
     on_reset_usd_preview_view,
     on_pan_usd_preview_view,
     on_zoom_usd_preview_view,
+    on_save_usd_inspection_preset,
+    on_apply_usd_inspection_preset,
+    on_delete_usd_inspection_preset,
     on_explode_usd_preview,
 );
 
@@ -3713,7 +4072,7 @@ fn render_preview_view(
     view_id: UsdPreviewViewId,
     singleton: bool,
 ) {
-    let (tex_id, focused_doc, next_view, projection, mode, text_layer) = ctx
+    let (tex_id, focused_doc, next_view, projection, mode, text_layer, active_preset) = ctx
         .resource::<UsdViewportState>()
         .and_then(|state| {
             let view = state.view(view_id)?;
@@ -3729,6 +4088,7 @@ fn render_preview_view(
                 view.projection(),
                 view.mode(),
                 view.text_layer(),
+                view.active_preset().map(str::to_owned),
             ))
         })
         .unwrap_or_else(|| {
@@ -3739,6 +4099,7 @@ fn render_preview_view(
                 UsdPreviewProjection::default(),
                 UsdPreviewViewMode::default(),
                 UsdPreviewTextLayer::default(),
+                None,
             )
         });
     let name = focused_doc
@@ -3801,6 +4162,61 @@ fn render_preview_view(
             }
             if ui.button("Reset").clicked() {
                 ctx.trigger(ResetUsdPreviewView { view: view_id });
+            }
+
+            let preset_names = ctx
+                .resource::<UsdInspectionSettings>()
+                .map(|settings| {
+                    settings
+                        .presets
+                        .iter()
+                        .map(|preset| preset.name.clone())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let preset_id = egui::Id::new(("usd-inspection-preset-name", view_id.0));
+            let mut preset_name = ui
+                .data_mut(|data| data.get_temp::<String>(preset_id))
+                .unwrap_or_else(|| {
+                    active_preset
+                        .clone()
+                        .unwrap_or_else(|| "inspection".to_string())
+                });
+            ui.add(
+                egui::TextEdit::singleline(&mut preset_name)
+                    .desired_width(110.0)
+                    .hint_text("preset name"),
+            );
+            ui.data_mut(|data| data.insert_temp(preset_id, preset_name.clone()));
+            if ui.button("Save view").clicked() {
+                ctx.trigger(SaveUsdInspectionPreset {
+                    view: view_id,
+                    name: preset_name.clone(),
+                });
+            }
+            if !preset_names.is_empty() {
+                let selected = active_preset
+                    .as_deref()
+                    .filter(|name| preset_names.iter().any(|candidate| candidate == name))
+                    .unwrap_or("Presets");
+                egui::ComboBox::from_id_salt(("usd-inspection-presets", view_id.0))
+                    .selected_text(selected)
+                    .show_ui(ui, |ui| {
+                        for name in &preset_names {
+                            if ui
+                                .selectable_label(active_preset.as_deref() == Some(name), name)
+                                .clicked()
+                            {
+                                ctx.trigger(ApplyUsdInspectionPreset {
+                                    view: view_id,
+                                    name: name.clone(),
+                                });
+                            }
+                        }
+                    });
+                if ui.button("Delete").clicked() {
+                    ctx.trigger(DeleteUsdInspectionPreset { name: preset_name });
+                }
             }
         }
         if let Some((preview, view)) = next_view {

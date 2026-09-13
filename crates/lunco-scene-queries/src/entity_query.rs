@@ -134,4 +134,3 @@ pub fn register(app: &mut App) {
         .resource_mut::<ApiQueryRegistry>()
         .register(QueryEntityProvider);
 }
-

@@ -52,12 +52,14 @@ pub use scene_files::{
     SceneFilesSection,
 };
 pub use viewport::{
-    CloseUsdPreview, CloseUsdPreviewView, ExplodeUsdPreview, FocusUsdPreview, FocusUsdPreviewView,
-    OpenUsdPreview, OpenUsdPreviewView, SetUsdPreviewTextLayer, SetUsdPreviewViewMode,
-    UsdPreviewExplodeAction, UsdPreviewExplodeAxis, UsdPreviewId, UsdPreviewRenderBudget,
-    UsdPreviewSession, UsdPreviewTextLayer, UsdPreviewView, UsdPreviewViewId, UsdPreviewViewMode,
-    UsdPreviewViewPanel, UsdViewportClick, UsdViewportPanel, UsdViewportPlugin, UsdViewportState,
-    EDITOR_PREVIEW_ID, USD_PREVIEW_VIEW_PANEL_ID, USD_VIEWPORT_PANEL_ID,
+    ApplyUsdInspectionPreset, CloseUsdPreview, CloseUsdPreviewView, DeleteUsdInspectionPreset,
+    ExplodeUsdPreview, FocusUsdPreview, FocusUsdPreviewView, FrameUsdPreviewSelection,
+    OpenUsdPreview, OpenUsdPreviewView, SaveUsdInspectionPreset, SetUsdPreviewTextLayer,
+    SetUsdPreviewViewMode, UsdPreviewExplodeAction, UsdPreviewExplodeAxis, UsdPreviewId,
+    UsdPreviewRenderBudget, UsdPreviewSession, UsdPreviewTextLayer, UsdPreviewView,
+    UsdPreviewViewId, UsdPreviewViewMode, UsdPreviewViewPanel, UsdViewportClick, UsdViewportPanel,
+    UsdViewportPlugin, UsdViewportState, EDITOR_PREVIEW_ID, USD_PREVIEW_VIEW_PANEL_ID,
+    USD_VIEWPORT_PANEL_ID,
 };
 
 /// Plugin that installs the USD Twin-browser section and the lifecycle

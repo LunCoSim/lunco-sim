@@ -107,6 +107,12 @@ fn preview_view_frame(view) {
     cmd("FrameUsdPreviewView", #{ view: view })
 }
 
+/// Fit one view to the visual bounds of an exact composed prim subtree. The
+/// preview lease scopes the path; the live scene is never selected by name.
+fn preview_view_frame_path(preview, view, path) {
+    cmd("FrameUsdPreviewSelection", #{ preview: preview, view: view, path: path })
+}
+
 /// Restore one preview view's default orbit pose and refit it.
 fn preview_view_reset(view) {
     cmd("ResetUsdPreviewView", #{ view: view })
@@ -120,6 +126,23 @@ fn preview_view_pan(view, delta) {
 /// Zoom one preview view by a positive multiplicative factor.
 fn preview_view_zoom(view, factor) {
     cmd("ZoomUsdPreviewView", #{ view: view, factor: factor })
+}
+
+/// Persist the current view-only camera pose in the shared settings document.
+fn save_inspection_preset(view, name) {
+    cmd("SaveUsdInspectionPreset", #{ view: view, name: name })
+}
+
+fn apply_inspection_preset(view, name) {
+    cmd("ApplyUsdInspectionPreset", #{ view: view, name: name })
+}
+
+fn delete_inspection_preset(name) {
+    cmd("DeleteUsdInspectionPreset", #{ name: name })
+}
+
+fn inspection_presets() {
+    query("InspectUsdInspectionPresets", #{})
 }
 
 /// Close one presentation view. Closing the final view closes its parent

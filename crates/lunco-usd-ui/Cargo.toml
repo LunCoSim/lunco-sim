@@ -28,6 +28,7 @@ lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-render = { path = "../lunco-render" }
 lunco-status-core = { path = "../lunco-status-core" }
 lunco-storage = { path = "../lunco-storage" }
+lunco-settings = { path = "../lunco-settings" }
 lunco-theme = { path = "../lunco-theme" }
 lunco-usd = { path = "../lunco-usd", default-features = false }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }

@@ -1833,7 +1833,8 @@ pub fn clear_kinematic_pulse_velocity(
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────
+// Property and shader authoring is owned by lunco-scene-authoring. Keeping
+// that contract in one package prevents duplicate command types and readers.
 /// Point the free-flight avatar camera at an entity (by API id), from a fixed
 /// side-on-and-above angle at `distance` metres. Lets API clients (MCP tools,
 /// automated screenshots) frame a subject — e.g. a wheel — without hand-driving

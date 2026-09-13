@@ -3,10 +3,11 @@
 //!
 //! ## Ownership
 //!
-//! An explicit `doc_id` resolves through the existing document-to-stage mapping
-//! and requires its synchronized generation to match the open document. Without
-//! `doc_id`, exactly one mounted live stage is required. Preview focus, duplicate
-//! prim paths, and detached cached stages never choose the query target.
+//! An explicit `doc_id` uses the synchronized document-to-stage mapping when a
+//! Twin owns the document, or the document's composed data for an isolated
+//! Editor fork. Without `doc_id`, exactly one mounted live stage is required.
+//! Preview focus, duplicate prim paths, and detached cached stages never choose
+//! the query target.
 //!
 //! ## Why a query provider and not a rhai binding
 //!
@@ -75,6 +76,7 @@ use lunco_usd_bevy_scene::collision::{collision_aabb, prim_geometry_aabb, Object
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_bevy_scene::UsdSceneRoot;
 use lunco_usd_bevy_twin::{scene_document_for, DocBackedTwinScenes};
+use lunco_usd_core::author::open_doc_stage;
 use lunco_usd_core::document::UsdDocument;
 use openusd::sdf::{Path as SdfPath, Value};
 
@@ -247,6 +249,7 @@ fn topology_for_stage(view: &StageView<'_>, selected: &SdfPath) -> serde_json::V
     let root = body_owner.clone().unwrap_or_else(|| selected.clone());
     let paths = view.prim_paths();
     let mut parts = Vec::new();
+    let mut frames = Vec::new();
 
     for candidate in paths.iter().filter(|candidate| {
         is_descendant_or_self(candidate, root.as_str()) && view.is_active(candidate)
@@ -300,6 +303,14 @@ fn topology_for_stage(view: &StageView<'_>, selected: &SdfPath) -> serde_json::V
                 serde_json::Value::Null
             }
         };
+
+        frames.push(serde_json::json!({
+            "path": candidate.as_str(),
+            "local_frame": "canonical_stage_parent",
+            "local": local.clone(),
+            "world_frame": "canonical_stage",
+            "world": world.clone(),
+        }));
         let render_material = view.bound_material(candidate, MaterialPurpose::Render);
         let physics_material = view.bound_material(candidate, MaterialPurpose::Physics);
         let shader = resolve_bound_shader(view, candidate).map(|path| path.as_str().to_string());
@@ -372,6 +383,7 @@ fn topology_for_stage(view: &StageView<'_>, selected: &SdfPath) -> serde_json::V
             "body_owner": body_owner.map(|path| path.as_str().to_string()),
         },
         "parts": parts,
+        "frames": frames,
         "joints": joints,
         "diagnostics": diagnostics,
     })
@@ -424,6 +436,139 @@ fn runtime_binding_json(world: &World, entity: Option<Entity>) -> serde_json::Va
             .is_some(),
         "physics_joint_link": joint_link,
     })
+}
+
+type PrimRead = (
+    Option<Vec3>,
+    String,
+    serde_json::Map<String, serde_json::Value>,
+    serde_json::Map<String, serde_json::Value>,
+    serde_json::Map<String, serde_json::Value>,
+    Vec<String>,
+    Vec<String>,
+    bool,
+    Option<serde_json::Value>,
+    Option<serde_json::Value>,
+);
+
+fn read_prim_from_view(
+    view: &StageView<'_>,
+    prim: &SdfPath,
+    path: &str,
+    requested: &Option<Vec<String>>,
+    requested_relationships: &Option<Vec<String>>,
+    include_relationships: bool,
+    include_connections: bool,
+    include_schemas: bool,
+    include_children: bool,
+    include_collision_bounds: bool,
+    include_topology: bool,
+    doc: Option<DocumentId>,
+) -> Result<Option<PrimRead>, String> {
+    if !view.has_prim(prim) {
+        return Ok(None);
+    }
+
+    let authored_position = if doc.is_some() {
+        Some(
+            lunco_usd_avian::world_transform(view, prim)
+                .map_err(|error| format!("QueryUsdPrim: invalid authored transform: {error}"))?
+                .translation,
+        )
+    } else {
+        None
+    };
+
+    let collision_bounds = if include_collision_bounds {
+        match collision_aabb(view, path) {
+            Ok(Some(aabb)) => Some(serde_json::json!({
+                "min": [aabb.min.x, aabb.min.y, aabb.min.z],
+                "max": [aabb.max.x, aabb.max.y, aabb.max.z],
+                "center": [
+                    (aabb.min.x + aabb.max.x) * 0.5,
+                    (aabb.min.y + aabb.max.y) * 0.5,
+                    (aabb.min.z + aabb.max.z) * 0.5,
+                ],
+                "half_extents": [
+                    (aabb.max.x - aabb.min.x) * 0.5,
+                    (aabb.max.y - aabb.min.y) * 0.5,
+                    (aabb.max.z - aabb.min.z) * 0.5,
+                ],
+                "frame": "canonical_stage",
+                "rest_depth": aabb.rest_depth(),
+            })),
+            Ok(None) => Some(serde_json::Value::Null),
+            Err(error) => {
+                return Err(format!(
+                    "QueryUsdPrim: invalid collision bounds at `{path}`: {error}"
+                ));
+            }
+        }
+    } else {
+        None
+    };
+
+    let type_name = view.type_name(prim).unwrap_or_default();
+    let names = requested.clone().unwrap_or_else(|| view.attr_names(prim));
+    let mut attrs = serde_json::Map::new();
+    for name in names {
+        attrs.insert(name.clone(), attr_json(view, prim, &name));
+    }
+
+    let mut relationships = serde_json::Map::new();
+    let relationship_names = if include_relationships {
+        view.relationship_names(prim)
+    } else {
+        requested_relationships.clone().unwrap_or_default()
+    };
+    if requested_relationships.is_some() || include_relationships {
+        for name in relationship_names {
+            let targets = view
+                .rel_targets(prim, &name)
+                .into_iter()
+                .map(|path| path.as_str().to_string())
+                .collect::<Vec<_>>();
+            relationships.insert(name, serde_json::json!(targets));
+        }
+    }
+
+    let mut connections = serde_json::Map::new();
+    if include_connections {
+        for name in view.attr_names(prim) {
+            let sources = view.connections(prim, &name);
+            if !sources.is_empty() {
+                connections.insert(name, serde_json::json!(sources));
+            }
+        }
+    }
+
+    let schemas = if include_schemas {
+        view.api_schemas(prim)
+    } else {
+        Vec::new()
+    };
+    let children = if include_children {
+        view.children(prim)
+            .into_iter()
+            .map(|path| path.as_str().to_string())
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let topology = include_topology.then(|| topology_for_stage(view, prim));
+
+    Ok(Some((
+        authored_position,
+        type_name,
+        attrs,
+        relationships,
+        connections,
+        schemas,
+        children,
+        view.is_active(prim),
+        collision_bounds,
+        topology,
+    )))
 }
 
 /// `QueryUsdPrim { doc_id?, path, attrs?, rels?, children?, collision_bounds?, topology? }`
@@ -515,15 +660,16 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
                 );
             };
             let generation = host.document().generation();
-            if world
+            if let Some(synced_generation) = world
                 .get_resource::<DocBackedTwinScenes>()
                 .and_then(|scenes| scenes.synced_generation(doc))
-                != Some(generation)
             {
-                return ApiResponse::error(
-                    ApiErrorCode::InternalError,
-                    format!("QueryUsdPrim: document {doc} projection is not current"),
-                );
+                if synced_generation != generation {
+                    return ApiResponse::error(
+                        ApiErrorCode::InternalError,
+                        format!("QueryUsdPrim: document {doc} projection is not current"),
+                    );
+                }
             }
             Some(generation)
         } else {
@@ -580,142 +726,87 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
             })
             .map(|(e, p)| (e, p.stage_handle.id()));
 
-        // Read everything under ONE short borrow: `CanonicalStages` is `!Send`
-        // and aliases the world, so it must be dropped before we touch entities.
-        // (Same shape as `lunco_usd::live_consume`.)
-        let mut authored_position = None;
-        let read: Option<(
-            String,
-            serde_json::Map<String, serde_json::Value>,
-            serde_json::Map<String, serde_json::Value>,
-            serde_json::Map<String, serde_json::Value>,
-            Vec<String>,
-            Vec<String>,
-            bool,
-            Option<serde_json::Value>,
-            Option<serde_json::Value>,
-        )> = {
-            let Some(stages) = world.get_non_send::<CanonicalStages>() else {
-                return ApiResponse::error(
-                    ApiErrorCode::InternalError,
-                    "QueryUsdPrim: no USD stage loaded".to_string(),
-                );
-            };
+        // Read everything under one short canonical-stage borrow. An Editor
+        // fork is not a Twin and therefore has no DocBackedTwinScenes entry;
+        // its document-owned composed data is still authoritative for local
+        // authoring queries, so use a transient USD stage when no canonical
+        // mapping exists. External arcs remain the responsibility of the
+        // mounted canonical stage and are reported as unavailable until it is
+        // ready rather than guessed from authored text.
+        let (authored_position, read): (Option<Vec3>, Option<PrimRead>) = {
+            let canonical = world
+                .get_non_send::<CanonicalStages>()
+                .and_then(|stages| match doc {
+                    Some(doc) => lunco_usd::assembly_api::canonical_stage_for_document(world, doc),
+                    None => live_stage.and_then(|id| stages.get(id)),
+                });
 
-            let found = match doc {
-                Some(doc) => lunco_usd::assembly_api::canonical_stage_for_document(world, doc),
-                None => live_stage.and_then(|id| stages.get(id)),
-            }
-            .filter(|stage| stage.view().has_prim(&prim));
-
-            if let Some(stage) = found.filter(|_| doc.is_some()) {
-                authored_position = match lunco_usd_avian::world_transform(&stage.view(), &prim) {
-                    Ok(transform) => Some(transform.translation),
+            if let Some(stage) = canonical {
+                match read_prim_from_view(
+                    &stage.view(),
+                    &prim,
+                    path,
+                    &requested,
+                    &requested_relationships,
+                    include_relationships,
+                    include_connections,
+                    include_schemas,
+                    include_children,
+                    include_collision_bounds,
+                    include_topology,
+                    doc,
+                ) {
+                    Ok(read) => (read.as_ref().and_then(|read| read.0), read),
+                    Err(error) => return ApiResponse::error(ApiErrorCode::InternalError, error),
+                }
+            } else if let Some(doc) = doc {
+                let Some(document) = world
+                    .get_resource::<DocumentRegistry<UsdDocument>>()
+                    .and_then(|registry| registry.host(doc))
+                    .map(|host| host.document())
+                else {
+                    return ApiResponse::error(
+                        ApiErrorCode::EntityNotFound,
+                        format!("QueryUsdPrim: document {doc} is not open"),
+                    );
+                };
+                let stage = match open_doc_stage(document.composed_arc().as_ref()) {
+                    Ok(stage) => stage,
                     Err(error) => {
                         return ApiResponse::error(
                             ApiErrorCode::InternalError,
-                            format!("QueryUsdPrim: invalid authored transform: {error}"),
+                            format!("QueryUsdPrim: document stage could not be opened: {error}"),
                         );
                     }
                 };
-            }
-
-            let collision_bounds = if include_collision_bounds {
-                match found {
-                    Some(cs) => match collision_aabb(&cs.view(), path) {
-                        Ok(Some(aabb)) => Some(serde_json::json!({
-                            "min": [aabb.min.x, aabb.min.y, aabb.min.z],
-                            "max": [aabb.max.x, aabb.max.y, aabb.max.z],
-                            "center": [
-                                (aabb.min.x + aabb.max.x) * 0.5,
-                                (aabb.min.y + aabb.max.y) * 0.5,
-                                (aabb.min.z + aabb.max.z) * 0.5,
-                            ],
-                            "half_extents": [
-                                (aabb.max.x - aabb.min.x) * 0.5,
-                                (aabb.max.y - aabb.min.y) * 0.5,
-                                (aabb.max.z - aabb.min.z) * 0.5,
-                            ],
-                            "frame": "canonical_stage",
-                            "rest_depth": aabb.rest_depth(),
-                        })),
-                        Ok(None) => Some(serde_json::Value::Null),
-                        Err(error) => {
-                            return ApiResponse::error(
-                                ApiErrorCode::InternalError,
-                                format!(
-                                    "QueryUsdPrim: invalid collision bounds at `{path}`: {error}"
-                                ),
-                            );
-                        }
-                    },
-                    None => Some(serde_json::Value::Null),
+                let view = StageView::new(&stage);
+                match read_prim_from_view(
+                    &view,
+                    &prim,
+                    path,
+                    &requested,
+                    &requested_relationships,
+                    include_relationships,
+                    include_connections,
+                    include_schemas,
+                    include_children,
+                    include_collision_bounds,
+                    include_topology,
+                    Some(doc),
+                ) {
+                    Ok(read) => (read.as_ref().and_then(|read| read.0), read),
+                    Err(error) => return ApiResponse::error(ApiErrorCode::InternalError, error),
                 }
             } else {
-                None
-            };
-
-            found.map(|cs| {
-                let view = cs.view();
-                let type_name = view.type_name(&prim).unwrap_or_default();
-                let names = requested.clone().unwrap_or_else(|| view.attr_names(&prim));
-                let mut map = serde_json::Map::new();
-                for n in names {
-                    map.insert(n.clone(), attr_json(&view, &prim, &n));
-                }
-                let mut relationships = serde_json::Map::new();
-                let relationship_names = if include_relationships {
-                    view.relationship_names(&prim)
-                } else {
-                    requested_relationships.clone().unwrap_or_default()
-                };
-                if requested_relationships.is_some() || include_relationships {
-                    for name in relationship_names {
-                        let targets = view
-                            .rel_targets(&prim, &name)
-                            .into_iter()
-                            .map(|path| path.as_str().to_string())
-                            .collect::<Vec<_>>();
-                        relationships.insert(name, serde_json::json!(targets));
-                    }
-                }
-                let mut connections = serde_json::Map::new();
-                if include_connections {
-                    for name in view.attr_names(&prim) {
-                        let sources = view.connections(&prim, &name);
-                        if !sources.is_empty() {
-                            connections.insert(name, serde_json::json!(sources));
-                        }
-                    }
-                }
-                let schemas = if include_schemas {
-                    view.api_schemas(&prim)
-                } else {
-                    Vec::new()
-                };
-                let children = if include_children {
-                    view.children(&prim)
-                        .into_iter()
-                        .map(|path| path.as_str().to_string())
-                        .collect()
-                } else {
-                    Vec::new()
-                };
-                (
-                    type_name,
-                    map,
-                    relationships,
-                    connections,
-                    schemas,
-                    children,
-                    view.is_active(&prim),
-                    collision_bounds.clone(),
-                    include_topology.then(|| topology_for_stage(&view, &prim)),
-                )
-            })
+                return ApiResponse::error(
+                    ApiErrorCode::InternalError,
+                    "QueryUsdPrim: no USD stage loaded",
+                );
+            }
         };
 
         let Some((
+            _,
             type_name,
             attrs,
             relationships,

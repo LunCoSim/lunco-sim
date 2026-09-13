@@ -57,6 +57,18 @@ impl DiagnosticVisualKind {
         }
     }
 
+    fn parse_layer(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "physics_arrows" => Some(Self::PhysicsArrows),
+            "joints" => Some(Self::Joints),
+            "wheel_forces" => Some(Self::WheelForces),
+            "physics_mass" => Some(Self::PhysicsMass),
+            "physics_forces" => Some(Self::PhysicsForces),
+            "physics_frames" => Some(Self::PhysicsFrames),
+            _ => None,
+        }
+    }
+
     fn is_builtin(self) -> bool {
         !matches!(self, Self::Camera | Self::Collider)
     }
@@ -289,6 +301,15 @@ pub struct ReleaseDiagnosticVisual {
     pub lease: u64,
 }
 
+/// Set a batch of reusable scene diagnostic layers. The layer names are
+/// generic presentation capabilities; authored Twin policy chooses when to
+/// request them through Rhai.
+#[Command]
+pub struct SetDiagnosticLayers {
+    pub enabled: bool,
+    pub layers: Vec<String>,
+}
+
 fn ack(id: u64, changed: bool, kind: DiagnosticVisualKind, target: u64) -> Ack {
     Ack::with_data(
         OpId::new(),
@@ -474,10 +495,38 @@ fn on_release_diagnostic_visual(
     Ok(Ack::new(OpId::new()))
 }
 
+#[on_command(SetDiagnosticLayers)]
+fn on_set_diagnostic_layers(
+    trigger: On<SetDiagnosticLayers>,
+    mut store: ResMut<DiagnosticVisualStore>,
+    mount: Res<SceneMountState>,
+) -> Result<Ack, String> {
+    let command = trigger.event();
+    let root = mount.active_root();
+    let mut kinds = Vec::with_capacity(command.layers.len());
+    for layer in &command.layers {
+        let kind = DiagnosticVisualKind::parse_layer(layer)
+            .ok_or_else(|| format!("unsupported diagnostic layer `{layer}`"))?;
+        kinds.push(kind);
+    }
+    for kind in kinds {
+        store.set_builtin(kind, command.enabled, root);
+    }
+    Ok(Ack::with_data(
+        OpId::new(),
+        json!({
+            "enabled": command.enabled,
+            "layers": command.layers,
+            "generation": store.generation(),
+        }),
+    ))
+}
+
 register_commands!(
     on_acquire_diagnostic_visual,
     on_update_diagnostic_visual,
     on_release_diagnostic_visual,
+    on_set_diagnostic_layers,
 );
 
 /// Clear all leases before scene entities are deferred-despawned.
