@@ -75,6 +75,112 @@ fn rover_contract(path, expected_raycast, expected_physical) {
         && rover_topology_ok(path)
 }
 
+// Composed USD migration contract. This is intentionally authored beside the
+// sandbox scene-test rather than in a Rust integration target: it checks the
+// same public QueryUsdPrim surface that users, tools, and other scripts see.
+// The generic reader itself is covered by in-memory tests in usd-bevy-core;
+// this function owns only the shipped rover's composition facts.
+fn composition_contract() {
+    let reference_paths = [
+        "/SandboxScene/Skid_Raycast_1",
+        "/SandboxScene/Skid_Raycast_1/Chassis",
+        "/SandboxScene/Skid_Raycast_1/Suspension_FL/Wheel_FL",
+        "/SandboxScene/Skid_Raycast_1/Suspension_RR/Wheel_RR",
+    ];
+    let references_ok = true;
+    for path in reference_paths {
+        references_ok = references_ok && query_ok(query("QueryUsdPrim", #{ path: path }));
+    }
+
+    let physical = query("QueryUsdPrim", #{
+        path: "/SandboxScene/Skid_Physical_1",
+        schemas: true,
+    });
+    let physical_schemas_ok = query_ok(physical)
+        && physical.api_schemas.contains("PhysicsArticulationRootAPI")
+        && physical.api_schemas.contains("PhysxVehicleContextAPI");
+
+    let physical_hinge = query("QueryUsdPrim", #{
+        path: "/SandboxScene/Skid_Physical_1/Wheel_FL_Hinge",
+        rels: ["physics:body1"],
+    });
+    let hinge_target_ok = query_ok(physical_hinge)
+        && physical_hinge.relationships["physics:body1"] ==
+            ["/SandboxScene/Skid_Physical_1/Suspension_FL/Wheel_FL"];
+
+    let raycast_root = query("QueryUsdPrim", #{
+        path: "/SandboxScene/Skid_Raycast_1",
+        children: true,
+        schemas: true,
+    });
+    let root_children_ok = query_ok(raycast_root)
+        && raycast_root.api_schemas.contains("PhysxVehicleContextAPI");
+    if root_children_ok {
+        for path in [
+            "/SandboxScene/Skid_Raycast_1/Chassis",
+            "/SandboxScene/Skid_Raycast_1/Suspension_FL",
+            "/SandboxScene/Skid_Raycast_1/Suspension_FR",
+            "/SandboxScene/Skid_Raycast_1/Suspension_RL",
+            "/SandboxScene/Skid_Raycast_1/Suspension_RR",
+        ] {
+            root_children_ok = root_children_ok && raycast_root.children.contains(path);
+        }
+    }
+
+    let wheel_params_ok = true;
+    for suffix in ["FL", "FR", "RL", "RR"] {
+        let path = "/SandboxScene/Skid_Raycast_1/Suspension_" + suffix + "/Wheel_" + suffix;
+        let wheel = query("QueryUsdPrim", #{
+            path: path,
+            attrs: ["radius", "physxVehicleSuspension:springStrength"],
+        });
+        wheel_params_ok = wheel_params_ok && query_ok(wheel)
+            && wheel.attrs["radius"] == 0.4
+            && wheel.attrs["physxVehicleSuspension:springStrength"] == 15000.0;
+    }
+
+    let variant_contract_ok = true;
+    for suffix in ["FL", "FR", "RL", "RR"] {
+        let physical_hinge = query("QueryUsdPrim", #{
+            path: "/SandboxScene/Skid_Physical_1/Wheel_" + suffix + "_Hinge",
+            rels: ["physics:body1"],
+        });
+        let expected_body = "/SandboxScene/Skid_Physical_1/Suspension_" + suffix
+            + "/Wheel_" + suffix;
+        let physical_mount = query("QueryUsdPrim", #{
+            path: "/SandboxScene/Skid_Physical_1/Suspension_" + suffix,
+            attrs: ["xformOp:translate"],
+        });
+        let raycast_mount = query("QueryUsdPrim", #{
+            path: "/SandboxScene/Skid_Raycast_1/Suspension_" + suffix,
+            attrs: ["xformOp:translate"],
+        });
+        variant_contract_ok = variant_contract_ok
+            && query_ok(physical_hinge)
+            && physical_hinge.relationships["physics:body1"] == [expected_body]
+            && query_ok(physical_mount)
+            && query_ok(raycast_mount)
+            && physical_mount.attrs["xformOp:translate"][1] == -0.65
+            && raycast_mount.attrs["xformOp:translate"][1] == -0.65;
+    }
+
+    let raycast_hinge = query("QueryUsdPrim", #{
+        path: "/SandboxScene/Skid_Raycast_1/Wheel_FL_Hinge",
+    });
+    let raycast_has_no_joints = !query_ok(raycast_hinge);
+
+    print("[sandbox-smoke] composition refs=" + references_ok
+        + " schemas=" + physical_schemas_ok
+        + " hinge=" + hinge_target_ok
+        + " children=" + root_children_ok
+        + " wheel_params=" + wheel_params_ok
+        + " variants=" + variant_contract_ok
+        + " raycast_no_joints=" + raycast_has_no_joints);
+
+    references_ok && physical_schemas_ok && hinge_target_ok && root_children_ok
+        && wheel_params_ok && variant_contract_ok && raycast_has_no_joints
+}
+
 fn wiring_contract() {
     let generated = query("GeneratedModelicaSource", #{
         network_root: "/SandboxScene/Skid_Battery_Thermal_1",
@@ -160,7 +266,7 @@ fn scene_contract() {
     let livery_ok = livery_color != () && livery_color.len() == 1
         && close_vec(livery_color[0], [0.85, 0.15, 0.12], 0.001);
     ground_ok && ramp_ok && rovers && suspension_visuals_ok && livery_ok
-        && wiring_contract()
+        && wiring_contract() && composition_contract()
 }
 
 fn on_start(me) {
@@ -227,8 +333,8 @@ fn verdict(s) {
     f.push(t_rel(s.joint_gap, 3.0, 5.0,
         "fixed-joint bodies lost their authored 3 m separation"));
     f.push(t_true(s.scene_contract,
-        "sandbox USD topology, wheel realization, authored collision, or Modelica wiring " +
-        "did not survive the production projection"));
+        "sandbox USD topology, rover composition, wheel realization, authored collision, " +
+        "or Modelica wiring did not survive the production projection"));
 
     print("[sandbox-smoke] ── results ─────────────────────────────────");
     print("[sandbox-smoke]   oscillator signal = " + r4(s.signal));
