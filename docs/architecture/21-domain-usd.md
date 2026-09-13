@@ -16,12 +16,15 @@ command/event contracts; `lunco-usd` contains UI-free runtime orchestration
 and the observers that execute those contracts;
 `lunco-usd-bevy-runtime` owns the complete application plugin bundle;
 `lunco-usd-geometry`
-owns the reusable render-free NURBS, trim, and curve-sweep substrate;
+owns the reusable render-free BasisCurves evaluator, NURBS, trim, and
+curve-sweep substrate;
 `lunco-usd-bevy-core` owns prepared/composed stage data;
 `lunco-usd-bevy-scene` owns render-free ECS scene identity, lifecycle, ancestry,
 projection ordering boundaries, visual-split markers, shared geometry decoding,
 and composed collision/placement envelopes; `lunco-usd-bevy-camera` owns render-free camera
 projection intent, camera paths, mounts, selection, and viewport reconciliation;
+it consumes the BasisCurves evaluator from `lunco-usd-geometry` rather than
+owning a second curve implementation;
 `lunco-usd-bevy-twin` owns the render-free document-to-`twin://` identity map,
 workspace and preview leases, projection cursors, user-ownership events, and
 the event-driven wake signal and document-to-mounted-stage lookup;
@@ -723,7 +726,7 @@ as runtime. Ownership follows the narrowest production boundary:
 - `crates/lunco-usd-bevy-core/src/{asset,authoring,canonical,read,compose,view}.rs` — prepared asset, authored-layer, composed-stage, and live-stage substrate
 - `crates/lunco-usd-bevy-scene/src/{lib,geometry,collision}.rs` — render-free ECS scene identity, lifecycle, ancestry, shared USD geometry readers, and composed collision/placement envelopes
 - `crates/lunco-usd-bevy-twin/src/lib.rs` — render-free Twin/document leases, document-to-mounted-stage lookup, ownership events, and projection wake state
-- `crates/lunco-usd-bevy-camera/src/{camera,camera_mount,camera_path,camera_switch,camera_track}.rs` — render-free camera projection, pose, path, selection, and track mechanisms
+- `crates/lunco-usd-bevy-camera/src/{camera,camera_mount,camera_path,camera_switch,camera_track}.rs` — render-free camera projection, pose, path, selection, and track mechanisms; curve math is in `lunco-usd-geometry/src/curve.rs`
 - `crates/lunco-usd-bevy-light/src/{light,dome}.rs` — UsdLux light readers, ambient-dome semantics, and HDRI environment projection
 - `crates/lunco-usd-bevy-core/src/animation.rs` — low-level time-sample topology, value decoding, rotation, and transform-reader mechanisms
 - `crates/lunco-usd-bevy-animation/src/lib.rs` — production animation planning, time-domain binding, and ECS sampling systems

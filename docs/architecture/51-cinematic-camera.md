@@ -34,7 +34,9 @@ The runtime accepts `point3f[]` and `point3d[]`, validates curve type, basis,
 wrap, point count, duration, and finite values, and refuses malformed paths. A
 non-periodic cubic Catmull-Rom path needs at least four control points; a periodic
 one needs at least three. The evaluator supports linear, Bezier, and Catmull-Rom
-bases according to the `BasisCurves` shape.
+bases according to the `BasisCurves` shape. The numeric evaluator is owned by
+`lunco-usd-geometry::curve`; the camera adapter consumes its position and tangent
+without owning a second curve implementation.
 
 ## Runtime ownership
 
@@ -126,6 +128,11 @@ Keep authoring controls separated:
 The path is an animation, not a behaviour tree. It is deterministic in time and
 must scrub backward; behaviour trees are for decisions, guards, retries, and
 world-state reactions.
+
+The camera path, visual curve projector, and editor overlay all consume the same
+`lunco-usd-geometry::curve::{eval_curve, eval_curve_tangent}` contract. Camera
+selection and aim policy remain in the camera adapter; BasisCurves interpolation,
+validation, and USD periodic/open segment rules remain in the geometry package.
 
 ## Remaining work
 

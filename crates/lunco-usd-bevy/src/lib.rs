@@ -3383,7 +3383,7 @@ fn build_usd_curve_mesh(
     quality: lunco_render::RenderQualityProfile,
 ) -> Option<Mesh> {
     use bevy::math::DVec3;
-    use lunco_usd_bevy_camera::camera_path::CurveBasis;
+    use lunco_usd_geometry::curve::{eval_curve, CurveBasis};
     use lunco_usd_geometry::curve_sweep::sweep_tube;
     use lunco_usd_geometry::ribbon::{build_ribbon_mesh, RibbonPoint};
 
@@ -3736,12 +3736,7 @@ fn build_usd_curve_mesh(
             let steps = (n.saturating_sub(1)).max(1) * quality.curve_samples_per_segment;
             let Some(samples) = (0..=steps)
                 .map(|i| {
-                    lunco_usd_bevy_camera::camera_path::eval_curve(
-                        &cvs,
-                        basis,
-                        periodic,
-                        i as f32 / steps as f32,
-                    )
+                    eval_curve(&cvs, basis, periodic, i as f32 / steps as f32)
                 })
                 .collect::<Option<Vec<_>>>()
             else {

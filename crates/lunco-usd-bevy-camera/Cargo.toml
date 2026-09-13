@@ -13,6 +13,7 @@ lunco-render = { path = "../lunco-render" }
 lunco-time = { path = "../lunco-time" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
+lunco-usd-geometry = { path = "../lunco-usd-geometry" }
 openusd = { workspace = true }
 
 [dev-dependencies]
