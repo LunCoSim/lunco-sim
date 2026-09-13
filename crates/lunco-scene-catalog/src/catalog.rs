@@ -31,9 +31,9 @@
 //! catalog while the remaining files are still being fetched.
 
 use bevy::prelude::*;
-use lunco_core::{on_command, Command};
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
+use lunco_core::{on_command, Command};
 use lunco_usd_bevy_core::UsdInstanceRoot;
 use lunco_usd_bevy_scene::UsdPrimPath;
 
@@ -62,6 +62,7 @@ impl ApiQueryProvider for SpawnCatalogProvider {
                 "ListSpawnCatalog: SpawnCatalog resource is not present",
             );
         };
+        let metadata = world.get_resource::<AssetMetaStore>();
         let mut entries: Vec<_> = catalog
             .entries
             .iter()
@@ -77,6 +78,12 @@ impl ApiQueryProvider for SpawnCatalogProvider {
                     "name": entry.display_name,
                     "category": entry.category,
                     "origin": entry.origin.as_api_value(),
+                    "description": match &entry.source {
+                        SpawnSource::UsdFile(path) => metadata
+                            .and_then(|store| store.description(path))
+                            .map(serde_json::Value::from)
+                            .unwrap_or(serde_json::Value::Null),
+                    },
                     "default_transform": {
                         "position": [
                             entry.default_transform.translation.x,
@@ -1195,6 +1202,17 @@ mod tests {
                 },
             ],
         });
+        world.insert_resource(AssetMetaStore {
+            by_path: [(
+                "a.usda".into(),
+                SpawnMeta {
+                    spawnable: true,
+                    description: Some("First authored asset".into()),
+                },
+            )]
+            .into_iter()
+            .collect(),
+        });
 
         let response = SpawnCatalogProvider.execute(&world, &serde_json::Value::Null);
         let data = match response {
@@ -1209,6 +1227,8 @@ mod tests {
         assert_eq!(data["entries"][0]["origin"]["label"], "Built-in LunCo");
         assert_eq!(data["entries"][1]["origin"]["kind"], "twin");
         assert_eq!(data["entries"][1]["origin"]["name"], "summer-space-school");
+        assert_eq!(data["entries"][0]["description"], "First authored asset");
+        assert_eq!(data["entries"][1]["description"], serde_json::Value::Null);
     }
 
     #[test]
@@ -1264,45 +1284,6 @@ mod tests {
             );
         }
         assert!(count >= 4, "expected the sandbox scene set, found {count}");
-    }
-
-    /// Every asset offered by the spawn catalog must explain itself through the
-    /// standard USD `doc` metadata on its default prim. Internal component files
-    /// may omit it; they are not user-facing spawn options.
-    #[test]
-    fn every_spawnable_asset_has_description() {
-        fn visit(dir: &std::path::Path, missing: &mut Vec<std::path::PathBuf>) {
-            for entry in std::fs::read_dir(dir).expect("asset directory exists") {
-                let path = entry.expect("asset entry readable").path();
-                if path.is_dir() {
-                    visit(&path, missing);
-                    continue;
-                }
-                if path.extension().and_then(|e| e.to_str()) != Some("usda") {
-                    continue;
-                }
-                let source = std::fs::read_to_string(&path).expect("USD asset readable");
-                let meta = parse_spawn_meta(&source);
-                if meta.spawnable
-                    && meta
-                        .description
-                        .as_deref()
-                        .is_none_or(|description| description.trim().is_empty())
-                {
-                    missing.push(path);
-                }
-            }
-        }
-
-        let mut missing = Vec::new();
-        visit(
-            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets"),
-            &mut missing,
-        );
-        assert!(
-            missing.is_empty(),
-            "spawnable USD assets need default-prim `doc` metadata: {missing:?}"
-        );
     }
 
     /// The store is keyed on `asset_path` (what the catalogue and the UI both

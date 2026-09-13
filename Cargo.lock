@@ -8015,7 +8015,6 @@ dependencies = [
  "lunco-scene-catalog",
  "lunco-scene-queries",
  "lunco-signal",
- "lunco-usd",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-light",
  "lunco-usd-bevy-scene",
@@ -8023,7 +8022,6 @@ dependencies = [
  "lunco-usd-core",
  "lunco-workspace",
  "openusd",
- "tempfile",
 ]
 
 [[package]]
