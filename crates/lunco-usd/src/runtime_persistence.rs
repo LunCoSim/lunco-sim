@@ -33,6 +33,7 @@ use bevy::prelude::*;
 use lunco_doc::DocumentId;
 use lunco_doc_bevy::{DocumentChanged, DocumentOpened};
 use lunco_storage::{Storage, StorageHandle};
+use lunco_usd_core::runtime::runtime_persistence_for_twin;
 use lunco_workspace::WorkspaceResource;
 use openusd::sdf::SpecType;
 
@@ -48,15 +49,6 @@ use lunco_doc_bevy::DocumentRegistry;
 /// this directory out of scenario sync and out of release bundles. Writer and
 /// excluders must not be able to drift apart.
 use lunco_twin::RUNTIME_SUBDIR;
-
-/// Twin-manifest key controlling persistence of generated runtime scene edits.
-///
-/// The value is deliberately a single boolean: loading without saving would
-/// resurrect a state that later silently stops changing, while saving without
-/// loading would write a cache that the user cannot see. The generic Twin
-/// setting command and the Settings menu are the two callers of this one
-/// project-owned policy.
-pub const RUNTIME_PERSISTENCE_SETTING: &str = "usd.runtime_persistence";
 
 /// Resolve the Twin that owns a document path.
 ///
@@ -87,26 +79,6 @@ pub fn runtime_persistence_enabled(
         return Ok(false);
     };
     runtime_persistence_for_twin(twin)
-}
-
-/// Read the runtime-persistence policy from one Twin manifest.
-///
-/// This is shared by the runtime writer/loader and the Settings menu so the
-/// UI cannot advertise a policy different from the one that guards I/O.
-pub fn runtime_persistence_for_twin(twin: &lunco_twin::Twin) -> Result<bool, String> {
-    if lunco_twin::isolated_run_requested() {
-        return Ok(false);
-    }
-    let Some(manifest) = twin.manifest.as_ref() else {
-        return Ok(false);
-    };
-    match manifest.setting(RUNTIME_PERSISTENCE_SETTING) {
-        None => Ok(false),
-        Some(lunco_twin::TwinSettingValue::Bool(enabled)) => Ok(*enabled),
-        Some(value) => Err(format!(
-            "`{RUNTIME_PERSISTENCE_SETTING}` must be a boolean, got {value:?}"
-        )),
-    }
 }
 
 /// `<twin-root>/.lunco/runtime/<scene-rel>` for a document whose file lives
@@ -292,6 +264,7 @@ mod tests {
     use super::*;
     use lunco_doc::{Document, DocumentOrigin};
     use lunco_usd_core::document::{LayerId, UsdDocument, UsdOp};
+    use lunco_usd_core::runtime::RUNTIME_PERSISTENCE_SETTING;
     use openusd::sdf::Path as SdfPath;
 
     const TINY: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n";

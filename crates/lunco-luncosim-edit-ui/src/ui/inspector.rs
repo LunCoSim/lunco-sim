@@ -32,11 +32,12 @@ use lunco_scene_authoring::doc_resolve::{
     bound_shader_prim, geom_api_schemas, resolve_doc_for_entity,
     resolve_shader_parameter_usd_target,
 };
-use lunco_usd::commands::{
-    CommitUsdProposal, CreateUsdProposal, ReviewUsdProposal, UsdProposalReviewAction,
-};
 use lunco_usd_bevy_scene::UsdPrimPath;
-use lunco_usd_core::commands::{ApplyUsdOp, ApplyUsdOps};
+use lunco_usd_core::commands::ApplyUsdOp;
+use lunco_usd_core::commands::{
+    ApplyUsdOps, AttachComponent, CommitUsdProposal, CreateUsdProposal, DetachComponent,
+    ReviewUsdProposal, UsdProposalReviewAction,
+};
 use lunco_usd_core::document::{LayerId, UsdOp};
 use lunco_usd_core::edit_session::{UsdEditScope, UsdProposalId, UsdProposalState};
 
@@ -395,7 +396,12 @@ pub(crate) fn on_mount_snap_requested(trigger: On<MountSnapRequested>, mut comma
             request.placement,
             request.rotate,
         );
-        lunco_usd::commands::apply_ops_as_change_set(world, doc, label, ops);
+        world.trigger(ApplyUsdOps {
+            doc_id: doc,
+            parent_gen: None,
+            label,
+            ops,
+        });
     });
 }
 
@@ -418,7 +424,7 @@ pub(crate) fn on_mount_detach_requested(trigger: On<MountDetachRequested>, mut c
             );
             return;
         };
-        world.trigger(lunco_usd::commands::DetachComponent {
+        world.trigger(DetachComponent {
             doc_id: doc,
             spec: lunco_usd_core::attach::DetachSpec {
                 edit_target,
@@ -2667,7 +2673,7 @@ fn attach_component_at_socket(
             return;
         }
     };
-    world.trigger(lunco_usd::commands::AttachComponent { doc_id: doc, spec });
+    world.trigger(AttachComponent { doc_id: doc, spec });
 }
 
 /// [`SetEnvironmentLight`](lunco_environment::SetEnvironmentLight) command

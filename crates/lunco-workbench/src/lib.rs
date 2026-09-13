@@ -60,8 +60,6 @@ use egui_dock::{
 use lunco_core::{on_command, register_commands, Command};
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use lunco_theme::ColorAlpha;
-#[cfg(test)]
-use lunco_workbench_core::PerspectiveSlotPlan;
 use lunco_workbench_core::{
     InstancePanel, MenuCtx, Panel, PanelCtx, PanelId, PanelMenuGroup, PanelRenderTarget,
     PanelScrollPolicy, PanelSlot, PanelSurfaceStyle, Perspective, PerspectiveId,
@@ -6835,6 +6833,7 @@ fn register_graphics_settings_menu(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lunco_workbench_core::PerspectiveSlotPlan;
 
     #[test]
     fn tab_content_setting_uses_translucent_default_for_panel_chrome() {

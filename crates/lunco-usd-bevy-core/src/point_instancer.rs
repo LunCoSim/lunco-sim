@@ -10,9 +10,6 @@ use anyhow::{bail, Result};
 use bevy::prelude::{Quat, Transform, Vec3};
 use openusd::sdf::{Path as SdfPath, Value};
 
-#[cfg(test)]
-use crate::UsdStageProjectionPlan;
-
 /// One evaluated entry in a standard [`UsdGeomPointInstancer`].
 ///
 /// The transform includes the prototype root's local transform, matching
@@ -309,6 +306,7 @@ fn validate_optional_len(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::UsdStageProjectionPlan;
 
     const VALID_SCENE: &str = r#"#usda 1.0
 (

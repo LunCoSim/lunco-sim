@@ -14,6 +14,7 @@ pub mod material;
 pub mod metadata;
 pub mod program;
 pub mod recipe;
+pub mod runtime;
 pub mod schema;
 pub mod units;
 pub mod usd_data;

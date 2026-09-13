@@ -201,8 +201,8 @@ impl EditsLayer {
 /// That is legal USD and it is not USD: a private encoding inside a string is opaque
 /// to the type system — nothing validates it, `allowedTokens` cannot constrain the
 /// kind, and no other DCC can read it. Packing bought undo atomicity ("one attribute =
-/// one undo step"), but `apply_ops_as_change_set` commits N ops as a single labelled
-/// undo step, so the reason had outlived the encoding.
+/// one undo step"), but `ApplyUsdOps` commits N ops as a single labelled undo step,
+/// so the reason had outlived the encoding.
 pub(super) const EDIT_KIND: &str = "kind";
 pub(super) const EDIT_CENTER: &str = "center";
 pub(super) const EDIT_RADIUS: &str = "radius";

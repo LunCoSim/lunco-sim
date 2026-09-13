@@ -393,8 +393,8 @@ pub fn attach_component_ops(spec: &AttachSpec) -> Vec<UsdOp> {
 /// `[0,0,0]`). Emits no `AddPrim`/`SetRelationship`: the topology is untouched, so
 /// this never rebuilds the world (all four ops replay incrementally, §3.3).
 ///
-/// **Apply these four as one transaction** — hand them to
-/// [`crate::commands::apply_ops_as_change_set`], which wraps them in a journal
+/// **Apply these four as one transaction** — submit them through
+/// [`crate::commands::ApplyUsdOps`], whose runtime observer wraps them in a journal
 /// change set so the realign is ONE undo unit (H10). Applying them one-by-one
 /// journals four independent entries and a single undo peels off one, leaving the
 /// part moved but its joint anchor stale (or vice-versa). Same rule as

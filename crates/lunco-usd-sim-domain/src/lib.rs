@@ -19,8 +19,6 @@ use lunco_modelica_core::{
     ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaNotice, ModelicaSignalLayout,
     ModelicaSignalProvenance, NoticeLevel,
 };
-#[cfg(test)]
-use lunco_usd_bevy_core::canonical::CanonicalStage;
 use lunco_usd_bevy_core::program::ProgramGraph;
 use lunco_usd_bevy_core::read::{UsdReadObject, UsdReadObject as ComposedReader};
 use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdInstanceProjection, UsdStageAsset};
@@ -4500,6 +4498,7 @@ pub fn resolve_member_classes(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lunco_usd_bevy_core::canonical::CanonicalStage;
 
     #[test]
     fn domain_projection_schedule_requires_an_authoring_trigger() {

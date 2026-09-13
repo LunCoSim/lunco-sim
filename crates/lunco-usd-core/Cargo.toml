@@ -15,6 +15,7 @@ openusd = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-assets = { path = "../lunco-assets" }
 lunco-doc = { path = "../lunco-doc" }
+lunco-twin = { path = "../lunco-twin" }
 lunco-twin-journal = { path = "../lunco-twin-journal" }
 lunco-usd-compose = { path = "../lunco-usd-compose" }
 serde = { workspace = true }

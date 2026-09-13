@@ -30,7 +30,6 @@ lunco-status-core = { path = "../lunco-status-core" }
 lunco-storage = { path = "../lunco-storage" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-theme = { path = "../lunco-theme" }
-lunco-usd = { path = "../lunco-usd", default-features = false }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
@@ -44,6 +43,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+lunco-usd = { path = "../lunco-usd", default-features = false }
 lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 tempfile = { workspace = true }
 

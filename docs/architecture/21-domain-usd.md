@@ -11,8 +11,9 @@
 > `lunco-usd-bevy-lathe`, `lunco-usd-sim`, `lunco-usd-sim-domain`.
 
 Package ownership follows the same boundary: `lunco-usd-core` contains the
-headless document/authoring surface, schemas, and pure probes; `lunco-usd`
-contains UI-free runtime orchestration and document commands;
+headless document/authoring surface, schemas, pure probes, and shared USD
+command/event contracts; `lunco-usd` contains UI-free runtime orchestration
+and the observers that execute those contracts;
 `lunco-usd-bevy-runtime` owns the complete application plugin bundle;
 `lunco-usd-geometry`
 owns the reusable render-free NURBS, trim, and curve-sweep substrate;
@@ -36,6 +37,13 @@ light, and lathe packages directly; and
 projection, while `lunco-usd-sim` owns vehicle projection and cosimulation
 orchestration. This keeps the Modelica-domain source and tests out of the
 vehicle orchestration rebuild boundary without introducing a test-only package.
+
+Public command and document-lifecycle coverage for the runtime boundary lives
+in `crates/lunco-usd/tests/commands.rs`, so changes to those tests do not
+recompile the command library's normal target. Private pending-load and
+grouped-edit seams remain beside their owning implementation because they
+cannot be observed through the public contract. Shared contract helpers are
+tested in `lunco-usd-core/tests/`.
 
 ## Scope
 

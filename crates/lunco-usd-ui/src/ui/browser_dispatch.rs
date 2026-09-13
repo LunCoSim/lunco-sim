@@ -17,19 +17,19 @@
 //! ## UI-only
 //!
 //! This module just translates browser-panel clicks into the document-load
-//! pipeline. The filesystem read and registry allocation live in
-//! [`lunco_usd::commands`] so they also work in headless / sandbox bins that never
-//! add `UsdUiPlugin`.
+//! pipeline. The filesystem read and registry allocation live in the USD
+//! command owner so they also work in headless bins that never add
+//! `UsdUiPlugin`.
 
 use bevy::prelude::*;
+use lunco_doc_bevy::OpenFile;
+use lunco_usd_core::commands::is_usd_path;
 use lunco_workbench::{BrowserAction, BrowserActions};
 use lunco_workspace::WorkspaceResource;
 
 fn is_usd_open_file(action: &BrowserAction) -> bool {
     match action {
-        BrowserAction::OpenFile { relative_path } => {
-            lunco_usd::commands::is_usd_path(&relative_path.to_string_lossy())
-        }
+        BrowserAction::OpenFile { relative_path } => is_usd_path(&relative_path.to_string_lossy()),
         _ => false,
     }
 }
@@ -56,7 +56,7 @@ fn browser_document_path(
 }
 
 /// Drain Twin-browser `OpenFile` actions whose path looks like USD and hand
-/// each off to the document pipeline ([`lunco_usd::commands::spawn_usd_load`]).
+/// each off to the document pipeline through the shared [`OpenFile`] command.
 /// This deliberately does not trigger [`lunco_usd_sim_cosim::LoadScene`].
 pub fn drain_browser_actions_for_usd(world: &mut World) {
     let actions: Vec<BrowserAction> = {
@@ -72,19 +72,10 @@ pub fn drain_browser_actions_for_usd(world: &mut World) {
         return;
     }
 
-    let (active_twin, twin_roots) = world
+    let active_twin = world
         .get_resource::<WorkspaceResource>()
-        .map(|ws| {
-            (
-                ws.active_twin
-                    .and_then(|id| ws.twin(id))
-                    .map(|t| t.root.clone()),
-                ws.twins()
-                    .map(|(_, twin)| twin.root.clone())
-                    .collect::<Vec<_>>(),
-            )
-        })
-        .unwrap_or_default();
+        .and_then(|ws| ws.active_twin.and_then(|id| ws.twin(id)))
+        .map(|twin| twin.root.clone());
     for action in actions {
         let BrowserAction::OpenFile { relative_path } = action else {
             continue;
@@ -96,12 +87,9 @@ pub fn drain_browser_actions_for_usd(world: &mut World) {
             );
             continue;
         };
-        let owner_root = twin_roots
-            .iter()
-            .filter(|root| abs.strip_prefix(root).is_ok())
-            .max_by_key(|root| root.components().count())
-            .cloned();
-        lunco_usd::commands::spawn_usd_load(world, abs, owner_root);
+        world.trigger(OpenFile {
+            path: abs.to_string_lossy().into_owned(),
+        });
     }
 }
 

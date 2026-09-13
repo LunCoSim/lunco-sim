@@ -75,8 +75,9 @@ pub struct ProgramAttachSpec {
 
 /// Build the primitive USD operations for [`ProgramAttachSpec`].
 ///
-/// Validation happens before any operation is returned. Callers must apply the
-/// returned vector with `apply_ops_as_change_set`; no caller may apply a subset.
+/// Validation happens before any operation is returned. Callers must submit the
+/// returned vector through [`crate::commands::ApplyUsdOps`]; no caller may apply
+/// a subset.
 pub fn program_attach_ops(spec: &ProgramAttachSpec) -> Result<Vec<UsdOp>, String> {
     validate_spec(spec)?;
 

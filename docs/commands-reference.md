@@ -528,7 +528,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  placement, and optional socket occupancy. Validation and lowering happen at
  the USD authoring boundary, so the attach is atomic and undoable.
 
-- *defined in:* `crates/lunco-usd/src/commands.rs`
+- *defined in:* `crates/lunco-usd-core/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -548,7 +548,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  but it is not a running scalar co-simulation participant. Add explicit ports
  and connections when the source must exchange values with Rust or Modelica.
 
-- *defined in:* `crates/lunco-usd/src/commands.rs`
+- *defined in:* `crates/lunco-usd-core/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -582,11 +582,11 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  Merge one accepted proposal through the ordinary grouped USD edit path.
 
  This is the only operation that removes a proposal by applying its plan.
- `apply_ops_as_change_set_result` performs the same atomic validation,
- journal change-set, undo grouping, and live projection notification as all
- direct Assembly Editor edits.
+ The runtime observer performs the same atomic validation, journal change-set,
+ undo grouping, and live projection notification as all direct Assembly Editor
+ edits.
 
-- *defined in:* `crates/lunco-usd/src/commands.rs`
+- *defined in:* `crates/lunco-usd-core/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -600,7 +600,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  causal predecessor: a proposal is explicitly reviewable work and must
  never be accepted against an unknown base.
 
-- *defined in:* `crates/lunco-usd/src/commands.rs`
+- *defined in:* `crates/lunco-usd-core/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -616,7 +616,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  supplies the exact component/joint/socket identities; Rust validates their
  ownership and topology, then reuses the generic compound journal boundary.
 
-- *defined in:* `crates/lunco-usd/src/commands.rs`
+- *defined in:* `crates/lunco-usd-core/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -727,7 +727,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Change review state without applying any USD operation.
 
-- *defined in:* `crates/lunco-usd/src/commands.rs`
+- *defined in:* `crates/lunco-usd-core/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -741,7 +741,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  image-based lighting.
 
  **This is the only way to change the environment at runtime.** It lowers to
- [`UsdOp`]s and goes through [`apply_ops_as_change_set`], so the edit saves,
+ [`UsdOp`]s and goes through [`ApplyUsdOps`], so the edit saves,
  journals, undoes as ONE unit, and replicates — exactly like any other USD
  edit. Writing to the `Skybox`/`GeneratedEnvironmentMapLight` components
  directly would light the local viewport and be invisible to all four of

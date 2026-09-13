@@ -19,6 +19,7 @@ use openusd::sdf;
 use lunco_usd_core::UsdData;
 use lunco_usd_core::UsdDataExt;
 use lunco_usd_core::{
+    commands::{CommitUsdProposal, ReviewUsdProposal, UsdProposalReviewAction},
     edit_session::{UsdProposalId, UsdProposalState, UsdProposalSummary},
     LayerId,
 };
@@ -26,8 +27,6 @@ use lunco_usd_core::{
 use crate::loaded_stages::{UsdBrowserView, UsdStageRow};
 use crate::viewport::{OpenUsdPreview, UsdPreviewId, UsdViewportState};
 use crate::USD_CONNECTION_CANVAS_PANEL_ID;
-use lunco_usd::commands::{CommitUsdProposal, ReviewUsdProposal, UsdProposalReviewAction};
-
 fn stage_in_active_scope(
     row: &UsdStageRow,
     workspace: Option<&lunco_workspace::WorkspaceResource>,
