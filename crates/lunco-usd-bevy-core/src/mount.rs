@@ -575,22 +575,4 @@ def Xform "World"
         assert!(result.sockets.is_empty());
         assert_eq!(result.diagnostics.len(), 1);
     }
-
-    #[test]
-    fn reads_plug_frame_off_a_not_yet_loaded_asset_file() {
-        // The new-attach path: `read_asset_plug` composes a component asset
-        // straight off disk (its plug lives in the file, not the live scene) and
-        // reads the plug frame off its `defaultPrim`. Validates against the shipped
-        // demo component, whose hub sits 0.4 m above the part origin.
-        let asset = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../assets/components/mounting/demo_probe.usda");
-        let plug =
-            super::read_asset_plug(&asset).expect("demo_probe.usda composes and advertises a plug");
-        assert_eq!(plug.kind, "probe");
-        assert!(
-            close(plug.frame.translation, [0.0, 0.4, 0.0]),
-            "asset plug frame {:?}",
-            plug.frame.translation
-        );
-    }
 }

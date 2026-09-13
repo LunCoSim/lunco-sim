@@ -57,6 +57,14 @@ The public query contracts live beside their owning package in
 `crates/lunco-usd-queries/tests/query_api.rs`; they do not require the larger
 runtime-orchestration package to compile.
 
+The public composed-stage reader, StageView, and prepared-reader contracts live
+in `crates/lunco-usd-bevy-core/tests/stage_reads.rs`. They use in-memory
+`StageRecipe` closures, so fixture edits do not touch the asset filesystem and
+do not rebuild the core library's inline test modules. Shipped-asset behavior is
+asserted through the production scene/Rhai tests under `assets/scenes/tests/`
+and `assets/scenarios/tests/`; the Rust target retains only generic USD
+composition and reader seams.
+
 ## Scope
 
 A USD **stage** is the 3D scene. This doc is the canonical reference for how a
@@ -733,6 +741,7 @@ the `ControlAnimation` command (API/MCP) and the Inspector **Animation** section
 All runtime acceptance tests load **real USD files** through the same pipeline
 as runtime. Ownership follows the narrowest production boundary:
 - `crates/lunco-usd-bevy-core/src/{asset,authoring,canonical,read,compose,view}.rs` — prepared asset, authored-layer, composed-stage, and live-stage substrate
+- `crates/lunco-usd-bevy-core/tests/stage_reads.rs` — public composed-stage, `StageView`, and prepared-reader integration contracts
 - `crates/lunco-usd-bevy-scene/src/{lib,geometry,collision}.rs` — render-free ECS scene identity, lifecycle, ancestry, shared USD geometry readers, and composed collision/placement envelopes
 - `crates/lunco-usd-bevy-twin/src/lib.rs` — render-free Twin/document leases, document-to-mounted-stage lookup, ownership events, and projection wake state
 - `crates/lunco-usd-bevy-camera/src/{camera,camera_mount,camera_path,camera_switch,camera_track}.rs` — render-free camera projection, pose, path, selection, and track mechanisms; curve math is in `lunco-usd-geometry/src/curve.rs`

@@ -14,8 +14,5 @@ lunco-core = { path = "../lunco-core" }
 lunco-usd-compose = { path = "../lunco-usd-compose" }
 lunco-usd-core = { path = "../lunco-usd-core" }
 
-[dev-dependencies]
-tempfile = { workspace = true }
-
 [lints]
 workspace = true

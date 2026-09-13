@@ -957,33 +957,19 @@ pub fn sync_canonical_stages(
     }
 }
 
-// Temp-dir USDA fixtures, native-only test code. The `std::fs` ban guards wasm
-// *runtime* paths; `clippy.toml` names tests as exempt, but cargo has no
-// path-scoped lint config, so the exemption is written out.
-#[cfg(all(test, not(target_arch = "wasm32")))]
-#[allow(clippy::disallowed_methods)]
+#[cfg(test)]
 mod recipe_tests {
-    //! A `StageRecipe` opens the live canonical stage with the same composed
-    //! semantics as the file-backed authoring path.
+    //! A `StageRecipe` opens the live canonical stage through the same composed
+    //! layer-closure path used by the asset loader.
 
     use super::*;
-    use crate::compose::compose_file_to_stage;
-    use crate::view::StageView;
-
     const FIXTURE: &str = "#usda 1.0\n\ndef Xform \"Root\"\n{\n    def Cube \"Box\"\n    {\n        double size = 3\n    }\n}\n";
 
     #[test]
     fn from_recipe_builds_composed_stage() {
-        let dir = std::env::temp_dir().join("lunco_recipe_test");
-        std::fs::create_dir_all(&dir).unwrap();
-        let f = dir.join("scene.usda");
-        std::fs::write(&f, FIXTURE).unwrap();
-
         // Recipe mirrors what `fetch_layer_closure` produces for a ref-less scene:
         // root keyed by the SAME canonical id the resolver uses.
-        let root_id = lunco_assets::asset_path::canonicalize_root(f.to_str().unwrap());
-        let bytes = HashMap::from([(root_id.clone(), std::fs::read(&f).unwrap())]);
-        let recipe = StageRecipe { root_id, bytes };
+        let recipe = StageRecipe::from_source("scene.usda", FIXTURE);
 
         let cstage = CanonicalStage::from_recipe(&recipe).expect("from_recipe builds a stage");
         let view = cstage.view();
@@ -996,23 +982,10 @@ mod recipe_tests {
             view.value::<f64>(&SdfPath::new("/Root/Box").unwrap(), "size"),
             Some(3.0)
         );
-
-        // And it composes identically to the known-good file-composed path.
-        let ref_stage = compose_file_to_stage(&f).expect("file compose");
-        let ref_prims: Vec<String> = StageView::new(&ref_stage)
-            .prim_paths()
-            .iter()
-            .map(|p| p.to_string())
-            .collect();
-        assert_eq!(
-            prims, ref_prims,
-            "recipe-built stage must match file-composed stage"
-        );
     }
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
-#[allow(clippy::disallowed_methods)] // temp-dir USDA fixtures; see `recipe_tests`
+#[cfg(test)]
 mod sync_system_tests {
     //! The initial `UsdStageAsset` carries a prepared composed projection plan.
     //! `sync_canonical_stages` only opens the non-`Send` live stage for an
@@ -1026,14 +999,7 @@ mod sync_system_tests {
 
     #[test]
     fn added_asset_keeps_live_stage_closed() {
-        let dir = std::env::temp_dir().join("lunco_sync_system_test");
-        std::fs::create_dir_all(&dir).unwrap();
-        let f = dir.join("scene.usda");
-        std::fs::write(&f, FIXTURE).unwrap();
-
-        let root_id = lunco_assets::asset_path::canonicalize_root(f.to_str().unwrap());
-        let bytes = HashMap::from([(root_id.clone(), std::fs::read(&f).unwrap())]);
-        let recipe = StageRecipe { root_id, bytes };
+        let recipe = StageRecipe::from_source("scene.usda", FIXTURE);
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
@@ -1076,14 +1042,7 @@ mod sync_system_tests {
 
     #[test]
     fn added_event_does_not_replace_an_explicit_live_stage() {
-        let dir = std::env::temp_dir().join("lunco_sync_existing_stage_test");
-        std::fs::create_dir_all(&dir).unwrap();
-        let f = dir.join("scene.usda");
-        std::fs::write(&f, FIXTURE).unwrap();
-
-        let root_id = lunco_assets::asset_path::canonicalize_root(f.to_str().unwrap());
-        let bytes = HashMap::from([(root_id.clone(), std::fs::read(&f).unwrap())]);
-        let recipe = StageRecipe { root_id, bytes };
+        let recipe = StageRecipe::from_source("scene.usda", FIXTURE);
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
