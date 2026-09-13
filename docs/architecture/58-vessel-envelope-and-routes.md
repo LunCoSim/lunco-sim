@@ -173,11 +173,12 @@ write. Waypoint labels remain separate: the
 marker prim authors `lunco:billboard*`, and the generic billboard renderer owns
 their screen-space presentation.
 
-The route ribbon is intentionally a lightweight world-space annotation. It is
-anchored at the first point and stores the remaining points in local curve
-coordinates, so large-world coordinates do not need to be duplicated into every
-vertex. The reusable USD asset owns its material, depth behavior, and
-shadowless/additive presentation; the tool owns only the current point topology.
+The route ribbon is intentionally a lightweight world-space annotation. It is an
+oriented `BasisCurves` surface: standard `normals` make its narrow `widths` a flat
+strip rather than a tube. It is anchored at the first point and stores the remaining
+points in local curve coordinates, so large-world coordinates do not need to be
+duplicated into every vertex. The reusable USD asset owns its material, depth behavior,
+and shadowless/additive presentation; the tool owns only the current point topology.
 It is not a terrain mesh, a physics surface, or a camera-path preview. If fewer
 than two active points remain, the tool removes the runtime ribbon atomically.
 

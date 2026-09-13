@@ -39,7 +39,6 @@ pub mod inspector;
 pub mod joint_state;
 /// Universal runtime port inspection and manual control surface.
 pub mod ports;
-pub(crate) mod ribbon;
 /// Generic right-click menus for USD-authored transparent markers.
 pub mod scene_context;
 pub(crate) mod selection_context;

@@ -79,7 +79,8 @@ does not fall back to a vessel-owned route.
 The marker's dome is emissive, translucent, and shadowless. Its trigger is
 invisible and has its own authored radius. Billboard text and placement are
 read by the generic billboard renderer. The ribbon is a separate, lightweight
-world-space annotation and does not participate in physics. Route execution
+world-space annotation: standard `normals` make its narrow `widths` a flat strip
+rather than a tube. It does not participate in physics. Route execution
 does not recolor or rebuild marker geometry; a scenario may react to
 `route_point_reached` to update mission state or the HUD through its own policy.
 

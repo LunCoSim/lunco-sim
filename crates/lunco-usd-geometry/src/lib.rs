@@ -8,4 +8,5 @@
 
 pub mod curve_sweep;
 pub mod nurbs;
+pub mod ribbon;
 pub mod trim;

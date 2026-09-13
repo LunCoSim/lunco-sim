@@ -41,6 +41,16 @@ fn ribbon_count(doc) {
     result.attrs["curveVertexCounts"][0]
 }
 
+fn ribbon_normals_match(doc, count) {
+    let result = query("QueryUsdPrim", #{
+        doc_id: doc,
+        path: RIBBON_GEOMETRY,
+        attrs: ["normals"],
+    });
+    result != () && result.ok != false && result.attrs != ()
+        && result.attrs["normals"] != () && result.attrs["normals"].len() == count
+}
+
 fn has_path(doc, path) {
     let result = query("QueryUsdPrim", #{ doc_id: doc, path: path });
     result != () && result.ok != false && result.active == true
@@ -142,7 +152,8 @@ fn on_tick(me) {
         if route == () || route.ok == false || route.doc_id == () { return; }
         this.doc = route.doc_id;
         this.subject = find(SUBJECT_PATH);
-        if this.subject < 0 || point_count(this.doc) != 3 || ribbon_count(this.doc) != 3 {
+        if this.subject < 0 || point_count(this.doc) != 3 || ribbon_count(this.doc) != 3
+            || !ribbon_normals_match(this.doc, 3) {
             return;
         }
         let program = query("QueryUsdPrim", #{
@@ -157,7 +168,7 @@ fn on_tick(me) {
             && program.attrs["info:sourceCode"] == (),
             "route program uses the sourceAsset-only USD contract"));
         this.checks.push(t_true(true,
-            "route program materializes one ribbon vertex per authored point"));
+            "route program materializes an oriented ribbon from authored points"));
         for check in invalid_edit_checks(this.doc) { this.checks.push(check); }
         this.phase = 1;
         return;
@@ -171,7 +182,7 @@ fn on_tick(me) {
 
     if this.phase == 2 {
         if point_count(this.doc) != 4 || !has_path(this.doc, this.new_point)
-            || ribbon_count(this.doc) != 4 { return; }
+            || ribbon_count(this.doc) != 4 || !ribbon_normals_match(this.doc, 4) { return; }
         this.checks.push(t_true(true,
             "Alt-click policy appends a named route point"));
         let position = point_position(this.doc, this.new_point);

@@ -27,18 +27,20 @@ over terrain instead of being occluded by it, and it cannot be authored — its 
 Rust constant. The route ribbon follows the same rule: its egui screen-space stroke was
 removed because it had no depth and painted over the terrain it was supposed to lie on.
 
-A mesh occludes properly and has a real world thickness. For authored scene geometry its
-look comes from a USD material; for a derived annotation its look is render intent owned
-by the annotation system. The two ownership models must not be mixed.
+A mesh occludes properly and has real depth. For authored scene geometry its look comes
+from a USD material; for a derived annotation its look is render intent owned by the
+annotation system. The two ownership models must not be mixed.
 
 ## Route ribbons are derived annotations
 
 The route-point prims and the Rhai task program are the authored facts. The
 `waypoint_editor` tool derives a route view from those facts and materializes a
-single standard `BasisCurves` prim from
+single oriented standard `BasisCurves` prim from
 [`assets/markers/route_ribbon.usda`](../../assets/markers/route_ribbon.usda)
 in `@runtime@`. This keeps the visual contract in USD, lets the existing USD
-renderer draw it with real depth, and keeps all route-specific policy in Rhai.
+renderer draw a cached flat strip with real depth, and keeps all route-specific policy
+in Rhai. The curve's standard `normals` make `widths` a ribbon width, so this path does
+not become a cylindrical tube.
 The runtime view is rebuilt only after a route edit or when the route program
 starts; it is not a per-frame USD edit, a second route, or a screen-space gizmo.
 

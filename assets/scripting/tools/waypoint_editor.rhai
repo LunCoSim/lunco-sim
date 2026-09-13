@@ -200,6 +200,12 @@ fn points_literal(points) {
     text + "]"
 }
 
+fn ribbon_normals_literal(count) {
+    let normals = [];
+    for i in 0..count { normals.push([0.0, 1.0, 0.0]); }
+    points_literal(normals)
+}
+
 fn vector_equal(a, b) {
     if a == () || b == () || a.len() != b.len() { return false; }
     for i in 0..a.len() {
@@ -241,7 +247,7 @@ fn ribbon_needs_update(doc, ribbon, geometry, anchor, local_points, count) {
     let shape = query("QueryUsdPrim", #{
         doc_id: doc,
         path: geometry,
-        attrs: ["type", "wrap", "curveVertexCounts", "points"],
+        attrs: ["type", "wrap", "curveVertexCounts", "points", "normals"],
     });
     if root == () || root.ok == false || root.attrs == ()
         || shape == () || shape.ok == false || shape.attrs == () {
@@ -252,6 +258,7 @@ fn ribbon_needs_update(doc, ribbon, geometry, anchor, local_points, count) {
         || shape.attrs["type"] != "linear"
         || shape.attrs["wrap"] != "nonperiodic"
         || shape.attrs["curveVertexCounts"] != [count]
+        || shape.attrs["normals"] == () || shape.attrs["normals"].len() != count
         || !points_equal(shape.attrs["points"], local_points) {
         return true;
     }
@@ -331,6 +338,13 @@ fn ribbon_ops(doc, route, points) {
         name: "points",
         type_name: "point3f[]",
         value: points_literal(local_points),
+    }});
+    ops.push(#{ SetAttribute: #{
+        edit_target: "@runtime@",
+        path: geometry,
+        name: "normals",
+        type_name: "normal3f[]",
+        value: ribbon_normals_literal(points.len()),
     }});
     ops
 }
