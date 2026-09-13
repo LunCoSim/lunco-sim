@@ -302,28 +302,38 @@ mod tests {
         let mut twin_entries = std::collections::BTreeMap::new();
         twin_entries.insert(
             "Demo Twin".to_owned(),
-            vec![entry("Rover", "Twin Lesson 1"), entry("Rover", "Twin Lesson 2")],
+            vec![
+                entry("Rover", "Twin Lesson 1"),
+                entry("Rover", "Twin Lesson 2"),
+            ],
         );
         let groups = tutorial_groups(
             vec![
-            entry("Sandbox", "First Drive"),
-            entry("Modelica", "Overview"),
-            entry("Sandbox", "Build a Scene"),
-            entry("Navigation", "View and Build"),
+                entry("Sandbox", "First Drive"),
+                entry("Modelica", "Overview"),
+                entry("Sandbox", "Build a Scene"),
+                entry("Navigation", "View and Build"),
             ],
             twin_entries,
         );
 
-        let bundled = groups.get(&(0, String::new(), "Sandbox".to_owned())).unwrap();
+        let bundled = groups
+            .get(&(0, String::new(), "Sandbox".to_owned()))
+            .unwrap();
         assert_eq!(
-            bundled.iter().map(|entry| entry.title.as_str()).collect::<Vec<_>>(),
+            bundled
+                .iter()
+                .map(|entry| entry.title.as_str())
+                .collect::<Vec<_>>(),
             vec!["First Drive", "Build a Scene"]
         );
         let twin = groups
             .get(&(1, "Demo Twin".to_owned(), "Rover".to_owned()))
             .unwrap();
         assert_eq!(
-            twin.iter().map(|entry| entry.title.as_str()).collect::<Vec<_>>(),
+            twin.iter()
+                .map(|entry| entry.title.as_str())
+                .collect::<Vec<_>>(),
             vec!["Twin Lesson 1", "Twin Lesson 2"]
         );
     }
