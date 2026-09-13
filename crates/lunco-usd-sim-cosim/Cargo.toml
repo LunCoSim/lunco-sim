@@ -22,7 +22,6 @@ lunco-doc = { path = "../lunco-doc" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
-lunco-mobility = { path = "../lunco-mobility" }
 lunco-physics = { path = "../lunco-physics" }
 lunco-readiness = { workspace = true }
 lunco-render = { path = "../lunco-render" }
@@ -33,9 +32,13 @@ lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-usd-bevy-camera = { path = "../lunco-usd-bevy-camera" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
+lunco-usd-sim-core = { path = "../lunco-usd-sim-core" }
 lunco-usd-sim-domain = { path = "../lunco-usd-sim-domain" }
 openusd = { workspace = true }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+lunco-usd-core = { path = "../lunco-usd-core" }
 
 [lints]
 workspace = true

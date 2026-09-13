@@ -6,6 +6,23 @@
 use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
 
+/// Marks a co-simulation participant projected from a USD prim.
+///
+/// The marker is backend-neutral: Modelica, Rhai, Python, and native physical
+/// endpoints can all expose a USD-authored port surface. It belongs beside the
+/// generic co-simulation model component rather than in a Modelica-domain
+/// projector so lifecycle and readiness consumers do not depend on that domain.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct UsdSourcedCosim;
+
+/// Requests a new native connection-binding epoch.
+///
+/// USD projection raises this resource when an authored connection or endpoint
+/// surface changes. The co-simulation binding system drains it after all
+/// projection owners have published their current ports.
+#[derive(Resource, Default)]
+pub struct BindingEpochDirty(pub bool);
+
 /// Output ports declared by an endpoint whose current samples are optional.
 ///
 /// The declaration is topology: it lets authored connections bind before a

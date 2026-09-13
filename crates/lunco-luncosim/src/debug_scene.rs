@@ -143,11 +143,11 @@ use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 
 use lunco_core::telemetry::{TelemetryEvent, TelemetryValue};
+use lunco_cosim::UsdSourcedCosim;
 use lunco_luncosim_core::LunCoSimHeadlessPlugin;
 use lunco_modelica_core::ModelicaModel;
 use lunco_usd_core::document::UsdDocument;
 use lunco_usd_sim_cosim::PendingModelicaSource;
-use lunco_usd_sim_domain::UsdSourcedCosim;
 
 /// Safety bound on the manual step loop. 20 000 ticks ≈ 333 s of simulated time
 /// at 60 Hz — an order of magnitude more than any current parity scenario needs
@@ -710,7 +710,7 @@ fn log_scene_readiness_blockers(world: &mut World) {
     let mut prims = world.query::<(
         &lunco_usd_bevy_scene::UsdPrimPath,
         Has<lunco_usd_bevy_scene::UsdSceneProjected>,
-        Has<lunco_usd_sim_cosim::UsdSimProcessed>,
+        Has<lunco_usd_sim_core::UsdSimProcessed>,
     )>();
     let mut prim_count = 0usize;
     let mut visual_count = 0usize;
@@ -933,7 +933,7 @@ pub fn run() -> u8 {
                 .world_mut()
                 .query_filtered::<(), (
                     With<lunco_usd_bevy_scene::UsdPrimPath>,
-                    Without<lunco_usd_sim_cosim::UsdSimProcessed>,
+                    Without<lunco_usd_sim_core::UsdSimProcessed>,
                 )>()
                 .iter(app.world())
                 .next()
@@ -975,7 +975,7 @@ pub fn run() -> u8 {
             .world_mut()
             .query_filtered::<(), (
                 With<lunco_usd_bevy_scene::UsdPrimPath>,
-                Without<lunco_usd_sim_cosim::UsdSimProcessed>,
+                Without<lunco_usd_sim_core::UsdSimProcessed>,
             )>()
             .iter(app.world())
             .next()

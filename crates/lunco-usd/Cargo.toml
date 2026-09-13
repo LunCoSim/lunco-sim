@@ -21,7 +21,7 @@ lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-usd-sim = { path = "../lunco-usd-sim" }
 lunco-usd-sim-cosim = { path = "../lunco-usd-sim-cosim" }
-lunco-usd-sim-domain = { path = "../lunco-usd-sim-domain" }
+lunco-usd-sim-core = { path = "../lunco-usd-sim-core" }
 lunco-usd-sim-shader = { path = "../lunco-usd-sim-shader" }
 lunco-usd-queries = { path = "../lunco-usd-queries" }
 lunco-core = { path = "../lunco-core" }

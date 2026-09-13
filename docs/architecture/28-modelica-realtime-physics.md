@@ -71,7 +71,7 @@ What is actually in the code:
 
 | Piece | Status |
 |---|---|
-| `uniform bool lunco:program:realtimeSafe`, read at prim-read time (`lunco-usd-sim/src/cosim.rs`) → the `RealtimeSafe` component (`crates/lunco-cosim/src/connection.rs`) | **implemented** |
+| `uniform bool lunco:program:realtimeSafe`, read at prim-read time (`lunco-usd-sim-cosim/src/lib.rs`) → the `RealtimeSafe` component (`crates/lunco-cosim/src/connection.rs`) | **implemented** |
 | Gate: a program **without** `RealtimeSafe` wiring a force/torque port on a client-predicted `Dynamic` body | **rejects the force loop at wire-build time** (`rewire_usd_connections`) and raises a terminal runtime fault |
 | Causal feedback in the explicit `SimConnection` fabric | **valid dynamic feedback**; the master performs one read/write transaction and does not pretend to solve an algebraic equation |
 | Acausal connection/island | **not accepted by the causal fabric**; it requires a typed backend island and partition before stepping |

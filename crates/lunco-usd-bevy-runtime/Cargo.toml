@@ -13,6 +13,7 @@ lunco-usd-bevy-animation = { path = "../lunco-usd-bevy-animation" }
 lunco-usd-bevy-diagnostics = { path = "../lunco-usd-bevy-diagnostics" }
 lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-usd-sim = { path = "../lunco-usd-sim" }
+lunco-usd-sim-cosim = { path = "../lunco-usd-sim-cosim" }
 
 [lints]
 workspace = true

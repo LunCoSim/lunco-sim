@@ -1,0 +1,13 @@
+[package]
+name = "lunco-usd-sim-core"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Shared USD simulation projection contracts"
+
+[dependencies]
+bevy_ecs = { workspace = true }
+lunco-mobility = { path = "../lunco-mobility" }
+
+[lints]
+workspace = true

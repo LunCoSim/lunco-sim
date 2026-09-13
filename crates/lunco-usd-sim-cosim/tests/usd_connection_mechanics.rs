@@ -8,11 +8,10 @@
 use bevy::asset::AssetApp;
 use bevy::prelude::*;
 use lunco_cosim::SimConnection;
-use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdStageAsset};
+use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdStageAsset, UsdWiringDirty};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_core::StageRecipe;
 use lunco_usd_sim_cosim::install_wiring_system;
-use lunco_usd_sim_domain::WiringDirty;
 use openusd::sdf::Path as SdfPath;
 
 /// Build an app with a live canonical stage for `SCENE`, initial changes drained.
@@ -21,7 +20,7 @@ fn setup() -> (App, AssetId<UsdStageAsset>, Handle<UsdStageAsset>) {
     app.add_plugins(bevy::asset::AssetPlugin::default())
         .init_asset::<UsdStageAsset>()
         .init_non_send::<CanonicalStages>()
-        .init_resource::<WiringDirty>();
+        .init_resource::<UsdWiringDirty>();
 
     // Keep this mechanism fixture structural rather than embedding a long USDA
     // document in Rust. Authored asset/policy fixtures belong in USD + Rhai;
@@ -142,7 +141,7 @@ fn rewire_derives_at_load_and_clears() {
     app.world_mut()
         .non_send_mut::<CanonicalStages>()
         .drain_all_changes();
-    app.world_mut().resource_mut::<WiringDirty>().0 = true;
+    app.world_mut().resource_mut::<UsdWiringDirty>().0 = true;
     app.update();
     assert!(
         edges(&mut app).is_empty(),

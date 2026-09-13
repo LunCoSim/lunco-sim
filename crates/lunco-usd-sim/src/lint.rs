@@ -14,7 +14,7 @@ use crate::{
     is_gear_drive, read_gear_drive_type, read_gear_drive_values, read_gear_ratio,
     DifferentialDriveType,
 };
-use lunco_usd_sim_domain::select_synthesizer_name;
+use lunco_usd_bevy_core::program::select_synthesizer_name;
 
 /// Add the domain owner selected by the same composed-USD classifier used by
 /// runtime domain projection.

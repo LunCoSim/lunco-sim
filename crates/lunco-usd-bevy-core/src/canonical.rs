@@ -46,6 +46,15 @@ pub struct RawStageChange {
     pub layer: String,
 }
 
+/// Invalidates the derived USD connection cache after an authored endpoint or
+/// `connectionPaths` change.
+///
+/// This is a USD-stage lifecycle signal, not a Modelica-domain fact. The live
+/// USD consumer raises it while the co-simulation projector drains it after
+/// the current endpoint surfaces have been published.
+#[derive(bevy::prelude::Resource, Default)]
+pub struct UsdWiringDirty(pub bool);
+
 /// The canonical live-composed stage for the active scene. `NonSend` (holds an
 /// `Rc`-backed `Stage`). Insert via `world.insert_non_send(..)`.
 pub struct CanonicalStage {

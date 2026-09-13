@@ -95,7 +95,7 @@ prediction systems in `lunco-networking::prediction`:
   `maintain_owned_locally` skips it and `propagate_owned_to_wheels` mirrors the chassis's
   `OwnedLocally` onto it (so the rover you drive runs local physics on all links).
 - `NotPredictable` — opaque body; the predictor never takes it over (it would diverge and
-  rubber-band). Stamped at the cosim takeover (`lunco-usd-sim/src/cosim.rs`) or via
+  rubber-band). Stamped at the cosim takeover (`lunco-usd-sim-cosim/src/lib.rs`) or via
   `authority = "opaque"`.
 
 ## Pipeline

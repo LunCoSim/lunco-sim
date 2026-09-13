@@ -13,7 +13,7 @@
 //!
 //! Per extension:
 //! - `.mo` — the same `lunco_modelica_ast::parse_to_syntax` + AST extraction
-//!   the USD-cosim dispatcher runs (`lunco-usd-sim/src/cosim.rs`); the
+//!   the USD-cosim dispatcher runs (`lunco-usd-sim-cosim/src/lib.rs`); the
 //!   reloadable `lint.modelica` policy decides which AST constructs are
 //!   actionable. NO compile, NO `ModelicaCommand` dispatch.
 //! - `.usda` — parse the layer (`usda_to_data`), compose the file

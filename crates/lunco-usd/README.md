@@ -30,7 +30,9 @@ individual packages remain independently installable:
 - **`UsdAvianPlugin`** (from `lunco-usd-avian`) — physics mapping: USD physics
   attributes → Avian3D `RigidBody` / `Collider` / `Mass` / `Damping`.
 - **`UsdSimPlugin`** (from `lunco-usd-sim`) — simulation mapping: detects sim
-  schemas and creates `WheelRaycast`, FSW, and generic authored port bindings.
+  schemas and creates `WheelRaycast` and vehicle-specific runtime surfaces.
+- **`UsdSimCosimPlugin`** (from `lunco-usd-sim-cosim`) — USD-authored program
+  discovery, connection wiring, scene transitions, readiness, and cosim APIs.
 - **`UsdCommandsPlugin`** (this crate, `commands` module) — the **headless-safe**
   document/file verb layer. The shared `ApplyUsdOp` and `ApplyUsdOps` command
   contracts live in `lunco-usd-core::commands`; this crate owns their observers,

@@ -18,6 +18,7 @@ impl Plugin for UsdPlugins {
             lunco_usd_bevy_diagnostics::UsdDiagnosticsPlugin,
             lunco_usd_avian::UsdAvianPlugin,
             lunco_usd_sim::UsdSimPlugin,
+            lunco_usd_sim_cosim::UsdSimCosimPlugin,
         ));
         app.add_plugins(lunco_usd::commands::UsdCommandsPlugin);
     }

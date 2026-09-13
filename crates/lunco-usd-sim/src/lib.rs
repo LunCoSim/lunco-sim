@@ -80,7 +80,7 @@ use lunco_mobility::{
     SuspensionSpring, WheelRaycast,
 };
 use lunco_render::{GraphicsCameraDefaults, PbrLook, SceneCamera};
-use lunco_usd_sim_cosim::{PendingDifferential, UsdSimProcessed, UsdSimSet};
+use lunco_usd_sim_core::{PendingDifferential, UsdSimProcessed, UsdSimSet};
 use openusd::schemas::physics::tokens as ptok;
 use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::{HashMap, HashSet};
@@ -435,10 +435,6 @@ impl Plugin for UsdSimPlugin {
         // admitted light and would publish a horizontal semantic sun on the
         // following frame.
         install_authored_sun_state_seed(app);
-        // USD → cosim wiring through native `connectionPaths`.
-        lunco_usd_sim_cosim::install(app);
-        // `GET /api/diagnostics` read side — exposes the cosim dangling-wire report.
-        lunco_usd_sim_cosim::diagnostics::register(app);
     }
 }
 
@@ -1294,10 +1290,10 @@ fn process_usd_sim_prim_read(
     // torque actuator publish ordinary scalar input ports; the cosim backend
     // later resolves those commands to Avian's force/torque writer. RCS names,
     // reaction-wheel names, and controller ownership do not appear here.
-    if let Some(actuator) = lunco_usd_sim_domain::force_actuator_from_usd(reader, &sdf_path) {
+    if let Some(actuator) = lunco_usd_avian::actuator::force_actuator_from_usd(reader, &sdf_path) {
         commands.entity(entity).try_insert(actuator);
     }
-    if let Some(actuator) = lunco_usd_sim_domain::torque_actuator_from_usd(reader, &sdf_path) {
+    if let Some(actuator) = lunco_usd_avian::actuator::torque_actuator_from_usd(reader, &sdf_path) {
         commands.entity(entity).try_insert(actuator);
     }
     // Screen-constant marker, keyed on the size that IS the request: a prim
@@ -3315,7 +3311,7 @@ fn activate_dynamic_bodies(
     )>,
     q_pending_diffs: Query<&UsdPrimPath, With<PendingDifferential>>,
     topology_index: Res<JointTopologyIndex>,
-    mut binding_epoch: ResMut<lunco_usd_sim_cosim::BindingEpochDirty>,
+    mut binding_epoch: ResMut<lunco_cosim::BindingEpochDirty>,
 ) {
     // USD/Avian topology is built in the fixed schedule, while this admission
     // pass runs in Update. A body may not become dynamic until every authored
@@ -3590,7 +3586,7 @@ mod dynamic_activation_tests {
         let mut app = App::new();
         app.init_resource::<GroundColliderPending>()
             .init_resource::<JointTopologyIndex>()
-            .init_resource::<lunco_usd_sim_cosim::BindingEpochDirty>()
+            .init_resource::<lunco_cosim::BindingEpochDirty>()
             .add_systems(Update, activate_dynamic_bodies);
 
         let stage = Handle::<UsdStageAsset>::default();
@@ -3655,7 +3651,7 @@ mod dynamic_activation_tests {
         let mut app = App::new();
         app.init_resource::<GroundColliderPending>()
             .init_resource::<JointTopologyIndex>()
-            .init_resource::<lunco_usd_sim_cosim::BindingEpochDirty>()
+            .init_resource::<lunco_cosim::BindingEpochDirty>()
             .add_systems(Update, activate_dynamic_bodies);
 
         let stage = Handle::<UsdStageAsset>::default();

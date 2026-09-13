@@ -84,8 +84,10 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-usd-bevy-diagnostics`** | Optional visual USD asset-failure and placeholder diagnostics: glTF fallback hiding, load-time replacement stubs, and labeled failure geometry. Installed by `lunco-usd-bevy-runtime`; kept separate from the visual projector. |
 | **`lunco-usd-avian`** | Physics bridge (`UsdAvianPlugin`): maps `UsdPhysics` schemas (RigidBody, Colliders, all joint kinds + drive API) to Avian3D — the single home for joint construction. Runtime-only; lint fact production is in `lunco-usd-avian-lint`. |
 | **`lunco-usd-avian-lint`** | Render-free composed `UsdPhysics` fact producer for the authored Rhai lint policy. It reuses Avian's authoritative geometry/joint readers without making the runtime physics crate own lint orchestration. |
-| **`lunco-usd-sim`** | Simulation-schema bridge (`UsdSimPlugin`): intercepts specialized vehicle/cosim schemas (e.g., PhysX Vehicles) and maps them to LunCo models. Full USD→Bevy→Avian→simulation projection tests live here; direct Avian bridge mechanics stay in `lunco-usd-avian`. |
-| **`lunco-usd-sim-domain`** | Render-free USD domain projection: reads component-network facts, resolves Modelica member classes, invokes Rhai synthesizers, publishes generated Modelica sources, and owns generic USD actuator descriptions. It is independent of the vehicle/cosim orchestration crate. |
+| **`lunco-usd-sim`** | Vehicle-specific simulation-schema bridge (`UsdSimPlugin`): intercepts specialized schemas such as PhysX Vehicles and maps them to LunCo mobility models. It no longer installs the heavy USD cosim translator. |
+| **`lunco-usd-sim-core`** | Small render-free protocol package for the shared USD simulation schedule, processed marker, and pending differential contract used by vehicle and cosim projectors. It contains no projection systems. |
+| **`lunco-usd-sim-cosim`** | USD-authored program discovery, connection wiring, scene lifecycle, readiness, cosim API providers, and Modelica/Rhai participant projection (`UsdSimCosimPlugin`). |
+| **`lunco-usd-sim-domain`** | Render-free USD domain projection: reads component-network facts, resolves Modelica member classes, invokes Rhai synthesizers, and publishes generated Modelica sources. Generic USD actuator lowering is owned by `lunco-usd-avian`. |
 | **`lunco-usd-sim-celestial`** | Independent render-free projector for USD-authored celestial anchors, orbits, link nodes, occluders, and reflected-light metadata. It owns the celestial projection marker and does not depend on vehicle or cosimulation projection. |
 | **`lunco-usd-sim-shader`** | Independent render-free projector for `UsdShade` WGSL material intent. It authors `ShaderLook` and owns the shader-resolution marker without pulling the vehicle/cosimulation implementation into the shader source crate. |
 | **`lunco-usd-sim-telemetry`** | Independent render-free Avian rigid-body and wheel telemetry recorder. It publishes through the shared signal/telemetry registries and is isolated from USD vehicle projection changes. |
@@ -410,14 +412,25 @@ but keeps lint dependencies and lint-only tests out of the runtime physics
 package.
 
 **`lunco-usd-sim`**
-Specialized simulation metadata bridge. Intercepts complex industry-standard vehicle schemas (like NVIDIA PhysX Vehicles) and substitutes them with optimized LunCo simulation models (e.g., Raycast wheels). Its integration tests cover the complete USD→Bevy→Avian→simulation seam; direct USD physics lowering remains in `lunco-usd-avian`.
+Specialized vehicle metadata bridge. Intercepts complex industry-standard vehicle schemas (like NVIDIA PhysX Vehicles) and substitutes them with optimized LunCo simulation models (e.g., Raycast wheels). Its `UsdSimPlugin` is independent from the USD cosim translator; direct USD physics lowering remains in `lunco-usd-avian`.
+
+**`lunco-usd-sim-core`**
+Small production contract package shared by the vehicle and USD cosim
+projectors. It owns `UsdSimSet`, `UsdSimProcessed`, and
+`PendingDifferential`, keeping those contracts out of either large
+implementation crate.
+
+**`lunco-usd-sim-cosim`**
+USD-to-cosim translator and scene lifecycle package. `UsdSimCosimPlugin`
+installs source discovery, wiring, readiness, scene commands, telemetry
+projection, and cosim API providers independently from vehicle realization.
 
 **`lunco-usd-sim-domain`**
 Render-free USD domain projection. It reads composed component-network facts,
-resolves Modelica member classes, invokes authored Rhai synthesizers, publishes
-generated Modelica sources, and lowers generic force/torque actuator
-descriptions. The package has no dependency on the vehicle/cosim orchestration
-crate, so Modelica-domain edits do not rebuild that orchestration source.
+resolves Modelica member classes, invokes authored Rhai synthesizers, and
+publishes generated Modelica sources. Generic force/torque actuator lowering
+belongs to `lunco-usd-avian`, while USD wiring and participant lifecycle belong
+to `lunco-usd-sim-cosim`.
 
 **`lunco-usd-sim-celestial`**
 Independent render-free projection of USD-authored celestial and connectivity facts. It converts anchors, orbits, link nodes, occluder extents, and reflected-light declarations to `lunco-celestial` components. Its separate package boundary prevents celestial authoring changes from rebuilding the vehicle and cosimulation projector.

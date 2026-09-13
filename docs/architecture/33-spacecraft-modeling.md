@@ -413,5 +413,5 @@ Rocker-bogie fidelity needs G4+G5+G2.
 - USD physics/joints: `crates/lunco-usd-avian/src/lib.rs:457,583,685`
 - USD vehicle/wheel spawn: `crates/lunco-usd-sim/src/lib.rs:335,636,690,1026`
 - Wheel physics: `crates/lunco-mobility/src/lib.rs` (raycast), `wheel_spin.rs`
-- Model binding (USD→cosim): `crates/lunco-usd-sim/src/cosim.rs:113,467`
+- Model binding (USD→cosim): `crates/lunco-usd-sim-cosim/src/lib.rs`
 - Engine models: `assets/models/RocketEngine.mo`, `AnnotatedRocketStage.mo`, `Balloon.mo`

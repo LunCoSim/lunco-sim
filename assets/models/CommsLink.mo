@@ -43,7 +43,7 @@ model CommsLink
   //
   // `input`, NOT `parameter`, and that is the interface contract. An unconnected
   // `inputs:` port with an authored constant IS a model's parameter
-  // (`lunco-usd-sim/src/cosim.rs`: "has no wire is exactly what makes an input a
+  // (`lunco-usd-sim-cosim/src/lib.rs`: "has no wire is exactly what makes an input a
   // parameter") — the same convention UsdShade uses for a shader's `inputs:`. So
   // declaring these as inputs is what lets a scene author them:
   //

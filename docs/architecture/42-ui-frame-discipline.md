@@ -331,7 +331,7 @@ so — rather than being auto-filled. (`lunco-core/src/lib.rs`)
 `Added<GlobalEntityId>` gate fire on the next frame, which despawned and
 respawned every edge, which minted fresh ids — a full wiring rebuild every
 frame (8.6 ms) with nothing changing. If a system's gate is satisfied by the
-system's own output, it is not a gate. (`lunco-usd-sim/src/cosim.rs`)
+system's own output, it is not a gate. (`lunco-usd-sim-cosim/src/lib.rs`)
 
 **Solve on a cadence when the answer changes slowly.** Ephemeris, solar poses,
 trajectory alignment, sun light and solar-frame anchoring cost ~10 ms/frame

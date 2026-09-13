@@ -15,8 +15,9 @@ This approach provides:
 ## Key Functions & Features
 
 The component-network/Modelica projection is owned by the render-free
-`lunco-usd-sim-domain` package. This crate remains the orchestration boundary
-for USD participants, wiring, vehicle realization, and scene lifecycle.
+`lunco-usd-sim-domain` package. USD co-simulation and wiring are installed by
+the separate `lunco-usd-sim-cosim::UsdSimCosimPlugin`; this crate owns vehicle
+realization and its simulation-specific scene projection.
 
 ### 1. `UsdSimPlugin`
 The main plugin that observes USD prims and injects simulation-specific behaviors.
@@ -136,6 +137,13 @@ Resolution is asset-loading-aware — a connection whose endpoint has not spawne
 deferred, not dropped. Neither participant has to know about the other: the consumer
 names the producer, and nothing else changes.
 
+### USD cosim companion
+
+The `UsdSimCosimPlugin` owns connection derivation, scene transitions, and
+the cosim status query. It is installed separately by the application bundle;
+the vehicle plugin above does not pull that implementation crate into its
+normal dependency closure.
+
 ### Runtime reload
 
 ```bash
@@ -144,7 +152,7 @@ curl -X POST http://127.0.0.1:4101/api/commands \
   -d '{"type":"ExecuteCommand","command":"LoadScene","params":{"path":"lunco://scenes/luncosim/sandbox_scene.usda","root_prim":""}}'
 ```
 
-`LoadScene` despawns every entity carrying `UsdPrimPath` plus every
+`LoadScene` (registered by `lunco-usd-sim-cosim`) despawns every entity carrying `UsdPrimPath` plus every
 `SimConnection`, force-reads the asset from disk, and spawns a fresh
 root parented directly under the canonical `WorldGrid`. Use during authoring to iterate on a
 USD scene without restarting the binary. `root_prim: ""` reads the stage's authored
@@ -154,8 +162,8 @@ Worker-side Modelica state is cleaned up with the scene transition.
 
 ### Live status
 
-`curl … {"type":"ExecuteCommand","command":"CosimStatus","params":{}}` returns one row per
-`UsdSourcedCosim` entity with position, velocity, Modelica timing, and
+`CosimStatus` (registered by `lunco-usd-sim-cosim`) returns one row per
+`lunco-cosim::UsdSourcedCosim` entity with position, velocity, Modelica timing, and
 the value currently flowing through `SimComponent.inputs["force_y"]`. Each row
 also has a `status` string (`Unbound`, `Compiling`, `Running`, `Paused`, or
 `Error: …`), so a source-only program or failed source load is visible instead
