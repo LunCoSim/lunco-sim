@@ -6,7 +6,7 @@
 #[path = "../luncosim_repl.rs"]
 mod rhai_repl;
 
-fn main() -> lunco_luncosim::AppExit {
+fn main() -> lunco_luncosim_core::AppExit {
     // Velopack must see the original process before CLI dispatch. It handles
     // install/update hooks and applies a package that was downloaded during a
     // previous run. It does not perform the GitHub update check; that remains

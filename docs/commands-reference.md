@@ -2204,7 +2204,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  **refused** (logged, not silently dropped) — matching the rule that the builder
  must only edit doc-backed scenes or it eats work on the next reload.
 
-- *defined in:* `crates/lunco-luncosim/src/lib.rs`
+- *defined in:* `crates/lunco-luncosim-ui/src/save_scenario.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -2229,7 +2229,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  raw `ApplyUsdOp` path still works. Single active scene doc for now (mirrors the
  journal drivers).
 
-- *defined in:* `crates/lunco-luncosim/src/lib.rs`
+- *defined in:* `crates/lunco-luncosim-core/src/lib.rs`
 
 | Field | Type | Description |
 |---|---|---|

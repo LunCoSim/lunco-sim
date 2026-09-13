@@ -9,6 +9,7 @@ members = [
     "crates/lunco-controller",
     "crates/lunco-avatar",
     "crates/lunco-luncosim",
+    "crates/lunco-luncosim-core",
     "crates/lunco-luncosim-ui",
     "crates/lunco-luncosim-exposures",
     "crates/lunco-usd-ui",
@@ -106,13 +107,10 @@ exclude = ["vendor/mitchty-transform-gizmo"]
 # sweeps). `lunco-telemetry` is wired into `lunco-luncosim`, including the
 # `SubscribeTelemetry` command path.
 #
-# `lunco-luncosim-server` is intentionally NOT here — for LEANNESS, not
-# correctness: built via `-p lunco-luncosim-server`, Cargo resolves
-# `lunco-luncosim` WITHOUT `ui`, so the GUI/winit/egui stack isn't linked. (A
-# bare/`--workspace` build unifies `ui` on via the GUI `sandbox` bin, making the
-# server binary heavier — but it STILL runs headless: the bin calls
-# `lunco_luncosim::run_headless()`, which forces the windowless path regardless of
-# the linked `ui` feature.) `cargo run -p lunco-luncosim-server`.
+# `lunco-luncosim-server` and `lunco-luncosim-core` are intentionally NOT here:
+# the server is a separately selected headless app and the core runtime is a
+# dependency of that app, not a default desktop member. `cargo run
+# -p lunco-luncosim-server`.
 default-members = [
     "crates/lunco-luncosim",
     "crates/lunco-modelica-ui",

@@ -1,39 +1,33 @@
 # lunco-luncosim
 
-The ground-physics **luncosim** test bed for LunCoSim — ground mobility + physics,
-loaded from USD: a USD scene + Avian physics + the in-scene edit tools, exposed as
-the `luncosim` binary. It is the composition root that aggregates the domain crates
-(`lunco-core`, `lunco-celestial`, `lunco-mobility`, `lunco-usd`, `lunco-controller`,
-`lunco-environment`, terrain, scripting, …) into a runnable app. (The full mission
-simulator is the separate `luncosim` crate; the headless variant is
-`lunco-luncosim-server`.)
+The windowed **luncosim** application shell for LunCoSim. It configures the
+renderer/window, desktop integration, offscreen capture, and interactive UI,
+then composes the headless-safe runtime from `lunco-luncosim-core` with
+`lunco-luncosim-ui`. The headless server depends on the core package directly.
 
 ## What This Crate Does
 
-The app lives in `src/lib.rs` as `pub fn run()` / `run_headless()`, the single
-shared entry point for both the windowed GUI and the headless server. It is
-built from three named plugins composed by a tiny shell:
+The app lives in `src/lib.rs` as the GUI entry point `pub fn run()`. Headless
+launching is owned by `lunco-luncosim-core`; this package only dispatches to it
+for `--no-ui` and `LUNCO_NO_UI`. The GUI shell composes:
 
-- **`LunCoSimCorePlugin`** — sim / physics / cosim / USD / networking / API.
-  Headless-safe, added unconditionally.
+- **`lunco_luncosim_core::LunCoSimCorePlugin`** — sim / physics / cosim / USD /
+  networking / API. Headless-safe and shared with the server.
 - **`lunco_luncosim_ui::LunCoSimUiPlugin`** (`ui` feature) — egui workbench, picking, the
   in-scene editor, materials, panels, and authored-camera presentation. Added
   only when windowed; a scene without an authored camera contract remains
   visibly camera-less with an owning diagnostic rather than receiving an
   engine-created camera. USD loading completion is independent of presentation.
-- **`LunCoSimHeadlessPlugin`** — the `ScheduleRunner` plus the Modelica/spawn
-  cores a server needs in the UI plugin's place. Added only when headless.
 
-GUI = `LunCoSimCorePlugin + LunCoSimUiPlugin`; headless =
-`LunCoSimCorePlugin + LunCoSimHeadlessPlugin`. Both binaries compose the SAME
-`LunCoSimCorePlugin`, so they can never drift.
+GUI = `LunCoSimCorePlugin + LunCoSimUiPlugin`. The server and scene-test runner
+use `LunCoSimCorePlugin + LunCoSimHeadlessPlugin` from the core package.
 
 ## Binaries
 
 `cargo run -p lunco-luncosim` runs the LunCoSim GUI (the `luncosim` bin in
-`src/bin/luncosim.rs`, which just calls `lunco_luncosim::run()`). The headless
-`luncosim-server` bin lives in the sibling `lunco-luncosim-server` crate and calls
-`run_headless()`.
+`src/bin/luncosim.rs`, which calls `lunco_luncosim::run()`). The headless
+`luncosim-server` bin lives in the sibling `lunco-luncosim-server` crate and
+calls `lunco_luncosim_core::run_headless()`.
 
 | Name | Purpose |
 |---|---|
@@ -54,7 +48,8 @@ already manually clocked and runs at the speed the CPU permits.
 - **Level 2 (Domain Logic)**: `lunco-celestial`, `lunco-mobility`, `lunco-usd`
 - **Level 3 (Software)**: `lunco-obc`, `lunco-controller`
 - **Level 4 (Workflow)**: `lunco-ui`, `lunco-workbench`
-- **Level 5 (Application)**: `lunco-luncosim` (this crate), `luncosim`, `lunco-luncosim-server`
+- **Level 5 (Application)**: `lunco-luncosim-core`, `lunco-luncosim` (this crate),
+  `luncosim`, `lunco-luncosim-server`
 
 ## Features
 
@@ -95,7 +90,7 @@ hooks, RNG, and the `?workspace=…&open=…` URL boot path.
 
 ## Notes
 
-- Native uses mimalloc as the global allocator (set in `lib.rs`) to avoid
+- Native uses mimalloc as the global allocator in `lunco-luncosim-core` to avoid
   glibc's global-lock contention against avian's contact-graph rebuild.
 - The workspace bevy baseline is `default-features = false`, so
   `reflect_auto_register` is OFF (it overflowed clang's link command line).

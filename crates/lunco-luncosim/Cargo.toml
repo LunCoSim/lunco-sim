@@ -7,9 +7,9 @@ license.workspace = true
 default-run = "luncosim"
 autobins = false
 
-# The app itself lives in `src/lib.rs` (`pub fn run()` + the global allocator),
-# shared by the `luncosim` GUI bin here and the headless `luncosim-server` bin in
-# the sibling `lunco-luncosim-server` crate — so the two can never drift.
+# This package is the windowed application shell. The headless runtime is owned
+# by the sibling `lunco-luncosim-core` package and launched directly by the
+# `lunco-luncosim-server` package.
 [lib]
 name = "lunco_luncosim"
 path = "src/lib.rs"
@@ -27,14 +27,10 @@ path = "examples/usd_rover_visual.rs"
 required-features = ["ui"]
 
 [dependencies]
-# Render ASSET-STORE features (always on, even headless): these register the
-# scene-facing asset and component types that USD visual sync and avian colliders
-# share. A `--no-ui` run does not register RenderPlugin or any render-world
-# consumer. `bevy_light`
-# (DirectionalLight/GlobalAmbientLight) and `bevy_window` (Window/PresentMode/
-# WindowPlugin types) are referenced on the headless path too, so they stay here.
-# The actual WINDOWING/INTERACTION stack (winit backend, picking, post-process,
-# gizmos) lives behind the `ui` feature below so a server build omits it entirely.
+lunco-luncosim-core = { path = "../lunco-luncosim-core", default-features = false }
+# Scene-facing Bevy asset/component features used by the GUI shell. The
+# headless runtime has its own equivalent dependency declaration in core, so a
+# server build never resolves this package's renderer/UI closure.
 #
 # Scene type registration: the workspace bevy baseline is `default-features =
 # false`, so bevy's inventory-based `reflect_auto_register` (part of the
@@ -46,34 +42,14 @@ required-features = ["ui"]
 # command line past its internal limit (link aborted with `std::length_error`).
 # Instead `UsdBevyPlugin` explicitly `register_type`s the bounded set of
 # glTF/USD scene component types — see `crates/lunco-usd-bevy-core/src/lib.rs`.
-# `bevy_pbr` is UI-only: headless domain crates state `PbrLook`/`ShaderLook`
-# intent, and the binder that turns intent into a render asset lives behind the
-# `ui` feature with `lunco-render-bevy`. Keeping PBR out of this dependency line
-# keeps the server free of the GPU renderer.
+# `bevy_pbr` is UI-only: domain crates state `PbrLook`/`ShaderLook` intent, and
+# the binder that turns intent into a render asset lives in `lunco-render-bevy`.
 bevy = { workspace = true, features = ["bevy_gltf", "bevy_mesh", "bevy_light", "bevy_window"] }
 avian3d = { workspace = true }
-lunco-physics = { workspace = true }
-# The sky-clock panel drives the celestial `TimeDomain` (`SetClock`) directly.
-lunco-time = { path = "../lunco-time" }
-big_space = { workspace = true }
+big_space = { workspace = true, optional = true }
 lunco-core = { path = "../lunco-core" }
-lunco-hardware = { path = "../lunco-hardware" }
-# The PRODUCER of `SampledParameter`. Its consumer (`lunco-api`'s
-# `sampled_param_observer` — i.e. `SubscribeTelemetry`) was already shipped and
-# wired, so leaving this out meant the API advertised parameter telemetry that could
-# never arrive. Render-free: it is the eyes-and-ears of a `--no-ui` run.
-lunco-telemetry = { path = "../lunco-telemetry" }
-lunco-mobility = { path = "../lunco-mobility" }
-lunco-controller = { path = "../lunco-controller" }
-# `default-features = false` drops avatar's egui/workbench/gizmo UI layer for the
-# lean server; the `ui` feature below re-enables it (`lunco-avatar/ui`) for the
-# GUI build. (Template for the celestial/usd/luncosim-edit pass — until those are
-# gated too, their transitive `lunco-avatar` (default) edges keep avatar/ui on
-# in non-server builds via Cargo feature unification.)
-lunco-avatar = { path = "../lunco-avatar", default-features = false }
 lunco-render = { path = "../lunco-render" }
-# The bevy_pbr binding layer. Added as a PLUGIN only in non-headless builds
-# (`LunCoSimCorePlugin::build`), which is the entire render gate.
+# The bevy_pbr binding layer, added by this GUI composition root only.
 #
 # THE RENDER GATE, at the dependency level. `lunco-render-bevy` is the one crate
 # that names `bevy_pbr`, so making it `optional` + `ui`-only is what finally stops
@@ -90,107 +66,46 @@ lunco-settings = { path = "../lunco-settings", optional = true }
 # `default-features = false` drops celestial's egui inspector (`CelestialUiPlugin`,
 # not used by the luncosim bin). The `celestial` feature still pulls embed-assets.
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
-# Real VSOP2013/ELP ephemeris on EVERY platform (wasm included — the
-# JPL-Horizons network fetch is cfg-gated inside the plugin; the analytic
-# series are pure Rust). Comms link geometry + the orbital view need real
-# body positions in the browser build too.
-lunco-celestial-ephemeris = { path = "../lunco-celestial-ephemeris" }
-lunco-terrain-globe = { path = "../lunco-terrain-globe" }
-lunco-obstacle-field = { path = "../lunco-obstacle-field" }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
 lunco-luncosim-ui = { path = "../lunco-luncosim-ui", default-features = false, optional = true }
-lunco-luncosim-exposures = { path = "../lunco-luncosim-exposures", default-features = false }
-# Experiment registry types — used by the experiment-journal replay leg AND the
-# all-platform result-artifact persistence (write/load). Unconditional: result
-# persistence is a core (not networking) feature, and experiments is a pure crate.
-lunco-experiments = { path = "../lunco-experiments" }
-# Result-artifact (de)serialization (RunResult ↔ JSON) for persistence. Core.
+lunco-scripting = { path = "../lunco-scripting" }
+lunco-assets = { workspace = true }
+lunco-twin = { path = "../lunco-twin" }
 serde_json = { workspace = true }
 lunco-cosim = { path = "../lunco-cosim" }
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-readiness = { workspace = true }
+lunco-scene-commands = { path = "../lunco-scene-commands" }
+lunco-scene-validation = { path = "../lunco-scene-validation" }
 lunco-usd-avian = { path = "../lunco-usd-avian" }
-lunco-environment = { path = "../lunco-environment" }
-lunco-scripting = { path = "../lunco-scripting" }
-# USD core (scene load + collider build) is always needed; its Twin-browser /
-# viewport egui UI is supplied by the application UI shell.
-lunco-usd = { path = "../lunco-usd", default-features = false }
-lunco-usd-bevy-runtime = { path = "../lunco-usd-bevy-runtime" }
-# Live canonical stage read path (`CanonicalStages` / `StageView` / `UsdRead`):
-# the USD-reading systems below consume the composed stage, while initial reads
-# use every asset's prepared projection plan.
-lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-core = { path = "../lunco-usd-core" }
-# `cosim::SceneLoadInFlight` for `report_scene_spawn_status`, which mirrors "scene
-# prims are still spawning" onto the workbench `StatusBus` — where the offline
-# recorder's readiness gate reads it. Adds NOTHING to the dependency graph:
-# `lunco-usd` already pulls this crate in, so naming it here only makes the type
-# reachable from this one.
 lunco-usd-sim = { path = "../lunco-usd-sim" }
 lunco-usd-sim-cosim = { path = "../lunco-usd-sim-cosim" }
 lunco-usd-sim-domain = { path = "../lunco-usd-sim-domain" }
-# USD→terrain projection: authored terrain prims → DEM request + layer stack, and
-# hand edits back onto the document's runtime layer. Render-free, so the headless
-# server gets its terrain collider without linking any UI.
-lunco-usd-terrain = { path = "../lunco-usd-terrain" }
-# The scene/document COMMAND LAYER — NOT optional: the headless server needs its
-# `commands::SpawnCommandPlugin` (runtime spawn/move + `NetReplicate` tagging) and
-# the journaled shader domain. Render-free, UI-free.
-lunco-scene-commands = { path = "../lunco-scene-commands" }
-lunco-scene-authoring = { path = "../lunco-scene-authoring" }
-lunco-scene-validation = { path = "../lunco-scene-validation" }
-# The UI-side editor adapter is optional and only used by the windowed app's
-# debug-scene selection helpers. The editor mechanisms are installed by
-# `lunco-luncosim-ui`, while the headless build contains neither editor package.
+# The production `luncosim test` subcommand uses the editor's selection query
+# to report visual parity diagnostics; it is UI-only and never enters core.
 lunco-luncosim-edit-ui = { path = "../lunco-luncosim-edit-ui", optional = true }
-lunco-web = { workspace = true }
-lunco-assets = { workspace = true }
-lunco-workspace = { path = "../lunco-workspace" }
-lunco-twin = { path = "../lunco-twin" }
-# Canonical Twin change-journal (`TwinJournalPlugin` / `JournalResource`), added
-# by `LunCoSimCorePlugin` as core substrate so the headless server + clients
-# record edits (not just the egui workbench). `default-features = false` keeps
-# `lunco-doc-bevy/ui` (→ bevy_egui) off the headless server (CQ-601).
-lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
-# Journal entry ids for the client-side journal→scene replay driver (Layer B).
-# Optional — only the `networking` build's `replay_scenario_journal` uses it.
-lunco-twin-journal = { path = "../lunco-twin-journal", optional = true }
 # ── UI-only crate deps (gated behind the `ui` feature) ────────────────────
-# A `--no-ui` server build (`--no-default-features --features server`) omits
-# these entirely: the egui workbench, the blueprint/shader material editors,
-# the doc/theme/general-UI crates. luncosim.rs cfg-gates every use behind
-# `feature = "ui"`.
-# Not optional/ui-gated: the doc subsystem (DocumentId, edit authoring) is a core,
-# headless-safe concern — not a UI feature. Already compiled transitively via
-# lunco-doc-bevy, so naming it directly adds no build cost. Was under `ui` only because
-# one UI panel imported DocumentId (CQ: de-UI-gate the doc subsystem).
+# The headless server does not depend on this package, so these stay outside
+# its dependency closure: egui workbench, material editors, and UI presentation.
 lunco-workbench = { path = "../lunco-workbench", optional = true }
 lunco-capture = { path = "../lunco-capture", optional = true }
 # `default-features = false` lets the application choose the outward transport
 # explicitly: native `transport-http` or the target-selected wasm bridge.
 lunco-api-transport = { path = "../lunco-api-transport", optional = true, default-features = false }
 # `default-features = false`: networking's egui/workbench `ui` feature is opt-in
-# (CQ-601). The GUI build re-enables it via this crate's `ui` feature
-# (`lunco-networking?/ui`); the headless `server` build leaves it off.
+# (CQ-601). The GUI build re-enables it via this crate's `ui` feature; the
+# headless core leaves it off.
 lunco-networking = { path = "../lunco-networking", optional = true, default-features = false }
 # Cross-platform I/O layer (native FileStorage / wasm WebStorage). Used by the
 # `luncosim://` scheme handler AND all-platform result-artifact persistence, so
 # it's unconditional — storage is the loading layer, not a networking concern.
 lunco-storage = { path = "../lunco-storage" }
 
-# Replace glibc's allocator with mimalloc on native targets. Bevy +
-# avian generate huge cross-thread allocator traffic; glibc's
-# arena-per-thread fallback still hits a global lock which serialised
-# our hot frames against the avian contact-graph rebuild. mimalloc
-# uses per-thread heaps and lock-free fast paths, giving consistent
-# frame times. Wasm has its own allocator path, so this dep is native-
-# only.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-mimalloc = "0.1"
-# Native desktop startup hooks and update checks. The Velopack application
-# entry point is only used by the windowed `luncosim` binary; headless and WASM
-# builds do not execute or link the updater path.
+# Native desktop startup hooks and update checks for the windowed `luncosim`.
 velopack = { version = "=1.2.110-ge826545", optional = true, features = ["public-utils"] }
 ureq = { workspace = true, optional = true }
 
@@ -199,7 +114,7 @@ ureq = { workspace = true, optional = true }
 # starts a local windowed simulation. Networking is deliberately opt-in: a normal
 # desktop run or automated scene test must not bind a multiplayer host port. Build
 # the wire explicitly with `--features networking`, or use the headless server
-# package. A lean HEADLESS server drops the GUI:
+# package. The alternate headless feature set drops the GUI:
 #   cargo build -p lunco-luncosim --bin luncosim --no-default-features --features server
 # which omits winit/wayland/x11/egui/picking/gizmos + the workbench/material/doc
 # UI crates entirely — the SAME `luncosim` bin, just a different feature set. Single-
@@ -208,8 +123,7 @@ ureq = { workspace = true, optional = true }
 # default does not affect it.
 default = ["ui", "celestial", "api-transport", "transport-http"]
 # Windowed GUI: the winit windowing backend + render-effect features + every
-# UI crate (egui workbench, material editors, doc/theme/ui). Off for a headless
-# server.
+# UI crate (egui workbench, material editors, doc/theme/ui).
 #
 # `dep:lunco-render-bevy` — THE RENDER GATE. This is the crate that names
 # `bevy_pbr`, so gating it here is what keeps wgpu + naga out of the `--no-ui`
@@ -219,17 +133,17 @@ default = ["ui", "celestial", "api-transport", "transport-http"]
 ui = [
     "dep:velopack",
     "dep:ureq",
-    # Screenshot capture is a rendered application capability. Keep it on the UI
-    # edge so the headless API server does not acquire GPU readback or image I/O.
+    # Screenshot capture is a rendered application capability kept on the UI edge.
     "dep:lunco-capture",
     "lunco-capture/api",
     "lunco-workbench/api",
     "dep:lunco-render-bevy",
-    "lunco-avatar/ui",
+    "lunco-luncosim-ui/avatar-ui",
     "dep:lunco-luncosim-edit-ui",
     "dep:lunco-luncosim-ui",
+    "dep:big_space",
     # egui presence/guided overlays + Network menu bridge — only when networking
-    # is also enabled (`?`); the headless server's `server` feature omits this.
+    # is also enabled (`?`); the headless core leaves this off.
     "lunco-networking?/ui",
     "lunco-api-transport?/winit",
     "dep:lunco-workbench",
@@ -250,7 +164,7 @@ ui = [
     # HUI/Flair reload their asset handles from AssetEvent::Modified. Enable
     # Bevy's native desktop watcher so editing the template or stylesheet
     # takes effect in the running GUI; this remains UI-only and is absent from
-    # the headless server feature set.
+    # the headless core feature set.
     "bevy/file_watcher",
     "bevy/bevy_post_process",
     "bevy/bevy_anti_alias",
@@ -276,6 +190,7 @@ luncosim = []
 api-transport = [
     "dep:lunco-api-transport",
     "lunco-modelica-core/api",
+    "lunco-luncosim-core/api-transport",
     "lunco-luncosim-ui?/api-transport",
 ]
 # Native HTTP API transport (axum/TcpListener) — also the gate for the in-app
@@ -284,6 +199,7 @@ api-transport = [
 # the bridge automatically via `cfg(target_arch="wasm32")`.
 transport-http = [
     "lunco-api-transport/transport-http",
+    "lunco-luncosim-core/transport-http",
     "lunco-networking?/transport-http",
     "lunco-luncosim-ui?/transport-http",
 ]
@@ -291,18 +207,17 @@ transport-http = [
 # adapter; the wire substrate (lunco-api) is required.
 networking = [
     "dep:lunco-networking",
+    "lunco-luncosim-core/networking",
     "lunco-networking/networking",
-    "lunco-luncosim-exposures/networking",
     "lunco-luncosim-ui?/networking",
     "api-transport",
-    "dep:lunco-twin-journal",
 ]
 # Netcode jitter diagnostics — off by default (not in normal builds). Build with
 # `--features networking,net-diag` when debugging; see lunco-networking/diagnostics.rs.
-net-diag = ["networking", "lunco-networking/net-diag"]
+net-diag = ["networking", "lunco-networking/net-diag", "lunco-luncosim-core/net-diag"]
 python = [
     "lunco-scripting/python",
-    "lunco-usd-sim-cosim/python",
+    "lunco-luncosim-core/python",
     "lunco-luncosim-ui?/python",
 ]
 # Tracy profiler. Enable with `--features tracy` and connect a Tracy

@@ -16,6 +16,9 @@ api-transport = ["dep:lunco-api", "dep:lunco-api-transport", "lunco-modelica-ui/
 transport-http = ["api-transport", "lunco-api-transport/transport-http"]
 # Source-palette presentation for Python-backed programs.
 python = []
+# Avatar's egui presentation belongs to the application UI shell rather than
+# the headless-safe simulation runtime.
+avatar-ui = ["lunco-avatar/ui"]
 # Downloaded Twin presentation in the Scenarios menu.
 networking = ["dep:lunco-networking", "lunco-networking/networking"]
 
