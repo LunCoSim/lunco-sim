@@ -8478,6 +8478,7 @@ dependencies = [
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
  "lunco-usd-core",
+ "lunco-usd-geometry",
  "openusd",
  "tempfile",
 ]

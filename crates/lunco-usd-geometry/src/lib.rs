@@ -7,6 +7,7 @@
 //! evaluator does not recompile the USD stage loader and its runtime systems.
 
 pub mod curve_sweep;
+pub mod curve;
 pub mod nurbs;
 pub mod ribbon;
 pub mod trim;

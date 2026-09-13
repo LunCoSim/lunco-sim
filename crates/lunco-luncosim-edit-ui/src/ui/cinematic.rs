@@ -30,7 +30,8 @@ use lunco_core::{on_command, register_commands, Command, SceneViewport};
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_render::SceneCamera;
 use lunco_time::{ControlAnimation, Playback, TransportMode};
-use lunco_usd_bevy_camera::camera_path::{eval_curve, eval_curve_tangent, AimMode, CameraPath};
+use lunco_usd_bevy_camera::camera_path::{AimMode, CameraPath};
+use lunco_usd_geometry::curve::{eval_curve, eval_curve_tangent};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_core::commands::ApplyUsdOp;
 use lunco_usd_core::document::UsdDocument;
@@ -90,7 +91,7 @@ impl Default for CinematicViz {
 /// Draw each [`CameraPath`]'s curve, its control points, and a live dot at the
 /// playhead.
 ///
-/// Evaluates the curve with the driver's OWN `eval_curve`, so what you see is
+/// Evaluates the curve with the shared geometry `eval_curve`, so what you see is
 /// exactly where the camera will fly — the overlay cannot drift from the motion,
 /// because it is the same function. It reads authored control points, not a trace
 /// of past positions, so the path is visible before playback ever runs and
