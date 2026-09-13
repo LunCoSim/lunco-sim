@@ -301,7 +301,8 @@ Deterministic-given-inputs, currently recomputed **every load**. Rank by payoff:
    not lighting — never needs re-baking," yet re-baked every session. Bake once,
    key = (mesh/DEM hash, resolution). Highest value / lowest risk. **Pairs with
    the render-side win** of turning the 96-step per-pixel ray-march into a baked
-   horizon-angle map (see the shader analysis) — same bake step feeds both.
+   visibility texture (see the shader analysis) — the same geometry bake feeds
+   both the CPU cache and the GPU shadow-cache input.
 2. **LOD tile meshes** — `lunco-terrain-surface/src/stream_viz.rs:200`
    `LodMeshCache` is RAM-only, capped 1024, dropped on re-bake. Tile geometry is
    "a pure function of the node" (its own comment). Persist keyed by
@@ -354,9 +355,13 @@ the integrator state.
    mutable compilation or simulation stepping.
 
 **Static-scene shortcut (architectural):** the Moon scene is static terrain +
-slow sun + a few dynamic movers. Baked horizon shadows (§4.1) already cover
-terrain self-shadowing; restrict real-time CSM to dynamic casters. Same
-"bake the static, compute only the moving" principle as physics topology caching.
+slow sun + a few dynamic movers. Baked horizon visibility owns long-range
+terrain self-shadowing, while static horizon terrain remains a native CSM
+caster and receiver for mesh-accurate near shadows and dynamic-object shadows.
+Only streamed terrain tiles are excluded from the CSM caster set because their
+resident tile population is too large; they remain receivers. This preserves
+the same "bake the static, compute only the moving" principle without removing
+the shadow path needed for objects to shade the terrain.
 
 ## 6. In-RAM memoization (existing, sound — leave alone)
 

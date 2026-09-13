@@ -250,15 +250,15 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     var color = pbr_functions::apply_pbr_lighting(pbr_input);
 
     // Ray-marched heightfield sun shadow (the mesh gains planar UVs once
-    // the horizon bake lands; before that this branch compiles out). Within
-    // the sun's cascade range (engine2.w) the terrain casts into the CSM,
-    // so the march fades in only beyond ~half that range — near pixels get
-    // mesh-accurate CSM self-shadow and skip the march loop entirely.
+    // the horizon bake lands; before that this branch compiles out). The
+    // terrain receives native CSM for mesh-accurate near and dynamic-object
+    // shadows, so the march fades in just outside the cascade range rather
+    // than multiplying a second terrain-shadow term over the CSM result.
 #ifdef VERTEX_UVS_A
     let csm_far = mat.csm_far;
     var march_blend = 1.0;
     if (csm_far > 0.0) {
-        march_blend = smoothstep(csm_far * 0.5, csm_far * 0.9, dist);
+        march_blend = smoothstep(csm_far, csm_far * 1.1, dist);
     }
     if (march_blend > 0.0) {
         let sun_vis = sun_visibility_resolved(

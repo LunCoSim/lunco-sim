@@ -7,11 +7,11 @@
 //! terrain heightfield (see `horizon_march.wgsl` for the algorithm; the
 //! engine writes the heightfield + sun uniforms).
 //!
-//! Near/far split: within the sun's cascade range the terrain casts into the
-//! CSM (mesh-accurate self-shadow via `apply_pbr_lighting`), so the march
-//! only fades in beyond ~half that range (`csm_far`; 0 ⇒ march everywhere)
-//! — its heightfield-texel-quantized edges never show up close, and near
-//! pixels skip the march loop entirely.
+//! Near/far split: within the sun's cascade range the terrain both casts and
+//! receives the CSM (mesh-accurate self-shadow and dynamic-object shadows via
+//! `apply_pbr_lighting`). The heightfield path fades in just outside that
+//! range (`csm_far`; 0 ⇒ march everywhere), avoiding a second shadow term over
+//! the native cascade while retaining the long-range terrain shadow.
 
 #import bevy_pbr::{
     forward_io::VertexOutput,
@@ -109,7 +109,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     var march_blend = 1.0;
     if (csm_far > 0.0) {
         let cam_d = distance(view.world_position, in.world_position.xyz);
-        march_blend = smoothstep(csm_far * 0.5, csm_far * 0.9, cam_d);
+        march_blend = smoothstep(csm_far, csm_far * 1.1, cam_d);
     }
     if (march_blend > 0.0) {
         let vis = sun_visibility_resolved(

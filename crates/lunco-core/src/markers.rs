@@ -141,18 +141,18 @@ impl Default for SunAngularDiameter {
     }
 }
 
-/// Opt-in marker for static terrain that self-shadows by **ray-marching a
-/// baked heightfield**, instead of the realtime cascade shadow map (which
-/// cannot resolve kilometre-scale terrain shadows: at a grazing sun the
-/// required depth bias scales as `1/tan(elevation)`, so any bias that stops
-/// acne peter-pans the shadow tens of metres).
+/// Opt-in marker for static terrain that supplements the realtime cascade shadow
+/// map with **ray-marching a baked heightfield**. Cascades remain authoritative
+/// for mesh-accurate near-field terrain and dynamic-object shadows; the
+/// heightfield path owns the long-range terrain self-shadow that a cascade
+/// cannot resolve reliably at lunar grazing angles.
 ///
 /// Stamped by loaders (the USD loader reads
 /// `custom bool lunco:terrain:horizonShadows`); consumed by
 /// `lunco-environment`'s horizon-shadow system, which bakes a `resolution`²
-/// heightfield of the terrain's local XZ bounding box and marches it per
-/// pixel. Universal across bodies: the bake is sun-agnostic — geometry only —
-/// so any sun direction is evaluated against it at runtime.
+/// heightfield of the terrain's local XZ bounding box and evaluates it outside
+/// the CSM range. Universal across bodies: the bake is sun-agnostic — geometry
+/// only — so any sun direction is evaluated against it at runtime.
 ///
 /// **Not a horizon-angle map**, despite the name. Storing horizon *angles* per
 /// grid point was tried and rejected: it low-pass-filters the casting crests
