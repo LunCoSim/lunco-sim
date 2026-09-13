@@ -12,20 +12,38 @@ use std::collections::HashMap;
 /// Maximum presentation publication rate for reactive runtime consumers.
 pub const EXPOSURE_UPDATE_HZ: f32 = 20.0;
 
-/// A scalar or already-formatted value exposed by an engine capability.
+/// A typed value exposed by an engine capability.
+///
+/// Collections stay typed across the engine/Rhai/UI boundary. Presentation
+/// code may choose how to render them, but the exposure registry never flattens
+/// authored arrays or records into numbered scalar slots.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExposureValue {
     Text(String),
     Bool(bool),
     Number(f64),
+    Array(Vec<ExposureValue>),
+    Map(Vec<(String, ExposureValue)>),
 }
 
 impl ExposureValue {
+    /// Render one scalar value for a template property or CSS custom property.
+    /// Structured values are intentionally not coerced into display text.
     pub fn render(&self) -> String {
         match self {
             Self::Text(value) => value.clone(),
             Self::Bool(value) => value.to_string(),
             Self::Number(value) => value.to_string(),
+            Self::Array(_) | Self::Map(_) => String::new(),
+        }
+    }
+
+    pub fn scalar_render(&self) -> Option<String> {
+        match self {
+            Self::Text(value) => Some(value.clone()),
+            Self::Bool(value) => Some(value.to_string()),
+            Self::Number(value) => Some(value.to_string()),
+            Self::Array(_) | Self::Map(_) => None,
         }
     }
 }

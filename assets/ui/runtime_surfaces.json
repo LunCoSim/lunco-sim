@@ -159,31 +159,16 @@
       "bindings": {
         "scope": { "source": "scope" },
         "program_count": { "source": "program_count" },
-        "program_0_path": { "source": "program_0_path" },
-        "program_0_source": { "source": "program_0_source" },
-        "program_0_status": { "source": "program_0_status" },
-        "program_0_select_action": { "source": "program_0_select_action" },
-        "program_0_edit_action": { "source": "program_0_edit_action" },
-        "program_0_display": { "source": "program_0_visible", "map": { "true": "flex", "false": "none" } },
-        "program_1_path": { "source": "program_1_path" },
-        "program_1_source": { "source": "program_1_source" },
-        "program_1_status": { "source": "program_1_status" },
-        "program_1_select_action": { "source": "program_1_select_action" },
-        "program_1_edit_action": { "source": "program_1_edit_action" },
-        "program_1_display": { "source": "program_1_visible", "map": { "true": "flex", "false": "none" } },
-        "program_2_path": { "source": "program_2_path" },
-        "program_2_source": { "source": "program_2_source" },
-        "program_2_status": { "source": "program_2_status" },
-        "program_2_select_action": { "source": "program_2_select_action" },
-        "program_2_edit_action": { "source": "program_2_edit_action" },
-        "program_2_display": { "source": "program_2_visible", "map": { "true": "flex", "false": "none" } },
-        "program_3_path": { "source": "program_3_path" },
-        "program_3_source": { "source": "program_3_source" },
-        "program_3_status": { "source": "program_3_status" },
-        "program_3_select_action": { "source": "program_3_select_action" },
-        "program_3_edit_action": { "source": "program_3_edit_action" },
-        "program_3_display": { "source": "program_3_visible", "map": { "true": "flex", "false": "none" } }
+        "program_empty_display": { "source": "program_empty_display", "map": { "true": "flex", "false": "none" } }
       },
+      "collections": [
+        {
+          "source": "programs",
+          "container": "program-list",
+          "template": "ui/program_browser_row.html",
+          "key": "key"
+        }
+      ],
       "interactive": true,
       "placement": {
         "mode": "window",
@@ -204,10 +189,12 @@
       "bindings": {
         "active_label": { "source": "active_label" }
       },
-      "actions": [
+      "collections": [
         {
-          "callback": "runtime_camera_picker_toggle",
-          "action": "camera.picker.toggle"
+          "source": "camera_items",
+          "container": "camera-list",
+          "template": "ui/camera_status_row.html",
+          "key": "key"
         }
       ],
       "visible_in_perspective": "sandbox_view",
@@ -216,8 +203,8 @@
         "mode": "window",
         "anchor": "top_right",
         "offset": [-12.0, 52.0],
-        "width": 196.0,
-        "height": 32.0
+        "width": 260.0,
+        "height": 236.0
       }
     },
     {

@@ -1,0 +1,18 @@
+<template>
+  <property name="key">—</property>
+  <property name="path">—</property>
+  <property name="source">—</property>
+  <property name="status">—</property>
+  <property name="select_action">program.select.0</property>
+  <property name="edit_action">program.edit.0</property>
+
+  <node id="program-row">
+    <node id="program-copy">
+      <text id="program-path">{path}</text>
+      <text id="program-source">{source}</text>
+      <text id="program-status">{status}</text>
+    </node>
+    <button id="program-select" on_press="runtime_ui_authored_action" tag:action="{select_action}"><text>SELECT</text></button>
+    <button id="program-edit" on_press="runtime_ui_authored_action" tag:action="{edit_action}"><text>EDIT</text></button>
+  </node>
+</template>

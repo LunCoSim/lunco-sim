@@ -155,27 +155,23 @@ value with `setting_default`.
 The camera-status surface is the reference composition. Rust publishes the
 full current camera fact (`active_name`) and a deterministic compact identity
 projection (`active_label`) through the generic `camera-status` exposure. Rhai
-owns authored camera-selection policy through `set_camera(name)` and can read
-the full fact with `get_exposure(...)`; HUI/CSS owns the compact retained
-presentation and binds `active_label` while its complete authored button emits
-`camera.picker.toggle` from the label, camera name, and card padding.
-The native picker uses the measured HUI rectangle only as its anchor; it sizes
-the popup from the widest rendered option, clamps that width to egui's menu and
-viewport limits, and truncates only the display projection when a bound is
-reached. Full USD identities remain the selection and hover data.
-The shared `lunco-usd-bevy-camera::camera_switch::camera_display_labels` policy is
-used by the exposure, picker, Camera menu, USD prim tree, entity tree, and
+owns the authored camera-selection policy: it maps the typed camera facts to
+ordered `camera_items` records, including optional observe-avatar and
+resume-director actions. HUI/CSS owns the retained presentation and the
+generic keyed collection host creates rows from the authored row template.
+Camera row actions resolve to the existing typed camera commands; no camera
+registry or selection heuristic is duplicated in the exposure producer.
+The collection host retains row order, clips long lists, and consumes wheel
+input at the host boundary; Rhai remains the owner of records, ordering, and
+actions rather than a per-surface Rust list implementation.
+The shared `lunco-usd-bevy-camera::camera_switch::camera_display_labels` policy
+is used by the exposure, Camera menu, USD prim tree, entity tree, and
 Inspector: unique authored leaves stand alone; duplicate leaves gain the
 nearest owner context and then additional ancestors; generated
 hexadecimal/UUID-like owner suffixes are omitted; an unavoidable normalized
 collision gets a small ordinal. The full USD path remains the selection
 identity and is available through tooltips, diagnostics, and `active_name`,
 never replaced by the display projection.
-Because HUI has no dynamic repeated-list or payload-action contract, the
-existing egui host draws the picker from the same `CameraSelectionStatus` view
-model, anchors it to the measured HUI surface rectangle, and emits the typed
-`SetUserCamera` command. No camera registry or selection heuristic is
-duplicated in the exposure producer.
 
 Camera and exposure updates are reactive: camera status is rebuilt after its
 selection, viewport, camera-entity, or track inputs change; it emits a

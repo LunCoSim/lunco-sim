@@ -338,6 +338,15 @@ fn exposure_value_to_json(value: &lunco_core::exposure::ExposureValue) -> serde_
         lunco_core::exposure::ExposureValue::Number(value) => serde_json::Number::from_f64(*value)
             .map(serde_json::Value::Number)
             .unwrap_or(serde_json::Value::Null),
+        lunco_core::exposure::ExposureValue::Array(values) => {
+            serde_json::Value::Array(values.iter().map(exposure_value_to_json).collect())
+        }
+        lunco_core::exposure::ExposureValue::Map(values) => serde_json::Value::Object(
+            values
+                .iter()
+                .map(|(key, value)| (key.clone(), exposure_value_to_json(value)))
+                .collect(),
+        ),
     }
 }
 

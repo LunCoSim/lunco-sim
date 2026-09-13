@@ -3,8 +3,8 @@
 
 #camera-status-root {
   display: flex;
-  align-items: center;
-  column-gap: 6px;
+  flex-direction: column;
+  gap: 6px;
   padding: 6px 9px;
   border-width: 1px;
   border-color: var(--panel-border);
@@ -13,6 +13,13 @@
   color: var(--text-color);
   font-family: "LunCo UI";
   overflow: hidden;
+}
+
+#camera-status-header {
+  display: flex;
+  align-items: center;
+  column-gap: 6px;
+  min-width: 0px;
 }
 
 #camera-status-label {
@@ -35,4 +42,30 @@
   font-size: 12px;
   font-weight: 700;
   -bevy-line-break: no-wrap;
+}
+
+#camera-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 184px;
+  overflow: scroll;
+}
+
+#camera-option {
+  width: 100%;
+  min-height: 24px;
+  padding: 3px 6px;
+  border-width: 1px;
+  border-color: var(--panel-border);
+  border-radius: 4px;
+  background-color: var(--button-background);
+  color: var(--text-color);
+  text-align: left;
+}
+
+#camera-option-label {
+  overflow: hidden;
+  -bevy-line-break: no-wrap;
+  font-size: 10px;
 }

@@ -65,18 +65,21 @@ unknown style property and rejects the template.
 The generic `program-browser` surface demonstrates this contract. A Twin or
 Rhai policy enables it on a USD scope, while the runtime exposes only the
 direct `LunCoProgramAPI` children and Rhai owns adding, selecting, editing, or
-switching a program source. The surface uses bounded rows because HUI 0.7 has
-no retained repeated-list primitive; it does not duplicate program state.
+switching a program source. Its `programs` array is rendered by the generic
+keyed collection host from the authored `program_browser_row.html` template;
+there is no fixed row count or program-specific Rust view model. Collection
+hosts retain authored row order and own wheel scrolling inside their clipped
+list; Rhai still owns the records, ordering, and actions.
 
 The camera-status card binds the deterministic compact `active_label` projection;
-the full `active_name` remains available to runtime consumers. The complete
-camera-status surface is the picker open button, so its label, camera name, and
-card padding share one click target. The button is intentionally only the
-picker open intent. HUI 0.7
-does not provide a dynamic repeated-list or payload-action contract, so the
-existing egui host renders the camera options from `CameraSelectionStatus` at
-the measured HUI anchor and emits the typed camera command. This keeps the
-camera identity list single-sourced while preserving the authored trigger.
+the full `active_name` remains available to runtime consumers. Rhai turns the
+typed camera facts into ordered `camera_items`, including optional observe-avatar
+and resume-director actions. The generic collection host renders those items
+from `camera_status_row.html`; a row emits its authored semantic action and the
+camera capability executes the resulting typed command. The card and its list
+therefore remain one authored HUI surface rather than an egui popup. Its
+collection host clips long lists and consumes wheel input at the host boundary;
+Rhai remains the owner of the records, order, and actions.
 
 The `celestial-view` surface also owns the authored lunar map. Rust resolves the
 local avatar's driven vessel through `TheLocalAvatar` and `ControllerLink`,

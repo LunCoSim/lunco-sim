@@ -42,16 +42,16 @@ use std::{
 
 use lunco_api::discovery::find_api_command;
 use lunco_api::executor::{
-    authz_target_gid, command_result_json, validate_command_params, ApiCommandEvent,
+    ApiCommandEvent, authz_target_gid, command_result_json, validate_command_params,
 };
 use lunco_api::queries::{ApiQueryRegistry, ApiVisibility};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::ApiResponse;
-use lunco_core::session::{authorize, CommandPolicyRegistry, SessionRbac, SessionRegistry};
+use lunco_core::session::{CommandPolicyRegistry, SessionRbac, SessionRegistry, authorize};
 use lunco_core::{
+    CelestialBody, CommandResults, GlobalEntityId, NavigationCommand, OpId, SECS_PER_TICK,
+    SessionId, Severity, SimTick, SteeringGeometry, TelemetryEvent, TelemetryValue,
     coords::{GridPos, VehicleFrame},
-    CelestialBody, CommandResults, GlobalEntityId, NavigationCommand, OpId, SessionId, Severity,
-    SimTick, SteeringGeometry, TelemetryEvent, TelemetryValue, SECS_PER_TICK,
 };
 
 // ── Native value construction ──────────────────────────────────────────────
@@ -1447,13 +1447,33 @@ pub fn get_exposure<B: ValueBuilder>(b: &B, namespace: &str, property: &str) -> 
             .get(namespace)?
             .properties
             .get(property)?;
-        Some(match value {
-            lunco_core::exposure::ExposureValue::Text(value) => b.string(value),
-            lunco_core::exposure::ExposureValue::Bool(value) => b.bool(*value),
-            lunco_core::exposure::ExposureValue::Number(value) => b.float(*value),
-        })
+        Some(exposure_value_to_native(b, value))
     })
     .flatten()
+}
+
+#[cfg(feature = "rhai")]
+fn exposure_value_to_native<B: ValueBuilder>(
+    b: &B,
+    value: &lunco_core::exposure::ExposureValue,
+) -> B::Value {
+    match value {
+        lunco_core::exposure::ExposureValue::Text(value) => b.string(value),
+        lunco_core::exposure::ExposureValue::Bool(value) => b.bool(*value),
+        lunco_core::exposure::ExposureValue::Number(value) => b.float(*value),
+        lunco_core::exposure::ExposureValue::Array(values) => b.array(
+            values
+                .iter()
+                .map(|value| exposure_value_to_native(b, value))
+                .collect(),
+        ),
+        lunco_core::exposure::ExposureValue::Map(values) => b.map(
+            values
+                .iter()
+                .map(|(key, value)| (key.clone(), exposure_value_to_native(b, value)))
+                .collect(),
+        ),
+    }
 }
 
 /// `is_unattended()` — whether NOTHING can take user input this run, so an

@@ -38,33 +38,30 @@ second hit-test/camera system.
 
 The shared `lunco-ui::modal` host owns modal queueing, scrim, focus, Esc
 dismissal, outcomes, and the typed `CloseModal` command. HUI currently has no
-modal queue/outcome, checkbox/input state events, or dynamic repeated-list
-contract, so a dialog requiring those capabilities belongs in that host until
-the runtime surface contract grows and is tested. A compact authored button may
-still open an existing egui host control when that is the established owner:
-the camera-status picker binds the deterministic `active_label` projection,
-uses the authored `camera.picker.toggle` intent, the measured HUI surface
-rectangle as its anchor, and the same
-`CameraSelectionStatus` view model as the workbench Camera menu. Keep the
-selection command typed and do not add a second camera registry or a HUI
-dynamic-list shim.
+modal queue/outcome or checkbox/input state events, so a dialog requiring those
+capabilities belongs in that host until the runtime surface contract grows and
+is tested. Generic keyed collection hosts are available for ordered arrays of
+typed records; the collection host owns row lifecycle only, while Rhai owns
+the records, labels, ordering, and actions.
 
-Twin-authored actions are open-ended semantic identifiers. Built-ins such as
-`camera.picker.toggle` stay in the host; every other identifier is forwarded as
-the typed `runtime.ui.action` event and is handled by Rhai. The reusable
-`program-browser` surface publishes bounded scalar slots for generic
-`LunCoProgramAPI` children. `program_editor` owns selection, editor focus,
-atomic source switching, and creation for any authored program, regardless of
-whether its owner is a rover, lander, route, or another model. Rich source
-text entry remains in the existing Rhai editor/REPL until HUI gains a tested
-typed input and repeated-list contract.
+Twin-authored actions are open-ended semantic identifiers. The reusable
+`program-browser` and `camera-status` surfaces publish typed arrays of records;
+their HUI row templates are reconciled by the generic keyed collection host.
+`program_editor` owns selection, editor focus, atomic source switching, and
+creation for any authored program, regardless of whether its owner is a rover,
+lander, route, or another model. Rich source text entry remains in the existing
+Rhai editor/REPL until HUI gains tested typed input semantics.
 
 For dynamic semantic controls, use the HUI convention
 `on_press="runtime_ui_authored_action" tag:action="{action}"`. The
-`action` tag property is supplied by the scalar Rhai view model and becomes a
-typed `runtime.ui.action` event. This permits Twin-defined actions and bounded
-dynamic controls without registering one Rust callback per item. Do not use
+`action` tag property is supplied by the Rhai view model and becomes a
+typed `runtime.ui.action` event. This permits Twin-defined actions and dynamic
+controls without registering one Rust callback per item. Do not use
 JavaScript or encode action payloads as JSON.
+
+Collection hosts retain the Rhai-authored row order, clip their list, and
+consume wheel input at the host boundary. They own row lifecycle only; do not
+add a per-surface Rust list resource or a fixed row-count view model.
 
 Use stable `id` attributes and `#id` selectors for authored HUI nodes. Flair
 supports class selectors, but HUI 0.7 does not turn an HTML `class` attribute
@@ -240,17 +237,13 @@ semantic action string; the runtime emits a typed action event; the host
 observer maps that action to an existing typed command/event. A template must
 not mutate resources or call a domain API directly.
 
-Built-in actions include `camera.picker.toggle` for the authored camera-status
-trigger. The complete camera-status surface is the authored
-button, so its label, camera name, and padding share one interaction target.
-That action only opens the camera picker; because HUI
-has no dynamic repeated-list or payload-action contract, the existing egui host
-renders the options from `CameraSelectionStatus`, anchors them to the measured
-HUI surface rectangle, measures the widest rendered option, clamps the popup to
-egui's menu and viewport limits, truncates only its display projection at that
-bound, and emits `SetUserCamera` with the full USD identity. Reuse that view model and
-typed command path instead of adding a second camera registry or a HUI list
-shim.
+The camera-status collection uses authored actions such as
+`camera.select.<index>`, `camera.observe.avatar`, and
+`camera.resume.director`. Rhai chooses which rows exist and their order; the
+generic runtime bridge only resolves a selected camera identity and emits the
+existing typed camera command. The HUI collection host owns row creation,
+property updates, ordering, and removal without a fixed row count or a second
+camera registry.
 
 If a new domain action is needed, author its semantic identifier and handle it
 in the owning Rhai program through the existing typed command/query/event

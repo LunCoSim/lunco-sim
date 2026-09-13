@@ -2,10 +2,9 @@
 @import "ui/runtime_theme.css";
 
 #program-browser-root {
-  --ui-program-0-display: none;
-  --ui-program-1-display: none;
-  --ui-program-2-display: none;
-  --ui-program-3-display: none;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
   width: 332px;
   max-width: 332px;
   padding: 10px;
@@ -20,11 +19,7 @@
 }
 
 #program-browser-header,
-#program-browser-actions,
-#program-row-0,
-#program-row-1,
-#program-row-2,
-#program-row-3 {
+#program-browser-actions {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -46,29 +41,14 @@
 
 #program-browser-scope,
 #program-browser-count,
-#program-source-0,
-#program-source-1,
-#program-source-2,
-#program-source-3,
-#program-status-0,
-#program-status-1,
-#program-status-2,
-#program-status-3 {
+#program-empty {
   color: var(--muted-color);
   font-size: 10px;
   overflow: hidden;
   -bevy-line-break: no-wrap;
 }
 
-#program-browser-scope,
-#program-path-0,
-#program-path-1,
-#program-path-2,
-#program-path-3,
-#program-source-0,
-#program-source-1,
-#program-source-2,
-#program-source-3 {
+#program-browser-scope {
   flex-grow: 1;
   flex-shrink: 1;
   flex-basis: 0px;
@@ -76,10 +56,26 @@
   max-width: 100%;
 }
 
-#program-row-0,
-#program-row-1,
-#program-row-2,
-#program-row-3 {
+#program-list {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  gap: 5px;
+  min-height: 42px;
+  max-height: 184px;
+  overflow: scroll;
+}
+
+#program-empty {
+  display: var(--ui-program-empty-display);
+  padding: 8px 5px;
+}
+
+#program-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 6px;
   min-height: 42px;
   padding: 5px;
   border-width: 1px;
@@ -87,15 +83,9 @@
   border-radius: 4px;
 }
 
-#program-row-0 { display: var(--ui-program-0-display); }
-#program-row-1 { display: var(--ui-program-1-display); }
-#program-row-2 { display: var(--ui-program-2-display); }
-#program-row-3 { display: var(--ui-program-3-display); }
-
-#program-copy-0,
-#program-copy-1,
-#program-copy-2,
-#program-copy-3 {
+#program-copy {
+  display: flex;
+  flex-direction: column;
   flex-grow: 1;
   flex-shrink: 1;
   flex-basis: 0px;
@@ -104,13 +94,18 @@
   overflow: hidden;
 }
 
-#program-path-0,
-#program-path-1,
-#program-path-2,
-#program-path-3 {
+#program-path {
   color: var(--text-color);
   font-size: 11px;
   font-weight: 700;
+  overflow: hidden;
+  -bevy-line-break: no-wrap;
+}
+
+#program-source,
+#program-status {
+  color: var(--muted-color);
+  font-size: 10px;
   overflow: hidden;
   -bevy-line-break: no-wrap;
 }

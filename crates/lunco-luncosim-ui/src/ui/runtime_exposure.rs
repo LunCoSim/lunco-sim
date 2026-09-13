@@ -5,21 +5,22 @@
 //! snapshot and own the retained tree, layout, and styling. A template does not
 //! know whether a value came from a port, telemetry, physics, a script, or a
 //! derived engine capability.
-use bevy::asset::{io::Reader, Asset, AssetLoader, LoadContext};
+use bevy::asset::{Asset, AssetLoader, LoadContext, io::Reader};
 use bevy::ecs::entity::EntityHashSet;
+use bevy::input::mouse::AccumulatedMouseScroll;
 use bevy::picking::events::{Click, Drag, Pointer};
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy::render::{ExtractSchedule, MainWorld, Render, RenderApp, RenderSystems};
 use bevy::window::PrimaryWindow;
-use bevy_egui::{egui, PrimaryEguiContext};
+use bevy_egui::{PrimaryEguiContext, egui};
 use bevy_flair::prelude::{InlineStyle, StyleSheet, Styled};
 use bevy_hui::prelude::{
     CompileContextEvent, HtmlFunctions, HtmlNode, HtmlStyle, HtmlTemplate, OnUiPress,
     TemplateProperties, UiId,
 };
-use lunco_core::exposure::EngineExposures;
 use lunco_core::SceneViewport;
+use lunco_core::exposure::EngineExposures;
 use lunco_hooks::HookValue;
 use lunco_render::SceneCamera;
 use lunco_workbench::{PanelRects, RuntimeSurfaceLayout, RuntimeSurfaceLayouts, ScenePickGate};
@@ -40,7 +41,6 @@ pub(crate) enum RuntimeUiActionKind {
     ViewBodyMoon,
     ViewBodyEarth,
     DismissTerrainOverlay,
-    ToggleCameraPicker,
     /// A Twin-authored semantic action. The runtime UI layer transports the
     /// identifier, but does not interpret its domain meaning; Rhai policy owns
     /// the resulting command or USD edit.
@@ -54,7 +54,6 @@ impl RuntimeUiActionKind {
             "view.body.moon" => Ok(Self::ViewBodyMoon),
             "view.body.earth" => Ok(Self::ViewBodyEarth),
             "overlay.terrain.dismiss" => Ok(Self::DismissTerrainOverlay),
-            "camera.picker.toggle" => Ok(Self::ToggleCameraPicker),
             _ if value.trim().is_empty() => Err("runtime UI action must not be empty".into()),
             _ => Ok(Self::Authored(value.to_owned())),
         }
@@ -173,6 +172,10 @@ pub(crate) struct RuntimeUiSurfaceDefinition {
     pub bindings: HashMap<String, RuntimeUiBindingDefinition>,
     #[serde(default)]
     pub actions: Vec<RuntimeUiActionDefinition>,
+    /// Generic ordered collection hosts. The source value is an exposure
+    /// array of typed records; the runtime only reconciles rows by key.
+    #[serde(default)]
+    pub collections: Vec<RuntimeUiCollectionDefinition>,
     #[serde(default)]
     pub visible_in_perspective: Option<String>,
     #[serde(default)]
@@ -214,6 +217,15 @@ pub(crate) struct RuntimeUiBindingDefinition {
 pub(crate) struct RuntimeUiActionDefinition {
     pub callback: String,
     pub action: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RuntimeUiCollectionDefinition {
+    pub source: String,
+    pub container: String,
+    pub template: String,
+    pub key: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -296,6 +308,27 @@ impl RuntimeUiManifest {
                 for (source_value, rendered_value) in &binding.map {
                     require_non_empty("binding map key", source_value)?;
                     require_non_empty("binding map value", rendered_value)?;
+                }
+            }
+            let mut collection_sources = HashSet::new();
+            let mut collection_hosts = HashSet::new();
+            for collection in &surface.collections {
+                require_non_empty("collection source", &collection.source)?;
+                require_non_empty("collection container", &collection.container)?;
+                require_non_empty("collection template", &collection.template)?;
+                require_non_empty("collection key", &collection.key)?;
+                require_asset_path("collection template", &collection.template)?;
+                if !collection_sources.insert(collection.source.as_str()) {
+                    return Err(format!(
+                        "duplicate runtime UI collection source `{}` on `{}`",
+                        collection.source, surface.id
+                    ));
+                }
+                if !collection_hosts.insert(collection.container.as_str()) {
+                    return Err(format!(
+                        "duplicate runtime UI collection container `{}` on `{}`",
+                        collection.container, surface.id
+                    ));
                 }
             }
             for action in &surface.actions {
@@ -537,23 +570,6 @@ struct ResolvedRuntimeUiPlacement {
     rect: egui::Rect,
 }
 
-/// Last measured logical rectangle for each visible runtime surface.
-///
-/// Native egui overlays that are opened by an authored HUI control use this
-/// measurement instead of copying the surface's manifest geometry. The HUI
-/// tree remains the placement authority; egui only owns the richer popup
-/// interaction that the current retained surface contract cannot express.
-#[derive(Resource, Default, Debug, Clone)]
-pub(crate) struct RuntimeUiSurfaceRects {
-    rects: HashMap<String, egui::Rect>,
-}
-
-impl RuntimeUiSurfaceRects {
-    pub(crate) fn get(&self, namespace: &str) -> Option<egui::Rect> {
-        self.rects.get(namespace).copied()
-    }
-}
-
 /// Root marker for a retained runtime-authored HTML surface. The namespace is
 /// the only contract between an engine exposure producer and a template.
 #[derive(Component, Debug)]
@@ -563,6 +579,7 @@ pub(crate) struct RuntimeUiSurface {
     template: Handle<HtmlTemplate>,
     stylesheet: Handle<StyleSheet>,
     bindings: HashMap<String, RuntimeUiBindingDefinition>,
+    collections: Vec<RuntimeUiCollection>,
     visible_in_perspective: Option<String>,
     gate: Option<String>,
     setting: Option<String>,
@@ -594,6 +611,7 @@ impl RuntimeUiSurface {
         definition: &RuntimeUiSurfaceDefinition,
         template: Handle<HtmlTemplate>,
         stylesheet: Handle<StyleSheet>,
+        server: Option<&AssetServer>,
     ) -> Self {
         Self {
             layout_id: definition.id.clone(),
@@ -601,6 +619,18 @@ impl RuntimeUiSurface {
             template,
             stylesheet,
             bindings: definition.bindings.clone(),
+            collections: definition
+                .collections
+                .iter()
+                .map(|collection| RuntimeUiCollection {
+                    source: collection.source.clone(),
+                    container: collection.container.clone(),
+                    template: server
+                        .map(|server| server.load(collection.template.clone()))
+                        .unwrap_or_default(),
+                    key: collection.key.clone(),
+                })
+                .collect(),
             visible_in_perspective: definition.visible_in_perspective.clone(),
             gate: definition.gate.clone(),
             setting: definition.setting.clone(),
@@ -617,6 +647,24 @@ impl RuntimeUiSurface {
         }
     }
 }
+
+#[derive(Debug)]
+struct RuntimeUiCollection {
+    source: String,
+    container: String,
+    template: Handle<HtmlTemplate>,
+    key: String,
+}
+
+#[derive(Component, Debug)]
+pub(crate) struct RuntimeUiCollectionRow {
+    host: Entity,
+    key: String,
+    property_names: Vec<String>,
+}
+
+#[derive(Component)]
+pub(crate) struct RuntimeUiCollectionHost;
 
 /// Resolve the active Twin's typed capture contract once per exposure/policy
 /// revision. A normal interactive session has no contract; when the recorder
@@ -995,7 +1043,7 @@ fn spawn_runtime_ui_surface(
     let stylesheet: Handle<StyleSheet> = server.load(definition.stylesheet.clone());
     let mut entity = commands.spawn((
         Node::default(),
-        RuntimeUiSurface::from_definition(definition, template, stylesheet),
+        RuntimeUiSurface::from_definition(definition, template, stylesheet, Some(server)),
         Visibility::Hidden,
     ));
     if definition.draggable {
@@ -1455,21 +1503,25 @@ pub(crate) fn apply_runtime_ui_exposures(
         apply_runtime_theme(theme, &mut style, &mut style_changed);
         if surface.bindings.is_empty() {
             for (name, value) in &exposure.properties {
-                apply_runtime_ui_property(
-                    name,
-                    value.render(),
-                    &mut properties,
-                    &mut style,
-                    &mut properties_changed,
-                    &mut style_changed,
-                );
+                if let Some(rendered) = value.scalar_render() {
+                    apply_runtime_ui_property(
+                        name,
+                        rendered,
+                        &mut properties,
+                        &mut style,
+                        &mut properties_changed,
+                        &mut style_changed,
+                    );
+                }
             }
         } else {
             for (target, binding) in &surface.bindings {
                 let Some(value) = exposure.properties.get(&binding.source) else {
                     continue;
                 };
-                let source_value = value.render();
+                let Some(source_value) = value.scalar_render() else {
+                    continue;
+                };
                 let rendered = if binding.map.is_empty() {
                     source_value
                 } else {
@@ -1497,6 +1549,205 @@ pub(crate) fn apply_runtime_ui_exposures(
         }
         surface.applied_revision = exposures.revision;
     }
+}
+
+/// Reconcile every authored collection host against one typed exposure array.
+/// This is the only collection mechanic: it knows neither programs nor
+/// cameras, and it never serializes rows through JSON. Rhai supplies ordered
+/// records and semantic action strings; HUI supplies the row template.
+pub(crate) fn reconcile_runtime_ui_collections(
+    mut commands: Commands,
+    exposures: Res<EngineExposures>,
+    roots: Query<(Entity, &RuntimeUiSurface, &Visibility)>,
+    ids: Query<(Entity, &UiId), With<Node>>,
+    parents: Query<&ChildOf>,
+    rows: Query<(Entity, &RuntimeUiCollectionRow)>,
+    hosts: Query<(), With<RuntimeUiCollectionHost>>,
+    mut properties: Query<&mut TemplateProperties>,
+) {
+    for (surface_entity, surface, visibility) in &roots {
+        if !surface.mounted || !matches!(*visibility, Visibility::Visible) {
+            continue;
+        }
+        let Some(exposure) = exposures.surfaces.get(&surface.namespace) else {
+            continue;
+        };
+        for collection in &surface.collections {
+            let Some(host) = ids.iter().find_map(|(entity, id)| {
+                (id.id() == &collection.container
+                    && is_descendant_of_runtime_surface(
+                        entity,
+                        &HashSet::from([surface_entity]),
+                        &parents,
+                    ))
+                .then_some(entity)
+            }) else {
+                continue;
+            };
+            if hosts.get(host).is_err() {
+                commands
+                    .entity(host)
+                    .insert((RuntimeUiCollectionHost, ScrollPosition::default()));
+            }
+
+            let values = match exposure.properties.get(&collection.source) {
+                Some(lunco_core::exposure::ExposureValue::Array(values)) => values.as_slice(),
+                Some(value) => {
+                    warn!(
+                        surface = surface.namespace,
+                        source = collection.source,
+                        value = ?value,
+                        "[runtime-ui] collection source is not an array"
+                    );
+                    &[]
+                }
+                None => &[],
+            };
+
+            let mut existing = HashMap::new();
+            for (entity, row) in &rows {
+                if row.host == host {
+                    existing.insert(row.key.clone(), entity);
+                }
+            }
+
+            let mut ordered = Vec::with_capacity(values.len());
+            let mut seen = HashSet::new();
+            for value in values {
+                let Some(fields) = collection_item_fields(value, &collection.key) else {
+                    warn!(
+                        surface = surface.namespace,
+                        source = collection.source,
+                        "[runtime-ui] collection item is not a keyed record; skipped"
+                    );
+                    continue;
+                };
+                let Some(key) = fields
+                    .iter()
+                    .find(|(name, _)| name == &collection.key)
+                    .map(|(_, value)| value.clone())
+                else {
+                    continue;
+                };
+                if !seen.insert(key.clone()) {
+                    warn!(
+                        surface = surface.namespace,
+                        source = collection.source,
+                        key,
+                        "[runtime-ui] collection contains a duplicate key; skipped"
+                    );
+                    continue;
+                }
+
+                let entity = if let Some(entity) = existing.remove(&key) {
+                    if let Ok(mut state) = properties.get_mut(entity) {
+                        let previous = rows
+                            .get(entity)
+                            .ok()
+                            .map(|(_, row)| row.property_names.clone())
+                            .unwrap_or_default();
+                        let mut changed = false;
+                        for name in previous {
+                            if !fields.iter().any(|(field, _)| field == &name) {
+                                changed |= state.remove(&name).is_some();
+                            }
+                        }
+                        for (name, value) in &fields {
+                            if state.get(name).map(String::as_str) != Some(value.as_str()) {
+                                state.set(name, value);
+                                changed = true;
+                            }
+                        }
+                        if changed {
+                            commands.trigger(CompileContextEvent { entity });
+                        }
+                    }
+                    commands.entity(entity).insert(RuntimeUiCollectionRow {
+                        host,
+                        key: key.clone(),
+                        property_names: fields.iter().map(|(name, _)| name.clone()).collect(),
+                    });
+                    entity
+                } else {
+                    let mut state = TemplateProperties::default();
+                    for (name, value) in &fields {
+                        state.set(name, value);
+                    }
+                    commands
+                        .spawn((
+                            Node::default(),
+                            HtmlNode(collection.template.clone()),
+                            state,
+                            RuntimeUiCollectionRow {
+                                host,
+                                key: key.clone(),
+                                property_names: fields
+                                    .iter()
+                                    .map(|(name, _)| name.clone())
+                                    .collect(),
+                            },
+                        ))
+                        .id()
+                };
+                ordered.push(entity);
+            }
+
+            for (_, entity) in existing {
+                commands
+                    .entity(entity)
+                    .despawn_related::<Children>()
+                    .try_despawn();
+            }
+            commands.entity(host).replace_children(&ordered);
+        }
+    }
+}
+
+/// Scroll any authored collection under the pointer. This is a generic UI
+/// mechanic: the collection manifest owns the host, while Rhai owns the row
+/// data and ordering. HUI/Bevy provide the retained scroll position; the
+/// runtime only maps the existing mouse-wheel input to that position.
+pub(crate) fn scroll_runtime_ui_collections(
+    windows: Query<&Window, With<PrimaryWindow>>,
+    scroll: Res<AccumulatedMouseScroll>,
+    mut hosts: Query<
+        (&ComputedNode, &UiGlobalTransform, &mut ScrollPosition),
+        With<RuntimeUiCollectionHost>,
+    >,
+) {
+    if scroll.delta.y == 0.0 {
+        return;
+    }
+    let Some(cursor) = windows.iter().next().and_then(Window::cursor_position) else {
+        return;
+    };
+    for (node, transform, mut position) in &mut hosts {
+        let Some(rect) = runtime_ui_input_rect(node, transform) else {
+            continue;
+        };
+        if !rect.contains(egui::pos2(cursor.x, cursor.y)) {
+            continue;
+        }
+        let max_y = (node.content_size.y - node.size.y).max(0.0);
+        position.y = (position.y - scroll.delta.y * 40.0).clamp(0.0, max_y);
+    }
+}
+
+fn collection_item_fields(
+    value: &lunco_core::exposure::ExposureValue,
+    key: &str,
+) -> Option<Vec<(String, String)>> {
+    let lunco_core::exposure::ExposureValue::Map(fields) = value else {
+        return None;
+    };
+    let fields = fields
+        .iter()
+        .filter_map(|(name, value)| value.scalar_render().map(|value| (name.clone(), value)))
+        .collect::<Vec<_>>();
+    fields
+        .iter()
+        .any(|(name, value)| name == key && !value.is_empty())
+        .then_some(fields)
 }
 
 fn apply_runtime_theme(theme: &lunco_theme::Theme, style: &mut InlineStyle, changed: &mut bool) {
@@ -1739,35 +1990,6 @@ pub(crate) fn register_runtime_ui_input_regions(
         }
         if let Some(rect) = runtime_ui_input_rect(node, transform) {
             gate.record_chrome_panel(rect, rect);
-        }
-    }
-}
-
-/// Publish measured surface rectangles for native overlays that are opened by
-/// authored runtime controls. This is change-detected by Bevy's UI layout
-/// lifecycle rather than reconstructed from duplicate manifest constants.
-pub(crate) fn publish_runtime_ui_surface_rects(
-    roots: Query<(
-        &RuntimeUiSurface,
-        &Visibility,
-        Option<&InheritedVisibility>,
-        Option<&ComputedNode>,
-        Option<&UiGlobalTransform>,
-    )>,
-    mut rects: ResMut<RuntimeUiSurfaceRects>,
-) {
-    rects.rects.clear();
-    for (surface, visibility, inherited_visibility, node, transform) in &roots {
-        if !matches!(*visibility, Visibility::Visible)
-            || !inherited_visibility.is_none_or(|visibility| visibility.get())
-        {
-            continue;
-        }
-        let (Some(node), Some(transform)) = (node, transform) else {
-            continue;
-        };
-        if let Some(rect) = runtime_ui_input_rect(node, transform) {
-            rects.rects.insert(surface.namespace.clone(), rect);
         }
     }
 }
@@ -2082,8 +2304,12 @@ mod tests {
             .iter()
             .find(|surface| surface.id == "celestial-view")
             .expect("shipped manifest should author the celestial-view surface");
-        let surface =
-            RuntimeUiSurface::from_definition(definition, Handle::default(), Handle::default());
+        let surface = RuntimeUiSurface::from_definition(
+            definition,
+            Handle::default(),
+            Handle::default(),
+            None,
+        );
         let mut layouts = RuntimeSurfaceLayouts::default();
         layouts.set(
             "celestial-view",
@@ -2159,6 +2385,7 @@ mod tests {
             &manifest.surfaces[0],
             Handle::default(),
             Handle::default(),
+            None,
         );
         let mut layouts = RuntimeSurfaceLayouts::default();
         layouts.set(
@@ -2224,6 +2451,7 @@ mod tests {
                     template: Handle::default(),
                     stylesheet: Handle::default(),
                     bindings: HashMap::new(),
+                    collections: Vec::new(),
                     visible_in_perspective: None,
                     gate: None,
                     setting: None,
@@ -2304,6 +2532,7 @@ mod tests {
                     template: Handle::default(),
                     stylesheet: Handle::default(),
                     bindings: HashMap::new(),
+                    collections: Vec::new(),
                     visible_in_perspective: None,
                     gate: None,
                     setting: None,
@@ -2351,6 +2580,7 @@ mod tests {
             template: Handle::default(),
             stylesheet: Handle::default(),
             bindings: HashMap::new(),
+            collections: Vec::new(),
             visible_in_perspective: None,
             gate: None,
             setting: None,
@@ -2413,6 +2643,7 @@ mod tests {
                     template: Handle::default(),
                     stylesheet: Handle::default(),
                     bindings: HashMap::new(),
+                    collections: Vec::new(),
                     visible_in_perspective: None,
                     gate: None,
                     setting: None,
@@ -2475,6 +2706,7 @@ mod tests {
                     template: Handle::default(),
                     stylesheet: Handle::default(),
                     bindings: HashMap::new(),
+                    collections: Vec::new(),
                     visible_in_perspective: None,
                     gate: None,
                     setting: None,
@@ -2687,34 +2919,6 @@ mod tests {
             RuntimeUiActionKind::parse("not.allowed"),
             Ok(RuntimeUiActionKind::Authored(action)) if action == "not.allowed"
         ));
-    }
-
-    #[test]
-    fn manifest_accepts_camera_picker_toggle_action() {
-        let manifest: RuntimeUiManifest = serde_json::from_str(
-            r#"{
-                "surfaces": [{
-                    "id": "camera-status",
-                    "template": "ui/camera_status.html",
-                    "stylesheet": "ui/camera_status.css",
-                    "namespace": "camera-status",
-                    "actions": [{
-                        "callback": "runtime_camera_picker_toggle",
-                        "action": "camera.picker.toggle"
-                    }],
-                    "placement": {"mode": "viewport"}
-                }]
-            }"#,
-        )
-        .expect("camera picker action should parse");
-
-        manifest
-            .validate()
-            .expect("camera picker action should be in the host action set");
-        assert_eq!(
-            RuntimeUiActionKind::parse("camera.picker.toggle"),
-            Ok(RuntimeUiActionKind::ToggleCameraPicker)
-        );
     }
 
     #[test]

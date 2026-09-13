@@ -46,7 +46,40 @@ fn participant_text(values) {
     result
 }
 
+fn camera_ui_properties(facts) {
+    let result = #{};
+    result.active_label = facts.active_label;
+    let items = [];
+    for index in 0..facts.cameras.len() {
+        let camera = facts.cameras[index];
+        items.push(#{
+            key: camera.name,
+            label: camera.label,
+            select_action: "camera.select." + index.to_string(),
+        });
+    }
+    if facts.avatar_available {
+        items.push(#{
+            key: "__avatar__",
+            label: "Observe avatar",
+            select_action: "camera.observe.avatar",
+        });
+    }
+    if facts.director_available {
+        items.push(#{
+            key: "__director__",
+            label: "Resume authored director",
+            select_action: "camera.resume.director",
+        });
+    }
+    result.camera_items = items;
+    result
+}
+
 fn runtime_ui_properties(facts) {
+    if facts.surface_id == "camera-status" {
+        return camera_ui_properties(facts);
+    }
     let result = #{};
     result.vehicle = facts.label;
     result.status = if facts.available { status_label(facts.status) } else { "WAITING" };
@@ -60,29 +93,26 @@ fn runtime_ui_properties(facts) {
     result.scope = if facts.scope == () || facts.scope == "" { "NO PROGRAM SCOPE" } else { facts.scope };
     let programs = if facts.programs == () { [] } else { facts.programs };
     result.program_count = programs.len().to_string() + " PROGRAMS";
-    for index in 0..4 {
-        result["program_" + index.to_string() + "_path"] = "—";
-        result["program_" + index.to_string() + "_source"] = "—";
-        result["program_" + index.to_string() + "_status"] = "—";
-        result["program_" + index.to_string() + "_select_action"] = "program.select." + index.to_string();
-        result["program_" + index.to_string() + "_edit_action"] = "program.edit." + index.to_string();
-        result["program_" + index.to_string() + "_visible"] = false;
-    }
-    let visible_program_count = programs.len();
-    if visible_program_count > 4 { visible_program_count = 4; }
-    for index in 0..visible_program_count {
+    result.program_empty_display = programs.len() == 0;
+    let items = [];
+    for index in 0..programs.len() {
         let program = programs[index];
-        let prefix = "program_" + index.to_string();
-        result[prefix + "_path"] = program.path;
-        result[prefix + "_source"] = if program.source == () || program.source == "" {
+        let source = if program.source == () || program.source == "" {
             program.implementation_source
         } else {
             program.source
         };
-        result[prefix + "_status"] = program.status;
-        result[prefix + "_visible"] = true;
+        items.push(#{
+            key: program.path,
+            path: program.path,
+            source: source,
+            status: program.status,
+            select_action: "program.select." + index.to_string(),
+            edit_action: "program.edit." + index.to_string(),
+        });
     }
-    result.current_program = if programs.len() > 0 { programs[0].path } else { "" };
-    result.current_source = if programs.len() > 0 { programs[0].source } else { "" };
+    result.programs = items;
+    result.current_program = if items.len() > 0 { items[0].path } else { "" };
+    result.current_source = if items.len() > 0 { items[0].source } else { "" };
     result
 }

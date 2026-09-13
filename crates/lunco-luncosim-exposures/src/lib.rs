@@ -14,11 +14,11 @@ use avian3d::prelude::{AngularVelocity, ComputedCenterOfMass, LinearVelocity, Ro
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
-use lunco_celestial::link::LinkState;
 use lunco_celestial::OrbitalViewPin;
+use lunco_celestial::link::LinkState;
 use lunco_controller::ControllerLink;
 use lunco_core::exposure::{
-    EngineExposures, ExposureRefresh, ExposureValue, ExposureWriter, EXPOSURE_UPDATE_HZ,
+    EXPOSURE_UPDATE_HZ, EngineExposures, ExposureRefresh, ExposureValue, ExposureWriter,
 };
 use lunco_core::{
     Avatar, CelestialBody, GlobalEntityId, LocalAvatar, SceneMountState, TheLocalAvatar,
@@ -29,7 +29,7 @@ use lunco_mobility::WheelRaycast;
 use lunco_scene_commands::SelectedEntities;
 use lunco_signal::{SignalRef, SignalRegistry, SignalType};
 use lunco_usd_bevy_core::read::UsdReadObject;
-use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdStageAsset};
+use lunco_usd_bevy_core::{UsdStageAsset, canonical::CanonicalStages};
 use lunco_usd_bevy_scene::scene_root_ancestor;
 use openusd::sdf::Path as SdfPath;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -113,10 +113,9 @@ fn runtime_ui_visibility(facts: &HookValue, surface_id: &str) -> bool {
     }
 }
 
-/// Ask the active Twin's Rhai policy for scalar presentation properties. The
-/// exposure registry deliberately remains scalar because HUI/egui/API readers
-/// share it; structured facts are consumed and flattened only at this policy
-/// boundary.
+/// Ask the active Twin's Rhai policy for presentation properties. Scalar values
+/// drive ordinary template bindings; arrays and maps remain typed so generic
+/// HUI collection hosts can reconcile authored rows without numbered slots.
 fn runtime_ui_properties(facts: &HookValue, surface_id: &str) -> Vec<(String, ExposureValue)> {
     let Some(result) = lunco_hooks::invoke(RUNTIME_UI_PROPERTIES_HOOK, std::slice::from_ref(facts))
     else {
@@ -145,23 +144,44 @@ fn runtime_ui_properties(facts: &HookValue, surface_id: &str) -> Vec<(String, Ex
     result
         .into_iter()
         .filter_map(|(name, value)| {
-            let value = match value {
-                HookValue::Str(value) => ExposureValue::Text(value),
-                HookValue::Bool(value) => ExposureValue::Bool(value),
-                HookValue::Int(value) => ExposureValue::Number(value as f64),
-                HookValue::Float(value) if value.is_finite() => ExposureValue::Number(value),
-                _ => {
-                    warn!(
-                        surface_id,
-                        property = name,
-                        "[runtime-ui] ignored non-scalar policy property"
-                    );
-                    return None;
-                }
-            };
-            Some((name, value))
+            hook_value_to_exposure(value, surface_id, &name).map(|value| (name, value))
         })
         .collect()
+}
+
+fn hook_value_to_exposure(
+    value: HookValue,
+    surface_id: &str,
+    property: &str,
+) -> Option<ExposureValue> {
+    match value {
+        HookValue::Unit => Some(ExposureValue::Text(String::new())),
+        HookValue::Str(value) => Some(ExposureValue::Text(value)),
+        HookValue::Bool(value) => Some(ExposureValue::Bool(value)),
+        HookValue::Int(value) => Some(ExposureValue::Number(value as f64)),
+        HookValue::Float(value) if value.is_finite() => Some(ExposureValue::Number(value)),
+        HookValue::Float(_) => {
+            warn!(
+                surface_id,
+                property, "[runtime-ui] ignored non-finite policy value"
+            );
+            None
+        }
+        HookValue::Array(values) => Some(ExposureValue::Array(
+            values
+                .into_iter()
+                .filter_map(|value| hook_value_to_exposure(value, surface_id, property))
+                .collect(),
+        )),
+        HookValue::Map(values) => Some(ExposureValue::Map(
+            values
+                .into_iter()
+                .filter_map(|(key, value)| {
+                    hook_value_to_exposure(value, surface_id, property).map(|value| (key, value))
+                })
+                .collect(),
+        )),
+    }
 }
 
 fn runtime_ui_facts(
@@ -380,7 +400,6 @@ fn authored_program_facts(
         .children(&root)
         .into_iter()
         .filter(|path| reader.has_api_schema(path, "LunCoProgramAPI"))
-        .take(16)
         .map(|path| {
             let path_text = path.as_str().to_owned();
             let status = q_sim
@@ -2398,8 +2417,6 @@ fn publish_camera_exposure(
     exposures: &mut EngineExposures,
     status: &lunco_usd_bevy_camera::camera_switch::CameraSelectionStatus,
 ) {
-    let mut ui = exposures.writer("camera-status");
-    ui.visible(true);
     // Keep the full path as the authoritative fact for Rhai/diagnostics, and
     // derive one deterministic identity label for compact status surfaces.
     // Selection policy remains in Rhai/the typed camera command path.
@@ -2409,11 +2426,46 @@ fn publish_camera_exposure(
         .active_name
         .as_ref()
         .and_then(|active| status.cameras.iter().position(|name| name == active))
-        .and_then(|index| labels.get(index))
-        .map(String::as_str)
-        .unwrap_or(active_name);
+        .and_then(|index| labels.get(index).cloned())
+        .unwrap_or_else(|| active_name.to_owned());
+    let cameras = status
+        .cameras
+        .iter()
+        .zip(labels)
+        .map(|(name, label)| {
+            HookValue::map([
+                ("name", HookValue::str(name.clone())),
+                ("label", HookValue::str(label)),
+            ])
+        })
+        .collect();
+    let facts = HookValue::map([
+        ("surface_id", HookValue::str("camera-status")),
+        ("active_name", HookValue::str(active_name)),
+        ("active_label", HookValue::str(active_label.clone())),
+        ("cameras", HookValue::Array(cameras)),
+        ("avatar_available", HookValue::Bool(status.avatar_available)),
+        (
+            "director_available",
+            HookValue::Bool(status.director_available),
+        ),
+        (
+            "error",
+            status
+                .last_error
+                .as_ref()
+                .map_or(HookValue::Unit, |error| HookValue::str(error.clone())),
+        ),
+    ]);
+    let properties = runtime_ui_properties(&facts, "camera-status");
+    let mut ui = exposures.writer("camera-status");
+    ui.visible(true);
+    ui.clear_properties();
     ui.property("active_name", active_name);
     ui.property("active_label", active_label);
+    for (name, value) in properties {
+        ui.property(name, value);
+    }
 }
 
 fn percent(value: f32) -> String {
