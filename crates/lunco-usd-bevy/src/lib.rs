@@ -51,6 +51,7 @@ use openusd::sdf::Value;
 
 /// Light and transform ports — the port backend for what `light`/`compose` spawn.
 pub mod scene_ports;
+use lunco_usd_bevy_core::asset::resolve_stage_asset_path;
 use lunco_usd_bevy_core::point_instancer::read_point_instancer;
 use lunco_usd_bevy_core::read::{
     attr_has_time_samples, read_authored_bool_strict, read_primvar_f32_strict,
@@ -69,7 +70,7 @@ use lunco_usd_bevy_core::{canonical::CanonicalStage, StageView};
 use lunco_usd_bevy_core::{
     canonical::CanonicalStages, compose_xform_order_at, local_transform_at, parent_prim_path,
     read_transform_from_usd, resolve_bound_shader, resolve_stage_prim_path, stage_convention,
-    UsdRead,
+    UsdRead, UsdReadObject,
 };
 use lunco_usd_bevy_lathe as lathe;
 use lunco_usd_bevy_light::light;
@@ -1436,18 +1437,18 @@ fn project_point_instancer<R: UsdRead>(
     stage_handle: &Handle<UsdStageAsset>,
     instances: Vec<lunco_usd_bevy_core::point_instancer::UsdPointInstancePlan>,
     commands: &mut Commands,
-) -> anyhow::Result<()> {
+) -> Result<(), String> {
     let prototype_paths = reader
         .rel_targets(path, "prototypes")
         .into_iter()
         .map(|prototype| prototype.to_string())
         .collect::<Vec<_>>();
     let convention = stage_convention(reader as &dyn UsdReadObject)
-        .map_err(|error| anyhow::anyhow!("invalid stage convention: {error}"))?;
+        .map_err(|error| format!("invalid stage convention: {error}"))?;
 
     for prototype in &prototype_paths {
         let prototype_path = SdfPath::new(prototype)
-            .map_err(|error| anyhow::anyhow!("invalid prototype target {prototype}: {error}"))?;
+            .map_err(|error| format!("invalid prototype target {prototype}: {error}"))?;
         let prototype_type = reader.type_name(&prototype_path).unwrap_or_default();
         if !matches!(
             prototype_type.as_str(),
@@ -1462,19 +1463,19 @@ fn project_point_instancer<R: UsdRead>(
                 | "BasisCurves"
                 | "NurbsCurves"
         ) {
-            anyhow::bail!(
+            return Err(format!(
                 "prototype {prototype} has type `{prototype_type}`; only direct renderable Gprims are currently supported"
-            );
+            ));
         }
         if prim_is_animated(reader, &prototype_path) {
-            anyhow::bail!(
+            return Err(format!(
                 "prototype {prototype} is animated; animated PointInstancer prototypes are not yet supported by the visual projection"
-            );
+            ));
         }
         if let Some(child) = reader.children(&prototype_path).into_iter().next() {
-            anyhow::bail!(
+            return Err(format!(
                 "prototype {prototype} has child {child}; arbitrary prototype subtrees require a multi-mesh instancing batch"
-            );
+            ));
         }
     }
 
@@ -1484,7 +1485,7 @@ fn project_point_instancer<R: UsdRead>(
     });
     for instance in instances {
         let prototype_path = SdfPath::new(&instance.prototype_path).map_err(|error| {
-            anyhow::anyhow!(
+            format!(
                 "invalid prototype path {}: {error}",
                 instance.prototype_path
             )
