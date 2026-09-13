@@ -6,7 +6,10 @@
 //! tests can therefore explain a release or admission failure through the
 //! public query path without reaching into private ECS components.
 
-use avian3d::prelude::{AngularVelocity, LinearVelocity, RigidBody, Sleeping};
+use avian3d::prelude::{
+    AngularVelocity, ComputedAngularInertia, ComputedCenterOfMass, ComputedMass, LinearVelocity,
+    RigidBody, Sleeping,
+};
 use bevy::ecs::query::QueryState;
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
@@ -51,6 +54,9 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
             Has<ShouldBeDynamic>,
             Has<avian3d::prelude::RigidBodyDisabled>,
             Has<avian3d::prelude::Collider>,
+            Option<&ComputedMass>,
+            Option<&ComputedCenterOfMass>,
+            Option<&ComputedAngularInertia>,
             Option<&PhysicsSupportFootprint>,
             Option<&UsdPrimPath>,
         )>::try_new(world) else {
@@ -69,6 +75,9 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
             admission_requested,
             disabled,
             collider,
+            mass,
+            center_of_mass,
+            inertia,
             support,
             prim_path,
         )) = state.get(world, entity)
@@ -124,6 +133,13 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
             "physics_admission_requested": admission_requested,
             "rigid_body_disabled": disabled,
             "collider_present": collider,
+            "mass_kg": mass.map(|mass| mass.value()),
+            "center_of_mass_m": center_of_mass
+                .map(|center| [center.0.x, center.0.y, center.0.z]),
+            "inertia_principal_kgm2": inertia.map(|inertia| {
+                let (principal, _) = inertia.principal_angular_inertia_with_local_frame();
+                [principal.x, principal.y, principal.z]
+            }),
             "support_contact_count": support_contacts.len(),
             "support_contacts": support_contacts,
         }))
@@ -143,6 +159,9 @@ pub fn register(app: &mut App) {
     world.register_component::<ShouldBeDynamic>();
     world.register_component::<avian3d::prelude::RigidBodyDisabled>();
     world.register_component::<avian3d::prelude::Collider>();
+    world.register_component::<ComputedMass>();
+    world.register_component::<ComputedCenterOfMass>();
+    world.register_component::<ComputedAngularInertia>();
     world.register_component::<PhysicsSupportFootprint>();
     world.register_component::<UsdPrimPath>();
     world
