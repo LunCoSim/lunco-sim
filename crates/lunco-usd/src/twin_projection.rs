@@ -1720,14 +1720,20 @@ mod tests {
     #[test]
     fn projection_wake_coalesces_and_consumes_explicitly() {
         let mut wake = TwinProjectionWake::default();
-        assert!(!wake.pending);
+        assert!(!wake.is_pending());
 
         wake.wake();
         wake.wake();
-        assert!(wake.pending, "multiple producers share one pending wake");
+        assert!(
+            wake.is_pending(),
+            "multiple producers share one pending wake"
+        );
 
         wake.consume();
-        assert!(!wake.pending, "the projection owner consumes its wake once");
+        assert!(
+            !wake.is_pending(),
+            "the projection owner consumes its wake once"
+        );
     }
 
     /// Relationship and connection edits use live-stage authors, while composition
