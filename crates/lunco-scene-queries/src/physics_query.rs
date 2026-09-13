@@ -14,6 +14,7 @@ use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
 use lunco_core::{GlobalEntityId, PhysicsStatePending, PhysicsStateReady};
 use lunco_physics::PhysicsSupportFootprint;
+use lunco_usd_avian::ShouldBeDynamic;
 use lunco_usd_bevy_scene::UsdPrimPath;
 
 /// `QueryPhysicsState { id }` → generic live body/admission state.
@@ -47,6 +48,9 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
             Has<Sleeping>,
             Has<PhysicsStateReady>,
             Has<PhysicsStatePending>,
+            Has<ShouldBeDynamic>,
+            Has<avian3d::prelude::RigidBodyDisabled>,
+            Has<avian3d::prelude::Collider>,
             Option<&PhysicsSupportFootprint>,
             Option<&UsdPrimPath>,
         )>::try_new(world) else {
@@ -55,8 +59,19 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
                 "QueryPhysicsState: world state unavailable".to_string(),
             );
         };
-        let Ok((body, linear, angular, sleeping, ready, pending, support, prim_path)) =
-            state.get(world, entity)
+        let Ok((
+            body,
+            linear,
+            angular,
+            sleeping,
+            ready,
+            pending,
+            admission_requested,
+            disabled,
+            collider,
+            support,
+            prim_path,
+        )) = state.get(world, entity)
         else {
             return ApiResponse::error(
                 ApiErrorCode::EntityNotFound,
@@ -106,6 +121,9 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
             "sleeping": sleeping,
             "physics_state_ready": ready,
             "physics_state_pending": pending,
+            "physics_admission_requested": admission_requested,
+            "rigid_body_disabled": disabled,
+            "collider_present": collider,
             "support_contact_count": support_contacts.len(),
             "support_contacts": support_contacts,
         }))
@@ -122,6 +140,9 @@ pub fn register(app: &mut App) {
     world.register_component::<Sleeping>();
     world.register_component::<PhysicsStateReady>();
     world.register_component::<PhysicsStatePending>();
+    world.register_component::<ShouldBeDynamic>();
+    world.register_component::<avian3d::prelude::RigidBodyDisabled>();
+    world.register_component::<avian3d::prelude::Collider>();
     world.register_component::<PhysicsSupportFootprint>();
     world.register_component::<UsdPrimPath>();
     world
