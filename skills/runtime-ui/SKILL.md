@@ -24,6 +24,14 @@ The current implementation is the `luncosim` windowed UI layer in
 `crates/lunco-luncosim-ui/src/ui/`. Do not assume that `lunica` or a headless
 server has this surface manifest.
 
+The current compatible dependency baseline is `bevy_hui 0.7.0`,
+`bevy_flair 0.8.1`, and Bevy `0.19.1`; verify the lockfile and upstream release
+notes before changing it. HUI 0.7 is the Bevy 0.19 release. The separate
+`bevy_hui_widgets 0.6.0` crate provides primitive text-input, slider, and select
+components, but is intentionally not a LunCoSim dependency: it does not define
+our clipboard, validation, keyboard-navigation, accessibility, or modal
+semantics.
+
 ## Choose the right layer
 
 Use runtime HTML/CSS for a small authored presentation surface that should be
@@ -37,12 +45,13 @@ egui host and dock geometry; it does not replace the workbench or create a
 second hit-test/camera system.
 
 The shared `lunco-ui::modal` host owns modal queueing, scrim, focus, Esc
-dismissal, outcomes, and the typed `CloseModal` command. HUI currently has no
-modal queue/outcome or checkbox/input state events, so a dialog requiring those
-capabilities belongs in that host until the runtime surface contract grows and
-is tested. Generic keyed collection hosts are available for ordered arrays of
-typed records; the collection host owns row lifecycle only, while Rhai owns
-the records, labels, ordering, and actions.
+dismissal, outcomes, and the typed `CloseModal` command. Base HUI has no modal
+queue/outcome contract; the optional widget crate only supplies primitive input,
+slider, and select mechanics. A dialog requiring editing, focus, validation,
+accessibility, or modal semantics belongs in that host until the runtime
+surface contract grows and is tested. Generic keyed collection hosts are
+available for ordered arrays of typed records; the collection host owns row
+lifecycle only, while Rhai owns the records, labels, ordering, and actions.
 
 Twin-authored actions are open-ended semantic identifiers. The reusable
 `program-browser` and `camera-status` surfaces publish typed arrays of records;

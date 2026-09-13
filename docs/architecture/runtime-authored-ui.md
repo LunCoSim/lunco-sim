@@ -13,6 +13,30 @@ native and web-facing presentation work without moving simulation authority into
 markup. A surface may read a named engine capability and emit a semantic action;
 it cannot inspect ECS state or directly mutate the simulation.
 
+## Version and capability baseline
+
+The current dependency baseline is `bevy_hui 0.7.0`, `bevy_flair 0.8.1`, and
+Bevy `0.19.1`. HUI 0.7 is the HUI release for Bevy 0.19; Flair 0.8 is the
+matching CSS/style release. Keep the committed `Cargo.lock` as the version
+evidence and re-check upstream release notes before changing this contract.
+
+The shipped contract deliberately uses the smallest stable subset:
+
+| Capability | Runtime contract |
+|---|---|
+| HUI templates | `<template>`, typed recursive `<property>` values, retained `<node>`, `<text>`, `<button>`, and authored row templates |
+| HUI events | semantic `on_press` callbacks, including Rhai-authored `tag:action` values; `on_enter`, `on_exit`, `on_spawn`, and `on_change` remain available for a tested surface-specific need |
+| Flair styling | authored `#id` selectors, flex/limited grid layout, overflow clipping, custom properties, transitions, animations, media queries, and bundled font imports where supported by the current Bevy style components |
+| LunCo bridge | revision-gated typed exposures, Rhai-owned view models, keyed collections, retained scrolling, explicit placement, and typed command/event dispatch |
+
+`bevy_hui_widgets 0.6.0` is a separate optional crate, not a dependency of
+LunCoSim. It supplies primitive text-input, slider, and select components, but
+not a browser form model, clipboard/caret editing, validation, keyboard
+navigation, accessibility tree, or modal outcome contract. Do not add it merely
+to make a HUD look like a web form. Rich source editing and dialogs remain
+owned by the existing egui workbench until LunCo defines and tests those
+semantics at the correct owner.
+
 ## The boundary
 
 ```text
@@ -479,7 +503,10 @@ include:
 - unsupported web units and features such as `em` and `text-decoration` are
   not available just because they exist in browser CSS;
 - no automatic form controls, focus model, accessibility tree, or DOM event
-  propagation contract beyond the authored HUI callbacks.
+  propagation contract beyond the authored HUI callbacks. The optional
+  `bevy_hui_widgets` crate is not this contract; its primitive widgets need an
+  explicit LunCo owner and acceptance tests before they can replace egui
+  editors or dialogs.
 
 Use the bundled font through `@import "ui/runtime_fonts.css"`. Bevy's minimal
 `default_font` does not cover the full Unicode range needed by telemetry and

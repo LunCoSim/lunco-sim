@@ -5,6 +5,11 @@ client. They are not browser documents: there is no DOM, JavaScript, network
 fetch, or full HTML/CSS implementation. The architecture and limitations are
 documented in [`docs/architecture/runtime-authored-ui.md`](../../docs/architecture/runtime-authored-ui.md).
 
+The pinned 2026-09 baseline is `bevy_hui 0.7.0` with `bevy_flair 0.8.1` on
+Bevy `0.19.1`. These are the current compatible releases in the committed
+lockfile. HUI is the template/event layer and Flair is the retained Bevy CSS
+style layer; neither is a browser DOM.
+
 ## Stable surface contract
 
 Runtime templates currently rely on:
@@ -19,9 +24,12 @@ Runtime templates currently rely on:
 HUI and Flair support additional features, but a feature outside this contract
 needs a real surface test before it becomes a shared interface convention.
 Forms, text inputs, DOM querying, JavaScript, accessibility semantics, and
-browser-style event propagation are not supplied by this layer. It also does
-not provide the `lunco-ui::modal` queue/outcome contract, scrim, focus, or
-typed close dispatch; dialogs that need those semantics stay in the shared
+browser-style event propagation are not supplied by this layer. The separate
+`bevy_hui_widgets 0.6.0` crate has primitive text-input, slider, and select
+components, but it does not supply the complete editor, focus, clipboard,
+validation, accessibility, or modal contract required by LunCoSim. It is not
+part of the runtime UI dependency set. The `lunco-ui::modal` queue/outcome
+contract, scrim, focus, and typed close dispatch therefore remain in the shared
 egui modal host.
 
 ## Data and actions

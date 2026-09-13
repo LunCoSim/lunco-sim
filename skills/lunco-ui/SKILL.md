@@ -248,8 +248,12 @@ manifest controls the retained surface's outer rectangle: the runtime pins its
 minimum and maximum size to the resolved placement and clips overflow, while
 the authored CSS/profile must fit its contents inside that boundary. The
 `lunco-ui::modal` host is the canonical owner of queued modal outcomes,
-scrim, focus, Esc dismissal, and typed `CloseModal` dispatch; HUI does not yet
-supply those dialog semantics or checkbox/input state events.
+scrim, focus, Esc dismissal, and typed `CloseModal` dispatch. Base HUI does not
+provide those dialog semantics. The separate `bevy_hui_widgets 0.6.0` crate
+offers primitive input, slider, and select mechanics, but it is not included in
+LunCoSim and does not define clipboard, validation, keyboard-navigation,
+accessibility, or modal semantics; do not route a rich editor through it
+without a new typed contract and acceptance tests.
 
 For lander control cards, keep GNC identity and state on the existing authored
 USD boundary: resolve the column-zero `lunco:ui:schemaNode`, then read its
