@@ -76,7 +76,8 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-usd-bevy-twin`** | Render-free Twin-backed USD document identity: document-to-`twin://` lookup, workspace/preview leases, projection cursors, user-ownership events, and the live-projection wake signal. It owns no stage loading, composition, rendering, or UI. |
 | **`lunco-usd-bevy-camera`** | Render-free USD camera adapter: standard `UsdGeomCamera` projection intent, mounted/cinematic camera pose, camera-track selection, and the single-authority viewport-camera reconciler. It depends on the core reader and scene contract, not on visual projection. |
 | **`lunco-usd-bevy-lathe`** | Independent parametric NURBS/lathe projection: reflected surface definitions, profile evaluation, and change-detected Bevy mesh regeneration. |
-| **`lunco-usd-bevy`** | Visual Bevy adapter (`UsdBevyPlugin`): projects USD hierarchy, shapes, transforms, materials, and `timeSamples` animation into Bevy entities/components on top of `lunco-usd-bevy-core`. Owns the remaining mesh/curve projection and installs the independent camera and light adapters. |
+| **`lunco-usd-bevy`** | Visual Bevy adapter (`UsdVisualPlugin`): projects USD hierarchy, shapes, transforms, and material intent into Bevy entities/components on top of `lunco-usd-bevy-core`. Owns the remaining mesh/curve projection and installs the independent camera and light adapters. |
+| **`lunco-usd-bevy-animation`** | Render-free animation adapter (`UsdAnimationPlugin`): binds projected USD prims to the shared time domains, plans authored `timeSamples` topology, and samples transform/visibility/material intent. It depends on the core reader and visual scene contract, not on mesh projection. |
 | **`lunco-usd-bevy-light`** | UsdLux light and textured dome projection: authored light components, ambient-dome semantics, HDRI equirectangular-to-cubemap conversion, and environment-camera binding. It is independent from the visual mesh projector. |
 | **`lunco-usd-bevy-diagnostics`** | Optional visual USD asset-failure and placeholder diagnostics: glTF fallback hiding, load-time replacement stubs, and labeled failure geometry. Installed by `lunco-usd-bevy-runtime`; kept separate from the visual projector. |
 | **`lunco-usd-avian`** | Physics bridge (`UsdAvianPlugin`): maps `UsdPhysics` schemas (RigidBody, Colliders, all joint kinds + drive API) to Avian3D — the single home for joint construction. Runtime-only; lint fact production is in `lunco-usd-avian-lint`. |
@@ -339,15 +340,23 @@ projection and does not depend on the visual adapter.
 
 **`lunco-usd-bevy`**
 Visual OpenUSD bridge built on `lunco-usd-bevy-core`. It maps USD prim
-hierarchies and visual facts into Bevy entities/components, projects meshes,
-render intent, and authored `timeSamples` animation. It installs the camera and
-light adapters at the integration boundary; `lunco-render-bevy` supplies the
-concrete render pipeline. Parametric NURBS/lathe definitions and their mesh
-regeneration live in the independent `lunco-usd-bevy-lathe` package, which this
-crate uses directly rather than re-exporting. See
+hierarchies and visual facts into Bevy entities/components, projects meshes and
+render intent, and installs the camera and light adapters at the integration
+boundary; `lunco-render-bevy` supplies the concrete render pipeline. Parametric
+NURBS/lathe definitions and their mesh regeneration live in the independent
+`lunco-usd-bevy-lathe` package, which this crate uses directly rather than
+re-exporting. Add `lunco-usd-bevy-animation` when authored `timeSamples`
+playback is required. See
 [`17-view-and-intent.md §6`](architecture/17-view-and-intent.md).
 Headless consumers import the owning `lunco-usd-bevy-core` modules directly;
 this visual adapter is not a compatibility facade for the headless API.
+
+**`lunco-usd-bevy-animation`**
+Render-free USD animation adapter built on `lunco-usd-bevy-core` and
+`lunco-usd-bevy-scene`. It owns time-domain binding, animation topology plans,
+and per-frame sampling of authored transform, visibility, and material intent.
+It is installed separately from the visual adapter so headless/document
+consumers do not compile animation systems unless they need them.
 
 **`lunco-usd-bevy-light`**
 Production UsdLux adapter for `DistantLight`, `DomeLight`, `SphereLight`, and

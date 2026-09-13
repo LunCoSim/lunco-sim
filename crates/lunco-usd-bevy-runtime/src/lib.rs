@@ -13,7 +13,8 @@ pub struct UsdPlugins;
 impl Plugin for UsdPlugins {
     fn build(&self, app: &mut App) {
         app.add_plugins((
-            lunco_usd_bevy::UsdBevyPlugin,
+            lunco_usd_bevy::UsdVisualPlugin,
+            lunco_usd_bevy_animation::UsdAnimationPlugin,
             lunco_usd_bevy_diagnostics::UsdDiagnosticsPlugin,
             lunco_usd_avian::UsdAvianPlugin,
             lunco_usd_sim::UsdSimPlugin,

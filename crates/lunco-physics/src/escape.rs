@@ -219,7 +219,7 @@ fn update_world_bounds(
 /// [`WorldBounds`], with everything needed to act on it without a re-run.
 ///
 /// `Name` carries the USD prim path for USD-spawned bodies: the loader spawns
-/// each prim with `Name::new(prim_path)` (`lunco-usd-bevy/src/lib.rs:1224`).
+/// each prim with `Name::new(prim_path)` (`lunco-usd-bevy` visual projection).
 /// This crate deliberately does not depend on `lunco-usd` — it is substrate for
 /// headless and wasm generators — so `Name` is both the reachable identifier and,
 /// in practice, the prim path itself.

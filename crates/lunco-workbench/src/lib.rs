@@ -936,7 +936,7 @@ impl Plugin for WorkbenchPlugin {
         app.register_settings_section::<lunco_render::CommunicationLineSettings>();
         // The mission-time spine (doc 19): `TimeTransport` is the single
         // play/pause + rate authority and `WorldTime` the derived view. Guarded so
-        // contexts that also add it via `CelestialPlugin` / `UsdBevyPlugin` are
+        // contexts that also add it via `CelestialPlugin` / `UsdAnimationPlugin` are
         // fine. Adding it on the workbench shell makes the transport present
         // wherever the toolbar Pause button lives — including modelica-only
         // `lunica`, which has no celestial/USD plugins — so the button drives the

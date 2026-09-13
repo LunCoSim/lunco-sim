@@ -29,6 +29,9 @@ pub struct UsdCameraPlugin;
 
 impl Plugin for UsdCameraPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<lunco_time::TimePlugin>() {
+            app.add_plugins(lunco_time::TimePlugin);
+        }
         register_all_commands(app);
 
         app.init_resource::<lunco_core::SceneViewport>()

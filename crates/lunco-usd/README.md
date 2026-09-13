@@ -20,8 +20,10 @@ The complete application bundle is owned by the production
 `lunco-usd-bevy-runtime` package (`app.add_plugins(UsdPlugins)`). The
 individual packages remain independently installable:
 
-- **`UsdBevyPlugin`** (from `lunco-usd-bevy`) — visual sync: spawns child
+- **`UsdVisualPlugin`** (from `lunco-usd-bevy`) — visual sync: spawns child
   entities for USD prims, attaches meshes + transforms + hierarchy.
+- **`UsdAnimationPlugin`** (from `lunco-usd-bevy-animation`) — time-domain
+  binding and `timeSamples` animation of projected transform and material intent.
 - **`UsdDiagnosticsPlugin`** (from `lunco-usd-bevy-diagnostics`) — visual
   glTF placeholder hiding and failure-stub diagnostics.
 - **`UsdAvianPlugin`** (from `lunco-usd-avian`) — physics mapping: USD physics

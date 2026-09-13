@@ -154,6 +154,13 @@ belongs in its scene's Rhai observer. Rust keeps only the generic document,
 projection, parser, lifecycle, and numerical mechanism tests that cannot be
 observed without inventing a test-only API.
 
+The shipped parametric-surface contract follows the same rule:
+`assets/scenes/tests/parametric_surface.usda` references the antenna reflector
+and lander nozzle directly, while
+`assets/scenarios/tests/parametric_surface.rhai` checks their composed
+`LunCoLatheAPI` schemas and parameters through `QueryUsdPrim`. The visual crate
+therefore does not open shipped asset paths from a Rust test.
+
 Tests with no maintained production claim are not part of the active suite.
 Current schema, parser, lifecycle, physics, editor-selection, and
 source-preservation contracts remain covered at their owners. Editor selection

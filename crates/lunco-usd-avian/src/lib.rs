@@ -1,7 +1,7 @@
 //! # LunCoSim USD → Avian3D Physics Mapping
 //!
 //! Maps USD physics attributes to Avian3D components. This is the **second** plugin in
-//! the USD processing pipeline, running after `UsdBevyPlugin` and alongside `UsdSimPlugin`.
+//! the USD processing pipeline, running after `UsdVisualPlugin` and alongside `UsdSimPlugin`.
 //!
 //! ## USD Standard: Compound Rigid Bodies
 //!
@@ -398,7 +398,7 @@ mod mobility_tests {
 }
 
 /// An animated USD body must be `Kinematic`, never `Dynamic`: the per-frame
-/// [`lunco_usd_bevy::sample_usd_animation`] sampler writes its `Transform`
+/// The USD animation sampler writes its `Transform`
 /// directly, and a `Dynamic` body would fight Avian's integrator each step
 /// (the authored pose and the solved pose disagree → jitter / launch). When a
 /// prim carries both a rigid body and authored animation, the visual sampler is

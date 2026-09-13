@@ -42,8 +42,12 @@ UsdOp  ──►  UsdDocumentRegistry::apply   (journals + inverts)
           UsdVisualProjectionQueued  (bounded ECS binding queue)
               │
               ▼
-          instantiate_usd_prim_from_reader (lunco-usd-bevy/src/lib.rs)
-              └── match reader.type_name(path) → components
+          UsdVisualPlugin (lunco-usd-bevy/src/lib.rs)
+              └── match reader.type_name(path) → visual components
+                         │
+                         ▼
+          UsdAnimationPlugin (lunco-usd-bevy-animation)
+              └── sample authored timeSamples into visual intent
 ```
 
 The asset loader composes the fetched layer closure and snapshots the complete
@@ -292,7 +296,7 @@ the right behaviour is for it to visibly do nothing.
 ## Adding support for a new prim type or attribute
 
 1. **Read it.** Extractors use the `UsdRead` trait
-   (`lunco-usd-bevy/src/read.rs`), implemented by both `StageView` (the live
+   (`lunco-usd-bevy-core/src/read.rs`), implemented by both `StageView` (the live
    composed stage) and `UsdStageProjectionPlan` (the worker-produced initial
    snapshot). Authoring-layer reads use `UsdDataExt` separately; runtime
    extractors never switch to that source.
@@ -319,7 +323,11 @@ the right behaviour is for it to visibly do nothing.
 6. **Test it.** Because extractors use the shared composed-reader contract,
    unit-test the prepared `UsdStageProjectionPlan` for initial-load behavior
    and use a live `StageView` only for explicit authored-edit behavior — no App,
-   no renderer.
+   no renderer. Keep pure animation topology/transform-reader tests in
+   `lunco-usd-bevy-core/src/animation.rs`; runtime animation-system tests belong
+   to `lunco-usd-bevy-animation`, and observable scene/policy assertions belong
+   in Rhai. Do not create a test-only crate or import animation readers into the
+   visual test target.
 
 ## Worked example
 

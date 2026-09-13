@@ -149,7 +149,7 @@ pub fn plan_camera_tracks(
 /// Bind freshly-tagged [`CameraTrack`]s to the [`AnimationPreview`] domain so the
 /// animation transport (play / pause / scrub / rate) drives which camera is live,
 /// and grow the preview [`Playback`] range to cover the track's key span. Mirror
-/// of `bind_animated_to_preview` for the editorial track. `Without<TimeBinding>`
+/// of `lunco-usd-bevy-animation::bind_animated_to_preview` for the editorial track. `Without<TimeBinding>`
 /// leaves an explicit binding intact; absent time spine → stays on the world clock.
 pub fn bind_camera_tracks_to_preview(
     preview: Option<Res<AnimationPreview>>,

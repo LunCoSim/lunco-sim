@@ -1,14 +1,16 @@
 # lunco-usd-bevy — AI Agent Notes
 
-This crate is the **first** plugin in the USD pipeline (Layer 2 / domain). It
-turns USD prims into Bevy entities with meshes, materials, and transforms.
-Everything physics- or sim-related lives in `lunco-usd-avian` and
-`lunco-usd-sim` and runs after the visual projection binding pass.
+This crate owns the **visual** plugin at the start of the USD pipeline (Layer 2
+/ domain). It turns USD prims into Bevy entities with meshes, material intent,
+and transforms. Time-sampled animation is a separate production adapter in
+`lunco-usd-bevy-animation`; physics and simulation live in
+`lunco-usd-avian` and `lunco-usd-sim` and run after visual projection.
 
 Read alongside `crates/lunco-usd-bevy/src/lib.rs` (the visual sync systems),
-`src/read.rs` (the `UsdRead` read seam), `src/view.rs` / `src/canonical.rs` (the
-live canonical stage), and `docs/architecture/21-domain-usd.md` (the
-system-level overview).
+`crates/lunco-usd-bevy-core/src/read.rs` (the `UsdRead` seam),
+`crates/lunco-usd-bevy-core/src/view.rs` /
+`crates/lunco-usd-bevy-core/src/canonical.rs` (the live canonical stage), and
+`docs/architecture/21-domain-usd.md` (the system-level overview).
 
 ## Reading USD attributes
 
@@ -89,7 +91,11 @@ on `AssetEvent`, not a system that polls every frame.
 
 ## Testing
 
-Tests in `crates/lunco-usd-bevy/tests/` run headless (`MinimalPlugins`).
+Visual projection tests in `crates/lunco-usd-bevy/tests/` run headless
+(`MinimalPlugins`); low-level USD animation reader tests live in
+`lunco-usd-bevy-core/src/animation.rs`, beside the reader they exercise. Do
+not add a test-only crate or import animation readers into the visual test
+target; each test stays with its production owner.
 glTF loading needs `bevy::scene::ScenePlugin` + `bevy_gltf::GltfPlugin` —
 add them explicitly when a test exercises the scene-mode path. The
 default-plugins test path covers it implicitly.

@@ -2113,6 +2113,36 @@ def Xform "World" (
     }
 
     #[test]
+    fn asset_typed_attribute_reads_as_asset_and_not_as_string() {
+        let source = "#usda 1.0\n\
+            def Shader \"Shader\"\n{\n\
+            uniform token info:implementationSource = \"sourceAsset\"\n\
+            uniform asset info:wgsl:sourceAsset = @shaders/wheel.wgsl@\n}\n";
+        let stage = test_stage_from_recipe(&StageRecipe::from_source("shader.usda", source));
+        let view = stage.view();
+        let shader = SdfPath::new("/Shader").unwrap();
+
+        assert_eq!(
+            UsdRead::asset(&view, &shader, "info:wgsl:sourceAsset").as_deref(),
+            Some("shaders/wheel.wgsl"),
+        );
+        assert!(
+            view.scalar::<String>(&shader, "info:wgsl:sourceAsset")
+                .is_none(),
+            "an asset must not be accepted as a String"
+        );
+        assert_eq!(
+            UsdRead::text(&view, &shader, "info:implementationSource").as_deref(),
+            Some("sourceAsset"),
+        );
+        assert!(
+            view.scalar::<String>(&shader, "info:implementationSource")
+                .is_none(),
+            "a token must not be accepted as a String"
+        );
+    }
+
+    #[test]
     fn resolve_stage_prim_path_uses_composed_default_prim_for_empty_mounts() {
         let source = "#usda 1.0\n(\n    defaultPrim = \"Apollo\"\n)\ndef Xform \"Apollo\"\n{\n}\n";
         let cs = test_stage_from_recipe(&StageRecipe::from_source("scene.usda", source));

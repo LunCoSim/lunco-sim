@@ -1742,7 +1742,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 | `playing` | `Option < bool >` |  Play (`Some(true)`) / pause (`Some(false)`) the animation; `None` leaves it. |
 | `seek_secs` | `Option < f64 >` |  Seek the playhead to this time in **seconds**; `None` leaves it. |
 | `rate` | `Option < f64 >` |  Playback rate (1.0 = realtime); `None` leaves it. |
-| `looping` | `Option < bool >` |  Wrap at the range end instead of clamping (`None` leaves it). Honoured by  [`step_playhead`], and only meaningful once the range is bounded — an  unbounded `Playback` ignores it, so a looping cutscene needs authored  clip spans (grown by `bind_animated_to_preview`). |
+| `looping` | `Option < bool >` |  Wrap at the range end instead of clamping (`None` leaves it). Honoured by  [`step_playhead`], and only meaningful once the range is bounded — an  unbounded `Playback` ignores it, so a looping cutscene needs authored  clip spans (grown by `lunco-usd-bevy-animation::bind_animated_to_preview`). |
 
 #### `ResetTime`
 

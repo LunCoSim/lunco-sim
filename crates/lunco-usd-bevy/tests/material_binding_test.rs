@@ -13,7 +13,7 @@
 
 use bevy::prelude::*;
 use lunco_render::{PbrLook, SurfaceAlpha};
-use lunco_usd_bevy::UsdBevyPlugin;
+use lunco_usd_bevy::UsdVisualPlugin;
 use lunco_usd_bevy_core::UsdStageAsset;
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneProjected};
 use lunco_usd_core::StageRecipe;
@@ -31,7 +31,7 @@ fn test_usd_material_binding_parsing() {
     app.init_asset::<Mesh>();
     app.init_asset::<Image>();
 
-    app.add_plugins(UsdBevyPlugin);
+    app.add_plugins(UsdVisualPlugin);
 
     // Setup a mock USD stage with a Material, Shader and a bound Cube Mesh
     let usda_content = r#"#usda 1.0
@@ -133,7 +133,7 @@ fn material_for_optional(usda: &str, prim_path: &str) -> Option<PbrLook> {
     app.init_asset::<UsdStageAsset>();
     app.init_asset::<Mesh>();
     app.init_asset::<Image>();
-    app.add_plugins(UsdBevyPlugin);
+    app.add_plugins(UsdVisualPlugin);
 
     let stage_handle = {
         let mut stages = app.world_mut().resource_mut::<Assets<UsdStageAsset>>();

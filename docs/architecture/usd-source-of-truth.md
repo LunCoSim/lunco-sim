@@ -143,7 +143,7 @@ namespace.
 ### Supporting facts
 
 - **`UsdPrimPath { stage_handle: Handle<UsdStageAsset>, path: String }`**
-  (`lunco-usd-bevy/src/lib.rs:244`) is the per-entity link back to its prim.
+  (`lunco-usd-bevy-scene`) is the per-entity link back to its prim.
 - Reverse lookup (prim path → entity) exists only as an **ad-hoc, per-call HashMap**
   (`lunco-usd-sim/src/cosim.rs:483`), not a maintained index.
 - Reading composed attrs: `UsdDataExt` (`lunco-usd-core/src/usd_data.rs`) —

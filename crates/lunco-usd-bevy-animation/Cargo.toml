@@ -1,18 +1,17 @@
 [package]
-name = "lunco-usd-bevy-scene"
+name = "lunco-usd-bevy-animation"
 version = "0.1.0"
 edition = "2021"
 license.workspace = true
-description = "Render-free USD scene identity, lifecycle, and geometry contracts for Bevy"
+description = "Render-free USD time-sample animation projection for Bevy"
 
 [dependencies]
 bevy = { workspace = true, features = ["bevy_asset"] }
-lunco-core = { path = "../lunco-core" }
+lunco-render = { path = "../lunco-render" }
+lunco-time = { path = "../lunco-time" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
+lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 openusd = { workspace = true }
-
-[dev-dependencies]
-lunco-usd-core = { path = "../lunco-usd-core" }
 
 [lints]
 workspace = true

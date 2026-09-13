@@ -401,7 +401,7 @@ impl Plugin for UsdCommandsPlugin {
         app.init_resource::<crate::twin_projection::PendingInstanceProjections>();
         // Gated on the asset pipeline: these need `AssetServer` (to fetch a
         // referenced asset's closure) and the `Assets<UsdSourceText>` store
-        // (UsdBevyPlugin's `init_asset`). Both are absent in headless
+        // (UsdVisualPlugin's `init_asset`). Both are absent in headless
         // `MinimalPlugins` test apps — and a partial setup can have one without
         // the other — so require both. Chained before `project_stage_changes`
         // (below) so a spawn authored this frame projects the same frame.

@@ -9,7 +9,7 @@ By separating visuals into this crate, we keep the core integration lightweight 
 
 ## Key Functions & Features
 
-### 1. `UsdBevyPlugin`
+### 1. `UsdVisualPlugin`
 The main plugin that sets up the USDA visual synchronization system. Registers the
 `UsdStageAsset` type, the USD asset loader, and the bounded visual projection
 systems that drive USDA visual synchronization.
@@ -34,9 +34,13 @@ render intent consumed by `lunco-render-bevy`.
 *   **`UsdStageAsset`**: Bevy `Asset` carrying the layer recipe and the worker-produced `UsdStageProjectionPlan` used for initial projection.
 
 ## Usage
-Register `UsdBevyPlugin`, load a `.usda` as a `UsdStageAsset` handle, and spawn
+Register `UsdVisualPlugin`, load a `.usda` as a `UsdStageAsset` handle, and spawn
 entities tagged with `UsdPrimPath`; the load observer queues them and the
 bounded projection pass binds meshes, transforms, and materials from the
 prepared plan. Later authored edits use the live canonical stage explicitly.
 UsdLux lights and textured domes are installed by the sibling
-`lunco-usd-bevy-light` package at the `UsdBevyPlugin` integration boundary.
+`lunco-usd-bevy-light` package at the `UsdVisualPlugin` integration boundary.
+
+Time-sampled animation is a separate production adapter. Add
+`lunco-usd-bevy-animation::UsdAnimationPlugin` after this plugin when the app
+needs authored animation playback.

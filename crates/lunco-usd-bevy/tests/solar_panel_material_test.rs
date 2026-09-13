@@ -1,9 +1,9 @@
 //! Unit tests for lunco-usd-bevy crate.
 
-/// Verifies the UsdBevyPlugin exists and is constructible
+/// Verifies the UsdVisualPlugin exists and is constructible
 #[test]
-fn test_usd_bevy_plugin_constructs() {
-    let _plugin = lunco_usd_bevy::UsdBevyPlugin;
+fn test_usd_visual_plugin_constructs() {
+    let _plugin = lunco_usd_bevy::UsdVisualPlugin;
 }
 
 /// Verifies UsdPrimPath is constructible
