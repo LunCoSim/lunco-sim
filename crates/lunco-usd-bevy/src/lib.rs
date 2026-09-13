@@ -51,6 +51,7 @@ use openusd::sdf::Value;
 
 /// Light and transform ports — the port backend for what `light`/`compose` spawn.
 pub mod scene_ports;
+use lunco_usd_bevy_core::point_instancer::read_point_instancer;
 use lunco_usd_bevy_core::read::{
     attr_has_time_samples, read_authored_bool_strict, read_primvar_f32_strict,
     read_primvar_vec3_at, read_primvar_vec3_strict, read_token_at, read_vec3_f64, read_vec3_f64_at,
@@ -73,9 +74,11 @@ use lunco_usd_bevy_core::{
 use lunco_usd_bevy_lathe as lathe;
 use lunco_usd_bevy_light::light;
 use lunco_usd_bevy_scene::{
-    is_preview_only, read_primitive_axis, read_shape_dims, read_usd_mesh_points,
+    bump_usd_stage_revision, is_preview_only, read_primitive_axis, read_shape_dims,
+    read_usd_mesh_indexed, read_usd_mesh_points,
     read_usd_mesh_topology, scene_root_ancestor, usd_axis_to_quat, GlbPlaceholder,
-    PlaceholderAssetUri, ShapeDims, UsdAnimated, UsdPreviewOnly, UsdPrimPath,
+    PlaceholderAssetUri, ShapeDims, UsdAnimated, UsdPointInstance, UsdPointInstancer,
+    UsdPreviewOnly, UsdPrimPath,
     UsdSceneAwaitingStage, UsdSceneGeometryPending, UsdScenePlugin, UsdSceneProjected,
     UsdSceneProjectionFailed, UsdSceneProjectionQueued, UsdSceneRoot, UsdSceneSyncSet,
     UsdStageRevision, UsdVisualMeshTarget, UsdVisualProjectionSet,
@@ -260,6 +263,15 @@ impl Plugin for UsdBevyPlugin {
                         .in_set(UsdVisualProjectionSet),
                     poll_pending_usd_meshes
                         .run_if(any_pending_usd_meshes)
+                        .after(process_queued_usd_visuals)
+                        .in_set(UsdVisualProjectionSet),
+                    resolve_point_instancer_meshes
+                        .after(poll_pending_usd_meshes)
+                        .in_set(UsdVisualProjectionSet),
+                    hide_point_instancer_prototypes
+                        .after(process_queued_usd_visuals)
+                        .in_set(UsdVisualProjectionSet),
+                    ensure_point_instancer_prototypes
                         .after(process_queued_usd_visuals)
                         .in_set(UsdVisualProjectionSet),
                     retry_awaiting_usd_visuals_after_quality_change
@@ -652,6 +664,65 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
 
         // Get prim type (Cube, Cylinder, Sphere, etc.)
         let prim_type = reader.type_name(&sdf_path);
+
+        // `UsdGeomPointInstancer` is an aggregate, not a Gprim. Its required
+        // arrays and prototype relationship are decoded by the shared USD
+        // reader, then projected into render-free instance children. The
+        // children receive their prototype mesh/material handles after the
+        // normal prototype prim has finished loading, which lets Bevy's
+        // automatic instancing batch equal copies without changing authored
+        // prototype-local coordinates.
+        if prim_type.as_deref() == Some("PointInstancer") {
+            if let Some(attribute) = point_instancer_array_time_samples(reader, &sdf_path) {
+                let message = format!(
+                    "{} has time-sampled {attribute}; animated PointInstancer arrays are not yet supported by the visual projection",
+                    sdf_path.as_str()
+                );
+                error!("[usd-bevy] {message}");
+                commands.entity(entity).try_insert((
+                    UsdSceneProjectionFailed(message.clone()),
+                    Visibility::Hidden,
+                ));
+                lunco_core::trigger_error(commands, "usd-visual-sync-failed", message);
+                return;
+            }
+            let instances = match read_point_instancer(reader, &sdf_path, 0.0) {
+                Ok(instances) => instances,
+                Err(error) => {
+                    let message = format!(
+                        "{} has malformed UsdGeomPointInstancer data: {error}",
+                        sdf_path.as_str()
+                    );
+                    error!("[usd-bevy] {message}");
+                    commands.entity(entity).try_insert((
+                        UsdSceneProjectionFailed(message.clone()),
+                        Visibility::Hidden,
+                    ));
+                    lunco_core::trigger_error(commands, "usd-visual-sync-failed", message);
+                    return;
+                }
+            };
+            if let Err(error) = project_point_instancer(
+                reader,
+                entity,
+                &sdf_path,
+                &prim_path.stage_handle,
+                instances,
+                commands,
+            ) {
+                let message = format!(
+                    "{} cannot project its UsdGeomPointInstancer prototypes: {error}",
+                    sdf_path.as_str()
+                );
+                error!("[usd-bevy] {message}");
+                commands.entity(entity).try_insert((
+                    UsdSceneProjectionFailed(message.clone()),
+                    Visibility::Hidden,
+                ));
+                lunco_core::trigger_error(commands, "usd-visual-sync-failed", message);
+                return;
+            }
+        }
 
         // A procedural camera background is an Xform-level appearance intent,
         // not a USD gprim. Read the authored contract once at the USD
@@ -1327,6 +1398,226 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
             is_grid_entity,
             commands,
         );
+    }
+}
+
+/// The initial visual projection is deliberately static. Reject time-sampled
+/// PointInstancer arrays instead of sampling their default/initial value and
+/// silently freezing a standards-valid animated asset.
+fn point_instancer_array_time_samples<R: UsdRead>(
+    reader: &R,
+    path: &SdfPath,
+) -> Option<&'static str> {
+    [
+        "positions",
+        "protoIndices",
+        "orientations",
+        "orientationsf",
+        "scales",
+        "ids",
+        "invisibleIds",
+    ]
+    .into_iter()
+    .find(|attribute| reader.has_time_samples(path, attribute))
+}
+
+/// Project a standard point instancer into render-free children.
+///
+/// The first production renderer supported by this crate can share one mesh
+/// and one material across direct-Gprim prototypes. A prototype subtree is
+/// valid OpenUSD, but needs a flattened multi-mesh render batch and is rejected
+/// here with an explicit projection failure until that renderer boundary is
+/// implemented. This keeps unsupported authored structure visible instead of
+/// silently drawing only part of a prototype.
+fn project_point_instancer<R: UsdRead>(
+    reader: &R,
+    parent: Entity,
+    path: &SdfPath,
+    stage_handle: &Handle<UsdStageAsset>,
+    instances: Vec<lunco_usd_bevy_core::point_instancer::UsdPointInstancePlan>,
+    commands: &mut Commands,
+) -> anyhow::Result<()> {
+    let prototype_paths = reader
+        .rel_targets(path, "prototypes")
+        .into_iter()
+        .map(|prototype| prototype.to_string())
+        .collect::<Vec<_>>();
+    let convention = stage_convention(reader as &dyn UsdReadObject)
+        .map_err(|error| anyhow::anyhow!("invalid stage convention: {error}"))?;
+
+    for prototype in &prototype_paths {
+        let prototype_path = SdfPath::new(prototype)
+            .map_err(|error| anyhow::anyhow!("invalid prototype target {prototype}: {error}"))?;
+        let prototype_type = reader.type_name(&prototype_path).unwrap_or_default();
+        if !matches!(
+            prototype_type.as_str(),
+            "Mesh"
+                | "Cube"
+                | "Sphere"
+                | "Cylinder"
+                | "Cone"
+                | "Capsule"
+                | "Plane"
+                | "NurbsPatch"
+                | "BasisCurves"
+                | "NurbsCurves"
+        ) {
+            anyhow::bail!(
+                "prototype {prototype} has type `{prototype_type}`; only direct renderable Gprims are currently supported"
+            );
+        }
+        if prim_is_animated(reader, &prototype_path) {
+            anyhow::bail!(
+                "prototype {prototype} is animated; animated PointInstancer prototypes are not yet supported by the visual projection"
+            );
+        }
+        if let Some(child) = reader.children(&prototype_path).into_iter().next() {
+            anyhow::bail!(
+                "prototype {prototype} has child {child}; arbitrary prototype subtrees require a multi-mesh instancing batch"
+            );
+        }
+    }
+
+    commands.entity(parent).try_insert(UsdPointInstancer {
+        stage_handle: stage_handle.clone(),
+        prototype_paths,
+    });
+    for instance in instances {
+        let prototype_path = SdfPath::new(&instance.prototype_path).map_err(|error| {
+            anyhow::anyhow!(
+                "invalid prototype path {}: {error}",
+                instance.prototype_path
+            )
+        })?;
+        let prototype_type = reader.type_name(&prototype_path).unwrap_or_default();
+        let mut transform = instance.transform;
+        if matches!(
+            prototype_type.as_str(),
+            "Cylinder" | "Cone" | "Capsule" | "Plane"
+        ) {
+            if let Some(axis) = read_primitive_axis(reader, &prototype_path, &prototype_type) {
+                transform.rotation *=
+                    convention.orient(usd_axis_to_quat(&axis).unwrap_or(Quat::IDENTITY));
+            }
+        }
+        commands.spawn((
+            Name::new(format!("{}[{}]", path.as_str(), instance.index)),
+            ChildOf(parent),
+            transform,
+            GlobalTransform::default(),
+            if instance.visible {
+                Visibility::Visible
+            } else {
+                Visibility::Hidden
+            },
+            InheritedVisibility::VISIBLE,
+            ViewVisibility::default(),
+            UsdPointInstance {
+                stage_id: stage_handle.id(),
+                index: instance.index,
+                id: instance.id,
+                prototype_path: instance.prototype_path,
+            },
+        ));
+    }
+    Ok(())
+}
+
+/// Copy a ready prototype mesh and appearance intent onto point-instancer
+/// children. Handles are deliberately shared: Bevy's automatic instancing
+/// requires equal `Handle<Mesh>` and `Handle<Material>` values, while the
+/// authored `UsdPointInstance` id remains independent of unstable GPU batch
+/// ordering.
+fn resolve_point_instancer_meshes(
+    mut commands: Commands,
+    prototypes: Query<(&UsdPrimPath, Option<&Mesh3d>, Option<&PbrLook>)>,
+    instances: Query<(Entity, &UsdPointInstance), Without<Mesh3d>>,
+) {
+    let mut ready = std::collections::HashMap::new();
+    for (path, mesh, look) in &prototypes {
+        if let (Some(mesh), Some(look)) = (mesh, look) {
+            ready.insert(
+                (path.stage_handle.id(), path.path.clone()),
+                (mesh.0.clone(), look.clone()),
+            );
+        }
+    }
+    for (entity, instance) in &instances {
+        let Some((mesh, look)) = ready.get(&(instance.stage_id, instance.prototype_path.clone()))
+        else {
+            continue;
+        };
+        commands
+            .entity(entity)
+            .try_insert((Mesh3d(mesh.clone()), look.clone()));
+    }
+}
+
+/// Keep prototype source prims out of the visible scene traversal. OpenUSD
+/// permits prototypes anywhere in the scenegraph, so this is relationship-
+/// driven rather than a name/path convention. Descendants inherit the hidden
+/// prototype root's visibility in Bevy.
+fn hide_point_instancer_prototypes(
+    instancers: Query<&UsdPointInstancer>,
+    mut prims: Query<(&UsdPrimPath, &mut Visibility)>,
+) {
+    for instancer in &instancers {
+        for prototype in &instancer.prototype_paths {
+            for (path, mut visibility) in &mut prims {
+                if (path.path == *prototype
+                    || path
+                        .path
+                        .strip_prefix(prototype)
+                        .is_some_and(|suffix| suffix.starts_with('/')))
+                    && *visibility != Visibility::Hidden
+                {
+                    *visibility = Visibility::Hidden;
+                }
+            }
+        }
+    }
+}
+
+/// Materialize a hidden source projection when a relationship targets a prim
+/// outside the currently mounted traversal subtree. OpenUSD permits prototype
+/// roots anywhere in the scenegraph; this keeps that legal arrangement working
+/// without fabricating a second mesh or altering the authored path.
+fn ensure_point_instancer_prototypes(
+    instancers: Query<(Entity, &UsdPointInstancer)>,
+    prims: Query<&UsdPrimPath>,
+    mut commands: Commands,
+) {
+    let mut existing = prims
+        .iter()
+        .map(|path| (path.stage_handle.id(), path.path.clone()))
+        .collect::<std::collections::HashSet<_>>();
+    for (parent, instancer) in &instancers {
+        for prototype in &instancer.prototype_paths {
+            let key = (instancer.stage_handle.id(), prototype.clone());
+            if !existing.insert(key) {
+                continue;
+            }
+            queue_usd_child_spawn(
+                &mut commands,
+                parent,
+                (
+                    Name::new(prototype.clone()),
+                    UsdPrimPath {
+                        stage_handle: instancer.stage_handle.clone(),
+                        path: prototype.clone(),
+                    },
+                    Transform::default(),
+                    GlobalTransform::default(),
+                    Visibility::Visible,
+                    InheritedVisibility::VISIBLE,
+                    ViewVisibility::default(),
+                    UsdSceneAwaitingStage,
+                    UsdSceneProjectionQueued,
+                ),
+                (),
+                None,
+            );
+        }
     }
 }
 
@@ -2942,6 +3233,177 @@ pub fn bind_animated_to_preview(
     }
 }
 
+/// Reads a 3-component vector attribute (`color3f` / `double3` / `float3`
+/// and `Vec<f32>`/`Vec<f64>` array forms) from a USD prim as a Bevy
+/// `Vec3` (f32). Thin wrapper over [`read_vec3_f64`] — reused by
+/// downstream crates (e.g. `lunco-usd-sim`'s shader authoring) so there
+/// is one canonical vec3 reader. `None` if absent or unconvertible.
+pub fn get_attribute_as_vec3(
+    reader: &dyn read::UsdReadObject,
+    path: &SdfPath,
+    attr: &str,
+) -> Option<Vec3> {
+    read_vec3_f64(reader, path, attr).map(|v| Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32))
+}
+
+/// Apply one generic program resolution to its owning entity.
+///
+/// The program prim is the authored source identity; the owning entity carries
+/// the runtime source marker. Keeping this operation generic lets the live USD
+/// edit bridge update Rhai programs in place without rebuilding the owner.
+pub fn apply_program_resolution(
+    world: &mut World,
+    entity: Entity,
+    stage_id: bevy::asset::AssetId<UsdStageAsset>,
+    resolved: Option<program::ResolvedProgram>,
+) {
+    let rhai_asset = resolved.as_ref().and_then(|resolved| {
+        let program::ProgramSource::Asset(asset) = &resolved.source else {
+            return None;
+        };
+        (resolved.backend == program::ProgramBackend::Rhai)
+            .then(|| resolve_stage_asset_path(world.resource::<AssetServer>(), stage_id, asset))
+    });
+    let mut entity = world.entity_mut(entity);
+    entity
+        .remove::<lunco_core::programs::ProgramDriverId>()
+        .remove::<lunco_core::EmbeddedScenarioSource>()
+        .remove::<lunco_core::EmbeddedScenarioPath>();
+
+    match resolved {
+        Some(program::ResolvedProgram {
+            backend: program::ProgramBackend::Builtin,
+            source: program::ProgramSource::Id(id),
+        }) => {
+            entity.insert(lunco_core::programs::ProgramDriverId(id));
+        }
+        Some(program::ResolvedProgram {
+            backend: program::ProgramBackend::Rhai,
+            source: program::ProgramSource::Code(source),
+        }) => {
+            entity.insert(lunco_core::EmbeddedScenarioSource(source));
+        }
+        Some(program::ResolvedProgram {
+            backend: program::ProgramBackend::Rhai,
+            source: program::ProgramSource::Asset(_),
+        }) => {
+            let Some(asset) = rhai_asset else {
+                warn!(
+                    "[usd] Rhai program asset could not be resolved for {:?}",
+                    entity.id()
+                );
+                return;
+            };
+            entity.insert(lunco_core::EmbeddedScenarioPath(asset));
+        }
+        Some(resolved) => {
+            warn!(
+                "[usd] non-generic program {:?} reached generic projection: {:?}",
+                entity.id(),
+                resolved.backend
+            );
+        }
+        None => {}
+    }
+}
+
+/// Re-read the generic program children of one existing owner.
+///
+/// This is the structural counterpart to source hot-reload: adding or removing
+/// a program prim changes the owner's executable policy, but must not recreate
+/// the owner's physics or visual subtree.
+pub fn refresh_program_owner(
+    world: &mut World,
+    stage_id: bevy::asset::AssetId<UsdStageAsset>,
+    owner: Entity,
+) {
+    let Some(owner_path) = world
+        .get::<UsdPrimPath>(owner)
+        .map(|path| path.path.clone())
+    else {
+        return;
+    };
+    let Some((program_path, resolved, params)) = ({
+        let Some(stages) = world.get_non_send::<CanonicalStages>() else {
+            return;
+        };
+        let Some(stage) = stages.get(stage_id) else {
+            return;
+        };
+        let view = stage.view();
+        let owner = SdfPath::new(&owner_path).expect("projected USD path is valid");
+        let network_members = program::modelica_network_member_paths(&view);
+        let mut candidates: Vec<SdfPath> = UsdRead::children(&view, &owner)
+            .into_iter()
+            .filter(|child| UsdRead::is_active(&view, child))
+            .filter(|child| UsdRead::has_api_schema(&view, child, "LunCoProgramAPI"))
+            .collect();
+        if UsdRead::type_name(&view, &owner).as_deref() != Some("Scope")
+            && UsdRead::has_api_schema(&view, &owner, "LunCoProgramAPI")
+        {
+            candidates.push(owner);
+        }
+
+        let mut programs = Vec::new();
+        for child in candidates {
+            if network_members.contains(child.as_str()) {
+                continue;
+            }
+            let resolved = match program::resolve_program(&view, &child) {
+                Ok(resolved) if program::is_generic_program_backend(resolved.backend) => resolved,
+                Ok(_) => continue,
+                Err(issue) => {
+                    warn!(
+                        "[usd] program {} is unresolved at {}: {}",
+                        child.as_str(),
+                        issue.property,
+                        issue.message
+                    );
+                    continue;
+                }
+            };
+            let params = UsdRead::attr_names(&view, &child)
+                .iter()
+                .filter_map(|name| {
+                    let key = name.strip_prefix("lunco:param:")?;
+                    Some((key.to_string(), UsdRead::real(&view, &child, name)?))
+                })
+                .collect::<std::collections::HashMap<_, _>>();
+            programs.push((child.to_string(), resolved, params));
+        }
+        if programs.len() > 1 {
+            warn!(
+                "[usd] {} has {} generic executable program children; none was attached",
+                owner_path,
+                programs.len()
+            );
+            None
+        } else {
+            programs.into_iter().next()
+        }
+    }) else {
+        {
+            let mut entity = world.entity_mut(owner);
+            entity
+                .remove::<lunco_core::ScriptParams>()
+                .remove::<lunco_core::ScenarioProgramPrim>();
+        }
+        apply_program_resolution(world, owner, stage_id, None);
+        return;
+    };
+
+    {
+        let mut entity = world.entity_mut(owner);
+        if params.is_empty() {
+            entity.remove::<lunco_core::ScriptParams>();
+        } else {
+            entity.insert(lunco_core::ScriptParams(params));
+        }
+        entity.insert(lunco_core::ScenarioProgramPrim(program_path));
+    }
+    apply_program_resolution(world, owner, stage_id, Some(resolved));
+}
+
 /// Attach the generic script/driver programs a prim carries to `entity`.
 ///
 /// Program resolution happens before the one-program-per-owner check. Modelica
@@ -3867,7 +4329,7 @@ fn build_usd_curve_mesh(
     let widths = match read::read_curve_real_array(reader, path, gtok::A_WIDTHS) {
         Ok(Some(widths)) if !widths.is_empty() => widths,
         Ok(Some(_)) | Ok(None) => return None,
-        Err(()) => {
+        Err(_) => {
             error!(
                 "[usd-bevy] {} has authored curve widths with an unsupported value type",
                 path.as_str()
@@ -3930,7 +4392,7 @@ fn build_usd_curve_mesh(
             );
             return None;
         }
-        Err(()) => {
+        Err(_) => {
             error!(
                 "[usd-bevy] {} has authored curveVertexCounts with an unsupported value type",
                 path.as_str()
@@ -3972,7 +4434,7 @@ fn build_usd_curve_mesh(
                     );
                     return None;
                 }
-                Err(()) => {
+                Err(_) => {
                     error!(
                     "[usd-bevy] {} has authored NurbsCurves order with an unsupported value type",
                     path.as_str()
@@ -3995,7 +4457,7 @@ fn build_usd_curve_mesh(
             openusd::schemas::geom::tokens::A_KNOTS,
         ) {
             Ok(Some(knots)) if !knots.is_empty() => knots,
-            Ok(Some(_)) | Ok(None) | Err(()) => {
+            Ok(Some(_)) | Ok(None) | Err(_) => {
                 error!(
                     "[usd-bevy] {} has no usable authored NurbsCurves knots",
                     path.as_str()
@@ -4017,7 +4479,7 @@ fn build_usd_curve_mesh(
                 return None;
             }
             Ok(None) => Vec::new(),
-            Err(()) => {
+            Err(_) => {
                 error!(
                     "[usd-bevy] {} has authored pointWeights with an unsupported value type",
                     path.as_str()
@@ -4035,7 +4497,7 @@ fn build_usd_curve_mesh(
             &["linear", "cubic"],
         ) {
             Ok(token) => token,
-            Err(()) => return None,
+            Err(_) => return None,
         };
         let basis = if ty == "linear" {
             CurveBasis::Linear
@@ -4049,7 +4511,7 @@ fn build_usd_curve_mesh(
             ) {
                 Ok(token) if token == "bezier" => CurveBasis::Bezier,
                 Ok(_) => CurveBasis::CatmullRom,
-                Err(()) => return None,
+                Err(_) => return None,
             }
         };
         let wrap = match read::read_curve_token(
@@ -4060,7 +4522,7 @@ fn build_usd_curve_mesh(
             &["nonperiodic", "periodic", "pinned"],
         ) {
             Ok(wrap) => wrap,
-            Err(()) => return None,
+            Err(_) => return None,
         };
         (
             basis,
@@ -4351,7 +4813,7 @@ fn read_patch_surface(
     }
     let u_knots = match read::read_curve_real_array(reader, path, gtok::A_U_KNOTS) {
         Ok(Some(knots)) if knots.len() == u_count + u_order => knots,
-        Ok(Some(_)) | Ok(None) | Err(()) => {
+        Ok(Some(_)) | Ok(None) | Err(_) => {
             error!(
                 "[usd-bevy] {} has no usable authored uKnots for its NurbsPatch",
                 path.as_str()
@@ -4361,7 +4823,7 @@ fn read_patch_surface(
     };
     let v_knots = match read::read_curve_real_array(reader, path, gtok::A_V_KNOTS) {
         Ok(Some(knots)) if knots.len() == v_count + v_order => knots,
-        Ok(Some(_)) | Ok(None) | Err(()) => {
+        Ok(Some(_)) | Ok(None) | Err(_) => {
             error!(
                 "[usd-bevy] {} has no usable authored vKnots for its NurbsPatch",
                 path.as_str()
@@ -4379,7 +4841,7 @@ fn read_patch_surface(
             return None;
         }
         Ok(None) => Vec::new(),
-        Err(()) => {
+        Err(_) => {
             error!(
                 "[usd-bevy] {} has pointWeights with an unsupported value type",
                 path.as_str()
@@ -4395,7 +4857,7 @@ fn read_patch_surface(
         &["rightHanded", "leftHanded"],
     ) {
         Ok(orientation) => orientation == "leftHanded",
-        Err(()) => return None,
+        Err(_) => return None,
     };
 
     Some((
@@ -4710,7 +5172,7 @@ fn build_usd_nurbs_patch_mesh(
         let ranges = match read::read_double2_array_strict(reader, path, "trimCurve:ranges") {
             Ok(Some(ranges)) => ranges,
             Ok(None) => Vec::new(),
-            Err(()) => {
+            Err(_) => {
                 error!(
                     "[usd-bevy] {} has malformed trimCurve:ranges; refusing the patch",
                     path.as_str()

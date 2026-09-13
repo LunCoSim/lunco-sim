@@ -149,8 +149,8 @@ pub fn set_contact_friction(
         || !friction.static_coefficient.is_finite()
         || friction.dynamic < 0.0
         || friction.static_coefficient < 0.0
-        || friction.dynamic > avian3d::math::Scalar::MAX as f64
-        || friction.static_coefficient > avian3d::math::Scalar::MAX as f64
+        || friction.dynamic > avian3d::math::Scalar::MAX
+        || friction.static_coefficient > avian3d::math::Scalar::MAX
     {
         return Err(format!(
             "invalid contact friction: coefficients must be finite, non-negative, and representable by Avian, got {friction:?}"
@@ -171,8 +171,8 @@ pub fn contact_friction_snapshot(
 ) -> Option<ContactFrictionParameters> {
     let value = world.get::<avian3d::prelude::Friction>(entity)?;
     Some(ContactFrictionParameters {
-        dynamic: value.dynamic_coefficient as f64,
-        static_coefficient: value.static_coefficient as f64,
+        dynamic: value.dynamic_coefficient,
+        static_coefficient: value.static_coefficient,
     })
 }
 
@@ -215,8 +215,8 @@ pub fn set_joint_damping(
         || !damping.angular.is_finite()
         || damping.linear < 0.0
         || damping.angular < 0.0
-        || damping.linear > avian3d::math::Scalar::MAX as f64
-        || damping.angular > avian3d::math::Scalar::MAX as f64
+        || damping.linear > avian3d::math::Scalar::MAX
+        || damping.angular > avian3d::math::Scalar::MAX
     {
         return Err(format!(
             "invalid joint damping: rates must be finite, non-negative, and representable by Avian, got {damping:?}"
@@ -249,8 +249,8 @@ pub fn joint_damping_snapshot(world: &World, entity: Entity) -> Option<JointDamp
         .copied()
         .unwrap_or_default();
     Some(JointDampingParameters {
-        linear: value.linear as f64,
-        angular: value.angular as f64,
+        linear: value.linear,
+        angular: value.angular,
     })
 }
 
@@ -290,22 +290,16 @@ pub fn contact_debug_snapshot(world: &World, entity: Entity) -> Option<ContactDe
         snapshot.touching_pair_count += 1;
         for manifold in &pair.manifolds {
             snapshot.manifold_count += 1;
-            snapshot.max_friction = snapshot.max_friction.max(manifold.friction as f64);
-            snapshot.contact_normal = [
-                manifold.normal.x as f64,
-                manifold.normal.y as f64,
-                manifold.normal.z as f64,
-            ];
+            snapshot.max_friction = snapshot.max_friction.max(manifold.friction);
+            snapshot.contact_normal = [manifold.normal.x, manifold.normal.y, manifold.normal.z];
             let normal_impulse = manifold.normal * manifold.total_normal_impulse();
-            snapshot.normal_impulse_vector[0] += normal_impulse.x as f64;
-            snapshot.normal_impulse_vector[1] += normal_impulse.y as f64;
-            snapshot.normal_impulse_vector[2] += normal_impulse.z as f64;
+            snapshot.normal_impulse_vector[0] += normal_impulse.x;
+            snapshot.normal_impulse_vector[1] += normal_impulse.y;
+            snapshot.normal_impulse_vector[2] += normal_impulse.z;
             for point in &manifold.points {
-                snapshot.total_normal_impulse += point.normal_impulse as f64;
-                snapshot.max_normal_speed = snapshot
-                    .max_normal_speed
-                    .max(point.normal_speed.abs() as f64);
-                snapshot.max_penetration = snapshot.max_penetration.max(point.penetration as f64);
+                snapshot.total_normal_impulse += point.normal_impulse;
+                snapshot.max_normal_speed = snapshot.max_normal_speed.max(point.normal_speed.abs());
+                snapshot.max_penetration = snapshot.max_penetration.max(point.penetration);
                 let velocity_at = |body: Option<Entity>, anchor: avian3d::math::Vector| {
                     let Some(body) = body else {
                         return avian3d::math::Vector::ZERO;
@@ -321,15 +315,10 @@ pub fn contact_debug_snapshot(world: &World, entity: Entity) -> Option<ContactDe
                 let relative =
                     velocity_at(pair.body2, point.anchor2) - velocity_at(pair.body1, point.anchor1);
                 let tangent = relative - manifold.normal * relative.dot(manifold.normal);
-                snapshot.max_tangent_speed =
-                    snapshot.max_tangent_speed.max(tangent.length() as f64);
+                snapshot.max_tangent_speed = snapshot.max_tangent_speed.max(tangent.length());
                 snapshot.total_warm_start_tangent_impulse +=
-                    point.warm_start_tangent_impulse.length() as f64;
-                snapshot.contact_point = [
-                    point.point.x as f64,
-                    point.point.y as f64,
-                    point.point.z as f64,
-                ];
+                    point.warm_start_tangent_impulse.length();
+                snapshot.contact_point = [point.point.x, point.point.y, point.point.z];
             }
         }
     }
@@ -464,7 +453,7 @@ pub fn set_prismatic_drive(
         .or_else(|| {
             world
                 .get::<ComputedMass>(joint.body2)
-                .map(|mass| mass.value() as f64)
+                .map(|mass| mass.value())
         })
         .ok_or_else(|| format!("prismatic joint {entity:?} has no driven-body mass"))?;
     let model = force_drive_motor_model(drive.stiffness, drive.damping, body_mass)
@@ -490,7 +479,7 @@ pub fn prismatic_drive_snapshot(world: &World, entity: Entity) -> Option<Prismat
         .or_else(|| {
             world
                 .get::<ComputedMass>(joint.body2)
-                .map(|mass| mass.value() as f64)
+                .map(|mass| mass.value())
         })
         .unwrap_or(0.0);
     let model = match joint.motor.motor_model {
@@ -503,9 +492,9 @@ pub fn prismatic_drive_snapshot(world: &World, entity: Entity) -> Option<Prismat
         model,
         target_position: joint.motor.target_position,
         target_velocity: joint.motor.target_velocity,
-        stiffness: stiffness as f64,
-        damping: damping as f64,
-        max_force: joint.motor.max_force as f64,
+        stiffness,
+        damping,
+        max_force: joint.motor.max_force,
     })
 }
 

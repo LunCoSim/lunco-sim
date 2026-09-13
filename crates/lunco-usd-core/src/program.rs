@@ -54,7 +54,7 @@ impl Default for ProgramOutput {
 }
 
 /// Complete authored intent for attaching one source-backed program.
-#[derive(Debug, Clone, PartialEq, Reflect, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Reflect, serde::Serialize, serde::Deserialize)]
 pub struct ProgramAttachSpec {
     /// Layer receiving the program opinion.
     pub edit_target: LayerId,
@@ -71,20 +71,6 @@ pub struct ProgramAttachSpec {
     /// Whether the program is allowed to drive force/torque ports on a
     /// client-predicted body.
     pub realtime_safe: bool,
-}
-
-impl Default for ProgramAttachSpec {
-    fn default() -> Self {
-        Self {
-            edit_target: LayerId::root(),
-            host_path: String::new(),
-            name: String::new(),
-            source_asset: String::new(),
-            inputs: Vec::new(),
-            outputs: Vec::new(),
-            realtime_safe: false,
-        }
-    }
 }
 
 /// Build the primitive USD operations for [`ProgramAttachSpec`].

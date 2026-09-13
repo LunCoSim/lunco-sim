@@ -79,7 +79,7 @@ impl TransformEditChannels {
 }
 
 fn transform_edits(info_only: &[String]) -> HashMap<String, TransformEditChannels> {
-    let mut edits = HashMap::new();
+    let mut edits: HashMap<String, TransformEditChannels> = HashMap::new();
     for path in info_only {
         let Some((prim, attribute)) = path.split_once('.') else {
             continue;
@@ -87,10 +87,7 @@ fn transform_edits(info_only: &[String]) -> HashMap<String, TransformEditChannel
         let Some(channels) = TransformEditChannels::for_attribute(attribute) else {
             continue;
         };
-        edits
-            .entry(prim.to_string())
-            .or_insert_with(TransformEditChannels::default)
-            .merge(channels);
+        edits.entry(prim.to_string()).or_default().merge(channels);
     }
     edits
 }
@@ -152,7 +149,7 @@ impl LiveTransformEditHints {
             .entry(stage)
             .or_default()
             .entry(path)
-            .or_insert_with(TransformEditChannels::default)
+            .or_default()
             .merge(channels);
     }
 
@@ -327,10 +324,7 @@ pub(crate) fn project_stage_changes(world: &mut World) {
 
         let mut transform_edits = transform_edits(&info_only);
         for (path, channels) in authored_transform_edits {
-            transform_edits
-                .entry(path)
-                .or_insert_with(TransformEditChannels::default)
-                .merge(channels);
+            transform_edits.entry(path).or_default().merge(channels);
         }
         apply_transform_edits_live(world, id, &transform_edits);
         // A `DomeLight`'s attributes (its HDRI, intensity, skybox flag) are not

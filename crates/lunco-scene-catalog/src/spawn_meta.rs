@@ -24,7 +24,7 @@
 use lunco_usd_bevy_core::DefaultPrim;
 
 /// Spawn metadata authored on a `*.usda`'s default prim.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct SpawnMeta {
     /// `bool lunco:spawnable` — whether the file is a spawnable part.
     ///
@@ -36,15 +36,6 @@ pub struct SpawnMeta {
     ///
     /// USD's standard `doc` field, visible to usdview and other USD tools.
     pub description: Option<String>,
-}
-
-impl Default for SpawnMeta {
-    fn default() -> Self {
-        SpawnMeta {
-            spawnable: false,
-            description: None,
-        }
-    }
 }
 
 /// Parse the catalog metadata out of a `*.usda`'s source.

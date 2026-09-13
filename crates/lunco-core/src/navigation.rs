@@ -127,7 +127,7 @@ pub fn steering_command(cross_yaw: f32, distance: f64, steering_geometry: Steeri
     // `cross_yaw` is positive for a target to the vehicle's left. The public
     // drive surface is positive-to-the-right for every authored rover, so the
     // one shared command sign is negative here.
-    (cross_yaw as f64 * gain * -1.0).clamp(-1.0, 1.0)
+    (-(cross_yaw as f64) * gain).clamp(-1.0, 1.0)
 }
 
 /// Scale the command as it enters the authored acceptance radius.

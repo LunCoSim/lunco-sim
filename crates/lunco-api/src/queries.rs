@@ -293,7 +293,7 @@ impl ApiQueryProvider for ReadExposuresProvider {
                 return ApiResponse::error(
                     ApiErrorCode::DeserializationError,
                     "ReadExposures: `surface` must be a string",
-                )
+                );
             }
         };
 
@@ -445,7 +445,7 @@ mod tests {
         let revision = exposures.revision;
         world.insert_resource(exposures);
 
-        let response = ReadExposuresProvider.execute(&mut world, &serde_json::json!({}));
+        let response = ReadExposuresProvider.execute(&world, &serde_json::json!({}));
         let ApiResponse::Ok {
             data: Some(data), ..
         } = response
@@ -468,7 +468,7 @@ mod tests {
         world.insert_resource(exposures);
 
         let response =
-            ReadExposuresProvider.execute(&mut world, &serde_json::json!({ "surface": "hud" }));
+            ReadExposuresProvider.execute(&world, &serde_json::json!({ "surface": "hud" }));
         let ApiResponse::Ok {
             data: Some(data), ..
         } = response

@@ -596,8 +596,12 @@ Commonly mistaken fields include:
 
 - **`PhysicsArticulationRootAPI`** — avian has no reduced-coordinate articulation;
   do not expect it to change this runtime.
-- **`UsdGeomPointInstancer` / `instanceable`** — not read. Every copy is a full
-  prim tree.
+- **`UsdGeomPointInstancer`** — the composed visual reader supports static direct
+  renderable Gprim prototypes and standard array/mask semantics. Time-sampled
+  arrays, animated prototypes, and arbitrary prototype subtrees fail visibly
+  because their runtime sampling or visual multi-mesh batching is not yet
+  implemented. Native **`instanceable = true`** scenegraph instancing remains
+  outside the runtime projection.
 - **`proxyPrim`** — not read; `purpose` on a sibling covers the case we have
   (see §6b).
 

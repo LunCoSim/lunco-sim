@@ -35,7 +35,7 @@ pub(super) fn render(ui: &egui::Ui, rect: egui::Rect, scene: &Scene, show_edges:
         };
         let connector = data.connector_type.clone();
         let style = wire_style_for(&connector);
-        entries.entry(connector).or_insert(LegendEntry {
+        entries.entry(connector).or_insert_with(|| LegendEntry {
             color: data.icon_color.unwrap_or(style.color),
             kind: data.kind,
             domain: style.domain,

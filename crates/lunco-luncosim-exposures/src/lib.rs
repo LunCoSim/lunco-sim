@@ -79,7 +79,10 @@ fn runtime_ui_visibility(facts: &HookValue, surface_id: &str) -> bool {
             match visible {
                 Some(visible) => visible,
                 _ => {
-                    warn!(surface_id, "[runtime-ui] visibility policy must return a map with boolean `visible`; surface hidden");
+                    warn!(
+                        surface_id,
+                        "[runtime-ui] visibility policy must return a map with boolean `visible`; surface hidden"
+                    );
                     false
                 }
             }
@@ -216,14 +219,10 @@ fn runtime_ui_facts(
         .and_then(|root| q_vel.get(root).ok())
         .map(|velocity| {
             HookValue::Array(
-                [
-                    velocity.0.x as f64,
-                    velocity.0.y as f64,
-                    velocity.0.z as f64,
-                ]
-                .into_iter()
-                .map(HookValue::Float)
-                .collect(),
+                [velocity.0.x, velocity.0.y, velocity.0.z]
+                    .into_iter()
+                    .map(HookValue::Float)
+                    .collect(),
             )
         })
         .unwrap_or_else(|| HookValue::Array(Vec::new()));
@@ -231,14 +230,10 @@ fn runtime_ui_facts(
         .and_then(|root| q_angvel.get(root).ok())
         .map(|velocity| {
             HookValue::Array(
-                [
-                    velocity.0.x as f64,
-                    velocity.0.y as f64,
-                    velocity.0.z as f64,
-                ]
-                .into_iter()
-                .map(HookValue::Float)
-                .collect(),
+                [velocity.0.x, velocity.0.y, velocity.0.z]
+                    .into_iter()
+                    .map(HookValue::Float)
+                    .collect(),
             )
         })
         .unwrap_or_else(|| HookValue::Array(Vec::new()));
@@ -246,15 +241,10 @@ fn runtime_ui_facts(
         .and_then(|root| q_rotation.get(root).ok())
         .map(|rotation| {
             HookValue::Array(
-                [
-                    rotation.0.x as f64,
-                    rotation.0.y as f64,
-                    rotation.0.z as f64,
-                    rotation.0.w as f64,
-                ]
-                .into_iter()
-                .map(HookValue::Float)
-                .collect(),
+                [rotation.0.x, rotation.0.y, rotation.0.z, rotation.0.w]
+                    .into_iter()
+                    .map(HookValue::Float)
+                    .collect(),
             )
         })
         .unwrap_or_else(|| HookValue::Array(Vec::new()));
@@ -1137,8 +1127,10 @@ mod exposure_tests {
         exposures.writer("camera-status").visible(true);
         exposures.writer("subject-surface").visible(true);
         exposures.writer("secondary-surface").visible(true);
-        let mut refresh = ExposureRefresh::default();
-        refresh.first_update = false;
+        let mut refresh = ExposureRefresh {
+            first_update: false,
+            ..default()
+        };
         refresh.clear_dirty();
 
         clear_scene_exposures_impl(&mut exposures, &mut refresh);

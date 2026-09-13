@@ -148,20 +148,20 @@ pub fn parse_model_interface(source: &str, file_label: &str) -> ModelInterface {
 /// parameter, input, output, and metadata projections cannot silently drift
 /// through separate parses or recovery modes.
 pub fn parse_model_interface_from_ast(ast: &StoredDefinition) -> ModelInterface {
-    let defaults = extract_inputs_with_defaults_from_ast(&ast);
+    let defaults = extract_inputs_with_defaults_from_ast(ast);
     ModelInterface {
-        model_name: extract_model_name_from_ast(&ast),
-        within: within_package(&ast),
-        parameters: extract_parameters_from_ast(&ast),
-        inputs: extract_input_names_from_ast(&ast)
+        model_name: extract_model_name_from_ast(ast),
+        within: within_package(ast),
+        parameters: extract_parameters_from_ast(ast),
+        inputs: extract_input_names_from_ast(ast)
             .into_iter()
             .map(|name| {
                 let seed = defaults.get(&name).copied().unwrap_or(0.0);
                 (name, seed)
             })
             .collect(),
-        outputs: extract_output_names_from_ast(&ast),
-        variable_metadata: variable_metadata_from_ast(&ast),
+        outputs: extract_output_names_from_ast(ast),
+        variable_metadata: variable_metadata_from_ast(ast),
     }
 }
 

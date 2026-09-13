@@ -287,7 +287,7 @@ fn on_run_scenario_asset(
         Some(scene)
     };
     let handle = asset_server.load::<crate::source_asset::RhaiSource>(path);
-    commands.entity(target).insert(PendingScenarioAsset {
+    commands.entity(target).try_insert(PendingScenarioAsset {
         handle,
         params: cmd.params.clone(),
         reload_policy: cmd.reload_policy,
@@ -479,7 +479,7 @@ pub fn attach_requested_scenarios(
         );
         commands
             .entity(entity)
-            .insert(ScenarioAssetHandle(request.handle))
+            .try_insert(ScenarioAssetHandle(request.handle))
             .remove::<PendingScenarioAsset>();
     }
 }

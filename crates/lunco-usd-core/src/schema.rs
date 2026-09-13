@@ -788,13 +788,12 @@ mod tests {
     #[test]
     fn wheel_schema_declares_ui_hints() {
         let reg = SchemaRegistry::global().read().unwrap();
-        for name in ["lunco:suspension:restLength"] {
-            let hint = reg.ui_hint(name).unwrap_or_else(|| {
-                panic!("{name} declares no schema-level UI hint — regenerate with gen_schema.py")
-            });
-            let (min, max) = (hint.min.expect("min"), hint.max.expect("max"));
-            assert!(max > min, "{name}: degenerate hint range {min}..{max}");
-        }
+        let name = "lunco:suspension:restLength";
+        let hint = reg.ui_hint(name).unwrap_or_else(|| {
+            panic!("{name} declares no schema-level UI hint — regenerate with gen_schema.py")
+        });
+        let (min, max) = (hint.min.expect("min"), hint.max.expect("max"));
+        assert!(max > min, "{name}: degenerate hint range {min}..{max}");
         // And the per-asset override contract: an authored customData beats the
         // schema hint (produce_usd_param_view asks the composed attr FIRST) —
         // nothing to assert here at registry level, but the registry must not

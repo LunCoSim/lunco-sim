@@ -385,9 +385,9 @@ impl CanonicalStage {
             })?;
         }
         let references = if explicit_target {
-            openusd::sdf::ReferenceListOp::prepended([reference.clone()])
+            openusd::sdf::ReferenceListOp::prepended([reference])
         } else {
-            openusd::sdf::ReferenceListOp::explicit([reference.clone()])
+            openusd::sdf::ReferenceListOp::explicit([reference])
         };
         self.stage
             .batch_edit(&[self.scene_layer.as_str()], |edits| {

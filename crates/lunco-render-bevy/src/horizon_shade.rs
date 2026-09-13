@@ -98,7 +98,6 @@ fn sync_horizon_quality_settings(
 /// projection (or by an explicit `ShaderLook` on a command-created terrain).
 /// This system only writes the heightfield/sun inputs after that intent has been
 /// bound; it never selects or synthesizes a shader asset.
-
 /// Clear engine-owned sun uniforms when the semantic/render sun is unavailable.
 /// A previously valid material must not keep lighting from an old scene or
 /// provider sample after the owning state has become invalid.

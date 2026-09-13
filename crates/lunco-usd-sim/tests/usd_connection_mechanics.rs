@@ -106,7 +106,7 @@ fn rewire_derives_at_load_and_clears() {
         .non_send_mut::<CanonicalStages>()
         .drain_all_changes();
 
-    spawn_endpoints(&mut app, handle.clone());
+    spawn_endpoints(&mut app, handle);
     app.update();
 
     let projected = edges(&mut app);

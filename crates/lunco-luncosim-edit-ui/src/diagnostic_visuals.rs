@@ -360,7 +360,7 @@ fn validate_target(
             }
         }
         _ => {
-            return Err("unsupported_kind: only camera and collider leases are public".to_string())
+            return Err("unsupported_kind: only camera and collider leases are public".to_string());
         }
     }
     Ok(root)
@@ -692,7 +692,7 @@ fn draw_collider(
     let mut found = false;
     let mut supported = true;
     for (entity, collider, owner, transform) in q_colliders.iter() {
-        if entity != target && !owner.is_some_and(|owner| owner.body == target) {
+        if entity != target && owner.is_none_or(|owner| owner.body != target) {
             continue;
         }
         found = true;

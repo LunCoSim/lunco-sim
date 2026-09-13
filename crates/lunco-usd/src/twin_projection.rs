@@ -891,10 +891,10 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             // Already done at this generation for a twin default scene
             // (`drain_pending_twin_docs` publishes before mounting); still needed
             // here for editor-viewport docs tracked via `track()`.
-            if overlay_synced != Some(cur_gen) {
-                if !write_twin_overlay(world, doc, &name, &rel, cur_gen) {
-                    continue;
-                }
+            if overlay_synced != Some(cur_gen)
+                && !write_twin_overlay(world, doc, &name, &rel, cur_gen)
+            {
+                continue;
             }
             // The prepared plan is the complete initial projection. Runtime
             // edits are not replayed here: the document generation becomes the

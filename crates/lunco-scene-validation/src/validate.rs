@@ -255,7 +255,7 @@ pub fn validate_twin(reference: &str, requested_policy: &str) -> TwinValidationR
                     "Twin validation requires a folder, got file `{}`",
                     path.display()
                 ),
-            )
+            );
         }
     };
     let snapshot = crate::twin_lint::inspect_twin(&twin);
@@ -286,7 +286,7 @@ pub fn validate_twin(reference: &str, requested_policy: &str) -> TwinValidationR
         warnings,
         entries: snapshot.entries.clone(),
         collisions: snapshot.collisions.clone(),
-        read_errors: snapshot.read_errors.clone(),
+        read_errors: snapshot.read_errors,
         findings,
     }
 }

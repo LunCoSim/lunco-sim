@@ -1545,30 +1545,6 @@ fn score(q: &str, label: &str, secondary: &str) -> Option<f32> {
     None
 }
 
-#[cfg(test)]
-mod find_model_tests {
-    use super::*;
-
-    #[test]
-    fn bundled_search_works_without_a_workspace_resource() {
-        let response = FindModelProvider.execute(
-            &World::new(),
-            &serde_json::json!({ "query": "rocket", "limit": 20 }),
-        );
-
-        let ApiResponse::Ok { data } = response else {
-            panic!("bundled search should not require an open WorkspaceResource");
-        };
-        let data = data.expect("FindModel success should include response data");
-        let items = data["items"]
-            .as_array()
-            .expect("FindModel response should include an item array");
-        assert!(items.iter().any(|item| {
-            item["uri"] == "bundled://AnnotatedRocketStage.mo" && item["source"] == "bundled"
-        }));
-    }
-}
-
 // ─── Provider helpers ──────────────────────────────────────────────────
 
 fn parse_doc_id(params: &serde_json::Value, field: &str) -> Option<DocumentId> {
@@ -1611,5 +1587,29 @@ fn origin_to_json(origin: &DocumentOrigin) -> serde_json::Value {
             "path": path.to_string_lossy(),
             "writable": writable,
         }),
+    }
+}
+
+#[cfg(test)]
+mod find_model_tests {
+    use super::*;
+
+    #[test]
+    fn bundled_search_works_without_a_workspace_resource() {
+        let response = FindModelProvider.execute(
+            &World::new(),
+            &serde_json::json!({ "query": "rocket", "limit": 20 }),
+        );
+
+        let ApiResponse::Ok { data } = response else {
+            panic!("bundled search should not require an open WorkspaceResource");
+        };
+        let data = data.expect("FindModel success should include response data");
+        let items = data["items"]
+            .as_array()
+            .expect("FindModel response should include an item array");
+        assert!(items.iter().any(|item| {
+            item["uri"] == "bundled://AnnotatedRocketStage.mo" && item["source"] == "bundled"
+        }));
     }
 }

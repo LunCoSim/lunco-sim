@@ -236,7 +236,7 @@ fn prepare_view_bind_groups(
         );
         commands
             .entity(entity)
-            .insert(ProceduralSkyboxViewBindGroup(bind_group));
+            .try_insert(ProceduralSkyboxViewBindGroup(bind_group));
     }
 }
 
@@ -370,6 +370,12 @@ fn queue_procedural_skybox(
     }
 }
 
+fn remove_skybox_material(remove: On<Remove, ProceduralSkybox>, mut commands: Commands) {
+    commands
+        .entity(remove.entity)
+        .remove::<ProceduralSkyboxMaterial>();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -397,10 +403,4 @@ mod tests {
             &key(TextureFormat::Rgba8UnormSrgb)
         ));
     }
-}
-
-fn remove_skybox_material(remove: On<Remove, ProceduralSkybox>, mut commands: Commands) {
-    commands
-        .entity(remove.entity)
-        .remove::<ProceduralSkyboxMaterial>();
 }

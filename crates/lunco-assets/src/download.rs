@@ -944,13 +944,13 @@ pub fn download_asset_with_control(
             [] => {
                 return Err(DownloadError::ExtractFailed(
                     "archive has no top-level directory".into(),
-                ))
+                ));
             }
             [entry] => entry.path(),
             _ => {
                 return Err(DownloadError::ExtractFailed(
                     "archive must contain exactly one top-level directory".into(),
-                ))
+                ));
             }
         };
 
@@ -1578,7 +1578,7 @@ fn install_staged_path(
         if destination_installed && destination.exists() {
             // Keep rollback O(1) while the gate is held. The guard removes the
             // failed tree after the lifecycle barrier is released.
-            let _ = std::fs::rename(&destination, backup_root.join("failed"));
+            let _ = std::fs::rename(destination, backup_root.join("failed"));
         }
         for (index, (marker_path, _)) in marker_paths.iter().enumerate() {
             if marker_path.exists() {
@@ -1632,9 +1632,11 @@ mod tests {
 
     #[test]
     fn shared_retry_policy_retries_transient_operations_only_to_success() {
-        let mut settings = DownloadSettings::default();
-        settings.max_attempts = 3;
-        settings.retry_initial_delay_secs = 0;
+        let settings = DownloadSettings {
+            max_attempts: 3,
+            retry_initial_delay_secs: 0,
+            ..Default::default()
+        };
         let mut calls = 0;
         let value = retry_with_backoff(
             &settings,
@@ -1656,9 +1658,11 @@ mod tests {
 
     #[test]
     fn shared_retry_policy_stops_on_non_retryable_or_cancelled_errors() {
-        let mut settings = DownloadSettings::default();
-        settings.max_attempts = 5;
-        settings.retry_initial_delay_secs = 1;
+        let settings = DownloadSettings {
+            max_attempts: 5,
+            retry_initial_delay_secs: 1,
+            ..Default::default()
+        };
         let mut non_retryable_calls = 0;
         let error = retry_with_backoff(
             &settings,

@@ -297,6 +297,11 @@ impl CausalTrace {
         self.records.len()
     }
 
+    /// Whether no semantic edge records are retained.
+    pub fn is_empty(&self) -> bool {
+        self.records.is_empty()
+    }
+
     /// Remove all scene-scoped records at the scene teardown boundary.
     pub fn clear(&mut self) {
         self.records.clear();

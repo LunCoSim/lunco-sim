@@ -360,8 +360,8 @@ fn sync_offscreen_environment(
     mirror_entity: Entity,
     source_skybox: Option<&bevy::light::Skybox>,
     source_environment: Option<&bevy::light::GeneratedEnvironmentMapLight>,
-    mut mirror_skybox: Option<&mut bevy::light::Skybox>,
-    mut mirror_environment: Option<&mut bevy::light::GeneratedEnvironmentMapLight>,
+    mirror_skybox: Option<&mut bevy::light::Skybox>,
+    mirror_environment: Option<&mut bevy::light::GeneratedEnvironmentMapLight>,
     mirror_derived_environment: Option<&bevy::light::EnvironmentMapLight>,
 ) {
     let skybox_changed = match (source_skybox, mirror_skybox.as_deref()) {
@@ -372,10 +372,10 @@ fn sync_offscreen_environment(
     if skybox_changed {
         match source_skybox {
             Some(source) => {
-                if let Some(mirror) = mirror_skybox.as_deref_mut() {
+                if let Some(mirror) = mirror_skybox {
                     *mirror = source.clone();
                 } else {
-                    commands.entity(mirror_entity).insert(source.clone());
+                    commands.entity(mirror_entity).try_insert(source.clone());
                 }
             }
             None => {
@@ -394,10 +394,10 @@ fn sync_offscreen_environment(
     if environment_changed {
         match source_environment {
             Some(source) => {
-                if let Some(mirror) = mirror_environment.as_deref_mut() {
+                if let Some(mirror) = mirror_environment {
                     *mirror = source.clone();
                 } else {
-                    commands.entity(mirror_entity).insert(source.clone());
+                    commands.entity(mirror_entity).try_insert(source.clone());
                 }
             }
             None => {
@@ -486,9 +486,9 @@ fn maintain_offscreen_render_camera(
         let settings = (
             camera.viewport.clone(),
             camera.msaa_writeback,
-            camera.clear_color.clone(),
+            camera.clear_color,
             camera.invert_culling,
-            camera.sub_camera_view.clone(),
+            camera.sub_camera_view,
         );
         camera.output_mode = bevy::camera::CameraOutputMode::Skip;
         // Keep the authored camera active for the scene's camera-driven LOD and
@@ -519,16 +519,16 @@ fn maintain_offscreen_render_camera(
             continue;
         }
         found = true;
-        *mirror_transform = source_transform.clone();
+        *mirror_transform = *source_transform;
         *mirror_projection = projection.clone();
         if let Some((viewport, msaa_writeback, clear_color, invert_culling, sub_camera_view)) =
             &source_camera_settings
         {
             camera.viewport = viewport.clone();
             camera.msaa_writeback = *msaa_writeback;
-            camera.clear_color = clear_color.clone();
+            camera.clear_color = *clear_color;
             camera.invert_culling = *invert_culling;
-            camera.sub_camera_view = sub_camera_view.clone();
+            camera.sub_camera_view = *sub_camera_view;
         }
         if let Some(mut exposure) = mirror_exposure {
             *exposure = *source_exposure;
@@ -566,35 +566,35 @@ fn maintain_offscreen_render_camera(
             Camera3d::default(),
             OffscreenRenderCamera(source),
             bevy::camera::RenderTarget::Image(target.0.clone().into()),
-            source_transform.clone(),
+            *source_transform,
             projection.clone(),
             *source_exposure,
             *source_tonemapping,
             *source_msaa,
         ));
         if let Some(source_skybox) = source_skybox {
-            entity.insert(source_skybox.clone());
+            entity.try_insert(source_skybox.clone());
         }
         if let Some(source_environment) = source_environment {
-            entity.insert(source_environment.clone());
+            entity.try_insert(source_environment.clone());
         }
         if let Some((viewport, msaa_writeback, clear_color, invert_culling, sub_camera_view)) =
             &source_camera_settings
         {
-            entity.insert(Camera {
+            entity.try_insert(Camera {
                 viewport: viewport.clone(),
                 msaa_writeback: *msaa_writeback,
-                clear_color: clear_color.clone(),
+                clear_color: *clear_color,
                 invert_culling: *invert_culling,
-                sub_camera_view: sub_camera_view.clone(),
+                sub_camera_view: *sub_camera_view,
                 ..default()
             });
         }
         if let Some(parent) = parent {
-            entity.insert(parent.clone());
+            entity.try_insert(parent.clone());
         }
         if let Some(cell) = cell {
-            entity.insert(*cell);
+            entity.try_insert(*cell);
         }
         info!("[offscreen] created image render camera from authored LocalAvatar {source}");
     }

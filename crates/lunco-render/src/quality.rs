@@ -1529,8 +1529,10 @@ mod tests {
 
     #[test]
     fn a_shadow_ceiling_below_configured_maximum_is_rejected() {
-        let mut settings = RenderingQualitySettings::default();
-        settings.shadow_budget_bytes = 1;
+        let settings = RenderingQualitySettings {
+            shadow_budget_bytes: 1,
+            ..Default::default()
+        };
         assert_eq!(
             settings.validate(),
             Err("shadow byte ceiling is below the configured maximum shadow allocation")
@@ -1850,9 +1852,11 @@ mod tests {
 
     #[test]
     fn render_recovery_timings_are_explicit_and_ordered() {
-        let mut settings = RenderingQualitySettings::default();
-        settings.render_failure_quiet_period_secs = 0.75;
-        settings.render_failure_give_up_after_secs = 12.0;
+        let mut settings = RenderingQualitySettings {
+            render_failure_quiet_period_secs: 0.75,
+            render_failure_give_up_after_secs: 12.0,
+            ..Default::default()
+        };
         assert!(settings.validate().is_ok());
 
         settings.render_failure_give_up_after_secs = 0.75;
@@ -1886,10 +1890,12 @@ mod tests {
         assert_eq!(balanced.nurbs_surface_subdivisions(9), 54);
         assert_eq!(balanced.nurbs_trim_subdivisions(9), 54);
 
-        let mut settings = RenderingQualitySettings::default();
-        settings.nurbs_surface_samples_per_control_span = 2;
-        settings.nurbs_surface_minimum_subdivisions = 16;
-        settings.nurbs_surface_maximum_subdivisions = 20;
+        let mut settings = RenderingQualitySettings {
+            nurbs_surface_samples_per_control_span: 2,
+            nurbs_surface_minimum_subdivisions: 16,
+            nurbs_surface_maximum_subdivisions: 20,
+            ..Default::default()
+        };
         assert_eq!(settings.profile().nurbs_surface_subdivisions(4), 16);
         assert_eq!(settings.profile().nurbs_surface_subdivisions(20), 20);
         assert!(settings.validate().is_ok());

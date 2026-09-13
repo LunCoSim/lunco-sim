@@ -103,7 +103,7 @@ impl TimeoutGithubSource {
             .repository
             .trim_end_matches('/')
             .strip_prefix("https://github.com/")
-            .unwrap_or(self.repository.trim_end_matches('/'));
+            .unwrap_or_else(|| self.repository.trim_end_matches('/'));
         format!("https://api.github.com/repos/{repository}/releases?per_page=10&page=1")
     }
 
@@ -186,6 +186,7 @@ impl TimeoutGithubSource {
         };
         let mut file = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .write(true)
             .open(local_file)?;
         file.set_len(offset)?;
@@ -1123,7 +1124,7 @@ fn check_for_updates(settings: lunco_settings::DownloadSettings) -> UpdateCheckR
         Ok(manager) => manager,
         Err(velopack::Error::NotInstalled(_)) => return UpdateCheckResult::NotInstalled,
         Err(error) => {
-            return UpdateCheckResult::Error(user_facing_update_error("check for updates", error))
+            return UpdateCheckResult::Error(user_facing_update_error("check for updates", error));
         }
     };
     match manager.check_for_updates() {

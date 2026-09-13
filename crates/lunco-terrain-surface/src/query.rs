@@ -530,7 +530,7 @@ mod tests {
         // Small `eps` keeps the central difference inside the linear region (the
         // default eps = sample spacing = 10 m would clamp at the ±10 m edge).
         let d = ok_data(
-            TerrainHeightProvider.execute(&mut world, &json!({"x": 5.0, "z": 0.0, "eps": 1.0})),
+            TerrainHeightProvider.execute(&world, &json!({"x": 5.0, "z": 0.0, "eps": 1.0})),
         );
         assert_eq!(d["found"], json!(true));
         assert!(
@@ -565,7 +565,7 @@ mod tests {
             )));
 
         let d = ok_data(
-            TerrainHeightProvider.execute(&mut world, &json!({"x": 5.0, "z": 0.0, "eps": 1.0})),
+            TerrainHeightProvider.execute(&world, &json!({"x": 5.0, "z": 0.0, "eps": 1.0})),
         );
         assert_eq!(d["found"], json!(true), "{d}");
         assert!(
@@ -578,14 +578,14 @@ mod tests {
     fn reports_not_found_outside_footprint() {
         let mut world = World::new();
         tilted_terrain(&mut world);
-        let d = ok_data(TerrainHeightProvider.execute(&mut world, &json!({"x": 100.0, "z": 0.0})));
+        let d = ok_data(TerrainHeightProvider.execute(&world, &json!({"x": 100.0, "z": 0.0})));
         assert_eq!(d["found"], json!(false));
     }
 
     #[test]
     fn missing_params_error() {
-        let mut world = World::new();
-        let resp = TerrainHeightProvider.execute(&mut world, &json!({"x": 1.0}));
+        let world = World::new();
+        let resp = TerrainHeightProvider.execute(&world, &json!({"x": 1.0}));
         assert!(matches!(resp, ApiResponse::Error { .. }));
     }
 
@@ -596,7 +596,7 @@ mod tests {
         let mut world = World::new();
         tilted_terrain(&mut world); // height = 0.1·x → slope atan(0.1) everywhere
         let d = ok_data(TerrainFieldProvider.execute(
-            &mut world,
+            &world,
             // ±5 m region well inside the ±10 m footprint, so every texel-centred
             // finite difference stays in the linear region.
             &json!({"field": "slope", "x": 0.0, "z": 0.0, "half": 5.0, "res": 4}),
@@ -618,7 +618,7 @@ mod tests {
         let mut world = World::new();
         tilted_terrain(&mut world);
         let d = ok_data(TerrainFieldProvider.execute(
-            &mut world,
+            &world,
             &json!({"field": "slope", "x": 100.0, "z": 0.0, "half": 5.0}),
         ));
         assert_eq!(d["found"], json!(false));
@@ -629,7 +629,7 @@ mod tests {
         let mut world = World::new();
         tilted_terrain(&mut world);
         let d = ok_data(TerrainFieldProvider.execute(
-            &mut world,
+            &world,
             &json!({"field": "elevation", "x": 8.0, "z": 0.0, "half": 5.0}),
         ));
         assert_eq!(d["found"], json!(false));
@@ -640,12 +640,12 @@ mod tests {
         let mut world = World::new();
         tilted_terrain(&mut world);
         let bad_field = TerrainFieldProvider.execute(
-            &mut world,
+            &world,
             &json!({"field": "mineral", "x": 0.0, "z": 0.0, "half": 5.0}),
         );
         assert!(matches!(bad_field, ApiResponse::Error { .. }));
         let bad_half = TerrainFieldProvider.execute(
-            &mut world,
+            &world,
             &json!({"field": "slope", "x": 0.0, "z": 0.0, "half": 0.0}),
         );
         assert!(matches!(bad_half, ApiResponse::Error { .. }));
@@ -656,7 +656,7 @@ mod tests {
         let mut world = World::new();
         tilted_terrain(&mut world);
         let d = ok_data(TerrainFieldProvider.execute(
-            &mut world,
+            &world,
             &json!({"field": "elevation", "x": 0.0, "z": 0.0, "half": 5.0, "res": 100000}),
         ));
         assert_eq!(d["res"], json!(FIELD_MAX_RES as u64));
@@ -672,7 +672,7 @@ mod tests {
         // From (0, 2, 0) toward (10, 0.5, 0): y(x)=2−0.15x, terrain=0.1x; the ray
         // dips below the surface past x≈8 → a hit near there.
         let d = ok_data(TerrainRaycastProvider.execute(
-            &mut world,
+            &world,
             &json!({ "origin": [0.0, 2.0, 0.0], "target": [10.0, 0.5, 0.0] }),
         ));
         assert_eq!(d["hit"], json!(true), "{d}");
@@ -691,7 +691,7 @@ mod tests {
         tilted_terrain(&mut world);
         // Horizontal ray well above the highest terrain (max height 1.0 at x=10).
         let d = ok_data(TerrainRaycastProvider.execute(
-            &mut world,
+            &world,
             &json!({ "origin": [-10.0, 100.0, 0.0], "dir": [1.0, 0.0, 0.0], "max": 20.0 }),
         ));
         assert_eq!(d["hit"], json!(false), "{d}");
@@ -702,7 +702,7 @@ mod tests {
         let mut world = World::new();
         tilted_terrain(&mut world);
         let d = ok_data(TerrainRaycastProvider.execute(
-            &mut world,
+            &world,
             &json!({ "origin": [200.0, 5.0, 0.0], "target": [210.0, 5.0, 0.0] }),
         ));
         assert_eq!(d["hit"], json!(false), "{d}");
@@ -714,14 +714,14 @@ mod tests {
         tilted_terrain(&mut world);
         // {x,y,z} map form parses the same as the array form.
         let d = ok_data(TerrainRaycastProvider.execute(
-            &mut world,
+            &world,
             &json!({ "origin": {"x": 0.0, "y": 2.0, "z": 0.0},
                      "target": {"x": 10.0, "y": 0.5, "z": 0.0} }),
         ));
         assert_eq!(d["hit"], json!(true), "{d}");
         // No origin → error.
         assert!(matches!(
-            TerrainRaycastProvider.execute(&mut world, &json!({ "dir": [1.0, 0.0, 0.0] })),
+            TerrainRaycastProvider.execute(&world, &json!({ "dir": [1.0, 0.0, 0.0] })),
             ApiResponse::Error { .. }
         ));
     }

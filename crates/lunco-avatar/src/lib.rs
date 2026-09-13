@@ -3202,7 +3202,7 @@ fn freeflight_scroll_transit_system(
             };
             next
         };
-        write_avatar_grid_position(&grid, &mut cell, &mut tf, next);
+        write_avatar_grid_position(grid, &mut cell, &mut tf, next);
 
         // Past the orbital floor going OUT → hand over to the celestial
         // OrbitCamera. A first entry derives the arm from the exact transit pose;
@@ -3575,7 +3575,7 @@ fn apply_fly(
             };
             next_pos
         };
-        write_avatar_grid_position(&grid, &mut cell, &mut tf, next_pos);
+        write_avatar_grid_position(grid, &mut cell, &mut tf, next_pos);
     }
 }
 
@@ -3775,7 +3775,7 @@ fn avatar_behavior_input_system(
                 body_orbit_look_scale(orbit.distance, body.radius_m, &settings)
             }) as f32;
             (orbit.yaw, orbit.pitch) =
-                look_angles(orbit.yaw, orbit.pitch, look_delta, &settings, scale as f32);
+                look_angles(orbit.yaw, orbit.pitch, look_delta, &settings, scale);
             commands.entity(entity).try_insert(OrbitUserInput);
         }
         if let Some(mut ff) = q_freeflight.iter_mut().next() {
@@ -5551,11 +5551,7 @@ fn on_surface_teleport_command(
             return;
         }
         let root = discriminant.sqrt();
-        let Some(t) = [-b - root, -b + root]
-            .into_iter()
-            .filter(|t| *t > 0.0)
-            .next()
-        else {
+        let Some(t) = [-b - root, -b + root].into_iter().find(|t| *t > 0.0) else {
             warn!("TELEPORT: camera ray does not intersect the body's forward surface");
             return;
         };

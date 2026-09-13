@@ -11,7 +11,7 @@
 pub mod collision;
 mod geometry;
 
-use bevy::asset::{AssetEvent, AssetLoadFailedEvent};
+use bevy::asset::{AssetEvent, AssetId, AssetLoadFailedEvent};
 use bevy::ecs::hierarchy::ChildOf;
 use bevy::prelude::*;
 use lunco_usd_bevy_core::{UsdInstanceProjection, UsdInstanceRoot, UsdStageAsset};
@@ -54,6 +54,36 @@ pub struct UsdPrimPath {
     pub stage_handle: Handle<UsdStageAsset>,
     /// Absolute USD prim path within the stage.
     pub path: String,
+}
+
+/// A render-free projection of one entry in a standard
+/// [`UsdGeomPointInstancer`]. It is not a USD prim and therefore intentionally
+/// has no [`UsdPrimPath`]; the parent instancer owns the authored identity while
+/// this component carries the ordered array index and prototype target needed
+/// by the visual adapter.
+#[derive(Component, Debug, Clone)]
+pub struct UsdPointInstance {
+    /// Stage containing the prototype target.
+    pub stage_id: AssetId<UsdStageAsset>,
+    /// Zero-based position in the authored `positions`/`protoIndices` arrays.
+    pub index: usize,
+    /// Stable authored id, or the array index when `ids` is omitted.
+    pub id: i64,
+    /// Ordered `prototypes` relationship target.
+    pub prototype_path: String,
+}
+
+/// The aggregate visual projection of a standard `UsdGeomPointInstancer`.
+///
+/// The prototype paths are retained only as a lookup key for the renderer;
+/// authored positions, ids, and transforms remain on the child
+/// [`UsdPointInstance`] projections.
+#[derive(Component, Debug, Clone)]
+pub struct UsdPointInstancer {
+    /// Stage containing the relationship targets.
+    pub stage_handle: Handle<UsdStageAsset>,
+    /// Ordered targets from the authored `prototypes` relationship.
+    pub prototype_paths: Vec<String>,
 }
 
 impl Default for UsdPrimPath {
@@ -355,12 +385,15 @@ mod tests {
         let root = world.spawn(UsdSceneRoot).id();
         let child = world.spawn(ChildOf(root)).id();
         let detached = world.spawn_empty().id();
+        let missing_parent = world
+            .spawn(ChildOf(Entity::from_raw_u32(999_999).unwrap()))
+            .id();
         let mut state: SystemState<(
             Query<(), With<UsdSceneRoot>>,
             Query<&ChildOf>,
             Query<Entity>,
         )> = SystemState::new(&mut world);
-        let (scene_roots, child_of, entities) = state.get(&mut world).unwrap();
+        let (scene_roots, child_of, entities) = state.get(&world).expect("valid queries");
 
         assert_eq!(
             scene_root_ancestor(child, &scene_roots, &child_of, &entities,),
@@ -369,6 +402,10 @@ mod tests {
         assert_eq!(
             scene_root_ancestor(detached, &scene_roots, &child_of, &entities,),
             Ok(None)
+        );
+        assert_eq!(
+            scene_root_ancestor(missing_parent, &scene_roots, &child_of, &entities,),
+            Err(SceneRootAncestorError::MissingParentEntity)
         );
     }
 
@@ -380,7 +417,7 @@ mod tests {
         let detached = world.spawn_empty().id();
         let mut state: SystemState<(Query<&ChildOf>, Query<(), With<UsdPreviewOnly>>)> =
             SystemState::new(&mut world);
-        let (child_of, preview_roots) = state.get(&mut world).unwrap();
+        let (child_of, preview_roots) = state.get(&world).expect("valid queries");
 
         assert!(is_preview_only(child, &child_of, &preview_roots));
         assert!(!is_preview_only(detached, &child_of, &preview_roots));

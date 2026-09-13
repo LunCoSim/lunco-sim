@@ -650,8 +650,10 @@ mod download_settings_tests {
 
     #[test]
     fn invalid_download_policy_is_rejected() {
-        let mut settings = DownloadSettings::default();
-        settings.max_attempts = 0;
+        let mut settings = DownloadSettings {
+            max_attempts: 0,
+            ..Default::default()
+        };
         assert!(settings.validate_section().is_err());
         settings = DownloadSettings::default();
         settings.retry_backoff_multiplier = 1;

@@ -740,143 +740,6 @@ fn should_open_as_document(
         && (pinned || is_usd)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::should_open_as_document;
-    use lunco_twin::{DocumentKindId, DocumentKindMeta, DocumentKindRegistry};
-    use std::path::Path;
-
-    fn usd_registry() -> DocumentKindRegistry {
-        let mut registry = DocumentKindRegistry::default();
-        registry.register(
-            DocumentKindId::new("usd"),
-            DocumentKindMeta {
-                display_name: "USD".into(),
-                extensions: vec!["usd".into(), "usda".into(), "usdc".into()],
-                ..Default::default()
-            },
-        );
-        registry
-    }
-
-    #[test]
-    fn double_click_routes_a_registered_usd_document() {
-        assert!(should_open_as_document(
-            Path::new("scenes/rover.usda"),
-            Some(&usd_registry()),
-            true,
-        ));
-    }
-
-    #[test]
-    fn single_click_routes_a_registered_usd_document() {
-        for path in ["scenes/rover.usda", "scenes/rover.usd", "scenes/rover.usdc"] {
-            assert!(should_open_as_document(
-                Path::new(path),
-                Some(&usd_registry()),
-                false,
-            ));
-        }
-    }
-
-    #[test]
-    fn single_click_keeps_modelica_on_the_source_viewer() {
-        let mut registry = DocumentKindRegistry::default();
-        registry.register(
-            DocumentKindId::new("modelica"),
-            DocumentKindMeta {
-                display_name: "Modelica".into(),
-                extensions: vec!["mo".into()],
-                ..Default::default()
-            },
-        );
-        assert!(!should_open_as_document(
-            Path::new("models/rover.mo"),
-            Some(&registry),
-            false,
-        ));
-    }
-
-    #[test]
-    fn an_unclaimed_usd_file_stays_openable_as_source() {
-        let registry = DocumentKindRegistry::default();
-        assert!(!should_open_as_document(
-            Path::new("scenes/rover.usda"),
-            Some(&registry),
-            true,
-        ));
-    }
-
-    #[test]
-    fn source_only_text_always_uses_the_source_viewer() {
-        let mut registry = DocumentKindRegistry::default();
-        registry.register(
-            DocumentKindId::new("shader"),
-            DocumentKindMeta {
-                display_name: "Shader".into(),
-                extensions: vec!["wgsl".into()],
-                ..Default::default()
-            },
-        );
-        registry.register(
-            DocumentKindId::new("rhai"),
-            DocumentKindMeta {
-                display_name: "Rhai".into(),
-                extensions: vec!["rhai".into()],
-                ..Default::default()
-            },
-        );
-        assert!(!should_open_as_document(
-            Path::new("shaders/terrain.wgsl"),
-            Some(&registry),
-            true,
-        ));
-        assert!(!should_open_as_document(
-            Path::new("scripts/teleop_policy.rhai"),
-            Some(&registry),
-            true,
-        ));
-    }
-
-    #[test]
-    fn missing_failed_and_cancelled_rows_offer_request() {
-        for state in [
-            lunco_assets::datasets::DatasetState::Missing,
-            lunco_assets::datasets::DatasetState::Cancelled,
-            lunco_assets::datasets::DatasetState::Failed("offline".into()),
-        ] {
-            assert_eq!(
-                super::dataset_row_action(&state),
-                Some(super::DatasetRowAction::Request)
-            );
-        }
-    }
-
-    #[test]
-    fn active_download_rows_offer_cancel_and_terminal_rows_are_idle() {
-        for state in [
-            lunco_assets::datasets::DatasetState::Downloading {
-                bytes_done: 4,
-                bytes_total: 8,
-            },
-            lunco_assets::datasets::DatasetState::Processing {
-                kind: "unpack".into(),
-            },
-        ] {
-            assert_eq!(
-                super::dataset_row_action(&state),
-                Some(super::DatasetRowAction::Cancel)
-            );
-        }
-        for state in [
-            lunco_assets::datasets::DatasetState::Cancelling,
-            lunco_assets::datasets::DatasetState::Installed,
-        ] {
-            assert_eq!(super::dataset_row_action(&state), None);
-        }
-    }
-}
-
 /// Recursively render one directory of the Twin's filesystem tree.
 ///
 /// Directories render as shared tree branches with the folder label;
@@ -1046,5 +909,142 @@ fn render_inline_rename(
         });
     } else if esc || (resp.lost_focus() && !enter) {
         *cancel_rename = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_open_as_document;
+    use lunco_twin::{DocumentKindId, DocumentKindMeta, DocumentKindRegistry};
+    use std::path::Path;
+
+    fn usd_registry() -> DocumentKindRegistry {
+        let mut registry = DocumentKindRegistry::default();
+        registry.register(
+            DocumentKindId::new("usd"),
+            DocumentKindMeta {
+                display_name: "USD".into(),
+                extensions: vec!["usd", "usda", "usdc"],
+                ..Default::default()
+            },
+        );
+        registry
+    }
+
+    #[test]
+    fn double_click_routes_a_registered_usd_document() {
+        assert!(should_open_as_document(
+            Path::new("scenes/rover.usda"),
+            Some(&usd_registry()),
+            true,
+        ));
+    }
+
+    #[test]
+    fn single_click_routes_a_registered_usd_document() {
+        for path in ["scenes/rover.usda", "scenes/rover.usd", "scenes/rover.usdc"] {
+            assert!(should_open_as_document(
+                Path::new(path),
+                Some(&usd_registry()),
+                false,
+            ));
+        }
+    }
+
+    #[test]
+    fn single_click_keeps_modelica_on_the_source_viewer() {
+        let mut registry = DocumentKindRegistry::default();
+        registry.register(
+            DocumentKindId::new("modelica"),
+            DocumentKindMeta {
+                display_name: "Modelica".into(),
+                extensions: vec!["mo"],
+                ..Default::default()
+            },
+        );
+        assert!(!should_open_as_document(
+            Path::new("models/rover.mo"),
+            Some(&registry),
+            false,
+        ));
+    }
+
+    #[test]
+    fn an_unclaimed_usd_file_stays_openable_as_source() {
+        let registry = DocumentKindRegistry::default();
+        assert!(!should_open_as_document(
+            Path::new("scenes/rover.usda"),
+            Some(&registry),
+            true,
+        ));
+    }
+
+    #[test]
+    fn source_only_text_always_uses_the_source_viewer() {
+        let mut registry = DocumentKindRegistry::default();
+        registry.register(
+            DocumentKindId::new("shader"),
+            DocumentKindMeta {
+                display_name: "Shader".into(),
+                extensions: vec!["wgsl"],
+                ..Default::default()
+            },
+        );
+        registry.register(
+            DocumentKindId::new("rhai"),
+            DocumentKindMeta {
+                display_name: "Rhai".into(),
+                extensions: vec!["rhai"],
+                ..Default::default()
+            },
+        );
+        assert!(!should_open_as_document(
+            Path::new("shaders/terrain.wgsl"),
+            Some(&registry),
+            true,
+        ));
+        assert!(!should_open_as_document(
+            Path::new("scripts/teleop_policy.rhai"),
+            Some(&registry),
+            true,
+        ));
+    }
+
+    #[test]
+    fn missing_failed_and_cancelled_rows_offer_request() {
+        for state in [
+            lunco_assets::datasets::DatasetState::Missing,
+            lunco_assets::datasets::DatasetState::Cancelled,
+            lunco_assets::datasets::DatasetState::Failed("offline".into()),
+        ] {
+            assert_eq!(
+                super::dataset_row_action(&state),
+                Some(super::DatasetRowAction::Request)
+            );
+        }
+    }
+
+    #[test]
+    fn active_download_rows_offer_cancel_and_terminal_rows_are_idle() {
+        for state in [
+            lunco_assets::datasets::DatasetState::Downloading {
+                bytes_done: 4,
+                bytes_total: 8,
+            },
+            lunco_assets::datasets::DatasetState::Processing {
+                kind: "unpack".into(),
+            },
+        ] {
+            assert_eq!(
+                super::dataset_row_action(&state),
+                Some(super::DatasetRowAction::Cancel)
+            );
+        }
+        for state in [
+            lunco_assets::datasets::DatasetState::Cancelling,
+            lunco_assets::datasets::DatasetState::Installed,
+        ] {
+            assert_eq!(super::dataset_row_action(&state), None);
+        }
     }
 }

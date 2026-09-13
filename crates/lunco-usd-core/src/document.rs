@@ -1841,7 +1841,7 @@ impl Document for UsdDocument {
                 // the op is missing, materialise that order plus the new op into
                 // the target layer — append, never clobber.
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
-                stage.override_prim(prim_sdf.clone()).map_err(author_err)?;
+                stage.override_prim(prim_sdf).map_err(author_err)?;
                 // CANONICAL IN, STAGE ON DISK. A `UsdOp`'s spatial values are always
                 // canonical (Y-up, metres) — that is what makes an op portable: the
                 // same journalled edit replays correctly against a centimetre stage
@@ -1911,7 +1911,7 @@ impl Document for UsdDocument {
                 let old_rotate =
                     layer.prim_attribute_value::<[f64; 3]>(&prim_sdf, "xformOp:rotateXYZ");
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
-                stage.override_prim(prim_sdf.clone()).map_err(author_err)?;
+                stage.override_prim(prim_sdf).map_err(author_err)?;
                 // Canonical in, stage on disk — see `SetTranslate`.
                 //
                 // Rotations convert through a quaternion (a Euler triple has no
@@ -1971,7 +1971,7 @@ impl Document for UsdDocument {
                     .is_some();
                 let old_scale = layer.prim_attribute_value::<[f64; 3]>(&prim_sdf, "xformOp:scale");
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
-                stage.override_prim(prim_sdf.clone()).map_err(author_err)?;
+                stage.override_prim(prim_sdf).map_err(author_err)?;
                 let conv = authoring_stage_convention(&stage)?;
                 let authored = conv.stage_scale_vec_d(DVec3::from_array(value)).to_array();
                 stage
@@ -2448,7 +2448,7 @@ impl Document for UsdDocument {
                             .is_some_and(|(_, relative)| relative == token.as_str());
                         if canonical {
                             UsdOp::SetDefaultPrim {
-                                edit_target: id.clone(),
+                                edit_target: id,
                                 default_prim: Some(token.to_string()),
                             }
                         } else {
@@ -2456,7 +2456,7 @@ impl Document for UsdDocument {
                         }
                     }
                     None => UsdOp::SetDefaultPrim {
-                        edit_target: id.clone(),
+                        edit_target: id,
                         default_prim: None,
                     },
                     Some(_) => self.coarse_inverse(target, &id),
@@ -2507,13 +2507,13 @@ impl Document for UsdDocument {
                         if validate_prim_kind(Some(token.as_str())).is_ok() =>
                     {
                         UsdOp::SetPrimKind {
-                            edit_target: id.clone(),
+                            edit_target: id,
                             path: path.clone(),
                             kind: Some(token.to_string()),
                         }
                     }
                     None => UsdOp::SetPrimKind {
-                        edit_target: id.clone(),
+                        edit_target: id,
                         path: path.clone(),
                         kind: None,
                     },
@@ -2540,7 +2540,7 @@ impl Document for UsdDocument {
                         .map_err(author_err)?;
                 }
                 let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
-                self.commit(target, new_data, UsdChange::Resync { path: path.clone() });
+                self.commit(target, new_data, UsdChange::Resync { path });
                 Ok(inverse)
             }
 
@@ -2660,7 +2660,7 @@ impl Document for UsdDocument {
                 // Read-modify-write the selection map so selecting `drivetrain`
                 // doesn't silently drop a sibling variant set's selection.
                 stage
-                    .prim(prim_sdf.clone())
+                    .prim(prim_sdf)
                     .update_metadata(sdf::FieldKey::VariantSelection.as_str(), |current| {
                         let mut map = match current {
                             Some(openusd::sdf::Value::VariantSelectionMap(m)) => m,

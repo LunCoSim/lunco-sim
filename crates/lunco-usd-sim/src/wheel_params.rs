@@ -548,12 +548,11 @@ impl WheelParams {
     /// applies its mass independently of the authored collision shape; it must
     /// not replace this assembly inertia with a collider-only estimate.
     pub fn axle_inertia(&self) -> f64 {
-        let tire = if self.moment_of_inertia > 0.0 {
+        if self.moment_of_inertia > 0.0 {
             self.moment_of_inertia
         } else {
             0.5 * self.mass * self.radius * self.radius
-        };
-        tire
+        }
     }
 }
 

@@ -536,10 +536,14 @@ fn open_usd_docs_on_twin_asset_mounted(
                     .get_load_state(handle.id())
                     .is_some_and(|state| state.is_failed());
                 let source_id = handle.id();
+                #[cfg(test)]
+                let pending_twin_name = twin_name.clone();
+                #[cfg(not(test))]
+                let pending_twin_name = twin_name;
                 pending_twin.push(
                     handle,
                     source_ready,
-                    twin_name.clone(),
+                    pending_twin_name,
                     scene.to_string(),
                     twin.root.join(scene),
                     twin.root.clone(),
@@ -1470,13 +1474,14 @@ fn on_new_document(trigger: On<NewDocument>, mut commands: Commands) {
         return;
     }
     commands.queue(|world: &mut World| {
-        let mut registry = world.resource_mut::<DocumentRegistry<UsdDocument>>();
-        let next = registry.ids().count() + 1;
-        let doc_id = registry.allocate(
-            DEFAULT_USDA_SCAFFOLD.to_string(),
-            lunco_doc::PathlessOrigin::untitled(format!("UntitledStage-{}.usda", next)),
-        );
-        drop(registry);
+        let doc_id = {
+            let mut registry = world.resource_mut::<DocumentRegistry<UsdDocument>>();
+            let next = registry.ids().count() + 1;
+            registry.allocate(
+                DEFAULT_USDA_SCAFFOLD.to_string(),
+                lunco_doc::PathlessOrigin::untitled(format!("UntitledStage-{}.usda", next)),
+            )
+        };
         claim_user_document_if_projected(world, doc_id);
         bevy::log::info!("[NewUsd] created untitled USD stage as {}", doc_id);
     });
@@ -1572,7 +1577,7 @@ fn on_save_as_document(
         return;
     };
     let document = host.document();
-    let source = document.source().to_string();
+    let source = document.source();
     if target_path.is_empty() {
         bevy::log::warn!("[SaveAsUsd] {doc_id} has no target path; the caller must provide one");
         return;
@@ -2583,7 +2588,7 @@ fn validate_authored_attribute_types(
                 .get(&source_key)
                 .cloned()
                 .or_else(|| attr_type(&source_prim, source_name));
-            if !composed.prim_type_name(&source_prim).is_some() && !planned_prim(&source_prim) {
+            if composed.prim_type_name(&source_prim).is_none() && !planned_prim(&source_prim) {
                 return Err(format!(
                     "USD connection `{path}.{name}` source `{source}` references missing prim `{source_prim}`"
                 ));
@@ -4411,7 +4416,7 @@ mod tests {
         ];
         for op in ops {
             app.world_mut().trigger(ApplyUsdOp {
-                doc_id: doc_id,
+                doc_id,
                 parent_gen: None,
                 op,
             });
@@ -4501,7 +4506,7 @@ mod tests {
         ];
         for op in forward_ops.clone() {
             app.world_mut().trigger(ApplyUsdOp {
-                doc_id: doc_id,
+                doc_id,
                 parent_gen: None,
                 op,
             });

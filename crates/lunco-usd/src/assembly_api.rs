@@ -92,10 +92,10 @@ fn document_snapshot(
 /// Resolve an explicitly mapped document to its canonical composed stage.
 /// Callers requiring the current document generation must check the projection
 /// cursor on `DocBackedTwinScenes` before consuming this derived stage.
-pub fn canonical_stage_for_document<'a>(
-    world: &'a World,
+pub fn canonical_stage_for_document(
+    world: &World,
     doc: DocumentId,
-) -> Option<&'a lunco_usd_bevy_core::canonical::CanonicalStage> {
+) -> Option<&lunco_usd_bevy_core::canonical::CanonicalStage> {
     let (name, rel) = world
         .get_resource::<crate::twin_projection::DocBackedTwinScenes>()?
         .coords_of(doc)?;
@@ -773,7 +773,7 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
         let authored_here = match document.authored_prim_exists(&edit_target, raw_path) {
             Ok(exists) => exists,
             Err(error) => {
-                return ApiResponse::error(ApiErrorCode::DeserializationError, error.to_string())
+                return ApiResponse::error(ApiErrorCode::DeserializationError, error.to_string());
             }
         };
         let authored_in_document = match (
@@ -782,13 +782,13 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
         ) {
             (Ok(root), Ok(runtime)) => root || runtime,
             (Err(error), _) | (_, Err(error)) => {
-                return ApiResponse::error(ApiErrorCode::DeserializationError, error.to_string())
+                return ApiResponse::error(ApiErrorCode::DeserializationError, error.to_string());
             }
         };
         let under_arc = match document.path_is_under_composed_arc(raw_path) {
             Ok(value) => value,
             Err(error) => {
-                return ApiResponse::error(ApiErrorCode::DeserializationError, error.to_string())
+                return ApiResponse::error(ApiErrorCode::DeserializationError, error.to_string());
             }
         };
 
@@ -800,7 +800,7 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
                     return ApiResponse::error(
                         ApiErrorCode::InternalError,
                         format!("OpenUSD could not validate `{raw_path}`: {error}"),
-                    )
+                    );
                 }
             };
             if composed_exists {
@@ -829,7 +829,7 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
                     },
                     "prim_stack": stack.into_iter().map(|(layer, authored_path)| {
                         serde_json::json!({
-                            "layer": layer.to_string(),
+                            "layer": layer,
                             "path": authored_path.to_string(),
                         })
                     }).collect::<Vec<_>>(),

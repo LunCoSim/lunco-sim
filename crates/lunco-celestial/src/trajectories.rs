@@ -108,8 +108,9 @@ fn trajectory_view_signature(view: &TrajectoryView) -> TrajectoryViewSignature {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum TrajectorySamplingStatus {
+    #[default]
     Pending,
     Ready,
     Empty,
@@ -133,12 +134,6 @@ fn ephemeris_revision(ephemeris: Option<&EphemerisResource>) -> EphemerisRevisio
             motion: ephemeris.provider.motion_revision(),
         },
     )
-}
-
-impl Default for TrajectorySamplingStatus {
-    fn default() -> Self {
-        Self::Pending
-    }
 }
 
 /// Runtime bookkeeping for the sampled presentation. It is deliberately
@@ -424,7 +419,7 @@ fn track_trajectory_view_changes(
         } else {
             let mut state = TrajectoryRuntimeState::default();
             state.observe_view(view);
-            commands.entity(entity).insert(state);
+            commands.entity(entity).try_insert(state);
         }
     }
 }
@@ -725,7 +720,7 @@ fn spawn_trajectory_update_task(
                 ),
             }
         });
-        commands.entity(entity).insert(TrajectoryTask(task));
+        commands.entity(entity).try_insert(TrajectoryTask(task));
     }
 }
 
@@ -920,7 +915,7 @@ fn trajectory_mesh_update_system(
                 result,
             }
         });
-        commands.entity(entity).insert(TrajectoryMeshTask(task));
+        commands.entity(entity).try_insert(TrajectoryMeshTask(task));
     }
 }
 
@@ -964,7 +959,7 @@ fn handle_trajectory_mesh_tasks(
                         }
                     }
                 }
-                commands.entity(entity).insert(TrajectoryMeshState {
+                commands.entity(entity).try_insert(TrajectoryMeshState {
                     geometry_revision: Some(data.geometry_revision),
                     presentation_revision: Some(data.presentation_revision),
                     num_points: 0,
@@ -999,7 +994,7 @@ fn handle_trajectory_mesh_tasks(
                 }
             }
             if committed && path.points.len() >= 2 {
-                commands.entity(entity).insert((
+                commands.entity(entity).try_insert((
                     TrajectoryMeshState {
                         geometry_revision: Some(data.geometry_revision),
                         presentation_revision: Some(data.presentation_revision),
@@ -1016,7 +1011,7 @@ fn handle_trajectory_mesh_tasks(
                     },
                 ));
             } else if committed {
-                commands.entity(entity).insert(TrajectoryMeshState {
+                commands.entity(entity).try_insert(TrajectoryMeshState {
                     geometry_revision: Some(data.geometry_revision),
                     presentation_revision: Some(data.presentation_revision),
                     num_points,
@@ -1034,7 +1029,7 @@ fn handle_trajectory_mesh_tasks(
                         }
                     }
                 }
-                commands.entity(entity).insert(TrajectoryMeshState {
+                commands.entity(entity).try_insert(TrajectoryMeshState {
                     geometry_revision: Some(data.geometry_revision),
                     presentation_revision: Some(data.presentation_revision),
                     num_points: 0,
@@ -1054,14 +1049,14 @@ fn handle_trajectory_mesh_tasks(
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, points);
         mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
         let mesh_handle = meshes.add(mesh);
-        commands.entity(entity).insert(TrajectoryMeshState {
+        commands.entity(entity).try_insert(TrajectoryMeshState {
             geometry_revision: Some(data.geometry_revision),
             presentation_revision: Some(data.presentation_revision),
             num_points,
             failed: false,
         });
         if path.points.len() >= 2 {
-            commands.entity(entity).insert(TrajectoryAlphaState {
+            commands.entity(entity).try_insert(TrajectoryAlphaState {
                 epoch_jd: Some(alpha_epoch),
                 geometry_revision: Some(alpha_geometry_revision),
                 sampling_days: alpha_sampling_days,
@@ -1218,7 +1213,9 @@ fn trajectory_alpha_update_system(
                 ),
             }
         });
-        commands.entity(entity).insert(TrajectoryAlphaTask(task));
+        commands
+            .entity(entity)
+            .try_insert(TrajectoryAlphaTask(task));
     }
 }
 
@@ -1271,7 +1268,7 @@ fn handle_trajectory_alpha_tasks(
         }
 
         if updated {
-            commands.entity(entity).insert(TrajectoryAlphaState {
+            commands.entity(entity).try_insert(TrajectoryAlphaState {
                 epoch_jd: Some(data.epoch_jd),
                 geometry_revision: Some(data.geometry_revision),
                 sampling_days: data.sampling_days,
@@ -1280,225 +1277,6 @@ fn handle_trajectory_alpha_tasks(
                 num_points: data.num_points,
             });
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn hidden_trajectory_is_not_active() {
-        let mut view = TrajectoryView::default();
-        view.user_visible = false;
-        assert!(!trajectory_is_active(&view));
-
-        view.user_visible = true;
-        view.is_visible = false;
-        assert!(!trajectory_is_active(&view));
-
-        view.is_visible = true;
-        assert!(trajectory_is_active(&view));
-    }
-
-    #[test]
-    fn alpha_stamp_skips_unchanged_clock_and_path() {
-        let view = TrajectoryView::default();
-        let path = TrajectoryPath {
-            points: vec![bevy::math::DVec3::ZERO, bevy::math::DVec3::X],
-            update_epoch: 2451545.0,
-            ..Default::default()
-        };
-        let state = TrajectoryAlphaState {
-            epoch_jd: Some(2451545.5),
-            geometry_revision: Some(path.geometry_revision),
-            sampling_days: view.sampling_days,
-            start_epoch: view.start_epoch,
-            end_epoch: view.end_epoch,
-            num_points: 2,
-        };
-
-        assert!(!alpha_update_is_needed(
-            Some(&state),
-            2451545.5,
-            &path,
-            &view,
-            2,
-            false
-        ));
-        assert!(alpha_update_is_needed(
-            Some(&state),
-            2451545.6,
-            &path,
-            &view,
-            2,
-            false
-        ));
-        assert!(!alpha_update_is_needed(
-            Some(&state),
-            2451545.6,
-            &path,
-            &view,
-            2,
-            true
-        ));
-        assert!(alpha_update_is_needed(
-            Some(&state),
-            2451545.6,
-            &TrajectoryPath {
-                geometry_revision: path.geometry_revision + 1,
-                ..path
-            },
-            &view,
-            2,
-            true
-        ));
-    }
-
-    #[test]
-    fn large_epoch_delta_holds_an_existing_trajectory_sample() {
-        let view = TrajectoryView::default();
-        let path = TrajectoryPath {
-            points: vec![bevy::math::DVec3::ZERO, bevy::math::DVec3::X],
-            update_epoch: 2451545.0,
-            ..Default::default()
-        };
-
-        let mut runtime = TrajectoryRuntimeState::default();
-        runtime.observe_view(&view);
-        runtime.status = TrajectorySamplingStatus::Ready;
-        runtime.resolved_sampling_revision = Some(runtime.sampling_revision);
-        runtime.resolved_frame_revision = Some(0);
-        runtime.resolved_provider_revision = Some(EphemerisRevision {
-            available: true,
-            motion: 0,
-        });
-        assert!(!trajectory_needs_update_revisioned(
-            &view,
-            &path,
-            &runtime,
-            2451600.0,
-            true,
-            0,
-            EphemerisRevision {
-                available: true,
-                motion: 0,
-            },
-        ));
-        assert!(trajectory_needs_update_revisioned(
-            &view,
-            &TrajectoryPath::default(),
-            &runtime,
-            2451600.0,
-            true,
-            0,
-            EphemerisRevision {
-                available: true,
-                motion: 0,
-            },
-        ));
-    }
-
-    #[test]
-    fn view_revision_separates_presentation_from_sampling() {
-        let mut view = TrajectoryView::default();
-        let mut state = TrajectoryRuntimeState::default();
-        state.observe_view(&view);
-        let sampling_revision = state.sampling_revision;
-
-        view.color = LinearRgba::RED;
-        state.observe_view(&view);
-        assert!(state.presentation_revision > 1);
-        assert_eq!(state.sampling_revision, sampling_revision);
-
-        view.sampling_step *= 2.0;
-        state.observe_view(&view);
-        assert!(state.sampling_revision > sampling_revision);
-        assert_eq!(state.status, TrajectorySamplingStatus::Pending);
-    }
-
-    #[test]
-    fn resolved_failure_does_not_reschedule_without_new_inputs() {
-        let view = TrajectoryView::default();
-        let mut state = TrajectoryRuntimeState::default();
-        state.observe_view(&view);
-        state.status = TrajectorySamplingStatus::Failed;
-        state.resolved_sampling_revision = Some(state.sampling_revision);
-        state.resolved_frame_revision = Some(3);
-        state.resolved_provider_revision = Some(EphemerisRevision {
-            available: true,
-            motion: 4,
-        });
-        assert!(!trajectory_needs_update_revisioned(
-            &view,
-            &TrajectoryPath::default(),
-            &state,
-            2451545.0,
-            false,
-            3,
-            EphemerisRevision {
-                available: true,
-                motion: 4,
-            },
-        ));
-        assert!(trajectory_needs_update_revisioned(
-            &view,
-            &TrajectoryPath::default(),
-            &state,
-            2451545.0,
-            false,
-            4,
-            EphemerisRevision {
-                available: true,
-                motion: 4,
-            },
-        ));
-    }
-
-    #[test]
-    fn missing_provider_is_reopened_when_provider_appears() {
-        let view = TrajectoryView::default();
-        let mut state = TrajectoryRuntimeState::default();
-        state.observe_view(&view);
-        state.status = TrajectorySamplingStatus::Failed;
-        state.resolved_sampling_revision = Some(state.sampling_revision);
-        state.resolved_frame_revision = Some(3);
-        state.resolved_provider_revision = Some(EphemerisRevision {
-            available: false,
-            motion: 0,
-        });
-
-        assert!(!trajectory_needs_update_revisioned(
-            &view,
-            &TrajectoryPath::default(),
-            &state,
-            2451545.0,
-            false,
-            3,
-            EphemerisRevision {
-                available: false,
-                motion: 0,
-            },
-        ));
-        assert!(trajectory_needs_update_revisioned(
-            &view,
-            &TrajectoryPath::default(),
-            &state,
-            2451545.0,
-            false,
-            3,
-            EphemerisRevision {
-                available: true,
-                motion: 0,
-            },
-        ));
-    }
-
-    #[test]
-    fn independently_scaled_celestial_clock_is_high_rate() {
-        assert!(celestial_clock_is_high_rate(Some(100_000.0), None));
-        assert!(celestial_clock_is_high_rate(Some(1.0), Some(100_000.0)));
-        assert!(!celestial_clock_is_high_rate(Some(1.0), Some(1.0)));
     }
 }
 
@@ -1763,4 +1541,225 @@ fn trajectory_frame_assignment_changed(
     frame_index: Res<crate::ReferenceFrameIndex>,
 ) -> bool {
     frame_index.is_changed() || !changed.is_empty()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hidden_trajectory_is_not_active() {
+        let mut view = TrajectoryView {
+            user_visible: false,
+            ..Default::default()
+        };
+        assert!(!trajectory_is_active(&view));
+
+        view.user_visible = true;
+        view.is_visible = false;
+        assert!(!trajectory_is_active(&view));
+
+        view.is_visible = true;
+        assert!(trajectory_is_active(&view));
+    }
+
+    #[test]
+    fn alpha_stamp_skips_unchanged_clock_and_path() {
+        let view = TrajectoryView::default();
+        let path = TrajectoryPath {
+            points: vec![bevy::math::DVec3::ZERO, bevy::math::DVec3::X],
+            update_epoch: 2451545.0,
+            ..Default::default()
+        };
+        let state = TrajectoryAlphaState {
+            epoch_jd: Some(2451545.5),
+            geometry_revision: Some(path.geometry_revision),
+            sampling_days: view.sampling_days,
+            start_epoch: view.start_epoch,
+            end_epoch: view.end_epoch,
+            num_points: 2,
+        };
+
+        assert!(!alpha_update_is_needed(
+            Some(&state),
+            2451545.5,
+            &path,
+            &view,
+            2,
+            false
+        ));
+        assert!(alpha_update_is_needed(
+            Some(&state),
+            2451545.6,
+            &path,
+            &view,
+            2,
+            false
+        ));
+        assert!(!alpha_update_is_needed(
+            Some(&state),
+            2451545.6,
+            &path,
+            &view,
+            2,
+            true
+        ));
+        assert!(alpha_update_is_needed(
+            Some(&state),
+            2451545.6,
+            &TrajectoryPath {
+                geometry_revision: path.geometry_revision + 1,
+                ..path
+            },
+            &view,
+            2,
+            true
+        ));
+    }
+
+    #[test]
+    fn large_epoch_delta_holds_an_existing_trajectory_sample() {
+        let view = TrajectoryView::default();
+        let path = TrajectoryPath {
+            points: vec![bevy::math::DVec3::ZERO, bevy::math::DVec3::X],
+            update_epoch: 2451545.0,
+            ..Default::default()
+        };
+
+        let mut runtime = TrajectoryRuntimeState::default();
+        runtime.observe_view(&view);
+        runtime.status = TrajectorySamplingStatus::Ready;
+        runtime.resolved_sampling_revision = Some(runtime.sampling_revision);
+        runtime.resolved_frame_revision = Some(0);
+        runtime.resolved_provider_revision = Some(EphemerisRevision {
+            available: true,
+            motion: 0,
+        });
+        assert!(!trajectory_needs_update_revisioned(
+            &view,
+            &path,
+            &runtime,
+            2451600.0,
+            true,
+            0,
+            EphemerisRevision {
+                available: true,
+                motion: 0,
+            },
+        ));
+        assert!(trajectory_needs_update_revisioned(
+            &view,
+            &TrajectoryPath::default(),
+            &runtime,
+            2451600.0,
+            true,
+            0,
+            EphemerisRevision {
+                available: true,
+                motion: 0,
+            },
+        ));
+    }
+
+    #[test]
+    fn view_revision_separates_presentation_from_sampling() {
+        let mut view = TrajectoryView::default();
+        let mut state = TrajectoryRuntimeState::default();
+        state.observe_view(&view);
+        let sampling_revision = state.sampling_revision;
+
+        view.color = LinearRgba::RED;
+        state.observe_view(&view);
+        assert!(state.presentation_revision > 1);
+        assert_eq!(state.sampling_revision, sampling_revision);
+
+        view.sampling_step *= 2.0;
+        state.observe_view(&view);
+        assert!(state.sampling_revision > sampling_revision);
+        assert_eq!(state.status, TrajectorySamplingStatus::Pending);
+    }
+
+    #[test]
+    fn resolved_failure_does_not_reschedule_without_new_inputs() {
+        let view = TrajectoryView::default();
+        let mut state = TrajectoryRuntimeState::default();
+        state.observe_view(&view);
+        state.status = TrajectorySamplingStatus::Failed;
+        state.resolved_sampling_revision = Some(state.sampling_revision);
+        state.resolved_frame_revision = Some(3);
+        state.resolved_provider_revision = Some(EphemerisRevision {
+            available: true,
+            motion: 4,
+        });
+        assert!(!trajectory_needs_update_revisioned(
+            &view,
+            &TrajectoryPath::default(),
+            &state,
+            2451545.0,
+            false,
+            3,
+            EphemerisRevision {
+                available: true,
+                motion: 4,
+            },
+        ));
+        assert!(trajectory_needs_update_revisioned(
+            &view,
+            &TrajectoryPath::default(),
+            &state,
+            2451545.0,
+            false,
+            4,
+            EphemerisRevision {
+                available: true,
+                motion: 4,
+            },
+        ));
+    }
+
+    #[test]
+    fn missing_provider_is_reopened_when_provider_appears() {
+        let view = TrajectoryView::default();
+        let mut state = TrajectoryRuntimeState::default();
+        state.observe_view(&view);
+        state.status = TrajectorySamplingStatus::Failed;
+        state.resolved_sampling_revision = Some(state.sampling_revision);
+        state.resolved_frame_revision = Some(3);
+        state.resolved_provider_revision = Some(EphemerisRevision {
+            available: false,
+            motion: 0,
+        });
+
+        assert!(!trajectory_needs_update_revisioned(
+            &view,
+            &TrajectoryPath::default(),
+            &state,
+            2451545.0,
+            false,
+            3,
+            EphemerisRevision {
+                available: false,
+                motion: 0,
+            },
+        ));
+        assert!(trajectory_needs_update_revisioned(
+            &view,
+            &TrajectoryPath::default(),
+            &state,
+            2451545.0,
+            false,
+            3,
+            EphemerisRevision {
+                available: true,
+                motion: 0,
+            },
+        ));
+    }
+
+    #[test]
+    fn independently_scaled_celestial_clock_is_high_rate() {
+        assert!(celestial_clock_is_high_rate(Some(100_000.0), None));
+        assert!(celestial_clock_is_high_rate(Some(1.0), Some(100_000.0)));
+        assert!(!celestial_clock_is_high_rate(Some(1.0), Some(1.0)));
+    }
 }

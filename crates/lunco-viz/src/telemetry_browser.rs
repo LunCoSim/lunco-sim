@@ -531,7 +531,7 @@ fn build_tree(
             vec![(format!("signal-group:{group}"), humanize_identifier(group))]
         } else {
             let structure_path = group_path
-                .and_then(|_| row.model_variable.as_deref())
+                .and(row.model_variable.as_deref())
                 .unwrap_or(&sig.path);
             signal_structure(structure_path)
         };
@@ -1080,7 +1080,7 @@ fn fmt_value(v: f64, settings: &TelemetryDisplaySettings) -> String {
     let significant_digits = settings.significant_digits.clamp(1, 8) as i32;
     let exponent = av.log10().floor() as i32;
     let decimals = (significant_digits - 1 - exponent).max(0) as usize;
-    let mut text = if exponent >= 7 || exponent < -4 {
+    let mut text = if !(-4..7).contains(&exponent) {
         format!(
             "{v:.precision$e}",
             precision = (significant_digits - 1) as usize
@@ -1654,7 +1654,7 @@ mod tests {
         };
         assert_eq!(telemetry_row_label(&public, false), "electrical power");
 
-        let mut internal = public.clone();
+        let mut internal = public;
         internal.sig = SignalRef::new(
             ent(1),
             "__member_Traverse_x2f_Rover_x2f_Motor_L0.electrical_power",

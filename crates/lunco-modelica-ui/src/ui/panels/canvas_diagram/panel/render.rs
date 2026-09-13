@@ -111,7 +111,7 @@ pub(crate) fn render_diagram_canvas(
                 "Diagram projection failed",
                 &drilled_class,
                 &error,
-                &theme,
+                theme,
             );
         } else {
             let lifecycle = {
@@ -138,7 +138,7 @@ pub(crate) fn render_diagram_canvas(
                         lunco_ui::busy::LoadingIndicator::for_scope(
                             lunco_status_core::status_bus::BusyScope::Document(doc_id.0),
                         )
-                        .overlay_on(ui, response.rect, bus, &theme);
+                        .overlay_on(ui, response.rect, bus, theme);
                     }
                     ui.ctx().request_repaint();
                 }
@@ -149,7 +149,7 @@ pub(crate) fn render_diagram_canvas(
                         "Failed to load resource",
                         &drilled_class,
                         &msg,
-                        &theme,
+                        theme,
                     );
                 }
                 LifecycleState::Empty => {

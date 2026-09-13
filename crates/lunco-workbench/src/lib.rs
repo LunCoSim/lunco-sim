@@ -4655,7 +4655,7 @@ fn render_layout(
                     }
                     ui.separator();
                 }
-                let tabs = perspective_switcher_tabs(&layout);
+                let tabs = perspective_switcher_tabs(layout);
                 if tabs.len() > 1 {
                     for (id, title, is_active) in tabs {
                         let mut label = egui::RichText::new(title.as_str()).color(if is_active {
@@ -4693,7 +4693,7 @@ fn render_layout(
                     })
                     .map(|(_, rect)| rect.left())
                     .min_by(f32::total_cmp)
-                    .unwrap_or(ui.min_rect().right());
+                    .unwrap_or_else(|| ui.min_rect().right());
                 let left_group_end = anchor_rects
                     .iter()
                     .filter(|(key, _)| {
@@ -4704,7 +4704,7 @@ fn render_layout(
                     })
                     .map(|(_, rect)| rect.right())
                     .max_by(f32::total_cmp)
-                    .unwrap_or(ui.min_rect().left());
+                    .unwrap_or_else(|| ui.min_rect().left());
                 let title_gap = egui::Rect::from_min_max(
                     egui::pos2(left_group_end, ui.min_rect().top()),
                     egui::pos2(right_group_start, ui.min_rect().bottom()),
@@ -5254,7 +5254,7 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
                             let notification = status_notification_layout_job(
                                 ui.style(),
                                 l.level,
-                                &l.source,
+                                l.source,
                                 display_message,
                                 dot_color,
                             );

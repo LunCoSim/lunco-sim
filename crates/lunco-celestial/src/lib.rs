@@ -567,6 +567,49 @@ fn teardown_celestial_scene(
     info!("[celestial] scene teardown retired {n} derived entities");
 }
 
+/// Standalone gravity plugin — registers gravity configuration types.
+///
+/// Provides:
+/// - [`Gravity`] resource (Flat or Surface mode)
+/// - [`GravityProvider`] / [`GravityBody`] components
+/// - [`LocalGravityField`] resource + `update_local_gravity_field` for the
+///   avatar's "up" direction (camera/UI use)
+///
+/// Does **NOT** apply gravity forces to `RigidBody` entities. For that, also
+/// add [`lunco_environment::EnvironmentPlugin`](https://docs.rs/lunco-environment),
+/// which computes per-entity `LocalGravity` and applies forces to Avian.
+///
+/// Use this when you only need gravity configuration without the full
+/// `CelestialPlugin`. The full client should use `CelestialPlugin` which
+/// includes this.
+pub struct GravityPlugin;
+
+impl Plugin for GravityPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<LocalGravityField>();
+        // `update_local_gravity_field` reads the pin to HOLD the field while an
+        // orbital view is active. `CelestialPlugin` also inits it, but this
+        // plugin is the documented "gravity without the full CelestialPlugin"
+        // entry point, so it must stand alone — otherwise the system panics on
+        // a missing `Res` in any app that adds only this. `init_resource` is
+        // idempotent, so adding both plugins is still fine.
+        app.init_resource::<placement::OrbitalViewPin>();
+        app.register_type::<GravityBody>();
+        // AFTER the celestial epoch chain: this system reads celestial
+        // Transform/CellCoords via `world_position_seeded`; unordered it could
+        // interleave mid-chain and compute gravity from half-updated grids
+        // (measured: alternating ~1e11 m body offsets → randomly flipping
+        // gravity vector → the "surface jitter" in site-anchored scenes).
+        app.add_systems(
+            PreUpdate,
+            update_local_gravity_field.after(CelestialEpochSet),
+        );
+        // NOTE: `gravity_system` (force application to RigidBodies) lives in
+        // `lunco-environment`'s `EnvironmentPlugin` and consumes `LocalGravity`.
+        // Add EnvironmentPlugin alongside GravityPlugin for full gravity behavior.
+    }
+}
+
 #[cfg(test)]
 mod scene_teardown_tests {
     use super::*;
@@ -661,47 +704,5 @@ mod scene_teardown_tests {
             *app.world().resource::<placement::OrbitalViewPin>(),
             placement::OrbitalViewPin::default()
         );
-    }
-}
-/// Standalone gravity plugin — registers gravity configuration types.
-///
-/// Provides:
-/// - [`Gravity`] resource (Flat or Surface mode)
-/// - [`GravityProvider`] / [`GravityBody`] components
-/// - [`LocalGravityField`] resource + `update_local_gravity_field` for the
-///   avatar's "up" direction (camera/UI use)
-///
-/// Does **NOT** apply gravity forces to `RigidBody` entities. For that, also
-/// add [`lunco_environment::EnvironmentPlugin`](https://docs.rs/lunco-environment),
-/// which computes per-entity `LocalGravity` and applies forces to Avian.
-///
-/// Use this when you only need gravity configuration without the full
-/// `CelestialPlugin`. The full client should use `CelestialPlugin` which
-/// includes this.
-pub struct GravityPlugin;
-
-impl Plugin for GravityPlugin {
-    fn build(&self, app: &mut App) {
-        app.init_resource::<LocalGravityField>();
-        // `update_local_gravity_field` reads the pin to HOLD the field while an
-        // orbital view is active. `CelestialPlugin` also inits it, but this
-        // plugin is the documented "gravity without the full CelestialPlugin"
-        // entry point, so it must stand alone — otherwise the system panics on
-        // a missing `Res` in any app that adds only this. `init_resource` is
-        // idempotent, so adding both plugins is still fine.
-        app.init_resource::<placement::OrbitalViewPin>();
-        app.register_type::<GravityBody>();
-        // AFTER the celestial epoch chain: this system reads celestial
-        // Transform/CellCoords via `world_position_seeded`; unordered it could
-        // interleave mid-chain and compute gravity from half-updated grids
-        // (measured: alternating ~1e11 m body offsets → randomly flipping
-        // gravity vector → the "surface jitter" in site-anchored scenes).
-        app.add_systems(
-            PreUpdate,
-            update_local_gravity_field.after(CelestialEpochSet),
-        );
-        // NOTE: `gravity_system` (force application to RigidBodies) lives in
-        // `lunco-environment`'s `EnvironmentPlugin` and consumes `LocalGravity`.
-        // Add EnvironmentPlugin alongside GravityPlugin for full gravity behavior.
     }
 }

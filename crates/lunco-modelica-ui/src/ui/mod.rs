@@ -1105,17 +1105,17 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    if root.is_some() && matches!(state, Some(MslLoadState::Failed(_))) {
-        if ui
+    if root.is_some()
+        && matches!(state, Some(MslLoadState::Failed(_)))
+        && ui
             .button("Rebuild editor index")
             .on_hover_text(
                 "Re-scan the installed Modelica source and rebuild its editor index. \
                  This does not download anything.",
             )
             .clicked()
-        {
-            ctx.trigger(crate::msl_remote::NativeMslIndexAction::Rebuild);
-        }
+    {
+        ctx.trigger(crate::msl_remote::NativeMslIndexAction::Rebuild);
     }
 
     // Local-root override — wins over an explicit download. Restart needed

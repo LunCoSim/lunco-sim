@@ -108,7 +108,7 @@ pub struct AttachSpec {
 /// supplied by the authoring policy (normally Rhai after a composed query). The
 /// lowering only turns that explicit plan into one compound USD edit; it never
 /// discovers or derives a related prim by name.
-#[derive(Debug, Clone, PartialEq, Eq, Reflect, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Reflect, serde::Serialize, serde::Deserialize)]
 pub struct DetachSpec {
     /// Layer receiving the complete detach edit.
     pub edit_target: LayerId,
@@ -118,17 +118,6 @@ pub struct DetachSpec {
     pub joint_path: String,
     /// Occupied socket to clear, when this component was socket-attached.
     pub socket_path: Option<String>,
-}
-
-impl Default for DetachSpec {
-    fn default() -> Self {
-        Self {
-            edit_target: LayerId::root(),
-            component_path: String::new(),
-            joint_path: String::new(),
-            socket_path: None,
-        }
-    }
 }
 
 /// Lower an explicit detach plan to one ordered USD change set.

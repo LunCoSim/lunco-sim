@@ -321,11 +321,10 @@ fn request_preview_text_read(world: &mut World, preview: UsdPreviewId) {
             return;
         }
         session.text.requested_generation = Some(generation);
-        if session.text.loading {
-            false
-        } else if session.text.displayed_generation == Some(generation)
-            && session.text.authored.is_some()
-            && session.text.composed.is_some()
+        if session.text.loading
+            || (session.text.displayed_generation == Some(generation)
+                && session.text.authored.is_some()
+                && session.text.composed.is_some())
         {
             false
         } else {
@@ -1122,16 +1121,15 @@ impl UsdViewportState {
 
     fn remove(&mut self, id: UsdPreviewId) -> Option<(UsdPreviewSession, Vec<UsdPreviewView>)> {
         let session = self.sessions.remove(&id)?;
-        let view_ids: Vec<_> = self
-            .views
-            .values()
-            .filter(|view| view.preview == id)
-            .map(UsdPreviewView::id)
-            .collect();
-        let views = view_ids
-            .into_iter()
-            .filter_map(|view| self.views.remove(&view))
-            .collect();
+        let mut views = Vec::new();
+        let stored_views = std::mem::take(&mut self.views);
+        for (view_id, view) in stored_views {
+            if view.preview == id {
+                views.push(view);
+            } else {
+                self.views.insert(view_id, view);
+            }
+        }
         if self.focused == Some(id) {
             self.focused = None;
             self.focused_view = None;
@@ -1176,22 +1174,20 @@ impl UsdViewportState {
 
     fn reserve_view_id(&mut self) -> Option<UsdPreviewViewId> {
         let id = self.next_view_id()?;
-        self.next_view_id = id.0.checked_add(1).unwrap_or(u64::MAX);
+        self.next_view_id = id.0.saturating_add(1);
         Some(id)
     }
 
-    fn insert_view(&mut self, view: UsdPreviewView) -> Result<(), UsdPreviewView> {
+    fn insert_view(&mut self, view: UsdPreviewView) -> Result<(), Box<UsdPreviewView>> {
         if view.id.0 == 0 || !self.sessions.contains_key(&view.preview) {
-            return Err(view);
+            return Err(Box::new(view));
         }
         let id = view.id;
         if self.views.contains_key(&id) {
-            return Err(view);
+            return Err(Box::new(view));
         }
         self.views.insert(id, view);
-        self.next_view_id = self
-            .next_view_id
-            .max(id.0.checked_add(1).unwrap_or(u64::MAX));
+        self.next_view_id = self.next_view_id.max(id.0.saturating_add(1));
         Ok(())
     }
 
@@ -2215,7 +2211,6 @@ fn on_open_usd_preview(trigger: On<OpenUsdPreview>, mut commands: Commands) {
                 "usd-preview-open-failed",
                 format!("document {doc} is not open"),
             );
-            return;
         }
         let target_valid = world
             .resource::<DocumentRegistry<UsdDocument>>()
@@ -2231,7 +2226,6 @@ fn on_open_usd_preview(trigger: On<OpenUsdPreview>, mut commands: Commands) {
                     edit_target.as_str()
                 ),
             );
-            return;
         }
         if world
             .resource::<UsdViewportState>()
@@ -2328,7 +2322,7 @@ fn on_open_usd_preview(trigger: On<OpenUsdPreview>, mut commands: Commands) {
             return;
         };
         if let Err(view) = world.resource_mut::<UsdViewportState>().insert_view(view) {
-            despawn_preview_view(world, view);
+            despawn_preview_view(world, *view);
             let _ = remove_preview_session(world, preview);
             report_preview_error(
                 world,
@@ -2401,7 +2395,7 @@ fn on_open_usd_preview_view(trigger: On<OpenUsdPreviewView>, mut commands: Comma
             .resource_mut::<UsdViewportState>()
             .insert_view(view_state)
         {
-            despawn_preview_view(world, view_state);
+            despawn_preview_view(world, *view_state);
             report_preview_error(
                 world,
                 "usd-preview-view-open-failed",
@@ -2492,17 +2486,22 @@ fn on_set_usd_preview_view_mode(trigger: On<SetUsdPreviewViewMode>, mut commands
     let view = command.view;
     let mode = command.mode;
     commands.queue(move |world: &mut World| {
-        let mut state = world.resource_mut::<UsdViewportState>();
-        let Some(view_state) = state.view_mut(view) else {
-            drop(state);
+        let missing = {
+            let mut state = world.resource_mut::<UsdViewportState>();
+            if let Some(view_state) = state.view_mut(view) {
+                view_state.mode = mode;
+                false
+            } else {
+                true
+            }
+        };
+        if missing {
             report_preview_error(
                 world,
                 "usd-preview-mode-failed",
                 format!("view {} is not open", view.0),
             );
-            return;
-        };
-        view_state.mode = mode;
+        }
     });
 }
 
@@ -2512,17 +2511,22 @@ fn on_set_usd_preview_text_layer(trigger: On<SetUsdPreviewTextLayer>, mut comman
     let view = command.view;
     let layer = command.layer;
     commands.queue(move |world: &mut World| {
-        let mut state = world.resource_mut::<UsdViewportState>();
-        let Some(view_state) = state.view_mut(view) else {
-            drop(state);
+        let missing = {
+            let mut state = world.resource_mut::<UsdViewportState>();
+            if let Some(view_state) = state.view_mut(view) {
+                view_state.text_layer = layer;
+                false
+            } else {
+                true
+            }
+        };
+        if missing {
             report_preview_error(
                 world,
                 "usd-preview-text-layer-failed",
                 format!("view {} is not open", view.0),
             );
-            return;
-        };
-        view_state.text_layer = layer;
+        }
     });
 }
 
@@ -2532,20 +2536,23 @@ fn on_set_usd_preview_projection(trigger: On<SetUsdPreviewProjection>, mut comma
     let view = command.view;
     let projection = command.projection;
     commands.queue(move |world: &mut World| {
-        let (camera, scale) = {
+        let view_data = {
             let mut viewport = world.resource_mut::<UsdViewportState>();
-            let Some(view_state) = viewport.view_mut(view) else {
-                drop(viewport);
-                report_preview_error(
-                    world,
-                    "usd-preview-projection-failed",
-                    format!("view {} is not open", view.0),
-                );
-                return;
-            };
-            view_state.projection = projection;
-            view_state.auto_frame = true;
-            (view_state.camera, view_state.orthographic_scale)
+            if let Some(view_state) = viewport.view_mut(view) {
+                view_state.projection = projection;
+                view_state.auto_frame = true;
+                Some((view_state.camera, view_state.orthographic_scale))
+            } else {
+                None
+            }
+        };
+        let Some((camera, scale)) = view_data else {
+            report_preview_error(
+                world,
+                "usd-preview-projection-failed",
+                format!("view {} is not open", view.0),
+            );
+            return;
         };
         let Some(mut camera_projection) = world.get_mut::<Projection>(camera) else {
             report_preview_error(
@@ -2563,17 +2570,22 @@ fn on_set_usd_preview_projection(trigger: On<SetUsdPreviewProjection>, mut comma
 fn on_frame_usd_preview_view(trigger: On<FrameUsdPreviewView>, mut commands: Commands) {
     let view = trigger.event().view;
     commands.queue(move |world: &mut World| {
-        let mut viewport = world.resource_mut::<UsdViewportState>();
-        let Some(view_state) = viewport.view_mut(view) else {
-            drop(viewport);
+        let missing = {
+            let mut viewport = world.resource_mut::<UsdViewportState>();
+            if let Some(view_state) = viewport.view_mut(view) {
+                view_state.auto_frame = true;
+                false
+            } else {
+                true
+            }
+        };
+        if missing {
             report_preview_error(
                 world,
                 "usd-preview-frame-failed",
                 format!("view {} is not open", view.0),
             );
-            return;
-        };
-        view_state.auto_frame = true;
+        }
     });
 }
 
@@ -2581,25 +2593,28 @@ fn on_frame_usd_preview_view(trigger: On<FrameUsdPreviewView>, mut commands: Com
 fn on_reset_usd_preview_view(trigger: On<ResetUsdPreviewView>, mut commands: Commands) {
     let view = trigger.event().view;
     commands.queue(move |world: &mut World| {
-        let (camera, mode, scale) = {
+        let view_data = {
             let mut viewport = world.resource_mut::<UsdViewportState>();
-            let Some(view_state) = viewport.view_mut(view) else {
-                drop(viewport);
-                report_preview_error(
-                    world,
-                    "usd-preview-reset-failed",
-                    format!("view {} is not open", view.0),
-                );
-                return;
-            };
-            view_state.orbit = OrbitCamera::default();
-            view_state.orthographic_scale = 1.0;
-            view_state.auto_frame = true;
-            (
-                view_state.camera,
-                view_state.projection,
-                view_state.orthographic_scale,
-            )
+            if let Some(view_state) = viewport.view_mut(view) {
+                view_state.orbit = OrbitCamera::default();
+                view_state.orthographic_scale = 1.0;
+                view_state.auto_frame = true;
+                Some((
+                    view_state.camera,
+                    view_state.projection,
+                    view_state.orthographic_scale,
+                ))
+            } else {
+                None
+            }
+        };
+        let Some((camera, mode, scale)) = view_data else {
+            report_preview_error(
+                world,
+                "usd-preview-reset-failed",
+                format!("view {} is not open", view.0),
+            );
+            return;
         };
         if let Some(mut transform) = world.get_mut::<Transform>(camera) {
             *transform = OrbitCamera::default().transform();
@@ -2718,31 +2733,35 @@ fn on_zoom_usd_preview_view(trigger: On<ZoomUsdPreviewView>, mut commands: Comma
             );
             return;
         }
-        let (camera, scale) = {
+        let view_data = {
             let mut viewport = world.resource_mut::<UsdViewportState>();
-            let Some(view_state) = viewport.view_mut(view) else {
-                drop(viewport);
-                report_preview_error(
-                    world,
-                    "usd-preview-zoom-failed",
-                    format!("view {} is not open", view.0),
-                );
-                return;
-            };
-            match view_state.projection {
-                UsdPreviewProjection::Perspective => {
-                    view_state.orbit.distance = (view_state.orbit.distance * factor)
-                        .clamp(view_state.orbit.min_distance, view_state.orbit.max_distance);
+            if let Some(view_state) = viewport.view_mut(view) {
+                match view_state.projection {
+                    UsdPreviewProjection::Perspective => {
+                        view_state.orbit.distance = (view_state.orbit.distance * factor)
+                            .clamp(view_state.orbit.min_distance, view_state.orbit.max_distance);
+                    }
+                    UsdPreviewProjection::Orthographic => {
+                        view_state.orthographic_scale = (view_state.orthographic_scale * factor)
+                            .clamp(
+                                view_state.orbit.min_orthographic_scale,
+                                view_state.orbit.max_orthographic_scale,
+                            );
+                    }
                 }
-                UsdPreviewProjection::Orthographic => {
-                    view_state.orthographic_scale = (view_state.orthographic_scale * factor).clamp(
-                        view_state.orbit.min_orthographic_scale,
-                        view_state.orbit.max_orthographic_scale,
-                    );
-                }
+                view_state.auto_frame = false;
+                Some((view_state.camera, view_state.orthographic_scale))
+            } else {
+                None
             }
-            view_state.auto_frame = false;
-            (view_state.camera, view_state.orthographic_scale)
+        };
+        let Some((camera, scale)) = view_data else {
+            report_preview_error(
+                world,
+                "usd-preview-zoom-failed",
+                format!("view {} is not open", view.0),
+            );
+            return;
         };
         let transform = world
             .resource::<UsdViewportState>()
@@ -2935,7 +2954,7 @@ fn collect_preview_explode_targets(
                 entity,
                 path: prim.path.clone(),
                 parent: parent.map(ChildOf::parent),
-                local: local.clone(),
+                local: *local,
                 kind: kind.map(|kind| kind.0.clone()),
                 synced,
             },
@@ -3023,7 +3042,7 @@ fn collect_preview_explode_targets(
 
     let mut locals = HashMap::with_capacity(snapshots.len());
     for snapshot in snapshots.values() {
-        locals.insert(snapshot.entity, snapshot.local.clone());
+        locals.insert(snapshot.entity, snapshot.local);
     }
     if preview_local_to_root(root, root, &parents, &locals).is_none() {
         return Err(format!(
@@ -3070,7 +3089,7 @@ fn execute_explode_usd_preview(
             targets
                 .iter()
                 .find(|target| target.path == part.path)
-                .map_or(true, |target| target.entity != part.entity)
+                .is_none_or(|target| target.entity != part.entity)
         }) {
             return Err(format!(
                 "USD preview {} explode state is stale after reprojection",
@@ -3117,7 +3136,7 @@ fn execute_explode_usd_preview(
                         part.path
                     ));
                 };
-                *transform = part.baseline.clone();
+                *transform = part.baseline;
             }
             true
         } else {
@@ -3173,7 +3192,7 @@ fn execute_explode_usd_preview(
                     Ok(UsdPreviewExplodedPart {
                         path: target.path.clone(),
                         entity: target.entity,
-                        baseline: target.local.clone(),
+                        baseline: target.local,
                         parent_to_root,
                     })
                 })
@@ -3196,7 +3215,7 @@ fn execute_explode_usd_preview(
                 part.path
             ));
         }
-        let mut transform = part.baseline.clone();
+        let mut transform = part.baseline;
         transform.translation += local_delta;
         if !finite_transform(&transform) {
             return Err(format!(
@@ -3712,14 +3731,16 @@ fn render_preview_view(
                 view.text_layer(),
             ))
         })
-        .unwrap_or((
-            None,
-            None,
-            None,
-            UsdPreviewProjection::default(),
-            UsdPreviewViewMode::default(),
-            UsdPreviewTextLayer::default(),
-        ));
+        .unwrap_or_else(|| {
+            (
+                None,
+                None,
+                None,
+                UsdPreviewProjection::default(),
+                UsdPreviewViewMode::default(),
+                UsdPreviewTextLayer::default(),
+            )
+        });
     let name = focused_doc
         .and_then(|doc| {
             ctx.resource::<DocumentRegistry<UsdDocument>>()
@@ -3886,8 +3907,8 @@ fn render_preview_view(
         );
         let delta = response.drag_delta();
         (
-            orbit.then_some(delta).unwrap_or_default(),
-            pan.then_some(delta).unwrap_or_default(),
+            if orbit { delta } else { egui::Vec2::ZERO },
+            if pan { delta } else { egui::Vec2::ZERO },
         )
     } else {
         (egui::Vec2::ZERO, egui::Vec2::ZERO)
@@ -4060,10 +4081,7 @@ fn render_preview_text(
     });
 }
 
-fn state_session_edit_target<'a>(
-    state: &'a UsdViewportState,
-    preview: UsdPreviewId,
-) -> Option<&'a str> {
+fn state_session_edit_target(state: &UsdViewportState, preview: UsdPreviewId) -> Option<&str> {
     state
         .session(preview)
         .map(|session| session.edit_target.as_str())
@@ -4301,8 +4319,8 @@ mod tests {
         let (mut app, preview, doc, part_a, part_b) = explode_fixture();
         let assembly = "/Scene/Assembly";
         let parts = ["/Scene/Assembly/Group/PartB", "/Scene/Assembly/PartA"];
-        let baseline_a = app.world().get::<Transform>(part_a).unwrap().clone();
-        let baseline_b = app.world().get::<Transform>(part_b).unwrap().clone();
+        let baseline_a = *app.world().get::<Transform>(part_a).unwrap();
+        let baseline_b = *app.world().get::<Transform>(part_b).unwrap();
 
         let enabled = execute_explode_usd_preview(
             app.world_mut(),
@@ -4383,7 +4401,7 @@ mod tests {
     #[test]
     fn explode_rejects_non_assembly_and_stale_targets_without_mutation() {
         let (mut app, preview, doc, part_a, _) = explode_fixture();
-        let before = app.world().get::<Transform>(part_a).unwrap().clone();
+        let before = *app.world().get::<Transform>(part_a).unwrap();
         let error = execute_explode_usd_preview(
             app.world_mut(),
             explode_command(
@@ -4420,8 +4438,8 @@ mod tests {
     #[test]
     fn reprojection_invalidates_explode_and_returns_captured_baselines() {
         let (mut app, preview, doc, part_a, part_b) = explode_fixture();
-        let baseline_a = app.world().get::<Transform>(part_a).unwrap().clone();
-        let baseline_b = app.world().get::<Transform>(part_b).unwrap().clone();
+        let baseline_a = *app.world().get::<Transform>(part_a).unwrap();
+        let baseline_b = *app.world().get::<Transform>(part_b).unwrap();
         execute_explode_usd_preview(
             app.world_mut(),
             explode_command(
@@ -4991,8 +5009,10 @@ mod tests {
     fn preview_light_uses_graphics_distant_light_default() {
         let mut app = App::new();
         app.init_resource::<Assets<Image>>();
-        let mut settings = RenderingQualitySettings::default();
-        settings.distant_light_default_illuminance = 42_000.0;
+        let settings = RenderingQualitySettings {
+            distant_light_default_illuminance: 42_000.0,
+            ..Default::default()
+        };
         app.insert_resource(settings);
 
         let profile = validated_preview_profile(app.world()).expect("quality is valid");
@@ -5170,8 +5190,10 @@ mod tests {
     #[test]
     fn preview_pan_uses_projection_scale_not_fixed_sensitivity() {
         let perspective = preview_projection(UsdPreviewProjection::Perspective, 1.0);
-        let mut near = OrbitCamera::default();
-        near.distance = 2.0;
+        let mut near = OrbitCamera {
+            distance: 2.0,
+            ..Default::default()
+        };
         let mut far = near.clone();
         far.distance = 4.0;
         assert!(near.apply_pan(
@@ -5191,8 +5213,10 @@ mod tests {
         assert!((far.target.length() / near.target.length() - 2.0).abs() < 1.0e-5);
 
         let orthographic = preview_projection(UsdPreviewProjection::Orthographic, 2.0);
-        let mut low = OrbitCamera::default();
-        low.distance = 2.0;
+        let mut low = OrbitCamera {
+            distance: 2.0,
+            ..Default::default()
+        };
         let mut high = low.clone();
         high.distance = 200.0;
         assert!(low.apply_pan(

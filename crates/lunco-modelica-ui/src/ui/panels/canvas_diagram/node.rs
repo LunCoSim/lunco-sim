@@ -704,36 +704,6 @@ fn hover_card_rect(cursor: egui::Pos2, size: egui::Vec2, bounds: egui::Rect) -> 
     egui::Rect::from_min_size(egui::pos2(x, y), size)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::hover_card_rect;
-    use bevy_egui::egui;
-
-    #[test]
-    fn hover_card_stays_inside_canvas_at_each_edge() {
-        let bounds = egui::Rect::from_min_size(egui::pos2(100.0, 50.0), egui::vec2(400.0, 300.0));
-
-        for cursor in [
-            egui::pos2(110.0, 60.0),
-            egui::pos2(490.0, 60.0),
-            egui::pos2(110.0, 340.0),
-            egui::pos2(490.0, 340.0),
-        ] {
-            let card = hover_card_rect(cursor, egui::vec2(120.0, 80.0), bounds);
-            assert!(bounds.contains(card.min));
-            assert!(bounds.contains(card.max - egui::vec2(f32::EPSILON, f32::EPSILON)));
-        }
-    }
-
-    #[test]
-    fn oversized_hover_card_is_clamped_to_canvas() {
-        let bounds = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(120.0, 90.0));
-        let card = hover_card_rect(egui::pos2(100.0, 80.0), egui::vec2(300.0, 200.0), bounds);
-
-        assert_eq!(card, bounds);
-    }
-}
-
 /// Paint a chain of small bright dots along a polyline that march
 /// from the first to the last vertex at constant screen-pixel speed.
 /// Phase keyed off wall-clock `time` so all wires stay in sync. The caller
@@ -810,5 +780,35 @@ pub(super) fn paint_flow_dots(
             segment_index += 1;
         }
         s += spacing;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hover_card_rect;
+    use bevy_egui::egui;
+
+    #[test]
+    fn hover_card_stays_inside_canvas_at_each_edge() {
+        let bounds = egui::Rect::from_min_size(egui::pos2(100.0, 50.0), egui::vec2(400.0, 300.0));
+
+        for cursor in [
+            egui::pos2(110.0, 60.0),
+            egui::pos2(490.0, 60.0),
+            egui::pos2(110.0, 340.0),
+            egui::pos2(490.0, 340.0),
+        ] {
+            let card = hover_card_rect(cursor, egui::vec2(120.0, 80.0), bounds);
+            assert!(bounds.contains(card.min));
+            assert!(bounds.contains(card.max - egui::vec2(f32::EPSILON, f32::EPSILON)));
+        }
+    }
+
+    #[test]
+    fn oversized_hover_card_is_clamped_to_canvas() {
+        let bounds = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(120.0, 90.0));
+        let card = hover_card_rect(egui::pos2(100.0, 80.0), egui::vec2(300.0, 200.0), bounds);
+
+        assert_eq!(card, bounds);
     }
 }
