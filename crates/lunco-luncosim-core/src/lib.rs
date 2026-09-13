@@ -1694,6 +1694,8 @@ impl Plugin for LunCoSimCorePlugin {
                 )
                     .chain(),
             );
+        #[cfg(feature = "sysml")]
+        app.add_plugins(lunco_sysml::SysmlPlugin);
         // Dynamic USD bodies are first promoted in `ActivateDynamicBodies`.
         // The terrain support projection must observe that promotion before it
         // decides whether physics may resume; plugin insertion order is not a

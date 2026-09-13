@@ -1,12 +1,12 @@
 # 24 — SysML Domain
 
-> Status: Design · Audience: contributors planning SysML v2 structure & requirements (stub, not yet built)
+> Status: Foundation implemented · Audience: contributors extending SysML v2 structure & requirements
 >
-> **Stub.** SysML v2 is the source of truth for **system structure and
-> requirements** — a peer domain inside a Twin, co-equal with Modelica
-> (behavior) and USD (geometry). Not the Twin container itself; see
-> [`13-twin-and-workflow.md`](13-twin-and-workflow.md) for the two-file
-> strategy.
+SysML v2 is the source of truth for **system structure and
+requirements** — a peer domain inside a Twin, co-equal with Modelica
+(behavior) and USD (geometry). Not the Twin container itself; see
+[`13-twin-and-workflow.md`](13-twin-and-workflow.md) for the two-file
+strategy.
 
 ## 1. Scope
 
@@ -82,20 +82,15 @@ Under [`10-document-system.md`](10-document-system.md) terms:
 
 ```rust
 pub struct SysmlDocument {
-    // AST from our SysML v2 parser
-    ast: SysmlAst,
+    // Serializable projection from lunco-sysml-ast
+    analysis: Arc<SysmlAnalysis>,
+    source: String,
     generation: u64,
 }
 
 pub enum SysmlOp {
-    AddPart       { path, type_name },
-    RemovePart    { path },
-    AddPort       { part, port_name, port_type },
-    AddConnection { from: PortRef, to: PortRef },
-    AddRequirement { id, doc_text },
-    SetAttribute  { path, attr, value },
-    AddRealization{ part, kind: RealizationKind, target: DocumentRef },
-    // ...
+    ReplaceSource { new: String },
+    EditText { range: Range<usize>, replacement: String },
 }
 ```
 
@@ -109,10 +104,10 @@ Views observing a `SysmlDocument`:
 
 ## 5. Parser strategy
 
-**Today:** no Rust production SysML v2 parser exists. LunCoSim will
-author a **subset parser** covering the features the domain actually
-needs — probably 500–1500 lines of Rust. The AST is designed to be
-swap-able with a full parser when the ecosystem matures.
+**Today:** `lunco-sysml-ast` embeds the pinned `sysmlv2-semantics` parser and
+its `sysmlv2-stdlib` data. The crate exposes a stable LunCoSim projection of
+source-backed elements, resolved references, and syntax/name/collision
+diagnostics; the upstream model remains private to the AST boundary.
 
 **Supported subset (initial):**
 
@@ -135,12 +130,18 @@ swap-able with a full parser when the ecosystem matures.
 - Allocations, refinements
 - Analysis/verification execution
 
-Users hitting an unsupported feature get a clear "not yet supported —
-feature X at line N" error.
+The runtime currently accepts source-level replace/range edits. Structured
+requirement/part operations and verification execution remain follow-up work;
+the read-only Rhai adapter can report requirements without mutating the model.
 
 ## 6. Status
 
-The SysML v2 integration design is complete, with foundational ties established to `10-document-system.md` and `13-twin-and-workflow.md`. Parser implementation, `SysmlDocument` Bevy bindings, and visual diagram/requirements panels are planned as follow-up work after the Modelica domain patterns are fully validated.
+The SysML v2 integration foundation is implemented in the terrain worktree:
+the pure AST projection, Bevy source/document plugin, canonical journal domain,
+`.sysml`/`.kerml` classification, pre-flight validation, and read-only Rhai
+requirement report are available behind the opt-in `sysml` feature. Twin-wide
+source discovery, RefIndex links, structured authoring, and visual panels are
+follow-up work.
 
 ## 7. What this does NOT do
 

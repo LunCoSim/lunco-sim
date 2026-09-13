@@ -833,6 +833,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
+name = "beef"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a8241f3ebb85c056b509d4327ad0358fbbba6ffb340bf388f26350aeda225b1"
+
+[[package]]
 name = "bevy"
 version = "0.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3254,6 +3260,12 @@ checksum = "77745e017f5edba1a9c1d854f6f3a52dac8a12dd5af5d2f54aecf61e43d80d30"
 dependencies = [
  "libm",
 ]
+
+[[package]]
+name = "countme"
+version = "3.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7704b5fdd17b18ae31c4c1da5a2e0305a2bf17b5249300a9ee9ed7b72114c636"
 
 [[package]]
 name = "cpufeatures"
@@ -6999,11 +7011,36 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
 name = "logos"
+version = "0.15.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ff472f899b4ec2d99161c51f60ff7075eeb3097069a36050d8037a6325eb8154"
+dependencies = [
+ "logos-derive 0.15.1",
+]
+
+[[package]]
+name = "logos"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eb2c55a318a87600ea870ff8c2012148b44bf18b74fad48d0f835c38c7d07c5f"
 dependencies = [
- "logos-derive",
+ "logos-derive 0.16.1",
+]
+
+[[package]]
+name = "logos-codegen"
+version = "0.15.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "192a3a2b90b0c05b27a0b2c43eecdb7c415e29243acc3f89cc8247a5b693045c"
+dependencies = [
+ "beef",
+ "fnv",
+ "lazy_static",
+ "proc-macro2",
+ "quote",
+ "regex-syntax",
+ "rustc_version",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -7022,11 +7059,20 @@ dependencies = [
 
 [[package]]
 name = "logos-derive"
+version = "0.15.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "605d9697bcd5ef3a42d38efc51541aa3d6a4a25f7ab6d1ed0da5ac632a26b470"
+dependencies = [
+ "logos-codegen 0.15.1",
+]
+
+[[package]]
+name = "logos-derive"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52d3a9855747c17eaf4383823f135220716ab49bea5fbea7dd42cc9a92f8aa31"
 dependencies = [
- "logos-codegen",
+ "logos-codegen 0.16.1",
 ]
 
 [[package]]
@@ -7391,6 +7437,7 @@ dependencies = [
  "lunco-scripting",
  "lunco-settings",
  "lunco-storage",
+ "lunco-sysml-rhai",
  "lunco-terrain-surface",
  "lunco-twin",
  "lunco-usd-avian",
@@ -7438,6 +7485,7 @@ dependencies = [
  "lunco-scene-validation",
  "lunco-scripting",
  "lunco-storage",
+ "lunco-sysml",
  "lunco-telemetry",
  "lunco-terrain-globe",
  "lunco-terrain-surface",
@@ -7563,6 +7611,7 @@ name = "lunco-luncosim-server"
 version = "0.6.0-dev"
 dependencies = [
  "lunco-luncosim-core",
+ "lunco-sysml-rhai",
 ]
 
 [[package]]
@@ -8025,6 +8074,7 @@ dependencies = [
  "lunco-materials",
  "lunco-modelica-ast",
  "lunco-physics",
+ "lunco-sysml-ast",
  "lunco-tools",
  "lunco-twin",
  "lunco-usd-avian-lint",
@@ -8123,6 +8173,39 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "lunco-sysml"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bevy",
+ "lunco-doc",
+ "lunco-doc-bevy",
+ "lunco-sysml-ast",
+ "lunco-twin-journal",
+ "serde",
+]
+
+[[package]]
+name = "lunco-sysml-ast"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "sysmlv2-semantics",
+ "sysmlv2-stdlib",
+ "sysmlv2-syntax",
+]
+
+[[package]]
+name = "lunco-sysml-rhai"
+version = "0.1.0"
+dependencies = [
+ "lunco-sysml-ast",
+ "rhai",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -10035,7 +10118,7 @@ dependencies = [
  "bytemuck",
  "derive_more",
  "half",
- "logos",
+ "logos 0.16.1",
  "lz4_flex",
  "num-traits",
  "strum",
@@ -11573,6 +11656,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rowan"
+version = "0.15.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2441aaccb50f4267d4f0f58b21e0138e96a449f361ed57a2673a83c9bca0772"
+dependencies = [
+ "countme",
+ "hashbrown 0.14.5",
+ "memoffset",
+ "rustc-hash 1.1.0",
+ "text-size",
+]
+
+[[package]]
 name = "roxmltree"
 version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13030,6 +13126,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "sysmlv2-model"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "886686d0bde998ac07a197f38ebdb2eaa272610300eb899617600be7af73a784"
+dependencies = [
+ "sysmlv2-syntax",
+]
+
+[[package]]
+name = "sysmlv2-semantics"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c3b1eb7c81d1f251c98ceea49e6114affafbdff10b1d9c83e2ac85dcc2b99ff"
+dependencies = [
+ "sysmlv2-model",
+ "sysmlv2-syntax",
+]
+
+[[package]]
+name = "sysmlv2-stdlib"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "43641fba26c1d00e5ad91b320e4b382446192bda175188491c14de2baea15871"
+
+[[package]]
+name = "sysmlv2-syntax"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "26873c15806485b1178d036880f2219da1640ebf714359daf30123c7312f7b9d"
+dependencies = [
+ "logos 0.15.1",
+ "rowan",
+ "unicode-width 0.2.2",
+]
+
+[[package]]
 name = "taffy"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13104,6 +13236,12 @@ name = "termtree"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f50febec83f5ee1df3015341d8bd429f2d1cc62bcba7ea2076759d315084683"
+
+[[package]]
+name = "text-size"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f18aa187839b2bdb1ad2fa35ead8c4c2976b64e4363c386d45ac0f7ee85c9233"
 
 [[package]]
 name = "textwrap"

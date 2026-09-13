@@ -68,6 +68,7 @@ lunco-settings = { path = "../lunco-settings", optional = true }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
+lunco-sysml-rhai = { path = "../lunco-sysml-rhai", optional = true }
 lunco-luncosim-ui = { path = "../lunco-luncosim-ui", default-features = false, optional = true }
 lunco-scripting = { path = "../lunco-scripting" }
 lunco-assets = { workspace = true }
@@ -220,6 +221,7 @@ python = [
     "lunco-luncosim-core/python",
     "lunco-luncosim-ui?/python",
 ]
+sysml = ["lunco-luncosim-core/sysml", "dep:lunco-sysml-rhai"]
 # Tracy profiler. Enable with `--features tracy` and connect a Tracy
 # GUI to see per-system flame graphs. Match the GUI version to the
 # tracy-client version pulled in by Bevy 0.18 (check `cargo tree -p

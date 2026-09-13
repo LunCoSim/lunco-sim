@@ -28,7 +28,8 @@ pub struct FileEntry {
 /// `docs/architecture/10-document-system.md` § 2a:
 ///
 /// - [`Document`](FileKind::Document) — editable inside LunCoSim via typed
-///   ops on structured content (`.mo`, `.usda`, `.sysml`, `.mission.ron`).
+///   ops on structured content (`.mo`, `.usda`, `.sysml`, `.kerml`,
+///   `.mission.ron`).
 /// - [`FileReference`](FileKind::FileReference) — opaque container edited
 ///   only in external tools (`.png`, `.glb`, `.wav`, ...). Twin tracks
 ///   its existence for dependency listing; no ops.
@@ -67,7 +68,7 @@ impl FileKind {
             // ── Document extensions ───────────────────────────────────
             "mo" => FileKind::Document(DocumentKindId::new("modelica")),
             "usda" | "usdc" | "usd" => FileKind::Document(DocumentKindId::new("usd")),
-            "sysml" => FileKind::Document(DocumentKindId::new("sysml")),
+            "sysml" | "kerml" => FileKind::Document(DocumentKindId::new("sysml")),
             "ron" | "yaml" | "yml" => FileKind::Document(DocumentKindId::new("data")),
 
             // ── File references (opaque) ─────────────────────────────
@@ -129,6 +130,14 @@ mod tests {
     fn classifies_sysml() {
         assert_eq!(
             classify("system.sysml"),
+            FileKind::Document(DocumentKindId::new("sysml"))
+        );
+    }
+
+    #[test]
+    fn classifies_kerml_as_sysml() {
+        assert_eq!(
+            classify("library.kerml"),
             FileKind::Document(DocumentKindId::new("sysml"))
         );
     }

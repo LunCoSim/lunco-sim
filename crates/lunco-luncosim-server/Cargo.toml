@@ -13,9 +13,11 @@ path = "src/main.rs"
 # Link the production headless runtime directly. The GUI shell is not part of
 # this dependency closure, so window/render/CLI changes do not rebuild the server.
 lunco-luncosim-core = { path = "../lunco-luncosim-core", default-features = false, features = ["server"] }
+lunco-sysml-rhai = { path = "../lunco-sysml-rhai", optional = true }
 
 [features]
 default = []
+sysml = ["lunco-luncosim-core/sysml", "dep:lunco-sysml-rhai"]
 
 [lints]
 workspace = true

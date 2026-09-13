@@ -18,6 +18,7 @@ lunco-hooks-rhai = { path = "../lunco-hooks-rhai" }
 lunco-lint = { path = "../lunco-lint" }
 lunco-materials = { path = "../lunco-materials" }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
+lunco-sysml-ast = { path = "../lunco-sysml-ast" }
 lunco-tools = { path = "../lunco-tools" }
 lunco-twin = { path = "../lunco-twin" }
 lunco-usd-avian-lint = { path = "../lunco-usd-avian-lint" }
