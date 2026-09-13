@@ -40,6 +40,11 @@ The first production slice now exists behind the opt-in `sysml` feature:
 - `lunco-sysml-rhai` exposes only a read-only `sysml_report_json()` Rhai
   function over an immutable analysis snapshot. Script policy and verdict
   ownership stay in the existing Rhai test runner.
+- `lunco-scene-validation` registers a compact `ValidateSysml` API query for
+  authored tests. It reuses `ValidateAsset`'s parser/resolver and projects
+  requirement/verification names, scalar literals, diagnostics, and the
+  source revision only; no second source walker or Griffin-specific Rust
+  policy is introduced.
 - `lunco-luncosim-core`, the GUI shell, and the headless server expose the
   `sysml` feature gate; default builds remain unchanged.
 

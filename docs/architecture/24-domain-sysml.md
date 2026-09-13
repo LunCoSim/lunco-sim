@@ -134,6 +134,12 @@ diagnostics; the upstream model remains private to the AST boundary.
 The runtime currently accepts source-level replace/range edits. Structured
 requirement/part operations and verification execution remain follow-up work;
 the read-only Rhai adapter can report requirements without mutating the model.
+For production checks, the scene-validation plugin also registers the compact
+`ValidateSysml { path }` query. It reuses the generic `ValidateAsset` parser
+and resolver, then returns only requirement/verification qualified names,
+authored scalar literals, diagnostics, and the source revision. This keeps the
+Rhai boundary bounded and avoids a second filesystem walker or
+Griffin-specific Rust projection.
 
 ## 6. SysML v2 requirement and verification contract
 
