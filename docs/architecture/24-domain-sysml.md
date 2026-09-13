@@ -189,16 +189,18 @@ that would break interchange.
    existing production scene and Rhai backend source. The mapping belongs in
    Twin-owned configuration/index data; the SysML file remains standard and
    portable. A missing mapping is an explicit `error`, never an ignored test.
-4. **Typed execution/report bridge.** Keep Rhai read-only for facts and policy,
-   but add a typed result sink that records `pass`, `fail`, `inconclusive`, or
-   `error`, source revision, observations, and evidence paths. Map the result
-   to `VerificationCases::VerdictKind`; store it as a run artifact/journal
-   record rather than mutating the SysML source.
-5. **Production discovery and CLI.** Add a runner mode that discovers
-   verification cases, selects the mapped scene/backend, runs the same
-   production `luncosim` process, and emits machine-readable JSON (with a
-   human summary). `TESTS_OK` remains a compatibility output during migration,
-   not the normative model.
+4. **Minimal Rhai bridge.** Keep Rhai read-only for SysML facts and policy.
+   Expose the resolved requirement/verification snapshot, the selected
+   qualified key, and the source revision; let the existing Rhai test emit a
+   small result map containing `pass`, `fail`, `inconclusive`, or `error`,
+   observations, evidence paths, and diagnostics. Map that map to
+   `VerificationCases::VerdictKind` in the existing test/report boundary. Do
+   not add a Rust assertion per requirement.
+5. **Production discovery and CLI.** Extend the existing `luncosim test`
+   discovery/runner to select a SysML verification case and invoke its Rhai
+   observer in the same production process. Emit machine-readable JSON (with a
+   human summary); `TESTS_OK` remains a compatibility envelope during
+   migration, not the normative model.
 
 ### Migration rules
 
@@ -210,7 +212,8 @@ that would break interchange.
 - Move thresholds and acceptance text into SysML attributes/constraints where
   the selected parser can preserve them. Keep measurement, command sequencing,
   and runtime reads in the Rhai backend; it consumes the SysML case and emits
-  observations rather than redefining the requirement.
+  observations rather than redefining the requirement. This is a Rhai test
+  migration, not a new Rust test framework.
 - Switch the production gate to the typed SysML verdict only after positive,
   negative, anti-trivial-motion, stale-generation, and evidence-path checks
   pass. Then remove duplicate Rhai assertions in the same change.

@@ -94,16 +94,21 @@ selector and JSON report are introduced.
 3. Add a Twin-owned verification registry from qualified verification name to
    the existing production scene and Rhai backend source. Missing mappings are
    terminal errors.
-4. Add a typed Rhai result sink and a production runner/CLI that selects one
-   verification case, executes the existing scene process, and emits the JSON
-   result above plus a human summary.
+4. Add only the small Rhai bridge needed to expose the resolved SysML snapshot,
+   selected verification key, and source revision. The authored Rhai observer
+   owns the result map; extend the existing production runner/CLI to emit the
+   JSON result above plus a human summary. Do not add a Rust test per
+   requirement.
 5. Add shadow-mode comparison against the legacy Rhai verdict, then switch the
    production gate and delete duplicate assertions only after positive,
    negative, anti-trivial-motion, stale-generation, and evidence checks pass.
 
 Thresholds may move from Rhai into SysML attributes/constraints only when the
-parser preserves their values and units. Runtime measurement and actuation
-remain Rhai/public-query responsibilities; SysML is not a second simulator.
+parser preserves their values and units. Runtime measurement, actuation, and
+the executable test remain Rhai/public-query responsibilities; SysML is not a
+second simulator. The Rust change should stay minimal: a read-only snapshot
+registration, a key/revision handoff, and reuse of the existing `luncosim test`
+runner/result protocol.
 This preserves the ownership split: SysML states intent, USD owns geometry and
 identity, Modelica owns continuous behavior, and Rhai executes policy and
 collects evidence.
@@ -351,10 +356,10 @@ absolute cache path.
 - The AST projection currently exposes generic elements/references rather than
   structured requirement/verification records; extraction of subjects,
   constraints, and trace links is the next implementation slice.
-- No verification-case registry, typed verdict sink, cross-file `RefIndex`
-  adapter, async source-set worker, or production requirement selector exists
-  yet. `ValidateAsset` remains the read-only pre-flight entry point for one
-  source file.
+- No verification-case registry, Rhai key/revision handoff, cross-file
+  `RefIndex` adapter, async source-set worker, or production requirement
+  selector exists yet. `ValidateAsset` remains the read-only pre-flight entry
+  point for one source file.
 - The architecture and Rhai test-strategy documents now define the migration
   contract; no existing Rhai gate has been switched until the shadow-mode and
   evidence requirements above are met.

@@ -85,6 +85,29 @@ Do not wrap an existing Rust test in Rhai, copy a threshold into both files,
 or let a missing verification mapping silently pass. This migration changes
 the ownership of the contract, not merely the spelling of the test.
 
+The intended authored test shape is therefore still Rhai, with SysML as its
+input contract:
+
+```rhai
+let model = from_json(sysml_requirement_report_json());
+let req = model.requirements.filter(|r| r.qualified_name ==
+    "GriffinRequirements::GR001_MassBudget");
+assert(req.len() == 1, "GR001 must resolve exactly once");
+
+// Existing production helpers perform the observation; this script owns the
+// verdict and evidence, while the numeric requirement lives in SysML.
+let rover = find("/Griffin/Rover");
+let mass = get(rover, "Mass.mass");
+assert(mass <= 450.0, "GR-001 mass budget exceeded");
+print("VERIFICATION GriffinRequirements::Verify_GR001 PASS");
+```
+
+The Rust surface needed to support this is intentionally small: one
+read-only SysML snapshot/query registration, one source-revision/key handoff,
+and reuse of the existing Rhai scene runner and result protocol. No
+requirement-specific Rust test module, Rust-side threshold, or second runner
+should be introduced.
+
 The rule is: move a Rust assertion only after an authored fixture can fail for
 the same reason through the public runtime path. A Rust test that supplies a
 spy command, fake world, private component, or direct function call is not a
