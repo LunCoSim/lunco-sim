@@ -23,8 +23,9 @@ and composed collision/placement envelopes; `lunco-usd-bevy-camera` owns render-
 projection intent, camera paths, mounts, selection, and viewport reconciliation;
 `lunco-usd-bevy-twin` owns the render-free document-to-`twin://` identity map,
 workspace and preview leases, projection cursors, user-ownership events, and
-the event-driven wake signal; `lunco-usd` owns the stage-loading,
-canonical-stage, and live ECS projection systems that consume that state;
+the event-driven wake signal and document-to-mounted-stage lookup;
+`lunco-usd-bevy-core` owns canonical-stage storage, while `lunco-usd` owns
+stage loading and the live ECS projection systems that consume that state;
 `lunco-usd-bevy-lathe` owns the independent parametric NURBS/lathe mesh
 projection; `lunco-usd-bevy-light` owns UsdLux light and dome projection;
 `lunco-usd-bevy-animation` owns the render-free time-sample projection;
@@ -713,7 +714,7 @@ All runtime acceptance tests load **real USD files** through the same pipeline
 as runtime. Ownership follows the narrowest production boundary:
 - `crates/lunco-usd-bevy-core/src/{asset,authoring,canonical,read,compose,view}.rs` — prepared asset, authored-layer, composed-stage, and live-stage substrate
 - `crates/lunco-usd-bevy-scene/src/{lib,geometry,collision}.rs` — render-free ECS scene identity, lifecycle, ancestry, shared USD geometry readers, and composed collision/placement envelopes
-- `crates/lunco-usd-bevy-twin/src/lib.rs` — render-free Twin/document leases, stage-to-document lookup, ownership events, and projection wake state
+- `crates/lunco-usd-bevy-twin/src/lib.rs` — render-free Twin/document leases, document-to-mounted-stage lookup, ownership events, and projection wake state
 - `crates/lunco-usd-bevy-camera/src/{camera,camera_mount,camera_path,camera_switch,camera_track}.rs` — render-free camera projection, pose, path, selection, and track mechanisms
 - `crates/lunco-usd-bevy-light/src/{light,dome}.rs` — UsdLux light readers, ambient-dome semantics, and HDRI environment projection
 - `crates/lunco-usd-bevy-core/src/animation.rs` — low-level time-sample topology, value decoding, rotation, and transform-reader mechanisms

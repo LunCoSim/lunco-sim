@@ -8042,7 +8042,6 @@ dependencies = [
  "lunco-doc-bevy",
  "lunco-physics",
  "lunco-scene-catalog",
- "lunco-usd",
  "lunco-usd-avian",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
