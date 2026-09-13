@@ -28,7 +28,7 @@ pub(crate) mod program_runtime;
 /// spelling.
 pub mod registry;
 pub mod runtime_persistence;
-pub mod twin_projection;
+pub(crate) mod twin_projection;
 
 /// Asset-backed OpenUSD assembly. This is the public composition boundary:
 /// `lunco-assets` supplies canonical identities and bytes, while this crate

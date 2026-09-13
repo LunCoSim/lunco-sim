@@ -204,7 +204,7 @@ pub fn geom_api_schemas(world: &mut World, prim: &UsdPrimPath) -> Vec<String> {
 /// dispatches every op to it.
 ///
 /// The stage-to-document binding is authoritative in
-/// [`lunco_usd::twin_projection::DocBackedTwinScenes`]. File-origin matching is
+/// [`lunco_usd_bevy_twin::DocBackedTwinScenes`]. File-origin matching is
 /// retained for ordinary file-backed projections that are not Twin-mounted.
 /// There is no active-viewport fallback: an entity without an explicit document
 /// binding is not editable.
@@ -216,7 +216,7 @@ pub fn resolve_doc_for_entity(world: &World, entity: Entity) -> Option<lunco_doc
 
     if let Some((name, rel)) = lunco_assets::split_twin_rel(&path_str) {
         if let Some(doc) = world
-            .get_resource::<lunco_usd::twin_projection::DocBackedTwinScenes>()
+            .get_resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
             .and_then(|backed| backed.doc_for(name, rel))
         {
             return Some(doc);

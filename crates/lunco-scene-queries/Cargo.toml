@@ -21,6 +21,7 @@ lunco-usd = { path = "../lunco-usd", default-features = false }
 lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
+lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
 lunco-usd-core = { path = "../lunco-usd-core" }
 openusd = { workspace = true }
 serde_json = { workspace = true }

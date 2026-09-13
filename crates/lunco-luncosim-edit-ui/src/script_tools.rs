@@ -75,7 +75,7 @@ pub(crate) struct SceneToolWorld<'w, 's> {
     selected: Res<'w, SelectedEntities>,
     local_avatar: Res<'w, TheLocalAvatar>,
     q_links: Query<'w, 's, &'static ControllerLink>,
-    backed: Res<'w, lunco_usd::twin_projection::DocBackedTwinScenes>,
+    backed: Res<'w, lunco_usd_bevy_twin::DocBackedTwinScenes>,
     asset_server: Res<'w, AssetServer>,
 }
 
@@ -169,7 +169,7 @@ fn scene_tool_context(
     selected: &SelectedEntities,
     local_avatar: &TheLocalAvatar,
     q_links: &Query<&ControllerLink>,
-    backed: &lunco_usd::twin_projection::DocBackedTwinScenes,
+    backed: &lunco_usd_bevy_twin::DocBackedTwinScenes,
     asset_server: &AssetServer,
 ) -> TelemetryValue {
     let mut cursor = click.entity;
@@ -269,11 +269,9 @@ fn scene_tool_context(
             "target_path".to_string(),
             TelemetryValue::String(path.path.clone()),
         ));
-        if let Some(doc) = lunco_usd::twin_projection::scene_document_for(
-            backed,
-            asset_server,
-            path.stage_handle.id(),
-        ) {
+        if let Some(doc) =
+            lunco_usd_bevy_twin::scene_document_for(backed, asset_server, path.stage_handle.id())
+        {
             context.push(("doc_id".to_string(), TelemetryValue::I64(doc.raw() as i64)));
         }
     }
@@ -306,11 +304,9 @@ fn scene_tool_context(
         }
     }
     if let Some(path) = context_prim {
-        if let Some(doc) = lunco_usd::twin_projection::scene_document_for(
-            backed,
-            asset_server,
-            path.stage_handle.id(),
-        ) {
+        if let Some(doc) =
+            lunco_usd_bevy_twin::scene_document_for(backed, asset_server, path.stage_handle.id())
+        {
             if !context.iter().any(|(name, _)| name == "doc_id") {
                 context.push(("doc_id".to_string(), TelemetryValue::I64(doc.raw() as i64)));
             }

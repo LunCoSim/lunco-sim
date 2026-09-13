@@ -17,9 +17,9 @@ license.workspace = true
 bevy = { workspace = true }
 openusd = { workspace = true }
 lunco-core = { path = "../lunco-core" }
-lunco-usd = { path = "../lunco-usd", default-features = false }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
+lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
 lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-obstacle-field = { path = "../lunco-obstacle-field" }

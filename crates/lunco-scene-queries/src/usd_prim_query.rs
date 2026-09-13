@@ -65,7 +65,6 @@ use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
 use lunco_doc::{Document, DocumentId};
 use lunco_doc_bevy::DocumentRegistry;
-use lunco_usd::twin_projection::DocBackedTwinScenes;
 use lunco_usd_bevy_core::read::UsdRead;
 use lunco_usd_bevy_core::view::StageView;
 use lunco_usd_bevy_core::{
@@ -75,6 +74,7 @@ use lunco_usd_bevy_core::{
 use lunco_usd_bevy_scene::collision::{collision_aabb, prim_geometry_aabb, ObjectAabb};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_bevy_scene::UsdSceneRoot;
+use lunco_usd_bevy_twin::{scene_document_for, DocBackedTwinScenes};
 use lunco_usd_core::document::UsdDocument;
 use openusd::sdf::{Path as SdfPath, Value};
 
@@ -558,7 +558,7 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
             live_stage.and_then(|stage| {
                 let backed = world.get_resource::<DocBackedTwinScenes>()?;
                 let asset_server = world.get_resource::<AssetServer>()?;
-                lunco_usd::twin_projection::scene_document_for(backed, asset_server, stage)
+                scene_document_for(backed, asset_server, stage)
             })
         } else {
             None

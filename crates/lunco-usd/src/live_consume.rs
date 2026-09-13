@@ -204,9 +204,7 @@ fn find_program_owner(
 }
 
 fn mark_stage_projected(world: &mut World, stage_id: AssetId<UsdStageAsset>) {
-    if let Some(mut backed) =
-        world.get_resource_mut::<crate::twin_projection::DocBackedTwinScenes>()
-    {
+    if let Some(mut backed) = world.get_resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>() {
         backed.mark_stage_projected(stage_id);
     }
 }

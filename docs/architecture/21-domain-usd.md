@@ -7,7 +7,7 @@
 > physical — lives as USD prims in USD stages. See
 > [`../../crates/lunco-usd-core/`](../../crates/lunco-usd-core/), [`../../crates/lunco-usd/`](../../crates/lunco-usd/) and companion crates
 > `lunco-usd-geometry`, `lunco-usd-avian`, `lunco-usd-avian-lint`, `lunco-usd-bevy-core`,
-> `lunco-usd-bevy-runtime`, `lunco-usd-bevy-scene`, `lunco-usd-bevy-camera`, `lunco-usd-bevy-light`, `lunco-usd-bevy` and
+> `lunco-usd-bevy-runtime`, `lunco-usd-bevy-scene`, `lunco-usd-bevy-twin`, `lunco-usd-bevy-camera`, `lunco-usd-bevy-light`, `lunco-usd-bevy` and
 > `lunco-usd-bevy-lathe`, `lunco-usd-sim`, `lunco-usd-sim-domain`.
 
 Package ownership follows the same boundary: `lunco-usd-core` contains the
@@ -21,6 +21,10 @@ owns the reusable render-free NURBS, trim, and curve-sweep substrate;
 projection ordering boundaries, visual-split markers, shared geometry decoding,
 and composed collision/placement envelopes; `lunco-usd-bevy-camera` owns render-free camera
 projection intent, camera paths, mounts, selection, and viewport reconciliation;
+`lunco-usd-bevy-twin` owns the render-free document-to-`twin://` identity map,
+workspace and preview leases, projection cursors, user-ownership events, and
+the event-driven wake signal; `lunco-usd` owns the stage-loading,
+canonical-stage, and live ECS projection systems that consume that state;
 `lunco-usd-bevy-lathe` owns the independent parametric NURBS/lathe mesh
 projection; `lunco-usd-bevy-light` owns UsdLux light and dome projection;
 `lunco-usd-bevy` owns the remaining visual projection and consumes the camera,
@@ -130,7 +134,7 @@ by re-flattening the scene per edit:
 UsdOp ─apply→ UsdDocument (base⊕runtime, op_log, generation++)
         │
         ├─ journal records op + inverse (undo / sync)
-        └─ sync_twin_overlays replays op → CanonicalStage.author_*  (twin_projection.rs)
+        └─ sync_twin_overlays replays op → CanonicalStage.author_*  (lunco-usd/twin_projection.rs)
                     │  fires openusd change sink
                     └─ project_stage_changes drains sink → reconcile ECS  (live_consume.rs)
                          · InfoOnly xformOp:translate → cheap pose update
@@ -707,6 +711,7 @@ All runtime acceptance tests load **real USD files** through the same pipeline
 as runtime. Ownership follows the narrowest production boundary:
 - `crates/lunco-usd-bevy-core/src/{asset,authoring,canonical,read,compose,view}.rs` — prepared asset, authored-layer, composed-stage, and live-stage substrate
 - `crates/lunco-usd-bevy-scene/src/{lib,geometry,collision}.rs` — render-free ECS scene identity, lifecycle, ancestry, shared USD geometry readers, and composed collision/placement envelopes
+- `crates/lunco-usd-bevy-twin/src/lib.rs` — render-free Twin/document leases, stage-to-document lookup, ownership events, and projection wake state
 - `crates/lunco-usd-bevy-camera/src/{camera,camera_mount,camera_path,camera_switch,camera_track}.rs` — render-free camera projection, pose, path, selection, and track mechanisms
 - `crates/lunco-usd-bevy-light/src/{light,dome}.rs` — UsdLux light readers, ambient-dome semantics, and HDRI environment projection
 - `crates/lunco-usd/tests/live_spawn_projection.rs` — document-backed USD authoring and raw asset composition facts

@@ -8,7 +8,8 @@
 > [`usd-projection`](../../skills/usd-projection/SKILL.md) skill.
 
 *Built:* the op-driven projection pipeline. An `ApplyUsdOp` edit lands in the
-`UsdDocument` (base⊕runtime layers), `twin_projection::sync_twin_overlays` replays
+`UsdDocument` (base⊕runtime layers), `lunco-usd-bevy-twin` supplies its
+document-to-`twin://` identity and leases, and `twin_projection::sync_twin_overlays` replays
 the typed op onto the `CanonicalStage` (`lunco-usd-bevy-core/src/canonical.rs`), openusd's
 change sink fires, and `live_consume::project_stage_changes` reconciles the ECS. See
 [`21-domain-usd.md`](21-domain-usd.md) § "Op-driven
@@ -75,7 +76,8 @@ document ownership available to the asset differs.
 - `UsdOp::SetAttribute` (`lunco-usd-core/src/document.rs`) mutates the in-memory layer
   `sdf::Data`, `commit`s (bumps `generation`), and **returns an inverse op** → undo for
   free.
-- Projected into ECS by `lunco-usd/src/twin_projection.rs` and
+- Projected into ECS by the state contract in `lunco-usd-bevy-twin` and the
+  runtime systems in `lunco-usd/src/twin_projection.rs` and
   `lunco-usd/src/live_consume.rs`: `sync_twin_overlays` publishes the composed
   `base ⊕ runtime` source and applies incremental authored changes; the live
   consumer drains the OpenUSD change sink and reconciles the ECS projection.
@@ -290,6 +292,7 @@ prim→entity.
 - `lunco-scene-authoring/src/properties.rs` — `SetObjectProperty` struct and observers
 - `lunco-scene-authoring/src/properties.rs` — `on_set_object_property`
 - `lunco-usd-core/src/document.rs` — `UsdOp::SetAttribute` apply (commit + inverse)
+- `lunco-usd-bevy-twin/src/lib.rs` — document-backed Twin identity, leases, and stage lookup
 - `lunco-usd/src/twin_projection.rs` — `sync_twin_overlays` and document-backed mounts
 - `lunco-usd/src/live_consume.rs` — `project_stage_changes` (E1/E2 consumer)
 - `lunco-usd/src/commands.rs` — scene command admission and document registration

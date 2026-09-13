@@ -73,6 +73,7 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-usd-geometry`** | Render-free NURBS evaluators, trimmed-domain tessellation, and rotation-minimizing curve-sweep mesh data. Isolates heavy numeric geometry dependencies from the USD stage loader. |
 | **`lunco-usd-bevy-core`** | Headless composed-USD reader/view, stage composition, prepared stage assets, canonical live-stage ownership, authored-layer readers, instance identity, send-safe projection plans, program/variant resolution, material binding, transform decoding, and unit conversion. Uses Bevy's asset/ECS substrate but has no mesh, light, camera, renderer, window, or UI projection. |
 | **`lunco-usd-bevy-scene`** | Render-free Bevy scene contract shared by visual and domain projections: `UsdPrimPath`, scene/revision lifecycle markers, projection ordering boundaries, visual-split markers, preview/ancestry ownership, canonical USD primitive/mesh geometry readers, and composed collision/placement envelopes. It depends on the core reader and has no visual adapter or renderer dependency. |
+| **`lunco-usd-bevy-twin`** | Render-free Twin-backed USD document identity: document-to-`twin://` lookup, workspace/preview leases, projection cursors, user-ownership events, and the live-projection wake signal. It owns no stage loading, composition, rendering, or UI. |
 | **`lunco-usd-bevy-camera`** | Render-free USD camera adapter: standard `UsdGeomCamera` projection intent, mounted/cinematic camera pose, camera-track selection, and the single-authority viewport-camera reconciler. It depends on the core reader and scene contract, not on visual projection. |
 | **`lunco-usd-bevy-lathe`** | Independent parametric NURBS/lathe projection: reflected surface definitions, profile evaluation, and change-detected Bevy mesh regeneration. |
 | **`lunco-usd-bevy`** | Visual Bevy adapter (`UsdBevyPlugin`): projects USD hierarchy, shapes, transforms, materials, and `timeSamples` animation into Bevy entities/components on top of `lunco-usd-bevy-core`. Owns the remaining mesh/curve projection and installs the independent camera and light adapters. |
@@ -316,6 +317,15 @@ crate uses the same contract when it binds presentation components.
 The package's `UsdScenePlugin` installs the render-free stage revision and
 failed-mount lifecycle systems. `FailedSceneLoad` is consumed by scene
 transactions, so headless simulation does not depend on visual diagnostics.
+
+**`lunco-usd-bevy-twin`**
+Render-free Twin/document projection state shared by headless runtime,
+authoring, terrain, validation, and UI adapters. It owns the
+`DocBackedTwinScenes` lease map, the `twin://` stage-to-document resolver,
+`UsdDocumentUserOwned`, `LiveRebuildExempt`, and the event-driven
+`TwinProjectionWake` signal. It depends on the stage-asset identity and asset
+path contracts, but it does not load or compose USD stages and does not depend
+on the aggregate `lunco-usd` runtime.
 
 **`lunco-usd-ui`**
 Interactive USD browser and preview presentation. Owns workbench sections, preview sessions/views, viewport queries, Save-As picker integration, and UI status/placeholder adapters while consuming the document and projection APIs from `lunco-usd`.

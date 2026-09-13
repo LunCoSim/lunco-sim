@@ -20,9 +20,9 @@ lunco-mobility = { path = "../lunco-mobility" }
 lunco-render = { path = "../lunco-render" }
 lunco-storage = { path = "../lunco-storage" }
 lunco-twin-journal = { path = "../lunco-twin-journal" }
-lunco-usd = { path = "../lunco-usd", default-features = false }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
+lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
 lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-workspace = { path = "../lunco-workspace" }
 openusd = { workspace = true }

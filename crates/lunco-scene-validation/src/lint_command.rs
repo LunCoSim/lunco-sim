@@ -331,7 +331,7 @@ pub fn on_run_lint(
     mut document_reports: ResMut<DocumentLintReports>,
     asset_server: Option<Res<AssetServer>>,
     documents: Option<Res<DocumentRegistry<lunco_usd_core::document::UsdDocument>>>,
-    backed: Option<Res<lunco_usd::twin_projection::DocBackedTwinScenes>>,
+    backed: Option<Res<lunco_usd_bevy_twin::DocBackedTwinScenes>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
 ) {
     let scope = trigger.event().scope.trim();

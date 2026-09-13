@@ -1,0 +1,15 @@
+[package]
+name = "lunco-usd-bevy-twin"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Render-free Twin-backed USD document identity and projection lease state"
+
+[dependencies]
+bevy = { workspace = true, features = ["bevy_asset"] }
+lunco-assets = { path = "../lunco-assets" }
+lunco-doc = { path = "../lunco-doc" }
+lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
+
+[lints]
+workspace = true

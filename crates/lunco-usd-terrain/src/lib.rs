@@ -607,7 +607,7 @@ fn refresh_layered_terrain_layers(
 /// Resolution is uniform: every doc-backed scene — twin default (`--scene` / workspace
 /// Twin) and live-imported (`OpenFile`) alike — is a doc-backed twin scene, so the doc
 /// is recovered from
-/// [`DocBackedTwinScenes`](lunco_usd::twin_projection::DocBackedTwinScenes) via the
+/// [`DocBackedTwinScenes`](lunco_usd_bevy_twin::DocBackedTwinScenes) via the
 /// stage's `twin://<name>/<rel>` asset path. Retries each frame (guarded by
 /// `Without<TerrainDocument>`) until the doc mounts; once resolved, it stops.
 #[derive(Component)]
@@ -942,7 +942,7 @@ fn cache_terrain_document(
             Without<TerrainDocument>,
         ),
     >,
-    twin_scenes: Res<lunco_usd::twin_projection::DocBackedTwinScenes>,
+    twin_scenes: Res<lunco_usd_bevy_twin::DocBackedTwinScenes>,
     asset_server: Res<AssetServer>,
     mut commands: Commands,
 ) {
@@ -972,7 +972,7 @@ fn cache_terrain_document(
         commands.entity(entity).try_insert((
             TerrainDocument { doc: doc.0 },
             lunco_terrain_surface::DocBackedTerrain,
-            lunco_usd::twin_projection::LiveRebuildExempt,
+            lunco_usd_bevy_twin::LiveRebuildExempt,
         ));
     }
 }

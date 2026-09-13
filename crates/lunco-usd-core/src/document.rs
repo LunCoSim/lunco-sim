@@ -45,8 +45,8 @@
 //!   openusd `Stage` with references / sublayers / variants resolved. It is
 //!   `Rc`-backed and therefore `!Send`: a main-thread `NonSend` resource. It is
 //!   the projection engine — authoring onto it fires the openusd change sink that
-//!   reconciles the ECS (see [`twin_projection`](crate::twin_projection) and
-//!   [`live_consume`](crate::live_consume)).
+//!   reconciles the ECS (see the runtime projector in
+//!   `lunco-usd/src/twin_projection.rs` and `lunco-usd/src/live_consume.rs`).
 //!
 //! This split is **not** a Rust/`Send` workaround — it is USD's own data model.
 //! Pixar's USD draws the same line between `SdfLayer` (flat authored opinions you

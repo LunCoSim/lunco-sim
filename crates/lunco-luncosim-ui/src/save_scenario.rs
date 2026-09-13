@@ -43,7 +43,7 @@ fn on_save_scenario(
     q_prim: Query<&lunco_usd_bevy_scene::UsdPrimPath>,
     q_program: Query<&lunco_core::ScenarioProgramPrim>,
     registry: Res<lunco_scripting::ScriptRegistry>,
-    backed: Res<lunco_usd::twin_projection::DocBackedTwinScenes>,
+    backed: Res<lunco_usd_bevy_twin::DocBackedTwinScenes>,
     asset_server: Res<AssetServer>,
     mut commands: Commands,
 ) {
@@ -69,11 +69,9 @@ fn on_save_scenario(
         warn!("[save-scenario] entity {target} is not a USD-backed prim — nothing to save onto");
         return;
     };
-    let Some(scene_doc) = lunco_usd::twin_projection::scene_document_for(
-        &backed,
-        &asset_server,
-        upp.stage_handle.id(),
-    ) else {
+    let Some(scene_doc) =
+        lunco_usd_bevy_twin::scene_document_for(&backed, &asset_server, upp.stage_handle.id())
+    else {
         warn!(
             "[save-scenario] the scene backing {target} is a raw-file scene (not doc-backed) — \
              open it as a Twin to save scenarios in place"
