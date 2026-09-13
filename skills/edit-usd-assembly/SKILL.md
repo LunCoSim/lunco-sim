@@ -183,6 +183,16 @@ Use this live loop for each component and then for the assembly:
 5. Save each component and the assembly only after the visual and typed
    checkpoints are acceptable. Record the exact files and known gaps.
 
+Use the Editor's **Authoring Review** panel during those checkpoints. It is a
+read-only consumer of the existing selection, possession, active-camera,
+runtime-diagnostic, and diagnostic-lease owners. It deliberately shows
+selected, controlled, and camera-target identities separately and can select a
+live diagnostic subject through its stable entity id. For dimensional checks,
+run `authoring_measurements::requirement_report(doc, requirements)` with exact
+USD paths and units; do not turn a screenshot, a display name, or a guessed
+bounding box into a requirement. The report must retain every check and treat
+missing/stale/unavailable evidence as a visible result.
+
 When a component is deliberately a global reference, validate the referenced
 asset's contract and keep local opinions limited to its instance transform,
 mount metadata, variants, and host wiring. When a new Twin-owned component is

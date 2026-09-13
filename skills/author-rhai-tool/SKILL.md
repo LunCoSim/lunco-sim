@@ -167,6 +167,19 @@ do not copy a large USDA string or an observable policy assertion into a Rust
 unit test. Keep Rust coverage only for a generic mechanism that the public
 Rhai surface cannot reach.
 
+### Measurement evidence
+
+Use the built-in `authoring_measurements` library for reusable dimensional
+requirements instead of adding a model-specific validator or Rust geometry
+policy. `requirement_report(doc, requirements)` evaluates every explicit
+`distance` or collision `extent` rule through `QueryUsdPrim` and retains the
+exact document, paths, frame, units, expected value, tolerance, method, and
+source. Its `checks` list is the complete execution record; `findings` contains
+only failed or unavailable rules. Missing subjects, missing collision bounds,
+stale document projections, and unsupported units must remain unavailable or
+failed, never a passing default. Put the positive and negative behavior in a
+production Rhai scene test when a live stage is required.
+
 Pass the exact document id, edit target, and generation returned by the read.
 These facades do not identify parts by vehicle name, write USDA directly, or
 hide missing references, endpoints, mounts, or runtime evidence.
