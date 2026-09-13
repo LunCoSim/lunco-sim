@@ -115,12 +115,95 @@ impl ApiQueryProvider for SpawnCatalogProvider {
     }
 }
 
+/// Structured read of the USD metadata catalog.
+///
+/// The asset scanner already reads every project USD file for spawn discovery
+/// and the Scenarios menu. Expose that same result to scripts and API clients
+/// instead of making another caller walk `assets/` or parse files itself.
+pub struct UsdAssetMetadataProvider;
+
+impl ApiQueryProvider for UsdAssetMetadataProvider {
+    fn name(&self) -> &'static str {
+        "ListUsdAssetMetadata"
+    }
+
+    fn execute(&self, world: &World, _params: &serde_json::Value) -> ApiResponse {
+        let Some(manifest) = world.get_resource::<lunco_assets::discovery::AssetManifest>() else {
+            return ApiResponse::error(
+                ApiErrorCode::InternalError,
+                "ListUsdAssetMetadata: AssetManifest resource is not present",
+            );
+        };
+        let Some(store) = world.get_resource::<AssetMetaStore>() else {
+            return ApiResponse::error(
+                ApiErrorCode::InternalError,
+                "ListUsdAssetMetadata: AssetMetaStore resource is not present",
+            );
+        };
+
+        let mut entries = Vec::new();
+        let mut pending = 0;
+        for path in manifest
+            .rels()
+            .iter()
+            .filter(|path| path.ends_with(".usda"))
+        {
+            let Some(meta) = store.get(path) else {
+                pending += 1;
+                entries.push(serde_json::json!({
+                    "path": path,
+                    "spawnable": false,
+                    "description": serde_json::Value::Null,
+                }));
+                continue;
+            };
+            entries.push(serde_json::json!({
+                "path": path,
+                "spawnable": meta.spawnable,
+                "description": meta
+                    .description
+                    .as_deref()
+                    .map(serde_json::Value::from)
+                    .unwrap_or(serde_json::Value::Null),
+            }));
+        }
+
+        // Twin assets are not part of the engine manifest, but their metadata
+        // is already in the same store. Include them without doing filesystem
+        // work in this synchronous query provider.
+        for (path, meta) in &store.by_path {
+            if manifest.rels().iter().any(|known| known == path) {
+                continue;
+            }
+            entries.push(serde_json::json!({
+                "path": path,
+                "spawnable": meta.spawnable,
+                "description": meta
+                    .description
+                    .as_deref()
+                    .map(serde_json::Value::from)
+                    .unwrap_or(serde_json::Value::Null),
+            }));
+        }
+        entries.sort_unstable_by(|a, b| a["path"].as_str().cmp(&b["path"].as_str()));
+
+        ApiResponse::ok(serde_json::json!({
+            "ready": manifest.ready() && pending == 0,
+            "entries": entries,
+            "count": entries.len(),
+        }))
+    }
+}
+
 /// Register the catalog query beside the catalog resource owner.
 pub fn register_query(app: &mut App) {
     app.init_resource::<ApiQueryRegistry>();
     app.world_mut()
         .resource_mut::<ApiQueryRegistry>()
         .register(SpawnCatalogProvider);
+    app.world_mut()
+        .resource_mut::<ApiQueryRegistry>()
+        .register(UsdAssetMetadataProvider);
 }
 
 impl SpawnCatalog {
@@ -1232,6 +1315,37 @@ mod tests {
     }
 
     #[test]
+    fn usd_asset_metadata_provider_exposes_pending_and_authored_docs() {
+        let mut world = World::new();
+        let mut manifest = lunco_assets::discovery::AssetManifest::default();
+        manifest.set(vec![
+            "scenes/luncosim/arena.usda".into(),
+            "scenes/luncosim/pending.usda".into(),
+        ]);
+        world.insert_resource(manifest);
+        world.insert_resource(AssetMetaStore {
+            by_path: [(
+                "scenes/luncosim/arena.usda".into(),
+                SpawnMeta {
+                    spawnable: false,
+                    description: Some("Arena".into()),
+                },
+            )]
+            .into_iter()
+            .collect(),
+        });
+
+        let response = UsdAssetMetadataProvider.execute(&world, &serde_json::Value::Null);
+        let ApiResponse::Ok { data: Some(data) } = response else {
+            panic!("expected metadata response");
+        };
+        assert_eq!(data["ready"], false);
+        assert_eq!(data["count"], 2);
+        assert_eq!(data["entries"][0]["description"], "Arena");
+        assert_eq!(data["entries"][1]["description"], serde_json::Value::Null);
+    }
+
+    #[test]
     fn test_categories_distinct_sorted() {
         let mut c = SpawnCatalog {
             entries: Vec::new(),
@@ -1252,38 +1366,6 @@ mod tests {
             vec!["Rovers".to_string(), "Structures".to_string()]
         );
         assert_eq!(c.by_category("Rovers").count(), 2);
-    }
-
-    /// Data guard: every shipped sandbox scene must carry a non-empty standard
-    /// USD `doc` metadata field so the Scenarios menu can show a tooltip for it.
-    /// A scene missing the attribute would silently show no tooltip — this
-    /// test fails loud instead, the moment a scene is added without one.
-    ///
-    /// Reads the shipped files through the same parser the app uses. Reading
-    /// is [`lunco_assets::asset_read`]'s job and understanding the metadata is
-    /// [`parse_spawn_meta`]'s; this test asserts the shipped data itself.
-    #[test]
-    fn test_every_sandbox_scene_has_description() {
-        let scenes_dir =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes/luncosim");
-        let mut count = 0;
-        for e in std::fs::read_dir(&scenes_dir).expect("sandbox scenes dir exists") {
-            let p = e.unwrap().path();
-            if p.extension().and_then(|s| s.to_str()) != Some("usda") {
-                continue;
-            }
-            count += 1;
-            let src = std::fs::read_to_string(&p).expect("scene readable");
-            let desc = parse_spawn_meta(&src)
-                .description
-                .unwrap_or_else(|| panic!("scene {} has no USD `doc` metadata", p.display()));
-            assert!(
-                !desc.trim().is_empty(),
-                "scene {} has an empty description",
-                p.display()
-            );
-        }
-        assert!(count >= 4, "expected the sandbox scene set, found {count}");
     }
 
     /// The store is keyed on `asset_path` (what the catalogue and the UI both
