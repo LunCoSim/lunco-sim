@@ -8,12 +8,13 @@
 
 use bevy::prelude::*;
 use lunco_doc_bevy::DocumentRegistry;
-use lunco_usd::{ApplyUsdOp, UsdCommandsPlugin};
+use lunco_usd::commands::UsdCommandsPlugin;
 use lunco_usd_bevy::UsdBevyPlugin;
 use lunco_usd_bevy_core::read::read_primvar_vec3;
 use lunco_usd_bevy_core::{StageView, UsdStageAsset};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_compose::compose_file_to_stage;
+use lunco_usd_core::commands::ApplyUsdOp;
 use lunco_usd_core::document::UsdDocument;
 use lunco_usd_core::{LayerId, UsdDataExt, UsdOp};
 use lunco_usd_ui::{

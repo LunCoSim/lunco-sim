@@ -10,8 +10,8 @@ use lunco_core::{on_command, Command};
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_materials::{ParamSchema, ParamValue, ShaderLook};
 use lunco_render::{PbrLook, SurfaceAlpha};
-use lunco_usd::commands::ApplyUsdOp;
 use lunco_usd_bevy_scene::UsdPrimPath;
+use lunco_usd_core::commands::ApplyUsdOp;
 use lunco_usd_core::document::{LayerId, UsdDocument, UsdOp};
 
 /// One wheel-dynamics parameter — **the** single source of truth for it.
@@ -145,12 +145,9 @@ pub fn persist_wheel_to_runtime_layer(
     let Some(target) = api_registry.resolve(&global_id) else {
         return;
     };
-    let Some((doc, path)) = crate::doc_resolve::authorable_prim(
-        target,
-        &q_prim,
-        &usd_registry,
-        Some(&*workspace),
-    ) else {
+    let Some((doc, path)) =
+        crate::doc_resolve::authorable_prim(target, &q_prim, &usd_registry, Some(&*workspace))
+    else {
         return;
     };
 
@@ -166,7 +163,6 @@ pub fn persist_wheel_to_runtime_layer(
         },
     });
 }
-
 
 /// Set a property on a scene object at runtime (live override — not persisted
 /// to USD). One general command instead of many narrow ones; new properties
@@ -699,7 +695,6 @@ pub fn on_set_object_property(
         }
     }
 }
-
 
 /// Force-reload shader assets from disk so live WGSL edits apply without
 /// restarting the app. Bypasses the file watcher (unreliable in this build):

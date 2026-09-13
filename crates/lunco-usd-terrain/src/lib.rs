@@ -1560,7 +1560,7 @@ fn on_obstacle_spec_authored(
             }
         }
         if !ops.is_empty() {
-            commands.trigger(lunco_usd::commands::ApplyUsdOps {
+            commands.trigger(lunco_usd_core::commands::ApplyUsdOps {
                 doc_id: doc,
                 parent_gen: None,
                 label: "Terrain obstacle settings".to_owned(),

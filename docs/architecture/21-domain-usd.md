@@ -85,7 +85,9 @@ the referenced layer's `defaultPrim`; an explicit absolute target preserves a
 named source prim when the asset's composition or variants depend on it.
 Programmatic and UI edits go through the
 **`ApplyUsdOp { doc_id, parent_gen, op }`** or **`ApplyUsdOps { doc_id, parent_gen, label, ops }`** command
-(`commands.rs`), which returns a generation-ack; direct source mutation is out.
+(`lunco-usd-core/src/commands.rs`). The observers that apply those contracts to
+the document registry remain in `lunco-usd/src/commands.rs`; the commands return
+a generation-ack and direct source mutation is out.
 Multi-op intents use one change set. `AttachProgram` is the typed source-backed
 program authoring intent and lowers its complete source/port/wire contract to
 that same USD operation path. `UsdOp` implements

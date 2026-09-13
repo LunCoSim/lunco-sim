@@ -7,6 +7,7 @@
 
 pub mod attach;
 pub mod author;
+pub mod commands;
 pub mod document;
 pub mod edit_session;
 pub mod material;

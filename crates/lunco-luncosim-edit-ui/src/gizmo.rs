@@ -693,7 +693,7 @@ pub fn capture_gizmo_start(
 /// Finish or cancel the active gizmo transactions and restore their pre-drag
 /// state. Live transactions emit the existing
 /// [`lunco_scene_commands::commands::TransformEntity`] command; USD preview
-/// transactions emit one existing [`lunco_usd::commands::ApplyUsdOps`]
+/// transactions emit one existing [`lunco_usd_core::commands::ApplyUsdOps`]
 /// change set. Each owner keeps its authoritative persistence boundary.
 pub fn restore_gizmo_dynamic(
     gizmo_targets: Query<(&GizmoProxy, &GizmoTarget)>,
@@ -816,7 +816,7 @@ pub fn restore_gizmo_dynamic(
                         }
                     }
                     if !ops.is_empty() {
-                        commands.trigger(lunco_usd::commands::ApplyUsdOps {
+                        commands.trigger(lunco_usd_core::commands::ApplyUsdOps {
                             doc_id: *doc,
                             parent_gen: (*generation != 0).then_some(*generation),
                             label: "Edit USD transform".to_string(),

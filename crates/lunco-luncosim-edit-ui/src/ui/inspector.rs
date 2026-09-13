@@ -33,10 +33,10 @@ use lunco_scene_authoring::doc_resolve::{
     resolve_shader_parameter_usd_target,
 };
 use lunco_usd::commands::{
-    ApplyUsdOp, ApplyUsdOps, CommitUsdProposal, CreateUsdProposal, ReviewUsdProposal,
-    UsdProposalReviewAction,
+    CommitUsdProposal, CreateUsdProposal, ReviewUsdProposal, UsdProposalReviewAction,
 };
 use lunco_usd_bevy_scene::UsdPrimPath;
+use lunco_usd_core::commands::{ApplyUsdOp, ApplyUsdOps};
 use lunco_usd_core::document::{LayerId, UsdOp};
 use lunco_usd_core::edit_session::{UsdEditScope, UsdProposalId, UsdProposalState};
 
@@ -716,7 +716,7 @@ pub(crate) fn on_pbr_material_requested(trigger: On<PbrMaterialRequested>, mut c
         if request.ior_changed || fresh {
             set("inputs:ior", "float", format!("{:.3}", request.ior));
         }
-        world.trigger(lunco_usd::commands::ApplyUsdOps {
+        world.trigger(lunco_usd_core::commands::ApplyUsdOps {
             doc_id: doc,
             parent_gen: (generation != 0).then_some(generation),
             label: "Edit material".to_string(),
@@ -1598,7 +1598,7 @@ fn usd_preview_transform_section(
             value: scale,
         });
     }
-    ctx.trigger(lunco_usd::commands::ApplyUsdOps {
+    ctx.trigger(lunco_usd_core::commands::ApplyUsdOps {
         doc_id: preview.doc,
         parent_gen: (preview.generation != 0).then_some(preview.generation),
         label: "Edit USD transform".to_string(),
@@ -4133,7 +4133,7 @@ fn apply_usd_attribute_batch_change(
             value,
         })
         .collect();
-    world.trigger(lunco_usd::commands::ApplyUsdOps {
+    world.trigger(lunco_usd_core::commands::ApplyUsdOps {
         doc_id: doc,
         parent_gen: (generation != 0).then_some(generation),
         label: "Edit USD parameters".to_string(),

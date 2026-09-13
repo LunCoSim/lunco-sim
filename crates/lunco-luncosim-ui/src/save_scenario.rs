@@ -92,7 +92,7 @@ fn on_save_scenario(
         );
         return;
     };
-    commands.trigger(lunco_usd::ApplyUsdOps {
+    commands.trigger(lunco_usd_core::commands::ApplyUsdOps {
         doc_id: scene_doc,
         parent_gen: None,
         label: "Save scenario source".into(),
