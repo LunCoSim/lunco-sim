@@ -6,9 +6,19 @@
   "bin": {
     "lunco-mcp": "./src/index.js"
   },
+  "files": [
+    "README.md",
+    "mcp.json",
+    "src",
+    "scripts",
+    "skills"
+  ],
   "scripts": {
     "start": "node src/index.js",
-    "dev": "node --watch src/index.js"
+    "dev": "node --watch src/index.js",
+    "test": "node --test tests/*.test.mjs",
+    "prepack": "node scripts/prepare-package.mjs",
+    "postpack": "node scripts/cleanup-package.mjs"
   },
   "keywords": ["mcp", "lunco", "simulation", "modelica"],
   "author": "",

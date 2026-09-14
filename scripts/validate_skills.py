@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import tomllib
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -94,12 +95,64 @@ def validate(root: Path) -> list[str]:
         if not any(line.startswith("# ") for line in path.read_text(encoding="utf-8").splitlines()):
             errors.append(f"{path.relative_to(root)}: missing Markdown title")
 
+    manifest_path = skills_dir / "manifest.toml"
+    if not manifest_path.is_file():
+        errors.append("skills/manifest.toml is missing")
+    else:
+        try:
+            manifest = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
+        except tomllib.TOMLDecodeError as error:
+            errors.append(f"skills/manifest.toml: invalid TOML: {error}")
+            manifest = {}
+
+        entries = manifest.get("skills", [])
+        if not isinstance(entries, list):
+            errors.append("skills/manifest.toml: skills must be an array of tables")
+            entries = []
+        manifest_names: list[str] = []
+        required = manifest.get("contract", {}).get("required", [])
+        if not isinstance(required, list) or not required:
+            errors.append("skills/manifest.toml: contract.required must be non-empty")
+            required = ["name", "category", "primary_for", "defer_to", "evidence"]
+        for entry in entries:
+            if not isinstance(entry, dict):
+                errors.append("skills/manifest.toml: each skill entry must be a table")
+                continue
+            name = entry.get("name")
+            if not isinstance(name, str) or not name:
+                errors.append("skills/manifest.toml: skill entry is missing name")
+                continue
+            if name in manifest_names:
+                errors.append(f"skills/manifest.toml: duplicate skill {name!r}")
+            manifest_names.append(name)
+            for field in required:
+                if field not in entry or entry[field] in ("", [], None):
+                    errors.append(f"skills/manifest.toml: {name}: missing {field}")
+            for field in ("primary_for", "defer_to"):
+                values = entry.get(field, [])
+                if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
+                    errors.append(f"skills/manifest.toml: {name}: {field} must be a string array")
+            evidence = entry.get("evidence")
+            if isinstance(evidence, str) and not (root / evidence).exists():
+                errors.append(f"skills/manifest.toml: {name}: evidence path does not exist: {evidence}")
+            for target in entry.get("defer_to", []):
+                if target not in names:
+                    errors.append(f"skills/manifest.toml: {name}: unknown deferred skill {target!r}")
+        if set(manifest_names) != set(names):
+            missing = sorted(set(names) - set(manifest_names))
+            stale = sorted(set(manifest_names) - set(names))
+            if missing:
+                errors.append(f"skills/manifest.toml: missing entries: {', '.join(missing)}")
+            if stale:
+                errors.append(f"skills/manifest.toml: stale entries: {', '.join(stale)}")
+
     if readme.is_file():
-        indexed_targets = {
+        indexed_links = [
             local_link_path(link)
             for link in markdown_links(readme)
             if local_link_path(link) is not None
-        }
+        ]
+        indexed_targets = set(indexed_links)
         for name in sorted(names):
             if f"{name}/SKILL.md" not in indexed_targets:
                 errors.append(f"{name}: missing entry in skills/README.md")
@@ -137,7 +190,7 @@ def main() -> int:
         print(f"skill catalogue invalid: {len(errors)} error(s)", file=sys.stderr)
         return 1
     count = len(list((root / "skills").glob("*/SKILL.md")))
-    print(f"skill catalogue valid: {count} skills, frontmatter/index/links checked")
+    print(f"skill catalogue valid: {count} skills, frontmatter/index/links/manifest checked")
     return 0
 
 

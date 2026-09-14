@@ -147,11 +147,15 @@ authored verdict. A timer is not a physical acceptance condition.
 
 ## 5. Run and inspect the Twin
 
-Build the production executable once, then open the declared stage on an
-explicit free API port:
+Choose either an installed GitHub build or a fresh source-checkout build, then
+open the declared stage on an explicit free API port. An installed command on
+`PATH` is preferred; a source checkout should point at its freshly built
+production executable:
 
 ```bash
 export LUNCOSIM_BIN="${LUNCOSIM_BIN:-luncosim}"
+# Source-checkout alternative:
+# export LUNCOSIM_BIN="$PWD/target/debug/luncosim"
 "$LUNCOSIM_BIN" --api 4148 --scene /path/to/my-rover-twin/scene.usda
 ```
 
