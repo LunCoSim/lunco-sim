@@ -85,7 +85,7 @@ fn route_point_uses_annotation_material() {
     if dome == () || dome.ok == false || dome.attrs == () { return false; }
     let opacity = dome.attrs["primvars:displayOpacity"];
     dome.attrs["primvars:doNotCastShadows"] == true
-        && opacity != () && opacity.len() == 1 && opacity[0] == 0.08
+        && opacity != () && opacity.len() == 1 && (opacity[0] - 0.08).abs() < 0.000001
         && dome.attrs["lunco:surface:additive"] == true
         && annotation_shader_is_emissive(ROUTE_POINT + "/Looks/Dome_Mat/Surface")
 }

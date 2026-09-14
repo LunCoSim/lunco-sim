@@ -19,13 +19,20 @@ fixed-step physics/Modelica.
 For live route edits, Rhai owns the route policy and calls the generic typed USD
 operation command. The reusable `waypoint_editor` tool authors ordinary scene
 route points, uses a local `active=false` opinion when a point comes from a
-reference arc, and updates the disposable runtime ribbon from the committed
-USD route. The subject and route owner remain live: route edits do not rebuild
+reference arc, and updates the disposable runtime ribbon under the route scope
+from the committed USD route. Keeping the ribbon under that scope preserves
+the route points' USD parent frame. The subject and route owner remain live:
+route edits do not rebuild
 or reset their physics, Modelica state, pose, possession, or Rhai `this` state.
 The authored `inputs:enabled` value is only an initial policy; F changes the
 scenario's runtime state and must not write it back to USD. Do not implement
 this policy with a polling `on_tick` loop or move USD identity resolution,
 terrain sampling, collision events, or fixed-step steering into Rhai.
+When a source is hot-swapped, the program emits the generic typed
+`program.ready` event after `on_start`; one-shot UI or control actions wait for
+that lifecycle edge rather than relying on a timer. Sensor events may carry a
+nested collider; match the entrant through the generic `parent()` chain to the
+authored subject instead of adding a route-specific child relationship.
 
 Reusable authored programs are managed through the generic Rhai
 `program_editor` tool. It lists `LunCoProgramAPI` children, selects or opens a

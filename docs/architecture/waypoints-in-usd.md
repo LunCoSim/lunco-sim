@@ -1,7 +1,7 @@
 # Routes and route points in USD
 
 Route geometry and route execution are scene-level concerns. A route is an
-ordinary USD scope containing reusable route-point prims and a sibling Rhai
+ordinary USD scope containing reusable route-point prims and a child Rhai
 program. The subject is an authored relationship on the program, so a vehicle
 does not own a waypoint list and the Rust core does not know about vehicles or
 autopilot programs.
@@ -49,21 +49,29 @@ The program reads its own composed USD parent, enumerates point children in
 authored order, resolves their poses, and reads `inputs:subject`. It does not
 copy coordinates into Rust or into the subject. Multiple routes can coexist by
 using distinct scopes and subject relationships; enablement is a property of
-each program instance.
+each program instance. A program emits the generic typed `program.ready` event
+after its `on_start` hook has completed. Runtime controls that send a one-shot
+gesture or semantic edge after a source switch wait for that event instead of
+using a fixed delay or racing the hot-reload boundary.
 
 The editor's route tool derives a ribbon from the same point children after the
 canonical USD projection has settled. It references the reusable
 [`assets/markers/route_ribbon.usda`](../../assets/markers/route_ribbon.usda)
-asset and writes only the generated `BasisCurves` opinions to the document's
-`@runtime@` layer. The Twin therefore contains no editor ribbon prim: removing
-the runtime view leaves the authored route unchanged, and another Twin can use
-the same tool without importing a Twin-specific presentation object.
+asset as a runtime child of the route scope and writes only the generated
+`BasisCurves` opinions to the document's `@runtime@` layer. Keeping the view
+under the route is a frame invariant: the ribbon anchor and every route point
+are expressed in the same USD parent space, so a transformed scene scope
+cannot put the overlay in a different frame. The Twin therefore contains no
+editor ribbon prim: removing the runtime view leaves the authored route
+unchanged, and another Twin can use the same tool without importing a
+Twin-specific presentation object.
 
 ## Progression
 
 The generic sensor emits `enter:<zone>` and `exit:<zone>` events. The route
-program accepts an enter event only when its source is the current subject and
-the zone is the current point. It then emits the authored route-level
+program accepts an enter event when its payload is the current subject or a
+registered descendant collider in that subject's generic parent chain, and the
+zone is the current point. It then emits the authored route-level
 `route_point_reached` event for mission policy and advances its local route
 cursor. Physics reports the sensor event; it does not publish a route-specific
 “target reached” fact and it does not decide mission progression.
@@ -78,6 +86,9 @@ are runtime state in the Rhai scenario instance. The authored
 back when the operator presses F. If a point edit briefly leaves a target
 unprojected, the task waits for the generic projection to settle; it does not
 persist runtime state into USD or emit a false stop.
+The program retains the last resolved subject entity while a structural USD
+edit briefly reprojects its relationship, so a one-shot control edge or
+safe-stop action cannot be lost to an unrelated point edit.
 
 ## Presentation
 

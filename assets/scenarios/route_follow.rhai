@@ -55,6 +55,22 @@ fn route_subject(me) {
     route_subject_state(me).subject
 }
 
+fn route_subject_for(me, state) {
+    let current = route_subject(me);
+    if current >= 0 {
+        state.subject_id = current;
+        return current;
+    }
+    // A structural USD edit can briefly rebuild the composed relationship
+    // before its replacement is projected. Keep the last canonical entity
+    // identity for one-shot events and control cleanup; do not lose an input
+    // merely because an unrelated route-point edit crossed that boundary.
+    if state.subject_id != () && state.subject_id >= 0 {
+        return state.subject_id;
+    }
+    -1
+}
+
 fn route_subject_state(me) {
     let route = route_path(me);
     let doc = route_document(me);
@@ -149,9 +165,21 @@ fn current_zone(me, state) {
     result.attrs["lunco:triggerZone"]
 }
 
+fn route_entrant_matches(subject, entrant) {
+    if entrant == () || entrant < 0 { return false; }
+    let current = entrant;
+    for depth in 0..32 {
+        if current == subject { return true; }
+        let next = parent(current);
+        if next == () || next < 0 { return false; }
+        current = next;
+    }
+    false
+}
+
 fn drive_current_point(me, state) {
     let subject_state = route_subject_state(me);
-    let subject = subject_state.subject;
+    let subject = route_subject_for(me, state);
     if !state.enabled {
         if subject >= 0 { brake(subject); }
         return;
@@ -316,7 +344,7 @@ fn advance_on_sensor(me, evt, state) {
     // Discrete control is a semantic input edge. The controller publishes it
     // for every authored control surface, even when no port named `action`
     // exists; this program owns the route-specific meaning of F.
-    if evt.name == "intent.edge" && evt.source == route_subject(me)
+    if evt.name == "intent.edge" && evt.source == route_subject_for(me, state)
         && evt.value != ()
         && evt.value["intent"] == "action"
         && (evt.value["edge"] == "pressed" || evt.value["edge"] == "pulse") {
@@ -327,8 +355,12 @@ fn advance_on_sensor(me, evt, state) {
     }
     if !state.enabled { return (); }
     if !evt.name.starts_with("enter:") { return; }
-    let subject = route_subject(me);
-    if subject < 0 || evt.value != subject { return; }
+    let subject = route_subject_for(me, state);
+    // Avian sensors report the collider that crossed the zone. A nested body
+    // is still an entrant of the authored route subject; follow the generic
+    // ECS parent chain instead of requiring every collider to be duplicated
+    // as a route-specific relationship.
+    if subject < 0 || !route_entrant_matches(subject, evt.value) { return; }
     let cursor = current_point_info(me, state);
     let point = cursor.path;
     if point == () { return; }
@@ -341,8 +373,8 @@ fn advance_on_sensor(me, evt, state) {
     ()
 }
 
-fn start_route(me) {
-    let subject = route_subject(me);
+fn start_route(me, state) {
+    let subject = route_subject_for(me, state);
     if subject < 0 {
         return route_failure("the route has no valid subject");
     }
@@ -359,6 +391,7 @@ fn start_route(me) {
 fn on_start(me) {
     this.route_index = 0;
     this.current_path = ();
+    this.subject_id = route_subject(me);
     this.enabled = route_enabled_from_usd(me);
     this.route_revision = ();
     this.route_error = "";
@@ -371,6 +404,13 @@ fn on_start(me) {
     } else {
         this.route_revision = view.revision;
     }
+    // Hot-swapped programs expose their lifecycle boundary on the same typed
+    // event bus consumed by the Twin. UI/tests can wait for this authored
+    // readiness edge before sending a one-shot command or pointer gesture.
+    emit("program.ready", #{
+        path: route_path(me),
+        generation: route_revision(me),
+    });
 }
 
 fn on_event(me, evt) {
@@ -383,7 +423,7 @@ fn on_event(me, evt) {
     if transition == () { return; }
     if transition.kind == "toggle" {
         if transition.enabled {
-            let started = start_route(me);
+            let started = start_route(me, this);
             if started.ok == true {
                 this.enabled = true;
                 this.route_index = 0;
@@ -396,12 +436,12 @@ fn on_event(me, evt) {
             }
         } else {
             this.enabled = false;
-            let subject = route_subject(me);
+            let subject = route_subject_for(me, this);
             if subject >= 0 { brake(subject); }
             emit("route_stopped");
         }
     } else if transition.kind == "start" {
-        let started = start_route(me);
+        let started = start_route(me, this);
         if started.ok == true {
             this.enabled = true;
             this.route_index = 0;
@@ -453,6 +493,6 @@ fn task(me) {
 }
 
 fn on_stop(me) {
-    let subject = route_subject(me);
+    let subject = route_subject_for(me, this);
     if subject >= 0 { brake(subject); }
 }
