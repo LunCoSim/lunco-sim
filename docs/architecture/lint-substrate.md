@@ -350,17 +350,12 @@ of a link inside a link attached to nothing.
 
 ## What keeps it honest
 
-- `crates/lunco-scene-validation/tests/shipped_assets_lint_clean.rs` — every
-  shipped vessel/scene/mission/tutorial must be lint-clean, **and** the
-  deliberately broken scene must still fail through the same path. "All clean"
-  and "the rules never ran" are the same green square without that second test.
-  `assets/components/` is deliberately out of scope: an overlay fragment
-  (`physical_drivetrain.usda` is nothing but joints) cannot answer for
-  joint targets that arrive with the reference arc. Components are covered
-  through the vessels that compose them.
 - `assets/scenes/tests/lint_selftest.usda` + `scenarios/tests/lint_selftest.rhai` —
   the chain end to end (facts → hook → rules → report → query), including the
-  false-positive guard that a correctly jointed nested body stays silent.
+  false-positive guard that a correctly jointed nested body stays silent. This
+  authored scenario is the executable lint gate; its negative USD fixture and
+  Rhai verdict replace a Rust test that walked assets with `std::fs` and called
+  preflight directly.
 - `assets/scenes/tests/connection_preflight.usda` +
   `scenarios/tests/connection_preflight.rhai` — a small standard-USD fixture
   proving terminal command rejection, authored source diagnostics, and the

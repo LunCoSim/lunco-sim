@@ -2,7 +2,6 @@
 (
     defaultPrim = "LintSelftest"
     upAxis = "Y"
-    metersPerUnit = 1
 )
 
 # ── The linter, linted ───────────────────────────────────────────────────────
@@ -33,6 +32,7 @@
 #                Authored mass/inertia cannot make a negative stiffness physically valid.
 #   BadGear      malformed PhysxPhysicsGearJoint drive values → invalid-gear-drive
 #                The USD-sim reader refuses the coupling; policy must surface it.
+#   stage metadata omitted                         → stage-meters-per-unit-missing
 #   MissingCollisionAPI  collisionEnabled=true without a collision schema
 #                The physics reader ignores the prim, so the intent must fail lint.
 #   Vehicle/LooseMotor  visible vehicle geometry with no collision owner or

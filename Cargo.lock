@@ -8200,7 +8200,6 @@ dependencies = [
  "lunco-lint",
  "lunco-materials",
  "lunco-modelica-ast",
- "lunco-physics",
  "lunco-sysml-ast",
  "lunco-tools",
  "lunco-twin",
