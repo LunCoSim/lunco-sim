@@ -97,7 +97,8 @@ impl ProcessControl {
 ///   `_CLRGRAD` TIFFs) and write an 8-bit PNG at `output` — the file a
 ///   terrain Material network's `asset inputs:<role>_map` points at.
 ///   Grayscale sources (NAC orthos are radiance floats) get a 1–99
-///   percentile stretch; RGB sources crop as-is.
+///   percentile stretch in linear contrast space, then sRGB-encode the result;
+///   RGB sources crop as-is.
 /// - `kind = "normalmap"`: crop + resample like `dem`, then derive a
 ///   world-space normal map PNG from the heights (RGB = `n*0.5+0.5`,
 ///   the encoding `terrain_layered.wgsl` decodes — same convention as
@@ -381,7 +382,7 @@ fn process_asset_to(
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,
                         format!("Unsupported source format: .{}", ext),
-                    ))
+                    ));
                 }
             }
         }
@@ -393,7 +394,7 @@ fn process_asset_to(
                      \"map\", or \"normalmap\")",
                     other
                 ),
-            ))
+            ));
         }
     }
 
@@ -527,6 +528,9 @@ fn commit_staged_output(
 /// `process_normalmap` / `resolve_roi` / `resample_roi_bilinear` and did not bump
 /// this, your fix does not exist for anyone with a warm cache — including CI.
 ///
+/// v6 (2026-09-14): grayscale `map` contrast is sRGB-encoded before writing the
+/// PNG, matching the renderer's sRGB image loader; the sidecar mean remains in
+/// the pre-encoded linear contrast domain.
 /// v5 (2026-08-27): every `map` output writes a normaliser sidecar; RGB maps use
 /// the identity value `1.0`, while grayscale maps retain their measured mean.
 /// v4 (2026-07-27): normalmap fills voids before differencing and encodes a
@@ -537,7 +541,7 @@ fn commit_staged_output(
 /// v2 (2026-07-27): ROI clamps to the valid-data bounding box, and a crop with
 /// >2% nodata fails the bake instead of shipping (`reject_if_mostly_nodata`).
 #[cfg(not(target_arch = "wasm32"))]
-const PIPELINE_VERSION: u32 = 5;
+const PIPELINE_VERSION: u32 = 6;
 
 /// Where the bake stamp lives: inside the output folder for folder outputs
 /// (`dem`), beside the file for file outputs. Both land under the twin's
@@ -1371,9 +1375,12 @@ fn resample_roi_bilinear(
 ///
 /// RGB sources (LROC `_SLOPE`/`_CLRGRAD` colour TIFFs) crop as-is. Grayscale
 /// sources (`_SHADE`, ortho `.IMG` radiance) get a 1–99 percentile stretch to
-/// 8 bits — NAC radiance floats would otherwise land in a few gray levels.
+/// a normalized linear contrast signal — NAC radiance floats would otherwise
+/// land in a few gray levels — then that signal is encoded as sRGB bytes.
 /// Output is always RGB PNG: Bevy tags 8-bit PNGs sRGB, and an R-only gray
-/// would sample red in the layered shader's albedo slot.
+/// would sample red in the layered shader's albedo slot. Encoding the stretched
+/// signal here is required because the runtime loader correctly decodes the
+/// authored PNG back to linear samples.
 #[cfg(not(target_arch = "wasm32"))]
 fn process_map(
     source: &Path,
@@ -1506,6 +1513,8 @@ fn process_map(
     };
     // Accumulated over the MEASURED samples only — nodata bakes to white, and
     // folding that into the mean would bias the gain by the size of the margin.
+    // Keep the sidecar in the normalized linear domain; the PNG bytes below
+    // are sRGB-encoded for the runtime image loader.
     let mut sum_measured = 0.0f64;
     let mut n_measured = 0.0f64;
     let mut png = image::RgbImage::new(out_n as u32, out_n as u32);
@@ -1523,8 +1532,9 @@ fn process_map(
         // non-finites first, so today the guard earns its keep on the `0.0` case —
         // but it must survive that resampler being fixed to propagate NaN.
         let v = if is_measurement(gray[i]) {
-            let s = (((gray[i] - lo) / (hi - lo)).clamp(0.0, 1.0) * 255.0).round() as u8;
-            sum_measured += s as f64 / 255.0;
+            let contrast = ((gray[i] - lo) / (hi - lo)).clamp(0.0, 1.0);
+            let s = encode_map_contrast_to_srgb_u8(contrast);
+            sum_measured += contrast;
             n_measured += 1.0;
             s
         } else {
@@ -1536,16 +1546,33 @@ fn process_map(
         .map_err(|e| io_err(format!("writing map PNG: {e}")))?;
 
     // Keep the measured mean beside the map for bake inspection. The PNG is a
-    // percentile-stretched contrast map; the runtime's shared
+    // percentile-stretched linear contrast map, encoded as sRGB in the PNG;
+    // the runtime's shared
     // `orthophoto_factor` maps it to bounded albedo tone and does not consume a
     // per-site gain from this sidecar.
     if n_measured > 0.0 {
         let mean = sum_measured / n_measured;
         let sidecar = output_path.with_extension("mean");
         std::fs::write(&sidecar, format!("{mean:.6}\n"))?;
-        println!("    map mean {mean:.4} (encoded; runtime uses bounded orthophoto tone)",);
+        println!("    map mean {mean:.4} (linear contrast; PNG is sRGB-encoded)",);
     }
     Ok(())
+}
+
+/// Encode a normalized grayscale map signal for an 8-bit PNG loaded as sRGB.
+/// The stretch is a linear contrast operation, while PNG's 8-bit colour
+/// contract is nonlinear. Keeping the conversion at the bake boundary means
+/// the runtime receives the same normalized contrast value it was authored
+/// from after Bevy's sRGB decode.
+#[cfg(not(target_arch = "wasm32"))]
+fn encode_map_contrast_to_srgb_u8(value: f64) -> u8 {
+    let value = value.clamp(0.0, 1.0);
+    let encoded = if value <= 0.003_130_8 {
+        value * 12.92
+    } else {
+        1.055 * value.powf(1.0 / 2.4) - 0.055
+    };
+    (encoded * 255.0).round() as u8
 }
 
 /// `kind = "normalmap"` pipeline — derive a DEM-local ENU normal map from the
@@ -2169,12 +2196,15 @@ mod tests {
 
         let bake = |v: f64| -> u8 {
             if v.is_finite() {
-                (((v - lo) / (hi - lo)).clamp(0.0, 1.0) * 255.0).round() as u8
+                encode_map_contrast_to_srgb_u8((v - lo) / (hi - lo))
             } else {
                 255
             }
         };
         assert_eq!(bake(f64::NAN), 255, "nodata is neutral (x1), never 0");
+        assert_eq!(encode_map_contrast_to_srgb_u8(0.0), 0);
+        assert!((187..=189).contains(&encode_map_contrast_to_srgb_u8(0.5)));
+        assert_eq!(encode_map_contrast_to_srgb_u8(1.0), 255);
         // Real samples must actually use the range, not collapse to one level.
         let lo_px = bake(-1900.0);
         let hi_px = bake(-1900.0 + 11.0 * 0.5);

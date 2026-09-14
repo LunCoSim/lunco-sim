@@ -38,9 +38,11 @@ diagnostic replacement:
    anti-aliased detail, roughness, and sun visibility. Streamed and static
    delivery may retain different vertex stages, but they must not choose
    different physical surface laws or distance-dependent colour/normal rules.
-   When USD supplies an albedo raster, the shared bounded orthophoto transfer
-   is the colour source at its authored weight; the static layered path scales
-   its procedural dust/mottle colour by `1 - weight_albedo`. Relief normals,
+   When USD supplies a grayscale albedo raster, the asset pipeline percentile-
+   stretches its linear contrast, sRGB-encodes the PNG, and the texture loader
+   decodes it back to linear before the shared bounded orthophoto transfer
+   applies it at its authored weight. The static layered path scales its
+   procedural dust/mottle colour by `1 - weight_albedo`. Relief normals,
    roughness, ambient occlusion, and photometry remain independent, so camera
    footprint or CDLOD replacement cannot introduce unrelated colour changes.
 2. `terrain_debug.wgsl` remains the only diagnostic replacement. LOD depth and
@@ -66,9 +68,13 @@ mesh-accurate near field and carries dynamic-object shadows onto the surface;
 the heightfield cache or march fades in outside the authored CSM range. The
 static terrain shaders use `csm_far` as that handoff boundary, so the two
 systems do not multiply the same terrain self-shadow in their overlap. Streamed
-tiles use the same receiver contract but are `NotShadowCaster` because their
-resident tile set is too large to add to every cascade; their horizon cache is
-their terrain self-shadow source at all distances.
+tiles always remain directional-shadow receivers, so dynamic-object shadows
+land on the surface. Their terrain self-shadow caster state follows the active
+producer: an active horizon cache marks them `NotShadowCaster` because the
+resident tile set is too large to add to every cascade, while an inactive or
+absent cache leaves them as directional-cascade casters. Thus a scene that
+disables horizon shadows uses CSM terrain shadows instead of silently losing
+terrain shadow casting.
 
 ### Distance and evidence contract
 

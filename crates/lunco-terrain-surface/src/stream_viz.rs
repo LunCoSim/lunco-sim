@@ -1429,9 +1429,11 @@ pub struct PendingTileBakes(HashMap<QuadCoord, (u32, Task<BakedTile>)>);
 
 /// Terrain self-shadow wiring for a STREAMED terrain's tiles: the pre-baked R8
 /// sun-visibility texture from `lunco-environment`'s horizon solution. The
-/// cache owns terrain-on-terrain occlusion at every distance; streamed tiles
-/// remain directional-shadow receivers so dynamic-object shadows land on the
-/// surface, while the cascade does not redraw the whole tile set as casters.
+/// When the cache is active it owns terrain-on-terrain occlusion at every
+/// distance; streamed tiles remain directional-shadow receivers so
+/// dynamic-object shadows land on the surface, while the cascade does not
+/// redraw the whole tile set as casters. When it is inactive, the directional
+/// cascade remains the terrain self-shadow producer.
 ///
 /// Written by the app glue (which can see both `HorizonShadowCache` and this
 /// crate); consumed by tile materials. `on == 0` disables sampling without
@@ -1745,7 +1747,7 @@ fn spawn_tile(
     if overlay.mode > 0.5 {
         tile.insert(TerrainDiagnosticTile);
     }
-    enforce_streamed_shadow_ownership(&mut tile);
+    enforce_streamed_shadow_ownership(&mut tile, shadow.is_some_and(|cache| cache.on > 0.5));
     tile.id()
 }
 
@@ -1754,15 +1756,23 @@ fn spawn_tile(
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub(crate) struct TerrainDiagnosticTile;
 
-/// Establish the one shadow ownership split for a streamed terrain tile.
+/// Establish the shadow ownership split for a streamed terrain tile.
 ///
-/// Terrain self-shadow is sampled from the DEM horizon cache, so the mesh must
-/// not cast a duplicate into the directional cascade. It remains a CSM
-/// receiver so dynamic objects (rover, rocks, equipment) can cast onto the
-/// surface. Keeping both operations here prevents initial spawn and late cache
-/// binding from drifting into different contracts again.
-fn enforce_streamed_shadow_ownership(tile: &mut EntityCommands<'_>) {
-    tile.try_insert(bevy::light::NotShadowCaster);
+/// The active terrain self-shadow producer is authoritative:
+/// - an active horizon cache owns terrain-on-terrain visibility, so the tile
+///   must not cast a duplicate into the directional cascade;
+/// - without an active cache, the directional cascade owns terrain shadows and
+///   the tile must remain a caster.
+///
+/// In both modes the tile remains a shadow receiver, so dynamic objects (the
+/// rover, rocks, and equipment) can cast onto the surface. Applying this at
+/// spawn and cache rebind keeps the two lifecycle paths on one contract.
+fn enforce_streamed_shadow_ownership(tile: &mut EntityCommands<'_>, cache_on: bool) {
+    if cache_on {
+        tile.try_insert(bevy::light::NotShadowCaster);
+    } else {
+        tile.try_remove::<bevy::light::NotShadowCaster>();
+    }
     tile.try_remove::<bevy::light::NotShadowReceiver>();
 }
 
@@ -3275,7 +3285,7 @@ pub(crate) fn bind_shadow_cache_to_tiles(
             // Keep already-resident tiles on the same terrain self-shadow
             // ownership contract as newly spawned tiles. They remain ordinary
             // CSM receivers for dynamic-object shadows.
-            enforce_streamed_shadow_ownership(&mut tile);
+            enforce_streamed_shadow_ownership(&mut tile, cache.on > 0.5);
             if let Ok((mut look, diagnostic)) = looks.get_mut(entity) {
                 if diagnostic.is_none() {
                     apply_shadow_cache_to_look(&mut look, cache);
@@ -3792,6 +3802,47 @@ mod draw_partition_tests {
             look.values.get("shadow_cache_on"),
             Some(&ParamValue::F32(1.0))
         );
+    }
+
+    #[test]
+    fn disabled_shadow_cache_restores_terrain_caster_for_csm() {
+        let mut app = App::new();
+        app.add_systems(PostUpdate, bind_shadow_cache_to_tiles);
+
+        let tile = app
+            .world_mut()
+            .spawn((
+                ShaderLook::new("shaders/terrain_geomorph.wgsl"),
+                bevy::light::NotShadowCaster,
+                bevy::light::NotShadowReceiver,
+            ))
+            .id();
+        let mut tiles = LodTiles::default();
+        tiles.tiles.insert(
+            QuadCoord::ROOT,
+            TileSlot {
+                entity: tile,
+                gen: 0,
+                morph_end: f32::INFINITY,
+                drawn: true,
+                ready: true,
+                stitch_edges: [0.0; 4],
+            },
+        );
+        app.world_mut().spawn((
+            TerrainLodViz,
+            tiles,
+            TileShadowCache {
+                image: Handle::<Image>::default(),
+                on: 0.0,
+            },
+        ));
+
+        app.update();
+
+        let tile_ref = app.world().entity(tile);
+        assert!(!tile_ref.contains::<bevy::light::NotShadowCaster>());
+        assert!(!tile_ref.contains::<bevy::light::NotShadowReceiver>());
     }
 
     #[test]
