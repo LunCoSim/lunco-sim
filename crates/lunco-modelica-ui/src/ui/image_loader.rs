@@ -14,7 +14,7 @@
 //! filesystem path under [`lunco_assets_core::msl_dir`] (the on-disk MSL
 //! tree) and hands the bytes off to egui's cached decoder.
 //!
-//! Non-`modelica://` URIs are left to the other loaders installed by
+//! Non-`modelica://` URIs are left to the raster loader installed by
 //! [`egui_extras::install_image_loaders`] — this one returns
 //! `LoadError::NotSupported` for anything it doesn't handle.
 //!

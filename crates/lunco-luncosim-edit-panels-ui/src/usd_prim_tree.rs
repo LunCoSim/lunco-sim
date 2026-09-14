@@ -27,11 +27,11 @@ use lunco_render::SceneCamera;
 use lunco_usd_bevy_camera::camera_switch::camera_display_labels;
 use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdRead, UsdStageAsset};
 use lunco_usd_bevy_scene::UsdPrimPath;
-use lunco_usd_ui::viewport::{UsdPreviewId, UsdViewportState};
+use lunco_usd_viewport_ui::{UsdPreviewId, UsdViewportState};
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 use openusd::sdf::Path as SdfPath;
 
-pub const USD_PRIM_TREE_PANEL_ID: PanelId = PanelId("usd_prim_tree");
+const USD_PRIM_TREE_PANEL_ID: PanelId = PanelId("usd_prim_tree");
 
 /// Tree-node identity: the composed USD prim path in one preview lease.
 /// Document scope comes from [`UsdViewportState`], so two open files can
@@ -120,7 +120,7 @@ pub fn produce_usd_prim_tree(
         let mut entity_of: HashMap<NodeKey, Entity> = HashMap::new();
         for (e, p, _) in q.iter() {
             if p.stage_handle.id() == stage_id
-                && crate::ui::is_editor_preview_entity(e, preview_root, &q_parents)
+                && lunco_luncosim_edit_ui::ui::is_editor_preview_entity(e, preview_root, &q_parents)
             {
                 entity_of.insert(p.path.clone(), e);
             }
@@ -131,7 +131,11 @@ pub fn produce_usd_prim_tree(
             .filter(|(entity, path, is_camera)| {
                 *is_camera
                     && path.stage_handle.id() == stage_id
-                    && crate::ui::is_editor_preview_entity(*entity, preview_root, &q_parents)
+                    && lunco_luncosim_edit_ui::ui::is_editor_preview_entity(
+                        *entity,
+                        preview_root,
+                        &q_parents,
+                    )
             })
             .map(|(entity, path, _)| (entity, path.path.clone()))
             .collect();
@@ -366,9 +370,9 @@ fn prim_tree_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
 
     // Route selection through the shared `apply_selection` (keyed by Entity).
     if let Some(entity) = to_select {
-        ctx.trigger(crate::selection::SelectEntityTarget {
+        ctx.trigger(lunco_luncosim_edit_ui::selection::SelectEntityTarget {
             target: entity,
-            intent: crate::selection::SelectionIntent::Replace,
+            intent: lunco_luncosim_edit_ui::selection::SelectionIntent::Replace,
         });
     }
 }

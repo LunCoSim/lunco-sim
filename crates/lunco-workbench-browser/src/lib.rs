@@ -1,10 +1,10 @@
 //! Twin and Files browser panels for the LunCoSim workbench.
 //!
 //! The concrete workbench shell owns docking, source editing, and viewport
-//! presentation. This package owns the reusable browser feature and its
-//! asset-backed dataset controls. Keeping the feature separate means hosts
-//! that only need the shell do not link the provisioning and processing
-//! closure from `lunco-assets`.
+//! presentation. This package owns the reusable browser feature. Dataset
+//! controls are provided by the optional `lunco-workbench-datasets-ui`
+//! package so hosts that only need browsing do not link the provisioning and
+//! processing closure from `lunco-assets`.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

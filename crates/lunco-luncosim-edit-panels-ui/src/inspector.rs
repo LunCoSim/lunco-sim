@@ -474,7 +474,7 @@ fn preview_authoring_context(
     entity: Entity,
 ) -> Option<(lunco_doc::DocumentId, LayerId, u64)> {
     world
-        .resource::<lunco_usd_ui::viewport::UsdViewportState>()
+        .resource::<lunco_usd_viewport_ui::UsdViewportState>()
         .sessions()
         .filter(|session| session.projection_ready())
         .find_map(|session| {
@@ -1337,7 +1337,7 @@ pub fn delete_selected_on_intent(
 /// review state; it does not infer a document from an ECS entity.
 fn usd_editor_session_context(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     let Some((preview, doc, edit_target, projected_generation, projection_ready)) = ctx
-        .resource::<lunco_usd_ui::viewport::UsdViewportState>()
+        .resource::<lunco_usd_viewport_ui::UsdViewportState>()
         .and_then(|viewport| {
             viewport.focused_session().map(|session| {
                 (
@@ -1431,7 +1431,7 @@ fn focused_preview_transform_context(
     entity: Entity,
 ) -> Option<PreviewTransformContext> {
     let prim = ctx.get::<UsdPrimPath>(entity)?;
-    let viewport = ctx.resource::<lunco_usd_ui::viewport::UsdViewportState>()?;
+    let viewport = ctx.resource::<lunco_usd_viewport_ui::UsdViewportState>()?;
     let session = viewport.focused_session()?;
     if !session.projection_ready() {
         return None;
@@ -1675,8 +1675,8 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
     // Authored USD Physics joint facts are distinct from the live joint
     // setpoint readout below. The editor writes bodies, frames, limits, and
     // drives through the same journaled USD operation surface as Rhai/API.
-    crate::ui::usd_joint::authored_joint_section(ui, ctx, entity);
-    crate::ui::usd_animation::authored_animation_section(ui, ctx, entity);
+    crate::usd_joint::authored_joint_section(ui, ctx, entity);
+    crate::usd_animation::authored_animation_section(ui, ctx, entity);
 
     // ── Transform component ──────────────────────────────────────
     // A USD preview has no live entity identity or physics body. Its
@@ -1821,13 +1821,13 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
     let parts = editable_parts(ctx, entity);
     if !parts.is_empty() {
         let stored = ctx
-            .resource::<crate::InspectorTarget>()
+            .resource::<lunco_luncosim_edit_ui::InspectorTarget>()
             .and_then(|t| t.part)
             .filter(|p| parts.iter().any(|(e, _)| e == p));
         let mut target = stored.or_else(|| default_part(ctx, &parts));
         if stored.is_none() {
             if let Some(t) = target {
-                ctx.resource_scope::<crate::InspectorTarget, _>(|_, target| {
+                ctx.resource_scope::<lunco_luncosim_edit_ui::InspectorTarget, _>(|_, target| {
                     target.part = Some(t);
                 });
             }
@@ -1981,21 +1981,21 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
     // set (see `produce_usd_param_view`), else at the primary. Render whenever
     // the view belongs to this inspector context — primary or its drill.
     let part = ctx
-        .resource::<crate::InspectorTarget>()
+        .resource::<lunco_luncosim_edit_ui::InspectorTarget>()
         .and_then(|t| t.part);
     let (preview, doc, edit_target, target, path, generation, kind, params): (
-        lunco_usd_ui::viewport::UsdPreviewId,
+        lunco_usd_viewport_ui::UsdPreviewId,
         lunco_doc::DocumentId,
         LayerId,
         Entity,
         String,
         u64,
         Option<String>,
-        Vec<crate::ui::usd_params::UsdParam>,
+        Vec<crate::usd_params::UsdParam>,
     ) = match ctx
-        .resource::<lunco_usd_ui::viewport::UsdViewportState>()
+        .resource::<lunco_usd_viewport_ui::UsdViewportState>()
         .and_then(|viewport| {
-            ctx.resource::<crate::ui::usd_params::UsdParamView>()
+            ctx.resource::<crate::usd_params::UsdParamView>()
                 .and_then(|views| views.focused(viewport))
         }) {
         Some(v)
@@ -2052,9 +2052,11 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
                 };
                 ui.label(egui::RichText::new(format!("part: {part_name}")).italics());
                 if ui.small_button("⏶ back to root").clicked() {
-                    ctx.resource_scope::<crate::InspectorTarget, _>(|_, target| {
-                        target.part = None;
-                    });
+                    ctx.resource_scope::<lunco_luncosim_edit_ui::InspectorTarget, _>(
+                        |_, target| {
+                            target.part = None;
+                        },
+                    );
                 }
             });
             ui.separator();
@@ -2074,9 +2076,9 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
             None;
         let mut cancel = false;
         let mut proposal_action: Option<(UsdProposalId, bool)> = None;
-        ctx.resource_scope::<crate::ui::usd_params::UsdParamDrafts, _>(|_, drafts| {
+        ctx.resource_scope::<crate::usd_params::UsdParamDrafts, _>(|_, drafts| {
             let draft = drafts.entries.entry(draft_key.clone()).or_insert_with(|| {
-                crate::ui::usd_params::UsdParamDraft {
+                crate::usd_params::UsdParamDraft {
                     generation,
                     values: params
                         .iter()
@@ -2263,11 +2265,11 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
                     edits,
                 });
             }
-            ctx.resource_scope::<crate::ui::usd_params::UsdParamDrafts, _>(|_, drafts| {
+            ctx.resource_scope::<crate::usd_params::UsdParamDrafts, _>(|_, drafts| {
                 drafts.entries.remove(&draft_key);
             });
         } else if cancel {
-            ctx.resource_scope::<crate::ui::usd_params::UsdParamDrafts, _>(|_, drafts| {
+            ctx.resource_scope::<crate::usd_params::UsdParamDrafts, _>(|_, drafts| {
                 drafts.entries.remove(&draft_key);
             });
         }
@@ -2295,7 +2297,7 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
                     parent_gen: generation,
                     ops,
                 });
-                ctx.resource_scope::<crate::ui::usd_params::UsdParamDrafts, _>(|_, drafts| {
+                ctx.resource_scope::<crate::usd_params::UsdParamDrafts, _>(|_, drafts| {
                     drafts.entries.remove(&draft_key);
                 });
             }
@@ -2315,7 +2317,7 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
 }
 
 /// The ⎇ Variants section — one row per variant set the selected prim ships,
-/// from the [`UsdVariantView`](crate::ui::usd_variants::UsdVariantView)
+/// from the [`UsdVariantView`](crate::usd_variants::UsdVariantView)
 /// view-model. Picking an option dispatches
 /// [`UsdOp::SetVariantSelection`](lunco_usd_core::document::UsdOp), so it journals,
 /// replicates and undoes like every other authoring edit.
@@ -2328,9 +2330,9 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
 /// identical opinion, and each dispatch costs a whole-subtree rebuild.
 fn usd_variants_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
     let (prim_path, sets) = match ctx
-        .resource::<lunco_usd_ui::viewport::UsdViewportState>()
+        .resource::<lunco_usd_viewport_ui::UsdViewportState>()
         .and_then(|viewport| {
-            ctx.resource::<crate::ui::usd_variants::UsdVariantView>()
+            ctx.resource::<crate::usd_variants::UsdVariantView>()
                 .and_then(|views| views.focused(viewport))
         }) {
         Some(v) if v.entity == Some(entity) && !v.sets.is_empty() => {
@@ -2407,13 +2409,13 @@ fn attach_joint_from(
 /// plug frame, `from_mount` it onto the socket, and reference + joint it in via
 /// `AttachComponent`.
 ///
-/// Reads the pre-resolved [`UsdMountView`](crate::ui::usd_mount::UsdMountView) (the
+/// Reads the pre-resolved [`UsdMountView`](crate::usd_mount::UsdMountView) (the
 /// socket frame math ran in the producer; it needs the `!Send` stage).
 fn mount_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
     let (host_path, items, diagnostics) = match ctx
-        .resource::<lunco_usd_ui::viewport::UsdViewportState>()
+        .resource::<lunco_usd_viewport_ui::UsdViewportState>()
         .and_then(|viewport| {
-            ctx.resource::<crate::ui::usd_mount::UsdMountView>()
+            ctx.resource::<crate::usd_mount::UsdMountView>()
                 .and_then(|views| views.focused(viewport))
         }) {
         Some(v)
@@ -3323,7 +3325,7 @@ fn default_part(ctx: &PanelCtx, parts: &[(Entity, String)]) -> Option<Entity> {
 }
 
 /// *Part* dropdown for a multi-part component. Writes the choice into
-/// [`InspectorTarget`](crate::InspectorTarget) (through a scoped resource) and returns the
+/// [`InspectorTarget`](lunco_luncosim_edit_ui::InspectorTarget) (through a scoped resource) and returns the
 /// new target.
 fn parts_selector(
     ui: &mut egui::Ui,
@@ -3346,7 +3348,7 @@ fn parts_selector(
             }
         });
     if let Some(c) = chosen {
-        ctx.resource_scope::<crate::InspectorTarget, _>(|_, target| {
+        ctx.resource_scope::<lunco_luncosim_edit_ui::InspectorTarget, _>(|_, target| {
             target.part = Some(c);
         });
         return Some(c);

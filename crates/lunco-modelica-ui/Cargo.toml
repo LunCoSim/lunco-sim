@@ -17,7 +17,7 @@ default = ["api", "transport-http", "ui", "scripting"]
 ui = [
     # Workbench API queries are UI-only, and NOT on `lunco-api` (a server build enables that).
     "lunco-workbench/api",
-    "dep:bevy_egui", "dep:lunco-theme", "dep:lunco-workbench", "dep:lunco-workbench-browser", "dep:lunco-workbench-core", "dep:lunco-status-core", "dep:lunco-ui",
+    "dep:bevy_egui", "dep:lunco-theme", "dep:lunco-workbench", "dep:lunco-workbench-browser", "dep:lunco-workbench-datasets-ui", "dep:lunco-workbench-core", "dep:lunco-status-core", "dep:lunco-ui",
     "dep:lunco-viz", "dep:lunco-canvas", "dep:egui_plot", "dep:egui_commonmark",
     "dep:egui_extras", "dep:htmd", "dep:lyon_tessellation", "dep:lyon_path",
     "dep:lyon_geom", "lunco-doc-bevy/ui",
@@ -85,7 +85,6 @@ lunco-workspace-api = { path = "../lunco-workspace-api", optional = true }
 # builds headless (`default-features = false`) for a server running cosim — no
 # egui→winit. The GUI/lunica build keeps `default = [..., "ui"]`.
 bevy_egui = { workspace = true, optional = true }
-lunco-assets = { workspace = true }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-core = { path = "../lunco-core" }
 lunco-core-session = { path = "../lunco-core-session" }
@@ -99,6 +98,7 @@ lunco-signal = { path = "../lunco-signal" }
 lunco-telemetry = { path = "../lunco-telemetry" }
 lunco-workbench = { path = "../lunco-workbench", optional = true }
 lunco-workbench-browser = { path = "../lunco-workbench-browser", optional = true }
+lunco-workbench-datasets-ui = { path = "../lunco-workbench-datasets-ui", optional = true }
 lunco-workbench-core = { path = "../lunco-workbench-core", optional = true }
 lunco-status-core = { path = "../lunco-status-core", optional = true }
 lunco-web = { workspace = true }
@@ -114,11 +114,10 @@ egui_plot = { workspace = true, optional = true }
 # match bevy_egui 0.41 (→ egui 0.35). Syntax highlighting is enabled
 # so `<pre><code>` blocks in Modelica docs render with colour.
 egui_commonmark = { version = "0.24", features = ["better_syntax_highlighting"], optional = true }
-# `all_loaders` wires up every shipped image source (file://, http://,
-# bytes://, raw paths) so images in Documentation HTML render. We add
-# a custom `modelica://` loader on top to resolve MSL-internal URIs
-# against the on-disk MSL tree.
-egui_extras = { version = "0.35", features = ["all_loaders"], optional = true }
+# The Modelica documentation path uses a custom `modelica://` bytes loader;
+# egui_extras supplies only the raster decoder needed after those bytes arrive.
+# Keep the file/http/GIF/WebP/SVG loaders out of this crate's graph.
+egui_extras = { version = "0.35", features = ["image"], optional = true }
 # Pure-Rust HTML → Markdown converter. Used once per Documentation
 # annotation to normalise into the shape commonmark expects.
 htmd = { version = "0.5", optional = true }
@@ -137,9 +136,9 @@ lyon_geom = { version = "1", optional = true }
 # Required because `std::time::Instant::now()` panics with
 # "time not implemented on this platform" on wasm32-unknown-unknown.
 web-time = { workspace = true }
-# Raster decoders used by egui_extras' `all_loaders`. Only the formats
-# actually present in MSL Resources/Images are enabled to keep the
-# compile surface small.
+# Raster decoders used by egui_extras' image loader and the Modelica icon
+# renderer. Only the formats supported by the workspace image contract are
+# enabled.
 image = { workspace = true, optional = true }
 lunco-experiments = { path = "../lunco-experiments" }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }

@@ -28,7 +28,7 @@ use lunco_core::SceneViewport;
 use lunco_doc::DocumentId;
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_core::document::LayerId;
-use lunco_usd_ui::viewport::{
+use lunco_usd_viewport_ui::{
     UsdPreviewId, UsdViewportState, USD_PREVIEW_VIEW_PANEL_ID, USD_VIEWPORT_PANEL_ID,
 };
 use lunco_workbench::{PanelRect, PanelRects, ScenePickGate, SceneTarget};

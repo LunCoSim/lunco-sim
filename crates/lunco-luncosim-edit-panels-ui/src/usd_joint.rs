@@ -16,7 +16,7 @@ use lunco_usd_bevy_core::{canonical::CanonicalStages, stage_convention, UsdRead,
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_core::author::normalize_value_literal;
 use lunco_usd_core::document::{LayerId, UsdOp};
-use lunco_usd_ui::viewport::{UsdPreviewId, UsdViewportState};
+use lunco_usd_viewport_ui::{UsdPreviewId, UsdViewportState};
 use openusd::sdf::Path as SdfPath;
 
 const JOINT_TYPES: &[&str] = &[
@@ -217,7 +217,7 @@ fn scalar_unit(type_name: &str, joint_type: &str, name: &str) -> String {
 /// Rebuild authored joint state for every open preview lease.
 pub fn produce_usd_joint_view(
     selected: Option<Res<lunco_scene_selection::SelectedEntities>>,
-    target: Option<Res<crate::InspectorTarget>>,
+    target: Option<Res<lunco_luncosim_edit_ui::InspectorTarget>>,
     q: Query<&UsdPrimPath>,
     q_parents: Query<&ChildOf>,
     stages: Res<Assets<UsdStageAsset>>,
@@ -251,7 +251,7 @@ pub fn produce_usd_joint_view(
             continue;
         }
 
-        let Some(entity) = crate::ui::selected_entity_in_preview(
+        let Some(entity) = lunco_luncosim_edit_ui::ui::selected_entity_in_preview(
             session,
             selected.as_deref(),
             target.as_deref(),
@@ -390,7 +390,7 @@ fn preview_body_path(targets: &[String]) -> Option<&str> {
 
 fn preview_body_transform(
     path: &str,
-    session: &lunco_usd_ui::viewport::UsdPreviewSession,
+    session: &lunco_usd_viewport_ui::UsdPreviewSession,
     q_prims: &Query<(Entity, &UsdPrimPath, &GlobalTransform)>,
     q_globals: &Query<&GlobalTransform>,
     q_parents: &Query<&ChildOf>,
@@ -404,7 +404,11 @@ fn preview_body_transform(
         .find(|(entity, prim, _)| {
             prim.stage_handle.id() == session.stage_handle().id()
                 && prim.path == path
-                && crate::ui::is_editor_preview_entity(*entity, session.scene_root(), q_parents)
+                && lunco_luncosim_edit_ui::ui::is_editor_preview_entity(
+                    *entity,
+                    session.scene_root(),
+                    q_parents,
+                )
         })
         .map(|(_, _, transform)| *transform)
 }
@@ -504,7 +508,11 @@ pub(crate) fn draw_usd_joint_preview_viz(
     let Some(entity) = view.entity else {
         return;
     };
-    if !crate::ui::is_editor_preview_entity(entity, session.scene_root(), &q_parents) {
+    if !lunco_luncosim_edit_ui::ui::is_editor_preview_entity(
+        entity,
+        session.scene_root(),
+        &q_parents,
+    ) {
         return;
     }
 

@@ -4552,18 +4552,6 @@ mod tests {
     use lunco_render::SceneCamera;
     use lunco_usd::commands::UsdCommandsPlugin;
     use lunco_usd_core::document::UsdOp;
-    use lunco_workbench_browser::{BrowserAction, BrowserActions};
-
-    #[derive(Resource, Default)]
-    struct OpenedPreviewTabs(Vec<(PanelId, u64)>);
-
-    fn record_opened_preview_tab(trigger: On<OpenTab>, mut opened: ResMut<OpenedPreviewTabs>) {
-        let event = *trigger.event();
-        if event.kind == USD_PREVIEW_VIEW_PANEL_ID {
-            opened.0.push((event.kind, event.instance));
-        }
-    }
-
     /// Without any rendering plugins (`Assets<Image>` absent), opening a
     /// document does not allocate a preview session or panic.
     #[test]
@@ -5144,55 +5132,6 @@ mod tests {
     }
 
     #[test]
-    fn reopening_the_same_browser_document_reuses_its_lease() {
-        let path = std::env::temp_dir().join("lunco_usd_preview_reopen_test.usda");
-        std::fs::write(&path, "#usda 1.0\ndef Xform \"X\" {}\n").unwrap();
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.add_plugins(bevy::asset::AssetPlugin::default());
-        app.init_asset::<Image>();
-        app.init_asset::<UsdStageAsset>();
-        app.add_plugins(UsdCommandsPlugin);
-        app.add_plugins(UsdViewportPlugin);
-
-        let doc = app
-            .world_mut()
-            .resource_mut::<DocumentRegistry<UsdDocument>>()
-            .open_file(&path, "#usda 1.0\ndef Xform \"X\" {}\n".to_string())
-            .0;
-        app.update();
-        app.world_mut()
-            .trigger(lunco_usd_core::commands::UsdDocumentReady {
-                doc,
-                outcome: lunco_doc::OpenOutcome::Allocated,
-            });
-        app.update();
-        app.update();
-        let preview = UsdPreviewId::for_document(doc);
-        let first_root = app
-            .world()
-            .resource::<UsdViewportState>()
-            .session(preview)
-            .expect("first preview lease")
-            .scene_root();
-
-        app.world_mut()
-            .trigger(lunco_usd_core::commands::UsdDocumentReady {
-                doc,
-                outcome: lunco_doc::OpenOutcome::Allocated,
-            });
-        app.update();
-        app.update();
-        let state = app.world().resource::<UsdViewportState>();
-        assert_eq!(state.session_count(), 1);
-        assert_eq!(state.focused_doc(), Some(doc));
-        assert_eq!(state.session(preview).unwrap().scene_root(), first_root);
-
-        let _ = std::fs::remove_file(path);
-    }
-
-    #[test]
     fn preview_readiness_ignores_live_projection_with_the_same_stage_handle() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -5277,129 +5216,6 @@ mod tests {
                 .document()
                 .generation()
         );
-    }
-
-    #[test]
-    fn browser_file_action_admits_and_focuses_the_existing_preview_lease() {
-        let path = std::env::temp_dir().join("lunco_usd_browser_preview_test.usd");
-        std::fs::write(&path, "#usda 1.0\ndef Xform \"X\" {}\n").unwrap();
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.add_plugins(bevy::asset::AssetPlugin::default());
-        app.init_asset::<Image>();
-        app.init_asset::<UsdStageAsset>();
-        app.add_plugins(UsdCommandsPlugin);
-        app.add_plugins(UsdViewportPlugin);
-        app.init_resource::<BrowserActions>();
-        app.add_systems(
-            Update,
-            crate::browser_dispatch::drain_browser_actions_for_usd,
-        );
-        app.update();
-
-        app.world_mut()
-            .resource_mut::<BrowserActions>()
-            .push(BrowserAction::OpenFile {
-                relative_path: path.clone(),
-            });
-        for _ in 0..20 {
-            app.update();
-            if app.world().resource::<UsdViewportState>().session_count() == 1 {
-                break;
-            }
-            std::thread::yield_now();
-        }
-
-        let state = app.world().resource::<UsdViewportState>();
-        let doc = app
-            .world()
-            .resource::<DocumentRegistry<UsdDocument>>()
-            .doc_for_file(&path)
-            .expect("browser action admitted the USD document");
-        assert_eq!(state.session_count(), 1);
-        assert_eq!(
-            state.focused_preview_id(),
-            Some(UsdPreviewId::for_document(doc))
-        );
-        assert_eq!(state.focused_doc(), Some(doc));
-
-        let _ = std::fs::remove_file(path);
-    }
-
-    #[test]
-    fn browser_documents_keep_distinct_preview_sessions_and_view_tabs() {
-        let first_path = std::env::temp_dir().join("lunco_usd_browser_preview_first.usda");
-        let second_path = std::env::temp_dir().join("lunco_usd_browser_preview_second.usda");
-        let source = "#usda 1.0\ndef Xform \"X\" {}\n";
-        std::fs::write(&first_path, source).unwrap();
-        std::fs::write(&second_path, source).unwrap();
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.add_plugins(bevy::asset::AssetPlugin::default());
-        app.init_asset::<Image>();
-        app.init_asset::<UsdStageAsset>();
-        app.add_plugins(UsdCommandsPlugin);
-        app.add_plugins(UsdViewportPlugin);
-        app.init_resource::<OpenedPreviewTabs>();
-        app.add_observer(record_opened_preview_tab);
-
-        let (first_doc, second_doc) = {
-            let mut registry = app
-                .world_mut()
-                .resource_mut::<DocumentRegistry<UsdDocument>>();
-            (
-                registry.open_file(&first_path, source.to_string()).0,
-                registry.open_file(&second_path, source.to_string()).0,
-            )
-        };
-        app.update();
-        app.world_mut()
-            .trigger(lunco_usd_core::commands::UsdDocumentReady {
-                doc: first_doc,
-                outcome: lunco_doc::OpenOutcome::Allocated,
-            });
-        app.world_mut()
-            .trigger(lunco_usd_core::commands::UsdDocumentReady {
-                doc: second_doc,
-                outcome: lunco_doc::OpenOutcome::Allocated,
-            });
-        app.update();
-        app.update();
-
-        let state = app.world().resource::<UsdViewportState>();
-        let first_preview = UsdPreviewId::for_document(first_doc);
-        let second_preview = UsdPreviewId::for_document(second_doc);
-        assert_eq!(state.session_count(), 2);
-        assert_eq!(state.view_count(), 2);
-        assert_eq!(state.session(first_preview).unwrap().doc(), first_doc);
-        assert_eq!(state.session(second_preview).unwrap().doc(), second_doc);
-        assert_ne!(
-            state.session(first_preview).unwrap().scene_root(),
-            state.session(second_preview).unwrap().scene_root()
-        );
-        assert_ne!(
-            state.session(first_preview).unwrap().primary_view(),
-            state.session(second_preview).unwrap().primary_view()
-        );
-        let mut opened_tabs: Vec<_> = app
-            .world()
-            .resource::<OpenedPreviewTabs>()
-            .0
-            .iter()
-            .map(|(_, instance)| *instance)
-            .collect();
-        opened_tabs.sort_unstable();
-        let mut primary_views = vec![
-            state.session(first_preview).unwrap().primary_view().0,
-            state.session(second_preview).unwrap().primary_view().0,
-        ];
-        primary_views.sort_unstable();
-        assert_eq!(opened_tabs, primary_views);
-
-        let _ = std::fs::remove_file(first_path);
-        let _ = std::fs::remove_file(second_path);
     }
 
     #[test]

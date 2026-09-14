@@ -20,7 +20,7 @@ use std::collections::HashMap;
 
 use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdRead, UsdStageAsset};
 use lunco_usd_bevy_scene::UsdPrimPath;
-use lunco_usd_ui::viewport::{UsdPreviewId, UsdViewportState};
+use lunco_usd_viewport_ui::{UsdPreviewId, UsdViewportState};
 use openusd::sdf::Path as SdfPath;
 
 /// One ranged parameter derived from an attribute's `customData`.
@@ -133,7 +133,7 @@ fn classify_real(raw: Option<f64>, min: f64, max: f64) -> (f64, bool, bool, Opti
 /// attributes into [`UsdParamView`].
 pub fn produce_usd_param_view(
     selected: Option<Res<lunco_scene_selection::SelectedEntities>>,
-    target: Option<Res<crate::InspectorTarget>>,
+    target: Option<Res<lunco_luncosim_edit_ui::InspectorTarget>>,
     q: Query<&UsdPrimPath>,
     q_parents: Query<&ChildOf>,
     stages: Res<Assets<UsdStageAsset>>,
@@ -177,7 +177,7 @@ pub fn produce_usd_param_view(
         // A drilled prim-backed subpart wins over the primary: Alt+Shift+click
         // a wheel of the selected rover and this session edits the wheel's own
         // attrs. A raw mesh drill falls back to the session's primary prim.
-        let Some(entity) = crate::ui::selected_entity_in_preview(
+        let Some(entity) = lunco_luncosim_edit_ui::ui::selected_entity_in_preview(
             session,
             selected.as_deref(),
             target.as_deref(),

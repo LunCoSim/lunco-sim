@@ -38,7 +38,6 @@ pub mod browser_section;
 pub mod loaded_stages;
 pub mod scene_files;
 pub mod session_codec;
-pub mod viewport;
 
 /// Stable singleton panel id for the USD wiring graph. The panel renderer is
 /// supplied by the simulator editor, while navigation belongs to the USD
@@ -52,16 +51,6 @@ pub use loaded_stages::{
 pub use scene_files::{
     produce_scene_file_view, SceneFileKind, SceneFileRescan, SceneFileRow, SceneFileView,
     SceneFilesSection,
-};
-pub use viewport::{
-    ApplyUsdInspectionPreset, CloseUsdPreview, CloseUsdPreviewView, DeleteUsdInspectionPreset,
-    ExplodeUsdPreview, FocusUsdPreview, FocusUsdPreviewView, FrameUsdPreviewSelection,
-    OpenUsdPreview, OpenUsdPreviewView, SaveUsdInspectionPreset, SetUsdPreviewTextLayer,
-    SetUsdPreviewViewMode, UsdPreviewExplodeAction, UsdPreviewExplodeAxis, UsdPreviewId,
-    UsdPreviewRenderBudget, UsdPreviewSession, UsdPreviewTextLayer, UsdPreviewView,
-    UsdPreviewViewId, UsdPreviewViewMode, UsdPreviewViewPanel, UsdViewportClick, UsdViewportPanel,
-    UsdViewportPlugin, UsdViewportState, EDITOR_PREVIEW_ID, USD_PREVIEW_VIEW_PANEL_ID,
-    USD_VIEWPORT_PANEL_ID,
 };
 
 /// Plugin that installs the USD Twin-browser section and the lifecycle

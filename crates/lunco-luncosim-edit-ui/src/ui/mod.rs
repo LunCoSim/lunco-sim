@@ -36,7 +36,6 @@ pub mod cinematic;
 pub mod command_deck;
 pub mod connection_canvas;
 pub mod entity_list;
-pub mod inspector;
 /// Joint State panel — live joint θ / ω / target / τ table for the selected
 /// vessel (revolute joints + raycast wheels + steering), deep-review §2.7.
 pub mod joint_state;
@@ -50,12 +49,6 @@ pub mod terrain_tools;
 /// Bounded, terrain-conforming motion trails for topology-derived vehicles.
 pub mod trail;
 pub use trail::VehicleTrailPlugin;
-pub mod usd_animation;
-pub mod usd_joint;
-pub mod usd_mount;
-pub mod usd_params;
-pub mod usd_prim_tree;
-pub mod usd_variants;
 /// Schedule slot (in `Update`) for the UI *view-model* producers — the
 /// change-driven systems that derive render-ready state into resources for the
 /// egui panels to read (WP-8). `Update` runs before `EguiPrimaryContextPass`, so
@@ -151,7 +144,7 @@ pub fn usd_selection_view_changed(
     selection: Res<lunco_scene_selection::SelectedEntities>,
     target: Res<crate::InspectorTarget>,
     revision: Res<lunco_usd_bevy_scene::UsdStageRevision>,
-    viewport: Option<Res<lunco_usd_ui::viewport::UsdViewportState>>,
+    viewport: Option<Res<lunco_usd_viewport_ui::UsdViewportState>>,
 ) -> bool {
     selection.is_changed()
         || target.is_changed()
@@ -162,11 +155,7 @@ pub fn usd_selection_view_changed(
 /// Return whether an entity belongs to the focused Editor preview subtree.
 /// The preview root itself is part of that scope; all other entities must be
 /// descendants through Bevy's authoritative hierarchy.
-pub(crate) fn is_editor_preview_entity(
-    entity: Entity,
-    root: Entity,
-    parents: &Query<&ChildOf>,
-) -> bool {
+pub fn is_editor_preview_entity(entity: Entity, root: Entity, parents: &Query<&ChildOf>) -> bool {
     if entity == root {
         return true;
     }
@@ -188,8 +177,8 @@ pub(crate) fn is_editor_preview_entity(
 /// and a live entity can be selected while a preview is focused. This helper
 /// applies the existing lease root and stage handle before a panel derives any
 /// authored view-model.
-pub(crate) fn selected_entity_in_preview(
-    session: &lunco_usd_ui::viewport::UsdPreviewSession,
+pub fn selected_entity_in_preview(
+    session: &lunco_usd_viewport_ui::UsdPreviewSession,
     selected: Option<&lunco_scene_selection::SelectedEntities>,
     target: Option<&crate::InspectorTarget>,
     q_paths: &Query<&lunco_usd_bevy_scene::UsdPrimPath>,
@@ -226,7 +215,7 @@ pub(crate) struct EditorSessionSelection {
 /// that projection belongs to and restores it after focus changes.
 #[derive(Resource, Default)]
 pub(crate) struct EditorSessionSelections {
-    pub(crate) sessions: HashMap<lunco_usd_ui::viewport::UsdPreviewId, EditorSessionSelection>,
+    pub(crate) sessions: HashMap<lunco_usd_viewport_ui::UsdPreviewId, EditorSessionSelection>,
     /// Live-scene selection remains entity-keyed because it is not an authored
     /// USD preview lease and never crosses into an Editor preview.
     live: LiveSceneSelection,
@@ -240,7 +229,7 @@ struct LiveSceneSelection {
 
 fn preview_path_for_entity(
     entity: Entity,
-    preview: &lunco_usd_ui::viewport::UsdPreviewSession,
+    preview: &lunco_usd_viewport_ui::UsdPreviewSession,
     q_paths: &Query<(Entity, &UsdPrimPath)>,
     q_parents: &Query<&ChildOf>,
 ) -> Option<String> {
@@ -253,7 +242,7 @@ fn preview_path_for_entity(
 
 fn preview_entity_for_path(
     path: &str,
-    preview: &lunco_usd_ui::viewport::UsdPreviewSession,
+    preview: &lunco_usd_viewport_ui::UsdPreviewSession,
     q_paths: &Query<(Entity, &UsdPrimPath)>,
     q_parents: &Query<&ChildOf>,
 ) -> Option<Entity> {
@@ -274,7 +263,7 @@ fn preview_entity_for_path(
 /// `InspectorTarget` are synchronized projections used by existing panels and
 /// gizmo systems.
 fn sync_editor_session_selection(
-    viewport: Option<Res<lunco_usd_ui::viewport::UsdViewportState>>,
+    viewport: Option<Res<lunco_usd_viewport_ui::UsdViewportState>>,
     mut selected: ResMut<lunco_scene_selection::SelectedEntities>,
     mut inspector_target: ResMut<crate::InspectorTarget>,
     q_paths: Query<(Entity, &UsdPrimPath)>,
@@ -282,7 +271,7 @@ fn sync_editor_session_selection(
     q_selected: Query<Entity, With<crate::selection::Selected>>,
     mut commands: Commands,
     mut sessions: ResMut<EditorSessionSelections>,
-    mut last_preview: Local<Option<lunco_usd_ui::viewport::UsdPreviewId>>,
+    mut last_preview: Local<Option<lunco_usd_viewport_ui::UsdPreviewId>>,
 ) {
     let focused = viewport
         .as_deref()
@@ -684,14 +673,11 @@ impl Plugin for SceneEditUiPlugin {
         // `every_frame` shape.
         app.add_view_model_every_frame(refresh_view_help_controls);
         app.register_panel(spawn_palette::SpawnPalette)
-            .register_panel(inspector::Inspector)
-            .register_panel(inspector::EnvironmentPanel)
             .register_panel(entity_list::EntityList)
             .register_panel(ports::PortPanel::default())
             .register_panel(terrain_tools::ToolsPanel)
             .register_panel(cinematic::CinematicPanel)
             .register_panel(connection_canvas::UsdCanvasPanel)
-            .register_panel(usd_prim_tree::UsdPrimTreePanel)
             .register_panel(command_deck::CommandDeck)
             .register_panel(authoring_review::AuthoringReviewPanel)
             .register_panel(joint_state::JointStatePanel)
@@ -895,31 +881,6 @@ impl Plugin for SceneEditUiPlugin {
             .init_resource::<lunco_core::PortTopologyRevision>();
         app.add_view_model(ports::populate_port_view, ports::port_view_due);
 
-        // WP-8: the Inspector reads query-derived sun / camera / joint state
-        // (which `PanelCtx` can't gather in paint) from `InspectorView`,
-        // produced each frame by an exclusive system before the egui pass.
-        app.init_resource::<inspector::InspectorView>();
-        app.init_resource::<inspector::ShaderSchemaCache>();
-        app.add_observer(inspector::on_inspector_component_edit)
-            .add_observer(inspector::on_projection_edit_requested)
-            .add_observer(inspector::on_usd_attribute_edit_requested)
-            .add_observer(inspector::on_usd_attribute_batch_edit_requested)
-            .add_observer(inspector::on_usd_variant_edit_requested)
-            .add_observer(inspector::on_mount_snap_requested)
-            .add_observer(inspector::on_mount_detach_requested)
-            .add_observer(inspector::on_shader_swap_requested)
-            .add_observer(inspector::on_shader_create_requested)
-            .add_observer(inspector::on_shader_import_requested)
-            .add_observer(inspector::on_shader_parameters_requested)
-            .add_observer(inspector::on_pbr_material_requested)
-            .add_observer(inspector::on_modelica_parameter_requested);
-        #[cfg(not(target_arch = "wasm32"))]
-        app.add_observer(inspector::on_attach_at_socket_requested);
-        app.add_view_model(
-            inspector::populate_inspector_view,
-            inspector::inspector_inputs_changed,
-        );
-
         // USD connection canvas: the scene is derived from the live composed
         // stage by a main-thread producer (the stage is `!Send`).
         //
@@ -935,69 +896,6 @@ impl Plugin for SceneEditUiPlugin {
         app.add_view_model(
             connection_canvas::produce_usd_canvas,
             connection_canvas::editor_canvas_changed,
-        );
-
-        // USD prim tree: same main-thread producer pattern (the stage is
-        // `!Send`), same gate for the same reason.
-        app.init_resource::<usd_prim_tree::UsdPrimTreeView>();
-        app.add_view_model(
-            usd_prim_tree::produce_usd_prim_tree,
-            usd_prim_tree::editor_prim_tree_changed,
-        );
-
-        // USD parameter sliders: harvest the selected prim's customData-ranged
-        // attributes for the Inspector's data-driven Parameters section. Walks
-        // the composed stage on every run, so it is gated on its three inputs
-        // (`usd_selection_view_changed`) rather than run every frame.
-        app.init_resource::<usd_params::UsdParamView>();
-        app.init_resource::<usd_params::UsdParamDrafts>();
-        app.add_view_model(
-            usd_params::produce_usd_param_view,
-            usd_selection_view_changed,
-        );
-
-        // Variant sets: which configurations the selected prim ships (a rover's
-        // `drivetrain`, a scenario scene's `terrain` site) and which composes
-        // now — the Inspector's ⎇ Variants picker. Same stage walk, same gate.
-        app.init_resource::<usd_variants::UsdVariantView>();
-        app.add_view_model(
-            usd_variants::produce_usd_variant_view,
-            usd_selection_view_changed,
-        );
-
-        // Mount snap: resolve each socket the selected host advertises + the
-        // placement that lands its part's plug on the socket (Inspector 🔩 Mount).
-        // Same stage walk, same gate.
-        app.init_resource::<usd_mount::UsdMountView>();
-        app.add_view_model(
-            usd_mount::produce_usd_mount_view,
-            usd_selection_view_changed,
-        );
-
-        // Standard USD Physics joint authoring: the producer reads the
-        // composed joint once per selection/stage revision, while the Inspector
-        // dispatches the same typed USD operations as Rhai and the API.
-        app.init_gizmo_group::<usd_joint::UsdJointPreviewGizmoConfigGroup>();
-        app.init_resource::<usd_joint::UsdJointView>();
-        app.add_view_model(
-            usd_joint::produce_usd_joint_view,
-            usd_selection_view_changed,
-        );
-        app.add_systems(
-            PostUpdate,
-            (
-                usd_joint::sync_usd_joint_preview_gizmo_config,
-                usd_joint::draw_usd_joint_preview_viz
-                    .after(bevy::transform::TransformSystems::Propagate)
-                    .before(bevy::camera::CameraUpdateSystems),
-            )
-                .chain()
-                .after(lunco_core::SceneViewportSet::Reconcile),
-        );
-        app.init_resource::<usd_animation::UsdAnimationView>();
-        app.add_view_model(
-            usd_animation::produce_usd_animation_view,
-            usd_selection_view_changed,
         );
 
         // Command Deck view-model: selection + possession + behaviour-spec
@@ -1032,8 +930,7 @@ impl Plugin for SceneEditUiPlugin {
                 bevy_egui::EguiPrimaryContextPass,
                 billboard_overlay::draw_billboard_overlay
                     .before(lunco_workbench::WorkbenchRenderSet),
-            )
-            .add_systems(Update, inspector::delete_selected_on_intent);
+            );
         cinematic::register_all_commands(app);
     }
 }
@@ -1230,16 +1127,16 @@ impl Perspective for EditorPerspective {
         // intentionally absent so an Editor session cannot mix a mounted
         // scene entity with the selected document.
         let mut plan = PerspectiveLayoutPlan {
-            side_browser: PerspectiveSlotPlan::new().stacked(
-                [usd_prim_tree::USD_PRIM_TREE_PANEL_ID],
-                [TWIN_BROWSER_PANEL_ID],
-            ),
+            side_browser: PerspectiveSlotPlan::new()
+                .stacked([PanelId("usd_prim_tree")], [TWIN_BROWSER_PANEL_ID]),
             // Central tabs: the isolated USD document preview and the Rhai
             // behaviour editor. The
             // USD connection graph is opened from the Connections entry in the
             // Lunica/Twin navigation, so it is not a second Build workflow.
-            center: PerspectiveSlotPlan::new()
-                .tabs([lunco_usd_ui::USD_VIEWPORT_PANEL_ID, PanelId("rhai_editor")]),
+            center: PerspectiveSlotPlan::new().tabs([
+                lunco_usd_viewport_ui::USD_VIEWPORT_PANEL_ID,
+                PanelId("rhai_editor"),
+            ]),
             // The Inspector alone on the right — parameter editing is the point here.
             right_inspector: PerspectiveSlotPlan::new().tabs([
                 PanelId("sandbox_inspector"),
@@ -1344,7 +1241,7 @@ mod tests {
         assert!(plan
             .side_browser
             .primary
-            .contains(&usd_prim_tree::USD_PRIM_TREE_PANEL_ID));
+            .contains(&PanelId("usd_prim_tree")));
         assert!(plan.side_browser.secondary.contains(&TWIN_BROWSER_PANEL_ID));
         assert_eq!(EditorPerspective.layout_revision(), 1);
     }

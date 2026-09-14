@@ -8,7 +8,6 @@ description = "Twin and Files browser panels for the LunCoSim workbench"
 [dependencies]
 bevy = { workspace = true }
 bevy_egui = { workspace = true }
-lunco-assets = { path = "../lunco-assets" }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-theme = { path = "../lunco-theme" }

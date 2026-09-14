@@ -1,0 +1,54 @@
+[package]
+name = "lunco-luncosim-edit-panels-ui"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Inspector and authored USD panels for LunCoSim's scene editor"
+
+[dependencies]
+bevy = { workspace = true, features = [
+    "bevy_asset",
+    "bevy_mesh",
+    "bevy_light",
+    "bevy_shader",
+    "bevy_post_process",
+    "bevy_anti_alias",
+    "bevy_gizmos",
+] }
+bevy_egui = { workspace = true }
+openusd = { workspace = true }
+avian3d = { workspace = true }
+big_space.workspace = true
+
+lunco-api = { path = "../lunco-api" }
+lunco-assets-core = { path = "../lunco-assets-core" }
+lunco-celestial = { path = "../lunco-celestial", default-features = false }
+lunco-cosim = { path = "../lunco-cosim" }
+lunco-cosim-core = { path = "../lunco-cosim-core" }
+lunco-core = { path = "../lunco-core" }
+lunco-doc = { path = "../lunco-doc" }
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
+lunco-environment = { path = "../lunco-environment" }
+lunco-luncosim-edit-ui = { path = "../lunco-luncosim-edit-ui" }
+lunco-materials = { path = "../lunco-materials" }
+lunco-modelica-ast = { path = "../lunco-modelica-ast" }
+lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
+lunco-modelica-ui = { path = "../lunco-modelica-ui", default-features = false, features = ["ui"] }
+lunco-obstacle-field = { path = "../lunco-obstacle-field" }
+lunco-render = { path = "../lunco-render" }
+lunco-scene-authoring = { path = "../lunco-scene-authoring" }
+lunco-scene-catalog = { path = "../lunco-scene-catalog" }
+lunco-scene-commands = { path = "../lunco-scene-commands" }
+lunco-scene-selection = { path = "../lunco-scene-selection" }
+lunco-terrain-surface = { path = "../lunco-terrain-surface" }
+lunco-time = { path = "../lunco-time" }
+lunco-usd-bevy-camera = { path = "../lunco-usd-bevy-camera" }
+lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
+lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
+lunco-usd-core = { path = "../lunco-usd-core" }
+lunco-usd-viewport-ui = { path = "../lunco-usd-viewport-ui" }
+lunco-workbench = { path = "../lunco-workbench" }
+lunco-workbench-core = { path = "../lunco-workbench-core" }
+
+[lints]
+workspace = true

@@ -106,16 +106,13 @@ pub mod welcome_progress;
 pub mod wire_router;
 pub mod workbench_state;
 
-/// Modelica section of the Twin Browser — class-tree contributed by
-/// this crate to `lunco-workbench-browser`'s `BrowserSectionRegistry`.
-pub mod browser_section;
-/// Twin-scoped downloadable resources shown in the Twin Browser.
-pub mod twin_datasets;
-
 /// Drains the workbench browser's `BrowserActions` outbox and routes
 /// section-emitted intents (open file, open Modelica class) into the
 /// existing document-load and drill-in pipelines.
 pub mod browser_dispatch;
+/// Modelica section of the Twin Browser — class-tree contributed by
+/// this crate to `lunco-workbench-browser`'s `BrowserSectionRegistry`.
+pub mod browser_section;
 
 /// Per-panel "pin to model" overrides for singleton inspector panels.
 pub mod doc_pin;
@@ -873,9 +870,10 @@ impl Plugin for ModelicaUiPlugin {
         app.world_mut()
             .resource_mut::<lunco_workbench_browser::BrowserSectionRegistry>()
             .register(browser_section::ModelicaSection);
-        app.world_mut()
-            .resource_mut::<lunco_workbench_browser::BrowserSectionRegistry>()
-            .register(twin_datasets::TwinDatasetsSection);
+        // Dataset provisioning is an opt-in browser capability. Keeping it in
+        // its own package prevents generic browser hosts from linking the
+        // archive, HTTP, raster, and SVG processing stack.
+        app.add_plugins(lunco_workbench_datasets_ui::TwinDatasetsPlugin);
     }
 }
 
@@ -1295,9 +1293,8 @@ fn install_image_loaders_once(
         // we get another shot next frame.
         return;
     };
-    // Built-in loaders for file://, http(s)://, raw paths, bytes://,
-    // etc. Covers everything the Modelica Documentation HTML can
-    // reference through normal URIs.
+    // Install only the raster decoder selected by the Modelica UI manifest.
+    // The custom bytes loader below owns the modelica:// storage boundary.
     egui_extras::install_image_loaders(ctx);
     // Custom loader for `modelica://Package/Resources/…` URIs used
     // throughout MSL Documentation blocks.

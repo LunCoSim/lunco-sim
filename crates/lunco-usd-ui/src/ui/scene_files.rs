@@ -538,8 +538,12 @@ mod tests {
     fn twin_references_resolve_against_the_mounted_root() {
         let root = tempfile::tempdir().expect("temporary Twin root");
         let scene = root.path().join("scenes/base.usda");
-        std::fs::create_dir_all(scene.parent().expect("scene parent")).unwrap();
-        std::fs::write(&scene, "#usda 1.0\n").unwrap();
+        lunco_storage::FileStorage::new()
+            .write_sync(
+                &lunco_storage::StorageHandle::File(scene.clone()),
+                b"#usda 1.0\n",
+            )
+            .unwrap();
         let twins = TwinRoots::default();
         let name = twins
             .register("moonbase", root.path())

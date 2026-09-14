@@ -132,13 +132,15 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 | :--- | :--- |
 | **`lunco-workbench-core`** | Renderer-independent workbench contracts: `Panel`/`PanelCtx`, instance tabs, perspective layout plans, menu contributions, and the published `WorkbenchSnapshot`. It uses the Bevy ECS substrate and egui types but does not pull `bevy_render`, `bevy_egui`, `egui_dock`, storage, or window/render services. |
 | **`lunco-workbench`** | The concrete IDE-like shell: `egui_dock` layout materialization, `bevy_egui` rendering, panel registration, persistence, viewport integration, and shell-only commands/widgets. It publishes `WorkbenchSnapshot`, consumes `lunco-workbench-core`, installs capture only when its API surface is enabled, and renders status data supplied by `lunco-status-core`. |
-| **`lunco-workbench-browser`** | Reusable Twin and Files browser feature: browser section registry and query state, dataset-backed library navigation, filesystem navigation, rename/open actions, and the `TwinBrowserPanel`/`FilesPanel` surfaces. It is an optional feature package layered on the concrete workbench shell. |
+| **`lunco-workbench-browser`** | Reusable Twin and Files browser feature: browser section registry and query state, filesystem and library navigation, rename/open actions, and the `TwinBrowserPanel`/`FilesPanel` surfaces. It depends on `lunco-assets-core`, not the dataset processing stack. |
+| **`lunco-workbench-datasets-ui`** | Optional browser presentation for Twin-declared downloadable resources. It projects `lunco-assets`' shared dataset registry and emits its typed request/cancel events without making the generic browser depend on provisioning and processing. |
 | **`lunco-capture`** | Render-bound screenshot and deterministic offline-recording capability: typed capture commands, GPU readback, frame pacing, PNG/video sinks, and recording status. It is an application capability shared by the workbench and windowless/offscreen hosts, not a workbench subsystem. |
 | **`lunco-ui`** | Reusable UI infrastructure: cached widgets, 3D world panels, command builders. |
 | **`lunco-viz`** | Domain-agnostic visualization: `SignalRegistry`, LinePlots, and future 3D/Rerun bridges. |
 | **`lunco-canvas`** | Stateful 2D scene editor substrate for diagrams and annotation overlays. |
 | **`lunco-luncosim-edit-core`** | Headless-safe scene-editing mechanisms: spawn and terrain tools, scene picking, typed command registration, and ECS state. |
 | **`lunco-luncosim-edit-ui`** | Rendered scene-editing presentation: egui/workbench panels, transform-gizmo and selection adapters, and physics diagnostics. |
+| **`lunco-luncosim-edit-panels-ui`** | Inspector and authored USD panels: composed-USD prim tree, standard USD joint/animation/mount/variant/parameter view models, and environment/entity authoring surfaces. It is installed explicitly by windowed composition roots. |
 | **`lunco-render`** | Appearance **intent**, render-free: `PbrLook`, `SceneCamera`, `WorldLabel`, sun/shadow look. Names `Mesh3d`, never `MeshMaterial3d`. |
 | **`lunco-render-recovery`** | Render-bound GPU health and presentation recovery: wgpu error handling, adapter shadow-capability admission, bounded failure escalation, presentation gating, and scene-teardown rearming. It is independent of the workbench shell. |
 | **`lunco-render-bevy`** | The **only** crate that names `bevy_pbr`. Binds the intent (`PbrLook`/`ShaderLook`/`SceneCamera`/`WorldLabel`) to real materials & cameras; owns `ShaderMaterial`. Headless never adds it. |
@@ -389,7 +391,10 @@ path contracts, but it does not load or compose USD stages and does not depend
 on the aggregate `lunco-usd` runtime.
 
 **`lunco-usd-ui`**
-Interactive USD browser and preview presentation. Owns workbench sections, preview sessions/views, viewport queries, Save-As picker integration, and UI status/placeholder adapters while consuming the document and projection APIs from `lunco-usd`.
+Interactive USD browser and document presentation. Owns workbench sections, loaded-stage and scene-file views, browser dispatch, Save-As picker integration, and UI status/placeholder adapters while consuming the document and projection APIs from `lunco-usd`. Add `lunco-usd-viewport-ui` when an application needs the render-heavy preview surface.
+
+**`lunco-usd-viewport-ui`**
+Render-heavy USD preview surface. Owns preview sessions/views, offscreen cameras and images, viewport interaction, inspection commands/queries, and the viewport panels. It consumes the document and projection APIs but does not own Twin-browser lifecycle or document navigation.
 
 **`lunco-usd-bevy-camera`**
 Render-free camera adapter built on `lunco-usd-bevy-core`,
@@ -554,10 +559,10 @@ navigation add the separate `lunco-workbench-browser` feature package.
 **`lunco-workbench-browser`**
 Reusable navigation feature for the concrete workbench. It owns the Twin and
 Files panels, browser query/actions/resources, built-in filesystem and library
-sections, and dataset provisioning controls. Domain UI crates register their
-own `BrowserSection` implementations; the package depends on the heavier
-asset-provisioning crate only for those built-in dataset controls, keeping the
-base workbench shell independent of that dependency.
+sections. Domain UI crates register their own `BrowserSection` implementations;
+optional dataset controls live in `lunco-workbench-datasets-ui`, which is the
+only browser extension that depends on the heavier asset-provisioning crate,
+keeping the base workbench shell independent of that dependency.
 
 **`lunco-capture`**
 Render-bound application capability for screenshots and deterministic offline

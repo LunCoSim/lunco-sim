@@ -99,9 +99,7 @@ mod tests {
 
     #[test]
     fn browser_usd_selection_stays_within_the_active_twin() {
-        let root = std::env::temp_dir()
-            .join("lunco-browser-dispatch")
-            .join("twin");
+        let root = std::path::PathBuf::from("/tmp/lunco-browser-dispatch/twin");
         let rover = root.join("sim").join("rovers").join("lunokhod2.usda");
         let traverse = root.join("sim").join("scenes").join("traverse.usda");
         let outside = root

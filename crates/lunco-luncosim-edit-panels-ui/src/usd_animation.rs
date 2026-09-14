@@ -16,7 +16,7 @@ use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdRead, UsdStageAsset};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_core::author::normalize_value_literal;
 use lunco_usd_core::document::{LayerId, UsdOp};
-use lunco_usd_ui::viewport::{UsdPreviewId, UsdViewportState};
+use lunco_usd_viewport_ui::{UsdPreviewId, UsdViewportState};
 use openusd::sdf::Path as SdfPath;
 
 #[derive(Clone, Copy)]
@@ -101,7 +101,7 @@ fn type_for_channel<R: UsdRead>(stage: &R, path: &SdfPath, name: &str) -> Option
 /// Rebuild keyable channels for the selected prim in every open Editor preview.
 pub fn produce_usd_animation_view(
     selected: Option<Res<lunco_scene_selection::SelectedEntities>>,
-    target: Option<Res<crate::InspectorTarget>>,
+    target: Option<Res<lunco_luncosim_edit_ui::InspectorTarget>>,
     q: Query<&UsdPrimPath>,
     q_parents: Query<&ChildOf>,
     stages: Res<Assets<UsdStageAsset>>,
@@ -135,7 +135,7 @@ pub fn produce_usd_animation_view(
             continue;
         }
 
-        let Some(entity) = crate::ui::selected_entity_in_preview(
+        let Some(entity) = lunco_luncosim_edit_ui::ui::selected_entity_in_preview(
             session,
             selected.as_deref(),
             target.as_deref(),

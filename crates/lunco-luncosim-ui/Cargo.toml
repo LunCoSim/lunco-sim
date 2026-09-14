@@ -67,6 +67,7 @@ lunco-environment = { path = "../lunco-environment" }
 lunco-hooks = { path = "../lunco-hooks" }
 lunco-luncosim-edit-core = { path = "../lunco-luncosim-edit-core" }
 lunco-luncosim-edit-ui = { path = "../lunco-luncosim-edit-ui" }
+lunco-luncosim-edit-panels-ui = { path = "../lunco-luncosim-edit-panels-ui" }
 lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 lunco-modelica-ui = { path = "../lunco-modelica-ui", default-features = false, features = ["ui"] }
@@ -93,6 +94,7 @@ lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
 lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-sim-cosim = { path = "../lunco-usd-sim-cosim" }
 lunco-usd-ui = { path = "../lunco-usd-ui" }
+lunco-usd-viewport-ui = { path = "../lunco-usd-viewport-ui" }
 lunco-workbench = { path = "../lunco-workbench", features = ["api"] }
 lunco-workbench-browser = { path = "../lunco-workbench-browser" }
 lunco-workbench-core = { path = "../lunco-workbench-core" }

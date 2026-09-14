@@ -565,7 +565,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Close one preview session and release all of its presentation resources.
 
-- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -577,7 +577,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  preview session because a session without a presentation view cannot be
  reached from the editor.
 
-- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -635,7 +635,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  This command changes only projected Bevy transforms; it never enters the
  USD document, journal, save state, or simulation projection.
 
-- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -651,7 +651,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Focus an already-open preview session in the USD dock.
 
-- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -661,7 +661,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Focus one presentation view and its parent USD preview session.
 
-- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -671,7 +671,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Fit one preview view to the projected visual bounds of its USD stage.
 
-- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -685,7 +685,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  explicit lease. Other sessions keep their roots, cameras, and stages
  untouched.
 
-- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -699,7 +699,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  The view id is explicit so persisted layouts and agents can address the
  exact camera without relying on tab order or display names.
 
-- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -712,7 +712,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  delta to its camera plane using the current projection and render-target
  viewport.
 
-- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -723,7 +723,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Restore one preview view's default orbit pose and fit it to its stage.
 
-- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -777,7 +777,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  the editor camera; authored USD camera opinions stay read-only presentation
  input and are never rewritten by a navigation gesture.
 
-- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -788,7 +788,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Change which authored/composed snapshot the Text mode displays.
 
-- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -799,7 +799,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Change only the presentation mode of one existing USD preview view.
 
-- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -811,7 +811,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  Zoom one preview view by a positive multiplicative factor. Perspective
  views change orbit distance; orthographic views change projection scale.
 
-- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|

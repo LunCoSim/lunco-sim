@@ -22,7 +22,7 @@ use lunco_usd_bevy_core::mount::{read_attachment_joint, read_plug, read_sockets,
 use lunco_usd_bevy_core::{canonical::CanonicalStages, local_transform_at, UsdStageAsset};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_core::attach::resolve_mount_placement;
-use lunco_usd_ui::viewport::{UsdPreviewId, UsdViewportState};
+use lunco_usd_viewport_ui::{UsdPreviewId, UsdViewportState};
 use openusd::sdf::Path as SdfPath;
 
 /// Position and orientation tolerance for the editor's no-op Snap state.
@@ -147,7 +147,7 @@ pub fn produce_usd_mount_view(
             continue;
         }
 
-        let Some(entity) = crate::ui::selected_entity_in_preview(
+        let Some(entity) = lunco_luncosim_edit_ui::ui::selected_entity_in_preview(
             session,
             selected.as_deref(),
             None,
