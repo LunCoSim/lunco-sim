@@ -28,7 +28,7 @@
 use bevy::prelude::*;
 use crossbeam_channel::{bounded, Receiver, Sender};
 
-use lunco_core::NetworkRole;
+use lunco_core_session::NetworkRole;
 
 use crate::scenario::{cid_for_content, RemoteScenarioManifest};
 use crate::scenario_sync::{asset_storage_handle, AssetDownloads, AssetPersist};

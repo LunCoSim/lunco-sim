@@ -1246,7 +1246,7 @@ fn process_usd_cosim_prim_read(
         );
         commands.entity(entity).try_insert((
             UsdSimProcessed,
-            lunco_core::NotPredictable,
+            lunco_core_session::NotPredictable,
             SimComponent {
                 model_name,
                 inputs,
@@ -1301,7 +1301,7 @@ fn process_usd_cosim_prim_read(
                 .map_or_else(|| "Modelica".to_string(), |path| format!("Modelica:{path}"));
             commands.entity(entity).try_insert((
                 UsdSimProcessed,
-                lunco_core::NotPredictable,
+                lunco_core_session::NotPredictable,
                 SimComponent {
                     model_name,
                     inputs,
@@ -1346,7 +1346,7 @@ fn process_usd_cosim_prim_read(
             let (inputs, outputs) = declared_interface(reader, sdf_path);
             commands.entity(entity).try_insert((
                 UsdSimProcessed,
-                lunco_core::NotPredictable,
+                lunco_core_session::NotPredictable,
                 SimComponent {
                     model_name: format!("Python:{asset_path}"),
                     inputs,
@@ -1408,7 +1408,7 @@ fn process_usd_cosim_prim_read(
     // marker is inert where prediction never runs.
     commands
         .entity(entity)
-        .try_insert(lunco_core::NotPredictable);
+        .try_insert(lunco_core_session::NotPredictable);
 
     // Source files are loaded through Bevy's `AssetServer`: on native it reads
     // from the workspace `assets/` source, on wasm it issues an HTTP fetch
@@ -2311,8 +2311,12 @@ struct WiringQueries<'w, 's> {
     provenance: Query<'w, 's, &'static lunco_core::Provenance>,
     instance_roots: Query<'w, 's, (), With<UsdInstanceRoot>>,
     realtime_safe: Query<'w, 's, &'static lunco_cosim::RealtimeSafe>,
-    predicted_bodies:
-        Query<'w, 's, &'static avian3d::prelude::RigidBody, Without<lunco_core::NotPredictable>>,
+    predicted_bodies: Query<
+        'w,
+        's,
+        &'static avian3d::prelude::RigidBody,
+        Without<lunco_core_session::NotPredictable>,
+    >,
     defaults: Query<'w, 's, &'static UsdInputDefaults>,
     outputs: Query<'w, 's, &'static lunco_core::OutputPorts>,
 }
@@ -2334,7 +2338,7 @@ fn wiring_due(
         )>,
     >,
     dirty: Res<UsdWiringDirty>,
-    role: Option<Res<lunco_core::NetworkRole>>,
+    role: Option<Res<lunco_core_session::NetworkRole>>,
 ) -> bool {
     !arrivals.is_empty() || dirty.0 || role.is_some_and(|role| role.is_changed())
 }
@@ -2576,11 +2580,14 @@ fn rewire_usd_connections(
     // a pure client predicts the body locally. Standalone and host processes are
     // authoritative, so their live solver is not incorrectly classified as a
     // prediction loop.
-    role: Option<Res<lunco_core::NetworkRole>>,
+    role: Option<Res<lunco_core_session::NetworkRole>>,
     stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<CanonicalStages>,
 ) {
-    let client_predicts = matches!(role.as_deref(), Some(lunco_core::NetworkRole::Client));
+    let client_predicts = matches!(
+        role.as_deref(),
+        Some(lunco_core_session::NetworkRole::Client)
+    );
     let role_changed = role.as_ref().is_some_and(|role| role.is_changed());
 
     let structural = !wiring_arrivals.is_empty()
@@ -3084,16 +3091,12 @@ fn rewire_usd_connections(
                     // diagnostics still need to name the authored source and
                     // sink that must be repaired.
                     Name::new(format!("UsdWire {src} -> {}.{sink_conn}", prim_path.path)),
-                    // A derived edge is a PURE CACHE of USD wiring — every peer
+                    // A derived edge is a pure cache of USD wiring — every peer
                     // re-derives it from the same stage, so it must never carry
-                    // network identity. `Local` is not a micro-optimisation here,
-                    // it closes a FEEDBACK LOOP: untagged entities fall into the
-                    // `None` arm of `assign_global_entity_ids` (lunco-core) and
-                    // get an auto-allocated id, which makes this system's own
-                    // `Added<GlobalEntityId>` gate fire on the very next frame,
-                    // which despawns and respawns every edge, which mints fresh
-                    // ids… Steady state cost was a full wiring rebuild EVERY
-                    // FRAME (8.6 ms on sandbox_scene) with nothing changing.
+                    // network identity. `Local` makes that ownership explicit;
+                    // session identity admission leaves it without a global id,
+                    // so the wiring cache cannot trigger its own identity-based
+                    // rebuild gate.
                     // See docs/architecture/42-ui-frame-discipline.md §6.
                     lunco_core::Provenance::Local,
                 ));
@@ -4105,7 +4108,7 @@ pub fn resolve_root_prim(_asset_path: &str, override_in: &str) -> String {
 /// does not depend on this heavy co-simulation implementation package.
 ///
 /// Opaque-body guard (prediction-membership design in git history): stamp
-/// [`lunco_core::NotPredictable`] on every cosim-driven physics body — one with a
+/// [`lunco_core_session::NotPredictable`] on every cosim-driven physics body — one with a
 /// [`SimComponent`] (its motion comes from Modelica/script forces the client does
 /// not run) AND a [`RigidBody`]. This is the cosim **takeover** site: the same
 /// `SimComponent`-attachment that makes a body server-driven also marks it
@@ -4125,12 +4128,14 @@ fn tag_cosim_opaque(
         (
             With<SimComponent>,
             With<avian3d::prelude::RigidBody>,
-            Without<lunco_core::NotPredictable>,
+            Without<lunco_core_session::NotPredictable>,
         ),
     >,
 ) {
     for e in q.iter() {
-        commands.entity(e).try_insert(lunco_core::NotPredictable);
+        commands
+            .entity(e)
+            .try_insert(lunco_core_session::NotPredictable);
     }
 }
 

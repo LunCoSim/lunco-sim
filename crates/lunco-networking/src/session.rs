@@ -1,18 +1,10 @@
-//! Wire-fed session state — the netcode-only half of what used to live in
-//! `lunco-core/src/session.rs` (Phase 6, review C7).
+//! Wire-fed session state owned by the networking adapter.
 //!
-//! ## Why this lives here and not in `lunco-core`
-//!
-//! The boundary rule for `lunco-core/src/session.rs` is: a type stays in core
-//! only if a crate that does NOT depend on `lunco-networking` consumes it
-//! (the always-on D7 seam — `NetworkRole`, `NetStatus`, `SessionRegistry`,
-//! the input logs the controller writes, the replication markers usd-sim
-//! stamps). Every type in THIS module is produced and consumed exclusively by
-//! this crate — the wire snapshot sample, the deep-link confirm gate, the
-//! prediction contact gate, the desync gauge, the reconcile residual — so
-//! keeping them in core was accretion, not substrate. Resources here are
-//! initialized by the plugins whose systems read them ([`crate::sync::SyncPlugin`],
-//! [`crate::prediction::NetcodePredictionPlugin`]), not by `LunCoCorePlugin`.
+//! These types are produced and consumed exclusively by this crate: the wire
+//! snapshot sample, deep-link confirmation gate, prediction contact gate,
+//! desync gauge, and reconcile residual. Resources here are initialized by the
+//! plugins whose systems read them ([`crate::sync::SyncPlugin`],
+//! [`crate::prediction::NetcodePredictionPlugin`]).
 
 use bevy::prelude::*;
 use std::collections::HashMap;
@@ -20,13 +12,13 @@ use std::collections::HashMap;
 /// A connect request that arrived from an **untrusted deep link** (a clicked
 /// `luncosim://connect?…` link, or the web `?connect=…#digest`) and is awaiting
 /// the user's confirmation. Unlike the menu's
-/// [`NetConnectRequest`](lunco_core::NetConnectRequest) (an explicit
+/// [`NetConnectRequest`](lunco_core_session::NetConnectRequest) (an explicit
 /// in-app click), a link could be planted by a third party to silently redirect
 /// the session, so the UI shows a "Connect to X? [Join] [Cancel]" prompt while
 /// this is `Some`; only on *Join* does it become a `JoinServer`. The networking
 /// adapter seeds it (native arg parse / wasm URL); the UI clears it on either
 /// choice. Both the seeder and the confirm modal live in this crate
-/// (`client` / `single_instance` / `ui`), so unlike [`lunco_core::NetStatus`]
+/// (`client` / `single_instance` / `ui`), so unlike [`lunco_core_session::NetStatus`]
 /// this is not an always-on seam.
 #[derive(Resource, Clone, Debug, Default)]
 pub struct PendingConnect {
@@ -44,8 +36,8 @@ pub struct PendingConnectRequest {
 }
 
 /// **Contact-prediction eligibility:** this non-owned replicated body *may* be
-/// promoted to a locally-`Dynamic` [`lunco_core::PredictedDynamic`] body, but
-/// **only while an [`lunco_core::OwnedLocally`] body is actually touching it**
+/// promoted to a locally-`Dynamic` [`lunco_core_session::PredictedDynamic`] body, but
+/// **only while an [`lunco_core_session::OwnedLocally`] body is actually touching it**
 /// (`promote_contacting_proxies`).
 /// The rest of the time it stays a kinematic snapshot proxy — perfectly synced to
 /// authority, no drift.
@@ -65,10 +57,10 @@ pub struct PendingConnectRequest {
 ///
 /// Stamped by `maintain_predicted_dynamic` (free props) and
 /// `maintain_predicted_vehicles` (remote raycast rovers) on the same eligible set
-/// they used to promote outright — cosim/opaque ([`lunco_core::NotPredictable`]),
-/// articulated ([`lunco_core::ArticulatedVehicle`], which flips if made Dynamic),
+/// they used to promote outright — cosim/opaque ([`lunco_core_session::NotPredictable`]),
+/// articulated ([`lunco_core_session::ArticulatedVehicle`], which flips if made Dynamic),
 /// owned, and static bodies are all excluded there. Removed when this peer
-/// possesses the body (the input-replay [`lunco_core::OwnedLocally`] path takes
+/// possesses the body (the input-replay [`lunco_core_session::OwnedLocally`] path takes
 /// over). Client-only; stamped and read only by this crate's prediction systems.
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct ContactPredictable;
@@ -137,7 +129,7 @@ pub struct BodyDivergence {
 /// Before this there was **no way to observe a desync in the field**: the only
 /// backstop was a *silent* per-body snap, and the owned-body half of it could be
 /// permanently disabled by the stale-ack bug (see
-/// [`lunco_core::AppliedInputSeq`]). A client
+/// [`lunco_core_session::AppliedInputSeq`]). A client
 /// could drift indefinitely and nothing said so — not a log line, not a counter.
 ///
 /// Every client-side reconcile feeds a sample here, so each locally-simulated body

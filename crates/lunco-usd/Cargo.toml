@@ -25,6 +25,7 @@ lunco-usd-sim-core = { path = "../lunco-usd-sim-core" }
 lunco-usd-sim-shader = { path = "../lunco-usd-sim-shader" }
 lunco-usd-queries = { path = "../lunco-usd-queries" }
 lunco-core = { path = "../lunco-core" }
+lunco-core-session = { path = "../lunco-core-session" }
 lunco-api = { path = "../lunco-api" }
 lunco-render = { path = "../lunco-render" }
 lunco-doc = { path = "../lunco-doc" }

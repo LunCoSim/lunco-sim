@@ -38,7 +38,8 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use lunco_core::{NetworkRole, SessionId, SyncChannel};
+use lunco_core::{SessionId, SyncChannel};
+use lunco_core_session::NetworkRole;
 use lunco_storage::StorageHandle;
 
 use crate::scenario::{

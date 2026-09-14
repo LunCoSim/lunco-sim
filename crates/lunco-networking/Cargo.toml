@@ -44,6 +44,7 @@ bevy = { workspace = true }
 lunco-workbench = { path = "../lunco-workbench", optional = true }
 lunco-workbench-core = { path = "../lunco-workbench-core", optional = true }
 lunco-core = { path = "../lunco-core" }
+lunco-core-session = { path = "../lunco-core-session" }
 # `default-features = false`: we only use the registry/executor types + plugin,
 # never the native `transport-http` server (axum/tokio/mio — wasm-incompatible).
 # Native builds still get transport-http via lunco-luncosim's own default features.

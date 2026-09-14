@@ -9,7 +9,8 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-core`** | Core primitives (`Port`, the typed `Mutation<P>` command substrate, `SimTick`), f64 coordinate/frame helpers, the persistent BigSpace world shell, typed scene transitions, `SceneMountState` and the `SceneTeardown` schedule, the `SceneViewport` (active-camera binding), canonical diagram data types, shared human-readable entity labels, and shared terminal runtime faults/fixed-step coupling state. Core carries no vehicle-specific motion policy. |
+| **`lunco-core`** | Core primitives (`Port`, the typed `Mutation<P>` command substrate, `SimTick`), f64 coordinate/frame helpers, the persistent BigSpace world shell, typed scene transitions, `SceneMountState` and the `SceneTeardown` schedule, the `SceneViewport` (active-camera binding), canonical diagram data types, shared human-readable entity labels, and shared terminal runtime faults/fixed-step coupling state. Core carries no session/authority policy or vehicle-specific motion policy. |
+| **`lunco-core-session`** | Always-on session and authority substrate: network role/status, possession and RBAC policy, prediction markers/input watermarks, and session-dependent identity admission. It depends on `lunco-core`; the lower-level core remains usable without session policy. |
 | **`lunco-command-macro`** | Procedural macros for the typed command system (`#[Command]`, `#[on_command]`, `register_commands!`; re-exported by `lunco-core`). |
 | **`lunco-workspace`** | Headless editor session management: open Twins, active documents, perspectives, recents, and generic active-Twin setting persistence (`SetTwinSetting` / `ResetTwinSetting`). |
 | **`lunco-workspace-api`** | API adapter for Workspace-owned queries (`ListOpenDocuments`, `ListRecentFiles`, `ListTwin`), installable by windowed, headless, or offscreen hosts without making the data-only Workspace crate depend on the API layer. |
@@ -134,6 +135,7 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 | **`lunco-luncosim-edit-core`** | Headless-safe scene-editing mechanisms: spawn and terrain tools, scene picking, typed command registration, and ECS state. |
 | **`lunco-luncosim-edit-ui`** | Rendered scene-editing presentation: egui/workbench panels, transform-gizmo and selection adapters, and physics diagnostics. |
 | **`lunco-render`** | Appearance **intent**, render-free: `PbrLook`, `SceneCamera`, `WorldLabel`, sun/shadow look. Names `Mesh3d`, never `MeshMaterial3d`. |
+| **`lunco-render-recovery`** | Render-bound GPU health and presentation recovery: wgpu error handling, adapter shadow-capability admission, bounded failure escalation, presentation gating, and scene-teardown rearming. It is independent of the workbench shell. |
 | **`lunco-render-bevy`** | The **only** crate that names `bevy_pbr`. Binds the intent (`PbrLook`/`ShaderLook`/`SceneCamera`/`WorldLabel`) to real materials & cameras; owns `ShaderMaterial`. Headless never adds it. |
 | **`lunco-web`** | Shared web frontend for wasm apps: streaming loader, `WebReadyPlugin`, and the HTML/CSS/Rhai tool host routed through `lunco_rhai`. |
 
@@ -185,6 +187,14 @@ Below, selected crates whose responsibilities benefit from extra detail. (Crates
 
 **`lunco-core`**
 The bedrock of the simulation. Defines the shared scalar port substrate (`PortRegistry`, `PortInfo`, owner-supplied metadata, backend-owned topology keys, and the durable owner-published `PortTopologyRevision`/`PortTopologyState` structural invalidation pair) for software/hardware interaction, the typed `Mutation<P>` command substrate, `SimTick`, and the `ComponentGraph` canonical data structure for all 2D diagram visualizations (Modelica, FSW, SysML). Owns the canonical BigSpace world shell, arbitrary-grid f64 pose composition/conversion, atomic grid migration, and the `ActivePhysicsFrame` boundary; it does not assign celestial semantics.
+
+**`lunco-core-session`**
+The session/authority layer above `lunco-core`. It owns network role and status,
+session registries and profiles, possession/RBAC policy, prediction markers and
+input watermarks, and the identity-admission systems that need the current
+authority role. Hosts that need session behavior add `LunCoCoreSessionPlugin`
+after `LunCoCorePlugin`; headless consumers that only need core primitives do not
+compile this policy layer.
 
 **`lunco-time`**
 The unified mission-time spine (architecture doc 19). Owns `MissionClock`/`TimeTransport`/`WorldTime` (the world animation clock that also gates physics via `Time<Virtual>`), the `TimeDomain` clock tree (`Playback`, `TimeBinding`, `ResolvedDomains`) with the `AnimationPreview` domain + `ControlAnimation` transport, and the `scales` projection layer (UTC↔TAI↔TT↔TDB, sidereal) over `celestial-time`. **All time-scale/JD nuance lives here; consumers delegate.**
@@ -511,7 +521,9 @@ The engineering-IDE shell. Handles the docking engine (tabs, splits),
 perspective presets (Build, Simulate), Twin Browser, shared hierarchy-row
 presentation (`tree::{branch, leaf}`), and picker/command adapters. It does
 not own file bytes or backend I/O; those go through `lunco-storage`, while
-Twin discovery stays in `lunco-workspace`/`lunco-twin`.
+Twin discovery stays in `lunco-workspace`/`lunco-twin`. GPU health and
+presentation recovery live in the independent `lunco-render-recovery` crate;
+the workbench only composes its banner and recovery systems.
 
 **`lunco-capture`**
 Render-bound application capability for screenshots and deterministic offline
@@ -554,6 +566,13 @@ Appearance **intent** and persisted Graphics quality policy — **render-free**.
 
 **`lunco-render-bevy`**
 The **only** crate that names `bevy_pbr`. Binds the intent above to real Bevy materials: `PbrLook` → `StandardMaterial`, `ShaderLook` → `ShaderMaterial` (the one general self-describing `AsBindGroup`, any `.wgsl` per-instance), plus `SceneCamera` → camera bundle, `WorldLabel` → billboard text, environment light and horizon shading. Headless simply never adds this plugin — which is why `--no-ui` links **no wgpu, no `bevy_render`, no `bevy_pbr`, no egui, no winit**. See [architecture/render-decoupling.md](architecture/render-decoupling.md).
+
+**`lunco-render-recovery`**
+Render-bound resilience for the presentation boundary. It installs the
+uncaptured-error handler, records adapter capabilities and shadow admission
+facts, escalates repeated failures to a terminal presentation gate, and resets
+that state at the explicit scene-teardown boundary. It has no workbench layout,
+panel, Twin, or domain-policy ownership.
 
 **`lunco-web`**
 Shared web frontend for the wasm apps. Provides the streaming loader (`web/lunco-boot.{js,css}`), `WebReadyPlugin`, which signals the HTML loader once Bevy paints its first frame, and `mountRhaiTool`, which mounts trusted HTML/CSS tool bundles whose actions execute through the existing Rhai bridge.

@@ -90,7 +90,7 @@ fn on_run_rhai(
     active: Res<ActiveCommandId>,
     pending_request: Res<PendingApiRequest>,
     mut pending: ResMut<PendingWorldScripts>,
-    guard: Option<Res<lunco_core::session::SyncApplyGuard>>,
+    guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
 ) -> Result<Ack, String> {
     let id = active.get().unwrap_or(0);
     // §3.4: gate the snippet's cmd()s against the submitting session. `Some`
@@ -118,7 +118,7 @@ fn on_run_rhai_tool(
     active: Res<ActiveCommandId>,
     pending_request: Res<PendingApiRequest>,
     mut pending: ResMut<PendingWorldScripts>,
-    guard: Option<Res<lunco_core::session::SyncApplyGuard>>,
+    guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
 ) -> Result<Ack, String> {
     let cmd = trigger.event();
     if !lunco_tools::has_function(&cmd.tool, lunco_tools::UI_CLICK_FN) {
@@ -237,7 +237,7 @@ fn on_run_scenario(
     world_root: Query<Entity, With<lunco_core::WorldRoot>>,
     mut registry: ResMut<ScriptRegistry>,
     q_existing: Query<&ScriptedModel>,
-    guard: Option<Res<lunco_core::session::SyncApplyGuard>>,
+    guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
     mut commands: Commands,
 ) -> Result<Ack, String> {
     let target = resolve_scenario_target(cmd.target, &entities, &world_root)?;
@@ -268,7 +268,7 @@ fn on_run_scenario_asset(
     entities: Query<Entity>,
     world_root: Query<Entity, With<lunco_core::WorldRoot>>,
     asset_server: Res<AssetServer>,
-    guard: Option<Res<lunco_core::session::SyncApplyGuard>>,
+    guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
     mut commands: Commands,
 ) -> Result<Ack, String> {
     let cmd = trigger.event();
@@ -1001,7 +1001,7 @@ fn on_run_timeline(
     _t: On<RunTimeline>,
     mut registry: ResMut<ScriptRegistry>,
     q_existing: Query<&ScriptedModel>,
-    guard: Option<Res<lunco_core::session::SyncApplyGuard>>,
+    guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
     mut commands: Commands,
 ) -> Result<Ack, String> {
     let (steps, step_count) =
@@ -1107,7 +1107,7 @@ fn on_run_stored_timeline(
     ws: Option<Res<lunco_workspace::WorkspaceResource>>,
     mut registry: ResMut<ScriptRegistry>,
     q_existing: Query<&ScriptedModel>,
-    guard: Option<Res<lunco_core::session::SyncApplyGuard>>,
+    guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
     mut commands: Commands,
 ) -> Result<Ack, String> {
     let owner = crate::timelines::active_owner(ws.as_deref())
@@ -1224,7 +1224,7 @@ fn on_stop_scenario(
 }
 
 /// Declare data-driven RBAC policies for the script-execution commands in the
-/// shared [`lunco_core::session::CommandPolicyRegistry`], so script submission is
+/// shared [`lunco_core_session::CommandPolicyRegistry`], so script submission is
 /// gated through the **same authorization seam** as every other command —
 /// instead of sitting at the registry's OPEN default while only the node-role
 /// [`crate::scripts_run_here`] condition (which decides *where* scripts run, not
@@ -1238,16 +1238,16 @@ fn on_stop_scenario(
 /// disk-persisting commands, and ownership-gated control for scenario lifecycle
 /// (which acts on a single `#[authz_target]` entity, exactly like `SetPorts`).
 /// Deployments relax or tighten any of these at runtime via
-/// [`lunco_core::session::CommandPolicyRegistry::set_override`] with no recompile.
+/// [`lunco_core_session::CommandPolicyRegistry::set_override`] with no recompile.
 ///
-/// Scope: only *networked client* submissions reach [`lunco_core::session::authorize`]
+/// Scope: only *networked client* submissions reach [`lunco_core_session::authorize`]
 /// (the host gate in `lunco-networking`); local host / standalone API + MCP
 /// commands never do, so single-player and host-local tooling are unaffected.
 #[cfg(any(feature = "rhai", feature = "python"))]
 pub(crate) fn register_command_policies(app: &mut App) {
-    use lunco_core::session::{AuthorityRole, CommandPolicy, CommandPolicyRegistry};
+    use lunco_core_session::{AuthorityRole, CommandPolicy, CommandPolicyRegistry};
 
-    // The registry is a `LunCoCorePlugin` resource; init defensively in case the
+    // The registry is a `LunCoCoreSessionPlugin` resource; init defensively in case the
     // scripting plugin is added first (`init_resource` is idempotent and keeps
     // the existing instance + its baseline `SetPorts` entry).
     app.init_resource::<CommandPolicyRegistry>();
@@ -1423,7 +1423,7 @@ mod tests {
     #[test]
     fn script_commands_carry_rbac_policies() {
         use bevy::prelude::*;
-        use lunco_core::session::{AuthorityRole, CommandPolicy, CommandPolicyRegistry};
+        use lunco_core_session::{AuthorityRole, CommandPolicy, CommandPolicyRegistry};
 
         let mut app = App::new();
         super::register_command_policies(&mut app);

@@ -18,12 +18,12 @@ use lunco_time::{
 #[derive(Event, Clone, Copy)]
 pub struct SetPossessionPolicy {
     /// The policy to apply to future claims.
-    pub policy: lunco_core::PossessionPolicy,
+    pub policy: lunco_core_session::PossessionPolicy,
 }
 
 pub fn on_set_possession_policy(
     trigger: On<SetPossessionPolicy>,
-    mut registry: ResMut<lunco_core::SessionRegistry>,
+    mut registry: ResMut<lunco_core_session::SessionRegistry>,
 ) {
     registry.set_policy(trigger.policy);
 }
@@ -128,11 +128,13 @@ impl Panel for MissionControl {
             // Networking context, read from the always-on substrate. In
             // single-player (Standalone, empty registry) `networked` is false
             // so the ownership UI stays hidden and rovers behave as before.
-            let local_session = ctx.resource::<lunco_core::LocalSession>().map(|l| l.0);
-            let role = ctx.resource::<lunco_core::NetworkRole>();
+            let local_session = ctx
+                .resource::<lunco_core_session::LocalSession>()
+                .map(|l| l.0);
+            let role = ctx.resource::<lunco_core_session::NetworkRole>();
             networked = role.map(|r| r.is_networked()).unwrap_or(false);
             is_host = role.map(|r| r.is_host()).unwrap_or(false);
-            let reg = ctx.resource::<lunco_core::SessionRegistry>();
+            let reg = ctx.resource::<lunco_core_session::SessionRegistry>();
             policy = reg.map(|r| r.policy()).unwrap_or_default();
 
             rovers_display = view
@@ -171,7 +173,7 @@ impl Panel for MissionControl {
         let mut leave_surface = false;
         let mut toggle_pause = false;
         let mut set_speed: Option<f64> = None;
-        let mut set_policy: Option<lunco_core::PossessionPolicy> = None;
+        let mut set_policy: Option<lunco_core_session::PossessionPolicy> = None;
 
         let frame = ctx.panel_content_frame();
 
@@ -254,12 +256,12 @@ impl Panel for MissionControl {
                         ui.add_enabled_ui(is_host, |ui| {
                             ui.selectable_value(
                                 &mut chosen,
-                                lunco_core::PossessionPolicy::Exclusive,
+                                lunco_core_session::PossessionPolicy::Exclusive,
                                 "One each",
                             );
                             ui.selectable_value(
                                 &mut chosen,
-                                lunco_core::PossessionPolicy::LastWins,
+                                lunco_core_session::PossessionPolicy::LastWins,
                                 "Anyone",
                             );
                         });
@@ -308,7 +310,10 @@ impl Panel for MissionControl {
                             // Under `Exclusive` a rover held by another is locked;
                             // under `LastWins` anyone can take it.
                             let locked = *taken_by_other
-                                && matches!(policy, lunco_core::PossessionPolicy::Exclusive);
+                                && matches!(
+                                    policy,
+                                    lunco_core_session::PossessionPolicy::Exclusive
+                                );
                             let resp =
                                 ui.add_enabled(!locked, egui::Button::new("Possess").small());
                             if locked {

@@ -618,7 +618,7 @@ fn piloted_value(w: &World, e: Entity) -> f64 {
         return 0.0;
     };
     let owned = w
-        .get_resource::<lunco_core::SessionRegistry>()
+        .get_resource::<lunco_core_session::SessionRegistry>()
         .is_some_and(|r| r.owner_of(gid).is_some());
     if owned {
         1.0

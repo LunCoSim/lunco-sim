@@ -4,7 +4,8 @@ use crate::sync::{DeclareChannelExt, SyncEnvelope};
 use bevy::prelude::*;
 use core::time::Duration;
 use lightyear::prelude::*;
-use lunco_core::{NetStatus, NetworkRole, SessionId, SyncChannel};
+use lunco_core::{SessionId, SyncChannel};
+use lunco_core_session::{NetStatus, NetworkRole};
 #[cfg(not(target_family = "wasm"))]
 use lunco_storage::Storage;
 
@@ -168,11 +169,12 @@ pub(crate) fn peer_to_session(peer: PeerId) -> SessionId {
 /// while `None` stays idle (`NetworkRole::Standalone`, single-player) until a
 /// `JoinServer` command dials a server. `Some(Host)` builds the listen-server.
 pub(crate) fn build_networking(app: &mut App, mode: &Option<NetworkMode>) {
-    // Wire-fed session state (review C7: moved out of `LunCoCorePlugin`'s
+    // Wire-fed session state (review C7: moved out of the always-on
     // always-on set — every reader/writer lives in this crate, behind this
     // feature). Initialized up front so every registration below — client
     // deep-link seeding, the ui confirm modal, net-diag's divergence report —
-    // can take `Res`/`ResMut` without ordering worries.
+    // can take `Res`/`ResMut` without ordering worries. The always-on session
+    // substrate itself is installed by `LunCoCoreSessionPlugin` at the host.
     app.init_resource::<crate::session::PendingConnect>();
     app.init_resource::<crate::session::IncomingSnapshots>();
     app.init_resource::<crate::session::DivergenceStats>();

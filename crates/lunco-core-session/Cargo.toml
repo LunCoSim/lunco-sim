@@ -1,0 +1,15 @@
+[package]
+name = "lunco-core-session"
+version = "0.1.0-dev"
+edition = "2021"
+license.workspace = true
+description = "Always-on session, authority, prediction markers, and identity admission for LunCoSim"
+
+[dependencies]
+bevy = { workspace = true }
+lunco-core = { path = "../lunco-core" }
+lunco-hooks = { path = "../lunco-hooks" }
+serde = { workspace = true }
+
+[lints]
+workspace = true

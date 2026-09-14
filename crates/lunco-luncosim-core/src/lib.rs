@@ -243,7 +243,7 @@ pub fn run_headless() -> AppExit {
 }
 #[cfg(feature = "networking")]
 fn load_ready_scenario(
-    role: Res<lunco_core::NetworkRole>,
+    role: Res<lunco_core_session::NetworkRole>,
     remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
     downloads: Res<lunco_networking::scenario_sync::AssetDownloads>,
     // Twin roots: a downloaded scenario is mounted here as a root over its cache
@@ -347,7 +347,7 @@ fn load_ready_scenario(
 /// by the entry's peer-local `doc` id, which single-scene makes irrelevant.
 #[cfg(feature = "networking")]
 fn replay_scenario_journal(
-    role: Res<lunco_core::NetworkRole>,
+    role: Res<lunco_core_session::NetworkRole>,
     remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
     // Host-side only (inserted by `setup_host`) — the manifest this host serves.
     local_scenario: Option<Res<lunco_networking::scenario::ScenarioManifestResource>>,
@@ -411,7 +411,7 @@ fn replay_scenario_journal(
 /// sufficient); with more than one open model it defers rather than misroute.
 #[cfg(feature = "networking")]
 fn replay_scenario_journal_modelica(
-    role: Res<lunco_core::NetworkRole>,
+    role: Res<lunco_core_session::NetworkRole>,
     remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     registry: Option<ResMut<lunco_modelica_core::state::ModelicaDocumentRegistry>>,
@@ -465,7 +465,7 @@ fn replay_scenario_journal_modelica(
 /// cross-peer document identity. No-ops when the registry / journal is absent.
 #[cfg(feature = "networking")]
 fn replay_scenario_journal_script(
-    role: Res<lunco_core::NetworkRole>,
+    role: Res<lunco_core_session::NetworkRole>,
     remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     registry: Option<ResMut<lunco_scripting::ScriptRegistry>>,
@@ -511,7 +511,7 @@ fn replay_scenario_journal_script(
 /// — they ride the content/presence planes. No-ops when registry/journal absent.
 #[cfg(feature = "networking")]
 fn replay_scenario_journal_experiment(
-    role: Res<lunco_core::NetworkRole>,
+    role: Res<lunco_core_session::NetworkRole>,
     remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     registry: Option<ResMut<lunco_experiments::ExperimentRegistry>>,
@@ -551,7 +551,7 @@ fn replay_scenario_journal_experiment(
 /// and simply no-ops (it still forwards the journal entry to GUI peers).
 #[cfg(feature = "networking")]
 fn replay_scenario_journal_shader(
-    role: Res<lunco_core::NetworkRole>,
+    role: Res<lunco_core_session::NetworkRole>,
     remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     registry: Option<ResMut<lunco_scene_authoring::shader_doc::ShaderRegistry>>,
@@ -603,7 +603,7 @@ fn replay_scenario_journal_shader(
 /// spec is a singleton). No-ops when the spec resource / journal are absent.
 #[cfg(feature = "networking")]
 fn replay_scenario_journal_obstacle(
-    role: Res<lunco_core::NetworkRole>,
+    role: Res<lunco_core_session::NetworkRole>,
     remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     spec: Option<ResMut<lunco_obstacle_field::ObstacleFieldSpec>>,
@@ -651,7 +651,7 @@ fn replay_scenario_journal_obstacle(
 /// ECS), so this needs no ECS resource beyond the journal. No-ops when absent.
 #[cfg(feature = "networking")]
 fn replay_scenario_journal_tools(
-    role: Res<lunco_core::NetworkRole>,
+    role: Res<lunco_core_session::NetworkRole>,
     remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
@@ -705,7 +705,7 @@ fn replay_scenario_journal_tools(
 /// store / journal are absent.
 #[cfg(feature = "networking")]
 fn replay_scenario_journal_timeline(
-    role: Res<lunco_core::NetworkRole>,
+    role: Res<lunco_core_session::NetworkRole>,
     remote: Res<lunco_networking::scenario::RemoteScenarioManifest>,
     journal: Option<Res<lunco_doc_bevy::JournalResource>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
@@ -769,9 +769,12 @@ fn write_run_result_artifact(
     mut completed: MessageReader<lunco_experiments::RunCompleted>,
     registry: Res<lunco_experiments::ExperimentRegistry>,
     workspace: Res<lunco_workspace::WorkspaceResource>,
-    role: Option<Res<lunco_core::NetworkRole>>,
+    role: Option<Res<lunco_core_session::NetworkRole>>,
 ) {
-    if matches!(role.as_deref(), Some(lunco_core::NetworkRole::Client)) {
+    if matches!(
+        role.as_deref(),
+        Some(lunco_core_session::NetworkRole::Client)
+    ) {
         return;
     }
     for msg in completed.read() {
@@ -861,10 +864,10 @@ fn load_run_result_artifacts(
 #[cfg(feature = "networking")]
 fn request_rebuild_after_result(
     mut completed: MessageReader<lunco_experiments::RunCompleted>,
-    role: Option<Res<lunco_core::NetworkRole>>,
+    role: Option<Res<lunco_core_session::NetworkRole>>,
     mut rebuild: ResMut<lunco_networking::sync::RequestManifestRebuild>,
 ) {
-    if !matches!(role.as_deref(), Some(lunco_core::NetworkRole::Host)) {
+    if !matches!(role.as_deref(), Some(lunco_core_session::NetworkRole::Host)) {
         return;
     }
     if completed.read().count() > 0 {
@@ -880,7 +883,7 @@ fn request_rebuild_after_result(
 /// primitive `RunStatusMsg` here (keeping networking free of an experiments dep).
 #[cfg(feature = "networking")]
 fn broadcast_run_status(
-    role: Option<Res<lunco_core::NetworkRole>>,
+    role: Option<Res<lunco_core_session::NetworkRole>>,
     mut outbox: ResMut<lunco_networking::sync::SyncOutbox>,
     mut progress: MessageReader<lunco_experiments::RunProgress>,
     mut completed: MessageReader<lunco_experiments::RunCompleted>,
@@ -888,7 +891,7 @@ fn broadcast_run_status(
     mut cancelled: MessageReader<lunco_experiments::RunCancelled>,
     registry: Res<lunco_experiments::ExperimentRegistry>,
 ) {
-    if !matches!(role.as_deref(), Some(lunco_core::NetworkRole::Host)) {
+    if !matches!(role.as_deref(), Some(lunco_core_session::NetworkRole::Host)) {
         return;
     }
     use lunco_core::SyncChannel;
@@ -1581,6 +1584,7 @@ impl Plugin for LunCoSimCorePlugin {
             // application paths from silently simulating different mechanics.
             .add_plugins(CoSimPlugin)
             .add_plugins(lunco_core::LunCoCorePlugin)
+            .add_plugins(lunco_core_session::LunCoCoreSessionPlugin)
             // Renderer-independent exposure aggregation is kept in its own
             // production crate. It remains in the shared core path so GUI and
             // headless hosts publish identical facts, while exposure edits no

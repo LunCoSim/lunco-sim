@@ -178,7 +178,7 @@ mod readiness_gate_tests {
 }
 
 /// The session a scenario acts on behalf of — captured at attach from the wire
-/// origin ([`lunco_core::session::SyncApplyGuard`]). `Some` only for a scenario
+/// origin ([`lunco_core_session::SyncApplyGuard`]). `Some` only for a scenario
 /// launched by a *remote* networked session; the driver sets it as the `cmd()`
 /// authority for that entity's hooks, so a remote script can't exceed its
 /// submitter's authority (design §3.4). Absent / `None` ⇒ host-trusted launch
@@ -561,8 +561,8 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
         // (`Client`/`Both`); the host ticks `Host`/`Both`. Read once — constant
         // for the whole pass.
         let is_client = matches!(
-            world.get_resource::<lunco_core::NetworkRole>(),
-            Some(lunco_core::NetworkRole::Client)
+            world.get_resource::<lunco_core_session::NetworkRole>(),
+            Some(lunco_core_session::NetworkRole::Client)
         );
         let scene_generation = world
             .get_resource::<ScenarioSceneGeneration>()

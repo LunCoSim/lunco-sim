@@ -18,7 +18,7 @@ pub mod attach;
 pub mod commands;
 pub mod coords;
 /// M1 — deterministic identity from `Provenance`. The only place network
-/// ids are *derived*; the assignment system below is the only place they
+/// ids are *derived*; the session identity-admission system is the only place they
 /// are *minted*.
 pub mod identity;
 /// Shared 53-bit time-sorted id generator backing `GlobalEntityId`
@@ -42,11 +42,6 @@ pub mod reconcile;
 pub mod scene;
 /// Shared scene teardown schedule for all scene-owned subsystems.
 mod scene_lifecycle;
-/// Always-on networking **authority** substrate (no wire dependency):
-/// `NetworkRole`, `LocalSession`, `SyncApplyGuard`, `SessionRegistry` + the
-/// single `authorize` gate. The seam the optional `lunco-networking` layer
-/// drives; trivially inert in single-player.
-pub mod session;
 pub mod telemetry;
 /// The persistent big_space world shell (single root + `WorldGrid` + one
 /// `FloatingOrigin`) that every scene mounts into.
@@ -115,14 +110,6 @@ pub use scene::{
     SceneTransitionRequest, SceneTransitionStarted,
 };
 pub use scene_lifecycle::{run_scene_teardown, SceneMountState, SceneTeardown};
-pub use session::{
-    authorize, AppliedInputSeq, AppliedSlot, ArticulatedLink, ArticulatedVehicle,
-    BufferedClientInputs, InputFrame, LocalDriveInput, LocalSession, NetConnectRequest,
-    NetDisconnectRequest, NetExcluded, NetReplicate, NetSpawn, NetStatus, NetworkRole,
-    NotPredictable, OwnedInputLog, OwnedLocally, PendingReplicatedSpawns, PossessionPolicy,
-    PredictedDynamic, ReplicatedChassisMotion, ReplicatedSpawn, SessionProfiles, SessionRegistry,
-    SkipContentStamp, SyncApplyGuard, VesselInputLog, MAX_SEQ_JUMP,
-};
 pub use telemetry::Severity;
 pub use world::{
     ensure_world_root, ActivePhysicsFrame, OriginAnchor, WorldGrid, WorldGridConfig, WorldRoot,
@@ -167,7 +154,7 @@ pub struct LunCoCorePlugin;
 /// A **53-bit** identifier, safe as a raw Number in JavaScript/JSON without
 /// precision loss. Ids are no longer minted ad-hoc: the field is **private**
 /// and there is no public `new()`/`Default`. An id is produced in exactly one
-/// of two ways, both routed through [`assign_global_entity_ids`]:
+/// of two ways, both admitted by the session-layer identity system:
 /// - **derived** from [`Provenance`] (Content/Derived) — deterministic, same on
 ///   every peer, no coordination;
 /// - **server-allocated** ([`Provenance::Authoritative`]) via [`crate::ids`],
@@ -200,15 +187,15 @@ impl GlobalEntityId {
     /// Reconstruct an id from a value that already exists — a wire/JSON `u64`
     /// the API layer is resolving back to an [`Entity`], or serde. This is
     /// *reconstruction*, not minting: callers must not pass freshly-invented
-    /// numbers here (attach a [`Provenance`] and let the assignment system mint).
+    /// numbers here (attach a [`Provenance`] and let the session identity-admission system mint).
     pub fn from_raw(v: u64) -> Self {
         Self(v)
     }
 
-    /// Server-only mint for [`Provenance::Authoritative`] entities. Wraps
-    /// [`crate::ids::make_id_53`]; crate-internal so the assignment system is
-    /// the sole caller.
-    pub(crate) fn allocate_authoritative() -> Self {
+    /// Server-only mint for [`Provenance::Authoritative`] entities. The
+    /// `lunco-core-session` identity-admission system is the sole production
+    /// owner that calls this boundary.
+    pub fn allocate_authoritative() -> Self {
         Self(crate::ids::make_id_53())
     }
 }
@@ -1080,18 +1067,12 @@ impl Plugin for LunCoCorePlugin {
         register_core_resources(app);
         app.add_systems(
             SceneTeardown,
-            (clear_runtime_diagnostics, reset_scene_simulation_state),
+            (clear_runtime_diagnostics, reset_core_scene_state),
         );
         // Runtime subsystem toggles (progressive-fidelity substrate) +
         // `SetSubsystemEnabled` command.
         subsystems::build_subsystems(app);
-        app.add_systems(FixedUpdate, advance_sim_tick)
-            .add_systems(PostUpdate, assign_global_entity_ids);
-        // Host: keep the per-gid input-ack watermarks keyed to their CURRENT owner.
-        // A re-possessed vessel must not keep acking the previous owner's `seq`
-        // stream — see `AppliedInputSeq`. Change-detected on the registry, so it
-        // costs nothing on a steady frame; always-on substrate (no wire dep).
-        app.add_systems(FixedFirst, sync_applied_seq_owners);
+        app.add_systems(FixedUpdate, advance_sim_tick);
         // Port propagation on rollback replay is registered by `lunco_cosim`
         // (its `CosimSet::Propagate` nests inside `ControlDacSet`). This crate
         // contributes nothing to the replayed chain — `advance_sim_tick` is
@@ -1119,30 +1100,9 @@ pub(crate) fn register_core_resources(app: &mut App) {
         // binary has it without ordering worries.
         .init_resource::<SceneViewport>()
         .init_resource::<SceneMountState>()
-        .init_resource::<session::NetworkRole>()
-        .init_resource::<session::LocalSession>()
-        .init_resource::<session::SyncApplyGuard>()
-        .init_resource::<session::NetStatus>()
-        .init_resource::<session::SessionRegistry>()
-        .init_resource::<session::SessionProfiles>()
-        .init_resource::<session::SessionRbac>()
-        .init_resource::<session::CommandPolicyRegistry>()
-        .init_resource::<session::PendingReplicatedSpawns>()
-        // Input-sequence bookkeeping is always-on substrate: the
-        // lunco-controller observers read/write these every frame whether
-        // or not the optional networking wire is present.
-        .init_resource::<session::OwnedInputLog>()
-        .init_resource::<session::BufferedClientInputs>()
-        .init_resource::<session::LocalDriveInput>()
-        .init_resource::<session::AppliedInputSeq>()
-        // NOTE (review C7): wire-only resources — the deep-link `PendingConnect`
-        // gate, the `IncomingSnapshots` inbox, the `DivergenceStats` desync gauge —
-        // moved to `lunco-networking/src/session.rs` and are initialized by the
-        // plugins whose systems read them. Only resources consumed by systems that
-        // run WITHOUT the networking feature belong in this list.
         // Command-result substrate: result-reporting `#[on_command]` observers
-        // require these to exist (same always-on rule as the session resources
-        // above — see the AppliedInputSeq fix).
+        // require these to exist (the same always-on resource rule enforced by
+        // LunCoCoreSessionPlugin for the session layer).
         .init_resource::<CommandResults>()
         .init_resource::<ActiveCommandId>()
         .init_resource::<CausalTrace>()
@@ -1159,55 +1119,13 @@ pub(crate) fn register_core_resources(app: &mut App) {
         .init_resource::<pacing::SimulationBarrierParticipants>();
 }
 
-/// Reset scene-scoped simulation and prediction state before the outgoing
-/// entities are despawned. These resources are keyed by scene gids or by the
-/// fixed tick; retaining them would let a replacement scene inherit old input
-/// frames, acknowledgements, render-leading values, or a rollback marker.
-fn reset_scene_simulation_state(
+/// Reset core-owned scene state before the outgoing entities are despawned.
+fn reset_core_scene_state(
     mut rollback: ResMut<RollbackInProgress>,
-    mut owned: ResMut<session::OwnedInputLog>,
-    mut buffered: ResMut<session::BufferedClientInputs>,
-    mut local_drive: ResMut<session::LocalDriveInput>,
-    mut applied: ResMut<session::AppliedInputSeq>,
     mut causal_trace: ResMut<CausalTrace>,
 ) {
     rollback.0 = false;
-    owned.0.clear();
-    buffered.pending.clear();
-    buffered.applied.clear();
-    buffered.last_writes.clear();
-    local_drive.0.clear();
-    applied.retain_gids(|_| false);
     causal_trace.clear();
-}
-
-/// HOST: re-key the input-ack watermarks against the authoritative ownership
-/// table whenever it changes (a claim, a release, a disconnect).
-///
-/// Without this, a vessel re-possessed by a second client keeps stamping the FIRST
-/// client's `seq` (e.g. 5000) into every snapshot. The new owner's client latches
-/// that as `last_reconciled`, then early-returns on every subsequent (lower) ack —
-/// its prediction is never reconciled again, and the rover drifts without bound.
-/// This is the failure users hit in ordinary play, with no attacker involved.
-///
-/// Also frees the slot of a vessel nobody owns any more, so the map tracks the
-/// live ownership table rather than growing across possession churn.
-pub fn sync_applied_seq_owners(
-    role: Res<session::NetworkRole>,
-    registry: Res<session::SessionRegistry>,
-    mut applied: ResMut<session::AppliedInputSeq>,
-    mut buffered: ResMut<session::BufferedClientInputs>,
-) {
-    if !role.is_host() || !registry.is_changed() {
-        return;
-    }
-    // Any gid whose owner changed loses BOTH its ack watermark and whatever the
-    // previous owner had queued but unintegrated — replaying A's inputs into B's
-    // vessel would be a control leak, not just a stale ack.
-    for gid in applied.changed_owner_gids(&registry) {
-        buffered.clear_gid(gid);
-    }
-    applied.sync_owners(&registry);
 }
 
 /// Advance the discrete [`SimTick`] once per fixed step, *only while time is
@@ -1226,192 +1144,9 @@ fn advance_sim_tick(mut tick: ResMut<SimTick>, vtime: Option<Res<Time<Virtual>>>
     }
 }
 
-/// The **only** place [`GlobalEntityId`]s are minted. [`Provenance`] decides how:
-/// Content/Derived → deterministic hash (same on every peer); Authoritative →
-/// server-allocated (clients receive it via replication); Local → no id at all.
-///
-/// **Identity is opt-in: `With<Provenance>`.** An entity that does not declare
-/// where it came from does not get a network identity, full stop.
-///
-/// This replaces a Ph1 migration fallback that auto-allocated an id for any
-/// untagged entity and `warn!`ed once. The fallback was not harmless:
-///
-/// - It made "I forgot to declare `Provenance`" **invisible**, which is how
-///   `rewire_usd_connections` came to re-trigger its own `Added<GlobalEntityId>`
-///   gate every frame and rebuild the entire co-sim wiring graph forever.
-/// - Because the filter was `Without<GlobalEntityId>` alone, and Bevy 0.19
-///   stores resources AS ENTITIES, it was minting network identities for **688
-///   resource entities** — `AppTypeRegistry`, `AccumulatedMouseScroll`, every
-///   `Assets<T>`. Identity for a resource is meaningless.
-///
-/// A missing `Provenance` now fails the honest way: no id, and whatever needed
-/// one says so. See `docs/architecture/42-ui-frame-discipline.md` §6.
-fn assign_global_entity_ids(
-    mut commands: Commands,
-    // `Provenance` is OPTIONAL, and a runtime instance is admitted on its own
-    // marker. A `SkipContentStamp` root normally also carries a `Content` stamp
-    // from the USD loader (which this system then ignores in favour of an
-    // authoritative id) — but a stage with no asset path gets no stamp at all,
-    // and requiring `&Provenance` silently dropped exactly those roots from the
-    // query. No `GlobalEntityId` means possession cannot claim ownership, so a
-    // `piloted`-gated vessel spawned that way is dead on arrival with nothing
-    // logged. The `Or` keeps the scan to entities that could ever want an id.
-    q_new: Query<
-        (Entity, Option<&Provenance>, Has<session::SkipContentStamp>),
-        (
-            Without<GlobalEntityId>,
-            Or<(With<Provenance>, With<session::SkipContentStamp>)>,
-        ),
-    >,
-    // Authority is derived from the role, not a separate `IsServer` flag — the two
-    // used to drift (a `Standalone` sandbox with `IsServer(false)` minted no ids
-    // for runtime spawns). `Host` and `Standalone` mint; a pure `Client` never
-    // reaches the minting arms because it pins host-allocated ids via replication.
-    role: Res<session::NetworkRole>,
-) {
-    let is_authoritative = role.is_authoritative();
-    for (entity, prov, runtime_instance) in q_new.iter() {
-        // Runtime-instanced subtree root (gap G2 / B.1): server-allocated unique
-        // identity, ignoring any `Content` stamp the USD loader adds. Two
-        // instances of the same asset would otherwise derive the *same*
-        // content id and collide. Clients receive the id via spawn-replication
-        // (they pin `GlobalEntityId::from_raw` directly, so they never reach
-        // here for these roots).
-        if runtime_instance {
-            if is_authoritative {
-                commands
-                    .entity(entity)
-                    .try_insert(GlobalEntityId::allocate_authoritative());
-            }
-            continue;
-        }
-        // No stamp and not a runtime instance: nothing to derive an id from, and
-        // nothing asked for one.
-        let Some(prov) = prov else {
-            continue;
-        };
-        match prov {
-            Provenance::Local => { /* never networked, no id */ }
-            p @ (Provenance::Content { .. } | Provenance::Derived { .. }) => {
-                if let Some(id) = identity::derive_id(p) {
-                    commands
-                        .entity(entity)
-                        .try_insert(GlobalEntityId::from_raw(id));
-                }
-            }
-            Provenance::Authoritative => {
-                // Only an authoritative peer mints; clients receive the id via replication.
-                if is_authoritative {
-                    commands
-                        .entity(entity)
-                        .try_insert(GlobalEntityId::allocate_authoritative());
-                }
-            }
-        }
-    }
-}
-
 #[cfg(test)]
-mod ph1_identity_tests {
-    //! Ph1 Bevy-wiring layer over the pure logic already proven in
-    //! `lunco-networking/proto-tests`. Runs on a bare headless `App` (no
-    //! rendering, no backend) — we invoke the schedules directly so no time
-    //! plumbing is needed.
+mod tests {
     use super::*;
-
-    /// App with just the Ph1 systems + resources, nothing else. `is_server` maps
-    /// onto the authority role: an authoritative peer is `Standalone` (equally
-    /// `Host` — same minting arm), a non-authoritative one is a pure `Client`.
-    fn ph1_app(is_server: bool) -> App {
-        let role = if is_server {
-            session::NetworkRole::Standalone
-        } else {
-            session::NetworkRole::Client
-        };
-        let mut app = App::new();
-        app.insert_resource(role)
-            .init_resource::<SimTick>()
-            .add_systems(FixedUpdate, advance_sim_tick)
-            .add_systems(PostUpdate, assign_global_entity_ids);
-        app
-    }
-
-    /// Guards the "substrate resource initialized only behind an optional
-    /// feature" bug class (the `AppliedInputSeq` single-player panic,
-    /// 2026-06-03). Builds the resource set exactly as `LunCoCorePlugin`
-    /// does — via `register_core_resources` — and asserts every always-on
-    /// substrate resource exists. If an init is moved out into a
-    /// feature-gated plugin (e.g. `SyncPlugin`), this fails in CI (default
-    /// features = networking off) long before a real single-player run can
-    /// panic.
-    #[test]
-    fn core_substrate_resources_present() {
-        let mut app = App::new();
-        register_core_resources(&mut app);
-        let w = app.world();
-        assert!(w.get_resource::<SimTick>().is_some());
-        assert!(w.get_resource::<session::NetworkRole>().is_some());
-        assert!(w.get_resource::<session::LocalSession>().is_some());
-        assert!(w.get_resource::<session::SyncApplyGuard>().is_some());
-        assert!(w.get_resource::<session::NetStatus>().is_some());
-        assert!(w.get_resource::<session::SessionRegistry>().is_some());
-        assert!(w
-            .get_resource::<session::PendingReplicatedSpawns>()
-            .is_some());
-        // The two resources that caused the original panic — nailed down
-        // explicitly so a regression names them.
-        assert!(w.get_resource::<session::OwnedInputLog>().is_some());
-        assert!(w.get_resource::<session::AppliedInputSeq>().is_some());
-        assert!(w.get_resource::<CausalTrace>().is_some());
-        assert!(w.get_resource::<PortTopologyRevision>().is_some());
-        assert!(w.get_resource::<ports::PortTopologyState>().is_some());
-    }
-
-    #[test]
-    fn scene_teardown_clears_prediction_state() {
-        let mut app = App::new();
-        register_core_resources(&mut app);
-        app.init_resource::<RollbackInProgress>()
-            .add_systems(SceneTeardown, reset_scene_simulation_state);
-
-        app.world_mut().resource_mut::<RollbackInProgress>().0 = true;
-        app.world_mut()
-            .resource_mut::<session::OwnedInputLog>()
-            .0
-            .insert(1, session::VesselInputLog::default());
-        app.world_mut()
-            .resource_mut::<session::BufferedClientInputs>()
-            .push(1, 1, vec![("throttle".into(), 1.0)]);
-        app.world_mut()
-            .resource_mut::<session::LocalDriveInput>()
-            .0
-            .insert(1, (1.0, 0.0));
-        app.world_mut()
-            .resource_mut::<session::AppliedInputSeq>()
-            .record(1, None, 1);
-
-        run_scene_teardown(app.world_mut());
-
-        assert!(!app.world().resource::<RollbackInProgress>().0);
-        assert!(app
-            .world()
-            .resource::<session::OwnedInputLog>()
-            .0
-            .is_empty());
-        let buffered = app.world().resource::<session::BufferedClientInputs>();
-        assert!(buffered.pending.is_empty());
-        assert!(buffered.applied.is_empty());
-        assert!(buffered.last_writes.is_empty());
-        assert!(app
-            .world()
-            .resource::<session::LocalDriveInput>()
-            .0
-            .is_empty());
-        assert!(app
-            .world()
-            .resource::<session::AppliedInputSeq>()
-            .is_empty());
-    }
 
     #[test]
     fn scene_pointer_policy_has_fail_safe_usd_semantics() {
@@ -1432,115 +1167,22 @@ mod ph1_identity_tests {
         );
     }
 
-    fn id_of(app: &mut App, e: Entity) -> Option<u64> {
-        app.world()
-            .get::<GlobalEntityId>(e)
-            .map(GlobalEntityId::get)
-    }
-
-    #[test]
-    fn content_entity_gets_deterministic_id() {
-        let mut app = ph1_app(true);
-        let prov = identity::content("usd", "scene.usda", "/World/Rover");
-        let expected = identity::derive_id(&prov).unwrap();
-        let e = app.world_mut().spawn(prov).id();
-        app.world_mut().run_schedule(PostUpdate);
-        assert_eq!(id_of(&mut app, e), Some(expected));
-    }
-
-    #[test]
-    fn local_entity_gets_no_id() {
-        let mut app = ph1_app(true);
-        let e = app.world_mut().spawn(Provenance::Local).id();
-        app.world_mut().run_schedule(PostUpdate);
-        assert_eq!(id_of(&mut app, e), None);
-    }
-
-    #[test]
-    fn authoritative_minted_only_on_server() {
-        // Pure client: no id.
-        let mut client = ph1_app(false);
-        let ce = client.world_mut().spawn(Provenance::Authoritative).id();
-        client.world_mut().run_schedule(PostUpdate);
-        assert_eq!(id_of(&mut client, ce), None);
-
-        // Server: id present.
-        let mut server = ph1_app(true);
-        let se = server.world_mut().spawn(Provenance::Authoritative).id();
-        server.world_mut().run_schedule(PostUpdate);
-        assert!(id_of(&mut server, se).is_some());
-    }
-
-    /// Authority is a pure function of the role — the single source of truth that
-    /// replaced the drift-prone `IsServer` flag.
-    #[test]
-    fn authority_derives_from_role() {
-        assert!(session::NetworkRole::Standalone.is_authoritative());
-        assert!(session::NetworkRole::Host.is_authoritative());
-        assert!(!session::NetworkRole::Client.is_authoritative());
-    }
-
-    /// Regression guard (2026-07-15): a palette/API spawn tags its root
-    /// `SkipContentStamp` (a "runtime instance"). A `Standalone` single-player
-    /// sandbox is authoritative and MUST mint an id for it — without one,
-    /// possession can't claim ownership and a `piloted`-gated lander goes dead
-    /// (the whole reason for this refactor). A pure `Client` must NOT mint — it
-    /// pins the host's id via replication.
-    #[test]
-    fn runtime_instance_root_minted_only_when_authoritative() {
-        let mut standalone = ph1_app(true);
-        let e = standalone.world_mut().spawn(session::SkipContentStamp).id();
-        standalone.world_mut().run_schedule(PostUpdate);
-        assert!(
-            id_of(&mut standalone, e).is_some(),
-            "Standalone must mint a GlobalEntityId for a runtime-instanced spawn"
-        );
-
-        let mut client = ph1_app(false);
-        let ce = client.world_mut().spawn(session::SkipContentStamp).id();
-        client.world_mut().run_schedule(PostUpdate);
-        assert_eq!(
-            id_of(&mut client, ce),
-            None,
-            "a pure Client must not mint — it pins the host-allocated id"
-        );
-    }
-
-    #[test]
-    fn derived_id_matches_parent_role() {
-        let mut app = ph1_app(true);
-        let parent_prov = identity::content("usd", "scene.usda", "/World/Rover");
-        let parent_id = identity::derive_id(&parent_prov).unwrap();
-        let child_prov = Provenance::Derived {
-            parent: parent_id,
-            role: "wheel.fl".into(),
-        };
-        let expected = identity::derive_id(&child_prov).unwrap();
-        let child = app.world_mut().spawn(child_prov).id();
-        app.world_mut().run_schedule(PostUpdate);
-        assert_eq!(id_of(&mut app, child), Some(expected));
-    }
-
     #[test]
     fn sim_tick_advances_under_run_paused_does_not() {
-        let mut app = ph1_app(true);
+        let mut app = App::new();
+        app.init_resource::<SimTick>()
+            .add_systems(FixedUpdate, advance_sim_tick)
+            .insert_resource(Time::<Virtual>::default());
 
-        // Running world: `Time<Virtual>` default `relative_speed` is 1.0 (> 0), so
-        // the tick advances each fixed step. This is the single gate — no separate
-        // `TimeWarpState`.
-        app.insert_resource(Time::<Virtual>::default());
         app.world_mut().run_schedule(FixedUpdate);
         assert_eq!(app.world().resource::<SimTick>().0, 1);
         app.world_mut().run_schedule(FixedUpdate);
         assert_eq!(app.world().resource::<SimTick>().0, 2);
 
-        // Paused (Bevy's paused flag — `effective_speed == 0` while
-        // `relative_speed` stays a positive rate): tick frozen.
         app.world_mut().resource_mut::<Time<Virtual>>().pause();
         app.world_mut().run_schedule(FixedUpdate);
         assert_eq!(app.world().resource::<SimTick>().0, 2);
 
-        // Resumed: the tick advances again.
         app.world_mut().resource_mut::<Time<Virtual>>().unpause();
         app.world_mut().run_schedule(FixedUpdate);
         assert_eq!(app.world().resource::<SimTick>().0, 3);

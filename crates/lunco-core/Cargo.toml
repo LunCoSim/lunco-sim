@@ -17,10 +17,6 @@ lunco-command-macro = { path = "../lunco-command-macro" }
 # with byte-wise FNV-1a; this is the one canonical impl, shared with terrain
 # cache keys + precompute, instead of a copy-pasted fold. Dependency-free.
 lunco-hash = { path = "../lunco-hash" }
-# Language-neutral internal hook registry — powers the optional scripted
-# authorization policy in `authorize()` ("policy→rhai"). Dependency-free, so it
-# adds no weight and can't cycle; absent a registered hook it's a no-op.
-lunco-hooks = { path = "../lunco-hooks" }
 # `std::time::SystemTime::now()` panics on wasm32-unknown-unknown.
 web-time = { workspace = true }
 # Real entropy for the per-process id seed (`ids.rs`). The workspace pin enables

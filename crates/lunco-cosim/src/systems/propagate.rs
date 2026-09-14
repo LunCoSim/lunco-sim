@@ -51,12 +51,12 @@ pub enum CosimSet {
 /// Host and standalone simulate every body authoritatively, so the question is
 /// only asked on a client. There, a target is simulated locally when:
 ///
-/// * it carries [`lunco_core::OwnedLocally`] — the body this session possesses
+/// * it carries [`lunco_core_session::OwnedLocally`] — the body this session possesses
 ///   and predicts (input-replay reconciled), or a wheel of it
 ///   (`propagate_owned_to_wheels` mirrors the marker onto `ArticulatedLink`s), or
-/// * it carries [`lunco_core::PredictedDynamic`] — a free body promoted to local
+/// * it carries [`lunco_core_session::PredictedDynamic`] — a free body promoted to local
 ///   dynamic prediction (state reconciled), or
-/// * it is **not replicated at all** ([`lunco_core::NetReplicate`] absent). This
+/// * it is **not replicated at all** ([`lunco_core_session::NetReplicate`] absent). This
 ///   clause is the load-bearing one for vessel control: the endpoints of a
 ///   rover's actuation graph are bare [`lunco_core::architecture::Port`] entities
 ///   (`lunco-usd-sim`'s generic USD wiring targets wheel drive/heading ports), which have
@@ -75,15 +75,23 @@ pub enum CosimSet {
 /// replicated gids.
 pub(crate) fn peer_simulates(world: &World, target: Entity) -> bool {
     let is_client = matches!(
-        world.get_resource::<lunco_core::NetworkRole>().copied(),
-        Some(lunco_core::NetworkRole::Client)
+        world
+            .get_resource::<lunco_core_session::NetworkRole>()
+            .copied(),
+        Some(lunco_core_session::NetworkRole::Client)
     );
     if !is_client {
         return true; // host / standalone: authoritative over everything
     }
-    world.get::<lunco_core::OwnedLocally>(target).is_some()
-        || world.get::<lunco_core::PredictedDynamic>(target).is_some()
-        || world.get::<lunco_core::NetReplicate>(target).is_none()
+    world
+        .get::<lunco_core_session::OwnedLocally>(target)
+        .is_some()
+        || world
+            .get::<lunco_core_session::PredictedDynamic>(target)
+            .is_some()
+        || world
+            .get::<lunco_core_session::NetReplicate>(target)
+            .is_none()
 }
 
 /// One compiled wire: source endpoint + affine gain + the *index* of its target
@@ -360,14 +368,16 @@ impl CompiledWiring {
                 {
                     force_producing = true;
                     let client_predicts = matches!(
-                        world.get_resource::<lunco_core::NetworkRole>().copied(),
-                        Some(lunco_core::NetworkRole::Client)
+                        world
+                            .get_resource::<lunco_core_session::NetworkRole>()
+                            .copied(),
+                        Some(lunco_core_session::NetworkRole::Client)
                     );
                     let predicted_dynamic = world
                         .get::<avian3d::prelude::RigidBody>(dst.entity)
                         .is_some_and(|body| matches!(body, avian3d::prelude::RigidBody::Dynamic))
                         && world
-                            .get::<lunco_core::NotPredictable>(dst.entity)
+                            .get::<lunco_core_session::NotPredictable>(dst.entity)
                             .is_none();
                     requires_realtime_safe |= client_predicts && predicted_dynamic;
                 }
@@ -1266,7 +1276,7 @@ mod wire_order_tests {
         init_builtin_ports(&mut world);
         world.init_resource::<crate::diagnostics::CosimDiagnostics>();
         world.init_resource::<lunco_core::RuntimeFaults>();
-        world.insert_resource(lunco_core::NetworkRole::Client);
+        world.insert_resource(lunco_core_session::NetworkRole::Client);
 
         let body = world
             .spawn((
@@ -1317,7 +1327,7 @@ mod wire_order_tests {
         init_builtin_ports(&mut unsafe_world);
         unsafe_world.init_resource::<crate::diagnostics::CosimDiagnostics>();
         unsafe_world.init_resource::<lunco_core::RuntimeFaults>();
-        unsafe_world.insert_resource(lunco_core::NetworkRole::Client);
+        unsafe_world.insert_resource(lunco_core_session::NetworkRole::Client);
         let body = unsafe_world
             .spawn((
                 GlobalEntityId::from_raw(10),
@@ -1363,7 +1373,7 @@ mod wire_order_tests {
         init_builtin_ports(&mut world);
         world.init_resource::<crate::diagnostics::CosimDiagnostics>();
         world.init_resource::<lunco_core::RuntimeFaults>();
-        world.insert_resource(lunco_core::NetworkRole::Standalone);
+        world.insert_resource(lunco_core_session::NetworkRole::Standalone);
 
         let body = world
             .spawn((

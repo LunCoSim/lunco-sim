@@ -1,4 +1,4 @@
-//! Scripted-authorization-hook behaviour for [`lunco_core::session::authorize`].
+//! Scripted-authorization-hook behaviour for [`lunco_core_session::authorize`].
 //!
 //! In its own test binary (a separate process from the `src` unit tests) because
 //! it registers under the **process-global** [`AUTHORIZE_HOOK`] id; doing that in
@@ -9,7 +9,7 @@
 use std::sync::{Arc, Mutex};
 
 use lunco_core::commands::SessionId;
-use lunco_core::session::{
+use lunco_core_session::{
     authorize, AuthorityRole, CommandPolicyRegistry, ControlPathRegistry, SessionRbac,
     SessionRegistry, UserSession, AUTHORIZE_HOOK,
 };

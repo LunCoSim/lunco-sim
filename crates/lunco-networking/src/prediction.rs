@@ -32,12 +32,12 @@ use std::collections::{HashMap, HashSet, VecDeque};
 /// proxy dynamic and sinking through the floor. The `!Kinematic` guard makes
 /// the steady state a no-op.
 pub fn force_kinematic_proxies(
-    role: Res<lunco_core::NetworkRole>,
+    role: Res<lunco_core_session::NetworkRole>,
     // Host-loss quiescence: when the client has no host, zero proxy velocities so
     // nothing dead-reckons/glides off (the disconnected cosim ball otherwise
     // launched to ~-195 km). The kinematic pin then holds them at their last
     // replicated pose until reconnect; the driver is gated off in parallel.
-    status: Res<lunco_core::NetStatus>,
+    status: Res<lunco_core_session::NetStatus>,
     mut commands: Commands,
     mut q: Query<
         (
@@ -52,13 +52,13 @@ pub fn force_kinematic_proxies(
         // (`PredictedDynamic`, e.g. a ball you bump) is likewise excluded — it
         // runs local physics + state-reconcile.
         (
-            With<lunco_core::NetReplicate>,
-            Without<lunco_core::OwnedLocally>,
-            Without<lunco_core::PredictedDynamic>,
+            With<lunco_core_session::NetReplicate>,
+            Without<lunco_core_session::OwnedLocally>,
+            Without<lunco_core_session::PredictedDynamic>,
         ),
     >,
 ) {
-    if !matches!(*role, lunco_core::NetworkRole::Client) {
+    if !matches!(*role, lunco_core_session::NetworkRole::Client) {
         return;
     }
     let frozen = !status.connected; // host lost → quiesce
@@ -429,8 +429,8 @@ pub fn interpolate_proxies(
     q_local_sim: Query<
         (),
         Or<(
-            With<lunco_core::OwnedLocally>,
-            With<lunco_core::PredictedDynamic>,
+            With<lunco_core_session::OwnedLocally>,
+            With<lunco_core_session::PredictedDynamic>,
         )>,
     >,
     mut q: Query<(
@@ -439,8 +439,8 @@ pub fn interpolate_proxies(
         Option<&mut Rotation>,
         // Animation motion hint: stamp the snapshot's authoritative chassis
         // velocity here for the wheel-spin model to read (see
-        // [`lunco_core::ReplicatedChassisMotion`]).
-        Option<&mut lunco_core::ReplicatedChassisMotion>,
+        // [`lunco_core_session::ReplicatedChassisMotion`]).
+        Option<&mut lunco_core_session::ReplicatedChassisMotion>,
         // Skip physics bodies — they're solver-driven by `drive_kinematic_proxies`.
         Has<RigidBody>,
     )>,
@@ -502,7 +502,7 @@ pub fn interpolate_proxies(
         // `force_kinematic_proxies` zeros away). `lv`/`av` are the bracketing-start
         // sample's velocities from `sample_curve` (changes at the 20 Hz snapshot
         // rate — plenty for animation).
-        let hint = lunco_core::ReplicatedChassisMotion { lin: lv, ang: av };
+        let hint = lunco_core_session::ReplicatedChassisMotion { lin: lv, ang: av };
         match motion {
             Some(mut m) => *m = hint,
             None => {
@@ -535,12 +535,12 @@ pub fn interpolate_proxies(
 /// body is more than [`PROXY_SNAP_DIST`] off its current curve point — a one-tick
 /// velocity to close a big gap would be a contact-disrupting kick.
 pub fn drive_kinematic_proxies(
-    role: Res<lunco_core::NetworkRole>,
+    role: Res<lunco_core_session::NetworkRole>,
     // Host-loss quiescence: with no authoritative snapshots arriving, driving
     // proxies off the starved curve would dead-reckon them off into space (the
     // disconnected cosim ball launched to ~-195 km). Stop driving when not
     // connected; `force_kinematic_proxies` freezes them (kinematic + zero vel).
-    status: Res<lunco_core::NetStatus>,
+    status: Res<lunco_core_session::NetStatus>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
     buffers: Res<InterpBuffers>,
     mut clock: ResMut<ProxyPlaybackClock>,
@@ -549,8 +549,8 @@ pub fn drive_kinematic_proxies(
     q_local_sim: Query<
         (),
         Or<(
-            With<lunco_core::OwnedLocally>,
-            With<lunco_core::PredictedDynamic>,
+            With<lunco_core_session::OwnedLocally>,
+            With<lunco_core_session::PredictedDynamic>,
         )>,
     >,
     mut q: Query<
@@ -559,13 +559,13 @@ pub fn drive_kinematic_proxies(
             &mut Rotation,
             &mut LinearVelocity,
             &mut AngularVelocity,
-            Option<&mut lunco_core::ReplicatedChassisMotion>,
+            Option<&mut lunco_core_session::ReplicatedChassisMotion>,
         ),
         With<RigidBody>,
     >,
     mut commands: Commands,
 ) {
-    if !matches!(*role, lunco_core::NetworkRole::Client) {
+    if !matches!(*role, lunco_core_session::NetworkRole::Client) {
         return;
     }
     if !status.connected {
@@ -632,7 +632,7 @@ pub fn drive_kinematic_proxies(
 
         // Animation hint = authoritative chassis velocity (moved here from
         // `interpolate_proxies`, which no longer touches RigidBody proxies).
-        let hint = lunco_core::ReplicatedChassisMotion { lin: lv, ang: av };
+        let hint = lunco_core_session::ReplicatedChassisMotion { lin: lv, ang: av };
         match motion {
             Some(mut m) => *m = hint,
             None => {
@@ -642,7 +642,7 @@ pub fn drive_kinematic_proxies(
     }
 }
 
-/// Client predict-own classifier: keep the [`lunco_core::OwnedLocally`] marker
+/// Client predict-own classifier: keep the [`lunco_core_session::OwnedLocally`] marker
 /// in sync with the authoritative ownership table. This is the **single** place
 /// that decides which replicated body this peer predicts locally (the rover it
 /// possesses) versus interpolates as a remote proxy — every other predict-own
@@ -752,9 +752,9 @@ pub fn on_set_visual_lead(trigger: On<SetVisualLead>, mut s: ResMut<VisualLeadSe
 }
 
 pub fn maintain_owned_locally(
-    role: Res<lunco_core::NetworkRole>,
-    local: Res<lunco_core::LocalSession>,
-    reg: Res<lunco_core::SessionRegistry>,
+    role: Res<lunco_core_session::NetworkRole>,
+    local: Res<lunco_core_session::LocalSession>,
+    reg: Res<lunco_core_session::SessionRegistry>,
     // Prediction membership is **computability**, not ownership (Phase A;
     // design in git history): predict the owned rover only while THIS peer is
     // actively driving it. A possessed-but-idle rover is dominated by external
@@ -762,7 +762,7 @@ pub fn maintain_owned_locally(
     // must interpolate as a normal proxy — else it free-runs local physics with no
     // working correction ("pushed without contact").
     tick: Res<lunco_core::SimTick>,
-    input_log: Res<lunco_core::OwnedInputLog>,
+    input_log: Res<lunco_core_session::OwnedInputLog>,
     // Freshest authoritative snapshot per gid — the seed for a newly-promoted
     // predicted body (see the promote arm). The deterministic replay contract means
     // aligning the prediction's START to authority makes
@@ -775,18 +775,18 @@ pub fn maintain_owned_locally(
         (
             Entity,
             &lunco_core::GlobalEntityId,
-            Has<lunco_core::OwnedLocally>,
+            Has<lunco_core_session::OwnedLocally>,
         ),
         // Skip articulated wheels: they are never owned in the registry (only the
         // chassis gid is claimed), so this system would strip the `OwnedLocally`
         // that `propagate_owned_to_wheels` mirrors onto an owned rover's wheels.
         (
-            With<lunco_core::NetReplicate>,
-            Without<lunco_core::ArticulatedLink>,
+            With<lunco_core_session::NetReplicate>,
+            Without<lunco_core_session::ArticulatedLink>,
         ),
     >,
 ) {
-    if !matches!(*role, lunco_core::NetworkRole::Client) {
+    if !matches!(*role, lunco_core_session::NetworkRole::Client) {
         return;
     }
     for (e, gid, has_marker) in q.iter() {
@@ -824,7 +824,7 @@ pub fn maintain_owned_locally(
                 );
                 commands
                     .entity(e)
-                    .try_insert((lunco_core::OwnedLocally, RigidBody::Dynamic));
+                    .try_insert((lunco_core_session::OwnedLocally, RigidBody::Dynamic));
                 // SEED FROM AUTHORITY (predict-alignment, Stage 1): overwrite the
                 // INTERP_DELAY-stale interpolated pose the proxy carried with the
                 // FRESHEST authoritative snapshot, so the deterministic prediction
@@ -857,17 +857,19 @@ pub fn maintain_owned_locally(
                     "[predict] demote owned rover gid={} (idle/released)",
                     gid.get()
                 );
-                commands.entity(e).remove::<lunco_core::OwnedLocally>();
+                commands
+                    .entity(e)
+                    .remove::<lunco_core_session::OwnedLocally>();
             }
             _ => {}
         }
     }
 }
 
-/// Client-only: mirror an [`lunco_core::ArticulatedVehicle`] chassis's
-/// [`lunco_core::OwnedLocally`] state onto its wheels ([`lunco_core::ArticulatedLink`]).
+/// Client-only: mirror an [`lunco_core_session::ArticulatedVehicle`] chassis's
+/// [`lunco_core_session::OwnedLocally`] state onto its wheels ([`lunco_core_session::ArticulatedLink`]).
 ///
-/// With per-link replication the wheels carry [`lunco_core::NetReplicate`], so by
+/// With per-link replication the wheels carry [`lunco_core_session::NetReplicate`], so by
 /// default a client would pin them `Kinematic` and snapshot-drive them
 /// (`force_kinematic_proxies` / `drive_kinematic_proxies`). That is correct for a
 /// *remote* rover (a fully pose-forced assembly), but WRONG for the rover this
@@ -884,21 +886,21 @@ pub fn maintain_owned_locally(
 /// is imperceptible and self-corrects. Wheel→chassis is read from `ChildOf` (the
 /// wheel keeps its chassis parent), so this needs no `lunco-usd-sim` types.
 pub fn propagate_owned_to_wheels(
-    role: Res<lunco_core::NetworkRole>,
+    role: Res<lunco_core_session::NetworkRole>,
     q_owned_chassis: Query<
         (),
         (
-            With<lunco_core::OwnedLocally>,
-            With<lunco_core::ArticulatedVehicle>,
+            With<lunco_core_session::OwnedLocally>,
+            With<lunco_core_session::ArticulatedVehicle>,
         ),
     >,
     q_wheels: Query<
-        (Entity, &ChildOf, Has<lunco_core::OwnedLocally>),
-        With<lunco_core::ArticulatedLink>,
+        (Entity, &ChildOf, Has<lunco_core_session::OwnedLocally>),
+        With<lunco_core_session::ArticulatedLink>,
     >,
     mut commands: Commands,
 ) {
-    if !matches!(*role, lunco_core::NetworkRole::Client) {
+    if !matches!(*role, lunco_core_session::NetworkRole::Client) {
         return;
     }
     for (e, child_of, has_marker) in q_wheels.iter() {
@@ -911,12 +913,14 @@ pub fn propagate_owned_to_wheels(
                 // restore in `maintain_owned_locally`).
                 commands
                     .entity(e)
-                    .try_insert((lunco_core::OwnedLocally, RigidBody::Dynamic));
+                    .try_insert((lunco_core_session::OwnedLocally, RigidBody::Dynamic));
             }
             (false, true) => {
                 // Chassis released: hand the wheel back to the snapshot-driven
                 // proxy path (`force_kinematic_proxies` re-pins it `Kinematic`).
-                commands.entity(e).remove::<lunco_core::OwnedLocally>();
+                commands
+                    .entity(e)
+                    .remove::<lunco_core_session::OwnedLocally>();
             }
             _ => {}
         }
@@ -933,10 +937,10 @@ pub fn propagate_owned_to_wheels(
 /// nothing accumulates, the sim (`Transform`/`Position`) is never touched, and when
 /// you stop steering the lead decays to zero — easing onto authority with no snap.
 fn lead_owned_rover_render(
-    role: Res<lunco_core::NetworkRole>,
-    local: Res<lunco_core::LocalSession>,
-    reg: Res<lunco_core::SessionRegistry>,
-    drive: Res<lunco_core::LocalDriveInput>,
+    role: Res<lunco_core_session::NetworkRole>,
+    local: Res<lunco_core_session::LocalSession>,
+    reg: Res<lunco_core_session::SessionRegistry>,
+    drive: Res<lunco_core_session::LocalDriveInput>,
     settings: Res<VisualLeadSettings>,
     time: Res<Time>,
     mut state: ResMut<VisualLeadState>,
@@ -946,15 +950,15 @@ fn lead_owned_rover_render(
     q_rovers: Query<
         (Entity, &lunco_core::GlobalEntityId),
         (
-            With<lunco_core::NetReplicate>,
-            Without<lunco_core::ArticulatedLink>,
-            Without<lunco_core::ArticulatedVehicle>,
+            With<lunco_core_session::NetReplicate>,
+            Without<lunco_core_session::ArticulatedLink>,
+            Without<lunco_core_session::ArticulatedVehicle>,
         ),
     >,
     q_children: Query<&Children>,
     mut q_gt: Query<&mut GlobalTransform>,
 ) {
-    if !matches!(*role, lunco_core::NetworkRole::Client) || !settings.enabled {
+    if !matches!(*role, lunco_core_session::NetworkRole::Client) || !settings.enabled {
         return;
     }
     let lead = settings.lead_secs;
@@ -1022,14 +1026,14 @@ fn lead_owned_rover_render(
 /// `on_set_ports`' later `Update` write is harmlessly overwritten next tick (the
 /// consumer latches the last input, so it stays the port authority). Host-only.
 fn apply_buffered_client_inputs(
-    role: Res<lunco_core::NetworkRole>,
-    mut buf: ResMut<lunco_core::BufferedClientInputs>,
+    role: Res<lunco_core_session::NetworkRole>,
+    mut buf: ResMut<lunco_core_session::BufferedClientInputs>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
     ports: Res<lunco_core::ports::PortRegistry>,
     // The reconcile ack is stamped HERE, from the seq this tick actually integrated
     // (review N2) — see the comment in the loop.
-    sessions: Res<lunco_core::SessionRegistry>,
-    mut applied: ResMut<lunco_core::AppliedInputSeq>,
+    sessions: Res<lunco_core_session::SessionRegistry>,
+    mut applied: ResMut<lunco_core_session::AppliedInputSeq>,
     mut commands: Commands,
 ) {
     if !role.is_host() {
@@ -1117,14 +1121,14 @@ struct BodyPredictionLog {
 pub struct PredictedStateLog(HashMap<u64, BodyPredictionLog>);
 
 /// Client predict-own: record the owned rover's post-step pose each fixed tick,
-/// keyed by the input `seq` applied that tick (from [`lunco_core::OwnedInputLog`]).
+/// keyed by the input `seq` applied that tick (from [`lunco_core_session::OwnedInputLog`]).
 /// Runs in `FixedPostUpdate` after avian writeback, after [`reconcile_owned_prediction`]
 /// so the history reflects any correction. Reads `Transform` (post-writeback =
 /// the avian pose, f32) so it never touches avian's f64 `Rotation` component.
 pub fn record_predicted_state(
-    input_log: Res<lunco_core::OwnedInputLog>,
+    input_log: Res<lunco_core_session::OwnedInputLog>,
     mut hist: ResMut<PredictedStateLog>,
-    q: Query<(&lunco_core::GlobalEntityId, &Transform), With<lunco_core::OwnedLocally>>,
+    q: Query<(&lunco_core::GlobalEntityId, &Transform), With<lunco_core_session::OwnedLocally>>,
 ) {
     for (gid, tf) in q.iter() {
         let g = gid.get();
@@ -1228,7 +1232,7 @@ fn rb_state(p: &Position, r: &Rotation, lv: &LinearVelocity, av: &AngularVelocit
 /// applied that tick — the history rollback rewinds into. `FixedPostUpdate` after
 /// avian writeback (so it captures the post-step truth), and NOT during a replay.
 pub fn record_assembly_state(
-    input_log: Res<lunco_core::OwnedInputLog>,
+    input_log: Res<lunco_core_session::OwnedInputLog>,
     mut hist: ResMut<AssemblyHistory>,
     // The chassis: owned + articulated root. `propagate_owned_to_wheels` mirrors
     // `OwnedLocally` onto the wheels too, so links MUST be excluded here or each
@@ -1243,8 +1247,8 @@ pub fn record_assembly_state(
             &AngularVelocity,
         ),
         (
-            With<lunco_core::OwnedLocally>,
-            Without<lunco_core::ArticulatedLink>,
+            With<lunco_core_session::OwnedLocally>,
+            Without<lunco_core_session::ArticulatedLink>,
         ),
     >,
     // Every rigid body in the rover, found by walking the subtree — NOT by assuming
@@ -1321,7 +1325,7 @@ fn replay_one_tick(
     world: &mut World,
     ports: &lunco_core::ports::PortRegistry,
     chassis: Entity,
-    input: &lunco_core::InputFrame,
+    input: &lunco_core_session::InputFrame,
 ) {
     // Feed the RECORDED input by writing the ports directly. Deliberately NOT a
     // `SetPorts` trigger: that would fire `record_control_input`, re-logging an input
@@ -1366,8 +1370,8 @@ pub fn rollback_owned_prediction(world: &mut World) {
     let mut owned: Vec<(Entity, u64)> = Vec::new();
     {
         let mut q = world.query_filtered::<(Entity, &lunco_core::GlobalEntityId), (
-            With<lunco_core::OwnedLocally>,
-            Without<lunco_core::ArticulatedLink>,
+            With<lunco_core_session::OwnedLocally>,
+            Without<lunco_core_session::ArticulatedLink>,
         )>();
         for (e, gid) in q.iter(world) {
             owned.push((e, gid.get()));
@@ -1378,7 +1382,7 @@ pub fn rollback_owned_prediction(world: &mut World) {
     }
     // Which owned bodies are articulated (have joints that a partial restore would tear).
     let articulated_set: HashSet<Entity> = {
-        let mut q = world.query_filtered::<Entity, With<lunco_core::ArticulatedVehicle>>();
+        let mut q = world.query_filtered::<Entity, With<lunco_core_session::ArticulatedVehicle>>();
         q.iter(world).collect()
     };
 
@@ -1401,7 +1405,7 @@ pub fn rollback_owned_prediction(world: &mut World) {
         // an ack above the highest seq we ever minted belongs to the vessel's PREVIOUS
         // owner, and latching it as `last_reconciled` disables this path permanently.
         let next_seq = world
-            .resource::<lunco_core::OwnedInputLog>()
+            .resource::<lunco_core_session::OwnedInputLog>()
             .0
             .get(&gid)
             .map_or(0, |l| l.next_seq);
@@ -1443,8 +1447,8 @@ pub fn rollback_owned_prediction(world: &mut World) {
         let diverged = dpos > ROLLBACK_POS_EPS || drot > ROLLBACK_ROT_EPS;
 
         // Inputs we've sent that the host hasn't acked — the ones to re-simulate.
-        let unacked: Vec<lunco_core::InputFrame> = world
-            .resource::<lunco_core::OwnedInputLog>()
+        let unacked: Vec<lunco_core_session::InputFrame> = world
+            .resource::<lunco_core_session::OwnedInputLog>()
             .0
             .get(&gid)
             .map(|l| l.frames.iter().filter(|f| f.seq > ack).copied().collect())
@@ -1540,7 +1544,7 @@ pub fn rollback_owned_prediction(world: &mut World) {
 
         // Prune what the ack has retired, whether or not we rolled back.
         if let Some(il) = world
-            .resource_mut::<lunco_core::OwnedInputLog>()
+            .resource_mut::<lunco_core_session::OwnedInputLog>()
             .0
             .get_mut(&gid)
         {
@@ -1578,7 +1582,7 @@ fn apply_states(world: &mut World, states: &[(Entity, RbState)]) {
 }
 
 /// Client predict-own reconciliation (input-replay model, D2). GENERAL over any
-/// owned, locally-predicted moving body — it keys off [`lunco_core::OwnedLocally`]
+/// owned, locally-predicted moving body — it keys off [`lunco_core_session::OwnedLocally`]
 /// and its gid, and corrects an arbitrary dynamic body's
 /// Transform/Position/velocity. It assumes nothing about "rover". Only the
 /// input that drives the body, such as a `SetPorts` throttle/steer write, is
@@ -1600,10 +1604,10 @@ pub fn reconcile_owned_prediction(
     buffers: Res<InterpBuffers>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
     mut hist: ResMut<PredictedStateLog>,
-    mut input_log: ResMut<lunco_core::OwnedInputLog>,
+    mut input_log: ResMut<lunco_core_session::OwnedInputLog>,
     // Desync detection (review N3): every ack feeds the per-body gauge.
     mut divergence: ResMut<crate::session::DivergenceStats>,
-    q_owned: Query<&lunco_core::GlobalEntityId, With<lunco_core::OwnedLocally>>,
+    q_owned: Query<&lunco_core::GlobalEntityId, With<lunco_core_session::OwnedLocally>>,
     mut q: Query<(
         &mut Transform,
         Option<&mut Position>,
@@ -1780,7 +1784,7 @@ pub fn reconcile_owned_prediction(
 /// Client Phase B (design in git history): mark **every replicated free dynamic
 /// prop** (a ball / crate / cone — whether runtime-spawned OR authored scene
 /// content) as [`crate::session::ContactPredictable`] — *eligible* to become a
-/// locally-`Dynamic` [`lunco_core::PredictedDynamic`] body, but only transiently,
+/// locally-`Dynamic` [`lunco_core_session::PredictedDynamic`] body, but only transiently,
 /// while an owned body is shoving it (`promote_contacting_proxies`). Until then it
 /// stays a kinematic snapshot proxy, perfectly synced to authority. This is the
 /// fix for the old "predict every prop the moment it's seen" design, whose N
@@ -1788,7 +1792,7 @@ pub fn reconcile_owned_prediction(
 /// `ContactPredictable`'s doc). Bump a prop and it still yields live in the same
 /// contact — the eligibility just defers the `Dynamic` flip to the contact window.
 ///
-/// The cosim guard is now [`lunco_core::NotPredictable`] ALONE — stamped on every
+/// The cosim guard is now [`lunco_core_session::NotPredictable`] ALONE — stamped on every
 /// cosim-driven / server-only body by `tag_cosim_opaque` and the USD net policy
 /// (balloons / `CosimTarget`, whose forces are server-only and not locally
 /// computable). That marker was added precisely so the structural
@@ -1799,12 +1803,12 @@ pub fn reconcile_owned_prediction(
 /// are excluded — they have their own paths. A `Static` prop is left alone.
 /// Client-only.
 pub fn maintain_predicted_dynamic(
-    role: Res<lunco_core::NetworkRole>,
+    role: Res<lunco_core_session::NetworkRole>,
     mut commands: Commands,
     q_add: Query<
         (Entity, &RigidBody),
         (
-            With<lunco_core::NetReplicate>,
+            With<lunco_core_session::NetReplicate>,
             // Wheeled vehicles have their own predict path
             // (`maintain_predicted_vehicles`); a cosim-flown vessel is caught by the
             // `NotPredictable` guard below.
@@ -1813,7 +1817,7 @@ pub fn maintain_predicted_dynamic(
             // has no mobility root and is not excluded here. The shared marker lives
             // in core so networking does not depend on the mobility implementation.
             Without<lunco_core::MobilityRoot>,
-            Without<lunco_core::OwnedLocally>,
+            Without<lunco_core_session::OwnedLocally>,
             // Stamp the eligibility marker at most once (a promoted body carries
             // both `ContactPredictable` and `PredictedDynamic`).
             Without<crate::session::ContactPredictable>,
@@ -1823,7 +1827,7 @@ pub fn maintain_predicted_dynamic(
             // This is now the SOLE membership guard (the old `SkipContentStamp`
             // runtime-spawn restriction is dropped so authored scene props run
             // live physics too).
-            Without<lunco_core::NotPredictable>,
+            Without<lunco_core_session::NotPredictable>,
         ),
     >,
     // If this peer later POSSESSES the prop, the owned (input-replay) path takes
@@ -1833,11 +1837,11 @@ pub fn maintain_predicted_dynamic(
         Entity,
         (
             With<crate::session::ContactPredictable>,
-            With<lunco_core::OwnedLocally>,
+            With<lunco_core_session::OwnedLocally>,
         ),
     >,
 ) {
-    if !matches!(*role, lunco_core::NetworkRole::Client) {
+    if !matches!(*role, lunco_core_session::NetworkRole::Client) {
         return;
     }
     for (e, rb) in q_add.iter() {
@@ -1853,7 +1857,7 @@ pub fn maintain_predicted_dynamic(
     for e in q_demote.iter() {
         commands.entity(e).remove::<(
             crate::session::ContactPredictable,
-            lunco_core::PredictedDynamic,
+            lunco_core_session::PredictedDynamic,
             ContactPredictLinger,
         )>();
     }
@@ -1882,23 +1886,23 @@ pub fn maintain_predicted_dynamic(
 /// (they flip if made single-body Dynamic) and stay pure kinematic proxies.
 /// Client-only.
 pub fn maintain_predicted_vehicles(
-    role: Res<lunco_core::NetworkRole>,
-    local: Res<lunco_core::LocalSession>,
-    reg: Res<lunco_core::SessionRegistry>,
+    role: Res<lunco_core_session::NetworkRole>,
+    local: Res<lunco_core_session::LocalSession>,
+    reg: Res<lunco_core_session::SessionRegistry>,
     mut commands: Commands,
     q_add: Query<
         (Entity, &lunco_core::GlobalEntityId, &RigidBody),
         (
-            With<lunco_core::NetReplicate>,
+            With<lunco_core_session::NetReplicate>,
             // A wheeled vehicle = a mobility root. The `Without<NotPredictable>` guard below
             // additionally excludes cosim-flown vessels, so this resolves to exactly the
             // locally-simulated rovers. (A lander no longer even reaches this filter: it
             // has no mobility root of its own.)
             With<lunco_core::MobilityRoot>,
-            Without<lunco_core::OwnedLocally>,
+            Without<lunco_core_session::OwnedLocally>,
             // Stamp eligibility at most once (a promoted rover carries both).
             Without<crate::session::ContactPredictable>,
-            Without<lunco_core::NotPredictable>,
+            Without<lunco_core_session::NotPredictable>,
             // Articulated (Physical/joint) rovers must NOT be single-body
             // predicted: only the chassis is replicated, so making it Dynamic +
             // reconciling its pose each snapshot while the jointed wheels run
@@ -1906,11 +1910,11 @@ pub fn maintain_predicted_vehicles(
             // (chassis pose forced by snapshots, cannot flip), so they never
             // become contact-eligible. Raycast rovers are single bodies and
             // yield fine when a shove promotes them.
-            Without<lunco_core::ArticulatedVehicle>,
+            Without<lunco_core_session::ArticulatedVehicle>,
         ),
     >,
 ) {
-    if !matches!(*role, lunco_core::NetworkRole::Client) {
+    if !matches!(*role, lunco_core_session::NetworkRole::Client) {
         return;
     }
     for (e, gid, rb) in q_add.iter() {
@@ -1952,7 +1956,7 @@ pub struct ContactPredictLinger(f32);
 
 /// The contact-gate that makes the hybrid work (see [`crate::session::ContactPredictable`]):
 /// promote a `ContactPredictable` kinematic proxy to a locally-`Dynamic`
-/// [`lunco_core::PredictedDynamic`] body **only while an [`lunco_core::OwnedLocally`]
+/// [`lunco_core_session::PredictedDynamic`] body **only while an [`lunco_core_session::OwnedLocally`]
 /// body is touching it** (plus [`CONTACT_PREDICT_LINGER`]), then demote it back.
 ///
 /// Non-owned bodies otherwise stay perfectly-synced kinematic proxies; the ONLY
@@ -1971,16 +1975,19 @@ pub struct ContactPredictLinger(f32);
 /// before the kinematic-pin pass runs, so a promoted body is skipped by the pin the
 /// same frame and a demoted one is re-pinned the same frame. Client-only.
 pub fn promote_contacting_proxies(
-    role: Res<lunco_core::NetworkRole>,
+    role: Res<lunco_core_session::NetworkRole>,
     time: Res<Time>,
     collisions: Collisions,
-    q_owned: Query<(), With<lunco_core::OwnedLocally>>,
+    q_owned: Query<(), With<lunco_core_session::OwnedLocally>>,
     q_eligible: Query<(), With<crate::session::ContactPredictable>>,
     // Bodies currently promoted (Dynamic) that carry the linger countdown.
-    mut q_promoted: Query<(Entity, &mut ContactPredictLinger), With<lunco_core::PredictedDynamic>>,
+    mut q_promoted: Query<
+        (Entity, &mut ContactPredictLinger),
+        With<lunco_core_session::PredictedDynamic>,
+    >,
     mut commands: Commands,
 ) {
-    if !matches!(*role, lunco_core::NetworkRole::Client) {
+    if !matches!(*role, lunco_core_session::NetworkRole::Client) {
         return;
     }
     // Which eligible proxies is an owned body touching this tick?
@@ -2023,7 +2030,7 @@ pub fn promote_contacting_proxies(
                 // authoritative curve (snapping if it drifted > 2 m).
                 commands
                     .entity(e)
-                    .remove::<(lunco_core::PredictedDynamic, ContactPredictLinger)>();
+                    .remove::<(lunco_core_session::PredictedDynamic, ContactPredictLinger)>();
             }
         }
     }
@@ -2034,14 +2041,14 @@ pub fn promote_contacting_proxies(
     // `reconcile_predicted_dynamic` keeps it from drifting past authority meanwhile.
     for e in touched {
         commands.entity(e).try_insert((
-            lunco_core::PredictedDynamic,
+            lunco_core_session::PredictedDynamic,
             RigidBody::Dynamic,
             ContactPredictLinger(CONTACT_PREDICT_LINGER),
         ));
     }
 }
 
-/// Client Phase B: **state-based** reconciliation for [`lunco_core::PredictedDynamic`]
+/// Client Phase B: **state-based** reconciliation for [`lunco_core_session::PredictedDynamic`]
 /// bodies (free props + remote rovers). Unlike the owned rover there is NO input
 /// `seq` to replay, so we pull the body's CURRENT pose toward the authoritative
 /// curve directly.
@@ -2068,15 +2075,15 @@ const RECONCILE_EPS_POS: f64 = 0.40;
 const RECONCILE_EPS_ROT: f32 = 0.10;
 
 pub fn reconcile_predicted_dynamic(
-    role: Res<lunco_core::NetworkRole>,
-    status: Res<lunco_core::NetStatus>,
+    role: Res<lunco_core_session::NetworkRole>,
+    status: Res<lunco_core_session::NetStatus>,
     buffers: Res<InterpBuffers>,
     clock: Res<ProxyPlaybackClock>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
     // Desync detection (review N3): free predicted bodies feed the same gauge as the
     // owned rover, so a drifting prop is observable instead of silently teleporting.
     mut divergence: ResMut<crate::session::DivergenceStats>,
-    q_pred: Query<&lunco_core::GlobalEntityId, With<lunco_core::PredictedDynamic>>,
+    q_pred: Query<&lunco_core::GlobalEntityId, With<lunco_core_session::PredictedDynamic>>,
     mut q: Query<(
         Option<&mut Position>,
         Option<&mut Rotation>,
@@ -2086,7 +2093,7 @@ pub fn reconcile_predicted_dynamic(
     )>,
     mut commands: Commands,
 ) {
-    if !matches!(*role, lunco_core::NetworkRole::Client) {
+    if !matches!(*role, lunco_core_session::NetworkRole::Client) {
         return;
     }
     if !status.connected {
@@ -2224,8 +2231,8 @@ const CORRECTION_MAX_POS_PER_TICK: f64 = 0.025;
 /// Per-tick cap on the drained rotation nudge (rad, ~0.9°/tick ≈ 57°/s capacity).
 const CORRECTION_MAX_ROT_PER_TICK: f64 = 0.016;
 
-// `PendingCorrection::is_negligible` moved to `lunco_core::session` with the type
-// (review A6) — an inherent impl must live in the type's own crate.
+// `PendingCorrection::is_negligible` remains in this networking session module
+// with the type (review A6) — an inherent impl must live in the type's own crate.
 
 /// Drain each body's [`PendingCorrection`] into its avian `Position`/`Rotation`
 /// in small per-tick steps (exp toward zero residual, hard per-tick caps).
@@ -2304,10 +2311,10 @@ pub fn apply_net_replication(
         (Entity, &RigidBody),
         (
             With<lunco_core::GlobalEntityId>,
-            Without<lunco_core::NetReplicate>,
-            Without<lunco_core::NetExcluded>,
-            Without<lunco_core::ArticulatedLink>,
-            Without<lunco_core::SkipContentStamp>,
+            Without<lunco_core_session::NetReplicate>,
+            Without<lunco_core_session::NetExcluded>,
+            Without<lunco_core_session::ArticulatedLink>,
+            Without<lunco_core_session::SkipContentStamp>,
         ),
     >,
 ) {
@@ -2315,7 +2322,9 @@ pub fn apply_net_replication(
         if matches!(*rb, RigidBody::Static) {
             continue;
         }
-        commands.entity(e).try_insert(lunco_core::NetReplicate);
+        commands
+            .entity(e)
+            .try_insert(lunco_core_session::NetReplicate);
     }
 }
 
@@ -2347,8 +2356,8 @@ impl Plugin for NetcodePredictionPlugin {
         app.init_resource::<InterpBuffers>();
         app.init_resource::<PredictedStateLog>();
         app.init_resource::<ProxyPlaybackClock>();
-        // Wire-fed session state this plugin consumes (review C7: moved out of
-        // `LunCoCorePlugin`'s always-on set — only this crate touches them).
+        // Wire-fed session state this plugin consumes. Only this crate touches
+        // these resources, so they remain in the networking adapter.
         // Also initialized by `shared::build_networking` for the wire boot;
         // repeated here so the plugin stands alone (tests, net_smoke-style bins).
         app.init_resource::<crate::session::IncomingSnapshots>();
@@ -2568,7 +2577,7 @@ mod pose_write_tests {
         let mut world = World::new();
         world.init_resource::<InterpBuffers>();
         world.init_resource::<PredictedStateLog>();
-        world.init_resource::<lunco_core::OwnedInputLog>();
+        world.init_resource::<lunco_core_session::OwnedInputLog>();
         world.init_resource::<crate::session::DivergenceStats>();
 
         let gid = 0x00AB_CDEFu64;
@@ -2583,8 +2592,8 @@ mod pose_write_tests {
                 LinearVelocity::default(),
                 AngularVelocity::default(),
                 lunco_core::GlobalEntityId::from_raw(gid),
-                lunco_core::OwnedLocally,
-                lunco_core::NetReplicate,
+                lunco_core_session::OwnedLocally,
+                lunco_core_session::NetReplicate,
             ))
             .id();
         registry_with(&mut world, e, gid);
@@ -2592,7 +2601,7 @@ mod pose_write_tests {
         // This client really did emit input seq 1 — the stale-ack guard (review N1)
         // only accepts an ack it could have produced.
         world
-            .resource_mut::<lunco_core::OwnedInputLog>()
+            .resource_mut::<lunco_core_session::OwnedInputLog>()
             .0
             .entry(gid)
             .or_default()
@@ -2692,7 +2701,7 @@ mod pose_write_tests {
                 Position::default(),
                 Rotation::default(),
                 lunco_core::GlobalEntityId::from_raw(gid),
-                lunco_core::NetReplicate, // NOT OwnedLocally → treated as a proxy
+                lunco_core_session::NetReplicate, // NOT OwnedLocally → treated as a proxy
             ))
             .id();
         registry_with(&mut world, e, gid);
@@ -2758,7 +2767,7 @@ mod pose_write_tests {
                 Position::default(),
                 Rotation::default(),
                 lunco_core::GlobalEntityId::from_raw(gid),
-                lunco_core::NetReplicate,
+                lunco_core_session::NetReplicate,
             ))
             .id();
         registry_with(&mut world, e, gid);
@@ -2822,8 +2831,8 @@ mod pose_write_tests {
         world.init_resource::<InterpBuffers>();
         world.init_resource::<crate::session::DivergenceStats>();
         // reconcile only runs as a connected Client; the clock is the render instant.
-        world.insert_resource(lunco_core::NetworkRole::Client);
-        world.insert_resource(lunco_core::NetStatus {
+        world.insert_resource(lunco_core_session::NetworkRole::Client);
+        world.insert_resource(lunco_core_session::NetStatus {
             connected: true,
             ..Default::default()
         });
@@ -2838,7 +2847,7 @@ mod pose_write_tests {
                 LinearVelocity::default(),
                 AngularVelocity::default(),
                 lunco_core::GlobalEntityId::from_raw(gid),
-                lunco_core::PredictedDynamic,
+                lunco_core_session::PredictedDynamic,
             ))
             .id();
         registry_with(&mut world, e, gid);
@@ -2883,8 +2892,8 @@ mod pose_write_tests {
         let mut world = World::new();
         world.init_resource::<InterpBuffers>();
         world.init_resource::<crate::session::DivergenceStats>();
-        world.insert_resource(lunco_core::NetworkRole::Client);
-        world.insert_resource(lunco_core::NetStatus {
+        world.insert_resource(lunco_core_session::NetworkRole::Client);
+        world.insert_resource(lunco_core_session::NetStatus {
             connected: true,
             ..Default::default()
         });
@@ -2900,7 +2909,7 @@ mod pose_write_tests {
                 LinearVelocity(local_vel),
                 AngularVelocity::default(),
                 lunco_core::GlobalEntityId::from_raw(gid),
-                lunco_core::PredictedDynamic,
+                lunco_core_session::PredictedDynamic,
             ))
             .id();
         registry_with(&mut world, e, gid);
@@ -2951,7 +2960,7 @@ mod pose_write_tests {
         let mut world = World::new();
         world.init_resource::<InterpBuffers>();
         world.init_resource::<PredictedStateLog>();
-        world.init_resource::<lunco_core::OwnedInputLog>();
+        world.init_resource::<lunco_core_session::OwnedInputLog>();
         world.init_resource::<crate::session::DivergenceStats>();
 
         let gid = 0x00CC_0001u64;
@@ -2963,15 +2972,15 @@ mod pose_write_tests {
                 LinearVelocity::default(),
                 AngularVelocity::default(),
                 lunco_core::GlobalEntityId::from_raw(gid),
-                lunco_core::OwnedLocally,
-                lunco_core::NetReplicate,
+                lunco_core_session::OwnedLocally,
+                lunco_core_session::NetReplicate,
             ))
             .id();
         registry_with(&mut world, e, gid);
 
         // WE have emitted exactly one input (seq 1) — we just possessed this rover.
         world
-            .resource_mut::<lunco_core::OwnedInputLog>()
+            .resource_mut::<lunco_core_session::OwnedInputLog>()
             .0
             .entry(gid)
             .or_default()

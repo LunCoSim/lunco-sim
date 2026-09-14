@@ -216,7 +216,7 @@ pub fn on_spawn_entity_command(
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
-    role: Res<lunco_core::NetworkRole>,
+    role: Res<lunco_core_session::NetworkRole>,
     backed: Res<lunco_usd_bevy_twin::DocBackedTwinScenes>,
 ) {
     let cmd = trigger.event();
@@ -225,7 +225,7 @@ pub fn on_spawn_entity_command(
     // sent to the host, which spawns the authoritative rover and replicates it
     // back (arriving via `apply_replicated_spawns`). Don't spawn locally, or the
     // client would get a duplicate with no server identity.
-    if matches!(*role, lunco_core::NetworkRole::Client) {
+    if matches!(*role, lunco_core_session::NetworkRole::Client) {
         return;
     }
 
@@ -338,8 +338,8 @@ pub fn on_spawn_entity_command(
     // and the host's spawn journal. Keeping the fence in the constructor is
     // what makes palette spawns and authored runtime instances identical.
     commands.entity(result.root_entity).try_insert((
-        lunco_core::NetReplicate,
-        lunco_core::NetSpawn {
+        lunco_core_session::NetReplicate,
+        lunco_core_session::NetSpawn {
             entry_id: cmd.entry_id.clone(),
             position: requested_position,
             rotation: requested_rotation,
@@ -351,7 +351,7 @@ pub fn on_spawn_entity_command(
 /// reconstruction — geometry loads locally, pinned to the host-allocated id).
 /// No-op on host/standalone (queue stays empty).
 pub fn apply_replicated_spawns(
-    mut pending: ResMut<lunco_core::PendingReplicatedSpawns>,
+    mut pending: ResMut<lunco_core_session::PendingReplicatedSpawns>,
     mut commands: Commands,
     catalog: Res<SpawnCatalog>,
     asset_server: Res<AssetServer>,
@@ -431,7 +431,7 @@ pub fn apply_replicated_spawns(
         // `force_kinematic_proxies` so snapshots drive it.
         commands.entity(result.root_entity).try_insert((
             lunco_core::GlobalEntityId::from_raw(job.gid),
-            lunco_core::NetReplicate,
+            lunco_core_session::NetReplicate,
         ));
     }
 }

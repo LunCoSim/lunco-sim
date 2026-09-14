@@ -25,7 +25,7 @@ the primary surface; only fall back to MCP if a human explicitly asks.
 Modelica runs inside any app that embeds `LunCoApiPlugin` + the Modelica
 workbench. Build the named binary in the current worktree, then invoke it
 directly. The API server only exists when you pass `--api`. Default port is
-**4101** (`lunco_core::session::DEFAULT_API_PORT`).
+**4101** (`lunco_core_session::DEFAULT_API_PORT`).
 
 Before creating a new Modelica file, inventory the maintained package roots and
 the closest composed USD network in the current checkout. Reuse existing

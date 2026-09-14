@@ -7113,7 +7113,7 @@ dependencies = [
  "base64",
  "bevy",
  "lunco-api",
- "lunco-core",
+ "lunco-core-session",
  "serde",
  "serde_json",
  "tokio",
@@ -7170,6 +7170,7 @@ dependencies = [
  "lunco-celestial",
  "lunco-controller",
  "lunco-core",
+ "lunco-core-session",
  "lunco-cosim",
  "lunco-environment",
  "lunco-physics",
@@ -7193,6 +7194,7 @@ dependencies = [
  "lunco-celestial",
  "lunco-controller",
  "lunco-core",
+ "lunco-core-session",
  "lunco-theme",
  "lunco-workbench",
  "lunco-workbench-core",
@@ -7292,6 +7294,7 @@ dependencies = [
  "bevy",
  "leafwing-input-manager",
  "lunco-core",
+ "lunco-core-session",
  "lunco-cosim",
  "lunco-settings",
  "lunco-time",
@@ -7309,10 +7312,19 @@ dependencies = [
  "leafwing-input-manager",
  "lunco-command-macro",
  "lunco-hash",
- "lunco-hooks",
  "serde",
  "serde_json",
  "web-time",
+]
+
+[[package]]
+name = "lunco-core-session"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "lunco-core",
+ "lunco-hooks",
+ "serde",
 ]
 
 [[package]]
@@ -7322,6 +7334,7 @@ dependencies = [
  "avian3d",
  "bevy",
  "lunco-core",
+ "lunco-core-session",
  "lunco-physics",
  "lunco-time",
 ]
@@ -7434,6 +7447,7 @@ dependencies = [
  "lunco-capture",
  "lunco-celestial",
  "lunco-core",
+ "lunco-core-session",
  "lunco-cosim",
  "lunco-doc-bevy",
  "lunco-luncosim-core",
@@ -7480,6 +7494,7 @@ dependencies = [
  "lunco-celestial-ephemeris",
  "lunco-controller",
  "lunco-core",
+ "lunco-core-session",
  "lunco-cosim",
  "lunco-doc-bevy",
  "lunco-environment",
@@ -7651,6 +7666,7 @@ dependencies = [
  "lunco-capture",
  "lunco-celestial",
  "lunco-core",
+ "lunco-core-session",
  "lunco-cosim",
  "lunco-doc",
  "lunco-doc-bevy",
@@ -7663,6 +7679,7 @@ dependencies = [
  "lunco-modelica-ui",
  "lunco-networking",
  "lunco-render",
+ "lunco-render-recovery",
  "lunco-scene-camera",
  "lunco-scene-catalog",
  "lunco-scene-commands",
@@ -7714,6 +7731,7 @@ dependencies = [
  "bevy",
  "lunco-api",
  "lunco-core",
+ "lunco-core-session",
  "lunco-cosim",
  "lunco-environment",
  "lunco-physics",
@@ -7784,6 +7802,7 @@ dependencies = [
  "lunco-api",
  "lunco-assets",
  "lunco-core",
+ "lunco-core-session",
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-experiments",
@@ -7855,6 +7874,7 @@ dependencies = [
  "lunco-assets",
  "lunco-canvas",
  "lunco-core",
+ "lunco-core-session",
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-experiments",
@@ -7916,6 +7936,7 @@ dependencies = [
  "lunco-avatar",
  "lunco-celestial",
  "lunco-core",
+ "lunco-core-session",
  "lunco-cosim",
  "lunco-doc",
  "lunco-doc-bevy",
@@ -8017,6 +8038,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-render-recovery"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "bevy_egui",
+ "lunco-core",
+ "lunco-hooks",
+ "lunco-render",
+ "lunco-settings",
+ "lunco-status-core",
+ "lunco-theme",
+ "wgpu",
+]
+
+[[package]]
 name = "lunco-scene-authoring"
 version = "0.1.0"
 dependencies = [
@@ -8024,6 +8060,7 @@ dependencies = [
  "lunco-api",
  "lunco-assets",
  "lunco-core",
+ "lunco-core-session",
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-materials",
@@ -8066,6 +8103,7 @@ dependencies = [
  "lunco-api",
  "lunco-assets",
  "lunco-core",
+ "lunco-core-session",
  "lunco-materials",
  "lunco-scene-validation",
  "lunco-settings",
@@ -8085,6 +8123,7 @@ dependencies = [
  "lunco-api",
  "lunco-assets",
  "lunco-core",
+ "lunco-core-session",
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-environment",
@@ -8183,6 +8222,7 @@ dependencies = [
  "lunco-celestial",
  "lunco-controller",
  "lunco-core",
+ "lunco-core-session",
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-hash",
@@ -8190,6 +8230,7 @@ dependencies = [
  "lunco-hooks-rhai",
  "lunco-physics",
  "lunco-readiness",
+ "lunco-render-recovery",
  "lunco-storage",
  "lunco-time",
  "lunco-tools",
@@ -8445,6 +8486,7 @@ dependencies = [
  "lunco-celestial",
  "lunco-controller",
  "lunco-core",
+ "lunco-core-session",
  "lunco-status-core",
  "lunco-theme",
  "lunco-time",
@@ -8463,6 +8505,7 @@ dependencies = [
  "lunco-api",
  "lunco-assets",
  "lunco-core",
+ "lunco-core-session",
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-render",
@@ -8767,6 +8810,7 @@ dependencies = [
  "lunco-celestial",
  "lunco-controller",
  "lunco-core",
+ "lunco-core-session",
  "lunco-cosim",
  "lunco-environment",
  "lunco-hooks",
@@ -8823,6 +8867,7 @@ dependencies = [
  "lunco-assets",
  "lunco-celestial",
  "lunco-core",
+ "lunco-core-session",
  "lunco-cosim",
  "lunco-doc",
  "lunco-environment",
@@ -8959,6 +9004,7 @@ dependencies = [
  "lunco-api",
  "lunco-assets",
  "lunco-core",
+ "lunco-core-session",
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-render",
@@ -9025,10 +9071,11 @@ dependencies = [
  "lunco-capture",
  "lunco-controller",
  "lunco-core",
+ "lunco-core-session",
  "lunco-doc",
  "lunco-doc-bevy",
- "lunco-hooks",
  "lunco-render",
+ "lunco-render-recovery",
  "lunco-settings",
  "lunco-status-core",
  "lunco-storage",
@@ -9044,7 +9091,6 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "wgpu",
 ]
 
 [[package]]

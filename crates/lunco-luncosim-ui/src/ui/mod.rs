@@ -251,7 +251,10 @@ impl Plugin for LunCoSimUiPlugin {
                 retain_workbench_chrome: true,
             });
         }
-        lunco_workbench::install_render_recovery_teardown(app, lunco_core::SceneTeardown);
+        app.add_systems(
+            lunco_core::SceneTeardown,
+            lunco_render_recovery::reset_render_recovery,
+        );
         app.add_plugins(overlays::plugin)
             // Overlay visibility prefs + the Time-menu rows that drive them.
             // USD Twin browser plus the explicit Editor preview. The preview

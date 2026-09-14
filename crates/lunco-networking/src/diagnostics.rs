@@ -118,8 +118,8 @@ fn report_render_jitter(
             Entity,
             &GlobalTransform,
             Option<&lunco_core::GlobalEntityId>,
-            Has<lunco_core::OwnedLocally>,
-            Has<lunco_core::PredictedDynamic>,
+            Has<lunco_core_session::OwnedLocally>,
+            Has<lunco_core_session::PredictedDynamic>,
         ),
         With<lunco_core::MobilityRoot>,
     >,
@@ -163,7 +163,7 @@ fn report_render_jitter(
 fn report_proxy_velocity(
     q: Query<
         (Option<&lunco_core::GlobalEntityId>, &LinearVelocity),
-        (With<RigidBody>, With<lunco_core::NetReplicate>),
+        (With<RigidBody>, With<lunco_core_session::NetReplicate>),
     >,
     mut n: Local<u32>,
 ) {

@@ -865,7 +865,7 @@ fn run_stored_timeline_unknown_name_errors() {
 /// `Host` and single-player (`Standalone` / absent role) run normally.
 #[test]
 fn client_role_gates_script_execution() {
-    use lunco_core::NetworkRole;
+    use lunco_core_session::NetworkRole;
     // The shipped task program drives toward its first (far) route point on tick 1 — a
     // reliable "did the script run?" probe through the generic SetPorts bridge.
     let src =

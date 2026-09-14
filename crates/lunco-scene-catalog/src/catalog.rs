@@ -409,7 +409,7 @@ pub fn spawn_usd_entry(
         // repeated palette spawns cannot collide on the asset's default prim
         // path. Keep this in the shared constructor so every runtime caller
         // has the same identity contract.
-        lunco_core::SkipContentStamp,
+        lunco_core_session::SkipContentStamp,
         // Seeds hierarchical instance identity (gap G2/B.1): the USD loader
         // gives this runtime spawn's descendants `Derived` ids off this root's
         // unique id, so two spawns of the same asset don't collide. Atomic with
@@ -1086,7 +1086,9 @@ mod spawn_anchor_tests {
             "a spawned top-level prim must carry a CellCoord in the scene-root grid"
         );
         assert!(
-            world.get::<lunco_core::SkipContentStamp>(root).is_some(),
+            world
+                .get::<lunco_core_session::SkipContentStamp>(root)
+                .is_some(),
             "every runtime USD instance root must suppress content-derived identity"
         );
         assert!(

@@ -89,8 +89,8 @@ impl DocumentSessionCodec for UsdSessionCodec {
         // moonbase scene rendered a pre-migration version and ignored disk edits. So the
         // local/host build never looks at the cache; it re-reads the file every open.
         let is_client = matches!(
-            world.get_resource::<lunco_core::NetworkRole>(),
-            Some(lunco_core::NetworkRole::Client)
+            world.get_resource::<lunco_core_session::NetworkRole>(),
+            Some(lunco_core_session::NetworkRole::Client)
         );
         if !is_client {
             return None;

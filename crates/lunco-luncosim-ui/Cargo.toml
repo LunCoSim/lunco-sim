@@ -58,6 +58,7 @@ lunco-avatar = { path = "../lunco-avatar", default-features = false }
 lunco-avatar-ui = { path = "../lunco-avatar-ui", optional = true }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-core = { path = "../lunco-core" }
+lunco-core-session = { path = "../lunco-core-session" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-environment = { path = "../lunco-environment" }
@@ -69,6 +70,7 @@ lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 lunco-modelica-ui = { path = "../lunco-modelica-ui", default-features = false, features = ["ui"] }
 lunco-networking = { path = "../lunco-networking", default-features = false, optional = true }
 lunco-render = { path = "../lunco-render" }
+lunco-render-recovery = { path = "../lunco-render-recovery" }
 lunco-scene-commands = { path = "../lunco-scene-commands" }
 lunco-scene-camera = { path = "../lunco-scene-camera" }
 lunco-scene-selection = { path = "../lunco-scene-selection" }

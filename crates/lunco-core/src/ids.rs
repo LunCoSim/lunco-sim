@@ -65,7 +65,7 @@ pub fn random_u64() -> u64 {
 /// connection so a client can neither pick nor guess its own authority identity
 /// (review H4/H5); masked to the 53-bit JS-safe range (session ids travel through
 /// JSON to the web/MCP clients) and never `0`, which is reserved for the
-/// local/host session ([`crate::SessionId::LOCAL`]).
+/// local/host session ([`crate::commands::SessionId::LOCAL`]).
 pub fn random_session_id() -> u64 {
     let v = rand_entropy() & 0x1F_FFFF_FFFF_FFFF;
     if v == 0 {
@@ -77,8 +77,8 @@ pub fn random_session_id() -> u64 {
 
 /// A 128-bit unpredictable authentication token as lowercase hex. The host mints
 /// one per session at connect and hands it to the client in the handshake; it is
-/// the server-issued credential that makes [`crate::session::SessionRbac`]
-/// authority load-bearing instead of name-only (review M2).
+/// the server-issued credential that makes session RBAC authority load-bearing
+/// instead of name-only (review M2).
 pub fn random_token() -> String {
     format!("{:016x}{:016x}", rand_entropy(), rand_entropy())
 }

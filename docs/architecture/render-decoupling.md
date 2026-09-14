@@ -96,9 +96,10 @@ doctrine applied to the last place that dodged it.
 ## The three intents
 
 `lunco-render` (render-free) and `lunco-materials` (render-free) hold the whole vocabulary.
-`lunco-render-bevy` is the material-binding crate. The GUI-only `lunco-workbench` also names
-Bevy's PBR limits for its rendered shadow-settings surface, but it is not reachable from the
-headless server.
+`lunco-render-bevy` is the material-binding crate. `lunco-render-recovery` owns the
+render-bound GPU error handler, adapter capability admission, and presentation gate. The
+GUI-only `lunco-workbench` consumes those capabilities for its rendered shadow-settings
+surface, but neither recovery nor the workbench is reachable from the headless server.
 
 | intent | in | binds to | notes |
 |---|---|---|---|

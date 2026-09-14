@@ -83,7 +83,7 @@ The windowed apps that embed the API bridge (`luncosim`, `lunica`, and anything 
 
 - `--api [PORT]` — enable the HTTP automation API. Default port **4101**. This is
   mandatory for luncosim visual/runtime validation; use an explicit free port.
-  (`lunco_core::session::DEFAULT_API_PORT`); the MCP config points here via
+  (`lunco_core_session::DEFAULT_API_PORT`); the MCP config points here via
   `LUNCO_API_PORT`. Without `--api`, no network surface.
 
 - `--no-ui` — headless (skip winit/egui, run the shared sim loop).
@@ -107,12 +107,12 @@ Use this to jump to the right one; read the index for the full responsibility.
 
 | Domain | Crates own | Key crates |
 |---|---|---|
-| **Core foundation** | primitives, docs/journal, time, storage, hashing, cache, settings, theme | `lunco-core`, `lunco-doc`, `lunco-twin-journal`, `lunco-time`, `lunco-storage`, `lunco-hash` |
+| **Core foundation** | primitives, session/authority substrate, docs/journal, time, storage, hashing, cache, settings, theme | `lunco-core`, `lunco-core-session`, `lunco-doc`, `lunco-twin-journal`, `lunco-time`, `lunco-storage`, `lunco-hash` |
 | **Simulation engine** | celestial, environment, terrain, experiments, cosim | `lunco-celestial`, `lunco-cosim`, `lunco-experiments`, `lunco-terrain-*` |
 | **Vessel control & hardware** | mobility, robotics, avatar, FSW/OBC/hardware, controller | `lunco-mobility`, `lunco-controller`, `lunco-cosim` |
 | **USD integration** | OpenUSD↔Bevy: headless document/core, geometry, visuals, physics, sim schemas, materials | `lunco-usd-core`, `lunco-usd-geometry`, `lunco-usd`, `lunco-usd-bevy`, `lunco-usd-avian`, `lunco-materials` |
 | **Networking & API** | replication, HTTP API, telemetry, attributes | `lunco-networking`, `lunco-api`, `lunco-telemetry` |
-| **Workbench & UI** | IDE shell, widgets, viz, 2D canvas, edit tools, render, web boot | `lunco-workbench`, `lunco-ui`, `lunco-viz`, `lunco-canvas`, `lunco-luncosim-edit-core`, `lunco-luncosim-edit-ui` |
+| **Workbench & UI** | IDE shell, widgets, viz, 2D canvas, edit tools, render intent/recovery, web boot | `lunco-workbench`, `lunco-ui`, `lunco-viz`, `lunco-canvas`, `lunco-luncosim-edit-core`, `lunco-luncosim-edit-ui`, `lunco-render-recovery` |
 | **Scripting & modeling** | Modelica, event-driven Rhai, tools, hooks, behavior trees, authored lessons | `lunco-modelica-core`, `lunco-modelica-ui`, `lunco-scripting`, `lunco-tools`, `lunco-hooks`, `lunco-behavior`, `lunco-luncosim` |
 | **Applications** | the entry-point binaries above | `luncosim`, `luncosim-server`, `lunica` |
 

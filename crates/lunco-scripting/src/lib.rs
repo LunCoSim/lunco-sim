@@ -219,7 +219,7 @@ pub fn register_builtin_policies() -> Result<(), String> {
     const BUILTINS: &[(&str, &str, &str)] = &[
         (
             "control_authority",
-            lunco_core::session::CONTROL_AUTHORITY_HOOK,
+            lunco_core_session::CONTROL_AUTHORITY_HOOK,
             "may_take_control",
         ),
         // Readiness policy: does a pending compile / scene load freeze the
@@ -234,14 +234,14 @@ pub fn register_builtin_policies() -> Result<(), String> {
         // Rhai decides whether an interactive consent window is appropriate.
         (
             "dataset_provisioning",
-            lunco_core::session::DATASET_PROVISION_HOOK,
+            lunco_core_session::DATASET_PROVISION_HOOK,
             "dataset_provisioning",
         ),
         // Renderer Rust publishes shadow-resource facts only; the authored
         // Rhai policy owns the warning decision and message.
         (
             "render_shadow_quality",
-            lunco_core::session::RENDER_SHADOW_QUALITY_HOOK,
+            lunco_render_recovery::RENDER_SHADOW_QUALITY_HOOK,
             "shadow_quality",
         ),
         // Runtime presentation is a typed Twin policy. The engine publishes
@@ -742,8 +742,11 @@ fn run_scripted_models(
 /// instead receive scripted behavior purely via replication of the resulting
 /// entity state. Mirrors cosim's identical gate (`lunco-cosim/src/lib.rs`).
 #[cfg(feature = "rhai")]
-fn scripts_run_here(role: Option<Res<lunco_core::NetworkRole>>) -> bool {
-    !matches!(role.as_deref(), Some(lunco_core::NetworkRole::Client))
+fn scripts_run_here(role: Option<Res<lunco_core_session::NetworkRole>>) -> bool {
+    !matches!(
+        role.as_deref(),
+        Some(lunco_core_session::NetworkRole::Client)
+    )
 }
 
 #[cfg(all(test, any(feature = "rhai", feature = "python")))]
@@ -789,14 +792,15 @@ mod policy_tests {
             ("estimated_bytes", lunco_hooks::HookValue::Int(1)),
             ("budget_bytes", lunco_hooks::HookValue::Int(2)),
         ]);
-        let result = lunco_hooks::invoke(lunco_core::session::RENDER_SHADOW_QUALITY_HOOK, &[facts])
-            .expect("the render shadow policy is registered")
-            .expect("the render shadow policy accepts renderer facts");
+        let result =
+            lunco_hooks::invoke(lunco_render_recovery::RENDER_SHADOW_QUALITY_HOOK, &[facts])
+                .expect("the render shadow policy is registered")
+                .expect("the render shadow policy accepts renderer facts");
         let lunco_hooks::HookValue::Str(message) = result else {
             panic!("the render shadow policy must return warning text when limits are unmet");
         };
         assert!(message.contains("5 point caster(s) exceed the configured limit of 1"));
         assert!(message.contains("All authored shadow maps remain enabled"));
-        lunco_hooks::unregister(lunco_core::session::RENDER_SHADOW_QUALITY_HOOK);
+        lunco_hooks::unregister(lunco_render_recovery::RENDER_SHADOW_QUALITY_HOOK);
     }
 }

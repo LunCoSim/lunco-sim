@@ -19,7 +19,7 @@ pub const ID_MASK_53: u64 = (1u64 << 53) - 1;
 /// Where an entity's identity *comes from* — the required input to identity.
 ///
 /// You cannot mint a [`GlobalEntityId`](crate::GlobalEntityId) without one of
-/// these: the single assignment system reads `Provenance` to decide *how* the id
+/// these: the session identity-admission system reads `Provenance` to decide *how* the id
 /// is produced (deterministic hash / server allocation / never).
 #[derive(Component, Clone, Debug, PartialEq, Eq, Hash, Reflect)]
 #[reflect(Component)]

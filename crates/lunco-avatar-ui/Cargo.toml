@@ -12,6 +12,7 @@ lunco-avatar = { path = "../lunco-avatar", default-features = false }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-controller = { path = "../lunco-controller" }
 lunco-core = { path = "../lunco-core" }
+lunco-core-session = { path = "../lunco-core-session" }
 lunco-theme = { path = "../lunco-theme" }
 lunco-workbench = { path = "../lunco-workbench" }
 lunco-workbench-core = { path = "../lunco-workbench-core" }

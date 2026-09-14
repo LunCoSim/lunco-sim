@@ -48,7 +48,9 @@ A **workbench** is the application shell of a LunCoSim app — the chrome around
 the 3D world. The `lunco-workbench-core` crate defines the stable panel,
 perspective, menu, and read-model contracts. The `lunco-workbench` crate owns
 the concrete `egui_dock`/`bevy_egui` shell that materializes those contracts,
-including persistence and renderer integration. A command palette and
+including persistence and viewport integration. GPU health, adapter capability
+admission, and presentation recovery are owned by the independent
+`lunco-render-recovery` crate, which the shell composes. A command palette and
 detachable-window host remain planned capabilities (§7–8).
 
 Terminology mapping:
@@ -841,6 +843,11 @@ simulation default.
    │     - Menu registry + WorkbenchSnapshot
    │         │
    │         ▼
+   ├── lunco-render-recovery  (GPU health and presentation gate)
+   │     - wgpu error handling and adapter capability admission
+   │     - bounded recovery ladder and scene-teardown reset
+   │         │
+   │         ▼
    ├── lunco-workbench  (concrete app shell — this document)
    │     - Root layout (SidePanel + CentralPanel)
    │     - egui_dock materialization and persistence
@@ -861,8 +868,10 @@ simulation default.
 
 - `lunco-workbench-core` is the app-facing contract layer — panel contexts,
   perspective plans, menu contributions, and published layout facts.
+- `lunco-render-recovery` is the concrete presentation-resilience boundary —
+  adapter admission, GPU error handling, and the terminal presentation gate.
 - `lunco-workbench` is the concrete app framework — layout, persistence,
-  workspace integration, rendering, and panel host.
+  workspace integration, viewport composition, and panel host.
 - `lunco-ui` is the widget library — draws things inside panels.
 - Domain crates contribute **Panel** implementations that use `lunco-ui`
   widgets and `lunco-workbench-core`'s Panel trait. They use

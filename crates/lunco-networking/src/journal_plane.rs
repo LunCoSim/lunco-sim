@@ -22,7 +22,7 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-use lunco_core::NetworkRole;
+use lunco_core_session::NetworkRole;
 use lunco_doc_bevy::JournalResource;
 use lunco_twin_journal::{AuthorId, DomainKind, EntryId, EntryKind, JournalEntry};
 

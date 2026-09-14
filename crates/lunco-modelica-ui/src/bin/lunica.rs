@@ -276,7 +276,7 @@ fn default_plugins(headless: bool) -> bevy::app::PluginGroupBuilder {
             let mut api_port: Option<u16> = None;
             for i in 0..args.len() {
                 if args[i] == "--api" {
-                    api_port = Some(lunco_core::session::DEFAULT_API_PORT);
+                    api_port = Some(lunco_core_session::DEFAULT_API_PORT);
                     if i + 1 < args.len() {
                         if let Ok(p) = args[i + 1].parse::<u16>() {
                             api_port = Some(p);

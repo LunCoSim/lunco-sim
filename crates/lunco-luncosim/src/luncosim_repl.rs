@@ -48,7 +48,7 @@ pub(super) fn run_if_requested() -> Option<i32> {
         return None;
     }
 
-    let mut port = lunco_core::session::DEFAULT_API_PORT;
+    let mut port = lunco_core_session::DEFAULT_API_PORT;
     let mut one_shot: Option<String> = None;
     let mut file: Option<String> = None;
     let mut output = OutputMode::Json;

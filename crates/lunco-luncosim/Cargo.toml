@@ -48,6 +48,7 @@ bevy = { workspace = true, features = ["bevy_gltf", "bevy_mesh", "bevy_light", "
 avian3d = { workspace = true }
 big_space = { workspace = true, optional = true }
 lunco-core = { path = "../lunco-core" }
+lunco-core-session = { path = "../lunco-core-session" }
 lunco-render = { path = "../lunco-render" }
 # The bevy_pbr binding layer, added by this GUI composition root only.
 #

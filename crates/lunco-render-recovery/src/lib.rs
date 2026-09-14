@@ -67,6 +67,9 @@ use lunco_render::{
 };
 use lunco_settings::AppSettingsExt;
 
+/// Hook id for the authored render-shadow warning policy.
+pub const RENDER_SHADOW_QUALITY_HOOK: &str = "render.shadow_quality";
+
 /// Error tallies shared between the wgpu callback (render thread, no `World`)
 /// and the escalation system (main world).
 ///
@@ -168,20 +171,20 @@ struct RenderCapabilityShared {
 pub(crate) struct RenderCapabilitiesHandle(Arc<RenderCapabilityShared>);
 
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct RenderCapabilities {
+pub struct RenderCapabilities {
     ready: bool,
     max_texture_dimension_2d: u32,
     max_texture_array_layers: u32,
 }
 
 impl RenderCapabilities {
-    pub(crate) fn is_ready(self) -> bool {
+    pub fn is_ready(self) -> bool {
         self.ready
     }
 
     /// Return every shadow-map size accepted by the live adapter and the
     /// persisted graphics-settings contract.
-    pub(crate) fn supported_shadow_map_sizes(self) -> Option<Vec<u32>> {
+    pub fn supported_shadow_map_sizes(self) -> Option<Vec<u32>> {
         if !self.ready || self.max_texture_dimension_2d == 0 {
             return None;
         }
@@ -292,7 +295,7 @@ pub struct RenderWarning {
 }
 
 /// Keep a render-health decision visible in the surviving workbench UI.
-pub(crate) fn draw_render_recovery_banner(
+pub fn draw_render_recovery_banner(
     mut egui_ctx: EguiContexts,
     warning: Option<Res<RenderWarning>>,
     gave_up: Option<Res<RenderGaveUp>>,
@@ -301,9 +304,9 @@ pub(crate) fn draw_render_recovery_banner(
     let theme = theme
         .map(|theme| theme.clone())
         .unwrap_or_else(lunco_theme::Theme::dark);
-    let (icon, title, message, color, fill) = if let Some(gave_up) = gave_up {
+    let (icon_label, title, message, color, fill) = if let Some(gave_up) = gave_up {
         (
-            crate::UiIcon::Error,
+            "×",
             "PRESENTATION STOPPED",
             gave_up.reason.clone(),
             theme.tokens.error,
@@ -311,7 +314,7 @@ pub(crate) fn draw_render_recovery_banner(
         )
     } else if let Some(warning) = warning {
         (
-            crate::UiIcon::Warning,
+            "!",
             warning.kind.title(),
             warning.message.clone(),
             theme.tokens.warning,
@@ -337,9 +340,12 @@ pub(crate) fn draw_render_recovery_banner(
                     ui.set_max_width(420.0);
                     ui.vertical_centered(|ui| {
                         ui.horizontal(|ui| {
-                            let (rect, _) = ui
-                                .allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
-                            crate::paint_icon(ui.painter(), icon, rect, color);
+                            ui.label(
+                                egui::RichText::new(icon_label)
+                                    .color(color)
+                                    .strong()
+                                    .size(18.0),
+                            );
                             ui.label(egui::RichText::new(title).color(color).strong());
                         });
                         ui.label(egui::RichText::new(message).color(theme.tokens.text));
@@ -501,7 +507,7 @@ impl Ladder {
 /// Install the error handler, the device-lost callback and the escalation ladder.
 ///
 /// No-op when there is no [`RenderApp`] (headless tests / API-only servers).
-pub(crate) fn install_wgpu_error_handler(app: &mut App) {
+pub fn install_wgpu_error_handler(app: &mut App) {
     app.register_settings_section::<RenderingQualitySettings>();
 
     if app.get_sub_app_mut(RenderApp).is_none() {
@@ -588,7 +594,7 @@ fn render_quality_changed(
 /// the current adapter will actually use. Bevy otherwise truncates light
 /// lists/layers in the render world, which would silently change an explicit
 /// graphics request or allocate an unsupported point-shadow texture.
-pub(crate) fn validate_profile_for_capabilities(
+pub fn validate_profile_for_capabilities(
     profile: lunco_render::RenderQualityProfile,
     capabilities: &RenderCapabilities,
 ) -> Result<(), String> {
@@ -1098,7 +1104,7 @@ fn shadow_quality_policy_warning(
         ("estimated_bytes", shadow_hook_int(required_bytes)),
         ("budget_bytes", shadow_hook_int(budget_bytes)),
     ]);
-    match lunco_hooks::invoke(lunco_core::session::RENDER_SHADOW_QUALITY_HOOK, &[facts]) {
+    match lunco_hooks::invoke(RENDER_SHADOW_QUALITY_HOOK, &[facts]) {
         None | Some(Ok(lunco_hooks::HookValue::Unit)) => None,
         Some(Ok(lunco_hooks::HookValue::Str(message))) if !message.is_empty() => Some(message),
         Some(Ok(lunco_hooks::HookValue::Str(_))) => None,
@@ -1282,25 +1288,30 @@ fn apply_shadow_caster_policy(
 /// A new scene gets fresh lights and cameras, so clearing the old ladder and
 /// shadow-admission bookkeeping is safe. A lost device remains terminal because
 /// no scene reload can recreate the adapter in-process.
-pub(crate) fn reset_render_recovery(
-    health: Res<RenderHealthHandle>,
-    mut ladder: ResMut<Ladder>,
-    mut budget: ResMut<ShadowAdmissionState>,
-    mut presentation: ResMut<PresentationState>,
-    mut commands: Commands,
-) {
-    if health.0.device_lost() {
+pub fn reset_render_recovery(world: &mut World) {
+    let device_lost = world
+        .get_resource::<RenderHealthHandle>()
+        .is_some_and(|health| health.0.device_lost());
+    if device_lost {
         return;
     }
-    health.0.reset_for_scene();
-    ladder.reset_state();
-    *budget = ShadowAdmissionState::default();
+    if let Some(health) = world.get_resource::<RenderHealthHandle>() {
+        health.0.reset_for_scene();
+    }
+    if let Some(mut ladder) = world.get_resource_mut::<Ladder>() {
+        ladder.reset_state();
+    }
+    if let Some(mut budget) = world.get_resource_mut::<ShadowAdmissionState>() {
+        *budget = ShadowAdmissionState::default();
+    }
     // The render schedule is gated by this extracted state, not by camera
     // activation.  Clearing only the ladder would leave a successfully
     // reloaded scene permanently headless after the previous scene gave up.
-    presentation.stopped = false;
-    commands.remove_resource::<RenderWarning>();
-    commands.remove_resource::<RenderGaveUp>();
+    if let Some(mut presentation) = world.get_resource_mut::<PresentationState>() {
+        presentation.stopped = false;
+    }
+    world.remove_resource::<RenderWarning>();
+    world.remove_resource::<RenderGaveUp>();
 }
 
 /// Main-world escalation: read the shared tallies, advance the [`Ladder`], and
@@ -1416,13 +1427,13 @@ mod tests {
 
     impl Drop for ShadowQualityHookGuard {
         fn drop(&mut self) {
-            lunco_hooks::unregister(lunco_core::session::RENDER_SHADOW_QUALITY_HOOK);
+            lunco_hooks::unregister(RENDER_SHADOW_QUALITY_HOOK);
         }
     }
 
     fn install_test_shadow_quality_policy() -> ShadowQualityHookGuard {
         lunco_hooks::register(lunco_hooks::RegisteredHook {
-            id: lunco_core::session::RENDER_SHADOW_QUALITY_HOOK.into(),
+            id: RENDER_SHADOW_QUALITY_HOOK.into(),
             backend: "test".into(),
             deterministic: false,
             hook: Arc::new(TestShadowQualityPolicy),

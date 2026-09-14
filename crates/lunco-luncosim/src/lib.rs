@@ -236,8 +236,8 @@ mod render_profile_tests {
 /// nothing parses is a lie.
 #[cfg(not(target_family = "wasm"))]
 fn help_text() -> String {
-    let api = lunco_core::session::DEFAULT_API_PORT;
-    let net = lunco_core::session::DEFAULT_HOST_PORT;
+    let api = lunco_core_session::DEFAULT_API_PORT;
+    let net = lunco_core_session::DEFAULT_HOST_PORT;
     format!(
         "\
 luncosim — the LunCoSim lunar simulator.
@@ -615,7 +615,7 @@ fn default_plugins_with_profile(
         let mut api_port: Option<u16> = None;
         for i in 0..args.len() {
             if args[i] == "--api" {
-                api_port = Some(lunco_core::session::DEFAULT_API_PORT);
+                api_port = Some(lunco_core_session::DEFAULT_API_PORT);
                 if i + 1 < args.len() {
                     if let Ok(p) = args[i + 1].parse::<u16>() {
                         api_port = Some(p);

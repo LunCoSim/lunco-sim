@@ -8,10 +8,8 @@ use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 use lunco_avatar::RoverNameTagSettings;
 use lunco_celestial::{CelestialBody, LeaveSurface, LocalGravityField};
 use lunco_controller::{resolved_input_label, ControllerLink, InputBindingsSettings};
-use lunco_core::{
-    Avatar, CameraFollow, ControlBinding, GlobalEntityId, LocalAvatar, SessionProfiles,
-    SessionRegistry, UserIntent,
-};
+use lunco_core::{Avatar, CameraFollow, ControlBinding, GlobalEntityId, LocalAvatar, UserIntent};
+use lunco_core_session::{SessionProfiles, SessionRegistry};
 
 use lunco_avatar::{FreeFlightCamera, OrbitCamera, SpringArmCamera, SurfaceCamera};
 
@@ -454,7 +452,7 @@ pub fn draw_rover_name_tags(
     settings: Res<RoverNameTagSettings>,
     scene_viewport: Option<Res<lunco_core::SceneViewport>>,
     panel_rects: Option<Res<PanelRects>>,
-    net_role: Option<Res<lunco_core::NetworkRole>>,
+    net_role: Option<Res<lunco_core_session::NetworkRole>>,
     q_camera: Query<(&Camera, &GlobalTransform), (With<Avatar>, With<LocalAvatar>)>,
     q_rovers: Query<(&GlobalEntityId, &GlobalTransform)>,
 ) {
