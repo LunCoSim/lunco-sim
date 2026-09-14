@@ -2,6 +2,7 @@
 
 use bevy::prelude::*;
 use lunco_doc::DocumentId;
+use lunco_modelica_ui_core::SetModelicaParameter;
 
 // The actual mutation (`apply_set_model_input`) + its error type are UI-free and
 // live in `crate::model_commands`; UI code calls that owning module directly.
@@ -29,6 +30,68 @@ pub(crate) fn on_set_model_input_requested(
                 name,
                 value
             );
+        }
+    });
+}
+
+/// Apply an inspector parameter edit to both the authored Modelica document
+/// and the live worker session.
+pub fn on_set_modelica_parameter(trigger: On<SetModelicaParameter>, mut commands: Commands) {
+    let request = trigger.event().clone();
+    commands.queue(move |world: &mut World| {
+        use lunco_modelica_core::document::ModelicaOp;
+        use lunco_modelica_core::state::ModelicaDocumentRegistry;
+        use lunco_modelica_runtime::{ModelicaChannels, ModelicaCommand, ModelicaModel};
+
+        let mut session_id = 0u64;
+        let mut model_name = String::new();
+        if let Some(mut model) = world.get_mut::<ModelicaModel>(request.entity) {
+            if let Some(slot) = model.parameters.get_mut(&request.key) {
+                *slot = request.value;
+            }
+            model.session_id += 1;
+            session_id = model.session_id;
+            model.is_stepping = true;
+            model_name = model.model_name.clone();
+        }
+
+        let (doc_id, class_name) = {
+            let registry = world.resource::<ModelicaDocumentRegistry>();
+            let doc = registry.document_of(request.entity);
+            let class = doc.and_then(|doc| registry.host(doc)).and_then(|host| {
+                lunco_modelica_ast::ast_extract::extract_model_name_from_ast(
+                    host.document().syntax().ast(),
+                )
+            });
+            (doc, class)
+        };
+        let (Some(doc_id), Some(class_name)) = (doc_id, class_name) else {
+            return;
+        };
+        lunco_modelica_core::doc_ops::apply_ops_as(
+            world,
+            doc_id,
+            vec![ModelicaOp::SetParameter {
+                class: class_name,
+                component: request.key.clone(),
+                param: String::new(),
+                value: request.value.to_string(),
+            }],
+            lunco_twin_journal::AuthorTag::local_user(),
+        );
+        let new_source = world
+            .resource::<ModelicaDocumentRegistry>()
+            .host(doc_id)
+            .map(|host| host.document().source().to_string());
+        if let (Some(new_source), Some(channels)) =
+            (new_source, world.get_resource::<ModelicaChannels>())
+        {
+            let _ = channels.tx.send(ModelicaCommand::UpdateParameters {
+                entity: request.entity,
+                session_id,
+                model_name,
+                source: new_source,
+            });
         }
     });
 }

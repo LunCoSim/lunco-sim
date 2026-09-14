@@ -17,6 +17,7 @@ use lunco_core::ports::PortRegistry;
 use lunco_core::OpId;
 use lunco_cosim::{joint_angle_holder, JOINT_ANGLE_PORT};
 use lunco_doc::Document;
+use lunco_modelica_ui_core::SetModelicaParameter;
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 // Appearance INTENT. The Material (PBR) section edits this component, not the
 // material asset — see `material_pbr_section`.
@@ -196,13 +197,6 @@ pub(crate) struct PbrMaterialRequested {
     metallic_changed: bool,
     roughness_changed: bool,
     ior_changed: bool,
-}
-
-#[derive(Event, Clone, Debug)]
-pub(crate) struct ModelicaParameterRequested {
-    entity: Entity,
-    key: String,
-    value: f64,
 }
 
 pub(crate) fn on_inspector_component_edit(
@@ -724,69 +718,6 @@ pub(crate) fn on_pbr_material_requested(trigger: On<PbrMaterialRequested>, mut c
             label: "Edit material".to_string(),
             ops,
         });
-    });
-}
-
-pub(crate) fn on_modelica_parameter_requested(
-    trigger: On<ModelicaParameterRequested>,
-    mut commands: Commands,
-) {
-    let request = trigger.event().clone();
-    commands.queue(move |world: &mut World| {
-        use lunco_modelica_runtime::{ModelicaChannels, ModelicaCommand, ModelicaModel};
-        use lunco_modelica_ui::document::ModelicaOp;
-        use lunco_modelica_ui::state::ModelicaDocumentRegistry;
-        use lunco_modelica_ui::ui::panels::canvas_diagram::apply_ops_public;
-
-        let mut session_id = 0u64;
-        let mut model_name = String::new();
-        if let Some(mut model) = world.get_mut::<ModelicaModel>(request.entity) {
-            if let Some(slot) = model.parameters.get_mut(&request.key) {
-                *slot = request.value;
-            }
-            model.session_id += 1;
-            session_id = model.session_id;
-            model.is_stepping = true;
-            model_name = model.model_name.clone();
-        }
-
-        let (doc_id, class_name) = {
-            let registry = world.resource::<ModelicaDocumentRegistry>();
-            let doc = registry.document_of(request.entity);
-            let class = doc.and_then(|doc| registry.host(doc)).and_then(|host| {
-                lunco_modelica_ast::ast_extract::extract_model_name_from_ast(
-                    host.document().syntax().ast(),
-                )
-            });
-            (doc, class)
-        };
-        let (Some(doc_id), Some(class_name)) = (doc_id, class_name) else {
-            return;
-        };
-        apply_ops_public(
-            world,
-            doc_id,
-            vec![ModelicaOp::SetParameter {
-                class: class_name,
-                component: request.key.clone(),
-                param: String::new(),
-                value: format!("{}", request.value),
-            }],
-        );
-        let new_source = world
-            .resource::<ModelicaDocumentRegistry>()
-            .host(doc_id)
-            .map(|host| host.document().source().to_string());
-        if let (Some(new_source), Some(channels)) =
-            (new_source, world.get_resource::<ModelicaChannels>())
-        {
-            let _ = channels.tx.send(ModelicaCommand::UpdateParameters {
-                entity: request.entity,
-                session_id,
-                model_name,
-                source: new_source,
-            });
-        }
     });
 }
 
@@ -3969,7 +3900,7 @@ fn modelica_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: En
         return;
     };
 
-    ctx.trigger(ModelicaParameterRequested {
+    ctx.trigger(SetModelicaParameter {
         entity,
         key: changed_key,
         value: new_value,
