@@ -81,7 +81,7 @@ fn every_albedo_map_uses_shared_bounded_transfer() {
         // The composite line must route the map through the shared transfer.
         let line = code
             .lines()
-            .find(|l| l.contains("mix(albedo") && l.contains("weight_albedo"))
+            .find(|l| l.contains("mix(albedo") && l.contains("orthophoto_factor"))
             .unwrap_or_else(|| {
                 panic!("{name} declares weight_albedo but never composites it into albedo")
             });
@@ -96,6 +96,36 @@ fn every_albedo_map_uses_shared_bounded_transfer() {
              transfer — two copies are how terrain paths drift apart"
         );
     }
+}
+
+/// An authored orthophoto owns colour variation at its declared weight. The
+/// static layered path used to add independent metre-scale dust/mottle after
+/// the USD albedo was present, which made the real raster appear to flicker as
+/// camera and LOD footprints changed. Procedural relief and roughness are
+/// separate concerns and must remain available.
+#[test]
+fn authored_albedo_suppresses_only_procedural_colour_variation() {
+    let layered = code_only(&read("terrain_layered.wgsl"));
+    assert!(layered.contains("let authored_albedo_weight = clamp(mat.weight_albedo"));
+    assert!(layered.contains("let procedural_albedo_weight = 1.0 - authored_albedo_weight"));
+    assert!(layered.contains("* dust_fade * procedural_albedo_weight"));
+    assert!(layered.contains("* mottle\n                * procedural_albedo_weight"));
+    assert!(
+        layered.contains("bump_layer"),
+        "authored albedo must not remove relief"
+    );
+    assert!(
+        layered.contains("var roughness"),
+        "authored albedo must not remove roughness"
+    );
+
+    let geomorph = code_only(&read("terrain_geomorph.wgsl"));
+    assert!(geomorph.contains("let authored_albedo_weight = clamp(mat.weight_albedo"));
+    let line = geomorph
+        .lines()
+        .find(|line| line.contains("orthophoto_factor(map_a)"))
+        .expect("geomorph terrain must apply the authored albedo transfer");
+    assert!(line.contains("authored_albedo_weight"));
 }
 
 /// The regolith surface kernel lives in `lunco::terrain` (terrain_surface.wgsl).

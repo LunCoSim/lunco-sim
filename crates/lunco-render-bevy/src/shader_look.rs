@@ -34,14 +34,17 @@
 use crate::look_cache::{sweep_look_cache, CachedLook, LookCache};
 use crate::shader_material::{build_shader_material, wgsl_source, ShaderMaterial};
 use bevy::asset::AssetId;
+use bevy::image::{ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::light::NotShadowCaster;
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::shader::Shader;
+use bevy::tasks::{futures_lite::future, AsyncComputeTaskPool, Task};
 use lunco_materials::{
-    ParamSchema, ProceduralSkybox, ShaderLook, ShaderLookBound, ShaderLookKey, ShaderLookReady,
-    TextureLayer,
+    rgba8_mip_chain, ParamSchema, ProceduralSkybox, Rgba8MipMode, ShaderLook, ShaderLookBound,
+    ShaderLookKey, ShaderLookReady, TextureLayer,
 };
 use lunco_render::SurfaceAlpha;
 use std::sync::Arc;
@@ -507,6 +510,239 @@ fn rebind_changed_shader_look(
     }
 }
 
+type ShaderImageMipKey = (AssetId<Image>, Rgba8MipMode);
+
+/// Tracks the event-driven CPU preparation needed by authored shader rasters.
+///
+/// PNG/JPEG image loading supplies a single base level even when its sampler
+/// requests trilinear filtering. The renderer owns the concrete `Image`, so it
+/// is also the authoritative place to materialize the missing levels. Requests
+/// are registered only when a look changes and are deduplicated by image id;
+/// hundreds of streamed terrain tiles therefore cannot repeat the same bake.
+#[derive(Resource, Default)]
+struct ShaderImageMipState {
+    /// Image-role requests discovered from live `ShaderLook` components. Keep
+    /// these separate from `pending`: an image may be hot-reloaded after its
+    /// first chain was installed, in which case the asset event must enqueue
+    /// it again without requiring every look to change.
+    requested: HashSet<ShaderImageMipKey>,
+    pending: HashSet<ShaderImageMipKey>,
+    tasks: HashMap<ShaderImageMipKey, Task<Option<MippedShaderImage>>>,
+    /// Asset events are the image-content invalidation boundary. A completed
+    /// worker result is applied only if no newer event has arrived since its
+    /// snapshot, so a hot reload cannot publish stale pixels over the new image.
+    epochs: HashMap<AssetId<Image>, u64>,
+}
+
+struct MippedShaderImage {
+    id: AssetId<Image>,
+    mode: Rgba8MipMode,
+    epoch: u64,
+    width: u32,
+    height: u32,
+    data: Vec<u8>,
+    mip_levels: u32,
+}
+
+fn authored_shader_image_mip_mode(layer: TextureLayer) -> Option<Rgba8MipMode> {
+    match layer {
+        // These are the four filterable image roles authored by the USD shader
+        // reader. Height and ShadowCache have different formats/access patterns
+        // and are intentionally not treated as RGBA8 colour images here.
+        TextureLayer::Albedo | TextureLayer::Mineral => Some(Rgba8MipMode::SrgbColor),
+        TextureLayer::Surface => Some(Rgba8MipMode::Linear),
+        TextureLayer::Normal => Some(Rgba8MipMode::Normal),
+        TextureLayer::Height | TextureLayer::ShadowCache => None,
+    }
+}
+
+fn authored_shader_image_format(mode: Rgba8MipMode) -> TextureFormat {
+    match mode {
+        Rgba8MipMode::SrgbColor => TextureFormat::Rgba8UnormSrgb,
+        Rgba8MipMode::Linear | Rgba8MipMode::Normal => TextureFormat::Rgba8Unorm,
+    }
+}
+
+fn authored_shader_image_base(image: &Image, mode: Rgba8MipMode) -> Option<(Vec<u8>, u32, u32)> {
+    let descriptor = &image.texture_descriptor;
+    if descriptor.dimension != TextureDimension::D2
+        || descriptor.size.depth_or_array_layers != 1
+        || descriptor.format != authored_shader_image_format(mode)
+    {
+        return None;
+    }
+    let (width, height) = (descriptor.size.width, descriptor.size.height);
+    let expected_len = usize::try_from(width)
+        .ok()?
+        .checked_mul(usize::try_from(height).ok()?)?
+        .checked_mul(4)?;
+    let data = image.data.as_ref()?;
+    (data.len() == expected_len).then(|| (data.clone(), width, height))
+}
+
+/// Prepare authored shader rasters after a look declares them.
+///
+/// This is event/change driven: no scene-wide per-frame scan and no duplicate
+/// work for tiles sharing a streamed asset. The byte filter runs on the async
+/// compute pool; the main thread only installs the completed chain and sampler
+/// descriptor into the existing image asset.
+fn prepare_authored_shader_image_mips(
+    changed: Query<&ShaderLook, Changed<ShaderLook>>,
+    mut image_events: MessageReader<AssetEvent<Image>>,
+    mut state: ResMut<ShaderImageMipState>,
+    images: Option<ResMut<Assets<Image>>>,
+    quality: Option<Res<lunco_render::RenderingQualitySettings>>,
+) {
+    let Some(mut images) = images else {
+        return;
+    };
+
+    for event in image_events.read() {
+        match event {
+            AssetEvent::Added { id } | AssetEvent::Modified { id } => {
+                let epoch = state.epochs.entry(*id).or_default();
+                *epoch = epoch.saturating_add(1);
+                let refreshed = state
+                    .requested
+                    .iter()
+                    .filter(|(image_id, _)| image_id == id)
+                    .copied()
+                    .collect::<Vec<_>>();
+                state.pending.extend(refreshed);
+            }
+            AssetEvent::Removed { id } | AssetEvent::Unused { id } => {
+                state.pending.retain(|(image_id, _)| image_id != id);
+                state.tasks.retain(|(image_id, _), _| image_id != id);
+                state.epochs.remove(id);
+            }
+            AssetEvent::LoadedWithDependencies { .. } => {}
+        }
+    }
+
+    for look in &changed {
+        for (layer, image) in &look.textures {
+            let Some(mode) = authored_shader_image_mip_mode(*layer) else {
+                continue;
+            };
+            let key = (image.id(), mode);
+            state.requested.insert(key);
+            state.pending.insert(key);
+        }
+    }
+
+    let pending: Vec<_> = state.pending.iter().copied().collect();
+    for (id, mode) in pending {
+        if state.tasks.contains_key(&(id, mode)) {
+            continue;
+        }
+        let Some(image) = images.get(id) else {
+            continue;
+        };
+        // KTX2/DDS and generated terrain images may already carry their full
+        // chain. They need no CPU work, but their existing sampler remains the
+        // source of truth.
+        if image.texture_descriptor.mip_level_count > 1 {
+            state.pending.remove(&(id, mode));
+            continue;
+        }
+        // A role/format mismatch is an authored contract error, not a reason
+        // to retry every frame. The USD reader assigns these formats at load
+        // time; non-RGBA roles are handled by their dedicated bindings.
+        if image.texture_descriptor.dimension != TextureDimension::D2
+            || image.texture_descriptor.size.depth_or_array_layers != 1
+            || image.texture_descriptor.format != authored_shader_image_format(mode)
+        {
+            state.pending.remove(&(id, mode));
+            continue;
+        }
+        // An image asset can briefly exist without CPU data while a custom
+        // loader finishes publishing it. Keep the request until its Modified
+        // event makes the bytes available.
+        let Some((base, width, height)) = authored_shader_image_base(image, mode) else {
+            continue;
+        };
+        if width == 1 && height == 1 {
+            state.pending.remove(&(id, mode));
+            continue;
+        }
+        let epoch = *state.epochs.entry(id).or_default();
+        let task = AsyncComputeTaskPool::get().spawn(async move {
+            let (data, mip_levels) = rgba8_mip_chain(
+                base,
+                usize::try_from(width).ok()?,
+                usize::try_from(height).ok()?,
+                mode,
+            )?;
+            Some(MippedShaderImage {
+                id,
+                mode,
+                epoch,
+                width,
+                height,
+                data,
+                mip_levels,
+            })
+        });
+        state.pending.remove(&(id, mode));
+        state.tasks.insert((id, mode), task);
+    }
+
+    let mut finished = Vec::new();
+    for (key, task) in &mut state.tasks {
+        if let Some(result) = future::block_on(future::poll_once(task)) {
+            finished.push((*key, result));
+        }
+    }
+    for (key, _) in &finished {
+        state.tasks.remove(key);
+    }
+
+    let default_anisotropy = lunco_render::RenderingQualitySettings::default()
+        .profile()
+        .terrain_derived_texture_anisotropy;
+    let anisotropy = quality
+        .as_ref()
+        .and_then(|settings| settings.validated_profile().ok())
+        .map(|profile| profile.terrain_derived_texture_anisotropy)
+        .unwrap_or(default_anisotropy)
+        .max(1);
+
+    for (_, result) in finished {
+        let Some(result) = result else { continue };
+        if state.epochs.get(&result.id).copied().unwrap_or_default() != result.epoch {
+            continue;
+        }
+        let Some(mut image) = images.get_mut(result.id) else {
+            continue;
+        };
+        if image.texture_descriptor.mip_level_count > 1
+            || image.texture_descriptor.dimension != TextureDimension::D2
+            || image.texture_descriptor.size.width != result.width
+            || image.texture_descriptor.size.height != result.height
+            || image.texture_descriptor.format != authored_shader_image_format(result.mode)
+        {
+            continue;
+        }
+        image.data = Some(result.data);
+        image.texture_descriptor.mip_level_count = result.mip_levels;
+        let mut sampler = match &image.sampler {
+            ImageSampler::Descriptor(descriptor) => descriptor.clone(),
+            ImageSampler::Default => ImageSamplerDescriptor::linear(),
+        };
+        sampler
+            .set_filter(ImageFilterMode::Linear)
+            .set_anisotropic_filter(anisotropy);
+        image.sampler = ImageSampler::Descriptor(sampler);
+    }
+}
+
+fn clear_shader_image_mips(mut state: ResMut<ShaderImageMipState>) {
+    state.requested.clear();
+    state.pending.clear();
+    state.tasks.clear();
+    state.epochs.clear();
+}
+
 /// Wire the `ShaderLook` binder into an app. Called by
 /// [`LuncoRenderPlugin`](crate::LuncoRenderPlugin).
 ///
@@ -538,6 +774,7 @@ pub(crate) fn build(app: &mut App) {
         bevy::asset::AssetApp::init_asset::<Shader>(app);
     }
     app.init_resource::<ShaderLookCache>()
+        .init_resource::<ShaderImageMipState>()
         .add_observer(bind_shader_look)
         .add_observer(bind_added_skybox_shader_look)
         .add_systems(
@@ -548,7 +785,12 @@ pub(crate) fn build(app: &mut App) {
                 mark_shader_look_ready.after(crate::reflect_shader_schemas),
                 sweep_look_cache::<ShaderLook>,
             ),
-        );
+        )
+        .add_systems(
+            Update,
+            prepare_authored_shader_image_mips.after(rebind_changed_shader_look),
+        )
+        .add_systems(lunco_core::SceneTeardown, clear_shader_image_mips);
     // Shader parameters become connection targets in `lunco-usd-sim`'s
     // `shader_ports` — beside the pass that authors `ShaderLook::driven`, so a
     // shader wire lands in a headless build too. The writes arrive in
@@ -928,6 +1170,94 @@ mod tests {
         assert_eq!(m.normal_map.as_ref(), Some(&normal));
         assert!(m.height_map.is_none());
         assert_eq!(mats.len(), 2, "a bound texture is part of the sharing key");
+    }
+
+    #[test]
+    fn authored_image_mips_are_rebuilt_after_hot_reload() {
+        let mut app = app();
+        let image = app
+            .world_mut()
+            .resource_mut::<Assets<Image>>()
+            .add(Image::new(
+                Extent3d {
+                    width: 2,
+                    height: 2,
+                    depth_or_array_layers: 1,
+                },
+                TextureDimension::D2,
+                vec![
+                    0, 0, 0, 255, 255, 255, 255, 255, 0, 0, 0, 255, 255, 255, 255, 255,
+                ],
+                TextureFormat::Rgba8UnormSrgb,
+                bevy::asset::RenderAssetUsages::MAIN_WORLD,
+            ));
+        let entity = app
+            .world_mut()
+            .spawn(
+                ShaderLook::new("shaders/terrain_geomorph.wgsl")
+                    .with_texture(TextureLayer::Albedo, image.clone()),
+            )
+            .id();
+
+        for _ in 0..8 {
+            app.update();
+            if app
+                .world()
+                .resource::<Assets<Image>>()
+                .get(image.id())
+                .is_some_and(|image| image.texture_descriptor.mip_level_count == 2)
+            {
+                break;
+            }
+        }
+        assert_eq!(
+            app.world()
+                .resource::<Assets<Image>>()
+                .get(image.id())
+                .expect("authored image")
+                .texture_descriptor
+                .mip_level_count,
+            2
+        );
+
+        let reloaded_base = vec![
+            32, 32, 32, 255, 224, 224, 224, 255, 32, 32, 32, 255, 224, 224, 224, 255,
+        ];
+        {
+            let mut images = app.world_mut().resource_mut::<Assets<Image>>();
+            let mut reloaded = images
+                .get_mut(image.id())
+                .expect("authored image for hot reload");
+            reloaded.data = Some(reloaded_base);
+            reloaded.texture_descriptor.mip_level_count = 1;
+        }
+
+        for _ in 0..8 {
+            app.update();
+            if app
+                .world()
+                .resource::<Assets<Image>>()
+                .get(image.id())
+                .is_some_and(|image| image.texture_descriptor.mip_level_count == 2)
+            {
+                break;
+            }
+        }
+        let image = app
+            .world()
+            .resource::<Assets<Image>>()
+            .get(image.id())
+            .expect("reloaded authored image");
+        assert_eq!(image.texture_descriptor.mip_level_count, 2);
+        assert_eq!(image.data.as_ref().map(Vec::len), Some(20));
+        assert!(matches!(
+            image.sampler,
+            ImageSampler::Descriptor(ImageSamplerDescriptor {
+                mipmap_filter: ImageFilterMode::Linear,
+                ..
+            })
+        ));
+        assert!(app.world().entity(entity).contains::<ShaderLookBound>());
     }
 
     #[test]

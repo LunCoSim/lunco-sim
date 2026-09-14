@@ -7,7 +7,8 @@
 //! Part C.2), each blended by a reflected `weight_*` knob:
 //!
 //!   * albedo  (binding 2/3) — real colour raster (e.g. the NASA lunar mosaic
-//!     downloaded via `Assets.toml`); `mix`ed over the procedural albedo.
+//!     downloaded via `Assets.toml`); it owns colour variation at full weight,
+//!     while procedural colour is only the un-authored fallback.
 //!   * mineral (binding 4/5) — classification/analysis OVERLAY (e.g. the LROC
 //!     slope map): composited UNLIT after lighting/shadowing, so it stays
 //!     readable in shadow (doc 18 §4 — overlays are data, not material).
@@ -196,6 +197,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     let mid_scale   = mat.mid_scale;
     let mid_bump    = mat.mid_bump;
     let mottle      = mat.mottle;
+    let authored_albedo_weight = clamp(mat.weight_albedo, 0.0, 1.0);
+    let procedural_albedo_weight = 1.0 - authored_albedo_weight;
     var albedo = mat.albedo;
 
     let world_p = in.world_position.xyz;
@@ -230,12 +233,21 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     n = terrain_detail_normal_to_world(detail_n, in.instance_index);
 #endif
 
-    let dust_fade = aa_fade(0.008, pw);
-    if (dust_fade > 0.0) {
-        let dust = surface_fbm(detail_p * 0.008, 3, 0.5);
-        albedo *= 1.0 + (dust - 0.5) * 0.18 * dust_fade;
+    // Procedural colour is a fallback only. Once an authored orthophoto is
+    // active, adding this independent per-metre variation over it makes the
+    // surface change between unrelated tones as the camera footprint and LOD
+    // change. The procedural normal and roughness layers remain independent.
+    if (procedural_albedo_weight > 0.0) {
+        let dust_fade = aa_fade(0.008, pw);
+        if (dust_fade > 0.0) {
+            let dust = surface_fbm(detail_p * 0.008, 3, 0.5);
+            albedo *= 1.0 + (dust - 0.5) * 0.18 * dust_fade * procedural_albedo_weight;
+        }
+        albedo *= 1.0
+            + (mix(0.5, mid_h, mid_fade) - 0.5)
+                * mottle
+                * procedural_albedo_weight;
     }
-    albedo *= 1.0 + (mix(0.5, mid_h, mid_fade) - 0.5) * mottle;
 
     let macro_rough = mix(0.5, macro_h, macro_fade);
     var roughness = clamp(mix(macro_rough, 1.0, rough_mix), 0.05, 1.0);
@@ -265,9 +277,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // linear reflectance. The shared transfer bounds its tone modulation so map
     // extrema cannot collapse the ground to black or wash it to white. It must
     // stay identical to the streamed path in `terrain_geomorph.wgsl`.
-    if (mat.weight_albedo > 0.0) {
+    if (authored_albedo_weight > 0.0) {
         let a = textureSample(albedo_tex, albedo_smp, uv).rgb;
-        albedo = mix(albedo, albedo * orthophoto_factor(a), mat.weight_albedo);
+        albedo = mix(albedo, albedo * orthophoto_factor(a), authored_albedo_weight);
     }
     // (Mineral/classification is NOT applied here: it is an OVERLAY — data
     // visualization, not material — and composites after lighting below, so a

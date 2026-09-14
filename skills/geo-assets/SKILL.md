@@ -151,6 +151,14 @@ def Scope "Looks"
 }
 ```
 
+Keep production albedo and normal rasters as authored assets. The render binder
+builds their missing RGBA8 mip levels once per image asset version, off-thread and with
+role-aware filtering (linear-light colour, linear scalars, renormalized normals)
+before enabling trilinear/anisotropic sampling. Do not replace an orthophoto
+with a hillshade, slope, or elevation-colour diagnostic to hide minification
+aliasing; those remain optional analysis products and their authored role/weight
+must stay explicit.
+
 ### Physics parameters for a DEM generator
 
 The `dem` child layer also owns the physics collider-ring lattice. Author these
@@ -186,6 +194,9 @@ and `normal`.
   node (doc 18 Tier B), not an authored file.
 - `mineral` composites **UNLIT after lighting**, so a slope/classification
   drape stays readable inside shadow — its entire job.
+- `albedo` is the terrain colour source at its authored `weight_albedo`; at
+  full weight the layered shader disables its procedural dust/mottle colour,
+  while relief normals, roughness, AO, and photometry remain active.
 - The authored shader source and maps bind on both static and streamed terrain
   through the same `ShaderLook`; streamed LOD tiles add only their CDLOD
   geometry inputs, and the derived bake fills slots an authored map left empty.
