@@ -93,7 +93,24 @@ pipeline's percentile stretch produces a contrast map rather than linear
 reflectance, so both terrain paths pass samples through the single
 `lunco::lunar::orthophoto_factor` transfer. It bounds the albedo modulation and
 keeps map extrema from becoming black or washed-out terrain; the texture-role
-loader supplies the color layer as linear samples.
+loader supplies the color layer as linear samples. When `weight_albedo` is
+fully authored, that raster owns terrain colour variation: the layered static
+path attenuates its procedural dust/mottle term by `1 - weight_albedo`, while
+normal, roughness, ambient occlusion, and lunar photometry remain independent.
+This keeps a real orthophoto spatially stable instead of overlaying unrelated
+fine-scale colour noise on it.
+
+The render binder also materialises a complete mip chain for filterable authored
+RGBA8 maps when a `ShaderLook` first references them or an image version changes.
+This is a deduplicated,
+off-thread operation keyed by image asset id, not a per-tile or per-frame bake:
+Albedo and Mineral mips average in linear light, Surface mips average scalar
+channels, and Normal mips average and renormalize vectors. The resulting image
+uses linear minification, trilinear mip selection, and the active terrain
+anisotropy setting. A sampler's `mipmap_filter` alone cannot create mip levels
+for an ordinary PNG, so this renderer-owned preparation is required to prevent
+real orthophoto detail from shimmering at distance. Height and ShadowCache keep
+their dedicated non-RGBA access contracts.
 
 ### Sharing, and how to not destroy it
 

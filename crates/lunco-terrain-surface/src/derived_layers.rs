@@ -40,7 +40,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::image::ImageSampler;
 use bevy::prelude::*;
 use bevy::tasks::{futures_lite::future, AsyncComputeTaskPool, Task};
-use lunco_materials::{ParamValue, ShaderLook, TextureLayer};
+use lunco_materials::{rgba8_mip_chain, ParamValue, Rgba8MipMode, ShaderLook, TextureLayer};
 // `wgpu-types`, not `bevy::render` — these are plain POD texture descriptors
 // (`bevy_image` itself takes them from here) and carry no pipeline, no wgpu device,
 // no naga. `bevy::render::render_resource` merely re-exports them, and importing it
@@ -260,7 +260,8 @@ struct DerivedMaps {
 }
 
 /// [`DerivedMaps`] with the full mip chain prebuilt for each map (`(data,
-/// level_count)` per [`mip_chain_rgba8`]). Built INSIDE the async bake body —
+/// level_count)` per [`lunco_materials::rgba8_mip_chain`]). Built INSIDE the
+/// async bake body —
 /// mipping the RGBA8 maps on the main thread after the off-thread bake was a
 /// per-publish `Update` spike — so [`finish_derived_bakes`] only wraps the
 /// buffers into `Image`s.
@@ -281,8 +282,10 @@ fn mip_maps(maps: DerivedMaps) -> DerivedMipped {
     } = maps;
     DerivedMipped {
         res,
-        surface: mip_chain_rgba8(surface_rgba, res),
-        normal: mip_chain_rgba8(normal_rgba, res),
+        surface: rgba8_mip_chain(surface_rgba, res, res, Rgba8MipMode::Linear)
+            .expect("derived surface map dimensions must match its RGBA8 buffer"),
+        normal: rgba8_mip_chain(normal_rgba, res, res, Rgba8MipMode::Normal)
+            .expect("derived normal map dimensions must match its RGBA8 buffer"),
     }
 }
 
@@ -817,58 +820,11 @@ fn update_derived_status(
     };
 }
 
-/// Build the full RGBA8 box-filtered mip chain for a square `res²` texture.
-/// Returns the concatenated level data (level 0 first) and the level count.
-/// Mips matter here: these maps are sampled out to the horizon, and without
-/// them distant texels shimmer and alias under the raking lunar sun.
-fn mip_chain_rgba8(base: Vec<u8>, res: usize) -> (Vec<u8>, u32) {
-    // Size the whole chain up front so each level is written IN PLACE into the
-    // one buffer (a disjoint `split_at_mut` window) — the old grow-as-you-go
-    // loop `to_vec()`d every source level just to appease the borrow checker.
-    let mut total = 0usize;
-    let mut levels = 0u32;
-    let mut r = res;
-    loop {
-        total += r * r * 4;
-        levels += 1;
-        if r <= 1 {
-            break;
-        }
-        r /= 2;
-    }
-    let mut all = base;
-    all.resize(total, 0);
-    let mut prev_res = res;
-    let mut prev_start = 0usize;
-    while prev_res > 1 {
-        let next_res = prev_res / 2;
-        let next_start = prev_start + prev_res * prev_res * 4;
-        // Read the previous level, write the next — disjoint halves of `all`.
-        let (head, tail) = all.split_at_mut(next_start);
-        let prev = &head[prev_start..];
-        let next = &mut tail[..next_res * next_res * 4];
-        for y in 0..next_res {
-            for x in 0..next_res {
-                for c in 0..4 {
-                    let i = |px: usize, py: usize| prev[(py * prev_res + px) * 4 + c] as u32;
-                    let sum = i(2 * x, 2 * y)
-                        + i(2 * x + 1, 2 * y)
-                        + i(2 * x, 2 * y + 1)
-                        + i(2 * x + 1, 2 * y + 1);
-                    next[(y * next_res + x) * 4 + c] = ((sum + 2) / 4) as u8;
-                }
-            }
-        }
-        prev_start = next_start;
-        prev_res = next_res;
-    }
-    (all, levels)
-}
-
 /// A linear (non-sRGB) RGBA8 data texture with a full mip chain and
 /// trilinear/anisotropic filtering — these carry the roughness/AO scalars,
 /// an encoded normal, and the albedo scalar, and are sampled out to the horizon.
-/// Takes the PREBUILT chain (`(data, level_count)` from [`mip_chain_rgba8`],
+/// Takes the PREBUILT chain (`(data, level_count)` from
+/// [`lunco_materials::rgba8_mip_chain`],
 /// run in the bake task) — this only wraps it in an `Image`.
 fn data_texture(res: usize, (data, mip_levels): (Vec<u8>, u32), anisotropy_clamp: u16) -> Image {
     use bevy::image::ImageSamplerDescriptor;

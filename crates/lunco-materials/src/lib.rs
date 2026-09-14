@@ -29,6 +29,7 @@
 pub mod catalog;
 pub mod dyn_params;
 pub mod engine_params;
+pub mod image_mips;
 pub mod look;
 pub mod naming;
 pub mod vertex;
@@ -38,6 +39,7 @@ pub use catalog::{
 };
 pub use dyn_params::{ParamField, ParamSchema, ParamType, ParamValue, UiKind};
 pub use engine_params::{engine_params, AttrRead, EngineParam, EngineParams, EngineSource};
+pub use image_mips::{rgba8_mip_chain, Rgba8MipMode};
 pub use look::{
     ProceduralSkybox, ShaderLook, ShaderLookBound, ShaderLookKey, ShaderLookReady, TextureLayer,
 };

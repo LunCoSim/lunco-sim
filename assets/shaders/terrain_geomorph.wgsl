@@ -266,6 +266,7 @@ fn vertex(vertex: GeoVertex) -> VertexOutput {
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
+    let authored_albedo_weight = clamp(mat.weight_albedo, 0.0, 1.0);
     var albedo = mat.albedo;
 
     let world_p = in.world_position.xyz;
@@ -383,8 +384,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // reflectance. Use the shared bounded transfer so its extrema cannot turn
     // the streamed terrain into near-black mud or washed-out patches. This is
     // the same transfer used by `terrain_layered.wgsl`.
-    if (mat.weight_albedo > 0.0) {
-        albedo = mix(albedo, albedo * orthophoto_factor(map_a), mat.weight_albedo);
+    if (authored_albedo_weight > 0.0) {
+        albedo = mix(albedo, albedo * orthophoto_factor(map_a), authored_albedo_weight);
     }
 
     // --- Lunar photometry: the actual realism lever -----------------------

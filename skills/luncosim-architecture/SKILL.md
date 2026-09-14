@@ -65,6 +65,16 @@ a multi-stage shader pair. See
 Keep authored grayscale orthophoto handling in the shared
 `lunco::lunar::orthophoto_factor` transfer: percentile-stretched maps are contrast
 signals, not linear reflectance, and must not be multiplied directly into albedo.
+When `weight_albedo` is fully authored, it owns terrain colour variation; scale
+the layered path's procedural dust/mottle colour by `1 - weight_albedo`, while
+keeping relief normals, roughness, ambient occlusion, and photometry independent.
+The render-side `ShaderLook` binder owns event-driven preparation of filterable
+authored RGBA8 maps: it deduplicates off-thread mip generation by image asset
+version,
+filters colour in linear light, averages scalar maps linearly, renormalizes
+normal vectors, and then enables trilinear/anisotropic sampling. Do not skip a
+zero-weight map at load time: authored weights are live inputs, while mip
+preparation is the separate renderer-owned image lifecycle.
 
 Project-owned persistence policy belongs to the active Twin manifest's generic
 settings boundary. A domain may define one namespaced scalar key and expose it

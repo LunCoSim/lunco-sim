@@ -38,6 +38,11 @@ diagnostic replacement:
    anti-aliased detail, roughness, and sun visibility. Streamed and static
    delivery may retain different vertex stages, but they must not choose
    different physical surface laws or distance-dependent colour/normal rules.
+   When USD supplies an albedo raster, the shared bounded orthophoto transfer
+   is the colour source at its authored weight; the static layered path scales
+   its procedural dust/mottle colour by `1 - weight_albedo`. Relief normals,
+   roughness, ambient occlusion, and photometry remain independent, so camera
+   footprint or CDLOD replacement cannot introduce unrelated colour changes.
 2. `terrain_debug.wgsl` remains the only diagnostic replacement. LOD depth and
    slope are analysis data, not branches or uniforms added to the production
    material.
@@ -71,12 +76,20 @@ their terrain self-shadow source at all distances.
 |---|---|---|
 | Near | DEM relief plus authored normal when present; restrained micro-detail; stable CSM/horizon visibility; no tiled or plastic look | Detail is shown only while its projected footprint supports it. |
 | Middle | Same albedo/roughness law and DEM relief; authored surface maps remain registered; no shader-path or LOD seam | Procedural detail fades analytically by footprint, not by mesh depth or morph state. |
-| Far | Stable albedo and large-scale relief with horizon visibility; no noisy high-frequency detail or mode switch | Use the existing derived/authored map source contract and pre-baked horizon cache. |
+| Far | Stable authored albedo and large-scale relief with horizon visibility; no noisy high-frequency colour detail or mode switch | Use the existing derived/authored map source contract and pre-baked horizon cache. |
 
 Missing authored maps have one semantic: the source-presence/weight contract
 selects the documented derived product or the base material. A missing tile or
 map is not converted into a second visual fallback. Height, collider,
 streaming, and lighting/time ownership remain unchanged by this decision.
+
+Filterable authored RGBA8 roles are prepared once per image asset version by the
+render binder. The CPU mip chain is built off-thread and deduplicated across all tiles:
+colour roles are filtered in linear light, scalar roles in their stored linear
+space, and normal roles are renormalized after filtering. The binder then opts
+the image into linear/trilinear filtering with the active anisotropy profile.
+This preserves the authored raster and its resolution while removing minification
+aliasing; changing a terrain tile or camera does not rebuild the chain.
 
 The shared performance reference is the open High-quality Apollo target:
 200 FPS sustained, 5.0 ms p95 frame time. It is a budget to measure against,
