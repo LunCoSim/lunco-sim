@@ -110,6 +110,7 @@ fn authored_albedo_suppresses_only_procedural_colour_variation() {
     assert!(layered.contains("let procedural_albedo_weight = 1.0 - authored_albedo_weight"));
     assert!(layered.contains("* dust_fade * procedural_albedo_weight"));
     assert!(layered.contains("* mottle\n                * procedural_albedo_weight"));
+    assert!(layered.contains("authored_albedo_weight,"));
     assert!(
         layered.contains("bump_layer"),
         "authored albedo must not remove relief"
@@ -126,6 +127,35 @@ fn authored_albedo_suppresses_only_procedural_colour_variation() {
         .find(|line| line.contains("orthophoto_factor(map_a)"))
         .expect("geomorph terrain must apply the authored albedo transfer");
     assert!(line.contains("authored_albedo_weight"));
+    assert!(geomorph.contains("authored_albedo_weight,"));
+
+    let surface = code_only(&read("terrain_surface.wgsl"));
+    assert!(surface.contains("* (1.0 - clamp(authored_albedo_weight, 0.0, 1.0))"));
+}
+
+/// Surface AO is indirect-light visibility, not albedo. Both terrain paths must
+/// use the shared transfer and hand the result to Bevy's PBR occlusion input;
+/// multiplying it into base colour produces broad low-frequency paint patches
+/// and incorrectly suppresses direct sunlight.
+#[test]
+fn terrain_ao_uses_indirect_pbr_occlusion_not_albedo() {
+    let kernel = code_only(&read("terrain_surface.wgsl"));
+    assert!(kernel.contains("fn terrain_surface_occlusion("));
+    assert!(kernel.contains("return clamp(occlusion, 0.0, 1.0)"));
+
+    let layered = code_only(&read("terrain_layered.wgsl"));
+    assert!(layered.contains("terrain_surface_occlusion("));
+    assert!(layered.contains("pbr_input.diffuse_occlusion = vec3(map_ao)"));
+    assert!(!layered.contains("albedo *= map_ao"));
+
+    let geomorph = code_only(&read("terrain_geomorph.wgsl"));
+    assert!(geomorph.contains("terrain_surface_occlusion("));
+    assert!(geomorph.contains("lit_n_occluded("));
+    assert!(geomorph.contains("vec3(map_ao)"));
+    assert!(!geomorph.contains("albedo *= map_ao"));
+
+    let pbr = code_only(&read("pbr_lit.wgsl"));
+    assert!(pbr.contains("pbr_input.diffuse_occlusion = diffuse_occlusion"));
 }
 
 /// The regolith surface kernel lives in `lunco::terrain` (terrain_surface.wgsl).

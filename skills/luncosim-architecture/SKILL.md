@@ -79,6 +79,11 @@ shared transfer must not be bypassed by multiplying the map directly into albedo
 When `weight_albedo` is fully authored, it owns terrain colour variation; scale
 the layered path's procedural dust/mottle colour by `1 - weight_albedo`, while
 keeping relief normals, roughness, ambient occlusion, and photometry independent.
+The packed surface map's G channel is ambient occlusion: route it through the
+shared `terrain_surface_occlusion` helper into Bevy's
+`PbrInput.diffuse_occlusion`, never into base albedo. AO is indirect-light
+visibility; multiplying it into albedo creates broad false colour patches and
+darkens direct sunlight.
 The render-side `ShaderLook` binder owns event-driven preparation of filterable
 authored RGBA8 maps: it deduplicates off-thread mip generation by image asset
 version,

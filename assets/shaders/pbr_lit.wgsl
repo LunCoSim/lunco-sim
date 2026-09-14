@@ -44,7 +44,9 @@ fn lit(
 
 // As `lit`, but with a caller-supplied shading normal `n` (world space,
 // normalized) — e.g. after procedural bump mapping. The geometric normal is
-// still used for the front-facing flip and shadow-receiver flags.
+// still used for the front-facing flip and shadow-receiver flags. Indirect
+// diffuse occlusion is explicit so a material can use baked AO without
+// incorrectly multiplying it into base colour or direct sunlight.
 fn lit_n(
     in: VertexOutput,
     is_front: bool,
@@ -53,6 +55,25 @@ fn lit_n(
     perceptual_roughness: f32,
     metallic: f32,
     emissive: vec3<f32>,
+) -> vec4<f32> {
+    return lit_n_occluded(
+        in, is_front, n, base_color, perceptual_roughness, metallic, emissive,
+        vec3(1.0),
+    );
+}
+
+/// `lit_n` with a caller-supplied Bevy diffuse-occlusion factor. This remains a
+/// small extension of the shared PBR owner rather than a terrain-specific
+/// lighting implementation.
+fn lit_n_occluded(
+    in: VertexOutput,
+    is_front: bool,
+    n: vec3<f32>,
+    base_color: vec3<f32>,
+    perceptual_roughness: f32,
+    metallic: f32,
+    emissive: vec3<f32>,
+    diffuse_occlusion: vec3<f32>,
 ) -> vec4<f32> {
     var pbr_input = pbr_types::pbr_input_new();
     pbr_input.flags = mesh[in.instance_index].flags; // keep SHADOW_RECEIVER etc.
@@ -73,6 +94,7 @@ fn lit_n(
     pbr_input.material.metallic = metallic;
     pbr_input.material.emissive = vec4(emissive, 1.0);
     pbr_input.material.reflectance = vec3(0.5);
+    pbr_input.diffuse_occlusion = diffuse_occlusion;
     var color = pbr_functions::apply_pbr_lighting(pbr_input);
     return pbr_functions::main_pass_post_lighting_processing(pbr_input, color);
 }

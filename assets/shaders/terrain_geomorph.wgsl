@@ -29,8 +29,8 @@
     forward_io::VertexOutput,
     mesh_view_bindings::view,
 }
-#import lunco::pbr_lit::lit_n
-#import lunco::terrain::{aa_fade, bump_layer, decode_dem_normal, dem_normal_to_world, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position, terrain_map_weights}
+#import lunco::pbr_lit::lit_n_occluded
+#import lunco::terrain::{aa_fade, bump_layer, decode_dem_normal, dem_normal_to_world, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position, terrain_map_weights, terrain_surface_occlusion}
 #import lunco::lunar::{orthophoto_factor, regolith_factor}
 
 //!@ui      albedo            color  "Albedo"
@@ -310,6 +310,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         mat.derived_normal_on,
         mat.authored_surface_on,
         mat.authored_normal_on,
+        authored_albedo_weight,
         mat.weight_rough,
         mat.weight_ao,
         mat.weight_normal,
@@ -360,15 +361,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // procedural layers and even the mesh detail have faded out.
     albedo *= 1.0 + (map_n.a - 0.5) * (0.6 * weight_tone);
 
-    // Baked ambient occlusion: crater interiors and valley floors receive less
-    // sky/bounce light. Darkens the diffuse base rather than the direct sun
-    // term (lit_n owns that), which visually matches at the distances where
-    // this weight is raised.
-    var map_ao = mix(1.0, 0.4 + 0.6 * map_s.g, weight_ao);
-    if (mat.authored_surface_on > 0.5) {
-        map_ao = mix(1.0, map_s.g, weight_ao);
-    }
-    albedo *= map_ao;
+    // Baked ambient occlusion belongs to indirect diffuse light, not base
+    // colour. Sending it through the shared PBR helper preserves the authored
+    // orthophoto and keeps direct sunlight independent of the broad AO field.
+    let map_ao = terrain_surface_occlusion(
+        map_s, weight_ao, mat.authored_surface_on);
 
     // AUTHORED albedo (the site's real orthophoto). Applied HERE — after every
     // procedural tone layer, before photometry — so the mosaic is what the sun
@@ -425,7 +422,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         0.05,
         1.0,
     );
-    var color = lit_n(in, is_front, n, albedo, roughness, 0.0, fill);
+    var color = lit_n_occluded(
+        in, is_front, n, albedo, roughness, 0.0, fill, vec3(map_ao));
 
     // Terrain self-shadow: sample the pre-baked sun-visibility cache at every
     // distance. The directional cascade intentionally contains dynamic casters
