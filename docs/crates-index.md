@@ -86,9 +86,10 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-usd-avian-lint`** | Render-free composed `UsdPhysics` fact producer for the authored Rhai lint policy. It reuses Avian's authoritative geometry/joint readers without making the runtime physics crate own lint orchestration. |
 | **`lunco-usd-sim`** | Vehicle-specific simulation-schema bridge (`UsdSimPlugin`): intercepts specialized schemas such as PhysX Vehicles and maps them to LunCo mobility models. It no longer installs the heavy USD cosim translator. |
 | **`lunco-usd-sim-core`** | Small render-free protocol package for the shared USD simulation schedule, processed marker, and pending differential contract used by vehicle and cosim projectors. It contains no projection systems. |
-| **`lunco-usd-sim-cosim`** | USD-authored program discovery, connection wiring, scene lifecycle, readiness, cosim API providers, and Modelica/Rhai participant projection (`UsdSimCosimPlugin`). |
+| **`lunco-usd-sim-cosim`** | USD-authored program discovery, connection wiring, scene lifecycle, readiness, and Modelica/Rhai participant projection (`UsdSimCosimPlugin`). API query providers are isolated in `lunco-usd-sim-cosim-api`. |
+| **`lunco-usd-sim-cosim-api`** | Optional API query providers for cosimulation ports, status, causal traces, binding diagnostics, camera audits, and broken-connection reports. It depends on the runtime projection but keeps API/JSON serialization out of the default cosimulation crate's direct source and dependency set. |
 | **`lunco-usd-sim-domain`** | Render-free USD domain projection: reads component-network facts, resolves Modelica member classes, invokes Rhai synthesizers, and publishes generated Modelica sources. Generic USD actuator lowering is owned by `lunco-usd-avian`; its optional API query providers live in `lunco-usd-sim-domain-api`. |
-| **`lunco-usd-sim-domain-api`** | Optional API query providers for generated Modelica source inspection. Kept outside the render-free domain projector so headless hosts without API exposure do not inherit the `lunco-api`/JSON query surface. |
+| **`lunco-usd-sim-domain-api`** | Optional API query providers for generated Modelica source inspection. Kept outside the render-free domain projector so its direct dependency set does not include the `lunco-api`/JSON query surface. |
 | **`lunco-usd-sim-celestial`** | Independent render-free projector for USD-authored celestial anchors, orbits, link nodes, occluders, and reflected-light metadata. It owns the celestial projection marker and does not depend on vehicle or cosimulation projection. |
 | **`lunco-usd-sim-shader`** | Independent render-free projector for `UsdShade` WGSL material intent. It authors `ShaderLook` and owns the shader-resolution marker without pulling the vehicle/cosimulation implementation into the shader source crate. |
 | **`lunco-usd-sim-telemetry`** | Independent render-free Avian rigid-body and wheel telemetry recorder. It publishes through the shared signal/telemetry registries and is isolated from USD vehicle projection changes. |
@@ -429,7 +430,15 @@ implementation crate.
 **`lunco-usd-sim-cosim`**
 USD-to-cosim translator and scene lifecycle package. `UsdSimCosimPlugin`
 installs source discovery, wiring, readiness, scene commands, telemetry
-projection, and cosim API providers independently from vehicle realization.
+projection independently from vehicle realization. Its optional API query
+providers live in `lunco-usd-sim-cosim-api`.
+
+**`lunco-usd-sim-cosim-api`**
+Optional API query providers for the cosimulation runtime: uniform ports,
+causal traces, cosimulation status, binding status, scene-camera audits, and
+broken-connection diagnostics. API-enabled composition installs this package
+alongside the runtime; default cosimulation hosts do not inherit its direct
+`lunco-api`/JSON serialization edge.
 
 **`lunco-usd-sim-domain`**
 Render-free USD domain projection. It reads composed component-network facts,
@@ -442,7 +451,8 @@ the separate `lunco-usd-sim-domain-api` package.
 **`lunco-usd-sim-domain-api`**
 Optional API query providers for the generated Modelica source projection. The
 package is installed only by API-enabled runtime composition, keeping the
-render-free domain projector independent from `lunco-api` and `serde_json`.
+render-free domain projector's direct dependency set independent from
+`lunco-api` and `serde_json`.
 
 **`lunco-usd-sim-celestial`**
 Independent render-free projection of USD-authored celestial and connectivity facts. It converts anchors, orbits, link nodes, occluder extents, and reflected-light declarations to `lunco-celestial` components. Its separate package boundary prevents celestial authoring changes from rebuilding the vehicle and cosimulation projector.

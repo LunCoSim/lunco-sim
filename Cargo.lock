@@ -8632,6 +8632,7 @@ dependencies = [
  "lunco-usd-bevy-diagnostics",
  "lunco-usd-sim",
  "lunco-usd-sim-cosim",
+ "lunco-usd-sim-cosim-api",
  "lunco-usd-sim-domain-api",
 ]
 
@@ -8776,7 +8777,6 @@ dependencies = [
  "avian3d",
  "bevy",
  "big_space",
- "lunco-api",
  "lunco-assets",
  "lunco-celestial",
  "lunco-controller",
@@ -8801,6 +8801,27 @@ dependencies = [
  "lunco-usd-sim-core",
  "lunco-usd-sim-domain",
  "openusd",
+]
+
+[[package]]
+name = "lunco-usd-sim-cosim-api"
+version = "0.1.0"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "lunco-api",
+ "lunco-core",
+ "lunco-cosim",
+ "lunco-modelica-runtime",
+ "lunco-physics",
+ "lunco-render",
+ "lunco-signal",
+ "lunco-usd-avian",
+ "lunco-usd-bevy-camera",
+ "lunco-usd-bevy-core",
+ "lunco-usd-bevy-scene",
+ "lunco-usd-sim-core",
+ "lunco-usd-sim-cosim",
  "serde_json",
 ]
 

@@ -9,8 +9,8 @@
 > `lunco-usd-geometry`, `lunco-usd-avian`, `lunco-usd-avian-lint`, `lunco-usd-bevy-core`,
 > `lunco-usd-bevy-runtime`, `lunco-usd-bevy-scene`, `lunco-usd-bevy-twin`, `lunco-usd-bevy-camera`, `lunco-usd-bevy-light`, `lunco-usd-bevy-animation`, `lunco-usd-bevy` and
 > `lunco-usd-bevy-lathe`, `lunco-usd-bevy-mesh`, `lunco-usd-queries`, `lunco-usd-sim`,
-> `lunco-usd-sim-core`, `lunco-usd-sim-cosim`, `lunco-usd-sim-domain`,
-> `lunco-usd-sim-domain-api`.
+> `lunco-usd-sim-core`, `lunco-usd-sim-cosim`, `lunco-usd-sim-cosim-api`,
+> `lunco-usd-sim-domain`, `lunco-usd-sim-domain-api`.
 
 Package ownership follows the same boundary: `lunco-usd-core` contains the
 headless document/authoring surface, schemas, pure probes, and shared USD
@@ -47,10 +47,11 @@ directly; and
 `lunco-usd-sim-core` owns the small shared USD-simulation protocol;
 `lunco-usd-sim-domain` owns composed component-network and Modelica projection;
 `lunco-usd-sim-domain-api` owns optional generated-source API queries;
-`lunco-usd-sim` owns vehicle projection; and `lunco-usd-sim-cosim` owns
-participant discovery, wiring, readiness, and scene lifecycle. The application
-bundle installs the two implementation plugins explicitly, so vehicle changes
-do not make the vehicle package depend on the 6.5k-line cosim implementation.
+`lunco-usd-sim` owns vehicle projection; `lunco-usd-sim-cosim` owns participant
+discovery, wiring, readiness, and scene lifecycle; and
+`lunco-usd-sim-cosim-api` owns optional API query serialization. The application
+bundle installs the implementation plugins explicitly, so vehicle changes do
+not make the vehicle package depend on the 6.5k-line cosim implementation.
 
 Public command and document-lifecycle coverage for the runtime boundary lives
 in `crates/lunco-usd/tests/commands.rs`, so changes to those tests do not

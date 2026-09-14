@@ -21,6 +21,8 @@ impl Plugin for UsdPlugins {
             lunco_usd_sim_cosim::UsdSimCosimPlugin,
         ));
         #[cfg(feature = "api")]
+        app.add_plugins(lunco_usd_sim_cosim_api::UsdSimCosimApiPlugin);
+        #[cfg(feature = "api")]
         app.add_plugins(lunco_usd_sim_domain_api::UsdSimDomainApiPlugin);
         app.add_plugins(lunco_usd::commands::UsdCommandsPlugin);
     }

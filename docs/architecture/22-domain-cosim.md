@@ -14,13 +14,16 @@ see **[`../../crates/lunco-cosim/README.md`](../../crates/lunco-cosim/README.md)
 The USD-specific boundary is split between
 [`lunco-usd-sim-domain`](../../crates/lunco-usd-sim-domain/),
 [`lunco-usd-sim-domain-api`](../../crates/lunco-usd-sim-domain-api/),
-[`lunco-usd-sim`](../../crates/lunco-usd-sim/), and
-[`lunco-usd-sim-cosim`](../../crates/lunco-usd-sim-cosim/): the domain package
+[`lunco-usd-sim`](../../crates/lunco-usd-sim/),
+[`lunco-usd-sim-cosim`](../../crates/lunco-usd-sim-cosim/), and
+[`lunco-usd-sim-cosim-api`](../../crates/lunco-usd-sim-cosim-api/): the domain package
 owns composed component-network facts, Modelica projection, and authored
 synthesizer dispatch; the domain API package owns optional generated-source
-queries; the vehicle package owns vehicle realization; and the
-cosim package owns participant orchestration, wiring, readiness, and scene
-lifecycle. Shared USD-simulation markers and ordering are in the small
+queries; the vehicle package owns vehicle realization; and the cosim package
+owns participant orchestration, wiring, readiness, and scene lifecycle. The
+optional [`lunco-usd-sim-cosim-api`](../../crates/lunco-usd-sim-cosim-api/)
+package owns the transport-facing cosim queries. Shared USD-simulation markers
+and ordering are in the small
 `lunco-usd-sim-core` protocol package.
 
 ## Core concepts
@@ -549,6 +552,7 @@ log polling.
 - [`../../crates/lunco-cosim/README.md`](../../crates/lunco-cosim/README.md) — engineering docs
 - [`../../crates/lunco-usd-sim/README.md`](../../crates/lunco-usd-sim/README.md) — vehicle translator details
 - [`../../crates/lunco-usd-sim-cosim/`](../../crates/lunco-usd-sim-cosim/) — USD program, wiring, and scene-lifecycle translator
+- [`../../crates/lunco-usd-sim-cosim-api/`](../../crates/lunco-usd-sim-cosim-api/) — optional transport-facing cosimulation query providers
 - [`20-domain-modelica.md`](20-domain-modelica.md) — Modelica-specific design
 - [`23-domain-environment.md`](23-domain-environment.md) — environment/gravity integration
 - `specs/014-modelica-simulation` — detailed Modelica spec
