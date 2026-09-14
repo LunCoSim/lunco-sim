@@ -168,9 +168,20 @@ fn report_structured_verdict(report, title, channel) {
     let ok = report != () && report.ok == true;
     let source_revision = "";
     let result_count = 0;
+    let results = [];
+    let verification = "";
+    let requirement_count = 0;
     if report != () {
         if report.source_revision != () { source_revision = report.source_revision; }
-        if report.results != () { result_count = report.results.len(); }
+        if report.results != () {
+            result_count = report.results.len();
+            // Preserve the complete typed observation table.  The legacy
+            // PASS/FAIL line remains the runner envelope, while this payload
+            // is the durable per-check evidence consumed by UI/CI clients.
+            results = report.results;
+        }
+        if report.verification != () { verification = report.verification; }
+        if report.requirement_count != () { requirement_count = report.requirement_count; }
         if report.failures != () {
             for failure in report.failures {
                 if type_of(failure) == "map" {
@@ -192,8 +203,11 @@ fn report_structured_verdict(report, title, channel) {
     }
     if failures.is_empty() && !ok { failures.push("requirement evaluation unavailable"); }
     let evidence = #{ok: ok, title: title, channel: channel,
+        verdict: if ok { "pass" } else { "fail" },
+        verification: verification, requirement_count: requirement_count,
         source_revision: source_revision, result_count: result_count,
-        failure_count: raw_failures.len(), failures: raw_failures};
+        failure_count: raw_failures.len(), results: results,
+        failures: raw_failures};
     emit(channel + "_EVIDENCE", evidence);
     print(channel + "_EVIDENCE source_revision=" + source_revision
         + " results=" + result_count + " failures=" + raw_failures.len());

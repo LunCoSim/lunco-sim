@@ -75,8 +75,8 @@ pub use error::TwinError;
 pub use file_kind::{FileEntry, FileKind};
 pub use manifest::{
     glob_matches, DownloadManifest, JournalManifest, ModelicaExternal, ModelicaManifest,
-    SysmlManifest, TwinChildRef, TwinManifest, TwinSettingValue, UsdManifest, DEFAULT_SCENE_GLOBS,
-    MANIFEST_FILENAME,
+    SysmlManifest, TwinChildRef, TwinManifest, TwinSettingValue, UsdManifest, VerificationCase,
+    VerificationManifest, DEFAULT_SCENE_GLOBS, MANIFEST_FILENAME,
 };
 
 // Re-export lunco-doc and lunco-storage so downstream crates don't need
@@ -441,6 +441,7 @@ impl Twin {
                         scenes: None,
                     }),
                     sysml: None,
+                    verification: None,
                     modelica: None,
                     journal: None,
                     downloads: None,
@@ -625,6 +626,75 @@ impl Twin {
             }
         }
         sources
+    }
+
+    /// Return the Twin-owned verification registry in declaration order.
+    ///
+    /// The registry is metadata over the existing indexed files: it does not
+    /// read or parse source and it never creates a second scene/test graph.
+    pub fn verification_cases(&self) -> &[VerificationCase] {
+        self.manifest
+            .as_ref()
+            .and_then(|manifest| manifest.verification.as_ref())
+            .map(|registry| registry.cases.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Find one exact qualified SysML verification mapping.
+    pub fn verification_case(&self, qualified_name: &str) -> Option<&VerificationCase> {
+        self.verification_cases()
+            .iter()
+            .find(|case| case.name == qualified_name)
+    }
+
+    /// Validate the Twin-owned verification registry against the indexed file
+    /// set.  This is intentionally a structural check; SysML name resolution
+    /// is owned by `lunco-sysml-ast` and is checked by `ValidateSysml`.
+    pub fn verification_registry_errors(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        let mut names = HashSet::new();
+        for case in self.verification_cases() {
+            let name = case.name.trim();
+            if name.is_empty() {
+                errors.push("verification mapping has an empty SysML name".to_owned());
+            } else if !names.insert(name.to_owned()) {
+                errors.push(format!("duplicate verification mapping `{name}`"));
+            }
+            for (label, path, extension) in [
+                ("scene", case.scene.as_path(), "usda"),
+                ("script", case.script.as_path(), "rhai"),
+            ] {
+                if !is_safe_relative_path(path) || path == Path::new(".") {
+                    errors.push(format!(
+                        "verification `{name}` {label} path `{}` must be a safe Twin-relative file",
+                        path.display()
+                    ));
+                    continue;
+                }
+                if path.extension().and_then(|value| value.to_str()) != Some(extension) {
+                    errors.push(format!(
+                        "verification `{name}` {label} must use .{extension}: `{}`",
+                        path.display()
+                    ));
+                }
+                if !self.files.iter().any(|entry| entry.relative_path == path) {
+                    errors.push(format!(
+                        "verification `{name}` {label} is not indexed: `{}`",
+                        path.display()
+                    ));
+                }
+            }
+            if case
+                .verdict_channel
+                .as_deref()
+                .is_some_and(|channel| channel.trim().is_empty())
+            {
+                errors.push(format!(
+                    "verification `{name}` has an empty verdict channel"
+                ));
+            }
+        }
+        errors
     }
 
     /// Sub-Twins loaded from the manifest's `[[twin.children]]` with a
@@ -864,6 +934,7 @@ version = "0.1.0"
             children: vec![],
             usd: None,
             sysml: None,
+            verification: None,
             modelica: None,
             journal: None,
             downloads: None,

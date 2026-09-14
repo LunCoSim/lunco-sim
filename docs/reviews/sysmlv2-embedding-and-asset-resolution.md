@@ -1,7 +1,7 @@
 # SysML v2 embedding in the terrain worktree
 
-**Status:** Foundation and Twin source discovery implemented; verification registry, CLI selection, and UI projections remain follow-up work
-**Reviewed:** 2026-09-13
+**Status:** Foundation, Twin verification registry, CLI selection, typed Rhai projections, and structured evidence implemented; automatic UI source-set loading and full constraint evaluation remain follow-up work
+**Reviewed:** 2026-09-14
 **Worktree:** `terrain` (`terrain-streaming`)
 
 ## Executive decision
@@ -37,22 +37,32 @@ The first production slice now exists behind the opt-in `sysml` feature:
   `EditText` operations, `FileBacked`/fork behavior, and a generic
   `DocumentRegistry` plugin. SysML operations enter the canonical journal as
   `DomainKind::Sysml`.
-- `lunco-sysml-rhai` exposes only a read-only `sysml_report_json()` Rhai
-  function over an immutable analysis snapshot. Script policy and verdict
-  ownership stay in the existing Rhai test runner.
+- `lunco-sysml-rhai` exposes read-only native `sysml_report()` and
+  `sysml_requirement_report()` maps over an immutable analysis snapshot, plus
+  JSON compatibility functions. Script policy and verdict ownership stay in
+  the existing Rhai test runner.
 - `lunco-scene-validation` registers a compact `ValidateSysml` API query for
   authored tests. It reuses `ValidateAsset`'s parser/resolver and projects
   typed attributes/literals, requirement/verification records, diagnostics,
-  source files, and a lossless source revision; no arbitrary second source
-  walker or product-specific Rust policy is introduced.
+  source files, a lossless source revision, and the Twin-owned verification
+  registry; no arbitrary second source walker or product-specific Rust policy
+  is introduced.
+- `TwinManifest` has an optional `[verification]` registry. Each qualified
+  SysML verification maps to one Twin-relative `.usda` scene, `.rhai`
+  observer, and optional verdict channel. `luncosim test --verification`
+  validates that mapping before starting the runner.
+- `report_structured_verdict` now preserves the complete per-check result and
+  failure evidence, including verification identity, requirement count, and
+  source revision. `SysmlAnalysis::build_cached` reuses the latest immutable
+  source-set snapshot for repeated queries.
 - `lunco-luncosim-core`, the GUI shell, and the headless server expose the
   `sysml` feature gate; default builds remain unchanged.
 
 This deliberately does not add a full SysML editor, an arbitrary filesystem
-source-root walker, a BREP/CAD pipeline, or automatic requirement-test
-discovery. Twin manifest discovery reuses the indexed file set; the remaining
-pieces can consume the stable projections above without changing the parser or
-document contracts.
+source-root walker, a BREP/CAD pipeline, automatic UI source-set discovery, or
+full constraint/expression execution. Twin manifest discovery reuses the
+indexed file set; the remaining pieces can consume the stable projections
+above without changing the parser or document contracts.
 
 ## Rhai-to-SysML verification migration
 
@@ -91,9 +101,9 @@ selector and JSON report are introduced.
 
 ### Required implementation slices
 
-Slices 1 and 2 below are implemented in this worktree. They remain listed as
-the contract checklist so future changes can be checked against the same
-boundary; slices 3–5 are the remaining integration work.
+Slices 1–4 below are implemented in this worktree. They remain listed as the
+contract checklist so future changes can be checked against the same boundary;
+slice 5 is the remaining migration hardening work.
 
 1. Extend `lunco-sysml-ast` with requirement and verification records, subject
    bindings, constraint/doc spans, and typed `satisfy`/`verify`/realization
@@ -106,8 +116,9 @@ boundary; slices 3–5 are the remaining integration work.
    terminal errors.
 4. Add only the small Rhai bridge needed to expose the resolved SysML snapshot,
    selected verification key, and source revision. The authored Rhai observer
-   owns the result map; extend the existing production runner/CLI to emit the
-   JSON result above plus a human summary. Do not add a Rust test per
+   owns the result map; the production runner/CLI validates the Twin registry
+   and accepts `--verification`. `report_structured_verdict` emits the JSON
+   result above plus complete per-check evidence. Do not add a Rust test per
    requirement.
 5. Add shadow-mode comparison against the legacy Rhai verdict, then switch the
    production gate and delete duplicate assertions only after positive,
@@ -367,13 +378,17 @@ absolute cache path.
   and `verify`/`satisfy`/realization fields for requirement and verification
   records. Full constraint/expression evaluation remains out of scope for the
   first subset.
-- No verification-case registry, CLI requirement selector, or typed verdict
-  sink exists yet; the Twin-local Rhai gate still owns execution and emits the
-  compatibility verdict channel.
-- The example Twin gate now reads its normative thresholds and traceability from
-  SysML while Rhai remains the executable observer. A broader automatic
-  verification selector still waits on the registry, typed verdict sink, and
-  shadow-mode/evidence requirements above.
+- The registry and CLI selector are now present, but there is no UI picker or
+  automatic source-set document loader yet. A caller still opens the selected
+  Twin files through the existing document lifecycle.
+- The typed verdict sink remains intentionally small: Rhai emits the structured
+  evidence and the compatibility `TESTS_OK`/`TESTS_FAIL` envelope. Durable
+  journal persistence and a standard `VerificationCases::VerdictKind` adapter
+  remain future work.
+- Full SysML constraint/expression evaluation and shadow-mode comparison are
+  not implemented. Thresholds are read from SysML literals; measurement,
+  actuation, and anti-trivial guards remain Rhai/public-query
+  responsibilities.
 
 ## Twin workflow
 

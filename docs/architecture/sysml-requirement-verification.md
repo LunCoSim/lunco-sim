@@ -6,7 +6,9 @@ as the executable test policy. A requirement is not accepted merely because a
 source parser found its declaration: an authored verification case must cover
 the requirement, and a Twin test must observe the composed USD/Modelica stage.
 
-The generic `sysml_requirements` Rhai tool provides the small bridge:
+The generic `sysml_requirements` Rhai tool provides the small bridge. It reads
+the active Twin's indexed SysML source set through `sysml_requirements::source()`;
+it does not embed a second copy of requirements in the test:
 
 ```rhai
 let source = sysml_requirements::source();
@@ -22,6 +24,33 @@ let result = sysml_requirements::evaluate(source, [
 ]);
 report_verdict(result.failures, "VISUAL REQUIREMENTS", "VISUAL_REQUIREMENTS");
 ```
+
+For inspection and tooling, the same snapshot is available as native Rhai
+maps (no stringify/parse round trip):
+
+```rhai
+let report = sysml_requirement_report();
+let all_declarations = sysml_report();
+```
+
+The `sysml_report_json()` and `sysml_requirement_report_json()` functions are
+compatibility paths for logs and external clients. A Twin declares the
+execution binding separately in `twin.toml`:
+
+```toml
+[verification]
+[[verification.cases]]
+name = "Project::VerifyVisual"
+scene = "tests/visual.usda"
+script = "scenarios/tests/visual.rhai"
+verdict_channel = "VISUAL_REQUIREMENTS"
+```
+
+`luncosim test --scene tests/visual.usda --verification Project::VerifyVisual`
+checks this registry mapping (qualified SysML name, Twin-relative scene and
+Rhai observer, and verdict channel) before constructing the simulation. The
+registry is metadata, not another requirement source; thresholds and units
+remain in SysML literals.
 
 Supported observations are `exists`, `children`, `attribute`,
 `attribute_component`, `attribute_equals`, and `coverage`. `expected_attr`

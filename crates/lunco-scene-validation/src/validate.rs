@@ -162,12 +162,12 @@ fn validate_sysml(reference: &str, path: &Path, text: &str) -> ValidationReport 
         true,
         lunco_hash::fnv1a64(text.as_bytes()),
     );
-    finish_sysml_report(reference, analysis)
+    finish_sysml_report(reference, &analysis)
 }
 
 fn finish_sysml_report(
     reference: &str,
-    analysis: lunco_sysml_ast::SysmlAnalysis,
+    analysis: &lunco_sysml_ast::SysmlAnalysis,
 ) -> ValidationReport {
     let mut report = ValidationReport::new(reference, "sysml");
     for diagnostic in analysis.diagnostics() {
@@ -195,6 +195,11 @@ fn finish_sysml_report(
         "attribute_records": analysis.attributes(),
         "requirement_records": analysis.requirements(),
         "verification_cases": analysis.verifications(),
+        // A filesystem/Twin caller may attach the manifest-owned registry
+        // below.  Keeping an empty value on the single-file path makes the
+        // response shape stable for generic Rhai consumers.
+        "verification_registry": json!([]),
+        "verification_registry_errors": json!([]),
         "source_revision": analysis.source_revision(),
         // Keep a lossless textual form alongside the JSON number. Rhai's
         // bounded value bridge represents JSON numbers as f64, which is not
@@ -875,6 +880,8 @@ impl ApiQueryProvider for ValidateSysmlProvider {
                 "requirement_records": compact_requirement_records(report.info.get("requirement_records")),
                 "verification_cases": verification_cases,
                 "verification_records": compact_verification_records(report.info.get("verification_cases")),
+                "verification_registry": report.info.get("verification_registry").cloned().unwrap_or_else(|| json!([])),
+                "verification_registry_errors": report.info.get("verification_registry_errors").cloned().unwrap_or_else(|| json!([])),
                 "source_revision": report.info.get("source_revision").cloned().unwrap_or(json!(0)),
                 "source_revision_hex": report.info.get("source_revision_hex").cloned().unwrap_or_else(|| json!("0x0000000000000000")),
             })
@@ -902,6 +909,8 @@ impl ApiQueryProvider for ValidateSysmlProvider {
                 "requirement_records": report.info.get("requirement_records").cloned().unwrap_or_else(|| json!([])),
                 "verification_cases": verification_cases,
                 "verification_records": report.info.get("verification_cases").cloned().unwrap_or_else(|| json!([])),
+                "verification_registry": report.info.get("verification_registry").cloned().unwrap_or_else(|| json!([])),
+                "verification_registry_errors": report.info.get("verification_registry_errors").cloned().unwrap_or_else(|| json!([])),
                 "source_revision": report.info.get("source_revision").cloned().unwrap_or(json!(0)),
                 "source_revision_hex": report.info.get("source_revision_hex").cloned().unwrap_or_else(|| json!("0x0000000000000000")),
             })
@@ -918,10 +927,12 @@ fn compact_sysml_attributes(value: Option<&serde_json::Value>) -> serde_json::Va
     for (name, record) in attributes {
         let scalar = record
             .get("value")
-            .map(|value| json!({
-                "number": value.get("number").cloned().unwrap_or(serde_json::Value::Null),
-                "literal": value.get("literal").cloned().unwrap_or(serde_json::Value::Null),
-            }))
+            .map(|value| {
+                json!({
+                    "number": value.get("number").cloned().unwrap_or(serde_json::Value::Null),
+                    "literal": value.get("literal").cloned().unwrap_or(serde_json::Value::Null),
+                })
+            })
             .unwrap_or_else(|| json!({"number": null, "literal": null}));
         output.insert(name.clone(), json!({"value": scalar}));
     }
@@ -1083,9 +1094,38 @@ fn validate_sysml_twin(world: &World, name: &str, reference: &str) -> Validation
         revision_input.extend_from_slice(text.as_bytes());
         sources.push((logical, text));
     }
-    let analysis =
-        lunco_sysml_ast::SysmlAnalysis::build(sources, true, lunco_hash::fnv1a64(&revision_input));
-    finish_sysml_report(reference, analysis)
+    let analysis = lunco_sysml_ast::SysmlAnalysis::build_cached(
+        sources,
+        true,
+        lunco_hash::fnv1a64(&revision_input),
+    );
+    let mut report = finish_sysml_report(reference, &analysis);
+    let registry_errors = twin.verification_registry_errors();
+    let verification_names = qualified_names(report.info.get("verification_cases"));
+    let mut binding_errors = registry_errors.clone();
+    for case in twin.verification_cases() {
+        if !verification_names.iter().any(|name| name == &case.name) {
+            binding_errors.push(format!(
+                "verification `{}` is not declared by the Twin SysML source set",
+                case.name
+            ));
+        }
+    }
+    if let Some(info) = report.info.as_object_mut() {
+        info.insert(
+            "verification_registry".to_owned(),
+            json!(twin.verification_cases()),
+        );
+        info.insert(
+            "verification_registry_errors".to_owned(),
+            json!(binding_errors),
+        );
+    }
+    if !binding_errors.is_empty() {
+        report.errors.extend(binding_errors);
+        report.ok = false;
+    }
+    report.finish()
 }
 
 /// `ValidateTwin { path, policy? }` → [`TwinValidationReport`].

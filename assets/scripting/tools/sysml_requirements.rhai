@@ -90,12 +90,14 @@ fn _expected(report, check) {
 
 fn _failure(check, message) {
     #{ ok: false, id: check.id, component: check.component,
-       requirement: check.requirement, path: check.path, error: message }
+       requirement: check.requirement, verification: check.verification,
+       path: check.path, error: message }
 }
 
 fn _check_one(report, check) {
-    if check == () || check.id == () || check.requirement == () || check.kind == () {
-        return #{ok: false, id: "<invalid>", error: "check requires id, requirement, and kind"};
+    if check == () || check.id == () || check.requirement == ()
+        || check.verification == () || check.kind == () {
+        return #{ok: false, id: "<invalid>", error: "check requires id, requirement, verification, and kind"};
     }
     if _find_requirement(report, check.requirement) == () {
         return _failure(check, "SysML requirement usage is missing");
@@ -261,12 +263,25 @@ fn evaluate(source_report, checks) {
     }
     for check in checks {
         let result = _check_one(source_report, check);
+        // Stamp the authored identity on every result, including helper
+        // failures.  This keeps the evidence table self-describing and makes
+        // it possible to aggregate reports without retaining the check list.
+        if result.verification == () { result.verification = check.verification; }
+        if result.requirement == () { result.requirement = check.requirement; }
+        if result.component == () && check.component != () { result.component = check.component; }
+        if result.kind == () { result.kind = check.kind; }
         results.push(result);
         if result.ok != true { failures.push(result); }
     }
+    let verification = "";
+    if checks.len() > 0 && checks[0].verification != () {
+        verification = checks[0].verification;
+    }
     #{ok: failures.len() == 0, results: results, failures: failures,
       requirement_count: checks.len(), failure_count: failures.len(),
-      source_revision: source_report.source_revision_hex}
+      verification: verification,
+      source_revision: source_report.source_revision_hex,
+      source_files: source_report.source_files}
 }
 
 /// Build the canonical source report for the active Twin. A test can pass the
