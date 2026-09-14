@@ -157,6 +157,39 @@ fn _check_one(report, check) {
     if expected_error != "" { return _failure(check, expected_error); }
     if check.kind == "coverage" { return #{ok: true, id: check.id, component: check.component, requirement: check.requirement}; }
 
+    // Compare a typed comma-separated SysML identity list with its declared
+    // count.  This is intentionally a generic source-side check: Twin tests
+    // still verify every composed USD path separately, while this catches a
+    // stale list/count contract before a loop can silently omit a component.
+    if check.kind == "source_list_count" {
+        if check.list_attr == () || check.list_attr == "" {
+            return _failure(check, "SysML identity list attribute is missing");
+        }
+        let resolved = attribute(report, check.list_attr);
+        if resolved.ok != true || resolved.record.value == () {
+            return _failure(check, "SysML identity list is missing");
+        }
+        let literal = _text(resolved.record.value.literal);
+        let actual = 0;
+        if literal != "" {
+            for item in literal.split(",") {
+                item.trim();
+                if item != "" { actual += 1; }
+            }
+        }
+        let expected = _expected(report, check);
+        if expected == () { return _failure(check, "SysML expected count is missing"); }
+        if actual.to_float() != expected.to_float() {
+            return #{ok: false, id: check.id, component: check.component,
+                requirement: check.requirement, path: check.path,
+                error: "SysML identity list length disagrees with declared count",
+                actual: actual, expected: expected};
+        }
+        return #{ok: true, id: check.id, component: check.component,
+            requirement: check.requirement, kind: check.kind,
+            actual: actual, expected: expected};
+    }
+
     if check.path == () || check.path == "" {
         return _failure(check, "USD observation path is missing");
     }
@@ -191,21 +224,18 @@ fn _check_one(report, check) {
         let expected = _expected(report, check);
         if expected == () { return _failure(check, "SysML expected attribute is missing"); }
         let tolerance = if check.tolerance == () { 0.001 } else { check.tolerance };
+        let matches = false;
         if _numeric(actual) && _numeric(expected) {
-            if !_close(actual, expected, tolerance) {
-                return #{ok: false, id: check.id, component: check.component,
-                    requirement: check.requirement, path: check.path,
-                    error: "USD attribute disagrees with SysML expected value",
-                    actual: actual, expected: expected, tolerance: tolerance};
-            }
+            matches = _close(actual, expected, tolerance);
         } else {
             // QueryUsdPrim preserves canonical quotes for authored string
             // literals.  Normalize both sides before comparing, exactly as
             // the attribute_equals observation does below.
             if type_of(actual) == "string" { actual = _text(actual); }
             if type_of(expected) == "string" { expected = _text(expected); }
+            matches = actual == expected;
         }
-        if actual != expected {
+        if !matches {
             return #{ok: false, id: check.id, component: check.component,
                 requirement: check.requirement, path: check.path,
                 error: "USD attribute disagrees with SysML expected value",
