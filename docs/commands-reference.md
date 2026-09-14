@@ -174,12 +174,16 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `ReloadShader`
 
- Force-reload shader assets from disk so live WGSL edits apply without
- restarting the app. Bypasses the file watcher (unreliable in this build):
- calls [`AssetServer::reload`], which re-runs the loader and triggers
- dependent material pipelines to rebuild. Empty `path` → reload the standard
- `assets/shaders/*` set; otherwise reload just that path (e.g.
- `"shaders/wheel.wgsl"`).
+ Force-reload active shader assets from disk so live WGSL edits apply without
+ restarting the app. Calls [`AssetServer::reload`], which re-runs the loader
+ and lets dependent material pipelines rebuild. A bare engine path such as
+ `"shaders/wheel.wgsl"` matches the active default-source and
+ `lunco://shaders/wheel.wgsl` identities; an explicit `lunco://…` or
+ `twin://…` path is matched exactly. An empty `path` reloads every currently
+ loaded WGSL asset. The command returns the queued asset paths and fails
+ visibly when no active asset matches, rather than reporting a successful
+ no-op. The response means reload was queued; shader compilation errors remain
+ visible in the render log.
 
 - *defined in:* `crates/lunco-scene-authoring/src/properties.rs`
 
@@ -231,10 +235,16 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Replace a shader asset's WGSL **source in place** from text sent over the
  API, recompiling it live without touching disk or restarting. Overwrites the
- `Shader` asset currently at `path` (e.g. `"shaders/wheel.wgsl"`), so every
- material using it re-specializes its pipeline next frame. Compile/validation
- outcome surfaces in the render log (naga errors on a bad shader). Pairs with
- [`ReloadShader`] (disk) — this one is for pushing edits directly.
+ active `Shader` asset(s) at `path` (e.g. `"shaders/wheel.wgsl"`), so every
+ material using them re-specializes its pipeline next frame. Bare engine paths
+ resolve the same default-source/`lunco://` identities as `ReloadShader`;
+ explicit sources remain exact. If no matching asset is loaded yet, a bare
+ engine path seeds its canonical `lunco://` asset so a replayed journal edit
+ can be applied before the material is loaded. The response reports the
+ applied paths.
+ Compile/validation outcome surfaces in the render log (naga errors on a bad
+ shader). Pairs with [`ReloadShader`] (disk) — this one is for pushing edits
+ directly.
 
 - *defined in:* `crates/lunco-scene-authoring/src/properties.rs`
 

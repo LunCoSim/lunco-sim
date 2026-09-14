@@ -585,10 +585,17 @@ fn replay_scenario_journal_shader(
             serde_json::from_value::<lunco_scene_authoring::shader_doc::ShaderOp>(op)
         {
             if let Some((path, source)) = registry.apply_replayed(&shader_op) {
-                // Same hot-reload hook as the local edit: overwrite the asset id
-                // every material holds so the recompile propagates.
-                let handle = asset_server.load::<bevy::shader::Shader>(path.clone());
-                let _ = shaders.insert(handle.id(), bevy::shader::Shader::from_wgsl(source, path));
+                // Use the same source/asset identity resolver as the local
+                // command. A journal path may be bare while the peer's live
+                // material is keyed under the explicit `lunco://` source.
+                if let Err(error) = lunco_scene_authoring::properties::apply_shader_source_live(
+                    &asset_server,
+                    &mut shaders,
+                    &path,
+                    &source,
+                ) {
+                    warn!("SHADER_JOURNAL: live source apply failed: {error}");
+                }
             }
         }
         applied.insert(id);

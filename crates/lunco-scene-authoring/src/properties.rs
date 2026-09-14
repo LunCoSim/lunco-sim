@@ -696,12 +696,138 @@ pub fn on_set_object_property(
     }
 }
 
-/// Force-reload shader assets from disk so live WGSL edits apply without
-/// restarting the app. Bypasses the file watcher (unreliable in this build):
-/// calls [`AssetServer::reload`], which re-runs the loader and triggers
-/// dependent material pipelines to rebuild. Empty `path` → reload the standard
-/// `assets/shaders/*` set; otherwise reload just that path (e.g.
-/// `"shaders/wheel.wgsl"`).
+/// Return the asset-path spellings that can identify an engine shader request.
+///
+/// A bare engine path is the public authoring spelling, while the live renderer
+/// may hold the same asset under the explicit `lunco://` source. Both are
+/// considered for a bare request so a command addresses the asset identity that
+/// is actually live. Explicit sources remain exact: `twin://…` must never be
+/// re-rooted into the engine library.
+fn shader_path_candidates(requested: &str) -> Vec<String> {
+    let requested = requested.trim();
+    if requested.is_empty() {
+        return Vec::new();
+    }
+
+    let mut candidates = Vec::with_capacity(2);
+    if !lunco_assets::has_scheme(requested) {
+        candidates.push(lunco_assets::engine_asset_uri(requested));
+    }
+    if !candidates.iter().any(|candidate| candidate == requested) {
+        candidates.push(requested.to_string());
+    }
+    candidates
+}
+
+/// Whether `path` is a standalone WGSL asset path accepted by the shader
+/// commands. Shader sub-assets are not valid command targets.
+fn is_wgsl_shader_path(path: &str) -> bool {
+    let Ok(path) = bevy::asset::AssetPath::try_parse(path) else {
+        return false;
+    };
+    // Bevy's embedded source contains engine-internal WGSL modules, not
+    // standalone files a caller can reload or replace. Other registered
+    // sources remain valid asset owners and are intentionally not enumerated
+    // here; the live AssetServer identity is the authority.
+    let editable_source = !matches!(path.source().as_str(), Some("embedded"));
+    editable_source
+        && path.label().is_none()
+        && path
+            .path()
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("wgsl"))
+}
+
+/// Find the live asset identities matching one shader request. The returned
+/// paths are exactly the paths held by [`AssetServer`], so reloading or
+/// replacing one cannot accidentally create a second default-source asset.
+fn active_shader_paths(
+    asset_server: &AssetServer,
+    shaders: &Assets<bevy::shader::Shader>,
+    requested: &str,
+) -> Vec<String> {
+    if requested.is_empty() {
+        let mut paths = std::collections::BTreeSet::new();
+        for id in shaders.ids() {
+            let Some(path) = asset_server.get_path(id) else {
+                continue;
+            };
+            if is_wgsl_shader_path(&path.to_string()) {
+                paths.insert(path.to_string());
+            }
+        }
+        return paths.into_iter().collect();
+    }
+
+    shader_path_candidates(requested)
+        .into_iter()
+        .filter(|path| {
+            is_wgsl_shader_path(path)
+                && asset_server
+                    .get_path_ids(path.clone())
+                    .into_iter()
+                    .any(|id| {
+                        id.try_typed::<bevy::shader::Shader>()
+                            .is_ok_and(|id| shaders.contains(id))
+                    })
+        })
+        .collect()
+}
+
+/// Replace the live `Shader` asset(s) identified by `requested`.
+///
+/// This is shared by the local command and journal replay. A bare request
+/// updates every active spelling of the same engine-relative path; if no
+/// spelling is active yet, it creates the canonical `lunco://` handle so a
+/// replayed source edit is still available to the renderer. It does not journal
+/// the edit — the caller that owns document persistence does that separately.
+pub fn apply_shader_source_live(
+    asset_server: &AssetServer,
+    shaders: &mut Assets<bevy::shader::Shader>,
+    requested: &str,
+    source: &str,
+) -> Result<Vec<String>, String> {
+    let requested = requested.trim();
+    if requested.is_empty() || !is_wgsl_shader_path(requested) {
+        return Err(format!(
+            "shader path must name a standalone .wgsl asset, got '{requested}'"
+        ));
+    }
+    if source.is_empty() {
+        return Err("shader source must not be empty".to_string());
+    }
+
+    let paths = {
+        let active = active_shader_paths(asset_server, shaders, requested);
+        if active.is_empty() {
+            shader_path_candidates(requested)
+                .into_iter()
+                .find(|path| is_wgsl_shader_path(path))
+                .into_iter()
+                .collect()
+        } else {
+            active
+        }
+    };
+
+    for path in &paths {
+        let handle = asset_server.load::<bevy::shader::Shader>(path.clone());
+        let shader = bevy::shader::Shader::from_wgsl(source.to_owned(), path.clone());
+        let _ = shaders.insert(handle.id(), shader);
+    }
+    Ok(paths)
+}
+
+/// Force-reload live WGSL assets from disk so edits apply without restarting
+/// the app. Calls [`AssetServer::reload`], which re-runs the loader and lets
+/// dependent material pipelines rebuild.
+///
+/// A supplied bare path such as `"shaders/wheel.wgsl"` resolves against the
+/// active engine-library identity, including its explicit `lunco://` spelling.
+/// An explicit `lunco://…` or `twin://…` path is matched exactly. An empty path
+/// reloads every currently loaded WGSL asset. The command fails visibly when
+/// the requested asset is not active instead of reporting a successful no-op.
 #[Command(default)]
 pub struct ReloadShader {
     pub path: String,
@@ -709,34 +835,62 @@ pub struct ReloadShader {
 
 /// Observer for [`ReloadShader`].
 #[on_command(ReloadShader)]
-pub fn on_reload_shader(trigger: On<ReloadShader>, asset_server: Res<AssetServer>) {
-    let p = trigger.event().path.trim().to_string();
-    let paths: Vec<String> = if p.is_empty() {
-        [
-            "shaders/wheel.wgsl",
-            "shaders/balloon.wgsl",
-            "shaders/solar_panel.wgsl",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect()
-    } else {
-        vec![p]
-    };
-    for path in paths {
-        // Owned `String` → `AssetPath<'static>`, so the queued reload doesn't
-        // borrow the (short-lived) trigger.
-        asset_server.reload(path.clone());
-        info!("RELOAD_SHADER: {}", path);
+pub fn on_reload_shader(
+    trigger: On<ReloadShader>,
+    asset_server: Res<AssetServer>,
+    shaders: Res<Assets<bevy::shader::Shader>>,
+) -> Result<lunco_core::Ack, String> {
+    let requested = trigger.event().path.trim().to_string();
+    if !requested.is_empty() && !is_wgsl_shader_path(&requested) {
+        return Err(format!(
+            "shader path must name a standalone .wgsl asset, got '{requested}'"
+        ));
     }
+    let paths = active_shader_paths(&asset_server, &shaders, &requested);
+    if paths.is_empty() {
+        return Err(if requested.is_empty() {
+            "no loaded WGSL shader assets are available to reload".to_string()
+        } else {
+            format!(
+                "no active WGSL shader asset matches '{}'; use the exact loaded source path",
+                requested
+            )
+        });
+    }
+
+    for path in &paths {
+        // Owned `String` → `AssetPath<'static>`, so the queued reload doesn't
+        // borrow the short-lived command trigger.
+        asset_server.reload(path.clone());
+        info!("RELOAD_SHADER: queued {}", path);
+    }
+    info!(
+        "RELOAD_SHADER: queued {} active asset(s) for '{}'",
+        paths.len(),
+        if requested.is_empty() {
+            "all"
+        } else {
+            requested.as_str()
+        }
+    );
+    Ok(lunco_core::Ack::with_data(
+        lunco_core::OpId::new(),
+        serde_json::json!({
+            "accepted": true,
+            "requested": requested,
+            "queued_paths": paths,
+        }),
+    ))
 }
 
 /// Replace a shader asset's WGSL **source in place** from text sent over the
 /// API, recompiling it live without touching disk or restarting. Overwrites the
-/// `Shader` asset currently at `path` (e.g. `"shaders/wheel.wgsl"`), so every
-/// material using it re-specializes its pipeline next frame. Compile/validation
-/// outcome surfaces in the render log (naga errors on a bad shader). Pairs with
-/// [`ReloadShader`] (disk) — this one is for pushing edits directly.
+/// active `Shader` asset(s) at `path` (e.g. `"shaders/wheel.wgsl"`), so every
+/// material using them re-specializes its pipeline next frame. Bare engine
+/// paths resolve the same `lunco://`/default-source aliases as [`ReloadShader`].
+/// Compile/validation outcome surfaces in the render log (naga errors on a bad
+/// shader). Pairs with [`ReloadShader`] (disk) — this one is for pushing edits
+/// directly.
 #[Command(default)]
 pub struct SetShaderSource {
     /// Asset path of the shader to overwrite, e.g. `"shaders/wheel.wgsl"`.
@@ -753,12 +907,12 @@ pub fn on_set_shader_source(
     mut shaders: ResMut<Assets<bevy::shader::Shader>>,
     mut registry: ResMut<crate::shader_doc::ShaderRegistry>,
     guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
-) {
+) -> Result<lunco_core::Ack, String> {
     let ev = trigger.event();
-    if ev.path.is_empty() || ev.source.is_empty() {
-        warn!("SET_SHADER_SOURCE: empty path or source");
-        return;
-    }
+    let requested = ev.path.trim();
+    // Compile/replace first. A rejected source must not create a journal
+    // document or persist an edit that never reached the live renderer.
+    let paths = apply_shader_source_live(&asset_server, &mut shaders, requested, &ev.source)?;
     // Record the edit into the Twin journal (`DomainKind::Shader`) via the shader
     // document registry — so it SYNCS + PERSISTS like a rhai/Modelica edit, not
     // just a local `Assets<Shader>` poke. Skip recording when this arrived from the
@@ -766,18 +920,21 @@ pub fn on_set_shader_source(
     // the journal replay leg applies + hot-reloads it here — re-recording would
     // duplicate the entry.
     if guard.is_none_or(|g| g.0.is_none()) {
-        registry.apply_source(&ev.path, ev.source.clone());
+        registry.apply_source(requested, ev.source.clone());
     }
-    // Hot-reload: `load` returns the handle every material already holds, so
-    // overwriting that asset id propagates the recompile to them.
-    let handle = asset_server.load::<bevy::shader::Shader>(ev.path.clone());
-    let shader = bevy::shader::Shader::from_wgsl(ev.source.clone(), ev.path.clone());
-    let _ = shaders.insert(handle.id(), shader);
     info!(
-        "SET_SHADER_SOURCE: recompiled {} from {} bytes of WGSL",
-        ev.path,
+        "SET_SHADER_SOURCE: recompiled {} active asset(s) from {} bytes of WGSL",
+        paths.len(),
         ev.source.len()
     );
+    Ok(lunco_core::Ack::with_data(
+        lunco_core::OpId::new(),
+        serde_json::json!({
+            "accepted": true,
+            "requested": requested,
+            "applied_paths": paths,
+        }),
+    ))
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1094,5 +1251,44 @@ pub fn on_delete_shader(
     }
     if !removed {
         warn!("DELETE_SHADER: '{path}' was not in the catalog");
+    }
+}
+
+#[cfg(test)]
+mod shader_reload_tests {
+    use super::*;
+
+    #[test]
+    fn bare_engine_path_checks_canonical_and_legacy_live_identities() {
+        assert_eq!(
+            shader_path_candidates(" shaders/wheel.wgsl "),
+            vec![
+                "lunco://shaders/wheel.wgsl".to_string(),
+                "shaders/wheel.wgsl".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn explicit_asset_source_is_never_rerooted() {
+        assert_eq!(
+            shader_path_candidates("lunco://shaders/wheel.wgsl"),
+            vec!["lunco://shaders/wheel.wgsl".to_string()]
+        );
+        assert_eq!(
+            shader_path_candidates("twin://moonbase/shaders/wheel.wgsl"),
+            vec!["twin://moonbase/shaders/wheel.wgsl".to_string()]
+        );
+    }
+
+    #[test]
+    fn shader_commands_accept_only_standalone_wgsl_assets() {
+        assert!(is_wgsl_shader_path("lunco://shaders/wheel.wgsl"));
+        assert!(is_wgsl_shader_path("twin://moonbase/shaders/wheel.WGSL"));
+        assert!(is_wgsl_shader_path("custom://shaders/wheel.wgsl"));
+        assert!(!is_wgsl_shader_path("embedded://bevy_pbr/render/pbr.wgsl"));
+        assert!(!is_wgsl_shader_path("shaders/wheel.wgsl#fragment"));
+        assert!(!is_wgsl_shader_path("shaders/wheel.rhai"));
+        assert!(!is_wgsl_shader_path("twin://moonbase/shaders/wheel.wgsl#"));
     }
 }

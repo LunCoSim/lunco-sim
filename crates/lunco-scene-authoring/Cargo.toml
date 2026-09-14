@@ -28,6 +28,7 @@ lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-workspace = { path = "../lunco-workspace" }
 openusd = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true
