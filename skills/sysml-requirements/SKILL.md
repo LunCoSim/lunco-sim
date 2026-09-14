@@ -47,6 +47,83 @@ Relevant implementation and design references:
 - [`assets/scripting/tools/sysml_requirements.rhai`](../../assets/scripting/tools/sysml_requirements.rhai)
   — generic evaluator implementation.
 
+## Requirement quality gate
+
+Treat an informal request as a stakeholder expectation until it has enough
+information to become a requirement. A good requirement is singular, clear,
+necessary, feasible, implementation-independent, traceable, and individually
+verifiable. It states one subject and one normative behavior or characteristic,
+usually with `shall`, plus the measure, units, limit or tolerance, operating
+condition, and verification method needed to decide pass or fail. This follows
+the NASA requirements guidance for statements that are clear, correct,
+feasible, unambiguous, measurable/verifiable, and traceable:
+[`NASA Appendix C`](https://www.nasa.gov/reference/appendix-c-how-to-write-a-good-requirement/)
+and [`NPR 7123.1C`](https://nodis3.gsfc.nasa.gov/displayAll.cfm?Internal_ID=N_PR_7123_001C_&page_name=all).
+
+Before authoring or baselining a requirement, check:
+
+- **Subject and scope:** Which system, part, interface, or operating mode does
+  it constrain? Name the subject and the condition or stimulus.
+- **Observable measure:** What will be measured, inspected, demonstrated,
+  analyzed, or tested? Include units, sampling rule, time window, population,
+  and reference/baseline when they affect the result.
+- **Pass criterion:** Give a numeric bound, range, tolerance, count, rate,
+  state, or explicit finite acceptance rubric. “Good”, “stable”, “fast”,
+  “intuitive”, “looks right”, and “make it look good” are not pass criteria.
+- **Single thought:** Split `and`, `or`, and compound paragraphs into separate
+  requirements unless the clauses are inseparable for verification.
+- **Traceability and intent:** Record the requirement ID, source/parent goal,
+  rationale, priority, and the qualified verification case. Keep design choices
+  such as a particular class, algorithm, or shader implementation out unless
+  they are themselves the required constraint.
+- **Failure behavior:** For safety, reliability, or resilience requirements,
+  specify the trigger, detection deadline, required response, and recovery or
+  safe state. “The system shall handle errors” is incomplete.
+
+### Ask the user when the requirement is underspecified
+
+It is correct to ask targeted questions before writing SysML. Ask only the
+questions that block a measurable, verifiable statement, and show the proposed
+rewritten requirement so the user can confirm the interpretation. Do not invent
+numbers, tolerances, reference images, operating conditions, or priorities.
+
+Use this compact question set as needed:
+
+1. What exact subject is being constrained, and in which operating condition or
+   scenario?
+2. What observable quantity or finite outcome proves success? What are its
+   units, range/threshold/tolerance, sampling rule, and time window?
+3. What stimulus, initial state, environment, or reference baseline applies?
+4. Should verification be by test, analysis, inspection, or demonstration, and
+   what artifact or runtime evidence must be retained?
+5. What stakeholder goal or parent requirement does it trace to, and what is the
+   priority if it conflicts with another requirement?
+
+If the user answers only “make it look good”, convert that into a clarification,
+not a requirement. Ask for the approved reference and observable visual
+criteria—for example camera/lighting/exposure, reference patches or objects,
+allowed luminance/color deviation, frame window, and the inspection or image
+analysis method. A valid visual requirement can be:
+
+```text
+Under the approved camera, sun direction, and exposure, the terrain surface
+shall keep the mean luminance of each of three approved reference patches within
+±5% over a 10-second stationary capture. Verification: image analysis of 300
+frames plus visual inspection against the approved albedo reference.
+```
+
+The numbers and reference artifacts in that example are placeholders, not
+defaults. Replace them with user-approved values before putting the statement
+in SysML. A similarly testable motion requirement names the scenario and
+window, for example: “During a 100 m straight run on a 10° slope at a commanded
+1.0 m/s, the rover shall keep lateral error ≤0.5 m and speed within ±0.2 m/s for
+at least 90% of samples after the first 5 s.”
+
+Do not weaken a vague request by choosing a permissive tolerance merely to make
+the first run pass. If the user cannot yet provide a bound, record it as an
+open stakeholder expectation/TBD with an owner, rationale, and resolution
+date; do not baseline it as a verified SysML requirement.
+
 ## What is implemented, and what is not
 
 The current supported subset is source-backed and deterministic:
