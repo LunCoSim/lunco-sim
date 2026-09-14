@@ -72,6 +72,7 @@ api-transport = [
     "dep:lunco-api-transport",
     "dep:lunco-modelica-api",
     "dep:lunco-workspace-api",
+    "lunco-usd-bevy-runtime/api",
     "lunco-modelica-core/api",
 ]
 transport-http = ["lunco-api-transport/transport-http", "lunco-networking?/transport-http"]

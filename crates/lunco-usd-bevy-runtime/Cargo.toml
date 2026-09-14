@@ -14,6 +14,10 @@ lunco-usd-bevy-diagnostics = { path = "../lunco-usd-bevy-diagnostics" }
 lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-usd-sim = { path = "../lunco-usd-sim" }
 lunco-usd-sim-cosim = { path = "../lunco-usd-sim-cosim" }
+lunco-usd-sim-domain-api = { path = "../lunco-usd-sim-domain-api", optional = true }
+
+[features]
+api = ["dep:lunco-usd-sim-domain-api"]
 
 [lints]
 workspace = true

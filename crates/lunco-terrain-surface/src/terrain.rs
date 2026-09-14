@@ -67,6 +67,7 @@ fn dem_failure_event(
 ) -> lunco_core::TelemetryEvent {
     let (name, severity) = match disposition {
         DemBuildFailureDisposition::Terminal => (DEM_BUILD_FAILED, lunco_core::Severity::Error),
+        #[cfg(any(target_arch = "wasm32", test))]
         DemBuildFailureDisposition::Refinement => {
             (DEM_REFINEMENT_FAILED, lunco_core::Severity::Warning)
         }
@@ -353,9 +354,9 @@ fn mark_dem_build_failed(
 }
 
 #[derive(Clone, Copy)]
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 enum DemBuildFailureDisposition {
     Terminal,
+    #[cfg(any(target_arch = "wasm32", test))]
     Refinement,
 }
 
@@ -429,8 +430,10 @@ fn update_terrain_gen_status(
         }
     }
     // Web worker phase: coarse still pending (request present) vs full refine.
-    #[allow(unused_mut)]
+    #[cfg(target_arch = "wasm32")]
     let mut download_fraction: Option<f32> = None;
+    #[cfg(not(target_arch = "wasm32"))]
+    let download_fraction: Option<f32> = None;
     let mut streaming_coarse = false;
     let mut refining_full = false;
     for (_entity, req, job) in &worker_jobs {
@@ -972,8 +975,8 @@ struct DemBuildTask(Task<Result<DemBuild, String>>);
 /// replies need — the request marker is dropped on the coarse reply (to release
 /// the physics hold), so these can't be read from it later. `id` (from
 /// [`dem_worker_job_id`]) correlates a reply back to this entity.
+#[cfg(target_arch = "wasm32")]
 #[derive(Component, Clone)]
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub struct DemWorkerJob {
     id: u32,
     collider_ring: bool,
@@ -989,6 +992,10 @@ pub struct DemWorkerJob {
     #[cfg(target_arch = "wasm32")]
     cache_key: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Component, Clone)]
+pub struct DemWorkerJob;
 
 /// OPFS namespace for the Full-stage baked DEM grid (web cold-start cache).
 #[cfg(target_arch = "wasm32")]

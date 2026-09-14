@@ -42,16 +42,16 @@ use std::{
 
 use lunco_api::discovery::find_api_command;
 use lunco_api::executor::{
-    ApiCommandEvent, authz_target_gid, command_result_json, validate_command_params,
+    authz_target_gid, command_result_json, validate_command_params, ApiCommandEvent,
 };
 use lunco_api::queries::{ApiQueryRegistry, ApiVisibility};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::ApiResponse;
-use lunco_core::session::{CommandPolicyRegistry, SessionRbac, SessionRegistry, authorize};
+use lunco_core::session::{authorize, CommandPolicyRegistry, SessionRbac, SessionRegistry};
 use lunco_core::{
-    CelestialBody, CommandResults, GlobalEntityId, NavigationCommand, OpId, SECS_PER_TICK,
-    SessionId, Severity, SimTick, SteeringGeometry, TelemetryEvent, TelemetryValue,
     coords::{GridPos, VehicleFrame},
+    CelestialBody, CommandResults, GlobalEntityId, NavigationCommand, OpId, SessionId, Severity,
+    SimTick, SteeringGeometry, TelemetryEvent, TelemetryValue, SECS_PER_TICK,
 };
 
 // ── Native value construction ──────────────────────────────────────────────

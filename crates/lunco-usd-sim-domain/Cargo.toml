@@ -8,9 +8,7 @@ description = "USD component-network facts and Modelica domain projection"
 [dependencies]
 bevy = { workspace = true, features = ["bevy_asset"] }
 openusd = { workspace = true }
-serde_json = { workspace = true }
 web-time = { workspace = true }
-lunco-api = { path = "../lunco-api" }
 lunco-core = { path = "../lunco-core" }
 lunco-cosim = { path = "../lunco-cosim" }
 lunco-doc = { path = "../lunco-doc" }

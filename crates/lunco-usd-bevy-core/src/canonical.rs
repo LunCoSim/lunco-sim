@@ -65,8 +65,8 @@ pub struct CanonicalStage {
     pub runtime_layer: String,
     /// Sink inbox drained by the projection system each tick.
     inbox: Arc<Mutex<Vec<RawStageChange>>>,
-    #[allow(dead_code)] // held to keep the sink alive for the stage's lifetime
-    sink_id: StageSinkId,
+    // Held to keep the sink alive for the stage's lifetime.
+    _sink_id: StageSinkId,
     /// The live resolver's shared byte-map handle, when this stage was built
     /// from a [`StageRecipe`] via [`from_recipe`](Self::from_recipe). `Some`
     /// lets [`add_layer_bytes`](Self::add_layer_bytes) inject a spawned asset's
@@ -111,7 +111,7 @@ impl CanonicalStage {
             scene_layer: scene_layer.into(),
             runtime_layer: String::new(),
             inbox,
-            sink_id,
+            _sink_id: sink_id,
             resolver_bytes: None,
             generation: 0,
         }

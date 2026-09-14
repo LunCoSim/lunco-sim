@@ -8632,6 +8632,7 @@ dependencies = [
  "lunco-usd-bevy-diagnostics",
  "lunco-usd-sim",
  "lunco-usd-sim-cosim",
+ "lunco-usd-sim-domain-api",
 ]
 
 [[package]]
@@ -8808,7 +8809,6 @@ name = "lunco-usd-sim-domain"
 version = "0.1.0"
 dependencies = [
  "bevy",
- "lunco-api",
  "lunco-assets",
  "lunco-core",
  "lunco-cosim",
@@ -8826,8 +8826,18 @@ dependencies = [
  "lunco-usd-compose",
  "lunco-usd-core",
  "openusd",
- "serde_json",
  "web-time",
+]
+
+[[package]]
+name = "lunco-usd-sim-domain-api"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "lunco-api",
+ "lunco-modelica-runtime",
+ "lunco-usd-sim-domain",
+ "serde_json",
 ]
 
 [[package]]

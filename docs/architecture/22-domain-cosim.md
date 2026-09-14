@@ -13,10 +13,12 @@ see **[`../../crates/lunco-cosim/README.md`](../../crates/lunco-cosim/README.md)
 
 The USD-specific boundary is split between
 [`lunco-usd-sim-domain`](../../crates/lunco-usd-sim-domain/),
+[`lunco-usd-sim-domain-api`](../../crates/lunco-usd-sim-domain-api/),
 [`lunco-usd-sim`](../../crates/lunco-usd-sim/), and
 [`lunco-usd-sim-cosim`](../../crates/lunco-usd-sim-cosim/): the domain package
 owns composed component-network facts, Modelica projection, and authored
-synthesizer dispatch; the vehicle package owns vehicle realization; and the
+synthesizer dispatch; the domain API package owns optional generated-source
+queries; the vehicle package owns vehicle realization; and the
 cosim package owns participant orchestration, wiring, readiness, and scene
 lifecycle. Shared USD-simulation markers and ordering are in the small
 `lunco-usd-sim-core` protocol package.

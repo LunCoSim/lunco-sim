@@ -5,8 +5,6 @@
 use bevy::math::DVec3;
 use big_space::prelude::*;
 
-use lunco_celestial::CelestialBody;
-
 const MOON_RADIUS: f64 = 1737.0e3;
 const MOON_GRID_CELL_SIZE: f64 = 2_000.0;
 
@@ -109,10 +107,4 @@ fn test_terrain_altitude_from_grid_local() {
         "Terrain altitude should be ~50m, got {:.2}m",
         altitude
     );
-}
-
-/// Suppress unused import warning.
-#[allow(dead_code)]
-fn _use_celestial_body() {
-    let _ = std::mem::size_of::<CelestialBody>();
 }

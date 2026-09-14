@@ -119,8 +119,8 @@ pub struct DomainProjectionState {
 }
 
 /// Inspectable runtime artifact for diagnostics and API/UI projection —
-/// readable through the `GeneratedModelicaSource` query
-/// ([`GeneratedSourceProvider`]).
+/// readable through the `GeneratedModelicaSource` query in
+/// `lunco-usd-sim-domain-api`.
 ///
 /// This is derived state, never persisted back into USD. Keeping the exact
 /// compiler input beside the run entity makes a compiler line actionable: the
@@ -2954,96 +2954,6 @@ pub fn generated_sources_need_publish(
     generated: Res<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>,
 ) -> bool {
     generated.dirty || !changed.is_empty()
-}
-
-/// `GeneratedModelicaSource` — read back the exact Modelica text a projected
-/// network was compiled from.
-///
-/// `curl … {"type":"ExecuteCommand","command":"GeneratedModelicaSource","params":{}}` lists every
-/// projected network; `{"network_root":"/Rover"}` returns one. This
-/// is the read path for the `generated://…` documents the compiler reports
-/// errors against, and the only way to see what USD actually emitted.
-pub struct GeneratedSourceProvider;
-
-impl lunco_api::ApiQueryProvider for GeneratedSourceProvider {
-    fn name(&self) -> &'static str {
-        "GeneratedModelicaSource"
-    }
-
-    fn execute(&self, world: &World, params: &serde_json::Value) -> lunco_api::ApiResponse {
-        let wanted = params
-            .get("network_root")
-            .and_then(|value| value.as_str())
-            .map(str::to_string);
-        let Some(mut q) = bevy::ecs::query::QueryState::<(
-            &GeneratedModelicaSource,
-            Option<&ModelicaModel>,
-        )>::try_new(world) else {
-            return lunco_api::ApiResponse::error(
-                lunco_api::ApiErrorCode::InternalError,
-                "GeneratedModelicaSource: ECS query is unavailable",
-            );
-        };
-        let networks: Vec<serde_json::Value> = q
-            .iter(world)
-            .filter(|(generated, _)| {
-                wanted
-                    .as_deref()
-                    .is_none_or(|root| root == generated.network_root)
-            })
-            .map(|(generated, model)| {
-                serde_json::json!({
-                    "network_root": generated.network_root,
-                    "model_name": model.map(|model| model.model_name.clone()).unwrap_or_default(),
-                    "doc_uri": generated.doc_uri,
-                    "projection_error": generated.projection_error,
-                    "boundary_inputs": generated.boundary_inputs,
-                    "boundary_outputs": generated.boundary_outputs,
-                    "member_output_aliases": generated.member_output_aliases,
-                    "components": generated.component_paths,
-                    "members": generated
-                        .members
-                        .iter()
-                        .map(|(prim, asset, class)| serde_json::json!({
-                            "prim": prim, "source_asset": asset, "class": class,
-                        }))
-                        .collect::<Vec<_>>(),
-                    "source_roots": generated.source_roots,
-                    "units": generated
-                        .units
-                        .iter()
-                        .map(|unit| serde_json::json!({
-                            "name": unit.name,
-                            "instance": unit.instance,
-                            "components": unit.component_paths,
-                            "inputs": unit.inputs,
-                            "outputs": unit.outputs,
-                        }))
-                        .collect::<Vec<_>>(),
-                    "layout": {
-                        "units": generated
-                            .layout
-                            .unit_positions
-                            .iter()
-                            .map(|(name, (x, y))| serde_json::json!({
-                                "name": name, "x": x, "y": y,
-                            }))
-                            .collect::<Vec<_>>(),
-                        "members": generated
-                            .layout
-                            .member_positions
-                            .iter()
-                            .map(|(path, (x, y))| serde_json::json!({
-                                "path": path, "x": x, "y": y,
-                            }))
-                            .collect::<Vec<_>>(),
-                    },
-                    "source": generated.source,
-                })
-            })
-            .collect();
-        lunco_api::ApiResponse::ok(serde_json::json!({ "networks": networks }))
-    }
 }
 
 /// Stable, path-qualified identity for a generated network model.

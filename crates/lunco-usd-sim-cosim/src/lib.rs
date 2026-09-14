@@ -5522,9 +5522,6 @@ impl Plugin for UsdSimCosimPlugin {
                     // entity list is identity-deduplicated and cannot reveal two
                     // projections of the same USD camera path.
                     reg.register(SceneCameraAuditProvider);
-                    // The read path for `generated://…` models — the text a
-                    // projected USD network was actually compiled from.
-                    reg.register(lunco_usd_sim_domain::GeneratedSourceProvider);
                 }
             },
         );

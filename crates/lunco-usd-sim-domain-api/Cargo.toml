@@ -1,0 +1,16 @@
+[package]
+name = "lunco-usd-sim-domain-api"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "API query providers for USD Modelica domain projections"
+
+[dependencies]
+bevy = { workspace = true }
+lunco-api = { path = "../lunco-api" }
+lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
+lunco-usd-sim-domain = { path = "../lunco-usd-sim-domain" }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
