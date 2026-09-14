@@ -3,6 +3,10 @@
 > **Pair with:** the **Twin** and **USD / Modelica** lessons in the luncosim
 > workbench.
 
+> **Start here for the workflow:** [`../../skills/START-HERE.md`](../../skills/START-HERE.md)
+> routes the task to the right runbook, explains the format boundaries, and
+> works for installed GitHub builds as well as source checkouts.
+
 A Twin is the project that owns one engineered system. It is not a mesh, a
 running process, or a Modelica file. It is a directory whose `twin.toml`
 identifies the project and whose documents describe the system:
@@ -25,7 +29,13 @@ The formats keep their normal responsibilities:
 | USD | parts, transforms, variants, materials, topology, typed ports, and connections | Modelica state integration |
 | Modelica | continuous equations, energy/state balance, and solved outputs | scene traversal or mission sequencing |
 | Rhai | events, commands, sequencing, and authored test verdicts | continuous dynamics |
+| SysML/KerML | Twin-owned requirements, verification cases, and system structure | full KerML expression execution or automatic USD projection |
 | Rust / Avian | generic projection and engine mechanics | domain-specific names or hidden policy |
+
+Python is an optional integration feature and is not used by the normal
+workflow. Use Rhai for scenario and verification policy and Modelica for
+continuous models; see [`sysml-requirements`](../../skills/sysml-requirements/SKILL.md)
+for the opt-in requirements boundary.
 
 ## 1. Create the Twin
 
@@ -141,7 +151,8 @@ Build the production executable once, then open the declared stage on an
 explicit free API port:
 
 ```bash
-target/debug/luncosim --api 4148 --scene /path/to/my-rover-twin/scene.usda
+export LUNCOSIM_BIN="${LUNCOSIM_BIN:-luncosim}"
+"$LUNCOSIM_BIN" --api 4148 --scene /path/to/my-rover-twin/scene.usda
 ```
 
 The API port is useful for both a UI session and headless inspection:
@@ -156,7 +167,7 @@ is not a substitute for observing the behaviour. For an authored scenario gate,
 use the production test command:
 
 ```bash
-target/debug/luncosim test \
+"$LUNCOSIM_BIN" test \
   --scene /path/to/my-rover-twin/scene.usda \
   --max-ticks 6000
 ```

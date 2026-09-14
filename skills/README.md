@@ -6,13 +6,58 @@ distills the relevant docs into a recipe, and bakes in the project-specific
 gotchas so the happy path just works.
 
 Each `SKILL.md` has a `description` with the phrases that trigger it; an agent
-harness matches the request and loads the skill automatically. You can also read
-one directly when doing that kind of task by hand.
+harness that supports discovery may match the request and load the skill
+automatically. You can always read one directly, and any MCP-compatible host
+can use the same Markdown path without host-specific syntax.
+
+New to LunCoSim? Start with [`START-HERE.md`](START-HERE.md). It explains how to
+choose one primary skill, defer to supporting skills, use the project formats,
+work with installed GitHub builds, create dynamic Rhai tools, and produce an
+evidence-backed handoff.
+
+## How to use a skill
+
+Use a skill when the request changes, authors, validates, observes, or reviews
+LunCoSim work. State the desired outcome in ordinary language, then point the
+agent or host at one primary runbook:
+
+```text
+Use skills/build-usd-scene/SKILL.md as the primary runbook. Assemble the
+existing rover and terrain assets into <scene>; keep authored topology in USD
+and verify it through the production API.
+```
+
+The primary skill owns the workflow. Load a neighbouring skill only when the
+primary runbook defers to its contract; arrows in the routing table are
+progressive disclosure, not a request to load the entire catalogue. Before
+declaring a feature absent, use [`capability-discovery`](capability-discovery/SKILL.md)
+to search the skills, canonical docs, current owner source, registrations,
+maintained dependencies, and live API surface when applicable.
+
+### Skill session contract
+
+Every maintained skill is a task runbook with a discoverable frontmatter
+`description`, one authoritative owner, a “read first” path, concrete commands
+or file locations, and bounded verification. A completed session reports:
+
+```text
+Primary skill -> supporting skill(s) -> owner/source -> files changed
+             -> checks and runtime/visual evidence -> limits/blocker
+             -> branch/commit -> next action
+```
+
+The catalogue check enforces the mechanical part of that contract: valid skill
+frontmatter, unique names, index coverage, and resolvable local Markdown links.
+It is available as `python3 scripts/validate_skills.py` from the repository
+root. This Python command is only a repository documentation check; it does not
+enable or imply the optional LunCoSim Python integration. It does not turn a
+parse check into runtime evidence.
 
 ## Orientation
 
 | Skill | Use it when you want to… |
 |---|---|
+| [**START-HERE**](START-HERE.md) | Route a new task, choose a primary skill, understand formats, or prepare a cross-host handoff |
 | [**repo-map**](repo-map/SKILL.md) | Get your bearings — repo layout, which binary to run, where a feature lives |
 | [**capability-discovery**](capability-discovery/SKILL.md) | Find an existing capability and its owner before calling a feature missing or adding a duplicate mechanism |
 | [**use-asset-library**](use-asset-library/SKILL.md) | Add a component, shader, Modelica model, or event-driven Rhai policy to `assets/` and have the engine find it |
@@ -193,4 +238,7 @@ this"; the *why* lives in `docs/architecture/`, and the skill links to it.
 - Every skill belongs in a table above and stays listed there.
 
 `skills/` is symlinked as `.claude/skills/`, so these load automatically in
-Claude Code.
+Claude Code. Other hosts may use the same files directly; host-specific
+metadata is optional and must not be required for the runbook to work. Keep
+the cross-host entry point in [`START-HERE.md`](START-HERE.md) current when
+adding or changing routing.

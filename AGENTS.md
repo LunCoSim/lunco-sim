@@ -1,9 +1,18 @@
 # LunCoSim agent guide
 
-Compact operating contract. Read `skills/README.md`, `docs/crates-index.md`,
+Compact operating contract. Read `skills/START-HERE.md` for cross-host skill
+routing, then `skills/README.md`, `docs/crates-index.md`,
 `docs/principles.md`, the architecture index, and the relevant open review first.
 If a nested `AGENTS.md` applies, follow the most specific guide and reconcile
 it with this one.
+
+Skills are portable Markdown runbooks, not runtime plugins. When a request is
+unfamiliar, select one primary skill through `skills/START-HERE.md`; load
+supporting skills only when the primary runbook defers to them. A host may
+auto-discover the frontmatter, but agents must also support the explicit path
+`skills/<name>/SKILL.md`. Do not declare a capability absent until the
+capability-discovery procedure has checked skills, docs, source, registrations,
+dependencies, and the live API where relevant.
 
 ## Architecture
 
@@ -160,10 +169,12 @@ it with this one.
   seams. Do not duplicate an observable runtime assertion in Rust merely because
   the implementation is Rust; tutorial behavior tests belong in authored Rhai so
   tutorial edits do not require a core rebuild.
-- Build and invoke only the production binary `target/debug/luncosim` for scene
-  tests and visual validation. Do not use an old `sandbox` executable or hide a
-  rebuild behind `cargo run`. `--validate` proves preflight only, not runtime
-  behavior. Capture real exit codes and inspect authored verdicts.
+- Build and invoke only the production binary resolved through `LUNCOSIM_BIN`
+  for scene tests and visual validation. In a source checkout this is usually
+  `target/debug/luncosim`; an installed GitHub build may be on `PATH` or at an
+  absolute path. Do not use an old `sandbox` executable or hide a rebuild behind
+  `cargo run`. `--validate` proves preflight only, not runtime behavior. Capture
+  real exit codes and inspect authored verdicts.
 - Targeted checks are the default for a focused change: format only touched Rust
   files with the repository toolchain (or the directly affected package when a
   package-level check is required), and run the narrowest relevant
@@ -211,7 +222,8 @@ it with this one.
 ## Session lifecycle
 
 - Every controllable launch uses an explicit free API port, for example
-  `target/debug/luncosim --api 4101`. Networking is opt-in:
+  `"$LUNCOSIM_BIN" --api 4101` after setting `LUNCOSIM_BIN` to the installed
+  command or source-checkout binary. Networking is opt-in:
   `cargo build -p lunco-luncosim --features networking`; local builds and scene
   tests must not start a multiplayer host.
 - Reuse one production session for asset, shader, and Rhai reloads through its

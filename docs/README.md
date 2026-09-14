@@ -4,7 +4,8 @@ The authoritative home for LunCoSim architecture, design, and reference docs.
 
 **Looking for something specific?** Jump to [I want to…](#i-want-to) below.
 **New to the project?** Follow the [reading order](#reading-order-for-newcomers).
-**An AI agent?** Read [`../AGENTS.md`](../AGENTS.md), then pick a [skill](../skills/README.md).
+**An AI agent?** Read [`../AGENTS.md`](../AGENTS.md), then follow the
+[skill router](../skills/START-HERE.md) and the [full skill catalogue](../skills/README.md).
 
 ---
 
@@ -45,9 +46,11 @@ primary four:
 
 ## Skills (agents & contributors)
 
-Task-oriented runbooks in [`../skills/`](../skills/README.md). Each triggers on a
-kind of request and distils these docs into a recipe plus the project-specific
-traps. Point an agent — or yourself — at one before a hands-on task.
+Task-oriented runbooks in [`../skills/`](../skills/README.md). Start with the
+cross-host [`START-HERE.md`](../skills/START-HERE.md) router, then choose one
+primary skill for the outcome. Each runbook distils these docs into a recipe
+plus the project-specific traps. Point an agent — or yourself — at one before
+a hands-on task.
 
 The full catalogue with trigger phrases is in
 [`../skills/README.md`](../skills/README.md). The most-used entry points:
@@ -55,6 +58,7 @@ The full catalogue with trigger phrases is in
 | Skill | Use it when you want to… |
 |---|---|
 | [repo-map](../skills/repo-map/SKILL.md) | Get oriented — layout, which binary to run, where a feature lives |
+| [capability-discovery](../skills/capability-discovery/SKILL.md) | Check whether an existing feature, owner, or runtime entry point already exists |
 | [build-usd-scene](../skills/build-usd-scene/SKILL.md) | Author/edit the 3D world — load, spawn, place, tune |
 | [update-documents](../skills/update-documents/SKILL.md) | Keep canonical docs, agent guidance, and skills aligned |
 | [author-scenario](../skills/author-scenario/SKILL.md) | Write rhai behaviour — missions, waypoints, reactions |
@@ -64,6 +68,7 @@ The full catalogue with trigger phrases is in
 | [inspect-simulation](../skills/inspect-simulation/SKILL.md) | Observe a running sim — ports, variables, screenshots |
 | [test-via-api](../skills/test-via-api/SKILL.md) | Verify a change without asking a human to click |
 | [runtime-ui](../skills/runtime-ui/SKILL.md) | Author reloadable Twin-facing HTML/CSS-like runtime surfaces |
+| [sysml-requirements](../skills/sysml-requirements/SKILL.md) | Author and verify Twin-owned SysML v2 requirements and verification cases |
 
 ## Documentation map
 

@@ -6,6 +6,12 @@ scenario with optional USD scene content. The application menu is the only
 Rust-owned tutorial surface; the simulator, Modelica packages, and USD reader
 remain tutorial-agnostic.
 
+For cross-host skill usage, task routing, format boundaries, dynamic Rhai
+tools, and the full development cycle, start with
+[`../../skills/START-HERE.md`](../../skills/START-HERE.md). The
+[`author-tutorial`](../../skills/author-tutorial/SKILL.md) runbook is the
+tutorial-specific route after the task shape is clear.
+
 ## In-app lessons
 
 The app menu reads `assets/tutorials/catalog.json` and exposes one submenu per
@@ -50,11 +56,12 @@ Run a gate directly after editing Rhai; it uses the already-built production
 binary and does not require a Rust rebuild:
 
 ```bash
-target/debug/luncosim test \
+export LUNCOSIM_BIN="${LUNCOSIM_BIN:-luncosim}"
+"$LUNCOSIM_BIN" test \
   --scene scenes/tests/tutorial_first_drive.usda --max-ticks 6000
 ```
 
-`target/debug/luncosim --validate` is only parse/preflight evidence. Generic
+`"$LUNCOSIM_BIN" --validate` is only parse/preflight evidence. Generic
 Rust tests may protect the scripting/lifecycle seam, but lesson-specific steps,
 required events, and command counts belong in Rhai runtime observers.
 

@@ -80,7 +80,8 @@ exercise this exact command path without a Rust test or rebuild after Rhai
 changes:
 
 ```bash
-target/debug/luncosim test \
+export LUNCOSIM_BIN="${LUNCOSIM_BIN:-luncosim}"
+"$LUNCOSIM_BIN" test \
   --scene scenes/tests/program_attach_command.usda --max-ticks 3000
 ```
 
