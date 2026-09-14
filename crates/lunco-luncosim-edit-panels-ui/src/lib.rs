@@ -45,8 +45,7 @@ impl Plugin for SceneEditPanelsUiPlugin {
             .add_observer(inspector::on_shader_create_requested)
             .add_observer(inspector::on_shader_import_requested)
             .add_observer(inspector::on_shader_parameters_requested)
-            .add_observer(inspector::on_pbr_material_requested)
-            .add_observer(inspector::on_modelica_parameter_requested);
+            .add_observer(inspector::on_pbr_material_requested);
         #[cfg(not(target_arch = "wasm32"))]
         app.add_observer(inspector::on_attach_at_socket_requested);
         app.add_view_model(

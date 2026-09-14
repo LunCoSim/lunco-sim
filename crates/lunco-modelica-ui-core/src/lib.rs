@@ -30,6 +30,21 @@ pub struct FocusDocumentByName {
     pub pattern: String,
 }
 
+/// Request an authored and runtime update of one Modelica parameter.
+///
+/// The emitting inspector owns only the gesture. The Modelica UI owns the
+/// document registry, journaled source edit, and worker update that fulfill
+/// the request.
+#[derive(bevy::prelude::Event, Clone, Debug)]
+pub struct SetModelicaParameter {
+    /// Modelica model entity whose parameter is being edited.
+    pub entity: bevy::prelude::Entity,
+    /// Parameter key as exposed by the Modelica runtime.
+    pub key: String,
+    /// New numeric parameter value.
+    pub value: f64,
+}
+
 /// How an authored or library Modelica class should be opened.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Default, bevy::reflect::Reflect)]
 #[serde(tag = "kind")]

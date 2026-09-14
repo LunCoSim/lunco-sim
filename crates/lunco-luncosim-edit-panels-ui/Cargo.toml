@@ -31,9 +31,8 @@ lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-environment = { path = "../lunco-environment" }
 lunco-luncosim-edit-ui = { path = "../lunco-luncosim-edit-ui" }
 lunco-materials = { path = "../lunco-materials" }
-lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
-lunco-modelica-ui = { path = "../lunco-modelica-ui", default-features = false, features = ["ui"] }
+lunco-modelica-ui-core = { path = "../lunco-modelica-ui-core" }
 lunco-obstacle-field = { path = "../lunco-obstacle-field" }
 lunco-render = { path = "../lunco-render" }
 lunco-scene-authoring = { path = "../lunco-scene-authoring" }
