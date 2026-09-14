@@ -4,8 +4,10 @@
 > spacecraft, trajectories, or body-relative views.
 
 `lunco-celestial` owns the solar-system semantic model. `lunco-celestial-
-ephemeris` supplies the concrete ephemeris provider. USD authors the physical
-intent; the engine resolves it into the existing reference-frame hierarchy.
+ephemeris` supplies the concrete ephemeris provider. The
+`lunco-celestial-spatial` adapter projects those semantics into the scene
+hierarchy. USD authors the physical intent; the engine resolves it into the
+existing reference-frame hierarchy.
 
 ## Body catalog
 

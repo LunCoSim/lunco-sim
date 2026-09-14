@@ -28,7 +28,7 @@ use lunco_core::SceneViewport;
 use lunco_doc::DocumentId;
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_core::document::LayerId;
-use lunco_usd_ui::viewport::{
+use lunco_usd_viewport_ui::{
     UsdPreviewId, UsdViewportState, USD_PREVIEW_VIEW_PANEL_ID, USD_VIEWPORT_PANEL_ID,
 };
 use lunco_workbench::{PanelRect, PanelRects, ScenePickGate, SceneTarget};
@@ -223,10 +223,10 @@ pub fn sync_gizmo_proxies(
                     continue;
                 };
                 let (render_position, render_rotation) =
-                    lunco_core::coords::grid_absolute_pose_to_render(
+                    lunco_spatial::coords::grid_absolute_pose_to_render(
                         grid,
-                        lunco_core::coords::GridPos(state.current_position),
-                        lunco_core::coords::GridRot(state.current_rotation),
+                        lunco_spatial::coords::GridPos(state.current_position),
+                        lunco_spatial::coords::GridRot(state.current_rotation),
                     );
                 tf.translation = render_position.0.as_vec3();
                 tf.rotation = render_rotation.0.as_quat();
@@ -260,10 +260,10 @@ fn proxy_pose_to_active_frame(
         return None;
     }
 
-    let (position, rotation) = lunco_core::coords::render_pose_to_grid_absolute(
+    let (position, rotation) = lunco_spatial::coords::render_pose_to_grid_absolute(
         grid,
-        lunco_core::coords::RenderPos::from_render_f32(tf.translation),
-        lunco_core::coords::GridRot::from_render_rotation(tf.rotation),
+        lunco_spatial::coords::RenderPos::from_render_f32(tf.translation),
+        lunco_spatial::coords::GridRot::from_render_rotation(tf.rotation),
     );
     if !position.0.is_finite() || !rotation.0.is_finite() {
         return None;
@@ -336,7 +336,7 @@ pub fn apply_gizmo_proxy_drag(
         Query<&mut lunco_physics::KinematicDrive, (With<GizmoDragState>, Without<GizmoProxy>)>,
         Query<&mut GizmoDragState, Without<GizmoProxy>>,
     )>,
-    active_frame: Res<lunco_core::ActivePhysicsFrame>,
+    active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
     q_grids: Query<&big_space::prelude::Grid>,
     q_parents: Query<&ChildOf>,
     q_globals: Query<&GlobalTransform, Without<GizmoProxy>>,
@@ -396,7 +396,7 @@ pub fn apply_gizmo_proxy_drag(
                 continue;
             };
             let Some((new_cell, new_translation)) =
-                lunco_core::coords::position_in_grid_to_parent_local(
+                lunco_spatial::coords::position_in_grid_to_parent_local(
                     link.target,
                     position,
                     drag_frame,
@@ -407,7 +407,7 @@ pub fn apply_gizmo_proxy_drag(
             else {
                 continue;
             };
-            let Some(new_rotation) = lunco_core::coords::rotation_in_grid_to_parent_local(
+            let Some(new_rotation) = lunco_spatial::coords::rotation_in_grid_to_parent_local(
                 link.target,
                 rotation,
                 drag_frame,
@@ -459,7 +459,7 @@ pub fn apply_gizmo_proxy_drag(
 pub fn capture_final_gizmo_pose(
     q_proxies: Query<(&Transform, &GizmoProxy, &GizmoTarget)>,
     mut q_drag: Query<&mut GizmoDragState, Without<GizmoProxy>>,
-    active_frame: Res<lunco_core::ActivePhysicsFrame>,
+    active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
     q_grids: Query<&big_space::prelude::Grid>,
     q_parents: Query<&ChildOf>,
     q_globals: Query<&GlobalTransform, Without<GizmoProxy>>,
@@ -574,7 +574,7 @@ pub fn capture_gizmo_start(
     q_paths: Query<&UsdPrimPath>,
     q_parents: Query<&ChildOf>,
     q_transforms: Query<&Transform, Without<GizmoProxy>>,
-    active_frame: Res<lunco_core::ActivePhysicsFrame>,
+    active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
     simulation_pose: lunco_physics::SimulationPoseQuery,
     q_rigid_bodies: Query<&RigidBody>,
     q_kinematic_state: Query<(
@@ -700,7 +700,7 @@ pub fn restore_gizmo_dynamic(
     mouse: Option<Res<ButtonInput<MouseButton>>>,
     keys: Option<Res<ButtonInput<KeyCode>>>,
     viewport: Option<Res<UsdViewportState>>,
-    active_frame: Res<lunco_core::ActivePhysicsFrame>,
+    active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
     q_drag: Query<(Entity, &GizmoDragState)>,
     mut q_vel: Query<(Option<&mut LinearVelocity>, Option<&mut AngularVelocity>)>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
@@ -838,7 +838,7 @@ pub fn restore_gizmo_dynamic(
                         return None;
                     };
                     let (new_cell, new_translation) =
-                        lunco_core::coords::position_in_grid_to_parent_local(
+                        lunco_spatial::coords::position_in_grid_to_parent_local(
                             entity,
                             drag.original_position,
                             *active_frame,
@@ -846,7 +846,7 @@ pub fn restore_gizmo_dynamic(
                             &q_grids,
                             &q_spatial,
                         )?;
-                    let new_rotation = lunco_core::coords::rotation_in_grid_to_parent_local(
+                    let new_rotation = lunco_spatial::coords::rotation_in_grid_to_parent_local(
                         entity,
                         drag.original_rotation,
                         *active_frame,
@@ -1067,7 +1067,7 @@ pub(crate) fn sync_gizmo_camera(
     q_tagged: Query<Entity, With<GizmoCamera>>,
     usd_viewport: Option<Res<UsdViewportState>>,
     panel_rects: Option<Res<PanelRects>>,
-    orbital_pin: Option<Res<lunco_celestial::OrbitalViewPin>>,
+    orbital_pin: Option<Res<lunco_celestial_spatial::OrbitalViewPin>>,
     mut options: ResMut<GizmoOptions>,
     mut visibility: ResMut<GizmoVisibilityState>,
     mut commands: Commands,
@@ -1311,7 +1311,7 @@ mod tests {
             .world_mut()
             .spawn(big_space::prelude::Grid::new(2_000.0, 100.0))
             .id();
-        app.insert_resource(lunco_core::ActivePhysicsFrame(active_frame));
+        app.insert_resource(lunco_spatial::ActivePhysicsFrame(active_frame));
 
         let wanted_position = DVec3::new(1234.5, -22.25, 78.5);
         let wanted_rotation =
@@ -1321,10 +1321,10 @@ mod tests {
                 .world()
                 .get::<big_space::prelude::Grid>(active_frame)
                 .unwrap();
-            lunco_core::coords::grid_absolute_pose_to_render(
+            lunco_spatial::coords::grid_absolute_pose_to_render(
                 grid,
-                lunco_core::coords::GridPos(wanted_position),
-                lunco_core::coords::GridRot(wanted_rotation),
+                lunco_spatial::coords::GridPos(wanted_position),
+                lunco_spatial::coords::GridRot(wanted_rotation),
             )
         };
 
@@ -1413,7 +1413,7 @@ mod tests {
             .world_mut()
             .spawn(big_space::prelude::Grid::new(2_000.0, 100.0))
             .id();
-        app.insert_resource(lunco_core::ActivePhysicsFrame(active_frame));
+        app.insert_resource(lunco_spatial::ActivePhysicsFrame(active_frame));
         app.add_systems(Update, restore_gizmo_dynamic);
 
         let vessel = app
@@ -1502,7 +1502,7 @@ mod tests {
             .world_mut()
             .spawn(big_space::prelude::Grid::new(2_000.0, 100.0))
             .id();
-        app.insert_resource(lunco_core::ActivePhysicsFrame(active_frame));
+        app.insert_resource(lunco_spatial::ActivePhysicsFrame(active_frame));
         app.add_systems(Update, restore_gizmo_dynamic);
 
         let prop = app

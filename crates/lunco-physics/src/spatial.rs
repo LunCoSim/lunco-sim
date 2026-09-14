@@ -5,7 +5,7 @@
 //!
 //! With `big_space`, an entity's `GlobalTransform` is expressed in the
 //! floating-origin **render** frame, while avian keeps every collider's
-//! `Position` in the one [`lunco_core::ActivePhysicsFrame`]. The source frame
+//! `Position` in the one [`lunco_spatial::ActivePhysicsFrame`]. The source frame
 //! may be the render frame or any named BigSpace [`Grid`]; neither is silently
 //! assumed to be the Avian frame.
 //!
@@ -42,7 +42,7 @@ use bevy::ecs::system::{SystemParam, SystemState};
 use bevy::math::Dir3;
 use bevy::prelude::{ChildOf, Query, Res, Resource, Transform, World};
 use big_space::prelude::{CellCoord, Grid};
-use lunco_core::coords::{pose_in_grid, render_to_grid_absolute, GridPos, RenderPos};
+use lunco_spatial::coords::{pose_in_grid, render_to_grid_absolute, GridPos, RenderPos};
 use std::sync::Mutex;
 
 /// Bevy state for the read-only API raycast adapter.
@@ -91,7 +91,7 @@ impl GridSpatialQueryState {
 #[derive(SystemParam)]
 pub struct GridSpatialQuery<'w, 's> {
     spatial: SpatialQuery<'w, 's>,
-    physics_frame: Option<Res<'w, lunco_core::ActivePhysicsFrame>>,
+    physics_frame: Option<Res<'w, lunco_spatial::ActivePhysicsFrame>>,
     grids: Query<'w, 's, &'static Grid>,
     parents: Query<'w, 's, &'static ChildOf>,
     // `cast_ray_in_grid` composes GRID entities only. Restricting the query to
@@ -189,7 +189,7 @@ impl<'w, 's> GridSpatialQuery<'w, 's> {
     /// This is the required entry point for systems that solve geometry in an
     /// entity's immediate grid (camera rigs, body-local sensors, streamed scene
     /// tools). Both the point and direction are rigidly composed into the one
-    /// [`lunco_core::ActivePhysicsFrame`] before Avian sees them. Supplying the
+    /// [`lunco_spatial::ActivePhysicsFrame`] before Avian sees them. Supplying the
     /// source grid makes the otherwise-untyped meaning of [`GridPos`] explicit
     /// at the boundary and prevents a sibling/rotated grid from being accepted
     /// merely because its numbers are finite.

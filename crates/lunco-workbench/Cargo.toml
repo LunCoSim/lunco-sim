@@ -3,7 +3,7 @@ name = "lunco-workbench"
 version = "0.1.0-dev"
 edition = "2021"
 license.workspace = true
-description = "LunCoSim's own workbench shell — activity bar, side browsers, central viewport, right inspector, bottom dock, status bar. Native replacement for bevy_workbench."
+description = "LunCoSim's own workbench shell — activity bar, central viewport, right inspector, bottom dock, status bar. Native replacement for bevy_workbench."
 
 [features]
 default = []
@@ -67,8 +67,9 @@ lunco-storage = { path = "../lunco-storage" }
 # stable serialisation lets us skip writes when nothing changed.
 serde_json = { workspace = true }
 serde = { workspace = true }
-# `user_config_dir()` for the cross-platform LunCoSim recents path.
-lunco-assets = { path = "../lunco-assets" }
+# `user_config_dir()` for the cross-platform LunCoSim recents path and the
+# lightweight source-library manifest used by the source viewer.
+lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-render = { path = "../lunco-render" }
 crossbeam-channel = { workspace = true }

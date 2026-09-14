@@ -6,6 +6,13 @@ Companion to [`55-scene-addressing-and-roots.md`](55-scene-addressing-and-roots.
 — same principle (*identity is not location*), applied to referenced assets
 rather than scenes.
 
+The implementation is split by change and dependency cost. `lunco-assets-core`
+owns identity, resolution, storage-facing readers, embedded sources, and
+discovery. `lunco-assets` is the opt-in provisioning boundary for manifests,
+downloads, and native offline processing. Runtime readers depend on the core
+package; application composition roots and explicit asset tools add the
+provisioning package.
+
 ## The rule
 
 **Authored content names logical identities; only the resolver knows locations.**
@@ -60,7 +67,7 @@ we distribute:
 During native development, downloads and processed outputs go directly to the
 machine-global cache. The packer copies selected manifest artifacts from that
 cache into `assets/.cache`, so a package remains self-contained while source
-runs and packaged runs use the same logical identities. `lunco_assets::library_roots()`
+runs and packaged runs use the same logical identities. `lunco_assets_core::library_roots()`
 is the single place that constructs the order for a particular `assets/` root;
 the `AssetSource`, synchronous resolver (`engine_asset_local_path`), and byte
 reader all use it, so a file the loader finds is a file the validator finds.
@@ -89,7 +96,7 @@ including outside the engine repo entirely. What matters is not where the scene 
 | ❌ A relative escape | ~~`@../../vessels/…@`~~ |
 
 `lunco://` exists for exactly this case — so a scene living **outside** the project can
-still reference shared parts (`lunco-assets/src/asset_sources.rs`). This is what removes any
+still reference shared parts (`lunco-assets-core/src/asset_sources.rs`). This is what removes any
 need to symlink external content into the engine tree.
 
 > [!WARNING]
@@ -105,7 +112,7 @@ need to symlink external content into the engine tree.
 declares it through Bevy's normal nested-asset dependency API. Dependencies may be
 top-level or inside a function; they are still loaded before the scenario becomes
 executable. The loader canonicalizes each path through
-`ScriptSources::canonical_id`, the same `lunco-assets` path algebra used by the
+`ScriptSources::canonical_id`, the same `lunco-assets-core` path algebra used by the
 synchronous module resolver:
 
 ```rhai
@@ -120,20 +127,20 @@ reads only the sources published by those dependency handles. Non-literal import
 are rejected while loading because an async asset graph cannot make an unknown
 runtime path safe or deterministic.
 
-## `lunco-assets` owns resolution
+## `lunco-assets-core` owns resolution
 
-Every URI↔location mapping lives in `crates/lunco-assets`, and no other crate
+Every URI↔location mapping lives in `crates/lunco-assets-core`, and no other crate
 re-derives one:
 
 | Concern | Entry point |
 |---|---|
-| Register the sources | `asset_sources::register_lunco_asset_sources` |
+| Register the sources | `lunco-assets-core::asset_sources::register_lunco_asset_sources` |
 | Build a Twin URI | `twin_uri(name, rel)` |
 | Parse a Twin URI | `parse_twin_uri` |
 | "already addressable?" | `has_scheme` |
 | Library URI ⇄ relative | `engine_asset_uri` / `engine_asset_rel` |
 | Any URI → local path | `local_path(reference, twins)` |
-| Library root | `assets_dir_abs` (`LUNCO_ASSET_ROOT` when set; otherwise executable/package ancestry, then current-directory ancestry) |
+| Library root | `lunco-assets-core::assets_dir_abs` (`LUNCO_ASSET_ROOT` when set; otherwise executable/package ancestry, then current-directory ancestry) |
 | Library root (of a file) | `shipped_asset_root` |
 | Id → disk path | `id_to_disk_path` |
 | Scenario staging dir | `scenarios_dir` |
@@ -150,12 +157,12 @@ ways* depending on which crate asked. A hand-rolled `PathBuf::from("assets")`
 join resolved against the caller's CWD while the loader used the absolute
 library path — same reference, different file, no error.
 
-**No crate outside `lunco-assets` performs filesystem path resolution.** Not a
+**No crate outside `lunco-assets-core` performs filesystem path resolution.** Not a
 style rule: a path derived anywhere else is native-only by construction, so it
 breaks on web (where bytes live in OPFS) and on any Twin-owned asset (which has
 no path under `assets/` at all). If code needs bytes, it goes through the
 `AssetServer` or `lunco-storage`; if it needs to know *where* a reference points,
-it asks `lunco-assets`. Joining `"assets"`, stripping a scheme prefix, or
+it asks `lunco-assets-core`. Joining `"assets"`, stripping a scheme prefix, or
 splitting a `twin://` authority by hand are all the same defect.
 
 What legitimately stays outside: `lunco-usd-bevy`'s `canonicalize` and
@@ -207,6 +214,7 @@ dies one crate at a time.
 
 | Concern | Owner |
 |---|---|
+| identity, roots, URI/path resolution, and source readers | `lunco-assets-core` |
 | manifest, URL, cache path, task, bytes, status | `lunco-assets` |
 | declaring datasets + reporting what it loaded | the domain crate |
 | listing and requesting | the UI (knows no dataset by name) |

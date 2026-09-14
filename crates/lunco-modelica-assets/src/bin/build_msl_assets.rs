@@ -1,6 +1,6 @@
 //! Build-time MSL bundler for the web target.
 //!
-//! Reads the on-disk MSL tree (whatever `lunco_assets::msl_source_root_path`
+//! Reads the on-disk MSL tree (whatever `lunco_assets_core::msl_source_root_path`
 //! points at on this host), packs every `.mo` source file into a tarball,
 //! zstd-compresses it, hashes the result, and emits both the bundle and a
 //! manifest into the chosen output directory.
@@ -67,11 +67,11 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 /// Tag stamped into the manifest's `rumoca_artifact_tag` field. Shared with the
-/// runtime via [`lunco_assets::msl::EXPECTED_RUMOCA_ARTIFACT_TAG`] so producer
+/// runtime via [`lunco_assets_core::msl::EXPECTED_RUMOCA_ARTIFACT_TAG`] so producer
 /// and consumer can't drift; the runtime refuses a parsed bundle whose tag
 /// doesn't match (the bincode'd `StoredDefinition` layout is rumoca-version
 /// sensitive). Bump the shared const when the rumoca AST shape changes.
-use lunco_assets::msl::EXPECTED_RUMOCA_ARTIFACT_TAG as RUMOCA_ARTIFACT_TAG;
+use lunco_assets_core::msl::EXPECTED_RUMOCA_ARTIFACT_TAG as RUMOCA_ARTIFACT_TAG;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -122,7 +122,7 @@ fn main() {
     };
 
     let msl_root = msl_root_override
-        .or_else(lunco_assets::msl_source_root_path)
+        .or_else(lunco_assets_core::msl_source_root_path)
         .unwrap_or_else(|| {
             eprintln!(
                 "error: no MSL tree on disk (run `lunco-assets -- download` first \
@@ -423,7 +423,7 @@ fn pack(entries: &[(PathBuf, PathBuf)], dest: &Path) -> u64 {
 /// forward slashes. This is the tar entry name AND the rumoca URI, and is
 /// what the web resolver matches against (`MslInMemory.files` keys).
 fn rel_key(root: &Path, path: &Path) -> String {
-    lunco_assets::asset_path::slashed(path.strip_prefix(root).expect("entry under its root"))
+    lunco_assets_core::asset_path::slashed(path.strip_prefix(root).expect("entry under its root"))
 }
 
 /// Discover third-party library roots under `cache_dir()`, mirroring native's
@@ -431,7 +431,7 @@ fn rel_key(root: &Path, path: &Path) -> String {
 /// `<Package>/package.mo` is a library root. Skips `msl` (the primary) and
 /// dot-dirs. Returns the root dirs (the parent of the package dir), sorted.
 fn discover_extra_roots() -> Vec<PathBuf> {
-    let cache = lunco_assets::cache_dir();
+    let cache = lunco_assets_core::cache_dir();
     let mut roots: Vec<PathBuf> = Vec::new();
     let Ok(rd) = fs::read_dir(&cache) else {
         return roots;

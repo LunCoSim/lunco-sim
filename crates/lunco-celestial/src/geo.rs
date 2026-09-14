@@ -147,8 +147,8 @@ impl LocalTangentFrame {
     /// Body-fixed ENU basis at a body-fixed Cartesian position.
     ///
     /// This is the position form of [`Self::body_fixed`]. It is the canonical
-    /// tangent frame for runtime consumers, which already have a BigSpace
-    /// composed body-relative position rather than an authored geodetic
+    /// tangent frame for runtime consumers, which already have a composed
+    /// body-relative position rather than an authored geodetic
     /// anchor. Longitude is recovered from the body-fixed position, so the
     /// basis remains tied to the body's prime meridian instead of an arbitrary
     /// engine axis.
@@ -178,15 +178,34 @@ impl LocalTangentFrame {
         }
     }
 
+    /// Rotation from the local scene convention (East=+X, Up=+Y,
+    /// North=-Z) into this frame's axes.
+    ///
+    /// This is the one authoritative ENU orientation conversion. Position
+    /// conversion uses the same rotation through [`Self::to_frame`], so a
+    /// site cannot acquire one axis map for placement and another for
+    /// lighting, pose tracking, or terrain.
+    pub fn scene_to_frame_rotation(&self) -> DQuat {
+        DQuat::from_mat3(&bevy::math::DMat3::from_cols(
+            self.east,
+            self.up,
+            -self.north,
+        ))
+    }
+
+    /// Rotation from this frame's axes into the local scene convention.
+    pub fn frame_to_scene_rotation(&self) -> DQuat {
+        self.scene_to_frame_rotation().inverse()
+    }
+
     /// Local scene coordinates (East=+X, Up=+Y, North=−Z) → frame coords.
     pub fn to_frame(&self, local: DVec3) -> DVec3 {
-        self.origin + self.east * local.x + self.up * local.y - self.north * local.z
+        self.origin + self.scene_to_frame_rotation() * local
     }
 
     /// Frame coords → local scene coordinates.
     pub fn from_frame(&self, p: DVec3) -> DVec3 {
-        let d = p - self.origin;
-        DVec3::new(d.dot(self.east), d.dot(self.up), -d.dot(self.north))
+        self.frame_to_scene_rotation() * (p - self.origin)
     }
 }
 

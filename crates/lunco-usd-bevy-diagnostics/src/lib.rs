@@ -109,7 +109,7 @@ impl Default for DiagnosticLabelConfig {
 #[derive(Resource, Default)]
 pub struct DiagnosticLabelFont(pub Option<std::sync::Arc<ab_glyph::FontVec>>);
 
-/// Holds the receiver from [`lunco_assets::font::load_dejavu_sans_bytes`]
+/// Holds the receiver from [`lunco_assets_core::font::load_dejavu_sans_bytes`]
 /// until the bytes land. The same channel mechanism works on native (bytes
 /// ready immediately) and web (bytes fetched async), so the plugin has no
 /// platform branches. Removed once the font installs.
@@ -131,7 +131,7 @@ fn load_diagnostic_label_font(
     mut commands: Commands,
     settings: Res<lunco_settings::DownloadSettings>,
 ) {
-    let rx = lunco_assets::font::load_dejavu_sans_bytes(&settings);
+    let rx = lunco_assets_core::font::load_dejavu_sans_bytes(&settings);
     commands.insert_resource(DiagnosticFontLoad(std::sync::Mutex::new(rx)));
 }
 

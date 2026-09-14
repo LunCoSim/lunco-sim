@@ -41,10 +41,10 @@ pub struct ShaderDocument {
 /// journal documents merely because two callers used different spellings.
 pub fn canonical_shader_path(path: &str) -> String {
     let path = path.trim();
-    if lunco_assets::has_scheme(path) {
+    if lunco_assets_core::has_scheme(path) {
         path.to_string()
     } else {
-        lunco_assets::engine_asset_uri(path)
+        lunco_assets_core::engine_asset_uri(path)
     }
 }
 

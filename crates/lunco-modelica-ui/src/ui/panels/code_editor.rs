@@ -192,29 +192,17 @@ pub struct EditorBufferState {
 /// wrong file. Unconditionally drained after one read either way.
 #[derive(Resource, Default)]
 pub struct EditorJumpRequest {
-    pending: Option<(
-        Option<lunco_doc::DocumentId>,
-        crate::ui::panels::log::SourceLoc,
-    )>,
+    pending: Option<(Option<lunco_doc::DocumentId>, lunco_ui::log::SourceLoc)>,
 }
 
 impl EditorJumpRequest {
     /// Queue a jump to `loc` within `doc`.
-    pub fn request(
-        &mut self,
-        doc: Option<lunco_doc::DocumentId>,
-        loc: crate::ui::panels::log::SourceLoc,
-    ) {
+    pub fn request(&mut self, doc: Option<lunco_doc::DocumentId>, loc: lunco_ui::log::SourceLoc) {
         self.pending = Some((doc, loc));
     }
 
     /// Take the queued jump, leaving the request empty.
-    fn take(
-        &mut self,
-    ) -> Option<(
-        Option<lunco_doc::DocumentId>,
-        crate::ui::panels::log::SourceLoc,
-    )> {
+    fn take(&mut self) -> Option<(Option<lunco_doc::DocumentId>, lunco_ui::log::SourceLoc)> {
         self.pending.take()
     }
 }

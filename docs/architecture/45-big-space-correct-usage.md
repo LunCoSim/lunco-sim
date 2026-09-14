@@ -10,13 +10,14 @@ semantic reference-frame model.
 ## Semantic frames
 
 `lunco-celestial::ReferenceFrame` is the only semantic frame tag used by the
-runtime:
+runtime. `lunco-celestial-spatial` is the only package that projects those
+semantics into the Bevy/BigSpace scene hierarchy:
 
 - `World` — the persistent scene/world frame.
 - `EclipticJ2000 { center }` — non-rotating axes centred on a named NAIF body.
 - `BodyFixed { body }` — IAU/WGCCRE rotating axes for a named body.
 
-`ReferenceFrameIndex` resolves each declaration to exactly one `Grid`. Missing
+`lunco-celestial-spatial::ReferenceFrameIndex` resolves each declaration to exactly one `Grid`. Missing
 or duplicate declarations return `None`; callers never choose the first grid,
 infer a frame from entity order, or silently substitute identity.
 
@@ -26,7 +27,7 @@ declares source and target semantics; it never handles `CellCoord` directly.
 
 ## One precision hierarchy
 
-`lunco_core::ensure_world_root` creates or returns the one persistent shell:
+`lunco_spatial::ensure_world_root` creates or returns the one persistent shell:
 
 ```text
 WorldRoot (BigSpace + Grid)
@@ -98,7 +99,7 @@ Grid parent.
 
 Environment projections follow the same boundary: Sun/Earth directions are
 composed from `ActivePhysicsFrame` and mount poses through
-`lunco_core::coords::world_pose`, then reduced to render or mechanism vectors.
+`lunco_spatial::coords::world_pose`, then reduced to render or mechanism vectors.
 They do not read `GlobalTransform` during `Update`, because BigSpace finalizes
 that camera-relative projection in `PostUpdate` and a rotating high-rate frame
 would otherwise be sampled one frame late.
@@ -127,7 +128,7 @@ the resulting `(CellCoord, Transform)` state and propagates its derived
 `GlobalTransform`.
 
 An entity migration is one atomic `(ChildOf, CellCoord, Transform)` operation
-through `lunco_core::attach::migrate_to_grid`. Compute the complete f64 pose in
+through `lunco_spatial::attach::migrate_to_grid`. Compute the complete f64 pose in
 the destination frame first, then write the destination representation. Do
 not reparent first and repair the pose next frame.
 

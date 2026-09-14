@@ -4019,14 +4019,12 @@ checksum = "e2bd33be7338367bf21f54d62e069d58a5fb3ae033fa8bc6df7a77b9ef4cf957"
 dependencies = [
  "ahash",
  "egui",
- "ehttp",
  "enum-map",
  "image",
  "itertools 0.14.0",
  "log",
  "mime_guess2",
  "profiling",
- "resvg 0.45.1",
 ]
 
 [[package]]
@@ -4038,20 +4036,6 @@ dependencies = [
  "ahash",
  "egui",
  "emath",
-]
-
-[[package]]
-name = "ehttp"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2f1b93eb2e039aaff63ce07cca59bd1dca02f2ce30075a17b619d2c42f56efc"
-dependencies = [
- "document-features",
- "js-sys",
- "ureq",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
 ]
 
 [[package]]
@@ -5802,12 +5786,9 @@ checksum = "85ab80394333c02fe689eaf900ab500fbd0c2213da414687ebf995a65d5a6104"
 dependencies = [
  "bytemuck",
  "byteorder-lite",
- "color_quant",
- "gif",
- "image-webp",
  "moxcms",
  "num-traits",
- "png 0.18.1",
+ "png",
  "tiff",
  "zune-core",
  "zune-jpeg",
@@ -5822,12 +5803,6 @@ dependencies = [
  "byteorder-lite",
  "quick-error",
 ]
-
-[[package]]
-name = "imagesize"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "edcd27d72f2f071c64249075f42e205ff93c9a4c5f6c6da53e79ed9f9832c285"
 
 [[package]]
 name = "imagesize"
@@ -6170,17 +6145,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d50be8a24c37debdf3170be6ca396d5b5b165f37f94837891adac735ca416b8"
 dependencies = [
  "bitflags 2.13.0",
-]
-
-[[package]]
-name = "kurbo"
-version = "0.11.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c62026ae44756f8a599ba21140f350303d4f08dcdcc71b5ad9c9bb8128c13c62"
-dependencies = [
- "arrayvec",
- "euclid",
- "smallvec",
 ]
 
 [[package]]
@@ -7127,21 +7091,15 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "bzip2",
- "crossbeam-channel",
- "dirs",
  "flate2",
  "image",
- "include_dir",
- "js-sys",
+ "lunco-assets-core",
  "lunco-core",
  "lunco-geotiff",
  "lunco-settings",
- "lunco-storage",
- "lunco-twin",
  "lunco-workspace",
  "rayon",
- "resvg 0.47.0",
- "ruzstd 0.7.3",
+ "resvg",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -7152,11 +7110,32 @@ dependencies = [
  "tiny-skia 0.12.0",
  "toml 1.1.2+spec-1.1.0",
  "ureq",
- "usvg 0.47.0",
+ "usvg",
+ "which",
+]
+
+[[package]]
+name = "lunco-assets-core"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "crossbeam-channel",
+ "dirs",
+ "include_dir",
+ "js-sys",
+ "lunco-core",
+ "lunco-settings",
+ "lunco-storage",
+ "lunco-twin",
+ "lunco-workspace",
+ "ruzstd 0.7.3",
+ "serde",
+ "serde_json",
+ "tar",
+ "thiserror 2.0.18",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "which",
 ]
 
 [[package]]
@@ -7168,6 +7147,7 @@ dependencies = [
  "big_space",
  "leafwing-input-manager",
  "lunco-celestial",
+ "lunco-celestial-spatial",
  "lunco-controller",
  "lunco-core",
  "lunco-core-session",
@@ -7177,6 +7157,7 @@ dependencies = [
  "lunco-physics",
  "lunco-render",
  "lunco-settings",
+ "lunco-spatial",
  "lunco-time",
  "lunco-twin",
  "lunco-usd-bevy-scene",
@@ -7193,6 +7174,7 @@ dependencies = [
  "bevy_egui",
  "lunco-avatar",
  "lunco-celestial",
+ "lunco-celestial-spatial",
  "lunco-controller",
  "lunco-core",
  "lunco-core-session",
@@ -7239,31 +7221,10 @@ dependencies = [
 name = "lunco-celestial"
 version = "0.6.0-dev"
 dependencies = [
- "avian3d",
  "bevy",
- "bevy_egui",
- "bevy_mesh",
- "big_space",
- "futures-lite",
- "lunco-api",
- "lunco-assets",
- "lunco-controller",
  "lunco-core",
- "lunco-environment",
- "lunco-hooks",
- "lunco-materials",
- "lunco-obstacle-field",
- "lunco-render",
- "lunco-settings",
- "lunco-terrain-core",
- "lunco-terrain-globe",
- "lunco-terrain-surface",
- "lunco-theme",
  "lunco-time",
- "lunco-workbench",
- "lunco-workbench-core",
  "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -7275,8 +7236,44 @@ dependencies = [
  "celestial-ephemeris",
  "celestial-time",
  "lunco-assets",
+ "lunco-assets-core",
  "lunco-celestial",
+ "lunco-settings",
  "serde",
+]
+
+[[package]]
+name = "lunco-celestial-spatial"
+version = "0.6.0-dev"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "bevy_egui",
+ "bevy_mesh",
+ "big_space",
+ "futures-lite",
+ "lunco-api",
+ "lunco-assets",
+ "lunco-assets-core",
+ "lunco-celestial",
+ "lunco-controller",
+ "lunco-core",
+ "lunco-environment",
+ "lunco-hooks",
+ "lunco-materials",
+ "lunco-obstacle-field",
+ "lunco-render",
+ "lunco-settings",
+ "lunco-spatial",
+ "lunco-terrain-core",
+ "lunco-terrain-globe",
+ "lunco-terrain-surface",
+ "lunco-theme",
+ "lunco-time",
+ "lunco-workbench",
+ "lunco-workbench-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -7308,7 +7305,6 @@ name = "lunco-core"
 version = "0.6.0-dev"
 dependencies = [
  "bevy",
- "big_space",
  "getrandom 0.2.17",
  "leafwing-input-manager",
  "lunco-command-macro",
@@ -7338,6 +7334,7 @@ dependencies = [
  "lunco-core-session",
  "lunco-cosim-core",
  "lunco-physics",
+ "lunco-spatial",
  "lunco-time",
 ]
 
@@ -7384,6 +7381,7 @@ dependencies = [
  "lunco-cosim-core",
  "lunco-physics",
  "lunco-render",
+ "lunco-spatial",
  "wgpu-types",
 ]
 
@@ -7454,9 +7452,9 @@ dependencies = [
  "getrandom 0.3.4",
  "js-sys",
  "lunco-api-transport",
- "lunco-assets",
+ "lunco-assets-core",
  "lunco-capture",
- "lunco-celestial",
+ "lunco-celestial-spatial",
  "lunco-core",
  "lunco-core-session",
  "lunco-cosim-core",
@@ -7502,9 +7500,10 @@ dependencies = [
  "big_space",
  "lunco-api-transport",
  "lunco-assets",
+ "lunco-assets-core",
  "lunco-avatar",
- "lunco-celestial",
  "lunco-celestial-ephemeris",
+ "lunco-celestial-spatial",
  "lunco-controller",
  "lunco-core",
  "lunco-core-session",
@@ -7527,6 +7526,7 @@ dependencies = [
  "lunco-scene-selection",
  "lunco-scene-validation",
  "lunco-scripting",
+ "lunco-spatial",
  "lunco-storage",
  "lunco-sysml",
  "lunco-telemetry",
@@ -7566,9 +7566,50 @@ dependencies = [
  "lunco-scene-catalog",
  "lunco-scene-commands",
  "lunco-scene-selection",
+ "lunco-spatial",
  "lunco-terrain-surface",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
+]
+
+[[package]]
+name = "lunco-luncosim-edit-panels-ui"
+version = "0.1.0"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "bevy_egui",
+ "big_space",
+ "lunco-api",
+ "lunco-assets-core",
+ "lunco-celestial",
+ "lunco-core",
+ "lunco-cosim",
+ "lunco-cosim-core",
+ "lunco-doc",
+ "lunco-doc-bevy",
+ "lunco-environment",
+ "lunco-luncosim-edit-ui",
+ "lunco-materials",
+ "lunco-modelica-ast",
+ "lunco-modelica-runtime",
+ "lunco-modelica-ui",
+ "lunco-obstacle-field",
+ "lunco-render",
+ "lunco-scene-authoring",
+ "lunco-scene-catalog",
+ "lunco-scene-commands",
+ "lunco-scene-selection",
+ "lunco-terrain-surface",
+ "lunco-time",
+ "lunco-usd-bevy-camera",
+ "lunco-usd-bevy-core",
+ "lunco-usd-bevy-scene",
+ "lunco-usd-core",
+ "lunco-usd-viewport-ui",
+ "lunco-workbench",
+ "lunco-workbench-core",
+ "openusd",
 ]
 
 [[package]]
@@ -7580,33 +7621,28 @@ dependencies = [
  "bevy_egui",
  "big_space",
  "lunco-api",
- "lunco-assets",
  "lunco-avatar",
  "lunco-canvas",
- "lunco-celestial",
+ "lunco-celestial-spatial",
  "lunco-controller",
  "lunco-core",
  "lunco-cosim",
  "lunco-cosim-core",
  "lunco-doc",
  "lunco-doc-bevy",
- "lunco-environment",
  "lunco-luncosim-edit-core",
- "lunco-materials",
  "lunco-mobility",
- "lunco-modelica-ast",
  "lunco-modelica-runtime",
  "lunco-modelica-ui",
- "lunco-obstacle-field",
  "lunco-physics",
  "lunco-render",
- "lunco-scene-authoring",
  "lunco-scene-camera",
  "lunco-scene-catalog",
  "lunco-scene-commands",
  "lunco-scene-selection",
  "lunco-scripting",
  "lunco-settings",
+ "lunco-spatial",
  "lunco-terrain-surface",
  "lunco-theme",
  "lunco-time",
@@ -7619,7 +7655,9 @@ dependencies = [
  "lunco-usd-geometry",
  "lunco-usd-sim",
  "lunco-usd-ui",
+ "lunco-usd-viewport-ui",
  "lunco-workbench",
+ "lunco-workbench-browser",
  "lunco-workbench-core",
  "lunco-workspace",
  "openusd",
@@ -7636,6 +7674,7 @@ dependencies = [
  "bevy",
  "big_space",
  "lunco-celestial",
+ "lunco-celestial-spatial",
  "lunco-controller",
  "lunco-core",
  "lunco-cosim-core",
@@ -7644,6 +7683,7 @@ dependencies = [
  "lunco-networking",
  "lunco-scene-selection",
  "lunco-signal",
+ "lunco-spatial",
  "lunco-terrain-surface",
  "lunco-twin",
  "lunco-usd-bevy-camera",
@@ -7675,10 +7715,12 @@ dependencies = [
  "lunco-api",
  "lunco-api-transport",
  "lunco-assets",
+ "lunco-assets-core",
  "lunco-avatar",
  "lunco-avatar-ui",
  "lunco-capture",
  "lunco-celestial",
+ "lunco-celestial-spatial",
  "lunco-core",
  "lunco-core-session",
  "lunco-cosim-core",
@@ -7687,6 +7729,7 @@ dependencies = [
  "lunco-environment",
  "lunco-hooks",
  "lunco-luncosim-edit-core",
+ "lunco-luncosim-edit-panels-ui",
  "lunco-luncosim-edit-ui",
  "lunco-modelica-core",
  "lunco-modelica-runtime",
@@ -7714,14 +7757,16 @@ dependencies = [
  "lunco-usd-core",
  "lunco-usd-sim-cosim",
  "lunco-usd-ui",
+ "lunco-usd-viewport-ui",
  "lunco-workbench",
+ "lunco-workbench-browser",
  "lunco-workbench-core",
  "lunco-workspace",
- "resvg 0.47.0",
+ "resvg",
  "serde",
  "serde_json",
  "ureq",
- "usvg 0.47.0",
+ "usvg",
  "velopack",
  "wasm-bindgen-futures",
  "web-sys",
@@ -7749,6 +7794,7 @@ dependencies = [
  "lunco-cosim",
  "lunco-environment",
  "lunco-physics",
+ "lunco-spatial",
  "lunco-time",
  "serde_json",
 ]
@@ -7759,7 +7805,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "lunco-api",
- "lunco-assets",
+ "lunco-assets-core",
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-experiments",
@@ -7777,7 +7823,7 @@ name = "lunco-modelica-assets"
 version = "0.1.0"
 dependencies = [
  "bincode 2.0.1",
- "lunco-assets",
+ "lunco-assets-core",
  "rayon",
  "rumoca-ir-ast",
  "rumoca-phase-parse",
@@ -7815,6 +7861,7 @@ dependencies = [
  "log",
  "lunco-api",
  "lunco-assets",
+ "lunco-assets-core",
  "lunco-core",
  "lunco-core-session",
  "lunco-doc",
@@ -7853,6 +7900,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-modelica-docs-ui"
+version = "0.1.0"
+dependencies = [
+ "bevy_egui",
+ "egui_commonmark",
+ "htmd",
+ "lunco-workbench",
+ "lunco-workbench-core",
+]
+
+[[package]]
+name = "lunco-modelica-icon-ui"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy_egui",
+ "egui_extras",
+ "image",
+ "lunco-assets-core",
+ "lunco-modelica-core",
+ "lunco-theme",
+ "lyon_geom",
+ "lyon_path",
+ "lyon_tessellation",
+ "web-time",
+]
+
+[[package]]
 name = "lunco-modelica-runtime"
 version = "0.1.0"
 dependencies = [
@@ -7875,17 +7950,12 @@ dependencies = [
  "bevy",
  "bevy_egui",
  "console_error_panic_hook",
- "egui_commonmark",
- "egui_extras",
- "egui_plot",
  "futures-lite",
  "getrandom 0.3.4",
- "htmd",
- "image",
  "log",
  "lunco-api",
  "lunco-api-transport",
- "lunco-assets",
+ "lunco-assets-core",
  "lunco-canvas",
  "lunco-core",
  "lunco-core-session",
@@ -7895,6 +7965,8 @@ dependencies = [
  "lunco-modelica-api",
  "lunco-modelica-ast",
  "lunco-modelica-core",
+ "lunco-modelica-docs-ui",
+ "lunco-modelica-icon-ui",
  "lunco-modelica-runtime",
  "lunco-scripting",
  "lunco-settings",
@@ -7909,12 +7981,11 @@ dependencies = [
  "lunco-viz",
  "lunco-web",
  "lunco-workbench",
+ "lunco-workbench-browser",
  "lunco-workbench-core",
+ "lunco-workbench-datasets-ui",
  "lunco-workspace",
  "lunco-workspace-api",
- "lyon_geom",
- "lyon_path",
- "lyon_tessellation",
  "regex",
  "rumoca-compile",
  "rumoca-tool-fmt",
@@ -7947,8 +8018,10 @@ dependencies = [
  "lunco-api",
  "lunco-api-transport",
  "lunco-assets",
+ "lunco-assets-core",
  "lunco-avatar",
  "lunco-celestial",
+ "lunco-celestial-spatial",
  "lunco-core",
  "lunco-core-session",
  "lunco-cosim",
@@ -7959,6 +8032,7 @@ dependencies = [
  "lunco-physics",
  "lunco-scripting",
  "lunco-settings",
+ "lunco-spatial",
  "lunco-storage",
  "lunco-twin",
  "lunco-twin-journal",
@@ -8005,6 +8079,7 @@ dependencies = [
  "lunco-core",
  "lunco-hooks",
  "lunco-readiness",
+ "lunco-spatial",
  "lunco-time",
  "serde_json",
 ]
@@ -8043,12 +8118,13 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "big_space",
- "lunco-celestial",
+ "lunco-celestial-spatial",
  "lunco-core",
  "lunco-cosim",
  "lunco-environment",
  "lunco-materials",
  "lunco-render",
+ "lunco-spatial",
  "lunco-terrain-surface",
 ]
 
@@ -8073,7 +8149,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "lunco-api",
- "lunco-assets",
+ "lunco-assets-core",
  "lunco-core",
  "lunco-core-session",
  "lunco-doc",
@@ -8102,9 +8178,11 @@ dependencies = [
  "lunco-api",
  "lunco-avatar",
  "lunco-celestial",
+ "lunco-celestial-spatial",
  "lunco-core",
  "lunco-environment",
  "lunco-scene-selection",
+ "lunco-spatial",
  "lunco-usd-bevy-scene",
 ]
 
@@ -8117,12 +8195,13 @@ dependencies = [
  "crossbeam-channel",
  "futures-lite",
  "lunco-api",
- "lunco-assets",
+ "lunco-assets-core",
  "lunco-core",
  "lunco-core-session",
  "lunco-materials",
  "lunco-scene-validation",
  "lunco-settings",
+ "lunco-spatial",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
  "serde_json",
@@ -8137,7 +8216,7 @@ dependencies = [
  "bevy",
  "big_space",
  "lunco-api",
- "lunco-assets",
+ "lunco-assets-core",
  "lunco-core",
  "lunco-core-session",
  "lunco-doc",
@@ -8148,6 +8227,7 @@ dependencies = [
  "lunco-scene-catalog",
  "lunco-scene-queries",
  "lunco-scene-selection",
+ "lunco-spatial",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-light",
  "lunco-usd-bevy-scene",
@@ -8193,7 +8273,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "lunco-api",
- "lunco-assets",
+ "lunco-assets-core",
  "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",
@@ -8203,7 +8283,6 @@ dependencies = [
  "lunco-lint",
  "lunco-materials",
  "lunco-modelica-ast",
- "lunco-physics",
  "lunco-sysml-ast",
  "lunco-sysml-report",
  "lunco-tools",
@@ -8235,8 +8314,10 @@ dependencies = [
  "libloading",
  "lunco-api",
  "lunco-assets",
+ "lunco-assets-core",
  "lunco-behavior",
  "lunco-celestial",
+ "lunco-celestial-spatial",
  "lunco-controller",
  "lunco-core",
  "lunco-core-session",
@@ -8248,6 +8329,7 @@ dependencies = [
  "lunco-physics",
  "lunco-readiness",
  "lunco-render-recovery",
+ "lunco-spatial",
  "lunco-storage",
  "lunco-time",
  "lunco-tools",
@@ -8281,6 +8363,15 @@ dependencies = [
  "indexmap",
  "lunco-core",
  "serde",
+]
+
+[[package]]
+name = "lunco-spatial"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "big_space",
+ "lunco-core",
 ]
 
 [[package]]
@@ -8407,7 +8498,7 @@ dependencies = [
  "bevy",
  "big_space",
  "lunco-api",
- "lunco-assets",
+ "lunco-assets-core",
  "lunco-core",
  "lunco-environment",
  "lunco-hooks",
@@ -8417,6 +8508,7 @@ dependencies = [
  "lunco-precompute",
  "lunco-render",
  "lunco-settings",
+ "lunco-spatial",
  "lunco-storage",
  "lunco-terrain-bake",
  "lunco-terrain-core",
@@ -8433,7 +8525,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "bevy_egui",
- "lunco-assets",
+ "lunco-assets-core",
  "lunco-settings",
  "serde",
  "wasm-bindgen-futures",
@@ -8509,6 +8601,7 @@ dependencies = [
  "egui_plot",
  "lunco-avatar",
  "lunco-celestial",
+ "lunco-celestial-spatial",
  "lunco-controller",
  "lunco-core",
  "lunco-core-session",
@@ -8528,7 +8621,7 @@ dependencies = [
  "bevy",
  "big_space",
  "lunco-api",
- "lunco-assets",
+ "lunco-assets-core",
  "lunco-core",
  "lunco-core-session",
  "lunco-doc",
@@ -8565,6 +8658,7 @@ dependencies = [
  "lunco-cosim",
  "lunco-environment",
  "lunco-physics",
+ "lunco-spatial",
  "lunco-terrain-globe",
  "lunco-usd-avian-core",
  "lunco-usd-avian-filters",
@@ -8583,6 +8677,7 @@ dependencies = [
  "big_space",
  "lunco-core",
  "lunco-physics",
+ "lunco-spatial",
  "lunco-usd-bevy-scene",
 ]
 
@@ -8652,6 +8747,7 @@ dependencies = [
  "big_space",
  "lunco-core",
  "lunco-render",
+ "lunco-spatial",
  "lunco-time",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
@@ -8667,7 +8763,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bevy",
- "lunco-assets",
+ "lunco-assets-core",
  "lunco-core",
  "lunco-usd-compose",
  "lunco-usd-core",
@@ -8680,7 +8776,7 @@ version = "0.1.0"
 dependencies = [
  "ab_glyph",
  "bevy",
- "lunco-assets",
+ "lunco-assets-core",
  "lunco-render",
  "lunco-settings",
  "lunco-usd-bevy-core",
@@ -8762,7 +8858,7 @@ name = "lunco-usd-bevy-twin"
 version = "0.1.0"
 dependencies = [
  "bevy",
- "lunco-assets",
+ "lunco-assets-core",
  "lunco-doc",
  "lunco-usd-bevy-core",
 ]
@@ -8772,7 +8868,7 @@ name = "lunco-usd-compose"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "lunco-assets",
+ "lunco-assets-core",
  "openusd",
  "tempfile",
 ]
@@ -8783,7 +8879,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bevy",
- "lunco-assets",
+ "lunco-assets-core",
  "lunco-core",
  "lunco-doc",
  "lunco-twin",
@@ -8845,6 +8941,7 @@ dependencies = [
  "lunco-mobility",
  "lunco-physics",
  "lunco-render",
+ "lunco-spatial",
  "lunco-usd-avian",
  "lunco-usd-avian-filters",
  "lunco-usd-bevy-camera",
@@ -8867,6 +8964,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "lunco-celestial",
+ "lunco-celestial-spatial",
  "lunco-environment",
  "lunco-time",
  "lunco-usd-bevy-core",
@@ -8890,8 +8988,8 @@ dependencies = [
  "avian3d",
  "bevy",
  "big_space",
- "lunco-assets",
- "lunco-celestial",
+ "lunco-assets-core",
+ "lunco-celestial-spatial",
  "lunco-core",
  "lunco-core-session",
  "lunco-cosim",
@@ -8904,6 +9002,7 @@ dependencies = [
  "lunco-physics",
  "lunco-readiness",
  "lunco-scripting",
+ "lunco-spatial",
  "lunco-time",
  "lunco-usd-avian",
  "lunco-usd-bevy-camera",
@@ -8944,7 +9043,7 @@ name = "lunco-usd-sim-domain"
 version = "0.1.0"
 dependencies = [
  "bevy",
- "lunco-assets",
+ "lunco-assets-core",
  "lunco-core",
  "lunco-cosim",
  "lunco-cosim-core",
@@ -8981,7 +9080,7 @@ name = "lunco-usd-sim-shader"
 version = "0.1.0"
 dependencies = [
  "bevy",
- "lunco-assets",
+ "lunco-assets-core",
  "lunco-core",
  "lunco-materials",
  "lunco-render",
@@ -9012,6 +9111,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "lunco-assets",
+ "lunco-assets-core",
  "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",
@@ -9030,23 +9130,46 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "bevy_egui",
- "lunco-api",
- "lunco-assets",
- "lunco-core",
+ "lunco-assets-core",
  "lunco-core-session",
+ "lunco-doc",
+ "lunco-doc-bevy",
+ "lunco-status-core",
+ "lunco-storage",
+ "lunco-theme",
+ "lunco-usd",
+ "lunco-usd-bevy-scene",
+ "lunco-usd-bevy-twin",
+ "lunco-usd-compose",
+ "lunco-usd-core",
+ "lunco-usd-viewport-ui",
+ "lunco-workbench",
+ "lunco-workbench-browser",
+ "lunco-workbench-core",
+ "lunco-workspace",
+ "openusd",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "lunco-usd-viewport-ui"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "bevy_egui",
+ "lunco-api",
+ "lunco-assets-core",
+ "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-render",
  "lunco-settings",
- "lunco-status-core",
- "lunco-storage",
- "lunco-theme",
  "lunco-usd",
  "lunco-usd-bevy",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
  "lunco-usd-bevy-twin",
- "lunco-usd-compose",
  "lunco-usd-core",
  "lunco-workbench",
  "lunco-workbench-core",
@@ -9096,7 +9219,7 @@ dependencies = [
  "egui_dock",
  "js-sys",
  "leafwing-input-manager",
- "lunco-assets",
+ "lunco-assets-core",
  "lunco-capture",
  "lunco-controller",
  "lunco-core",
@@ -9123,6 +9246,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-workbench-browser"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "bevy_egui",
+ "lunco-assets-core",
+ "lunco-doc",
+ "lunco-theme",
+ "lunco-twin",
+ "lunco-workbench",
+ "lunco-workbench-core",
+ "lunco-workspace",
+]
+
+[[package]]
 name = "lunco-workbench-core"
 version = "0.1.0-dev"
 dependencies = [
@@ -9130,6 +9268,18 @@ dependencies = [
  "egui",
  "lunco-core",
  "serde",
+]
+
+[[package]]
+name = "lunco-workbench-datasets-ui"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "bevy_egui",
+ "lunco-assets",
+ "lunco-assets-core",
+ "lunco-workbench-browser",
+ "lunco-workspace",
 ]
 
 [[package]]
@@ -10665,7 +10815,7 @@ checksum = "839c8299360d2e998bdb106dc0a6cd71dcc5f4df51df1b620361bf50e283cca6"
 dependencies = [
  "bytemuck",
  "color",
- "kurbo 0.13.1",
+ "kurbo",
  "linebender_resource_handle",
  "smallvec",
 ]
@@ -10921,19 +11071,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51bae2ac328883f7acdfea3d66a7c35751187f870bc81f94563733a154d7a670"
 dependencies = [
  "plotters-backend",
-]
-
-[[package]]
-name = "png"
-version = "0.17.16"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82151a2fc869e011c153adc57cf2789ccb8d9906ce52c0b39a6b5697749d7526"
-dependencies = [
- "bitflags 1.3.2",
- "crc32fast",
- "fdeflate",
- "flate2",
- "miniz_oxide",
 ]
 
 [[package]]
@@ -11780,20 +11917,6 @@ checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 
 [[package]]
 name = "resvg"
-version = "0.45.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8928798c0a55e03c9ca6c4c6846f76377427d2c1e1f7e6de3c06ae57942df43"
-dependencies = [
- "log",
- "pico-args",
- "rgb",
- "svgtypes 0.15.3",
- "tiny-skia 0.11.4",
- "usvg 0.45.1",
-]
-
-[[package]]
-name = "resvg"
 version = "0.47.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9be183ad6a216aa96f33e4c8033b0988b8b3ea6fd2359d19af5bac4643fd8e81"
@@ -11803,9 +11926,9 @@ dependencies = [
  "log",
  "pico-args",
  "rgb",
- "svgtypes 0.16.1",
+ "svgtypes",
  "tiny-skia 0.12.0",
- "usvg 0.47.0",
+ "usvg",
  "zune-jpeg",
 ]
 
@@ -13255,21 +13378,11 @@ checksum = "0193cc4331cfd2f3d2011ef287590868599a2f33c3e69bc22c1a3d3acf9e02fb"
 
 [[package]]
 name = "svgtypes"
-version = "0.15.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68c7541fff44b35860c1a7a47a7cadf3e4a304c457b58f9870d9706ece028afc"
-dependencies = [
- "kurbo 0.11.3",
- "siphasher",
-]
-
-[[package]]
-name = "svgtypes"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "695b5790b3131dafa99b3bbfd25a216edb3d216dad9ca208d4657bfb8f2abc3d"
 dependencies = [
- "kurbo 0.13.1",
+ "kurbo",
  "siphasher",
 ]
 
@@ -13655,7 +13768,6 @@ dependencies = [
  "bytemuck",
  "cfg-if",
  "log",
- "png 0.17.16",
  "tiny-skia-path 0.11.4",
 ]
 
@@ -13670,7 +13782,7 @@ dependencies = [
  "bytemuck",
  "cfg-if",
  "log",
- "png 0.18.1",
+ "png",
  "tiny-skia-path 0.12.0",
 ]
 
@@ -14444,28 +14556,6 @@ dependencies = [
 
 [[package]]
 name = "usvg"
-version = "0.45.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80be9b06fbae3b8b303400ab20778c80bbaf338f563afe567cf3c9eea17b47ef"
-dependencies = [
- "base64",
- "data-url",
- "flate2",
- "imagesize 0.13.0",
- "kurbo 0.11.3",
- "log",
- "pico-args",
- "roxmltree 0.20.0",
- "simplecss",
- "siphasher",
- "strict-num",
- "svgtypes 0.15.3",
- "tiny-skia-path 0.11.4",
- "xmlwriter",
-]
-
-[[package]]
-name = "usvg"
 version = "0.47.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d46cf96c5f498d36b7a9693bc6a7075c0bb9303189d61b2249b0dc3d309c07de"
@@ -14474,8 +14564,8 @@ dependencies = [
  "data-url",
  "flate2",
  "fontdb",
- "imagesize 0.14.0",
- "kurbo 0.13.1",
+ "imagesize",
+ "kurbo",
  "log",
  "pico-args",
  "roxmltree 0.21.1",
@@ -14483,7 +14573,7 @@ dependencies = [
  "simplecss",
  "siphasher",
  "strict-num",
- "svgtypes 0.16.1",
+ "svgtypes",
  "tiny-skia-path 0.12.0",
  "ttf-parser",
  "unicode-bidi",

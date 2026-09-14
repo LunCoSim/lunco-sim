@@ -19,7 +19,7 @@ use lunco_luncosim_edit_core::SpawnState;
 use lunco_scene_selection::SelectedEntities;
 use lunco_usd_bevy_core::UsdStageAsset;
 use lunco_usd_bevy_scene::UsdPrimPath;
-use lunco_usd_ui::viewport::{UsdPreviewId, UsdViewportState};
+use lunco_usd_viewport_ui::{UsdPreviewId, UsdViewportState};
 
 /// Component marking an entity as currently selected.
 #[derive(Component)]
@@ -73,10 +73,14 @@ impl lunco_api::queries::ApiQueryProvider for InspectSelectionProvider {
 /// Modifier decoding belongs at the pointer boundary; selection mutation then
 /// consumes this enum so every input surface shares one contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SelectionIntent {
+pub enum SelectionIntent {
+    /// Replace the current selection with the target.
     Replace,
+    /// Add the target while retaining the current selection.
     Extend,
+    /// Toggle the target in the current selection.
     Toggle,
+    /// Remove the target from the current selection.
     Remove,
 }
 
@@ -119,9 +123,11 @@ fn usd_selection_intent(extend: bool, toggle: bool) -> SelectionIntent {
 /// the concrete entity. This preserves the shared selection mutation without
 /// exposing a mutable `World` to UI code.
 #[derive(Event, Clone, Copy)]
-pub(crate) struct SelectEntityTarget {
-    pub(crate) target: Entity,
-    pub(crate) intent: SelectionIntent,
+pub struct SelectEntityTarget {
+    /// Entity selected by the editor gesture.
+    pub target: Entity,
+    /// Semantic selection operation to apply.
+    pub intent: SelectionIntent,
 }
 
 pub(crate) fn on_select_entity_target(
@@ -152,7 +158,7 @@ pub(crate) fn on_select_entity_target(
 /// The nearest prim-backed ancestor is the selection target, which keeps a
 /// generated visual mesh attached to the authored USD prim it represents.
 pub(crate) fn on_usd_viewport_click(
-    trigger: On<lunco_usd_ui::viewport::UsdViewportClick>,
+    trigger: On<lunco_usd_viewport_ui::UsdViewportClick>,
     viewport: Res<UsdViewportState>,
     q_cameras: Query<(&Camera, &GlobalTransform)>,
     q_paths: Query<&UsdPrimPath>,
@@ -826,7 +832,7 @@ pub fn compute_selection_aabb(
         (&GlobalTransform, &Aabb),
         (
             With<Mesh3d>,
-            Without<lunco_celestial::TrajectoryMeshMarker>,
+            Without<lunco_celestial_spatial::TrajectoryMeshMarker>,
             Without<lunco_core::programs::ProgramDriverId>,
             Without<lunco_core::NoSelectionBounds>,
         ),
@@ -837,7 +843,7 @@ pub fn compute_selection_aabb(
         Or<(
             With<big_space::prelude::Grid>,
             With<big_space::prelude::CellCoord>,
-            With<lunco_celestial::TrajectoryMeshMarker>,
+            With<lunco_celestial_spatial::TrajectoryMeshMarker>,
             With<lunco_core::programs::ProgramDriverId>,
             With<lunco_core::NoSelectionBounds>,
         )>,
@@ -895,7 +901,7 @@ pub fn draw_selection_bounds(
         (&GlobalTransform, &Aabb),
         (
             With<Mesh3d>,
-            Without<lunco_celestial::TrajectoryMeshMarker>,
+            Without<lunco_celestial_spatial::TrajectoryMeshMarker>,
             Without<lunco_core::programs::ProgramDriverId>,
             Without<lunco_core::NoSelectionBounds>,
         ),
@@ -906,7 +912,7 @@ pub fn draw_selection_bounds(
         Or<(
             With<big_space::prelude::Grid>,
             With<big_space::prelude::CellCoord>,
-            With<lunco_celestial::TrajectoryMeshMarker>,
+            With<lunco_celestial_spatial::TrajectoryMeshMarker>,
             With<lunco_core::programs::ProgramDriverId>,
             With<lunco_core::NoSelectionBounds>,
         )>,
@@ -1389,7 +1395,7 @@ mod tests {
 
         let mut q = app.world_mut().query_filtered::<Entity, (
             With<Mesh3d>,
-            Without<lunco_celestial::TrajectoryMeshMarker>,
+            Without<lunco_celestial_spatial::TrajectoryMeshMarker>,
             Without<lunco_core::programs::ProgramDriverId>,
             Without<lunco_core::NoSelectionBounds>,
         )>();
@@ -1440,7 +1446,7 @@ mod tests {
             .world_mut()
             .query_filtered::<(&GlobalTransform, &Aabb), (
                 With<Mesh3d>,
-                Without<lunco_celestial::TrajectoryMeshMarker>,
+                Without<lunco_celestial_spatial::TrajectoryMeshMarker>,
                 Without<lunco_core::programs::ProgramDriverId>,
                 Without<lunco_core::NoSelectionBounds>,
             )>();
@@ -1448,7 +1454,7 @@ mod tests {
         let mut state_skip = app.world_mut().query_filtered::<(), Or<(
             With<big_space::prelude::Grid>,
             With<big_space::prelude::CellCoord>,
-            With<lunco_celestial::TrajectoryMeshMarker>,
+            With<lunco_celestial_spatial::TrajectoryMeshMarker>,
             With<lunco_core::programs::ProgramDriverId>,
             With<lunco_core::NoSelectionBounds>,
         )>>();
@@ -1502,7 +1508,7 @@ mod tests {
             .world_mut()
             .query_filtered::<(&GlobalTransform, &Aabb), (
                 With<Mesh3d>,
-                Without<lunco_celestial::TrajectoryMeshMarker>,
+                Without<lunco_celestial_spatial::TrajectoryMeshMarker>,
                 Without<lunco_core::programs::ProgramDriverId>,
                 Without<lunco_core::NoSelectionBounds>,
             )>();
@@ -1510,7 +1516,7 @@ mod tests {
         let mut state_skip = app.world_mut().query_filtered::<(), Or<(
             With<big_space::prelude::Grid>,
             With<big_space::prelude::CellCoord>,
-            With<lunco_celestial::TrajectoryMeshMarker>,
+            With<lunco_celestial_spatial::TrajectoryMeshMarker>,
             With<lunco_core::programs::ProgramDriverId>,
             With<lunco_core::NoSelectionBounds>,
         )>>();

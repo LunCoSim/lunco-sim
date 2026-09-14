@@ -70,7 +70,7 @@ pub fn resolve_camera_mounts(
 
         // Nested under a moving prim → find the mount's enclosing grid through
         // the canonical BigSpace hierarchy resolver.
-        let Some((grid, _)) = lunco_core::coords::ancestor_grid(parent, &q_parents, &q_grids)
+        let Some((grid, _)) = lunco_spatial::coords::ancestor_grid(parent, &q_parents, &q_grids)
         else {
             continue;
         };
@@ -84,10 +84,10 @@ pub fn resolve_camera_mounts(
                 mount: parent,
                 offset: *tf,
             },
-            lunco_core::GridAnchor,
+            lunco_spatial::GridAnchor,
             CameraMountResolved,
         ));
-        lunco_core::attach::migrate_to_grid(&mut commands, cam, grid, CellCoord::default(), *tf);
+        lunco_spatial::attach::migrate_to_grid(&mut commands, cam, grid, CellCoord::default(), *tf);
         info!("[camera] {cam:?} mounted on {parent:?} → grid-direct follower");
     }
 }
@@ -116,11 +116,11 @@ pub fn follow_mounted_cameras(
 ) {
     for (camera, mounted, mut cell, mut tf, child_of) in q_cam.iter_mut() {
         let Some((mount_grid_entity, mount_grid)) =
-            lunco_core::coords::ancestor_grid(mounted.mount, &q_parents, &q_grids)
+            lunco_spatial::coords::ancestor_grid(mounted.mount, &q_parents, &q_grids)
         else {
             continue;
         };
-        let Some((mount_position, mount_rotation)) = lunco_core::coords::grid_relative_pose(
+        let Some((mount_position, mount_rotation)) = lunco_spatial::coords::grid_relative_pose(
             mounted.mount,
             mount_grid_entity,
             &q_parents,
@@ -143,7 +143,7 @@ pub fn follow_mounted_cameras(
         // Follow a mount that migrates grids as one atomic BigSpace operation.
         // The parent, cell, and local transform must never be observed apart.
         if child_of.parent() != mount_grid_entity {
-            lunco_core::attach::migrate_to_grid(
+            lunco_spatial::attach::migrate_to_grid(
                 &mut commands,
                 camera,
                 mount_grid_entity,
@@ -311,7 +311,7 @@ mod tests {
         )> = bevy::ecs::system::SystemState::new(world);
         let (parents, grids, spatial) = state.get(world).unwrap();
         let (mount_position, mount_rotation) =
-            lunco_core::coords::grid_relative_pose(rover, grid, &parents, &grids, &spatial)
+            lunco_spatial::coords::grid_relative_pose(rover, grid, &parents, &grids, &spatial)
                 .unwrap();
         let expected_position = mount_position + mount_rotation * offset.translation.as_dvec3();
         let expected_rotation = mount_rotation * offset.rotation.as_dquat();

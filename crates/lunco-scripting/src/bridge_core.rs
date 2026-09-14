@@ -48,13 +48,16 @@ use lunco_api::queries::{ApiQueryRegistry, ApiVisibility};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::ApiResponse;
 use lunco_core::{
-    coords::{GridPos, VehicleFrame},
-    CelestialBody, CommandResults, GlobalEntityId, NavigationCommand, OpId, SessionId, Severity,
-    SimTick, SteeringGeometry, TelemetryEvent, TelemetryValue,
+    CelestialBody, CommandResults, GlobalEntityId, OpId, SessionId, Severity, SimTick,
+    TelemetryEvent, TelemetryValue,
 };
 use lunco_core_session::{authorize, CommandPolicyRegistry, SessionRbac, SessionRegistry};
 use lunco_physics::PhysicsTime;
 use lunco_time::{Clocks, MissionClock, ResolvedDomains, TimeTransport, WorldTime};
+use lunco_spatial::{
+    coords::{GridPos, VehicleFrame},
+    NavigationCommand, SteeringGeometry,
+};
 
 // ── Native value construction ──────────────────────────────────────────────
 
@@ -869,10 +872,10 @@ pub fn geolocation(gid: u64) -> Option<lunco_celestial::Geodetic> {
             Query<(Option<&CellCoord>, &Transform)>,
             Query<(Entity, &lunco_celestial::GeodeticAnchor), With<lunco_celestial::SiteAnchor>>,
             Res<lunco_celestial::CelestialBodyRegistry>,
-            Res<lunco_celestial::ReferenceFrameIndex>,
+            Res<lunco_celestial_spatial::ReferenceFrameIndex>,
         )> = SystemState::new(world);
         let (q_parents, q_grids, q_spatial, q_site, bodies, frame_index) = state.get(world).ok()?;
-        lunco_celestial::resolve_surface_pose(
+        lunco_celestial_spatial::resolve_surface_pose(
             entity,
             &q_site,
             &bodies,
@@ -917,7 +920,7 @@ pub fn navigation_command(
         };
         let target = GridPos(target);
         let fwd = VehicleFrame::forward(rotation).as_vec3();
-        lunco_core::nav_setpoint(pos, fwd, target, speed, radius, geometry)
+        lunco_spatial::nav_setpoint(pos, fwd, target, speed, radius, geometry)
     })
     .flatten()
 }
@@ -1975,13 +1978,13 @@ mod tests {
     #[test]
     fn script_pose_reads_share_the_active_frame_below_rotating_ancestors() {
         let mut world = World::new();
-        let world_grid = lunco_core::ensure_world_root(&mut world);
-        world.insert_resource(lunco_core::ActivePhysicsFrame(world_grid));
+        let world_grid = lunco_spatial::ensure_world_root(&mut world);
+        world.insert_resource(lunco_spatial::ActivePhysicsFrame(world_grid));
         world.init_resource::<ApiEntityRegistry>();
-        let root = world.resource::<lunco_core::ActivePhysicsFrame>().0;
+        let root = world.resource::<lunco_spatial::ActivePhysicsFrame>().0;
         let body = world
             .spawn((
-                lunco_core::WorldGridConfig::default().grid(),
+                lunco_spatial::WorldGridConfig::default().grid(),
                 CellCoord::new(100_000, -2_000, 40_000),
                 Transform::from_rotation(Quat::from_rotation_x(0.9)),
                 ChildOf(root),
@@ -1989,13 +1992,13 @@ mod tests {
             .id();
         let site = world
             .spawn((
-                lunco_core::WorldGridConfig::default().grid(),
+                lunco_spatial::WorldGridConfig::default().grid(),
                 CellCoord::new(800, -950, 300),
                 Transform::from_rotation(Quat::from_rotation_z(-0.7)),
                 ChildOf(body),
             ))
             .id();
-        world.insert_resource(lunco_core::ActivePhysicsFrame(site));
+        world.insert_resource(lunco_spatial::ActivePhysicsFrame(site));
         let local_position = DVec3::new(14.0, -1_901.5, -8.0);
         let local_rotation = DQuat::from_rotation_y(0.35);
         let entity = world

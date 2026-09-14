@@ -105,7 +105,7 @@ fn resolve(reference: &str) -> Result<PathBuf, String> {
     if as_given.is_file() {
         return Ok(as_given.to_path_buf());
     }
-    match lunco_assets::engine_asset_local_path(reference) {
+    match lunco_assets_core::engine_asset_local_path(reference) {
         Some(p) if p.is_file() => Ok(p),
         Some(p) => Err(format!(
             "file not found: `{reference}` (tried as given, then {})",
@@ -276,7 +276,7 @@ fn resolve_twin_root(reference: &str) -> Result<PathBuf, String> {
     if as_given.is_dir() {
         return Ok(as_given.to_path_buf());
     }
-    match lunco_assets::engine_asset_local_path(reference) {
+    match lunco_assets_core::engine_asset_local_path(reference) {
         Some(path) if path.is_dir() => Ok(path),
         Some(path) => Err(format!(
             "Twin folder not found: `{reference}` (resolved `{}` is not a directory)",
@@ -489,7 +489,9 @@ fn validate_usda(reference: &str, path: &Path, text: &str) -> ValidationReport {
     // The physics projection the `lint.usd` rules read — the SAME complete facts
     // the live lint command hands them, including USD-sim gear drives, so a rule
     // cannot pass here and fire at load, or the reverse.
-    report.lint_facts = Some(crate::lint_command::usd_physics_facts(&view));
+    let (lint_facts, control_binding_info) =
+        crate::lint_command::usd_physics_facts_with_control_info(&view);
+    report.lint_facts = Some(lint_facts);
 
     // Every composed wheel must satisfy the ONE reader both wheel kinds spawn
     // through — `Err(missing)` here is exactly the refusal the spawner logs.
@@ -540,44 +542,9 @@ fn validate_usda(reference: &str, path: &Path, text: &str) -> ValidationReport {
             }
         }
     }
-    // Every control binding's intent must be one `parse_user_intent` knows.
-    let mut control_bindings = Vec::new();
-    for prim in view.prim_paths() {
-        if !is_controls_scope(&view, &prim) {
-            continue;
-        }
-        for bind in view.children(&prim) {
-            let Some(name) = bind.name() else { continue };
-            if lunco_core::parse_user_intent(name).is_some() {
-                control_bindings.push(json!({
-                    "prim": bind.as_str(),
-                    "intent": name,
-                    // `text` not `scalar::<String>`: a port may be authored as a
-                    // `string` or a `token` and those are distinct sdf values.
-                    "port": view.text(&bind, "lunco:port"),
-                }));
-                continue;
-            }
-            let hint = match closest_intent(name) {
-                Some(s) => format!(" — did you mean `{s}`?"),
-                None => String::new(),
-            };
-            report.errors.push(format!(
-                "control binding {} names `{name}`, which is not a control intent — \
-                 the loader skips it, so this binding never actuates anything{hint}",
-                bind.as_str()
-            ));
-            control_bindings.push(json!({
-                "prim": bind.as_str(),
-                "intent": name,
-                "ok": false,
-            }));
-        }
-    }
-
     report.info = json!({
         "wheel_prims": wheel_prims,
-        "control_bindings": control_bindings,
+        "control_bindings": control_binding_info,
     });
     report.finish()
 }
@@ -589,69 +556,11 @@ fn validate_usda(reference: &str, path: &Path, text: &str) -> ValidationReport {
 /// the crate directory, so use the compile-time workspace layout only when the
 /// runtime root is absent.
 pub(crate) fn engine_assets_root() -> PathBuf {
-    let runtime_root = lunco_assets::assets_dir_abs();
+    let runtime_root = lunco_assets_core::assets_dir_abs();
     if runtime_root.is_dir() {
         return runtime_root;
     }
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets")
-}
-
-/// A prim whose children carry intent→port bindings. Named `Controls` is the
-/// form a vessel composes (`lunco-usd-bevy` matches exactly that name), but the
-/// shared profiles in `vessels/control_profiles.usda` are `RoverControls` /
-/// `LanderControls` — validating THAT file is the point, since a typo authored
-/// once there reaches every vessel referencing it. So the shape decides, not the
-/// name: a scope is any prim with a child that authors `lunco:port`.
-fn is_controls_scope(view: &impl UsdRead, prim: &openusd::sdf::Path) -> bool {
-    view.children(prim)
-        .iter()
-        .any(|c| c.name().is_some() && view.attr_names(c).iter().any(|a| a == "lunco:port"))
-}
-
-/// Canonical names [`lunco_core::parse_user_intent`] accepts. Used ONLY to suggest a
-/// correction: the check itself calls `parse_user_intent`, never this list, so a
-/// stale entry can never accept or reject a binding — only make a hint worse.
-/// `intent_spellings_all_parse` pins every entry against the real parser.
-const INTENT_SPELLINGS: &[&str] = &[
-    "forward",
-    "backward",
-    "left",
-    "right",
-    "yaw_left",
-    "yaw_right",
-    "action",
-    "thrust",
-    "release",
-    "switch_mode",
-    "pause",
-    "cancel",
-];
-
-/// Nearest accepted spelling, when the name is close enough to be a typo rather
-/// than a different word. `None` suppresses the hint.
-fn closest_intent(name: &str) -> Option<&'static str> {
-    let lower = name.trim().to_ascii_lowercase();
-    let (best, dist) = INTENT_SPELLINGS
-        .iter()
-        .map(|c| (*c, edit_distance(&lower, c)))
-        .min_by_key(|(_, d)| *d)?;
-    (dist <= 2 && dist < lower.len()).then_some(best)
-}
-
-/// Levenshtein distance, two-row DP.
-fn edit_distance(a: &str, b: &str) -> usize {
-    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
-    let mut prev: Vec<usize> = (0..=b.len()).collect();
-    let mut cur = vec![0usize; b.len() + 1];
-    for (i, ca) in a.iter().enumerate() {
-        cur[0] = i + 1;
-        for (j, cb) in b.iter().enumerate() {
-            let sub = prev[j] + usize::from(ca != cb);
-            cur[j + 1] = sub.min(prev[j + 1] + 1).min(cur[j] + 1);
-        }
-        std::mem::swap(&mut prev, &mut cur);
-    }
-    prev[b.len()]
 }
 
 // ─── .wgsl ──────────────────────────────────────────────────────────────────
@@ -959,10 +868,10 @@ fn validate_sysml_reference(world: &World, reference: &str) -> ValidationReport 
             return validate_sysml_twin(world, name, reference);
         }
     }
-    let Some((name, relative)) = lunco_assets::parse_twin_uri(reference) else {
+    let Some((name, relative)) = lunco_assets_core::parse_twin_uri(reference) else {
         return validate_asset(reference);
     };
-    let Some(roots) = world.get_resource::<lunco_assets::TwinRoots>() else {
+    let Some(roots) = world.get_resource::<lunco_assets_core::TwinRoots>() else {
         return ValidationReport::new(reference, "sysml")
             .error("ValidateSysml twin:// requires the TwinRoots asset registry");
     };
@@ -996,7 +905,7 @@ fn validate_sysml_reference(world: &World, reference: &str) -> ValidationReport 
 }
 
 fn validate_sysml_twin(world: &World, name: &str, reference: &str) -> ValidationReport {
-    let Some(roots) = world.get_resource::<lunco_assets::TwinRoots>() else {
+    let Some(roots) = world.get_resource::<lunco_assets_core::TwinRoots>() else {
         return ValidationReport::new(reference, "sysml")
             .error("ValidateSysml twin:// requires the TwinRoots asset registry");
     };
@@ -1045,7 +954,7 @@ fn validate_sysml_twin(world: &World, name: &str, reference: &str) -> Validation
                     .error(format!("cannot read {}: {error}", path.display()));
             }
         };
-        let logical = lunco_assets::twin_uri(name, &relative);
+        let logical = lunco_assets_core::twin_uri(name, &relative);
         revision_input.extend_from_slice(logical.as_bytes());
         revision_input.push(0);
         revision_input.extend_from_slice(text.as_bytes());
@@ -1151,35 +1060,6 @@ mod tests {
         path
     }
 
-    /// A control scope whose children are named `intent`, one per line.
-    fn controls_usda(intents: &[&str]) -> String {
-        let mut s = String::from("#usda 1.0\n\ndef \"RoverControls\"\n{\n");
-        for i in intents {
-            s.push_str(&format!(
-                "    def \"{i}\"\n    {{\n        uniform string lunco:port = \"throttle\"\n        uniform double lunco:factor = 1\n    }}\n"
-            ));
-        }
-        s.push_str("}\n");
-        s
-    }
-
-    #[test]
-    fn valid_control_profile_produces_no_diagnostics() {
-        let path = temp_usda(
-            "valid_profile.usda",
-            &controls_usda(&["forward", "backward", "left", "right", "thrust"]),
-        );
-        let report = validate_asset(path.to_str().unwrap());
-        assert!(report.ok, "{:?}", report.errors);
-        // NOT vacuous: the scope must actually have been walked. Without this the
-        // test would still pass if `is_controls_scope` never matched anything.
-        let found = report.info["control_bindings"]
-            .as_array()
-            .expect("control_bindings in info")
-            .len();
-        assert_eq!(found, 5, "{:?}", report.info);
-    }
-
     #[test]
     fn external_twin_scene_resolves_lunco_references_for_preflight() {
         let path = temp_usda(
@@ -1195,36 +1075,6 @@ def Xform \"Battery\" (\n\
             "an external Twin gets the same lunco:// mount as runtime: {:?}",
             report.errors
         );
-    }
-
-    #[test]
-    fn misspelled_intent_is_reported_once_with_a_suggestion() {
-        let path = temp_usda(
-            "typo_profile.usda",
-            &controls_usda(&["forwrad", "backward", "left", "right", "action"]),
-        );
-        let report = validate_asset(path.to_str().unwrap());
-        assert!(!report.ok, "a misspelled intent must fail validation");
-        let hits: Vec<&String> = report
-            .errors
-            .iter()
-            .filter(|e| e.contains("not a control intent"))
-            .collect();
-        assert_eq!(hits.len(), 1, "{:?}", report.errors);
-        assert!(hits[0].contains("forwrad"), "{}", hits[0]);
-        assert!(hits[0].contains("did you mean `forward`"), "{}", hits[0]);
-    }
-
-    /// The suggestion table is a MIRROR of `parse_user_intent`, never an
-    /// authority. If an entry stops parsing, the mirror has drifted.
-    #[test]
-    fn intent_spellings_all_parse() {
-        for s in INTENT_SPELLINGS {
-            assert!(
-                lunco_core::parse_user_intent(s).is_some(),
-                "`{s}` is no longer an accepted intent spelling"
-            );
-        }
     }
 
     #[test]

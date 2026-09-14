@@ -4,7 +4,7 @@
 //!
 //! ## Native
 //!
-//! If [`lunco_assets::msl_source_root_path`] returns a path, we use it and
+//! If [`lunco_assets_core::msl_source_root_path`] returns a path, we use it and
 //! build the editor index in the background. If it is absent, the generic
 //! dataset registry owns the explicit download; this plugin never opens a
 //! native network connection.
@@ -14,7 +14,7 @@
 //! The Settings menu can start a `wasm_bindgen_futures::spawn_local` task that:
 //!
 //! 1. `fetch`es `msl/manifest.json` (same-origin).
-//! 2. Parses it into [`lunco_assets::msl::MslManifest`].
+//! 2. Parses it into [`lunco_assets_core::msl::MslManifest`].
 //! 3. `fetch`es the compressed bundles named in the manifest.
 //! 4. Verifies bundle sizes and artifact tags.
 //! 5. Transfers compressed Modelica work to the Web Worker; the worker owns
@@ -32,7 +32,7 @@ use bevy::prelude::*;
 
 #[cfg(not(target_arch = "wasm32"))]
 use lunco_assets::datasets::{DatasetRegistry, DatasetState};
-use lunco_assets::msl::{MslAssetSource, MslLoadPhase, MslLoadState};
+use lunco_assets_core::msl::{MslAssetSource, MslLoadPhase, MslLoadState};
 
 /// Process-wide pre-parsed MSL documents. Populated on wasm by the
 /// chunked parse driver once the full bundle has been turned into
@@ -96,7 +96,7 @@ pub fn parsed_msl_bundle(
         if let Some(bundle) = GLOBAL_PARSED_MSL.get() {
             return Some(bundle);
         }
-        let bundle_path = lunco_assets::msl_dir().join("parsed-msl.bin");
+        let bundle_path = lunco_assets_core::msl_dir().join("parsed-msl.bin");
         // The bundle is zstd-compressed bincode (~10× smaller on disk than the
         // raw bincode it replaced). A stale/foreign bundle that fails to decode
         // returns `Err` below → the caller cold-parses and rewrites it. The
@@ -220,7 +220,7 @@ pub fn deserialize_parsed_bundle(
 pub fn load_msl_index_from_source_bundle(
     compressed: &[u8],
 ) -> Result<crate::visual_diagram::MslIndex, String> {
-    let files = lunco_assets::web_fetch::unpack_tar_zst(compressed, 1)?;
+    let files = lunco_assets_core::web_fetch::unpack_tar_zst(compressed, 1)?;
     let bytes = files
         .get(std::path::Path::new("msl_index.json"))
         .ok_or_else(|| "source bundle has no generated msl_index.json".to_string())?;
@@ -393,11 +393,11 @@ fn drive_msl_main_decode(mut state: ResMut<MslLoadState>) {
 // second freeze. Image/icon loading is disabled on wasm, so nothing else needs
 // it at boot.
 #[cfg(target_arch = "wasm32")]
-static MSL_SOURCE_COMPRESSED: OnceLock<(Vec<u8>, lunco_assets::msl::MslBundleEntry)> =
+static MSL_SOURCE_COMPRESSED: OnceLock<(Vec<u8>, lunco_assets_core::msl::MslBundleEntry)> =
     OnceLock::new();
 
 #[cfg(target_arch = "wasm32")]
-fn stash_compressed_source(bytes: Vec<u8>, meta: lunco_assets::msl::MslBundleEntry) {
+fn stash_compressed_source(bytes: Vec<u8>, meta: lunco_assets_core::msl::MslBundleEntry) {
     let _ = MSL_SOURCE_COMPRESSED.set((bytes, meta));
 }
 
@@ -416,7 +416,7 @@ fn sources_with_extras(primary: MslAssetSource) -> Vec<MslAssetSource> {
         if matches!(sources[0], MslAssetSource::Filesystem(_)) {
             for (subdir, _pkg) in crate::package_tree::scanner::discover_third_party_libs() {
                 sources.push(MslAssetSource::Filesystem(
-                    lunco_assets::cache_dir().join(subdir),
+                    lunco_assets_core::cache_dir().join(subdir),
                 ));
             }
         }
@@ -430,17 +430,17 @@ fn sources_with_extras(primary: MslAssetSource) -> Vec<MslAssetSource> {
 /// unpacked or if no compressed source was stashed.
 #[cfg(target_arch = "wasm32")]
 pub fn ensure_msl_source_unpacked() {
-    if lunco_assets::msl::has_msl_source() {
+    if lunco_assets_core::msl::has_msl_source() {
         return;
     }
     let Some((bytes, meta)) = MSL_SOURCE_COMPRESSED.get() else {
         return;
     };
-    match lunco_assets::web_fetch::unpack_tar_zst(bytes, meta.file_count) {
+    match lunco_assets_core::web_fetch::unpack_tar_zst(bytes, meta.file_count) {
         Ok(files) => {
             let n = files.len();
-            lunco_assets::msl::install_global_msl_sources(sources_with_extras(
-                MslAssetSource::InMemory(Arc::new(lunco_assets::msl::MslInMemory { files })),
+            lunco_assets_core::msl::install_global_msl_sources(sources_with_extras(
+                MslAssetSource::InMemory(Arc::new(lunco_assets_core::msl::MslInMemory { files })),
             ));
             info!("[MSL] source bundle unpacked lazily ({n} files) for drill-in");
         }
@@ -625,7 +625,7 @@ impl Plugin for MslRemotePlugin {
                 }
             });
 
-            let resolved_root = override_root.or_else(lunco_assets::msl_source_root_path);
+            let resolved_root = override_root.or_else(lunco_assets_core::msl_source_root_path);
 
             if let Some(root) = resolved_root {
                 let count = count_mo_files(&root);
@@ -634,7 +634,7 @@ impl Plugin for MslRemotePlugin {
                     "[MSL] using on-disk root {} ({count} .mo files)",
                     root.display()
                 );
-                lunco_assets::msl::install_global_msl_sources(sources_with_extras(
+                lunco_assets_core::msl::install_global_msl_sources(sources_with_extras(
                     MslAssetSource::Filesystem(root.clone()),
                 ));
                 app.insert_resource(NativeMslIndexLoad::new());
@@ -733,9 +733,9 @@ impl NativeMslIndexLoad {
 fn native_index_resources(root: std::path::PathBuf) -> NativeMslInstallSlot {
     let slot: NativeInstallSlot = Arc::new(Mutex::new(NativeInstallSlotInner::default()));
     let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    lunco_assets::msl::install_global_msl_sources(sources_with_extras(MslAssetSource::Filesystem(
-        root.clone(),
-    )));
+    lunco_assets_core::msl::install_global_msl_sources(sources_with_extras(
+        MslAssetSource::Filesystem(root.clone()),
+    ));
     spawn_native_index(slot.clone(), root, cancel.clone());
     NativeMslInstallSlot {
         state: slot,
@@ -848,7 +848,7 @@ fn on_native_msl_index_action(
     {
         return;
     }
-    let Some(root) = lunco_assets::msl_source_root_path() else {
+    let Some(root) = lunco_assets_core::msl_source_root_path() else {
         return;
     };
     if let Some(existing) = existing {
@@ -922,14 +922,14 @@ fn drive_native_msl_dataset(
             if index_load.as_ref().is_some_and(|load| load.failed) {
                 return;
             }
-            let Some(root) = lunco_assets::msl_source_root_path() else {
+            let Some(root) = lunco_assets_core::msl_source_root_path() else {
                 *state = MslLoadState::Failed(
                     "dataset is installed but no Modelica/ tree exists in the cache".into(),
                 );
                 return;
             };
             if root.join("msl_index.json").is_file() {
-                lunco_assets::msl::install_global_msl_sources(sources_with_extras(
+                lunco_assets_core::msl::install_global_msl_sources(sources_with_extras(
                     MslAssetSource::Filesystem(root.clone()),
                 ));
                 *state = MslLoadState::Ready {
@@ -1044,7 +1044,7 @@ struct SlotInner {
     pending_parsed_compressed: Option<Vec<u8>>,
     /// Raw **compressed** `sources-*.tar.zst` bytes + their manifest entry,
     /// stashed for lazy unpack on first editor drill-in.
-    pending_source_compressed: Option<(Vec<u8>, lunco_assets::msl::MslBundleEntry)>,
+    pending_source_compressed: Option<(Vec<u8>, lunco_assets_core::msl::MslBundleEntry)>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1141,8 +1141,8 @@ mod web {
     use super::*;
     use std::collections::HashSet;
 
-    use lunco_assets::msl::MslManifest;
-    use lunco_assets::web_fetch;
+    use lunco_assets_core::msl::MslManifest;
+    use lunco_assets_core::web_fetch;
     use wasm_bindgen::prelude::*;
 
     pub(super) async fn run_fetcher(slot: SharedSlot, settings: lunco_settings::DownloadSettings) {
@@ -1226,11 +1226,11 @@ mod web {
             ));
         }
 
-        if manifest.rumoca_artifact_tag != lunco_assets::msl::EXPECTED_RUMOCA_ARTIFACT_TAG {
+        if manifest.rumoca_artifact_tag != lunco_assets_core::msl::EXPECTED_RUMOCA_ARTIFACT_TAG {
             return Err(format!(
                 "MSL parsed artifact tag `{}` does not match runtime `{}`; rebuild the MSL bundle",
                 manifest.rumoca_artifact_tag,
-                lunco_assets::msl::EXPECTED_RUMOCA_ARTIFACT_TAG,
+                lunco_assets_core::msl::EXPECTED_RUMOCA_ARTIFACT_TAG,
             ));
         }
         let parsed_meta = &manifest.parsed;

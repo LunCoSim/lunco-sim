@@ -8,19 +8,14 @@
 //! SPICE, or Orekit), LunCoSim uses the **NAIF ID** system (e.g., 399 for
 //! Earth, 301 for the Moon).
 //!
-//! ## Reference Frame Anchoring
-//! [`ReferenceFrame`] is the semantic tag on every celestial [`big_space`]
-//! grid. It states both the centre and the orientation of the coordinates
-//! encoded by that grid.
-//! All physics and rendering calculations within a body's [SOI] are
-//! calculated relative to this frame, effectively implementing the
-//! **Heliocentric -> Geocentric -> Body-Fixed** transition hierarchy
-//! required for long-duration spaceflight.
+//! ## Reference Frame Semantics
+//! [`ReferenceFrame`] states the centre and orientation of a coordinate value.
+//! A scene or spatial adapter may associate that semantic value with its own
+//! storage representation, but the analytical catalog does not own that
+//! representation.
 
 use bevy::math::DVec3;
 use bevy::prelude::*;
-use big_space::prelude::Grid;
-use std::collections::{HashMap, HashSet};
 
 use crate::iau::IauRotation;
 
@@ -66,14 +61,14 @@ pub use lunco_core::CelestialBody;
 /// history. Do not re-type the value anywhere.
 pub use lunco_core::MOON_MEAN_RADIUS_M;
 
-/// Semantic identity of a celestial [`big_space`] grid.
+/// Semantic identity of a celestial coordinate frame.
 ///
-/// A grid is only a precision encoding; this component says what its numbers
-/// mean. The centre and orientation are deliberately one value so a grid
-/// cannot simultaneously acquire conflicting "fixed" and "inertial" tags.
-/// User-facing placement declares one of these frames; engine code resolves
-/// it to a concrete grid and performs the f64 transform before the final
-/// BigSpace cell/local split.
+/// Runtime adapters may associate this identity with their own storage
+/// hierarchy. The centre and orientation are deliberately one value so a
+/// frame cannot simultaneously acquire conflicting "fixed" and "inertial"
+/// tags. User-facing placement declares one of these frames; engine code
+/// resolves it and performs the f64 transform before handing the result to a
+/// runtime representation.
 #[derive(
     Component,
     Debug,
@@ -88,7 +83,7 @@ pub use lunco_core::MOON_MEAN_RADIUS_M;
 )]
 #[reflect(Component)]
 pub enum ReferenceFrame {
-    /// The persistent BigSpace root used by scenes with no celestial frame.
+    /// The persistent world frame used by scenes with no celestial frame.
     /// This is a real semantic frame, not an implicit "whatever grid happens
     /// to be current" fallback.
     World,
@@ -138,106 +133,6 @@ pub fn inherited_reference_frame(
         current = q_parents.get(current).ok()?.parent();
     }
     None
-}
-
-/// Event-maintained map from semantic frames to their one concrete BigSpace
-/// grid. Consumers request a frame; they never search hierarchy markers or
-/// choose a parent entity themselves.
-///
-/// Duplicate declarations are deliberately unresolved. Picking the first one
-/// would make camera, networking and trajectory placement depend on archetype
-/// order.
-#[derive(Resource, Debug, Default)]
-pub struct ReferenceFrameIndex {
-    grids: HashMap<ReferenceFrame, Entity>,
-    ambiguous: HashSet<ReferenceFrame>,
-    /// Changes whenever a frame/grid declaration changes. Consumers use this
-    /// as an event revision instead of rescanning the hierarchy each frame.
-    pub(crate) revision: u64,
-}
-
-impl ReferenceFrameIndex {
-    /// The unique grid for `frame`, or `None` when absent or duplicated.
-    pub fn resolve(&self, frame: ReferenceFrame) -> Option<Entity> {
-        if self.ambiguous.contains(&frame) {
-            None
-        } else {
-            self.grids.get(&frame).copied()
-        }
-    }
-}
-
-/// Convert a pose between named semantic frames without exposing concrete
-/// BigSpace grids to the caller.
-///
-/// Missing and ambiguous frame declarations fail closed. The conversion is
-/// f64 hierarchy composition over the concrete BigSpace projection;
-/// `(CellCoord, Transform)` splitting happens only after the receiver has
-/// selected its own local mount. Authoritative analytical conversion between
-/// celestial frames remains the job of [`crate::transform::FrameTree`].
-pub fn transform_pose_between_reference_frames<F: bevy::ecs::query::QueryFilter>(
-    position: DVec3,
-    rotation: bevy::math::DQuat,
-    source: ReferenceFrame,
-    target: ReferenceFrame,
-    index: &ReferenceFrameIndex,
-    q_parents: &Query<&ChildOf>,
-    q_grids: &Query<&Grid>,
-    q_spatial: &Query<(Option<&big_space::prelude::CellCoord>, &Transform), F>,
-) -> Option<(DVec3, bevy::math::DQuat)> {
-    let source_grid = index.resolve(source)?;
-    let target_grid = index.resolve(target)?;
-    lunco_core::coords::transform_pose_between_grids(
-        position,
-        rotation,
-        source_grid,
-        target_grid,
-        q_parents,
-        q_grids,
-        q_spatial,
-    )
-}
-
-/// Rebuild the tiny frame index only when frame/grid structure changes.
-pub fn update_reference_frame_index(
-    mut index: ResMut<ReferenceFrameIndex>,
-    changed: Query<
-        (),
-        Or<(
-            (
-                With<Grid>,
-                Or<(Added<ReferenceFrame>, Changed<ReferenceFrame>)>,
-            ),
-            (With<ReferenceFrame>, Added<Grid>),
-        )>,
-    >,
-    all: Query<(Entity, &ReferenceFrame), With<Grid>>,
-    mut removed_frames: RemovedComponents<ReferenceFrame>,
-    mut removed_grids: RemovedComponents<Grid>,
-) {
-    let removed_any = removed_frames.read().count() > 0 || removed_grids.read().count() > 0;
-    if changed.is_empty() && !removed_any {
-        return;
-    }
-
-    index.grids.clear();
-    index.ambiguous.clear();
-    for (entity, frame) in &all {
-        if index.grids.insert(*frame, entity).is_some() {
-            index.ambiguous.insert(*frame);
-        }
-    }
-    index.revision = index.revision.wrapping_add(1);
-    let ReferenceFrameIndex {
-        grids, ambiguous, ..
-    } = &mut *index;
-    grids.retain(|frame, _| !ambiguous.contains(frame));
-    for frame in ambiguous.iter() {
-        error!(
-            "[celestial] duplicate {:?} grids; semantic frame is unresolved",
-            frame
-        );
-    }
 }
 
 /// Static physical and orbital properties of a celestial body.
@@ -493,127 +388,5 @@ mod tests {
         ] {
             assert!(registry.get(id).is_some(), "missing built-in NAIF {id}");
         }
-    }
-
-    #[test]
-    fn duplicate_frame_grids_are_unresolved_until_ambiguity_is_removed() {
-        let mut app = App::new();
-        app.init_resource::<ReferenceFrameIndex>()
-            .add_systems(First, update_reference_frame_index);
-        let frame = ReferenceFrame::EclipticJ2000 {
-            center: ephemeris_id::MOON,
-        };
-        let first = app.world_mut().spawn((frame, Grid::default())).id();
-        app.update();
-        assert_eq!(
-            app.world().resource::<ReferenceFrameIndex>().resolve(frame),
-            Some(first)
-        );
-
-        let duplicate = app.world_mut().spawn((frame, Grid::default())).id();
-        app.update();
-        assert_eq!(
-            app.world().resource::<ReferenceFrameIndex>().resolve(frame),
-            None,
-            "duplicate semantic frames must not resolve by archetype order"
-        );
-
-        app.world_mut().despawn(duplicate);
-        app.update();
-        assert_eq!(
-            app.world().resource::<ReferenceFrameIndex>().resolve(frame),
-            Some(first)
-        );
-    }
-
-    #[test]
-    fn frame_index_tracks_grid_component_lifecycle() {
-        let mut app = App::new();
-        app.init_resource::<ReferenceFrameIndex>()
-            .add_systems(First, update_reference_frame_index);
-        let frame = ReferenceFrame::BodyFixed {
-            body: ephemeris_id::MOON,
-        };
-        let entity = app.world_mut().spawn(frame).id();
-
-        app.update();
-        assert_eq!(
-            app.world().resource::<ReferenceFrameIndex>().resolve(frame),
-            None,
-            "a semantic declaration without a BigSpace grid is not a usable frame"
-        );
-
-        app.world_mut().entity_mut(entity).insert(Grid::default());
-        app.update();
-        assert_eq!(
-            app.world().resource::<ReferenceFrameIndex>().resolve(frame),
-            Some(entity),
-            "adding the concrete grid must make the named frame resolvable"
-        );
-
-        app.world_mut().entity_mut(entity).remove::<Grid>();
-        app.update();
-        assert_eq!(
-            app.world().resource::<ReferenceFrameIndex>().resolve(frame),
-            None,
-            "removing the concrete grid must invalidate the index"
-        );
-    }
-
-    #[test]
-    fn named_frame_conversion_composes_translation_and_rotation_in_f64() {
-        let mut app = App::new();
-        app.init_resource::<ReferenceFrameIndex>()
-            .add_systems(First, update_reference_frame_index);
-        let world_frame = ReferenceFrame::World;
-        let lunar_frame = ReferenceFrame::BodyFixed {
-            body: ephemeris_id::MOON,
-        };
-        let root = app
-            .world_mut()
-            .spawn((world_frame, lunco_core::WorldGridConfig::default().grid()))
-            .id();
-        let root_grid = app.world().get::<Grid>(root).unwrap();
-        let origin = DVec3::new(384_000_000.25, -5.0, 7.0);
-        let (cell, translation) = root_grid.translation_to_grid(origin);
-        let axes = bevy::math::DQuat::from_rotation_y(0.5);
-        app.world_mut().spawn((
-            lunar_frame,
-            lunco_core::WorldGridConfig::default().grid(),
-            cell,
-            Transform::from_translation(translation).with_rotation(axes.as_quat()),
-            ChildOf(root),
-        ));
-        app.update();
-
-        let mut state: bevy::ecs::system::SystemState<(
-            Query<&ChildOf>,
-            Query<&Grid>,
-            Query<(Option<&big_space::prelude::CellCoord>, &Transform)>,
-        )> = bevy::ecs::system::SystemState::new(app.world_mut());
-        let (parents, grids, spatial) = state.get(app.world()).unwrap();
-        let local = DVec3::new(12.0, 3.0, -9.0);
-        let (world, rotation) = transform_pose_between_reference_frames(
-            local,
-            bevy::math::DQuat::IDENTITY,
-            lunar_frame,
-            world_frame,
-            app.world().resource::<ReferenceFrameIndex>(),
-            &parents,
-            &grids,
-            &spatial,
-        )
-        .expect("connected named frames");
-        // Stored BigSpace axes are f32. The shared conversion boundary restores
-        // the rigid-transform invariant by normalizing that projection once
-        // before applying it to both positions and orientations.
-        let projected_axes = axes.as_quat().as_dquat().normalize();
-        let expected = origin + projected_axes * local;
-        assert!(
-            (world - expected).length() < 1.0e-8,
-            "world={world:?} expected={expected:?} error={:?}",
-            world - expected
-        );
-        assert!(rotation.angle_between(projected_axes) < 1.0e-12);
     }
 }

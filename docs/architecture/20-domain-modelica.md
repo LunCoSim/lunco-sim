@@ -45,7 +45,12 @@ It owns BOM-preserving normalization, strict/recovering Rumoca parse wrappers,
 AST interface projections, and parse-time lint facts. It has no Bevy, document,
 worker, UI, or solver state. `lunco-modelica-core` owns the headless document,
 compiler, worker, and simulation seams; `lunco-modelica-ui` owns workbench
-presentation and the `lunica` application facade.
+ presentation and the `lunica` application facade. The reusable egui graphics
+renderer is isolated in [`lunco-modelica-icon-ui`](../../crates/lunco-modelica-icon-ui/);
+the diagram canvas and model preview consume that package directly.
+HTML documentation rendering is isolated in
+[`lunco-modelica-docs-ui`](../../crates/lunco-modelica-docs-ui/); the Modelica
+view supplies only the selected class's documentation fragments.
 
 The transport-free Modelica query surface is a separate production capability
 in [`lunco-modelica-api`](../../crates/lunco-modelica-api/). API-enabled hosts
@@ -100,7 +105,7 @@ member role schemas: `LunCoForceActuatorAPI` selects the actuator-wrench
 projection, while `LunCoProgramAPI` selects the generated Modelica path. Rust
 supplies the composed facts — component identities and
 classes, constants, causal links, acausal connections, boundary ports, member
-outputs, and deterministic fact coordinates — and validates the result. It
+outputs, and deterministic topology partition — and validates the result. It
 does not classify components as battery, motor, solar, thermal, fluid, or any
 other domain.
 
@@ -164,10 +169,11 @@ other vehicle assemblies without a Rust toggle, a per-frame script, or a
 vehicle-specific electrical equation.
 
 Each policy unit carries both its Modelica class name and its root instance
-name. The shipped facts include a deterministic instance default, but a Rhai
-policy may replace it; Rust validates identifier/collision/uniqueness rules and
-uses the returned name for telemetry mapping. This keeps naming policy out of
-the Rust projector without allowing an invalid runtime address.
+name. The incoming Rust facts contain only the USD-derived partition and
+boundary; the Rhai policy owns generated names and may choose them freely
+within the validated Modelica identifier/collision/uniqueness contract. Rust
+uses the returned name for telemetry mapping without inventing a runtime
+address when policy data is missing.
 
 The generated visual contract is deliberately ordinary Modelica. The root
 `Icon` is a compact identity mark; its `Diagram` contains placed generated
@@ -1188,7 +1194,7 @@ twin-journal doc; not in scope here.
 | **Package Browser** | ✅ Working | MSL package hierarchy |
 | **Telemetry / Parameters** | ✅ Working | Runtime values, inputs, plotting toggles, and document-backed parameter edits |
 | **Inspector** | ✅ Working | Context-aware selected-component editor backed by `ModelicaOp::SetParameter` |
-| **Graphs** | ✅ Working | Time-series via `egui_plot` |
+| **Graphs** | ✅ Working | Live and completed-run trajectories via shared `lunco-viz` rendering |
 
 ## 11. Current gaps
 
@@ -1233,7 +1239,7 @@ Feature parity snapshot:
 | Diagram canvas | ✅ custom icons | ✅ authored Modelica icons + routed wires |
 | Text view | ✅ | ✅ |
 | Parameter dialog | ✅ | ✅ (Telemetry + selected-component Inspector) |
-| Plot variables | ✅ | ✅ (`egui_plot`) |
+| Plot variables | ✅ | ✅ (shared `lunco-viz` plot widgets) |
 | Variables browser | ✅ | ✅ |
 | Compilation pipeline | ✅ | ✅ (rumoca) |
 | Simulation setup dialog | ✅ | ❌ (continuous stepping instead) |

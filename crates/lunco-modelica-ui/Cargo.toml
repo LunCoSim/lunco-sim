@@ -11,17 +11,18 @@ description = "Modelica workbench UI and lunica application facade for LunCoSim"
 # them (`cargo build --no-default-features`) keeps the UI package optional.
 default = ["api", "transport-http", "ui", "scripting"]
 # The egui Modelica IDE: panels, diagram canvas, plots, docs viewer. OFF ⇒ the
-# compile core (ModelicaCorePlugin) builds headless — no egui/winit, no lyon,
+# compile core (ModelicaCorePlugin) builds headless — no egui/winit,
 # no workbench shell. Consumers that need only the compiler (lunco-usd-sim on a
 # server) build with `default-features = false`.
 ui = [
     # Workbench API queries are UI-only, and NOT on `lunco-api` (a server build enables that).
     "lunco-workbench/api",
-    "dep:bevy_egui", "dep:lunco-theme", "dep:lunco-workbench", "dep:lunco-workbench-core", "dep:lunco-status-core", "dep:lunco-ui",
-    "dep:lunco-viz", "dep:lunco-canvas", "dep:egui_plot", "dep:egui_commonmark",
-    "dep:egui_extras", "dep:htmd", "dep:lyon_tessellation", "dep:lyon_path",
-    "dep:lyon_geom", "lunco-doc-bevy/ui",
-    "dep:rumoca-tool-fmt", "dep:rumoca-tool-lint", "dep:image", "dep:arboard",
+    "dep:bevy_egui", "dep:lunco-theme", "dep:lunco-workbench", "dep:lunco-workbench-browser", "dep:lunco-workbench-datasets-ui", "dep:lunco-workbench-core", "dep:lunco-status-core", "dep:lunco-ui",
+    "dep:lunco-viz", "dep:lunco-canvas",
+    "lunco-doc-bevy/ui",
+    "dep:rumoca-tool-fmt", "dep:rumoca-tool-lint", "dep:arboard",
+    "dep:lunco-modelica-icon-ui",
+    "dep:lunco-modelica-docs-ui",
     # bevy_egui pulls bevy_render + bevy_window; the lunica WINDOW additionally
     # needs the winit backend (no longer in the workspace bevy default).
     "bevy/bevy_winit", "bevy/bevy_window", "bevy/x11", "bevy/wayland",
@@ -77,6 +78,8 @@ path = "src/bin/lunica.rs"
 [dependencies]
 bevy.workspace = true
 lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
+lunco-modelica-icon-ui = { path = "../lunco-modelica-icon-ui", optional = true }
+lunco-modelica-docs-ui = { path = "../lunco-modelica-docs-ui", optional = true }
 lunco-modelica-api = { path = "../lunco-modelica-api", default-features = false, optional = true }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 lunco-workspace-api = { path = "../lunco-workspace-api", optional = true }
@@ -85,7 +88,7 @@ lunco-workspace-api = { path = "../lunco-workspace-api", optional = true }
 # builds headless (`default-features = false`) for a server running cosim — no
 # egui→winit. The GUI/lunica build keeps `default = [..., "ui"]`.
 bevy_egui = { workspace = true, optional = true }
-lunco-assets = { workspace = true }
+lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-core = { path = "../lunco-core" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-theme = { path = "../lunco-theme", optional = true }
@@ -97,6 +100,8 @@ lunco-settings = { path = "../lunco-settings" }
 lunco-signal = { path = "../lunco-signal" }
 lunco-telemetry = { path = "../lunco-telemetry" }
 lunco-workbench = { path = "../lunco-workbench", optional = true }
+lunco-workbench-browser = { path = "../lunco-workbench-browser", optional = true }
+lunco-workbench-datasets-ui = { path = "../lunco-workbench-datasets-ui", optional = true }
 lunco-workbench-core = { path = "../lunco-workbench-core", optional = true }
 lunco-status-core = { path = "../lunco-status-core", optional = true }
 lunco-web = { workspace = true }
@@ -106,39 +111,11 @@ lunco-canvas = { path = "../lunco-canvas", features = ["ui"], optional = true }
 lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
 lunco-workspace = { path = "../lunco-workspace" }
 lunco-storage = { path = "../lunco-storage" }
-egui_plot = { workspace = true, optional = true }
-# Docs view (ModelViewMode::Docs): HTML → Markdown → egui render.
-# `egui_commonmark` pulls the workspace egui version transitively to
-# match bevy_egui 0.41 (→ egui 0.35). Syntax highlighting is enabled
-# so `<pre><code>` blocks in Modelica docs render with colour.
-egui_commonmark = { version = "0.24", features = ["better_syntax_highlighting"], optional = true }
-# `all_loaders` wires up every shipped image source (file://, http://,
-# bytes://, raw paths) so images in Documentation HTML render. We add
-# a custom `modelica://` loader on top to resolve MSL-internal URIs
-# against the on-disk MSL tree.
-egui_extras = { version = "0.35", features = ["all_loaders"], optional = true }
-# Pure-Rust HTML → Markdown converter. Used once per Documentation
-# annotation to normalise into the shape commonmark expects.
-htmd = { version = "0.5", optional = true }
-# Polygon tessellator with EvenOdd fill-rule support — matches the
-# de-facto Modelica standard (Qt's QPainterPath default that OMEdit
-# and Dymola rely on). egui's built-in `Shape::convex_polygon` only
-# triangulates convex shapes; concave or self-intersecting polygons
-# (PartialValve's bowtie, sensor Y-marks, gauge X-shapes) need a real
-# tessellator. lyon does this in pure Rust with vertex/index buffer
-# output that drops straight into `egui::Mesh`. ~150 KB compiled.
-lyon_tessellation = { version = "1", optional = true }
-lyon_path = { version = "1", optional = true }
-lyon_geom = { version = "1", optional = true }
 # Wasm-safe replacement for `std::time::Instant`. On native it's an alias
 # for `std::time::Instant`; on wasm32 it's backed by `performance.now()`.
 # Required because `std::time::Instant::now()` panics with
 # "time not implemented on this platform" on wasm32-unknown-unknown.
 web-time = { workspace = true }
-# Raster decoders used by egui_extras' `all_loaders`. Only the formats
-# actually present in MSL Resources/Images are enabled to keep the
-# compile surface small.
-image = { workspace = true, optional = true }
 lunco-experiments = { path = "../lunco-experiments" }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 rumoca-compile = { workspace = true }

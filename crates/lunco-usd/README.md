@@ -7,7 +7,7 @@ entities with Avian3D physics and LunCoSim simulation components.
 ## Assembly boundary
 
 `lunco-usd-compose` is the render-free composition leaf. It asks
-`lunco-assets` for canonical asset identities and bytes, then lets OpenUSD
+`lunco-assets-core` for canonical asset identities and bytes, then lets OpenUSD
 assemble sublayers, references, payloads, and variants into an inert stage.
 Consumers import that composition API from its owning package or from
 `lunco-usd-bevy-core::compose` when they need the prepared-stage boundary.
@@ -67,13 +67,15 @@ grouped journal/undo path. A stale plan becomes an explicit conflict; it is
 never rebased or silently overwritten. Save/Save-As remains a separate
 explicit document operation.
 
-## UI plugins (`lunco-usd-ui`)
+## UI plugins (`lunco-usd-ui` and `lunco-usd-viewport-ui`)
 
-The separate `lunco-usd-ui` package adds the egui browser/viewport panels and
-is installed by app composition (not by the complete runtime bundle):
+The separate `lunco-usd-ui` package adds the egui browser/document panels and
+the independent `lunco-usd-viewport-ui` package adds the render-heavy preview
+surface. They are installed by app composition (not by the complete runtime
+bundle):
 
 - **`UsdUiPlugin`** — Twin browser / loaded-stages / dispatch panels.
-- **`UsdViewportPlugin`** — `UsdViewportPanel` plus the instance-backed
+- **`UsdViewportPlugin`** (from `lunco-usd-viewport-ui`) — `UsdViewportPanel` plus the instance-backed
   `UsdPreviewViewPanel`. `OpenUsdPreview` owns one projected USD session;
   `OpenUsdPreviewView` adds an independent camera/render target over that
   session for a dock tab or split. `FocusUsdPreviewView` and

@@ -1,0 +1,44 @@
+[package]
+name = "lunco-assets-core"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Lightweight LunCoSim asset identity, resolution, storage, and source integration"
+
+[dependencies]
+bevy = { workspace = true, features = ["bevy_asset"] }
+lunco-core = { path = "../lunco-core" }
+lunco-settings = { path = "../lunco-settings" }
+lunco-storage = { path = "../lunco-storage" }
+lunco-twin = { path = "../lunco-twin" }
+lunco-workspace = { path = "../lunco-workspace" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+include_dir = "0.7"
+dirs = "5"
+
+[[bin]]
+name = "build_asset_manifest"
+path = "src/bin/build_asset_manifest.rs"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+crossbeam-channel = { workspace = true }
+js-sys = { workspace = true }
+web-sys = { workspace = true, features = [
+    "Window",
+    "Response",
+    "Request",
+    "RequestInit",
+    "RequestMode",
+    "Cache",
+    "CacheStorage",
+    "Headers",
+] }
+ruzstd = "0.7"
+tar = { workspace = true }
+
+[lints]
+workspace = true

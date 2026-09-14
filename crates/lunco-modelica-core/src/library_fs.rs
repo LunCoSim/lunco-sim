@@ -75,7 +75,7 @@ pub fn locate_library_file(qualified: &str) -> Option<std::path::PathBuf> {
     // join base (`base`) are owned by `lunco_assets` — no filesystem
     // access here. So both targets run identical logic and the §13
     // semantics can't drift.
-    for source in lunco_assets::msl::global_msl_sources() {
+    for source in lunco_assets_core::msl::global_msl_sources() {
         if let Some(hit) = resolve_in_root(&segments, source.base(), |c| source.contains(c)) {
             return Some(hit);
         }

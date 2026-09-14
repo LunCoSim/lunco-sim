@@ -299,7 +299,7 @@ impl Default for RunScenario {
 fn on_run_scenario(
     _t: On<RunScenario>,
     entities: Query<Entity>,
-    world_root: Query<Entity, With<lunco_core::WorldRoot>>,
+    world_root: Query<Entity, With<lunco_spatial::WorldRoot>>,
     mut registry: ResMut<ScriptRegistry>,
     q_existing: Query<&ScriptedModel>,
     guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
@@ -332,13 +332,13 @@ fn on_run_scenario(
 fn on_run_scenario_asset(
     trigger: On<RunScenarioAsset>,
     entities: Query<Entity>,
-    world_root: Query<Entity, With<lunco_core::WorldRoot>>,
+    world_root: Query<Entity, With<lunco_spatial::WorldRoot>>,
     asset_server: Res<AssetServer>,
     guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
     mut commands: Commands,
 ) -> Result<Ack, String> {
     let cmd = trigger.event();
-    let path = lunco_assets::engine_asset_uri(&cmd.source_asset);
+    let path = lunco_assets_core::engine_asset_uri(&cmd.source_asset);
     if path.is_empty() {
         return Err("RunScenarioAsset: source_asset must not be empty".to_string());
     }
@@ -346,7 +346,7 @@ fn on_run_scenario_asset(
     let scene = if cmd.scene_asset.trim().is_empty() {
         None
     } else {
-        let scene = lunco_assets::engine_asset_uri(&cmd.scene_asset);
+        let scene = lunco_assets_core::engine_asset_uri(&cmd.scene_asset);
         if scene.is_empty() {
             return Err("RunScenarioAsset: scene_asset is not a valid asset path".to_string());
         }
@@ -375,7 +375,7 @@ fn on_run_scenario_asset(
 fn resolve_scenario_target(
     requested: Entity,
     entities: &Query<Entity>,
-    world_root: &Query<Entity, With<lunco_core::WorldRoot>>,
+    world_root: &Query<Entity, With<lunco_spatial::WorldRoot>>,
 ) -> Result<Entity, String> {
     if requested != Entity::PLACEHOLDER {
         if entities.get(requested).is_ok() {
@@ -607,7 +607,7 @@ pub fn attach_requested_scenarios(
         };
         let Some(asset_id) = asset_server
             .get_path(&request.handle)
-            .map(|path| lunco_assets::asset_path::anchor_of(&path))
+            .map(|path| lunco_assets_core::asset_path::anchor_of(&path))
         else {
             error!("[rhai] requested scenario asset for {entity:?} has no resolved identity");
             commands.entity(entity).remove::<PendingScenarioAsset>();
@@ -757,10 +757,10 @@ pub fn resolve_embedded_scenario_paths(
             // `assets/` prefix by hand and riding the DEFAULT source: an authored
             // `assets/foo.rhai`, a bare `foo.rhai`, and an explicit
             // `lunco://foo.rhai` must all name the same script, and only
-            // `lunco-assets` gets to decide what that means. A ref that already
+            // `lunco-assets-core` gets to decide what that means. A ref that already
             // carries its own scheme (`twin://…`) is passed through untouched, so
             // a Twin-owned script resolves against the Twin.
-            let uri = lunco_assets::engine_asset_uri(&path.0);
+            let uri = lunco_assets_core::engine_asset_uri(&path.0);
             info!(
                 "[scripting] loading scenario script `{}` as `{uri}`",
                 path.0
@@ -808,7 +808,7 @@ pub fn resolve_embedded_scenario_paths(
             // engine invariant break, not a case to paper over: say so and skip.
             let Some(id) = asset_server
                 .get_path(&*handle)
-                .map(|p| lunco_assets::asset_path::anchor_of(&p))
+                .map(|p| lunco_assets_core::asset_path::anchor_of(&p))
             else {
                 error!(
                     "[rhai] loaded script asset {:?} has no resolved AssetPath — cannot \
@@ -866,7 +866,7 @@ fn on_register_tool_library(
     ws: Option<Res<lunco_workspace::WorkspaceResource>>,
     // The same asset-backed import registry used by the persistent world
     // engine. Validation below builds that production engine before publish.
-    sources: Option<Res<lunco_assets::script_source::ScriptSources>>,
+    sources: Option<Res<lunco_assets_core::script_source::ScriptSources>>,
     // Journal handle (present once wired). Records the registration as a
     // `DomainKind::ToolLibrary` op so it syncs to peers + persists cross-platform.
     // The command isn't on the command bus, so this only fires for LOCAL

@@ -7,7 +7,7 @@ description = "Render-free Twin-backed USD document identity and projection leas
 
 [dependencies]
 bevy = { workspace = true, features = ["bevy_asset"] }
-lunco-assets = { path = "../lunco-assets" }
+lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 

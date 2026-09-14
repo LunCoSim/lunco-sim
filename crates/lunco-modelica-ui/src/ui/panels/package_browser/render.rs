@@ -3,7 +3,7 @@
 use crate::package_tree::types::PackageNode;
 use crate::state::ModelLibrary;
 use bevy_egui::egui;
-use lunco_workbench::BrowserQuery;
+use lunco_workbench_browser::BrowserQuery;
 
 #[derive(Clone)]
 pub(super) enum PackageAction {
@@ -13,7 +13,7 @@ pub(super) enum PackageAction {
 
 /// Render helper for callers that hold a
 /// `&PackageTreeCache` (no `&mut`) — e.g. the Twin Browser's
-/// [`BrowserCtx`](lunco_workbench::BrowserCtx), which can't take the
+/// [`BrowserCtx`](lunco_workbench_browser::BrowserCtx), which can't take the
 /// cache mutably. Instead of mutating `is_loading` / pushing scan
 /// tasks in place, an unscanned Category pushes its `(id, package_path)`
 /// into `load_out`; the caller schedules the scan through the package-tree

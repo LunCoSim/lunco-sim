@@ -314,7 +314,7 @@ On every rumoca bump, in this order:
 1. `cargo update -p rumoca-compile` (all rumoca crates share one git source, so
    this moves them together).
 2. Re-run the probes above; delete any workaround whose probe went green.
-3. Bump `EXPECTED_RUMOCA_ARTIFACT_TAG` in `lunco-assets/src/msl.rs` — the bincode'd
+3. Bump `EXPECTED_RUMOCA_ARTIFACT_TAG` in `lunco-assets-core/src/msl.rs` — the bincode'd
    `StoredDefinition` layout is version-sensitive and a stale bundle decodes to
    garbage.
 4. `rm .cache/msl/parsed-msl.bin && cargo run --release --bin msl_indexer -- --warm`.

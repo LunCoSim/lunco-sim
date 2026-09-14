@@ -19,13 +19,14 @@ use std::hash::{Hash, Hasher};
 use avian3d::prelude::{ColliderOf, Collisions, Position, RayHits, RigidBody, Rotation};
 use bevy::math::DVec3;
 use bevy::prelude::*;
-use lunco_core::coords::{GridPos, GridRot};
-use lunco_core::{ActivePhysicsFrame, MobilityRoot};
+use lunco_core::MobilityRoot;
 use lunco_mobility::wheel_kinematics::wheel_hub_pose;
 use lunco_mobility::{
     raycast_contact_point, JointedWheelTire, Suspension, WheelBodyMount, WheelRaycast,
 };
 use lunco_render::{PbrLook, SurfaceAlpha};
+use lunco_spatial::coords::{GridPos, GridRot};
+use lunco_spatial::ActivePhysicsFrame;
 use lunco_usd_geometry::ribbon::{build_ribbon_mesh, RibbonPoint};
 use lunco_usd_sim::PhysicalWheel;
 

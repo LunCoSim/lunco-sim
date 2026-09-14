@@ -33,7 +33,7 @@
 //! ## Layout
 //!
 //! Entries live at `<root>/<namespace>/<key-hex>/…`, where `root` is the app's
-//! machine-global cache directory (`lunco_assets::cache_dir()`, passed in so this crate stays
+//! machine-global cache directory (`lunco_assets_core::cache_dir()`, passed in so this crate stays
 //! runtime-agnostic) and `namespace` is a `/`-separated subpath like
 //! `"terrain/derived"`. An entry may hold one or several named blobs.
 
@@ -87,7 +87,7 @@ pub trait Bake {
 /// Load `bake`'s artifact from the content-addressed cache under `root`, or bake
 /// it (and write it through) on a miss. The heart of Substrate B.
 ///
-/// `root` is the app's cache root (`lunco_assets::cache_dir()`), passed in so
+/// `root` is the app's cache root (`lunco_assets_core::cache_dir()`), passed in so
 /// this crate needs no bevy/asset dependency. Compute it once before spawning an
 /// off-thread bake and move it into the task.
 pub fn bake_or_load<B: Bake>(bake: &B, root: &Path) -> B::Output {

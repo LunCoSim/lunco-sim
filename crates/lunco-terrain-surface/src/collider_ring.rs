@@ -35,8 +35,8 @@ use bevy::math::{DQuat, DVec3, Dir3};
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
 use big_space::prelude::{CellCoord, Grid};
-use lunco_core::coords::{GridPos, GridRot};
 use lunco_core::{on_command, register_commands, Command};
+use lunco_spatial::coords::{GridPos, GridRot};
 use lunco_terrain_core::{quantize, HeightSource};
 use serde::{Deserialize, Serialize};
 
@@ -1031,7 +1031,7 @@ pub fn update_collider_ring(
     parents: Query<&ChildOf>,
     grids: Query<&Grid>,
     spatial: Query<(Option<&CellCoord>, &Transform)>,
-    active_frame: Res<lunco_core::ActivePhysicsFrame>,
+    active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
 ) {
     let pool = AsyncComputeTaskPool::get();
 
@@ -1050,7 +1050,7 @@ pub fn update_collider_ring(
 
     for (terrain, hf, ring, mut tiles, mut pending, dirty_region) in &mut terrains {
         let Some((grid_entity, grid)) =
-            lunco_core::coords::ancestor_grid(terrain, &parents, &grids)
+            lunco_spatial::coords::ancestor_grid(terrain, &parents, &grids)
         else {
             continue;
         };
@@ -1060,13 +1060,17 @@ pub fn update_collider_ring(
         // cross-branch conversion for both poses. Mixing this with world_pose
         // makes every support ray miss as soon as a body-fixed surface grid is
         // selected.
-        let Some((terrain_world, terrain_rotation)) =
-            lunco_core::coords::pose_in_grid(terrain, active_frame.0, &parents, &grids, &spatial)
-                .map(|(position, rotation)| (GridPos(position), GridRot(rotation)))
-        else {
+        let Some((terrain_world, terrain_rotation)) = lunco_spatial::coords::pose_in_grid(
+            terrain,
+            active_frame.0,
+            &parents,
+            &grids,
+            &spatial,
+        )
+        .map(|(position, rotation)| (GridPos(position), GridRot(rotation))) else {
             continue;
         };
-        let Some((grid_world, grid_rotation)) = lunco_core::coords::pose_in_grid(
+        let Some((grid_world, grid_rotation)) = lunco_spatial::coords::pose_in_grid(
             grid_entity,
             active_frame.0,
             &parents,
@@ -1355,13 +1359,13 @@ pub fn hold_physics_until_dem_ready(
     parents: Query<&ChildOf>,
     grids: Query<&Grid>,
     spatial: Query<(Option<&CellCoord>, &Transform)>,
-    active_frame: Res<lunco_core::ActivePhysicsFrame>,
+    active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
 ) {
     let Some(mut holds) = holds else { return };
     let mut wait = !building.is_empty();
     if !wait {
         'terrains: for (terrain, hf, ring, tiles) in &rings {
-            let Some((terrain_world, terrain_rotation)) = lunco_core::coords::pose_in_grid(
+            let Some((terrain_world, terrain_rotation)) = lunco_spatial::coords::pose_in_grid(
                 terrain,
                 active_frame.0,
                 &parents,
@@ -1656,7 +1660,7 @@ pub fn validate_initial_physics_poses(
     local_gravity: Query<&lunco_environment::LocalGravity>,
     flat_sites: Query<(), With<crate::georef::FlatSiteSurface>>,
     holds: Option<Res<lunco_physics::PhysicsHolds>>,
-    active_frame: Res<lunco_core::ActivePhysicsFrame>,
+    active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
     mut commands: Commands,
     mut diagnostics: ResMut<lunco_core::RuntimeDiagnostics>,
 ) {
@@ -1684,7 +1688,7 @@ pub fn validate_initial_physics_poses(
     // valid support surface and are handled by the same footprint transaction
     // below.
     let terrain_context = terrains.iter().next().and_then(|(terrain, hf, ring)| {
-        let (terrain_world, terrain_rotation) = lunco_core::coords::grid_relative_pose(
+        let (terrain_world, terrain_rotation) = lunco_spatial::coords::grid_relative_pose(
             terrain,
             active_frame.0,
             &parents,
@@ -2160,7 +2164,7 @@ fn on_recover_vessel(
     parents: Query<&ChildOf>,
     grids: Query<&Grid>,
     spatial: Query<(Option<&CellCoord>, &Transform)>,
-    active_frame: Res<lunco_core::ActivePhysicsFrame>,
+    active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
 ) {
     use bevy::math::DQuat;
     let global_id = lunco_core::GlobalEntityId::from_raw(trigger.event().entity_id);
@@ -2184,7 +2188,7 @@ fn on_recover_vessel(
         let terrain_surfaces: Vec<(GridPos, GridRot, Arc<SurfaceOracle>)> = terrains
             .iter()
             .filter_map(|(terrain, hf)| {
-                lunco_core::coords::pose_in_grid(
+                lunco_spatial::coords::pose_in_grid(
                     terrain,
                     active_frame.0,
                     &parents,

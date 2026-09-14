@@ -218,7 +218,7 @@ mechanism is independently convergent — therefore the world converges.**
 - **M2/M4/M6** ⇐ the backend (lightyear ships M2-predicted/interpolated + M6
   tick-sync; this is the standing argument for lightyear). README → *Transport
   Abstraction* is the pipes they ride.
-- **M2 local write chokepoint** ⇐ `lunco_core::attach::migrate_to_grid` (commit
+- **M2 local write chokepoint** ⇐ `lunco_spatial::attach::migrate_to_grid` (commit
   `7e5fddce`). When an applied snapshot or a reconciled prediction changes *which
   grid* a body belongs to (e.g. an SOI crossing), the local `(ChildOf, CellCoord,
   Transform)` triple must land atomically — splitting the writes lets an observer

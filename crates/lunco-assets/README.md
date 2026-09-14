@@ -1,16 +1,32 @@
 # lunco-assets
 
-Unified asset management for LunCoSim — the single source of truth for cache directory resolution, versioned downloads, texture processing, and cross-platform asset loading.
+Dataset provisioning and offline asset processing for LunCoSim. The lightweight
+identity, URI, storage, discovery, and embedded-source APIs live in
+[`lunco-assets-core`](../lunco-assets-core); this package is intentionally the
+heavy application/CLI boundary.
 
 ## What This Crate Does
 
-- **Resolves the shared cache directory** — all git worktrees point to the same cache location
 - **Downloads external assets** from `Assets.toml` declarations with SHA-256 verification
 - **Processes textures** — resize/convert source images (JPEG, PNG, TIFF, SVG → PNG)
-- **Eliminates hardcoded paths** — no more scattered `.cache/` and `assets/` strings
-- **Traverses transitive asset files** — `transitive_file_closure*` owns native
-  queueing, canonical paths, and reads; format crates supply only document and
-  dependency interpretation
+- **Processes DEM, map, normal-map, PDS3, GeoTIFF, and glTF products** in the
+  native offline pipeline
+- **Owns the explicit dataset lifecycle** — declaration, user-authorised
+  download, processing, cancellation, and installed status
+
+## Package boundary
+
+Use `lunco-assets-core` for normal runtime asset access:
+
+- canonical `lunco://` and `twin://` identities and readers
+- cache and Twin-root resolution
+- embedded Modelica, mission, tutorial, and Rhai sources
+- discovery/catalog data and the shared asset-source registration plugin
+
+Use `lunco-assets` only where the application or tool explicitly provisions
+datasets or runs the native processing pipeline. Keeping those consumers out of
+the core package prevents archive, HTTP, raster, SVG, GeoTIFF, and `npx`
+dependencies from propagating through every asset-reading crate.
 
 ## CLI Usage
 
@@ -87,7 +103,7 @@ configured cap. The in-app Data & libraries panel is the settings editor.
 
 ```
 1. download  → 2. process  →  3. use
-   (lunco-assets) (lunco-assets) (Bevy at runtime)
+   (lunco-assets) (lunco-assets) (lunco-assets-core / Bevy at runtime)
    global cache/           global cache/
    earth_source.jpg        textures/earth.png
    moon_source.tif         textures/moon.png
@@ -98,4 +114,10 @@ configured cap. The in-app Data & libraries panel is the settings editor.
 
 ```bash
 cargo test -p lunco-assets
+```
+
+The low-level asset identity and source tests are in the lightweight package:
+
+```bash
+cargo test -p lunco-assets-core
 ```

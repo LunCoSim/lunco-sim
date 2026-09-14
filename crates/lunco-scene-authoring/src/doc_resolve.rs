@@ -214,7 +214,7 @@ pub fn resolve_doc_for_entity(world: &World, entity: Entity) -> Option<lunco_doc
     let asset_path = asset_server.get_path(prim.stage_handle.id())?;
     let path_str = asset_path.path().to_string_lossy().to_string();
 
-    if let Some((name, rel)) = lunco_assets::split_twin_rel(&path_str) {
+    if let Some((name, rel)) = lunco_assets_core::split_twin_rel(&path_str) {
         if let Some(doc) = world
             .get_resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
             .and_then(|backed| backed.doc_for(name, rel))

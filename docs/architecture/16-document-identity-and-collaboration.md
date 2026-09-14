@@ -324,7 +324,7 @@ persistently-stale file nags once, and re-arms when the file re-syncs.
 
 A document's dependencies are found by walking `subLayers`, `references`,
 `payload`, and asset-valued attributes. There must be one filesystem traversal:
-`lunco_assets::transitive_file_closure*` owns its queue, canonical paths, and
+`lunco_assets_core::transitive_file_closure*` owns its queue, canonical paths, and
 native reads. `lunco-usd-compose` supplies the format facts:
 
 ```rust

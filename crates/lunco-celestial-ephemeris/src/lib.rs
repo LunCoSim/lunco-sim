@@ -170,19 +170,12 @@ pub struct EphemerisDatasetMeta {
 
 /// Parse a downloaded Horizons response into sorted vectors.
 ///
-/// `None` when the file cannot be read or holds no usable rows — a present but
+/// `None` when the bytes are not UTF-8 or hold no usable rows — a present but
 /// unparseable file is reported, never silently treated as "no data".
-#[cfg(not(target_arch = "wasm32"))]
-#[allow(clippy::disallowed_methods)]
-fn read_vectors(path: &std::path::Path) -> Option<Vec<CsvDataPoint>> {
-    let text = std::fs::read_to_string(path).ok()?;
+fn parse_vectors(bytes: &[u8]) -> Option<Vec<CsvDataPoint>> {
+    let text = std::str::from_utf8(bytes).ok()?;
     let points = parse_ephemeris_csv(&text);
     if points.is_empty() {
-        warn!(
-            "[ephemeris] {} parsed to zero usable vectors — present, but not a Horizons \
-             VECTORS response",
-            path.display()
-        );
         return None;
     }
     Some(points)
@@ -607,7 +600,7 @@ mod frame_tests {
 /// contract.
 ///
 /// ```ignore
-/// app.add_plugins(lunco_celestial::CelestialPlugin)
+/// app.add_plugins(lunco_celestial_spatial::CelestialPlugin)
 ///    .add_plugins(lunco_celestial_ephemeris::EphemerisPlugin);
 /// ```
 pub struct EphemerisPlugin;
@@ -644,8 +637,9 @@ impl Plugin for EphemerisPlugin {
     }
 }
 
-/// Adopt every ephemeris dataset whose file is on disk — cached from an earlier
-/// run, downloaded a moment ago, or shipped inside an open Twin.
+/// Adopt every ephemeris dataset whose artifact is available through the asset
+/// registry — cached from an earlier run, downloaded a moment ago, or shipped
+/// inside an open Twin.
 ///
 /// Everything it needs is in the ONE declaration: `path` (where transport put
 /// the bytes) and `[<key>.ephemeris]` (what they are). No directory scan, no
@@ -657,12 +651,52 @@ impl Plugin for EphemerisPlugin {
 #[cfg(not(target_arch = "wasm32"))]
 fn adopt_ephemeris_datasets(
     registry: Option<Res<lunco_assets::datasets::DatasetRegistry>>,
+    settings: Option<Res<lunco_settings::DownloadSettings>>,
     vectors: Option<Res<EphemerisVectors>>,
     mut seen: Local<std::collections::HashSet<String>>,
+    mut pending: Local<Vec<PendingEphemerisRead>>,
 ) {
-    let (Some(registry), Some(vectors)) = (registry, vectors) else {
+    let (Some(registry), Some(settings), Some(vectors)) = (registry, settings, vectors) else {
         return;
     };
+
+    use bevy::tasks::futures_lite::future;
+
+    let mut completed = Vec::new();
+    pending.retain_mut(|read| {
+        let Some(result) = future::block_on(future::poll_once(&mut read.task)) else {
+            return true;
+        };
+        completed.push((read.key.clone(), read.naif_id, result));
+        false
+    });
+    for (key, naif_id, result) in completed {
+        match result {
+            Ok(bytes) => match parse_vectors(&bytes) {
+                Some(points) => {
+                    info!(
+                        "[ephemeris] loaded {} vectors for NAIF {} from dataset '{}'",
+                        points.len(),
+                        naif_id,
+                        key
+                    );
+                    vectors
+                        .data
+                        .write()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .insert(naif_id, points);
+                    vectors.motion_revision.fetch_add(1, Ordering::Release);
+                }
+                None => error!(
+                    "[ephemeris] dataset '{}' is present but is not a readable Horizons VECTORS \
+                     response",
+                    key
+                ),
+            },
+            Err(error) => error!("[ephemeris] could not read dataset '{}': {error}", key),
+        }
+    }
+
     for entry in registry.entries() {
         let Some(meta) = entry.spec.domain::<EphemerisDatasetMeta>("ephemeris") else {
             continue; // not ours
@@ -712,22 +746,36 @@ fn adopt_ephemeris_datasets(
         if !seen.insert(format!("loaded:{}", entry.key)) {
             continue;
         }
-        let Some(points) = read_vectors(&entry.path) else {
-            continue;
+        let asset = lunco_assets_core::discovery::AssetFile {
+            asset_path: entry.artifact_uri(),
+            stem: entry.key.clone(),
+            rel: entry.artifact_rel.clone(),
+            abs_path: entry.artifact_path(),
+            twin: match &entry.scope {
+                lunco_assets::datasets::DatasetScope::Engine => None,
+                lunco_assets::datasets::DatasetScope::Twin { name, .. } => Some(name.clone()),
+            },
         };
-        info!(
-            "[ephemeris] loaded {} vectors for NAIF {} from dataset '{}'",
-            points.len(),
-            meta.naif_id,
-            entry.key
-        );
-        vectors
-            .data
-            .write()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(meta.naif_id, points);
-        vectors.motion_revision.fetch_add(1, Ordering::Release);
+        let key = entry.key.clone();
+        let settings = settings.clone();
+        pending.push(PendingEphemerisRead {
+            key,
+            naif_id: meta.naif_id,
+            task: bevy::tasks::IoTaskPool::get().spawn(async move {
+                lunco_assets_core::asset_read::read_asset_bytes(&asset, &settings).await
+            }),
+        });
     }
+}
+
+/// One non-blocking read of a declared ephemeris artifact. The asset layer
+/// owns path resolution and storage; this package only parses the returned
+/// bytes into its provider representation.
+#[cfg(not(target_arch = "wasm32"))]
+struct PendingEphemerisRead {
+    key: String,
+    naif_id: i32,
+    task: bevy::tasks::Task<Result<Vec<u8>, String>>,
 }
 
 /// Writable handles onto the provider's mission maps — the only way a dataset

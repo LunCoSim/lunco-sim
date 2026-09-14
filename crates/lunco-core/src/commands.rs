@@ -488,7 +488,7 @@ impl MarkClientLocalExt for bevy::app::App {
 ///
 /// `reflect_default` semantics: API/rhai callers may omit optional fields — a
 /// missing `rotation` defaults to `None` (→ identity). Position is always
-/// expressed in the current semantic [`crate::ActivePhysicsFrame`]; callers
+/// expressed in the current semantic physics frame; callers
 /// never pass a Bevy grid entity or perform BigSpace hierarchy conversion
 /// themselves.
 #[Command(reflect_default)]

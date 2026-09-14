@@ -58,6 +58,7 @@
 //! - **Graphs** (bottom dock) — time-series plots of simulation variables
 
 use bevy::prelude::*;
+use lunco_ui::log::{LogBuffer, LogLevel};
 use lunco_workbench::WorkbenchAppExt;
 use lunco_workbench_core::{
     MenuCtx, PanelId, Perspective, PerspectiveId, PerspectiveLayoutPlan, PerspectiveSlotPlan,
@@ -90,8 +91,6 @@ pub use commands::{CompileModel, CreateNewScratchModel, ModelicaCommandsPlugin};
 
 pub mod class_display;
 pub mod context;
-pub mod icon_paint;
-pub mod image_loader;
 /// Debounced AST reparse driver — see module docs.
 pub mod input_activity;
 pub mod panels;
@@ -106,16 +105,13 @@ pub mod welcome_progress;
 pub mod wire_router;
 pub mod workbench_state;
 
-/// Modelica section of the Twin Browser — class-tree contributed by
-/// this crate to `lunco-workbench`'s `BrowserSectionRegistry`.
-pub mod browser_section;
-/// Twin-scoped downloadable resources shown in the Twin Browser.
-pub mod twin_datasets;
-
-/// Drains the workbench's `BrowserActions` outbox and routes
+/// Drains the workbench browser's `BrowserActions` outbox and routes
 /// section-emitted intents (open file, open Modelica class) into the
 /// existing document-load and drill-in pipelines.
 pub mod browser_dispatch;
+/// Modelica section of the Twin Browser — class-tree contributed by
+/// this crate to `lunco-workbench-browser`'s `BrowserSectionRegistry`.
+pub mod browser_section;
 
 /// Per-panel "pin to model" overrides for singleton inspector panels.
 pub mod doc_pin;
@@ -515,8 +511,8 @@ impl Perspective for AnalyzePerspective {
         // pattern) and Files (raw FS). Twin is leftmost so it's the
         // default active tab on first launch.
         plan.side_browser = PerspectiveSlotPlan::new().tabs([
-            lunco_workbench::TWIN_BROWSER_PANEL_ID,
-            lunco_workbench::FILES_PANEL_ID,
+            lunco_workbench_browser::TWIN_BROWSER_PANEL_ID,
+            lunco_workbench_browser::FILES_PANEL_ID,
         ]);
         // Center is seeded with no singleton tab — model views are
         // multi-instance tabs opened dynamically by the Package Browser
@@ -665,7 +661,7 @@ impl Plugin for ModelicaUiPlugin {
             .add_observer(panels::model_view::on_sync_model_tab_requested)
             .add_observer(panels::model_view::on_fast_run_setup_requested)
             .add_observer(clear_modelica_state_on_twin_closed)
-            .init_resource::<panels::console::ConsoleLog>()
+            .init_resource::<LogBuffer>()
             .init_resource::<panels::diagnostics::DiagnosticsLog>()
             // Journal panel reads directly from the canonical
             // `JournalResource` in `lunco-doc-bevy`; no local cache.
@@ -795,8 +791,6 @@ impl Plugin for ModelicaUiPlugin {
                     ),
                 ),
             )
-            .register_panel(lunco_workbench::TwinBrowserPanel)
-            .register_panel(lunco_workbench::FilesPanel)
             .insert_resource(panels::welcome::ExamplePathRegistry::with_builtins())
             .register_panel(panels::welcome::WelcomePanel)
             .register_panel(panels::telemetry::TelemetryPanel)
@@ -860,11 +854,11 @@ impl Plugin for ModelicaUiPlugin {
             );
 
         // Contribute the Modelica section to the Twin Browser's
-        // section registry. The workbench's WorkbenchPlugin already
-        // installed the registry resource and the built-in Files
-        // section; we just append. ensure it exists first to avoid
+        // section registry. TwinBrowserPlugin installed the registry and
+        // built-in file/library sections; we just append. Ensure it exists
+        // first to avoid
         // panics during mixed-mode or deferred plugin builds.
-        app.init_resource::<lunco_workbench::BrowserSectionRegistry>();
+        app.init_resource::<lunco_workbench_browser::BrowserSectionRegistry>();
         // One section per domain — `ModelicaSection` reads system
         // libraries straight from `PackageTreeCache::roots` and
         // workspace docs from `ModelicaDocumentRegistry`. No parallel
@@ -873,11 +867,12 @@ impl Plugin for ModelicaUiPlugin {
         // crates (`UsdSection`, `SysmlSection`, ...) follow the same
         // outer pattern with their own per-domain section.
         app.world_mut()
-            .resource_mut::<lunco_workbench::BrowserSectionRegistry>()
+            .resource_mut::<lunco_workbench_browser::BrowserSectionRegistry>()
             .register(browser_section::ModelicaSection);
-        app.world_mut()
-            .resource_mut::<lunco_workbench::BrowserSectionRegistry>()
-            .register(twin_datasets::TwinDatasetsSection);
+        // Dataset provisioning is an opt-in browser capability. Keeping it in
+        // its own package prevents generic browser hosts from linking the
+        // archive, HTTP, raster, and SVG processing stack.
+        app.add_plugins(lunco_workbench_datasets_ui::TwinDatasetsPlugin);
     }
 }
 
@@ -1028,7 +1023,7 @@ fn register_settings_submenu(world: &mut World) {
 /// Native dataset download actions live in the generic Data & libraries panel.
 fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
     use bevy_egui::egui;
-    use lunco_assets::msl::{MslLoadPhase, MslLoadState};
+    use lunco_assets_core::msl::{MslLoadPhase, MslLoadState};
 
     // Current state line.
     let state = ctx.resource::<MslLoadState>().cloned();
@@ -1092,7 +1087,7 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
 
     // Resolved on-disk path. May be the explicit-install destination, the
     // workspace `.cache/msl/`, or a user-supplied override.
-    let root = lunco_assets::msl_source_root_path();
+    let root = lunco_assets_core::msl_source_root_path();
     match root.as_ref() {
         Some(p) => {
             ui.horizontal(|ui| {
@@ -1163,15 +1158,20 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
     {
         // Web MSL is a host-served bundle rather than a native dataset, so its
         // platform-specific fetch controls remain here.
-        let load_state = ctx.resource::<lunco_assets::msl::MslLoadState>().cloned();
+        let load_state = ctx
+            .resource::<lunco_assets_core::msl::MslLoadState>()
+            .cloned();
         let install_running = matches!(
             load_state,
-            Some(lunco_assets::msl::MslLoadState::Loading { .. })
+            Some(lunco_assets_core::msl::MslLoadState::Loading { .. })
         );
-        let install_failed = matches!(load_state, Some(lunco_assets::msl::MslLoadState::Failed(_)));
+        let install_failed = matches!(
+            load_state,
+            Some(lunco_assets_core::msl::MslLoadState::Failed(_))
+        );
         let install_ready = matches!(
             load_state,
-            Some(lunco_assets::msl::MslLoadState::Ready { .. })
+            Some(lunco_assets_core::msl::MslLoadState::Ready { .. })
         );
         ui.horizontal(|ui| {
             // While an install is in flight, show Cancel. Before the first
@@ -1180,7 +1180,7 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
                 ui.label("MSL bundle loading…");
             } else if matches!(
                 load_state,
-                Some(lunco_assets::msl::MslLoadState::NotStarted) | None
+                Some(lunco_assets_core::msl::MslLoadState::NotStarted) | None
             ) {
                 if ui
                     .button("Install MSL")
@@ -1292,21 +1292,16 @@ fn install_image_loaders_once(
         // we get another shot next frame.
         return;
     };
-    // Built-in loaders for file://, http(s)://, raw paths, bytes://,
-    // etc. Covers everything the Modelica Documentation HTML can
-    // reference through normal URIs.
-    egui_extras::install_image_loaders(ctx);
-    // Custom loader for `modelica://Package/Resources/…` URIs used
-    // throughout MSL Documentation blocks.
-    let loader = std::sync::Arc::new(image_loader::ModelicaImageLoader::new());
-    ctx.add_bytes_loader(loader);
-    bevy::log::info!("[ModelicaImageLoader] installed egui_extras loaders + modelica:// loader");
+    // The graphics package owns both the raster decoder and the custom
+    // `modelica://Package/Resources/…` loader used by MSL Documentation.
+    lunco_modelica_icon_ui::install_image_loaders(ctx);
+    bevy::log::info!("[ModelicaImageLoader] installed Modelica image loaders");
 
     commands.insert_resource(ImageLoadersInstalled);
 }
 
 /// Forward newly-pushed [`lunco_status_core::status_bus::StatusBus`]
-/// events to the [`panels::console::ConsoleLog`].
+/// events to the shared [`lunco_ui::log::LogBuffer`].
 ///
 /// We track how many *discrete* history entries we've already mirrored
 /// so progress ticks (which mutate the bus seq but don't append to
@@ -1317,7 +1312,7 @@ fn install_image_loaders_once(
 /// freezing the console audit trail (CQ-523).
 fn fan_status_bus_to_console(
     bus: bevy::prelude::Res<lunco_status_core::status_bus::StatusBus>,
-    mut console: bevy::prelude::ResMut<panels::console::ConsoleLog>,
+    mut console: bevy::prelude::ResMut<LogBuffer>,
     mut last_total: bevy::prelude::Local<u64>,
 ) {
     let total = bus.history_total();
@@ -1339,19 +1334,13 @@ fn fan_status_bus_to_console(
         .rev()
     {
         let level = match ev.level {
-            lunco_status_core::status_bus::StatusLevel::Info => panels::console::ConsoleLevel::Info,
-            lunco_status_core::status_bus::StatusLevel::Warn => panels::console::ConsoleLevel::Warn,
-            lunco_status_core::status_bus::StatusLevel::Error => {
-                panels::console::ConsoleLevel::Error
-            }
-            lunco_status_core::status_bus::StatusLevel::Attention => {
-                panels::console::ConsoleLevel::Info
-            }
+            lunco_status_core::status_bus::StatusLevel::Info => LogLevel::Info,
+            lunco_status_core::status_bus::StatusLevel::Warn => LogLevel::Warn,
+            lunco_status_core::status_bus::StatusLevel::Error => LogLevel::Error,
+            lunco_status_core::status_bus::StatusLevel::Attention => LogLevel::Info,
             // Progress events shouldn't be in `history` (they live in
             // active_progress), but if one ever sneaks in, surface as Info.
-            lunco_status_core::status_bus::StatusLevel::Progress => {
-                panels::console::ConsoleLevel::Info
-            }
+            lunco_status_core::status_bus::StatusLevel::Progress => LogLevel::Info,
         };
         console.push(level, format!("[{}] {}", ev.source, ev.message));
     }

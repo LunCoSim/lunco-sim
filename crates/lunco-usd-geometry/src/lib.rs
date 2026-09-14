@@ -6,8 +6,8 @@
 //! numeric/mesh-heavy code behind a package boundary means changing an
 //! evaluator does not recompile the USD stage loader and its runtime systems.
 
-pub mod curve_sweep;
 pub mod curve;
+pub mod curve_sweep;
 pub mod nurbs;
 pub mod ribbon;
 pub mod trim;

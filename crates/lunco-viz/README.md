@@ -55,7 +55,7 @@ projection publishes them.
 | `registry`          | `VisualizationRegistry` (Bevy resource)                     |
 | `panel`             | `VizPanel` — generic `InstancePanel` keyed by `VizId`       |
 | `kinds::line_plot`  | First concrete viz kind (time-series line on `Panel2D`)     |
-| `render::panel_2d`  | egui_plot adaptor                                           |
+| `multi_series_plot` | Reusable completed-run/live trajectory comparison widget    |
 
 All of these are wired by `LuncoVizPlugin`.
 
@@ -68,6 +68,8 @@ Implemented:
 - [x] `Visualization` trait + registration via `App` extension
 - [x] `LinePlot` viz kind (2D time-series, feature-parity with the
       Modelica Graphs panel)
+- [x] Reusable multi-series trajectory plot with overlays, log-Y, fit, and
+      scrub interaction
 - [x] `VizPanel` — multi-instance workbench panel keyed by `VizId`
 - [x] `LuncoVizPlugin`
 

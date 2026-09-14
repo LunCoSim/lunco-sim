@@ -1,4 +1,4 @@
-//! Routes [`lunco_workbench::BrowserAction::OpenFile`] events with USD
+//! Routes [`lunco_workbench_browser::BrowserAction::OpenFile`] events with USD
 //! extensions (`.usda`, `.usd`, `.usdc`) into the USD document open pipeline.
 //!
 //! A browser click means **open and preview this source**, never **replace the
@@ -24,7 +24,7 @@
 use bevy::prelude::*;
 use lunco_doc_bevy::OpenFile;
 use lunco_usd_core::commands::is_usd_path;
-use lunco_workbench::{BrowserAction, BrowserActions};
+use lunco_workbench_browser::{BrowserAction, BrowserActions};
 use lunco_workspace::WorkspaceResource;
 
 fn is_usd_open_file(action: &BrowserAction) -> bool {
@@ -99,9 +99,7 @@ mod tests {
 
     #[test]
     fn browser_usd_selection_stays_within_the_active_twin() {
-        let root = std::env::temp_dir()
-            .join("lunco-browser-dispatch")
-            .join("twin");
+        let root = std::path::PathBuf::from("/tmp/lunco-browser-dispatch/twin");
         let rover = root.join("sim").join("rovers").join("lunokhod2.usda");
         let traverse = root.join("sim").join("scenes").join("traverse.usda");
         let outside = root

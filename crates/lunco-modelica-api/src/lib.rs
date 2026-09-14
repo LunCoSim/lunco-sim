@@ -86,9 +86,9 @@ impl ApiQueryProvider for ListBundledProvider {
             .iter()
             .map(|model| model.filename.to_string())
             .collect::<Vec<_>>();
-        for package in lunco_assets::models::package_roots() {
+        for package in lunco_assets_core::models::package_roots() {
             source_paths.extend(
-                lunco_assets::models::package_files(&package)
+                lunco_assets_core::models::package_files(&package)
                     .into_iter()
                     .map(|(path, _)| path),
             );

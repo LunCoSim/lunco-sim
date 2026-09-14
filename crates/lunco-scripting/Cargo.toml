@@ -24,6 +24,7 @@ lunco-twin-journal = { path = "../lunco-twin-journal" }
 # lunco-core. The API discovers it by reflection (AppTypeRegistry) — no direct
 # lunco-api dep. Lua remains only a reserved language id; it has no command.
 lunco-core = { path = "../lunco-core" }
+lunco-spatial = { path = "../lunco-spatial" }
 lunco-core-session = { path = "../lunco-core-session" }
 # Render recovery is an application-edge policy provider. Keep it optional and
 # out of the default Rhai/world bridge so headless hosts do not acquire Bevy's
@@ -66,6 +67,7 @@ big_space = { workspace = true, optional = true }
 # headless-capable and must not pull bevy_egui/workbench in behind it.
 # No cycle — lunco-celestial depends on lunco-core, never on lunco-scripting.
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
+lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }
 # Tool libraries: the runtime-agnostic registry (lunco-tools) + its rhai binding
 # (lunco-tools-rhai). Gated on `rhai` since the binding + scenario runtime are
 # rhai; the registry itself is dependency-light.
@@ -77,10 +79,11 @@ lunco-hooks = { path = "../lunco-hooks", optional = true }
 lunco-hooks-rhai = { path = "../lunco-hooks-rhai", optional = true }
 # The prelude + built-in tool libraries + example scenarios are authored under
 # `assets/scripting/` and embedded at compile time (wasm has no fs). That embed
-# is owned by lunco-assets (the single asset-access crate) — we consume it via
-# `lunco_assets::scripting::{prelude_files, tool_libraries, examples}`. Drop a
+# is owned by lunco-assets-core (the shared asset-access crate) — we consume it via
+# `lunco_assets_core::scripting::{prelude_files, tool_libraries, examples}`. Drop a
 # `.rhai` in the folder, rebuild, and it's picked up with no code edit here.
 lunco-assets = { path = "../lunco-assets", optional = true }
+lunco-assets-core = { path = "../lunco-assets-core" }
 # Twin persistence: the `TwinAdded` event + `WorkspaceResource` (twin→root path)
 # let the tool-library loader scan `<twin>/tools/*.rhai` on open. Gated on `rhai`
 # (the tool subsystem is rhai). No cycle: lunco-workspace has no scripting dep.

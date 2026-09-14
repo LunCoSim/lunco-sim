@@ -9,7 +9,7 @@
 //!
 //! Each row is a Modelica class keyed by its **fully-qualified path**
 //! (e.g. `"AnnotatedRocketStage.RocketStage"`). Click → emits
-//! [`lunco_workbench::BrowserAction::OpenLoadedClass`] for in-memory docs, dispatched
+//! [`lunco_workbench_browser::BrowserAction::OpenLoadedClass`] for in-memory docs, dispatched
 //! into the existing drill-in machinery so the canvas tab opens
 //! directly on the requested class.
 //!
@@ -30,7 +30,7 @@
 
 use bevy_egui::egui;
 use lunco_doc::DocumentId;
-use lunco_workbench::{BrowserAction, BrowserCtx, BrowserQuery, BrowserSection};
+use lunco_workbench_browser::{BrowserAction, BrowserCtx, BrowserQuery, BrowserSection};
 use rumoca_compile::parsing::ClassType;
 
 // `DrilledInClassNames` reads migrated to
@@ -986,7 +986,7 @@ fn browser_sort_group(c: &ClassEntry) -> BrowserSortGroup {
 // ---------------------------------------------------------------------------
 
 /// Paint one class row. Recurses into children when the row is
-/// expanded. Click → [`lunco_workbench::BrowserAction::OpenLoadedClass`] keyed by the
+/// expanded. Click → [`lunco_workbench_browser::BrowserAction::OpenLoadedClass`] keyed by the
 /// owning document's id.
 ///
 /// `active_doc`/`active_qualified` describe what the foreground tab

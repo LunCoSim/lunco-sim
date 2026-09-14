@@ -1,0 +1,17 @@
+[package]
+name = "lunco-workbench-datasets-ui"
+version = "0.1.0-dev"
+edition = "2021"
+license.workspace = true
+description = "Optional Twin dataset controls for the LunCoSim workbench browser"
+
+[dependencies]
+bevy = { workspace = true }
+bevy_egui = { workspace = true }
+lunco-assets = { path = "../lunco-assets" }
+lunco-assets-core = { path = "../lunco-assets-core" }
+lunco-workbench-browser = { path = "../lunco-workbench-browser" }
+lunco-workspace = { path = "../lunco-workspace" }
+
+[lints]
+workspace = true

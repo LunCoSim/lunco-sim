@@ -9,7 +9,8 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-core`** | Core primitives (`Port`, the typed `Mutation<P>` command substrate, `SimTick`), f64 coordinate/frame helpers, the persistent BigSpace world shell, typed scene transitions, `SceneMountState` and the `SceneTeardown` schedule, the `SceneViewport` (active-camera binding), canonical diagram data types, shared human-readable entity labels, and shared terminal runtime faults/fixed-step coupling state. Core carries no session/authority policy or vehicle-specific motion policy. |
+| **`lunco-core`** | Dependency-light engine primitives (`Port`, the typed `Mutation<P>` command substrate, `SimTick`), typed scene transitions, `SceneMountState` and the `SceneTeardown` schedule, the `SceneViewport` (active-camera binding), canonical diagram data types, shared human-readable entity labels, and shared terminal runtime faults/fixed-step coupling state. Core carries no BigSpace dependency, session/authority policy, or vehicle-specific motion policy. |
+| **`lunco-spatial`** | BigSpace spatial substrate: f64 coordinate/frame helpers, the persistent `WorldRoot`/`WorldGrid` shell, atomic grid migration, hierarchy invariants, spatial markers, and the vehicle-neutral navigation law. It depends on `lunco-core` for the shared runtime-diagnostic resource, but core does not depend on spatial. |
 | **`lunco-core-session`** | Always-on session and authority substrate: network role/status, possession and RBAC policy, prediction markers/input watermarks, and session-dependent identity admission. It depends on `lunco-core`; the lower-level core remains usable without session policy. |
 | **`lunco-command-macro`** | Procedural macros for the typed command system (`#[Command]`, `#[on_command]`, `register_commands!`; re-exported by `lunco-core`). |
 | **`lunco-workspace`** | Headless editor session management: open Twins, active documents, perspectives, recents, and generic active-Twin setting persistence (`SetTwinSetting` / `ResetTwinSetting`). |
@@ -19,7 +20,8 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 | **`lunco-doc`** | Foundation for structured artifacts (Modelica, USD, SysML): process-wide live document handle allocation, the `DocumentHost` container and atomic `DocumentOp` pattern with built-in undo/redo. |
 | **`lunco-doc-bevy`** | Bevy ECS integration for the Document System: lifecycle events, `JournalResource` (Bevy wrapper around the canonical Twin journal), `BevyJournalSink` for remote-replay, `EditorIntent` keybindings, `Presence` collab seed. |
 | **`lunco-storage`** | I/O abstraction layer (`Storage` trait — Native FS, Memory, future WASM/Remote backends). The single write path; raw `std::fs` is disallowed. |
-| **`lunco-assets`** | Unified asset management: cache resolution across worktrees, versioned downloads (`Assets.toml`, SHA-256), and texture processing. |
+| **`lunco-assets-core`** | Lightweight asset identity and resolution: canonical `lunco://`/`twin://` sources, cache/Twin roots, embedded sources, discovery, and storage-facing readers. |
+| **`lunco-assets`** | Explicit dataset provisioning and native offline processing: `Assets.toml` registry, user-authorised downloads, texture/DEM/map/glTF pipelines, and the asset-manager CLI. Depends on `lunco-assets-core`; ordinary asset readers should not depend on this package. |
 | **`lunco-modelica-assets`** | Native Modelica asset packaging: bundles MSL source and pre-parsed Rumoca definitions for the web runtime; keeps MSL build-only dependencies out of the generic asset manager. |
 | **`lunco-hash`** | Hashing substrate: Fast tier (FNV-1a) for change/cache keys and CID tier (CIDv1 raw+sha2-256) for on-disk/on-wire content-addressing. Draws a firewall between ephemeral process keys and cross-peer persisted content. |
 | **`lunco-precompute`** | Content-addressed precompute disk cache (`bake_or_load`): runs expensive pure functions once, persists results keyed by content hash (via `lunco-hash` + `lunco-storage`), and loads them on subsequent runs/peers. |
@@ -36,7 +38,8 @@ The "Laws of Nature" — celestial mechanics, environmental state, terrain, obst
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-celestial`** | Orbital mechanics, canonical body catalog/NAIF identities, typed analytical frame transforms, named BigSpace frame projection, gravity, body rotation, and automatic SOI/frame transitions; sun-light driven from ephemeris. |
+| **`lunco-celestial`** | Headless celestial semantics: canonical body catalog/NAIF identities, ephemeris contracts, typed f64 frame transforms, geodesy, body rotation, and Kepler propagation. |
+| **`lunco-celestial-spatial`** | Bevy/BigSpace projection of celestial semantics: scene hierarchy, gravity, surface placement, terrain/globe integration, links, trajectories, cadence, and runtime celestial commands. |
 | **`lunco-celestial-ephemeris`** | Concrete high-fidelity ephemeris provider for `lunco-celestial` (VSOP2013 + ELP/MPP02 via `celestial-ephemeris`); the heavy, non-Windows-MSVC half of the celestial split and the one place `celestial-time` is allowed. |
 | **`lunco-environment`** | Per-entity position-dependent environment state (atmosphere, radiation, local gravity). |
 | **`lunco-terrain-core`** | Projection-agnostic terrain LOD spine: quadtree-CDLOD selection, tile-grid math, and the `HeightSource` trait. Pure (std + serde), shared by both the planar DEM streamer and the cube-sphere planetary tiler. |
@@ -128,13 +131,16 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 | Crate | Responsibility |
 | :--- | :--- |
 | **`lunco-workbench-core`** | Renderer-independent workbench contracts: `Panel`/`PanelCtx`, instance tabs, perspective layout plans, menu contributions, and the published `WorkbenchSnapshot`. It uses the Bevy ECS substrate and egui types but does not pull `bevy_render`, `bevy_egui`, `egui_dock`, storage, or window/render services. |
-| **`lunco-workbench`** | The concrete IDE-like shell: `egui_dock` layout materialization, `bevy_egui` rendering, panel registration, persistence, viewport integration, built-in browser panels, and shell-only commands/widgets. It publishes `WorkbenchSnapshot`, consumes `lunco-workbench-core`, installs capture only when its API surface is enabled, and renders status data supplied by `lunco-status-core`. |
+| **`lunco-workbench`** | The concrete IDE-like shell: `egui_dock` layout materialization, `bevy_egui` rendering, panel registration, persistence, viewport integration, and shell-only commands/widgets. It publishes `WorkbenchSnapshot`, consumes `lunco-workbench-core`, installs capture only when its API surface is enabled, and renders status data supplied by `lunco-status-core`. |
+| **`lunco-workbench-browser`** | Reusable Twin and Files browser feature: browser section registry and query state, filesystem and library navigation, rename/open actions, and the `TwinBrowserPanel`/`FilesPanel` surfaces. It depends on `lunco-assets-core`, not the dataset processing stack. |
+| **`lunco-workbench-datasets-ui`** | Optional browser presentation for Twin-declared downloadable resources. It projects `lunco-assets`' shared dataset registry and emits its typed request/cancel events without making the generic browser depend on provisioning and processing. |
 | **`lunco-capture`** | Render-bound screenshot and deterministic offline-recording capability: typed capture commands, GPU readback, frame pacing, PNG/video sinks, and recording status. It is an application capability shared by the workbench and windowless/offscreen hosts, not a workbench subsystem. |
-| **`lunco-ui`** | Reusable UI infrastructure: cached widgets, 3D world panels, command builders. |
-| **`lunco-viz`** | Domain-agnostic visualization: `SignalRegistry`, LinePlots, and future 3D/Rerun bridges. |
+| **`lunco-ui`** | Reusable UI infrastructure: cached widgets, 3D world panels, command builders, and the shared bounded log model/renderer. |
+| **`lunco-viz`** | Domain-agnostic visualization: `SignalRegistry`, LinePlots, reusable multi-series trajectory plots, and future 3D/Rerun bridges. |
 | **`lunco-canvas`** | Stateful 2D scene editor substrate for diagrams and annotation overlays. |
 | **`lunco-luncosim-edit-core`** | Headless-safe scene-editing mechanisms: spawn and terrain tools, scene picking, typed command registration, and ECS state. |
 | **`lunco-luncosim-edit-ui`** | Rendered scene-editing presentation: egui/workbench panels, transform-gizmo and selection adapters, and physics diagnostics. |
+| **`lunco-luncosim-edit-panels-ui`** | Inspector and authored USD panels: composed-USD prim tree, standard USD joint/animation/mount/variant/parameter view models, and environment/entity authoring surfaces. It is installed explicitly by windowed composition roots. |
 | **`lunco-render`** | Appearance **intent**, render-free: `PbrLook`, `SceneCamera`, `WorldLabel`, sun/shadow look. Names `Mesh3d`, never `MeshMaterial3d`. |
 | **`lunco-render-recovery`** | Render-bound GPU health and presentation recovery: wgpu error handling, adapter shadow-capability admission, bounded failure escalation, presentation gating, and scene-teardown rearming. It is independent of the workbench shell. |
 | **`lunco-render-bevy`** | The **only** crate that names `bevy_pbr`. Binds the intent (`PbrLook`/`ShaderLook`/`SceneCamera`/`WorldLabel`) to real materials & cameras; owns `ShaderMaterial`. Headless never adds it. |
@@ -150,7 +156,9 @@ Logic engines for dynamic simulation behavior, the tool registry, and industrial
 | **`lunco-modelica-runtime`** | Render-free Modelica runtime contract: the `ModelicaModel` ECS component, worker command/result protocol, source asset loader, generated-source metadata, communication schedule, notices, sample stream, and telemetry layout. It deliberately has no Rumoca compiler, worker implementation, document editor, or UI closure. |
 | **`lunco-modelica-core`** | Headless Modelica compiler host: authored document editing, Rumoca compilation, simulation sessions, worker implementation, and MSL indexing. It consumes `lunco-modelica-runtime`, keeps API command contracts opt-in, and does not own API query registration, the shared runtime protocol, or generated USD-document metadata. It has no workbench, egui, tutorial, or UI dependency. |
 | **`lunco-modelica-api`** | Production transport-free API capability for Modelica: registers document, compiler, experiment, solver, source, and run query providers. It depends on the headless Modelica core but is not part of the compiler core's default closure; Workspace queries remain in `lunco-workspace-api`. |
-| **`lunco-modelica-ui`** | Modelica workbench UI and `lunica` application facade. It adapts core state to workbench contexts and owns Modelica panels, diagrams, plots, onboarding, and editor presentation; it has no tutorial catalog or lifecycle. |
+| **`lunco-modelica-ui`** | Modelica workbench UI and `lunica` application facade. It adapts core state to workbench contexts and owns Modelica panels, diagram/editor adapters, onboarding, and experiment-result view-models; reusable log, icon, documentation, and trajectory rendering lives in shared UI crates. It has no tutorial catalog or lifecycle. |
+| **`lunco-modelica-icon-ui`** | Reusable egui renderer for authored Modelica `Icon`/`Diagram` graphics, including orientation, text substitution, themed colors, polygon tessellation, and bitmap loading through the MSL asset-source boundary. It has no workbench panel or document lifecycle ownership. |
+| **`lunco-modelica-docs-ui`** | Reusable egui Modelica documentation renderer: cached HTML-to-Markdown conversion, CommonMark presentation, and workbench URI-link dispatch. It does not resolve documents or own panel selection. |
 | **`lunco-modelica-ast`** | Pure Modelica source boundary: BOM normalization, strict/recovering Rumoca parse wrappers, AST interface/component extraction, shared expression/description display projections, and Modelica lint facts. It has no Bevy, UI, worker, storage, or solver ownership; authored lint policy remains in `assets/scripting/policy/lint_modelica.rhai`. |
 | **`lunco-sysml-ast`** | Pure SysML v2 parser/resolver projection: source files, qualified elements, typed literals, requirements, verification links, and diagnostics. It has no Bevy, filesystem, Twin, or scripting ownership. |
 | **`lunco-sysml-report`** | Small transport-neutral JSON projection shared by validation and language adapters. It owns no parsing, filesystem, Twin, Bevy, or verdict policy, and keeps qualified attributes/collision evidence stable across API and Rhai. |
@@ -177,6 +185,8 @@ Primary entry points and simulation assembly targets.
 | **`lunco-luncosim-core`** | — | Headless-safe simulation runtime shared by the GUI shell, `luncosim-server`, and scene-test runner. |
 | **`lunco-luncosim-server`** | `luncosim-server` | Thin headless launcher that depends directly on `lunco-luncosim-core` with API + networking enabled; the GUI shell is not linked. |
 | **`lunco-modelica-ui`** | `lunica` | The Modelica workbench application and UI facade. |
+| **`lunco-modelica-icon-ui`** | — | Reusable egui Modelica icon/diagram graphics renderer used by the diagram canvas and model preview. |
+| **`lunco-modelica-docs-ui`** | — | Reusable egui Modelica documentation renderer used by the model view. |
 | **`lunco-modelica-core`** | `lunica_worker`, `modelica_run`, `modelica_tester`, `msl_indexer`, `msl_parse_bench` | Headless Modelica worker and CLI/indexing tools; none link the workbench UI or Modelica API query capability. The worker protocol and live ECS component come from `lunco-modelica-runtime`. |
 | **`lunco-modelica-api`** | — | API query capability installed by API-enabled Modelica and LunCoSim hosts. |
 
@@ -191,7 +201,10 @@ Below, selected crates whose responsibilities benefit from extra detail. (Crates
 ### Core Foundation
 
 **`lunco-core`**
-The bedrock of the simulation. Defines the shared scalar port substrate (`PortRegistry`, `PortInfo`, owner-supplied metadata, backend-owned topology keys, and the durable owner-published `PortTopologyRevision`/`PortTopologyState` structural invalidation pair) for software/hardware interaction, the typed `Mutation<P>` command substrate, `SimTick`, and the `ComponentGraph` canonical data structure for all 2D diagram visualizations (Modelica, FSW, SysML). Owns the canonical BigSpace world shell, arbitrary-grid f64 pose composition/conversion, atomic grid migration, and the `ActivePhysicsFrame` boundary; it does not assign celestial semantics.
+The bedrock of the simulation. Defines the shared scalar port substrate (`PortRegistry`, `PortInfo`, owner-supplied metadata, backend-owned topology keys, and the durable owner-published `PortTopologyRevision`/`PortTopologyState` structural invalidation pair) for software/hardware interaction, the typed `Mutation<P>` command substrate, `SimTick`, and the `ComponentGraph` canonical data structure for all 2D diagram visualizations (Modelica, FSW, SysML). It owns generic engine lifecycle and runtime state but has no BigSpace dependency and does not assign celestial semantics.
+
+**`lunco-spatial`**
+Owns the BigSpace-specific boundary: arbitrary-grid f64 pose composition/conversion, the persistent world shell, atomic grid migration, `ActivePhysicsFrame`, spatial markers, hierarchy invariants, and the vehicle-neutral navigation law. It depends on `lunco-core` for shared runtime diagnostics; the dependency direction is one-way, so changing spatial code does not rebuild core.
 
 **`lunco-core-session`**
 The session/authority layer above `lunco-core`. It owns network role and status,
@@ -213,8 +226,19 @@ renaming, entry-kind inspection, and directory preparation through handles.
 Supports native FS and memory (for tests), with the browser localStorage
 backend and architectural stubs for future OPFS/IndexedDB and remote backends.
 
+**`lunco-assets-core`**
+The lightweight runtime asset boundary. It owns canonical `lunco://` and
+`twin://` identities, cache and Twin-root resolution, Bevy source registration,
+embedded Modelica/mission/tutorial/Rhai sources, and project asset discovery.
+It intentionally excludes HTTP, archive, raster, SVG, GeoTIFF, and native
+process dependencies.
+
 **`lunco-assets`**
-Unified asset management system. Resolves shared cache locations across git worktrees, downloads external assets via `Assets.toml` with SHA-256 verification, and handles texture pre-processing (resize/convert).
+The explicit provisioning boundary. It owns `Assets.toml` dataset registration,
+user-authorised download/cancellation/status orchestration, native offline
+texture/DEM/map/glTF processing, and the `lunco-assets` CLI. Applications add it
+only where dataset management is part of the composition; asset-reading crates
+depend on `lunco-assets-core` instead.
 
 **`lunco-hash`**
 The workspace hashing substrate. Fast tier provides dependency-free, wasm-clean FNV-1a hashing for process-local change detection and caching keys. CID tier (via the `cid` feature) provides CIDv1 raw + SHA-256 content-addressing for files/blobs on disk and wire.
@@ -245,7 +269,10 @@ The generic Web Worker pool transport (wasm-only; `#![cfg(target_arch = "wasm32"
 ### Simulation Engine
 
 **`lunco-celestial`**
-Orbital mechanics and solar-system simulation spine. Owns the canonical body catalog and named semantic reference frames, the typed f64 `FrameTree`, body-fixed rotation, gravity vectors, and automatic Sphere-of-Influence/frame migration. User-facing anchors/orbits declare physical intent; the crate resolves concrete BigSpace grids and performs the projection. Owns the `EphemerisResource` abstraction; the concrete high-fidelity provider lives in `lunco-celestial-ephemeris`.
+Headless celestial semantics. Owns the canonical body catalog and named semantic reference frames, the typed f64 `FrameTree`, body-fixed rotation, geodesy, Kepler propagation, and the `EphemerisResource` abstraction. It has no scene hierarchy, BigSpace, terrain, rendering, or UI dependency. The concrete high-fidelity provider lives in `lunco-celestial-ephemeris`.
+
+**`lunco-celestial-spatial`**
+Bevy/BigSpace runtime adapter for `lunco-celestial`. Owns scene hierarchy and grid projection, gravity application, surface placement, SOI migration, globe/imagery integration, links, trajectories, cadence, and runtime commands. It is the scene-facing package; semantic consumers should depend on `lunco-celestial` directly.
 
 **`lunco-celestial-ephemeris`**
 Concrete high-fidelity ephemeris provider for `lunco-celestial`. The heavy half of the celestial split and the one place `celestial-time` is allowed: pulls in `celestial-ephemeris` (VSOP2013 + ELP/MPP02), `celestial-time`, and `celestial-core` (none of which build on Windows MSVC). Apps that need real planetary positions add `EphemerisPlugin`, which overwrites the default `EphemerisResource`.
@@ -372,7 +399,10 @@ path contracts, but it does not load or compose USD stages and does not depend
 on the aggregate `lunco-usd` runtime.
 
 **`lunco-usd-ui`**
-Interactive USD browser and preview presentation. Owns workbench sections, preview sessions/views, viewport queries, Save-As picker integration, and UI status/placeholder adapters while consuming the document and projection APIs from `lunco-usd`.
+Interactive USD browser and document presentation. Owns workbench sections, loaded-stage and scene-file views, browser dispatch, Save-As picker integration, and UI status/placeholder adapters while consuming the document and projection APIs from `lunco-usd`. Add `lunco-usd-viewport-ui` when an application needs the render-heavy preview surface.
+
+**`lunco-usd-viewport-ui`**
+Render-heavy USD preview surface. Owns preview sessions/views, offscreen cameras and images, viewport interaction, inspection commands/queries, and the viewport panels. It consumes the document and projection APIs but does not own Twin-browser lifecycle or document navigation.
 
 **`lunco-usd-bevy-camera`**
 Render-free camera adapter built on `lunco-usd-bevy-core`,
@@ -526,12 +556,21 @@ Reflection-based data extraction engine. Automatically samples and standardizes 
 
 **`lunco-workbench`**
 The engineering-IDE shell. Handles the docking engine (tabs, splits),
-perspective presets (Build, Simulate), Twin Browser, shared hierarchy-row
-presentation (`tree::{branch, leaf}`), and picker/command adapters. It does
-not own file bytes or backend I/O; those go through `lunco-storage`, while
-Twin discovery stays in `lunco-workspace`/`lunco-twin`. GPU health and
-presentation recovery live in the independent `lunco-render-recovery` crate;
-the workbench only composes its banner and recovery systems.
+perspective presets (Build, Simulate), shared hierarchy-row presentation
+(`tree::{branch, leaf}`), and picker/command adapters. It does not own file
+bytes or backend I/O; those go through `lunco-storage`, while Twin discovery
+stays in `lunco-workspace`/`lunco-twin`. GPU health and presentation recovery
+live in the independent `lunco-render-recovery` crate; the workbench only
+composes its banner and recovery systems. Hosts that need Twin and Files
+navigation add the separate `lunco-workbench-browser` feature package.
+
+**`lunco-workbench-browser`**
+Reusable navigation feature for the concrete workbench. It owns the Twin and
+Files panels, browser query/actions/resources, built-in filesystem and library
+sections. Domain UI crates register their own `BrowserSection` implementations;
+optional dataset controls live in `lunco-workbench-datasets-ui`, which is the
+only browser extension that depends on the heavier asset-provisioning crate,
+keeping the base workbench shell independent of that dependency.
 
 **`lunco-capture`**
 Render-bound application capability for screenshots and deterministic offline

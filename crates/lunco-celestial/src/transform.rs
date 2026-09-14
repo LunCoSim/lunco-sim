@@ -25,29 +25,9 @@
 //! Every frame needs exactly two functions — *into* the hub and *out of* it — and any A→B is
 //! their composition. Adding a frame is O(1), not O(N).
 //!
-//! # big_space: precision, not a frame
-//!
-//! A `big_space` grid is **not a reference frame** — it is a *precision encoding*. `(CellCoord
-//! i64, Vec3 f32)` and one `f64` metre vector are the *same position in the same frame*, stored
-//! differently: the split exists so an `f32` render transform never has to hold an AU-scale
-//! number and lose metres to rounding.
-//!
-//! Typing the grid as a frame would be a category error — you would be typing the *storage*, and
-//! every `translation_to_grid` would become a conversion that means nothing. So the seam is:
-//!
-//! - **frames** = semantics (what the axes mean, where the origin is);
-//! - **big_space** = precision (how that number survives being an `f32` on the GPU).
-//!
-//! [`Pos<Solar>`] — f64, absolute, metres — is exactly what you hand a grid:
-//!
-//! ```ignore
-//! let p: Pos<Solar> = tree.center_in_solar(Center::Body(301));
-//! let (cell, offset) = grid.translation_to_grid(p.raw());   // precision split, same frame
-//! ```
-//!
-//! What a grid DOES carry is a frame: the solar grid's axes are [`Solar`]; a body's grid is that
-//! body's. That association is the grid entity's business (see `placement.rs`), not the number's
-//! — which is why [`Pos`] stops at f64 and does not know about cells.
+//! The analytical functions stop at f64 values in a semantic frame. Runtime
+//! adapters are responsible for encoding those values for a scene or physics
+//! representation.
 //!
 //! # What a transform needs
 //!

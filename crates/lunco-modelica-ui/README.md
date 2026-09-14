@@ -3,9 +3,12 @@
 Modelica workbench UI and `lunica` application facade for LunCoSim.
 
 The headless compiler, document runtime, simulation worker, and CLI tools live
-in [`lunco-modelica-core`](../lunco-modelica-core/). This package adds the
-egui/workbench presentation and composes the core runtime for the standalone
-workbench.
+in [`lunco-modelica-core`](../lunco-modelica-core/). The reusable Modelica
+graphics renderer lives in [`lunco-modelica-icon-ui`](../lunco-modelica-icon-ui/).
+The reusable HTML documentation renderer lives in
+[`lunco-modelica-docs-ui`](../lunco-modelica-docs-ui/).
+This package adds the egui/workbench presentation and composes the core runtime
+for the standalone workbench.
 
 ## What This Crate Does
 
@@ -207,7 +210,7 @@ no silent stall regardless of model size.
 - `rumoca-session`, `rumoca-phase-parse` — Modelica compilation (LunCoSim/rumoca fork)
 - `lunco-workbench` — docking, persistence, panel system
 - `lunco-canvas` — interactive diagram rendering substrate
-- `egui_plot` — time-series charts
+- `lunco-viz` — shared line and multi-series trajectory rendering
 
 ## See Also
 

@@ -710,8 +710,8 @@ fn shader_path_candidates(requested: &str) -> Vec<String> {
     }
 
     let mut candidates = Vec::with_capacity(2);
-    if !lunco_assets::has_scheme(requested) {
-        candidates.push(lunco_assets::engine_asset_uri(requested));
+    if !lunco_assets_core::has_scheme(requested) {
+        candidates.push(lunco_assets_core::engine_asset_uri(requested));
     }
     if !candidates.iter().any(|candidate| candidate == requested) {
         candidates.push(requested.to_string());
@@ -951,12 +951,12 @@ pub fn on_set_shader_source(
 /// (`shaders/<stem>.wgsl`) when no Twin is open. Mirrors [`install_shader`]'s
 /// destination logic so callers (e.g. the Inspector) can predict the path.
 pub fn shader_asset_path_for(
-    twin_roots: Option<&lunco_assets::twin_source::TwinRoots>,
+    twin_roots: Option<&lunco_assets_core::twin_source::TwinRoots>,
     stem: &str,
-) -> Result<String, lunco_assets::TwinRootsError> {
+) -> Result<String, lunco_assets_core::TwinRootsError> {
     Ok(
         match twin_roots.map(|t| t.primary()).transpose()?.flatten() {
-            Some((name, _)) => lunco_assets::twin_uri(&name, format!("shaders/{stem}.wgsl")),
+            Some((name, _)) => lunco_assets_core::twin_uri(&name, format!("shaders/{stem}.wgsl")),
             None => format!("shaders/{stem}.wgsl"),
         },
     )
@@ -994,7 +994,7 @@ fn install_shader(
     stem: &str,
     source: &str,
     target: u64,
-    twin_roots: Option<&lunco_assets::twin_source::TwinRoots>,
+    twin_roots: Option<&lunco_assets_core::twin_source::TwinRoots>,
     asset_server: &AssetServer,
     shaders: &mut Assets<bevy::shader::Shader>,
     catalog: &mut lunco_materials::ShaderCatalog,
@@ -1030,12 +1030,12 @@ fn install_shader(
     };
     let (asset_path, disk_path): (String, std::path::PathBuf) = match primary {
         Some((name, root)) => (
-            lunco_assets::twin_uri(&name, format!("shaders/{stem}.wgsl")),
+            lunco_assets_core::twin_uri(&name, format!("shaders/{stem}.wgsl")),
             root.join("shaders").join(format!("{stem}.wgsl")),
         ),
         None => (
             format!("shaders/{stem}.wgsl"),
-            lunco_assets::assets_dir_abs()
+            lunco_assets_core::assets_dir_abs()
                 .join("shaders")
                 .join(format!("{stem}.wgsl")),
         ),
@@ -1106,7 +1106,7 @@ pub struct CreateShader {
 #[on_command(CreateShader)]
 pub fn on_create_shader(
     trigger: On<CreateShader>,
-    twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
+    twin_roots: Option<Res<lunco_assets_core::twin_source::TwinRoots>>,
     asset_server: Res<AssetServer>,
     mut shaders: ResMut<Assets<bevy::shader::Shader>>,
     mut catalog: ResMut<lunco_materials::ShaderCatalog>,
@@ -1160,7 +1160,7 @@ pub struct ImportShader {
 pub fn on_import_shader(
     trigger: On<ImportShader>,
     #[cfg(not(target_arch = "wasm32"))] twin_roots: Option<
-        Res<lunco_assets::twin_source::TwinRoots>,
+        Res<lunco_assets_core::twin_source::TwinRoots>,
     >,
     #[cfg(not(target_arch = "wasm32"))] asset_server: Res<AssetServer>,
     #[cfg(not(target_arch = "wasm32"))] mut shaders: ResMut<Assets<bevy::shader::Shader>>,
@@ -1176,8 +1176,9 @@ pub fn on_import_shader(
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let src = match lunco_assets::read_asset_file_string(std::path::Path::new(&ev.source_path))
-        {
+        let src = match lunco_assets_core::read_asset_file_string(std::path::Path::new(
+            &ev.source_path,
+        )) {
             Ok(s) => s,
             Err(e) => {
                 warn!("IMPORT_SHADER: read '{}' failed: {e}", ev.source_path);
@@ -1225,7 +1226,7 @@ pub struct DeleteShader {
 #[on_command(DeleteShader)]
 pub fn on_delete_shader(
     trigger: On<DeleteShader>,
-    #[cfg(not(target_arch = "wasm32"))] schemes: Option<Res<lunco_assets::SchemeRegistry>>,
+    #[cfg(not(target_arch = "wasm32"))] schemes: Option<Res<lunco_assets_core::SchemeRegistry>>,
     mut catalog: ResMut<lunco_materials::ShaderCatalog>,
 ) {
     let path = trigger.event().path.trim().to_string();

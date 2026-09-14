@@ -48,10 +48,11 @@ type Controllable = bevy::prelude::Or<(
     bevy::prelude::With<lunco_core::ControlBinding>,
     bevy::prelude::With<lunco_cosim_core::SimComponent>,
 )>;
-use lunco_celestial::{geo::LocalTangentFrame, LeaveSurface, LocalGravityField, TeleportToSurface};
-use lunco_core::attach::migrate_to_grid;
+use lunco_celestial::geo::LocalTangentFrame;
+use lunco_celestial_spatial::{LeaveSurface, LocalGravityField, TeleportToSurface};
 use lunco_environment::{GravityBody, GravityProvider};
 use lunco_settings::{AppSettingsExt, ProfileSettings, SettingsSection};
+use lunco_spatial::attach::migrate_to_grid;
 use lunco_time::{SetTimeTransport, TimeTransport, TransportMode, WorldTime};
 use lunco_usd_bevy_scene::{is_preview_only, is_preview_only_entity, UsdPreviewOnly, UsdPrimPath};
 
@@ -1483,7 +1484,7 @@ fn capture_site_camera_pose(
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
-    q_world_grid: Query<(), With<lunco_core::WorldGrid>>,
+    q_world_grid: Query<(), With<lunco_spatial::WorldGrid>>,
     mut commands: Commands,
 ) {
     let Ok(site_root) = q_site.single() else {
@@ -1498,7 +1499,7 @@ fn capture_site_camera_pose(
         if q_grids.get(current_parent).is_ok() && q_world_grid.get(current_parent).is_err() {
             continue;
         }
-        let pose = lunco_core::coords::common_grid_poses(
+        let pose = lunco_spatial::coords::common_grid_poses(
             avatar, site_root, &q_parents, &q_grids, &q_spatial,
         )
         .map(
@@ -1567,7 +1568,7 @@ fn bind_local_avatar_to_site_grid(
     q_avatar: Query<(Entity, &ChildOf, Option<&GravityBody>), (With<Avatar>, With<LocalAvatar>)>,
     q_pending: Query<&PendingSiteCameraPose>,
     q_grids: Query<&Grid>,
-    q_world_grid: Query<(), With<lunco_core::WorldGrid>>,
+    q_world_grid: Query<(), With<lunco_spatial::WorldGrid>>,
     mut commands: Commands,
 ) {
     let Ok((site_root, anchor)) = q_site.single() else {
@@ -1894,13 +1895,14 @@ fn surface_axes_in_grid(
     q_spatial: &Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
 ) -> Option<(Vec3, Vec3, Vec3)> {
     let body_entity = gravity.body_entity?;
-    let (_, _, grid_to_body_frame, _, body_to_body_frame) = lunco_core::coords::common_grid_poses(
-        grid_entity,
-        body_entity,
-        q_parents,
-        q_grids,
-        q_spatial,
-    )?;
+    let (_, _, grid_to_body_frame, _, body_to_body_frame) =
+        lunco_spatial::coords::common_grid_poses(
+            grid_entity,
+            body_entity,
+            q_parents,
+            q_grids,
+            q_spatial,
+        )?;
     let body_to_grid = grid_to_body_frame.inverse() * body_to_body_frame;
     Some(surface_axes_from_body_position(
         gravity.body_relative_position,
@@ -1929,7 +1931,7 @@ fn surface_axes_from_body_position(
 /// Resolve a body-fixed ENU frame for a point already expressed in a Grid.
 ///
 /// `grid_position` is a BigSpace grid-absolute position, exactly the value
-/// returned by [`lunco_core::coords::grid_relative_pose`] for a target. The
+/// returned by [`lunco_spatial::coords::grid_relative_pose`] for a target. The
 /// conversion stays in the shared body-frame branch and never goes through a
 /// root `GlobalTransform`.
 fn surface_axes_for_grid_position<F: bevy::ecs::query::QueryFilter>(
@@ -1941,7 +1943,7 @@ fn surface_axes_for_grid_position<F: bevy::ecs::query::QueryFilter>(
     q_spatial: &Query<(Option<&CellCoord>, &Transform), F>,
 ) -> Option<(Vec3, Vec3, Vec3)> {
     let (_, grid_body_position, grid_to_body_frame, body_position, body_to_body_frame) =
-        lunco_core::coords::common_grid_poses(
+        lunco_spatial::coords::common_grid_poses(
             grid_entity,
             body_entity,
             q_parents,
@@ -1978,7 +1980,7 @@ fn gravity_up_in_grid(
         return up;
     }
 
-    let (_, grid_rotation) = lunco_core::coords::world_pose(grid_entity, q_parents, q_grids, q_spatial)
+    let (_, grid_rotation) = lunco_spatial::coords::world_pose(grid_entity, q_parents, q_grids, q_spatial)
         .unwrap_or_else(|error| {
             panic!(
                 "camera Grid {grid_entity:?} has no valid BigSpace pose while resolving gravity: {error}"
@@ -2133,7 +2135,7 @@ fn apply_scroll_zoom(
 /// in that Grid's local frame.
 ///
 /// This is intentionally a local-frame boundary. A possession/follow target is
-/// resolved with [`lunco_core::coords::grid_relative_pose`], so the camera is
+/// resolved with [`lunco_spatial::coords::grid_relative_pose`], so the camera is
 /// never converted through the heliocentric root and then subtracted back into
 /// the target grid. That round trip is numerically valid at ordinary distances,
 /// but it is the wrong contract for a live BigSpace hierarchy: site pinning and
@@ -2505,7 +2507,7 @@ fn spring_arm_system(
         // body-local BigSpace frame. Keep the render-rate follow solve in that
         // frame as well. A target -> solar root -> avatar-grid round trip makes
         // the camera depend on site pinning and celestial propagation order.
-        let Some((target_pos, target_rotation)) = lunco_core::coords::grid_relative_pose(
+        let Some((target_pos, target_rotation)) = lunco_spatial::coords::grid_relative_pose(
             arm.target, child_of.0, &q_parents, &q_grids, &q_spatial,
         ) else {
             continue;
@@ -2637,7 +2639,7 @@ fn spring_arm_system(
                 let filter = collision_filters.filter_for(arm.target, &q_children);
                 sq.cast_ray_in_grid(
                     child_of.0,
-                    lunco_core::coords::GridPos(ray_origin),
+                    lunco_spatial::coords::GridPos(ray_origin),
                     bevy::math::Dir3::new(ray_dir.as_vec3()).unwrap_or(bevy::math::Dir3::Y),
                     ray_len,
                     true,
@@ -2735,8 +2737,8 @@ fn orbit_system(
             Without<lunco_core::CinematicCameraLock>,
         ),
     >,
-    q_world_grid: Query<Entity, With<lunco_core::WorldGrid>>,
-    frame_index: Res<lunco_celestial::ReferenceFrameIndex>,
+    q_world_grid: Query<Entity, With<lunco_spatial::WorldGrid>>,
+    frame_index: Res<lunco_celestial_spatial::ReferenceFrameIndex>,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
     q_bodies: Query<(Entity, &CelestialBody)>,
@@ -2748,7 +2750,7 @@ fn orbit_system(
     q_children: Query<&Children>,
     mut commands: Commands,
     mut log_countdown: Local<u32>,
-    mut orbital_pin: Option<ResMut<lunco_celestial::OrbitalViewPin>>,
+    mut orbital_pin: Option<ResMut<lunco_celestial_spatial::OrbitalViewPin>>,
 ) {
     if keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight) {
         return;
@@ -2801,7 +2803,7 @@ fn orbit_system(
             continue;
         };
         let centre_entity = body.map_or(orbit.target, |_| physical_target);
-        let Some((target_orbit, _)) = lunco_core::coords::pose_in_grid(
+        let Some((target_orbit, _)) = lunco_spatial::coords::pose_in_grid(
             centre_entity,
             orbit_grid,
             &q_parents,
@@ -2814,7 +2816,7 @@ fn orbit_system(
         // conversion with its live cell/local pair. Orbit math stays directly
         // in the selected inertial body grid; no subtraction of ~AU root-frame
         // coordinates can consume local precision.
-        let Some((cam_orbit, _)) = lunco_core::coords::pose_in_grid_seeded(
+        let Some((cam_orbit, _)) = lunco_spatial::coords::pose_in_grid_seeded(
             avatar_ent,
             orbit_grid,
             Some(&*cell),
@@ -2901,7 +2903,7 @@ fn orbit_system(
         if let (Some(body), Some(pin)) = (body, orbital_pin.as_mut()) {
             let rotation = Quat::from_euler(EulerRot::YXZ, orbit.yaw, orbit.pitch, 0.0);
             let direction = rotation.mul_vec3(Vec3::Z).as_dvec3();
-            let next_pin = lunco_celestial::OrbitalViewPin {
+            let next_pin = lunco_celestial_spatial::OrbitalViewPin {
                 active: true,
                 body: body.ephemeris_id,
                 dir: direction,
@@ -3066,7 +3068,7 @@ fn freeflight_scroll_transit_system(
     q_site: Query<&lunco_celestial::GeodeticAnchor, With<lunco_celestial::SiteAnchor>>,
     q_bodies: Query<(Entity, &CelestialBody)>,
     drag_mode: Option<Res<lunco_core::DragModeActive>>,
-    active_frame: Option<Res<lunco_core::ActivePhysicsFrame>>,
+    active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
     move_and_slide: Option<MoveAndSlide<'_, '_>>,
     collision_settings: Res<AvatarCollisionSettings>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
@@ -3120,7 +3122,7 @@ fn freeflight_scroll_transit_system(
             zoom.delta = 0.0;
             continue;
         };
-        let Some((center, _)) = lunco_core::coords::pose_in_grid(
+        let Some((center, _)) = lunco_spatial::coords::pose_in_grid(
             body_ent,
             child_of.parent(),
             &q_parents,
@@ -3343,14 +3345,14 @@ fn move_avatar_with_collision(
     if !source_position.is_finite() || !desired_delta.is_finite() || !up_direction.is_finite() {
         return None;
     }
-    let source_to_physics = lunco_core::coords::grid_transform_between_grids(
+    let source_to_physics = lunco_spatial::coords::grid_transform_between_grids(
         source_grid,
         active_frame,
         q_parents,
         q_grids,
         q_spatial,
     )?;
-    let physics_to_source = lunco_core::coords::grid_transform_between_grids(
+    let physics_to_source = lunco_spatial::coords::grid_transform_between_grids(
         active_frame,
         source_grid,
         q_parents,
@@ -3457,7 +3459,7 @@ fn apply_fly(
     // paused, because pausing the simulation is not supposed to paralyse the user.
     time: Res<Time>,
     drag_mode: Option<Res<lunco_core::DragModeActive>>,
-    active_frame: Option<Res<lunco_core::ActivePhysicsFrame>>,
+    active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
     move_and_slide: Option<MoveAndSlide<'_, '_>>,
     collision_settings: Res<AvatarCollisionSettings>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
@@ -4219,7 +4221,7 @@ fn on_return_from_orbit(
         (With<Avatar>, With<LocalAvatar>),
     >,
     q_bodies: Query<&CelestialBody>,
-    mut orbital_pin: Option<ResMut<lunco_celestial::OrbitalViewPin>>,
+    mut orbital_pin: Option<ResMut<lunco_celestial_spatial::OrbitalViewPin>>,
 ) {
     let avatar = trigger.event().target;
     let Ok((
@@ -4295,7 +4297,7 @@ fn on_release_command(
         (With<Avatar>, With<LocalAvatar>),
     >,
     guard: Res<lunco_core_session::SyncApplyGuard>,
-    mut orbital_pin: Option<ResMut<lunco_celestial::OrbitalViewPin>>,
+    mut orbital_pin: Option<ResMut<lunco_celestial_spatial::OrbitalViewPin>>,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
@@ -4776,7 +4778,7 @@ fn on_possess_command(
         warn!(target = ?cmd.target, "[possess] refused: target has no live Grid frame");
         return;
     };
-    let Some((target_local_pos, target_local_rotation)) = lunco_core::coords::grid_relative_pose(
+    let Some((target_local_pos, target_local_rotation)) = lunco_spatial::coords::grid_relative_pose(
         cmd.target,
         target_grid_entity,
         &q_parents,
@@ -5027,7 +5029,7 @@ fn on_follow_command(
         warn!(target = ?cmd.target, "[follow] refused: target has no live Grid frame");
         return;
     };
-    let Some((target_local_pos, target_local_rotation)) = lunco_core::coords::grid_relative_pose(
+    let Some((target_local_pos, target_local_rotation)) = lunco_spatial::coords::grid_relative_pose(
         cmd.target,
         target_grid_entity,
         &q_parents,
@@ -5145,7 +5147,7 @@ fn on_focus_command(
     >,
     mut q_zoom: Query<&mut CameraZoomInput, (With<Avatar>, With<LocalAvatar>)>,
     q_bodies: Query<&CelestialBody>,
-    q_body_decls: Query<&lunco_celestial::CelestialBodyDecl>,
+    q_body_decls: Query<&lunco_celestial_spatial::CelestialBodyDecl>,
     q_body_entities: Query<(Entity, &CelestialBody)>,
     q_sc: Query<&Spacecraft>,
     q_children: Query<&Children>,
@@ -5434,7 +5436,7 @@ fn on_surface_teleport_command(
     q_parents: Query<&ChildOf>,
     q_spatial_abs: Query<(Option<&CellCoord>, &Transform)>,
     q_bodies: Query<(Entity, &CelestialBody)>,
-    q_globe_lods: Query<&lunco_celestial::GlobeLod>,
+    q_globe_lods: Query<&lunco_celestial_spatial::GlobeLod>,
     q_gravity_providers: Query<&GravityProvider>,
     mut field: ResMut<LocalGravityField>,
 ) {
@@ -5497,7 +5499,7 @@ fn on_surface_teleport_command(
         // share one parent frame; it becomes a sideways teleport after an
         // orbital/body-grid handoff.
         let Some((_common_grid, avatar_position, avatar_rotation, body_position, body_rotation)) =
-            lunco_core::coords::common_grid_poses(
+            lunco_spatial::coords::common_grid_poses(
                 avatar_ent,
                 body_entity,
                 &q_parents,
@@ -5509,7 +5511,7 @@ fn on_surface_teleport_command(
             return;
         };
         let Some((_, grid_position, grid_to_common, _, body_to_common)) =
-            lunco_core::coords::common_grid_poses(
+            lunco_spatial::coords::common_grid_poses(
                 target_grid,
                 body_entity,
                 &q_parents,
@@ -5588,7 +5590,8 @@ fn on_surface_teleport_command(
         field.local_up = surface_normal;
         field.surface_g = surface_g;
         let Some((_, body_world_rotation)) =
-            lunco_core::coords::world_pose(body_entity, &q_parents, &q_grids, &q_spatial_abs).ok()
+            lunco_spatial::coords::world_pose(body_entity, &q_parents, &q_grids, &q_spatial_abs)
+                .ok()
         else {
             warn!("TELEPORT: body has no complete world BigSpace pose");
             return;
@@ -5828,7 +5831,7 @@ fn get_physical_body(
 
 fn resolve_declared_body(
     target: Entity,
-    declarations: &Query<&lunco_celestial::CelestialBodyDecl>,
+    declarations: &Query<&lunco_celestial_spatial::CelestialBodyDecl>,
     bodies: &Query<(Entity, &CelestialBody)>,
 ) -> Option<Entity> {
     let decl = declarations.get(target).ok()?;
@@ -6612,15 +6615,15 @@ mod tests {
             .init_resource::<Time<Real>>()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<CameraDefaults>()
-            .init_resource::<lunco_celestial::ReferenceFrameIndex>()
-            .add_systems(First, lunco_celestial::update_reference_frame_index)
+            .init_resource::<lunco_celestial_spatial::ReferenceFrameIndex>()
+            .add_systems(First, lunco_celestial_spatial::update_reference_frame_index)
             .add_systems(Update, orbit_system);
 
         let root_grid = app
             .world_mut()
             .spawn((
-                lunco_core::WorldGrid,
-                lunco_core::WorldGridConfig::default().grid(),
+                lunco_spatial::WorldGrid,
+                lunco_spatial::WorldGridConfig::default().grid(),
                 CellCoord::ZERO,
                 Transform::default(),
             ))
@@ -6629,7 +6632,7 @@ mod tests {
         let host_grid = app
             .world_mut()
             .spawn((
-                lunco_core::WorldGridConfig::default().grid(),
+                lunco_spatial::WorldGridConfig::default().grid(),
                 CellCoord::new(75_000_000, 0, 0),
                 Transform::from_rotation(host_rotation),
                 ChildOf(root_grid),
@@ -6641,7 +6644,7 @@ mod tests {
                 lunco_celestial::ReferenceFrame::EclipticJ2000 {
                     center: lunco_celestial::ephemeris_id::MOON,
                 },
-                lunco_core::WorldGridConfig::default().grid(),
+                lunco_spatial::WorldGridConfig::default().grid(),
                 CellCoord::new(75_000_000, 0, 0),
                 Transform::default(),
                 ChildOf(root_grid),
@@ -6735,8 +6738,8 @@ mod tests {
         let root_grid = app
             .world_mut()
             .spawn((
-                lunco_core::WorldGrid,
-                lunco_core::WorldGridConfig::default().grid(),
+                lunco_spatial::WorldGrid,
+                lunco_spatial::WorldGridConfig::default().grid(),
                 CellCoord::ZERO,
                 Transform::default(),
             ))
@@ -6744,7 +6747,7 @@ mod tests {
         let surface_grid = app
             .world_mut()
             .spawn((
-                lunco_core::WorldGridConfig::default().grid(),
+                lunco_spatial::WorldGridConfig::default().grid(),
                 CellCoord::new(17, -4, 8),
                 Transform::from_rotation(Quat::from_rotation_y(0.7)),
                 ChildOf(root_grid),
@@ -6758,7 +6761,7 @@ mod tests {
             heading: 0.4,
             pitch: -0.25,
         };
-        app.insert_resource(lunco_celestial::OrbitalViewPin {
+        app.insert_resource(lunco_celestial_spatial::OrbitalViewPin {
             active: true,
             body: lunco_celestial::ephemeris_id::MOON,
             dir: DVec3::Z,
@@ -6804,7 +6807,11 @@ mod tests {
         assert!(restored
             .rotation
             .abs_diff_eq(return_transform.rotation, 1e-6));
-        assert!(!world.resource::<lunco_celestial::OrbitalViewPin>().active);
+        assert!(
+            !world
+                .resource::<lunco_celestial_spatial::OrbitalViewPin>()
+                .active
+        );
         assert!(world.get::<OrbitCamera>(avatar).is_none());
         assert_eq!(
             world.get::<SurfaceCamera>(avatar).unwrap().heading,
@@ -6821,14 +6828,14 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<lunco_core_session::SyncApplyGuard>()
             .init_resource::<LocalGravityField>()
-            .init_resource::<lunco_celestial::OrbitalViewPin>()
+            .init_resource::<lunco_celestial_spatial::OrbitalViewPin>()
             .add_observer(on_focus_command)
             .add_observer(on_return_from_orbit);
 
         let surface_grid = app
             .world_mut()
             .spawn((
-                lunco_core::WorldGridConfig::default().grid(),
+                lunco_spatial::WorldGridConfig::default().grid(),
                 CellCoord::ZERO,
             ))
             .id();
@@ -6940,7 +6947,7 @@ mod tests {
         let grid = app
             .world_mut()
             .spawn((
-                lunco_core::WorldGridConfig::default().grid(),
+                lunco_spatial::WorldGridConfig::default().grid(),
                 CellCoord::ZERO,
             ))
             .id();
@@ -7165,21 +7172,21 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<lunco_core_session::SyncApplyGuard>()
             .init_resource::<LocalGravityField>()
-            .init_resource::<lunco_celestial::OrbitalViewPin>()
+            .init_resource::<lunco_celestial_spatial::OrbitalViewPin>()
             .add_observer(on_focus_command)
             .add_observer(on_return_from_orbit);
 
         let surface_grid = app
             .world_mut()
             .spawn((
-                lunco_core::WorldGridConfig::default().grid(),
+                lunco_spatial::WorldGridConfig::default().grid(),
                 CellCoord::ZERO,
             ))
             .id();
         let orbit_grid = app
             .world_mut()
             .spawn((
-                lunco_core::WorldGridConfig::default().grid(),
+                lunco_spatial::WorldGridConfig::default().grid(),
                 CellCoord::ZERO,
             ))
             .id();
@@ -7274,7 +7281,11 @@ mod tests {
         );
         assert!(world.get::<OrbitCamera>(avatar).is_none());
         assert!(world.get::<OrbitViewReturn>(avatar).is_none());
-        assert!(!world.resource::<lunco_celestial::OrbitalViewPin>().active);
+        assert!(
+            !world
+                .resource::<lunco_celestial_spatial::OrbitalViewPin>()
+                .active
+        );
     }
 
     #[test]
@@ -7315,15 +7326,15 @@ mod tests {
     #[test]
     fn local_avatar_mounts_into_ready_site_grid() {
         let mut app = App::new();
-        app.insert_resource(lunco_core::WorldGridConfig::default());
+        app.insert_resource(lunco_spatial::WorldGridConfig::default());
 
         let world_grid = app
             .world_mut()
             .spawn((
-                lunco_core::WorldGridConfig::default().grid(),
+                lunco_spatial::WorldGridConfig::default().grid(),
                 CellCoord::ZERO,
                 Transform::default(),
-                lunco_core::WorldGrid,
+                lunco_spatial::WorldGrid,
             ))
             .id();
         let site = app
@@ -7365,7 +7376,7 @@ mod tests {
         assert!(app.world().get::<PendingSiteCameraPose>(avatar).is_some());
         app.world_mut()
             .entity_mut(site)
-            .insert(lunco_core::WorldGridConfig::default().grid());
+            .insert(lunco_spatial::WorldGridConfig::default().grid());
         app.update();
 
         assert_eq!(app.world().get::<ChildOf>(avatar).unwrap().parent(), site);
@@ -7385,10 +7396,10 @@ mod tests {
         let world_grid = app
             .world_mut()
             .spawn((
-                lunco_core::WorldGridConfig::default().grid(),
+                lunco_spatial::WorldGridConfig::default().grid(),
                 CellCoord::ZERO,
                 Transform::default(),
-                lunco_core::WorldGrid,
+                lunco_spatial::WorldGrid,
             ))
             .id();
         let site = app
@@ -7399,7 +7410,7 @@ mod tests {
                     body: lunco_celestial::ephemeris_id::MOON,
                     geodetic: lunco_celestial::Geodetic::new(25.28, 307.60, 0.0),
                 },
-                lunco_core::WorldGridConfig::default().grid(),
+                lunco_spatial::WorldGridConfig::default().grid(),
                 CellCoord::ZERO,
                 Transform::default(),
                 ChildOf(world_grid),
@@ -7443,16 +7454,16 @@ mod tests {
         let world_grid = app
             .world_mut()
             .spawn((
-                lunco_core::WorldGridConfig::default().grid(),
+                lunco_spatial::WorldGridConfig::default().grid(),
                 CellCoord::ZERO,
                 Transform::default(),
-                lunco_core::WorldGrid,
+                lunco_spatial::WorldGrid,
             ))
             .id();
         let surface_grid = app
             .world_mut()
             .spawn((
-                lunco_core::WorldGridConfig::default().grid(),
+                lunco_spatial::WorldGridConfig::default().grid(),
                 CellCoord::ZERO,
                 Transform::default(),
                 ChildOf(world_grid),
@@ -7466,7 +7477,7 @@ mod tests {
                     body: lunco_celestial::ephemeris_id::MOON,
                     geodetic: lunco_celestial::Geodetic::new(25.28, 307.60, 0.0),
                 },
-                lunco_core::WorldGridConfig::default().grid(),
+                lunco_spatial::WorldGridConfig::default().grid(),
                 CellCoord::ZERO,
                 Transform::from_xyz(100.0, 0.0, 0.0),
                 ChildOf(surface_grid),
@@ -7505,7 +7516,7 @@ mod tests {
     fn deferred_avatar_projection_is_captured_at_the_handoff_boundary() {
         fn project_avatar_once(
             mut commands: Commands,
-            q_world_grid: Query<Entity, With<lunco_core::WorldGrid>>,
+            q_world_grid: Query<Entity, With<lunco_spatial::WorldGrid>>,
             mut projected: Local<bool>,
         ) {
             if *projected {
@@ -7527,10 +7538,10 @@ mod tests {
         let world_grid = app
             .world_mut()
             .spawn((
-                lunco_core::WorldGridConfig::default().grid(),
+                lunco_spatial::WorldGridConfig::default().grid(),
                 CellCoord::ZERO,
                 Transform::default(),
-                lunco_core::WorldGrid,
+                lunco_spatial::WorldGrid,
             ))
             .id();
         app.world_mut().spawn((
@@ -7539,7 +7550,7 @@ mod tests {
                 body: lunco_celestial::ephemeris_id::MOON,
                 geodetic: lunco_celestial::Geodetic::new(25.28, 307.60, 0.0),
             },
-            lunco_core::WorldGridConfig::default().grid(),
+            lunco_spatial::WorldGridConfig::default().grid(),
             CellCoord::ZERO,
             Transform::default(),
             ChildOf(world_grid),

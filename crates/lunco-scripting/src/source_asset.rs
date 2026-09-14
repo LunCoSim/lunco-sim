@@ -108,7 +108,7 @@ impl AssetLoader for RhaiSourceLoader {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
         let text = String::from_utf8(bytes)?;
-        let importer = lunco_assets::asset_path::anchor_of(load_context.path());
+        let importer = lunco_assets_core::asset_path::anchor_of(load_context.path());
         let dependencies = load_import_dependencies(&text, &importer, load_context)?;
         Ok(RhaiSource { text, dependencies })
     }
@@ -139,7 +139,7 @@ fn import_dependency_ids(source: &str, importer: &str) -> Result<Vec<String>, an
             paths
                 .into_iter()
                 .map(|path| {
-                    lunco_assets::script_source::ScriptSources::canonical_id(
+                    lunco_assets_core::script_source::ScriptSources::canonical_id(
                         &path,
                         Some(importer),
                         "rhai",
@@ -157,7 +157,7 @@ fn import_dependency_ids(source: &str, importer: &str) -> Result<Vec<String>, an
 /// resolver's memo (which stores the source it compiled) recompiles on the diff.
 ///
 /// Registration is keyed by the asset's own canonical id
-/// (`lunco_assets::asset_path::anchor_of`) — the same identity the `AssetServer`
+/// (`lunco_assets_core::asset_path::anchor_of`) — the same identity the `AssetServer`
 /// loaded it under — so a script is importable by exactly the path that names it,
 /// through whatever source it came from: `lunco://`, `twin://` for a campaign repo
 /// outside the engine tree, or a peer's synced content mounted as a Twin.
@@ -171,7 +171,7 @@ fn publish_rhai_sources(
     mut events: MessageReader<AssetEvent<RhaiSource>>,
     assets: Res<Assets<RhaiSource>>,
     asset_server: Res<AssetServer>,
-    sources: Res<lunco_assets::script_source::ScriptSources>,
+    sources: Res<lunco_assets_core::script_source::ScriptSources>,
     mut registry: ResMut<crate::ScriptRegistry>,
 ) {
     for ev in events.read() {
@@ -191,7 +191,7 @@ fn publish_rhai_sources(
                     warn!("[rhai] loaded script {id:?} has no asset path — not importable");
                     continue;
                 };
-                let canonical = lunco_assets::asset_path::anchor_of(&path);
+                let canonical = lunco_assets_core::asset_path::anchor_of(&path);
                 debug!("[rhai] script available for import: {canonical}");
                 publish_rhai_source(&canonical, &src.text, &sources, &mut registry);
             }
@@ -203,7 +203,7 @@ fn publish_rhai_sources(
                     );
                     continue;
                 };
-                let canonical = lunco_assets::asset_path::anchor_of(&path);
+                let canonical = lunco_assets_core::asset_path::anchor_of(&path);
                 if sources.remove(&canonical) {
                     debug!("[rhai] retired script source: {canonical}");
                 }
@@ -227,7 +227,7 @@ fn publish_rhai_sources(
 fn publish_rhai_source(
     canonical: &str,
     text: &str,
-    sources: &lunco_assets::script_source::ScriptSources,
+    sources: &lunco_assets_core::script_source::ScriptSources,
     registry: &mut crate::ScriptRegistry,
 ) {
     sources.insert(canonical, text);
@@ -280,7 +280,7 @@ impl Plugin for RhaiSourceAssetPlugin {
                 Update,
                 (publish_rhai_sources,)
                     .in_set(RhaiSourceAssetSet)
-                    .run_if(resource_exists::<lunco_assets::script_source::ScriptSources>),
+                    .run_if(resource_exists::<lunco_assets_core::script_source::ScriptSources>),
             );
     }
 }
@@ -299,7 +299,7 @@ mod tests {
 
     #[test]
     fn asset_revision_replaces_every_matching_live_document() {
-        let sources = lunco_assets::script_source::ScriptSources::default();
+        let sources = lunco_assets_core::script_source::ScriptSources::default();
         let mut registry = crate::ScriptRegistry::default();
         registry.insert_document(
             DocumentId::new(1),
@@ -345,7 +345,7 @@ mod tests {
     #[test]
     fn identical_asset_revision_does_not_advance_generation() {
         let source = "fn on_start(me) {}";
-        let sources = lunco_assets::script_source::ScriptSources::default();
+        let sources = lunco_assets_core::script_source::ScriptSources::default();
         let mut registry = crate::ScriptRegistry::default();
         registry.insert_document(
             DocumentId::new(1),

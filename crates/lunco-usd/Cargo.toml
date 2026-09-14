@@ -37,7 +37,7 @@ lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
 # Canonical Twin edit journal. USD records its (forward, inverse) op pairs
 # here — lossless, since `UsdOp` derives `Serialize` (no hand summaries).
 lunco-twin-journal = { path = "../lunco-twin-journal" }
-lunco-assets = { path = "../lunco-assets" }
+lunco-assets-core = { path = "../lunco-assets-core" }
 # Editor-session binding (WorkspaceResource + events). ECS-only, no UI — the
 # binding moved here from lunco-workbench so non-ui consumers can read it.
 lunco-workspace = { path = "../lunco-workspace" }

@@ -62,7 +62,7 @@ impl ExampleProgress {
 }
 
 fn progress_file_path() -> PathBuf {
-    lunco_assets::cache_dir().join("welcome_progress.json")
+    lunco_assets_core::cache_dir().join("welcome_progress.json")
 }
 
 /// Load the ledger from disk at startup. Missing file / parse error

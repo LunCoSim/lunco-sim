@@ -61,9 +61,9 @@ impl BodyState {
         body_point_velocity(
             self.linear_velocity,
             self.angular_velocity,
-            lunco_core::coords::GridPos(point),
-            lunco_core::coords::GridPos(self.position),
-            lunco_core::coords::GridRot(self.rotation),
+            lunco_spatial::coords::GridPos(point),
+            lunco_spatial::coords::GridPos(self.position),
+            lunco_spatial::coords::GridRot(self.rotation),
             self.center_of_mass,
         )
     }

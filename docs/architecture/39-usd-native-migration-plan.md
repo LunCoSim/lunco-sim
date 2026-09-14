@@ -239,7 +239,7 @@ projection architecture.
 Depends on Phases 1–2 (ports/connections/identity) + optionally 5 (electrical draw).
 
 - **P6.1–P6.3 — DONE, but not as a comms feature.** There is no comms crate, no comms component and no
-  comms vocabulary: connectivity landed as a **generic link kernel** in `lunco-celestial`
+  comms vocabulary: connectivity landed as a **generic link kernel** in `lunco-celestial-spatial`
   (`LinkNode`/`LinkState`, cadence-gated geometry: range + elevation + body occlusion + terrain LOS),
   with the verdict behind the language-neutral `link.connected` hook and routing authored in rhai over
   the `query("Links")` snapshot. The USD vocabulary is `lunco:linkNode` / `lunco:link:*`. See
@@ -270,7 +270,8 @@ in `openusd` v0.5** (doc 38 §12.2) — adoption is deletion on our side, not im
 
 ## Federation seams (track, don't build now; doc 38 §11)
 
-- **SPICE → USD xforms** — already done (`lunco-celestial`); carry NAIF ids as prim metadata.
+- **SPICE → USD xforms** — already done (`lunco-celestial` semantics with the
+  `lunco-celestial-spatial` scene adapter); carry NAIF ids as prim metadata.
 - **USD+FMI** — the one live convergence; `info:*` (P2.3) is the hook. Track AOUSD; doc 37 already
   implements the pattern (candidate to contribute).
 - **SysML v2 API → USD projection** — future; the naming (part/port/connection/flow/allocation, doc 38 §14.5)

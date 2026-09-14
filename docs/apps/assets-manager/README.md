@@ -34,7 +34,7 @@ cargo run -p lunco-assets -- <ACTION> [FLAGS]
 
 ## Cache Layout
 
-Assets are stored in the OS-global cache returned by `lunco_assets::cache_dir()` (typically `~/.cache/lunco/` on Linux):
+Assets are stored in the OS-global cache returned by `lunco_assets_core::cache_dir()` (typically `~/.cache/lunco/` on Linux):
 
 ```
 .cache/

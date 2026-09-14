@@ -20,7 +20,7 @@ use big_space::prelude::{CellCoord, Grid};
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
-use lunco_core::coords::{pose_in_grid, ActiveFramePoseQuery, GridPos, GridRot};
+use lunco_spatial::coords::{pose_in_grid, ActiveFramePoseQuery, GridPos, GridRot};
 
 /// Read-only query state for API and other non-system callers.
 ///
@@ -53,7 +53,7 @@ impl SimulationPoseReadState {
 
     /// Resolve one entity in the active physics frame.
     pub fn pose(&mut self, world: &World, entity: Entity) -> Option<(GridPos, GridRot)> {
-        let frame = world.get_resource::<lunco_core::ActivePhysicsFrame>()?.0;
+        let frame = world.get_resource::<lunco_spatial::ActivePhysicsFrame>()?.0;
         if self.bodies.get(world, entity).is_ok() {
             let (position, rotation) = self.physics.get(world, entity).ok()?;
             return Some((GridPos(position.0), GridRot(rotation.0)));
@@ -238,9 +238,9 @@ mod tests {
     fn physical_body_uses_exact_f64_pose_not_rounded_transform() {
         let mut world = World::new();
         let frame = world
-            .spawn(lunco_core::WorldGridConfig::default().grid())
+            .spawn(lunco_spatial::WorldGridConfig::default().grid())
             .id();
-        world.insert_resource(lunco_core::ActivePhysicsFrame(frame));
+        world.insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
         let exact = DVec3::new(0.123_456_789_012, -1_901.623_456_789, 4.987_654_321_098);
         let exact_rotation = DQuat::from_rotation_y(0.123_456_789);
         let body = world
@@ -264,9 +264,9 @@ mod tests {
     fn unseeded_physical_body_has_no_reportable_pose() {
         let mut world = World::new();
         let frame = world
-            .spawn(lunco_core::WorldGridConfig::default().grid())
+            .spawn(lunco_spatial::WorldGridConfig::default().grid())
             .id();
-        world.insert_resource(lunco_core::ActivePhysicsFrame(frame));
+        world.insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
         let body = world
             .spawn((
                 RigidBody::Dynamic,
@@ -284,9 +284,9 @@ mod tests {
     fn non_physical_entity_uses_bigspace_hierarchy() {
         let mut world = World::new();
         let frame = world
-            .spawn(lunco_core::WorldGridConfig::default().grid())
+            .spawn(lunco_spatial::WorldGridConfig::default().grid())
             .id();
-        world.insert_resource(lunco_core::ActivePhysicsFrame(frame));
+        world.insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
         let marker = world
             .spawn((Transform::from_xyz(12.0, -34.0, 56.0), ChildOf(frame)))
             .id();
@@ -299,9 +299,9 @@ mod tests {
     fn proximity_provider_uses_exact_physics_position() {
         let mut world = World::new();
         let frame = world
-            .spawn(lunco_core::WorldGridConfig::default().grid())
+            .spawn(lunco_spatial::WorldGridConfig::default().grid())
             .id();
-        world.insert_resource(lunco_core::ActivePhysicsFrame(frame));
+        world.insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
         world.register_component::<CellCoord>();
         world.init_resource::<ApiEntityRegistry>();
         let exact = DVec3::new(12.123_456_789, -1_900.987_654_321, -4.0);

@@ -279,7 +279,7 @@ pub fn scene_document_for(
 ) -> Option<DocumentId> {
     let asset_path = asset_server.get_path(scene)?;
     let rel_path = asset_path.path().to_string_lossy();
-    let (name, rel) = lunco_assets::split_twin_rel(&rel_path)?;
+    let (name, rel) = lunco_assets_core::split_twin_rel(&rel_path)?;
     backed.doc_for(name, rel)
 }
 
@@ -293,7 +293,7 @@ pub fn canonical_stage_for_document(world: &World, doc: DocumentId) -> Option<&C
     let (name, rel) = world
         .get_resource::<DocBackedTwinScenes>()?
         .coords_of(doc)?;
-    let twin_path = lunco_assets::twin_uri(&name, &rel);
+    let twin_path = lunco_assets_core::twin_uri(&name, &rel);
     let stage_id = world
         .get_resource::<AssetServer>()?
         .get_handle::<UsdStageAsset>(twin_path)?

@@ -7,7 +7,7 @@
 
 use bevy::math::{DVec3, Dir3};
 use bevy::prelude::Entity;
-use lunco_core::coords::GridPos;
+use lunco_spatial::coords::GridPos;
 
 /// Finite ray bound shared by placement tools. `GridSpatialQuery` requires a
 /// finite distance, and this span covers the authored editor scene range.

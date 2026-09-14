@@ -4,7 +4,7 @@
 //! authority for equations and member types; USD supplies instances, constant
 //! input opinions, and ordinary property connections between public members.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use bevy::asset::AssetId;
@@ -231,7 +231,7 @@ pub struct SynthesisUnit {
     /// Stable generated Modelica class name for the composite unit.
     pub name: String,
     /// Modelica instance name chosen by the synthesis policy. Runtime signal
-    /// mapping follows this exact name; the policy result must provide it.
+    /// mapping follows this exact name.
     pub instance: String,
     /// Composed USD members absorbed into the unit.
     pub component_paths: Vec<String>,
@@ -241,14 +241,27 @@ pub struct SynthesisUnit {
     pub outputs: BTreeSet<String>,
 }
 
+/// Structural unit facts projected to the dynamic synthesis policy.
+///
+/// This is intentionally separate from [`SynthesisUnit`]: the latter is the
+/// policy result and therefore owns generated Modelica identity, while these
+/// facts contain only the USD-derived partition and public boundary. Keeping
+/// the two shapes distinct prevents an empty or invented Rust instance name
+/// from becoming an accidental policy default.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct NetworkUnitFact {
+    name: String,
+    component_paths: Vec<String>,
+    inputs: BTreeSet<String>,
+    outputs: BTreeSet<String>,
+}
+
 /// Visual placement selected alongside a generated Modelica plan.
 ///
-/// Positions are presentation facts, not simulation inputs. The built-in
-/// synthesizer supplies a deterministic topology layout; a hook-backed
-/// synthesizer may replace it by returning a `layout` map. Keeping the
-/// positions in the plan makes the policy result inspectable through the
-/// generated-source API instead of leaving the visual decision implicit in a
-/// separate Rust pass.
+/// Positions are presentation facts, not simulation inputs. The selected
+/// synthesizer returns them in its `layout` map. Keeping the positions in the
+/// plan makes the policy result inspectable through the generated-source API
+/// instead of leaving the visual decision implicit in a separate Rust pass.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SynthesisLayout {
     /// Generated child-unit class name to Modelica diagram position.
@@ -315,8 +328,9 @@ pub struct SynthesisPlan {
 /// built-in owner from the typed member role schemas.
 ///
 /// Hook-backed entries use the existing `lunco_hooks` substrate: Rust supplies
-/// the composed facts and Rhai returns the Modelica source, merge units, and
-/// diagram placements. The registry keeps that policy selection independent of
+/// the composed topology facts and Rhai returns the Modelica source, merge
+/// units, instance names, and diagram placements. The registry keeps that
+/// policy selection independent of
 /// `project_domain_islands`, so changing dynamic building behaviour does not
 /// require a Rust branch.
 pub trait DomainSynthesizer: Send + Sync + 'static {
@@ -1229,10 +1243,12 @@ fn parse_policy_layout(
 
 /// The composed network, as a map an authored policy can read.
 ///
-/// Deliberately the WHOLE graph, flat and self-describing: instance name, class,
-/// constants, acausal edges, causal edges, and the wrapper boundary. A policy
-/// that needs something not in here is a reason to extend this function — not a
-/// reason for the policy to go read USD itself.
+/// Deliberately the WHOLE graph, flat and self-describing: member identity,
+/// class, constants, acausal edges, causal edges, and the wrapper boundary.
+/// Unit facts contain only the USD-derived partition and boundary; generated
+/// Modelica instance names and presentation layout are policy outputs. A
+/// policy that needs another authored fact is a reason to extend this function
+/// — not a reason for the policy to go read USD itself.
 pub fn network_facts(
     network: &DomainNetwork,
     model_name: &str,
@@ -1240,7 +1256,6 @@ pub fn network_facts(
 ) -> Result<lunco_hooks::HookValue, String> {
     use lunco_hooks::HookValue as H;
     let units = partition_network(network);
-    let layout = default_synthesis_layout(network, &units);
     let member_outputs = generated_member_outputs(network, classes)?;
     let source_roots: BTreeSet<String> = network
         .components
@@ -1526,7 +1541,6 @@ pub fn network_facts(
                     .map(|unit| {
                         H::map([
                             ("name", H::str(unit.name)),
-                            ("instance", H::str(unit.instance.clone())),
                             (
                                 "components",
                                 H::Array(unit.component_paths.into_iter().map(H::str).collect()),
@@ -1544,43 +1558,6 @@ pub fn network_facts(
                     .collect(),
             ),
         ),
-        (
-            "layout",
-            H::map([
-                (
-                    "units",
-                    H::Array(
-                        layout
-                            .unit_positions
-                            .into_iter()
-                            .map(|(name, (x, y))| {
-                                H::map([
-                                    ("name", H::str(name)),
-                                    ("x", H::Int(i64::from(x))),
-                                    ("y", H::Int(i64::from(y))),
-                                ])
-                            })
-                            .collect(),
-                    ),
-                ),
-                (
-                    "members",
-                    H::Array(
-                        layout
-                            .member_positions
-                            .into_iter()
-                            .map(|(path, (x, y))| {
-                                H::map([
-                                    ("path", H::str(path)),
-                                    ("x", H::Int(i64::from(x))),
-                                    ("y", H::Int(i64::from(y))),
-                                ])
-                            })
-                            .collect(),
-                    ),
-                ),
-            ]),
-        ),
     ]))
 }
 
@@ -1591,7 +1568,7 @@ pub fn network_facts(
 /// the public FMI/SSP-style interface of the containing network root. The
 /// returned order and generated names are stable across runs and independent
 /// of USD collection ordering.
-pub fn partition_network(network: &DomainNetwork) -> Vec<SynthesisUnit> {
+fn partition_network(network: &DomainNetwork) -> Vec<NetworkUnitFact> {
     let paths: BTreeSet<String> = network
         .components
         .iter()
@@ -1626,8 +1603,7 @@ pub fn partition_network(network: &DomainNetwork) -> Vec<SynthesisUnit> {
     graph
         .connected_components()
         .into_iter()
-        .enumerate()
-        .map(|(unit_index, component_paths)| {
+        .map(|component_paths| {
             let members: BTreeSet<_> = component_paths.iter().map(String::as_str).collect();
             let inputs = network
                 .components
@@ -1655,8 +1631,7 @@ pub fn partition_network(network: &DomainNetwork) -> Vec<SynthesisUnit> {
             debug_assert!(component_paths
                 .iter()
                 .all(|path| component_by_path.contains_key(path.as_str())));
-            SynthesisUnit {
-                instance: unit_instance_identifier(&name, unit_index),
+            NetworkUnitFact {
                 name,
                 component_paths,
                 inputs,
@@ -1992,165 +1967,6 @@ fn actuator_wrench_matrix(
     Ok((columns, 0.9 / gram_trace))
 }
 
-/// Deterministic layout facts supplied to the synthesis policy.
-///
-/// The policy owns the generated Modelica and diagram; Rust only supplies a
-/// stable topology-derived starting arrangement in the facts map.
-const GENERATED_UNIT_COLUMN_SPACING: i32 = 150;
-const GENERATED_UNIT_ROW_SPACING: i32 = 100;
-const NETWORK_LAYOUT_ORIGIN_X: i32 = -100;
-const NETWORK_LAYOUT_LAYER_SPACING: i32 = 55;
-const NETWORK_LAYOUT_ROW_SPACING: i32 = 22;
-const NETWORK_LAYOUT_ROW_CENTER_STEP: i32 = 2;
-
-/// Deterministic default Modelica name for a synthesized unit instance. A
-/// policy may replace this name in its returned unit table; this helper is not
-/// a visual emitter or a second policy.
-fn unit_instance_identifier(unit_name: &str, unit_index: usize) -> String {
-    let encoded_path = unit_name.strip_prefix("Unit_").unwrap_or(unit_name);
-    let path_parts = encoded_path.split("_x2f_").collect::<Vec<_>>();
-    let readable = path_parts
-        .iter()
-        .rev()
-        .take(2)
-        .copied()
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect::<Vec<_>>()
-        .join("_");
-    modelica_identifier(&format!("unit_{}_{}", unit_index + 1, readable))
-}
-
-/// The deterministic presentation supplied in the facts map. The Rhai policy
-/// may replace it, but the graph reader remains the only source of membership.
-fn generated_unit_layout(units: &[SynthesisUnit]) -> BTreeMap<String, (i32, i32)> {
-    let columns = (units.len() as f64).sqrt().ceil().max(1.0) as i32;
-    let rows = ((units.len() as i32 + columns - 1) / columns).max(1);
-    let origin_x = -((columns - 1) * GENERATED_UNIT_COLUMN_SPACING) / 2;
-    let origin_y = ((rows - 1) * GENERATED_UNIT_ROW_SPACING) / 2;
-
-    units
-        .iter()
-        .enumerate()
-        .map(|(index, unit)| {
-            let index = index as i32;
-            (
-                unit.name.clone(),
-                (
-                    origin_x + (index % columns) * GENERATED_UNIT_COLUMN_SPACING,
-                    origin_y - (index / columns) * GENERATED_UNIT_ROW_SPACING,
-                ),
-            )
-        })
-        .collect()
-}
-
-fn default_synthesis_layout(network: &DomainNetwork, units: &[SynthesisUnit]) -> SynthesisLayout {
-    SynthesisLayout {
-        unit_positions: generated_unit_layout(units),
-        member_positions: network_layout(network),
-    }
-}
-
-/// Place generated components by topology, not source-file order. These are
-/// facts for the policy and telemetry mapping; Rust does not emit their schema.
-fn network_layout(network: &DomainNetwork) -> BTreeMap<String, (i32, i32)> {
-    let paths: BTreeSet<_> = network.components.iter().map(|c| c.path.clone()).collect();
-    let mut neighbours: BTreeMap<String, BTreeSet<String>> = paths
-        .iter()
-        .map(|path| (path.clone(), BTreeSet::new()))
-        .collect();
-    let mut incoming: BTreeMap<String, usize> =
-        paths.iter().map(|path| (path.clone(), 0)).collect();
-    for component in &network.components {
-        for target in component.connectors.values().flatten() {
-            if let Some((target, _)) = target.split_once(".connectors:") {
-                if paths.contains(target) {
-                    if let Some(component_neighbours) = neighbours.get_mut(&component.path) {
-                        component_neighbours.insert(target.to_string());
-                    }
-                    if let Some(target_neighbours) = neighbours.get_mut(target) {
-                        target_neighbours.insert(component.path.clone());
-                    }
-                }
-            }
-        }
-        for target in component.inputs.values() {
-            if let Some((source, _)) = target.split_once(".outputs:") {
-                if paths.contains(source) {
-                    if let Some(source_neighbours) = neighbours.get_mut(source) {
-                        source_neighbours.insert(component.path.clone());
-                    }
-                    if let Some(component_incoming) = incoming.get_mut(&component.path) {
-                        *component_incoming += 1;
-                    }
-                }
-            }
-        }
-    }
-    let mut roots: Vec<_> = network
-        .components
-        .iter()
-        .filter(|component| incoming.get(&component.path).copied() == Some(0))
-        .map(|component| component.path.clone())
-        .collect();
-    roots.sort();
-    let mut rank = BTreeMap::new();
-    let mut queue = VecDeque::new();
-    for root in roots {
-        if !rank.contains_key(&root) {
-            queue.push_back((root, 0usize));
-        }
-        while let Some((path, layer)) = queue.pop_front() {
-            if rank.contains_key(&path) {
-                continue;
-            }
-            rank.insert(path.clone(), layer);
-            for neighbour in neighbours.get(&path).into_iter().flatten() {
-                if !rank.contains_key(neighbour) {
-                    queue.push_back((neighbour.clone(), layer + 1));
-                }
-            }
-        }
-    }
-    for path in &paths {
-        if rank.contains_key(path) {
-            continue;
-        }
-        queue.push_back((path.clone(), rank.values().copied().max().unwrap_or(0) + 1));
-        while let Some((path, layer)) = queue.pop_front() {
-            if rank.contains_key(&path) {
-                continue;
-            }
-            rank.insert(path.clone(), layer);
-            for neighbour in neighbours.get(&path).into_iter().flatten() {
-                if !rank.contains_key(neighbour) {
-                    queue.push_back((neighbour.clone(), layer + 1));
-                }
-            }
-        }
-    }
-    let mut layers: BTreeMap<usize, Vec<String>> = BTreeMap::new();
-    for (path, layer) in rank {
-        layers.entry(layer).or_default().push(path);
-    }
-    let mut placements = BTreeMap::new();
-    for (layer, paths) in layers {
-        let count = paths.len() as i32;
-        for (row, path) in paths.into_iter().enumerate() {
-            placements.insert(
-                path,
-                (
-                    NETWORK_LAYOUT_ORIGIN_X + layer as i32 * NETWORK_LAYOUT_LAYER_SPACING,
-                    (count - 1 - row as i32 * NETWORK_LAYOUT_ROW_CENTER_STEP)
-                        * NETWORK_LAYOUT_ROW_SPACING,
-                ),
-            );
-        }
-    }
-    placements
-}
 /// Stable Modelica name for a causal output promoted from a generated member.
 ///
 /// The wrapper is the only runtime solver participant, so member outputs that
@@ -4412,7 +4228,7 @@ mod tests {
         lunco_hooks_rhai::register_rhai_hook(
             "synth.acausal-network",
             "synthesize",
-            lunco_assets::scripting::policy("synth_acausal_network")
+            lunco_assets_core::scripting::policy("synth_acausal_network")
                 .expect("shipped synthesis policy"),
             true,
         )
@@ -4917,7 +4733,7 @@ def Scope "Rig"
         lunco_hooks_rhai::register_rhai_hook(
             "synth.actuator-wrench",
             "synthesize",
-            lunco_assets::scripting::policy("synth_actuator_wrench")
+            lunco_assets_core::scripting::policy("synth_actuator_wrench")
                 .expect("shipped actuator policy"),
             true,
         )

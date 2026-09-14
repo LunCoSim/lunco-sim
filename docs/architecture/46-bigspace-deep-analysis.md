@@ -10,10 +10,10 @@ Keep this page operational. The complete contract is in
 | Concern | Owner | Canonical boundary |
 |---|---|---|
 | Semantic astronomical frame | `lunco-celestial` | `ReferenceFrame`, `FrameTree` |
-| Grid lookup | `lunco-celestial` | `ReferenceFrameIndex` |
-| f64 pose composition | `lunco-core` | `ActiveFramePoseQuery`, frame helpers |
+| Grid lookup | `lunco-celestial-spatial` | `ReferenceFrameIndex` |
+| f64 pose composition | `lunco-spatial` | `ActiveFramePoseQuery`, frame helpers |
 | Cell/local split | `big_space` | `Grid::translation_to_grid` |
-| Camera origin | `lunco-core` + `lunco-usd-bevy` | persistent `OriginAnchor`; viewport projects the selected camera pose into its `WorldGrid` cell |
+| Camera origin | `lunco-spatial` + `lunco-usd-bevy` | persistent `OriginAnchor`; viewport projects the selected camera pose into its `WorldGrid` cell |
 | Terrain blueprint coordinates | `lunco-render-bevy` | `blueprint_origin` plus the active frame's finalized render origin/inverse rotation restore authored flat-grid coordinates; semantic pose remains f64 |
 | Physics pose bridge | `lunco-usd-avian-core` | explicitly bound `ActivePhysicsFrame` bridge |
 | Scene ownership | `lunco-core` / `lunco-usd` | `SceneMountState`, typed transitions |
@@ -115,7 +115,7 @@ possible.
 ## Focused verification
 
 ```sh
-scripts/run_rust_tests.sh -p lunco-core --lib -j 4
+scripts/run_rust_tests.sh -p lunco-spatial --lib -j 4
 scripts/run_rust_tests.sh -p lunco-celestial -j 4
 scripts/run_rust_tests.sh -p lunco-usd-avian -j 4
 RUSTC_WRAPPER= cargo build -p lunco-luncosim --bin luncosim -j 4

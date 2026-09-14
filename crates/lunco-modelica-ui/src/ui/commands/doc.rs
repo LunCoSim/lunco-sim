@@ -158,7 +158,7 @@ pub fn sync_editor_buffer_to_source(
 pub fn on_save_document(
     trigger: On<SaveDocument>,
     mut registry: ResMut<ModelicaDocumentRegistry>,
-    mut console: ResMut<crate::ui::panels::console::ConsoleLog>,
+    mut console: ResMut<lunco_ui::log::LogBuffer>,
     mut commands: Commands,
 ) {
     let doc = trigger.event().doc_id;
@@ -234,7 +234,7 @@ pub fn on_save_as_document(
     trigger: On<SaveAsDocument>,
     mut registry: ResMut<ModelicaDocumentRegistry>,
     workspace: Res<lunco_workspace::WorkspaceResource>,
-    mut console: ResMut<crate::ui::panels::console::ConsoleLog>,
+    mut console: ResMut<lunco_ui::log::LogBuffer>,
     mut commands: Commands,
 ) {
     let doc = trigger.event().doc_id;

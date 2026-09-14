@@ -1369,7 +1369,7 @@ pub fn run() -> u8 {
     // USD projection, and Modelica preparation are being pumped above. EXACT
     // solves the celestial tree every update, which is correct for verdicts but
     // needlessly blocks readiness when applied to the zero-time load phase.
-    app.insert_resource(lunco_celestial::cadence::CelestialCadenceSettings::EXACT);
+    app.insert_resource(lunco_celestial_spatial::cadence::CelestialCadenceSettings::EXACT);
     if let Some(mut gate) = app
         .world_mut()
         .get_resource_mut::<lunco_scripting::scenario::ScenarioExecutionGate>()
@@ -1462,7 +1462,7 @@ pub fn run() -> u8 {
                         app.world_mut()
                             .query_filtered::<(&GlobalTransform, &bevy::camera::primitives::Aabb), (
                                 With<Mesh3d>,
-                                Without<lunco_celestial::TrajectoryMeshMarker>,
+                                Without<lunco_celestial_spatial::TrajectoryMeshMarker>,
                                 Without<lunco_core::programs::ProgramDriverId>,
                                 Without<lunco_core::NoSelectionBounds>,
                             )>();
@@ -1470,7 +1470,7 @@ pub fn run() -> u8 {
                     let mut state_skip = app.world_mut().query_filtered::<(), Or<(
                         With<big_space::prelude::Grid>,
                         With<big_space::prelude::CellCoord>,
-                        With<lunco_celestial::TrajectoryMeshMarker>,
+                        With<lunco_celestial_spatial::TrajectoryMeshMarker>,
                         With<lunco_core::programs::ProgramDriverId>,
                         With<lunco_core::NoSelectionBounds>,
                     )>>();
@@ -1677,8 +1677,8 @@ pub fn run() -> u8 {
 /// Print the authoritative scene-test catalog without constructing Bevy or a
 /// renderer. The shell gates consume this as `KIND<TAB>assets-relative-scene`.
 fn list_scene_tests() -> u8 {
-    let scenes_dir = lunco_assets::assets_dir_abs().join("scenes/tests");
-    let assets_root = lunco_assets::assets_dir_abs();
+    let scenes_dir = lunco_assets_core::assets_dir_abs().join("scenes/tests");
+    let assets_root = lunco_assets_core::assets_dir_abs();
     let tests = match lunco_scene_validation::test_discovery::discover_scene_tests(&scenes_dir) {
         Ok(tests) => tests,
         Err(error) => {

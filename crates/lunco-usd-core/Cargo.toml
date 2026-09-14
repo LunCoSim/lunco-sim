@@ -13,7 +13,7 @@ bevy = { workspace = true }
 anyhow = { workspace = true }
 openusd = { workspace = true }
 lunco-core = { path = "../lunco-core" }
-lunco-assets = { path = "../lunco-assets" }
+lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-twin = { path = "../lunco-twin" }
 lunco-twin-journal = { path = "../lunco-twin-journal" }

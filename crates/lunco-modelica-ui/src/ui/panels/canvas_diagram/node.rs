@@ -82,7 +82,7 @@ pub struct IconNodeData {
 ///
 /// 1. The class's decoded `Icon(graphics={...})` annotation merged
 ///    across the `extends` chain — the only icon source. Painted via
-///    [`crate::icon_paint::paint_graphics`] with lyon-tessellated
+///    [`lunco_modelica_icon_ui::paint_graphics`] with lyon-tessellated
 ///    fills (EvenOdd, matching OMEdit/Dymola).
 /// 2. An explicit diagnostic card when the resolved class has no `Icon`
 ///    annotation anywhere in its inheritance chain. The canvas never invents
@@ -261,14 +261,14 @@ impl NodeVisual for IconNodeVisual {
         // Per-instance orientation rotates+mirrors every primitive
         // at the rect level so placement-rotation shows visually,
         // not just on the port positions.
-        let orientation = crate::icon_paint::IconOrientation {
+        let orientation = lunco_modelica_icon_ui::IconOrientation {
             rotation_deg: self.rotation_deg,
             mirror_x: self.mirror_x,
             mirror_y: self.mirror_y,
         };
         let mut drew_icon = false;
         if let Some(icon) = &self.icon_graphics {
-            let sub = crate::icon_paint::TextSubstitution {
+            let sub = lunco_modelica_icon_ui::TextSubstitution {
                 name: (!self.instance_name.is_empty()).then_some(self.instance_name.as_str()),
                 class_name: (!self.class_name.is_empty()).then_some(self.class_name.as_str()),
                 parameters: (!self.parameters.is_empty()).then_some(self.parameters.as_slice()),
@@ -310,7 +310,7 @@ impl NodeVisual for IconNodeVisual {
                 .graphics_bbox()
                 .map(|e| crate::annotations::CoordinateSystem { extent: e })
                 .unwrap_or(icon.coordinate_system);
-            crate::icon_paint::paint_graphics_themed(
+            lunco_modelica_icon_ui::paint_graphics_themed(
                 painter,
                 rect,
                 coord_system_for_paint,
@@ -506,12 +506,12 @@ impl NodeVisual for IconNodeVisual {
                     // icon. Adding the parent's rotation makes
                     // the marker rotate WITH the icon body so
                     // the arrow tip always points into the icon.
-                    let port_orientation = crate::icon_paint::IconOrientation {
+                    let port_orientation = lunco_modelica_icon_ui::IconOrientation {
                         rotation_deg: self.rotation_deg - port_rotation_deg,
                         mirror_x: self.mirror_x,
                         mirror_y: self.mirror_y,
                     };
-                    crate::icon_paint::paint_graphics_themed(
+                    lunco_modelica_icon_ui::paint_graphics_themed(
                         painter,
                         port_rect,
                         icon.coordinate_system,

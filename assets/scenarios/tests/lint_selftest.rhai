@@ -92,6 +92,28 @@ fn on_tick(me) {
 
     let f = [];
 
+    let invalid_controls = by_rule(findings, "control-binding-unknown-intent");
+    f.push(t_true(invalid_controls.len() == 1,
+        "control-binding-unknown-intent fired " + invalid_controls.len() +
+        " time(s), expected exactly 1"));
+    if invalid_controls.len() == 1 {
+        f.push(t_true(invalid_controls[0].subject == "/LintSelftest/InvalidControls/forwrad",
+            "unknown control binding was reported at " + invalid_controls[0].subject));
+    }
+
+    let missing_units = by_rule(findings, "stage-meters-per-unit-missing");
+    f.push(t_true(missing_units.len() == 1,
+        "stage-meters-per-unit-missing fired " + missing_units.len() +
+        " time(s), expected exactly 1 for the intentionally incomplete stage metadata"));
+    if missing_units.len() == 1 {
+        f.push(t_true(missing_units[0].subject == "<stage>",
+            "stage-meters-per-unit-missing named " + missing_units[0].subject +
+            ", expected the stage"));
+        f.push(t_true(missing_units[0].severity == "warn",
+            "omitted metersPerUnit is severity " + missing_units[0].severity +
+            ", expected warn because OpenUSD supplies a valid centimetre fallback"));
+    }
+
     let missing_epoch = by_rule(findings, "epoch-api-missing-time");
     f.push(t_true(missing_epoch.len() == 2,
         "epoch-api-missing-time fired " + missing_epoch.len() +
@@ -201,6 +223,11 @@ fn on_tick(me) {
             "joint-drive-negative-stiffness did not explain why adding mass cannot fix it"));
     }
 
+    let derived_drive = by_rule(findings, "conditionally-stable-joint-drive");
+    f.push(t_true(!mentions(derived_drive, "/LintSelftest/Leg/Strut_Spring"),
+        "a force drive with Avian-derived inertia was reported as conditionally stable; " +
+        "the composed USD path lowers it to the implicit SpringDamper realization"));
+
     let invalid_gear = by_rule(findings, "invalid-gear-drive");
     f.push(t_true(invalid_gear.len() == 1,
         "invalid-gear-drive fired " + invalid_gear.len() +
@@ -237,6 +264,16 @@ fn on_tick(me) {
             "filtered-pair-target-missing named " + inert[0].subject +
             ", expected the bumper"));
     }
+
+    let missing_telemetry_target = by_rule(findings, "telemetry-target-required");
+    f.push(t_true(missing_telemetry_target.len() == 1 &&
+        missing_telemetry_target[0].subject == "/LintSelftest/BrokenTelemetry",
+        "telemetry-target-required must name the targetless declaration exactly once"));
+
+    let thin_clearance = by_rule(findings, "sprung-foot-thin-clearance");
+    f.push(t_true(thin_clearance.len() == 1 &&
+        thin_clearance[0].subject == "/LintSelftest/Leg/Foot_Gimbal",
+        "sprung-foot-thin-clearance must catch the authored leg geometry at its joint"));
 
     // A collision group whose collection matches no prim, and whose
     // `filteredGroups` names a body instead of a group. Both are ERRORs: the

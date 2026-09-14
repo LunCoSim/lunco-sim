@@ -238,7 +238,7 @@ pub fn sample_raycast_observations(
         }
 
         let Some(hit) = grid.cast_ray_grid(
-            lunco_core::coords::GridPos(origin),
+            lunco_spatial::coords::GridPos(origin),
             direction,
             observation.max_distance,
             true,

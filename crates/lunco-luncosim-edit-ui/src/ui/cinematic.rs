@@ -261,7 +261,7 @@ fn on_add_camera_here(
     // which is the render/floating-origin frame and would author a pose that
     // silently drifts with the origin (the camera-path frame contract).
     let Some((pos, rot)) =
-        lunco_core::coords::world_pose(cam_entity, &q_parents, &q_grids, &q_spatial)
+        lunco_spatial::coords::world_pose(cam_entity, &q_parents, &q_grids, &q_spatial)
             .ok()
             .map(|(p, r)| (p.0, r.0))
     else {

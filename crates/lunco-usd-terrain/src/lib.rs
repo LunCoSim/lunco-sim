@@ -955,7 +955,7 @@ fn cache_terrain_document(
             .get_path(terrain_path.stage_handle.id())
             .and_then(|asset_path| {
                 let rel_path = asset_path.path().to_string_lossy();
-                let (name, rel) = lunco_assets::split_twin_rel(&rel_path)?;
+                let (name, rel) = lunco_assets_core::split_twin_rel(&rel_path)?;
                 twin_scenes.doc_for(name, rel)
             });
         let Some(doc) = doc else {
@@ -1590,7 +1590,7 @@ fn bridge_usd_dem_terrain(
         )>,
     >,
     stages: Res<Assets<lunco_usd_bevy_core::UsdStageAsset>>,
-    twins: Res<lunco_assets::twin_source::TwinRoots>,
+    twins: Res<lunco_assets_core::twin_source::TwinRoots>,
     asset_server: Res<AssetServer>,
     datasets: Res<lunco_assets::datasets::DatasetRegistry>,
     registry: Res<lunco_terrain_surface::TerrainLayerParserRegistry>,
@@ -1706,7 +1706,7 @@ fn bridge_dem_prim_read(
     sdf: &openusd::sdf::Path,
     scene_root: Option<&std::path::Path>,
     scene_twin_name: Option<&str>,
-    twins: &lunco_assets::twin_source::TwinRoots,
+    twins: &lunco_assets_core::twin_source::TwinRoots,
     datasets: &lunco_assets::datasets::DatasetRegistry,
     registry: &lunco_terrain_surface::TerrainLayerParserRegistry,
     obstacle_spec: &mut lunco_obstacle_field::spec::ObstacleFieldSpec,
@@ -1865,9 +1865,9 @@ fn bridge_dem_prim_read(
                 return;
             }
         };
-        lunco_assets::asset_path::slashed(path)
+        lunco_assets_core::asset_path::slashed(path)
     } else {
-        lunco_assets::asset_path::slashed(root.join(&rel))
+        lunco_assets_core::asset_path::slashed(root.join(&rel))
     };
     let window_m = match dem_attrs
         .as_ref()
@@ -2379,7 +2379,7 @@ def Xform \"Traverse\"\n{\n}\n"
                 &sdf,
                 Some(std::path::Path::new("/twin/moonbase")),
                 None,
-                &lunco_assets::twin_source::TwinRoots::default(),
+                &lunco_assets_core::twin_source::TwinRoots::default(),
                 &lunco_assets::datasets::DatasetRegistry::default(),
                 &registry,
                 &mut spec,

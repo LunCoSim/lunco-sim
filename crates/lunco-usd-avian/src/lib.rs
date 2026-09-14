@@ -53,7 +53,7 @@ use bevy::ecs::system::SystemState;
 use bevy::math::{DQuat, DVec3};
 use bevy::mesh::VertexAttributeValues;
 use bevy::prelude::*;
-use lunco_core::coords::GridPos;
+use lunco_spatial::coords::GridPos;
 use lunco_usd_avian_core::report_physics_runtime_fault;
 use lunco_usd_avian_filters::collision_groups::{CollisionGroupTable, CollisionGroupTables};
 use lunco_usd_avian_filters::filtered_pairs as collision_filters;

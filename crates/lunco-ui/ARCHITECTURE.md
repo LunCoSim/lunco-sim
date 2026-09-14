@@ -44,6 +44,7 @@ their view-model reads and typed actions local.
                │  Typed Commands │  ← AI-native command bus
                │  WorldPanel     │  ← 3D in-scene UI
                │  Label3D        │
+               │  LogBuffer      │  ← shared log rows
                └─────────────────┘
 ```
 
@@ -319,6 +320,7 @@ crates/lunco-ui/
     ├── components.rs        # WorldPanel + Label3D
     ├── mission_control.rs   # mission-control panel widget
     ├── telemetry.rs         # telemetry panel widget
+    ├── log.rs               # bounded log model + renderer
     ├── busy/                # busy/spinner indicator widget (mod.rs, spinner.rs, widget.rs)
     ├── diagrams/            # diagram widgets (mod.rs, time_series.rs)
     └── modal/              # modal-dialog host (mod.rs, host.rs)

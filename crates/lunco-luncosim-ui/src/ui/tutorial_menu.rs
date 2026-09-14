@@ -60,8 +60,9 @@ impl Plugin for TutorialMenuPlugin {
 }
 
 fn load_catalog() -> TutorialMenuCatalog {
-    match serde_json::from_str::<TutorialMenuFile>(&lunco_assets::tutorials::tutorial_catalog_json())
-    {
+    match serde_json::from_str::<TutorialMenuFile>(
+        &lunco_assets_core::tutorials::tutorial_catalog_json(),
+    ) {
         Ok(file) => TutorialMenuCatalog {
             entries: file.tutorials,
             error: None,
@@ -205,18 +206,18 @@ fn register_tutorial_menu(world: &mut World) {
 }
 
 fn twin_asset_uri(twin: &str, reference: &str) -> String {
-    if lunco_assets::has_scheme(reference) {
+    if lunco_assets_core::has_scheme(reference) {
         return reference.to_owned();
     }
-    lunco_assets::twin_uri(twin, Path::new(reference))
+    lunco_assets_core::twin_uri(twin, Path::new(reference))
 }
 
 /// Read Twin tutorial metadata through the shared asset/storage boundary. The
 /// menu never walks a Twin itself and never reads its files on the UI thread.
 fn sync_twin_tutorial_catalogs(
     mut catalog: ResMut<TutorialMenuCatalog>,
-    roots: Res<lunco_assets::TwinRoots>,
-    manifest: Res<lunco_assets::discovery::AssetManifest>,
+    roots: Res<lunco_assets_core::TwinRoots>,
+    manifest: Res<lunco_assets_core::discovery::AssetManifest>,
     settings: Option<Res<lunco_settings::DownloadSettings>>,
 ) {
     let Ok(names) = roots.names() else {
@@ -240,8 +241,8 @@ fn sync_twin_tutorial_catalogs(
         if catalog.loaded_twins.contains(&name) || catalog.pending_twins.contains_key(&name) {
             continue;
         }
-        let path = lunco_assets::twin_uri(&name, Path::new("sim/tutorials/catalog.json"));
-        let Ok(Some(asset)) = lunco_assets::discovery::resolve_asset(&manifest, &roots, &path)
+        let path = lunco_assets_core::twin_uri(&name, Path::new("sim/tutorials/catalog.json"));
+        let Ok(Some(asset)) = lunco_assets_core::discovery::resolve_asset(&manifest, &roots, &path)
         else {
             // A Twin may legitimately have no menu catalog. It remains a valid
             // Twin; only its lessons are absent from this application menu.
@@ -253,7 +254,7 @@ fn sync_twin_tutorial_catalogs(
     }
     for (name, asset, settings) in requests {
         let task = AsyncComputeTaskPool::get().spawn(async move {
-            let text = lunco_assets::asset_read::read_asset_text(&asset, &settings).await?;
+            let text = lunco_assets_core::asset_read::read_asset_text(&asset, &settings).await?;
             serde_json::from_str::<TutorialMenuFile>(&text)
                 .map_err(|error| format!("{}: invalid tutorial catalog: {error}", asset.rel))
         });

@@ -657,7 +657,7 @@ pub(crate) fn render_compile_class_picker(
 fn is_library_document(document: &crate::document::ModelicaDocument) -> bool {
     match document.origin() {
         lunco_doc::DocumentOrigin::File { path, writable } => {
-            !writable || lunco_assets::msl::owns_filesystem_path(path)
+            !writable || lunco_assets_core::msl::owns_filesystem_path(path)
         }
         _ => false,
     }
@@ -680,7 +680,7 @@ pub fn on_compile_model(
     mut registry: ResMut<ModelicaDocumentRegistry>,
     workbench: ResMut<WorkbenchState>,
     mut compile_states: ResMut<DocumentDiagnostics>,
-    mut console: ResMut<crate::ui::panels::console::ConsoleLog>,
+    mut console: ResMut<lunco_ui::log::LogBuffer>,
     mut diagnostics: Option<ResMut<crate::ui::panels::diagnostics::DiagnosticsLog>>,
     mut picker: ResMut<CompileClassPickerState>,
     mut sim_streams: ResMut<lunco_signal::SimRegistry>,
@@ -1065,9 +1065,9 @@ pub fn on_compile_model(
     compile_states.mark_started(doc);
     console.info(format!("⏵ Compile started: '{model_name}'"));
     if let Some(diag) = diagnostics.as_mut() {
-        diag.append(vec![crate::ui::panels::log::LogEntry {
+        diag.append(vec![lunco_ui::log::LogEntry {
             at: web_time::Instant::now(),
-            level: crate::ui::panels::log::LogLevel::Info,
+            level: lunco_ui::log::LogLevel::Info,
             text: format!("⏵ Compile started: '{model_name}'"),
             model: Some(model_name.clone()),
             loc: None,
@@ -1266,7 +1266,7 @@ fn fail_compile_dispatch(
     target_entity: Entity,
     cause: &str,
     compile_states: &mut DocumentDiagnostics,
-    console: &mut crate::ui::panels::console::ConsoleLog,
+    console: &mut lunco_ui::log::LogBuffer,
     diagnostics: Option<&mut crate::ui::panels::diagnostics::DiagnosticsLog>,
     q_models: &mut Query<&mut ModelicaModel>,
     commands: &mut Commands,
@@ -1276,9 +1276,9 @@ fn fail_compile_dispatch(
     compile_states.set_error_message(doc, msg.clone());
     console.error(msg.clone());
     if let Some(diag) = diagnostics {
-        diag.append(vec![crate::ui::panels::log::LogEntry {
+        diag.append(vec![lunco_ui::log::LogEntry {
             at: web_time::Instant::now(),
-            level: crate::ui::panels::log::LogLevel::Error,
+            level: lunco_ui::log::LogLevel::Error,
             text: msg.clone(),
             model: Some(model_name.to_string()),
             loc: None,
@@ -1930,9 +1930,7 @@ fn dispatch_experiment(
             exp.name,
             model_name
         );
-        if let Some(mut console) =
-            world.get_resource_mut::<crate::ui::panels::console::ConsoleLog>()
-        {
+        if let Some(mut console) = world.get_resource_mut::<lunco_ui::log::LogBuffer>() {
             console.info(format!(
                 "Run: '{}' (t={:.2} to {:.2}s)",
                 model_name, exp.bounds.t_start, exp.bounds.t_end
@@ -1950,9 +1948,7 @@ fn dispatch_experiment(
 fn refuse_run(who: &str, why: String, commands: &mut Commands) {
     error!("[{who}] run refused: {why}");
     commands.queue(move |world: &mut World| {
-        if let Some(mut console) =
-            world.get_resource_mut::<crate::ui::panels::console::ConsoleLog>()
-        {
+        if let Some(mut console) = world.get_resource_mut::<lunco_ui::log::LogBuffer>() {
             console.error(format!("Run refused: {why}"));
         }
     });

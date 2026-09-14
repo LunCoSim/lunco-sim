@@ -1,6 +1,6 @@
 //! Asset-backed OpenUSD composition.
 //!
-//! `lunco-assets` owns canonical asset identities and storage locations. This
+//! `lunco-assets-core` owns canonical asset identities and storage locations. This
 //! crate owns the USD meaning of those bytes: sublayers, references, payloads,
 //! variants, and OpenUSD stage assembly. It is deliberately below the Bevy
 //! projector and the simulation umbrella, so tutorials and headless tools can
@@ -129,7 +129,7 @@ pub fn is_usd_layer(path: &Path) -> bool {
 /// asset-valued attributes as well as composition arcs.
 ///
 /// This is USD interpretation only. Traversal and storage access remain in
-/// `lunco-assets`.
+/// `lunco-assets-core`.
 pub fn layer_dependency_arcs(text: &str) -> Option<Vec<String>> {
     let data = parse_usda(text).ok()?;
     Some(
@@ -145,7 +145,7 @@ pub fn layer_dependency_arcs(text: &str) -> Option<Vec<String>> {
 /// The root is promoted to `lunco://` when it lives below an `assets/` root, so
 /// all arcs in the closure use the same canonical identity space.
 pub fn compose_file_to_stage(path: &Path) -> Result<Stage> {
-    let assets_root = lunco_assets::shipped_asset_root(path);
+    let assets_root = lunco_assets_core::shipped_asset_root(path);
     compose_file_to_stage_with_assets(path, assets_root)
 }
 
@@ -173,10 +173,12 @@ pub fn compose_file_to_stage_with_roots(
     twin_root: Option<&Path>,
 ) -> Result<Stage> {
     let root_id = match assets_root.and_then(|root| path.strip_prefix(root).ok()) {
-        Some(rel) => lunco_assets::engine_asset_uri(&lunco_assets::asset_path::slashed(rel)),
-        None => lunco_assets::asset_path::canonicalize_root(&path.to_string_lossy()),
+        Some(rel) => {
+            lunco_assets_core::engine_asset_uri(&lunco_assets_core::asset_path::slashed(rel))
+        }
+        None => lunco_assets_core::asset_path::canonicalize_root(&path.to_string_lossy()),
     };
-    let root_bytes = lunco_assets::read_asset_file_bytes(path)
+    let root_bytes = lunco_assets_core::read_asset_file_bytes(path)
         .map_err(|e| anyhow!("cannot read {}: {e}", path.display()))?;
     let mut bytes = HashMap::from([(root_id.clone(), root_bytes)]);
     let mut queue = vec![root_id.clone()];
@@ -189,14 +191,17 @@ pub fn compose_file_to_stage_with_roots(
             if bytes.contains_key(&child_id) {
                 continue;
             }
-            let child =
-                lunco_assets::read_asset_bytes_with_twin_root(&child_id, assets_root, twin_root)
-                    .map_err(|e| {
-                        anyhow!(
-                            "failed to fetch sublayer {child_id} for {}: {e}",
-                            path.display()
-                        )
-                    })?;
+            let child = lunco_assets_core::read_asset_bytes_with_twin_root(
+                &child_id,
+                assets_root,
+                twin_root,
+            )
+            .map_err(|e| {
+                anyhow!(
+                    "failed to fetch sublayer {child_id} for {}: {e}",
+                    path.display()
+                )
+            })?;
             bytes.insert(child_id.clone(), child);
             queue.push(child_id);
         }

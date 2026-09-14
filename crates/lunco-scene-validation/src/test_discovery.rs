@@ -158,8 +158,10 @@ fn discover_scene_test(scene_path: &Path) -> Result<SceneTest, String> {
         else {
             continue;
         };
-        let source_rel = lunco_assets::engine_asset_rel(&source_asset);
-        if !lunco_assets::discovery::is_test_asset(source_rel) || !source_rel.ends_with(".rhai") {
+        let source_rel = lunco_assets_core::engine_asset_rel(&source_asset);
+        if !lunco_assets_core::discovery::is_test_asset(source_rel)
+            || !source_rel.ends_with(".rhai")
+        {
             continue;
         }
         if !sources.insert(source_asset.clone()) {
@@ -170,12 +172,12 @@ fn discover_scene_test(scene_path: &Path) -> Result<SceneTest, String> {
         // the process CWD. Cargo integration tests run with the package as the
         // current directory, while the production binary normally runs from
         // the workspace or beside a packaged `assets/` directory.
-        let source_path = lunco_assets::id_to_disk_path(
+        let source_path = lunco_assets_core::id_to_disk_path(
             &source_asset,
-            lunco_assets::shipped_asset_root(scene_path),
+            lunco_assets_core::shipped_asset_root(scene_path),
         )
         .ok_or_else(|| format!("{scene_path:?}: cannot resolve test source {source_asset}"))?;
-        let source = lunco_assets::read_asset_file_string(&source_path).map_err(|error| {
+        let source = lunco_assets_core::read_asset_file_string(&source_path).map_err(|error| {
             format!(
                 "{}: cannot read test source {}: {error}",
                 scene_path.display(),

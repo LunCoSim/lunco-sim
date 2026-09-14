@@ -226,7 +226,8 @@ impl Plugin for LunCoSimUiPlugin {
             // bevy_picking's mesh backend: makes visible Mesh3d entities pickable,
             // so scene selection / possession / spawn-placement run as click observers.
             .add_plugins(bevy::picking::mesh_picking::MeshPickingPlugin)
-            .add_plugins(lunco_workbench::WorkbenchPlugin);
+            .add_plugins(lunco_workbench::WorkbenchPlugin)
+            .add_plugins(lunco_workbench_browser::TwinBrowserPlugin);
         #[cfg(feature = "avatar-ui")]
         app.add_plugins(lunco_avatar_ui::AvatarUiPlugin);
         // An explicit scene launch is a presentation request for the simulator:
@@ -262,10 +263,11 @@ impl Plugin for LunCoSimUiPlugin {
             // user selects a document in the Twin Browser; it never auto-mounts
             // the simulation's default scene and therefore cannot duplicate the
             // live world.
-            .add_plugins(lunco_usd_ui::UsdViewportPlugin)
+            .add_plugins(lunco_usd_viewport_ui::UsdViewportPlugin)
             .add_plugins(lunco_usd_ui::UsdUiPlugin)
             .add_plugins(lunco_luncosim_edit_core::SceneEditPlugin)
             .add_plugins(lunco_luncosim_edit_ui::ui::SceneEditUiPlugin)
+            .add_plugins(lunco_luncosim_edit_panels_ui::SceneEditPanelsUiPlugin)
             // NOTE: `ShaderMaterialPlugin` (the dynamic `ShaderMaterial` render
             // pipeline) used to be added here. It now lives inside
             // `lunco_render_bevy::LuncoRenderPlugin` — the one crate that may name
@@ -459,7 +461,7 @@ fn on_runtime_ui_action(
     q_avatar: Query<Entity, (With<lunco_core::Avatar>, With<lunco_core::LocalAvatar>)>,
     q_bodies: Query<(Entity, &lunco_core::CelestialBody)>,
     q_tags: Query<&bevy_hui::prelude::Tags>,
-    orbital_pin: Option<Res<lunco_celestial::OrbitalViewPin>>,
+    orbital_pin: Option<Res<lunco_celestial_spatial::OrbitalViewPin>>,
     camera_status: Option<Res<CameraSelectionStatus>>,
     mut commands: Commands,
 ) {
@@ -714,7 +716,7 @@ struct LunCoSimBootState {
 #[cfg(target_arch = "wasm32")]
 fn luncosim_boot_from_url(
     mut commands: bevy::prelude::Commands,
-    msl: Option<bevy::prelude::Res<lunco_assets::msl::MslLoadState>>,
+    msl: Option<bevy::prelude::Res<lunco_assets_core::msl::MslLoadState>>,
     mut state: bevy::prelude::Local<LunCoSimBootState>,
 ) {
     if state.done {
@@ -753,7 +755,7 @@ fn luncosim_boot_from_url(
     if let Some(qual) = state.open_class.clone() {
         let ready = matches!(
             msl.as_deref(),
-            Some(lunco_assets::msl::MslLoadState::Ready { .. })
+            Some(lunco_assets_core::msl::MslLoadState::Ready { .. })
         );
         if !ready {
             return;
@@ -816,7 +818,7 @@ fn install_window_icon(
 }
 
 /// Settings ▸ downloadable data — the generic view over
-/// [`lunco_assets::datasets`].
+/// [`lunco_assets_core::datasets`].
 ///
 /// The app never reaches the network on its own: every fetchable dataset is
 /// DECLARED in an `Assets.toml` (a crate's, or an open Twin's) and downloaded
@@ -1198,7 +1200,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                                     // Mounts the cache dir as this twin's root and yields the
                                     // same `twin://<name>/<rel>` the host uses for the scene.
                                     let Some(twins) = ctx
-                                        .resource::<lunco_assets::twin_source::TwinRoots>()
+                                        .resource::<lunco_assets_core::twin_source::TwinRoots>()
                                         .cloned()
                                     else {
                                         continue;
@@ -1240,7 +1242,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
         ui.separator();
 
         let Some(roots) = ctx
-            .resource::<lunco_assets::twin_source::TwinRoots>()
+            .resource::<lunco_assets_core::twin_source::TwinRoots>()
             .cloned()
         else {
             report_scenario_registry_error(ctx, "the Twin registry resource is unavailable");
@@ -1260,7 +1262,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
             return;
         }
 
-        let Some(manifest) = ctx.resource::<lunco_assets::discovery::AssetManifest>() else {
+        let Some(manifest) = ctx.resource::<lunco_assets_core::discovery::AssetManifest>() else {
             render_scenario_registry_unavailable(ui);
             return;
         };
@@ -1279,7 +1281,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
         // project's answer, not this menu's: each Twin declares `[usd] scenes`
         // in its `twin.toml`, the engine library uses its own `scenes/` layout.
         // See `discovery::list_scene_assets` for why the menu stopped deciding.
-        let mut assets = match lunco_assets::discovery::list_scene_assets(manifest, &roots) {
+        let mut assets = match lunco_assets_core::discovery::list_scene_assets(manifest, &roots) {
             Ok(assets) => assets,
             Err(error) => {
                 report_scenario_registry_error(ctx, error.to_string());
@@ -1307,7 +1309,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
             .resource::<lunco_luncosim_edit_ui::ui::asset_visibility::AssetVisibilitySettings>()
             .is_some_and(|s| s.show_test_assets);
         if !show_tests {
-            assets.retain(|asset| !lunco_assets::discovery::is_test_asset(&asset.rel));
+            assets.retain(|asset| !lunco_assets_core::discovery::is_test_asset(&asset.rel));
         }
         assets.sort_by(|a, b| a.stem.cmp(&b.stem));
 
@@ -1341,7 +1343,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
         let render =
             |ui: &mut bevy_egui::egui::Ui,
              ctx: &mut MenuCtx,
-             items: &[(&lunco_assets::discovery::AssetFile, &Option<String>)]| {
+             items: &[(&lunco_assets_core::discovery::AssetFile, &Option<String>)]| {
                 ui.set_min_width(SCENARIO_MENU_MIN_WIDTH);
                 ui.set_max_width(SCENARIO_MENU_MAX_WIDTH);
                 bevy_egui::egui::ScrollArea::vertical()
@@ -1362,7 +1364,7 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                             };
                             if resp.clicked() {
                                 ctx.trigger(lunco_usd_sim_cosim::LoadScene {
-                                    path: lunco_assets::engine_asset_uri(&asset.asset_path),
+                                    path: lunco_assets_core::engine_asset_uri(&asset.asset_path),
                                     root_prim: String::new(),
                                 });
                                 ui.close();
@@ -1371,17 +1373,17 @@ fn register_sandbox_scenarios_menu(world: &mut World) {
                     });
             };
 
-        let paired: Vec<(&lunco_assets::discovery::AssetFile, &Option<String>)> =
+        let paired: Vec<(&lunco_assets_core::discovery::AssetFile, &Option<String>)> =
             assets.iter().zip(descs.iter()).collect();
         let regular: Vec<_> = paired
             .iter()
             .copied()
-            .filter(|(asset, _)| !lunco_assets::discovery::is_test_asset(&asset.rel))
+            .filter(|(asset, _)| !lunco_assets_core::discovery::is_test_asset(&asset.rel))
             .collect();
         let tests: Vec<_> = paired
             .iter()
             .copied()
-            .filter(|(asset, _)| lunco_assets::discovery::is_test_asset(&asset.rel))
+            .filter(|(asset, _)| lunco_assets_core::discovery::is_test_asset(&asset.rel))
             .collect();
 
         // Open Twins FIRST as submenus: the twin you have open is

@@ -42,9 +42,9 @@ use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_core::{on_command, Command};
 use lunco_time::{Clocks, Playback, ResolvedDomains, TimeBinding, TimeDomain, TransportMode};
-use lunco_usd_geometry::curve::{eval_curve, eval_curve_tangent, CurveBasis};
 use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdRead, UsdStageAsset};
 use lunco_usd_bevy_scene::UsdPrimPath;
+use lunco_usd_geometry::curve::{eval_curve, eval_curve_tangent, CurveBasis};
 use openusd::schemas::geom::tokens;
 use openusd::sdf::Path as SdfPath;
 
@@ -796,7 +796,7 @@ pub fn resolve_camera_paths(
         // are deferred; inserting `CameraPath` first would remove this prim from
         // `q_new`, and a missing grid would then orphan the newly created clocks
         // forever instead of allowing the next load frame to retry.
-        let Some((grid, _)) = lunco_core::coords::ancestor_grid(entity, &q_parents, &q_grids)
+        let Some((grid, _)) = lunco_spatial::coords::ancestor_grid(entity, &q_parents, &q_grids)
         else {
             continue;
         };
@@ -808,7 +808,7 @@ pub fn resolve_camera_paths(
             continue;
         };
         let Some((camera_position, camera_rotation)) =
-            lunco_core::coords::pose_in_grid(camera, grid, &q_parents, &q_grids, &q_spatial)
+            lunco_spatial::coords::pose_in_grid(camera, grid, &q_parents, &q_grids, &q_spatial)
         else {
             error!(
                 "[camera-path] {} camera {:?} has no complete pose in its path Grid {:?}",
@@ -888,7 +888,7 @@ pub fn resolve_camera_paths(
             .remove::<crate::camera_mount::MountedCamera>()
             .try_insert((
                 crate::camera::UsdCameraPose::Path,
-                lunco_core::GridAnchor,
+                lunco_spatial::GridAnchor,
                 // Bind the camera to THIS path's clock, not the shared preview.
                 TimeBinding { domain },
                 CameraPathDriven {
@@ -907,7 +907,7 @@ pub fn resolve_camera_paths(
                 // avatar side honours it at every mode-transition boundary.
                 lunco_core::CinematicCameraLock,
             ));
-        lunco_core::attach::migrate_to_grid(
+        lunco_spatial::attach::migrate_to_grid(
             &mut commands,
             camera,
             grid,
@@ -994,7 +994,7 @@ pub fn drive_camera_paths(
         // root: the root representation legitimately changes as BigSpace
         // rebases, while the authored site frame does not.
         let Some((target_grid, _)) =
-            lunco_core::coords::ancestor_grid(curve_entity, &q_parents, &q_grids)
+            lunco_spatial::coords::ancestor_grid(curve_entity, &q_parents, &q_grids)
         else {
             // Transient during load (grid ancestry not spawned). If it
             // PERSISTS the camera is never primed and never driven — a whole
@@ -1005,7 +1005,7 @@ pub fn drive_camera_paths(
             );
             continue;
         };
-        let Some((curve_pos, curve_rot)) = lunco_core::coords::grid_relative_pose(
+        let Some((curve_pos, curve_rot)) = lunco_spatial::coords::grid_relative_pose(
             curve_entity,
             target_grid,
             &q_parents,
@@ -1064,7 +1064,7 @@ pub fn drive_camera_paths(
                     );
                     continue;
                 };
-                match lunco_core::coords::pose_in_grid(
+                match lunco_spatial::coords::pose_in_grid(
                     entity,
                     target_grid,
                     &q_parents,
@@ -1147,7 +1147,7 @@ pub fn drive_camera_paths(
                         match mode {
                             AimMode::Target(target_path) => {
                                 let entity = live_target(&target_path, &q_targets)?;
-                                let (target, _) = lunco_core::coords::pose_in_grid(
+                                let (target, _) = lunco_spatial::coords::pose_in_grid(
                                     entity,
                                     target_grid,
                                     &q_parents,
@@ -1237,7 +1237,7 @@ pub fn apply_camera_paths(
             continue;
         }
         let Some(target_grid) =
-            lunco_core::coords::ancestor_grid(driven.frame, &q_parents, &q_grids)
+            lunco_spatial::coords::ancestor_grid(driven.frame, &q_parents, &q_grids)
                 .map(|(entity, _)| entity)
         else {
             if chatty {
@@ -1269,7 +1269,7 @@ pub fn apply_camera_paths(
         // operation. Continuing with the old parent for even one write would
         // expose the celestial-frame displacement as a visible jump.
         if child_of.parent() != target_grid {
-            lunco_core::attach::migrate_to_grid(
+            lunco_spatial::attach::migrate_to_grid(
                 &mut commands,
                 camera,
                 target_grid,

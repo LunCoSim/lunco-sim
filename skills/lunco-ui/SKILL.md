@@ -32,15 +32,18 @@ and design decisions. This skill is a quick-reference summary.
 3. **Panels are `Panel` impls** (the contract lives in `lunco_workbench_core`) — registered via `lunco_workbench::WorkbenchAppExt::register_panel()` with the concrete shell's docking system.
 4. **Headless must work** — removing UI plugins (Layers 3 and 4) leaves a functioning simulation. See `AGENTS.md` §4.1 for the four-layer architecture.
 
-The workbench is deliberately two layers. `lunco-workbench-core` contains the
-stable `Panel`/`PanelCtx`, `InstancePanel`, `PerspectiveLayoutPlan`, menu
+The workbench is deliberately three layers. `lunco-workbench-core` contains
+the stable `Panel`/`PanelCtx`, `InstancePanel`, `PerspectiveLayoutPlan`, menu
 registry, and `WorkbenchSnapshot` contracts. It is safe for domain UI crates
 that need panel behavior or published layout facts and does not pull the
 renderer or `egui_dock`. `lunco-workbench` is the concrete shell: it owns
-docking, egui/bevy integration, persistence, built-in browser services, and
-shell-only widgets such as icons and tree renderers. Domain crates must not
-read the shell's private `WorkbenchLayout`; use `WorkbenchSnapshot` for layout
-facts and typed workbench commands for navigation.
+docking, egui/bevy integration, persistence, source editing, and shell-only
+widgets such as icons and tree renderers. `lunco-workbench-browser` is the
+optional reusable Twin/Files feature: it owns browser state, standard panels,
+and filesystem/library sections, including the asset-provisioning dependency.
+Domain crates must not read the shell's private `WorkbenchLayout`; use
+`WorkbenchSnapshot` for layout facts and typed workbench/browser actions for
+navigation.
 
 Universal runtime inspections should read an authoritative view model produced
 outside egui. For ports, use `PortRegistry::entity_port_infos` so values,
@@ -111,7 +114,7 @@ the shared vector `UiIcon::Check` and `UiIcon::Pending` with accessible status
 text; do not render status words or font-dependent glyphs as a second status
 system.
 
-For Twin-browser work, use the workbench-owned `BrowserQuery` as the single
+For Twin-browser work, use `lunco_workbench_browser::BrowserQuery` as the single
 transient search field. Sections filter their own authoritative view-models by
 human-readable names/paths, retain matching ancestors, and emit the existing
 typed navigation actions. Do not add a per-domain search resource or make the

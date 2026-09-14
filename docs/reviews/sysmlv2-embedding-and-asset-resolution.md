@@ -16,7 +16,7 @@ Rhai execution. The existing LunCoSim owners remain authoritative:
 
 ```text
 Twin/FileEntry
-  -> lunco-assets (canonical ids, twin://, storage, cache)
+  -> lunco-assets-core (canonical ids, twin://, storage, cache)
   -> SysmlSource asset
   -> SysmlDocument / domain engine
   -> sysmlv2 Workspace::add_file + resolve_reached
@@ -242,7 +242,7 @@ Keep Modelica-specific normalization, AST extraction, and AST mutation in
 
 1. `lunco-doc` for document identity, undo/redo, generation, diagnostics,
    file-backed reload, and cross-document references;
-2. `lunco-assets`/`TwinRoots` for canonical ids, `twin://`, storage, and cache;
+2. `lunco-assets-core`/`TwinRoots` for canonical ids, `twin://`, storage, and cache;
 3. the Modelica/Rhai generation and worker ideas as a template, not as a
    second parser dependency or copied Modelica engine.
 
@@ -337,7 +337,7 @@ shows that it is needed.
    `DocumentChanged`/Twin close events invalidate or retire the snapshot.
 
 For external references such as `@"path"::"selector"`, canonicalize the path
-with `lunco_assets::asset_path` and resolve it through `lunco://` or `twin://`.
+with `lunco_assets_core::asset_path` and resolve it through `lunco://` or `twin://`.
 The parser must receive a stable logical filename; it must not be handed an
 absolute cache path.
 

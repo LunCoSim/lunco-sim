@@ -43,7 +43,7 @@ The current entry points are deliberately split by ownership:
 
 - `validate_scene_address` (`lunco-usd-sim-cosim/src/lib.rs`) — accepts only
   registered scene schemes and rejects bare or filesystem paths.
-- `lunco_assets::engine_asset_uri` — converts an in-tree library reference to
+- `lunco_assets_core::engine_asset_uri` — converts an in-tree library reference to
   its canonical `lunco://` address at command boundaries.
 - `load_startup_scene` (`lunco-luncosim-core/src/lib.rs`) and the USD `on_open_file`
   observer (`lunco-usd/src/commands.rs`) both resolve the owning root and enter

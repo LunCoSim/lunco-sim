@@ -10,7 +10,7 @@ name = "build_msl_assets"
 path = "src/bin/build_msl_assets.rs"
 
 [dependencies]
-lunco-assets = { path = "../lunco-assets" }
+lunco-assets-core = { path = "../lunco-assets-core" }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 tar = { workspace = true }

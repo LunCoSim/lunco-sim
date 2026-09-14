@@ -233,7 +233,7 @@ pub fn update_terrain_brush_ghost(
     // physics is only the fallback for scenes without a DEM terrain. Both are
     // resolved by the shared editor surface picker in the GRID frame.
     let Some((origin_grid, dir_grid)) =
-        surface.ray_to_grid(lunco_core::coords::RenderPos(origin), dir)
+        surface.ray_to_grid(lunco_spatial::coords::RenderPos(origin), dir)
     else {
         return;
     };
@@ -258,7 +258,7 @@ pub fn update_terrain_brush_ghost(
     // then split it through the canonical world grid. The cursor hit is in the
     // floating-origin render frame; its `Transform` must remain grid-local.
     let Some((world_grid, brush_cell, brush_local)) =
-        surface.grid_local(lunco_core::coords::GridPos(point + DVec3::Y * 0.05))
+        surface.grid_local(lunco_spatial::coords::GridPos(point + DVec3::Y * 0.05))
     else {
         return;
     };
@@ -353,7 +353,7 @@ pub fn on_scene_click_terrain(
     // `HitData::position` is the renderer's floating-origin frame. Terrain
     // commands own grid-local coordinates, so cross that boundary exactly once
     // here instead of allowing each command branch to receive render values.
-    let Some(point) = surface.to_grid(lunco_core::coords::RenderPos(render_point.as_dvec3()))
+    let Some(point) = surface.to_grid(lunco_spatial::coords::RenderPos(render_point.as_dvec3()))
     else {
         warn!("[terrain] click ignored: active terrain grid is unavailable");
         return;

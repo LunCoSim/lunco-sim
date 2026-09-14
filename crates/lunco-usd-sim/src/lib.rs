@@ -69,7 +69,6 @@ use lunco_avatar::{
 };
 use lunco_controller::InputBindingsSettings;
 use lunco_core::architecture::{IntentAnalogState, Port, PortSurface};
-use lunco_core::coords::{GridPos, GridRot, VehicleFrame};
 use lunco_core::{Avatar, LocalAvatar};
 use lunco_cosim::{avian_queries::RaycastObservation, JointTorqueActuator};
 use lunco_materials::ShaderLook;
@@ -79,6 +78,7 @@ use lunco_mobility::{
     SuspensionSpring, WheelRaycast,
 };
 use lunco_render::{GraphicsCameraDefaults, PbrLook, SceneCamera};
+use lunco_spatial::coords::{GridPos, GridRot, VehicleFrame};
 use lunco_usd_sim_core::{PendingDifferential, UsdSimProcessed, UsdSimSet};
 use openusd::schemas::physics::tokens as ptok;
 use openusd::sdf::{Path as SdfPath, Value};
@@ -311,7 +311,7 @@ mod authored_sun_tests {
             .world_mut()
             .spawn((Transform::default(), GlobalTransform::default()))
             .id();
-        app.insert_resource(lunco_core::ActivePhysicsFrame(frame));
+        app.insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
 
         let authored_rotation = Quat::from_euler(
             EulerRot::XYZ,
@@ -1064,7 +1064,7 @@ fn process_usd_sim_prim_read(
     // Omitted or invalid capability leaves navigation unavailable and therefore
     // fail-closed; no vehicle class is guessed here.
     match reader.text(&sdf_path, "lunco:steeringGeometry") {
-        Some(value) => match lunco_core::parse_steering_geometry(&value) {
+        Some(value) => match lunco_spatial::parse_steering_geometry(&value) {
             Some(geometry) => {
                 commands.entity(entity).try_insert(geometry);
             }
@@ -1076,13 +1076,13 @@ fn process_usd_sim_prim_read(
                 );
                 commands
                     .entity(entity)
-                    .try_remove::<lunco_core::SteeringGeometry>();
+                    .try_remove::<lunco_spatial::SteeringGeometry>();
             }
         },
         None => {
             commands
                 .entity(entity)
-                .try_remove::<lunco_core::SteeringGeometry>();
+                .try_remove::<lunco_spatial::SteeringGeometry>();
         }
     }
 
@@ -1608,7 +1608,7 @@ fn process_usd_sim_prim_read(
         // parallel grid. Resolve the pose directly in that Grid's frame; a
         // root-world compose followed by an immediate inverse conversion is
         // both unnecessary and unstable when the distant root is re-pinned.
-        let (grid_entity, grid) = lunco_core::coords::ancestor_grid(
+        let (grid_entity, grid) = lunco_spatial::coords::ancestor_grid(
             entity,
             q_child_of,
             grid_components,
@@ -1618,7 +1618,7 @@ fn process_usd_sim_prim_read(
                 "USD avatar {sdf_path} is not below a BigSpace Grid; an explicit spatial frame is required"
             )
         });
-        let (position, rotation) = lunco_core::coords::grid_relative_pose(
+        let (position, rotation) = lunco_spatial::coords::grid_relative_pose(
             entity,
             grid_entity,
             q_child_of,
@@ -1767,7 +1767,13 @@ fn process_usd_sim_prim_read(
         // scene during bootstrap or body-surface rebranching. The pose was
         // already composed in that Grid; commit the complete spatial handoff
         // through the shared migration boundary.
-        lunco_core::attach::migrate_to_grid(commands, entity, grid_entity, avatar_cell, avatar_tf);
+        lunco_spatial::attach::migrate_to_grid(
+            commands,
+            entity,
+            grid_entity,
+            avatar_cell,
+            avatar_tf,
+        );
     }
 
     // 1. Detect PhysxVehicleContextAPI (the mobility root)
@@ -3154,7 +3160,7 @@ fn install_authored_sun_state_seed(app: &mut App) {
 /// semantic sample already published by a provider or command.
 fn seed_authored_sun_state(
     sun_state: Option<ResMut<lunco_environment::SunState>>,
-    active_frame: Option<Res<lunco_core::ActivePhysicsFrame>>,
+    active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
     q_frames: Query<&GlobalTransform>,
     q_suns: Query<
         (&GlobalTransform, &bevy::light::DirectionalLight),
