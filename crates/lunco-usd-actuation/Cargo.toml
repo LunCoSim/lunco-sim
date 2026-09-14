@@ -1,0 +1,15 @@
+[package]
+name = "lunco-usd-actuation"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Composed USD actuation readers for co-simulation projections"
+
+[dependencies]
+bevy.workspace = true
+lunco-cosim = { path = "../lunco-cosim" }
+lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
+openusd = { workspace = true }
+
+[lints]
+workspace = true

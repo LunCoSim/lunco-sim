@@ -301,7 +301,7 @@ fn topology_for_stage(view: &StageView<'_>, selected: &SdfPath) -> serde_json::V
                 serde_json::Value::Null
             }
         };
-        let world = match lunco_usd_avian::world_transform(view, candidate) {
+        let world = match lunco_usd_bevy_core::world_transform(view, candidate) {
             Ok(value) => transform_json(Some(value)),
             Err(error) => {
                 diagnostics.push(format!("{candidate}: world transform failed: {error}"));
@@ -478,7 +478,7 @@ fn read_prim_from_view(
 
     let authored_position = if doc.is_some() {
         Some(
-            lunco_usd_avian::world_transform(view, prim)
+            lunco_usd_bevy_core::world_transform(view, prim)
                 .map_err(|error| format!("QueryUsdPrim: invalid authored transform: {error}"))?
                 .translation,
         )

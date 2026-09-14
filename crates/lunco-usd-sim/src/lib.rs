@@ -1289,10 +1289,10 @@ fn process_usd_sim_prim_read(
     // torque actuator publish ordinary scalar input ports; the cosim backend
     // later resolves those commands to Avian's force/torque writer. RCS names,
     // reaction-wheel names, and controller ownership do not appear here.
-    if let Some(actuator) = lunco_usd_avian::actuator::force_actuator_from_usd(reader, &sdf_path) {
+    if let Some(actuator) = lunco_usd_actuation::force_actuator_from_usd(reader, &sdf_path) {
         commands.entity(entity).try_insert(actuator);
     }
-    if let Some(actuator) = lunco_usd_avian::actuator::torque_actuator_from_usd(reader, &sdf_path) {
+    if let Some(actuator) = lunco_usd_actuation::torque_actuator_from_usd(reader, &sdf_path) {
         commands.entity(entity).try_insert(actuator);
     }
     // Screen-constant marker, keyed on the size that IS the request: a prim
@@ -2290,7 +2290,7 @@ fn wheel_body_mount(
         raycast_body_path(reader, wheel_path)?
     };
     let body = usd_entity_for_path(all_prims, stage, body_path.as_str())?;
-    let local = lunco_usd_avian::transform_in_body_frame(reader, &body_path, wheel_path)?;
+    let local = lunco_usd_bevy_core::transform_in_body_frame(reader, &body_path, wheel_path)?;
     Some(lunco_mobility::WheelBodyMount { body, local })
 }
 
@@ -2305,8 +2305,8 @@ fn vehicle_mount_transform(
     let mut path = wheel_path.clone();
     loop {
         if reader.has_api_schema(&path, "PhysxVehicleContextAPI") {
-            let wheel = lunco_usd_avian::world_transform(reader, wheel_path).ok()?;
-            let vehicle = lunco_usd_avian::world_transform(reader, &path).ok()?;
+            let wheel = lunco_usd_bevy_core::world_transform(reader, wheel_path).ok()?;
+            let vehicle = lunco_usd_bevy_core::world_transform(reader, &path).ok()?;
             let inverse = vehicle.rotation.inverse();
             return Some(Transform {
                 translation: inverse * (wheel.translation - vehicle.translation),
@@ -2367,7 +2367,7 @@ fn raycast_mass_contribution_from_usd(
     }
     let owner = usd_entity_for_path(all_prims, stage_id, body_path.as_str())
         .ok_or_else(|| format!("owner entity {} is not projected", body_path.as_str()))?;
-    let local = lunco_usd_avian::transform_in_body_frame(reader, &body_path, prim)
+    let local = lunco_usd_bevy_core::transform_in_body_frame(reader, &body_path, prim)
         .ok_or_else(|| "cannot resolve local transform".to_owned())?;
     let principal = convention.dir_d(DVec3::new(inertia[0], inertia[1], inertia[2]))
         * (meters_per_unit * meters_per_unit);

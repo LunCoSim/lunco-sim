@@ -97,6 +97,63 @@ pub fn read_transform_from_usd(
     }
 }
 
+/// Compose a prim's world transform through the available USD read surface.
+///
+/// Prepared reference readers may begin below the scene root, so absent outer
+/// ancestors are skipped until the first prim in the read surface. Once that
+/// surface has begun, a missing interior prim stops composition at the
+/// reference boundary rather than inventing a transform across the gap.
+pub fn world_transform(
+    reader: &dyn UsdReadObject,
+    path: &SdfPath,
+) -> Result<Transform, TransformReadError> {
+    if !reader.has_prim(path) {
+        return Err(TransformReadError {
+            prim: path.to_string(),
+        });
+    }
+    let mut chain = Vec::new();
+    let mut cur = Some(path.clone());
+    while let Some(p) = cur {
+        if p.is_abs_root() {
+            break;
+        }
+        chain.push(p);
+        cur = chain.last().and_then(SdfPath::parent);
+    }
+    let mut acc = Transform::IDENTITY;
+    let mut in_read_surface = false;
+    for prim in chain.iter().rev() {
+        if !reader.has_prim(prim) {
+            if in_read_surface {
+                break;
+            }
+            continue;
+        }
+        in_read_surface = true;
+        if let Some(local) = reader.local_transform_at(prim, 0.0)? {
+            acc = acc.mul_transform(local);
+        }
+    }
+    Ok(acc)
+}
+
+/// Compose a prim's transform in an authored body's local frame.
+pub fn transform_in_body_frame(
+    reader: &dyn UsdReadObject,
+    body_path: &SdfPath,
+    prim_path: &SdfPath,
+) -> Option<Transform> {
+    let body = world_transform(reader, body_path).ok()?;
+    let prim = world_transform(reader, prim_path).ok()?;
+    let inv = body.rotation.inverse();
+    Some(Transform {
+        translation: inv * (prim.translation - body.translation),
+        rotation: (inv * prim.rotation).normalize(),
+        scale: Vec3::ONE,
+    })
+}
+
 /// Resolve inherited USD Imageable visibility and purpose on a live stage.
 pub(crate) fn stage_prim_is_invisible_or_guide(reader: &StageView<'_>, path: &SdfPath) -> bool {
     use openusd::schemas::geom::Imageable as _;

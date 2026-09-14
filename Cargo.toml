@@ -57,6 +57,7 @@ members = [
     "crates/lunco-usd-sim-core",
     "crates/lunco-usd-sim-cosim",
     "crates/lunco-usd-sim-domain",
+    "crates/lunco-usd-actuation",
     "crates/lunco-usd-sim-cosim-api",
     "crates/lunco-usd-sim-domain-api",
     "crates/lunco-usd-sim-celestial",

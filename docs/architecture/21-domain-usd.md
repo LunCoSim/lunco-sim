@@ -48,8 +48,9 @@ bridge, including f64 pose synchronization, rootless collider propagation,
 frame transport/reset, and backend admission validation;
 `lunco-usd-avian-filters` owns standard USD collision filtering, transient joint
 pair suppression, and Avian's single collision/contact hook;
-`lunco-usd-avian` owns OpenUSD physics projection and generic USD actuator
-lowering;
+`lunco-usd-avian` owns OpenUSD physics projection and joint construction;
+`lunco-usd-actuation` owns the render-free composed USD force/torque actuator
+reader used by the simulation projectors;
 `lunco-usd-sim-core` owns the small shared USD-simulation protocol;
 `lunco-usd-sim-domain` owns composed component-network and Modelica projection;
 `lunco-usd-sim-domain-api` owns optional generated-source API queries;

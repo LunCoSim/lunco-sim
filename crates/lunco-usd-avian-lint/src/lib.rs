@@ -202,7 +202,7 @@ fn local_bounds(reader: &StageView<'_>, p: &SdfPath) -> Option<(Vec3, Vec3)> {
 /// and taking its local box as world would understate how low its corner hangs.
 fn world_aabb(reader: &StageView<'_>, p: &SdfPath) -> Option<(Vec3, Vec3)> {
     let (lo, hi) = local_bounds(reader, p)?;
-    let t = lunco_usd_avian::world_transform(reader, p).ok()?;
+    let t = lunco_usd_bevy_core::world_transform(reader, p).ok()?;
     let mut min = Vec3::splat(f32::INFINITY);
     let mut max = Vec3::splat(f32::NEG_INFINITY);
     for i in 0..8 {

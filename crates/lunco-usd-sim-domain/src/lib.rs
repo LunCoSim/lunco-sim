@@ -1732,8 +1732,7 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
                 }]);
             }
             let command = command.to_string();
-            let Some(actuator) = lunco_usd_avian::actuator::force_actuator_from_usd(view, &path)
-            else {
+            let Some(actuator) = lunco_usd_actuation::force_actuator_from_usd(view, &path) else {
                 return Err(vec![DomainProjectionError {
                     path: path.to_string(),
                     message: "actuator-wrench member is not a valid force actuator with a \
