@@ -42,27 +42,30 @@ versioned artifact (and eventually a journal record), never an edit to the
 requirement file. The `lunco-sysml-rhai` crate is a read-only
 snapshot/report adapter: it exposes typed requirement and verification records,
 while the production `ValidateSysml` query discovers a manifest-declared Twin
-source set. It does not submit typed verdicts to the production runner yet. See
+source set. The shared Rhai verdict adapter emits structured evidence and the
+production runner retains its stable verdict envelope. See
 [`24-domain-sysml.md`](24-domain-sysml.md#sysml-v2-requirement-and-verification-contract)
 for the source shape and implementation gates.
 
-### Required migration surface
+### Implemented integration surface
 
-Before converting a current Rhai test, the runtime needs all of the following:
+The current runtime provides the required bounded migration surface:
 
-1. A semantic projection for requirements, verification cases, subjects,
-   constraints, and `satisfy`/`verify`/realization links, with source spans and
-   a source-set revision.
-2. One Twin-indexed source set that discovers `.sysml`/`.kerml` through the
-   existing asset identities and resolves it once with the standard library
-   (`ValidateSysml` accepts `twin://name` for this path).
-3. A Twin-owned verification registry mapping a qualified SysML verification
-   name to the existing scene and Rhai backend. Missing mappings fail loudly.
-4. A typed Rhai result sink carrying the verification key, requirement key,
-   revision, verdict, observations, evidence paths, and diagnostics. The
-   existing `TESTS_OK`/`TESTS_FAIL` text remains a compatibility envelope only.
-5. A production CLI/API selector for one verification case or requirement,
-   plus JSON output suitable for CI and a human-readable summary.
+1. `lunco-sysml-ast` projects requirements, verification cases, subjects,
+   typed scalar attributes, `satisfy`/`verify` links, source spans and a
+   source-set revision.
+2. `ValidateSysml` resolves the Twin-indexed `.sysml`/`.kerml` source set
+   through existing asset identities and `[sysml]` roots.
+3. The Twin-owned verification registry maps qualified SysML names to
+   existing scenes and Rhai observers; missing mappings fail loudly.
+4. Native Rhai reports and `report_structured_verdict` carry verification and
+   requirement identity, revision, observations, evidence and diagnostics,
+   while the stable `TESTS_OK`/`TESTS_FAIL` envelope remains available.
+5. The production `--verification` selector validates one mapped case and its
+   scene before the run; JSON reports remain available for external clients.
+
+Full KerML expression/constraint execution and automatic requirement-to-USD
+projection remain outside the bounded integration.
 
 ### Staged conversion of an existing Rhai test
 
@@ -87,21 +90,20 @@ Do not wrap an existing Rust test in Rhai, copy a threshold into both files,
 or let a missing verification mapping silently pass. This migration changes
 the ownership of the contract, not merely the spelling of the test.
 
-The intended authored test shape is therefore still Rhai, with SysML as its
-input contract:
+The authored test shape is Rhai, with SysML as its input contract. Use the
+generic evaluator so a numeric limit is read from SysML rather than copied into
+the script:
 
 ```rhai
-let model = from_json(sysml_requirement_report_json());
-let req = model.requirements.filter(|r| r.qualified_name ==
-    "ExampleRequirements::REQ001_MassBudget");
-assert(req.len() == 1, "GR001 must resolve exactly once");
-
-// Existing production helpers perform the observation; this script owns the
-// verdict and evidence, while the numeric requirement lives in SysML.
-let rover = find("/Vehicle/Rover");
-let mass = get(rover, "Mass.mass");
-assert(mass <= 450.0, "REQ-001 mass budget exceeded");
-print("VERIFICATION ExampleRequirements::Verify_REQ001 PASS");
+let source = sysml_requirements::source();
+let result = sysml_requirements::evaluate(source, [
+    #{ id: "MASS-001", component: "rover",
+       requirement: "ExampleRequirements::REQ001_MassBudget",
+       verification: "ExampleRequirements::Verify_REQ001",
+       kind: "attribute", path: "/Vehicle/Rover",
+       attr: "mass", expected_attr: "massBudgetKg", tolerance: 0.001 }
+]);
+report_structured_verdict(result, "MASS REQUIREMENTS", "MASS_REQUIREMENTS");
 ```
 
 The Rust surface needed to support this is intentionally small: one

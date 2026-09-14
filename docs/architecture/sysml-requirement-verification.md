@@ -53,10 +53,14 @@ registry is metadata, not another requirement source; thresholds and units
 remain in SysML literals.
 
 Supported observations are `exists`, `children`, `attribute`,
-`attribute_component`, `attribute_equals`, and `coverage`. `expected_attr`
-must name a literal SysML attribute, so numeric limits are not copied into a
-Rhai script. Every check carries a component and requirement ID, producing a
-per-component evidence record with the source revision and exact USD path.
+`attribute_component`, `extent_component`, `bounds_component`,
+`attribute_equals`, `relationship`, and `coverage`. `expected_attr` reads a
+literal SysML attribute by its unique source attribute name, so numeric limits
+are not copied into a Rhai script. The compact bridge uses short attribute
+names; callers must resolve collisions through the full report instead of
+silently choosing one. Every check carries a component and requirement ID,
+producing a per-component evidence record with the source revision and exact
+USD path.
 
 This is deliberately a subset of SysML v2 verification semantics: requirement
 definitions/usages, subjects, attributes, and verification-case `verify`

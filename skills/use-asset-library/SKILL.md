@@ -2,7 +2,7 @@
 name: use-asset-library
 description: >
   Add or locate LunCoSim assets under `assets/`: USD components, WGSL shaders,
-  Modelica models, or event-driven Rhai policies. Use for discovery, spawn
+  Modelica models, SysML requirements, or event-driven Rhai policies. Use for discovery, spawn
   palette entries, `lunco://` references, Twin-mounted assets, source programs,
   or web manifests. This skill owns placement and resolution; use
   author-usd-component for USD authoring and validate-assets for pre-flight.
@@ -40,7 +40,8 @@ README defines the stable taxonomy.
 | `assets/structures/` | surface installations — habitat, mast, ISRU plant, landing pad |
 | `assets/props/` | simple scene objects — ball, ramp, wall |
 | `assets/scenes/` | loadable stages — `base/`, `luncosim/`, `tests/`, `celestial/` |
-| `assets/models/` | behaviour sources: `.mo` (Modelica), `.py` |
+| `assets/models/` | behaviour sources: `.mo` (Modelica); `.py` only when the optional Python backend is explicitly enabled |
+| Twin-owned requirement roots | `.sysml` / `.kerml` source files declared and indexed by `twin.toml` |
 | `assets/scenarios/` | `.rhai` bound as a `LunCoProgramAPI` source |
 | `assets/scripting/` | importable rhai modules — `lib/`, `prelude/`, `policy/`, `tools/` |
 | `assets/shaders/` | `.wgsl` |
@@ -68,9 +69,10 @@ output and connect that output back to itself.
 
 The engine-recognized **source** extensions are walked into the discovery manifest
 (`crates/lunco-assets/src/discovery.rs`): **`.usda`, `.wgsl`, `.rhai`, `.mo`,
-`.py`**. `.mo` (Modelica) and `.py` (Python)
-are catalogued both because a `.usda` names them and so they can be browsed
-directly — the Scenarios menu lists every registered source file, grouped by type.
+`.py`, `.sysml`, `.kerml`**. `.mo` (Modelica), `.py` (optional Python), and
+SysML/KerML sources are catalogued both because a `.usda`/Twin names them and
+so they can be browsed directly. Python is not the standard scenario backend;
+Rhai is. The Scenarios menu groups registered source files by type.
 Non-source data (`.json`, `.toml`) is not walked: it is read by a subsystem or
 evaluated ad hoc, not browsed as an authored asset.
 
@@ -123,7 +125,7 @@ prepend references = @../../components/mobility/wheel.usda@
 ```
 
 The active program contract is visible in the runtime status. A Modelica or
-Python source with no declared `inputs:`/`outputs:` is reported as source-only;
+optional Python source with no declared `inputs:`/`outputs:` is reported as source-only;
 it is not treated as a running participant. `AttachProgram` is the canonical
 way to add the source and its explicit scalar contract. "My model does nothing"
 should be diagnosed by checking `CosimStatus` and `GetBrokenConnections`, not by
@@ -298,7 +300,7 @@ platform-dependent cache subdirectory.
 ## Validate before you run
 
 ```bash
-target/debug/luncosim --validate assets/vessels/rovers/my_rover.usda
+"$LUNCOSIM_BIN" --validate assets/vessels/rovers/my_rover.usda
 ```
 
 Seconds, no GPU, no app. Composes the whole reference closure — so it catches

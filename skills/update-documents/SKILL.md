@@ -88,7 +88,7 @@ git diff --check
 ```
 
 For code or authored assets, run the owning focused test and the production
-scene/API gate. Use `target/debug/luncosim --validate` for USD/Rhai preflight,
+scene/API gate. Use `$LUNCOSIM_BIN --validate` for USD/Rhai preflight,
 but do not call it runtime proof. For tutorial behavior, use an authored Rhai
 observer under `assets/scenarios/tests/` and run the production scene-test
 binary; keep Rust tests generic to seams that Rhai cannot observe.

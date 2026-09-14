@@ -90,9 +90,12 @@ flatten a referenced source.
 ## Requirements and dimensions
 
 Store reusable facts and requirements in SysML files owned by the Twin; keep
-requirements separated by owning subsystem when ownership differs.
-Write generic Rhai tests with `sysml_requirements::evaluate` and checks such as
-`exists`, `children`, `attribute`, `bounds_component`, and `relationship`.
+requirements separated by owning subsystem when ownership differs. Use the
+dedicated [`sysml-requirements`](../sysml-requirements/SKILL.md) runbook for
+source-set configuration, qualified names, validation and verification
+selection. Write generic Rhai tests with `sysml_requirements::evaluate` and
+checks such as `exists`, `children`, `attribute`, `attribute_component`,
+`extent_component`, `bounds_component`, and `relationship`.
 Tests must fail closed on missing, stale or unavailable evidence and should
 cover both structure and presentation (for example the declared wheel stations,
 named mount sockets, ramp frame relationships, symmetry and metric units).

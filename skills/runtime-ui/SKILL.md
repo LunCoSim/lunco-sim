@@ -297,8 +297,9 @@ For a markup/style-only change:
    `CaptureScreenshot` when the visual result matters.
 5. Check logs for HUI/Flair parse or asset errors.
 
-For a Rust change, build `target/debug/luncosim` in this worktree, send API
-`Exit`, verify the existing process and port are gone, then launch the replacement.
+For a Rust change, build the production binary in this worktree, set
+`LUNCOSIM_BIN` to it, send API `Exit`, verify the existing process and port are
+gone, then launch the replacement.
 Never overlap sessions or use `pkill`.
 
 Useful diagnosis order:

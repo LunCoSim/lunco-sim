@@ -209,7 +209,7 @@ This keeps tutorial regression tests in Rhai, where they can be edited and run
 without rebuilding the Rust core:
 
 ```bash
-target/debug/luncosim test \
+"$LUNCOSIM_BIN" test \
   --scene scenes/tests/tutorial_first_drive.usda --max-ticks 6000
 ```
 
@@ -242,12 +242,14 @@ Run the deterministic numeric assertion headlessly only when visual acceptance
 is not part of the request:
 
 ```
-target/debug/luncosim test \
+"$LUNCOSIM_BIN" test \
     --scene scenes/tests/landing_legs.usda --max-ticks 500
 ```
 
-Build `target/debug/luncosim` in the current worktree before the first gate.
-Test commands consume that exact production build; they do not use `cargo run`.
+When a source build is required, build the production binary in the current
+worktree and set `LUNCOSIM_BIN` to that executable. An installed production
+build can be used directly. Test commands consume the selected production
+binary; they do not use `cargo run`.
 For USD/Rhai-only iteration, reuse it without rebuilding:
 
 ```bash

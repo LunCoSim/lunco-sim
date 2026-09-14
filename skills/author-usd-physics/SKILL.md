@@ -538,7 +538,7 @@ contract in §2b; proxy geometry still inherits its authored frame.
 ### Validate and run the scene
 
 ```bash
-target/debug/luncosim --validate assets/vessels/rovers/skid_rover.usda
+"$LUNCOSIM_BIN" --validate assets/vessels/rovers/skid_rover.usda
 ```
 
 ```
@@ -614,7 +614,7 @@ the owner and its projection before authoring the field.
 its exit code comes from a telemetry verdict:
 
 ```
-target/debug/luncosim test \
+"$LUNCOSIM_BIN" test \
     --scene scenes/tests/landing_legs.usda --max-ticks 500
 ```
 

@@ -21,12 +21,12 @@ is a function of frame index, never machine speed. Full design:
 
 ```sh
 # Windowless: no window/egui, renders offscreen, EXITS BY ITSELF when done
-target/debug/luncosim --api 4101 \
+"$LUNCOSIM_BIN" --api 4101 \
   --offscreen --render-quality high \
   --record-offline ~/.cache/take.mp4 --record-fps 30 --record-frames 300
 
 # Windowed variant (records the live window; you stop it, or pass --record-frames)
-target/debug/luncosim --api 4101 --record-offline ~/.cache/take.mp4 --record-fps 30
+"$LUNCOSIM_BIN" --api 4101 --record-offline ~/.cache/take.mp4 --record-fps 30
 ```
 
 - Recording starts **after the scene-visuals readiness gate**, not at process

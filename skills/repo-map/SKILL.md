@@ -56,16 +56,30 @@ verified” or “externally blocked”.
 | Author / compile / simulate Modelica models, browse MSL | **`lunica`** | The **Modelica** workbench (⚠️ NOT the main sim). |
 | Download / verify / process external assets | **`lunco-assets`** | `-- download\|list\|process`. |
 
-Launch (workspace `default-members` make a bare `cargo run` ambiguous — **always pass a target**):
+Launch the installed production executable, or explicitly select a checkout
+build when source validation is the goal. Workspace `default-members` make a
+bare `cargo run` ambiguous — **always pass a target**:
 
 ```bash
-cargo build -p lunco-luncosim --bin luncosim
-target/debug/luncosim
-target/debug/luncosim --api 4101
-cargo build -p lunco-luncosim-server --bin luncosim-server
-target/debug/luncosim-server --api 4101
-cargo build -p lunco-modelica-ui --bin lunica
-target/debug/lunica --api 4101
+# GitHub/release install on PATH (or override with an absolute installed path).
+export LUNCOSIM_BIN="${LUNCOSIM_BIN:-luncosim}"
+export LUNCOSIM_SERVER_BIN="${LUNCOSIM_SERVER_BIN:-luncosim-server}"
+export LUNICA_BIN="${LUNICA_BIN:-lunica}"
+"$LUNCOSIM_BIN"
+"$LUNCOSIM_BIN" --api 4101
+"$LUNCOSIM_SERVER_BIN" --api 4101
+
+# Source checkout alternative: build, then override the variables before use.
+# cargo build -p lunco-luncosim --bin luncosim -j 4
+# export LUNCOSIM_BIN=target/debug/luncosim
+# cargo build -p lunco-luncosim-server --bin luncosim-server -j 4
+# export LUNCOSIM_SERVER_BIN=target/debug/luncosim-server
+
+"$LUNICA_BIN" --api 4101
+
+# Source checkout alternative for the Modelica workbench:
+# cargo build -p lunco-modelica-ui --bin lunica -j 4
+# export LUNICA_BIN=target/debug/lunica
 ```
 
 **Utility / dev bins** (all in `lunco-modelica-core` unless noted): `modelica_run`
@@ -136,7 +150,7 @@ Use this to jump to the right one; read the index for the full responsibility.
 - **No `apps/` directory** — every binary lives in a `crates/<crate>/src/{main.rs,bin/}`.
 - **`lunica` ≠ the main sim.** It is the Modelica workbench (crates `lunco-modelica-ui` (workbench) and `lunco-modelica-core` (compiler/worker)); `luncosim` is the ground-physics simulator and `luncosim-server` is its headless launcher.
 - **Do not launch LunCoSim through `cargo run`.** Build the named package/bin,
-  then execute `target/debug/luncosim` directly. Bare `cargo run` is also
+  then execute `$LUNCOSIM_BIN` directly. Bare `cargo run` is also
   ambiguous because the default members are `lunco-luncosim` and `lunco-modelica-ui`.
 - **`lunco-luncosim` produces the `luncosim` binary** (crate name ≠ binary name); `luncosim-server` is a *separate crate* (`lunco-luncosim-server`) that exists only to default to headless.
 - **API port is 4101** by default; always pass an explicit free port when another

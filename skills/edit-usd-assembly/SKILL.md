@@ -18,7 +18,7 @@ frames/sockets, independent component framing, SI dimensions, and fail-closed
 visual requirements), also read [`assembly-quality`](../assembly-quality/SKILL.md).
 
 This is the human-and-agent workflow for editing an existing assembly. It is
-not a second authoring API. The running production `target/debug/luncosim`
+not a second authoring API. The running production `$LUNCOSIM_BIN`
 window is the shared workspace: the user sees the focused Editor preview, the
 agent drives the same typed commands, and the agent inspects screenshots and
 typed state after every coherent edit.
@@ -29,7 +29,7 @@ Start in **headful windowed mode**. Launch the production binary with an
 explicit API port and without `--offscreen` or `--no-ui`:
 
 ```bash
-target/debug/luncosim --api 4127
+"$LUNCOSIM_BIN" --api 4127
 ```
 
 Use the existing headful session when one is already running. If no graphical

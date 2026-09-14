@@ -95,7 +95,7 @@ production scene-test binary. Keep Rust tests limited to generic scripting,
 asset, USD, and lifecycle seams.
 
 ```bash
-target/debug/luncosim test \
+"$LUNCOSIM_BIN" test \
   --scene scenes/tests/tutorial_first_drive.usda --max-ticks 6000
 ```
 

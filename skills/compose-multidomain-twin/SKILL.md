@@ -8,7 +8,7 @@ description: >
   a scenario as a Twin. Before designing, audit existing capabilities and the
   closest production exemplar. The skill covers Twin manifests, one program
   prim per domain, generated network roots, native USD connections, port wiring,
-  scenario orchestration, and the rule that vehicles are authored USD assets,
+  scenario orchestration, Twin-owned SysML requirements/verification, and the rule that vehicles are authored USD assets,
   not Rust structs. It also covers PortRegistry ownership and environment-owned
   gravity. See docs/architecture/33-spacecraft-modeling.md and
   docs/architecture/34-scenario-and-multidomain.md.
@@ -21,6 +21,7 @@ A full mission layers cleanly — never blur the layers:
 | Layer ("…") | Owns | Lives in |
 |---|---|---|
 | **Structure + wiring** ("what") | bodies, colliders, mass/inertia, joints, topology, program prims, port connections | **USD** (authored) |
+| **System intent + acceptance contract** | parts/ports/connections, requirements, satisfy/verify traceability | **SysML v2** (`sysml` feature, opt-in) |
 | **Subsystem dynamics** ("how a part behaves") | thrust, propellant, battery, thermal, controllers | **Modelica / rhai** (cosim) |
 | **Substrate + behavior library** ("the laws") | solver, force/joint/port plumbing, parameterized wheel/suspension/friction | **Rust** (reusable, never bespoke) |
 
@@ -32,7 +33,10 @@ A full mission layers cleanly — never blur the layers:
 colliders, contacts, joints. Modelica owns everything else that evolves: thermal,
 electrical, propulsion, structural. Modelica reaches physics through cosim ports,
 and may also carry GNC or flight-software math (an equation is an equation); what it
-must never become is a second physics engine. rhai stays logic.
+must never become is a second physics engine. SysML owns requirement intent and
+traceability; Rhai observes the composed stage and emits the executable verdict.
+Rhai is the default scenario backend. Python is optional and is not part of the
+normal Twin workflow.
 
 ## Start with a capability and exemplar audit
 
@@ -128,7 +132,12 @@ per-tick work in rhai — except in a rhai *test*, where stepping is the point.
 
 ## Attach a program through the shared contract
 
-Use `AttachProgram { doc_id, spec }` for a new Modelica or Python participant.
+Use `AttachProgram { doc_id, spec }` for a new Modelica participant. Python is
+an optional `python`-feature integration and should be used only when the Twin
+explicitly requires it; it is not the normal scenario backend. For Twin-owned
+requirements and verification cases, use
+[`sysml-requirements`](../sysml-requirements/SKILL.md) rather than adding
+requirement metadata to a program prim.
 The command validates the source path and explicit scalar interface, then
 authors the `LunCoProgramAPI` child, defaults, and native USD connections as one
 journal/undo change set. The Models palette and the `assembly_edit` Rhai tool

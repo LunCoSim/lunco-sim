@@ -1,10 +1,10 @@
 ---
 name: validate-assets
 description: >
-  Pre-flight a LunCoSim `.mo`, `.usda`, `.wgsl`, or `.rhai` asset with
+  Pre-flight a LunCoSim `.mo`, `.usda`, `.sysml`, `.kerml`, `.wgsl`, or `.rhai` asset with
   `ValidateAsset` or the production CLI, or inspect one Twin's resolver
   namespaces with `ValidateTwin`. Use for parse, reference, schema,
-  shader-parameter, Modelica, namespace, or authored-lint checks. These are
+  shader-parameter, Modelica, SysML, namespace, or authored-lint checks. These are
   read-only queries; use `RunLint` for a loaded scene and test-via-api for
   runtime behavior.
 ---
@@ -20,17 +20,20 @@ Implementation: [`crates/lunco-scene-validation/src/validate.rs`](../../crates/l
 Related: [`author-usd-component`](../author-usd-component/SKILL.md) (author the
 file), [`use-asset-library`](../use-asset-library/SKILL.md) (get it discovered),
 [`build-vehicle`](../build-vehicle/SKILL.md) (wheels), [`test-via-api`](../test-via-api/SKILL.md)
-(drive the running app once it validates).
+(drive the running app once it validates), and
+[`sysml-requirements`](../sysml-requirements/SKILL.md) (Twin source sets and
+verification cases).
 
 ## Two invocation forms
 
 ### CLI — no app, no window, no GPU
 
 ```bash
-target/debug/luncosim --validate \
+"$LUNCOSIM_BIN" --validate \
   assets/models/LunCo/Electrical/Battery.mo \
   assets/vessels/rovers/skid_rover.usda \
-  assets/shaders/rover_hull.wgsl
+  assets/shaders/rover_hull.wgsl \
+  requirements/system.sysml
 ```
 
 The flag is intercepted in `crates/lunco-luncosim/src/bin/luncosim.rs`
@@ -68,7 +71,7 @@ when only lunica is up.
 ## The report
 
 ```json
-{"path":"…", "kind":"modelica|usd|wgsl|rhai|unknown",
+{"path":"…", "kind":"modelica|usd|sysml|wgsl|rhai|unknown",
  "ok":true, "errors":[], "warnings":[], "info":{}}
 ```
 
@@ -124,12 +127,17 @@ the stage, or silently save. See the [model-authoring guide](../../docs/scriptin
 |---|---|---|
 | `.mo` | rumoca `parse_to_syntax` + AST facts + authored `lint.modelica` policy | yes |
 | `.usda` | layer parse → **compose the reference closure** → strict `WheelParams::read` on every `PhysxVehicleWheelAPI` prim | yes |
+| `.sysml` / `.kerml` | shared SysML parser/resolver, semantic projections, requirement/verification records and source revision | yes |
 | `.wgsl` | `ParamSchema::parse` — reflect the `struct Material` uniform + `//!@` annotations | **no** — warnings only |
 | `.rhai` | `rhai::Engine::new().compile()`, nothing executed | yes |
 | anything else | `unsupported extension` error | yes |
 
 Extension gate is literal: **`.usda` only** — `.usd` and `.usdc` are rejected as
 unsupported, not parsed.
+
+For a complete Twin source set, use the read-only `ValidateSysml` query rather
+than validating a single file and assuming the manifest/registry is correct:
+see [`sysml-requirements`](../sysml-requirements/SKILL.md).
 
 ### `.mo` — the branch-free policy is the point
 

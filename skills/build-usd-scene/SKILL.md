@@ -122,7 +122,7 @@ stable API ids in selection order and the current primary id.
    [`inspect-simulation`](../inspect-simulation/SKILL.md) for reading state back).
 6. **Persist:** to make it permanent, author it into the `.usda` scene file under
    `assets/scenes/` (the runtime edits are USD ops; save them into the layer).
-7. **Verify the contract:** run `target/debug/luncosim --validate <scene.usda>`;
+7. **Verify the contract:** run `$LUNCOSIM_BIN --validate <scene.usda>`;
    for a composed world, run the authored Rhai scene gate and inspect its
    verdict. `--validate` catches parse/composition/lint failures but does not
    prove that the light remains stable during runtime.

@@ -190,37 +190,37 @@ human identifier such as `REQ-001` belongs in the requirement documentation (or
 in a future standard metadata projection), not in a LunCo-specific annotation
 that would break interchange.
 
-### What must be added before a Rhai test can be rewritten
+### Current integration path
 
-The first two slices are now available: the AST exposes typed requirement and
-verification records, and `ValidateSysml` loads the Twin manifest's indexed
-source set. The remaining slices are the integration roadmap.
+The implementation now covers the complete bounded path from source to an
+authored runtime verdict:
 
-1. **Semantic projection.** Extend `lunco-sysml-ast` beyond generic elements
-   with requirement records (qualified name, subject, doc/constraint spans),
-   verification records, and typed `satisfy`/`verify`/realization links. Keep
-   source ranges and the source-set revision so reports can identify the exact
-   model that was tested.
-2. **Twin source-set discovery.** Consume the existing `Twin::files()` index,
-   load all reachable `.sysml`/`.kerml` sources through canonical `twin://`
-   identities, and resolve the complete requirement/verification graph once.
-   Do not add a second filesystem walker or pass cache paths to the parser.
-3. **Verification registry.** Map a qualified verification-case name to an
-   existing production scene and Rhai backend source. The mapping belongs in
-   Twin-owned configuration/index data; the SysML file remains standard and
-   portable. A missing mapping is an explicit `error`, never an ignored test.
-4. **Minimal Rhai bridge.** Keep Rhai read-only for SysML facts and policy.
-   Expose the resolved requirement/verification snapshot, the selected
-   qualified key, and the source revision; let the existing Rhai test emit a
-   small result map containing `pass`, `fail`, `inconclusive`, or `error`,
-   observations, evidence paths, and diagnostics. Map that map to
-   `VerificationCases::VerdictKind` in the existing test/report boundary. Do
-   not add a Rust assertion per requirement.
-5. **Production discovery and CLI.** Extend the existing `luncosim test`
-   discovery/runner to select a SysML verification case and invoke its Rhai
-   observer in the same production process. Emit machine-readable JSON (with a
-   human summary); `TESTS_OK` remains a compatibility envelope during
-   migration, not the normative model.
+1. **Semantic projection.** `lunco-sysml-ast` exposes requirement and
+   verification records, qualified names, typed scalar attributes,
+   `satisfy`/`verify` links, source ranges and a deterministic source-set
+   revision.
+2. **Twin source-set discovery.** `Twin::files()` is the authority for
+   `.sysml`/`.kerml` discovery. `[sysml]` narrows the indexed set and orders an
+   optional root; the parser resolves the selected sources once through the
+   canonical Twin identity. There is no second filesystem walker.
+3. **Verification registry.** Twin-owned `[verification]` configuration maps a
+   qualified verification-case name to an indexed production scene and Rhai
+   observer. Missing, duplicate, unsafe or mismatched mappings are explicit
+   errors; the SysML file remains standard and portable.
+4. **Read-only Rhai bridge.** `ValidateSysml`,
+   `sysml_requirements::source()` and the native report helpers expose the
+   resolved requirement/verification snapshot and source revision. The generic
+   `sysml_requirements::evaluate` tool observes the composed USD stage and
+   `report_structured_verdict` emits machine-readable evidence plus the normal
+   test verdict envelope. No requirement-specific Rust assertion is added.
+5. **Production selector.** `luncosim test --scene <PATH> --verification
+   QUALIFIED_NAME` validates the Twin mapping before constructing the
+   simulation and selects its declared verdict channel. The mapped Rhai
+   observer still owns measurement and verdict policy.
+
+The remaining work is bounded follow-up: full KerML expression/constraint
+execution, a full SysML editor, automatic UI source-set discovery, and a
+SysML-to-USD projection are not part of this integration.
 
 ### Migration rules
 
@@ -243,13 +243,14 @@ source set. The remaining slices are the integration roadmap.
 
 ## 7. Status
 
-The SysML v2 integration foundation is implemented in the terrain worktree:
-the pure AST projection, Bevy source/document plugin, canonical journal domain,
-`.sysml`/`.kerml` classification, `[sysml]` Twin manifest source roots,
-manifest-aware source discovery, pre-flight validation, and read-only Rhai
-requirement/verification reports are available behind the opt-in `sysml`
-feature. RefIndex links, structured authoring, visual panels, a verification
-registry, and a CLI selector remain follow-up work.
+The SysML v2 integration is implemented in the current runtime behind the
+opt-in `sysml` feature: the pure AST projection, Bevy source/document plugin,
+canonical journal domain, `.sysml`/`.kerml` classification, `[sysml]` Twin
+manifest source roots, manifest-aware source discovery, pre-flight validation,
+read-only Rhai requirement/verification reports, structured evidence,
+verification registry, and CLI selector are available. Full KerML expression
+execution, a full editor, automatic UI source discovery, and automatic
+SysML-to-USD projection remain outside the supported subset.
 
 ## 8. What this does NOT do
 

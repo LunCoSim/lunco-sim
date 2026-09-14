@@ -18,6 +18,7 @@ one directly when doing that kind of task by hand.
 | [**use-asset-library**](use-asset-library/SKILL.md) | Add a component, shader, Modelica model, or event-driven Rhai policy to `assets/` and have the engine find it |
 | [**luncosim-architecture**](luncosim-architecture/SKILL.md) | Design or review a reusable feature across USD, Modelica, Avian, Rust, and Rhai; adopt standard USD schemas and remove legacy paths |
 | [**coordinate-frames**](coordinate-frames/SKILL.md) | Diagnose or implement BigSpace, reference-frame, camera, terrain, trajectory, or physics pose changes without raw-f32 or repair logic |
+| [**sysml-requirements**](sysml-requirements/SKILL.md) | Author, validate, and run Twin-owned SysML v2 requirements and verification cases; understand the opt-in subset and Rhai bridge |
 
 ## Author the world & its behaviour
 
@@ -34,7 +35,7 @@ one directly when doing that kind of task by hand.
 | [**author-usd-physics**](author-usd-physics/SKILL.md) | Author physics in USD — joints and joint FRAMES, gravity per scene, why a mechanism is rigid, a vehicle flies apart, or a part falls off it |
 | [**author-scenario**](author-scenario/SKILL.md) | Write rhai behaviour — missions, waypoints, reactions, multi-entity coordination |
 | [**authoring-vessel-controllers**](authoring-vessel-controllers/SKILL.md) | Give a vessel a self-driving GNC / autopilot with manual handoff |
-| [**compose-multidomain-twin**](compose-multidomain-twin/SKILL.md) | Assemble a full mission — USD + Modelica + cosim + rhai — into a Twin |
+| [**compose-multidomain-twin**](compose-multidomain-twin/SKILL.md) | Assemble a full mission — USD + SysML + Modelica + cosim + rhai — into a Twin |
 | [**author-tutorial**](author-tutorial/SKILL.md) | Build a guided interactive lesson / onboarding flow (rhai + teaching HUD) |
 
 ## Run, observe & verify
@@ -45,7 +46,7 @@ one directly when doing that kind of task by hand.
 | [**inspect-simulation**](inspect-simulation/SKILL.md) | Observe a running sim — read ports/variables, screenshot the viewport |
 | [**record-video**](record-video/SKILL.md) | Record deterministic video/PNG takes — windowed or windowless (`--offscreen`), CLI or rhai-sequenced |
 | [**test-via-api**](test-via-api/SKILL.md) | Verify a change end-to-end via the API instead of asking the user to click |
-| [**validate-assets**](validate-assets/SKILL.md) | Pre-flight a `.mo`/`.usda`/`.wgsl`/`.rhai` or an entire Twin namespace — does it parse, resolve, and lint correctly? — in seconds; plus `RunLint` for the loaded scene and where lint rules are authored |
+| [**validate-assets**](validate-assets/SKILL.md) | Pre-flight a `.mo`/`.usda`/`.sysml`/`.kerml`/`.wgsl`/`.rhai` or an entire Twin namespace — does it parse, resolve, and lint correctly? — in seconds; plus `ValidateSysml`/`RunLint` for Twin and loaded-scene checks |
 
 ## Extend the engine
 
@@ -77,10 +78,20 @@ one directly when doing that kind of task by hand.
 
 ## Cross-cutting conventions (baked into every skill)
 
-- **Use the built production binary**: build in the current worktree, then invoke
-  `target/debug/luncosim` directly for validation, tests, and launches. Do not
-  substitute `cargo run` for the built binary.
-- **Always launch luncosim with its HTTP API**: `target/debug/luncosim --api 4101` (use
+- **Use the production binary**: resolve `LUNCOSIM_BIN` to the installed
+  `luncosim` command or its absolute GitHub-installed path. In a source
+  checkout without an installed command, build the production binary and use
+  the resulting checkout executable (usually `target/debug/luncosim`). Do not substitute `cargo run` or an
+  old `sandbox` executable for the production binary.
+- **Set the executable variables once per shell session** before copying a
+  command from a skill:
+  `export LUNCOSIM_BIN="${LUNCOSIM_BIN:-luncosim}"` and, for a headless server,
+  `export LUNCOSIM_SERVER_BIN="${LUNCOSIM_SERVER_BIN:-luncosim-server}"`.
+  For the Modelica workbench use
+  `export LUNICA_BIN="${LUNICA_BIN:-lunica}"`.
+  Override either with the absolute path to an installed GitHub build or to a
+  freshly built checkout binary when the command is not on `PATH`.
+- **Always launch luncosim with its HTTP API**: `"$LUNCOSIM_BIN" --api 4101` (use
   another explicit free port when needed). Every controllable, visual, realtime,
   or scene-test luncosim process must carry
   an explicit `--api PORT`. Only parse-only `--validate` invocations are exempt.
@@ -117,8 +128,9 @@ one directly when doing that kind of task by hand.
   doesn't lower to a `UsdOp` escapes save, journal, undo *and* replication —
   silently. See [**usd-projection**](usd-projection/SKILL.md).
 - **Use the API `Exit`**, never `pkill`, to stop a running app.
-- **Validate before you run.** `target/debug/luncosim --validate <files…>` parses assets in
-  seconds with no GPU and catches broken references, missing wheel attrs and
+- **Validate before you run.** `"$LUNCOSIM_BIN" --validate <files…>` parses assets in
+  seconds with no GPU and catches broken references, missing wheel attrs,
+  SysML/KerML diagnostics and
   `if`/`when` in Modelica — **and runs the authored lint rules**, which is what
   reports a part that would fall off a vehicle. On a *loaded* scene use the verb:
   `cmd("RunLint", #{})` + `query("LintReport")`, or `query("ValidateTwin", #{path: "..."})` for a Twin-wide namespace pre-flight; nothing lints on its own. Rules
@@ -159,6 +171,7 @@ only when its contract is needed:
 | Run a Modelica model | `run-modelica` | `test-via-api` for generic end-to-end evidence; `inspect-simulation` for read-only observation |
 | Observe live state | `inspect-simulation` | `test-via-api` only when commands or verdicts are required |
 | Build a Twin-wide mission | `compose-multidomain-twin` | `author-scenario` for mission policy and `author-tutorial` for lessons |
+| Author or verify SysML requirements | `sysml-requirements` | `validate-assets` for parse-only gates; `compose-multidomain-twin` for complete Twin composition; `test-via-api` for generic runtime evidence |
 | Workbench UI versus Twin UI | `lunco-ui` | `lunco-theme` for tokens; `runtime-ui` for authored Twin-facing surfaces |
 
 ## Writing or changing a skill

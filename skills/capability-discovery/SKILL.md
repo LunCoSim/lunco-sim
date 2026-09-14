@@ -65,7 +65,7 @@ registration or caller is not the same as a usable capability; a missing name
 in one crate is not proof that the capability is absent.
 
 For live behavior, use the production binary and its API. Start a rebuilt
-`target/debug/luncosim` with an explicit free `--api PORT`, then use:
+`$LUNCOSIM_BIN` with an explicit free `--api PORT`, then use:
 
 ```bash
 curl -s http://127.0.0.1:PORT/api/commands/schema | jq .

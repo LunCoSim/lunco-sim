@@ -514,12 +514,12 @@ Run the smallest relevant checks first, then the production binary:
 python3 scripts/gen_schema.py
 RUSTC_WRAPPER= cargo fmt --all -- --check
 RUSTC_WRAPPER= cargo test -p lunco-usd-core --test schema_generation -j 4
-target/debug/luncosim test --scene scenes/tests/sensor.usda
+"$LUNCOSIM_BIN" test --scene scenes/tests/sensor.usda
 RUSTC_WRAPPER= cargo test -p lunco-usd-sim --test usd_connection_mechanics -j 4
 CARGO_INCREMENTAL=1 RUSTC_WRAPPER= cargo build -p lunco-luncosim --bin luncosim -j 4
 ```
 
-For a live feature, launch only `target/debug/luncosim` with an explicit free
+For a live feature, launch only `$LUNCOSIM_BIN` with an explicit free
 API port, verify readiness, inspect ports and composed connections, and run the
 scene through the real executable. Report separately:
 

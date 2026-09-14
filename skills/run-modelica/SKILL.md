@@ -36,9 +36,9 @@ wiring nor runtime physics.
 
 | App | Launch | Modelica surface |
 |---|---|---|
-| **`lunica`** | `target/debug/lunica --api 4101` | **The Modelica workbench itself** — nothing to switch to. Prefer this for pure Modelica work. |
-| **`luncosim`** | `target/debug/luncosim --api 4101` | Ground-physics simulator; an explicit `--scene` launch opens **View**, while Modelica lives under the **`modelica_analyze` perspective** — switch to it (below) before diagrams/plots render. |
-| **`luncosim-server`** | `target/debug/luncosim-server --api 4101` | Headless LunCoSim host; use the GUI `luncosim` command for the workbench. |
+| **`lunica`** | `"$LUNICA_BIN" --api 4101` | **The Modelica workbench itself** — nothing to switch to. Prefer this for pure Modelica work. |
+| **`luncosim`** | `$LUNCOSIM_BIN --api 4101` | Ground-physics simulator; an explicit `--scene` launch opens **View**, while Modelica lives under the **`modelica_analyze` perspective** — switch to it (below) before diagrams/plots render. |
+| **`luncosim-server`** | `$LUNCOSIM_SERVER_BIN --api 4101` | Headless LunCoSim host; use the GUI `luncosim` command for the workbench. |
 
 **In `luncosim`, switch to the Modelica view before plotting/screenshotting.**
 The compile/run/experiment *commands and query providers work regardless* (they're

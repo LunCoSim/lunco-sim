@@ -210,7 +210,7 @@ rebuilt binary or an explicit clean session is required.
 # 1. After the existing session is confirmed stopped, start the production
 #    binary built in this worktree. Keep it alive in the runner's background
 #    session.
-target/debug/luncosim --api 4101
+"$LUNCOSIM_BIN" --api 4101
 
 # 2. Wait for the readiness contract, not just an open socket:
 until curl -s http://127.0.0.1:4101/api/ready 2>/dev/null \
@@ -293,7 +293,7 @@ instance (or only lunica) up, the same checks run as a one-shot CLI that builds
 no app at all:
 
 ```bash
-target/debug/luncosim --validate assets/models/LunCo/Electrical/Battery.mo
+"$LUNCOSIM_BIN" --validate assets/models/LunCo/Electrical/Battery.mo
 ```
 
 Full runbook — per-extension checks, exit codes, and the CWD path-resolution
@@ -382,7 +382,7 @@ or changing `soc`.
 
 ## Production tutorial tests
 
-Tutorial acceptance belongs to the production `target/debug/luncosim` binary.
+Tutorial acceptance belongs to the production `$LUNCOSIM_BIN` binary.
 Build that binary in the worktree, run the scene-test command directly, and
 capture its exit code and authored verdict. `--validate` proves only USD
 parsing; a successful acknowledgement proves validation and dispatch, not that
@@ -401,7 +401,7 @@ document, dispatch `AttachProgram`, then verify `ListPorts`, `CosimStatus`, and
 `GetBrokenConnections`. The production Rhai gate is:
 
 ```bash
-target/debug/luncosim test \
+"$LUNCOSIM_BIN" test \
   --scene scenes/tests/program_attach_command.usda --max-ticks 3000
 ```
 

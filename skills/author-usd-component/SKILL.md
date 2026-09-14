@@ -572,7 +572,7 @@ wheels.
 **Pre-flight first — it costs seconds and needs no app:**
 
 ```bash
-target/debug/luncosim --validate assets/<your file>.usda
+"$LUNCOSIM_BIN" --validate assets/<your file>.usda
 ```
 
 It parses the layer, **composes the whole reference closure** (so a dangling
