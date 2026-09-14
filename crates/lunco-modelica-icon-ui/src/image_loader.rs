@@ -10,9 +10,8 @@
 //!
 //! The standard egui image loaders don't know this scheme. Until we
 //! register ours they'd log `unsupported uri scheme`, leaving the
-//! image placeholder empty. This loader rewrites the URI to a
-//! filesystem path under [`lunco_assets_core::msl_dir`] (the on-disk MSL
-//! tree) and hands the bytes off to egui's cached decoder.
+//! image placeholder empty. This loader resolves the URI through the
+//! MSL asset source and hands the bytes off to egui's cached decoder.
 //!
 //! Non-`modelica://` URIs are left to the raster loader installed by
 //! [`egui_extras::install_image_loaders`] — this one returns
@@ -259,7 +258,7 @@ impl egui::load::BytesLoader for ModelicaImageLoader {
                 let read_result: Result<Arc<[u8]>, String> =
                     match lunco_assets_core::msl::msl_read(&path) {
                         Some(bytes) => {
-                            log::info!(
+                            bevy::log::info!(
                                 "[ModelicaImageLoader] loaded {} → {} ({} bytes)",
                                 uri_for_worker,
                                 path.display(),
@@ -268,7 +267,7 @@ impl egui::load::BytesLoader for ModelicaImageLoader {
                             Ok(Arc::from(bytes))
                         }
                         None => {
-                            log::warn!(
+                            bevy::log::warn!(
                                 "[ModelicaImageLoader] not found in any MSL root: {} → {}",
                                 uri_for_worker,
                                 path.display(),

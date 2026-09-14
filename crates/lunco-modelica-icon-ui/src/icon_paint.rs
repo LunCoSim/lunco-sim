@@ -966,7 +966,7 @@ fn paint_ellipse(painter: &egui::Painter, xf: &CoordXform, e: &Ellipse) {
 /// Paint a Bitmap primitive.
 ///
 /// Supports `filename="modelica://Package.Name/path/img.png"` (resolved
-/// via `lunco_assets_core::msl_dir`) and `filename="modelica://Package.Name/file.png"`
+/// via the MSL asset source) and `filename="modelica://Package.Name/file.png"`
 /// (same). Base64 `imageSource` is not yet wired — decoding inline
 /// buffers every frame is the wrong shape; when we need it, the
 /// base64 will be decoded once and cached by hash.
@@ -1070,25 +1070,17 @@ fn texture_for_bitmap(ctx: &egui::Context, filename: &str) -> Option<egui::Textu
 
 /// Resolve a Modelica `fileName` value to raw bytes on disk.
 ///
-/// - `modelica://Pkg/path/img.png` → `<msl_root>/Pkg/path/img.png`
-///   (walking the package-as-directory convention).
-/// - Plain relative path → tried under the MSL root as-is (best
-///   effort).
+/// - `modelica://Pkg/path/img.png` → the MSL virtual path `Pkg/path/img.png`.
+/// - Plain relative path → the same MSL-root-relative path (best effort).
 fn load_bitmap_bytes(filename: &str) -> Option<Vec<u8>> {
     let rel = match filename.strip_prefix("modelica://") {
         Some(tail) => tail.to_string(),
         None => filename.to_string(),
     };
-    let msl_root = lunco_assets_core::msl_dir();
-    let candidate = msl_root.join(&rel);
-    // Route through lunco-storage — `std::fs` is clippy-banned in domain
-    // crates and absent on wasm. `FileStorage` reads native disk; on wasm
-    // it errors → `.ok()` → `None`, which the icon renderer already
-    // tolerates (bitmap simply doesn't draw).
-    use lunco_storage::Storage;
-    lunco_storage::FileStorage::new()
-        .read_sync(&lunco_storage::StorageHandle::File(candidate))
-        .ok()
+    // Read through the MSL virtual source. This keeps bitmap resolution on the
+    // same asset boundary as documentation images and works for both the native
+    // filesystem source and the browser's in-memory bundle.
+    lunco_assets_core::msl::msl_read(std::path::Path::new(&rel))
 }
 
 // ---------------------------------------------------------------------------

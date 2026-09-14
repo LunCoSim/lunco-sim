@@ -19,7 +19,7 @@ ui = [
     "lunco-workbench/api",
     "dep:bevy_egui", "dep:lunco-theme", "dep:lunco-workbench", "dep:lunco-workbench-browser", "dep:lunco-workbench-datasets-ui", "dep:lunco-workbench-core", "dep:lunco-status-core", "dep:lunco-ui",
     "dep:lunco-viz", "dep:lunco-canvas", "dep:egui_plot", "dep:egui_commonmark",
-    "dep:egui_extras", "dep:htmd", "lunco-doc-bevy/ui",
+    "dep:htmd", "lunco-doc-bevy/ui",
     "dep:rumoca-tool-fmt", "dep:rumoca-tool-lint", "dep:arboard",
     "dep:lunco-modelica-icon-ui",
     # bevy_egui pulls bevy_render + bevy_window; the lunica WINDOW additionally
@@ -118,7 +118,6 @@ egui_commonmark = { version = "0.24", features = ["better_syntax_highlighting"],
 # The Modelica documentation path uses a custom `modelica://` bytes loader;
 # egui_extras supplies only the raster decoder needed after those bytes arrive.
 # Keep the file/http/GIF/WebP/SVG loaders out of this crate's graph.
-egui_extras = { version = "0.35", features = ["image"], optional = true }
 # Pure-Rust HTML → Markdown converter. Used once per Documentation
 # annotation to normalise into the shape commonmark expects.
 htmd = { version = "0.5", optional = true }

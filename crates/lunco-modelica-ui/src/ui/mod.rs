@@ -90,7 +90,6 @@ pub use commands::{CompileModel, CreateNewScratchModel, ModelicaCommandsPlugin};
 
 pub mod class_display;
 pub mod context;
-pub mod image_loader;
 /// Debounced AST reparse driver — see module docs.
 pub mod input_activity;
 pub mod panels;
@@ -1292,14 +1291,10 @@ fn install_image_loaders_once(
         // we get another shot next frame.
         return;
     };
-    // Install only the raster decoder selected by the Modelica UI manifest.
-    // The custom bytes loader below owns the modelica:// storage boundary.
-    egui_extras::install_image_loaders(ctx);
-    // Custom loader for `modelica://Package/Resources/…` URIs used
-    // throughout MSL Documentation blocks.
-    let loader = std::sync::Arc::new(image_loader::ModelicaImageLoader::new());
-    ctx.add_bytes_loader(loader);
-    bevy::log::info!("[ModelicaImageLoader] installed egui_extras loaders + modelica:// loader");
+    // The graphics package owns both the raster decoder and the custom
+    // `modelica://Package/Resources/…` loader used by MSL Documentation.
+    lunco_modelica_icon_ui::install_image_loaders(ctx);
+    bevy::log::info!("[ModelicaImageLoader] installed Modelica image loaders");
 
     commands.insert_resource(ImageLoadersInstalled);
 }
