@@ -1,0 +1,13 @@
+[package]
+name = "lunco-sysml-report"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Transport-neutral JSON projections for SysML v2 semantic snapshots"
+
+[dependencies]
+lunco-sysml-ast = { path = "../lunco-sysml-ast" }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

@@ -26,6 +26,7 @@ members = [
     "crates/lunco-modelica-api",
     "crates/lunco-modelica-ast",
     "crates/lunco-sysml-ast",
+    "crates/lunco-sysml-report",
     "crates/lunco-sysml",
     "crates/lunco-sysml-rhai",
     "crates/lunco-usd-avian",
