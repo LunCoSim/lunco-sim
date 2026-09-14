@@ -5,14 +5,16 @@
 //! has no Avian or renderer dependency. Avian-specific port tables, physics
 //! systems, and the full wiring scheduler remain in [`lunco-cosim`].
 
+pub mod actuation;
 pub mod component;
 pub mod connection;
 pub mod contract;
 pub mod diagnostics;
 
+pub use actuation::{ForceActuator, TorqueActuator};
 pub use component::*;
 pub use connection::{
-    ControlWriteFence, PortHolds, RealtimeSafe, SimConnection, clear_control_write_fence,
+    clear_control_write_fence, ControlWriteFence, PortHolds, RealtimeSafe, SimConnection,
 };
 pub use contract::*;
 pub use diagnostics::{AlgebraicLoopDiagnostic, BrokenConnection, CosimDiagnostics};

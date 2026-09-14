@@ -9,7 +9,7 @@
 #![warn(missing_docs)]
 
 use bevy::prelude::*;
-use lunco_cosim::{ForceActuator, TorqueActuator};
+use lunco_cosim_core::{ForceActuator, TorqueActuator};
 use lunco_usd_bevy_core::read::UsdReadObject;
 use openusd::sdf::Path as SdfPath;
 

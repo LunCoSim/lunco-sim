@@ -52,8 +52,8 @@ pub use joint::*;
 pub use ports::*;
 
 use lunco_cosim_core::{
-    BrokenConnection, ControlWriteFence, CosimDiagnostics, PortHolds, RealtimeSafe, SimComponent,
-    SimConnection, SimStatus,
+    BrokenConnection, ControlWriteFence, CosimDiagnostics, ForceActuator, PortHolds, RealtimeSafe,
+    SimComponent, SimConnection, SimStatus, TorqueActuator,
 };
 
 // Typed-command machinery (re-exported from `lunco-core`, which re-exports

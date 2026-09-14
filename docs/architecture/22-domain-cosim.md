@@ -13,10 +13,10 @@ see **[`../../crates/lunco-cosim/README.md`](../../crates/lunco-cosim/README.md)
 
 The backend-neutral contract is in
 [`../../crates/lunco-cosim-core/`](../../crates/lunco-cosim-core/): it owns
-participants, connections, diagnostics, control holds, and shared connector
-contracts without depending on Avian. `lunco-cosim` owns the Avian port
-backends, binding transaction, and fixed-step propagation that realize those
-contracts.
+participants, connections, diagnostics, control holds, generic force/torque
+actuator metadata, and shared connector contracts without depending on Avian.
+`lunco-cosim` owns the Avian port backends, binding transaction, and fixed-step
+propagation that realize those contracts.
 
 The USD-specific boundary is split between
 [`lunco-usd-sim-domain`](../../crates/lunco-usd-sim-domain/),

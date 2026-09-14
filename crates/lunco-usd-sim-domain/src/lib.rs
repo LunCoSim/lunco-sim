@@ -1938,7 +1938,7 @@ fn strip_connection_suffix(name: &str) -> String {
 /// maximum body force and torque, so the Modelica allocator solves the actual
 /// one-sided least-squares problem instead of clamping a signed pseudo-inverse.
 fn actuator_wrench_matrix(
-    actuators: &[lunco_cosim::ForceActuator],
+    actuators: &[lunco_cosim_core::ForceActuator],
 ) -> Result<(Vec<[f64; 6]>, f64), String> {
     let columns: Vec<[f64; 6]> = actuators
         .iter()
@@ -4690,17 +4690,17 @@ def Scope "Rig"
     #[test]
     fn actuator_wrench_allocation_uses_authored_body_torque_axes() {
         let actuators = [
-            lunco_cosim::ForceActuator {
+            lunco_cosim_core::ForceActuator {
                 local_position: Vec3::Y,
                 direction_local: Vec3::Z,
                 max_force_n: 1.0,
             },
-            lunco_cosim::ForceActuator {
+            lunco_cosim_core::ForceActuator {
                 local_position: Vec3::Z,
                 direction_local: Vec3::X,
                 max_force_n: 1.0,
             },
-            lunco_cosim::ForceActuator {
+            lunco_cosim_core::ForceActuator {
                 local_position: Vec3::X,
                 direction_local: Vec3::Y,
                 max_force_n: 1.0,
@@ -4717,7 +4717,7 @@ def Scope "Rig"
 
     #[test]
     fn actuator_wrench_rejects_zero_authority_geometry() {
-        let actuators = [lunco_cosim::ForceActuator {
+        let actuators = [lunco_cosim_core::ForceActuator {
             local_position: Vec3::ZERO,
             direction_local: Vec3::ZERO,
             max_force_n: 1.0,
