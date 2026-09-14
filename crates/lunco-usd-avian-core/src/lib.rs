@@ -74,6 +74,28 @@ use lunco_core::coords::{
     cell_local_remainder, compose_cell_local, grid_relative_pose_seeded,
     grid_transform_between_grids, pose_in_grid, pose_in_grid_seeded, GridPos, GridRot,
 };
+use lunco_usd_bevy_scene::UsdPrimPath;
+
+/// Report an invalid Avian input at the owner that can stop further admission.
+/// The shared backend predicate lives in `lunco-physics`; this helper applies
+/// the scene lifecycle policy and preserves the first causal subject.
+pub fn report_physics_runtime_fault(
+    faults: Option<&mut lunco_core::RuntimeFaults>,
+    holds: Option<&mut lunco_physics::PhysicsHolds>,
+    entity: Entity,
+    subject: String,
+    kind: &'static str,
+    detail: String,
+) {
+    if let Some(holds) = holds {
+        holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+    }
+    if let Some(faults) = faults {
+        if faults.raise(kind, Some(entity), subject.clone(), detail.clone()) {
+            error!("[physics] runtime physics admission fault on {subject}: {kind}: {detail}");
+        }
+    }
+}
 
 /// The bridge's two passes, as orderable sets.
 ///
@@ -149,11 +171,7 @@ fn physics_backend_state_ready(faults: Option<Res<lunco_core::RuntimeFaults>>) -
     !faults.is_some_and(|faults| faults.active())
 }
 
-fn physics_subject(
-    entity: Entity,
-    name: Option<&Name>,
-    prim_path: Option<&crate::UsdPrimPath>,
-) -> String {
+fn physics_subject(entity: Entity, name: Option<&Name>, prim_path: Option<&UsdPrimPath>) -> String {
     if let Some(prim_path) = prim_path {
         return format!(
             "{} [stage={:?}]",
@@ -733,7 +751,7 @@ fn validate_physics_backend_state(
             Option<Ref<ColliderOf>>,
             Option<Ref<ColliderTransform>>,
             Option<&Name>,
-            Option<&crate::UsdPrimPath>,
+            Option<&UsdPrimPath>,
         ),
         Without<ColliderDisabled>,
     >,
@@ -751,7 +769,7 @@ fn validate_physics_backend_state(
             continue;
         }
         if !lunco_physics::avian_backend_pose_is_valid(position.0, rotation.0) {
-            crate::raise_physics_runtime_fault(
+            report_physics_runtime_fault(
                 faults.as_deref_mut(),
                 holds.as_deref_mut(),
                 entity,
@@ -807,7 +825,7 @@ fn validate_physics_backend_state(
                     .ok()
                     .map(|(_, position, rotation)| (position, rotation))
                 else {
-                    crate::raise_physics_runtime_fault(
+                    report_physics_runtime_fault(
                         faults.as_deref_mut(),
                         holds.as_deref_mut(),
                         entity,
@@ -821,7 +839,7 @@ fn validate_physics_backend_state(
                     continue;
                 };
                 let Some(collider_transform) = collider_transform else {
-                    crate::raise_physics_runtime_fault(
+                    report_physics_runtime_fault(
                         faults.as_deref_mut(),
                         holds.as_deref_mut(),
                         entity,
@@ -876,7 +894,7 @@ fn validate_physics_backend_state(
                 "collider pose or scale is not finite and f32-representable: position={effective_position:?}, rotation={effective_rotation:?}, scale={scale:?}"
             ),
         };
-        crate::raise_physics_runtime_fault(
+        report_physics_runtime_fault(
             faults.as_deref_mut(),
             holds.as_deref_mut(),
             entity,
@@ -952,7 +970,7 @@ fn pose_to_position(
             BridgeSynced,
         >,
     )>,
-    q_metadata: Query<(Option<&Name>, Option<&crate::UsdPrimPath>)>,
+    q_metadata: Query<(Option<&Name>, Option<&UsdPrimPath>)>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
 ) {
@@ -1124,7 +1142,7 @@ fn pose_to_position(
         );
         if !lunco_physics::avian_backend_pose_is_valid(p.0, r.0) {
             let (name, prim_path) = q_metadata.get(e).unwrap_or((None, None));
-            crate::raise_physics_runtime_fault(
+            report_physics_runtime_fault(
                 faults.as_deref_mut(),
                 holds.as_deref_mut(),
                 e,
@@ -1277,7 +1295,7 @@ fn position_to_pose(
         &RigidBody,
         Option<&lunco_core::PhysicsPoseAuthoritative>,
     )>,
-    q_metadata: Query<(Option<&Name>, Option<&crate::UsdPrimPath>)>,
+    q_metadata: Query<(Option<&Name>, Option<&UsdPrimPath>)>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
     // PERSISTENT across ticks, not just scratch: entries for bodies the solver
@@ -1331,7 +1349,7 @@ fn position_to_pose(
         }
         if !lunco_physics::avian_backend_pose_is_valid(pos.0, rot.0) {
             let (name, prim_path) = q_metadata.get(e).unwrap_or((None, None));
-            crate::raise_physics_runtime_fault(
+            report_physics_runtime_fault(
                 faults.as_deref_mut(),
                 holds.as_deref_mut(),
                 e,

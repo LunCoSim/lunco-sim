@@ -409,8 +409,23 @@ tessellation, quality invalidation, and the low-level geometry tests. The
 hierarchy loader retains async projection orchestration and material intent but
 does not depend directly on the heavy geometry evaluator stack.
 
+**`lunco-usd-avian-core`**
+Core Avian/BigSpace physics-frame bridge. Owns f64 pose synchronization,
+rootless collider propagation, active-frame transport/reset, backend admission
+validation, and `BridgeShadow`; it does not read USD stages or contain UI
+policy. Its bridge tests live with this production package so changing the USD
+reader does not rebuild the bridge implementation.
+
 **`lunco-usd-avian`**
-Physics bridge for OpenUSD (`UsdAvianPlugin`). Maps `UsdPhysics` schemas — rigid bodies + mass-properties, all collider shapes, and **all joints** (revolute/prismatic/fixed/spherical/distance, D6-reduced) with `UsdPhysicsDriveAPI` motor drive — to Avian3D. The single home for Avian joint construction (incl. the programmatic wheel hinge). Runtime-only; its Rust tests cover low-level mechanics with in-memory USDA fixtures, while shipped asset/runtime assertions are owned by the Rhai scene-test gate. Lint fact extraction is isolated in `lunco-usd-avian-lint`.
+Physics projection for OpenUSD (`UsdAvianPlugin`). Maps `UsdPhysics` schemas —
+rigid bodies + mass-properties, all collider shapes, and **all joints**
+(revolute/prismatic/fixed/spherical/distance, D6-reduced) with
+`UsdPhysicsDriveAPI` motor drive — to Avian3D. The single home for USD-driven
+Avian joint construction (including the programmatic wheel hinge). It consumes
+the separate Avian/BigSpace core bridge. Runtime-only; its Rust tests cover
+low-level mechanics with in-memory USDA fixtures, while shipped asset/runtime
+assertions are owned by the Rhai scene-test gate. Lint fact extraction is
+isolated in `lunco-usd-avian-lint`.
 
 **`lunco-usd-avian-lint`**
 Render-free composed-`UsdPhysics` fact producer for the authored Rhai lint

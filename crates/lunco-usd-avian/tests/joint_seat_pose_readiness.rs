@@ -13,7 +13,7 @@ use bevy::time::TimeUpdateStrategy;
 use big_space::prelude::{BigSpace, CellCoord, FloatingOrigin, Grid};
 use core::time::Duration;
 use lunco_core::ActivePhysicsFrame;
-use lunco_usd_avian::{BigSpacePhysicsBridgePlugin, PhysicsBridgeSystems};
+use lunco_usd_avian_core::{BigSpacePhysicsBridgePlugin, PhysicsBridgeSystems};
 
 const EDGE: f32 = 2000.0;
 

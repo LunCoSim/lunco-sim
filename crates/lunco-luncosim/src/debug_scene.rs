@@ -659,7 +659,7 @@ fn log_participant_readiness_blockers(world: &mut World) {
                 .get::<avian3d::prelude::RigidBodyDisabled>()
                 .is_some(),
             entity
-                .get::<lunco_usd_avian::big_space_bridge::BridgeShadow>()
+                .get::<lunco_usd_avian_core::BridgeShadow>()
                 .is_some_and(|shadow| shadow.is_seeded()),
         )
     };

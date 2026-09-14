@@ -349,7 +349,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Written through `Transform`, never through avian's `Rotation`, for exactly
  the reason `MoveEntity` never hand-writes `Position`:
- `BigSpacePhysicsBridgePlugin::pose_to_position` fires on the external
+ the `lunco-usd-avian-core::PhysicsBridgeSystems::Read` pass detects the external
  `Transform` write and derives the physics pose from it (carrying it to
  jointed descendants); a hand-written `Rotation` is a second, wronger opinion
  that the bridge's writeback then undoes. The body is pinned Kinematic for the

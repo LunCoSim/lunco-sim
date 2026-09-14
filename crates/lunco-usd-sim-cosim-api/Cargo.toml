@@ -16,6 +16,7 @@ lunco-physics = { path = "../lunco-physics" }
 lunco-render = { path = "../lunco-render" }
 lunco-signal = { path = "../lunco-signal" }
 lunco-usd-avian = { path = "../lunco-usd-avian" }
+lunco-usd-avian-core = { path = "../lunco-usd-avian-core" }
 lunco-usd-bevy-camera = { path = "../lunco-usd-bevy-camera" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }

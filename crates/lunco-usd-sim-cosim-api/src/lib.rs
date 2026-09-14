@@ -707,7 +707,7 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
             Option<&avian3d::prelude::RigidBody>,
             Option<&avian3d::prelude::Position>,
             Option<&avian3d::prelude::RigidBodyDisabled>,
-            Option<&lunco_usd_avian::big_space_bridge::BridgeShadow>,
+            Option<&lunco_usd_avian_core::BridgeShadow>,
             Option<&lunco_core::Provenance>,
             Option<&lunco_core::GlobalEntityId>,
             Has<UsdInstanceRoot>,

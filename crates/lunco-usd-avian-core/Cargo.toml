@@ -1,0 +1,17 @@
+[package]
+name = "lunco-usd-avian-core"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Core Avian/BigSpace physics-frame bridge used by USD runtime adapters"
+
+[dependencies]
+bevy.workspace = true
+avian3d.workspace = true
+big_space.workspace = true
+lunco-core = { path = "../lunco-core" }
+lunco-physics = { path = "../lunco-physics" }
+lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
+
+[lints]
+workspace = true

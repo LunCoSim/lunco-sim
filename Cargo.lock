@@ -7439,6 +7439,7 @@ dependencies = [
  "lunco-terrain-surface",
  "lunco-twin",
  "lunco-usd-avian",
+ "lunco-usd-avian-core",
  "lunco-usd-bevy-scene",
  "lunco-usd-core",
  "lunco-usd-sim",
@@ -7494,6 +7495,7 @@ dependencies = [
  "lunco-twin",
  "lunco-twin-journal",
  "lunco-usd-avian",
+ "lunco-usd-avian-core",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-runtime",
  "lunco-usd-bevy-scene",
@@ -8476,16 +8478,28 @@ version = "0.1.0"
 dependencies = [
  "avian3d",
  "bevy",
- "big_space",
  "lunco-core",
  "lunco-cosim",
  "lunco-environment",
  "lunco-physics",
  "lunco-terrain-globe",
+ "lunco-usd-avian-core",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
  "lunco-usd-core",
  "openusd",
+]
+
+[[package]]
+name = "lunco-usd-avian-core"
+version = "0.1.0"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "big_space",
+ "lunco-core",
+ "lunco-physics",
+ "lunco-usd-bevy-scene",
 ]
 
 [[package]]
@@ -8814,6 +8828,7 @@ dependencies = [
  "lunco-render",
  "lunco-signal",
  "lunco-usd-avian",
+ "lunco-usd-avian-core",
  "lunco-usd-bevy-camera",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
