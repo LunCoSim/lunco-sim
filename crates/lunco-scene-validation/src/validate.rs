@@ -777,10 +777,12 @@ fn compact_sysml_attributes(value: Option<&serde_json::Value>) -> serde_json::Va
         return serde_json::Value::Object(output);
     };
     for (name, record) in attributes {
-        // Keep the same typed record shape as the full report while omitting
-        // unrelated AST elements.  Qualified identity and source spans are
-        // intentionally retained so a Rhai test can report an exact source
-        // location and never resolve a colliding short name by accident.
+        // Keep only the identity and typed literal needed by the Rhai
+        // requirement bridge.  The full ValidateAsset report remains the
+        // source-span/IDE projection; duplicating owner/name/start/end for
+        // both short and qualified maps can exceed Rhai's 64 KiB string
+        // budget as a Twin grows.  `attribute_collisions` still prevents an
+        // ambiguous short name from being used accidentally.
         let value = record
             .get("value")
             .cloned()
@@ -788,8 +790,6 @@ fn compact_sysml_attributes(value: Option<&serde_json::Value>) -> serde_json::Va
         output.insert(
             name.clone(),
             json!({
-                "owner": record.get("owner").cloned().unwrap_or(serde_json::Value::Null),
-                "name": record.get("name").cloned().unwrap_or_else(|| json!(name)),
                 "qualified_name": record
                     .get("qualified_name")
                     .cloned()
@@ -797,8 +797,6 @@ fn compact_sysml_attributes(value: Option<&serde_json::Value>) -> serde_json::Va
                 "type_name": record.get("type_name").cloned().unwrap_or(serde_json::Value::Null),
                 "value": value,
                 "file": record.get("file").cloned().unwrap_or(serde_json::Value::Null),
-                "start": record.get("start").cloned().unwrap_or(serde_json::Value::Null),
-                "end": record.get("end").cloned().unwrap_or(serde_json::Value::Null),
             }),
         );
     }
