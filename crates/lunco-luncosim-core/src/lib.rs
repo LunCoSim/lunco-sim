@@ -161,8 +161,14 @@ pub const SANDBOX_GRAVITY: lunco_environment::Gravity = lunco_environment::Gravi
 /// package did not request it; composing the headless group from `MinimalPlugins`
 /// makes that boundary structural and fail-closed.
 pub fn default_plugins() -> bevy::app::PluginGroupBuilder {
+    // The host owns scheduling.  MinimalPlugins includes Bevy's default
+    // ScheduleRunnerPlugin; leaving it enabled makes every headless host
+    // that installs its explicit cadence fail with a duplicate-plugin panic.
+    // Keep the substrate inert so the server and scene-test runner can each
+    // install exactly one policy-owned runner.
     let group = MinimalPlugins
         .build()
+        .disable::<bevy::app::ScheduleRunnerPlugin>()
         .add(bevy::app::PanicHandlerPlugin)
         .add(bevy::log::LogPlugin {
             filter: "wgpu=error,naga=warn,cranelift=warn,cranelift_jit=warn,cranelift_codegen=warn,diffsol=warn,info".into(),
