@@ -1,5 +1,5 @@
 //! Co-sim connection diagnostics — the machine-readable form of the wiring
-//! log lines that [`crate::systems::propagate::propagate_connections`] emits.
+//! log lines that the co-simulation propagation system emits.
 //!
 //! The interaction report asked for `GET /api/diagnostics` so a caller can *poll*
 //! unresolved connections instead of scraping the terminal. The log line and this
@@ -29,7 +29,7 @@ use bevy::prelude::*;
 use lunco_core::GlobalEntityId;
 
 /// One connection target that did not accept its write on the last propagation
-/// tick. Rebuilt every tick by [`crate::systems::propagate::propagate_connections`].
+/// tick. Rebuilt every tick by the co-simulation propagation system.
 #[derive(Debug, Clone)]
 pub struct BrokenConnection {
     /// The target entity whose input port could not be written.
@@ -137,7 +137,7 @@ pub struct CosimDiagnostics {
 
 impl CosimDiagnostics {
     /// Record a diagnostic key and return whether it was new in this scene.
-    pub(crate) fn report_once(&mut self, key: impl Into<String>) -> bool {
+    pub fn report_once(&mut self, key: impl Into<String>) -> bool {
         self.reported.insert(key.into())
     }
 }

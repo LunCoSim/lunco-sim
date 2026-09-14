@@ -10,6 +10,7 @@ bevy.workspace = true
 avian3d.workspace = true
 lunco-core = { path = "../lunco-core" }
 lunco-core-session = { path = "../lunco-core-session" }
+lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-physics = { path = "../lunco-physics" }
 lunco-time = { path = "../lunco-time" }
 [lints]

@@ -10,7 +10,7 @@ use std::sync::Arc;
 use bevy::asset::AssetId;
 use bevy::prelude::*;
 use bevy::tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task};
-use lunco_cosim::UsdSourcedCosim;
+use lunco_cosim_core::UsdSourcedCosim;
 use lunco_modelica_ast::ast_extract::{
     parse_model_interface, parse_model_interface_from_ast, ModelInterface, ModelicaVariableMetadata,
 };
@@ -81,7 +81,7 @@ pub struct UsdModelicaSchedule {
 fn retire_sim_interface(commands: &mut Commands, entity: Entity) {
     commands
         .entity(entity)
-        .remove::<(lunco_cosim::SimComponent, UsdModelicaSchedule)>();
+        .remove::<(lunco_cosim_core::SimComponent, UsdModelicaSchedule)>();
 }
 
 /// Generated documents are runtime projections, unlike authored documents
@@ -4703,7 +4703,7 @@ def Scope "Rig"
                     layout: SynthesisLayout::default(),
                     projection_error: None,
                 },
-                lunco_cosim::SimComponent {
+                lunco_cosim_core::SimComponent {
                     outputs: std::collections::HashMap::from([("soc".into(), 0.75)]),
                     ..default()
                 },
@@ -4714,7 +4714,7 @@ def Scope "Rig"
 
         assert!(
             app.world()
-                .get::<lunco_cosim::SimComponent>(entity)
+                .get::<lunco_cosim_core::SimComponent>(entity)
                 .is_none(),
             "a changed or rejected projection must not retain solved values from its previous topology"
         );

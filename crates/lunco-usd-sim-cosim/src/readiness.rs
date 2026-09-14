@@ -29,7 +29,7 @@ use lunco_modelica_runtime::ModelicaModel;
 use lunco_readiness::{kinds, ReadinessRegistry, ReadinessTicket, Subject};
 
 use crate::SceneLoadInFlight;
-use lunco_cosim::{SimComponent, UsdSourcedCosim};
+use lunco_cosim_core::{SimComponent, UsdSourcedCosim};
 use lunco_usd_avian::ShouldBeDynamic;
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneAwaitingStage};
 
@@ -249,8 +249,9 @@ fn modelica_wait_kind(
     component: Option<&SimComponent>,
 ) -> Option<&'static str> {
     if model.last_error.is_some()
-        || component
-            .is_some_and(|component| matches!(component.status, lunco_cosim::SimStatus::Error(_)))
+        || component.is_some_and(|component| {
+            matches!(component.status, lunco_cosim_core::SimStatus::Error(_))
+        })
     {
         Some(kinds::PROGRAM_FAILED)
     } else if model.is_compiling || !model.is_compiled {
@@ -315,7 +316,7 @@ mod tests {
     #[test]
     fn early_port_projection_does_not_release_compile_hold() {
         let compiling = SimComponent {
-            status: lunco_cosim::SimStatus::Compiling,
+            status: lunco_cosim_core::SimStatus::Compiling,
             ..default()
         };
         let model = ModelicaModel::default();
@@ -329,7 +330,7 @@ mod tests {
         );
 
         let failed = SimComponent {
-            status: lunco_cosim::SimStatus::Error("bad model".into()),
+            status: lunco_cosim_core::SimStatus::Error("bad model".into()),
             ..default()
         };
         assert_eq!(

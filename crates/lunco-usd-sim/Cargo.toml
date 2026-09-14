@@ -39,6 +39,7 @@ lunco-environment = { path = "../lunco-environment" }
 lunco-avatar = { path = "../lunco-avatar", default-features = false }
 lunco-controller = { path = "../lunco-controller" }
 lunco-cosim = { path = "../lunco-cosim" }
+lunco-cosim-core = { path = "../lunco-cosim-core" }
 # Hook substrate for authored policies and typed USD lint facts for the custom
 # PhysxPhysicsGearJoint projection. Rules remain authored in
 # assets/scripting/policy/lint_usd.rhai.

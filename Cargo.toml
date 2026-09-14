@@ -79,6 +79,7 @@ members = [
     "crates/lunco-api",
     "crates/lunco-api-transport",
     "crates/lunco-cosim",
+    "crates/lunco-cosim-core",
     "crates/lunco-environment",
     "crates/lunco-doc",
     "crates/lunco-doc-bevy",

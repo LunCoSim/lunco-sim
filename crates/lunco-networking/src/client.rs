@@ -328,7 +328,7 @@ fn on_client_disconnected(
     _trigger: On<Add, Disconnected>,
     mut local: ResMut<LocalSession>,
     mut status: ResMut<NetStatus>,
-    holds: Option<Res<lunco_cosim::PortHolds>>,
+    holds: Option<Res<lunco_cosim_core::PortHolds>>,
     mut commands: Commands,
 ) {
     if let Some(holds) = holds {

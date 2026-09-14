@@ -75,7 +75,7 @@ lunco-scripting = { path = "../lunco-scripting" }
 lunco-assets = { workspace = true }
 lunco-twin = { path = "../lunco-twin" }
 serde_json = { workspace = true }
-lunco-cosim = { path = "../lunco-cosim" }
+lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-usd-sim-core = { path = "../lunco-usd-sim-core" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-readiness = { workspace = true }

@@ -7172,6 +7172,7 @@ dependencies = [
  "lunco-core",
  "lunco-core-session",
  "lunco-cosim",
+ "lunco-cosim-core",
  "lunco-environment",
  "lunco-physics",
  "lunco-render",
@@ -7335,8 +7336,17 @@ dependencies = [
  "bevy",
  "lunco-core",
  "lunco-core-session",
+ "lunco-cosim-core",
  "lunco-physics",
  "lunco-time",
+]
+
+[[package]]
+name = "lunco-cosim-core"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "lunco-core",
 ]
 
 [[package]]
@@ -7371,6 +7381,7 @@ dependencies = [
  "big_space",
  "lunco-core",
  "lunco-cosim",
+ "lunco-cosim-core",
  "lunco-physics",
  "lunco-render",
  "wgpu-types",
@@ -7448,7 +7459,7 @@ dependencies = [
  "lunco-celestial",
  "lunco-core",
  "lunco-core-session",
- "lunco-cosim",
+ "lunco-cosim-core",
  "lunco-doc-bevy",
  "lunco-luncosim-core",
  "lunco-luncosim-edit-ui",
@@ -7574,6 +7585,7 @@ dependencies = [
  "lunco-controller",
  "lunco-core",
  "lunco-cosim",
+ "lunco-cosim-core",
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-environment",
@@ -7624,7 +7636,7 @@ dependencies = [
  "lunco-celestial",
  "lunco-controller",
  "lunco-core",
- "lunco-cosim",
+ "lunco-cosim-core",
  "lunco-hooks",
  "lunco-mobility",
  "lunco-networking",
@@ -7667,7 +7679,7 @@ dependencies = [
  "lunco-celestial",
  "lunco-core",
  "lunco-core-session",
- "lunco-cosim",
+ "lunco-cosim-core",
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-environment",
@@ -7938,6 +7950,7 @@ dependencies = [
  "lunco-core",
  "lunco-core-session",
  "lunco-cosim",
+ "lunco-cosim-core",
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-hash",
@@ -8812,6 +8825,7 @@ dependencies = [
  "lunco-core",
  "lunco-core-session",
  "lunco-cosim",
+ "lunco-cosim-core",
  "lunco-environment",
  "lunco-hooks",
  "lunco-hooks-rhai",
@@ -8869,6 +8883,7 @@ dependencies = [
  "lunco-core",
  "lunco-core-session",
  "lunco-cosim",
+ "lunco-cosim-core",
  "lunco-doc",
  "lunco-environment",
  "lunco-modelica-ast",
@@ -8897,6 +8912,7 @@ dependencies = [
  "lunco-api",
  "lunco-core",
  "lunco-cosim",
+ "lunco-cosim-core",
  "lunco-modelica-runtime",
  "lunco-physics",
  "lunco-render",
@@ -8919,6 +8935,7 @@ dependencies = [
  "lunco-assets",
  "lunco-core",
  "lunco-cosim",
+ "lunco-cosim-core",
  "lunco-doc",
  "lunco-hash",
  "lunco-hooks",

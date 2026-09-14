@@ -892,7 +892,7 @@ fn on_server_disconnected(
     mut serve_tasks: ResMut<crate::scenario_sync::AssetServeTasks>,
     mut replay: ResMut<PendingJournalReplay>,
     q_vessels: Query<(Entity, &lunco_core::GlobalEntityId)>,
-    holds: Option<Res<lunco_cosim::PortHolds>>,
+    holds: Option<Res<lunco_cosim_core::PortHolds>>,
     mut commands: Commands,
 ) {
     // `TelemetrySubscriptions` is not reaped here: a disconnecting client's

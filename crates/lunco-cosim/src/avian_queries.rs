@@ -12,11 +12,11 @@
 //! native Avian groups means adding a new flight computer does not require a
 //! new Rust sensor implementation.
 
-use crate::connection::PortDirection;
 use crate::ports::{AvianGroup, AvianPort};
 use avian3d::prelude::{Physics, Position, RigidBody, Rotation, SpatialQueryFilter};
 use bevy::math::{DVec3, Dir3};
 use bevy::prelude::*;
+use lunco_core::ports::PortDirection;
 
 /// A raw, single-ray observation authored on a mounted USD prim.
 ///

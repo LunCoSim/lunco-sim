@@ -1,0 +1,13 @@
+[package]
+name = "lunco-cosim-core"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Backend-neutral co-simulation components, connections, diagnostics, and control state"
+
+[dependencies]
+bevy = { workspace = true }
+lunco-core = { path = "../lunco-core" }
+
+[lints]
+workspace = true

@@ -1,7 +1,7 @@
 //! Connection propagation — the co-simulation master's exchange step.
 //!
 //! Implements the FMI-CS "read outputs → write inputs" exchange over every
-//! [`crate::SimConnection`]. The propagated value is the SSP affine transform
+//! [`lunco_cosim_core::SimConnection`]. The propagated value is the SSP affine transform
 //! `source * scale + offset`; multiple wires into one input **sum** (a
 //! signal-flow junction — convenient for force accumulation, a deliberate
 //! extension beyond FMI's 1:1 connections).
@@ -29,7 +29,13 @@ use bevy::prelude::*;
 use lunco_core::ports::{PortRegistry, ResolvedPort};
 use lunco_core::RebuildOnChange;
 
-use crate::{is_physics_force_port, BoundConnection, RealtimeSafe, SimConnection};
+use lunco_cosim_core::{
+    AlgebraicLoopDiagnostic, BrokenConnection, CosimDiagnostics, PortHolds, RealtimeSafe,
+    SimComponent, SimConnection, SimStatus,
+};
+
+use crate::avian::is_physics_force_port;
+use crate::binding::BoundConnection;
 
 /// System sets for co-simulation propagation.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -151,7 +157,7 @@ struct DetectedLoop {
 }
 
 /// The flattened wiring fabric — the "SignalBus" — cached inside
-/// [`propagate_connections`] and rebuilt only when the [`crate::SimConnection`]
+/// [`propagate_connections`] and rebuilt only when the [`lunco_cosim_core::SimConnection`]
 /// set actually changes.
 ///
 /// Replaces the old per-tick snapshot (string-cloning every connector every
@@ -413,7 +419,7 @@ impl CompiledWiring {
             let programs: Vec<Entity> = members
                 .iter()
                 .copied()
-                .filter(|member| world.get::<crate::SimComponent>(*member).is_some())
+                .filter(|member| world.get::<SimComponent>(*member).is_some())
                 .collect();
             let realtime_safe = force_producing
                 && !programs.is_empty()
@@ -439,7 +445,7 @@ impl CompiledWiring {
 ///
 /// Exclusive system: it addresses arbitrary backends through the resolver,
 /// which needs whole-world access. Self-contained — it caches the compiled
-/// fabric in a `Local` and rebuilds it only when the [`crate::SimConnection`]
+/// fabric in a `Local` and rebuilds it only when the [`lunco_cosim_core::SimConnection`]
 /// set changes, so calling this system alone (e.g. in tests, without the full
 /// schedule) both compiles and propagates. No per-tick query snapshot, string
 /// clone, or hash on the steady path:
@@ -497,7 +503,7 @@ pub fn propagate_connections(
         // fabric. Keys are collected before taking the resource borrow because the
         // liveness test needs `&World`.
         let dead: Vec<(Entity, String)> = {
-            let diag = world.resource::<crate::diagnostics::CosimDiagnostics>();
+            let diag = world.resource::<CosimDiagnostics>();
             diag.faults
                 .keys()
                 .chain(diag.landed.iter())
@@ -506,7 +512,7 @@ pub fn propagate_connections(
                 .collect()
         };
         if !dead.is_empty() {
-            let mut diag = world.resource_mut::<crate::diagnostics::CosimDiagnostics>();
+            let mut diag = world.resource_mut::<CosimDiagnostics>();
             for key in dead {
                 diag.faults.remove(&key);
                 diag.landed.remove(&key);
@@ -519,7 +525,7 @@ pub fn propagate_connections(
         let loops = compiled
             .loops
             .iter()
-            .map(|loop_info| crate::diagnostics::AlgebraicLoopDiagnostic {
+            .map(|loop_info| AlgebraicLoopDiagnostic {
                 entity: loop_info.entity,
                 global_id: loop_info.global_id,
                 detail: loop_info.detail.clone(),
@@ -529,16 +535,14 @@ pub fn propagate_connections(
                     && !loop_info.realtime_safe,
             })
             .collect();
-        world
-            .resource_mut::<crate::diagnostics::CosimDiagnostics>()
-            .algebraic_loops = loops;
+        world.resource_mut::<CosimDiagnostics>().algebraic_loops = loops;
         for loop_info in &compiled.loops {
             if loop_info.force_producing
                 && loop_info.requires_realtime_safe
                 && loop_info.realtime_safe
             {
                 if world
-                    .resource_mut::<crate::diagnostics::CosimDiagnostics>()
+                    .resource_mut::<CosimDiagnostics>()
                     .report_once(format!("loop:{detail}", detail = loop_info.detail))
                 {
                     info!(
@@ -549,7 +553,7 @@ pub fn propagate_connections(
                 continue;
             }
             if world
-                .resource_mut::<crate::diagnostics::CosimDiagnostics>()
+                .resource_mut::<CosimDiagnostics>()
                 .report_once(format!("loop:{detail}", detail = loop_info.detail))
             {
                 if loop_info.force_producing
@@ -593,7 +597,7 @@ pub fn propagate_connections(
 
     if compiled.targets.is_empty() {
         // No wires ⇒ nothing broken. Clear any report left from a prior fabric.
-        let mut diag = world.resource_mut::<crate::diagnostics::CosimDiagnostics>();
+        let mut diag = world.resource_mut::<CosimDiagnostics>();
         if !diag.broken.is_empty() || !diag.pending.is_empty() {
             diag.broken.clear();
             diag.pending.clear();
@@ -636,20 +640,20 @@ pub fn propagate_connections(
     // Gated per target (see `peer_simulates`), never by process role.
     // Terminal failures, rebuilt every tick so `GET /api/diagnostics` polls the
     // current fabric (see `CosimDiagnostics`).
-    let mut broken: Vec<crate::diagnostics::BrokenConnection> = Vec::new();
+    let mut broken: Vec<BrokenConnection> = Vec::new();
     // A scene may wire an endpoint before its runtime contract is published.
     // Generated Modelica islands are the important case: their interface is
     // provisional while compiling, not an authoring error.
-    let mut pending: Vec<crate::diagnostics::BrokenConnection> = Vec::new();
+    let mut pending: Vec<BrokenConnection> = Vec::new();
     // Targets that DID take their write this tick — the proof a wire is real, and
     // the only thing that can retract a fault (see below).
     let mut landed: Vec<(Entity, String)> = Vec::new();
-    // Manual holds outrank the fabric — see `crate::PortHolds`. They are
+    // Manual holds outrank the fabric — see `lunco_cosim_core::PortHolds`. They are
     // explicit control intents, so they remain live across fixed ticks and are
     // cleared only by ReleasePort, the vehicle safe-stop command, or lifecycle
     // teardown.
     let held: std::collections::HashMap<(Entity, String), f64> =
-        match world.get_resource_mut::<crate::PortHolds>() {
+        match world.get_resource_mut::<PortHolds>() {
             Some(holds) if !holds.is_empty() => holds.snapshot(),
             _ => Default::default(),
         };
@@ -694,7 +698,7 @@ pub fn propagate_connections(
             continue;
         }
         let has_port_surface = !registry.entity_ports(world, t.entity).is_empty();
-        let unresolved = crate::diagnostics::BrokenConnection {
+        let unresolved = BrokenConnection {
             entity: t.entity,
             global_id: world.get::<lunco_core::GlobalEntityId>(t.entity).copied(),
             port: t.name.clone(),
@@ -702,9 +706,9 @@ pub fn propagate_connections(
             dropped_value: acc[i],
         };
         let model_status = world
-            .get::<crate::SimComponent>(t.entity)
+            .get::<SimComponent>(t.entity)
             .map(|component| &component.status);
-        let compiling = matches!(model_status, Some(crate::SimStatus::Compiling));
+        let compiling = matches!(model_status, Some(SimStatus::Compiling));
         // Only an explicitly published pending marker or a compiling Modelica
         // component is assembly progress. Structural Motor/Gearbox edges are
         // filtered during USD wire derivation, so a bare endpoint with no
@@ -722,13 +726,10 @@ pub fn propagate_connections(
         // Insertions are the failure event. They occur once per endpoint, not on
         // every propagation tick, and are what produces the warning.
         let key = (unresolved.entity, unresolved.port.clone());
-        let already_landed = world
-            .resource::<crate::diagnostics::CosimDiagnostics>()
-            .landed
-            .contains(&key);
+        let already_landed = world.resource::<CosimDiagnostics>().landed.contains(&key);
         if !already_landed {
             let inserted = {
-                let mut diag = world.resource_mut::<crate::diagnostics::CosimDiagnostics>();
+                let mut diag = world.resource_mut::<CosimDiagnostics>();
                 match diag.faults.entry(key) {
                     std::collections::hash_map::Entry::Vacant(entry) => {
                         entry.insert(unresolved.clone());
@@ -740,7 +741,7 @@ pub fn propagate_connections(
             let report_key = target_report_key(world, t);
             let should_report = inserted
                 && world
-                    .resource_mut::<crate::diagnostics::CosimDiagnostics>()
+                    .resource_mut::<CosimDiagnostics>()
                     .report_once(report_key);
             if should_report {
                 let label = world
@@ -769,7 +770,7 @@ pub fn propagate_connections(
     // first write may well arrive late (a joint's `angle` port exists only once
     // avian admits both bodies), and that window is load order, not an authoring
     // error. Only a wire that never lands at all survives here.
-    let mut diag = world.resource_mut::<crate::diagnostics::CosimDiagnostics>();
+    let mut diag = world.resource_mut::<CosimDiagnostics>();
     for key in landed {
         diag.faults.remove(&key);
         diag.landed.insert(key);
@@ -781,8 +782,8 @@ pub fn propagate_connections(
 #[cfg(test)]
 mod wire_order_tests {
     use super::*;
-    use crate::SimComponent;
     use lunco_core::GlobalEntityId;
+    use SimComponent;
 
     /// P10: the fabric is compiled from ECS iteration order, but the SUMMATION
     /// order must be a function of the wires' *identities*, not of the order the
@@ -860,8 +861,8 @@ mod wire_order_tests {
     fn a_hold_outranks_its_wire_until_explicit_release() {
         use bevy::ecs::system::RunSystemOnce;
         let mut world = World::new();
-        world.init_resource::<crate::diagnostics::CosimDiagnostics>();
-        world.init_resource::<crate::PortHolds>();
+        world.init_resource::<CosimDiagnostics>();
+        world.init_resource::<PortHolds>();
         world.init_resource::<Time<bevy::time::Real>>();
 
         // One backend over `SimComponent`, so the sink has a real writable port.
@@ -870,13 +871,13 @@ mod wire_order_tests {
         world.insert_resource(registry);
 
         let src = world
-            .spawn(crate::SimComponent {
+            .spawn(SimComponent {
                 outputs: std::collections::HashMap::from([("out".to_string(), 7.0)]),
                 ..Default::default()
             })
             .id();
         let sink = world
-            .spawn(crate::SimComponent {
+            .spawn(SimComponent {
                 inputs: std::collections::HashMap::from([("demand".to_string(), 0.0)]),
                 ..Default::default()
             })
@@ -896,7 +897,7 @@ mod wire_order_tests {
 
         let demand = |world: &World| -> f64 {
             world
-                .get::<crate::SimComponent>(sink)
+                .get::<SimComponent>(sink)
                 .and_then(|c| c.inputs.get("demand").copied())
                 .unwrap_or(f64::NAN)
         };
@@ -905,9 +906,7 @@ mod wire_order_tests {
         assert_eq!(demand(&world), 7.0, "the wire drives the port");
 
         // Hold it somewhere else. The wire keeps producing 7.0 every tick.
-        world
-            .resource_mut::<crate::PortHolds>()
-            .hold(sink, "demand", -1.0);
+        world.resource_mut::<PortHolds>().hold(sink, "demand", -1.0);
         world.run_system_once(propagate_connections).unwrap();
         assert_eq!(
             demand(&world),
@@ -917,13 +916,11 @@ mod wire_order_tests {
 
         // The intent remains live across arbitrary fixed ticks. An explicit
         // release hands the port back to its authored wire.
-        world
-            .resource_mut::<crate::PortHolds>()
-            .release(sink, "demand");
+        world.resource_mut::<PortHolds>().release(sink, "demand");
         world.run_system_once(propagate_connections).unwrap();
         assert_eq!(demand(&world), 7.0, "an explicit release restores the wire");
         assert!(
-            world.resource::<crate::PortHolds>().is_empty(),
+            world.resource::<PortHolds>().is_empty(),
             "the released entry is dropped, not merely ignored"
         );
     }
@@ -936,7 +933,7 @@ mod wire_order_tests {
 
         let mut world = World::new();
         world.init_resource::<PortRegistry>();
-        world.init_resource::<crate::diagnostics::CosimDiagnostics>();
+        world.init_resource::<CosimDiagnostics>();
 
         let src = world.spawn(GlobalEntityId::from_raw(10)).id();
         // Sink has an id but no port backend of any kind.
@@ -956,7 +953,7 @@ mod wire_order_tests {
 
         world.run_system_once(propagate_connections).unwrap();
 
-        let diag = world.resource::<crate::diagnostics::CosimDiagnostics>();
+        let diag = world.resource::<CosimDiagnostics>();
         assert_eq!(diag.broken.len(), 1, "the unresolved target is terminal");
         let b = &diag.broken[0];
         assert_eq!(b.port, "nonexistent_port");
@@ -977,17 +974,11 @@ mod wire_order_tests {
         }
         world.run_system_once(propagate_connections).unwrap();
         assert!(
-            world
-                .resource::<crate::diagnostics::CosimDiagnostics>()
-                .broken
-                .is_empty(),
+            world.resource::<CosimDiagnostics>().broken.is_empty(),
             "no wires ⇒ report clears"
         );
         assert!(
-            world
-                .resource::<crate::diagnostics::CosimDiagnostics>()
-                .pending
-                .is_empty(),
+            world.resource::<CosimDiagnostics>().pending.is_empty(),
             "no wires also clears assembly progress"
         );
     }
@@ -1000,7 +991,7 @@ mod wire_order_tests {
 
         let mut world = World::new();
         world.init_resource::<PortRegistry>();
-        world.init_resource::<crate::diagnostics::CosimDiagnostics>();
+        world.init_resource::<CosimDiagnostics>();
 
         let src = world.spawn(GlobalEntityId::from_raw(10)).id();
         let sink = world
@@ -1021,7 +1012,7 @@ mod wire_order_tests {
 
         world.run_system_once(propagate_connections).unwrap();
 
-        let diag = world.resource::<crate::diagnostics::CosimDiagnostics>();
+        let diag = world.resource::<CosimDiagnostics>();
         assert_eq!(diag.pending.len(), 1, "still visible as assembly progress");
         assert!(
             diag.faults.is_empty(),
@@ -1037,7 +1028,7 @@ mod wire_order_tests {
         use bevy::ecs::system::RunSystemOnce;
 
         let mut world = World::new();
-        world.init_resource::<crate::diagnostics::CosimDiagnostics>();
+        world.init_resource::<CosimDiagnostics>();
         let mut registry = PortRegistry::default();
         crate::ports::register_builtin_port_backends(&mut registry);
         world.insert_resource(registry);
@@ -1046,7 +1037,7 @@ mod wire_order_tests {
         let sink = world
             .spawn((
                 GlobalEntityId::from_raw(20),
-                crate::SimComponent {
+                SimComponent {
                     model_name: "GeneratedNetworkIsland".into(),
                     // The generated model publishes part of its interface while
                     // compiling.  That makes the missing `drive_left` name a
@@ -1054,7 +1045,7 @@ mod wire_order_tests {
                     // rather than an entity that has not exposed any port
                     // surface yet.
                     inputs: std::collections::HashMap::from([("existing".into(), 0.0)]),
-                    status: crate::SimStatus::Compiling,
+                    status: SimStatus::Compiling,
                     ..Default::default()
                 },
             ))
@@ -1073,7 +1064,7 @@ mod wire_order_tests {
         ));
 
         world.run_system_once(propagate_connections).unwrap();
-        let diag = world.resource::<crate::diagnostics::CosimDiagnostics>();
+        let diag = world.resource::<CosimDiagnostics>();
         assert_eq!(diag.pending.len(), 1);
         assert!(diag.broken.is_empty());
         assert!(
@@ -1082,9 +1073,9 @@ mod wire_order_tests {
             diag.faults
         );
 
-        world.get_mut::<crate::SimComponent>(sink).unwrap().status = crate::SimStatus::Running;
+        world.get_mut::<SimComponent>(sink).unwrap().status = SimStatus::Running;
         world.run_system_once(propagate_connections).unwrap();
-        let diag = world.resource::<crate::diagnostics::CosimDiagnostics>();
+        let diag = world.resource::<CosimDiagnostics>();
         assert!(diag.pending.is_empty());
         assert_eq!(diag.broken.len(), 1);
         assert_eq!(diag.faults.len(), 1);
@@ -1104,7 +1095,7 @@ mod wire_order_tests {
 
         let mut world = World::new();
         world.init_resource::<PortRegistry>();
-        world.init_resource::<crate::diagnostics::CosimDiagnostics>();
+        world.init_resource::<CosimDiagnostics>();
 
         let src = world.spawn(GlobalEntityId::from_raw(10)).id();
         let sink = world.spawn(GlobalEntityId::from_raw(20)).id();
@@ -1125,17 +1116,14 @@ mod wire_order_tests {
         // is all `landed` records. Reaching a real port backend would need a
         // registered provider and would test that provider, not this rule.
         world
-            .resource_mut::<crate::diagnostics::CosimDiagnostics>()
+            .resource_mut::<CosimDiagnostics>()
             .landed
             .insert((sink, "angle".to_string()));
 
         world.run_system_once(propagate_connections).unwrap();
 
         assert!(
-            world
-                .resource::<crate::diagnostics::CosimDiagnostics>()
-                .faults
-                .is_empty(),
+            world.resource::<CosimDiagnostics>().faults.is_empty(),
             "a wire already proven to have landed must not be re-reported"
         );
     }
@@ -1163,7 +1151,7 @@ mod wire_order_tests {
 
     fn loop_diagnostics(world: &World) -> Vec<String> {
         world
-            .resource::<crate::diagnostics::CosimDiagnostics>()
+            .resource::<CosimDiagnostics>()
             .algebraic_loops
             .iter()
             .map(|loop_diag| loop_diag.detail.clone())
@@ -1179,7 +1167,7 @@ mod wire_order_tests {
 
         let mut world = World::new();
         init_builtin_ports(&mut world);
-        world.init_resource::<crate::diagnostics::CosimDiagnostics>();
+        world.init_resource::<CosimDiagnostics>();
 
         let a = world
             .spawn((GlobalEntityId::from_raw(10), lunco_core::PortSurfacePending))
@@ -1198,10 +1186,7 @@ mod wire_order_tests {
             "ordinary causal feedback is not an algebraic diagnostic: {loops:?}"
         );
         assert!(
-            world
-                .resource::<crate::diagnostics::CosimDiagnostics>()
-                .faults
-                .is_empty(),
+            world.resource::<CosimDiagnostics>().faults.is_empty(),
             "a topology loop is not a missing-port fault"
         );
         // Removing the back-edge keeps the causal fabric clean after rebuild.
@@ -1228,7 +1213,7 @@ mod wire_order_tests {
 
         let mut world = World::new();
         init_builtin_ports(&mut world);
-        world.init_resource::<crate::diagnostics::CosimDiagnostics>();
+        world.init_resource::<CosimDiagnostics>();
 
         let a = world
             .spawn((
@@ -1261,7 +1246,7 @@ mod wire_order_tests {
             !loop_diagnostics(&world).is_empty(),
             "the current topology remains observable when its force loop is accepted"
         );
-        let diag = world.resource::<crate::diagnostics::CosimDiagnostics>();
+        let diag = world.resource::<CosimDiagnostics>();
         assert!(!diag.algebraic_loops[0].rejected);
         assert!(diag.faults.is_empty());
     }
@@ -1274,7 +1259,7 @@ mod wire_order_tests {
 
         let mut world = World::new();
         init_builtin_ports(&mut world);
-        world.init_resource::<crate::diagnostics::CosimDiagnostics>();
+        world.init_resource::<CosimDiagnostics>();
         world.init_resource::<lunco_core::RuntimeFaults>();
         world.insert_resource(lunco_core_session::NetworkRole::Client);
 
@@ -1302,21 +1287,11 @@ mod wire_order_tests {
             !loop_diagnostics(&world).is_empty(),
             "the current topology remains observable when its force loop is accepted"
         );
+        assert!(!world.resource::<CosimDiagnostics>().algebraic_loops[0].rejected);
         assert!(
-            !world
-                .resource::<crate::diagnostics::CosimDiagnostics>()
-                .algebraic_loops[0]
-                .rejected
-        );
-        assert!(
-            world
-                .resource::<crate::diagnostics::CosimDiagnostics>()
-                .faults
-                .is_empty(),
+            world.resource::<CosimDiagnostics>().faults.is_empty(),
             "unexpected faults: {:?}",
-            world
-                .resource::<crate::diagnostics::CosimDiagnostics>()
-                .faults
+            world.resource::<CosimDiagnostics>().faults
         );
         assert!(world
             .resource::<lunco_core::RuntimeFaults>()
@@ -1325,7 +1300,7 @@ mod wire_order_tests {
 
         let mut unsafe_world = World::new();
         init_builtin_ports(&mut unsafe_world);
-        unsafe_world.init_resource::<crate::diagnostics::CosimDiagnostics>();
+        unsafe_world.init_resource::<CosimDiagnostics>();
         unsafe_world.init_resource::<lunco_core::RuntimeFaults>();
         unsafe_world.insert_resource(lunco_core_session::NetworkRole::Client);
         let body = unsafe_world
@@ -1371,7 +1346,7 @@ mod wire_order_tests {
 
         let mut world = World::new();
         init_builtin_ports(&mut world);
-        world.init_resource::<crate::diagnostics::CosimDiagnostics>();
+        world.init_resource::<CosimDiagnostics>();
         world.init_resource::<lunco_core::RuntimeFaults>();
         world.insert_resource(lunco_core_session::NetworkRole::Standalone);
 
@@ -1395,7 +1370,7 @@ mod wire_order_tests {
 
         world.run_system_once(propagate_connections).unwrap();
 
-        let diag = world.resource::<crate::diagnostics::CosimDiagnostics>();
+        let diag = world.resource::<CosimDiagnostics>();
         assert_eq!(diag.algebraic_loops.len(), 1);
         assert!(!diag.algebraic_loops[0].rejected);
         assert!(
@@ -1421,7 +1396,7 @@ mod wire_order_tests {
 
         let mut world = World::new();
         world.init_resource::<PortRegistry>();
-        world.init_resource::<crate::diagnostics::CosimDiagnostics>();
+        world.init_resource::<CosimDiagnostics>();
 
         let balloon = world
             .spawn((GlobalEntityId::from_raw(10), lunco_core::PortSurfacePending))
@@ -1432,10 +1407,7 @@ mod wire_order_tests {
         world.run_system_once(propagate_connections).unwrap();
 
         assert!(
-            world
-                .resource::<crate::diagnostics::CosimDiagnostics>()
-                .faults
-                .is_empty(),
+            world.resource::<CosimDiagnostics>().faults.is_empty(),
             "self-wires on one entity are causal feedback, not missing ports"
         );
     }
@@ -1447,7 +1419,7 @@ mod wire_order_tests {
 
         let mut world = World::new();
         world.init_resource::<PortRegistry>();
-        world.init_resource::<crate::diagnostics::CosimDiagnostics>();
+        world.init_resource::<CosimDiagnostics>();
 
         let a = world
             .spawn((GlobalEntityId::from_raw(10), lunco_core::PortSurfacePending))
@@ -1465,10 +1437,7 @@ mod wire_order_tests {
         world.run_system_once(propagate_connections).unwrap();
 
         assert!(
-            world
-                .resource::<crate::diagnostics::CosimDiagnostics>()
-                .faults
-                .is_empty(),
+            world.resource::<CosimDiagnostics>().faults.is_empty(),
             "valid causal wires do not create synthetic loop faults"
         );
     }

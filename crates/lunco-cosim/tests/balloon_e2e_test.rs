@@ -4,6 +4,7 @@
 
 use bevy::prelude::*;
 use lunco_cosim::*;
+use lunco_cosim_core::*;
 
 #[test]
 fn test_balloon_force_propagation() {

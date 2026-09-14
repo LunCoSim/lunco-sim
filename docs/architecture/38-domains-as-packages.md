@@ -386,7 +386,7 @@ radius. Ordered by leverage.
   input. The SSP affine `scale`/`offset` — the *only* thing USD connections don't natively carry — is
   minimal `lunco:` metadata on the input (`lunco:factor`, `lunco:offset` — SSP LinearTransformation terms);
   that is the residual LunCo glue.
-- **`SimConnection`** (`lunco-cosim/connection.rs`) is not an *authored* form: it is a **projection of** the
+- **`SimConnection`** (`lunco-cosim-core/connection.rs`) is not an *authored* form: it is a **projection of** the
   USD connections, read at compose time. Electrical topology uses the same connectable attributes as every
   other signal, not a separate relationship encoding.
 - **Blast radius:** the cosim reader walks USD connections (`lunco-usd-sim/cosim.rs`), and every asset that
@@ -667,7 +667,7 @@ in the code:
 - `lunco-core/ports.rs:1-26` — "the **FMI/SSP** scalar-exchange surface… wire currency is `f64` (what
   FMI-CS exchanges almost everywhere)… we deliberately do **not** model Bool/Enum/String ports."
 - `ports.rs:168-185` — `ResolvedPort` = "the FMI **valueReference** analogue… process-local slots."
-- `lunco-cosim/connection.rs:3,71-77` — "Follows the **FMI/SSP** ontology: `SimPort`=SSP Connector,
+- `lunco-cosim-core/connection.rs:3,71-77` — "Follows the **FMI/SSP** ontology: `SimPort`=SSP Connector,
   `SimConnection`=SSP Connection"; affine `src*scale+offset` = "SSP **LinearTransformation**."
 - `propagate.rs:3-7` — "FMI-CS 'read outputs → write inputs'… multiple wires into one input **sum** = a
   deliberate extension beyond FMI's 1:1." (The OBC `Port` side is SysML-flavored

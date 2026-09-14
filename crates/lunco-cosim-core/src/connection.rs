@@ -11,11 +11,6 @@
 
 use bevy::prelude::*;
 
-// Port causality/domain enums live in the neutral substrate so every participant
-// (engine, API, scripting) shares one definition; re-exported here because this
-// crate's `SimPort` and the avian backends address them as `connection::Port*`.
-pub use lunco_core::ports::PortDirection;
-
 /// A connection between two simulation ports.
 ///
 /// Copies the output value of `start_element.start_connector` to
@@ -23,7 +18,7 @@ pub use lunco_core::ports::PortDirection;
 ///
 /// ## Port Resolution
 ///
-/// Connector names are resolved by [`propagate_connections`](crate::systems::propagate::propagate_connections):
+/// Connector names are resolved by the backend-specific propagation system:
 ///
 /// - `"netForce"`, `"volume"`, etc. → [`crate::SimComponent`](crate::SimComponent) outputs
 /// - `"position_y"`, `"force_y"`, etc. → Avian rigid-body outputs/inputs
@@ -98,8 +93,8 @@ impl Default for SimConnection {
 /// # Why a hold, and not just a write
 ///
 /// Writing an input port directly works only while nothing else drives it. The
-/// moment that port is a wire's target, [`crate::systems::propagate::propagate_connections`]
-/// overwrites it on the next tick: a raw port write reported success, the value
+/// moment that port is a wire's target, the propagation system overwrites it on
+/// the next tick: a raw port write reported success, the value
 /// lasted under 16 ms, and from the caller's side that is indistinguishable from
 /// a port that does not exist. Every "I set the throttle and nothing happened"
 /// report has this shape.
@@ -225,57 +220,3 @@ impl PortHolds {
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Reflect)]
 #[reflect(Component)]
 pub struct RealtimeSafe;
-
-/// Is `port` an avian force/torque input — i.e. does writing it push a rigid
-/// body around? These are the ONLY ports whose writer can desync a
-/// client-predicted body, so they are what the [`RealtimeSafe`] gate guards.
-///
-/// The sets are declared beside the port tables that implement them — NOT
-/// matched by spelling here.
-pub fn is_physics_force_port(port: &str) -> bool {
-    crate::avian::BODY_FORCE_PORTS.contains(&port)
-        || crate::avian::ACTUATOR_FORCE_PORTS.contains(&port)
-}
-
-#[cfg(test)]
-mod realtime_gate_tests {
-    use super::*;
-
-    #[test]
-    fn force_ports_are_the_gated_ones() {
-        assert!(is_physics_force_port("force_y"));
-        assert!(is_physics_force_port("torque_z"));
-        // Body-frame thrust pushes a body just as hard as world-frame thrust.
-        assert!(is_physics_force_port("force_local_x"));
-        assert!(!is_physics_force_port("throttle"));
-        assert!(is_physics_force_port("force_command"));
-        assert!(is_physics_force_port("torque_command"));
-        assert!(!is_physics_force_port("angle"));
-        // A gearbox's MECHANICAL shaft torque is not a body force: it drives a
-        // reduction, not a rigid body, so it must not demand a realtime promise.
-        assert!(!is_physics_force_port("torque"));
-    }
-
-    /// Tripwire: a body-force port added to the avian table but not declared in
-    /// [`crate::avian::BODY_FORCE_PORTS`] would go UNGATED and silently. This
-    /// cannot see through the write closures, so it uses the naming convention
-    /// as a heuristic alarm — if you add a conventionally-named force port,
-    /// declare it (or, if it genuinely does not touch a body, rename it).
-    #[test]
-    fn conventionally_named_force_ports_are_all_declared() {
-        for group in crate::ports::AVIAN {
-            for p in group.ports {
-                let looks_like_force =
-                    p.name.starts_with("force_") || p.name.starts_with("torque_");
-                if looks_like_force {
-                    assert!(
-                        is_physics_force_port(p.name),
-                        "avian port `{}` looks like a body-force port but is not in \
-                         BODY_FORCE_PORTS — it would bypass the RealtimeSafe gate",
-                        p.name
-                    );
-                }
-            }
-        }
-    }
-}

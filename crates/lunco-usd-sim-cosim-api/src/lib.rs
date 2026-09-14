@@ -8,8 +8,9 @@ use avian3d::schedule::PhysicsTime;
 use bevy::ecs::query::QueryState;
 use bevy::prelude::*;
 use lunco_core::{Avatar, LocalAvatar};
-use lunco_cosim::{
-    BindingEpochDirty, ConnectionBinding, SimComponent, SimConnection, SimStatus, UsdSourcedCosim,
+use lunco_cosim::ConnectionBinding;
+use lunco_cosim_core::{
+    BindingEpochDirty, SimComponent, SimConnection, SimStatus, UsdSourcedCosim,
 };
 use lunco_modelica_runtime::ModelicaModel;
 use lunco_render::SceneCamera;
@@ -51,12 +52,12 @@ impl Plugin for UsdSimCosimApiPlugin {
 // owns it. These are the canonical port verbs; they are not aliases of
 // `CosimStatus` (which stays as richer per-entity cosim introspection).
 
-/// Map a [`lunco_cosim::PortDirection`] to a stable wire string.
-fn port_dir_str(d: lunco_cosim::PortDirection) -> &'static str {
+/// Map a [`lunco_core::ports::PortDirection`] to a stable wire string.
+fn port_dir_str(d: lunco_core::ports::PortDirection) -> &'static str {
     match d {
-        lunco_cosim::PortDirection::In => "in",
-        lunco_cosim::PortDirection::Out => "out",
-        lunco_cosim::PortDirection::InOut => "inout",
+        lunco_core::ports::PortDirection::In => "in",
+        lunco_core::ports::PortDirection::Out => "out",
+        lunco_core::ports::PortDirection::InOut => "inout",
     }
 }
 

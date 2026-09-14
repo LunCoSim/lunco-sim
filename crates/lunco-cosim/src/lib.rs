@@ -13,7 +13,7 @@
 //! | **SimComponent** (Modelica) | `height`, `velocity`, `g` | `netForce`, `volume`, ... |
 //! | **SimComponent** (FMU)     | `current_in`            | `soc`, `voltage`, ...         |
 //!
-//! [`crate::SimConnection`] connects any output to any input, following the FMI/SSP pattern.
+//! [`lunco_cosim_core::SimConnection`] connects any output to any input, following the FMI/SSP pattern.
 //!
 //! ## Example
 //!
@@ -42,22 +42,19 @@ use bevy::prelude::*;
 pub mod avian;
 pub mod avian_queries;
 pub mod binding;
-pub mod component;
-pub mod connection;
-pub mod diagnostics;
 pub mod joint;
 pub mod ports;
-pub mod suggestion;
 pub mod systems;
 
 pub use avian::*;
 pub use binding::*;
-pub use component::*;
-pub use connection::*;
-pub use diagnostics::{AlgebraicLoopDiagnostic, BrokenConnection, CosimDiagnostics};
 pub use joint::*;
 pub use ports::*;
-pub use suggestion::*;
+
+use lunco_cosim_core::{
+    BrokenConnection, ControlWriteFence, CosimDiagnostics, PortHolds, RealtimeSafe, SimComponent,
+    SimConnection, SimStatus,
+};
 
 // Typed-command machinery (re-exported from `lunco-core`, which re-exports
 // the `lunco-command-macro` proc-macros). Used by the `SetPorts` command +
@@ -146,7 +143,8 @@ fn sync_model_endpoint_lifecycle(world: &mut World) {
 
 /// Plugin for co-simulation orchestration.
 ///
-/// Registers [`crate::SimComponent`], [`crate::AvianSim`], and [`crate::SimConnection`] types,
+/// Registers [`lunco_cosim_core::SimComponent`], [`crate::AvianSim`], and
+/// [`lunco_cosim_core::SimConnection`] types,
 /// and adds systems for wire propagation and Avian manual stepping.
 ///
 /// ## Usage
@@ -156,7 +154,7 @@ fn sync_model_endpoint_lifecycle(world: &mut World) {
 /// ```
 ///
 /// Engine plugins (e.g., `lunco-modelica-core`) depend on this crate and
-/// create [`crate::SimComponent`] instances when models compile.
+/// create [`lunco_cosim_core::SimComponent`] instances when models compile.
 pub struct CoSimPlugin;
 
 /// Clear co-simulation state owned by the outgoing scene before its entities
@@ -164,14 +162,14 @@ pub struct CoSimPlugin;
 /// diagnostics all contain entity-scoped state and must not cross a scene
 /// replacement boundary.
 fn reset_scene_state(
-    mut diagnostics: ResMut<diagnostics::CosimDiagnostics>,
-    mut holds: ResMut<connection::PortHolds>,
-    mut fence: ResMut<connection::ControlWriteFence>,
+    mut diagnostics: ResMut<CosimDiagnostics>,
+    mut holds: ResMut<PortHolds>,
+    mut fence: ResMut<ControlWriteFence>,
     mut revision: ResMut<BindingRevision>,
 ) {
-    *diagnostics = diagnostics::CosimDiagnostics::default();
-    *holds = connection::PortHolds::default();
-    *fence = connection::ControlWriteFence::default();
+    *diagnostics = CosimDiagnostics::default();
+    *holds = PortHolds::default();
+    *fence = ControlWriteFence::default();
     *revision = BindingRevision::default();
 }
 
@@ -211,16 +209,16 @@ impl Plugin for CoSimPlugin {
             .init_resource::<BindingRevision>();
         // Machine-readable dangling-wire report, refreshed each propagation tick
         // and surfaced via the API's `GET /api/diagnostics` (`GetBrokenConnections`).
-        app.init_resource::<diagnostics::CosimDiagnostics>();
+        app.init_resource::<CosimDiagnostics>();
         // Manual control intents that outrank the wiring fabric until an
         // explicit release — without it, a `SetPorts` write on a WIRED input
         // lives less than one tick.
-        app.init_resource::<connection::PortHolds>();
+        app.init_resource::<PortHolds>();
         // A lifecycle command may retire a producer after its SetPorts trigger
         // was emitted but before its deferred write lands. Keep that stale write
         // outside the shared control boundary until next tick.
-        app.init_resource::<connection::ControlWriteFence>();
-        app.add_systems(FixedFirst, connection::clear_control_write_fence);
+        app.init_resource::<ControlWriteFence>();
+        app.add_systems(FixedFirst, lunco_cosim_core::clear_control_write_fence);
         app.add_systems(lunco_core::SceneTeardown, reset_scene_state);
         app.add_observer(binding::on_add_connection)
             // Co-sim retains every `SimComponent` output itself, with source
@@ -456,6 +454,7 @@ impl Plugin for CoSimPlugin {
 mod binding_lifecycle_tests {
     use super::*;
     use avian3d::prelude::RevoluteJoint;
+    use lunco_core::ports::PortDirection;
 
     #[test]
     fn port_topology_revision_tracks_owner_lifecycle_not_live_values() {
@@ -882,9 +881,7 @@ mod binding_lifecycle_tests {
             diagnostics.landed.insert((entity, "drive_right".into()));
             diagnostics.pending.push(broken.clone());
             diagnostics.broken.push(broken);
-            diagnostics
-                .reported
-                .insert("target:entity:0:drive_left".into());
+            diagnostics.report_once("target:entity:0:drive_left");
         }
         app.world_mut()
             .resource_mut::<PortHolds>()
@@ -901,7 +898,10 @@ mod binding_lifecycle_tests {
         assert!(diagnostics.broken.is_empty());
         assert!(diagnostics.faults.is_empty());
         assert!(diagnostics.landed.is_empty());
-        assert!(diagnostics.reported.is_empty());
+        assert!(app
+            .world_mut()
+            .resource_mut::<CosimDiagnostics>()
+            .report_once("target:entity:0:drive_left"));
         assert!(app.world().resource::<PortHolds>().is_empty());
         assert!(!app.world().resource::<ControlWriteFence>().blocks(entity));
         assert!(!app.world().resource::<BindingRevision>().pending());
@@ -1016,7 +1016,7 @@ fn on_set_ports(
     let writes = cmd.writes.clone();
     commands.queue(move |world: &mut World| {
         if world
-            .get_resource::<connection::ControlWriteFence>()
+            .get_resource::<ControlWriteFence>()
             .is_some_and(|fence| fence.blocks(target))
         {
             return;
@@ -1042,7 +1042,7 @@ fn on_set_ports(
         // intent and ends only through an explicit release or lifecycle clear.
         for (port, value) in &writes {
             if reg.write_port(world, target, port, *value) {
-                if let Some(mut holds) = world.get_resource_mut::<connection::PortHolds>() {
+                if let Some(mut holds) = world.get_resource_mut::<PortHolds>() {
                     holds.hold(target, port.clone(), *value);
                 }
                 // A landing write retracts any earlier fault for this port —
@@ -1054,10 +1054,10 @@ fn on_set_ports(
                 // drop (a backend momentarily absent mid-reload), and a port
                 // proven by `SetPorts` was not in that set at all, so its fault
                 // could come back after being cleared.
-                let diag = world.resource::<diagnostics::CosimDiagnostics>();
+                let diag = world.resource::<CosimDiagnostics>();
                 let key = (target, port.clone());
                 if !diag.faults.is_empty() || !diag.landed.contains(&key) {
-                    let mut diag = world.resource_mut::<diagnostics::CosimDiagnostics>();
+                    let mut diag = world.resource_mut::<CosimDiagnostics>();
                     diag.faults.remove(&key);
                     diag.landed.insert(key);
                 }
@@ -1082,7 +1082,7 @@ fn on_set_ports(
                 .get::<Name>(target)
                 .map(|n| n.to_string())
                 .unwrap_or_else(|| format!("{target:?}"));
-            let mut diag = world.resource_mut::<diagnostics::CosimDiagnostics>();
+            let mut diag = world.resource_mut::<CosimDiagnostics>();
             let key = (target, port.clone());
             if diag.landed.contains(&key) {
                 continue;
@@ -1093,7 +1093,7 @@ fn on_set_ports(
                      dropped (declare the port or fix the caller)",
                     port, label, target
                 );
-                e.insert(diagnostics::BrokenConnection {
+                e.insert(BrokenConnection {
                     entity: target,
                     global_id,
                     port: port.clone(),
@@ -1106,10 +1106,7 @@ fn on_set_ports(
 }
 
 #[on_command(ReleasePort)]
-fn on_release_port(
-    trigger: On<ReleasePort>,
-    mut holds: ResMut<connection::PortHolds>,
-) -> Result<Ack, String> {
+fn on_release_port(trigger: On<ReleasePort>, mut holds: ResMut<PortHolds>) -> Result<Ack, String> {
     let cmd = trigger.event();
     holds.release(cmd.target, &cmd.name);
     Ok(Ack::new(OpId::new()))
@@ -1123,8 +1120,8 @@ fn on_release_port(
 fn on_release_control(
     trigger: On<ReleaseControl>,
     registry: Res<lunco_core::ports::PortRegistry>,
-    mut holds: ResMut<connection::PortHolds>,
-    mut fence: ResMut<connection::ControlWriteFence>,
+    mut holds: ResMut<PortHolds>,
+    mut fence: ResMut<ControlWriteFence>,
     q_inputs: Query<&lunco_core::InputPorts>,
     mut commands: Commands,
 ) {
@@ -1156,7 +1153,7 @@ fn on_release_control(
         if let Some(mut command_surface) = world.get_mut::<lunco_core::InputPorts>(target) {
             command_surface.safe_stop();
         }
-        if let Some(mut holds) = world.get_resource_mut::<connection::PortHolds>() {
+        if let Some(mut holds) = world.get_resource_mut::<PortHolds>() {
             for (name, value) in &inputs {
                 holds.hold(target, name.clone(), *value);
             }

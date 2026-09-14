@@ -13,7 +13,7 @@ big_space = { workspace = true }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-controller = { path = "../lunco-controller" }
 lunco-core = { path = "../lunco-core" }
-lunco-cosim = { path = "../lunco-cosim" }
+lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-hooks = { path = "../lunco-hooks" }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-networking = { path = "../lunco-networking", default-features = false, optional = true }

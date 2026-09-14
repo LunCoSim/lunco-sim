@@ -8,6 +8,7 @@ use bevy::math::DVec3;
 use bevy::prelude::*;
 use lunco_core::ports::PortRegistry;
 use lunco_cosim::*;
+use lunco_cosim_core::*;
 
 /// A standalone port registry carrying the engine's builtin backends, so a test
 /// can list/read/write ports without standing up a full `CoSimPlugin`. Mirrors
@@ -407,63 +408,6 @@ fn test_apply_sim_forces_accumulates_multiple_connections() {
         Some(0.0),
         "apply_pending_forces should drain force_y to 0"
     );
-}
-
-// ---------------------------------------------------------------------------
-// Suggestion Tests
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_suggestions_for_balloon_model() {
-    let suggestions = generate_suggestions(
-        Entity::PLACEHOLDER,
-        "Balloon",
-        vec!["height".into(), "velocity".into(), "g".into()].into_iter(),
-        vec!["netForce".into(), "volume".into(), "buoyancy".into()].into_iter(),
-        true, // has_forces
-        true, // has_collider
-    );
-
-    // Should suggest force connections for netForce, buoyancy
-    let force_suggestions = suggestions
-        .iter()
-        .filter(|s| s.end_connector == "force_y")
-        .count();
-    assert!(force_suggestions >= 2);
-
-    // Should suggest collider for volume
-    let collider_suggestions = suggestions
-        .iter()
-        .filter(|s| s.end_connector == "collider")
-        .count();
-    assert_eq!(collider_suggestions, 1);
-
-    // Should suggest gravity for g — sourced from the local-gravity output
-    // (populated by lunco-environment), not a hardcoded constant.
-    let gravity_suggestions = suggestions
-        .iter()
-        .filter(|s| s.start_connector == lunco_cosim::GRAVITY_SOURCE_CONNECTOR)
-        .count();
-    assert_eq!(gravity_suggestions, 1);
-}
-
-#[test]
-fn test_suggestions_for_battery_model() {
-    let suggestions = generate_suggestions(
-        Entity::PLACEHOLDER,
-        "Battery",
-        vec!["current_in".into()].into_iter(),
-        vec!["soc".into(), "voltage_out".into()].into_iter(),
-        false, // no forces
-        false, // no collider
-    );
-
-    // Should NOT suggest force/collider connections for a battery
-    assert!(!suggestions.iter().any(|s| s.end_connector == "force_y"));
-    assert!(!suggestions.iter().any(|s| s.end_connector == "collider"));
-
-    // Should have suggestions for known patterns if any match
-    // (battery has no force/velocity/height vars, so likely minimal suggestions)
 }
 
 // ---------------------------------------------------------------------------

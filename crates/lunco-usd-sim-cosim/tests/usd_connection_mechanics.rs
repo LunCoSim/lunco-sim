@@ -7,7 +7,7 @@
 
 use bevy::asset::AssetApp;
 use bevy::prelude::*;
-use lunco_cosim::SimConnection;
+use lunco_cosim_core::SimConnection;
 use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdStageAsset, UsdWiringDirty};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_core::StageRecipe;

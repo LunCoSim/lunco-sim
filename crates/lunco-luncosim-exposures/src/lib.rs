@@ -23,7 +23,7 @@ use lunco_core::exposure::{
 use lunco_core::{
     Avatar, CelestialBody, GlobalEntityId, LocalAvatar, SceneMountState, TheLocalAvatar,
 };
-use lunco_cosim::{SimComponent, SimStatus};
+use lunco_cosim_core::{SimComponent, SimStatus};
 use lunco_hooks::HookValue;
 use lunco_mobility::WheelRaycast;
 use lunco_scene_selection::SelectedEntities;

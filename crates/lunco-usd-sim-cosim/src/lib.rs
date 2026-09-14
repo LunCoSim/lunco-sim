@@ -31,9 +31,9 @@ use lunco_core::{
     SceneTransitionCompleted, SceneTransitionCoordinator, SceneTransitionFailed,
     SceneTransitionIntent, SceneTransitionRequest, WorldGrid,
 };
-use lunco_cosim::{
-    BindingEpochDirty, ConnectionBinding, DeclaredOutputPorts, SimComponent, SimConnection,
-    SimStatus, UsdSourcedCosim,
+use lunco_cosim::ConnectionBinding;
+use lunco_cosim_core::{
+    BindingEpochDirty, DeclaredOutputPorts, SimComponent, SimConnection, SimStatus, UsdSourcedCosim,
 };
 use lunco_doc::DocumentId;
 #[cfg(feature = "python")]
@@ -297,7 +297,7 @@ fn strip_rigid_body_inputs(
 /// connected without inventing a sample.
 fn environment_probe_interface() -> DeclaredOutputPorts {
     DeclaredOutputPorts {
-        names: lunco_cosim::ENVIRONMENT_PROBE_OUTPUTS
+        names: lunco_cosim_core::ENVIRONMENT_PROBE_OUTPUTS
             .iter()
             .map(|name| (*name).to_owned())
             .collect(),
@@ -1483,7 +1483,7 @@ fn process_usd_cosim_prim_read(
         Ok(Some(true)) => {
             commands
                 .entity(entity)
-                .try_insert(lunco_cosim::RealtimeSafe);
+                .try_insert(lunco_cosim_core::RealtimeSafe);
         }
         Ok(Some(false)) | Ok(None) => {}
         Err(_) => warn!(
@@ -1629,7 +1629,7 @@ pub(crate) fn dispatch_loaded_modelica_sources(
     // The solver-selection input only carries the authored prediction contract.
     // Solver capability and Modelica lowering remain owned by the worker's
     // backend registry; they are never inferred from a DAE shape here.
-    q_realtime_safe: Query<&lunco_cosim::RealtimeSafe>,
+    q_realtime_safe: Query<&lunco_cosim_core::RealtimeSafe>,
 ) {
     let Some(channels) = channels else { return };
 
@@ -2310,7 +2310,7 @@ struct WiringQueries<'w, 's> {
     global_ids: Query<'w, 's, &'static lunco_core::GlobalEntityId>,
     provenance: Query<'w, 's, &'static lunco_core::Provenance>,
     instance_roots: Query<'w, 's, (), With<UsdInstanceRoot>>,
-    realtime_safe: Query<'w, 's, &'static lunco_cosim::RealtimeSafe>,
+    realtime_safe: Query<'w, 's, &'static lunco_cosim_core::RealtimeSafe>,
     predicted_bodies: Query<
         'w,
         's,
@@ -2776,7 +2776,7 @@ fn rewire_usd_connections(
                         .ok()
                         .and_then(|outputs| outputs.get(name))
                     {
-                        Some(port_entity) => (port_entity, lunco_cosim::PORT_NAME.to_string()),
+                        Some(port_entity) => (port_entity, lunco_cosim_core::PORT_NAME.to_string()),
                         None => (entity, name.to_string()),
                     }
                 });
@@ -2970,9 +2970,9 @@ fn rewire_usd_connections(
                     && environment_probe_entities.contains(&start_element)
                     && matches!(
                         src_conn.as_str(),
-                        lunco_cosim::EARTH_MOUNT_X_CONNECTOR
-                            | lunco_cosim::EARTH_MOUNT_Y_CONNECTOR
-                            | lunco_cosim::EARTH_MOUNT_Z_CONNECTOR
+                        lunco_cosim_core::EARTH_MOUNT_X_CONNECTOR
+                            | lunco_cosim_core::EARTH_MOUNT_Y_CONNECTOR
+                            | lunco_cosim_core::EARTH_MOUNT_Z_CONNECTOR
                     )
                 {
                     earth_direction_required.insert(start_element);
@@ -3007,7 +3007,7 @@ fn rewire_usd_connections(
                         })
                     {
                         start_element = port_entity;
-                        src_conn = lunco_cosim::PORT_NAME.to_string();
+                        src_conn = lunco_cosim_core::PORT_NAME.to_string();
                     }
                 }
 
@@ -3021,7 +3021,7 @@ fn rewire_usd_connections(
                 // runs late.
                 //
                 if client_predicts
-                    && lunco_cosim::is_physics_force_port(sink_conn)
+                    && lunco_cosim::avian::is_physics_force_port(sink_conn)
                     && matches!(
                         wiring.predicted_bodies.get(entity),
                         Ok(avian3d::prelude::RigidBody::Dynamic)
@@ -3060,7 +3060,7 @@ fn rewire_usd_connections(
                 let end = if let Some(surface) = wheel_endpoints {
                     surface
                         .get(sink_conn)
-                        .map(|port| (port, lunco_cosim::PORT_NAME.to_string()))
+                        .map(|port| (port, lunco_cosim_core::PORT_NAME.to_string()))
                 } else {
                     Some(
                         forward
@@ -4774,7 +4774,7 @@ mod tests {
                 .iter()
                 .map(String::as_str)
                 .collect::<BTreeSet<_>>(),
-            lunco_cosim::ENVIRONMENT_PROBE_OUTPUTS
+            lunco_cosim_core::ENVIRONMENT_PROBE_OUTPUTS
                 .iter()
                 .copied()
                 .collect::<BTreeSet<_>>()
