@@ -123,12 +123,16 @@ world-space annotation: the route tool densifies long legs with the shared
 `normals` make its authored 0.12 m width a narrow readable flat strip rather
 than a tube. Each sampled vertex is offset 0.03 m along its support normal, so
 the annotation stays above slopes without applying a global vertical offset.
-Long legs are sampled at 3 m intervals during ribbon rebuilds to avoid cutting
-through streamed terrain relief while keeping the transient Rhai/USD payload
-bounded; this work is not performed in the per-frame route-control task. It does
-not participate in physics or route control. Route execution does not recolor
-or rebuild marker geometry; a scenario may react to `route_point_reached` to
-update mission state or the HUD through its own policy.
+Long legs use a 3 m base sampling interval during ribbon rebuilds to avoid
+cutting through streamed terrain relief. The route tool caps the transient
+payload at 768 samples, quantizes only the transient text representation to
+millimetre positions and 0.1 mm normals, and increases spacing only for
+unusually long routes. Every authored waypoint remains an endpoint without
+allowing the Rhai/USD string transport to overflow. This work is not performed
+in the per-frame route-control task. It does not participate in physics or
+route control. Route execution does not recolor or rebuild marker geometry; a
+scenario may react to `route_point_reached` to update mission state or the HUD
+through its own policy.
 
 The visual contract is covered by
 [`assets/scenes/tests/waypoint_visual.usda`](../../assets/scenes/tests/waypoint_visual.usda)

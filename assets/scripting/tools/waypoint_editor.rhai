@@ -12,6 +12,10 @@ fn route_ribbon_clearance() { 0.03 }
 // while still sampling more densely than the original long-leg chord
 // approximation.
 fn route_ribbon_sample_spacing() { 3.0 }
+// A transient USD attribute is lowered through a bounded string payload. Keep
+// the whole route below that transport limit; long legs increase their sample
+// spacing adaptively while every authored waypoint remains an endpoint.
+fn route_ribbon_max_samples() { 768 }
 
 fn ui_label() { "Route point" }
 fn ui_hint() { "Alt-click the terrain to append a point to the active route" }
@@ -253,6 +257,42 @@ fn terrain_ribbon_sample(point) {
     #{ point: point, normal: [0.0, 1.0, 0.0], surface: false }
 }
 
+fn ribbon_step_count(a, b, spacing) {
+    let distance = vlen([b[0] - a[0], 0.0, b[2] - a[2]]);
+    let steps = 1;
+    while steps.to_float() * spacing < distance {
+        steps += 1;
+    }
+    steps
+}
+
+fn ribbon_sample_count(points, spacing) {
+    let count = 1;
+    for i in 0..(points.len() - 1) {
+        count += ribbon_step_count(points[i], points[i + 1], spacing);
+    }
+    count
+}
+
+fn ribbon_sampling_spacing(points) {
+    let spacing = route_ribbon_sample_spacing();
+    if points.len() < 2 { return spacing; }
+
+    let limit = if points.len() > route_ribbon_max_samples() {
+        points.len()
+    } else {
+        route_ribbon_max_samples()
+    };
+    let count = ribbon_sample_count(points, spacing);
+    // Keep ordinary routes at the authored 3 m quality. Only oversized
+    // payloads trade density for a valid typed USD operation.
+    while count > limit {
+        spacing *= 1.25;
+        count = ribbon_sample_count(points, spacing);
+    }
+    spacing
+}
+
 // Densify long authored legs and project each sample onto the DEM. This keeps
 // the ribbon a terrain-following annotation instead of a sparse straight chord
 // between distant waypoints. It runs only when the disposable view is rebuilt,
@@ -277,14 +317,11 @@ fn ribbon_surface_samples(points) {
         }
         return #{ points: sampled_points, normals: sampled_normals };
     }
+    let spacing = ribbon_sampling_spacing(points);
     for i in 0..(points.len() - 1) {
         let a = points[i];
         let b = points[i + 1];
-        let distance = vlen([b[0] - a[0], 0.0, b[2] - a[2]]);
-        let steps = 1;
-        while steps.to_float() * route_ribbon_sample_spacing() < distance {
-            steps += 1;
-        }
+        let steps = ribbon_step_count(a, b, spacing);
         for j in 0..steps {
             let t = j.to_float() / steps.to_float();
             let point = [
@@ -345,6 +382,18 @@ fn points_equal(a, b) {
         if !vector_equal(a[i], b[i]) { return false; }
     }
     true
+}
+
+fn ribbon_quantized_vectors(vectors, scale) {
+    let quantized = [];
+    for vector in vectors {
+        quantized.push([
+            (vector[0] * scale).round() / scale,
+            (vector[1] * scale).round() / scale,
+            (vector[2] * scale).round() / scale,
+        ]);
+    }
+    quantized
 }
 
 fn ribbon_path(route) {
@@ -424,8 +473,13 @@ fn ribbon_ops(doc, route, points) {
             point[2] - anchor[2],
         ]);
     }
+    // Compact only the transient USD text payload. Millimetre positions and
+    // 0.1 mm normals keep the terrain-following shape while leaving ample
+    // room below the Rhai string limit for long routes.
+    let encoded_points = ribbon_quantized_vectors(local_points, 1000.0);
+    let encoded_normals = ribbon_quantized_vectors(surface_normals, 10000.0);
     if !ribbon_needs_update(
-        doc, ribbon, geometry, anchor, local_points, surface_normals
+        doc, ribbon, geometry, anchor, encoded_points, encoded_normals
     ) {
         return [];
     }
@@ -475,7 +529,7 @@ fn ribbon_ops(doc, route, points) {
         path: geometry,
         name: "points",
         type_name: "point3f[]",
-        value: points_literal(local_points),
+        value: points_literal(encoded_points),
     }});
     ops.push(#{ SetAttribute: #{
         edit_target: "@runtime@",
@@ -489,7 +543,7 @@ fn ribbon_ops(doc, route, points) {
         path: geometry,
         name: "normals",
         type_name: "normal3f[]",
-        value: ribbon_normals_literal(surface_normals),
+        value: ribbon_normals_literal(encoded_normals),
     }});
     ops
 }
