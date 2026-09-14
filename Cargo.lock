@@ -7948,7 +7948,6 @@ dependencies = [
  "bevy",
  "bevy_egui",
  "console_error_panic_hook",
- "egui_plot",
  "futures-lite",
  "getrandom 0.3.4",
  "log",

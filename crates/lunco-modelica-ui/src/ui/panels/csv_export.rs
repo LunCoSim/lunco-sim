@@ -50,9 +50,7 @@ pub fn save_csv_via_dialog(
     match futures_lite::future::block_on(storage.write(&handle, bytes)) {
         Ok(()) => Some(handle),
         Err(e) => {
-            if let Some(mut console) =
-                world.get_resource_mut::<crate::ui::panels::console::ConsoleLog>()
-            {
+            if let Some(mut console) = world.get_resource_mut::<lunco_ui::log::LogBuffer>() {
                 console.error(format!("CSV export: write failed: {e}"));
             }
             None

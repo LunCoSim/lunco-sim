@@ -51,7 +51,7 @@ lunco-modelica-core/
     cfg(target_arch="wasm32") -> WebWorkerTransport
     cfg(not(...))             -> ThreadTransport
   source-string override injector
-  Run buttons + Experiments panel + bounds inline UI
+  Run buttons + experiment table + bounds inline UI
 
 lunco-modelica-core/src/bin/lunica_worker.rs
   + ModelicaCommand::RunFast / CancelRun
@@ -60,7 +60,8 @@ lunco-modelica-core/src/bin/lunica_worker.rs
 
 lunco-twin/, lunco-twin-journal/      unchanged in v1
 lunco-cosim/                          unchanged (Interactive path)
-lunco-viz/                            Graphs panel: multi-series from registry
+lunco-modelica-ui/                   Modelica experiment adapters and panel
+lunco-viz/                            Shared multi-series trajectory renderer
 ```
 
 `lunco-modelica-core` depends on `lunco-experiments`. `lunco-experiments` does not depend on `lunco-modelica-core` or `rumoca-*`.
@@ -204,6 +205,13 @@ Table of detected top-level literal parameters with current values + override fi
 ### Graphs panel
 
 Existing variable picker is shared across experiments. Each picked variable plots once per checked experiment. Legend: `<exp name> · <var path>`.
+
+The Modelica adapter prepares the completed-run buffers and labels; the
+reusable multi-series trajectory renderer lives in `lunco-viz` alongside the
+live `LinePlot` kind. It owns legends, run/variable stroke styles, log-Y
+formatting, fit/reset, overlays, and scrub interaction. This keeps those UI
+semantics available to other experiment or co-simulation backends without
+making `lunco-viz` depend on Modelica.
 
 ## Future enhancements
 

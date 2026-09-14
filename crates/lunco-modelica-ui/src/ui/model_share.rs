@@ -55,17 +55,13 @@ fn active_share_url(world: &mut World) -> Option<String> {
 fn on_copy_share_link(trigger: On<CopyShareLink>, mut commands: Commands) {
     commands.queue(|world: &mut World| {
         let Some(url) = active_share_url(world) else {
-            if let Some(mut console) =
-                world.get_resource_mut::<crate::ui::panels::console::ConsoleLog>()
-            {
+            if let Some(mut console) = world.get_resource_mut::<lunco_ui::log::LogBuffer>() {
                 console.warn("Copy Share Link: no active model to share");
             }
             return;
         };
         copy_to_clipboard(&url);
-        if let Some(mut console) =
-            world.get_resource_mut::<crate::ui::panels::console::ConsoleLog>()
-        {
+        if let Some(mut console) = world.get_resource_mut::<lunco_ui::log::LogBuffer>() {
             console.info(format!(
                 "Share link copied to clipboard ({} chars)",
                 url.len()

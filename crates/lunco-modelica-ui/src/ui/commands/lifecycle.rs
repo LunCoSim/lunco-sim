@@ -465,7 +465,7 @@ pub fn on_duplicate_model_from_read_only(
     mut model_tabs: ResMut<ModelTabs>,
     mut openings: ResMut<crate::ui::document_openings::DocumentOpenings>,
     mut bus: ResMut<lunco_status_core::status_bus::StatusBus>,
-    mut console: ResMut<crate::ui::panels::console::ConsoleLog>,
+    mut console: ResMut<lunco_ui::log::LogBuffer>,
     mut commands: Commands,
     mut egui_q: Query<&mut bevy_egui::EguiContext>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
@@ -738,7 +738,7 @@ pub fn spawn_duplicate_class_task(world: &mut World, qualified: String, name_hin
             ),
         );
     world
-        .resource_mut::<crate::ui::panels::console::ConsoleLog>()
+        .resource_mut::<lunco_ui::log::LogBuffer>()
         .info(format!(
             "Opening class `{qualified}` -> editable `{name}` (building...)"
         ));

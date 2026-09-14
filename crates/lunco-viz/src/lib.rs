@@ -20,6 +20,8 @@
 #[cfg(feature = "ui")]
 pub mod kinds;
 #[cfg(feature = "ui")]
+pub mod multi_series_plot;
+#[cfg(feature = "ui")]
 pub mod panel;
 #[cfg(feature = "ui")]
 pub mod plot_fmt;

@@ -32,6 +32,7 @@ See [`docs/architecture/11-workbench.md`](../../docs/architecture/11-workbench.m
 | **Typed Commands** | AI-native UI — all interactions via Bevy ECS command events |
 | **WorldPanel** | 3D in-scene UI panels attached to entities |
 | **Label3D** | Floating labels over 3D objects with LOD fade |
+| **LogBuffer / log renderer** | Bounded timestamped messages and source-aware log rows |
 | **Time-series plots** | Zero-copy chart rendering via `egui_plot` |
 | **Node graphs / diagrams** | Render via `lunco-canvas`; domain crates own their projector |
 
@@ -40,7 +41,7 @@ See [`docs/architecture/11-workbench.md`](../../docs/architecture/11-workbench.m
 - Panel implementations → domain crate `src/ui/`
 - Docking system → `lunco-workbench`
 - Theming → `lunco-workbench`
-- Inspector/console → `lunco-workbench`
+- Domain panel implementations, including console/diagnostics panel identity → domain UI crates
 
 ## Quick Start
 

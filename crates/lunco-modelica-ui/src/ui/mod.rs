@@ -58,6 +58,7 @@
 //! - **Graphs** (bottom dock) — time-series plots of simulation variables
 
 use bevy::prelude::*;
+use lunco_ui::log::{LogBuffer, LogLevel};
 use lunco_workbench::WorkbenchAppExt;
 use lunco_workbench_core::{
     MenuCtx, PanelId, Perspective, PerspectiveId, PerspectiveLayoutPlan, PerspectiveSlotPlan,
@@ -660,7 +661,7 @@ impl Plugin for ModelicaUiPlugin {
             .add_observer(panels::model_view::on_sync_model_tab_requested)
             .add_observer(panels::model_view::on_fast_run_setup_requested)
             .add_observer(clear_modelica_state_on_twin_closed)
-            .init_resource::<panels::console::ConsoleLog>()
+            .init_resource::<LogBuffer>()
             .init_resource::<panels::diagnostics::DiagnosticsLog>()
             // Journal panel reads directly from the canonical
             // `JournalResource` in `lunco-doc-bevy`; no local cache.
@@ -1300,7 +1301,7 @@ fn install_image_loaders_once(
 }
 
 /// Forward newly-pushed [`lunco_status_core::status_bus::StatusBus`]
-/// events to the [`panels::console::ConsoleLog`].
+/// events to the shared [`lunco_ui::log::LogBuffer`].
 ///
 /// We track how many *discrete* history entries we've already mirrored
 /// so progress ticks (which mutate the bus seq but don't append to
@@ -1311,7 +1312,7 @@ fn install_image_loaders_once(
 /// freezing the console audit trail (CQ-523).
 fn fan_status_bus_to_console(
     bus: bevy::prelude::Res<lunco_status_core::status_bus::StatusBus>,
-    mut console: bevy::prelude::ResMut<panels::console::ConsoleLog>,
+    mut console: bevy::prelude::ResMut<LogBuffer>,
     mut last_total: bevy::prelude::Local<u64>,
 ) {
     let total = bus.history_total();
@@ -1333,19 +1334,13 @@ fn fan_status_bus_to_console(
         .rev()
     {
         let level = match ev.level {
-            lunco_status_core::status_bus::StatusLevel::Info => panels::console::ConsoleLevel::Info,
-            lunco_status_core::status_bus::StatusLevel::Warn => panels::console::ConsoleLevel::Warn,
-            lunco_status_core::status_bus::StatusLevel::Error => {
-                panels::console::ConsoleLevel::Error
-            }
-            lunco_status_core::status_bus::StatusLevel::Attention => {
-                panels::console::ConsoleLevel::Info
-            }
+            lunco_status_core::status_bus::StatusLevel::Info => LogLevel::Info,
+            lunco_status_core::status_bus::StatusLevel::Warn => LogLevel::Warn,
+            lunco_status_core::status_bus::StatusLevel::Error => LogLevel::Error,
+            lunco_status_core::status_bus::StatusLevel::Attention => LogLevel::Info,
             // Progress events shouldn't be in `history` (they live in
             // active_progress), but if one ever sneaks in, surface as Info.
-            lunco_status_core::status_bus::StatusLevel::Progress => {
-                panels::console::ConsoleLevel::Info
-            }
+            lunco_status_core::status_bus::StatusLevel::Progress => LogLevel::Info,
         };
         console.push(level, format!("[{}] {}", ev.source, ev.message));
     }

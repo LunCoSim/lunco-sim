@@ -18,7 +18,7 @@ ui = [
     # Workbench API queries are UI-only, and NOT on `lunco-api` (a server build enables that).
     "lunco-workbench/api",
     "dep:bevy_egui", "dep:lunco-theme", "dep:lunco-workbench", "dep:lunco-workbench-browser", "dep:lunco-workbench-datasets-ui", "dep:lunco-workbench-core", "dep:lunco-status-core", "dep:lunco-ui",
-    "dep:lunco-viz", "dep:lunco-canvas", "dep:egui_plot",
+    "dep:lunco-viz", "dep:lunco-canvas",
     "lunco-doc-bevy/ui",
     "dep:rumoca-tool-fmt", "dep:rumoca-tool-lint", "dep:arboard",
     "dep:lunco-modelica-icon-ui",
@@ -111,7 +111,6 @@ lunco-canvas = { path = "../lunco-canvas", features = ["ui"], optional = true }
 lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
 lunco-workspace = { path = "../lunco-workspace" }
 lunco-storage = { path = "../lunco-storage" }
-egui_plot = { workspace = true, optional = true }
 # Wasm-safe replacement for `std::time::Instant`. On native it's an alias
 # for `std::time::Instant`; on wasm32 it's backed by `performance.now()`.
 # Required because `std::time::Instant::now()` panics with

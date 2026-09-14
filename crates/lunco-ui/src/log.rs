@@ -1,24 +1,18 @@
-//! Shared log entry types + renderer used by `ConsolePanel` and
-//! `DiagnosticsPanel`.
+//! Reusable timestamped log primitives and egui renderer.
 //!
-//! The two panels share the same visual shape (timestamp + level tag +
-//! coloured message, scrolling list, Clear button), but hold different
-//! content: Console accumulates every workbench-level event
-//! (compile started, saved, worker returned…), Diagnostics holds
-//! only the *currently-active* set of Modelica semantic errors.
-//!
-//! Keeping the types and renderer here means fixing a colour,
-//! adjusting font size, or tweaking the empty-state hint lands in
-//! exactly one place instead of drifting between two panels.
+//! A log entry is deliberately presentation-oriented: producers attach a
+//! severity, text, optional model label, and optional source location; a
+//! panel decides which entries it owns and which action to take when a
+//! located entry is clicked. This keeps console, diagnostics, and future
+//! workbench logs on one rendering path without coupling this package to a
+//! domain parser or document model.
 
 use std::collections::VecDeque;
-use web_time::Instant;
 
 use bevy_egui::egui;
+use web_time::Instant;
 
-/// Maximum buffered entries. Oldest pruned when exceeded. Matches
-/// terminal scrollback semantics — no unbounded growth on long
-/// sessions.
+/// Maximum number of entries retained by [`LogBuffer`].
 pub const MAX_LOG_ENTRIES: usize = 2000;
 
 /// Severity / colour classification for a log entry.
@@ -32,20 +26,8 @@ pub enum LogLevel {
     Error,
 }
 
-/// A 1-based source position (line, column) attached to a diagnostic.
-/// Present only for entries the linter located precisely; clicking such
-/// an entry jumps the code editor to this spot.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SourceLoc {
-    pub line: u32,
-    pub column: u32,
-}
-
 impl LogLevel {
-    /// Theme-driven colour. Info reads as plain text; warn/error use
-    /// the semantic warn/error tokens so both Light and Dark stay
-    /// legible (the previous hardcoded RGB pinned light-grey Info on
-    /// a white background → invisible).
+    /// Theme-driven colour for this severity.
     pub fn color(self, theme: &lunco_theme::Theme) -> egui::Color32 {
         match self {
             Self::Info => theme.tokens.text,
@@ -54,6 +36,7 @@ impl LogLevel {
         }
     }
 
+    /// Compact severity tag used by the log renderer and clipboard export.
     pub fn tag(self) -> &'static str {
         match self {
             Self::Info => "INFO",
@@ -63,35 +46,87 @@ impl LogLevel {
     }
 }
 
-/// One line of log output.
+/// A 1-based source position attached to a diagnostic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourceLoc {
+    /// 1-based source line.
+    pub line: u32,
+    /// 1-based source column.
+    pub column: u32,
+}
+
+/// One timestamped line of user-facing log output.
 #[derive(Debug, Clone)]
 pub struct LogEntry {
+    /// Time at which the entry was produced.
     pub at: Instant,
+    /// Entry severity.
     pub level: LogLevel,
+    /// Human-readable message.
     pub text: String,
-    /// Model this entry belongs to (display name — file stem or
-    /// qualified class). `None` means the entry is session-global
-    /// (e.g. "worker ready"). Rendered as a chip in front of the
-    /// message so users can tell at a glance whether the error
-    /// they're reading came from the tab they're currently
-    /// looking at.
-    #[doc(hidden)]
+    /// Optional model or document label.
     pub model: Option<String>,
-    /// Precise source position, when known (linter findings carry
-    /// line+column). `Some` makes the row clickable → jump-to-source.
-    /// `None` for entries without a location (compile-started notices,
-    /// AST/compile error strings that don't yet thread a span).
+    /// Optional source location. Located entries become clickable.
     pub loc: Option<SourceLoc>,
 }
 
-/// Render a scrolling log view. Shared body of Console and
-/// Diagnostics panels.
+/// Bounded rolling log resource for generic UI-facing messages.
+#[derive(bevy::prelude::Resource, Default)]
+pub struct LogBuffer {
+    entries: VecDeque<LogEntry>,
+}
+
+impl LogBuffer {
+    /// Append an entry without attaching domain-specific metadata.
+    pub fn push(&mut self, level: LogLevel, text: impl Into<String>) {
+        self.append(LogEntry {
+            at: Instant::now(),
+            level,
+            text: text.into(),
+            model: None,
+            loc: None,
+        });
+    }
+
+    /// Append an informational entry.
+    pub fn info(&mut self, text: impl Into<String>) {
+        self.push(LogLevel::Info, text);
+    }
+
+    /// Append a warning entry.
+    pub fn warn(&mut self, text: impl Into<String>) {
+        self.push(LogLevel::Warn, text);
+    }
+
+    /// Append an error entry.
+    pub fn error(&mut self, text: impl Into<String>) {
+        self.push(LogLevel::Error, text);
+    }
+
+    /// Append a fully populated entry and evict the oldest entry at capacity.
+    pub fn append(&mut self, entry: LogEntry) {
+        if self.entries.len() >= MAX_LOG_ENTRIES {
+            self.entries.pop_front();
+        }
+        self.entries.push_back(entry);
+    }
+
+    /// Remove all entries.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    /// Borrow entries in chronological order.
+    pub fn entries(&self) -> &VecDeque<LogEntry> {
+        &self.entries
+    }
+}
+
+/// Render a scrolling log view shared by console and diagnostic panels.
 ///
-/// `empty_hint` appears when `entries` is empty — each panel provides
-/// its own text so the empty state reads naturally.
-///
-/// Returns the [`SourceLoc`] of a located entry the user clicked this
-/// frame (if any), so the caller can drive jump-to-source.
+/// Returns the source location of a located entry clicked during this frame.
+/// The caller owns the resulting navigation action and may leave it unset for
+/// logs whose locations are informational only.
 pub fn render_log_view(
     ui: &mut egui::Ui,
     entries: &VecDeque<LogEntry>,
@@ -101,7 +136,6 @@ pub fn render_log_view(
     theme: &lunco_theme::Theme,
 ) -> Option<SourceLoc> {
     let mut clicked: Option<SourceLoc> = None;
-    // Header row: count + Clear button.
     let count = entries.len();
     ui.horizontal(|ui| {
         ui.label(
@@ -116,10 +150,6 @@ pub fn render_log_view(
         {
             *clear_requested = true;
         }
-        // 📋 Copy — dump every entry as plain text to the clipboard so a
-        // solver/compile error can be pasted into a bug report or search.
-        // Per-label `ui.label` rows can't be range-selected cleanly, so a
-        // one-click "copy all" is the reliable troubleshooting affordance.
         if !entries.is_empty()
             && ui
                 .small_button("Copy")
@@ -148,25 +178,17 @@ pub fn render_log_view(
         .stick_to_bottom(true)
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            // Fix a session-start instant the first time any log entry
-            // is rendered — pinned so timestamps don't tick across
-            // frames. Lazily initialised so the first entry anchors
-            // t=0 rather than some arbitrary app-boot moment.
-            use std::sync::OnceLock;
-            static SESSION_START: OnceLock<web_time::Instant> = OnceLock::new();
-            let session_start = *SESSION_START.get_or_init(|| {
-                entries
-                    .front()
-                    .map(|e| e.at)
-                    .unwrap_or_else(web_time::Instant::now)
-            });
+            let session_start = entries
+                .front()
+                .map(|entry| entry.at)
+                .unwrap_or_else(Instant::now);
             for entry in entries {
                 let color = entry.level.color(theme);
                 let offset = entry
                     .at
                     .saturating_duration_since(session_start)
                     .as_secs_f32();
-                let ts = format!("[{:>6.2}s]", offset);
+                let ts = format!("[+{:>6.2}s]", offset);
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(&ts).monospace().size(10.0).color(muted));
                     ui.label(
@@ -177,18 +199,11 @@ pub fn render_log_view(
                             .color(color),
                     );
                     if let Some(model) = entry.model.as_deref() {
-                        // Model chip — dim, monospace, truncated so
-                        // long qualified names don't push the
-                        // message off-screen. 24 chars fits the
-                        // deepest common MSL names
-                        // (`Electrical.Analog.Examples.Rectifier`
-                        // → `Rectifier`); display names are
-                        // usually much shorter.
                         let pill = if model.chars().count() > 24 {
-                            let s: String = model.chars().rev().take(24).collect::<String>();
-                            format!("…{}", s.chars().rev().collect::<String>())
+                            let suffix: String = model.chars().rev().take(24).collect();
+                            format!("…{}", suffix.chars().rev().collect::<String>())
                         } else {
-                            model.to_string()
+                            model.to_owned()
                         };
                         ui.label(
                             egui::RichText::new(format!("[{pill}]"))
@@ -196,12 +211,8 @@ pub fn render_log_view(
                                 .size(10.0)
                                 .color(theme.tokens.accent),
                         )
-                        .on_hover_text(model.to_string());
+                        .on_hover_text(model.to_owned());
                     }
-                    // Location chip + clickable message for located
-                    // entries (linter findings). Clicking jumps the
-                    // editor to the spot. Unlocated entries render as
-                    // plain labels.
                     if let Some(loc) = entry.loc {
                         ui.label(
                             egui::RichText::new(format!("L{}:{}", loc.line, loc.column))
@@ -209,7 +220,7 @@ pub fn render_log_view(
                                 .size(10.0)
                                 .color(theme.tokens.accent),
                         );
-                        let resp = ui
+                        let response = ui
                             .add(
                                 egui::Label::new(
                                     egui::RichText::new(&entry.text)
@@ -224,7 +235,7 @@ pub fn render_log_view(
                                 loc.line, loc.column
                             ))
                             .on_hover_cursor(egui::CursorIcon::PointingHand);
-                        if resp.clicked() {
+                        if response.clicked() {
                             clicked = Some(loc);
                         }
                     } else {
@@ -241,26 +252,27 @@ pub fn render_log_view(
     clicked
 }
 
-/// Render the whole log buffer as newline-separated plain text for the
-/// clipboard. Mirrors the on-screen row layout — `[ts] TAG [model] Lline:col text`
-/// — so a pasted dump reads the same as what the user saw.
 fn format_entries_plain(entries: &VecDeque<LogEntry>) -> String {
-    let session_start = entries.front().map(|e| e.at);
-    let mut out = String::new();
+    let session_start = entries.front().map(|entry| entry.at);
+    let mut output = String::new();
     for entry in entries {
         let offset = session_start
-            .and_then(|s| entry.at.checked_duration_since(s))
-            .map(|d| d.as_secs_f32())
+            .and_then(|start| entry.at.checked_duration_since(start))
+            .map(|duration| duration.as_secs_f32())
             .unwrap_or(0.0);
-        out.push_str(&format!("[{:>6.2}s] {} ", offset, entry.level.tag().trim()));
+        output.push_str(&format!(
+            "[+{:>6.2}s] {} ",
+            offset,
+            entry.level.tag().trim()
+        ));
         if let Some(model) = entry.model.as_deref() {
-            out.push_str(&format!("[{model}] "));
+            output.push_str(&format!("[{model}] "));
         }
         if let Some(loc) = entry.loc {
-            out.push_str(&format!("L{}:{} ", loc.line, loc.column));
+            output.push_str(&format!("L{}:{} ", loc.line, loc.column));
         }
-        out.push_str(&entry.text);
-        out.push('\n');
+        output.push_str(&entry.text);
+        output.push('\n');
     }
-    out
+    output
 }

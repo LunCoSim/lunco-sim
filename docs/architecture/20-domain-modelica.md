@@ -1185,7 +1185,7 @@ twin-journal doc; not in scope here.
 | **Package Browser** | ✅ Working | MSL package hierarchy |
 | **Telemetry / Parameters** | ✅ Working | Runtime values, inputs, plotting toggles, and document-backed parameter edits |
 | **Inspector** | ✅ Working | Context-aware selected-component editor backed by `ModelicaOp::SetParameter` |
-| **Graphs** | ✅ Working | Time-series via `egui_plot` |
+| **Graphs** | ✅ Working | Live and completed-run trajectories via shared `lunco-viz` rendering |
 
 ## 11. Current gaps
 
@@ -1230,7 +1230,7 @@ Feature parity snapshot:
 | Diagram canvas | ✅ custom icons | ✅ authored Modelica icons + routed wires |
 | Text view | ✅ | ✅ |
 | Parameter dialog | ✅ | ✅ (Telemetry + selected-component Inspector) |
-| Plot variables | ✅ | ✅ (`egui_plot`) |
+| Plot variables | ✅ | ✅ (shared `lunco-viz` plot widgets) |
 | Variables browser | ✅ | ✅ |
 | Compilation pipeline | ✅ | ✅ (rumoca) |
 | Simulation setup dialog | ✅ | ❌ (continuous stepping instead) |

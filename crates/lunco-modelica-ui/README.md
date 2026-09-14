@@ -210,7 +210,7 @@ no silent stall regardless of model size.
 - `rumoca-session`, `rumoca-phase-parse` — Modelica compilation (LunCoSim/rumoca fork)
 - `lunco-workbench` — docking, persistence, panel system
 - `lunco-canvas` — interactive diagram rendering substrate
-- `egui_plot` — time-series charts
+- `lunco-viz` — shared line and multi-series trajectory rendering
 
 ## See Also
 

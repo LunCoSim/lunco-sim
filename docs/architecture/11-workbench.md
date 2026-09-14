@@ -877,7 +877,7 @@ simulation default.
    │     - WidgetSystem (cached widgets)
    │     - Entity-viewer trait
    │     - Shared widgets: TimeSeries, InspectorField
-   │     - Re-exports: egui_plot
+   │     - Shared LogBuffer and source-aware log renderer
    │     (Node graphs / diagrams render on `lunco-canvas`)
    │         │
    │         ▼
@@ -893,6 +893,10 @@ simulation default.
 - `lunco-workbench-browser` is the optional navigation feature — Twin/Files
   panels, browser state/actions, and the built-in generic sections.
 - `lunco-ui` is the widget library — draws things inside panels.
+- `lunco-ui::log` owns the reusable bounded log model and renderer; domain
+  crates provide panel identity and domain-specific production/navigation.
+- `lunco-viz` owns live and multi-series trajectory rendering; domain crates
+  provide the series data and keep experiment policy local.
 - Domain crates contribute **Panel** implementations that use `lunco-ui`
   widgets and `lunco-workbench-core`'s Panel trait. They use
   `lunco-workbench` only for shell-owned widgets, commands, or other concrete

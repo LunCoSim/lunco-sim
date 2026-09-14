@@ -14,9 +14,12 @@ use std::collections::BTreeMap;
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use egui_plot::{Legend, Line, LineStyle, Plot, PlotPoints, VLine};
 use lunco_doc::DocumentId;
 use lunco_experiments::{ExperimentId, ExperimentRegistry, RunStatus};
+use lunco_viz::multi_series_plot::{
+    render_multi_series_plot, MultiSeriesLine, MultiSeriesOverlay, MultiSeriesPlotOptions,
+    MultiSeriesStyle,
+};
 use lunco_viz::viz::VizId;
 use lunco_workbench::{icon_button, UiIcon};
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
@@ -1711,18 +1714,6 @@ fn parse_override(type_name: &str, text: &str) -> Option<lunco_experiments::Para
     }
 }
 
-struct PlotSeries {
-    label: String,
-    color: (u8, u8, u8),
-    /// Shared time-value samples, borrowed from [`ExperimentsViewModel`].
-    /// `Arc` so building a frame's series list is pointer-bumps, not a
-    /// re-zip of every run's `times`×`values` columns (CQ-207).
-    points: std::sync::Arc<[[f64; 2]]>,
-    /// Stroke pattern that distinguishes runs sharing the same
-    /// variable color. `0 = solid, 1 = dashed, 2 = dotted, 3 = dash-dot`.
-    style_idx: u8,
-}
-
 /// Change-gated view-model for the experiments plot (CQ-207).
 ///
 /// The plot used to **re-zip every run's `times`×`values` columns into a
@@ -1747,7 +1738,7 @@ pub struct ExperimentsViewModel {
     /// Shared time-value samples per `(run, variable)`.
     points: std::collections::HashMap<
         (lunco_experiments::ExperimentId, String),
-        std::sync::Arc<[[f64; 2]]>,
+        std::sync::Arc<Vec<[f64; 2]>>,
     >,
     /// Every variable name across the twin's runs (the picker catalog).
     all_vars: std::collections::BTreeSet<String>,
@@ -1833,19 +1824,21 @@ pub fn populate_experiments_view_model(world: &mut World) {
         let reg = world.resource::<ExperimentRegistry>();
         let mut points: std::collections::HashMap<
             (lunco_experiments::ExperimentId, String),
-            std::sync::Arc<[[f64; 2]]>,
+            std::sync::Arc<Vec<[f64; 2]>>,
         > = std::collections::HashMap::new();
         let mut all_vars: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         for exp in reg.list_for_twin(&twin) {
             let Some(result) = &exp.result else { continue };
             for (var, values) in &result.series {
                 all_vars.insert(var.clone());
-                let pts: std::sync::Arc<[[f64; 2]]> = result
-                    .times
-                    .iter()
-                    .zip(values.iter())
-                    .map(|(t, y)| [*t, *y])
-                    .collect();
+                let pts = std::sync::Arc::new(
+                    result
+                        .times
+                        .iter()
+                        .zip(values.iter())
+                        .map(|(t, y)| [*t, *y])
+                        .collect(),
+                );
                 points.insert((exp.id, var.clone()), pts);
             }
         }
@@ -1870,36 +1863,6 @@ pub fn populate_experiments_view_model(world: &mut World) {
 ///   one; otherwise blank (mixed-unit plots happen often when users
 ///   tick variables across components).
 ///
-/// Extra line injected into the experiments plot — used by
-/// [`crate::ui::panels::graphs`] to overlay live `SignalRegistry`
-/// histories on top of the completed-run curves so users see a
-/// single merged plot instead of two stacked widgets.
-pub struct PlotExtraLine {
-    pub label: String,
-    pub color: (u8, u8, u8),
-    pub points: std::sync::Arc<Vec<[f64; 2]>>,
-}
-
-/// Render a bare plot frame plus any live overlays. Used when no
-/// active doc is resolved so the Graphs tab still shows a plot
-/// widget instead of disappearing.
-fn render_empty_plot_frame(ui: &mut egui::Ui, extras: &[PlotExtraLine]) {
-    Plot::new("graphs_experiments_plot_empty")
-        .legend(Legend::default())
-        .allow_drag(false)
-        .show(ui, |plot_ui| {
-            for ex in extras {
-                let (r, g, b) = ex.color;
-                let line = Line::new(
-                    ex.label.clone(),
-                    PlotPoints::from(ex.points.as_ref().clone()),
-                )
-                .color(egui::Color32::from_rgb(r, g, b));
-                plot_ui.line(line);
-            }
-        });
-}
-
 pub fn render_experiments_plot(
     ui: &mut egui::Ui,
     ctx: &mut PanelCtx,
@@ -1912,7 +1875,7 @@ pub fn render_experiments_plot_with_extras(
     ui: &mut egui::Ui,
     ctx: &mut PanelCtx,
     viz_id: VizId,
-    extras: &[PlotExtraLine],
+    extras: &[MultiSeriesOverlay],
 ) -> ExpPlotSummary {
     render_experiments_plot_inner(ui, ctx, viz_id, extras)
 }
@@ -1921,7 +1884,7 @@ fn render_experiments_plot_inner(
     ui: &mut egui::Ui,
     ctx: &mut PanelCtx,
     viz_id: VizId,
-    extras: &[PlotExtraLine],
+    extras: &[MultiSeriesOverlay],
 ) -> ExpPlotSummary {
     // Scope to the experiments-pinned (or active) doc — same
     // semantics as the Experiments table above. When no doc is
@@ -1941,7 +1904,11 @@ fn render_experiments_plot_inner(
                 .color(col_muted)
                 .small(),
         );
-        render_empty_plot_frame(ui, extras);
+        let options = MultiSeriesPlotOptions {
+            id: egui::Id::new(("graphs_experiments_plot_empty", viz_id.0)),
+            ..Default::default()
+        };
+        let _ = render_multi_series_plot(ui, &[], extras, &options);
         return ExpPlotSummary::default();
     };
     let twin = crate::ui::doc_pin::twin_id_for_doc(doc_id);
@@ -1981,7 +1948,7 @@ fn render_experiments_plot_inner(
         // Build var -> unit map from the active doc index.
         let units: std::collections::HashMap<String, String> = active_doc_units(ctx, &picked_vars);
 
-        let mut series: Vec<PlotSeries> = Vec::new();
+        let mut series: Vec<MultiSeriesLine> = Vec::new();
         let mut total_runs = 0usize;
         let mut visible_runs = 0usize;
         let mut shared_unit: Option<String> = None;
@@ -2053,11 +2020,16 @@ fn render_experiments_plot_inner(
                     } else {
                         (palette_color(v_idx), exp.color_hint % 4)
                     };
-                    series.push(PlotSeries {
+                    series.push(MultiSeriesLine {
                         label,
-                        color,
+                        color: egui::Color32::from_rgb(color.0, color.1, color.2),
                         points: pts,
-                        style_idx,
+                        style: match style_idx {
+                            0 => MultiSeriesStyle::Solid,
+                            1 => MultiSeriesStyle::Dashed,
+                            2 => MultiSeriesStyle::Dotted,
+                            _ => MultiSeriesStyle::DashDot,
+                        },
                     });
                 }
             }
@@ -2428,97 +2400,27 @@ fn render_experiments_plot_inner(
         // (`render_plot_header`), grouped top-right with Fit / + / CSV.
         // This body only computes `log_y` and persists the auto-default.
 
-        // Plot frame always renders. x-axis label dropped: time is
-        // implicit in this panel and the label was burning a row of
-        // pixels for one symbol.
-        {
-            let mut plot = Plot::new("graphs_experiments_plot")
-                .legend(Legend::default())
-                // Don't let the dragger eat clicks — we want clicks to set
-                // the scrub cursor instead of pan/zoom. Box-zoom stays on
-                // the modifier defaults; double-click still resets bounds.
-                .allow_drag(false)
-                // Hover any curve → run·var name + time + de-logged value.
-                // egui_plot 0.36 unified the (name, point) args into `HoverPosition`.
-                .label_formatter(move |pos| {
-                    let (name, point) = match pos {
-                        egui_plot::HoverPosition::NearDataPoint {
-                            plot_name,
-                            position,
-                            ..
-                        } => (*plot_name, position),
-                        egui_plot::HoverPosition::Elsewhere { position } => ("", position),
-                    };
-                    Some(lunco_viz::plot_fmt::hover_label(name, point, log_y))
-                });
-            if fit_requested {
-                plot = plot.reset();
-            }
-            if log_y {
-                plot = plot
-                    .y_axis_formatter(|mark, _range| lunco_viz::plot_fmt::log_y_tick(mark.value));
-            }
-            // Only label the axis with the unit (when shared). The "(log₁₀)"
-            // marker is dropped — it rendered as a wide vertical strip on the
-            // left and the `log Y` toggle button already signals the scale.
-            if let Some(u) = shared_unit.as_ref().filter(|u| !u.is_empty()) {
-                plot = plot.y_axis_label(format!("[{u}]"));
-            }
-            let captured_x: std::cell::Cell<Option<f64>> = std::cell::Cell::new(None);
-            plot.show(ui, |plot_ui| {
-                for s in &series {
-                    let (r, g, b) = s.color;
-                    let style = match s.style_idx {
-                        0 => LineStyle::Solid,
-                        1 => LineStyle::dashed_dense(),
-                        2 => LineStyle::dotted_dense(),
-                        _ => LineStyle::dashed_loose(),
-                    };
-                    let pts = if log_y {
-                        lunco_viz::plot_fmt::log_y_points(&s.points)
-                    } else {
-                        // egui_plot wants an owned `Vec`; copy the shared
-                        // samples out once (the per-frame re-zip is gone).
-                        s.points.to_vec()
-                    };
-                    let line = Line::new(s.label.clone(), PlotPoints::from(pts))
-                        .color(egui::Color32::from_rgb(r, g, b))
-                        .style(style);
-                    plot_ui.line(line);
-                }
-                // Live `SignalRegistry` curves overlaid on top of the
-                // run curves so users get a single merged plot instead
-                // of separate "experiment" and "live" widgets.
-                // Visibility is controlled by the "Interactive Live" row
-                // in the experiments table.
-                if visible.contains(&ExperimentId::live()) {
-                    for ex in extras {
-                        let (r, g, b) = ex.color;
-                        let pts = if log_y {
-                            lunco_viz::plot_fmt::log_y_points(ex.points.as_slice())
-                        } else {
-                            ex.points.as_ref().clone()
-                        };
-                        let line = Line::new(ex.label.clone(), PlotPoints::from(pts))
-                            .color(egui::Color32::from_rgb(r, g, b));
-                        plot_ui.line(line);
-                    }
-                }
-                if let Some(t) = scrub_time {
-                    plot_ui.vline(VLine::new("scrub", t).color(col_accent).width(1.5));
-                }
-                // Click anywhere on the chart sets the scrub time. Drag
-                // is disabled (allow_drag=false above) so clicks aren't
-                // ambiguous with pan.
-                if plot_ui.response().clicked() {
-                    if let Some(p) = plot_ui.pointer_coordinate() {
-                        captured_x.set(Some(p.x));
-                    }
-                }
-            });
-            if let Some(x) = captured_x.get() {
-                new_scrub = Some(Some(x));
-            }
+        // Plot rendering is shared with other trajectory producers; this
+        // panel supplies only the selected series and its display policy.
+        let y_axis_label = shared_unit
+            .as_ref()
+            .filter(|unit| !unit.is_empty())
+            .map(|unit| format!("[{unit}]"));
+        let overlays = if visible.contains(&ExperimentId::live()) {
+            extras
+        } else {
+            &[]
+        };
+        let options = MultiSeriesPlotOptions {
+            id: egui::Id::new(("graphs_experiments_plot", viz_id.0)),
+            log_y,
+            reset_bounds: fit_requested,
+            y_axis_label,
+            scrub_time,
+            scrub_color: col_accent,
+        };
+        if let Some(x) = render_multi_series_plot(ui, &series, overlays, &options) {
+            new_scrub = Some(Some(x));
         }
 
         if let Some(s) = new_scrub {
@@ -2591,9 +2493,7 @@ fn export_experiment_csv(world: &mut World, id: ExperimentId) {
         };
         let Some(exp) = registry.get(id) else { return };
         let Some(result) = &exp.result else {
-            if let Some(mut console) =
-                world.get_resource_mut::<crate::ui::panels::console::ConsoleLog>()
-            {
+            if let Some(mut console) = world.get_resource_mut::<lunco_ui::log::LogBuffer>() {
                 console.error("CSV export: experiment has no result yet (still running or failed)");
             }
             return;
@@ -2656,9 +2556,7 @@ fn export_experiment_csv(world: &mut World, id: ExperimentId) {
     if csv_export::save_csv_via_dialog(world, &format!("{file_stem}.csv"), csv_text.as_bytes())
         .is_some()
     {
-        if let Some(mut console) =
-            world.get_resource_mut::<crate::ui::panels::console::ConsoleLog>()
-        {
+        if let Some(mut console) = world.get_resource_mut::<lunco_ui::log::LogBuffer>() {
             console.info(format!("Exported experiment to {file_stem}.csv"));
         }
     }
