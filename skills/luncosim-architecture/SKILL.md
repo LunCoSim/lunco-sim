@@ -9,6 +9,15 @@ Use this skill before changing a reusable engine feature. Keep the authored
 system declarative and composable, and make each concern live in its native
 representation:
 
+Before calling an architectural capability missing or impossible, use
+[**capability-discovery**](../capability-discovery/SKILL.md). Search the relevant
+skills and architecture docs, identify the standard or project owner, inspect
+registrations and callers, check maintained dependencies, and verify the
+production/API surface when relevant. Classify the result as found,
+implemented-but-unwired, present on another branch/version, not found in the
+searched scope, or externally blocked. Do not create a second owner, fallback,
+or compatibility shim because the first search was incomplete.
+
 | Concern | Authoritative owner | Runtime role |
 |---|---|---|
 | Scene structure, identity, topology, frames, connections, component parameters | USD | Rust projects the composed stage; it does not invent missing topology |

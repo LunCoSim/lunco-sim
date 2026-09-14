@@ -22,6 +22,17 @@ plus assets, docs, specs, and skills. This skill is the fast orientation; the tw
 
 When those disagree with anything here, they win.
 
+## When a capability is hard to find
+
+This map routes to owners; it is not an exhaustive capability list. Before
+calling a feature missing, use
+[**capability-discovery**](../capability-discovery/SKILL.md): search the relevant
+skills and docs, then `crates/`, `assets/`, registrations/callers, maintained
+dependencies, and the live API/runtime. Search alternate vocabulary and
+standard USD schema/property names before adding a new command, field, tool, or
+crate. Report the exact searched scope and distinguish “not found” from “not
+verified” or “externally blocked”.
+
 ## Top-level layout
 
 | Dir | What's in it |

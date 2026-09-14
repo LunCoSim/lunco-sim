@@ -7,6 +7,17 @@ it with this one.
 
 ## Architecture
 
+- **Discover capabilities before declaring them absent.** A missing symbol,
+  unfamiliar UI, failed first command, stale report, or one empty search is not
+  proof that LunCoSim cannot do something. Before saying “not possible”, “not
+  supported”, or “not implemented”, read the relevant skills and docs, search
+  the current checkout with alternate vocabulary, identify the owning crate or
+  standard USD schema, trace registrations and callers, and check maintained
+  dependencies and the live API/runtime when applicable. Use
+  `skills/capability-discovery/SKILL.md`; report whether the result is found,
+  implemented-but-unwired, present on another branch/version, not found in the
+  searched scope, or externally blocked. Reserve “impossible” for a demonstrated
+  contract, dependency, platform, or permission limit.
 - Read the owning source before accepting a bug claim. Check OpenUSD, Modelica,
   Avian, Bevy, or a maintained crate before adding a schema, resolver, field, or
   duplicate mechanism. When renaming/removing an API, crate, type, or binary,

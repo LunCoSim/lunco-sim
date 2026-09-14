@@ -14,6 +14,7 @@ one directly when doing that kind of task by hand.
 | Skill | Use it when you want to… |
 |---|---|
 | [**repo-map**](repo-map/SKILL.md) | Get your bearings — repo layout, which binary to run, where a feature lives |
+| [**capability-discovery**](capability-discovery/SKILL.md) | Find an existing capability and its owner before calling a feature missing or adding a duplicate mechanism |
 | [**use-asset-library**](use-asset-library/SKILL.md) | Add a component, shader, Modelica model, or event-driven Rhai policy to `assets/` and have the engine find it |
 | [**luncosim-architecture**](luncosim-architecture/SKILL.md) | Design or review a reusable feature across USD, Modelica, Avian, Rust, and Rhai; adopt standard USD schemas and remove legacy paths |
 | [**coordinate-frames**](coordinate-frames/SKILL.md) | Diagnose or implement BigSpace, reference-frame, camera, terrain, trajectory, or physics pose changes without raw-f32 or repair logic |
@@ -88,6 +89,12 @@ one directly when doing that kind of task by hand.
   GUI/API sessions or reuse a port while the old session is still alive.
 - **curl-first** over the `mcp__lunco__*` tools; drive the app over `POST /api/commands`.
 - **Discover, don't hardcode** the command set — `DiscoverSchema` enumerates it live.
+- **Discover before declaring a gap**: search the relevant skills and docs first,
+  then the current owner source, registrations/callers, maintained dependencies,
+  and runtime/API surface. Use
+  [**capability-discovery**](capability-discovery/SKILL.md) and report bounded
+  evidence as found, unwired, elsewhere/version-mismatched, not found in scope,
+  or externally blocked.
 - **Policy → rhai, identity → USD, math → Modelica** — keep logic out of the Rust core.
 - **Tutorial tests → Rhai** — put lesson-specific runtime assertions in
   `assets/scenarios/tests/*.rhai` and run them through production
@@ -129,8 +136,10 @@ one directly when doing that kind of task by hand.
 - **Colour is `primvars:displayColor`**, shader or not; WGSL opts in with
   `//!@engine display_color`.
 
-New to the codebase? Start with [**repo-map**](repo-map/SKILL.md), then the
-[Documentation Hub](../docs/README.md) and the [AI Agent Guide](../AGENTS.md).
+New to the codebase? Start with [**repo-map**](repo-map/SKILL.md), then use
+[**capability-discovery**](capability-discovery/SKILL.md) for any unfamiliar
+feature. The [Documentation Hub](../docs/README.md) and the
+[AI Agent Guide](../AGENTS.md) are the governing indexes and contract.
 
 ## Routing boundaries
 
