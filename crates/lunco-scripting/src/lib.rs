@@ -72,7 +72,7 @@ pub use doc::{ScenarioReloadPolicy, ScriptDocument, ScriptedModel};
 use lunco_api::executor::DeferredCommandAppExt;
 #[cfg(any(feature = "rhai", feature = "python"))]
 use lunco_doc::Document;
-use lunco_doc::{DocumentHost, DocumentId};
+use lunco_doc::{DocumentHost, DocumentId, FileBacked, Reject};
 use std::collections::HashMap;
 // Brings the pyo3 method traits (`PyDictMethods::{set_item,get_item}`,
 // `PyAnyMethods::{downcast,extract}`) into scope for `run_scripted_models`.
@@ -146,6 +146,32 @@ impl ScriptRegistry {
                 }
             }
         }
+    }
+
+    /// Apply a user-authored operation to a script document through its host.
+    ///
+    /// Keeping this funnel on the registry is important for source edits that
+    /// arrive from commands or the editor: the host owns the inverse stack and
+    /// its recorder mirrors the operation, undo, and redo into the Twin
+    /// journal. Replacing a host would silently discard both.
+    pub fn apply(&mut self, doc: DocumentId, op: doc::ScriptOp) -> Result<lunco_doc::Ack, Reject> {
+        let host = self
+            .documents
+            .get_mut(&doc)
+            .ok_or_else(|| Reject::InvalidOp(format!("unknown script document {doc}")))?;
+        host.apply(op)
+    }
+
+    /// Refresh a script from an external source owner without creating an
+    /// editor history entry. USD-authored `info:sourceCode` and a changed
+    /// file-backed `.rhai` asset already have their own authoritative source;
+    /// mirroring that refresh as a second Script journal op would duplicate
+    /// the same change and make undo restore a stale projection.
+    pub fn reload_external_source(&mut self, doc: DocumentId, source: &str) -> bool {
+        let Some(host) = self.documents.get_mut(&doc) else {
+            return false;
+        };
+        FileBacked::reload_base(host.document_mut(), source)
     }
 }
 
@@ -769,6 +795,34 @@ mod journal_tests {
         // Unknown doc and non-ScriptOp payloads fail softly (logged, false).
         assert!(!reg.replay_op(DocumentId::new(999), &op));
         assert!(!reg.replay_op(id, &serde_json::json!({ "nope": 1 })));
+    }
+
+    #[test]
+    fn source_edits_and_script_undo_redo_share_the_journaled_host() {
+        let mut reg = ScriptRegistry::default();
+        let journal = lunco_doc_bevy::JournalResource::default_local();
+        reg.set_journal(journal.clone());
+        let id = DocumentId::new(2);
+        reg.insert_document(id, ScriptDocument::new(2, ScriptLanguage::Rhai, "v1"));
+
+        reg.apply(id, ScriptOp::SetSource("v2".into()))
+            .expect("user source edit applies");
+        assert_eq!(reg.documents.get(&id).unwrap().document().source, "v2");
+
+        reg.documents
+            .get_mut(&id)
+            .unwrap()
+            .undo()
+            .expect("script undo applies");
+        assert_eq!(reg.documents.get(&id).unwrap().document().source, "v1");
+
+        reg.documents
+            .get_mut(&id)
+            .unwrap()
+            .redo()
+            .expect("script redo applies");
+        assert_eq!(reg.documents.get(&id).unwrap().document().source, "v2");
+        assert_eq!(journal.len(), 3, "apply, undo, and redo are all journaled");
     }
 }
 

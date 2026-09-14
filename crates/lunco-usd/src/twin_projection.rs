@@ -809,13 +809,16 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
         let owned_path = match op {
             UsdOp::RemovePrim { path, .. }
             | UsdOp::SetTranslate { path, .. }
+            | UsdOp::RemoveXformOp { path, .. }
+            | UsdOp::RestoreXformOp { path, .. }
             | UsdOp::SetRotate { path, .. }
             | UsdOp::SetScale { path, .. }
             | UsdOp::SetAttribute { path, .. }
             | UsdOp::SetRelationship { path, .. }
             | UsdOp::SetConnection { path, .. }
             | UsdOp::SetApiSchemas { path, .. }
-            | UsdOp::SetActive { path, .. } => Some(path.as_str()),
+            | UsdOp::SetActive { path, .. }
+            | UsdOp::ClearActive { path, .. } => Some(path.as_str()),
             _ => None,
         };
         if let Some(owned_path) = owned_path {
@@ -904,6 +907,59 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                         scene_id,
                         path.clone(),
                         crate::live_consume::TransformEditChannels::scale(),
+                    );
+                }
+            }
+        }
+        UsdOp::RemoveXformOp { path, name, .. } => {
+            let Ok(sp) = openusd::sdf::Path::new(path) else {
+                return;
+            };
+            if let Some(cs) = world
+                .get_non_send::<CanonicalStages>()
+                .and_then(|s| s.get(scene_id))
+            {
+                if let Err(e) = cs.projector().remove_xform_op(&sp, name) {
+                    warn!("[twin] remove xform operation {path}.{name}: {e}");
+                } else if let Some(channel) =
+                    crate::live_consume::TransformEditChannels::for_attribute(name)
+                {
+                    crate::live_consume::mark_live_transform(
+                        world,
+                        scene_id,
+                        path.clone(),
+                        channel,
+                    );
+                }
+            }
+        }
+        UsdOp::RestoreXformOp {
+            path,
+            name,
+            value,
+            order,
+            ..
+        } => {
+            let Ok(sp) = openusd::sdf::Path::new(path) else {
+                return;
+            };
+            if let Some(cs) = world
+                .get_non_send::<CanonicalStages>()
+                .and_then(|s| s.get(scene_id))
+            {
+                if let Err(e) = cs
+                    .projector()
+                    .restore_xform_op(&sp, name, *value, order.as_deref())
+                {
+                    warn!("[twin] restore xform operation {path}.{name}: {e}");
+                } else if let Some(channel) =
+                    crate::live_consume::TransformEditChannels::for_attribute(name)
+                {
+                    crate::live_consume::mark_live_transform(
+                        world,
+                        scene_id,
+                        path.clone(),
+                        channel,
                     );
                 }
             }
@@ -1158,6 +1214,30 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                 .is_some_and(|cs| cs.projector().author_active(&sp, *active).is_ok());
             if !authored {
                 warn!("[twin] author active={active} at {path} failed");
+            }
+        }
+        UsdOp::ClearActive { path, .. } => {
+            let Ok(sp) = openusd::sdf::Path::new(path) else {
+                return;
+            };
+            let cleared = world
+                .get_non_send::<CanonicalStages>()
+                .and_then(|s| s.get(scene_id))
+                .is_some_and(|cs| cs.projector().clear_active(&sp).is_ok());
+            if cleared {
+                // OpenUSD 0.5 exposes metadata erasure through Sdf data editing;
+                // unlike Prim::set_active, that low-level edit is not classified
+                // as a structural resync by the pinned sink. Reuse the shared
+                // structural reconciler at the same stage boundary so undoing a
+                // local active=false opinion immediately reveals the weaker
+                // composed prim without a scene rebuild.
+                crate::live_consume::reconcile_structural_live(
+                    world,
+                    scene_id,
+                    std::slice::from_ref(path),
+                );
+            } else {
+                warn!("[twin] clear active at {path} failed");
             }
         }
         // Coarse ops never reach here (the caller rebuilds for them). Active

@@ -46,6 +46,22 @@ pub struct ApplyUsdOps {
     pub ops: Vec<UsdOp>,
 }
 
+/// Apply a compound USD edit that belongs to a disposable view rather than to
+/// user-authored history. The document and typed operation log still advance,
+/// so the live canonical stage receives the same ordered delta; only the
+/// undo/redo and external-journal entries are omitted.
+#[Command(default)]
+pub struct ApplyUsdTransientOps {
+    /// Target document.
+    pub doc_id: DocumentId,
+    /// Generation the view was derived from.
+    pub parent_gen: Option<u64>,
+    /// Human-readable diagnostic label.
+    pub label: String,
+    /// Ordered view operations.
+    pub ops: Vec<UsdOp>,
+}
+
 /// Stable id for the USD document kind in the shared document registry.
 pub const USD_DOCUMENT_KIND: &str = "usd";
 

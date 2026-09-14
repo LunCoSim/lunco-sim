@@ -38,6 +38,23 @@ telemetry samples, and transient runtime state are not authored document ops:
 - `#[Command]` execution history and deterministic session replay are not yet
   journaled. See [`command-journal.md`](command-journal.md).
 
+There are two deliberate exceptions to the authored-edit path. A source that
+is refreshed by its external owner — a disk-backed `.rhai` file, USD
+`info:sourceCode`, or a generated Modelica network — uses the shared
+`FileBacked::reload_base` contract. It updates the live document generation,
+parse/compile invalidation, and clean baseline without creating a second
+`DocumentHost` undo entry or duplicating the source owner's journal entry.
+Likewise, a derived presentation such as the USD route ribbon uses a typed
+transient projection command. It may update the runtime view and its
+projection cursor, but it is not authored content and therefore is not saved,
+undone, or journaled.
+
+User changes remain different: Rhai/ScriptDocument source and pin edits,
+Modelica source/structural edits, and USD authored operations all go through
+their existing `DocumentHost`/typed-command owners. Their undo and redo calls
+use the same host and recorder, so both the forward edit and its inverse are
+losslessly represented in the Twin journal.
+
 ## Undo, replay, and sync
 
 `DocumentHost` applies a typed op and obtains its inverse. The same host path
@@ -67,8 +84,11 @@ derived history out of authored content unless the Twin explicitly owns it.
 
 ## Boundaries
 
-- Do not mutate a document source directly; use its typed command/document host
-  path so inverse generation and journaling cannot diverge.
+- Do not mutate a user-owned document source directly; use its typed
+  command/document-host path so inverse generation and journaling cannot
+  diverge. For an externally owned source, use `FileBacked::reload_base`; for
+  a derived view, use its typed transient projection command. Neither is a
+  substitute for a user edit or a reason to emit a duplicate journal entry.
 - Do not put telemetry, per-frame controls, or runtime caches in the journal.
 - Do not add a second domain broadcast for authored edits; use `OpPayload` and
   the networking journal plane.

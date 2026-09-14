@@ -57,6 +57,20 @@ fn apply_ops(doc, label, ops) {
     #{ ok: true, changed: true }
 }
 
+fn apply_view_ops(doc, label, ops) {
+    if ops.len() == 0 { return #{ ok: true, changed: false }; }
+    let result = cmd("ApplyUsdTransientOps", #{
+        doc_id: doc,
+        parent_gen: generation(doc),
+        label: label,
+        ops: ops,
+    });
+    if result == () || result.ok != true {
+        return failure(if result == () { "USD view edit returned no result" } else { result.error });
+    }
+    #{ ok: true, changed: true }
+}
+
 fn route_edit_path(context) {
     let explicit = context["route_path"];
     if explicit != () && explicit != "" {
@@ -133,9 +147,9 @@ fn next_point_name(doc, route) {
 }
 
 // Read the route points from one settled composed-stage generation. The
-// result is used only by the disposable ribbon tool; durable point edits are
-// intentionally committed in their own USD transaction.
-fn route_positions(doc, route, edited_path, replacement, appended) {
+// result feeds only the disposable ribbon view; authored route points remain
+// the document's durable state.
+fn route_positions(doc, route) {
     let document_gen = generation(doc);
     if document_gen == () {
         return #{ ok: false, retryable: true,
@@ -167,10 +181,6 @@ fn route_positions(doc, route, edited_path, replacement, appended) {
                 error: "route point state is not synchronized" };
         }
         if record.active != true { continue; }
-        if child == edited_path {
-            if replacement != () { positions.push(replacement); }
-            continue;
-        }
         let point = query("QueryUsdPrim", #{
             doc_id: doc,
             path: child,
@@ -183,7 +193,6 @@ fn route_positions(doc, route, edited_path, replacement, appended) {
         }
         positions.push(point.attrs["xformOp:translate"]);
     }
-    if appended != () { positions.push(appended); }
     #{ ok: true, points: positions }
 }
 
@@ -445,10 +454,10 @@ fn ensure_ribbon(context) {
     if context == () || context.doc_id == () || context.route_path == () {
         return failure("route view has no explicit document or route path");
     }
-    let read = route_positions(context.doc_id, context.route_path, (), (), ());
+    let read = route_positions(context.doc_id, context.route_path);
     if read.ok != true { return read; }
     let ops = ribbon_ops(context.doc_id, context.route_path, read.points);
-    apply_ops(context.doc_id, "Update route ribbon", ops)
+    apply_view_ops(context.doc_id, "Update route ribbon", ops)
 }
 
 fn route_setup(doc, route, subject) {
@@ -585,9 +594,6 @@ fn on_click(context) {
     if !point.ok { return failure(point.error); }
     let ops = setup.ops;
     for op in point.ops { ops.push(op); }
-    // Commit only the durable route facts. The route program invokes the
-    // disposable ribbon tool after the canonical projection settles, so an
-    // asynchronous stage update cannot mix old geometry with the new point.
     let result = apply_ops(context.doc_id, "Append route point", ops);
     if result.ok { result.path = point.path; }
     result
@@ -624,12 +630,13 @@ fn on_delete(context) {
     let target = target_record(context.doc_id, point, "@root@");
     if !target.ok || !target.exists { return failure("delete target does not exist"); }
 
-    let op = if target.authored_here {
-        #{ RemovePrim: #{ edit_target: "@root@", path: point } }
-    } else if target.under_arc {
+    let op = if target.under_arc {
         // A referenced child cannot be removed from the referencing layer. USD
-        // expresses this edit as a stronger local active=false opinion.
+        // expresses this edit as a stronger local active=false opinion, even
+        // when the local layer already carries transform or other overrides.
         #{ SetActive: #{ edit_target: "@root@", path: point, active: false } }
+    } else if target.authored_here {
+        #{ RemovePrim: #{ edit_target: "@root@", path: point } }
     } else {
         let runtime = target_record(context.doc_id, point, "@runtime@");
         if runtime.ok && runtime.authored_here {

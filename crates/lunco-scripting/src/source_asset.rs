@@ -232,20 +232,30 @@ fn publish_rhai_source(
 ) {
     sources.insert(canonical, text);
 
+    let docs: Vec<_> = registry
+        .documents
+        .iter()
+        .filter(|(_, host)| {
+            host.document().asset_id.as_deref() == Some(canonical) && host.document().source != text
+        })
+        .map(|(id, _)| *id)
+        .collect();
     let mut replaced = 0usize;
-    for host in registry.documents.values_mut() {
-        let matches_asset = host.document().asset_id.as_deref() == Some(canonical);
-        if !matches_asset || host.document().source == text {
-            continue;
-        }
-
-        let before = host.generation();
+    for doc in docs {
+        let before = registry
+            .documents
+            .get(&doc)
+            .map(|host| host.generation())
+            .unwrap_or_default();
         // Asset events are the external-source side of the existing document
-        // lifecycle. `reload_base` replaces the clean base and advances its
-        // generation; it is not an editor mutation and therefore does not mint a
-        // second source ownership path or pollute undo history.
-        if lunco_doc::FileBacked::reload_base(host.document_mut(), text)
-            && host.generation() != before
+        // lifecycle. The registry refresh replaces the clean base and advances
+        // its generation; it is not an editor mutation and therefore does not
+        // mint a second source ownership path or pollute undo history.
+        if registry.reload_external_source(doc, text)
+            && registry
+                .documents
+                .get(&doc)
+                .is_some_and(|host| host.generation() != before)
         {
             replaced += 1;
         }

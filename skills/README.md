@@ -185,9 +185,11 @@ parse check into runtime evidence.
   `epoch-api-missing-time` lint catches an epoch API without its field. See
   [`build-usd-scene`](build-usd-scene/SKILL.md) and
   [`assets/tutorials/README.md`](../assets/tutorials/README.md).
-- **USD is the source of truth; the ECS is a projection of it.** An edit that
-  doesn't lower to a `UsdOp` escapes save, journal, undo *and* replication —
-  silently. See [**usd-projection**](usd-projection/SKILL.md).
+- **USD is the source of truth; the ECS is a projection of it.** An authored
+  edit that doesn't lower to a `UsdOp` escapes save, journal, undo *and*
+  replication — silently. Disposable derived presentation uses the typed
+  transient projection command and is deliberately outside that history. See
+  [**usd-projection**](usd-projection/SKILL.md).
 - **Use the API `Exit`**, never `pkill`, to stop a running app.
 - **Validate before you run.** `"$LUNCOSIM_BIN" --validate <files…>` parses assets in
   seconds with no GPU and catches broken references, missing wheel attrs,

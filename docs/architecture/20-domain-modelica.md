@@ -867,6 +867,15 @@ editor's debounced commit (≈ 350 ms idle or focus-loss) calls
 `checkpoint_source` → `ReplaceSource`, the generation bumps past
 `last_seen_gen`, and the diagram rebuilds on its next frame.
 
+That path is only for user-owned edits. Disk reloads and generated Modelica
+projections use `ModelicaDocumentRegistry::reload_external_source`, which
+funnels through the shared `FileBacked::reload_base` contract. The external
+source replaces the resident text and advances the normal invalidation
+generation, but it does not enter the editor undo stack or Twin journal: the
+file or USD synthesis owner is already authoritative. Formatting and other
+interactive commands remain typed `ModelicaOp` operations on the host, so they
+are undoable and journalled like code-editor edits.
+
 ### 9.2 Visual details
 
 - Resolved classes render their authored Modelica `Icon` graphics, including

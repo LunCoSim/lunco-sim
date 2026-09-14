@@ -382,6 +382,26 @@ impl ModelicaDocumentRegistry {
         true
     }
 
+    /// Refresh a document from an external source owner without creating an
+    /// editor undo/journal entry. Generated Modelica projections and disk
+    /// reloads already have an authoritative owner; recording the refresh as
+    /// a user edit would duplicate that change and make undo restore a stale
+    /// generated or on-disk snapshot.
+    pub fn reload_external_source(&mut self, doc: DocumentId, source: &str) -> bool {
+        let Some(host) = self.hosts.get_mut(&doc) else {
+            return false;
+        };
+        if host.document().source() == source {
+            return false;
+        }
+        if !lunco_doc::FileBacked::reload_base(host.document_mut(), source) {
+            return false;
+        }
+        self.pending_changes.push(doc);
+        self.revision = self.revision.wrapping_add(1);
+        true
+    }
+
     /// Explicitly mark a document as changed. Required after direct
     /// mutations through [`host_mut`](Self::host_mut) (undo / redo),
     /// since the registry cannot observe those through a bare `&mut`.
@@ -657,6 +677,25 @@ mod tests {
         assert!(
             !d.is_dirty(),
             "text came FROM disk ⇒ the document matches it ⇒ clean"
+        );
+    }
+
+    #[test]
+    fn external_source_refresh_does_not_enter_editor_history() {
+        let mut reg = ModelicaDocumentRegistry::default();
+        let doc = reg.allocate_with_origin(
+            "model A end A;".into(),
+            DocumentOrigin::Bundled {
+                filename: "generated/A.mo".into(),
+            },
+        );
+
+        assert!(reg.reload_external_source(doc, "model B end B;"));
+        let host = reg.host(doc).unwrap();
+        assert_eq!(host.document().source(), "model B end B;");
+        assert!(
+            !host.can_undo(),
+            "external projection is not an editor edit"
         );
     }
 
