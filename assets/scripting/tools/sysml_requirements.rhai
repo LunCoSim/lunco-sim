@@ -62,6 +62,47 @@ fn _find_requirement(report, expected) {
     ()
 }
 
+// Resolve one typed SysML attribute without silently choosing a colliding
+// short name. Qualified names are the stable contract; a local name is only
+// accepted when the validator proved it unique.
+fn attribute(report, name) {
+    if report == () || name == () || name == "" {
+        return #{ok: false, error: "SysML attribute name is missing"};
+    }
+    if name.contains("::") {
+        if report.attributes_qualified == () || report.attributes_qualified[name] == () {
+            return #{ok: false, error: "qualified SysML attribute is missing: " + name};
+        }
+        return #{ok: true, record: report.attributes_qualified[name]};
+    }
+    if report.attribute_collisions != () {
+        for collision in report.attribute_collisions {
+            if collision.name == name {
+                return #{ok: false, error: "ambiguous SysML attribute `" + name + "`; use a qualified name"};
+            }
+        }
+    }
+    if report.attributes == () || report.attributes[name] == () {
+        return #{ok: false, error: "SysML attribute is missing: " + name};
+    }
+    #{ok: true, record: report.attributes[name]}
+}
+
+fn number(report, name) {
+    let resolved = attribute(report, name);
+    if resolved.ok != true || resolved.record.value == () {
+        return ();
+    }
+    if resolved.record.value.number != () { return resolved.record.value.number.to_float(); }
+    ()
+}
+
+fn text(report, name) {
+    let resolved = attribute(report, name);
+    if resolved.ok != true || resolved.record.value == () { return (); }
+    _text(resolved.record.value.literal)
+}
+
 fn _verification_covers(report, requirement, verification_name) {
     if report == () || report.verification_records == () { return false; }
     let wanted = _short_name(requirement);
@@ -81,17 +122,24 @@ fn _verification_covers(report, requirement, verification_name) {
 
 fn _expected(report, check) {
     if check.expected_attr == () { return check.expected; }
-    if report == () || report.attributes == () { return (); }
-    let attribute = report.attributes[check.expected_attr];
-    if attribute == () || attribute.value == () { return (); }
-    if attribute.value.number != () { return attribute.value.number.to_float(); }
-    _text(attribute.value.literal)
+    let resolved = attribute(report, check.expected_attr);
+    if resolved.ok != true || resolved.record.value == () { return (); }
+    if resolved.record.value.number != () { return resolved.record.value.number.to_float(); }
+    _text(resolved.record.value.literal)
+}
+
+fn _expected_error(report, check) {
+    if check.expected_attr == () { return ""; }
+    let resolved = attribute(report, check.expected_attr);
+    if resolved.ok != true { return resolved.error; }
+    if resolved.record.value == () { return "SysML attribute has no literal value: " + check.expected_attr; }
+    ""
 }
 
 fn _failure(check, message) {
     #{ ok: false, id: check.id, component: check.component,
        requirement: check.requirement, verification: check.verification,
-       path: check.path, error: message }
+       kind: check.kind, path: check.path, error: message }
 }
 
 fn _check_one(report, check) {
@@ -105,6 +153,8 @@ fn _check_one(report, check) {
     if !_verification_covers(report, check.requirement, check.verification) {
         return _failure(check, "no SysML verification case covers this requirement");
     }
+    let expected_error = _expected_error(report, check);
+    if expected_error != "" { return _failure(check, expected_error); }
     if check.kind == "coverage" { return #{ok: true, id: check.id, component: check.component, requirement: check.requirement}; }
 
     if check.path == () || check.path == "" {

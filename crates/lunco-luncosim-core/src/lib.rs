@@ -35,6 +35,17 @@ use lunco_usd_bevy_scene::UsdPrimPath;
 #[cfg(feature = "networking")]
 use lunco_usd_sim_cosim::LoadScene;
 
+/// Asset registration needed by USD authoring in a headless world. These are
+/// data stores only; no render plugin is installed here.
+struct HeadlessAssetTypePlugin;
+
+impl Plugin for HeadlessAssetTypePlugin {
+    fn build(&self, app: &mut App) {
+        app.init_asset::<bevy::shader::Shader>();
+        app.init_asset::<bevy::image::Image>();
+    }
+}
+
 /// Exit status returned by the production runner.
 pub use bevy::app::AppExit;
 
@@ -106,6 +117,28 @@ mod startup_scene_tests {
     }
 }
 
+#[cfg(test)]
+mod headless_composition_tests {
+    use super::*;
+
+    #[test]
+    fn headless_plugins_install_only_data_asset_stores() {
+        let mut app = App::new();
+        app.add_plugins(default_plugins());
+
+        assert!(app.is_plugin_added::<AssetPlugin>());
+        assert!(app.world().get_resource::<AssetServer>().is_some());
+        assert!(app
+            .world()
+            .get_resource::<Assets<bevy::shader::Shader>>()
+            .is_some());
+        assert!(app
+            .world()
+            .get_resource::<Assets<bevy::image::Image>>()
+            .is_some());
+    }
+}
+
 /// The luncosim's one physics configuration.
 fn luncosim_physics_plugins() -> impl PluginGroup {
     PhysicsPlugins::default()
@@ -121,16 +154,17 @@ pub const SANDBOX_GRAVITY: lunco_environment::Gravity = lunco_environment::Gravi
 );
 
 /// Build the headless Bevy plugin group shared by the server and scene tests.
-/// No render, window backend, or UI feature is enabled in this package.
+///
+/// This is intentionally a hand-selected substrate rather than
+/// `DefaultPlugins` with render plugins disabled. Cargo feature unification can
+/// make a render plugin available in a downstream GUI build even when the core
+/// package did not request it; composing the headless group from `MinimalPlugins`
+/// makes that boundary structural and fail-closed.
 pub fn default_plugins() -> bevy::app::PluginGroupBuilder {
-    let group = DefaultPlugins
-        .set(AssetPlugin {
-            file_path: lunco_assets::assets_dir_abs().to_string_lossy().to_string(),
-            watch_for_changes_override: Some(false),
-            meta_check: AssetMetaCheck::Never,
-            ..default()
-        })
-        .set(bevy::log::LogPlugin {
+    let group = MinimalPlugins
+        .build()
+        .add(bevy::app::PanicHandlerPlugin)
+        .add(bevy::log::LogPlugin {
             filter: "wgpu=error,naga=warn,cranelift=warn,cranelift_jit=warn,cranelift_codegen=warn,diffsol=warn,info".into(),
             fmt_layer: |_app| {
                 use bevy::log::tracing_subscriber::Layer;
@@ -146,14 +180,22 @@ pub fn default_plugins() -> bevy::app::PluginGroupBuilder {
             },
             ..default()
         })
-        .set(WindowPlugin {
-            primary_window: None,
-            exit_condition: bevy::window::ExitCondition::DontExit,
-            close_when_requested: false,
+        .add(bevy::diagnostic::DiagnosticsPlugin)
+        .add(bevy::input::InputPlugin)
+        .add(bevy::input_focus::InputFocusPlugin)
+        .add(bevy::input_focus::InputDispatchPlugin)
+        .add(bevy::state::app::StatesPlugin)
+        .add(AssetPlugin {
+            file_path: lunco_assets::assets_dir_abs().to_string_lossy().to_string(),
+            watch_for_changes_override: Some(false),
+            meta_check: AssetMetaCheck::Never,
             ..default()
-        });
+        })
+        .add_after::<AssetPlugin>(HeadlessAssetTypePlugin);
 
-    group.build().disable::<TransformPlugin>()
+    // BigSpace owns the transform propagation chain for the simulation world;
+    // the ordinary Bevy transform plugin is deliberately not added here.
+    group.build()
 }
 
 /// Build the production headless simulation app with an optional fixed
@@ -190,6 +232,9 @@ pub fn build_headless_app_with_threads(compute_threads: Option<usize>) -> App {
         },
     });
     app.add_plugins(plugins);
+    app.insert_resource(lunco_physics::PhysicsDeterminism::from_compute_threads(
+        compute_threads,
+    ));
     app.add_plugins(log_dedup::LogDedupPlugin);
     app.add_plugins(LunCoSimCorePlugin { headless: true });
     app
@@ -197,7 +242,10 @@ pub fn build_headless_app_with_threads(compute_threads: Option<usize>) -> App {
 
 /// Build the normal headless app with the production schedule runner.
 pub fn build_headless_app() -> App {
-    let mut app = build_headless_app_with_threads(None);
+    // Production headless physics is an acceptance/replay surface. Keep its
+    // compute order explicit; callers that need the multi-threaded diagnostic
+    // matrix must use `build_headless_app_with_threads(None)` deliberately.
+    let mut app = build_headless_app_with_threads(Some(1));
     app.add_plugins(LunCoSimHeadlessPlugin::default());
     app
 }
@@ -220,7 +268,9 @@ pub fn run_headless() -> AppExit {
     } else {
         lunco_core::SimulationExecutionMode::Realtime
     };
-    let mut app = build_headless_app_with_threads(None);
+    // The server is also a deterministic simulation authority by default.
+    // Multi-threaded order studies remain an explicit scene-test override.
+    let mut app = build_headless_app_with_threads(Some(1));
 
     #[cfg(all(
         feature = "api-transport",
@@ -1655,12 +1705,6 @@ impl Plugin for LunCoSimCorePlugin {
             .add_plugins(LunCoControllerPlugin)
             .add_plugins(LunCoAvatarPlugin)
             .add_plugins(lunco_scripting::LunCoScriptingPlugin)
-            // Default scene-wide fill for scenes that author no lighting; a
-            // scene-authored UsdLux light takes ambient over.
-            .insert_resource(bevy::light::GlobalAmbientLight {
-                brightness: 0.0,
-                ..Default::default()
-            })
             .add_systems(Startup, setup_luncosim)
             .add_systems(Startup, load_startup_scene_on_boot.after(setup_luncosim))
             // Fail loud if the requested `--scene` never loads (e.g. a wrong

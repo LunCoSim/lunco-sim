@@ -67,9 +67,11 @@ lunco-settings = { path = "../lunco-settings", optional = true }
 # `default-features = false` drops celestial's egui inspector (`CelestialUiPlugin`,
 # not used by the luncosim bin). The `celestial` feature still pulls embed-assets.
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
+lunco-time = { path = "../lunco-time" }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-usd-avian-core = { path = "../lunco-usd-avian-core" }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
+lunco-physics = { path = "../lunco-physics" }
 lunco-luncosim-ui = { path = "../lunco-luncosim-ui", default-features = false, optional = true }
 lunco-scripting = { path = "../lunco-scripting" }
 lunco-assets = { workspace = true }
@@ -139,6 +141,7 @@ ui = [
     "lunco-capture/api",
     "lunco-workbench/api",
     "dep:lunco-render-bevy",
+    "lunco-scripting/render-policy",
     "lunco-luncosim-ui/avatar-ui",
     "dep:lunco-luncosim-edit-ui",
     "dep:lunco-luncosim-ui",

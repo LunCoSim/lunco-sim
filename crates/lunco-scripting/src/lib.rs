@@ -267,7 +267,9 @@ pub fn register_builtin_policies() -> Result<(), String> {
             "dataset_provisioning",
         ),
         // Renderer Rust publishes shadow-resource facts only; the authored
-        // Rhai policy owns the warning decision and message.
+        // Rhai policy owns the warning decision and message. The render edge
+        // is deliberately opt-in so a headless scripting host stays GPU-free.
+        #[cfg(feature = "render-policy")]
         (
             "render_shadow_quality",
             lunco_render_recovery::RENDER_SHADOW_QUALITY_HOOK,
@@ -449,7 +451,8 @@ impl Plugin for LunCoScriptingPlugin {
                 FixedUpdate,
                 run_scripted_models
                     .in_set(ScriptingSet)
-                    .run_if(scenario::scenario_execution_enabled),
+                    .run_if(scenario::scenario_execution_enabled)
+                    .run_if(scenario::simulation_is_running),
             );
         }
 
@@ -571,7 +574,8 @@ impl Plugin for LunCoScriptingPlugin {
                 // deterministic physics timing.
                 world_bridge::tick_rhai_scenarios
                     .in_set(ScriptingSet)
-                    .run_if(scenario::scenario_execution_enabled),
+                    .run_if(scenario::scenario_execution_enabled)
+                    .run_if(scenario::simulation_is_running),
             );
             app.add_systems(
                 Update,
@@ -830,7 +834,7 @@ mod journal_tests {
     }
 }
 
-#[cfg(all(test, feature = "rhai"))]
+#[cfg(all(test, feature = "rhai", feature = "render-policy"))]
 mod policy_tests {
     use super::*;
 

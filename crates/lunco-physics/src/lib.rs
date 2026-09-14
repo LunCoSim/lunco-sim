@@ -37,12 +37,13 @@ use avian3d::dynamics::solver::{
     solver_body::{SolverBody, SolverBodyInertia},
     xpbd::{joints::PrismaticJointSolverData, XpbdConstraint},
 };
+pub use avian3d::prelude::Physics;
 use avian3d::prelude::{
     AngularVelocity, ComputedCenterOfMass, ContactGraph, CustomPositionIntegration, JointDisabled,
-    LinearVelocity, Physics, Position, PrismaticJoint, RigidBody, RigidBodyColliders,
-    RigidBodyDisabled, Rotation, Sensor,
+    LinearVelocity, Position, PrismaticJoint, RigidBody, RigidBodyColliders, RigidBodyDisabled,
+    Rotation, Sensor,
 };
-use avian3d::schedule::PhysicsTime;
+pub use avian3d::schedule::PhysicsTime;
 use bevy::ecs::schedule::ApplyDeferred;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
@@ -69,8 +70,7 @@ pub use support::{
     PhysicsInitializationInvalid, PhysicsInitializationPending, PhysicsInitializationPolicy,
     PhysicsInitializationSubject, PhysicsJointDetachSet, PhysicsJointLink, PhysicsJointPending,
     PhysicsSupportContact, PhysicsSupportFootprint, PhysicsSupportSet,
-    PHYSICS_INITIALIZATION_HOOK_PREFIX,
-    STRICT_AUTHORED_INITIALIZATION_POLICY,
+    PHYSICS_INITIALIZATION_HOOK_PREFIX, STRICT_AUTHORED_INITIALIZATION_POLICY,
 };
 
 /// Number of Avian solver substeps in one authoritative fixed physics tick.
@@ -94,6 +94,32 @@ pub const DEFAULT_SUBSTEP_COUNT: u32 = 8;
 /// owner changes that default in this crate.
 pub const MIN_DIAGNOSTIC_SUBSTEP_COUNT: u32 = 1;
 pub const MAX_DIAGNOSTIC_SUBSTEP_COUNT: u32 = 64;
+
+/// Runtime admission policy for physics reproducibility.
+///
+/// Avian's parallel island/contact work is order-sensitive. A deterministic
+/// run therefore needs an explicitly pinned compute pool, not merely a fixed
+/// timestep. The application composition root sets this resource when it
+/// chooses the task-pool policy; the physics crate owns the meaning and all
+/// consumers can report it without trying to inspect Bevy's global pool.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PhysicsDeterminism {
+    /// Requested compute-pool width. `None` means the host left the pool
+    /// unconstrained and the result must not be treated as reproducible.
+    pub compute_threads: Option<usize>,
+    /// True only for the single-threaded admission profile.
+    pub deterministic: bool,
+}
+
+impl PhysicsDeterminism {
+    /// Build the contract from the composition root's explicit pool choice.
+    pub const fn from_compute_threads(compute_threads: Option<usize>) -> Self {
+        Self {
+            compute_threads,
+            deterministic: matches!(compute_threads, Some(1)),
+        }
+    }
+}
 
 /// Read the live Avian solver resolution.
 pub fn solver_substeps(world: &World) -> Option<u32> {
@@ -1295,6 +1321,7 @@ impl Plugin for PhysicsGatePlugin {
             // target; no app-level duplicate or target-specific selection is
             // permitted.
             .insert_resource(avian3d::prelude::SubstepCount(DEFAULT_SUBSTEP_COUNT))
+            .init_resource::<PhysicsDeterminism>()
             .init_resource::<PhysicsHolds>()
             .init_resource::<PhysicsInitializationExternalValidator>()
             .init_resource::<PhysicsStepRequest>()
@@ -1356,6 +1383,13 @@ mod tests {
     fn contact_impulse_uses_the_current_avian_accumulator_contract() {
         assert!((contact_force_from_impulse(32.4, 1.0) - 16.2).abs() < 1.0e-12);
         assert!((contact_force_from_impulse(0.324, 0.01) - 16.2).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn determinism_contract_is_true_only_for_a_pinned_single_thread_pool() {
+        assert!(PhysicsDeterminism::from_compute_threads(Some(1)).deterministic);
+        assert!(!PhysicsDeterminism::from_compute_threads(Some(2)).deterministic);
+        assert!(!PhysicsDeterminism::from_compute_threads(None).deterministic);
     }
 
     #[test]

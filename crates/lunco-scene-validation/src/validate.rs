@@ -186,12 +186,12 @@ fn finish_sysml_report(
         "references": analysis.references(),
         // Expose the typed semantic projection. Rhai tests consume this
         // snapshot without walking source text or reimplementing parsing.
-        "attributes": sysml_attributes_json(&analysis),
+        "attributes": lunco_sysml_report::attributes(&analysis),
         // The short-name map is convenient for authored Twin contracts.  The
         // qualified projection is the lossless lookup for workspaces where
         // two definitions intentionally reuse a local attribute name.
-        "attributes_qualified": sysml_attributes_qualified_json(&analysis),
-        "attribute_collisions": sysml_attribute_collisions_json(&analysis),
+        "attributes_qualified": lunco_sysml_report::attributes_qualified(&analysis),
+        "attribute_collisions": lunco_sysml_report::attribute_collisions(&analysis),
         "attribute_records": analysis.attributes(),
         "requirement_records": analysis.requirements(),
         "verification_cases": analysis.verifications(),
@@ -208,69 +208,6 @@ fn finish_sysml_report(
         "stdlib": analysis.includes_stdlib(),
     });
     report.finish()
-}
-
-fn sysml_attributes_json(analysis: &lunco_sysml_ast::SysmlAnalysis) -> serde_json::Value {
-    let mut attributes = serde_json::Map::new();
-    for attribute in analysis.attributes() {
-        attributes.insert(attribute.name.clone(), sysml_attribute_record(attribute));
-    }
-    serde_json::Value::Object(attributes)
-}
-
-fn sysml_attributes_qualified_json(analysis: &lunco_sysml_ast::SysmlAnalysis) -> serde_json::Value {
-    let mut attributes = serde_json::Map::new();
-    for attribute in analysis.attributes() {
-        attributes.insert(
-            attribute.qualified_name.clone(),
-            sysml_attribute_record(attribute),
-        );
-    }
-    serde_json::Value::Object(attributes)
-}
-
-fn sysml_attribute_collisions_json(analysis: &lunco_sysml_ast::SysmlAnalysis) -> serde_json::Value {
-    let mut names = std::collections::BTreeMap::<String, Vec<String>>::new();
-    for attribute in analysis.attributes() {
-        names
-            .entry(attribute.name.clone())
-            .or_default()
-            .push(attribute.qualified_name.clone());
-    }
-    let collisions = names
-        .into_iter()
-        .filter_map(|(name, qualified_names)| {
-            (qualified_names.len() > 1).then_some(json!({
-                "name": name,
-                "qualified_names": qualified_names,
-            }))
-        })
-        .collect::<Vec<_>>();
-    serde_json::Value::Array(collisions)
-}
-
-fn sysml_attribute_record(attribute: &lunco_sysml_ast::SysmlAttribute) -> serde_json::Value {
-    let value = attribute.value.as_ref().map(|literal| {
-        let number = literal
-            .number
-            .as_deref()
-            .and_then(|text| text.parse::<f64>().ok())
-            .filter(|number| number.is_finite());
-        json!({
-            "literal": literal.literal,
-            "kind": literal.kind,
-            "number": number,
-        })
-    });
-    json!({
-        "owner": attribute.owner,
-        "qualified_name": attribute.qualified_name,
-        "type_name": attribute.type_name,
-        "value": value,
-        "file": attribute.file,
-        "start": attribute.start,
-        "end": attribute.end,
-    })
 }
 
 /// One Twin-level lint finding in the pre-flight response.
@@ -877,6 +814,12 @@ impl ApiQueryProvider for ValidateSysmlProvider {
                 "source_files": report.info.get("source_files").cloned().unwrap_or_else(|| json!([])),
                 "requirements": requirements,
                 "attributes": compact_sysml_attributes(report.info.get("attributes")),
+                "attributes_qualified": compact_sysml_attributes(report.info.get("attributes_qualified")),
+                "attribute_collisions": report
+                    .info
+                    .get("attribute_collisions")
+                    .cloned()
+                    .unwrap_or_else(|| json!([])),
                 "requirement_records": compact_requirement_records(report.info.get("requirement_records")),
                 "verification_cases": verification_cases,
                 "verification_records": compact_verification_records(report.info.get("verification_cases")),
@@ -925,16 +868,30 @@ fn compact_sysml_attributes(value: Option<&serde_json::Value>) -> serde_json::Va
         return serde_json::Value::Object(output);
     };
     for (name, record) in attributes {
-        let scalar = record
+        // Keep the same typed record shape as the full report while omitting
+        // unrelated AST elements.  Qualified identity and source spans are
+        // intentionally retained so a Rhai test can report an exact source
+        // location and never resolve a colliding short name by accident.
+        let value = record
             .get("value")
-            .map(|value| {
-                json!({
-                    "number": value.get("number").cloned().unwrap_or(serde_json::Value::Null),
-                    "literal": value.get("literal").cloned().unwrap_or(serde_json::Value::Null),
-                })
-            })
-            .unwrap_or_else(|| json!({"number": null, "literal": null}));
-        output.insert(name.clone(), json!({"value": scalar}));
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        output.insert(
+            name.clone(),
+            json!({
+                "owner": record.get("owner").cloned().unwrap_or(serde_json::Value::Null),
+                "name": record.get("name").cloned().unwrap_or_else(|| json!(name)),
+                "qualified_name": record
+                    .get("qualified_name")
+                    .cloned()
+                    .unwrap_or_else(|| json!(name)),
+                "type_name": record.get("type_name").cloned().unwrap_or(serde_json::Value::Null),
+                "value": value,
+                "file": record.get("file").cloned().unwrap_or(serde_json::Value::Null),
+                "start": record.get("start").cloned().unwrap_or(serde_json::Value::Null),
+                "end": record.get("end").cloned().unwrap_or(serde_json::Value::Null),
+            }),
+        );
     }
     serde_json::Value::Object(output)
 }
@@ -1312,5 +1269,20 @@ def Xform \"Battery\" (\n\
             .expect("collision array");
         assert_eq!(collisions.len(), 1, "{:?}", report.info);
         assert_eq!(collisions[0]["name"], "mass");
+    }
+
+    #[test]
+    fn compact_sysml_projection_keeps_typed_source_identity() {
+        let path = temp_sysml(
+            "compact_attributes.sysml",
+            "package Example { part def Lander { attribute mass : Real = 1.0; } }",
+        );
+        let report = validate_asset(path.to_str().unwrap());
+        assert!(report.ok, "{:?}", report.errors);
+        let compact = compact_sysml_attributes(report.info.get("attributes_qualified"));
+        let mass = &compact["Example::Lander::mass"];
+        assert_eq!(mass["qualified_name"], "Example::Lander::mass");
+        assert_eq!(mass["value"]["kind"], "real");
+        assert_eq!(mass["file"], "compact_attributes.sysml");
     }
 }

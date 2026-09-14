@@ -10,7 +10,10 @@ name = "lunco_luncosim_core"
 path = "src/lib.rs"
 
 [dependencies]
-bevy = { workspace = true, features = ["bevy_gltf", "bevy_mesh", "bevy_light", "bevy_window"] }
+# Core owns the CPU/ECS simulation composition. Asset/image/shader stores are
+# retained because USD document projection uses them as data, but renderer,
+# window, glTF, mesh, and light plugins belong to the GUI edge.
+bevy = { workspace = true, features = ["bevy_asset", "bevy_image", "bevy_shader"] }
 avian3d = { workspace = true }
 big_space = { workspace = true }
 lunco-physics = { workspace = true }

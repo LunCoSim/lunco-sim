@@ -26,7 +26,9 @@
 //   children(id) -> [id, ...]     tree:   ids of direct registered children
 //   sim_tick() -> i64             time:  current fixed tick (integer)
 //   dt() -> f64                   time:  fixed-step delta in seconds (1/60)
-//   elapsed_seconds() -> f64      time:  monotonic sim seconds since startup
+//   elapsed_seconds() -> f64      time:  admitted sim seconds derived from SimTick
+//   clock_snapshot() -> map       time:  fixed/virtual/physics/mission clocks plus
+//                                        physics_deterministic admission status
 //   emit(name, value)             event: fire a TelemetryEvent
 //   on_event(me, evt)             event: receives emit()s AND physics
 //                                        COLLISION_START / COLLISION_END pulses

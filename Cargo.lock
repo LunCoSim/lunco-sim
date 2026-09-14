@@ -7466,6 +7466,7 @@ dependencies = [
  "lunco-luncosim-ui",
  "lunco-modelica-runtime",
  "lunco-networking",
+ "lunco-physics",
  "lunco-readiness",
  "lunco-render",
  "lunco-render-bevy",
@@ -7474,6 +7475,7 @@ dependencies = [
  "lunco-settings",
  "lunco-storage",
  "lunco-terrain-surface",
+ "lunco-time",
  "lunco-twin",
  "lunco-usd-avian",
  "lunco-usd-avian-core",
@@ -8202,6 +8204,7 @@ dependencies = [
  "lunco-modelica-ast",
  "lunco-physics",
  "lunco-sysml-ast",
+ "lunco-sysml-report",
  "lunco-tools",
  "lunco-twin",
  "lunco-usd-avian-lint",
@@ -8325,6 +8328,14 @@ dependencies = [
  "sysmlv2-semantics",
  "sysmlv2-stdlib",
  "sysmlv2-syntax",
+]
+
+[[package]]
+name = "lunco-sysml-report"
+version = "0.1.0"
+dependencies = [
+ "lunco-sysml-ast",
+ "serde_json",
 ]
 
 [[package]]

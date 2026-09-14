@@ -67,6 +67,10 @@ pub struct SysmlVerification {
 pub struct SysmlRequirementReport {
     /// Source generation tested.
     pub source_revision: u64,
+    /// Logical files included in the resolved source set.
+    pub source_files: Vec<String>,
+    /// Typed attributes retained for requirement thresholds and units.
+    pub attributes: Vec<SysmlAttribute>,
     /// Requirements found in project files.
     pub requirements: Vec<SysmlRequirement>,
     /// Verification-case definitions/usages in the source set.
@@ -112,6 +116,12 @@ pub fn verifications(analysis: &SysmlAnalysis) -> Vec<SysmlVerification> {
 pub fn requirement_report_json(analysis: &SysmlAnalysis) -> String {
     let report = SysmlRequirementReport {
         source_revision: analysis.source_revision(),
+        source_files: analysis
+            .files()
+            .iter()
+            .map(|file| file.name.clone())
+            .collect(),
+        attributes: analysis.attributes().to_vec(),
         requirements: requirements(analysis),
         verifications: verifications(analysis),
         diagnostics: analysis.diagnostics().to_vec(),
@@ -227,8 +237,36 @@ pub fn requirement_report_dynamic(analysis: &SysmlAnalysis) -> Dynamic {
         Dynamic::from_bool(analysis.includes_stdlib()),
     );
     report.insert(
+        "source_files".into(),
+        Dynamic::from_array(
+            analysis
+                .files()
+                .iter()
+                .map(|file| Dynamic::from(file.name.clone()))
+                .collect(),
+        ),
+    );
+    report.insert(
+        "attributes".into(),
+        attributes_short_dynamic(analysis),
+    );
+    report.insert(
+        "attributes_qualified".into(),
+        attributes_qualified_dynamic(analysis),
+    );
+    report.insert(
+        "attribute_collisions".into(),
+        attribute_collisions_dynamic(analysis),
+    );
+    report.insert(
         "requirements".into(),
-        Dynamic::from_array(analysis.requirements().iter().map(requirement_dynamic).collect()),
+        Dynamic::from_array(
+            analysis
+                .requirements()
+                .iter()
+                .map(requirement_dynamic)
+                .collect(),
+        ),
     );
     report.insert(
         "verifications".into(),
@@ -349,6 +387,49 @@ fn attribute_dynamic(attribute: &SysmlAttribute) -> Dynamic {
     value.insert("start".into(), Dynamic::from_int(attribute.start as i64));
     value.insert("end".into(), Dynamic::from_int(attribute.end as i64));
     Dynamic::from_map(value)
+}
+
+fn attributes_qualified_dynamic(analysis: &SysmlAnalysis) -> Dynamic {
+    let mut output = Map::new();
+    for attribute in analysis.attributes() {
+        output.insert(
+            attribute.qualified_name.clone().into(),
+            attribute_dynamic(attribute),
+        );
+    }
+    Dynamic::from_map(output)
+}
+
+fn attributes_short_dynamic(analysis: &SysmlAnalysis) -> Dynamic {
+    let mut output = Map::new();
+    for attribute in analysis.attributes() {
+        output.insert(attribute.name.clone().into(), attribute_dynamic(attribute));
+    }
+    Dynamic::from_map(output)
+}
+
+fn attribute_collisions_dynamic(analysis: &SysmlAnalysis) -> Dynamic {
+    let mut names = std::collections::BTreeMap::<String, Vec<String>>::new();
+    for attribute in analysis.attributes() {
+        names
+            .entry(attribute.name.clone())
+            .or_default()
+            .push(attribute.qualified_name.clone());
+    }
+    Dynamic::from_array(
+        names
+            .into_iter()
+            .filter_map(|(name, qualified_names)| {
+                if qualified_names.len() < 2 {
+                    return None;
+                }
+                let mut value = Map::new();
+                value.insert("name".into(), Dynamic::from(name));
+                value.insert("qualified_names".into(), string_array(&qualified_names));
+                Some(Dynamic::from_map(value))
+            })
+            .collect(),
+    )
 }
 
 fn requirement_dynamic(record: &lunco_sysml_ast::SysmlRequirementRecord) -> Dynamic {

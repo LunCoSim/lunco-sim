@@ -1557,15 +1557,22 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
 
     // dt() -> f64 — the fixed-step integration delta in seconds (1/FIXED_HZ).
     // The per-tick `dt` an on_tick hook should multiply rates by for
-    // frame-rate-independent integration. Falls back to the canonical
-    // SECS_PER_TICK if no `Time<Fixed>` is in scope (e.g. a bare test world).
+    // frame-rate-independent integration. The fixed clock is mandatory in a
+    // running simulation; a missing or invalid clock raises RuntimeFaults.
     engine.register_fn("dt", || -> f64 { bridge_core::dt() });
-    // elapsed_seconds() -> f64 — monotonic simulation seconds since startup, for
-    // second-based timeouts / rate limits (`this.t0`-relative dwell, etc.). Uses
-    // the fixed clock's elapsed time (advances only while the sim steps), 0.0 if
-    // unavailable.
+    // elapsed_seconds() -> f64 — admitted simulation seconds derived from the
+    // deterministic SimTick, for second-based timeouts / rate limits
+    // (`this.t0`-relative dwell, etc.). Scheduler overstep accumulated while a
+    // causal barrier is held is excluded.
     engine.register_fn("elapsed_seconds", || -> f64 {
         bridge_core::elapsed_seconds()
+    });
+    // clock_snapshot() -> #{...} — read every installed clock domain and the
+    // synchronization barrier.  `sim_tick`/`world_sim_s` are deterministic;
+    // `wall_*` values are diagnostics/interaction only and are marked
+    // `wall_time_deterministic: false` in the returned map.
+    engine.register_fn("clock_snapshot", || -> Dynamic {
+        bridge_core::clock_snapshot(&RhaiBuilder)
     });
 
     // twin_root() -> String — absolute path of the ACTIVE twin's folder, i.e. the
@@ -3479,10 +3486,11 @@ mod tests {
         use bevy::prelude::*;
         use bevy::time::{Fixed, Time};
         let mut world = World::new();
-        let mut t: Time<Fixed> = Default::default();
+        let mut t: Time<Fixed> = Time::from_hz(60.0);
         // Directly advance the fixed clock one step so delta/elapsed are set.
         t.advance_by(std::time::Duration::from_secs_f64(1.0 / 60.0));
         world.insert_resource(t);
+        world.insert_resource(lunco_core::SimTick(1));
 
         let dt: f64 = super::eval_with_world(&mut world, "dt()")
             .unwrap()
@@ -3500,17 +3508,135 @@ mod tests {
     }
 
     #[test]
-    fn dt_falls_back_to_secs_per_tick_without_a_clock() {
+    fn elapsed_uses_admitted_sim_tick_when_the_fixed_clock_has_scheduler_overstep() {
+        use bevy::prelude::*;
+        use bevy::time::{Fixed, Time};
+        let mut world = World::new();
+        let mut fixed: Time<Fixed> = Time::from_hz(60.0);
+        // Simulate a fixed clock that accumulated bookkeeping while a causal
+        // barrier was held: its elapsed value is intentionally ahead of the
+        // admitted simulation tick.
+        fixed.advance_by(std::time::Duration::from_secs(2));
+        world.insert_resource(fixed);
+        world.insert_resource(lunco_core::SimTick(3));
+
+        let elapsed: f64 = super::eval_with_world(&mut world, "elapsed_seconds()")
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert!(
+            (elapsed - 3.0 / 60.0).abs() < 1e-9,
+            "elapsed_seconds() was {elapsed}"
+        );
+    }
+
+    #[test]
+    fn missing_fixed_clock_is_reported_as_a_terminal_contract_fault() {
         use bevy::prelude::World;
         let mut world = World::new();
+        world.insert_resource(lunco_core::RuntimeFaults::default());
         let dt: f64 = super::eval_with_world(&mut world, "dt()")
             .unwrap()
             .trim()
             .parse()
             .unwrap();
         assert!(
-            (dt - lunco_core::SECS_PER_TICK).abs() < 1e-12,
-            "dt() was {dt}"
+            dt.is_nan(),
+            "missing fixed clock must not receive a default: {dt}"
+        );
+        assert_eq!(
+            world
+                .resource::<lunco_core::RuntimeFaults>()
+                .first
+                .as_ref()
+                .unwrap()
+                .kind,
+            "fixed-clock-missing"
+        );
+    }
+
+    #[test]
+    fn clock_snapshot_exposes_the_deterministic_spine_and_barrier() {
+        use bevy::prelude::*;
+        use bevy::time::{Fixed, Real, Time, Virtual};
+
+        let mut world = World::new();
+        let mut fixed = Time::<Fixed>::from_hz(60.0);
+        fixed.advance_by(std::time::Duration::from_secs_f64(1.0 / 60.0));
+        let mut virtual_time = Time::<Virtual>::default();
+        virtual_time.advance_by(std::time::Duration::from_secs_f64(1.0 / 60.0));
+        let mut real = Time::<Real>::default();
+        real.advance_by(std::time::Duration::from_secs_f64(0.25));
+        world.insert_resource(fixed);
+        world.insert_resource(virtual_time);
+        world.insert_resource(real);
+        world.insert_resource(Time::<lunco_physics::Physics>::default());
+        world.insert_resource(lunco_physics::PhysicsDeterminism::from_compute_threads(
+            Some(1),
+        ));
+        world.insert_resource(lunco_core::SimTick(42));
+        world.insert_resource(lunco_time::WorldTime {
+            epoch_jd: 2_451_545.5,
+            sim_secs: 0.7,
+            met_secs: 1.2,
+        });
+        world.insert_resource(lunco_time::MissionClock::anchored(2_451_545.0, 4));
+        world.insert_resource(lunco_time::TimeTransport::default());
+        world.insert_resource(lunco_core::SimulationBarrier {
+            held: true,
+            active_participants: 3,
+            shared_clock_participants: 2,
+            worst_lag_secs: 0.02,
+            worst_entity: None,
+        });
+
+        let value = super::eval_with_world(
+            &mut world,
+            r#"
+                let c = clock_snapshot();
+                if c.sim_tick == 42 && c.fixed_dt_s > 0.016 &&
+                   c.world_sim_s == 0.7 && c.barrier_held &&
+                   c.barrier_active_participants == 3 &&
+                   c.physics_deterministic && c.physics_compute_threads == 1 &&
+                   c.wall_time_deterministic == false &&
+                   c.deterministic_master == "sim_tick" { 1 } else { 0 }
+            "#,
+        )
+        .unwrap();
+        assert_eq!(value.trim(), "1", "clock snapshot was {value}");
+    }
+
+    #[test]
+    fn clock_snapshot_reports_missing_physics_admission_loudly() {
+        use bevy::prelude::*;
+        use bevy::time::{Fixed, Time, Virtual};
+
+        let mut world = World::new();
+        world.insert_resource(Time::<Fixed>::from_hz(60.0));
+        world.insert_resource(Time::<Virtual>::default());
+        world.insert_resource(lunco_core::SimTick(0));
+        world.insert_resource(lunco_core::RuntimeFaults::default());
+
+        let value = super::eval_with_world(
+            &mut world,
+            r#"
+                let c = clock_snapshot();
+                if c.physics_contract_ok == false &&
+                   c.physics_deterministic == false &&
+                   c.physics_contract_error.contains("absent") { 1 } else { 0 }
+            "#,
+        )
+        .unwrap();
+        assert_eq!(value.trim(), "1", "clock snapshot was {value}");
+        assert_eq!(
+            world
+                .resource::<lunco_core::RuntimeFaults>()
+                .first
+                .as_ref()
+                .unwrap()
+                .kind,
+            "physics-determinism-missing"
         );
     }
 

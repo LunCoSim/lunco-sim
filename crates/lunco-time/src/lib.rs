@@ -145,11 +145,11 @@ pub fn project_transport_state(
     }
 }
 
-/// Run condition for systems that mutate the causal simulation. An absent
-/// virtual clock keeps small headless owner tests usable; installed clocks must
-/// be both unpaused and configured with a positive rate.
+/// Run condition for systems that mutate the causal simulation. The virtual
+/// clock is mandatory in a composed host; an absent clock fails closed instead
+/// of allowing a subsystem to advance outside the shared time spine.
 pub fn simulation_is_running(time: Option<Res<Time<Virtual>>>) -> bool {
-    time.is_none_or(|time| !time.is_paused() && time.relative_speed_f64() > 0.0)
+    time.is_some_and(|time| !time.is_paused() && time.relative_speed_f64() > 0.0)
 }
 
 /// Keep Bevy's fixed-loop catch-up bounded for the current transport rate.

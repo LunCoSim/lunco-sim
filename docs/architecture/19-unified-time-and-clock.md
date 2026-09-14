@@ -127,6 +127,17 @@ physics tick. A camera path's clock is local unless its authored shot is part of
 the shared scene contract; the path still uses the same explicit domain and
 transport rules.
 
+Physics determinism has a second admission requirement beyond the fixed clock:
+the Avian compute order must be pinned. The production headless/server builder
+uses one compute thread and publishes `PhysicsDeterminism { deterministic: true }`;
+`clock_snapshot()` exposes `physics_contract_ok`, the admission error (if any),
+and the selected `physics_compute_threads` to Rhai. A multi-threaded pool is still
+available only as an explicit diagnostic/divergence configuration and reports
+`physics_deterministic: false`. Fixed `dt` alone is not evidence of a
+reproducible contact solve. If the admission resource is absent,
+`clock_snapshot()` records a `physics-determinism-missing` runtime fault rather
+than silently treating the world as deterministic.
+
 Never replicate a private floating-origin cell/local split as the time contract.
 Coordinate projection and time authority are separate boundaries.
 

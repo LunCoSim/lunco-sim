@@ -128,7 +128,7 @@ done
 # already be poisoned.
 echo
 echo "── bevy_pbr feature is confined to render boundaries ───────"
-ALLOWED_RE='lunco-render-bevy|luncosim|lunco-workbench|lunco-usd'
+ALLOWED_RE='lunco-render-bevy|lunco-render-recovery|luncosim|lunco-workbench|lunco-usd'
 offenders="$(grep -l '^bevy = .*"bevy_pbr"' crates/*/Cargo.toml 2>/dev/null \
     | grep -Ev "crates/($ALLOWED_RE)/Cargo.toml" || true)"
 if [ -n "$offenders" ]; then
