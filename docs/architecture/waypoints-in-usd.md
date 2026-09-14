@@ -97,7 +97,8 @@ invisible and has its own authored radius. Billboard text and placement are
 read by the generic billboard renderer. The ribbon is a separate, lightweight
 world-space annotation: the route tool densifies long legs with the shared
 `TerrainHeight` query, authors the sampled support normals, and standard
-`normals` make its authored `widths` a flat strip rather than a tube. It does
+`normals` make its authored 1.5 m width a readable flat strip rather than a
+tube. It does
 not participate in physics or route control. Route execution does not recolor
 or rebuild marker geometry; a scenario may react to `route_point_reached` to
 update mission state or the HUD through its own policy.
