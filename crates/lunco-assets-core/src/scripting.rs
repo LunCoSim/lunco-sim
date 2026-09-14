@@ -1,7 +1,7 @@
 //! rhai scripting assets — the prelude, built-in tool libraries, and example
 //! scenarios authored under `assets/scripting/`.
 //!
-//! Why this lives HERE: `lunco-assets` owns every asset interaction. Every set
+//! Why this lives HERE: `lunco-assets-core` owns shared asset interaction. Every set
 //! is EMBEDDED with `include_dir!` (wasm has no filesystem, and an installed
 //! binary may run without an `assets/` tree beside it), but the PRELUDE is
 //! loaded **from disk at startup** on native when the corresponding

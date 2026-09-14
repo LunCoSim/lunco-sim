@@ -1434,8 +1434,8 @@ pub fn run() -> u8 {
 /// Print the authoritative scene-test catalog without constructing Bevy or a
 /// renderer. The shell gates consume this as `KIND<TAB>assets-relative-scene`.
 fn list_scene_tests() -> u8 {
-    let scenes_dir = lunco_assets::assets_dir_abs().join("scenes/tests");
-    let assets_root = lunco_assets::assets_dir_abs();
+    let scenes_dir = lunco_assets_core::assets_dir_abs().join("scenes/tests");
+    let assets_root = lunco_assets_core::assets_dir_abs();
     let tests = match lunco_scene_validation::test_discovery::discover_scene_tests(&scenes_dir) {
         Ok(tests) => tests,
         Err(error) => {

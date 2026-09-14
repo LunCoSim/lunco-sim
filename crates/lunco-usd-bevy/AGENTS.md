@@ -75,10 +75,11 @@ an authored `.usda` would carry a machine-local storage location and resolve
 only inside our pipeline. A future collaborative/Nucleus-like protocol should
 take a distinct scheme (e.g. `lunco-net://`).
 
-**Resolution itself belongs to `lunco-assets`.** This crate owns `canonicalize`
+**USD composition resolution is separate from asset-source resolution.** The
+asset-source boundary belongs to `lunco-assets-core`; this crate owns `canonicalize`
 and `LuncoUsdResolver` — anchoring a *relative* reference to its referencing
 layer, which is USD composition semantics. It must not re-derive where a scheme
-points: ask `lunco_assets` (`has_scheme`, `local_path`, `shipped_asset_root`,
+points: ask `lunco_assets_core` (`has_scheme`, `local_path`, `shipped_asset_root`,
 `id_to_disk_path`, `engine_asset_uri`/`_rel`).
 
 ## When the asset is missing

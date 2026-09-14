@@ -32,7 +32,7 @@ use anyhow::{anyhow, Result};
 use bevy::asset::{AssetPath, LoadContext};
 use openusd::usd::Stage;
 
-use lunco_assets::asset_path::canonicalize_root;
+use lunco_assets_core::asset_path::canonicalize_root;
 
 use lunco_usd_compose::{child_layer_ids, LuncoUsdResolver, SharedLayerBytes};
 use lunco_usd_core::StageRecipe;

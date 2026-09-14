@@ -86,7 +86,7 @@ impl ExamplePathRegistry {
     /// error (should never happen — the JSON is compiled in) logs and returns an
     /// empty registry so the panel degrades gracefully rather than panicking.
     pub fn with_builtins() -> Self {
-        match serde_json::from_str::<Self>(lunco_assets::modelica::example_paths_json()) {
+        match serde_json::from_str::<Self>(lunco_assets_core::modelica::example_paths_json()) {
             Ok(reg) => reg,
             Err(e) => {
                 warn!("[welcome] example_paths.json parse failed: {e}");

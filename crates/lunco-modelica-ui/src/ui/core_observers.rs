@@ -12,7 +12,7 @@ use lunco_status_core::status_bus::{StatusBus, StatusLevel};
 use lunco_telemetry::TelemetrySettings;
 use lunco_viz::{SignalMeta, SignalRef, SignalRegistry, VisualizationRegistry};
 
-use lunco_assets::msl::{MslLoadPhase, MslLoadState};
+use lunco_assets_core::msl::{MslLoadPhase, MslLoadState};
 
 const MSL_SOURCE: &str = "MSL";
 

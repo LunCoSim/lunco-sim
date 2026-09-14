@@ -92,7 +92,7 @@ mod native {
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(8);
                 let mut paths: Vec<std::path::PathBuf> = Vec::new();
-                walk_mo(&lunco_assets::msl_dir(), &mut paths);
+                walk_mo(&lunco_assets_core::msl_dir(), &mut paths);
                 // Retain the full bundle (the real output) so peak RSS is
                 // comparable to perfile/batch, which both build it.
                 let mut bundle: Vec<(String, rumoca_compile::parsing::ast::StoredDefinition)> =
@@ -109,7 +109,7 @@ mod native {
                 );
             }
             "batch" => {
-                let root = lunco_assets::msl_source_root_path().expect("no MSL root on disk");
+                let root = lunco_assets_core::msl_source_root_path().expect("no MSL root on disk");
                 let cache = rumoca_compile::source_roots::resolve_source_root_cache_dir();
                 let parsed = rumoca_compile::source_roots::parse_source_root_with_cache_in(
                     &root,

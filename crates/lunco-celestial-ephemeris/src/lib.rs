@@ -746,7 +746,7 @@ fn adopt_ephemeris_datasets(
         if !seen.insert(format!("loaded:{}", entry.key)) {
             continue;
         }
-        let asset = lunco_assets::discovery::AssetFile {
+        let asset = lunco_assets_core::discovery::AssetFile {
             asset_path: entry.artifact_uri(),
             stem: entry.key.clone(),
             rel: entry.artifact_rel.clone(),
@@ -762,7 +762,7 @@ fn adopt_ephemeris_datasets(
             key,
             naif_id: meta.naif_id,
             task: bevy::tasks::IoTaskPool::get().spawn(async move {
-                lunco_assets::asset_read::read_asset_bytes(&asset, &settings).await
+                lunco_assets_core::asset_read::read_asset_bytes(&asset, &settings).await
             }),
         });
     }

@@ -57,7 +57,7 @@ fn runtime_engine(commands: Arc<Mutex<Vec<String>>>) -> Engine {
 }
 
 fn combined_source(script: &str) -> String {
-    let preludes = lunco_assets::scripting::prelude_files()
+    let preludes = lunco_assets_core::scripting::prelude_files()
         .expect("active prelude source")
         .into_iter()
         .map(|(_, source)| source)
@@ -93,7 +93,7 @@ fn call_hook<A: rhai::FuncArgs>(
 
 #[test]
 fn every_bundled_tutorial_starts_and_navigates_without_a_rhai_runtime_error() {
-    let files = lunco_assets::tutorials::tutorial_files();
+    let files = lunco_assets_core::tutorials::tutorial_files();
     assert!(!files.is_empty(), "no bundled tutorials found");
 
     for (path, source) in files {

@@ -7,7 +7,7 @@ entities with Avian3D physics and LunCoSim simulation components.
 ## Assembly boundary
 
 `lunco-usd-compose` is the render-free composition leaf. It asks
-`lunco-assets` for canonical asset identities and bytes, then lets OpenUSD
+`lunco-assets-core` for canonical asset identities and bytes, then lets OpenUSD
 assemble sublayers, references, payloads, and variants into an inert stage.
 Consumers import that composition API from its owning package or from
 `lunco-usd-bevy-core::compose` when they need the prepared-stage boundary.

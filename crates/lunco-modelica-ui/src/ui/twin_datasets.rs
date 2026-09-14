@@ -60,7 +60,7 @@ impl BrowserSection for TwinDatasetsSection {
         };
         let twin_root = twin.root.clone();
 
-        let Some(roots) = ctx.resource::<lunco_assets::TwinRoots>() else {
+        let Some(roots) = ctx.resource::<lunco_assets_core::TwinRoots>() else {
             ui.label(
                 egui::RichText::new("Twin asset services are not installed in this host.")
                     .weak()

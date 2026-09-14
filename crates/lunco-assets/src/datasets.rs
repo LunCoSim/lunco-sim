@@ -87,7 +87,7 @@ impl DatasetState {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DatasetScope {
     /// Declared by the engine (a crate's own `Assets.toml`) → the shared
-    /// [`cache_dir`](crate::cache_dir).
+    /// [`cache_dir`](lunco_assets_core::cache_dir).
     Engine,
     /// Declared by a Twin. The default write owner is that Twin's cache
     /// ([`twin_cache_dir`](crate::twin_cache_dir)); entries marked `shared`
@@ -106,9 +106,9 @@ impl DatasetScope {
     /// mean one location in the app and another on the CLI.
     pub fn twin_cache_root(root: &std::path::Path, shared: bool) -> PathBuf {
         if shared {
-            crate::cache_dir()
+            lunco_assets_core::cache_dir()
         } else {
-            crate::twin_cache_dir(root)
+            lunco_assets_core::twin_cache_dir(root)
         }
     }
 
@@ -117,7 +117,7 @@ impl DatasetScope {
     /// cache with `shared = true`; otherwise its artifacts stay beside it.
     pub fn cache_root(&self, shared: bool) -> PathBuf {
         match self {
-            DatasetScope::Engine => crate::cache_dir(),
+            DatasetScope::Engine => lunco_assets_core::cache_dir(),
             DatasetScope::Twin { root, .. } => Self::twin_cache_root(root, shared),
         }
     }
@@ -137,12 +137,14 @@ impl DatasetScope {
     /// copy.
     pub fn read_roots(&self) -> Vec<PathBuf> {
         match self {
-            DatasetScope::Engine => crate::library_roots(&crate::assets_dir_abs()),
+            DatasetScope::Engine => {
+                lunco_assets_core::library_roots(&lunco_assets_core::assets_dir_abs())
+            }
             DatasetScope::Twin { root, .. } => {
                 vec![
                     root.clone(),
-                    crate::twin_cache_dir(root),
-                    crate::cache_dir(),
+                    lunco_assets_core::twin_cache_dir(root),
+                    lunco_assets_core::cache_dir(),
                 ]
             }
         }
@@ -275,8 +277,13 @@ impl DatasetEntry {
     /// downloaded" on a dev machine, with no branch at the call site.
     pub fn artifact_uri(&self) -> String {
         match &self.scope {
-            DatasetScope::Engine => crate::asset_path::uri(crate::LUNCO_SCHEME, &self.artifact_rel),
-            DatasetScope::Twin { name, .. } => crate::twin_uri(name, &self.artifact_rel),
+            DatasetScope::Engine => lunco_assets_core::asset_path::uri(
+                lunco_assets_core::LUNCO_SCHEME,
+                &self.artifact_rel,
+            ),
+            DatasetScope::Twin { name, .. } => {
+                lunco_assets_core::twin_uri(name, &self.artifact_rel)
+            }
         }
     }
 }
@@ -320,7 +327,7 @@ fn artifact_rel_of(
         let abs = crate::process::process_output_path(cfg, Some(&cache_root), twin_root)?;
         return abs
             .strip_prefix(&cache_root)
-            .map(crate::asset_path::slashed)
+            .map(lunco_assets_core::asset_path::slashed)
             .map_err(|_| {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
@@ -334,7 +341,7 @@ fn artifact_rel_of(
     }
     let _ = entry;
     dest.strip_prefix(scope.cache_root(entry.shared))
-        .map(crate::asset_path::slashed)
+        .map(lunco_assets_core::asset_path::slashed)
         .map_err(|_| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -740,7 +747,7 @@ impl DatasetRegistry {
         scope: &DatasetScope,
         relative: &std::path::Path,
     ) -> Option<&DatasetEntry> {
-        let relative = crate::asset_path::slashed(relative)
+        let relative = lunco_assets_core::asset_path::slashed(relative)
             .trim_start_matches('/')
             .to_owned();
         self.entries
@@ -1177,13 +1184,13 @@ fn reload_installed_asset(trigger: On<DatasetInstalled>, asset_server: Option<Re
 /// deliberately not responsible for teardown because a root can close and be
 /// replaced before the next update frame.
 ///
-/// [`TwinRoots`](crate::TwinRoots) is mutated through interior mutability (no
+/// [`TwinRoots`](lunco_assets_core::TwinRoots) is mutated through interior mutability (no
 /// Bevy change detection), so discovery still diffs the name set. That is a
 /// lock plus a small `Vec<String>` per frame, against a registry that is at most
 /// a handful of Twins.
 #[cfg(not(target_arch = "wasm32"))]
 fn scan_open_twins_for_datasets(
-    roots: Option<Res<crate::TwinRoots>>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
     registry: Option<ResMut<DatasetRegistry>>,
     mut commands: Commands,
 ) {
@@ -1240,12 +1247,12 @@ fn scan_open_twins_for_datasets(
 #[cfg(not(target_arch = "wasm32"))]
 fn scan_engine_manifests(registry: Option<ResMut<DatasetRegistry>>, mut commands: Commands) {
     let Some(mut registry) = registry else { return };
-    let manifests = match crate::engine_manifests() {
+    let manifests = match lunco_assets_core::engine_manifests() {
         Ok(manifests) => manifests,
         Err(error) => {
             registry.pending_failures.push(format!(
                 "cannot enumerate engine manifests in {}: {error}",
-                crate::manifests_dir().display()
+                lunco_assets_core::manifests_dir().display()
             ));
             commands.trigger(DatasetScopeReady {
                 scope: DatasetScope::Engine,
@@ -1258,7 +1265,7 @@ fn scan_engine_manifests(registry: Option<ResMut<DatasetRegistry>>, mut commands
         // exactly what a mis-staged package looks like, so say so once.
         info!(
             "[datasets] no manifests in {} — nothing is offered for download",
-            crate::manifests_dir().display()
+            lunco_assets_core::manifests_dir().display()
         );
         commands.trigger(DatasetScopeReady {
             scope: DatasetScope::Engine,
@@ -1498,13 +1505,16 @@ output = "terrain/luna2"
     #[test]
     fn engine_scope_reads_the_packed_cache_before_the_shared_pool() {
         let roots = DatasetScope::Engine.read_roots();
-        assert_eq!(roots[0], crate::assets_dir_abs());
-        assert_eq!(roots[1], crate::packed_cache_dir());
-        let shared = crate::cache_dir();
+        assert_eq!(roots[0], lunco_assets_core::assets_dir_abs());
+        assert_eq!(roots[1], lunco_assets_core::packed_cache_dir());
+        let shared = lunco_assets_core::cache_dir();
         assert_eq!(roots.last(), Some(&shared));
         // The write root stays the shared pool: a package may be read-only,
         // and one machine should not hold a copy per installation.
-        assert_eq!(DatasetScope::Engine.cache_root(false), crate::cache_dir());
+        assert_eq!(
+            DatasetScope::Engine.cache_root(false),
+            lunco_assets_core::cache_dir()
+        );
     }
 
     /// A Twin folder writes to its own `.cache`; authored files remain first
@@ -1517,13 +1527,13 @@ output = "terrain/luna2"
             root: root.clone(),
         };
         assert_eq!(scope.cache_root(false), crate::twin_cache_dir(&root));
-        assert_eq!(scope.cache_root(true), crate::cache_dir());
+        assert_eq!(scope.cache_root(true), lunco_assets_core::cache_dir());
         assert_eq!(
             scope.read_roots(),
             vec![
                 root.clone(),
                 crate::twin_cache_dir(&root),
-                crate::cache_dir()
+                lunco_assets_core::cache_dir()
             ]
         );
     }

@@ -301,8 +301,8 @@ fn run_scenario_command_attaches_and_runs() {
         "rover starts with no scenario"
     );
 
-    let src =
-        lunco_assets::scripting::example("mission_plan").expect("mission_plan example embedded");
+    let src = lunco_assets_core::scripting::example("mission_plan")
+        .expect("mission_plan example embedded");
     app.world_mut().trigger(ApiCommandEvent {
         command: "RunScenario".to_string(),
         params: serde_json::json!({ "target": ROVER_GID, "source": src }),
@@ -874,8 +874,8 @@ fn client_role_gates_script_execution() {
     use lunco_core_session::NetworkRole;
     // The shipped task program drives toward its first (far) route point on tick 1 — a
     // reliable "did the script run?" probe through the generic SetPorts bridge.
-    let src =
-        lunco_assets::scripting::example("mission_plan").expect("mission_plan example embedded");
+    let src = lunco_assets_core::scripting::example("mission_plan")
+        .expect("mission_plan example embedded");
 
     // Client → gated off: on_tick never issues a SetPorts drive.
     let (mut app, _r) = setup(src);

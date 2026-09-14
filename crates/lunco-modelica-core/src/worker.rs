@@ -15,7 +15,7 @@ use crossbeam_channel::{Receiver, Sender};
 use serde::{Deserialize, Serialize};
 
 #[cfg(not(target_arch = "wasm32"))]
-use lunco_assets::modelica_dir;
+use lunco_assets_core::modelica_dir;
 
 use crate::simulation_session::LiveStepper;
 use crate::ModelicaCompiler;

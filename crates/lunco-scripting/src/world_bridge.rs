@@ -341,7 +341,7 @@ fn apply_dynamic_fields(
 ///
 /// The prelude is the ergonomic policy layer (drive/distance/arrived/nav/HUD/…)
 /// authored in rhai. Its topic files live under `assets/scripting/prelude/` and are
-/// embedded + enumerated by [`lunco_assets::scripting::prelude_files`] (the
+/// embedded + enumerated by [`lunco_assets_core::scripting::prelude_files`] (the
 /// asset-owning crate) — sorted by stem for a deterministic merge, the files
 /// being pure `fn` definitions so order is semantically irrelevant. Flat
 /// namespace + embedded, identical to compiling one concatenated string, but a
@@ -354,7 +354,7 @@ pub(crate) fn compile_prelude(engine: &Engine) -> Result<AST, String> {
     // Once a source set is selected, an authored parse error is terminal for
     // this engine construction. Running stale embedded helpers would make the
     // visible source disagree with the policy actually executing.
-    let files = lunco_assets::scripting::prelude_files()?;
+    let files = lunco_assets_core::scripting::prelude_files()?;
     compile_prelude_set(engine, files)
 }
 
@@ -588,7 +588,7 @@ fn compile_prelude_set(engine: &Engine, files: Vec<(String, String)>) -> Result<
 ///
 /// Panics if the embedded prelude cannot compile or cannot be installed as the
 /// global module. An engine without its prelude is not a valid runtime.
-pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -> Engine {
+pub fn build_world_engine(sources: lunco_assets_core::script_source::ScriptSources) -> Engine {
     let mut engine = Engine::new();
 
     engine.register_fn(TASK_INVOKER_FN, invoke_task);
@@ -1577,7 +1577,7 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
 pub fn validate_tool_library(
     name: &str,
     source: &str,
-    sources: lunco_assets::script_source::ScriptSources,
+    sources: lunco_assets_core::script_source::ScriptSources,
 ) -> Result<Vec<String>, String> {
     let engine = build_world_engine(sources);
     lunco_tools_rhai::validate_rhai_tool_with_engine(name, source, &engine)
@@ -1845,7 +1845,7 @@ pub struct RhaiScenarioRuntime {
     tool_gen: u64,
     /// The script registry backing `import`. Shared (`Arc`) with the engine's
     /// module resolver and with the Bevy resource the asset side fills.
-    sources: lunco_assets::script_source::ScriptSources,
+    sources: lunco_assets_core::script_source::ScriptSources,
 }
 
 impl Default for RhaiScenarioRuntime {
@@ -1855,7 +1855,7 @@ impl Default for RhaiScenarioRuntime {
         // asset-loading side fills) and the copy captured by the engine's module
         // resolver are the same map — a script loaded later is importable without
         // rebuilding the engine.
-        let sources = lunco_assets::script_source::ScriptSources::default();
+        let sources = lunco_assets_core::script_source::ScriptSources::default();
         let mut engine = build_world_engine(sources.clone());
         engine.on_print(|s| info!("[rhai] {s}"));
         let prelude_ast =
@@ -1878,7 +1878,7 @@ impl RhaiScenarioRuntime {
     /// Insert this as a Bevy resource so the asset side and the engine's module
     /// resolver share ONE map — they are `Arc` clones of the same storage, which is
     /// what lets a script loaded after engine construction still be importable.
-    pub fn script_sources(&self) -> lunco_assets::script_source::ScriptSources {
+    pub fn script_sources(&self) -> lunco_assets_core::script_source::ScriptSources {
         self.sources.clone()
     }
 }
@@ -2678,7 +2678,7 @@ pub fn eval_with_world_as(
     // make the REPL a place where imports mysteriously fail — the kind of
     // inconsistency that costs an hour to diagnose.
     let sources = world
-        .get_resource::<lunco_assets::script_source::ScriptSources>()
+        .get_resource::<lunco_assets_core::script_source::ScriptSources>()
         .cloned()
         .unwrap_or_default();
     let mut engine = build_world_engine(sources);
@@ -2733,7 +2733,7 @@ pub fn eval_tool_with_world_as(
 
     use std::sync::{Arc, Mutex};
     let sources = world
-        .get_resource::<lunco_assets::script_source::ScriptSources>()
+        .get_resource::<lunco_assets_core::script_source::ScriptSources>()
         .cloned()
         .unwrap_or_default();
     let mut engine = build_world_engine(sources);
@@ -3011,9 +3011,9 @@ mod tests {
         // crate, so new files are covered automatically (no hand-kept list here).
         // The bundled scenarios include the lander auto-land GUIDANCE, so a
         // syntax slip can't silently disable auto-land at scene load.
-        let examples = lunco_assets::scripting::examples();
-        let tools = lunco_assets::scripting::tool_libraries();
-        let scenarios = lunco_assets::scripting::scenarios();
+        let examples = lunco_assets_core::scripting::examples();
+        let tools = lunco_assets_core::scripting::tool_libraries();
+        let scenarios = lunco_assets_core::scripting::scenarios();
         assert!(
             !examples.is_empty() && !tools.is_empty() && !scenarios.is_empty(),
             "embedded scripting assets empty"
@@ -3078,7 +3078,7 @@ mod tests {
 
     /// Two scripts, one engine, one registry — the shape a scenario compile has.
     fn engine_with_sibling(sibling_id: &str, sibling_src: &str) -> rhai::Engine {
-        let sources = lunco_assets::script_source::ScriptSources::default();
+        let sources = lunco_assets_core::script_source::ScriptSources::default();
         sources.insert(sibling_id, sibling_src);
         super::build_world_engine(sources)
     }

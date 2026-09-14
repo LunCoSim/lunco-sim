@@ -4,7 +4,7 @@
 //! is [`ScriptSources::canonical_id`], which is the same canonicalization USD
 //! references go through — so a path means one thing everywhere, and a script
 //! reached as `twin://ep1/lib.rhai` by an asset load is reached identically by an
-//! import. Everything here is: ask `lunco-assets` for the id, look up the text,
+//! import. Everything here is: ask `lunco-assets-core` for the id, look up the text,
 //! compile it.
 //!
 //! # Why this must exist
@@ -27,7 +27,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 
-use lunco_assets::script_source::ScriptSources;
+use lunco_assets_core::script_source::ScriptSources;
 use rhai::{Engine, EvalAltResult, Module, ModuleResolver, Position, Scope, Shared};
 
 /// Default extension applied to an extension-less import, so `import "lib"` and

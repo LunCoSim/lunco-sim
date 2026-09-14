@@ -125,7 +125,7 @@ pub const SANDBOX_GRAVITY: lunco_environment::Gravity = lunco_environment::Gravi
 pub fn default_plugins() -> bevy::app::PluginGroupBuilder {
     let group = DefaultPlugins
         .set(AssetPlugin {
-            file_path: lunco_assets::assets_dir_abs().to_string_lossy().to_string(),
+            file_path: lunco_assets_core::assets_dir_abs().to_string_lossy().to_string(),
             watch_for_changes_override: Some(false),
             meta_check: AssetMetaCheck::Never,
             ..default()
@@ -162,7 +162,8 @@ pub fn default_plugins() -> bevy::app::PluginGroupBuilder {
 /// clock and loop.
 pub fn build_headless_app_with_threads(compute_threads: Option<usize>) -> App {
     let mut app = App::new();
-    lunco_assets::register_lunco_asset_sources(&mut app);
+    lunco_assets_core::register_lunco_asset_sources(&mut app);
+    app.add_plugins(lunco_assets::datasets::DatasetsPlugin);
 
     let mut plugins = default_plugins();
     let compute = if let Some(threads) = compute_threads {
@@ -248,7 +249,7 @@ fn load_ready_scenario(
     downloads: Res<lunco_networking::scenario_sync::AssetDownloads>,
     // Twin roots: a downloaded scenario is mounted here as a root over its cache
     // dir, so it loads under the SAME `twin://<name>/<rel>` the host uses.
-    twins: Res<lunco_assets::twin_source::TwinRoots>,
+    twins: Res<lunco_assets_core::twin_source::TwinRoots>,
     // Last scenario revision we triggered a load for — reload only on change.
     mut last_loaded: Local<Option<[u8; 32]>>,
     mut commands: Commands,
@@ -2148,7 +2149,7 @@ fn load_startup_scene(world: &mut World, scene_path: String) {
 
     let rel_scene_path = abs_path
         .strip_prefix(&twin_root)
-        .map(lunco_assets::asset_path::slashed)
+        .map(lunco_assets_core::asset_path::slashed)
         .unwrap_or_else(|_| scene_file.clone());
     let Some(mut pending) = world.get_resource_mut::<lunco_workspace::open::PendingTwinOpens>()
     else {
@@ -2211,13 +2212,13 @@ fn resolve_scene_cli_path(input: &str) -> std::path::PathBuf {
     }
 
     if let Ok(without_assets) = path.strip_prefix("assets") {
-        let asset_spelling = lunco_assets::assets_dir_abs().join(without_assets);
+        let asset_spelling = lunco_assets_core::assets_dir_abs().join(without_assets);
         if asset_spelling.exists() {
             return asset_spelling;
         }
     }
 
-    lunco_assets::assets_dir_abs().join(path)
+    lunco_assets_core::assets_dir_abs().join(path)
 }
 
 /// Tracks an explicitly requested startup scene so the two startup failguards

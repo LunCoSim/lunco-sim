@@ -6,7 +6,7 @@
 //! `usda`, the shader catalog for `wgsl`, pickers, the API) call [`list_assets`]
 //! instead of each re-walking the disk with their own scan.
 //!
-//! Lives in `lunco-assets` because this crate already owns *where assets live* —
+//! Lives in `lunco-assets-core` because this crate already owns *where assets live* —
 //! the [`TwinRoots`](crate::twin_source::TwinRoots) registry and the `twin://` /
 //! `lunco://` schemes. What a file *says* is a separate question, answered by
 //! reading it ([`crate::asset_read`]).

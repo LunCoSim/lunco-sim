@@ -20,7 +20,8 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 | **`lunco-doc`** | Foundation for structured artifacts (Modelica, USD, SysML): process-wide live document handle allocation, the `DocumentHost` container and atomic `DocumentOp` pattern with built-in undo/redo. |
 | **`lunco-doc-bevy`** | Bevy ECS integration for the Document System: lifecycle events, `JournalResource` (Bevy wrapper around the canonical Twin journal), `BevyJournalSink` for remote-replay, `EditorIntent` keybindings, `Presence` collab seed. |
 | **`lunco-storage`** | I/O abstraction layer (`Storage` trait — Native FS, Memory, future WASM/Remote backends). The single write path; raw `std::fs` is disallowed. |
-| **`lunco-assets`** | Unified asset management: cache resolution across worktrees, versioned downloads (`Assets.toml`, SHA-256), and texture processing. |
+| **`lunco-assets-core`** | Lightweight asset identity and resolution: canonical `lunco://`/`twin://` sources, cache/Twin roots, embedded sources, discovery, and storage-facing readers. |
+| **`lunco-assets`** | Explicit dataset provisioning and native offline processing: `Assets.toml` registry, user-authorised downloads, texture/DEM/map/glTF pipelines, and the asset-manager CLI. Depends on `lunco-assets-core`; ordinary asset readers should not depend on this package. |
 | **`lunco-modelica-assets`** | Native Modelica asset packaging: bundles MSL source and pre-parsed Rumoca definitions for the web runtime; keeps MSL build-only dependencies out of the generic asset manager. |
 | **`lunco-hash`** | Hashing substrate: Fast tier (FNV-1a) for change/cache keys and CID tier (CIDv1 raw+sha2-256) for on-disk/on-wire content-addressing. Draws a firewall between ephemeral process keys and cross-peer persisted content. |
 | **`lunco-precompute`** | Content-addressed precompute disk cache (`bake_or_load`): runs expensive pure functions once, persists results keyed by content hash (via `lunco-hash` + `lunco-storage`), and loads them on subsequent runs/peers. |
@@ -214,8 +215,19 @@ renaming, entry-kind inspection, and directory preparation through handles.
 Supports native FS and memory (for tests), with the browser localStorage
 backend and architectural stubs for future OPFS/IndexedDB and remote backends.
 
+**`lunco-assets-core`**
+The lightweight runtime asset boundary. It owns canonical `lunco://` and
+`twin://` identities, cache and Twin-root resolution, Bevy source registration,
+embedded Modelica/mission/tutorial/Rhai sources, and project asset discovery.
+It intentionally excludes HTTP, archive, raster, SVG, GeoTIFF, and native
+process dependencies.
+
 **`lunco-assets`**
-Unified asset management system. Resolves shared cache locations across git worktrees, downloads external assets via `Assets.toml` with SHA-256 verification, and handles texture pre-processing (resize/convert).
+The explicit provisioning boundary. It owns `Assets.toml` dataset registration,
+user-authorised download/cancellation/status orchestration, native offline
+texture/DEM/map/glTF processing, and the `lunco-assets` CLI. Applications add it
+only where dataset management is part of the composition; asset-reading crates
+depend on `lunco-assets-core` instead.
 
 **`lunco-hash`**
 The workspace hashing substrate. Fast tier provides dependency-free, wasm-clean FNV-1a hashing for process-local change detection and caching keys. CID tier (via the `cid` feature) provides CIDv1 raw + SHA-256 content-addressing for files/blobs on disk and wire.

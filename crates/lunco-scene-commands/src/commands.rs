@@ -181,7 +181,7 @@ fn runtime_spawn_ops(
             // engine asset source. Keep the USD reference source-qualified at
             // the ownership boundary; the catalog remains free to expose its
             // discovery spelling to UI consumers.
-            reference: Some(lunco_assets::engine_asset_uri(asset_path)),
+            reference: Some(lunco_assets_core::engine_asset_uri(asset_path)),
             reference_prim_path: None,
         },
         UsdOp::SetAttribute {
@@ -1986,7 +1986,7 @@ impl Plugin for SpawnCommandPlugin {
         // Resources this plugin's OWN systems read, so it stands alone without the
         // UI-layer `SceneEditPlugin` / the render-layer `ShaderMaterialPlugin`
         // (e.g. a headless `--no-ui` server that adds only `SpawnCommandPlugin`).
-        // The host must install `lunco_assets::register_lunco_asset_sources`
+        // The host must install `lunco_assets_core::register_lunco_asset_sources`
         // before Bevy's asset plugin; that shared asset boundary owns the
         // `AssetManifest` and `TwinRoots` resources consumed here.
         // `init_resource` is idempotent, so when those plugins also init these it's

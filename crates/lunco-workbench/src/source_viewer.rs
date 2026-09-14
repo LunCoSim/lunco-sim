@@ -311,15 +311,16 @@ pub(crate) fn drain_pending_source_requests(world: &mut World) {
             SourceOpenRequest::Asset(asset_path) => {
                 let asset = {
                     let Some(manifest) =
-                        world.get_resource::<lunco_assets::discovery::AssetManifest>()
+                        world.get_resource::<lunco_assets_core::discovery::AssetManifest>()
                     else {
                         continue;
                     };
-                    let Some(roots) = world.get_resource::<lunco_assets::twin_source::TwinRoots>()
+                    let Some(roots) =
+                        world.get_resource::<lunco_assets_core::twin_source::TwinRoots>()
                     else {
                         continue;
                     };
-                    lunco_assets::discovery::resolve_asset(manifest, roots, &asset_path)
+                    lunco_assets_core::discovery::resolve_asset(manifest, roots, &asset_path)
                 };
                 match asset {
                     Ok(Some(asset)) => {
@@ -454,7 +455,7 @@ fn open_path(
     world: &mut World,
     path: PathBuf,
     origin: Option<TwinSourceOrigin>,
-    asset: Option<lunco_assets::discovery::AssetFile>,
+    asset: Option<lunco_assets_core::discovery::AssetFile>,
     pinned: bool,
     focus: bool,
 ) {
@@ -523,7 +524,7 @@ fn start_read(
     world: &mut World,
     tab: EditorTabId,
     path: PathBuf,
-    asset: Option<lunco_assets::discovery::AssetFile>,
+    asset: Option<lunco_assets_core::discovery::AssetFile>,
 ) {
     let request = {
         let mut reads = world.resource_mut::<PendingSourceReads>();
@@ -541,7 +542,7 @@ fn start_read(
     #[cfg(not(target_arch = "wasm32"))]
     let task = AsyncComputeTaskPool::get().spawn(async move {
         if let Some(asset) = asset {
-            lunco_assets::asset_read::read_asset_text(&asset, &settings).await
+            lunco_assets_core::asset_read::read_asset_text(&asset, &settings).await
         } else {
             lunco_storage::read_file_sync(&path)
                 .map_err(|error| format!("failed to read {}: {error:?}", path.display()))
@@ -562,7 +563,7 @@ fn start_read(
         let (tx, result) = crossbeam_channel::bounded(1);
         wasm_bindgen_futures::spawn_local(async move {
             let read = if let Some(asset) = asset {
-                lunco_assets::asset_read::read_asset_text(&asset, &settings).await
+                lunco_assets_core::asset_read::read_asset_text(&asset, &settings).await
             } else {
                 lunco_storage::read_file_sync(&path)
                     .map_err(|error| format!("failed to read {}: {error:?}", path.display()))

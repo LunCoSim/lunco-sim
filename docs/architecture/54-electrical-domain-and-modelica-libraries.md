@@ -284,7 +284,7 @@ icons, equations, and diagnostics readable without introducing a collision fallb
 The workbench exposes this generated source as a read-only Modelica document,
 not as a poster. Its root diagram shows generated units, and drilling into a
 unit shows the native LunCo members and their authored icons. The class cache
-loads a bundled package root through `lunco_assets::models::package_files` and
+loads a bundled package root through `lunco_assets_core::models::package_files` and
 the shared `ModelicaEngine`; this keeps LunCo visual resolution on the same
 source/AST path as every other Modelica class without making the generated
 policy or UI depend on MSL.
@@ -378,7 +378,7 @@ library-specific installer or root-name branch.
   just to poke the worker; the crate that *owns* the Modelica worker is the right owner of
   "load a Twin's Modelica," and it already sees the shared Twin asset authority.
 
-**Gotcha worth its own line:** `lunco_assets::models::model_files()` is top-level only
+**Gotcha worth its own line:** `lunco_assets_core::models::model_files()` is top-level only
 (`MODELS_DIR.files()`), so a package under a subdirectory is embedded but invisible to it.
 Use `package_files_live(pkg)` in the native runtime, which prefers the editable
 filesystem tree and recurses; `package_files(pkg)` is the embedded/portable

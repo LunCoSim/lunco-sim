@@ -76,10 +76,11 @@ lunco-hooks = { path = "../lunco-hooks", optional = true }
 lunco-hooks-rhai = { path = "../lunco-hooks-rhai", optional = true }
 # The prelude + built-in tool libraries + example scenarios are authored under
 # `assets/scripting/` and embedded at compile time (wasm has no fs). That embed
-# is owned by lunco-assets (the single asset-access crate) — we consume it via
-# `lunco_assets::scripting::{prelude_files, tool_libraries, examples}`. Drop a
+# is owned by lunco-assets-core (the shared asset-access crate) — we consume it via
+# `lunco_assets_core::scripting::{prelude_files, tool_libraries, examples}`. Drop a
 # `.rhai` in the folder, rebuild, and it's picked up with no code edit here.
 lunco-assets = { path = "../lunco-assets", optional = true }
+lunco-assets-core = { path = "../lunco-assets-core" }
 # Twin persistence: the `TwinAdded` event + `WorkspaceResource` (twin→root path)
 # let the tool-library loader scan `<twin>/tools/*.rhai` on open. Gated on `rhai`
 # (the tool subsystem is rhai). No cycle: lunco-workspace has no scripting dep.

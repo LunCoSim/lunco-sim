@@ -1025,7 +1025,7 @@ impl ExperimentsPanel {
         // notice on `MslLoadState::is_pending()` (false at boot on native,
         // false post-decode on web) so the run doesn't look stuck.
         let msl_pending = ctx
-            .resource::<lunco_assets::msl::MslLoadState>()
+            .resource::<lunco_assets_core::msl::MslLoadState>()
             .map(|s| s.is_pending())
             .unwrap_or(true);
         // If the MSL load *failed*, a run that depends on the standard
@@ -1033,8 +1033,8 @@ impl ExperimentsPanel {
         // the queued command is never flushed). `msl_pending` is false in
         // that state, so without this the panel would just show a normal
         // "▶ running" chip on a permanently-stuck run with no explanation.
-        let msl_error = match ctx.resource::<lunco_assets::msl::MslLoadState>() {
-            Some(lunco_assets::msl::MslLoadState::Failed(msg)) => Some(msg.clone()),
+        let msl_error = match ctx.resource::<lunco_assets_core::msl::MslLoadState>() {
+            Some(lunco_assets_core::msl::MslLoadState::Failed(msg)) => Some(msg.clone()),
             _ => None,
         };
 

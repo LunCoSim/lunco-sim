@@ -29,7 +29,7 @@ fn runtime_engine() -> Engine {
 #[test]
 fn prelude_files_all_parse() {
     let engine = runtime_engine();
-    let files = lunco_assets::scripting::prelude_files().expect("active prelude source");
+    let files = lunco_assets_core::scripting::prelude_files().expect("active prelude source");
     assert!(!files.is_empty(), "no prelude files found at all");
 
     for (stem, src) in &files {
@@ -44,7 +44,7 @@ fn prelude_files_all_parse() {
 #[test]
 fn embedded_prelude_files_all_parse() {
     let engine = runtime_engine();
-    for (stem, src) in lunco_assets::scripting::embedded_prelude_files() {
+    for (stem, src) in lunco_assets_core::scripting::embedded_prelude_files() {
         if let Err(e) = engine.compile(src.as_str()) {
             panic!("embedded prelude '{stem}.rhai' does not parse: {e}");
         }
@@ -57,7 +57,7 @@ fn embedded_prelude_files_all_parse() {
 #[test]
 fn embedded_tool_libraries_all_parse() {
     let engine = runtime_engine();
-    let tools = lunco_assets::scripting::tool_libraries();
+    let tools = lunco_assets_core::scripting::tool_libraries();
     assert!(!tools.is_empty(), "no embedded tool libraries found");
     for (name, src) in tools {
         if let Err(e) = engine.compile(src) {
@@ -72,7 +72,7 @@ fn embedded_tool_libraries_all_parse() {
 #[test]
 fn usd_authoring_surface_is_namespaced() {
     let engine = runtime_engine();
-    let (_, authoring) = lunco_assets::scripting::prelude_files()
+    let (_, authoring) = lunco_assets_core::scripting::prelude_files()
         .expect("active prelude source")
         .into_iter()
         .find(|(stem, _)| stem == "authoring")
@@ -92,7 +92,7 @@ fn usd_authoring_surface_is_namespaced() {
         "authoring.rhai must not expose global USD assembly helpers: {authoring_functions:?}"
     );
 
-    let (_, assembly_edit) = lunco_assets::scripting::tool_libraries()
+    let (_, assembly_edit) = lunco_assets_core::scripting::tool_libraries()
         .into_iter()
         .find(|(name, _)| *name == "assembly_edit")
         .expect("assembly_edit.rhai must be embedded");
@@ -142,7 +142,7 @@ fn usd_authoring_surface_is_namespaced() {
 
 #[test]
 fn assembly_ui_templates_use_existing_surfaces_and_workflows() {
-    let (_, source) = lunco_assets::scripting::tool_libraries()
+    let (_, source) = lunco_assets_core::scripting::tool_libraries()
         .into_iter()
         .find(|(name, _)| *name == "assembly_ui")
         .expect("assembly_ui.rhai must be embedded");
@@ -201,7 +201,7 @@ fn assembly_tool_libraries_are_discoverable() {
         "model_authoring",
         "program_editor",
     ] {
-        let (_, source) = lunco_assets::scripting::tool_libraries()
+        let (_, source) = lunco_assets_core::scripting::tool_libraries()
             .into_iter()
             .find(|(tool_name, _)| *tool_name == name)
             .unwrap_or_else(|| panic!("{name}.rhai must be embedded"));
@@ -215,7 +215,7 @@ fn assembly_tool_libraries_are_discoverable() {
 
 #[test]
 fn authored_timeline_requires_one_explicit_operation() {
-    let source = lunco_assets::scripting::prelude_files()
+    let source = lunco_assets_core::scripting::prelude_files()
         .expect("active prelude source")
         .into_iter()
         .map(|(_, source)| source)
@@ -243,7 +243,7 @@ fn authored_timeline_requires_one_explicit_operation() {
 
 #[test]
 fn set_property_helper_uses_the_reflected_command_fields() {
-    let (_, src) = lunco_assets::scripting::prelude_files()
+    let (_, src) = lunco_assets_core::scripting::prelude_files()
         .expect("active prelude source")
         .into_iter()
         .find(|(stem, _)| stem == "control")
@@ -267,7 +267,7 @@ fn set_property_helper_uses_the_reflected_command_fields() {
 #[test]
 fn bundled_tutorial_scripts_all_parse() {
     let engine = runtime_engine();
-    let files = lunco_assets::tutorials::tutorial_files();
+    let files = lunco_assets_core::tutorials::tutorial_files();
     assert!(!files.is_empty(), "no tutorial scripts found at all");
 
     for (path, src) in &files {
@@ -282,7 +282,7 @@ fn bundled_tutorial_scripts_all_parse() {
 /// a silent break (rhai resolves calls at runtime).
 #[test]
 fn links_prelude_exposes_the_routing_surface() {
-    let (_, src) = lunco_assets::scripting::prelude_files()
+    let (_, src) = lunco_assets_core::scripting::prelude_files()
         .expect("active prelude source")
         .into_iter()
         .find(|(stem, _)| stem == "links")
@@ -315,7 +315,7 @@ fn links_prelude_exposes_the_routing_surface() {
 #[test]
 fn policy_files_all_parse() {
     let engine = runtime_engine();
-    let files = lunco_assets::scripting::policy_files().expect("active policy source");
+    let files = lunco_assets_core::scripting::policy_files().expect("active policy source");
     assert!(!files.is_empty(), "no policy files found at all");
 
     for (stem, src) in &files {

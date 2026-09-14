@@ -70,7 +70,7 @@ lunco-usd-avian-core = { path = "../lunco-usd-avian-core" }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 lunco-luncosim-ui = { path = "../lunco-luncosim-ui", default-features = false, optional = true }
 lunco-scripting = { path = "../lunco-scripting" }
-lunco-assets = { workspace = true }
+lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-twin = { path = "../lunco-twin" }
 serde_json = { workspace = true }
 lunco-cosim-core = { path = "../lunco-cosim-core" }

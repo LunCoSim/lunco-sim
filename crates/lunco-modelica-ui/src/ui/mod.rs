@@ -1028,7 +1028,7 @@ fn register_settings_submenu(world: &mut World) {
 /// Native dataset download actions live in the generic Data & libraries panel.
 fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
     use bevy_egui::egui;
-    use lunco_assets::msl::{MslLoadPhase, MslLoadState};
+    use lunco_assets_core::msl::{MslLoadPhase, MslLoadState};
 
     // Current state line.
     let state = ctx.resource::<MslLoadState>().cloned();
@@ -1092,7 +1092,7 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
 
     // Resolved on-disk path. May be the explicit-install destination, the
     // workspace `.cache/msl/`, or a user-supplied override.
-    let root = lunco_assets::msl_source_root_path();
+    let root = lunco_assets_core::msl_source_root_path();
     match root.as_ref() {
         Some(p) => {
             ui.horizontal(|ui| {
@@ -1163,15 +1163,20 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
     {
         // Web MSL is a host-served bundle rather than a native dataset, so its
         // platform-specific fetch controls remain here.
-        let load_state = ctx.resource::<lunco_assets::msl::MslLoadState>().cloned();
+        let load_state = ctx
+            .resource::<lunco_assets_core::msl::MslLoadState>()
+            .cloned();
         let install_running = matches!(
             load_state,
-            Some(lunco_assets::msl::MslLoadState::Loading { .. })
+            Some(lunco_assets_core::msl::MslLoadState::Loading { .. })
         );
-        let install_failed = matches!(load_state, Some(lunco_assets::msl::MslLoadState::Failed(_)));
+        let install_failed = matches!(
+            load_state,
+            Some(lunco_assets_core::msl::MslLoadState::Failed(_))
+        );
         let install_ready = matches!(
             load_state,
-            Some(lunco_assets::msl::MslLoadState::Ready { .. })
+            Some(lunco_assets_core::msl::MslLoadState::Ready { .. })
         );
         ui.horizontal(|ui| {
             // While an install is in flight, show Cancel. Before the first
@@ -1180,7 +1185,7 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
                 ui.label("MSL bundle loading…");
             } else if matches!(
                 load_state,
-                Some(lunco_assets::msl::MslLoadState::NotStarted) | None
+                Some(lunco_assets_core::msl::MslLoadState::NotStarted) | None
             ) {
                 if ui
                     .button("Install MSL")

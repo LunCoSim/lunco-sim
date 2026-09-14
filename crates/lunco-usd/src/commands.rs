@@ -225,7 +225,7 @@ fn clear_usd_edit_session_on_document_closed(
 fn forget_backed_document_on_closed(
     trigger: On<DocumentClosed>,
     mut backed: ResMut<lunco_usd_bevy_twin::DocBackedTwinScenes>,
-    twins: Res<lunco_assets::twin_source::TwinRoots>,
+    twins: Res<lunco_assets_core::twin_source::TwinRoots>,
 ) {
     if let Some((name, _rel)) = backed.forget_document(trigger.event().doc) {
         if let Err(error) = twins.unregister_name(&name) {
@@ -257,8 +257,8 @@ impl Plugin for UsdCommandsPlugin {
         // Twin authority registration belongs to the asset boundary and is
         // shared by lunica and luncosim. Install it here only for minimal USD
         // hosts/tests that do not compose the normal asset-source root.
-        if !app.is_plugin_added::<lunco_assets::TwinRootsPlugin>() {
-            app.add_plugins(lunco_assets::TwinRootsPlugin);
+        if !app.is_plugin_added::<lunco_assets_core::TwinRootsPlugin>() {
+            app.add_plugins(lunco_assets_core::TwinRootsPlugin);
         }
         app.init_resource::<DocumentRegistry<UsdDocument>>();
         app.init_resource::<UsdEditSessions>();
@@ -459,7 +459,7 @@ impl Plugin for UsdCommandsPlugin {
 /// Skips child Twins — they raise their own `TwinAdded` when the
 /// workspace eagerly opens them, each resolving its own starting scene.
 fn open_usd_docs_on_twin_asset_mounted(
-    trigger: On<lunco_assets::TwinAssetMounted>,
+    trigger: On<lunco_assets_core::TwinAssetMounted>,
     workspace: Res<WorkspaceResource>,
     // Optional because a document-only host may not install the asset pipeline.
     // The authoritative doc-backed mount below is the only scene-loading path;
@@ -485,7 +485,7 @@ fn open_usd_docs_on_twin_asset_mounted(
     let twin_name = trigger.event().name.clone();
     match default_scene {
         Some(scene) => {
-            let scene_uri = lunco_assets::twin_uri(&twin_name, scene);
+            let scene_uri = lunco_assets_core::twin_uri(&twin_name, scene);
             // Load the scene THROUGH the `twin://` source registered above —
             // never a bare absolute path. Works identically on native (fs) and
             // web (http), and keeps the scene's co-located relative refs
@@ -781,7 +781,7 @@ fn on_restart_scene_refresh_active_document(
     q_usd: Query<(&UsdPrimPath, Has<UsdSceneRoot>)>,
     mut registry: ResMut<DocumentRegistry<UsdDocument>>,
     backed: Option<Res<lunco_usd_bevy_twin::DocBackedTwinScenes>>,
-    twins: Option<Res<lunco_assets::twin_source::TwinRoots>>,
+    twins: Option<Res<lunco_assets_core::twin_source::TwinRoots>>,
     role: Option<Res<lunco_core_session::NetworkRole>>,
 ) {
     let lunco_core::SceneTransition::Restart { reset_document, .. } = &trigger.event().transition
@@ -808,7 +808,7 @@ fn on_restart_scene_refresh_active_document(
 
     let active = registry.ids().find_map(|doc| {
         let (name, rel) = backed.coords_of(doc)?;
-        (lunco_assets::twin_uri(&name, &rel) == stage_path).then_some((doc, name, rel))
+        (lunco_assets_core::twin_uri(&name, &rel) == stage_path).then_some((doc, name, rel))
     });
     let Some((doc, name, rel)) = active else {
         return;
@@ -902,7 +902,7 @@ fn on_open_file(
     // A scheme already names its root. Send it through the typed scene
     // transition so it gets the same admission, teardown, and readiness path
     // as startup, tutorials, and Twin default scenes.
-    if lunco_assets::has_scheme(&path) {
+    if lunco_assets_core::has_scheme(&path) {
         commands.trigger(LoadScene {
             path,
             root_prim: String::new(),
@@ -959,7 +959,7 @@ fn spawn_twin_from_scene(scene: &Path, pending: &mut PendingTwinOpens, log_tag: 
     let root = lunco_twin::root_for_file(&abs);
     let rel = abs
         .strip_prefix(&root)
-        .map(lunco_assets::asset_path::slashed)
+        .map(lunco_assets_core::asset_path::slashed)
         .unwrap_or_else(|_| {
             abs.file_name()
                 .unwrap_or_default()
@@ -1024,7 +1024,7 @@ fn on_open_file_for_usd(trigger: On<OpenFile>, mut commands: Commands) {
         // scene URI. Other schemes do not have a filesystem document to read;
         // `on_open_file` sends them through the typed scene transition.
         let stripped = path.strip_prefix("file://").unwrap_or(&path);
-        if lunco_assets::has_scheme(stripped) {
+        if lunco_assets_core::has_scheme(stripped) {
             return;
         }
         if !is_usd_path(stripped) {
@@ -2243,7 +2243,7 @@ fn validate_live_attribute_types(
     let stage_path = world
         .get_resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
         .and_then(|scenes| scenes.coords_of(doc))
-        .map(|(name, rel)| lunco_assets::twin_uri(&name, &rel));
+        .map(|(name, rel)| lunco_assets_core::twin_uri(&name, &rel));
     let stage_id = stage_path
         .and_then(|path| {
             world
@@ -2896,7 +2896,7 @@ fn validate_attach_component(
     #[cfg(not(target_arch = "wasm32"))]
     {
         let schemes = world
-            .get_resource::<lunco_assets::SchemeRegistry>()
+            .get_resource::<lunco_assets_core::SchemeRegistry>()
             .ok_or_else(|| "asset scheme registry is unavailable".to_string())?;
         let local_asset = schemes
             .local_path(&spec.asset)

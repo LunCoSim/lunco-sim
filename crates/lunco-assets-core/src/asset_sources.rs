@@ -167,17 +167,12 @@ pub fn register_lunco_asset_sources(app: &mut App) -> TwinRoots {
         .expect("register the canonical twin asset scheme");
     app.insert_resource(schemes);
 
-    // Declared-dataset registry: owns every download, scans each open Twin's
-    // `Assets.toml`, and is the ONLY thing in the engine that fetches. Lives
-    // here so every app that registers asset sources gets it — a domain crate
-    // that had to remember to add it would eventually forget and grow its own
-    // downloader.
-    // The same common boundary also owns the library manifest. Scene catalogs
-    // and source browsers require this authoritative listing; script loading
-    // itself follows the referenced Rhai asset's Bevy dependency graph and does
-    // not scan this manifest.
+    // The common boundary owns the library manifest. Scene catalogs and source
+    // browsers require this authoritative listing; script loading itself
+    // follows the referenced Rhai asset's Bevy dependency graph and does not
+    // scan this manifest. Downloadable datasets are installed by the separate
+    // `lunco-assets` runtime package so this source library stays lightweight.
     app.add_plugins(crate::discovery::AssetDiscoveryPlugin);
-    app.add_plugins(crate::datasets::DatasetsPlugin);
 
     twin_roots
 }

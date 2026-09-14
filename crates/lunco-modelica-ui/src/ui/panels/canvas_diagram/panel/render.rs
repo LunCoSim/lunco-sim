@@ -180,7 +180,7 @@ pub(crate) fn render_diagram_canvas(
                     .map(|host| crate::state::is_generated_document(host.document()))
             })
             .unwrap_or(false);
-        let msl_state = ctx.resource::<lunco_assets::msl::MslLoadState>();
+        let msl_state = ctx.resource::<lunco_assets_core::msl::MslLoadState>();
         let msl_resident = crate::msl_remote::global_parsed_msl().is_some()
             || ctx
                 .resource::<crate::engine_resource::ModelicaEngineHandle>()
@@ -191,7 +191,7 @@ pub(crate) fn render_diagram_canvas(
         // the download/parse is — not just a static "loading" string.
         let (msl_message, msl_is_loading) = match (msl_state, msl_resident) {
             (
-                Some(lunco_assets::msl::MslLoadState::Loading {
+                Some(lunco_assets_core::msl::MslLoadState::Loading {
                     phase,
                     bytes_done,
                     bytes_total,
@@ -201,11 +201,11 @@ pub(crate) fn render_diagram_canvas(
                 Some(format_msl_loading_hint(*phase, *bytes_done, *bytes_total)),
                 true,
             ),
-            (Some(lunco_assets::msl::MslLoadState::Failed(msg)), false) => (
+            (Some(lunco_assets_core::msl::MslLoadState::Failed(msg)), false) => (
                 Some(format!("Modelica Standard Library error: {msg}")),
                 false,
             ),
-            (Some(lunco_assets::msl::MslLoadState::NotStarted), false) => (
+            (Some(lunco_assets_core::msl::MslLoadState::NotStarted), false) => (
                 Some("Modelica Standard Library unavailable".to_string()),
                 false,
             ),
@@ -439,11 +439,11 @@ fn apply_pending_fit(
 /// phase carries file counts in `done`/`total`; other phases carry bytes.
 /// Falls back to a bare phase label when `total` is unknown (`0`).
 fn format_msl_loading_hint(
-    phase: lunco_assets::msl::MslLoadPhase,
+    phase: lunco_assets_core::msl::MslLoadPhase,
     done: u64,
     total: u64,
 ) -> String {
-    use lunco_assets::msl::MslLoadPhase;
+    use lunco_assets_core::msl::MslLoadPhase;
     let label = phase.as_str();
     match phase {
         MslLoadPhase::Parsing if total > 0 => {

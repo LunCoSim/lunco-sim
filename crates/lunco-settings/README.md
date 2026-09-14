@@ -32,7 +32,7 @@ The download section is stored in the same `settings.json` as every other
 preference. Its defaults are 3 parallel downloads, 5 total attempts, a 1
 second initial delay, a multiplier of 2, and a 60 second delay cap. The
 configuration directory is resolved here (`LUNCOSIM_CONFIG`, then the OS
-configuration directory); `lunco-assets` owns only the separate regenerable
+configuration directory); `lunco-assets-core` owns only the separate regenerable
 cache directory.
 
 ## Registering a section

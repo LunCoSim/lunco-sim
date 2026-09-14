@@ -878,7 +878,7 @@ pub fn drain_open_file_results(world: &mut bevy::prelude::World) {
     };
     for result in pending {
         let path = result.path;
-        let read_only_library = lunco_assets::msl::owns_filesystem_path(&path);
+        let read_only_library = lunco_assets_core::msl::owns_filesystem_path(&path);
         let source = match result.read_result {
             Ok(s) => s,
             Err(e) => {
@@ -987,7 +987,7 @@ pub fn on_open(trigger: On<Open>, mut commands: Commands) {
         return;
     }
 
-    if lunco_assets::has_scheme(&uri) {
+    if lunco_assets_core::has_scheme(&uri) {
         commands.trigger(OpenFile { path: uri });
         return;
     }

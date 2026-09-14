@@ -46,7 +46,7 @@ impl ProgramChoice {
         if self.asset_path.starts_with("lunco://") || self.asset_path.starts_with("twin://") {
             self.asset_path.clone()
         } else {
-            lunco_assets::engine_asset_uri(&self.asset_path)
+            lunco_assets_core::engine_asset_uri(&self.asset_path)
         }
     }
 

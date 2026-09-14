@@ -196,7 +196,7 @@ fn main() {
             let binary = binary.ok_or_else(|| "stage requires --binary".to_string());
             let cache = stage_cache
                 .map(PathBuf::from)
-                .unwrap_or_else(lunco_assets::cache_dir);
+                .unwrap_or_else(lunco_assets_core::cache_dir);
             let destination = stage_destination
                 .map(PathBuf::from)
                 .ok_or_else(|| "stage requires --destination".to_string());
@@ -304,7 +304,7 @@ fn entry_cache_root(
 ) -> std::path::PathBuf {
     twin_root
         .map(|root| lunco_assets::datasets::DatasetScope::twin_cache_root(root, entry.shared))
-        .unwrap_or_else(lunco_assets::cache_dir)
+        .unwrap_or_else(lunco_assets_core::cache_dir)
 }
 
 /// Process one engine manifest group (`assets/manifests/<group>.toml`).
@@ -312,7 +312,7 @@ fn entry_cache_root(
 fn process_group(group: &str) -> Result<(), String> {
     println!("Processing `{group}`...");
     process_filtered(
-        &lunco_assets::manifests_dir().join(format!("{group}.toml")),
+        &lunco_assets_core::manifests_dir().join(format!("{group}.toml")),
         None,
         None,
         "good",
@@ -322,7 +322,7 @@ fn process_group(group: &str) -> Result<(), String> {
 /// Process every engine manifest group.
 #[cfg(not(target_arch = "wasm32"))]
 fn process_all_groups() -> Result<(), String> {
-    let manifests = lunco_assets::engine_manifests().map_err(|error| error.to_string())?;
+    let manifests = lunco_assets_core::engine_manifests().map_err(|error| error.to_string())?;
     for (group, _) in manifests {
         process_group(&group)?;
     }
@@ -332,7 +332,7 @@ fn process_all_groups() -> Result<(), String> {
 /// List every engine manifest group.
 #[cfg(not(target_arch = "wasm32"))]
 fn list_all_groups() -> Result<(), String> {
-    let manifests = lunco_assets::engine_manifests().map_err(|error| error.to_string())?;
+    let manifests = lunco_assets_core::engine_manifests().map_err(|error| error.to_string())?;
     for (group, _) in manifests {
         println!();
         download::list_group(&group).map_err(|error| error.to_string())?;
@@ -368,7 +368,7 @@ fn stage_engine_bundle(
     destination: &std::path::Path,
 ) -> Result<(), String> {
     let mut staged = std::collections::BTreeSet::new();
-    for (group, path) in lunco_assets::engine_manifests().map_err(|e| e.to_string())? {
+    for (group, path) in lunco_assets_core::engine_manifests().map_err(|e| e.to_string())? {
         let manifest =
             download::AssetManifest::from_file(&path).map_err(|e| format!("{group}: {e}"))?;
         for (key, entry) in manifest.assets {

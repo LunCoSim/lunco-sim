@@ -3921,10 +3921,10 @@ pub fn spawn_usd_child_under_parent(
 /// Filesystem paths belong to `OpenFile` / startup root discovery and must not
 /// be reinterpreted here.
 pub fn validate_scene_address(path_in: &str) -> Option<String> {
-    let valid_lunco = lunco_assets::parse_lunco_uri(path_in)
-        .is_some_and(lunco_assets::asset_path::is_safe_relative_path);
-    let valid_twin = lunco_assets::parse_twin_uri(path_in).is_some_and(|(name, rel)| {
-        !name.is_empty() && lunco_assets::asset_path::is_safe_relative_path(rel)
+    let valid_lunco = lunco_assets_core::parse_lunco_uri(path_in)
+        .is_some_and(lunco_assets_core::asset_path::is_safe_relative_path);
+    let valid_twin = lunco_assets_core::parse_twin_uri(path_in).is_some_and(|(name, rel)| {
+        !name.is_empty() && lunco_assets_core::asset_path::is_safe_relative_path(rel)
     });
     if valid_lunco || valid_twin {
         return Some(path_in.to_string());

@@ -7,7 +7,7 @@
 //! FrameVectorTransform is the shared quaternion frame-conversion boundary used
 //! by sensors and guidance.
 //!
-//! Why this lives HERE: `lunco-assets` owns every asset interaction. The
+//! Why this lives HERE: `lunco-assets-core` owns shared asset interaction. The
 //! bundled models must be present at compile time on EVERY target — wasm has no
 //! filesystem — so they're baked in with `include_dir!` and handed to consumers
 //! as raw `(filename, source)` pairs. DROP A `.mo` in `assets/models/`, rebuild,

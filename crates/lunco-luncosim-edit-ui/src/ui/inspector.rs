@@ -2606,7 +2606,7 @@ fn attach_component_at_socket(
     // has no path under `assets/` at all; joining one produced a path that never
     // existed and the attach was skipped with a "no plug frame" warning.
     let Some(schemes) = world
-        .get_resource::<lunco_assets::SchemeRegistry>()
+        .get_resource::<lunco_assets_core::SchemeRegistry>()
         .cloned()
     else {
         report_inspector_error(
@@ -3586,7 +3586,7 @@ fn import_and_apply(world: &mut World, part: Entity, src_path: &str) {
 /// If a shader for `stem` is now registered, swap `part` onto it.
 fn apply_if_registered(world: &mut World, part: Entity, stem: &str) {
     let shader_path = {
-        let tr = world.get_resource::<lunco_assets::twin_source::TwinRoots>();
+        let tr = world.get_resource::<lunco_assets_core::twin_source::TwinRoots>();
         lunco_scene_authoring::properties::shader_asset_path_for(tr, stem)
     };
     let path = match shader_path {

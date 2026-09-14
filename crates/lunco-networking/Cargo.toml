@@ -95,6 +95,7 @@ lunco-scripting = { path = "../lunco-scripting", optional = true, default-featur
 # Scenario asset cache root (`cache_dir()`), for the Phase-3 client-side
 # `scenarios/<id>/` download target. Native + wasm-safe path helper.
 lunco-assets = { path = "../lunco-assets" }
+lunco-assets-core = { path = "../lunco-assets-core" }
 # Host-side scenario closure: `lunco-assets` owns filesystem traversal; this
 # leaf supplies only USD's document test and dependency extraction. A scene's
 # rovers/components can live outside its own folder (`@../../vessels/…@`), so
@@ -150,7 +151,7 @@ lightyear_aeronet = { version = "0.28.0", default-features = false }
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 # Native byte-GET for the HTTP asset plane (`http_fetch`). Already in the workspace
 # tree (lunco-assets/celestial use it), so this pulls no new transitive deps. Web
-# uses `lunco_assets::web_fetch` (browser `fetch`) instead.
+# uses `lunco_assets_core::web_fetch` (browser `fetch`) instead.
 ureq = { workspace = true }
 # Shared version + feature set come from [workspace.dependencies]; these two are
 # the native-only additions. `webtransport_dangerous_configuration` accepts the

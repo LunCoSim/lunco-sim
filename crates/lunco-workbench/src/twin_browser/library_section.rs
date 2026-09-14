@@ -31,7 +31,7 @@ pub struct LuncoLibrarySection {
 
 impl LuncoLibrarySection {
     /// Rebuild only when the immutable bundle manifest changes (not every frame).
-    fn refresh(&mut self, manifest: &lunco_assets::discovery::AssetManifest) {
+    fn refresh(&mut self, manifest: &lunco_assets_core::discovery::AssetManifest) {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         manifest.rels().hash(&mut hasher);
         let fingerprint = hasher.finish();
@@ -39,7 +39,7 @@ impl LuncoLibrarySection {
             return;
         }
 
-        let mut assets = lunco_assets::discovery::list_library_assets(manifest);
+        let mut assets = lunco_assets_core::discovery::list_library_assets(manifest);
         assets.sort_by(|a, b| a.rel.cmp(&b.rel));
         self.tree = build_path_tree(assets.into_iter().map(|asset| {
             let rel = PathBuf::from(&asset.rel);
@@ -85,7 +85,7 @@ impl BrowserSection for LuncoLibrarySection {
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut BrowserCtx<'_, '_>) {
-        let Some(manifest) = ctx.resource::<lunco_assets::discovery::AssetManifest>() else {
+        let Some(manifest) = ctx.resource::<lunco_assets_core::discovery::AssetManifest>() else {
             ui.label(
                 egui::RichText::new("(library unavailable)")
                     .weak()

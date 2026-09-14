@@ -21,7 +21,7 @@ bevy = { workspace = true, features = [
 ] }
 bevy_egui = { workspace = true }
 lunco-api = { path = "../lunco-api" }
-lunco-assets = { path = "../lunco-assets" }
+lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-core = { path = "../lunco-core" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-doc = { path = "../lunco-doc" }

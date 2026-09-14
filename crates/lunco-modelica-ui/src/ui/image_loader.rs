@@ -11,7 +11,7 @@
 //! The standard egui image loaders don't know this scheme. Until we
 //! register ours they'd log `unsupported uri scheme`, leaving the
 //! image placeholder empty. This loader rewrites the URI to a
-//! filesystem path under [`lunco_assets::msl_dir`] (the on-disk MSL
+//! filesystem path under [`lunco_assets_core::msl_dir`] (the on-disk MSL
 //! tree) and hands the bytes off to egui's cached decoder.
 //!
 //! Non-`modelica://` URIs are left to the other loaders installed by
@@ -20,7 +20,7 @@
 //!
 //! # One path, both targets
 //!
-//! Bytes are fetched through [`lunco_assets::msl::msl_read`] — the MSL
+//! Bytes are fetched through [`lunco_assets_core::msl::msl_read`] — the MSL
 //! *virtual* filesystem — not `std::fs`. `msl_read` resolves a
 //! bundle-relative path (`Modelica/Resources/Images/…`) against whichever MSL
 //! root is installed: the on-disk tree on native, the in-memory bundle the web
@@ -120,7 +120,7 @@ impl ModelicaImageLoader {
                     let Some(path) = Self::resolve_uri(uri) else {
                         continue;
                     };
-                    match lunco_assets::msl::msl_read(&path) {
+                    match lunco_assets_core::msl::msl_read(&path) {
                         Some(bytes) => {
                             let arc: Arc<[u8]> = Arc::from(bytes);
                             total_bytes += arc.len();
@@ -148,7 +148,7 @@ impl ModelicaImageLoader {
 
     /// Resolve `modelica://Modelica/Resources/…` → an **MSL-root-relative**
     /// path (`Modelica/Resources/…`), the key
-    /// [`lunco_assets::msl::msl_read`] takes. The root itself (a directory on
+    /// [`lunco_assets_core::msl::msl_read`] takes. The root itself (a directory on
     /// native, the in-memory bundle on wasm) is the storage layer's business,
     /// not ours — which is what makes this one function correct on both
     /// targets.
@@ -257,7 +257,7 @@ impl egui::load::BytesLoader for ModelicaImageLoader {
             .spawn(async move {
                 // MSL virtual FS: on-disk tree (native) or in-memory bundle (web).
                 let read_result: Result<Arc<[u8]>, String> =
-                    match lunco_assets::msl::msl_read(&path) {
+                    match lunco_assets_core::msl::msl_read(&path) {
                         Some(bytes) => {
                             log::info!(
                                 "[ModelicaImageLoader] loaded {} → {} ({} bytes)",

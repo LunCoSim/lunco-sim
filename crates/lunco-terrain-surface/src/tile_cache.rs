@@ -142,7 +142,7 @@ pub fn bake_tile_mesh_cached(
             dem_half_extent,
             origin_xz,
         },
-        &lunco_assets::cache_dir(),
+        &lunco_assets_core::cache_dir(),
     )
 }
 

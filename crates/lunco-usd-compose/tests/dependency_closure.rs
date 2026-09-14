@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-use lunco_assets::{asset_path::normalize, transitive_file_closure, transitive_file_closure_with};
+use lunco_assets_core::{
+    asset_path::normalize, transitive_file_closure, transitive_file_closure_with,
+};
 use lunco_usd_compose::{is_usd_layer, layer_dependency_arcs};
 
 #[test]
@@ -42,7 +44,7 @@ fn delegates_schemed_reference_resolution_to_the_asset_caller() {
 
     let closure = transitive_file_closure_with(
         &[PathBuf::from(&scene)],
-        |arc| lunco_assets::parse_lunco_uri(arc).map(|relative| assets.join(relative)),
+        |arc| lunco_assets_core::parse_lunco_uri(arc).map(|relative| assets.join(relative)),
         is_usd_layer,
         layer_dependency_arcs,
     );

@@ -353,7 +353,7 @@ mod tests {
     }
 }
 
-/// Native read for a caller-selected root document. Kept in `lunco-assets` so
+/// Native read for a caller-selected root document. Kept in `lunco-assets-core` so
 /// USD consumers never perform their own filesystem access.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_asset_file_bytes(path: &Path) -> std::io::Result<Vec<u8>> {

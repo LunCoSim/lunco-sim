@@ -45,7 +45,7 @@ fn celestial_test_app() -> App {
     app.add_plugins(MinimalPlugins);
     app.add_plugins(bevy::input::InputPlugin);
     app.add_plugins(bevy::transform::TransformPlugin);
-    let _ = lunco_assets::register_lunco_asset_sources(&mut app);
+    let _ = lunco_assets_core::register_lunco_asset_sources(&mut app);
     app.add_plugins(bevy::asset::AssetPlugin::default());
     app.init_resource::<Assets<Mesh>>();
     app.init_asset::<Image>();
@@ -637,7 +637,7 @@ fn test_celestial_startup_and_movement() {
     // on the async load task (it resolves the source off-thread). The app entry
     // registers these; the test must too — otherwise it only passed by timing
     // luck (the load task never ran before the 2 `update()`s completed).
-    let _ = lunco_assets::register_lunco_asset_sources(&mut app);
+    let _ = lunco_assets_core::register_lunco_asset_sources(&mut app);
     app.add_plugins(bevy::asset::AssetPlugin::default());
     app.init_resource::<Assets<Mesh>>();
     // NO material asset stores, and no `Shader` asset type, any more: the crate is

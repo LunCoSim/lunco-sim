@@ -1,6 +1,6 @@
 //! Authored tutorial content — files under `assets/tutorials/`.
 //!
-//! Why this lives HERE: `lunco-assets` owns every asset interaction, INCLUDING
+//! Why this lives HERE: `lunco-assets-core` owns shared asset interaction, INCLUDING
 //! the native-disk-vs-wasm-embed policy. Consumers ask this crate for a
 //! tutorial's text and never touch `include_str!`/the filesystem themselves.
 //!

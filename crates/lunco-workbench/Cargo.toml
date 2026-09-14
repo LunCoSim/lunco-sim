@@ -69,6 +69,7 @@ serde_json = { workspace = true }
 serde = { workspace = true }
 # `user_config_dir()` for the cross-platform LunCoSim recents path.
 lunco-assets = { path = "../lunco-assets" }
+lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-render = { path = "../lunco-render" }
 crossbeam-channel = { workspace = true }

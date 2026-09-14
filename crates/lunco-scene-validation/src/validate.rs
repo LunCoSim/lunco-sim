@@ -105,7 +105,7 @@ fn resolve(reference: &str) -> Result<PathBuf, String> {
     if as_given.is_file() {
         return Ok(as_given.to_path_buf());
     }
-    match lunco_assets::engine_asset_local_path(reference) {
+    match lunco_assets_core::engine_asset_local_path(reference) {
         Some(p) if p.is_file() => Ok(p),
         Some(p) => Err(format!(
             "file not found: `{reference}` (tried as given, then {})",
@@ -339,7 +339,7 @@ fn resolve_twin_root(reference: &str) -> Result<PathBuf, String> {
     if as_given.is_dir() {
         return Ok(as_given.to_path_buf());
     }
-    match lunco_assets::engine_asset_local_path(reference) {
+    match lunco_assets_core::engine_asset_local_path(reference) {
         Some(path) if path.is_dir() => Ok(path),
         Some(path) => Err(format!(
             "Twin folder not found: `{reference}` (resolved `{}` is not a directory)",
@@ -619,7 +619,7 @@ fn validate_usda(reference: &str, path: &Path, text: &str) -> ValidationReport {
 /// the crate directory, so use the compile-time workspace layout only when the
 /// runtime root is absent.
 pub(crate) fn engine_assets_root() -> PathBuf {
-    let runtime_root = lunco_assets::assets_dir_abs();
+    let runtime_root = lunco_assets_core::assets_dir_abs();
     if runtime_root.is_dir() {
         return runtime_root;
     }
@@ -911,10 +911,10 @@ fn validate_sysml_reference(world: &World, reference: &str) -> ValidationReport 
             return validate_sysml_twin(world, name, reference);
         }
     }
-    let Some((name, relative)) = lunco_assets::parse_twin_uri(reference) else {
+    let Some((name, relative)) = lunco_assets_core::parse_twin_uri(reference) else {
         return validate_asset(reference);
     };
-    let Some(roots) = world.get_resource::<lunco_assets::TwinRoots>() else {
+    let Some(roots) = world.get_resource::<lunco_assets_core::TwinRoots>() else {
         return ValidationReport::new(reference, "sysml")
             .error("ValidateSysml twin:// requires the TwinRoots asset registry");
     };
@@ -948,7 +948,7 @@ fn validate_sysml_reference(world: &World, reference: &str) -> ValidationReport 
 }
 
 fn validate_sysml_twin(world: &World, name: &str, reference: &str) -> ValidationReport {
-    let Some(roots) = world.get_resource::<lunco_assets::TwinRoots>() else {
+    let Some(roots) = world.get_resource::<lunco_assets_core::TwinRoots>() else {
         return ValidationReport::new(reference, "sysml")
             .error("ValidateSysml twin:// requires the TwinRoots asset registry");
     };
@@ -997,7 +997,7 @@ fn validate_sysml_twin(world: &World, name: &str, reference: &str) -> Validation
                     .error(format!("cannot read {}: {error}", path.display()));
             }
         };
-        let logical = lunco_assets::twin_uri(name, &relative);
+        let logical = lunco_assets_core::twin_uri(name, &relative);
         revision_input.extend_from_slice(logical.as_bytes());
         revision_input.push(0);
         revision_input.extend_from_slice(text.as_bytes());

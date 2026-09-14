@@ -500,10 +500,10 @@ fn apply_render_quality_override(_app: &mut App, _quality: Option<lunco_render::
 fn build_gui_app_with_profile(offscreen: bool, render_profile: LunCoSimRenderProfile) -> App {
     let mut app = App::new();
     // Register every LunCo asset source (lunco:// and twin://) +
-    // the shared `TwinRoots` resource in ONE shared place (`lunco-assets`), so all
+    // the shared `TwinRoots` resource in ONE shared place (`lunco-assets-core`), so all
     // binaries get identical schemes. MUST run before `DefaultPlugins`/`AssetPlugin`
     // snapshots the source registry.
-    lunco_assets::register_lunco_asset_sources(&mut app);
+    lunco_assets_core::register_lunco_asset_sources(&mut app);
     let plugins = default_plugins_with_profile(offscreen, render_profile);
     app.add_plugins(plugins);
     // Flushes the WARN/ERROR dedup counters the `LogPlugin` filter accumulates.
@@ -644,7 +644,7 @@ fn default_plugins_with_profile(
 
     let group = DefaultPlugins
         .set(AssetPlugin {
-            file_path: lunco_assets::assets_dir_abs().to_string_lossy().to_string(),
+            file_path: lunco_assets_core::assets_dir_abs().to_string_lossy().to_string(),
             // File watching is an interactive authoring capability. Offscreen
             // runs must be deterministic and must not allocate OS watcher
             // resources; scene tests and render capture use explicit paths.

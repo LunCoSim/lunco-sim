@@ -1,6 +1,6 @@
 //! Embedded mission definitions — files under `assets/missions/`.
 //!
-//! Why this lives HERE: `lunco-assets` owns every asset interaction. Mission
+//! Why this lives HERE: `lunco-assets-core` owns shared asset interaction. Mission
 //! data that must be present at compile time on wasm (no filesystem) is baked in
 //! with `include_dir!` and handed to consumers by basename. DROP A file in
 //! `assets/missions/`, rebuild, and it's reachable — no code edit here.
@@ -28,7 +28,7 @@ mod tests {
         // A mission is USD, and only USD: nothing under `assets/missions/`
         // describes a download. Obtaining vectors is a declared dataset
         // (`crates/lunco-celestial-ephemeris/Assets.toml`), owned by
-        // `crate::datasets`.
+        // `lunco-assets::datasets`.
         assert!(mission_source("artemis_2_mission.usda").is_some());
         assert!(mission_source("DoesNotExist.json").is_none());
     }

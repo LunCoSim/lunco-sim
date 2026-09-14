@@ -15,7 +15,7 @@ use bevy::prelude::*;
 // Embedded Missions
 // ============================================================================
 
-// Mission JSON is owned by the asset crate — `lunco_assets::missions` embeds
+// Mission JSON is owned by the asset crate — `lunco_assets_core::missions` embeds
 // `assets/missions/` and hands it over by basename (see `build` below), so this
 // crate holds no direct path into the shared asset tree.
 

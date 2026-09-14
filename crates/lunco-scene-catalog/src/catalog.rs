@@ -10,7 +10,7 @@
 //!
 //! Two questions, two different costs:
 //!
-//! - *Which files exist?* — [`lunco_assets::discovery`], executed on Bevy's
+//! - *Which files exist?* — [`lunco_assets_core::discovery`], executed on Bevy's
 //!   async compute pool on native. The native build walks the directory; the web
 //!   build reads a manifest baked at build time, because HTTP has no `readdir`
 //!   and a bundle's contents genuinely ARE a build-time fact.
@@ -19,7 +19,7 @@
 //!   file we ship, and it can be read from the file we ship.
 //!
 //! The read is asynchronous on both platforms, and the parse is openusd's. See
-//! [`crate::spawn_meta`] for the full account, and [`lunco_assets::asset_read`]
+//! [`crate::spawn_meta`] for the full account, and [`lunco_assets_core::asset_read`]
 //! for the bytes.
 //!
 //! The shape is dispatch/drain: [`dispatch_catalog_listing`] moves one shared
@@ -128,7 +128,8 @@ impl ApiQueryProvider for UsdAssetMetadataProvider {
     }
 
     fn execute(&self, world: &World, _params: &serde_json::Value) -> ApiResponse {
-        let Some(manifest) = world.get_resource::<lunco_assets::discovery::AssetManifest>() else {
+        let Some(manifest) = world.get_resource::<lunco_assets_core::discovery::AssetManifest>()
+        else {
             return ApiResponse::error(
                 ApiErrorCode::InternalError,
                 "ListUsdAssetMetadata: AssetManifest resource is not present",
@@ -458,7 +459,7 @@ fn categorize(rel: &str) -> String {
 }
 
 use crate::spawn_meta::{parse_spawn_meta, SpawnMeta};
-use lunco_assets::discovery::AssetFile;
+use lunco_assets_core::discovery::AssetFile;
 
 /// What every project `*.usda` says about itself, keyed by its asset path.
 ///
@@ -512,9 +513,9 @@ struct Scanned {
 struct CatalogListing {
     generation: u64,
     manifest_ready: bool,
-    usd: Option<Result<Vec<AssetFile>, lunco_assets::TwinRootsError>>,
-    shaders: Option<Result<Vec<AssetFile>, lunco_assets::TwinRootsError>>,
-    programs: Option<Result<Vec<AssetFile>, lunco_assets::TwinRootsError>>,
+    usd: Option<Result<Vec<AssetFile>, lunco_assets_core::TwinRootsError>>,
+    shaders: Option<Result<Vec<AssetFile>, lunco_assets_core::TwinRootsError>>,
+    programs: Option<Result<Vec<AssetFile>, lunco_assets_core::TwinRootsError>>,
 }
 
 /// The in-flight metadata scan.
@@ -533,7 +534,7 @@ pub struct CatalogScan {
     program_listing: Option<(
         u64,
         bool,
-        Result<Vec<AssetFile>, lunco_assets::TwinRootsError>,
+        Result<Vec<AssetFile>, lunco_assets_core::TwinRootsError>,
     )>,
     tx: crossbeam_channel::Sender<Scanned>,
     rx: crossbeam_channel::Receiver<Scanned>,
@@ -594,8 +595,8 @@ impl CatalogScan {
 /// opening a Twin never traverses the same root once per catalog. A newer
 /// dispatch supersedes an older one; the drain drops stale generations.
 pub fn dispatch_catalog_listing(
-    manifest: &lunco_assets::discovery::AssetManifest,
-    roots: &lunco_assets::twin_source::TwinRoots,
+    manifest: &lunco_assets_core::discovery::AssetManifest,
+    roots: &lunco_assets_core::twin_source::TwinRoots,
     scan: &mut CatalogScan,
     include_usd: bool,
     include_shaders: bool,
@@ -624,7 +625,7 @@ pub fn dispatch_catalog_listing(
     .collect();
 
     let fut = async move {
-        let listing = match lunco_assets::discovery::list_assets_with_extensions(
+        let listing = match lunco_assets_core::discovery::list_assets_with_extensions(
             &manifest,
             &roots,
             &extensions,
@@ -666,8 +667,8 @@ pub fn dispatch_catalog_listing(
 /// engine manifest or the open-Twin set changes; idle frames do no filesystem
 /// work.
 pub fn maintain_catalogs(
-    twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
-    manifest: Res<lunco_assets::discovery::AssetManifest>,
+    twin_roots: Option<Res<lunco_assets_core::twin_source::TwinRoots>>,
+    manifest: Res<lunco_assets_core::discovery::AssetManifest>,
     mut scan: ResMut<CatalogScan>,
     mut last_twins: Local<Vec<String>>,
 ) {
@@ -700,8 +701,8 @@ pub struct RescanSpawnCatalog {}
 #[on_command(RescanSpawnCatalog)]
 pub fn on_rescan_spawn_catalog(
     _trigger: On<RescanSpawnCatalog>,
-    twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
-    manifest: Res<lunco_assets::discovery::AssetManifest>,
+    twin_roots: Option<Res<lunco_assets_core::twin_source::TwinRoots>>,
+    manifest: Res<lunco_assets_core::discovery::AssetManifest>,
     mut scan: ResMut<CatalogScan>,
 ) {
     if let Some(roots) = twin_roots.as_deref() {
@@ -719,8 +720,8 @@ pub struct RescanShaders {}
 #[on_command(RescanShaders)]
 pub fn on_rescan_shaders(
     _trigger: On<RescanShaders>,
-    twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
-    manifest: Res<lunco_assets::discovery::AssetManifest>,
+    twin_roots: Option<Res<lunco_assets_core::twin_source::TwinRoots>>,
+    manifest: Res<lunco_assets_core::discovery::AssetManifest>,
     mut scan: ResMut<CatalogScan>,
 ) {
     if let Some(roots) = twin_roots.as_deref() {
@@ -785,7 +786,7 @@ pub fn drain_catalog_listing(
 /// turns it into `ProgramChoice` values.
 pub fn take_program_listing(
     scan: &mut CatalogScan,
-) -> Option<Result<(bool, Vec<AssetFile>), lunco_assets::TwinRootsError>> {
+) -> Option<Result<(bool, Vec<AssetFile>), lunco_assets_core::TwinRootsError>> {
     let (generation, manifest_ready, result) = scan.program_listing.take()?;
     if generation != scan.listing_generation {
         return None;
@@ -794,7 +795,7 @@ pub fn take_program_listing(
 }
 
 /// Read one discovered asset's metadata. The single read path, both platforms:
-/// bytes via [`lunco_assets::asset_read`], meaning via openusd.
+/// bytes via [`lunco_assets_core::asset_read`], meaning via openusd.
 ///
 /// An unreadable asset yields [`SpawnMeta::default`] — *not spawnable*. A file we
 /// cannot read has not told us it is a part, and guessing "yes" is how a broken
@@ -803,7 +804,7 @@ pub async fn read_asset_meta(
     asset: &AssetFile,
     settings: &lunco_settings::DownloadSettings,
 ) -> SpawnMeta {
-    match lunco_assets::asset_read::read_asset_text(asset, settings).await {
+    match lunco_assets_core::asset_read::read_asset_text(asset, settings).await {
         Ok(src) => {
             let mut meta = parse_spawn_meta(&src);
             #[cfg(not(target_arch = "wasm32"))]
@@ -917,11 +918,11 @@ pub fn drain_usd_scan(
     // catalog's existing unsuffixed stem IDs for shipped assets.
     scan.staged.sort_unstable_by(|a, b| {
         let a_key = (
-            lunco_assets::asset_path::split_scheme(&a.asset.asset_path).is_some(),
+            lunco_assets_core::asset_path::split_scheme(&a.asset.asset_path).is_some(),
             &a.asset.asset_path,
         );
         let b_key = (
-            lunco_assets::asset_path::split_scheme(&b.asset.asset_path).is_some(),
+            lunco_assets_core::asset_path::split_scheme(&b.asset.asset_path).is_some(),
             &b.asset.asset_path,
         );
         a_key.cmp(&b_key)
@@ -981,13 +982,13 @@ fn title_case(stem: &str) -> String {
 /// dispatch/drain pair instead.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn scan_usd_into_catalog_blocking(
-    manifest: &lunco_assets::discovery::AssetManifest,
-    roots: &lunco_assets::twin_source::TwinRoots,
+    manifest: &lunco_assets_core::discovery::AssetManifest,
+    roots: &lunco_assets_core::twin_source::TwinRoots,
     catalog: &mut SpawnCatalog,
     settings: &lunco_settings::DownloadSettings,
 ) -> usize {
     let mut added = 0;
-    let assets = match lunco_assets::discovery::list_usd_assets(manifest, roots) {
+    let assets = match lunco_assets_core::discovery::list_usd_assets(manifest, roots) {
         Ok(assets) => assets,
         Err(error) => {
             error!("CATALOG: Twin registry unavailable during blocking USD scan: {error}");
@@ -1319,7 +1320,7 @@ mod tests {
     #[test]
     fn usd_asset_metadata_provider_exposes_pending_and_authored_docs() {
         let mut world = World::new();
-        let mut manifest = lunco_assets::discovery::AssetManifest::default();
+        let mut manifest = lunco_assets_core::discovery::AssetManifest::default();
         manifest.set(vec![
             "scenes/luncosim/arena.usda".into(),
             "scenes/luncosim/pending.usda".into(),

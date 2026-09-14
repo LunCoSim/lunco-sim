@@ -4,8 +4,9 @@
 
 **TL;DR.** Domain crates read shippable assets through
 `bevy::asset::AssetServer`; user-data bytes and mutations go through
-`lunco-storage`; asset identity, resolution, and cache policy belong to
-`lunco-assets`. The shared retry/backoff policy is owned by
+`lunco-storage`; lightweight asset identity, resolution, and cache policy belong
+to `lunco-assets-core`. Dataset provisioning belongs to `lunco-assets`, and the
+shared retry/backoff policy is owned by
 `lunco-settings::DownloadSettings` and is passed to every network fetch path.
 `lunco-workbench` may own picker and command routing, but it
 must not perform backend I/O itself. Never use `std::fs::read*`,
@@ -82,7 +83,8 @@ backend owner separate:
 
 | Concern | Owner | Workbench role |
 |---|---|---|
-| Asset identity, URI resolution, and content-addressed caches | `lunco-assets` | none |
+| Asset identity, URI resolution, and cache roots | `lunco-assets-core` | none |
+| Dataset manifests, download orchestration, and installed status | `lunco-assets` | none |
 | Read/write/rename/delete, entry metadata, directory preparation, and backend selection | `lunco-storage` | dispatch a typed command; never call the backend directly |
 | Twin manifest semantics and recursive file index | `lunco-twin` | render the index and send intents |
 | Open-root/session policy and async Twin admission | `lunco-workspace` | provide the picker seam only |
@@ -119,8 +121,9 @@ the manifest or open Twins.
 
 Three classes of crate legitimately bypass `AssetServer`:
 
-- **Filesystem-owning crates.** `lunco-assets` (download/extract/cache
-  pipeline), `lunco-storage` (user-data persistence), and `lunco-twin`
+- **Filesystem-owning crates.** `lunco-assets-core` (asset roots, source
+  resolution, and embedded asset access), `lunco-assets` (download/extract and
+  native processing), `lunco-storage` (user-data persistence), and `lunco-twin`
   (Twin-folder traversal and manifest semantics). These are the owners of
   their respective filesystem concerns; the workbench and domain consumers
   call their APIs. `lunco-storage` supplies the native backend and the wasm
@@ -135,8 +138,8 @@ a top-of-file:
 
 ```rust
 #![allow(clippy::disallowed_methods)]
-// Reason: this crate owns on-disk cache layout for the native build;
-// wasm consumers go through AssetServer.
+// Reason: this crate owns the on-disk cache layout for asset resolution;
+// domain consumers go through its APIs.
 ```
 
 Adding new escapes requires PR review — the allow itself is the audit

@@ -41,6 +41,6 @@ openusd = { workspace = true }
 lunco-workspace = { path = "../lunco-workspace" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-physics = { path = "../lunco-physics" }
-lunco-assets = { path = "../lunco-assets" }
+lunco-assets-core = { path = "../lunco-assets-core" }
 [lints]
 workspace = true

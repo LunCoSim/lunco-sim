@@ -603,11 +603,11 @@ fn on_spawn_dem_terrain(
     // Standalone entity, anchored into the world grid at the origin cell (when it
     // exists). The USD path instead places `DemTerrainRequest` on the prim entity,
     // which already carries its USD transform + grid parentage.
-    let mut material = ShaderLook::new(lunco_assets::engine_asset_uri(&ev.shader));
+    let mut material = ShaderLook::new(lunco_assets_core::engine_asset_uri(&ev.shader));
     material.vertex_shader = ev
         .vertex_shader
         .as_deref()
-        .map(lunco_assets::engine_asset_uri);
+        .map(lunco_assets_core::engine_asset_uri);
     let mut e = commands.spawn((
         DemTerrainSurface,
         Name::new("DemTerrain"),
@@ -1128,7 +1128,7 @@ async fn read_bytes(
         //    next reload.
         // The baked demo's `twins/…` path never exists under `scenarios/`, so an
         // OPFS existence check cleanly picks the right backend.
-        let opfs_candidate = lunco_assets::scenarios_dir().join(&path);
+        let opfs_candidate = lunco_assets_core::scenarios_dir().join(&path);
         let opfs = OpfsStorage::new();
         if opfs
             .exists(&StorageHandle::File(opfs_candidate.clone()))
@@ -1139,9 +1139,13 @@ async fn read_bytes(
                 .await
                 .map_err(|e| e.to_string());
         }
-        let url = lunco_assets::asset_path::web_url(&path.to_string_lossy());
-        lunco_assets::web_fetch::fetch_bytes_cached_conditional("lunco-twin-v1", &url, settings)
-            .await
+        let url = lunco_assets_core::asset_path::web_url(&path.to_string_lossy());
+        lunco_assets_core::web_fetch::fetch_bytes_cached_conditional(
+            "lunco-twin-v1",
+            &url,
+            settings,
+        )
+        .await
     }
 }
 
@@ -1288,7 +1292,7 @@ fn start_dem_builds(
                     // Only the baked-in demo twin is staged under `assets/`. This
                     // mirrors `read_bytes`; the .tif can't reuse it because it
                     // wants progress reporting.
-                    let opfs_tif = lunco_assets::scenarios_dir().join(&tif_path);
+                    let opfs_tif = lunco_assets_core::scenarios_dir().join(&tif_path);
                     let opfs_handle = lunco_storage::StorageHandle::File(opfs_tif);
                     let opfs = lunco_storage::OpfsStorage::new();
                     let tif = if opfs.exists(&opfs_handle).await {
@@ -1316,7 +1320,7 @@ fn start_dem_builds(
                             }
                         }
                     } else {
-                        let url = lunco_assets::asset_path::web_url(&tif_path.to_string_lossy());
+                        let url = lunco_assets_core::asset_path::web_url(&tif_path.to_string_lossy());
 
                         let progress_slot = download_progress.clone();
                         let progress_cb = wasm_bindgen::closure::Closure::<dyn FnMut(f64, f64)>::new(move |done: f64, total: f64| {
@@ -1330,7 +1334,7 @@ fn start_dem_builds(
                         // host-side twin update replaces it in place), so a changed
                         // DEM is re-cached for the next reload instead of being
                         // served stale forever.
-                        let fetched = lunco_assets::web_fetch::fetch_cached_with_progress_conditional(
+                        let fetched = lunco_assets_core::web_fetch::fetch_cached_with_progress_conditional(
                             "lunco-twin-v1",
                             &url,
                             0,

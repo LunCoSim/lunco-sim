@@ -10,7 +10,8 @@
 //! `lunco-modelica-core/src/msl_remote.rs` because that's where the
 //! `web-sys`/`wasm-bindgen-futures` deps already are. Keeping
 //! `lunco-assets` web-sys-free keeps it cheap to depend on from
-//! everywhere else.
+//! everywhere else. Dataset downloading and archive processing remain in
+//! `lunco-assets`.
 
 use std::collections::HashMap;
 use std::path::PathBuf;

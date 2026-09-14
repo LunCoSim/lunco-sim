@@ -279,7 +279,7 @@ pub fn process_output_path(
     cache_root: Option<&Path>,
     twin_root: Option<&Path>,
 ) -> Result<std::path::PathBuf, std::io::Error> {
-    if !crate::asset_path::is_safe_relative_path(&process.output) {
+    if !lunco_assets_core::asset_path::is_safe_relative_path(&process.output) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!(
@@ -289,7 +289,7 @@ pub fn process_output_path(
         ));
     }
     match process.output_root.as_str() {
-        "assets" => Ok(crate::assets_dir_abs().join(&process.output)),
+        "assets" => Ok(lunco_assets_core::assets_dir_abs().join(&process.output)),
         "twin" => {
             // Caller-supplied Twin folder root (the CLI's --twin flag).
             let root = twin_root.ok_or_else(|| {
@@ -663,7 +663,7 @@ fn process_gltf(source: &Path, output: &Path, control: &ProcessControl) -> std::
     // idempotent (the source is the immutable Assets.toml-pinned blob).
     static GLTF_STAGE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let stage_id = GLTF_STAGE.fetch_add(1, Ordering::Relaxed);
-    let tmp = crate::temp_dir().join(format!(
+    let tmp = lunco_assets_core::temp_dir().join(format!(
         "gltf_decoded_{}-{stage_id}.glb",
         std::process::id()
     ));

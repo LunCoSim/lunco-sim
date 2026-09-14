@@ -56,6 +56,7 @@ lunco-scene-authoring = { path = "../lunco-scene-authoring" }
 lunco-scene-validation = { path = "../lunco-scene-validation" }
 lunco-web = { workspace = true }
 lunco-assets = { workspace = true }
+lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-workspace = { path = "../lunco-workspace" }
 lunco-twin = { path = "../lunco-twin" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }

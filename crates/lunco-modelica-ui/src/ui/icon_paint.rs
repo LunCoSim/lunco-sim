@@ -965,7 +965,7 @@ fn paint_ellipse(painter: &egui::Painter, xf: &CoordXform, e: &Ellipse) {
 /// Paint a Bitmap primitive.
 ///
 /// Supports `filename="modelica://Package.Name/path/img.png"` (resolved
-/// via `lunco_assets::msl_dir`) and `filename="modelica://Package.Name/file.png"`
+/// via `lunco_assets_core::msl_dir`) and `filename="modelica://Package.Name/file.png"`
 /// (same). Base64 `imageSource` is not yet wired — decoding inline
 /// buffers every frame is the wrong shape; when we need it, the
 /// base64 will be decoded once and cached by hash.
@@ -1078,7 +1078,7 @@ fn load_bitmap_bytes(filename: &str) -> Option<Vec<u8>> {
         Some(tail) => tail.to_string(),
         None => filename.to_string(),
     };
-    let msl_root = lunco_assets::msl_dir();
+    let msl_root = lunco_assets_core::msl_dir();
     let candidate = msl_root.join(&rel);
     // Route through lunco-storage — `std::fs` is clippy-banned in domain
     // crates and absent on wasm. `FileStorage` reads native disk; on wasm

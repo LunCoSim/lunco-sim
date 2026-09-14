@@ -515,7 +515,7 @@ mod tests {
     /// Not `include_str!`: that would test a compiled-in copy while the running
     /// app reads a file, which is exactly the drift that moving manifests out
     /// of the crates was meant to end. Anchored on `CARGO_MANIFEST_DIR` rather
-    /// than `lunco_assets::manifests_dir()` because cargo runs a test with the
+    /// than `lunco_assets_core::manifests_dir()` because cargo runs a test with the
     /// CRATE as its working directory, while the app runs from the workspace
     /// root — same file, reached the way each caller can actually reach it.
     fn celestial_manifest() -> String {

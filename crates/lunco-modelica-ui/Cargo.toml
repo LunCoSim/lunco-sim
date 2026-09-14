@@ -86,6 +86,7 @@ lunco-workspace-api = { path = "../lunco-workspace-api", optional = true }
 # egui→winit. The GUI/lunica build keeps `default = [..., "ui"]`.
 bevy_egui = { workspace = true, optional = true }
 lunco-assets = { workspace = true }
+lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-core = { path = "../lunco-core" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-theme = { path = "../lunco-theme", optional = true }

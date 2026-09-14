@@ -520,7 +520,7 @@ pub fn on_run_lint(
             backed
                 .as_deref()
                 .and_then(|scenes| scenes.coords_of(doc))
-                .map(|(name, rel)| lunco_assets::twin_uri(&name, &rel))
+                .map(|(name, rel)| lunco_assets_core::twin_uri(&name, &rel))
                 .and_then(|path| server.get_handle::<UsdStageAsset>(path))
         });
         let stage_id = stage_handle.as_ref().map(|handle| handle.id());

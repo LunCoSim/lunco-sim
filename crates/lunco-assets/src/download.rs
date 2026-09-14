@@ -22,7 +22,8 @@
 //! | Textures | `sha256` (content hash) | `"abc123..."` |
 //! | Ephemeris | date in filename | `target_-1024_2026-04-02.csv` |
 
-use crate::{cache_dir, process::ProcessConfig};
+use crate::process::ProcessConfig;
+use lunco_assets_core::cache_dir;
 #[cfg(not(target_arch = "wasm32"))]
 use lunco_settings::DownloadSettings;
 use serde::Deserialize;
@@ -148,7 +149,7 @@ pub fn entry_dest_path(
 ) -> Result<PathBuf, std::io::Error> {
     if !entry.shared {
         if let Some(dest) = entry.dest.as_deref() {
-            if !crate::asset_path::is_safe_relative_path(dest) {
+            if !lunco_assets_core::asset_path::is_safe_relative_path(dest) {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
                     format!("asset destination {dest:?} must be a safe relative path"),
@@ -325,7 +326,7 @@ pub fn source_pool_path(root: &Path, url: &str) -> PathBuf {
         .split(['?', '#'])
         .next()
         .and_then(|u| u.rsplit('/').next())
-        .filter(|s| !s.is_empty() && crate::asset_path::is_safe_relative_path(s))
+        .filter(|s| !s.is_empty() && lunco_assets_core::asset_path::is_safe_relative_path(s))
         .unwrap_or("download.bin");
     root.join("sources").join(&hash[..16]).join(base)
 }
@@ -652,7 +653,7 @@ pub fn download_asset(
 /// the physical cache path.
 /// When a `dest_root` is supplied, `entry.dest` is validated to be a
 /// strictly relative path with no `..` segments (see
-/// [`crate::asset_path::is_safe_relative_path`])
+/// [`lunco_assets_core::asset_path::is_safe_relative_path`])
 /// so a manifest can never escape the Twin root.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn download_asset_with_control(
@@ -665,7 +666,7 @@ pub fn download_asset_with_control(
     // Twin-relative downloads must not let a manifest's `dest` walk outside
     // the Twin root. Cache-relative downloads are plain relative paths.
     if let (Some(_root), Some(d)) = (dest_root, entry.dest.as_deref()) {
-        if !crate::asset_path::is_safe_relative_path(d) {
+        if !lunco_assets_core::asset_path::is_safe_relative_path(d) {
             return Err(DownloadError::ManifestFailed(format!(
                 "asset `{key}` has an unsafe `dest` for a twin download: {d:?} \
                  (must be relative, no `..`, no absolute, no backslash)"
@@ -1017,7 +1018,7 @@ pub fn download_all_for_group_with_limit(
     max_parallel: usize,
     settings: &DownloadSettings,
 ) -> Result<(), DownloadError> {
-    let path = crate::manifests_dir().join(format!("{group}.toml"));
+    let path = lunco_assets_core::manifests_dir().join(format!("{group}.toml"));
     let manifest = AssetManifest::from_file(&path)
         .map_err(|e| DownloadError::ManifestFailed(e.to_string()))?;
 
@@ -1121,7 +1122,7 @@ pub fn download_all_for_bundle_with_limit(
     max_parallel: usize,
     settings: &DownloadSettings,
 ) -> Result<(), DownloadError> {
-    let manifests = crate::engine_manifests()
+    let manifests = lunco_assets_core::engine_manifests()
         .map_err(|error| DownloadError::ManifestFailed(error.to_string()))?;
     let mut entries = Vec::new();
     for (group, path) in manifests {
@@ -1231,7 +1232,7 @@ pub fn download_one_engine(
     asset_key: &str,
     settings: &DownloadSettings,
 ) -> Result<(), DownloadError> {
-    let manifests = crate::engine_manifests()
+    let manifests = lunco_assets_core::engine_manifests()
         .map_err(|error| DownloadError::ManifestFailed(error.to_string()))?;
     for (group, path) in manifests {
         let manifest = AssetManifest::from_file(&path)
@@ -1244,14 +1245,14 @@ pub fn download_one_engine(
 
     Err(DownloadError::ManifestFailed(format!(
         "asset `{asset_key}` not declared in any manifest under {}",
-        crate::manifests_dir().display()
+        lunco_assets_core::manifests_dir().display()
     )))
 }
 
 /// Downloads every asset declared by every engine manifest group.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn download_all_engine(settings: &DownloadSettings) -> Result<(), DownloadError> {
-    let manifests = crate::engine_manifests()
+    let manifests = lunco_assets_core::engine_manifests()
         .map_err(|error| DownloadError::ManifestFailed(error.to_string()))?;
     for (group, _) in manifests {
         download_all_for_group(&group, settings)?;
@@ -1297,7 +1298,7 @@ fn list_manifest_with_twin(
             let process_cache = match owner_cache {
                 Some(root) => Some(root),
                 None => {
-                    default_cache = crate::cache_dir();
+                    default_cache = lunco_assets_core::cache_dir();
                     Some(default_cache.as_path())
                 }
             };
@@ -1356,7 +1357,7 @@ pub fn list_for_twin(twin_root: &Path) -> Result<(), std::io::Error> {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn list_group(group: &str) -> Result<(), std::io::Error> {
     list_manifest(
-        &crate::manifests_dir().join(format!("{group}.toml")),
+        &lunco_assets_core::manifests_dir().join(format!("{group}.toml")),
         group,
         None,
     )
@@ -1743,13 +1744,13 @@ mod tests {
 
     #[test]
     fn safe_rel_dest_accepts_plain_relative() {
-        assert!(crate::asset_path::is_safe_relative_path(
+        assert!(lunco_assets_core::asset_path::is_safe_relative_path(
             "terrain/apollo15/.cache/dtm.tif"
         ));
-        assert!(crate::asset_path::is_safe_relative_path(
+        assert!(lunco_assets_core::asset_path::is_safe_relative_path(
             "textures/moon.png"
         ));
-        assert!(crate::asset_path::is_safe_relative_path(
+        assert!(lunco_assets_core::asset_path::is_safe_relative_path(
             "fonts/DejaVuSans.ttf"
         ));
     }
@@ -1757,20 +1758,30 @@ mod tests {
     #[test]
     fn safe_rel_dest_rejects_traversal_and_absolute() {
         // Parent escape — the whole point of the guard.
-        assert!(!crate::asset_path::is_safe_relative_path("../escape.tif"));
-        assert!(!crate::asset_path::is_safe_relative_path(
+        assert!(!lunco_assets_core::asset_path::is_safe_relative_path(
+            "../escape.tif"
+        ));
+        assert!(!lunco_assets_core::asset_path::is_safe_relative_path(
             "terrain/../../escape.tif"
         ));
-        assert!(!crate::asset_path::is_safe_relative_path("a/../b/../../x"));
+        assert!(!lunco_assets_core::asset_path::is_safe_relative_path(
+            "a/../b/../../x"
+        ));
         // Absolute (Unix + Windows drive).
-        assert!(!crate::asset_path::is_safe_relative_path("/etc/passwd"));
-        assert!(!crate::asset_path::is_safe_relative_path("C:/Users/x"));
+        assert!(!lunco_assets_core::asset_path::is_safe_relative_path(
+            "/etc/passwd"
+        ));
+        assert!(!lunco_assets_core::asset_path::is_safe_relative_path(
+            "C:/Users/x"
+        ));
         // Backslash is a traversal vector on Windows; reject everywhere.
-        assert!(!crate::asset_path::is_safe_relative_path(r"terrain\..\x"));
+        assert!(!lunco_assets_core::asset_path::is_safe_relative_path(
+            r"terrain\..\x"
+        ));
         // Empty / leading-slash-adjacent.
-        assert!(!crate::asset_path::is_safe_relative_path(""));
-        assert!(!crate::asset_path::is_safe_relative_path("."));
-        assert!(!crate::asset_path::is_safe_relative_path(".."));
+        assert!(!lunco_assets_core::asset_path::is_safe_relative_path(""));
+        assert!(!lunco_assets_core::asset_path::is_safe_relative_path("."));
+        assert!(!lunco_assets_core::asset_path::is_safe_relative_path(".."));
     }
 
     /// A `dest_root = Some(twin)` download that fails the traversal guard

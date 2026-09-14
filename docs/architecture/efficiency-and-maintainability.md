@@ -136,7 +136,8 @@ Plus helpers: `key_hex`, `entry_dir`, `store_blob`, `load_blob`, and re-exports
 (cross-peer content address for entries that travel on the wire).
 
 Entries live at `<root>/<namespace>/<key-hex>/…`. `root` is passed in
-(`lunco_assets::cache_dir()`) so the crate needs no bevy/asset dep — it depends
+(`lunco_assets_core::cache_dir()`) so the crate itself needs no asset dependency
+and remains runtime-agnostic — it depends
 only on **lunco-hash** (keys) + **lunco-storage** (I/O). `lunco-storage` stays
 I/O-only; the CAS *policy* lives here.
 

@@ -231,7 +231,7 @@ impl ModelicaDocument {
         #[cfg(target_arch = "wasm32")]
         crate::msl_remote::ensure_msl_source_unpacked();
 
-        let full_source = if let Some(bytes) = lunco_assets::msl::msl_read(path) {
+        let full_source = if let Some(bytes) = lunco_assets_core::msl::msl_read(path) {
             String::from_utf8(bytes)
                 .map_err(|e| format!("non-utf8 source `{}`: {e}", path.display()))?
         } else {
@@ -339,7 +339,7 @@ impl ModelicaDocument {
         #[cfg(target_arch = "wasm32")]
         crate::msl_remote::ensure_msl_source_unpacked();
 
-        let source = if let Some(bytes) = lunco_assets::msl::msl_read(path) {
+        let source = if let Some(bytes) = lunco_assets_core::msl::msl_read(path) {
             String::from_utf8(bytes)
                 .map_err(|e| format!("non-utf8 source `{}`: {e}", path.display()))?
         } else {

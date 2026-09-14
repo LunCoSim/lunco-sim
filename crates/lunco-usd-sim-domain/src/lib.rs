@@ -4228,7 +4228,7 @@ mod tests {
         lunco_hooks_rhai::register_rhai_hook(
             "synth.acausal-network",
             "synthesize",
-            lunco_assets::scripting::policy("synth_acausal_network")
+            lunco_assets_core::scripting::policy("synth_acausal_network")
                 .expect("shipped synthesis policy"),
             true,
         )
@@ -4733,7 +4733,7 @@ def Scope "Rig"
         lunco_hooks_rhai::register_rhai_hook(
             "synth.actuator-wrench",
             "synthesize",
-            lunco_assets::scripting::policy("synth_actuator_wrench")
+            lunco_assets_core::scripting::policy("synth_actuator_wrench")
                 .expect("shipped actuator policy"),
             true,
         )

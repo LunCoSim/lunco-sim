@@ -64,7 +64,7 @@ use bevy_egui::{EguiTextureHandle, EguiUserTextures};
 use lunco_api::executor::{finish_command_result, PendingApiRequest};
 use lunco_api::queries::ApiQueryProvider;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
-use lunco_assets::twin_source::TwinRoots;
+use lunco_assets_core::twin_source::TwinRoots;
 use lunco_core::{on_command, register_commands, Ack, ActiveCommandId, Command, OpId};
 use lunco_doc::{Document, DocumentId, DocumentOrigin};
 use lunco_doc_bevy::{DocumentChanged, DocumentClosed};
@@ -2432,7 +2432,7 @@ fn on_open_usd_preview(trigger: On<OpenUsdPreview>, mut commands: Commands) {
         };
         let stage_handle = world
             .resource::<AssetServer>()
-            .load::<UsdStageAsset>(lunco_assets::twin_uri(&name, &rel));
+            .load::<UsdStageAsset>(lunco_assets_core::twin_uri(&name, &rel));
         if let Some(old_doc) = world
             .resource::<UsdViewportState>()
             .session(preview)
@@ -3788,7 +3788,7 @@ fn mount_preview_session(world: &mut World, preview: UsdPreviewId) {
     };
     let handle = world
         .resource::<AssetServer>()
-        .load::<UsdStageAsset>(lunco_assets::twin_uri(&name, &rel));
+        .load::<UsdStageAsset>(lunco_assets_core::twin_uri(&name, &rel));
     world
         .resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
         .track_preview(doc, name, rel);

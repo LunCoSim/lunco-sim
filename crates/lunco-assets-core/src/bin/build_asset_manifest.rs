@@ -1,7 +1,7 @@
 //! Writes the engine-library `manifest.json` the **web build** ships.
 //!
 //! ```text
-//! cargo run -p lunco-assets --bin build_asset_manifest -- <dist>/assets
+//! cargo run -p lunco-assets-core --bin build_asset_manifest -- <dist>/assets
 //! ```
 //!
 //! The browser has no `readdir`, so the bundle has to carry its own table of
@@ -12,7 +12,7 @@
 //! # Why this is a Rust binary and not four lines of shell
 //!
 //! Because "which files ship" already has a definition —
-//! [`lunco_assets::discovery::scan_library`] — and the runtime reads the result. A
+//! [`lunco_assets_core::discovery::scan_library`] — and the runtime reads the result. A
 //! packaging step that re-derives it with its own `find`/`os.walk` is a *second*
 //! implementation of the same rule, in another language, kept in step by discipline.
 //! That is how the native and web builds come to disagree about what an asset is,
@@ -49,7 +49,7 @@ fn main() {
         std::process::exit(1);
     }
 
-    let rels = lunco_assets::discovery::scan_library(&dir);
+    let rels = lunco_assets_core::discovery::scan_library(&dir);
     if rels.is_empty() {
         // Not fatal on its own, but it means the web spawn palette and shader
         // catalog will be empty — almost certainly a staging bug, so say so.

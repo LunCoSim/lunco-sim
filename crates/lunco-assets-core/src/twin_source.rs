@@ -359,7 +359,7 @@ impl TwinRoots {
 
     /// Absolute root folder of an open Twin, by `twin://` authority. Public
     /// because a Twin's own `Assets.toml` (scanned on open by
-    /// [`crate::datasets`]) is addressed by filesystem path, not by URI.
+    /// `lunco-assets`]) is addressed by filesystem path, not by URI.
     pub fn root_for(&self, name: &str) -> Result<Option<PathBuf>, TwinRootsError> {
         self.roots
             .read()

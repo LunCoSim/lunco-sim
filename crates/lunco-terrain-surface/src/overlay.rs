@@ -58,7 +58,7 @@ pub struct TerrainDiagnosticLook(pub ShaderLook);
 
 impl Default for TerrainDiagnosticLook {
     fn default() -> Self {
-        let shader = lunco_assets::engine_asset_uri("shaders/terrain_debug.wgsl");
+        let shader = lunco_assets_core::engine_asset_uri("shaders/terrain_debug.wgsl");
         Self(ShaderLook::new(shader.clone()).with_vertex_shader(shader))
     }
 }
@@ -203,10 +203,11 @@ fn on_set_terrain_overlay(
         params.opacity = opacity.clamp(0.0, 1.0);
     }
     if let Some(shader) = ev.shader.as_deref() {
-        diagnostic.0.shader = lunco_assets::engine_asset_uri(shader.trim());
+        diagnostic.0.shader = lunco_assets_core::engine_asset_uri(shader.trim());
     }
     if let Some(vertex_shader) = ev.vertex_shader.as_deref() {
-        diagnostic.0.vertex_shader = Some(lunco_assets::engine_asset_uri(vertex_shader.trim()));
+        diagnostic.0.vertex_shader =
+            Some(lunco_assets_core::engine_asset_uri(vertex_shader.trim()));
     }
     debug!(
         "[terrain-overlay] enabled={} lod_depth={} safe={}° cliff={}° opacity={}",

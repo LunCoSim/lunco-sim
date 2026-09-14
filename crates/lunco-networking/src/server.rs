@@ -1183,7 +1183,7 @@ fn collect_scenario_input(
             let Ok(rel) = abs_path.strip_prefix(&twin.root) else {
                 continue;
             };
-            let twin_rel = lunco_assets::asset_path::slashed(rel);
+            let twin_rel = lunco_assets_core::asset_path::slashed(rel);
             if is_runtime_state(&twin_rel) {
                 continue;
             }
@@ -1218,7 +1218,7 @@ fn collect_scenario_input(
     // The host ships whatever the authored asset closure
     // walker reached. Revisit before multiplayer hardening
     // (REVIEW-2026-07-19.md finding #5).
-    for f in lunco_assets::transitive_file_closure(
+    for f in lunco_assets_core::transitive_file_closure(
         &roots,
         lunco_usd_compose::is_usd_layer,
         lunco_usd_compose::layer_dependency_arcs,
@@ -1252,7 +1252,7 @@ fn collect_scenario_input(
         let Ok(rel) = abs_path.strip_prefix(&manifest_root) else {
             continue;
         };
-        let rel_path = lunco_assets::asset_path::slashed(rel);
+        let rel_path = lunco_assets_core::asset_path::slashed(rel);
         descriptors.push(AssetDescriptor {
             abs_path,
             rel_path,
@@ -1273,7 +1273,7 @@ fn collect_scenario_input(
             .join(&ds)
             .strip_prefix(&manifest_root)
             .ok()
-            .map(lunco_assets::asset_path::slashed)
+            .map(lunco_assets_core::asset_path::slashed)
             .unwrap_or(ds)
     });
 

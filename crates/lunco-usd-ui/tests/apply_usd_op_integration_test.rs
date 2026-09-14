@@ -27,7 +27,7 @@ fn test_apply_usd_op_integration() {
     // the `twin://` source, so register the lunco asset sources (which insert
     // `TwinRoots`) BEFORE `AssetPlugin` snapshots them.
     app.add_plugins(MinimalPlugins);
-    lunco_assets::register_lunco_asset_sources(&mut app);
+    lunco_assets_core::register_lunco_asset_sources(&mut app);
     app.add_plugins(AssetPlugin::default());
 
     app.init_asset::<UsdStageAsset>();

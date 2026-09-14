@@ -2,30 +2,17 @@
 name = "lunco-assets"
 version = "0.1.0"
 edition = "2021"
-# Every doc/manifest in the tree invokes `cargo run -p lunco-assets -- …`;
-# without this, cargo refuses (three [[bin]]s) and the documented command
-# form has never actually run.
+# The package exposes the asset-manager CLI as its default binary.
 default-run = "lunco-assets"
 license.workspace = true
-description = "Unified asset management for LunCoSim — cache resolution, versioned downloads, texture processing, and loading abstraction"
+description = "Dataset provisioning and native offline asset processing for LunCoSim"
 
 [dependencies]
-# `bevy_asset` is required here directly: this crate defines the `twin://` /
-# `lunco://` AssetReaders (twin_source.rs uses `bevy::asset::io::*`). The
-# workspace bevy default is substrate-only (no render/asset) since the render
-# gating, so declare the feature here rather than relying on a consumer to
-# unify it in — otherwise the standalone asset-manager binary fails to
-# compile (E0433: `bevy::asset` not found).
+# Dataset lifecycle resources and commands are Bevy-facing. Asset identity and
+# source registration are owned by `lunco-assets-core`.
 bevy = { workspace = true, features = ["bevy_asset"] }
-# The `twin://` AssetReader routes byte reads through the storage backend
-# (native `FileStorage`, web `OpfsStorage`) rather than raw `std::fs`, so an open
-# Twin and a downloaded scenario are served uniformly on both platforms.
-lunco-storage = { path = "../lunco-storage" }
-lunco-twin = { path = "../lunco-twin" }
+lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-settings = { path = "../lunco-settings" }
-# Twin open/close events are the lifecycle boundary for the shared `twin://`
-# source and its scoped dataset registry. The asset layer owns that binding so
-# a host does not need a domain-specific plugin just to mount a Twin.
 lunco-workspace = { path = "../lunco-workspace" }
 # A broken `Assets.toml` or a failed dataset download has to REACH the user, and
 # `warn!`/`error!` is not surfacing — the workbench fans an Error-severity
@@ -38,29 +25,13 @@ serde_json = { workspace = true }
 toml = { workspace = true }
 thiserror = { workspace = true }
 image = { workspace = true }
-# Compile-time embed of authored asset subtrees that must be present on EVERY
-# target (wasm has no filesystem). Used by `scripting.rs` to bake
-# `assets/scripting/` in. All-targets: `include_dir!` is fs-free at runtime.
-include_dir = "0.7"
-# Cross-platform OS cache-dir resolution for `cache_dir()`.
-dirs = "5"
-# Not native-only: `download::source_pool_path` keys the source pool by URL hash,
-# and that resolver is target-neutral — `datasets.rs` and the Modelica UI call it
-# on wasm to learn WHERE a product lives. Only the fetching around it is gated.
 sha2 = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
 
-# Writes the engine-library `manifest.json` the web bundle ships (the browser has
-# no `readdir`). Calls `discovery::scan_library` — the SAME scanner the native
-# runtime uses — so the packaging step cannot disagree with the runtime about what
-# an asset is. See the binary's docs.
-[[bin]]
-name = "build_asset_manifest"
-path = "src/bin/build_asset_manifest.rs"
-
-# Desktop-only: HTTP client for asset downloads, tarball extraction
+# Desktop-only: HTTP client for asset downloads, tarball extraction, and native
+# processing. These dependencies are absent from `lunco-assets-core`.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ureq = { workspace = true }
 # `which` is used by the glb process step to verify that `npx`
@@ -86,35 +57,6 @@ rayon = { workspace = true }
 resvg = { workspace = true }
 tiny-skia = { workspace = true }
 usvg = { workspace = true }
-
-# Wasm-only: fetch bundled TTF fonts over HTTP at runtime (served at
-# `/fonts/…` by the page bundle — see the copy step in
-# `scripts/build_web.sh`). Native reads the same file from the cache dir.
-# Also backs `web_fetch` — the generic browser fetch + Cache-Storage +
-# tar.zst-unpack primitives shared by every bundle distributor (MSL,
-# twin bundles), extracted here from lunco-modelica-core's MSL fetcher.
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen = { workspace = true }
-wasm-bindgen-futures = { workspace = true }
-# The engine-library listing arrives by `fetch` (`assets/manifest.json`), which is
-# async and `!Send`; the loaded result crosses back into ECS over a channel.
-crossbeam-channel = { workspace = true }
-js-sys = { workspace = true }
-web-sys = { workspace = true, features = [
-    "Window",
-    "Response",
-    "Request",
-    "RequestInit",
-    "RequestMode",
-    "Cache",
-    "CacheStorage",
-    "Headers",
-] }
-# Pure-Rust zstd decoder + tar reader for `web_fetch::unpack_tar_zst`
-# (the web runtime has no `zstd`/filesystem). Native bundle packing uses
-# the C `zstd` crate above; the browser decodes with these.
-ruzstd = "0.7"
-tar = { workspace = true }
 
 [lints]
 workspace = true

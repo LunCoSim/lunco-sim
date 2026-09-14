@@ -9,6 +9,7 @@ bevy = { workspace = true }
 serde = { workspace = true }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-assets = { workspace = true }
+lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-settings = { path = "../lunco-settings" }
 celestial-ephemeris = "0.1.1-alpha.2"
 celestial-time = "0.1.1-alpha.2"
