@@ -34,9 +34,9 @@ const TRAIL_SAMPLE_SPACING_M: f64 = 0.5;
 /// Maximum retained samples per vehicle. At the sampling spacing this bounds
 /// the visible history to roughly 512 m, even on a rover that never stops.
 const TRAIL_MAX_POINTS: usize = 1024;
-/// The trail is an annotation rather than a road or terrain deformation.
-const TRAIL_HALF_WIDTH_M: f32 = 0.16;
-const TRAIL_SURFACE_CLEARANCE_M: f32 = 0.09;
+/// The trail is an annotation rather than a road or terrain deformation. Keep
+/// it just above the solved surface to avoid z-fighting without floating.
+const TRAIL_SURFACE_CLEARANCE_M: f32 = 0.02;
 /// A wheel contact must support some upward load. This excludes vertical wall
 /// contacts while preserving steep but physically driveable static surfaces.
 const TRAIL_MIN_SUPPORT_NORMAL_Y: f64 = 0.2;
@@ -143,6 +143,9 @@ pub(crate) struct TrailVisualProjection {
 #[derive(Clone, Debug)]
 struct TrailLane {
     wheel: Entity,
+    /// `build_ribbon_mesh` consumes half-width; this comes from the authored
+    /// full tire width for the wheel realization.
+    half_width: f32,
     points: Vec<RibbonPoint>,
 }
 
@@ -360,7 +363,7 @@ pub(crate) fn sample_vehicle_trails(
         &Transform,
         &WheelBodyMount,
     )>,
-    q_physical_wheels: Query<Entity, (With<PhysicalWheel>, With<JointedWheelTire>)>,
+    q_physical_wheels: Query<(&PhysicalWheel, Entity), With<JointedWheelTire>>,
     collisions: Collisions,
 ) {
     let mut samples = Vec::new();
@@ -382,9 +385,9 @@ pub(crate) fn sample_vehicle_trails(
         ) else {
             continue;
         };
-        samples.push((vehicle, wheel_entity, contact));
+        samples.push((vehicle, wheel_entity, wheel.wheel_width, contact));
     }
-    for wheel_entity in q_physical_wheels.iter() {
+    for (physical_wheel, wheel_entity) in q_physical_wheels.iter() {
         active_wheels.insert(wheel_entity);
         let Some(vehicle) = mobility_root(wheel_entity, &q_roots, &q_parents) else {
             continue;
@@ -397,10 +400,18 @@ pub(crate) fn sample_vehicle_trails(
         ) else {
             continue;
         };
-        samples.push((vehicle, wheel_entity, contact));
+        samples.push((
+            vehicle,
+            wheel_entity,
+            physical_wheel.wheel_width as f64,
+            contact,
+        ));
     }
 
-    for (vehicle, wheel, contact) in samples {
+    for (vehicle, wheel, width, contact) in samples {
+        if !width.is_finite() || width <= 0.0 {
+            continue;
+        }
         if let Ok(mut history) = q_histories.get_mut(vehicle) {
             history.record(active_frame.0, wheel, contact);
         }
@@ -424,12 +435,16 @@ pub(crate) fn arm_trail_projection_rebuild(
             Or<(Changed<Position>, Changed<VehicleTrailHistory>)>,
         ),
     >,
+    q_raycast_widths: Query<(), Changed<WheelRaycast>>,
+    q_physical_widths: Query<(), Changed<PhysicalWheel>>,
     mut removed_histories: RemovedComponents<VehicleTrailHistory>,
     active_frame: Res<ActivePhysicsFrame>,
     surface: lunco_terrain_surface::GridSurfaceQuery,
     projection: Res<TrailVisualProjection>,
 ) {
     if !q_vehicles.is_empty()
+        || !q_raycast_widths.is_empty()
+        || !q_physical_widths.is_empty()
         || removed_histories.read().next().is_some()
         || active_frame.is_changed()
         || projection.frame != Some(active_frame.0)
@@ -482,6 +497,8 @@ pub(crate) fn rebuild_vehicle_trail_projection(
     active_frame: Res<ActivePhysicsFrame>,
     surface: lunco_terrain_surface::GridSurfaceQuery,
     q_vehicles: Query<(Entity, &VehicleTrailHistory), With<MobilityRoot>>,
+    q_raycast_wheels: Query<&WheelRaycast>,
+    q_physical_wheels: Query<&PhysicalWheel>,
     mut request: ResMut<TrailProjectionRebuildRequested>,
     mut projection: ResMut<TrailVisualProjection>,
 ) {
@@ -504,16 +521,31 @@ pub(crate) fn rebuild_vehicle_trail_projection(
             if lane.points.len() < 2 {
                 continue;
             }
+            let Some(half_width) = q_raycast_wheels
+                .get(wheel)
+                .map(|wheel| wheel.wheel_width)
+                .or_else(|_| {
+                    q_physical_wheels
+                        .get(wheel)
+                        .map(|wheel| wheel.wheel_width as f64)
+                })
+                .ok()
+                .filter(|width| width.is_finite() && *width > 0.0)
+                .map(|width| (width as f32) * 0.5)
+            else {
+                continue;
+            };
             let Some(points) =
                 project_trail_to_surface(lane.points.iter().copied(), &surface, surface_mode)
             else {
                 continue;
             };
             if points.len() >= 2 {
-                trails
-                    .entry(vehicle)
-                    .or_default()
-                    .push(TrailLane { wheel, points });
+                trails.entry(vehicle).or_default().push(TrailLane {
+                    wheel,
+                    half_width,
+                    points,
+                });
             }
         }
     }
@@ -527,6 +559,7 @@ fn trail_signature(
     wheel: Entity,
     frame: Option<Entity>,
     surface: Option<(Entity, u64)>,
+    half_width: f32,
     points: &[RibbonPoint],
 ) -> u64 {
     let mut hash = std::collections::hash_map::DefaultHasher::new();
@@ -534,6 +567,7 @@ fn trail_signature(
     wheel.hash(&mut hash);
     frame.hash(&mut hash);
     surface.hash(&mut hash);
+    half_width.to_bits().hash(&mut hash);
     for point in points {
         point.position.x.to_bits().hash(&mut hash);
         point.position.y.to_bits().hash(&mut hash);
@@ -597,6 +631,7 @@ pub(crate) fn sync_vehicle_trail_meshes(
                 lane.wheel,
                 projection.frame,
                 projection.surface,
+                lane.half_width,
                 &lane.points,
             );
             let previous = existing.remove(&key);
@@ -606,7 +641,7 @@ pub(crate) fn sync_vehicle_trail_meshes(
             let Some(new_mesh) = build_ribbon_mesh(
                 &lane.points,
                 anchor,
-                &[TRAIL_HALF_WIDTH_M],
+                &[lane.half_width],
                 TRAIL_SURFACE_CLEARANCE_M,
                 false,
             ) else {
@@ -813,7 +848,7 @@ mod tests {
         let mesh = build_ribbon_mesh(
             &points,
             points[0].position,
-            &[TRAIL_HALF_WIDTH_M],
+            &[0.16],
             TRAIL_SURFACE_CLEARANCE_M,
             false,
         )

@@ -40,17 +40,17 @@ def Xform "RouteRibbon"
     {
         token type = "linear"
         token wrap = "nonperiodic"
-        # Keep the annotation visibly above the streamed terrain. The route tool
-        # owns the terrain-following centerline; this presentation clearance stays
-        # with the reusable visual asset instead of becoming route policy.
-        double3 xformOp:translate = (0, 0.35, 0)
+        # The route tool offsets each sampled vertex along its support normal.
+        # Keep this reusable geometry at the local origin so a route's authored
+        # frame remains the only transform applied to the generated view.
+        double3 xformOp:translate = (0, 0, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         int[] curveVertexCounts = [2]
         point3f[] points = [(0, 0, 0), (0, 0, 1)]
         # UsdGeomCurves interprets widths as full ribbon width when normals are
         # authored. Keep this a narrow readable annotation, not a road-sized
         # surface.
-        float[] widths = [0.5]
+        float[] widths = [0.12]
         normal3f[] normals = [(0, 1, 0), (0, 1, 0)]
         rel material:binding = </RouteRibbon/Looks/RouteRibbon_Mat>
         bool doubleSided = true

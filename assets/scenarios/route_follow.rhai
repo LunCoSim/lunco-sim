@@ -255,70 +255,6 @@ fn refresh_route_view(me, state) {
     #{ ok: true, revision: if post_revision == () { revision } else { post_revision } }
 }
 
-fn route_scene_root(me) {
-    let route = route_path(me);
-    if route == () { return (); }
-    let parts = route.split("/");
-    if parts.len() <= 2 { return "/"; }
-    let root = "";
-    for i in 1..parts.len() - 1 {
-        root += "/" + parts[i];
-    }
-    root
-}
-
-fn route_pointer_context(context, route) {
-    // Event payload maps are immutable snapshots at the event boundary. Build
-    // the tool context explicitly so the route policy owns the route binding
-    // without mutating a telemetry payload shared with other subscribers.
-    #{
-        button: context.button,
-        screen_position: context.screen_position,
-        hit_entity_id: context.hit_entity_id,
-        target_entity_id: context.target_entity_id,
-        hit_path: context.hit_path,
-        target_path: context.target_path,
-        selected_entity_id: context.selected_entity_id,
-        selected_path: context.selected_path,
-        controlled_entity_id: context.controlled_entity_id,
-        controlled_path: context.controlled_path,
-        prim_paths: context.prim_paths,
-        modifiers: context.modifiers,
-        doc_id: context.doc_id,
-        scene_root_path: context.scene_root_path,
-        route_path: route,
-        world_position: context.world_position,
-    }
-}
-
-fn route_pointer(me, evt) {
-    if evt.name != "scene.pointer" || evt.value == () { return; }
-    let context = evt.value;
-    let route = route_path(me);
-    if route == () || context.scene_root_path == ()
-        || context.scene_root_path != route_scene_root(me) {
-        return;
-    }
-
-    let modifiers = context.modifiers;
-    if context.button == "primary"
-        && modifiers != ()
-        && modifiers["alt"] == true
-        && modifiers["shift"] != true
-        && modifiers["ctrl"] != true
-        && context.world_position != () {
-        waypoint_editor::on_click(route_pointer_context(context, route));
-        return;
-    }
-
-    // Secondary clicks are routed by the same event contract. The policy only
-    // handles an authored direct child of this route, so a right click on a
-    // rover or another scene object cannot accidentally select it here.
-    if context.button == "secondary" {
-        waypoint_editor::on_context(route_pointer_context(context, route));
-    }
-}
-
 // The runtime program HUD emits generic semantic actions. This route policy
 // owns the route-specific scope binding; the editor library remains generic.
 fn runtime_program_action(me, action) {
@@ -432,7 +368,6 @@ fn on_event(me, evt) {
         runtime_program_action(me, evt.value);
         return;
     }
-    route_pointer(me, evt);
     // Avian owns zone occupancy. Keep route-zone enter pulses in the program's
     // live state even while disabled so starting from the initial point targets
     // the next point. This is runtime state only; no occupancy is written to

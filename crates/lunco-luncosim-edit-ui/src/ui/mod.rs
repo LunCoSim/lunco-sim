@@ -44,6 +44,8 @@ pub mod joint_state;
 pub mod ports;
 /// Generic right-click menus for USD-authored transparent markers.
 pub mod scene_context;
+/// Generic script-authored scene context-menu host.
+pub mod scene_context_menu;
 pub(crate) mod selection_context;
 pub mod spawn_palette;
 pub mod terrain_tools;
@@ -540,6 +542,7 @@ impl Plugin for SceneEditUiPlugin {
             .init_resource::<crate::gizmo::GizmoDragSession>()
             .init_resource::<crate::gizmo::GizmoVisibilityState>()
             .init_resource::<crate::diagnostic_visuals::DiagnosticVisualStore>()
+            .init_resource::<scene_context_menu::SceneContextMenuState>()
             .init_resource::<lunco_core::ArmedScriptTool>()
             .init_resource::<crate::script_tools::ScenePointerDispatch>()
             .add_plugins(crate::perf_bridge::PerfBridgePlugin);
@@ -601,6 +604,7 @@ impl Plugin for SceneEditUiPlugin {
         app.add_observer(crate::selection::on_select_entity_target);
         app.add_systems(Update, crate::selection::handle_deselect_keys);
         app.add_observer(crate::script_tools::on_scene_pointer_event);
+        app.add_observer(scene_context_menu::on_script_ui_request);
         app.add_observer(crate::selection::on_scene_click_select);
         app.add_observer(crate::selection::on_usd_viewport_click);
         app.add_observer(crate::script_tools::on_scene_click_script_tool);
@@ -1030,7 +1034,10 @@ impl Plugin for SceneEditUiPlugin {
         app.add_observer(scene_context::apply_pointer_policy)
             .add_systems(
                 bevy_egui::EguiPrimaryContextPass,
-                billboard_overlay::draw_billboard_overlay
+                (
+                    billboard_overlay::draw_billboard_overlay,
+                    scene_context_menu::draw_scene_context_menu,
+                )
                     .before(lunco_workbench::WorkbenchRenderSet),
             )
             .add_systems(Update, inspector::delete_selected_on_intent);

@@ -958,6 +958,8 @@ pub struct WheelRaycast {
     pub heading_port: Entity,
     /// Radius of the tire (effectively the minimum offset from ground).
     pub wheel_radius: f64,
+    /// Full authored tire width used by generic presentation consumers.
+    pub wheel_width: f64,
     /// Entity for the visual mesh to be transformed.
     pub visual_entity: Option<Entity>,
     /// Resultant normal force from the last physics tick, used for friction calculations.
@@ -1017,6 +1019,7 @@ impl Default for WheelRaycast {
             speed_port: Entity::PLACEHOLDER,
             heading_port: Entity::PLACEHOLDER,
             wheel_radius: 0.0,
+            wheel_width: 0.0,
             visual_entity: None,
             last_normal_force: 0.0,
             spin_angle: 0.0,

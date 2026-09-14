@@ -68,6 +68,20 @@ fn ribbon_normals_match(doc, count) {
         && result.attrs["normals"] != () && result.attrs["normals"].len() == count
 }
 
+fn ribbon_clearance_matches(doc) {
+    let result = query("QueryUsdPrim", #{
+        doc_id: doc,
+        path: RIBBON_GEOMETRY,
+        attrs: ["points"],
+    });
+    if result == () || result.ok == false || result.attrs == ()
+        || result.attrs["points"] == () || result.attrs["points"].len() == 0 {
+        return false;
+    }
+    let first = result.attrs["points"][0];
+    first.len() == 3 && first[1] >= 0.02 && first[1] <= 0.04
+}
+
 fn ribbon_anchor_matches_point(doc, point_path) {
     let point = query("QueryUsdPrim", #{
         doc_id: doc,
@@ -104,6 +118,7 @@ fn point_position(doc, path) {
 fn context(doc, path, position) {
     #{
         button: "primary",
+        screen_position: [64.0, 64.0],
         doc_id: doc,
         scene_root_path: ROOT,
         route_path: ROUTE,
@@ -219,8 +234,10 @@ fn on_tick(me) {
             "route program uses the sourceAsset-only USD contract"));
         this.checks.push(t_true(true,
             "route program materializes an oriented ribbon from authored points"));
-        this.checks.push(t_true(ribbon_width_matches(this.doc, 0.5),
-            "route ribbon keeps a readable annotation width"));
+        this.checks.push(t_true(ribbon_width_matches(this.doc, 0.12),
+            "route ribbon keeps a narrow terrain annotation width"));
+        this.checks.push(t_true(ribbon_clearance_matches(this.doc),
+            "route ribbon clears the surface along its support normal"));
         let listed = program_editor::list(this.doc, ROUTE);
         this.checks.push(t_true(listed.ok && listed.programs.len() == 1
             && listed.programs[0].path == ROUTE + "/Program",
@@ -265,7 +282,14 @@ fn on_tick(me) {
             this.phase = 100;
             return;
         }
-        emit("scene.pointer", context(this.doc, (), [0.0, 1.0, -32.0]));
+        let pointer = waypoint_editor::on_pointer(
+            context(this.doc, (), [0.0, 1.0, -32.0]),
+        );
+        if pointer.ok != true {
+            this.checks.push(t_true(false, "generic pointer policy rejected Alt-click"));
+            finish(this);
+            return;
+        }
         this.phase = 2;
         return;
     }
@@ -313,7 +337,14 @@ fn on_tick(me) {
         // one-shot scene event. A semantic event is not a durable command and
         // must not be sent into a program that is still being replaced.
         if !this.route_ready { return; }
-        emit("scene.pointer", context(this.doc, (), [0.0, 1.0, -32.0]));
+        let pointer = waypoint_editor::on_pointer(
+            context(this.doc, (), [0.0, 1.0, -32.0]),
+        );
+        if pointer.ok != true {
+            this.checks.push(t_true(false, "generic pointer policy rejected Alt-click"));
+            finish(this);
+            return;
+        }
         this.program_switch_complete = true;
         this.phase = 2;
         return;
@@ -330,7 +361,9 @@ fn on_tick(me) {
         let secondary = context(this.doc, this.new_point, ());
         secondary.button = "secondary";
         secondary.modifiers = #{ alt: false, shift: false, ctrl: false };
-        emit("scene.pointer", secondary);
+        let pointer = waypoint_editor::on_pointer(secondary);
+        this.checks.push(t_true(pointer.ok == true,
+            "generic pointer policy accepts secondary-click context"));
         this.phase = 20;
         return;
     }
@@ -504,7 +537,7 @@ fn on_tick(me) {
 
     if this.phase == 9 {
         if point_count(this.doc) != 2 || ribbon_count(this.doc) != 2 { return; }
-        emit("scene.pointer", modified_context(this.doc, (), [0.0, 1.0, -24.0],
+        waypoint_editor::on_pointer(modified_context(this.doc, (), [0.0, 1.0, -24.0],
             #{ alt: true, shift: true, ctrl: true }));
         this.phase = 90;
         return;

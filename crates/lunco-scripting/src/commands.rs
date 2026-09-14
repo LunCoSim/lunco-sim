@@ -1,6 +1,6 @@
 //! One-shot script-execution commands.
 //!
-//! `RunRhai`, `RunRhaiTool` / `RunPython` are typed `#[Command]`s — discoverable on every
+//! `RunRhai`, `RunRhaiTool`, `RunRhaiToolHook` / `RunPython` are typed `#[Command]`s — discoverable on every
 //! transport (HTTP API, MCP, scripts) like any other command. `RunRhai` is
 //! always present (pure-Rust, wasm-clean). `RunPython` is `#[cfg]`-gated on the
 //! `python` feature, so it only appears in the API schema when the runtime is
@@ -80,6 +80,23 @@ pub struct RunRhaiTool {
     pub args: TelemetryValue,
 }
 
+/// Invoke any one-argument hook exposed by a registered Rhai tool.
+///
+/// This is the generic interaction seam used by authored pointer policies and
+/// menus. The hook name is validated against the tool registry before it is
+/// queued; the payload remains a typed [`TelemetryValue`] until the Rhai
+/// adapter creates its native value.
+#[cfg(feature = "rhai")]
+#[Command(default)]
+pub struct RunRhaiToolHook {
+    /// Registered tool namespace, for example `waypoint_editor`.
+    pub tool: String,
+    /// One-argument function in that namespace, without `/1`.
+    pub hook: String,
+    /// Structured argument passed to the hook.
+    pub args: TelemetryValue,
+}
+
 // rhai runs with full World access (`cmd`/`world_pos`/`get`/...), which an
 // observer can't hold. So the handler ENQUEUES the snippet under the active
 // request id; the exclusive `drain_world_scripts` system runs it next Update
@@ -135,6 +152,53 @@ fn on_run_rhai_tool(
     pending.queue.push(PendingWorldScript::Tool {
         id,
         tool: cmd.tool.clone(),
+        hook: "on_click".to_string(),
+        args: cmd.args.clone(),
+        authority,
+        correlation_id,
+    });
+    Ok(Ack::with_data(
+        OpId::new(),
+        serde_json::json!({ "status": "queued" }),
+    ))
+}
+
+#[cfg(feature = "rhai")]
+#[on_command(RunRhaiToolHook)]
+fn on_run_rhai_tool_hook(
+    trigger: On<RunRhaiToolHook>,
+    active: Res<ActiveCommandId>,
+    pending_request: Res<PendingApiRequest>,
+    mut pending: ResMut<PendingWorldScripts>,
+    guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
+) -> Result<Ack, String> {
+    let cmd = trigger.event();
+    if cmd.hook.is_empty()
+        || !cmd
+            .hook
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    {
+        return Err(format!(
+            "invalid Rhai tool hook '{}'; expected an identifier",
+            cmd.hook
+        ));
+    }
+    let signature = format!("{}/1", cmd.hook);
+    if !lunco_tools::has_function(&cmd.tool, &signature) {
+        return Err(format!(
+            "Rhai tool '{}' has no {} handler",
+            cmd.tool, signature
+        ));
+    }
+    let id = active.get().unwrap_or(0);
+    let authority = guard.and_then(|g| g.0);
+    let correlation_id =
+        (pending_request.correlation_id != 0).then_some(pending_request.correlation_id);
+    pending.queue.push(PendingWorldScript::Tool {
+        id,
+        tool: cmd.tool.clone(),
+        hook: cmd.hook.clone(),
         args: cmd.args.clone(),
         authority,
         correlation_id,
@@ -1362,6 +1426,7 @@ pub(crate) fn register_command_policies(app: &mut App) {
     {
         reg.register("RunRhai", EXEC);
         reg.register("RunRhaiTool", EXEC);
+        reg.register("RunRhaiToolHook", EXEC);
         reg.register("RunScenario", EXEC);
         reg.register("RunScenarioAsset", EXEC);
         reg.register("RunTimeline", EXEC);
@@ -1420,6 +1485,7 @@ register_commands!(
     on_redo_script_document,
     on_run_rhai,
     on_run_rhai_tool,
+    on_run_rhai_tool_hook,
     on_run_scenario,
     on_run_scenario_asset,
     on_run_timeline,
@@ -1436,6 +1502,7 @@ register_commands!(
     on_redo_script_document,
     on_run_rhai,
     on_run_rhai_tool,
+    on_run_rhai_tool_hook,
     on_run_scenario,
     on_run_scenario_asset,
     on_run_timeline,

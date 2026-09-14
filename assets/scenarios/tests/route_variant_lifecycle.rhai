@@ -41,6 +41,7 @@ fn active_points(doc) {
 fn context(doc, path, position) {
     #{
         button: "primary",
+        screen_position: [64.0, 64.0],
         doc_id: doc,
         scene_root_path: ROOT,
         route_path: ROUTE,

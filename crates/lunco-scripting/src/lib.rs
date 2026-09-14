@@ -65,6 +65,9 @@ pub mod timelines;
 /// Importable rhai tool libraries (named `libname::fn` modules).
 #[cfg(feature = "rhai")]
 pub mod tool_libs;
+/// Typed requests from authored scripts to generic runtime UI adapters.
+#[cfg(feature = "rhai")]
+pub mod ui_bridge;
 pub mod world_bridge;
 
 pub use doc::{ScenarioReloadPolicy, ScriptDocument, ScriptedModel};
@@ -477,6 +480,7 @@ impl Plugin for LunCoScriptingPlugin {
             // by the Update drain after evaluation completes.
             app.register_deferred_command::<commands::RunRhai>();
             app.register_deferred_command::<commands::RunRhaiTool>();
+            app.register_deferred_command::<commands::RunRhaiToolHook>();
             // The rhai scenario backend, wrapped in the language-neutral driver
             // (owns the on_start/on_tick/on_event/on_stop + hot-reload + pause +
             // teardown lifecycle; rhai supplies only the mechanics).

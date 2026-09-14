@@ -167,6 +167,34 @@ fn rhai_to_telemetry(value: &Dynamic) -> TelemetryValue {
     }
 }
 
+fn screen_position_array(value: &Dynamic) -> Option<[f32; 2]> {
+    let values = value.clone().try_cast::<rhai::Array>()?;
+    (values.len() == 2).then_some([
+        values[0].as_float().ok()? as f32,
+        values[1].as_float().ok()? as f32,
+    ])
+}
+
+fn context_menu_items(value: &Dynamic) -> Option<Vec<crate::ui_bridge::ScriptMenuItem>> {
+    let values = value.clone().try_cast::<rhai::Array>()?;
+    values
+        .into_iter()
+        .map(|item| {
+            let map = item.try_cast::<Map>()?;
+            let label = map.get("label")?.clone().into_string().ok()?;
+            let tool = map.get("tool")?.clone().into_string().ok()?;
+            let hook = map.get("hook")?.clone().into_string().ok()?;
+            let args = map.get("args").map(rhai_to_telemetry).unwrap_or_default();
+            Some(crate::ui_bridge::ScriptMenuItem {
+                label,
+                tool,
+                hook,
+                args,
+            })
+        })
+        .collect()
+}
+
 /// Convert a rhai params map to the JSON the API command/query layer expects —
 /// the one inherent JSON seam (`cmd`/`query` params are *defined* as JSON).
 fn map_to_json(params: Map) -> serde_json::Value {
@@ -625,6 +653,31 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
     engine.register_fn("command_result", |id: i64| -> Dynamic {
         bridge_core::command_result(&RhaiBuilder, id as u64)
     });
+
+    // open_context_menu(screen_position, items) is a typed script-to-UI bridge.
+    // The payload is lowered directly to TelemetryValue and delivered as an
+    // ECS event; it does not travel through the reflected JSON command seam.
+    engine.register_fn(
+        "open_context_menu",
+        |screen_position: Dynamic, items: Dynamic| -> bool {
+            let Some(screen_position) = screen_position_array(&screen_position) else {
+                warn!("[rhai-ui] context menu rejected: screen position must be [x, y]");
+                return false;
+            };
+            let Some(items) = context_menu_items(&items) else {
+                warn!("[rhai-ui] context menu rejected: items must be typed action maps");
+                return false;
+            };
+            bridge_core::with_world(|world| {
+                world.trigger(crate::ui_bridge::ScriptUiRequest::ContextMenu {
+                    screen_position,
+                    items,
+                });
+                true
+            })
+            .unwrap_or(false)
+        },
+    );
 
     // to_json(map) -> string — serialize a rhai map to a JSON string. Lets a
     // script author a structured value as a native `#{...}` and feed it to a
@@ -2596,6 +2649,7 @@ pub enum PendingWorldScript {
     Tool {
         id: u64,
         tool: String,
+        hook: String,
         args: TelemetryValue,
         authority: Option<lunco_core::SessionId>,
         correlation_id: Option<u64>,
@@ -2625,13 +2679,14 @@ pub fn drain_world_scripts(world: &mut World) {
             PendingWorldScript::Tool {
                 id,
                 tool,
+                hook,
                 args,
                 authority,
                 correlation_id,
             } => (
                 id,
                 correlation_id,
-                eval_tool_with_world_as(world, &tool, &args, authority),
+                eval_tool_with_world_as(world, &tool, &hook, &args, authority),
             ),
         };
         let outcome = match outcome {
@@ -2707,7 +2762,7 @@ pub fn eval_with_world_as(
     Ok(captured)
 }
 
-/// Invoke a registered `on_click(context)` tool with a native Rhai value.
+/// Invoke a registered one-argument tool hook with a native Rhai value.
 ///
 /// The namespace is the only part interpolated into a tiny dispatch expression;
 /// the context is bound in the Rhai scope as a [`Dynamic`]. This keeps authored
@@ -2717,6 +2772,7 @@ pub fn eval_with_world_as(
 pub fn eval_tool_with_world_as(
     world: &mut World,
     tool: &str,
+    hook: &str,
     args: &TelemetryValue,
     authority: Option<lunco_core::SessionId>,
 ) -> Result<String, String> {
@@ -2724,11 +2780,15 @@ pub fn eval_tool_with_world_as(
         || !tool
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+        || hook.is_empty()
+        || !hook
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
     {
-        return Err(format!("invalid script-tool namespace '{tool}'"));
+        return Err(format!("invalid script-tool hook '{tool}::{hook}'"));
     }
-    if !lunco_tools::has_function(tool, lunco_tools::UI_CLICK_FN) {
-        return Err(format!("script tool '{tool}' has no on_click/1 handler"));
+    if !lunco_tools::has_function(tool, &format!("{hook}/1")) {
+        return Err(format!("script tool '{tool}' has no {hook}/1 handler"));
     }
 
     use std::sync::{Arc, Mutex};
@@ -2753,7 +2813,7 @@ pub fn eval_tool_with_world_as(
         "__scene_tool_context",
         bridge_core::telemetry_value(&RhaiBuilder, args),
     );
-    let dispatch = format!("{tool}::on_click(__scene_tool_context)");
+    let dispatch = format!("{tool}::{hook}(__scene_tool_context)");
     let result = engine
         .eval_with_scope::<Dynamic>(&mut scope, &dispatch)
         .map_err(|error| error.to_string())?;

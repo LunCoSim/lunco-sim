@@ -102,6 +102,17 @@ The program retains the last resolved subject entity while a structural USD
 edit briefly reprojects its relationship, so a one-shot control edge or
 safe-stop action cannot be lost to an unrelated point edit.
 
+## Interaction
+
+The editor exposes a generic typed scene-pointer context to any registered Rhai
+tool that declares `on_pointer(context)`. The tool owns modifier and button
+semantics: `waypoint_editor` treats Alt+primary-click as append and secondary
+click on a direct route point as its context-menu request. Rust resolves the
+canonical document, prim paths, screen position, modifiers, and world position;
+it does not decide that a click means “waypoint”. The popup host only renders
+authored menu items and dispatches their typed tool hooks, so adding another
+route action does not require an editor-specific Rust branch.
+
 ## Presentation
 
 The marker's dome is emissive, translucent, and shadowless. Its trigger is
@@ -109,8 +120,12 @@ invisible and has its own authored radius. Billboard text and placement are
 read by the generic billboard renderer. The ribbon is a separate, lightweight
 world-space annotation: the route tool densifies long legs with the shared
 `TerrainHeight` query, authors the sampled support normals, and standard
-`normals` make its authored 0.5 m width a narrow readable flat strip rather
-than a tube. It does
+`normals` make its authored 0.12 m width a narrow readable flat strip rather
+than a tube. Each sampled vertex is offset 0.03 m along its support normal, so
+the annotation stays above slopes without applying a global vertical offset.
+Long legs are sampled at 3 m intervals during ribbon rebuilds to avoid cutting
+through streamed terrain relief while keeping the transient Rhai/USD payload
+bounded; this work is not performed in the per-frame route-control task. It does
 not participate in physics or route control. Route execution does not recolor
 or rebuild marker geometry; a scenario may react to `route_point_reached` to
 update mission state or the HUD through its own policy.

@@ -21,9 +21,9 @@
 //! implements. A separate list of palette entries could disagree with the code —
 //! a button with no handler, or a handler nobody can reach. This cannot.
 //!
-//! The click is handed over as a typed `RunRhaiTool` command. It is queued and
-//! run by `drain_world_scripts` with the prelude and every tool in scope, so a
-//! tool handler can do anything a scenario can.
+//! The click is handed over as a typed tool-hook command. It is queued and run
+//! by `drain_world_scripts` with the prelude and every tool in scope, so an
+//! authored interaction policy can do anything a scenario can.
 
 use bevy::picking::pointer::{PointerButton, PointerId};
 use bevy::prelude::*;
@@ -395,6 +395,13 @@ pub(crate) fn on_scene_pointer_event(
         .get(click.entity)
         .map(|id| id.get())
         .unwrap_or_default();
+    for tool in lunco_tools::ui_pointer_tools() {
+        commands.trigger(lunco_scripting::commands::RunRhaiToolHook {
+            tool: tool.name,
+            hook: "on_pointer".to_string(),
+            args: context.clone(),
+        });
+    }
     commands.trigger(TelemetryEvent {
         name: "scene.pointer".to_string(),
         source,

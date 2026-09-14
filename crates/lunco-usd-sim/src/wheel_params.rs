@@ -515,6 +515,7 @@ impl WheelParams {
     /// re-derive a spawned wheel in place (ports/visual/state untouched).
     pub fn apply_to_raycast(&self, wheel: &mut WheelRaycast) {
         wheel.wheel_radius = self.radius;
+        wheel.wheel_width = self.width;
         wheel.mass = self.mass;
         wheel.moment_of_inertia = self.moment_of_inertia;
         wheel.bearing_damping = self.bearing_damping;

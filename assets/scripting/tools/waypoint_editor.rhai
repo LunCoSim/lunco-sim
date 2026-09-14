@@ -4,8 +4,41 @@
 // command. This policy creates ordinary USD prims and a disposable route-view
 // overlay; no route, waypoint, or vehicle type is known by the engine.
 
+// Module functions are used instead of top-level variables because imported
+// Rhai tool functions execute in their own module scope.
+fn route_ribbon_width() { 0.12 }
+fn route_ribbon_clearance() { 0.03 }
+// Keep the transient BasisCurves payload below the Rhai/USD operation limit
+// while still sampling more densely than the original long-leg chord
+// approximation.
+fn route_ribbon_sample_spacing() { 3.0 }
+
 fn ui_label() { "Route point" }
 fn ui_hint() { "Alt-click the terrain to append a point to the active route" }
+
+// The generic scene adapter invokes this hook for an unarmed pointer gesture.
+// Button and modifier meaning stay in this authored policy; Rust only resolves
+// the canonical scene context and routes the hook.
+fn on_pointer(context) {
+    if context == () { return #{ ok: true, changed: false, handled: false }; }
+    let modifiers = context.modifiers;
+    if context.button == "primary"
+        && modifiers != ()
+        && modifiers["alt"] == true
+        && modifiers["shift"] != true
+        && modifiers["ctrl"] != true
+        && context.world_position != () {
+        return on_click(context);
+    }
+    if context.button == "secondary" {
+        let route = route_edit_path(context);
+        if route == () || context_route_point(context, route) == () {
+            return #{ ok: true, changed: false, handled: false };
+        }
+        return on_context(context);
+    }
+    #{ ok: true, changed: false, handled: false }
+}
 
 fn failure(message) {
     notify_kind("Route edit failed: " + message, "error");
@@ -249,7 +282,7 @@ fn ribbon_surface_samples(points) {
         let b = points[i + 1];
         let distance = vlen([b[0] - a[0], 0.0, b[2] - a[2]]);
         let steps = 1;
-        while steps.to_float() * 4.0 < distance {
+        while steps.to_float() * route_ribbon_sample_spacing() < distance {
             steps += 1;
         }
         for j in 0..steps {
@@ -290,6 +323,14 @@ fn ribbon_normals_literal(input_normals) {
     points_literal(literals)
 }
 
+fn ribbon_clearanced_point(point, normal) {
+    [
+        point[0] + normal[0] * route_ribbon_clearance(),
+        point[1] + normal[1] * route_ribbon_clearance(),
+        point[2] + normal[2] * route_ribbon_clearance(),
+    ]
+}
+
 fn vector_equal(a, b) {
     if a == () || b == () || a.len() != b.len() { return false; }
     for i in 0..a.len() {
@@ -318,7 +359,8 @@ fn ribbon_geometry_path(route) {
 }
 
 fn ribbon_width_matches(widths) {
-    widths != () && widths.len() == 1 && (widths[0] - 0.5).abs() < 0.001
+    widths != () && widths.len() == 1
+        && (widths[0] - route_ribbon_width()).abs() < 0.001
 }
 
 fn ribbon_needs_update(doc, ribbon, geometry, anchor, local_points, local_normals) {
@@ -368,9 +410,14 @@ fn ribbon_ops(doc, route, points) {
         return [];
     }
     let geometry = ribbon_geometry_path(route);
+    // Keep the route root at the exact first sampled surface point so its USD
+    // identity remains aligned with P0. Offset each curve vertex along the
+    // sampled support normal instead of translating the child geometry in a
+    // global axis; this keeps the narrow strip above slopes and steps.
     let anchor = surface_points[0];
     let local_points = [];
-    for point in surface_points {
+    for i in 0..surface_points.len() {
+        let point = ribbon_clearanced_point(surface_points[i], surface_normals[i]);
         local_points.push([
             point[0] - anchor[0],
             point[1] - anchor[1],
@@ -435,7 +482,7 @@ fn ribbon_ops(doc, route, points) {
         path: geometry,
         name: "widths",
         type_name: "float[]",
-        value: "[0.5]",
+        value: "[" + route_ribbon_width().to_string() + "]",
     }});
     ops.push(#{ SetAttribute: #{
         edit_target: "@runtime@",
@@ -651,16 +698,15 @@ fn on_delete(context) {
     result
 }
 
-// Secondary pointer context is a safe, route-scoped selection action. The
-// route point remains an ordinary USD prim; the standard gizmo and Delete
-// command can operate on the selected entity.
-fn on_context(context) {
+// Select the canonical live projection for a route point. The route point
+// remains an ordinary USD prim; the standard gizmo can then operate on it.
+fn on_select(context) {
     if context == () || context.doc_id == () {
-        return failure("context click has no active document");
+        return failure("selection has no active document");
     }
     let route = route_edit_path(context);
     let point = context_route_point(context, route);
-    if point == () { return failure("context target is not a direct route point"); }
+    if point == () { return failure("selection target is not a direct route point"); }
     // Unattended scene tests and server runs intentionally have no editor
     // selection owner. The route context is still valid there; only an
     // attended editor has a selection side effect to perform.
@@ -684,4 +730,37 @@ fn on_context(context) {
         return failure(result.error);
     }
     #{ ok: true, path: point }
+}
+
+// Secondary pointer context opens a generic authored menu. The editor owns
+// only popup placement and dispatch; labels and actions are authored here.
+fn on_context(context) {
+    if context == () || context.doc_id == () {
+        return failure("context click has no active document");
+    }
+    let route = route_edit_path(context);
+    let point = context_route_point(context, route);
+    if point == () { return failure("context target is not a direct route point"); }
+    if is_unattended() { return #{ ok: true, path: point, selected: false }; }
+    let selected = on_select(context);
+    if selected.ok != true { return selected; }
+    if context.screen_position == () {
+        return failure("context click has no screen position");
+    }
+    let opened = open_context_menu(context.screen_position, [
+        #{
+            label: "Select route point",
+            tool: "waypoint_editor",
+            hook: "on_select",
+            args: context,
+        },
+        #{
+            label: "Delete route point",
+            tool: "waypoint_editor",
+            hook: "on_delete",
+            args: context,
+        },
+    ]);
+    if !opened { return failure("the scene context-menu host is unavailable"); }
+    #{ ok: true, path: point, menu: true }
 }

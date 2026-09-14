@@ -69,10 +69,12 @@ per lane, and uses the combined point+normal `GridSurfaceQuery` sample when an
 analytic DEM owns the location. A missing surface sample fails that lane closed
 rather than drawing a detached chord through unknown ground.
 
-Each trail lane uses the existing world-space triangle-strip builder, with its
-own width and clearance. The builder projects the tangent into each support
-plane, offsets clearance along the support normal, and writes that normal to the
-mesh. A trail remains transient Bevy presentation parented to the active
+Each trail lane uses the existing world-space triangle-strip builder. Its full
+width is derived from the authored wheel width for that lane (raycast and
+jointed wheels use the same physical fact), while the builder receives the
+corresponding half-width and a small surface clearance. The builder projects
+the tangent into each support plane, offsets clearance along the support normal,
+and writes that normal to the mesh. A trail remains transient Bevy presentation parented to the active
 physics frame; it is not USD topology, terrain deformation, telemetry, or a per-frame
 document edit. Scene teardown clears both the mesh and history, and an active-frame
 change starts a new history, so a later Twin or grid cannot inherit a stale path.
@@ -81,6 +83,13 @@ name-based rover registry, second motion source, or second contact model is
 introduced. The same presentation plugin is installed by the interactive viewport
 and the GPU offscreen recorder; the recorder does not depend on the editor's egui,
 picking, or workbench plugin.
+
+Rhai owns whether a trail is enabled or how a scenario presents it; Rust keeps
+only the generic solved-contact sampler, bounded history, and mesh projection.
+That boundary is deliberate: moving per-contact history into a script would
+turn a fixed-rate physics presentation path into allocations and interpreter
+work, while leaving policy extensible without teaching the core about rovers,
+landers, or route names.
 
 ## The unit-primitive idiom — live size is `xformOp:scale`
 
