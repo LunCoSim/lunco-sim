@@ -693,9 +693,12 @@ impl ApiQueryProvider for SyncUsdDocumentProvider {
 /// { "doc_id": 3, "path": "/Rover/Wheel", "edit_target": "@runtime@" }
 /// ```
 ///
-/// Referenced and payloaded paths are never guessed from the authored layer.
-/// They require the already-mounted canonical stage, whose OpenUSD PCP stack
-/// supplies the authoritative authored layer/path pairs.
+/// Composed-only referenced and payloaded paths require the already-mounted
+/// canonical stage, whose OpenUSD PCP stack supplies the authoritative
+/// authored layer/path pairs. A path authored in this document remains
+/// resolvable from the document layer while the canonical stage catches up
+/// with that local edit; projection latency must not turn a valid authoring
+/// target into a user-visible missing-path error.
 pub struct ResolveUsdTargetProvider;
 
 impl ApiQueryProvider for ResolveUsdTargetProvider {
@@ -771,6 +774,33 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
             }
         };
 
+        let document_composed_exists = document
+            .composed_arc()
+            .spec(&path)
+            .is_some_and(|spec| spec.ty == openusd::sdf::SpecType::Prim)
+            || authored_in_document;
+        let document_layer_response = || {
+            ApiResponse::ok(serde_json::json!({
+                "doc_id": doc,
+                "path": raw_path,
+                "edit_target": edit_target,
+                "status": if document_composed_exists { "resolved" } else { "missing" },
+                "source": "document_layers",
+                "composed_exists": document_composed_exists,
+                "authored_here": authored_here,
+                "authored_in_document": authored_in_document,
+                "under_arc": under_arc,
+                "edit_scope": if authored_here {
+                    "authored_layer"
+                } else if document_composed_exists && authored_in_document {
+                    "local_override"
+                } else {
+                    "missing"
+                },
+                "prim_stack": [],
+            }))
+        };
+
         if let Some(stage) = lunco_usd_bevy_twin::canonical_stage_for_document(world, doc) {
             let prim = stage.stage().prim(path.clone());
             let composed_exists = match prim.is_valid() {
@@ -814,6 +844,9 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
                     }).collect::<Vec<_>>(),
                 }));
             }
+            if authored_in_document {
+                return document_layer_response();
+            }
             if under_arc {
                 return ApiResponse::error(
                     ApiErrorCode::EntityNotFound,
@@ -821,6 +854,9 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
                 );
             }
         } else if under_arc {
+            if authored_in_document {
+                return document_layer_response();
+            }
             return ApiResponse::error(
                 ApiErrorCode::CommandRejected,
                 format!(
@@ -828,30 +864,6 @@ impl ApiQueryProvider for ResolveUsdTargetProvider {
                 ),
             );
         }
-
-        let composed_exists = document
-            .composed_arc()
-            .spec(&path)
-            .is_some_and(|spec| spec.ty == openusd::sdf::SpecType::Prim)
-            || authored_in_document;
-        ApiResponse::ok(serde_json::json!({
-            "doc_id": doc,
-            "path": raw_path,
-            "edit_target": edit_target,
-            "status": if composed_exists { "resolved" } else { "missing" },
-            "source": "document_layers",
-            "composed_exists": composed_exists,
-            "authored_here": authored_here,
-            "authored_in_document": authored_in_document,
-            "under_arc": under_arc,
-            "edit_scope": if authored_here {
-                "authored_layer"
-            } else if composed_exists && authored_in_document {
-                "local_override"
-            } else {
-                "missing"
-            },
-            "prim_stack": [],
-        }))
+        document_layer_response()
     }
 }

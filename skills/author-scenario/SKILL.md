@@ -28,6 +28,11 @@ The authored `inputs:enabled` value is only an initial policy; F changes the
 scenario's runtime state and must not write it back to USD. Do not implement
 this policy with a polling `on_tick` loop or move USD identity resolution,
 terrain sampling, collision events, or fixed-step steering into Rhai.
+Document-backed route edits remain valid during the short projection interval:
+the generic resolver uses a locally authored target before its live ECS entity
+exists, while selection/context policy reports a pending projection instead of
+turning that transient state into an edit error. Composed-only paths still
+require the mounted canonical stage.
 When a source is hot-swapped, the program emits the generic typed
 `program.ready` event after `on_start`; one-shot UI or control actions wait for
 that lifecycle edge rather than relying on a timer. Sensor events may carry a

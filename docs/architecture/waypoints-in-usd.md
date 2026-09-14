@@ -77,6 +77,11 @@ For a point below a reference, payload, or selected variant, the canonical
 composed path is the edit identity: the stronger local layer authors an `over`
 and the transform opinion there, and undo/redo removes or restores only that
 local opinion.
+The document layer is authoritative during the short interval before the
+canonical projection contains a newly authored point. Move and delete resolve
+that local target immediately, while selection/context actions report a
+pending projection rather than a user-facing edit error. Once the live entity
+exists, the same canonical path is used for selection and menu dispatch.
 
 ## Progression
 

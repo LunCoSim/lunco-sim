@@ -156,6 +156,44 @@ fn assembly_queries_resolve_local_targets_and_reject_future_sync_cursors() {
 }
 
 #[test]
+fn authored_target_under_composed_arc_resolves_before_stage_projection() {
+    let mut world = World::new();
+    let mut registry = DocumentRegistry::<UsdDocument>::default();
+    let doc = registry.allocate(
+        r#"#usda 1.0
+def Xform "Site" (
+    references = @site.usda@
+)
+{
+    def Xform "Route" {
+        def Xform "W0" {}
+    }
+}
+"#
+        .to_owned(),
+        PathlessOrigin::untitled("ProjectedRoute.usda"),
+    );
+    world.insert_resource(registry);
+
+    let resolved = ResolveUsdTargetProvider.execute(
+        &world,
+        &serde_json::json!({
+            "doc_id": doc.raw(),
+            "path": "/Site/Route/W0",
+            "edit_target": "@root@"
+        }),
+    );
+    let lunco_api::schema::ApiResponse::Ok { data: Some(data) } = resolved else {
+        panic!("an authored local target must resolve before canonical projection catches up");
+    };
+    assert_eq!(data["status"], serde_json::json!("resolved"));
+    assert_eq!(data["source"], serde_json::json!("document_layers"));
+    assert_eq!(data["authored_in_document"], serde_json::json!(true));
+    assert_eq!(data["under_arc"], serde_json::json!(true));
+    assert_eq!(data["edit_scope"], serde_json::json!("authored_layer"));
+}
+
+#[test]
 fn sync_query_returns_a_complete_snapshot_after_the_op_ring_expires() {
     let mut world = World::new();
     let mut registry = DocumentRegistry::<UsdDocument>::default();

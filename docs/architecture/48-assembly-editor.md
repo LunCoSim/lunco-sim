@@ -421,9 +421,12 @@ the query and commands through the shared Rhai library.
 `ResolveUsdTarget` requires `doc_id`, a prim `path`, and an explicit `edit_target`
 (`@root@` or `@runtime@`). Local authored and runtime opinions are resolved by
 `UsdDocument`; referenced or payloaded paths are resolved by the already-mounted
-`CanonicalStage`, and the returned OpenUSD prim stack identifies the actual
-composed opinions. If an arc has no mounted canonical stage, the query rejects
-the request instead of guessing from the flat authored layer. `SyncUsdDocument`
+`CanonicalStage` when the composed projection is available, and the returned
+OpenUSD prim stack identifies the actual composed opinions. A path authored in
+the current document remains an editable document-layer target while its
+canonical projection catches up; composed-only paths still require the mounted
+canonical stage. The query never guesses a composed-only target from a flat
+authored layer. `SyncUsdDocument`
 uses the document's bounded typed-op ring: a covered generation returns an
 ordered delta, while an expired cursor returns the complete base/runtime layer
 snapshot needed to resync. A future cursor is rejected. Neither query creates a

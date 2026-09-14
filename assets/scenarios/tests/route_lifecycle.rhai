@@ -337,6 +337,38 @@ fn on_tick(me) {
         // one-shot scene event. A semantic event is not a durable command and
         // must not be sent into a program that is still being replaced.
         if !this.route_ready { return; }
+        // Exercise the authoring race directly: ApplyUsdOps completes on the
+        // document before the canonical composed stage has projected the new
+        // prim. All three edits must still use the authored document target,
+        // without surfacing a transient missing-path notification.
+        let transient = waypoint_editor::on_click(
+            context(this.doc, (), [0.0, 1.0, -40.0]),
+        );
+        if transient.ok != true || transient.path == () {
+            this.checks.push(t_true(false,
+                "a newly added route point is available to the edit policy immediately"));
+            finish(this);
+            return;
+        }
+        let transient_path = transient.path;
+        let transient_move = waypoint_editor::on_move(
+            context(this.doc, transient_path, [1.0, 1.0, -41.0]),
+        );
+        this.checks.push(t_true(transient_move.ok == true,
+            "a newly added route point can be moved before stage projection settles"));
+        let transient_delete = waypoint_editor::on_delete(
+            context(this.doc, transient_path, ()),
+        );
+        this.checks.push(t_true(transient_delete.ok == true,
+            "a newly added route point can be deleted before stage projection settles"));
+        this.phase = 102;
+        return;
+    }
+
+    if this.phase == 102 {
+        // Let the disposable ribbon observe the completed delete before the
+        // durable point used by the rest of this lifecycle is appended.
+        if point_count(this.doc) != 3 || ribbon_count(this.doc) != 3 { return; }
         let pointer = waypoint_editor::on_pointer(
             context(this.doc, (), [0.0, 1.0, -32.0]),
         );
@@ -345,6 +377,7 @@ fn on_tick(me) {
             finish(this);
             return;
         }
+        this.new_point = pointer.path;
         this.program_switch_complete = true;
         this.phase = 2;
         return;

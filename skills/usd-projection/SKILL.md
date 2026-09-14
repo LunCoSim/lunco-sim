@@ -151,11 +151,14 @@ document generation. Use its typed delta while the cursor is covered; consume
 the returned base/runtime layer snapshot when it reports an expired history
 window. Reject future cursors. To edit a composed path, call
 `ResolveUsdTarget` with the explicit document id, prim path, and `@root@` or
-`@runtime@` target. Referenced and payloaded paths are valid only when the
-existing `CanonicalStage` is mounted; use its `edit_scope` and typed-operation
-validation rather than treating a composed read as permission to move or
-remove a referenced/variant prim. Do not inspect flat layer data as a
-replacement for OpenUSD PCP resolution.
+`@runtime@` target. A referenced or payloaded path that has a local authored
+opinion in the current document is valid from that document layer while the
+existing `CanonicalStage` projection catches up; a composed-only path still
+requires the mounted canonical stage. Use the returned `edit_scope` and
+typed-operation validation rather than treating a composed read as permission
+to move or remove a referenced/variant prim. Do not inspect flat layer data as
+a replacement for OpenUSD PCP resolution or use it to invent a composed-only
+target.
 
 Agents and editor automation should use the built-in `assembly_edit` Rhai
 library. It is a thin wrapper over `OpenFile`, `InspectUsdDocument`,

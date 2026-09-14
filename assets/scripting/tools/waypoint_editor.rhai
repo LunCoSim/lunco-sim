@@ -770,7 +770,13 @@ fn on_select(context) {
     // the exact authored route-point path, resolve that canonical identity
     // directly instead of trusting the semantic target chosen for selection.
     let entity_id = find_path(point);
-    if entity_id < 0 { return failure("route point has no live projection"); }
+    // Authoring and live projection are separate revisions. A pointer event
+    // can arrive after the document edit but before the entity projection has
+    // spawned; keep the route target valid and let the caller continue with a
+    // pending selection instead of surfacing a transient edit error.
+    if entity_id < 0 {
+        return #{ ok: true, path: point, selected: false, pending: true };
+    }
     let result = cmd("SelectEntity", #{
         entity_id: entity_id,
         extend: false,
