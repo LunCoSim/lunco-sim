@@ -2,7 +2,7 @@
 //!
 //! Sibling of [`TwinBrowserPanel`](crate::TwinBrowserPanel) (which
 //! shows typed Twin content like Modelica classes and drafts) and
-//! [`LibraryPanel`](crate::LibraryPanel) (which shows app-level
+//! [`LuncoLibrarySection`](crate::LuncoLibrarySection) (which shows app-level
 //! reference content like MSL). The three panels tab together in the
 //! side dock by default — separate tabs rather than sub-tabs of one
 //! browser, matching peer tools that keep "what's in this project",
@@ -13,7 +13,7 @@
 //!
 //! Renders every section with
 //! [`scope`](crate::twin_browser::BrowserSection::scope) equal to
-//! [`BrowserScope::Files`]. The workbench's built-in
+//! [`BrowserScope::Files`]. This package's built-in
 //! [`FilesSection`](crate::FilesSection) is the default content;
 //! domain crates may add more (e.g. a future
 //! `WorkspaceDocumentsSection` surfacing a categorised list of

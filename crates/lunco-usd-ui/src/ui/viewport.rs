@@ -4552,7 +4552,7 @@ mod tests {
     use lunco_render::SceneCamera;
     use lunco_usd::commands::UsdCommandsPlugin;
     use lunco_usd_core::document::UsdOp;
-    use lunco_workbench::{BrowserAction, BrowserActions};
+    use lunco_workbench_browser::{BrowserAction, BrowserActions};
 
     #[derive(Resource, Default)]
     struct OpenedPreviewTabs(Vec<(PanelId, u64)>);

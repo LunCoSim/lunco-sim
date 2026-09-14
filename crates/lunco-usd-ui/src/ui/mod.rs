@@ -24,7 +24,8 @@ use lunco_doc_bevy::{
 };
 use lunco_status_core::status_bus::{StatusBus, StatusLevel};
 use lunco_usd_bevy_scene::UsdPrimPath;
-use lunco_workbench::{BrowserSectionRegistry, ViewportPlaceholder};
+use lunco_workbench::ViewportPlaceholder;
+use lunco_workbench_browser::{BrowserSectionRegistry, TwinBrowserPlugin};
 use lunco_workbench_core::PanelId;
 
 use lunco_usd_bevy_twin::UsdDocumentUserOwned;
@@ -69,6 +70,11 @@ pub struct UsdUiPlugin;
 
 impl Plugin for UsdUiPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<TwinBrowserPlugin>()
+            && app.is_plugin_added::<lunco_workbench::WorkbenchPlugin>()
+        {
+            app.add_plugins(TwinBrowserPlugin);
+        }
         app.init_resource::<LoadedUsdStages>();
         // Change-gated view-model the `UsdSceneSection` reads each frame.
         // The producer refreshes parse caches + flattens stages into it

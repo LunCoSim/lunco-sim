@@ -349,7 +349,7 @@ impl BrowserSection for FilesSection {
         // are intentionally omitted — file extensions in the display
         // name carry that information for the user.
         let docs: Vec<super::UnsavedDocEntry> = match (
-            ctx.resource::<crate::WorkspaceResource>(),
+            ctx.resource::<lunco_workspace::WorkspaceResource>(),
             ctx.resource::<super::UnsavedDocs>(),
         ) {
             (Some(workspace), Some(entries)) => entries
@@ -405,7 +405,7 @@ impl BrowserSection for FilesSection {
                         .as_mut()
                         .expect("in_rename ⇒ rename_doc Some");
                     let resp = ui.add(
-                        crate::text_editor::singleline(&mut state.buffer)
+                        lunco_workbench::text_editor::singleline(&mut state.buffer)
                             .desired_width(f32::INFINITY),
                     );
                     if state.needs_focus {
@@ -454,11 +454,15 @@ impl BrowserSection for FilesSection {
                     // delete path from the UI and resurrects on every
                     // reload. Right-aligned so it doesn't crowd names.
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let close = crate::icon_button(ui, crate::UiIcon::Close, "Close document")
-                            .on_hover_text(
-                                "Close document (discards unsaved \
+                        let close = lunco_workbench::icon_button(
+                            ui,
+                            lunco_workbench::UiIcon::Close,
+                            "Close document",
+                        )
+                        .on_hover_text(
+                            "Close document (discards unsaved \
                                      changes)",
-                            );
+                        );
                         if close.clicked() {
                             doc_close = Some(entry.id);
                         }
@@ -481,7 +485,7 @@ impl BrowserSection for FilesSection {
             self.rename_doc = None;
             let new_name = new_name.trim().to_string();
             if !new_name.is_empty() {
-                ctx.trigger(super::super::file_ops::RenameOpenDocument {
+                ctx.trigger(lunco_workbench::file_ops::RenameOpenDocument {
                     doc_id: doc,
                     new_name,
                 });
@@ -502,12 +506,14 @@ impl BrowserSection for FilesSection {
         // state, but their files must not be presented as current or routed
         // through the active Twin's path resolver.
         let active_twin = ctx
-            .resource::<crate::WorkspaceResource>()
+            .resource::<lunco_workspace::WorkspaceResource>()
             .and_then(|ws| ws.active_twin);
-        let active_twin_root = ctx.resource::<crate::WorkspaceResource>().and_then(|ws| {
-            ws.active_twin
-                .and_then(|id| ws.twin(id).map(|twin| twin.root.clone()))
-        });
+        let active_twin_root = ctx
+            .resource::<lunco_workspace::WorkspaceResource>()
+            .and_then(|ws| {
+                ws.active_twin
+                    .and_then(|id| ws.twin(id).map(|twin| twin.root.clone()))
+            });
 
         // Open-document markers: which on-disk paths have an open editor tab,
         // and which of those are dirty (never-saved this session). A file row
@@ -519,7 +525,7 @@ impl BrowserSection for FilesSection {
             std::collections::HashSet::new();
         let mut unsaved_paths: std::collections::HashSet<std::path::PathBuf> =
             std::collections::HashSet::new();
-        if let Some(ws) = ctx.resource::<crate::WorkspaceResource>() {
+        if let Some(ws) = ctx.resource::<lunco_workspace::WorkspaceResource>() {
             // id → is_unsaved from the cross-domain UnsavedDocs projection.
             let unsaved_ids: std::collections::HashSet<lunco_doc::DocumentId> =
                 docs.iter().filter(|d| d.is_unsaved).map(|d| d.id).collect();
@@ -559,7 +565,7 @@ impl BrowserSection for FilesSection {
         }
 
         let twins: Vec<(lunco_workspace::TwinId, &lunco_twin::Twin)> = ctx
-            .resource::<crate::WorkspaceResource>()
+            .resource::<lunco_workspace::WorkspaceResource>()
             .and_then(|ws| {
                 ws.active_twin
                     .and_then(|id| ws.twin(id).map(|twin| (id, twin)))
@@ -601,7 +607,7 @@ impl BrowserSection for FilesSection {
             let salt = twin.root.to_string_lossy().into_owned();
             let twin_root = twin.root.clone();
             let id = ui.make_persistent_id(("twin_browser_folder", salt.clone()));
-            crate::tree::branch(
+            lunco_workbench::tree::branch(
                 ui,
                 id,
                 true,
@@ -642,20 +648,18 @@ impl BrowserSection for FilesSection {
                     // Closed tree branches still skip their contents,
                     // so render cost scales with *expanded* entries.
                     let tree = build_tree(&files);
-                    render_dir(
-                        &tree,
-                        std::path::Path::new(""),
-                        &twin_root,
-                        active_rename_abs.as_deref(),
-                        &mut self.rename,
-                        &mut clicks,
-                        &mut begin_rename,
-                        &mut submit_rename,
-                        &mut cancel_rename,
-                        &open_paths,
-                        &unsaved_paths,
-                        ui,
-                    );
+                    let mut render_state = TreeRenderState {
+                        twin_root: &twin_root,
+                        active_rename_abs: active_rename_abs.as_deref(),
+                        rename: &mut self.rename,
+                        clicks: &mut clicks,
+                        begin_rename: &mut begin_rename,
+                        submit_rename: &mut submit_rename,
+                        cancel_rename: &mut cancel_rename,
+                        open_paths: &open_paths,
+                        unsaved_paths: &unsaved_paths,
+                    };
+                    render_dir(&tree, std::path::Path::new(""), &mut render_state, ui);
                 },
             );
         }
@@ -681,7 +685,7 @@ impl BrowserSection for FilesSection {
                     relative_path: twin_root.join(relative_path),
                 });
             } else {
-                ctx.trigger(crate::OpenTwinSource {
+                ctx.trigger(lunco_workbench::OpenTwinSource {
                     twin_root: twin_root.to_string_lossy().into_owned(),
                     relative_path: relative_path.to_string_lossy().into_owned(),
                     pinned,
@@ -703,7 +707,7 @@ impl BrowserSection for FilesSection {
                 .unwrap_or_default();
             let new_name = req.buffer.trim().to_string();
             if !new_name.is_empty() && new_name != old_leaf {
-                ctx.trigger(super::super::file_ops::RenameTwinEntry {
+                ctx.trigger(lunco_workbench::file_ops::RenameTwinEntry {
                     twin_root: req.twin_root.to_string_lossy().into_owned(),
                     relative_path: req.relative_path.to_string_lossy().into_owned(),
                     new_name,
@@ -735,9 +739,7 @@ fn should_open_as_document(
                 "usd" | "usda" | "usdc"
             )
         });
-    registered
-        && !crate::source_viewer::is_source_only_text_path(relative_path)
-        && (pinned || is_usd)
+    registered && !lunco_workbench::is_source_only_text_path(relative_path) && (pinned || is_usd)
 }
 
 /// Recursively render one directory of the Twin's filesystem tree.
@@ -750,33 +752,31 @@ fn should_open_as_document(
 /// All mutation lands on the caller-owned queues (`clicks`,
 /// `begin_rename`, …) so the egui closures can stay shallow; the
 /// caller drains them after the egui pass completes.
-#[allow(clippy::too_many_arguments)]
 fn render_dir(
     node: &PathTree<&lunco_twin::FileEntry>,
     rel_prefix: &std::path::Path,
-    twin_root: &std::path::Path,
-    active_rename_abs: Option<&std::path::Path>,
-    rename: &mut Option<RenameInProgress>,
-    clicks: &mut Vec<(std::path::PathBuf, std::path::PathBuf, bool)>,
-    begin_rename: &mut Option<RenameInProgress>,
-    submit_rename: &mut Option<RenameInProgress>,
-    cancel_rename: &mut bool,
-    open_paths: &std::collections::HashSet<std::path::PathBuf>,
-    unsaved_paths: &std::collections::HashSet<std::path::PathBuf>,
+    state: &mut TreeRenderState<'_>,
     ui: &mut egui::Ui,
 ) {
+    let twin_root = state.twin_root;
     // Directories first, alphabetical.
     for (dir_name, sub) in &node.subdirs {
         let rel = rel_prefix.join(dir_name);
         let abs = twin_root.join(&rel);
-        let in_rename = active_rename_abs == Some(abs.as_path());
+        let in_rename = state.active_rename_abs == Some(abs.as_path());
 
         if in_rename {
-            render_inline_rename(ui, &abs, rename, submit_rename, cancel_rename);
+            render_inline_rename(
+                ui,
+                &abs,
+                state.rename,
+                state.submit_rename,
+                state.cancel_rename,
+            );
         } else {
             let id = ui.make_persistent_id(("twin_browser_dir", abs.to_string_lossy()));
             let mut header_begin_rename = None;
-            crate::tree::branch(
+            lunco_workbench::tree::branch(
                 ui,
                 id,
                 false,
@@ -798,24 +798,11 @@ fn render_dir(
                     resp.clicked()
                 },
                 |ui| {
-                    render_dir(
-                        sub,
-                        &rel,
-                        twin_root,
-                        active_rename_abs,
-                        rename,
-                        clicks,
-                        begin_rename,
-                        submit_rename,
-                        cancel_rename,
-                        open_paths,
-                        unsaved_paths,
-                        ui,
-                    );
+                    render_dir(sub, &rel, state, ui);
                 },
             );
             if header_begin_rename.is_some() {
-                *begin_rename = header_begin_rename;
+                *state.begin_rename = header_begin_rename;
             }
         }
     }
@@ -829,10 +816,16 @@ fn render_dir(
     });
     for entry in files {
         let abs = twin_root.join(&entry.relative_path);
-        let in_rename = active_rename_abs == Some(abs.as_path());
+        let in_rename = state.active_rename_abs == Some(abs.as_path());
 
         if in_rename {
-            render_inline_rename(ui, &abs, rename, submit_rename, cancel_rename);
+            render_inline_rename(
+                ui,
+                &abs,
+                state.rename,
+                state.submit_rename,
+                state.cancel_rename,
+            );
         } else {
             let leaf = entry
                 .relative_path
@@ -845,9 +838,9 @@ fn render_dir(
             // Matches the workspace-doc list's dirty-dot convention above.
             // Build the label from a borrow of `leaf` so `leaf` stays owned
             // for the rename buffer below.
-            let marker = if unsaved_paths.contains(&abs) {
+            let marker = if state.unsaved_paths.contains(&abs) {
                 Some("• ")
-            } else if open_paths.contains(&abs) {
+            } else if state.open_paths.contains(&abs) {
                 Some("○ ")
             } else {
                 None
@@ -856,16 +849,20 @@ fn render_dir(
                 Some(m) => format!("{m}{leaf}"),
                 None => leaf.clone(),
             };
-            let r = crate::tree::leaf(ui, |ui| ui.selectable_label(false, &label)).inner;
+            let r = lunco_workbench::tree::leaf(ui, |ui| ui.selectable_label(false, &label)).inner;
             if r.double_clicked() {
-                clicks.push((twin_root.to_path_buf(), entry.relative_path.clone(), true));
+                state
+                    .clicks
+                    .push((twin_root.to_path_buf(), entry.relative_path.clone(), true));
             } else if r.clicked() {
-                clicks.push((twin_root.to_path_buf(), entry.relative_path.clone(), false));
+                state
+                    .clicks
+                    .push((twin_root.to_path_buf(), entry.relative_path.clone(), false));
             }
             r.context_menu(|ui| {
                 if ui.button("Rename").clicked() {
                     ui.close();
-                    *begin_rename = Some(RenameInProgress {
+                    *state.begin_rename = Some(RenameInProgress {
                         target_abs: abs.clone(),
                         twin_root: twin_root.to_path_buf(),
                         relative_path: entry.relative_path.clone(),
@@ -876,6 +873,21 @@ fn render_dir(
             });
         }
     }
+}
+
+/// Mutable queues and immutable projections shared by the recursive Twin-file
+/// tree renderer. Keeping them in one owner makes the renderer composable
+/// without a long parameter list or hidden global state.
+struct TreeRenderState<'a> {
+    twin_root: &'a std::path::Path,
+    active_rename_abs: Option<&'a std::path::Path>,
+    rename: &'a mut Option<RenameInProgress>,
+    clicks: &'a mut Vec<(std::path::PathBuf, std::path::PathBuf, bool)>,
+    begin_rename: &'a mut Option<RenameInProgress>,
+    submit_rename: &'a mut Option<RenameInProgress>,
+    cancel_rename: &'a mut bool,
+    open_paths: &'a std::collections::HashSet<std::path::PathBuf>,
+    unsaved_paths: &'a std::collections::HashSet<std::path::PathBuf>,
 }
 
 /// Paint the inline rename `TextEdit` for one row (file or directory).
@@ -891,8 +903,9 @@ fn render_inline_rename(
     if state.target_abs != target_abs {
         return;
     }
-    let resp =
-        ui.add(crate::text_editor::singleline(&mut state.buffer).desired_width(f32::INFINITY));
+    let resp = ui.add(
+        lunco_workbench::text_editor::singleline(&mut state.buffer).desired_width(f32::INFINITY),
+    );
     if state.needs_focus {
         resp.request_focus();
         state.needs_focus = false;

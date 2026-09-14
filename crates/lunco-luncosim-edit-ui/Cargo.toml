@@ -27,6 +27,7 @@ bevy_egui = { workspace = true }
 lunco-theme = { path = "../lunco-theme" }
 transform-gizmo-bevy = { version = "0.9.0" }
 lunco-workbench = { path = "../lunco-workbench" }
+lunco-workbench-browser = { path = "../lunco-workbench-browser" }
 lunco-workbench-core = { path = "../lunco-workbench-core" }
 lunco-canvas = { path = "../lunco-canvas", features = ["ui"] }
 serde_json = { workspace = true }

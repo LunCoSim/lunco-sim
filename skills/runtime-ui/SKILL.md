@@ -44,6 +44,10 @@ that need semantics not present in the runtime contract. Runtime UI uses the exi
 egui host and dock geometry; it does not replace the workbench or create a
 second hit-test/camera system.
 
+The standard Twin and Files navigation is the optional
+`lunco-workbench-browser` feature layered on the shell; do not recreate those
+panels in an authored runtime surface.
+
 The shared `lunco-ui::modal` host owns modal queueing, scrim, focus, Esc
 dismissal, outcomes, and the typed `CloseModal` command. Base HUI has no modal
 queue/outcome contract; the optional widget crate only supplies primitive input,

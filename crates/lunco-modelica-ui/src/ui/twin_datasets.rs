@@ -10,7 +10,7 @@ use bevy_egui::egui;
 use lunco_assets::datasets::{
     CancelDataset, DatasetEntry, DatasetRegistry, DatasetScope, DatasetState, RequestDataset,
 };
-use lunco_workbench::twin_browser::{BrowserCtx, BrowserScope, BrowserSection};
+use lunco_workbench_browser::{BrowserCtx, BrowserScope, BrowserSection};
 
 /// Twin Browser section that reports the active Twin's declared resources.
 #[derive(Default)]

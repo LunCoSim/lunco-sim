@@ -41,6 +41,9 @@ for that.
 The stable panel, menu, and perspective contracts live in
 `lunco-workbench-core`. This crate owns the concrete egui/egui_dock shell and
 publishes `WorkbenchSnapshot` for consumers that need current layout facts.
+The Twin and Files browser is a separate reusable feature package,
+`lunco-workbench-browser`; hosts compose it explicitly when they need those
+navigation surfaces.
 
 | Type | Role |
 |------|------|
@@ -56,8 +59,6 @@ publishes `WorkbenchSnapshot` for consumers that need current layout facts.
 | [`WorkspaceResource`] | Bevy `Resource` wrapping `lunco_workspace::Workspace` (open Twins + documents + active selectors) |
 | [`WorkspacePlugin`] | Registers `WorkspaceResource` + the `RegisterDocument` / `UnregisterDocument` observer pair |
 | [`TwinAdded`] / [`TwinClosed`] / [`DocumentOpened`] / [`DocumentClosed`] | Fine-grained session events observers react to |
-| [`TwinBrowserPanel`] | Built-in side-panel shell for domain `BrowserSection` impls |
-| [`BrowserSection`] / [`BrowserSectionRegistry`] | Pluggable section trait — Modelica / USD / future domains register one each |
 
 ## Minimal usage
 
@@ -102,6 +103,19 @@ fn main() {
 }
 ```
 
+Applications that need the standard Twin and Files navigation add the browser
+feature alongside the shell:
+
+```rust,no_run
+use bevy::prelude::App;
+use lunco_workbench::WorkbenchPlugin;
+use lunco_workbench_browser::TwinBrowserPlugin;
+
+App::new()
+    .add_plugins(WorkbenchPlugin)
+    .add_plugins(TwinBrowserPlugin);
+```
+
 The workbench is embedded by the apps that use it — run one of them to see it live:
 
 ```bash
@@ -136,11 +150,9 @@ cargo run --bin lunica      # Modelica workbench
   perspective for an explicit launch request. It takes precedence during the
   first Twin restore and is then consumed; ordinary user perspective changes
   continue to persist per Twin.
-- **Twin Browser** — built-in side-panel that renders `BrowserSection`
-  impls contributed by domain plugins, reading the active Twin from
-  `WorkspaceResource`. Closing or replacing a Twin retires its domain tabs
-  and preview state; its documents remain loose Workspace entries and are
-  not shown in the replacement Twin's browser scope.
+- The shell is browser-agnostic. Add `lunco-workbench-browser` when the
+  application needs Twin/Files navigation; that package provides the standard
+  panels and accepts domain `BrowserSection` implementations.
 
 The workbench derives `egui::Visuals` once per `Theme` revision and shares
 that snapshot with every panel surface. Panel render paths should consume the
@@ -195,6 +207,8 @@ bevy + bevy_egui
    │       │ panels and perspectives implement these contracts
    │       └── lunco-workbench ← this crate (editor shell + WorkspaceResource)
    │              ▲
-   │              │ shell-owned widgets, commands, and browser services
-   │              └── lunco-modelica-ui, lunco-luncosim-edit-ui, lunco-cosim, …
+   │              └── lunco-workbench-browser ← optional Twin/Files feature
+   │                     ▲
+   │                     │ browser panels and section contract used by app/domain UI
+   │                     └── lunco-modelica-ui, lunco-luncosim-edit-ui, …
 ```

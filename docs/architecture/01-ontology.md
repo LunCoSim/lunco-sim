@@ -248,7 +248,7 @@ Runtime plumbing that owns a Document, routes ops from views, records undo histo
 
 ---
 
-## 4d. Workbench Concepts (`lunco-workbench`)
+## 4d. Workbench Concepts (`lunco-workbench`, `lunco-workbench-browser`)
 
 The UI application scaffold. See [`11-workbench.md`](11-workbench.md).
 
@@ -259,12 +259,13 @@ avoid the collision:
 | Concept | Our term | Where |
 |---|---|---|
 | Editor shell + dock engine + panel registry | **Workbench** | `lunco-workbench` |
+| Twin and Files navigation feature | **Browser** | `lunco-workbench-browser` |
 | Editor session: open Twins + documents + recents | **Workspace** | `lunco-workspace` (wrapped as `WorkspaceResource` in `lunco-workbench`) |
 | Task-specific UI chrome preset | **Perspective** | `lunco-workbench` (trait) |
 | A simulation unit on disk | **Twin** | `lunco-twin` |
 
 ### Panel
-A dockable UI element in the workbench. A Panel typically implements `DocumentView<D>` for some Document type, or is a non-document tool (Scene Tree, Spawn Palette, Console, Twin Browser).
+A dockable UI element in the workbench. A Panel typically implements `DocumentView<D>` for some Document type, or is a non-document tool (Scene Tree, Spawn Palette, Console, Twin Browser). The standard Twin/Files browser panels and their section registry live in `lunco-workbench-browser`; the shell only provides the generic panel host.
 
 ### Perspective
 A named task-specific UI configuration. Each Perspective has its own default panel layout, toolbar set, and optionally a camera/view state. Standard LunCoSim Perspectives: **Build** (edit scenes and subsystems), **Simulate** (minimal chrome, maximize viewport), **Analyze** (Modelica/system model deep dive), **Plan** (mission timeline), **Observe** (presentation/cinema mode). Analogous to Eclipse Perspectives (same word) or Blender "Workspaces" (different word, same idea). *Distinct from the broader **Workspace** concept — see §4e.*

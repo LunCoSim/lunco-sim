@@ -6,7 +6,8 @@
 > perspectives, panels, and viewport. Command-palette and detachable-window
 > sections below are explicit future design, not current behavior.
 > Establishes the framework on top of which all domain-specific UI
-> lives.
+> lives. `lunco-workbench-browser` is a separate reusable feature package for
+> Twin and Files navigation; the shell itself remains browser-agnostic.
 >
 > **Terminology note.** Later sections of this doc (§4 onward) use
 > "workspace" in its original Blender/CATIA sense — a layout preset.
@@ -18,8 +19,9 @@
 > `lunco-status-core` owns renderer-independent lifecycle, progress, and status
 > data. The workbench status bar is one consumer of that contract, alongside
 > busy widgets and headless diagnostics. `lunco-workbench-core` is the stable
-> workbench contract crate and `lunco-workbench` is the concrete shell. Together
-> they are depended on by ~10 crates
+> workbench contract crate, `lunco-workbench` is the concrete shell, and
+> `lunco-workbench-browser` is the optional navigation feature. Together they
+> are depended on by ~10 crates
 > (luncosim, lunco-luncosim, lunco-luncosim-edit-core, lunco-luncosim-edit-ui,
 > lunco-usd, lunco-modelica-ui,
 > lunco-celestial, lunco-avatar, lunco-networking, …).
@@ -48,8 +50,10 @@ A **workbench** is the application shell of a LunCoSim app — the chrome around
 the 3D world. The `lunco-workbench-core` crate defines the stable panel,
 perspective, menu, and read-model contracts. The `lunco-workbench` crate owns
 the concrete `egui_dock`/`bevy_egui` shell that materializes those contracts,
-including persistence and viewport integration. GPU health, adapter capability
-admission, and presentation recovery are owned by the independent
+including persistence and viewport integration. The optional
+`lunco-workbench-browser` crate builds the reusable Twin and Files navigation
+panels on top of that shell. GPU health, adapter capability admission, and
+presentation recovery are owned by the independent
 `lunco-render-recovery` crate, which the shell composes. A command palette and
 detachable-window host remain planned capabilities (§7–8).
 
@@ -411,6 +415,12 @@ insertion path.
 
 ### 5a. Side-browser architecture — Twin panel + Files panel
 
+The side-browser feature is implemented by `lunco-workbench-browser`, not by
+the base shell. Applications install `TwinBrowserPlugin` after
+`WorkbenchPlugin` when they need these panels. This keeps the shell reusable
+for hosts that need docking and source editing but do not need Twin discovery,
+filesystem browsing, or dataset provisioning.
+
 The two Navigation-slot panels follow a Dymola/OMEdit-style split:
 
 - **Twin panel** — what you browse "by name" in the active Twin scope. One section per
@@ -449,15 +459,18 @@ dispatches. A section that already resolved a file outside the active Twin
 uses the absolute `OpenFile` path form; relative actions are anchored only by
 the active Twin at the owning domain boundary.
 
-This keeps the workbench crate domain-agnostic — `lunco-workbench`
-ships `FilesPanel`, `TwinBrowserPanel`, and `FilesSection`, but
-nothing Modelica-specific. Adding USD/SysML/Julia is one new
-section per domain, no central edits.
+This keeps the browser feature domain-agnostic —
+`lunco-workbench-browser` ships `FilesPanel`, `TwinBrowserPanel`, and
+`FilesSection`, but nothing Modelica-specific. Adding USD/SysML/Julia is one
+new section per domain, with no central shell edits. The base
+`lunco-workbench` crate supplies only the generic shell services that the
+browser feature consumes, such as source-view routing and hierarchy-row
+presentation.
 
 ### 5b. Shared browser search
 
 Both navigation panels expose one transient `BrowserQuery` owned by the
-workbench. The query is presentation state, so domain sections do not keep
+browser feature. The query is presentation state, so domain sections do not keep
 parallel search resources or parse source during paint. Each section applies
 the same case-insensitive substring contract to its own authoritative display
 names, qualified paths, and authored file paths:
@@ -469,10 +482,10 @@ names, qualified paths, and authored file paths:
 - the active query and transient row state are cleared on the active `TwinClosed`
   edge, so a replacement Twin cannot inherit stale navigation state.
 
-The workbench owns only the field and the search affordance. USD, Modelica,
-scene-closure, library, and raw-file sections remain responsible for their
-own loading/error/empty rows and for emitting the existing typed navigation
-actions.
+The browser feature owns only the field and the search affordance. USD,
+Modelica, scene-closure, library, and raw-file sections remain responsible for
+their own loading/error/empty rows and for emitting the existing typed
+navigation actions.
 
 ### 5c. Shared hierarchy presentation
 
@@ -851,8 +864,13 @@ simulation default.
    ├── lunco-workbench  (concrete app shell — this document)
    │     - Root layout (SidePanel + CentralPanel)
    │     - egui_dock materialization and persistence
-   │     - bevy_egui / viewport / built-in shell panels
+   │     - bevy_egui / viewport / shell panels
    │     - Shell commands, activity bar, status bar
+   │         │
+   │         ▼
+   ├── lunco-workbench-browser (optional navigation feature)
+   │     - Twin/Files panels and browser resources
+   │     - filesystem/library sections and dataset controls
    │         │
    │         ▼
    ├── lunco-ui  (widget toolkit)
@@ -871,12 +889,15 @@ simulation default.
 - `lunco-render-recovery` is the concrete presentation-resilience boundary —
   adapter admission, GPU error handling, and the terminal presentation gate.
 - `lunco-workbench` is the concrete app framework — layout, persistence,
-  workspace integration, viewport composition, and panel host.
+  workspace integration, viewport composition, source editing, and panel host.
+- `lunco-workbench-browser` is the optional navigation feature — Twin/Files
+  panels, browser state/actions, and the built-in generic sections.
 - `lunco-ui` is the widget library — draws things inside panels.
 - Domain crates contribute **Panel** implementations that use `lunco-ui`
   widgets and `lunco-workbench-core`'s Panel trait. They use
-  `lunco-workbench` only for shell-owned widgets, commands, browser services,
-  or other concrete presentation integration.
+  `lunco-workbench` only for shell-owned widgets, commands, or other concrete
+  presentation integration. Browser consumers use `lunco-workbench-browser`
+  for Twin/Files state, panels, and section registration.
 
 Both `lunco-workbench` and `lunco-ui` are LunCoSim-agnostic at their core —
 they don't know about balloons, solar panels, or Modelica. Domain knowledge

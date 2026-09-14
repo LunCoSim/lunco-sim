@@ -226,7 +226,8 @@ impl Plugin for LunCoSimUiPlugin {
             // bevy_picking's mesh backend: makes visible Mesh3d entities pickable,
             // so scene selection / possession / spawn-placement run as click observers.
             .add_plugins(bevy::picking::mesh_picking::MeshPickingPlugin)
-            .add_plugins(lunco_workbench::WorkbenchPlugin);
+            .add_plugins(lunco_workbench::WorkbenchPlugin)
+            .add_plugins(lunco_workbench_browser::TwinBrowserPlugin);
         #[cfg(feature = "avatar-ui")]
         app.add_plugins(lunco_avatar_ui::AvatarUiPlugin);
         // An explicit scene launch is a presentation request for the simulator:

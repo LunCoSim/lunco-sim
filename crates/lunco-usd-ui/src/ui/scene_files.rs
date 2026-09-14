@@ -2,7 +2,7 @@
 //!
 //! # Why this is not the Files section
 //!
-//! [`FilesSection`](lunco_workbench::FilesSection) shows a FOLDER (the active
+//! [`FilesSection`](lunco_workbench_browser::FilesSection) shows a FOLDER (the active
 //! Twin's tree) and [`UsdSceneSection`](crate::browser_section::UsdSceneSection)
 //! shows the open STAGES. Neither answers "what is this scene composed of", which
 //! is a graph question: a scene pulls its rovers from `assets/vessels/…`, those
@@ -45,9 +45,9 @@ use bevy_egui::egui;
 use lunco_assets_core::TwinRoots;
 use lunco_doc::DocumentOrigin;
 use lunco_doc_bevy::{DocumentRegistry, OpenFile};
-use lunco_workbench::twin_browser::BrowserQuery;
-use lunco_workbench::twin_browser::BrowserScope;
-use lunco_workbench::{BrowserAction, BrowserCtx, BrowserSection};
+use lunco_workbench_browser::{
+    BrowserAction, BrowserCtx, BrowserQuery, BrowserScope, BrowserSection,
+};
 
 use lunco_usd_core::commands::is_usd_path;
 use lunco_usd_core::document::UsdDocument;

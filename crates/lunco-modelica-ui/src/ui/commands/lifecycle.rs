@@ -180,7 +180,7 @@ pub fn request_app_close(world: &mut World) {
     // docs are automatically picked up by the close prompt with no
     // change here.
     let dirty_tabs: Vec<(DocumentId, u64)> = {
-        let Some(unsaved) = world.get_resource::<lunco_workbench::UnsavedDocs>() else {
+        let Some(unsaved) = world.get_resource::<lunco_workbench_browser::UnsavedDocs>() else {
             fire_app_exit(world);
             return;
         };

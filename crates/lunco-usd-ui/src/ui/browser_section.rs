@@ -10,8 +10,9 @@
 
 use bevy_egui::egui;
 use lunco_doc::DocumentId;
-use lunco_workbench::twin_browser::{BrowserAction, BrowserQuery, BrowserScope};
-use lunco_workbench::{BrowserCtx, BrowserSection};
+use lunco_workbench_browser::{
+    BrowserAction, BrowserCtx, BrowserQuery, BrowserScope, BrowserSection,
+};
 use openusd::sdf;
 // The layer browser walks the AUTHORED specs of a layer, deliberately without
 // composition — so it reads through `UsdDataExt` (the authored-layer accessor),

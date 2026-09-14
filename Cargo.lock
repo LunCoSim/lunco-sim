@@ -7657,6 +7657,7 @@ dependencies = [
  "lunco-usd-sim",
  "lunco-usd-ui",
  "lunco-workbench",
+ "lunco-workbench-browser",
  "lunco-workbench-core",
  "lunco-workspace",
  "openusd",
@@ -7756,6 +7757,7 @@ dependencies = [
  "lunco-usd-sim-cosim",
  "lunco-usd-ui",
  "lunco-workbench",
+ "lunco-workbench-browser",
  "lunco-workbench-core",
  "lunco-workspace",
  "resvg 0.47.0",
@@ -7953,6 +7955,7 @@ dependencies = [
  "lunco-viz",
  "lunco-web",
  "lunco-workbench",
+ "lunco-workbench-browser",
  "lunco-workbench-core",
  "lunco-workspace",
  "lunco-workspace-api",
@@ -9112,6 +9115,7 @@ dependencies = [
  "lunco-usd-compose",
  "lunco-usd-core",
  "lunco-workbench",
+ "lunco-workbench-browser",
  "lunco-workbench-core",
  "lunco-workspace",
  "openusd",
@@ -9159,7 +9163,6 @@ dependencies = [
  "egui_dock",
  "js-sys",
  "leafwing-input-manager",
- "lunco-assets",
  "lunco-assets-core",
  "lunco-capture",
  "lunco-controller",
@@ -9184,6 +9187,22 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "lunco-workbench-browser"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "bevy_egui",
+ "lunco-assets",
+ "lunco-assets-core",
+ "lunco-doc",
+ "lunco-theme",
+ "lunco-twin",
+ "lunco-workbench",
+ "lunco-workbench-core",
+ "lunco-workspace",
 ]
 
 [[package]]

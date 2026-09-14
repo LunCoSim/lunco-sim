@@ -10,11 +10,11 @@ use bevy::prelude::*;
 use lunco_controller::ControllerLink;
 use lunco_core::{Avatar, ControlBinding, InputPorts, SceneMountState, TheLocalAvatar};
 use lunco_usd_bevy_scene::UsdPrimPath;
-use lunco_workbench::twin_browser::TWIN_BROWSER_PANEL_ID;
 use lunco_workbench::{
     HelpMouse, HelpShortcut, LiveHelpSection, LiveHelpSections, PerspectiveHelp, ViewportPanel,
     WorkbenchAppExt, VIEWPORT_PANEL_ID,
 };
+use lunco_workbench_browser::TWIN_BROWSER_PANEL_ID;
 use lunco_workbench_core::{
     PanelId, PanelSlot, Perspective, PerspectiveId, PerspectiveLayoutPlan, PerspectiveSlotPlan,
 };

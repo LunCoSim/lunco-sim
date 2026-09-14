@@ -11,7 +11,7 @@ use super::{
     path_tree::{build_path_tree, PathTree},
     BrowserCtx, BrowserScope, BrowserSection,
 };
-use crate::OpenSourceView;
+use lunco_workbench::OpenSourceView;
 
 /// Display-ready source entry retained between UI frames.
 struct LibraryEntry {
@@ -104,7 +104,7 @@ impl BrowserSection for LuncoLibrarySection {
         }
 
         let loaded_name = ctx
-            .resource::<crate::CurrentSceneName>()
+            .resource::<lunco_workbench::CurrentSceneName>()
             .map(|scene| scene.0.clone())
             .unwrap_or_default();
         let mut clicked = None;
@@ -152,7 +152,7 @@ fn render_dir(
         }
         visible = true;
         let id = ui.make_persistent_id(("library_dir", &rel));
-        crate::tree::branch(
+        lunco_workbench::tree::branch(
             ui,
             id,
             false,
@@ -191,7 +191,7 @@ fn render_dir(
                     .split_whitespace()
                     .next()
                     .is_some_and(|first| first == asset.stem));
-        let response = crate::tree::leaf(ui, |ui| {
+        let response = lunco_workbench::tree::leaf(ui, |ui| {
             if is_loaded {
                 ui.selectable_label(false, format!("● {}", asset.file_name))
             } else {

@@ -21,7 +21,7 @@ impl<'a, 'ctx> ResourceRead for PanelResources<'a, 'ctx> {
     }
 }
 
-struct BrowserResources<'a, 'ctx, 'world>(&'a lunco_workbench::BrowserCtx<'ctx, 'world>);
+struct BrowserResources<'a, 'ctx, 'world>(&'a lunco_workbench_browser::BrowserCtx<'ctx, 'world>);
 
 impl<'a, 'ctx, 'world> ResourceRead for BrowserResources<'a, 'ctx, 'world> {
     fn read_resource<T: Resource>(&self) -> Option<&T> {
@@ -80,7 +80,7 @@ pub fn resolve_metadata_for_doc(
 }
 
 pub fn drilled_class_for_browser_doc(
-    ctx: &lunco_workbench::BrowserCtx<'_, '_>,
+    ctx: &lunco_workbench_browser::BrowserCtx<'_, '_>,
     doc: DocumentId,
 ) -> Option<String> {
     let resources = BrowserResources(ctx);

@@ -6,13 +6,13 @@
 //! A single workbench panel ([`TwinBrowserPanel`]) that renders a
 //! stack of collapsible *sections*. Each section is contributed by a
 //! domain plugin via the [`BrowserSection`] trait and stored in the
-//! [`BrowserSectionRegistry`] resource. The workbench itself ships
-//! exactly one built-in section — [`files_section::FilesSection`] —
-//! because file listing is domain-agnostic.
+//! [`BrowserSectionRegistry`] resource. This feature ships exactly one
+//! built-in section — [`files_section::FilesSection`] — because file listing
+//! is domain-agnostic.
 //!
 //! ## Why a registry instead of a hard-coded list
 //!
-//! `lunco-workbench` cannot depend on the domain crates without
+//! `lunco-workbench-browser` cannot depend on the domain crates without
 //! inverting the dependency graph (`lunco-modelica-core` already depends on
 //! us). So domain crates push their section impls into the registry
 //! at plugin-build time:
@@ -55,8 +55,8 @@ pub const TWIN_BROWSER_PANEL_ID: PanelId = PanelId("lunco.workbench.twin_browser
 
 /// Shared transient filter for the Twin and Files browser panels.
 ///
-/// The workbench owns the query because it is presentation state, while each
-/// domain section decides which of its authoritative rows match. Keeping the
+/// The browser feature owns the query because it is presentation state, while
+/// each domain section decides which of its authoritative rows match. Keeping the
 /// query here means a search survives switching between the Twin and Files
 /// tabs without introducing a second per-domain browser model.
 #[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
@@ -88,12 +88,17 @@ pub fn render_search_bar(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("Find").strong());
         ui.add(
-            crate::text_editor::singleline(&mut query.text)
+            lunco_workbench::text_editor::singleline(&mut query.text)
                 .hint_text("names, paths, or types")
                 .desired_width(160.0),
         );
         if !query.text.trim().is_empty()
-            && crate::icon_button(ui, crate::UiIcon::Close, "Clear browser filter").clicked()
+            && lunco_workbench::icon_button(
+                ui,
+                lunco_workbench::UiIcon::Close,
+                "Clear browser filter",
+            )
+            .clicked()
         {
             query.text.clear();
         }
@@ -203,7 +208,7 @@ pub struct UnsavedDocs {
 /// Registry of [`BrowserSection`] impls contributed by domain plugins.
 ///
 /// Sections render in registration order. The built-in
-/// [`FilesSection`] is registered first by [`crate::WorkbenchPlugin`]
+/// [`FilesSection`] is registered by [`TwinBrowserPlugin`](crate::TwinBrowserPlugin)
 /// so it always appears at the bottom of the stack (typically
 /// collapsed); domain sections appear above it.
 #[derive(Resource, Default)]

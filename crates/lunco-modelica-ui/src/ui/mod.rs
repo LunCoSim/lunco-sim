@@ -107,12 +107,12 @@ pub mod wire_router;
 pub mod workbench_state;
 
 /// Modelica section of the Twin Browser — class-tree contributed by
-/// this crate to `lunco-workbench`'s `BrowserSectionRegistry`.
+/// this crate to `lunco-workbench-browser`'s `BrowserSectionRegistry`.
 pub mod browser_section;
 /// Twin-scoped downloadable resources shown in the Twin Browser.
 pub mod twin_datasets;
 
-/// Drains the workbench's `BrowserActions` outbox and routes
+/// Drains the workbench browser's `BrowserActions` outbox and routes
 /// section-emitted intents (open file, open Modelica class) into the
 /// existing document-load and drill-in pipelines.
 pub mod browser_dispatch;
@@ -515,8 +515,8 @@ impl Perspective for AnalyzePerspective {
         // pattern) and Files (raw FS). Twin is leftmost so it's the
         // default active tab on first launch.
         plan.side_browser = PerspectiveSlotPlan::new().tabs([
-            lunco_workbench::TWIN_BROWSER_PANEL_ID,
-            lunco_workbench::FILES_PANEL_ID,
+            lunco_workbench_browser::TWIN_BROWSER_PANEL_ID,
+            lunco_workbench_browser::FILES_PANEL_ID,
         ]);
         // Center is seeded with no singleton tab — model views are
         // multi-instance tabs opened dynamically by the Package Browser
@@ -795,8 +795,6 @@ impl Plugin for ModelicaUiPlugin {
                     ),
                 ),
             )
-            .register_panel(lunco_workbench::TwinBrowserPanel)
-            .register_panel(lunco_workbench::FilesPanel)
             .insert_resource(panels::welcome::ExamplePathRegistry::with_builtins())
             .register_panel(panels::welcome::WelcomePanel)
             .register_panel(panels::telemetry::TelemetryPanel)
@@ -860,11 +858,11 @@ impl Plugin for ModelicaUiPlugin {
             );
 
         // Contribute the Modelica section to the Twin Browser's
-        // section registry. The workbench's WorkbenchPlugin already
-        // installed the registry resource and the built-in Files
-        // section; we just append. ensure it exists first to avoid
+        // section registry. TwinBrowserPlugin installed the registry and
+        // built-in file/library sections; we just append. Ensure it exists
+        // first to avoid
         // panics during mixed-mode or deferred plugin builds.
-        app.init_resource::<lunco_workbench::BrowserSectionRegistry>();
+        app.init_resource::<lunco_workbench_browser::BrowserSectionRegistry>();
         // One section per domain — `ModelicaSection` reads system
         // libraries straight from `PackageTreeCache::roots` and
         // workspace docs from `ModelicaDocumentRegistry`. No parallel
@@ -873,10 +871,10 @@ impl Plugin for ModelicaUiPlugin {
         // crates (`UsdSection`, `SysmlSection`, ...) follow the same
         // outer pattern with their own per-domain section.
         app.world_mut()
-            .resource_mut::<lunco_workbench::BrowserSectionRegistry>()
+            .resource_mut::<lunco_workbench_browser::BrowserSectionRegistry>()
             .register(browser_section::ModelicaSection);
         app.world_mut()
-            .resource_mut::<lunco_workbench::BrowserSectionRegistry>()
+            .resource_mut::<lunco_workbench_browser::BrowserSectionRegistry>()
             .register(twin_datasets::TwinDatasetsSection);
     }
 }

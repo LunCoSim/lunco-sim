@@ -85,6 +85,7 @@ Apps (luncosim, luncosim-server, lunica)
    │          ▼
    ├── Framework layer
    │     lunco-workbench  ← canonical UI scaffold, docking, perspectives, File menu
+   │     lunco-workbench-browser ← optional Twin/Files navigation feature
    │     lunco-doc        ← Authority, diagnostics substrate, CRUD foundation
    │     lunco-doc-bevy   ← Bevy bridge: DocumentDiagnostics, open/new document
    │          │
@@ -105,6 +106,9 @@ Arrows point at dependencies, and two edges deserve calling out explicitly:
 - **The Framework layer sits above the Session layer**, not below it —
   `lunco-workbench` depends on `lunco-twin` and `lunco-workspace` (it wraps the
   session as `WorkspaceResource`, and mounts Twins from the File menu).
+  Applications that need the Twin/Files side browser add
+  `lunco-workbench-browser`; the shell does not pull its asset-provisioning
+  dependency.
 - **UI crates are deliberate cross-layer adapters.** They are not widget
   toolkits under the workbench: `lunco-ui` sits *on top of* `lunco-workbench`
   and reaches into domain crates for mission-control views, while

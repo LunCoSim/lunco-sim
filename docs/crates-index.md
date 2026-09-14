@@ -131,7 +131,8 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 | Crate | Responsibility |
 | :--- | :--- |
 | **`lunco-workbench-core`** | Renderer-independent workbench contracts: `Panel`/`PanelCtx`, instance tabs, perspective layout plans, menu contributions, and the published `WorkbenchSnapshot`. It uses the Bevy ECS substrate and egui types but does not pull `bevy_render`, `bevy_egui`, `egui_dock`, storage, or window/render services. |
-| **`lunco-workbench`** | The concrete IDE-like shell: `egui_dock` layout materialization, `bevy_egui` rendering, panel registration, persistence, viewport integration, built-in browser panels, and shell-only commands/widgets. It publishes `WorkbenchSnapshot`, consumes `lunco-workbench-core`, installs capture only when its API surface is enabled, and renders status data supplied by `lunco-status-core`. |
+| **`lunco-workbench`** | The concrete IDE-like shell: `egui_dock` layout materialization, `bevy_egui` rendering, panel registration, persistence, viewport integration, and shell-only commands/widgets. It publishes `WorkbenchSnapshot`, consumes `lunco-workbench-core`, installs capture only when its API surface is enabled, and renders status data supplied by `lunco-status-core`. |
+| **`lunco-workbench-browser`** | Reusable Twin and Files browser feature: browser section registry and query state, dataset-backed library navigation, filesystem navigation, rename/open actions, and the `TwinBrowserPanel`/`FilesPanel` surfaces. It is an optional feature package layered on the concrete workbench shell. |
 | **`lunco-capture`** | Render-bound screenshot and deterministic offline-recording capability: typed capture commands, GPU readback, frame pacing, PNG/video sinks, and recording status. It is an application capability shared by the workbench and windowless/offscreen hosts, not a workbench subsystem. |
 | **`lunco-ui`** | Reusable UI infrastructure: cached widgets, 3D world panels, command builders. |
 | **`lunco-viz`** | Domain-agnostic visualization: `SignalRegistry`, LinePlots, and future 3D/Rerun bridges. |
@@ -542,12 +543,21 @@ Reflection-based data extraction engine. Automatically samples and standardizes 
 
 **`lunco-workbench`**
 The engineering-IDE shell. Handles the docking engine (tabs, splits),
-perspective presets (Build, Simulate), Twin Browser, shared hierarchy-row
-presentation (`tree::{branch, leaf}`), and picker/command adapters. It does
-not own file bytes or backend I/O; those go through `lunco-storage`, while
-Twin discovery stays in `lunco-workspace`/`lunco-twin`. GPU health and
-presentation recovery live in the independent `lunco-render-recovery` crate;
-the workbench only composes its banner and recovery systems.
+perspective presets (Build, Simulate), shared hierarchy-row presentation
+(`tree::{branch, leaf}`), and picker/command adapters. It does not own file
+bytes or backend I/O; those go through `lunco-storage`, while Twin discovery
+stays in `lunco-workspace`/`lunco-twin`. GPU health and presentation recovery
+live in the independent `lunco-render-recovery` crate; the workbench only
+composes its banner and recovery systems. Hosts that need Twin and Files
+navigation add the separate `lunco-workbench-browser` feature package.
+
+**`lunco-workbench-browser`**
+Reusable navigation feature for the concrete workbench. It owns the Twin and
+Files panels, browser query/actions/resources, built-in filesystem and library
+sections, and dataset provisioning controls. Domain UI crates register their
+own `BrowserSection` implementations; the package depends on the heavier
+asset-provisioning crate only for those built-in dataset controls, keeping the
+base workbench shell independent of that dependency.
 
 **`lunco-capture`**
 Render-bound application capability for screenshots and deterministic offline

@@ -13,7 +13,7 @@ mod render;
 // so the headless/server build can resolve packages without egui. The Twin
 // Browser renders that backend; this module owns loading and opening.
 use crate::package_tree::{PackageNode, PackageTreeCache};
-use lunco_workbench::BrowserQuery;
+use lunco_workbench_browser::BrowserQuery;
 
 /// Open a class selected in the Modelica Twin-Browser section through the
 /// normal asynchronous document/tab loader.
@@ -210,7 +210,7 @@ fn find_and_update_node(
 /// renders walk the cached tree.
 pub fn render_root_subtree(
     ui: &mut egui::Ui,
-    ctx: &mut lunco_workbench::BrowserCtx<'_, '_>,
+    ctx: &mut lunco_workbench_browser::BrowserCtx<'_, '_>,
     root_id: &str,
 ) {
     let query = ctx.resource::<BrowserQuery>().cloned().unwrap_or_default();
