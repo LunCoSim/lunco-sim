@@ -50,14 +50,65 @@ use std::collections::{BTreeMap, HashMap};
 /// that projection. The policy sees one map and one authoritative value for
 /// each subject.
 pub(crate) fn usd_physics_facts(view: &StageView<'_>) -> H {
+    usd_physics_facts_with_control_info(view).0
+}
+
+/// Build the complete USD lint facts and the structured control-binding
+/// projection used by `ValidateAsset`'s JSON report.
+pub(crate) fn usd_physics_facts_with_control_info(
+    view: &StageView<'_>,
+) -> (H, Vec<serde_json::Value>) {
     let mut facts = lunco_usd_avian_lint::physics_facts(view);
     lunco_usd_sim::lint::append_network_synthesizer_facts(view, &mut facts);
     lunco_usd_sim::lint::append_gear_drive_facts(view, &mut facts);
     lunco_usd_sim::lint::append_wheel_attachment_facts(view, &mut facts);
+    let (bindings, info) = control_binding_facts(view);
     if let H::Map(entries) = &mut facts {
         entries.push(("runtime_connections".to_string(), H::Array(Vec::new())));
+        entries.push(("control_bindings".to_string(), H::Array(bindings)));
     }
-    facts
+    (facts, info)
+}
+
+/// Project the composed controls shape into policy facts.
+///
+/// Rust supplies only authored identity, port text, and the validity bit from
+/// the parser used by the loader. The Rhai policy owns severity and wording.
+fn control_binding_facts(view: &StageView<'_>) -> (Vec<H>, Vec<serde_json::Value>) {
+    let mut facts = Vec::new();
+    let mut info = Vec::new();
+    for prim in view.prim_paths() {
+        if !is_controls_scope(view, &prim) {
+            continue;
+        }
+        for bind in view.children(&prim) {
+            let Some(name) = bind.name() else { continue };
+            let valid = lunco_core::parse_user_intent(name).is_some();
+            let port = view.text(&bind, "lunco:port");
+            facts.push(H::map([
+                ("prim", H::str(bind.as_str())),
+                ("intent", H::str(name)),
+                ("port", port.clone().map(H::str).unwrap_or(H::Unit)),
+                ("valid", H::Bool(valid)),
+            ]));
+            info.push(json!({
+                "prim": bind.as_str(),
+                "intent": name,
+                "port": port,
+                "ok": valid,
+            }));
+        }
+    }
+    (facts, info)
+}
+
+/// A prim whose children carry intent→port bindings. The shape decides, not a
+/// prim name: shared control profiles are often composed under vessel-specific
+/// scopes.
+fn is_controls_scope(view: &impl UsdRead, prim: &openusd::sdf::Path) -> bool {
+    view.children(prim)
+        .iter()
+        .any(|c| c.name().is_some() && view.attr_names(c).iter().any(|a| a == "lunco:port"))
 }
 
 /// Run the complete live USD lint pipeline over one composed stage.

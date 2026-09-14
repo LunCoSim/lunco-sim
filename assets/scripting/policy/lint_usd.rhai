@@ -61,6 +61,9 @@
 //       live-only evidence for runtime provider endpoints. File validation
 //       supplies an empty array because it cannot observe ECS projection.
 //
+//   facts.control_bindings[] #{ prim, intent, port, valid }
+//       composed control profiles projected from the canonical loader parser.
+//
 //   facts.vehicle_parts[]  #{ path, type, vehicle, body, purpose, collision_api,
 //                              collision_state, wheel_projector, physical_wheel,
 //                              rigid_body_api,
@@ -275,8 +278,30 @@ fn is_modelica_network(scope) {
     scope.synthesizer == "acausal-network"
 }
 
+/// Rust projects control bindings with the canonical loader parser. The
+/// authored policy owns severity and wording, so this contract can evolve
+/// without rebuilding the scene-validation crate. No duplicated spelling list
+/// lives here: `valid` is evidence from the single runtime authority.
+fn control_binding_contract(facts) {
+    let out = [];
+    if facts.control_bindings == () { return out; }
+    for binding in facts.control_bindings {
+        if binding.valid { continue; }
+        let message = "names `" + binding.intent + "`, which is not a control intent; "
+            + "the loader skips it, so this binding never actuates anything";
+        out.push(finding(
+            "control-binding-unknown-intent",
+            "error",
+            binding.prim,
+            message,
+        ));
+    }
+    out
+}
+
 fn lint_usd(facts) {
     let out = [];
+    for f in control_binding_contract(facts) { out.push(f); }
     for f in stage_meters_per_unit_missing(facts) { out.push(f); }
     for f in epoch_api_requires_authored_time(facts) { out.push(f); }
     for f in connection_contract(facts) { out.push(f); }

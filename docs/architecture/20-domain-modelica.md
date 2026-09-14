@@ -100,7 +100,7 @@ member role schemas: `LunCoForceActuatorAPI` selects the actuator-wrench
 projection, while `LunCoProgramAPI` selects the generated Modelica path. Rust
 supplies the composed facts — component identities and
 classes, constants, causal links, acausal connections, boundary ports, member
-outputs, and deterministic fact coordinates — and validates the result. It
+outputs, and deterministic topology partition — and validates the result. It
 does not classify components as battery, motor, solar, thermal, fluid, or any
 other domain.
 
@@ -164,10 +164,11 @@ other vehicle assemblies without a Rust toggle, a per-frame script, or a
 vehicle-specific electrical equation.
 
 Each policy unit carries both its Modelica class name and its root instance
-name. The shipped facts include a deterministic instance default, but a Rhai
-policy may replace it; Rust validates identifier/collision/uniqueness rules and
-uses the returned name for telemetry mapping. This keeps naming policy out of
-the Rust projector without allowing an invalid runtime address.
+name. The incoming Rust facts contain only the USD-derived partition and
+boundary; the Rhai policy owns generated names and may choose them freely
+within the validated Modelica identifier/collision/uniqueness contract. Rust
+uses the returned name for telemetry mapping without inventing a runtime
+address when policy data is missing.
 
 The generated visual contract is deliberately ordinary Modelica. The root
 `Icon` is a compact identity mark; its `Diagram` contains placed generated

@@ -84,6 +84,17 @@ def Xform "LintSelftest" (
         double lunco:time:epochJd = 0.0
     }
 
+    # The binding reader still uses the canonical Rust intent parser, but the
+    # authoring diagnostic belongs to the reloadable USD Rhai policy.
+    def Scope "InvalidControls"
+    {
+        def "forwrad"
+        {
+            uniform string lunco:port = "throttle"
+            uniform double lunco:factor = 1
+        }
+    }
+
     over "Sun"
     {
         double3 xformOp:rotateXYZ = (-35.0, 40.0, 0.0)

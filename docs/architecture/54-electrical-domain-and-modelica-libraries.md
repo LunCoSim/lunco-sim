@@ -189,10 +189,10 @@ resolver's source of truth, and the shared engine loads roots asynchronously
 before the canvas resolves their authored icons and ports.
 
 Each returned unit may set its `instance` independently of its generated class
-`name`. The facts provide the deterministic default, while the policy owns any
-custom naming; Rust only validates that instances are valid, unique, and do not
-collide with the generated root interface before using those exact names for
-runtime signal provenance.
+`name`. The facts do not provide a generated instance default: naming is a
+policy decision. Rust only validates that instances are valid, unique, and do
+not collide with the generated root interface before using those exact names
+for runtime signal provenance.
 
 ## 2a. Authoring a device model: the four rules that are not obvious
 

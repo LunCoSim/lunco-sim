@@ -92,6 +92,7 @@ facts.prims[].connections[].sources[] #{ path, path_valid, prim_exists,
 facts.runtime_connections[] #{ subject, source, source_prim, source_property,
                                direction, port_name, provider, projected,
                                port_exists, pending }  // loaded RunLint only
+facts.control_bindings[] #{ prim, intent, port, valid }
 facts.collision_enabled_without_api[]  ordinary non-terrain, non-wheel paths
                                           authoring `physics:collisionEnabled=true`
                                           without `PhysicsCollisionAPI`; terrain
@@ -124,6 +125,13 @@ policy before a run.
 `prims` is the escape hatch that makes the rhai half real: a rule about a schema
 nobody anticipated (`mass-outside-any-body` is the worked example) needs **no
 Rust change**.
+
+`control_bindings` is a composed-stage projection from the same
+`lunco_core::parse_user_intent` authority used by the loader. Rust supplies only
+the authored binding, port text, and validity bit; `lint_usd.rhai` owns the
+severity and message for an unknown intent. There is no second spelling table
+for suggestions, so adding or removing a canonical intent cannot leave lint
+policy accepting a stale name.
 
 `vehicle_parts` is the composed collision contract for every renderable gprim
 under a `kind = "assembly"` rigid-body root. `contract` is `collider` for a

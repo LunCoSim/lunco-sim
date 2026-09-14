@@ -92,6 +92,15 @@ fn on_tick(me) {
 
     let f = [];
 
+    let invalid_controls = by_rule(findings, "control-binding-unknown-intent");
+    f.push(t_true(invalid_controls.len() == 1,
+        "control-binding-unknown-intent fired " + invalid_controls.len() +
+        " time(s), expected exactly 1"));
+    if invalid_controls.len() == 1 {
+        f.push(t_true(invalid_controls[0].subject == "/LintSelftest/InvalidControls/forwrad",
+            "unknown control binding was reported at " + invalid_controls[0].subject));
+    }
+
     let missing_epoch = by_rule(findings, "epoch-api-missing-time");
     f.push(t_true(missing_epoch.len() == 2,
         "epoch-api-missing-time fired " + missing_epoch.len() +
