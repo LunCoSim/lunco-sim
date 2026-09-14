@@ -56,6 +56,39 @@ surface, and pipeline changes. The likely fix must remove avoidable transition
 churn at its owner, without suppressing invalid state or reducing render
 quality.
 
+## Sandbox physics-admission regression (2026-09-14)
+
+The later sandbox regression was a separate startup/admission bug, not a
+recurring Builder renderer cost. The authored `Ramp` is rotated and its broad
+phase AABB reaches `y=17.730926`. The validator treated that AABB maximum as a
+filled vertical support slab, so bodies at `y=6` were falsely reported as
+penetrating by `12.230926 m`. `JointTestB` and the `Base`/`Arm` assembly remained
+pending; the old readiness policy then released the world after its 3,600-tick
+deadline and concealed the invalid admission state.
+
+The fix keeps the ownership boundary but removes the approximation: the terrain
+admission pass snapshots the live Avian collider poses, filters, disabled state,
+and sensor state once, then uses Avian's maintained narrow-phase
+`collision::collider::contact_query::contact` for rigid support overlap. The
+same snapshot feeds the existing initial support-ray query, so startup geometry
+and collision filtering do not have two divergent readers. Unsupported or
+non-finite contact results remain held and produce a diagnostic; no pose is
+rewritten and no regular physics hot path is changed.
+
+Readiness deadlines are now terminal `RuntimeFaults` (`readiness-timeout`), not
+permission to proceed. The item remains pending and physics remains held until
+the producer closes its ticket or the scene teardown clears the scene state.
+
+Production verification in this worktree: `cargo test -p lunco-readiness` passed
+12/12; the two exact Avian contact regressions passed; the production binary
+loaded `assets/scenes/luncosim/sandbox_scene.usda` with
+`ready=true`, `world_hold=false`, `faulted=false`, `pending_count=0`, and zero
+runtime diagnostics. The Tracy capture
+`scripts/perf/captures/sandbox-physics-post-fix-20260914.tracy` measured
+`PhysicsSchedule` at 0.270 ms mean for the full 30.39-second trace and 0.265 ms
+mean after 10 seconds; the validator itself was 0.007 ms mean after settling.
+The separate non-Tracy production run reached the same clear readiness state.
+
 ## Root-cause investigation
 
 The first production capture of the Builder-only panel path showed that the

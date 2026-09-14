@@ -16,11 +16,13 @@
 //! A ticket opened on an event has to be closed on the matching event, on every
 //! path — including the ones that end in a failed asset load, a scene reload
 //! halfway through a compile, or a despawn. Missing one leaks a hold that freezes
-//! the world until the deadline.
+//! the world until the producer closes the ticket; an overdue ticket is a
+//! terminal runtime fault and never releases the world implicitly.
 //!
 //! These systems instead derive the wait from state that is *already* the truth:
 //! `SceneLoadInFlight` and unresolved `UsdSceneAwaitingStage` prims for the scene, a
-//! `ModelicaModel` whose interface has not compiled for a model. There is no
+//! `ModelicaModel` whose interface has not compiled for a model, and the
+//! physics-admission markers for bodies not yet admitted. There is no
 //! path to miss, because there is no transition being watched — each frame the
 //! wait either still describes the world or it does not.
 
