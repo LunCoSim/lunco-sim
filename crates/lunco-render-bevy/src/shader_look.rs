@@ -39,7 +39,7 @@ use bevy::light::NotShadowCaster;
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+use bevy::render::render_resource::{TextureDimension, TextureFormat};
 use bevy::shader::Shader;
 use bevy::tasks::{futures_lite::future, AsyncComputeTaskPool, Task};
 use lunco_materials::{
@@ -947,6 +947,7 @@ fn mark_shader_look_ready(
 mod tests {
     use super::*;
     use crate::ShaderSchemas;
+    use bevy::render::render_resource::Extent3d;
     use lunco_materials::ParamValue;
 
     fn app() -> App {
