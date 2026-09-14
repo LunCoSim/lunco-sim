@@ -434,7 +434,7 @@ pub fn on_save_active_document_as(trigger: On<SaveActiveDocumentAs>, mut command
         // Through `lunco-storage` — atomic tmp+rename on native, localStorage on
         // wasm — so "Save As" is a real, working command in the browser instead
         // of a `std::fs::write` that always fails there.
-        if let Err(e) = crate::source_asset::write_text_sync(&path, &source) {
+        if let Err(e) = lunco_modelica_runtime::source_asset::write_text_sync(&path, &source) {
             bevy::log::warn!(
                 "[SaveActiveDocumentAs] write failed {}: {}",
                 path.display(),

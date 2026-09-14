@@ -9,6 +9,7 @@
 use bevy::prelude::*;
 use lunco_api::{ApiErrorCode, ApiQueryProvider, ApiQueryRegistry, ApiResponse};
 use lunco_doc::{Document, DocumentOrigin};
+use lunco_modelica_runtime::ModelicaModel;
 use lunco_workspace::WorkspaceResource;
 
 use crate::experiments_runner::ExperimentSources;
@@ -526,7 +527,7 @@ impl ApiQueryProvider for CompileStatusProvider {
             })
             .unwrap_or((0, None));
         let (is_compiled, is_compiling, paused, running, run_stale, current_time) = run_entity
-            .and_then(|e| world.get::<crate::ModelicaModel>(e))
+            .and_then(|e| world.get::<ModelicaModel>(e))
             .map(|m| {
                 let stale = !m.is_compiled || m.compiled_generation != doc_generation;
                 (
@@ -1265,7 +1266,7 @@ impl ApiQueryProvider for SnapshotVariablesProvider {
             }));
         };
 
-        let Some(model) = world.get::<crate::ModelicaModel>(entity) else {
+        let Some(model) = world.get::<ModelicaModel>(entity) else {
             return ApiResponse::ok(serde_json::json!({
                 "doc_id": doc_id.raw(),
                 "t": null,

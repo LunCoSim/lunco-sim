@@ -49,7 +49,8 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
 use crate::lock_ext::LockExt;
-use crate::worker::{ModelicaChannels, ModelicaCommand, ModelicaResult};
+use crate::worker::ModelicaWorkerState;
+use lunco_modelica_runtime::{ModelicaChannels, ModelicaCommand, ModelicaResult};
 
 /// Wire-format envelope for the postMessage transport.
 ///

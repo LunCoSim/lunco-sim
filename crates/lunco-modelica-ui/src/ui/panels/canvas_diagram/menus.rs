@@ -173,7 +173,7 @@ fn collect_varying_signals(ctx: &PanelCtx) -> Vec<(bevy::prelude::Entity, String
     let mut v: Vec<_> = signals
         .into_iter()
         .filter(|(entity, path)| {
-            ctx.get::<crate::ModelicaModel>(*entity)
+            ctx.get::<lunco_modelica_runtime::ModelicaModel>(*entity)
                 .map(|m| !m.parameters.contains_key(path) && !m.inputs.contains_key(path))
                 .unwrap_or(true)
         })

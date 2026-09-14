@@ -750,7 +750,7 @@ fn report_dome_environment_status(
 /// source filename looking like ongoing work after the scene had settled.
 fn report_modelica_status(
     pending_sources: Query<(), With<lunco_usd_sim_cosim::PendingModelicaSource>>,
-    models: Query<&lunco_modelica_core::ModelicaModel, With<lunco_cosim::UsdSourcedCosim>>,
+    models: Query<&lunco_modelica_runtime::ModelicaModel, With<lunco_cosim::UsdSourcedCosim>>,
     bus: Option<ResMut<lunco_status_core::status_bus::StatusBus>>,
     mut mirror: ResMut<ModelicaStatusMirrorState>,
 ) {
@@ -828,8 +828,8 @@ fn reset_modelica_status_mirror_on_scene_teardown(
 mod modelica_status_tests {
     use super::*;
 
-    fn ready_model(name: &str) -> lunco_modelica_core::ModelicaModel {
-        lunco_modelica_core::ModelicaModel {
+    fn ready_model(name: &str) -> lunco_modelica_runtime::ModelicaModel {
+        lunco_modelica_runtime::ModelicaModel {
             model_name: name.to_owned(),
             is_compiled: true,
             ..default()
@@ -862,7 +862,7 @@ mod modelica_status_tests {
 
         app.world_mut()
             .entity_mut(first)
-            .get_mut::<lunco_modelica_core::ModelicaModel>()
+            .get_mut::<lunco_modelica_runtime::ModelicaModel>()
             .expect("Modelica model")
             .is_compiling = true;
         app.update();
@@ -874,7 +874,7 @@ mod modelica_status_tests {
 
         app.world_mut()
             .entity_mut(first)
-            .get_mut::<lunco_modelica_core::ModelicaModel>()
+            .get_mut::<lunco_modelica_runtime::ModelicaModel>()
             .expect("Modelica model")
             .is_compiling = false;
         app.update();

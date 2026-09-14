@@ -140,7 +140,8 @@ Logic engines for dynamic simulation behavior, the tool registry, and industrial
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-modelica-core`** | Headless Modelica domain runtime: document editing, Rumoca compilation, simulation sessions, worker transport, MSL indexing, and API-facing commands/queries. It has no workbench, egui, tutorial, or UI dependency. |
+| **`lunco-modelica-runtime`** | Render-free Modelica runtime contract: the `ModelicaModel` ECS component, worker command/result protocol, source asset loader, communication schedule, notices, sample stream, and telemetry layout. It deliberately has no Rumoca compiler, worker implementation, document editor, or UI closure. |
+| **`lunco-modelica-core`** | Headless Modelica compiler host: document editing, Rumoca compilation, simulation sessions, worker implementation, MSL indexing, and API-facing commands/queries. It consumes `lunco-modelica-runtime` but does not own the shared runtime protocol. It has no workbench, egui, tutorial, or UI dependency. |
 | **`lunco-modelica-ui`** | Modelica workbench UI and `lunica` application facade. It adapts core state to workbench contexts and owns Modelica panels, diagrams, plots, onboarding, and editor presentation; it has no tutorial catalog or lifecycle. |
 | **`lunco-modelica-ast`** | Pure Modelica source boundary: BOM normalization, strict/recovering Rumoca parse wrappers, AST interface/component extraction, shared expression/description display projections, and Modelica lint facts. It has no Bevy, UI, worker, storage, or solver ownership; authored lint policy remains in `assets/scripting/policy/lint_modelica.rhai`. |
 | **`lunco-scripting`** | Runtime-agnostic, language-neutral world bridge with **rhai** as the default (browser-capable) backend; Python is an optional one-shot-eval backend, Lua a reserved (unimplemented) backend id; logic providers cover scenarios and sequencing. Rhai can read/write generic active-Twin settings and read named engine exposures without per-setting bindings. |
@@ -164,7 +165,7 @@ Primary entry points and simulation assembly targets.
 | **`lunco-luncosim-core`** | — | Headless-safe simulation runtime shared by the GUI shell, `luncosim-server`, and scene-test runner. |
 | **`lunco-luncosim-server`** | `luncosim-server` | Thin headless launcher that depends directly on `lunco-luncosim-core` with API + networking enabled; the GUI shell is not linked. |
 | **`lunco-modelica-ui`** | `lunica` | The Modelica workbench application and UI facade. |
-| **`lunco-modelica-core`** | `lunica_worker`, `modelica_run`, `modelica_tester`, `msl_indexer`, `msl_parse_bench` | Headless Modelica worker and CLI/indexing tools; none link the workbench UI. |
+| **`lunco-modelica-core`** | `lunica_worker`, `modelica_run`, `modelica_tester`, `msl_indexer`, `msl_parse_bench` | Headless Modelica worker and CLI/indexing tools; none link the workbench UI. The worker protocol and live ECS component come from `lunco-modelica-runtime`. |
 
 > Other binaries: `build_msl_assets` (`lunco-modelica-assets`), `net_smoke` (`lunco-networking`), `dem_worker` (`lunco-terrain-bake`, the off-thread DEM bake Web Worker — staged next to the wasm by `build_web.sh`).
 

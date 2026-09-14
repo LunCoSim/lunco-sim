@@ -204,7 +204,7 @@ pub fn display_name_for(world: &bevy::prelude::World, doc: DocumentId) -> Option
 /// **The single source of truth for Modelica source text.** Every spawn
 /// path (CodeEditor Compile, Diagram auto-compile, USD program projection, the
 /// workbench binaries) allocates a document here and stores its id in
-/// [`crate::ModelicaModel::document`]. The entity becomes a runtime
+/// [`lunco_modelica_runtime::ModelicaModel::document`]. The entity becomes a runtime
 /// *reference* to the document, not its owner — a document can exist
 /// before any entity is spawned and can outlive an entity (e.g. a user
 /// stops a sim but keeps editing).

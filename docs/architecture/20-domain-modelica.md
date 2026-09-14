@@ -47,6 +47,12 @@ worker, UI, or solver state. `lunco-modelica-core` owns the headless document,
 compiler, worker, and simulation seams; `lunco-modelica-ui` owns workbench
 presentation and the `lunica` application facade.
 
+The shared render-free participant contract is [`lunco-modelica-runtime`](../../crates/lunco-modelica-runtime/).
+It owns `ModelicaModel`, the serialized worker command/result messages, source
+assets, communication scheduling, notices, samples, and telemetry layout. The
+compiler host consumes that contract; USD projection and UI adapters depend on
+the runtime package directly when they do not need Rumoca compilation.
+
 ## 2. Architecture in layers
 
 ```

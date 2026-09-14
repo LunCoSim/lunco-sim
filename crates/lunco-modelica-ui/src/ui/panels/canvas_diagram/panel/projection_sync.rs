@@ -426,7 +426,7 @@ fn spawn_projection_task(
     let target_for_log = target_class.clone();
     let source_hash = projection_relevant_source_hash(&source);
     let root_model_name = crate::ui::context::simulator_for(ctx, doc_id)
-        .and_then(|entity| ctx.get::<crate::ModelicaModel>(entity))
+        .and_then(|entity| ctx.get::<lunco_modelica_runtime::ModelicaModel>(entity))
         .map(|model| model.model_name.clone())
         .or_else(|| lunco_modelica_ast::ast_extract::extract_model_name_from_ast(ast_arc.as_ref()));
     let label = match &target_class {

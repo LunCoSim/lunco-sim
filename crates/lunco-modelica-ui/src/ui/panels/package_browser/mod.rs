@@ -589,7 +589,7 @@ fn open_user_file_class(world: &mut World, path: PathBuf, class: &ClassRef) {
         // — previously this just focused the stale tab. Read synchronously
         // (user-initiated, small file) and apply through the op pipeline so
         // canvas/plots/compile reproject; skip if the buffer already matches.
-        if let Ok(disk) = crate::source_asset::read_text_sync(&path) {
+        if let Ok(disk) = lunco_modelica_runtime::source_asset::read_text_sync(&path) {
             let differs = world
                 .resource::<ModelicaDocumentRegistry>()
                 .host(doc)
@@ -655,7 +655,7 @@ fn open_user_file_class(world: &mut World, path: PathBuf, class: &ClassRef) {
         };
         // `lunco-storage`, not `std::fs`: on wasm the picked file's text is in
         // browser storage, and this is the same call site on both targets.
-        let result = crate::source_asset::read_text_sync(&path_for_task)
+        let result = lunco_modelica_runtime::source_asset::read_text_sync(&path_for_task)
             .map(|source_text| {
                 crate::document::ModelicaDocument::with_origin(reserved_doc_id, source_text, origin)
             })

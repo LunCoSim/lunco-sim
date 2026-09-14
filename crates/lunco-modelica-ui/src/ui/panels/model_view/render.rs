@@ -402,7 +402,7 @@ fn render_unified_toolbar(
         .resource::<ModelicaDocumentRegistry>()
         .and_then(|r| r.entities_linked_to(doc).into_iter().next())
         .and_then(|e| {
-            ctx.get::<crate::ModelicaModel>(e)
+            ctx.get::<lunco_modelica_runtime::ModelicaModel>(e)
                 .map(|m| (m.paused, m.current_time))
         });
 

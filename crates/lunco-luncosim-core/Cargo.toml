@@ -26,6 +26,7 @@ lunco-terrain-globe = { path = "../lunco-terrain-globe" }
 lunco-obstacle-field = { path = "../lunco-obstacle-field" }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
+lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 lunco-sysml = { path = "../lunco-sysml", optional = true }
 lunco-luncosim-exposures = { path = "../lunco-luncosim-exposures", default-features = false }
 lunco-experiments = { path = "../lunco-experiments" }

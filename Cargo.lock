@@ -7427,7 +7427,7 @@ dependencies = [
  "lunco-luncosim-core",
  "lunco-luncosim-edit-ui",
  "lunco-luncosim-ui",
- "lunco-modelica-core",
+ "lunco-modelica-runtime",
  "lunco-networking",
  "lunco-readiness",
  "lunco-render",
@@ -7475,6 +7475,7 @@ dependencies = [
  "lunco-luncosim-exposures",
  "lunco-mobility",
  "lunco-modelica-core",
+ "lunco-modelica-runtime",
  "lunco-networking",
  "lunco-obstacle-field",
  "lunco-physics",
@@ -7549,6 +7550,7 @@ dependencies = [
  "lunco-materials",
  "lunco-mobility",
  "lunco-modelica-ast",
+ "lunco-modelica-runtime",
  "lunco-modelica-ui",
  "lunco-obstacle-field",
  "lunco-physics",
@@ -7640,6 +7642,7 @@ dependencies = [
  "lunco-luncosim-edit-core",
  "lunco-luncosim-edit-ui",
  "lunco-modelica-core",
+ "lunco-modelica-runtime",
  "lunco-modelica-ui",
  "lunco-networking",
  "lunco-render",
@@ -7749,6 +7752,7 @@ dependencies = [
  "lunco-doc-bevy",
  "lunco-experiments",
  "lunco-modelica-ast",
+ "lunco-modelica-runtime",
  "lunco-settings",
  "lunco-signal",
  "lunco-storage",
@@ -7781,6 +7785,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-modelica-runtime"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bevy",
+ "crossbeam-channel",
+ "lunco-core",
+ "lunco-doc",
+ "lunco-modelica-ast",
+ "lunco-signal",
+ "lunco-storage",
+ "serde",
+]
+
+[[package]]
 name = "lunco-modelica-ui"
 version = "0.1.0"
 dependencies = [
@@ -7806,6 +7825,7 @@ dependencies = [
  "lunco-experiments",
  "lunco-modelica-ast",
  "lunco-modelica-core",
+ "lunco-modelica-runtime",
  "lunco-scripting",
  "lunco-settings",
  "lunco-signal",
@@ -8743,6 +8763,7 @@ dependencies = [
  "lunco-environment",
  "lunco-modelica-ast",
  "lunco-modelica-core",
+ "lunco-modelica-runtime",
  "lunco-physics",
  "lunco-readiness",
  "lunco-render",
@@ -8775,6 +8796,7 @@ dependencies = [
  "lunco-hooks-rhai",
  "lunco-modelica-ast",
  "lunco-modelica-core",
+ "lunco-modelica-runtime",
  "lunco-signal",
  "lunco-usd-avian",
  "lunco-usd-bevy-core",

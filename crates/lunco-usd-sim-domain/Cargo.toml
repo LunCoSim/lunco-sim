@@ -18,6 +18,7 @@ lunco-hash = { path = "../lunco-hash" }
 lunco-hooks = { path = "../lunco-hooks" }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
+lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }

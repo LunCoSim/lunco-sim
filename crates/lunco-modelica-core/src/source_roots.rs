@@ -23,6 +23,9 @@
 //! workspace folder becomes a data change, not new plumbing.
 
 use bevy::prelude::*;
+use lunco_modelica_runtime::{
+    source_asset::read_text_sync, LoadSourceRootPayload, ModelicaChannels, ModelicaCommand,
+};
 use rumoca_compile::parsing::ast::{ClassDef, StoredDefinition};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -527,7 +530,7 @@ fn twin_source_root_specs(
 /// one source-root admission path and one dependency/session view.
 pub fn load_twin_source_roots(
     twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
-    channels: Option<Res<crate::ModelicaChannels>>,
+    channels: Option<Res<ModelicaChannels>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     mut seen: Local<HashSet<String>>,
 ) {
@@ -570,9 +573,9 @@ pub fn load_twin_source_roots(
             if seen.contains(&spec.id) {
                 continue;
             }
-            let cmd = crate::worker::ModelicaCommand::LoadSourceRoot {
+            let cmd = ModelicaCommand::LoadSourceRoot {
                 id: spec.id.clone(),
-                payload: crate::worker::LoadSourceRootPayload::Disk {
+                payload: LoadSourceRootPayload::Disk {
                     root_dir: spec.root_dir.clone(),
                 },
             };
@@ -591,7 +594,7 @@ pub fn load_twin_source_roots(
 pub fn ensure_loaded(
     registry: &mut SourceRootRegistry,
     id: &str,
-    channels: &crate::ModelicaChannels,
+    channels: &ModelicaChannels,
 ) -> bool {
     let Some(entry) = registry.roots.get_mut(id) else {
         return false;
@@ -612,7 +615,7 @@ pub fn ensure_loaded(
         } => {
             let summary = format!("disk {}", root_dir.display());
             (
-                crate::worker::LoadSourceRootPayload::Disk {
+                LoadSourceRootPayload::Disk {
                     root_dir: root_dir.clone(),
                 },
                 summary,
@@ -634,7 +637,7 @@ pub fn ensure_loaded(
             };
             let summary = format!("bundled {}, {}B", filename, source.len());
             (
-                crate::worker::LoadSourceRootPayload::InMemory {
+                LoadSourceRootPayload::InMemory {
                     label: format!("bundled:{filename}"),
                     files: vec![(filename.clone(), source.to_string())],
                 },
@@ -655,7 +658,7 @@ pub fn ensure_loaded(
             }
             let summary = format!("bundled package {root}, {} files", files.len());
             (
-                crate::worker::LoadSourceRootPayload::InMemory {
+                LoadSourceRootPayload::InMemory {
                     label: format!("bundled:{root}"),
                     files,
                 },
@@ -666,7 +669,7 @@ pub fn ensure_loaded(
             // Through `lunco-storage` (FileStorage native / WebStorage on wasm),
             // not `std::fs`: a workspace dependency can be opened in the web
             // build too, where the picked file's text lives in browser storage.
-            let source = match crate::source_asset::read_text_sync(path) {
+            let source = match read_text_sync(path) {
                 Ok(s) => s,
                 Err(e) => {
                     bevy::log::warn!(
@@ -686,7 +689,7 @@ pub fn ensure_loaded(
                 .to_string();
             let summary = format!("workspace {}, {}B", path.display(), source.len());
             (
-                crate::worker::LoadSourceRootPayload::InMemory {
+                LoadSourceRootPayload::InMemory {
                     label: format!("workspace:{}", path.display()),
                     files: vec![(uri, source)],
                 },
@@ -708,7 +711,7 @@ pub fn ensure_loaded(
     // see `worker::enqueue_command`), so a Compile sent immediately after
     // this is guaranteed to see the loaded session. Worker results transition
     // Loading → Ready or Failed based on the actual load outcome.
-    let cmd = crate::worker::ModelicaCommand::LoadSourceRoot {
+    let cmd = ModelicaCommand::LoadSourceRoot {
         id: id.to_string(),
         payload,
     };

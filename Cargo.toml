@@ -63,6 +63,7 @@ members = [
     "crates/lunco-ui",
     "crates/lunco-assets",
     "crates/lunco-modelica-assets",
+    "crates/lunco-modelica-runtime",
     "crates/lunco-materials",
     "crates/lunco-networking",
     "crates/lunco-command-macro",

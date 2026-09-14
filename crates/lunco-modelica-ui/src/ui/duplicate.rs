@@ -176,7 +176,7 @@ pub(crate) fn collect_parent_imports(class_file: &std::path::Path) -> Vec<String
                 // path-shaped and only reachable when the class came from a
                 // real on-disk package (native); the web resolves package
                 // imports out of the in-memory parsed bundle instead.
-                let src = match crate::source_asset::read_text_sync(&pkg) {
+                let src = match lunco_modelica_runtime::source_asset::read_text_sync(&pkg) {
                     Ok(s) => s,
                     Err(_) => {
                         dir = d.parent();

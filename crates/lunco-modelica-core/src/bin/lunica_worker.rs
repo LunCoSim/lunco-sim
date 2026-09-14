@@ -56,8 +56,8 @@ mod wasm {
     use std::cell::RefCell;
 
     use js_sys::Uint8Array;
-    use lunco_modelica_core::worker::{ModelicaCommand, ModelicaResult};
     use lunco_modelica_core::worker_transport::{WireMessage, WireResult};
+    use lunco_modelica_runtime::{ModelicaCommand, ModelicaResult};
 
     fn command_label(cmd: &ModelicaCommand) -> String {
         match cmd {

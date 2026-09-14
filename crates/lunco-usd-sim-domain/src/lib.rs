@@ -15,7 +15,8 @@ use lunco_modelica_ast::ast_extract::{
     parse_model_interface, parse_model_interface_from_ast, ModelInterface, ModelicaVariableMetadata,
 };
 use lunco_modelica_ast::{Causality, StoredDefinition};
-use lunco_modelica_core::{
+use lunco_modelica_runtime::{resolve_communication_period_secs, ModelicaSource};
+use lunco_modelica_runtime::{
     ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaNotice, ModelicaSignalLayout,
     ModelicaSignalProvenance, NoticeLevel,
 };
@@ -1949,7 +1950,7 @@ impl DomainSynthesizer for ActuatorWrenchSynthesizer {
             member_output_aliases: Vec::new(),
             units: Vec::new(),
             layout: SynthesisLayout::default(),
-            communication_period_secs: lunco_modelica_core::DEFAULT_COMMUNICATION_PERIOD_SECS,
+            communication_period_secs: lunco_modelica_runtime::DEFAULT_COMMUNICATION_PERIOD_SECS,
         })))
     }
 }
@@ -3101,7 +3102,7 @@ where
     }
     Ok(selected
         .map(|(_, _, period)| period)
-        .unwrap_or(lunco_modelica_core::DEFAULT_COMMUNICATION_PERIOD_SECS))
+        .unwrap_or(lunco_modelica_runtime::DEFAULT_COMMUNICATION_PERIOD_SECS))
 }
 
 fn network_communication_period(
@@ -3117,7 +3118,7 @@ fn network_communication_period(
             .attr_names(&path)
             .iter()
             .any(|name| name == COMMUNICATION_PERIOD_ATTR);
-        let period = lunco_modelica_core::resolve_communication_period_secs(
+        let period = resolve_communication_period_secs(
             authored,
             view.real(&path, COMMUNICATION_PERIOD_ATTR),
         )
@@ -3311,7 +3312,7 @@ pub fn read_network(
             inputs: BTreeSet::new(),
             input_sources: BTreeMap::new(),
             outputs: BTreeMap::new(),
-            communication_period_secs: lunco_modelica_core::DEFAULT_COMMUNICATION_PERIOD_SECS,
+            communication_period_secs: lunco_modelica_runtime::DEFAULT_COMMUNICATION_PERIOD_SECS,
             pending_sources: true,
         }));
     }
@@ -4008,8 +4009,8 @@ pub struct MemberClasses {
     metadata: HashMap<String, HashMap<String, ModelicaVariableMetadata>>,
     /// Resident handles let source modification events invalidate the exact
     /// declaration they changed without rescanning every pending source.
-    handles: HashMap<String, Handle<lunco_modelica_core::source_asset::ModelicaSource>>,
-    pending: HashMap<String, Handle<lunco_modelica_core::source_asset::ModelicaSource>>,
+    handles: HashMap<String, Handle<ModelicaSource>>,
+    pending: HashMap<String, Handle<ModelicaSource>>,
 }
 
 impl MemberClasses {
@@ -4127,11 +4128,9 @@ pub fn resolve_member_classes(
     stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<CanonicalStages>,
     asset_server: Res<AssetServer>,
-    sources: Res<Assets<lunco_modelica_core::source_asset::ModelicaSource>>,
-    mut source_events: MessageReader<AssetEvent<lunco_modelica_core::source_asset::ModelicaSource>>,
-    mut source_failures: MessageReader<
-        bevy::asset::AssetLoadFailedEvent<lunco_modelica_core::source_asset::ModelicaSource>,
-    >,
+    sources: Res<Assets<ModelicaSource>>,
+    mut source_events: MessageReader<AssetEvent<ModelicaSource>>,
+    mut source_failures: MessageReader<bevy::asset::AssetLoadFailedEvent<ModelicaSource>>,
 ) {
     let mut loaded = HashSet::new();
     let mut modified = HashSet::new();
@@ -4146,11 +4145,10 @@ pub fn resolve_member_classes(
             _ => {}
         }
     }
-    let failed: HashMap<AssetId<lunco_modelica_core::source_asset::ModelicaSource>, String> =
-        source_failures
-            .read()
-            .map(|event| (event.id, event.error.to_string()))
-            .collect();
+    let failed: HashMap<AssetId<ModelicaSource>, String> = source_failures
+        .read()
+        .map(|event| (event.id, event.error.to_string()))
+        .collect();
     let discover = !added.is_empty() || dirty.0;
     if !discover && loaded.is_empty() && modified.is_empty() && failed.is_empty() {
         return;
@@ -4210,8 +4208,7 @@ pub fn resolve_member_classes(
                 if classes.known.contains_key(&asset) || classes.pending.contains_key(&asset) {
                     continue;
                 }
-                let handle: Handle<lunco_modelica_core::source_asset::ModelicaSource> =
-                    asset_server.load(asset.clone());
+                let handle: Handle<ModelicaSource> = asset_server.load(asset.clone());
                 discovered.insert(handle.id());
                 classes.handles.insert(asset.clone(), handle.clone());
                 classes.pending.insert(asset, handle);
@@ -4338,7 +4335,7 @@ mod tests {
                     "/Thermal/Right/Mass.outputs:temp_k".into(),
                 ),
             ]),
-            communication_period_secs: lunco_modelica_core::DEFAULT_COMMUNICATION_PERIOD_SECS,
+            communication_period_secs: lunco_modelica_runtime::DEFAULT_COMMUNICATION_PERIOD_SECS,
             pending_sources: false,
         };
 
@@ -4371,7 +4368,7 @@ mod tests {
             inputs: BTreeSet::new(),
             input_sources: BTreeMap::new(),
             outputs: BTreeMap::new(),
-            communication_period_secs: lunco_modelica_core::DEFAULT_COMMUNICATION_PERIOD_SECS,
+            communication_period_secs: lunco_modelica_runtime::DEFAULT_COMMUNICATION_PERIOD_SECS,
             pending_sources: false,
         };
         let units = vec![
@@ -4643,7 +4640,7 @@ def Scope "Rig"
             inputs: BTreeSet::new(),
             input_sources: BTreeMap::new(),
             outputs: BTreeMap::new(),
-            communication_period_secs: lunco_modelica_core::DEFAULT_COMMUNICATION_PERIOD_SECS,
+            communication_period_secs: lunco_modelica_runtime::DEFAULT_COMMUNICATION_PERIOD_SECS,
             pending_sources: false,
         };
         let errors = validate_network(&network);
@@ -4705,7 +4702,7 @@ def Scope "Rig"
     fn aggregates_one_schedule_and_rejects_conflicting_member_periods() {
         assert_eq!(
             aggregate_communication_periods(std::iter::empty()).unwrap(),
-            lunco_modelica_core::DEFAULT_COMMUNICATION_PERIOD_SECS
+            lunco_modelica_runtime::DEFAULT_COMMUNICATION_PERIOD_SECS
         );
         let six_ticks = 6.0 * lunco_core::SECS_PER_TICK;
         assert_eq!(
@@ -4736,7 +4733,7 @@ def Scope "Rig"
                 ("right".into(), "/Controls.outputs:throttle".into()),
             ]),
             outputs: BTreeMap::new(),
-            communication_period_secs: lunco_modelica_core::DEFAULT_COMMUNICATION_PERIOD_SECS,
+            communication_period_secs: lunco_modelica_runtime::DEFAULT_COMMUNICATION_PERIOD_SECS,
             pending_sources: false,
         };
         assert!(validate_network(&network)
@@ -4755,7 +4752,7 @@ def Scope "Rig"
             inputs: BTreeSet::from(["demand".into()]),
             input_sources: BTreeMap::new(),
             outputs: BTreeMap::new(),
-            communication_period_secs: lunco_modelica_core::DEFAULT_COMMUNICATION_PERIOD_SECS,
+            communication_period_secs: lunco_modelica_runtime::DEFAULT_COMMUNICATION_PERIOD_SECS,
             pending_sources: false,
         };
         assert!(validate_network(&network)

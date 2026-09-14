@@ -11,12 +11,16 @@
 
 use bevy::prelude::*;
 use lunco_core::GlobalEntityId;
-use lunco_signal::{SignalExposure, SignalMeta, SignalRef, SignalRegistry, SignalSource};
+use lunco_signal::{SignalMeta, SignalRef, SignalRegistry, SignalSource};
 use lunco_telemetry::TelemetrySettings;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
-use crate::{state::ModelicaDocumentRegistry, ModelicaModel};
+use crate::state::ModelicaDocumentRegistry;
+#[cfg(test)]
 use lunco_modelica_ast::ast_extract::ModelicaVariableMetadata;
+#[cfg(test)]
+use lunco_modelica_runtime::ModelicaSignalProvenance;
+use lunco_modelica_runtime::{ModelicaModel, ModelicaSignalLayout};
 
 /// Runtime state retained for each Modelica participant.
 ///
@@ -27,109 +31,6 @@ use lunco_modelica_ast::ast_extract::ModelicaVariableMetadata;
 #[derive(Resource, Default)]
 pub struct RuntimeTelemetrySessions {
     sessions: HashMap<Entity, RuntimeTelemetrySession>,
-}
-
-/// Authored identity of a generated Modelica value.
-///
-/// The generated wrapper is a compiler artifact and may rename every member
-/// to make the combined model legal.  Keeping this identity beside the solver
-/// namespace means telemetry consumers never have to reverse-engineer those
-/// names (or guess a component from a string prefix).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ModelicaSignalProvenance {
-    /// Asset that declared the member class.
-    pub source_asset: Option<String>,
-    /// Fully-qualified class declared by that asset.
-    pub model_class: Option<String>,
-    /// Variable name in the member class.
-    pub model_variable: Option<String>,
-    /// Boundary name, when this value also has a canonical USD-facing output.
-    pub canonical_name: Option<String>,
-}
-
-/// Authored-structure address map for a generated Modelica participant.
-///
-/// A generated network has one solver entity, but its variables still describe
-/// values owned by the composed USD members.  The domain projector creates this
-/// map from the composed network; the telemetry producer only applies it.  This
-/// keeps the solver namespace private to the Modelica backend while preserving
-/// the USD ownership tree for every consumer of [`SignalRegistry`].
-#[derive(Component, Clone, Debug, Default)]
-pub struct ModelicaSignalLayout {
-    /// Exact solver variable → composed USD prim path mappings.  Boundary
-    /// outputs and promoted member outputs use this form.
-    pub exact_paths: BTreeMap<String, String>,
-    /// Solver namespace prefix → composed USD prim path mappings.  Generated
-    /// unit/member instance variables use this form so newly exposed internal
-    /// variables do not require another explicit telemetry declaration.
-    pub prefixes: Vec<(String, String)>,
-    /// Exact solver variable → authored Modelica identity mappings.
-    pub exact_provenance: BTreeMap<String, ModelicaSignalProvenance>,
-    /// Solver namespace prefix → authored Modelica identity mappings. The
-    /// variable name is completed from the suffix at lookup time.
-    pub provenance_prefixes: Vec<(String, ModelicaSignalProvenance)>,
-    /// Generated wrapper variables that correspond to authored outputs of the
-    /// composed USD network. A member alias is public when it is the only
-    /// runtime representation of that authored output; aliases already
-    /// represented by a public network output remain internal to avoid a
-    /// duplicate row for the same physical value. Every other variable remains
-    /// available through the explicit model-variable inspection view.
-    pub public_exact_paths: HashSet<String>,
-    /// Modelica source metadata for projected solver names.  Generated wrapper
-    /// declarations are intentionally plain `Real`s, so the member declaration
-    /// is the only authoritative place to recover units and descriptions for
-    /// promoted outputs.
-    pub metadata: BTreeMap<String, ModelicaVariableMetadata>,
-    /// Owner of a generated value for which the topology has no more specific
-    /// member mapping.  This is the composed network root, not a fabricated
-    /// telemetry entity.
-    pub root_path: String,
-}
-
-impl ModelicaSignalLayout {
-    /// Resolve a solver variable to its composed USD owner.
-    pub fn group_path(&self, variable: &str) -> Option<&str> {
-        if let Some(path) = self.exact_paths.get(variable) {
-            return Some(path);
-        }
-        self.prefixes
-            .iter()
-            .filter(|(prefix, _)| variable.starts_with(prefix))
-            .max_by_key(|(prefix, _)| prefix.len())
-            .map(|(_, path)| path.as_str())
-            .or_else(|| (!self.root_path.is_empty()).then_some(self.root_path.as_str()))
-    }
-
-    /// Classify a generated solver variable without parsing its generated
-    /// spelling in a consumer.  The projection records the authored network
-    /// boundary once; copied unit variables and internal connector/state
-    /// variables are therefore unambiguously implementation values.
-    pub fn exposure(&self, variable: &str) -> SignalExposure {
-        if self.public_exact_paths.contains(variable) {
-            SignalExposure::Public
-        } else {
-            SignalExposure::Internal
-        }
-    }
-
-    /// Resolve authored Modelica identity for a solver variable.
-    pub fn provenance(&self, variable: &str) -> Option<ModelicaSignalProvenance> {
-        if let Some(identity) = self.exact_provenance.get(variable) {
-            return Some(identity.clone());
-        }
-        self.provenance_prefixes
-            .iter()
-            .filter(|(prefix, _)| variable.starts_with(prefix))
-            .max_by_key(|(prefix, _)| prefix.len())
-            .map(|(prefix, identity)| {
-                let mut resolved = identity.clone();
-                let suffix = variable.strip_prefix(prefix).unwrap_or_default();
-                if !suffix.is_empty() {
-                    resolved.model_variable = Some(suffix.to_string());
-                }
-                resolved
-            })
-    }
 }
 
 #[derive(Default)]
