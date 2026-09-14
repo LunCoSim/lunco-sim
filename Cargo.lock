@@ -8037,7 +8037,6 @@ dependencies = [
  "lunco-twin",
  "lunco-twin-journal",
  "lunco-usd-compose",
- "lunco-workbench",
  "lunco-workbench-core",
  "lunco-workspace",
  "rustls-pemfile",

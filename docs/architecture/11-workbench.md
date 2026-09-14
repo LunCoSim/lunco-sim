@@ -48,7 +48,8 @@
 
 A **workbench** is the application shell of a LunCoSim app — the chrome around
 the 3D world. The `lunco-workbench-core` crate defines the stable panel,
-perspective, menu, and read-model contracts. The `lunco-workbench` crate owns
+perspective, menu, read-model, scheduling-label, and command-payload
+contracts. The `lunco-workbench` crate owns
 the concrete `egui_dock`/`bevy_egui` shell that materializes those contracts,
 including persistence and viewport integration. The optional
 `lunco-workbench-browser` crate builds the reusable Twin and Files navigation
@@ -224,7 +225,16 @@ heuristic is allowed. The tutorial draw systems are chained within that layer,
 so HUD, spotlight, coach, and recovery surfaces do not depend on scheduler
 interleaving.
 
-### 3.2 Render-time resource ownership
+### 3.2 Contract-only integrations
+
+`WorkbenchRenderSet` and `ApplicationOverlayRenderSet` are scheduling labels,
+not implementations of the dock shell, so they live in
+`lunco-workbench-core`. The perspective command payloads follow the same
+boundary at `lunco_workbench_core::commands`: the concrete shell owns their
+observers, while networking and other adapters may transport or trigger the
+typed data without linking `egui_dock`.
+
+### 3.3 Render-time resource ownership
 
 `WorkbenchLayout` is a private resource in the concrete shell and the owner of
 the dock tree, but `render_workbench` removes

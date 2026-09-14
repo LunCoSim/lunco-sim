@@ -61,9 +61,10 @@ use lunco_core::{on_command, register_commands, Command};
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use lunco_theme::ColorAlpha;
 use lunco_workbench_core::{
-    InstancePanel, MenuCtx, Panel, PanelCtx, PanelId, PanelMenuGroup, PanelRenderTarget,
-    PanelScrollPolicy, PanelSlot, PanelSurfaceStyle, Perspective, PerspectiveId,
-    PerspectiveLayoutPlan, TabId, UndoProbeCtx, WorkbenchMenuRegistry, WorkbenchSnapshot,
+    ApplicationOverlayRenderSet, InstancePanel, MenuCtx, Panel, PanelCtx, PanelId, PanelMenuGroup,
+    PanelRenderTarget, PanelScrollPolicy, PanelSlot, PanelSurfaceStyle, Perspective, PerspectiveId,
+    PerspectiveLayoutPlan, TabId, UndoProbeCtx, WorkbenchMenuRegistry, WorkbenchRenderSet,
+    WorkbenchSnapshot,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -114,19 +115,6 @@ pub use workspace_state::{
     DocumentSessionCodec, DocumentSessionRegistry, DocumentSnapshot, RuntimeSurfaceLayout,
     RuntimeSurfaceLayouts, WorkspaceState, WorkspaceStatePlugin, WorkspaceStateRestorePolicy,
 };
-
-/// SystemSet that runs the main workbench egui pass. Use
-/// `.after(WorkbenchRenderSet)` for systems that need to read
-/// the rects the workbench just published (e.g. help-tour overlays
-/// reading [`HelpAnchors`]).
-#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct WorkbenchRenderSet;
-
-/// System set for application-owned transient surfaces that must be rendered
-/// after the workbench and authored Bevy UI. The egui order of each surface
-/// still controls modal-vs-nonmodal precedence inside this final UI pass.
-#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct ApplicationOverlayRenderSet;
 
 /// Authoritative version and build identity supplied by the host application.
 ///

@@ -26,12 +26,14 @@ networking = ["dep:lunco-api-transport", "dep:lightyear", "dep:serde", "dep:serd
 net-diag = ["networking"]
 # Layer-4 in-sim UI (`mod ui`): the egui presence-cursor / tutorial overlays +
 # the Network/settings menu bridge. Pulls `bevy_egui` (otherwise NOT linked) and
-# the workbench. Implies `networking` because the bridge re-dispatches the typed
-# JoinServer/LeaveServer commands from `client`/`sync`. OFF for headless servers.
-ui = ["networking", "dep:bevy_egui", "workbench"]
-# Perspective/layout sync against the workbench (`sync.rs` ActivatePerspective +
-# WorkbenchSnapshot reads). UI-adjacent but no egui itself; pulled in by `ui`.
-workbench = ["dep:lunco-workbench", "dep:lunco-workbench-core"]
+# the renderer-independent workbench contract. Implies `networking` because the
+# bridge re-dispatches the typed JoinServer/LeaveServer commands from
+# `client`/`sync`. OFF for headless servers.
+ui = ["networking", "dep:bevy_egui", "layout-sync"]
+# Perspective/layout sync against the renderer-independent workbench contract
+# (`sync.rs` ActivatePerspective + WorkbenchSnapshot reads). This does not pull
+# the concrete egui docking shell.
+layout-sync = ["dep:lunco-workbench-core"]
 # Host-side HTTP **bytes plane**: serve scenario assets by CID over HTTP instead of
 # streaming them through the reliable QUIC channel (which queues without bound and
 # stalls on multi-MB twins). Native-only in effect — the `lunco-api` asset server is
@@ -41,7 +43,6 @@ transport-http = ["networking", "lunco-api-transport/transport-http"]
 
 [dependencies]
 bevy = { workspace = true }
-lunco-workbench = { path = "../lunco-workbench", optional = true }
 lunco-workbench-core = { path = "../lunco-workbench-core", optional = true }
 lunco-core = { path = "../lunco-core" }
 lunco-spatial = { path = "../lunco-spatial" }

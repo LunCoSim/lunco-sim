@@ -936,7 +936,7 @@ impl Plugin for SceneEditUiPlugin {
                     billboard_overlay::draw_billboard_overlay,
                     scene_context_menu::draw_scene_context_menu,
                 )
-                    .before(lunco_workbench::WorkbenchRenderSet),
+                    .before(lunco_workbench_core::WorkbenchRenderSet),
             );
         cinematic::register_all_commands(app);
     }

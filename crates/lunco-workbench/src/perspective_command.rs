@@ -13,18 +13,10 @@
 
 use crate::WorkbenchLayout;
 use bevy::prelude::*;
-use lunco_core::{on_command, register_commands, Command};
-
-/// Activate a registered [`Perspective`](crate::Perspective) by its
-/// `PerspectiveId` string. The luncosim registers `sandbox_view`,
-/// `rover_build`, `terrain_sculpt`, and `editor`; `editor` is available in
-/// the default title-bar switcher while `terrain_sculpt` remains an explicit
-/// authored mode. Unknown ids produce a user-visible status error.
-#[Command(default)]
-pub struct ActivatePerspective {
-    /// The id string of a registered perspective (e.g. `"editor"`).
-    pub id: String,
-}
+use lunco_core::{on_command, register_commands};
+use lunco_workbench_core::commands::{
+    ActivatePerspective, ResetToDefaultPerspective, ResetWorkspaceLayout, SetRequiredPerspective,
+};
 
 #[on_command(ActivatePerspective)]
 fn on_activate_perspective(
@@ -66,13 +58,6 @@ pub(crate) fn report_unknown_perspective(commands: &mut Commands, id: &str) {
     });
 }
 
-/// Reset the dock layout to the active perspective's clean preset — the
-/// recovery hatch when a stale persisted layout drops a panel (e.g. the 3D
-/// Viewport, which leaves the centre blank and the camera inactive). Exposed on
-/// the API bus and as the **View ▸ Reset Layout** menu item.
-#[Command(default)]
-pub struct ResetWorkspaceLayout {}
-
 #[on_command(ResetWorkspaceLayout)]
 fn on_reset_workspace_layout(
     _trigger: On<ResetWorkspaceLayout>,
@@ -93,13 +78,6 @@ fn on_reset_workspace_layout(
     info!("[ResetWorkspaceLayout] dock reset to active perspective preset");
 }
 
-/// Constrain perspective activation to an authored presentation perspective.
-#[Command(default)]
-pub struct SetRequiredPerspective {
-    /// Raw id of the required perspective, or `None` to release the shell.
-    pub id: Option<String>,
-}
-
 #[on_command(SetRequiredPerspective)]
 fn on_set_required_perspective(
     trigger: On<SetRequiredPerspective>,
@@ -110,10 +88,6 @@ fn on_set_required_perspective(
     };
     layout.set_required_perspective(trigger.event().id.as_deref());
 }
-
-/// Reset the workbench to the required or first registered perspective.
-#[Command(default)]
-pub struct ResetToDefaultPerspective {}
 
 #[on_command(ResetToDefaultPerspective)]
 fn on_reset_to_default_perspective(

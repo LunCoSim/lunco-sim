@@ -2365,7 +2365,7 @@ pub fn send_tutor_status_updates(
     mut timer: Local<f32>,
     time: Res<Time>,
     mut outbox: ResMut<SyncOutbox>,
-    #[cfg(feature = "workbench")] layout: Option<Res<lunco_workbench_core::WorkbenchSnapshot>>,
+    #[cfg(feature = "layout-sync")] layout: Option<Res<lunco_workbench_core::WorkbenchSnapshot>>,
 ) {
     if !role.is_networked() {
         return;
@@ -2383,14 +2383,14 @@ pub fn send_tutor_status_updates(
 
     let active_doc = workspace.as_ref().and_then(|w| w.active_document);
     let active_perspective = {
-        #[cfg(feature = "workbench")]
+        #[cfg(feature = "layout-sync")]
         {
             layout
                 .as_ref()
                 .and_then(|l| l.active_perspective())
                 .map(|pid| pid.as_str().to_string())
         }
-        #[cfg(not(feature = "workbench"))]
+        #[cfg(not(feature = "layout-sync"))]
         {
             None
         }
@@ -2422,7 +2422,7 @@ pub fn send_student_status_updates(
     mut timer: Local<f32>,
     time: Res<Time>,
     mut outbox: ResMut<SyncOutbox>,
-    #[cfg(feature = "workbench")] layout: Option<Res<lunco_workbench_core::WorkbenchSnapshot>>,
+    #[cfg(feature = "layout-sync")] layout: Option<Res<lunco_workbench_core::WorkbenchSnapshot>>,
 ) {
     if !role.is_networked() {
         return;
@@ -2441,14 +2441,14 @@ pub fn send_student_status_updates(
 
     let active_doc = workspace.as_ref().and_then(|w| w.active_document);
     let active_perspective = {
-        #[cfg(feature = "workbench")]
+        #[cfg(feature = "layout-sync")]
         {
             layout
                 .as_ref()
                 .and_then(|l| l.active_perspective())
                 .map(|pid| pid.as_str().to_string())
         }
-        #[cfg(not(feature = "workbench"))]
+        #[cfg(not(feature = "layout-sync"))]
         {
             None
         }
@@ -2835,7 +2835,7 @@ pub fn apply_tutorial_mirroring(
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_grid_spatial: Query<(Option<&CellCoord>, &Transform), (With<Grid>, Without<LocalAvatar>)>,
-    #[cfg(feature = "workbench")] layout: Option<Res<lunco_workbench_core::WorkbenchSnapshot>>,
+    #[cfg(feature = "layout-sync")] layout: Option<Res<lunco_workbench_core::WorkbenchSnapshot>>,
 ) {
     // Case 1: Student is in follow mode, mirroring tutor status
     if settings.follow_mode {
@@ -2861,16 +2861,14 @@ pub fn apply_tutorial_mirroring(
             }
 
             // Mirror active perspective
-            #[cfg(feature = "workbench")]
+            #[cfg(feature = "layout-sync")]
             if let Some(ref target_persp) = tutor_status.active_perspective {
                 if let Some(ref l) = layout {
                     let current_persp = l.active_perspective().map(|pid| pid.as_str());
                     if current_persp != Some(target_persp) {
-                        commands.trigger(
-                            lunco_workbench::perspective_command::ActivatePerspective {
-                                id: target_persp.clone(),
-                            },
-                        );
+                        commands.trigger(lunco_workbench_core::commands::ActivatePerspective {
+                            id: target_persp.clone(),
+                        });
                     }
                 }
             }
@@ -2901,12 +2899,12 @@ pub fn apply_tutorial_mirroring(
         }
 
         // Mirror active perspective from the observed student
-        #[cfg(feature = "workbench")]
+        #[cfg(feature = "layout-sync")]
         if let Some(ref target_persp) = tutor_status.observed_student_perspective {
             if let Some(ref l) = layout {
                 let current_persp = l.active_perspective().map(|pid| pid.as_str());
                 if current_persp != Some(target_persp) {
-                    commands.trigger(lunco_workbench::perspective_command::ActivatePerspective {
+                    commands.trigger(lunco_workbench_core::commands::ActivatePerspective {
                         id: target_persp.clone(),
                     });
                 }
@@ -2938,12 +2936,12 @@ pub fn apply_tutorial_mirroring(
         }
 
         // Snap active perspective
-        #[cfg(feature = "workbench")]
+        #[cfg(feature = "layout-sync")]
         if let Some(ref target_persp) = msg.active_perspective {
             if let Some(ref l) = layout {
                 let current_persp = l.active_perspective().map(|pid| pid.as_str());
                 if current_persp != Some(target_persp) {
-                    commands.trigger(lunco_workbench::perspective_command::ActivatePerspective {
+                    commands.trigger(lunco_workbench_core::commands::ActivatePerspective {
                         id: target_persp.clone(),
                     });
                 }
@@ -3231,18 +3229,18 @@ fn on_share_perspective(
     workspace: Res<lunco_workspace::WorkspaceResource>,
     avatar_pose: AvatarPoseContext,
     mut outbox: ResMut<SyncOutbox>,
-    #[cfg(feature = "workbench")] layout: Option<Res<lunco_workbench_core::WorkbenchSnapshot>>,
+    #[cfg(feature = "layout-sync")] layout: Option<Res<lunco_workbench_core::WorkbenchSnapshot>>,
 ) {
     let active_doc = workspace.active_document;
     let active_perspective = {
-        #[cfg(feature = "workbench")]
+        #[cfg(feature = "layout-sync")]
         {
             layout
                 .as_ref()
                 .and_then(|l| l.active_perspective())
                 .map(|pid| pid.as_str().to_string())
         }
-        #[cfg(not(feature = "workbench"))]
+        #[cfg(not(feature = "layout-sync"))]
         {
             None
         }

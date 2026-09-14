@@ -13,6 +13,8 @@ mod panel;
 mod perspective;
 mod snapshot;
 
+pub mod commands;
+
 pub use menu::{
     CustomMenu, MenuCallback, MenuCtx, MenuIntents, SettingsSubmenu, UndoProbe, UndoProbeCtx,
     WorkbenchMenuRegistry,
@@ -25,3 +27,16 @@ pub use perspective::{
     Perspective, PerspectiveId, PerspectiveInstanceTab, PerspectiveLayoutPlan, PerspectiveSlotPlan,
 };
 pub use snapshot::WorkbenchSnapshot;
+
+/// System set occupied by the concrete workbench egui pass.
+///
+/// Consumers that render an overlay after the shell use this contract label;
+/// they do not need to depend on the shell implementation merely to express
+/// ordering.
+#[derive(bevy::ecs::schedule::SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct WorkbenchRenderSet;
+
+/// System set for application-owned transient surfaces rendered after the
+/// workbench and authored Bevy UI.
+#[derive(bevy::ecs::schedule::SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ApplicationOverlayRenderSet;

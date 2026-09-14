@@ -1172,7 +1172,7 @@ fn tour_tail_points(
 }
 
 /// Adds the [`GuidedOverlay`] resource, its commands, and the ui-gated overlay draw
-/// systems (ordered after [`WorkbenchRenderSet`](crate::WorkbenchRenderSet) so
+/// systems (ordered after [`WorkbenchRenderSet`](lunco_workbench_core::WorkbenchRenderSet) so
 /// panel `HelpAnchors` rects are populated before the spotlight/tour read them).
 /// Idempotent. Registered by [`WorkbenchPlugin`](crate::WorkbenchPlugin).
 pub struct GuidedOverlayPlugin;
@@ -1203,7 +1203,7 @@ impl Plugin for GuidedOverlayPlugin {
                 draw_guided_recovery,
             )
                 .chain()
-                .in_set(crate::ApplicationOverlayRenderSet),
+                .in_set(lunco_workbench_core::ApplicationOverlayRenderSet),
         );
     }
 }

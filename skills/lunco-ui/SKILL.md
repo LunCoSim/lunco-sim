@@ -34,9 +34,10 @@ and design decisions. This skill is a quick-reference summary.
 
 The workbench is deliberately three layers. `lunco-workbench-core` contains
 the stable `Panel`/`PanelCtx`, `InstancePanel`, `PerspectiveLayoutPlan`, menu
-registry, and `WorkbenchSnapshot` contracts. It is safe for domain UI crates
-that need panel behavior or published layout facts and does not pull the
-renderer or `egui_dock`. `lunco-workbench` is the concrete shell: it owns
+registry, `WorkbenchSnapshot`, scheduling labels, and perspective command
+payloads. It is safe for domain UI crates that need panel behavior or published
+layout facts and does not pull the renderer or `egui_dock`. `lunco-workbench`
+is the concrete shell: it owns
 docking, egui/bevy integration, persistence, source editing, and shell-only
 widgets such as icons and tree renderers. `lunco-workbench-browser` is the
 optional reusable Twin/Files feature: it owns browser state, standard panels,
