@@ -18,14 +18,18 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
-mod support;
-
-/// Build a headless Avian app (with `Transform` propagation) and step it `n` fixed
-/// steps. The `AssetPlugin`/`Mesh` wiring physics stepping needs lives in
-/// [`support::headless_physics_app`].
+/// Build a headless Avian app (with `Transform` propagation) and step it `n`
+/// fixed steps. `AssetPlugin` and the `Mesh` asset initialize the Avian
+/// collider-cache messages required by a manually driven app.
 fn step_app(build: impl FnOnce(&mut World) -> Entity, n: usize) -> (App, Entity) {
-    let mut app = support::headless_physics_app();
-    app.add_plugins(TransformPlugin);
+    let mut app = App::new();
+    app.add_plugins((
+        MinimalPlugins,
+        AssetPlugin::default(),
+        PhysicsPlugins::default(),
+        TransformPlugin,
+    ));
+    app.init_asset::<Mesh>();
     app.insert_resource(Time::<Fixed>::from_hz(60.0));
     let tracked = build(app.world_mut());
     // Driving `update()` by hand (not `run()`) still needs the plugins' deferred

@@ -697,7 +697,6 @@ pub struct RegisterToolLibrary {
 
 #[cfg(feature = "rhai")]
 #[on_command(RegisterToolLibrary)]
-#[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
 fn on_register_tool_library(
     _t: On<RegisterToolLibrary>,
     mut scoped: ResMut<crate::tool_libs::TwinToolLibraries>,
@@ -1048,7 +1047,6 @@ pub struct RegisterTimeline {
 
 #[cfg(feature = "rhai")]
 #[on_command(RegisterTimeline)]
-#[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
 fn on_register_timeline(
     _t: On<RegisterTimeline>,
     mut store: ResMut<crate::timelines::TimelineStore>,

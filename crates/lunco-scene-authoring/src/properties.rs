@@ -998,17 +998,19 @@ pub struct ImportShader {
 }
 
 /// Observer for [`ImportShader`].
-#[allow(clippy::too_many_arguments, unused_variables, unused_mut)]
+#[allow(clippy::too_many_arguments)]
 #[on_command(ImportShader)]
 pub fn on_import_shader(
     trigger: On<ImportShader>,
-    twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
-    asset_server: Res<AssetServer>,
-    mut shaders: ResMut<Assets<bevy::shader::Shader>>,
-    mut catalog: ResMut<lunco_materials::ShaderCatalog>,
-    registry: Res<lunco_api::registry::ApiEntityRegistry>,
-    q_look: Query<&ShaderLook>,
-    mut commands: Commands,
+    #[cfg(not(target_arch = "wasm32"))] twin_roots: Option<
+        Res<lunco_assets::twin_source::TwinRoots>,
+    >,
+    #[cfg(not(target_arch = "wasm32"))] asset_server: Res<AssetServer>,
+    #[cfg(not(target_arch = "wasm32"))] mut shaders: ResMut<Assets<bevy::shader::Shader>>,
+    #[cfg(not(target_arch = "wasm32"))] mut catalog: ResMut<lunco_materials::ShaderCatalog>,
+    #[cfg(not(target_arch = "wasm32"))] registry: Res<lunco_api::registry::ApiEntityRegistry>,
+    #[cfg(not(target_arch = "wasm32"))] q_look: Query<&ShaderLook>,
+    #[cfg(not(target_arch = "wasm32"))] mut commands: Commands,
 ) {
     let ev = trigger.event();
     #[cfg(target_arch = "wasm32")]
@@ -1063,11 +1065,10 @@ pub struct DeleteShader {
 }
 
 /// Observer for [`DeleteShader`].
-#[allow(unused_variables)]
 #[on_command(DeleteShader)]
 pub fn on_delete_shader(
     trigger: On<DeleteShader>,
-    schemes: Option<Res<lunco_assets::SchemeRegistry>>,
+    #[cfg(not(target_arch = "wasm32"))] schemes: Option<Res<lunco_assets::SchemeRegistry>>,
     mut catalog: ResMut<lunco_materials::ShaderCatalog>,
 ) {
     let path = trigger.event().path.trim().to_string();

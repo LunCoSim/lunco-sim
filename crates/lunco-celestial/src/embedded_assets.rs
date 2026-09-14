@@ -36,8 +36,10 @@ const ARTEMIS_2_EPHEMERIS_CSV: &str =
 pub struct EmbeddedAssetsPlugin;
 
 impl Plugin for EmbeddedAssetsPlugin {
-    #[allow(unused_variables)]
     fn build(&self, app: &mut App) {
+        #[cfg(not(all(target_arch = "wasm32", feature = "embed-assets")))]
+        let _ = app;
+
         #[cfg(all(target_arch = "wasm32", feature = "embed-assets"))]
         {
             // Only the EPHEMERIS payload is embedded now. The mission's own
