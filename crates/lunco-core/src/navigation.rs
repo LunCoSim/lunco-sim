@@ -84,13 +84,20 @@ pub fn nav_setpoint(
     let dot = fwd.dot(to);
 
     // A waypoint behind the vehicle is a heading-recovery command, not a
-    // request to drive in reverse. Turning in place keeps every rover's
-    // longitudinal motion forward and makes the next waypoint the vehicle's
-    // actual heading target. The sign tie-breaker is deterministic for the
+    // request to drive in reverse. Differential steering can rotate in place,
+    // while an Ackermann vehicle needs a small forward roll to generate yaw;
+    // asking it to turn with zero throttle leaves it permanently parked at a
+    // rear-facing waypoint. The sign tie-breaker is deterministic for the
     // exact 180-degree case, where the cross product has no direction.
     if dot < 0.0 {
         return Some(NavigationCommand {
-            throttle: 0.0,
+            throttle: match steering_geometry {
+                SteeringGeometry::Differential => 0.0,
+                // Keep the recovery arc slow enough to remain inside the
+                // authored route envelope while still giving front-steer
+                // geometry enough motion to change heading.
+                SteeringGeometry::Ackermann => speed * 0.35,
+            },
             steer: if cross_yaw >= 0.0 { -1.0 } else { 1.0 },
             brake: 0.0,
             arrived: false,
@@ -133,4 +140,43 @@ pub fn steering_command(cross_yaw: f32, distance: f64, steering_geometry: Steeri
 /// Scale the command as it enters the authored acceptance radius.
 pub fn approach_factor(distance: f64, radius: f32) -> f64 {
     ((distance - radius as f64) / (radius as f64 * 2.0)).clamp(0.15, 1.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ackermann_rear_target_rolls_into_heading_recovery() {
+        let command = nav_setpoint(
+            GridPos(DVec3::ZERO),
+            Vec3::new(0.0, 0.0, -1.0),
+            GridPos(DVec3::new(0.0, 0.0, 4.0)),
+            0.4,
+            1.0,
+            SteeringGeometry::Ackermann,
+        )
+        .expect("valid rear target");
+
+        assert!(command.throttle > 0.0);
+        assert_eq!(command.steer.abs(), 1.0);
+        assert_eq!(command.brake, 0.0);
+        assert!(!command.arrived);
+    }
+
+    #[test]
+    fn differential_rear_target_still_turns_in_place() {
+        let command = nav_setpoint(
+            GridPos(DVec3::ZERO),
+            Vec3::new(0.0, 0.0, -1.0),
+            GridPos(DVec3::new(0.0, 0.0, 4.0)),
+            0.4,
+            1.0,
+            SteeringGeometry::Differential,
+        )
+        .expect("valid rear target");
+
+        assert_eq!(command.throttle, 0.0);
+        assert_eq!(command.steer.abs(), 1.0);
+    }
 }
