@@ -1,11 +1,11 @@
 //! Avatar UI panels — camera mode display and surface coordinates.
 
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiContexts};
+use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 use lunco_workbench::{PanelRects, WorkbenchAppExt, VIEWPORT_PANEL_ID};
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
-use crate::RoverNameTagSettings;
+use lunco_avatar::RoverNameTagSettings;
 use lunco_celestial::{CelestialBody, LeaveSurface, LocalGravityField};
 use lunco_controller::{resolved_input_label, ControllerLink, InputBindingsSettings};
 use lunco_core::{
@@ -13,7 +13,7 @@ use lunco_core::{
     SessionRegistry, UserIntent,
 };
 
-use crate::{FreeFlightCamera, OrbitCamera, SpringArmCamera, SurfaceCamera};
+use lunco_avatar::{FreeFlightCamera, OrbitCamera, SpringArmCamera, SurfaceCamera};
 
 /// Register the avatar's Twin-scoped safety policy in the existing Settings
 /// menu. The movement system and this row call the same policy reader, so the
@@ -25,11 +25,11 @@ pub fn register_avatar_settings(world: &mut World) {
     };
     menus.register_settings_submenu("Avatar", |ui, ctx| {
         ui.label(egui::RichText::new("Avatar collision").weak().small());
-        let policy = crate::avatar_soil_collision_policy(
+        let policy = lunco_avatar::avatar_soil_collision_policy(
             ctx.resource::<lunco_workspace::WorkspaceResource>(),
         );
         match &policy {
-            Ok(crate::AvatarSoilCollisionPolicy::ThroughSoilAllowed) => {
+            Ok(lunco_avatar::AvatarSoilCollisionPolicy::ThroughSoilAllowed) => {
                 ui.label(
                     egui::RichText::new(
                         "The avatar bypasses projected colliders in the active Twin.",
@@ -38,14 +38,14 @@ pub fn register_avatar_settings(world: &mut World) {
                     .small(),
                 );
             }
-            Ok(crate::AvatarSoilCollisionPolicy::CollisionEnabled) => {
+            Ok(lunco_avatar::AvatarSoilCollisionPolicy::CollisionEnabled) => {
                 ui.label(
                     egui::RichText::new("Projected colliders block avatar movement by default.")
                         .weak()
                         .small(),
                 );
             }
-            Ok(crate::AvatarSoilCollisionPolicy::Unavailable) => {
+            Ok(lunco_avatar::AvatarSoilCollisionPolicy::Unavailable) => {
                 ui.label(
                     egui::RichText::new(
                         "No active Twin settings manifest; avatar collision remains enabled.",
@@ -68,19 +68,19 @@ pub fn register_avatar_settings(world: &mut World) {
         }
         if matches!(
             &policy,
-            Ok(crate::AvatarSoilCollisionPolicy::CollisionEnabled)
-                | Ok(crate::AvatarSoilCollisionPolicy::ThroughSoilAllowed)
+            Ok(lunco_avatar::AvatarSoilCollisionPolicy::CollisionEnabled)
+                | Ok(lunco_avatar::AvatarSoilCollisionPolicy::ThroughSoilAllowed)
         ) {
             let mut allowed = matches!(
                 &policy,
-                Ok(crate::AvatarSoilCollisionPolicy::ThroughSoilAllowed)
+                Ok(lunco_avatar::AvatarSoilCollisionPolicy::ThroughSoilAllowed)
             );
             if ui
                 .checkbox(&mut allowed, "Allow avatar through soil (unsafe)")
                 .changed()
             {
                 ctx.trigger(lunco_workspace::SetTwinSetting {
-                    key: crate::AVATAR_ALLOW_THROUGH_SOIL_SETTING.to_string(),
+                    key: lunco_avatar::AVATAR_ALLOW_THROUGH_SOIL_SETTING.to_string(),
                     value: lunco_workspace::TwinSettingInput::Bool(allowed),
                 });
             }
@@ -427,13 +427,22 @@ impl Plugin for AvatarUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<AvatarStatusView>();
         app.add_systems(Update, populate_avatar_status_view);
+        app.add_systems(Startup, register_avatar_settings);
+        app.add_systems(
+            EguiPrimaryContextPass,
+            draw_rover_name_tags.before(lunco_workbench::WorkbenchRenderSet),
+        );
+        app.add_systems(
+            EguiPrimaryContextPass,
+            draw_notifications.in_set(lunco_workbench::ApplicationOverlayRenderSet),
+        );
         app.register_panel(AvatarStatusPanel);
     }
 }
 
 /// Draw a floating name tag above every possessed rover, in screen space.
 ///
-/// Registered in the egui pass by [`crate::LunCoAvatarPlugin`] (ui-gated) so it
+/// Registered in the egui pass alongside [`lunco_avatar::LunCoAvatarPlugin`] so it
 /// composites on top of the 3D viewport regardless of camera setup. Each rover's
 /// world position (plus a vertical offset) is projected through the active avatar
 /// camera; rovers behind the camera or off the near plane are skipped
@@ -536,9 +545,8 @@ pub fn draw_rover_name_tags(
         let size = galley.size();
         let top_left = pos - egui::vec2(size.x * 0.5, size.y);
         let bg = egui::Rect::from_min_size(top_left, size).expand2(egui::vec2(4.0, 2.0));
-        // TODO(theme): migrate to lunco-theme once the token set covers this.
-        // Distance/idle-faded backing behind a player name tag over the 3D scene.
-        // Blocked on the dep, as with the toasts below.
+        // The available theme tokens cover semantic foregrounds, while this
+        // distance-faded backing is a presentation-layer contrast treatment.
         painter.rect_filled(
             bg,
             3.0,
@@ -548,13 +556,16 @@ pub fn draw_rover_name_tags(
     }
 }
 
-/// Draw active [`crate::ScreenNotifications`] toasts as a centered stack near the
+/// Draw active [`lunco_avatar::ScreenNotifications`] toasts as a centered stack near the
 /// top of the screen, newest at the bottom; each fades out over its final second.
 ///
-/// ui-gated screen-space overlay (the scene has only a `Camera3d`, so a
-/// world-anchored `Text2d` HUD never renders) — registered in the egui pass by
-/// [`crate::LunCoAvatarPlugin`]. Mission scripts drive it through rhai `notify`.
-pub fn draw_notifications(mut egui_ctx: EguiContexts, notes: Res<crate::ScreenNotifications>) {
+/// Screen-space overlay (the scene has only a `Camera3d`, so a world-anchored
+/// `Text2d` HUD never renders) registered by [`AvatarUiPlugin`]. Mission scripts
+/// drive it through rhai `notify`.
+pub fn draw_notifications(
+    mut egui_ctx: EguiContexts,
+    notes: Res<lunco_avatar::ScreenNotifications>,
+) {
     if notes.toasts.is_empty() {
         return;
     }
@@ -572,12 +583,8 @@ pub fn draw_notifications(mut egui_ctx: EguiContexts, notes: Res<crate::ScreenNo
         // Fully opaque until the final second, then linearly fade out.
         let fade = t.remaining.clamp(0.0, 1.0);
         let a = |base: f32| (base * fade) as u8;
-        // TODO(theme): migrate to lunco-theme once the token set covers this.
-        // Toast bg/fg per severity (success / warn / error / info) drawn over the
-        // 3D viewport, each modulating alpha by `fade`. `tokens.success|warning|
-        // error` cover the foregrounds; the dark tinted backgrounds have no token.
-        // BLOCKED: `lunco-avatar` is reachable from `lunco-luncosim-server`, so it
-        // must not gain an unconditional `lunco-theme` edge (bevy_egui -> wgpu).
+        // Toast backgrounds are severity-specific contrast treatments; the
+        // available theme tokens cover the corresponding semantic foregrounds.
         let (bg, fg) = match t.kind.as_str() {
             "success" => (
                 egui::Color32::from_rgba_unmultiplied(28, 92, 44, a(225.0)),

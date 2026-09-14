@@ -75,10 +75,12 @@ Apps (luncosim, luncosim-server, lunica)
    │     lunco-scripting   ← rhai world-bridge + op-graph generators
    │          │
    │          ▼
-   ├── UI adapter
+   ├── UI adapters
    │     lunco-ui         ← thin adapter on top of lunco-workbench: mission-control
    │                        widgets, telemetry, diagrams; also depends on Domain
    │                        crates (lunco-avatar, lunco-celestial, lunco-mobility)
+   │     lunco-avatar-ui  ← optional egui presentation for the headless-safe
+   │                        lunco-avatar runtime (status, overlays, settings)
    │          │
    │          ▼
    ├── Framework layer
@@ -101,11 +103,12 @@ Arrows point at dependencies, and two edges deserve calling out explicitly:
 - **The Framework layer sits above the Session layer**, not below it —
   `lunco-workbench` depends on `lunco-twin` and `lunco-workspace` (it wraps the
   session as `WorkspaceResource`, and mounts Twins from the File menu).
-- **`lunco-ui` is a deliberate cross-layer adapter.** It is not a widget
-  toolkit under the workbench; it sits *on top of* `lunco-workbench` and also
-  reaches sideways into Domain crates (`lunco-avatar`, `lunco-celestial`,
-  `lunco-mobility`) to render their state. It is the one place UI and domain state
-  are allowed to meet below the Apps.
+- **UI crates are deliberate cross-layer adapters.** They are not widget
+  toolkits under the workbench: `lunco-ui` sits *on top of* `lunco-workbench`
+  and reaches into domain crates for mission-control views, while
+  `lunco-avatar-ui` owns Avatar-specific egui presentation over the
+  headless-safe `lunco-avatar` runtime. UI and domain state meet below the
+  Apps only through these explicit adapters.
 
 ## 6. Strategic Roadmap Orientation
 

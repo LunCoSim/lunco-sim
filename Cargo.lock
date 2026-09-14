@@ -7165,7 +7165,6 @@ version = "0.6.0-dev"
 dependencies = [
  "avian3d",
  "bevy",
- "bevy_egui",
  "big_space",
  "leafwing-input-manager",
  "lunco-celestial",
@@ -7176,15 +7175,28 @@ dependencies = [
  "lunco-physics",
  "lunco-render",
  "lunco-settings",
- "lunco-theme",
  "lunco-time",
  "lunco-twin",
  "lunco-usd-bevy-scene",
- "lunco-workbench",
- "lunco-workbench-core",
  "lunco-workspace",
  "serde",
  "tempfile",
+]
+
+[[package]]
+name = "lunco-avatar-ui"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy_egui",
+ "lunco-avatar",
+ "lunco-celestial",
+ "lunco-controller",
+ "lunco-core",
+ "lunco-theme",
+ "lunco-workbench",
+ "lunco-workbench-core",
+ "lunco-workspace",
 ]
 
 [[package]]
@@ -7635,6 +7647,7 @@ dependencies = [
  "lunco-api-transport",
  "lunco-assets",
  "lunco-avatar",
+ "lunco-avatar-ui",
  "lunco-capture",
  "lunco-celestial",
  "lunco-core",

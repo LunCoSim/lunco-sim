@@ -15,7 +15,7 @@ lunco-theme = { path = "../lunco-theme" }
 lunco-core = { path = "../lunco-core" }
 lunco-controller = { path = "../lunco-controller" }
 lunco-celestial = { path = "../lunco-celestial" }
-lunco-avatar = { path = "../lunco-avatar" }
+lunco-avatar = { path = "../lunco-avatar", default-features = false }
 # Time formatting/scales — reuse the spine, never re-derive JD↔UTC locally.
 lunco-time = { path = "../lunco-time" }
 egui_plot = { workspace = true }

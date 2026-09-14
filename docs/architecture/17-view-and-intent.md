@@ -6,7 +6,7 @@
 > execution (UserIntent → … → actuation), keeping the camera and intent
 > systems modular and headless-safe.
 
-**Status: partly implemented.** The `ViewPoint` / `CameraDevice` components and the `lunco-camera` crate described in §1–§5 remain the aspirational target ontology; they do not exist in the codebase yet. However, camera **selection** and the **viewport** are now real and follow a single-authority design — see **§6 (Implemented: Scene Viewport & Active Camera)**. Camera *rig behaviors* (spring-arm, orbit, free-flight, surface) still live in `lunco-avatar`.
+**Status: partly implemented.** The `ViewPoint` / `CameraDevice` components and the `lunco-camera` crate described in §1–§5 remain the aspirational target ontology; they do not exist in the codebase yet. However, camera **selection** and the **viewport** are now real and follow a single-authority design — see **§6 (Implemented: Scene Viewport & Active Camera)**. Camera *rig behaviors* (spring-arm, orbit, free-flight, surface) still live in `lunco-avatar`; their egui presentation lives in the optional `lunco-avatar-ui` adapter.
 
 This document provides a technical guide to the modular, action-oriented, and headless-safe camera and intent systems in LunCoSim.
 
@@ -48,9 +48,9 @@ Representing a sensing hardware unit.
 - **Crate**: would live in `lunco-core` (Hardware Marker). *Not yet implemented.*
 - **Purpose**: Attaches a `ViewPoint` to a physical presence. It can optionally have a **Physical Collider** (via `avian`) to prevent terrain clipping.
 
-### **Renderer / Blender (Visual)** — *today: `lunco-avatar`*
+### **Renderer / Blender (Visual)** — *today: `lunco-avatar` + `lunco-avatar-ui`*
 The rendering bridge.
-- **Crate**: `lunco-avatar` (`LunCoAvatarPlugin`, client-only camera rigs). Sun/shadow in `lunco-render`.
+- **Crates**: `lunco-avatar` (`LunCoAvatarPlugin`, client-only camera rigs) and the optional `lunco-avatar-ui` egui adapter. Sun/shadow in `lunco-render`.
 - **Purpose**: Drives a Bevy `Camera3d`; the persistent `OriginAnchor` tracks
   the selected camera's f64 cell while camera rigs (spring-arm, orbit,
   free-flight, surface-relative) handle motion between simulation truth and
@@ -94,7 +94,7 @@ over automated camera ownership:
 The simulation core (`lunco-celestial`, `lunco-core`) has NO dependency on the camera rigs or Bevy's rendering systems.
 - **Bots** can "see" and "look at" objects through the same `Action` / intent system (against the planned `ViewPoint`; today against the avatar/camera transform).
 - **Server** instances run the full spatial logic without a GPU.
-- **Clients** add **`LunCoAvatarPlugin`** (`lunco-avatar`) to provide the camera rigs and visual bridge; post-processing / lighting come from `lunco-render`.
+- **Clients** add **`LunCoAvatarPlugin`** (`lunco-avatar`) to provide the camera rigs and runtime bridge, and add **`AvatarUiPlugin`** (`lunco-avatar-ui`) when they need egui presentation; post-processing / lighting come from `lunco-render`.
 
 ---
 
