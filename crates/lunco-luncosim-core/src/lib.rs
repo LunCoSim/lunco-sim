@@ -41,6 +41,11 @@ struct HeadlessAssetTypePlugin;
 
 impl Plugin for HeadlessAssetTypePlugin {
     fn build(&self, app: &mut App) {
+        // Avian's collider cache consumes AssetEvent<Mesh> even in a
+        // render-free world. Register the asset type here so its message
+        // channel exists before the first schedule update; visual material
+        // stores remain intentionally limited to the data-only types below.
+        app.init_asset::<bevy::mesh::Mesh>();
         app.init_asset::<bevy::shader::Shader>();
         app.init_asset::<bevy::image::Image>();
     }
