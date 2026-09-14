@@ -2,7 +2,7 @@
 //!
 //! The **Connect** controls themselves live in the workbench's top menu bar
 //! (the *Network* menu) — drawn with no lunco-networking dependency, off the
-//! always-on [`lunco_core::NetStatus`] seam. This plugin is the thin adapter
+//! always-on [`lunco_core_session::NetStatus`] seam. This plugin is the thin adapter
 //! that closes the loop:
 //!
 //! - **seeds** [`NetStatus::connect_hint`] with [`crate::default_connect_host`]
@@ -19,7 +19,8 @@
 
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
-use lunco_core::{LocalSession, NetConnectRequest, NetDisconnectRequest, NetStatus};
+use lunco_core::{NetConnectRequest, NetDisconnectRequest};
+use lunco_core_session::{LocalSession, NetStatus};
 use lunco_doc_bevy::Presence;
 use lunco_workbench_core::WorkbenchMenuRegistry;
 
@@ -259,7 +260,7 @@ fn register_settings_submenu(world: &mut World) {
 
         // The tutor lock applies to me only if I'm explicitly targeted, or it's a
         // broadcast and I opted in. Only then is the manual toggle disabled.
-        let Some(local_session) = ctx.resource::<lunco_core::LocalSession>().map(|s| s.0 .0) else {
+        let Some(local_session) = ctx.resource::<lunco_core_session::LocalSession>().map(|s| s.0 .0) else {
             return;
         };
         let locked_for_me = tutor_lock_active(&tutor_status)

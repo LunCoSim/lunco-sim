@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/lunco-core",
+    "crates/lunco-core-session",
     "crates/lunco-hash",
     "crates/lunco-geotiff",
     "crates/lunco-precompute",
@@ -104,6 +105,7 @@ members = [
     "crates/lunco-settings",
     "crates/lunco-experiments",
     "crates/lunco-render",
+    "crates/lunco-render-recovery",
     "crates/lunco-render-bevy",
     "crates/lunco-obstacle-field",
     "crates/lunco-physics",

@@ -31,10 +31,8 @@ use leafwing_input_manager::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use lunco_controller::{ControllerLink, InputBindingsSettings};
-use lunco_core::{
-    on_command, register_commands, Avatar, CelestialBody, LocalAvatar, LocalSession, NetworkRole,
-    SessionProfiles, Spacecraft,
-};
+use lunco_core::{on_command, register_commands, Avatar, CelestialBody, LocalAvatar, Spacecraft};
+use lunco_core_session::{LocalSession, NetworkRole, SessionProfiles};
 /// Capability test for "**accepts commands**": carries an authored intent→port
 /// binding (`ControlBinding`, from its USD `Controls` scope) or a Modelica actuation
 /// backend (`SimComponent`).
@@ -1094,7 +1092,7 @@ fn commit_possession_authority(
     let origin = authority.guard.0.unwrap_or(authority.session.0);
     let target_gid = authority.q_owned.get(target).ok().map(|gid| gid.get());
     if let Some(gid) = target_gid {
-        if !lunco_core::session::may_control(&authority.registry, &authority.rbac, origin, gid) {
+        if !lunco_core_session::may_control(&authority.registry, &authority.rbac, origin, gid) {
             info!("[possess] vessel {gid} owned by another session — refused (policy)");
             return None;
         }
@@ -1102,7 +1100,7 @@ fn commit_possession_authority(
 
     // Clients keep the host's table as the authority and only use the shared
     // predicate above for optimistic local binding.
-    if matches!(*authority.role, lunco_core::NetworkRole::Client) {
+    if matches!(*authority.role, lunco_core_session::NetworkRole::Client) {
         return Some(Vec::new());
     }
 
@@ -1140,7 +1138,7 @@ fn commit_possession_authority(
 /// same deterministic global ids without inheriting authority from the prior
 /// scene.
 fn clear_scene_possession_claims(
-    mut registry: ResMut<lunco_core::SessionRegistry>,
+    mut registry: ResMut<lunco_core_session::SessionRegistry>,
     q_scene_prims: Query<(&lunco_core::GlobalEntityId, &UsdPrimPath)>,
 ) {
     let mut released = 0;
@@ -1160,14 +1158,14 @@ fn clear_scene_possession_claims(
 /// raced another client. A missing target identity is stale scene state and is
 /// released through the same command path.
 fn enforce_ownership(
-    role: Res<lunco_core::NetworkRole>,
-    registry: Res<lunco_core::SessionRegistry>,
-    session: Res<lunco_core::LocalSession>,
+    role: Res<lunco_core_session::NetworkRole>,
+    registry: Res<lunco_core_session::SessionRegistry>,
+    session: Res<lunco_core_session::LocalSession>,
     q_avatar: Query<(Entity, &ControllerLink), (With<Avatar>, With<LocalAvatar>)>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     mut commands: Commands,
 ) {
-    if !matches!(*role, lunco_core::NetworkRole::Client) {
+    if !matches!(*role, lunco_core_session::NetworkRole::Client) {
         return;
     }
     for (avatar, link) in q_avatar.iter() {
@@ -4296,7 +4294,7 @@ fn on_release_command(
         ),
         (With<Avatar>, With<LocalAvatar>),
     >,
-    guard: Res<lunco_core::SyncApplyGuard>,
+    guard: Res<lunco_core_session::SyncApplyGuard>,
     mut orbital_pin: Option<ResMut<lunco_celestial::OrbitalViewPin>>,
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
@@ -4305,17 +4303,17 @@ fn on_release_command(
     q_owned: Query<&lunco_core::GlobalEntityId>,
     q_bodies: Query<&CelestialBody>,
     gravity: Res<LocalGravityField>,
-    role: Res<lunco_core::NetworkRole>,
+    role: Res<lunco_core_session::NetworkRole>,
     mut authority: Option<ResMut<lunco_core::markers::FlightAuthority>>,
-    local: Res<lunco_core::LocalSession>,
-    mut registry: ResMut<lunco_core::SessionRegistry>,
+    local: Res<lunco_core_session::LocalSession>,
+    mut registry: ResMut<lunco_core_session::SessionRegistry>,
 ) {
     let cmd = trigger.event();
     // A wire-applied release carries the remote client's avatar, which is not a
     // local camera entity. The same command still owns the host-side release and
     // hard-stop transaction.
     if guard.is_from_sync() {
-        if !matches!(*role, lunco_core::NetworkRole::Client) {
+        if !matches!(*role, lunco_core_session::NetworkRole::Client) {
             let origin = guard.0.unwrap_or(local.0);
             let released = registry.release_session(origin);
             stop_released_vessels(&mut commands, &released, &q_vessels);
@@ -4335,7 +4333,7 @@ fn on_release_command(
         warn!(target = ?cmd.target, "[release] refused: target is not the local avatar");
         return;
     }
-    let released = if matches!(*role, lunco_core::NetworkRole::Client) {
+    let released = if matches!(*role, lunco_core_session::NetworkRole::Client) {
         Vec::new()
     } else {
         let freed = registry.release_session(local.0);
@@ -4610,11 +4608,11 @@ struct PossessAvatarQueries<'w, 's> {
 
 #[derive(bevy::ecs::system::SystemParam)]
 struct PossessionAuthority<'w, 's> {
-    role: Res<'w, lunco_core::NetworkRole>,
-    guard: Res<'w, lunco_core::SyncApplyGuard>,
-    registry: ResMut<'w, lunco_core::SessionRegistry>,
-    rbac: Res<'w, lunco_core::session::SessionRbac>,
-    session: Res<'w, lunco_core::LocalSession>,
+    role: Res<'w, lunco_core_session::NetworkRole>,
+    guard: Res<'w, lunco_core_session::SyncApplyGuard>,
+    registry: ResMut<'w, lunco_core_session::SessionRegistry>,
+    rbac: Res<'w, lunco_core_session::SessionRbac>,
+    session: Res<'w, lunco_core_session::LocalSession>,
     q_vessels: Query<'w, 's, (Entity, &'static lunco_core::GlobalEntityId)>,
     q_owned: Query<'w, 's, &'static lunco_core::GlobalEntityId>,
 }
@@ -4651,7 +4649,10 @@ fn on_possess_command(
     // A wire-applied possession records the remote session on the host but
     // never binds that session to this process's local camera or controller.
     if possession_authority.guard.is_from_sync() {
-        if !matches!(*possession_authority.role, lunco_core::NetworkRole::Client) {
+        if !matches!(
+            *possession_authority.role,
+            lunco_core_session::NetworkRole::Client
+        ) {
             let _ =
                 commit_possession_authority(&mut commands, &mut possession_authority, cmd.target);
         }
@@ -5883,7 +5884,7 @@ impl Default for RoverNameTagSettings {
 #[on_command(UpdateProfile)]
 fn on_update_profile(
     trigger: On<UpdateProfile>,
-    guard: Res<lunco_core::SyncApplyGuard>,
+    guard: Res<lunco_core_session::SyncApplyGuard>,
     local: Res<LocalSession>,
     mut profiles: ResMut<SessionProfiles>,
 ) {
@@ -5991,7 +5992,7 @@ mod tests {
     #[test]
     fn scene_teardown_clears_claims_for_usd_prims_only() {
         let mut world = World::new();
-        world.insert_resource(lunco_core::SessionRegistry::default());
+        world.insert_resource(lunco_core_session::SessionRegistry::default());
         let scene_gid = 41;
         let persistent_gid = 42;
         world.spawn((
@@ -6000,7 +6001,7 @@ mod tests {
         ));
         world.spawn(lunco_core::GlobalEntityId::from_raw(persistent_gid));
         {
-            let mut registry = world.resource_mut::<lunco_core::SessionRegistry>();
+            let mut registry = world.resource_mut::<lunco_core_session::SessionRegistry>();
             registry
                 .claim(lunco_core::SessionId::LOCAL, scene_gid)
                 .unwrap();
@@ -6013,7 +6014,7 @@ mod tests {
             .run_system_once(clear_scene_possession_claims)
             .unwrap();
 
-        let registry = world.resource::<lunco_core::SessionRegistry>();
+        let registry = world.resource::<lunco_core_session::SessionRegistry>();
         assert_eq!(registry.owner_of(scene_gid), None);
         assert_eq!(
             registry.owner_of(persistent_gid),
@@ -6046,11 +6047,11 @@ mod tests {
     #[test]
     fn possession_binds_controller_during_camera_handoff() {
         let mut app = App::new();
-        app.init_resource::<lunco_core::SyncApplyGuard>()
-            .init_resource::<lunco_core::NetworkRole>()
-            .init_resource::<lunco_core::SessionRegistry>()
-            .init_resource::<lunco_core::session::SessionRbac>()
-            .init_resource::<lunco_core::LocalSession>()
+        app.init_resource::<lunco_core_session::SyncApplyGuard>()
+            .init_resource::<lunco_core_session::NetworkRole>()
+            .init_resource::<lunco_core_session::SessionRegistry>()
+            .init_resource::<lunco_core_session::SessionRbac>()
+            .init_resource::<lunco_core_session::LocalSession>()
             .add_observer(on_possess_command);
 
         // During a scene/perspective handoff the camera-owned `LocalAvatar`
@@ -6087,11 +6088,11 @@ mod tests {
     #[test]
     fn possession_validation_precedes_authority_claim() {
         let mut app = App::new();
-        app.init_resource::<lunco_core::SyncApplyGuard>()
-            .init_resource::<lunco_core::NetworkRole>()
-            .init_resource::<lunco_core::SessionRegistry>()
-            .init_resource::<lunco_core::session::SessionRbac>()
-            .init_resource::<lunco_core::LocalSession>()
+        app.init_resource::<lunco_core_session::SyncApplyGuard>()
+            .init_resource::<lunco_core_session::NetworkRole>()
+            .init_resource::<lunco_core_session::SessionRegistry>()
+            .init_resource::<lunco_core_session::SessionRbac>()
+            .init_resource::<lunco_core_session::LocalSession>()
             .add_observer(on_possess_command);
         let target = app
             .world_mut()
@@ -6112,7 +6113,7 @@ mod tests {
 
         assert_eq!(
             app.world()
-                .resource::<lunco_core::SessionRegistry>()
+                .resource::<lunco_core_session::SessionRegistry>()
                 .owner_of(0xA1),
             None,
             "invalid local binding must not leave an authority claim"
@@ -6122,11 +6123,11 @@ mod tests {
     #[test]
     fn possession_handoff_keeps_one_claim_and_releases_the_old_target() {
         let mut app = App::new();
-        app.init_resource::<lunco_core::SyncApplyGuard>()
-            .init_resource::<lunco_core::NetworkRole>()
-            .init_resource::<lunco_core::SessionRegistry>()
-            .init_resource::<lunco_core::session::SessionRbac>()
-            .init_resource::<lunco_core::LocalSession>()
+        app.init_resource::<lunco_core_session::SyncApplyGuard>()
+            .init_resource::<lunco_core_session::NetworkRole>()
+            .init_resource::<lunco_core_session::SessionRegistry>()
+            .init_resource::<lunco_core_session::SessionRbac>()
+            .init_resource::<lunco_core_session::LocalSession>()
             .add_observer(on_possess_command);
         let first = app
             .world_mut()
@@ -6152,7 +6153,9 @@ mod tests {
             app.world_mut().flush();
         }
 
-        let registry = app.world().resource::<lunco_core::SessionRegistry>();
+        let registry = app
+            .world()
+            .resource::<lunco_core_session::SessionRegistry>();
         assert_eq!(registry.owner_of(0xA1), None);
         assert_eq!(
             registry.owner_of(0xB2),
@@ -6722,10 +6725,10 @@ mod tests {
     #[test]
     fn orbital_release_restores_pose_and_mode_in_one_transition() {
         let mut app = App::new();
-        app.init_resource::<lunco_core::SyncApplyGuard>()
-            .init_resource::<lunco_core::NetworkRole>()
-            .init_resource::<lunco_core::LocalSession>()
-            .init_resource::<lunco_core::SessionRegistry>()
+        app.init_resource::<lunco_core_session::SyncApplyGuard>()
+            .init_resource::<lunco_core_session::NetworkRole>()
+            .init_resource::<lunco_core_session::LocalSession>()
+            .init_resource::<lunco_core_session::SessionRegistry>()
             .init_resource::<LocalGravityField>()
             .add_observer(on_release_command);
 
@@ -6816,7 +6819,7 @@ mod tests {
     #[test]
     fn moon_earth_surface_round_trip_preserves_the_original_surface_transaction() {
         let mut app = App::new();
-        app.init_resource::<lunco_core::SyncApplyGuard>()
+        app.init_resource::<lunco_core_session::SyncApplyGuard>()
             .init_resource::<LocalGravityField>()
             .init_resource::<lunco_celestial::OrbitalViewPin>()
             .add_observer(on_focus_command)
@@ -7160,7 +7163,7 @@ mod tests {
     #[test]
     fn possessed_orbit_view_round_trip_preserves_control_and_spring_arm() {
         let mut app = App::new();
-        app.init_resource::<lunco_core::SyncApplyGuard>()
+        app.init_resource::<lunco_core_session::SyncApplyGuard>()
             .init_resource::<LocalGravityField>()
             .init_resource::<lunco_celestial::OrbitalViewPin>()
             .add_observer(on_focus_command)
@@ -7956,7 +7959,7 @@ fn on_inspect_vessels(_t: On<InspectVessels>, mut commands: Commands) {
             });
             let owner = gid.and_then(|g| {
                 world
-                    .get_resource::<lunco_core::SessionRegistry>()
+                    .get_resource::<lunco_core_session::SessionRegistry>()
                     .and_then(|r| r.owner_of(g))
             });
             info!(

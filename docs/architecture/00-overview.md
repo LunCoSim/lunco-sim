@@ -95,7 +95,8 @@ Apps (luncosim, luncosim-server, lunica)
    │     lunco-storage    ← I/O backend (read/write only)
    │          │
    │          ▼
-   └── lunco-core         ← f64 math foundation, Mutation<P> command substrate, fundamentals
+   ├── lunco-core         ← f64 math foundation, Mutation<P> command substrate, fundamentals
+   └── lunco-core-session ← session, authority, and prediction layer above core
 ```
 
 Arrows point at dependencies, and two edges deserve calling out explicitly:

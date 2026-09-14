@@ -7,7 +7,7 @@
 //! (the listen-server model), no second branch. This is D7: the substrate is
 //! always compiled in; only the wire is feature-gated.
 //!
-//! ## Why this lives in `lunco-core` (substrate justification, review C7)
+//! ## Why this is a separate core-session package
 //!
 //! The boundary rule: **a type stays here only if a crate that does NOT depend
 //! on `lunco-networking` consumes it.** Everything below passes that test —
@@ -29,15 +29,15 @@
 //! `PendingCorrection`, `ContactPredictable`) moved to
 //! `lunco-networking/src/session.rs` — new net-only state belongs there, not here.
 
-use crate::commands::{Reject, SessionId};
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
+use lunco_core::commands::{Reject, SessionId};
 use std::collections::{HashMap, VecDeque};
 
 /// Default WebTransport port for the listen-server / host and for any client
 /// address that omits an explicit port. Single source of truth for the `5888`
 /// that `--host`, `--connect`, the in-sim Connect panel, the wasm deep-link, and
-/// the deploy scripts all default to. Lives in core (no wire dep) so every crate
+/// the deploy scripts all default to. Lives in core-session (no wire dep) so every crate
 /// — even ones without a `lunco-networking` dependency (e.g. the workbench
 /// Network menu) — can reference one constant.
 pub const DEFAULT_HOST_PORT: u16 = 5888;
@@ -49,7 +49,7 @@ pub const DEFAULT_API_PORT: u16 = 4101;
 
 /// Which side of the wire is this process? Drives three decisions:
 /// capture (`Standalone` never serializes), id minting (`Host` mints
-/// [`crate::Provenance::Authoritative`]), and apply (`Host` authorizes).
+/// [`lunco_core::Provenance::Authoritative`]), and apply (`Host` authorizes).
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum NetworkRole {
     /// Single-process; the wire is inert. Default — single-player is the
@@ -73,8 +73,8 @@ impl NetworkRole {
         !matches!(self, NetworkRole::Standalone)
     }
     /// This peer is the identity + authority owner of its own world: it **mints**
-    /// [`GlobalEntityId`](crate::GlobalEntityId)s (the `is_authoritative` gate in
-    /// `assign_global_entity_ids`) and authorizes control. `true` for `Host`
+    /// [`lunco_core::GlobalEntityId`]s (the `is_authoritative` gate in
+    /// the identity-admission system) and authorizes control. `true` for `Host`
     /// (listen/dedicated server) and `Standalone` (single-player is its own
     /// authority); `false` only for a pure `Client`, which defers identity to the
     /// host and pins host-allocated ids via replication.
@@ -194,7 +194,7 @@ pub enum PossessionPolicy {
 }
 
 /// Server-side ownership: which session may issue authoritative commands against
-/// which entity (keyed by [`crate::GlobalEntityId`] raw `u64`). The home of the
+/// which entity (keyed by [`lunco_core::GlobalEntityId`] raw `u64`). The home of the
 /// single [`authorize`] gate. On a pure client this stays empty (the client
 /// trusts the host); the client's optimistic local apply is gated by
 /// [`SyncApplyGuard`] / [`NetworkRole`], not by ownership.
@@ -401,7 +401,7 @@ impl SessionRbac {
     }
 }
 
-/// Suppress the USD loader's automatic [`crate::Provenance::Content`] stamping
+/// Suppress the USD loader's automatic [`lunco_core::Provenance::Content`] stamping
 /// for a runtime-instanced subtree. Runtime instances get server-allocated
 /// identity (root `Authoritative`, children left un-networked) rather than
 /// content-derived ids — otherwise two instances of the same asset would derive
@@ -594,7 +594,7 @@ pub struct VesselInputLog {
     pub last_active_tick: u64,
 }
 
-/// Client-side unacked input logs keyed by [`crate::GlobalEntityId`] raw `u64`.
+/// Client-side unacked input logs keyed by [`lunco_core::GlobalEntityId`] raw `u64`.
 /// Populated only for vessels this peer owns + predicts (`OwnedLocally`); the
 /// reconcile drops acked frames and replays the rest over the owned avian body.
 /// Empty on host/standalone.
@@ -917,10 +917,10 @@ pub mod capability {
     /// Apply an inbound **journal edit** (an authored document change on the
     /// journal plane) to the host's authoritative history. Gates *who may edit
     /// the shared scene/model*, resolved through [`CommandPolicyRegistry`] like
-    /// any command. Absent from the default registry → [`super::CommandPolicy::OPEN`]
+    /// any command. Absent from the default registry → [`CommandPolicy::OPEN`]
     /// (open-sandbox: any authenticated peer may edit). A deployment tightens
     /// collaborative editing to, e.g., `Operator` via
-    /// [`CommandPolicyRegistry::set_override`](super::CommandPolicyRegistry::set_override)
+    /// [`CommandPolicyRegistry::set_override`]
     /// (`"JournalEdit"`) — read-only viewers then can't mutate shared content.
     pub const JOURNAL_EDIT: &str = "JournalEdit";
     /// Ingest an inbound **asset offer** (a client-imported asset written into
@@ -928,9 +928,9 @@ pub mod capability {
     /// plane sibling of [`JOURNAL_EDIT`]: gates *who may contribute bytes to
     /// the shared scenario*, resolved through [`CommandPolicyRegistry`] like
     /// any command. Absent from the default registry →
-    /// [`super::CommandPolicy::OPEN`] (open-sandbox: any authenticated peer may
+    /// [`CommandPolicy::OPEN`] (open-sandbox: any authenticated peer may
     /// import); tighten via
-    /// [`CommandPolicyRegistry::set_override`](super::CommandPolicyRegistry::set_override)
+    /// [`CommandPolicyRegistry::set_override`]
     /// (`"AssetOffer"`).
     pub const ASSET_OFFER: &str = "AssetOffer";
 }
@@ -970,11 +970,6 @@ pub const CONTROL_AUTHORITY_HOOK: &str = "control.authority.take";
 /// headless run). The policy never authorises network traffic itself.
 pub const DATASET_PROVISION_HOOK: &str = "assets.provision";
 
-/// Hook id for the renderer's authored shadow-resource warning policy.
-/// Rust publishes the live renderer facts; the Rhai policy decides whether
-/// those facts warrant a user-facing warning and writes its message.
-pub const RENDER_SHADOW_QUALITY_HOOK: &str = "render.shadow_quality";
-
 /// Which entities the **control path is currently down** to: commands issued now
 /// would not reach them.
 ///
@@ -993,7 +988,7 @@ pub const RENDER_SHADOW_QUALITY_HOOK: &str = "render.shadow_quality";
 ///
 /// Read into the [`AUTHORIZE_HOOK`] ctx as `target_control_path_down`, so an
 /// authored policy can refuse commands to an unreachable vessel. Keyed by
-/// [`crate::GlobalEntityId`] (raw), like [`SessionRegistry`] — a gid outlives the
+/// [`lunco_core::GlobalEntityId`] (raw), like [`SessionRegistry`] — a gid outlives the
 /// `Entity` and is what the gate already speaks.
 ///
 /// The verb that writes it is `SetControlPath`, in `lunco-controller` (beside
@@ -1107,7 +1102,7 @@ impl CommandPolicyRegistry {
 }
 
 /// The single authority gate. Given the `origin` session of a command, the
-/// command's short type name, and the target entity's [`crate::GlobalEntityId`]
+/// command's short type name, and the target entity's [`lunco_core::GlobalEntityId`]
 /// (raw), decide whether the host applies it.
 ///
 /// Policy is **data**, resolved from [`CommandPolicyRegistry`] — this function
@@ -1298,7 +1293,7 @@ pub fn may_take_control(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::SessionId;
+    use lunco_core::commands::SessionId;
 
     const A: SessionId = SessionId(1);
     const B: SessionId = SessionId(2);

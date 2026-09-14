@@ -31,7 +31,7 @@ use lunco_cosim::{ports::PORT_NAME, CoSimPlugin, SimConnection};
 
 /// Minimal headless app: cosim over avian, with the fixed clock driven manually
 /// so one `app.update()` runs at least one `FixedUpdate`.
-fn app_with_role(role: Option<lunco_core::NetworkRole>) -> App {
+fn app_with_role(role: Option<lunco_core_session::NetworkRole>) -> App {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins)
         .add_plugins(AssetPlugin::default())
@@ -91,13 +91,16 @@ fn value_of(app: &App, e: Entity) -> f64 {
 /// fails — which is precisely the bug (the predicted rover stops driving).
 #[test]
 fn client_propagates_into_owned_locally_target() {
-    let mut app = app_with_role(Some(lunco_core::NetworkRole::Client));
+    let mut app = app_with_role(Some(lunco_core_session::NetworkRole::Client));
     // Replicated AND owned: the marker combination a possessed rover carries on
     // a client. `NetReplicate` alone would be skipped (see the test below), so
     // this isolates the `OwnedLocally` branch rather than the never-replicated one.
     let target = wire_ports(
         &mut app,
-        (lunco_core::NetReplicate, lunco_core::OwnedLocally),
+        (
+            lunco_core_session::NetReplicate,
+            lunco_core_session::OwnedLocally,
+        ),
     );
 
     app.update();
@@ -119,7 +122,7 @@ fn client_propagates_into_owned_locally_target() {
 /// predicate; also fails under a process-wide client gate.
 #[test]
 fn client_propagates_into_never_replicated_target() {
-    let mut app = app_with_role(Some(lunco_core::NetworkRole::Client));
+    let mut app = app_with_role(Some(lunco_core_session::NetworkRole::Client));
     let target = wire_ports(&mut app, ());
 
     app.update();
@@ -139,8 +142,8 @@ fn client_propagates_into_never_replicated_target() {
 /// propagation must skip it.
 #[test]
 fn client_skips_replicated_only_target() {
-    let mut app = app_with_role(Some(lunco_core::NetworkRole::Client));
-    let target = wire_ports(&mut app, lunco_core::NetReplicate);
+    let mut app = app_with_role(Some(lunco_core_session::NetworkRole::Client));
+    let target = wire_ports(&mut app, lunco_core_session::NetReplicate);
 
     app.update();
     app.update();
@@ -157,10 +160,13 @@ fn client_skips_replicated_only_target() {
 /// bumped), so propagation into it must run too.
 #[test]
 fn client_propagates_into_predicted_dynamic_target() {
-    let mut app = app_with_role(Some(lunco_core::NetworkRole::Client));
+    let mut app = app_with_role(Some(lunco_core_session::NetworkRole::Client));
     let target = wire_ports(
         &mut app,
-        (lunco_core::NetReplicate, lunco_core::PredictedDynamic),
+        (
+            lunco_core_session::NetReplicate,
+            lunco_core_session::PredictedDynamic,
+        ),
     );
 
     app.update();
@@ -173,8 +179,8 @@ fn client_propagates_into_predicted_dynamic_target() {
 /// skipped there — including a replicated one.
 #[test]
 fn host_propagates_into_replicated_target() {
-    let mut app = app_with_role(Some(lunco_core::NetworkRole::Host));
-    let target = wire_ports(&mut app, lunco_core::NetReplicate);
+    let mut app = app_with_role(Some(lunco_core_session::NetworkRole::Host));
+    let target = wire_ports(&mut app, lunco_core_session::NetReplicate);
 
     app.update();
     app.update();
@@ -213,8 +219,8 @@ fn rollback_replay_propagates() {
 /// replays only what it simulates, and a snapshot proxy is not that.
 #[test]
 fn rollback_replay_skips_replicated_only_target() {
-    let mut app = app_with_role(Some(lunco_core::NetworkRole::Client));
-    let target = wire_ports(&mut app, lunco_core::NetReplicate);
+    let mut app = app_with_role(Some(lunco_core_session::NetworkRole::Client));
+    let target = wire_ports(&mut app, lunco_core_session::NetReplicate);
 
     app.update();
     app.world_mut().get_mut::<Port>(target).unwrap().value = 0.0;

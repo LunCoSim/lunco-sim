@@ -1,7 +1,7 @@
 // ── Control-authority takeover policy (spec 034) ─────────────────────────────
 //
 // Decides who may take a vessel from its CURRENT owner. Registered under
-// `lunco_core::session::CONTROL_AUTHORITY_HOOK` and consulted by the possession
+// `lunco_core_session::CONTROL_AUTHORITY_HOOK` and consulted by the possession
 // path when a `PossessVessel` targets a vessel another session already owns.
 // Returning `true` releases the prior owner so the taker's claim succeeds (even
 // under the default Exclusive possession policy); `false` denies the takeover.

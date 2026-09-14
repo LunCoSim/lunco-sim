@@ -11,7 +11,7 @@
 
 ## Verdict
 
-**The scene loaded and the renderer survived.** That is new — in five runs on 2026-07-26 the tester never once got both. The `render_robustness` ladder landed in `4b5e3183` and this log is the first evidence it works on the adapter that produced the original fault, which is exactly the thing its module docs said no test could prove:
+**The scene loaded and the renderer survived.** That is new — in five runs on 2026-07-26 the tester never once got both. The `lunco-render-recovery` ladder landed in `4b5e3183` and this log is the first evidence it works on the adapter that produced the original fault, which is exactly the thing its module docs said no test could prove:
 
 ```
 08:36:37.236  ERROR  wgpu out of memory … 'directional_light_shadow_map_texture' … Not enough memory left.
@@ -125,7 +125,7 @@ The consequence for the tester is not cosmetic. Shadows are off *for the rest of
 
 **Fix:**
 
-- **Log the requested allocation.** `describe()` in `crates/lunco-workbench/src/render_robustness.rs` walks the wgpu source chain, which gives `Not enough memory left` but not *how much* was asked for. Query `RenderDevice` limits and the atlas descriptor at the point of failure and print requested bytes vs. adapter budget. Without that number this stays unfixable-by-inspection.
+- **Log the requested allocation.** `describe()` in `crates/lunco-render-recovery/src/lib.rs` walks the wgpu source chain, which gives `Not enough memory left` but not *how much* was asked for. Query `RenderDevice` limits and the atlas descriptor at the point of failure and print requested bytes vs. adapter budget. Without that number this stays unfixable-by-inspection.
 - **The render settings now own the admission budget.** The earlier proposal to
   impose hardcoded per-device byte ceilings was rejected: it silently rewrote
   the user's requested quality and made adapter class a hidden preset selector.

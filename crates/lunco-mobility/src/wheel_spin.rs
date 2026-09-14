@@ -70,7 +70,7 @@ pub(crate) fn update_wheel_spin(
             &RigidBody,
             // Client proxies are Kinematic with avian velocity zeroed; their real
             // ground speed arrives via this delivered hint (set by `interpolate_proxies`).
-            Option<&lunco_core::ReplicatedChassisMotion>,
+            Option<&lunco_core_session::ReplicatedChassisMotion>,
         ),
         // The wheel body owner is resolved from authored topology and carried by
         // `WheelBodyMount`. A raycast wheel may be nested under a visual or

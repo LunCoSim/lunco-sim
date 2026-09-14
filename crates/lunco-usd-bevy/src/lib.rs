@@ -546,7 +546,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
         //    **stable logical asset path** (NOT the content-hash `AssetId` —
         //    D3b in DECISIONS.md), so the same prim derives the same
         //    `GlobalEntityId` on every peer. The instance root *also* takes a
-        //    `Content` stamp here, but `assign_global_entity_ids` ignores it
+        //    `Content` stamp here, but session identity admission ignores it
         //    (the root carries `SkipContentStamp` → authoritative id). A stage
         //    with no stable source path receives no content provenance and
         //    therefore no derived identity.
@@ -2166,9 +2166,9 @@ fn retry_awaiting_usd_visuals_after_quality_change(
 }
 
 /// Convergence is at most one frame behind the root's id allocation: the member
-/// stays parked (`Local` is a no-op in `assign_global_entity_ids`, so it is
+/// stays parked (`Local` is a no-op in session identity admission, so it is
 /// never given a colliding auto-allocated id) until this runs, after which the
-/// same-frame `assign_global_entity_ids` (PostUpdate) derives the real id.
+/// same-frame identity-admission system (PostUpdate) derives the real id.
 /// `UsdInstanceMember` is removed on upgrade so each member resolves once.
 fn resolve_usd_instance_identities(
     mut commands: Commands,

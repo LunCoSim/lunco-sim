@@ -782,7 +782,7 @@ fn on_restart_scene_refresh_active_document(
     mut registry: ResMut<DocumentRegistry<UsdDocument>>,
     backed: Option<Res<lunco_usd_bevy_twin::DocBackedTwinScenes>>,
     twins: Option<Res<lunco_assets::twin_source::TwinRoots>>,
-    role: Option<Res<lunco_core::NetworkRole>>,
+    role: Option<Res<lunco_core_session::NetworkRole>>,
 ) {
     let lunco_core::SceneTransition::Restart { reset_document, .. } = &trigger.event().transition
     else {

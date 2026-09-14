@@ -1763,8 +1763,8 @@ fn dispatch_experiment(
         // the *definition* via the experiment journal and the *results* via the
         // content plane. Mirrors `scripts_run_here` in lunco-scripting.
         if matches!(
-            world.get_resource::<lunco_core::NetworkRole>(),
-            Some(lunco_core::NetworkRole::Client)
+            world.get_resource::<lunco_core_session::NetworkRole>(),
+            Some(lunco_core_session::NetworkRole::Client)
         ) {
             return None;
         }

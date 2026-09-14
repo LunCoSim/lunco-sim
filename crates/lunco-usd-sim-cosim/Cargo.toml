@@ -15,6 +15,7 @@ big_space = { workspace = true }
 lunco-assets = { workspace = true }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-core = { path = "../lunco-core" }
+lunco-core-session = { path = "../lunco-core-session" }
 lunco-cosim = { path = "../lunco-cosim" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-environment = { path = "../lunco-environment" }

@@ -244,9 +244,9 @@ fn on_simulate_intent(trigger: On<SimulateIntent>, mut sim: ResMut<SimulatedInte
 
 /// Declare that commands can (or cannot) currently reach `target`.
 ///
-/// The generic verb behind [`lunco_core::session::ControlPathRegistry`]. A mission
+/// The generic verb behind [`lunco_core_session::ControlPathRegistry`]. A mission
 /// script computes the DOMAIN fact and states the CONSEQUENCE here; an authored
-/// policy ([`lunco_core::session::AUTHORIZE_HOOK`]) then decides what to refuse.
+/// policy ([`lunco_core_session::AUTHORIZE_HOOK`]) then decides what to refuse.
 /// Space School does exactly that — `ss3_radio_shadow.rhai` reads real link geometry
 /// with `can_reach(radio, "earth")` and calls this — which keeps doc 49's split one
 /// layer up: the kernel computes geometry, the script decides what it means, and
@@ -282,7 +282,7 @@ impl Default for SetControlPath {
 fn on_set_control_path(
     trigger: On<SetControlPath>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
-    mut paths: ResMut<lunco_core::session::ControlPathRegistry>,
+    mut paths: ResMut<lunco_core_session::ControlPathRegistry>,
 ) {
     let cmd = trigger.event();
     // No gid ⇒ no stable identity to key the blackout on, and a fabricated key
@@ -318,7 +318,7 @@ pub struct LunCoControllerPlugin;
 /// the same entity slot or global id.
 fn reset_scene_control_state(
     mut intents: ResMut<SimulatedIntents>,
-    mut paths: ResMut<lunco_core::session::ControlPathRegistry>,
+    mut paths: ResMut<lunco_core_session::ControlPathRegistry>,
 ) {
     intents.0.clear();
     paths.clear();
@@ -326,10 +326,10 @@ fn reset_scene_control_state(
 
 impl Plugin for LunCoControllerPlugin {
     fn build(&self, app: &mut App) {
-        // NOTE: OwnedInputLog / AppliedInputSeq are always-on substrate owned by
-        // LunCoCorePlugin (lunco-core). The controller's observers consume them
-        // unconditionally, but it does NOT init them here — single source of
-        // truth lives in lunco-core, which every consumer depends on.
+        // NOTE: OwnedInputLog / AppliedInputSeq are always-on session substrate
+        // owned by LunCoCoreSessionPlugin (lunco-core-session). The controller's
+        // observers consume them unconditionally, but it does NOT init them here;
+        // the session plugin is the single resource owner.
         //
         // Input → port writes are EMITTED once per fixed tick (so the
         // prediction replay is a clean 1:1 loop over `InputFrame`s).
@@ -340,18 +340,18 @@ impl Plugin for LunCoControllerPlugin {
         app.init_resource::<SimulatedIntents>()
             .register_type::<InputBindingsSettings>()
             .register_settings_section::<InputBindingsSettings>();
-        app.init_resource::<lunco_core::session::CommandPolicyRegistry>();
+        app.init_resource::<lunco_core_session::CommandPolicyRegistry>();
         app.world_mut()
-            .resource_mut::<lunco_core::session::CommandPolicyRegistry>()
+            .resource_mut::<lunco_core_session::CommandPolicyRegistry>()
             .register(
                 "SimulateIntentEdge",
-                lunco_core::session::CommandPolicy::OWNED_CONTROL,
+                lunco_core_session::CommandPolicy::OWNED_CONTROL,
             );
         app.add_observer(project_intent_edge);
         app.add_systems(lunco_core::SceneTeardown, reset_scene_control_state);
         // The blackout table the authorization gate reads. Empty by default, so an
         // app that never declares one is byte-for-byte unchanged.
-        app.init_resource::<lunco_core::session::ControlPathRegistry>();
+        app.init_resource::<lunco_core_session::ControlPathRegistry>();
         register_all_commands(app);
         app.add_systems(
             FixedUpdate,
@@ -435,28 +435,31 @@ const INPUT_EPS: f64 = 1e-3;
 /// Fixed-tick input emission for prediction. Emits a [`lunco_cosim::SetPorts`]
 /// while a controller is active and once on the active→idle edge, from its
 /// [`ControlBinding`] and held keys, stamped with a per-vessel `seq` + `SimTick`.
-/// For a vessel this client owns + predicts ([`lunco_core::OwnedLocally`]) the
+/// For a vessel this client owns + predicts ([`lunco_core_session::OwnedLocally`]) the
 /// frame is buffered for replay by [`record_control_input`]; on host/standalone
 /// the command uses `seq = 0`. Silent idle ticks leave the domain writer alone.
 fn drive_from_bindings(
-    role: Res<lunco_core::NetworkRole>,
+    role: Res<lunco_core_session::NetworkRole>,
     tick: Res<lunco_core::SimTick>,
-    mut log: ResMut<lunco_core::OwnedInputLog>,
+    mut log: ResMut<lunco_core_session::OwnedInputLog>,
     // Spec 034 yield: control authority is vessel ownership, so the human keyboard
     // drives ONLY vessels the local session owns. A vessel owned by another actor
     // (another player, or an autopilot's `AiAgent` session) is driven by that actor
     // — the human yields on a single `owner_of` lookup, no per-frame arbiter. Both
     // `Option` so a controller-only test app without the session substrate runs.
-    registry: Option<Res<lunco_core::SessionRegistry>>,
-    local_session: Option<Res<lunco_core::LocalSession>>,
+    registry: Option<Res<lunco_core_session::SessionRegistry>>,
+    local_session: Option<Res<lunco_core_session::LocalSession>>,
     // The authored authorization POLICY applies to the local keyboard too — see the
     // gate below. All `Option` so a controller-only test app without the session
     // substrate still runs ungated.
-    rbac: Option<Res<lunco_core::session::SessionRbac>>,
-    control_paths: Option<Res<lunco_core::session::ControlPathRegistry>>,
+    rbac: Option<Res<lunco_core_session::SessionRbac>>,
+    control_paths: Option<Res<lunco_core_session::ControlPathRegistry>>,
     q_ctrl: Query<(&ControllerLink, &ActionState<UserIntent>)>,
     q_binding: Query<&ControlBinding>,
-    q_vessel: Query<(&lunco_core::GlobalEntityId, Has<lunco_core::OwnedLocally>)>,
+    q_vessel: Query<(
+        &lunco_core::GlobalEntityId,
+        Has<lunco_core_session::OwnedLocally>,
+    )>,
     // egui keyboard capture (published by `lunco-workbench`). While a text field
     // is focused we treat every intent as released so a keypress typed into the UI
     // doesn't also drive the vessel — see the `held` closure below. `Option` so a
@@ -480,7 +483,7 @@ fn drive_from_bindings(
         edge_state.retain(|(entity, _), _| *entity != vessel);
     }
 
-    let client = matches!(*role, lunco_core::NetworkRole::Client);
+    let client = matches!(*role, lunco_core_session::NetworkRole::Client);
 
     // When egui holds the keyboard, no local key counts as pressed. `drive_from_
     // bindings` still runs and `resolve` still writes EVERY bound port — now all
@@ -540,7 +543,7 @@ fn drive_from_bindings(
             let owns = registry
                 .as_ref()
                 .is_some_and(|reg| reg.owns(local.0, gid.get()));
-            if lunco_core::session::authorize_policy(
+            if lunco_core_session::authorize_policy(
                 rbac,
                 paths,
                 local.0,
@@ -749,22 +752,25 @@ fn drive_self_drivers(
 /// the reconcile ack (host) no longer depend on *how* the command was made.
 fn record_control_input(
     trigger: On<lunco_cosim::SetPorts>,
-    role: Res<lunco_core::NetworkRole>,
+    role: Res<lunco_core_session::NetworkRole>,
     sim_tick: Res<lunco_core::SimTick>,
     virtual_time: Option<Res<Time<Virtual>>>,
-    mut owned_log: ResMut<lunco_core::OwnedInputLog>,
-    mut applied: ResMut<lunco_core::AppliedInputSeq>,
+    mut owned_log: ResMut<lunco_core_session::OwnedInputLog>,
+    mut applied: ResMut<lunco_core_session::AppliedInputSeq>,
     // Latest local drive input per gid — the render-lead reads it to visually
     // anticipate the rover's motion (presentational only; see `LocalDriveInput`).
-    mut drive_input: ResMut<lunco_core::LocalDriveInput>,
+    mut drive_input: ResMut<lunco_core_session::LocalDriveInput>,
     // Host-side per-tick input buffer + ownership table: a forwarded client input
     // is queued by seq so `apply_buffered_client_inputs` steps EXACTLY ONE per
     // fixed tick — matching the client's one-input-per-tick prediction, so the two
     // deterministic sims stay in lockstep (no divergence → gentle reconcile).
-    reg: Res<lunco_core::SessionRegistry>,
-    local: Res<lunco_core::LocalSession>,
-    mut buffered: ResMut<lunco_core::BufferedClientInputs>,
-    q: Query<(&lunco_core::GlobalEntityId, Has<lunco_core::OwnedLocally>)>,
+    reg: Res<lunco_core_session::SessionRegistry>,
+    local: Res<lunco_core_session::LocalSession>,
+    mut buffered: ResMut<lunco_core_session::BufferedClientInputs>,
+    q: Query<(
+        &lunco_core::GlobalEntityId,
+        Has<lunco_core_session::OwnedLocally>,
+    )>,
 ) {
     let cmd = trigger.event();
     if virtual_time.is_some_and(|time| time.is_paused()) {
@@ -834,7 +840,7 @@ fn record_control_input(
                     _ => {}
                 }
             }
-            entry.frames.push_back(lunco_core::InputFrame {
+            entry.frames.push_back(lunco_core_session::InputFrame {
                 seq: cmd.seq,
                 tick: cmd.tick,
                 forward,
@@ -1117,9 +1123,10 @@ fn refresh_live_input_maps(
 #[cfg(test)]
 mod input_ack_tests {
     use super::*;
-    use lunco_core::{
-        AppliedInputSeq, BufferedClientInputs, GlobalEntityId, LocalDriveInput, LocalSession,
-        NetworkRole, OwnedInputLog, SessionId, SessionRegistry, SimTick,
+    use lunco_core::{GlobalEntityId, SessionId, SimTick};
+    use lunco_core_session::{
+        AppliedInputSeq, BufferedClientInputs, LocalDriveInput, LocalSession, NetworkRole,
+        OwnedInputLog, SessionRegistry,
     };
 
     const HOST: SessionId = SessionId(0);
@@ -1232,13 +1239,12 @@ mod input_ack_tests {
         assert_eq!(app.world().resource::<AppliedInputSeq>().ack(gid), 50);
 
         // A releases, B possesses — the ownership table changed, so the host re-keys
-        // its watermarks (`sync_applied_seq_owners`, LunCoCorePlugin/FixedFirst).
+        // its watermarks (`sync_applied_seq_owners`, LunCoCoreSessionPlugin/FixedFirst).
         {
             let mut reg = app.world_mut().resource_mut::<SessionRegistry>();
             reg.release_session(CLIENT_A);
             reg.claim(CLIENT_B, gid).expect("B claims the rover");
         }
-        app.add_systems(FixedFirst, lunco_core::sync_applied_seq_owners);
         app.world_mut().run_schedule(FixedFirst);
 
         assert_eq!(
@@ -1317,14 +1323,14 @@ mod tests {
             .init_resource::<lunco_core::ActiveCommandId>()
             .init_resource::<lunco_core::CausalTrace>()
             .init_resource::<SimulatedIntents>()
-            .init_resource::<lunco_core::session::CommandPolicyRegistry>()
+            .init_resource::<lunco_core_session::CommandPolicyRegistry>()
             .add_observer(observe_semantic_edge)
             .add_observer(observe_edge_telemetry);
         app.world_mut()
-            .resource_mut::<lunco_core::session::CommandPolicyRegistry>()
+            .resource_mut::<lunco_core_session::CommandPolicyRegistry>()
             .register(
                 "SimulateIntentEdge",
-                lunco_core::session::CommandPolicy::OWNED_CONTROL,
+                lunco_core_session::CommandPolicy::OWNED_CONTROL,
             );
         register_all_commands(&mut app);
         app.add_observer(project_intent_edge);
@@ -1341,9 +1347,9 @@ mod tests {
 
         assert_eq!(
             app.world()
-                .resource::<lunco_core::session::CommandPolicyRegistry>()
+                .resource::<lunco_core_session::CommandPolicyRegistry>()
                 .policy_for("SimulateIntentEdge"),
-            lunco_core::session::CommandPolicy::OWNED_CONTROL
+            lunco_core_session::CommandPolicy::OWNED_CONTROL
         );
 
         app.world_mut().trigger(SimulateIntentEdge {
@@ -1808,9 +1814,9 @@ mod tests {
             InputPlugin,
             InputManagerPlugin::<UserIntent>::default(),
         ));
-        app.insert_resource(lunco_core::NetworkRole::Host)
+        app.insert_resource(lunco_core_session::NetworkRole::Host)
             .init_resource::<lunco_core::SimTick>()
-            .init_resource::<lunco_core::OwnedInputLog>()
+            .init_resource::<lunco_core_session::OwnedInputLog>()
             .init_resource::<VesselControlObserved>()
             .add_observer(observe_vessel_control)
             .add_systems(FixedUpdate, drive_from_bindings);

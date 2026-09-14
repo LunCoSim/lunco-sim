@@ -752,7 +752,7 @@ pub fn on_set_shader_source(
     asset_server: Res<AssetServer>,
     mut shaders: ResMut<Assets<bevy::shader::Shader>>,
     mut registry: ResMut<crate::shader_doc::ShaderRegistry>,
-    guard: Option<Res<lunco_core::session::SyncApplyGuard>>,
+    guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
 ) {
     let ev = trigger.event();
     if ev.path.is_empty() || ev.source.is_empty() {

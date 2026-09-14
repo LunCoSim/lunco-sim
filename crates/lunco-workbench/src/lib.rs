@@ -76,7 +76,6 @@ pub mod tree;
 mod editor_tabs;
 mod perspective;
 mod perspective_help;
-mod render_robustness;
 mod session;
 mod source_viewer;
 mod twin_settings;
@@ -102,20 +101,6 @@ pub use perspective_help::{
     HelpMouse, HelpPopup, HelpShortcut, LiveHelpSection, LiveHelpSections, PerspectiveHelp,
     PerspectiveHelpPlugin, PerspectiveHelpRegistry,
 };
-pub use render_robustness::{
-    RenderGaveUp, RenderHealth, RenderHealthHandle, RenderWarning, RenderWarningKind,
-};
-
-/// Register the render-recovery reset at the host application's scene-teardown
-/// boundary. The workbench owns GPU state but deliberately does not depend on
-/// the USD scene lifecycle crate; the composition root supplies its schedule
-/// label when both concerns are present.
-pub fn install_render_recovery_teardown<S: bevy::ecs::schedule::ScheduleLabel>(
-    app: &mut App,
-    schedule: S,
-) {
-    app.add_systems(schedule, render_robustness::reset_render_recovery);
-}
 pub use window_command::{
     merged_titlebar_window, CloseWindow, MaximizeWindow, MinimizeWindow, WindowMaximized,
 };
@@ -881,7 +866,7 @@ impl Plugin for WorkbenchPlugin {
         // The render-health systems install only after the host has selected
         // its explicit adapter/backend settings at `DefaultPlugins` build
         // time.
-        render_robustness::install_wgpu_error_handler(app);
+        lunco_render_recovery::install_wgpu_error_handler(app);
 
         // Screenshot backend. Its ABSENCE (a headless server, which links no workbench) is
         // what makes `CaptureScreenshot` reject cleanly there instead of deferring a
@@ -914,7 +899,7 @@ impl Plugin for WorkbenchPlugin {
             .auto_create_primary_context = false;
         app.add_systems(
             EguiPrimaryContextPass,
-            render_robustness::draw_render_recovery_banner.in_set(ApplicationOverlayRenderSet),
+            lunco_render_recovery::draw_render_recovery_banner.in_set(ApplicationOverlayRenderSet),
         );
         app.configure_sets(
             EguiPrimaryContextPass,
@@ -3396,7 +3381,7 @@ fn run_menu_callback(
 /// The workbench owns only the menu surface and typed bridge events; the
 /// networking adapter owns connection behavior and observes those events.
 fn render_network_menu(ui: &mut egui::Ui, world: &mut World) {
-    use lunco_core::{NetConnectRequest, NetDisconnectRequest, NetStatus, NetworkRole};
+    use lunco_core_session::{NetConnectRequest, NetDisconnectRequest, NetStatus, NetworkRole};
 
     let status = world
         .get_resource::<NetStatus>()
@@ -3496,7 +3481,7 @@ fn render_network_menu(ui: &mut egui::Ui, world: &mut World) {
             let mut address = ui.data_mut(|d| {
                 d.get_temp::<String>(id).unwrap_or_else(|| {
                     if status.connect_hint.is_empty() {
-                        format!("127.0.0.1:{}", lunco_core::session::DEFAULT_HOST_PORT)
+                        format!("127.0.0.1:{}", lunco_core_session::DEFAULT_HOST_PORT)
                     } else {
                         status.connect_hint.clone()
                     }
@@ -5168,8 +5153,8 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
     // The networking chip only paints when not standalone; reserve room
     // for it on the right so the clickable status region doesn't overlap.
     let net_active = world
-        .get_resource::<lunco_core::NetStatus>()
-        .map(|s| !matches!(s.role, lunco_core::NetworkRole::Standalone))
+        .get_resource::<lunco_core_session::NetStatus>()
+        .map(|s| !matches!(s.role, lunco_core_session::NetworkRole::Standalone))
         .unwrap_or(false);
     let scene_name = world
         .get_resource::<CurrentSceneName>()
@@ -6017,7 +6002,7 @@ fn status_bar_right_widths(
 }
 
 /// Render the always-visible networking chip in the status bar.
-/// Reads `lunco_core::NetStatus` (always present; populated by the
+/// Reads `lunco_core_session::NetStatus` (always present; populated by the
 /// optional `lunco-networking` adapter when it's wired). Silent (zero pixels)
 /// in single-player (`Standalone`), so non-networked apps show nothing.
 ///
@@ -6025,7 +6010,7 @@ fn status_bar_right_widths(
 /// - **Client (connected)**: green dot, `CLIENT → host:port`.
 /// - **Client (connecting)**: amber dot, `connecting → host:port`.
 fn render_net_chip(ui: &mut egui::Ui, world: &mut World, theme: &lunco_theme::Theme, width: f32) {
-    use lunco_core::{NetStatus, NetworkRole};
+    use lunco_core_session::{NetStatus, NetworkRole};
     let Some(status) = world.get_resource::<NetStatus>().cloned() else {
         return;
     };
@@ -6233,7 +6218,7 @@ fn register_graphics_settings_menu(world: &mut World) {
                 settings.apply_preset(selected_preset);
             }
             let shadow_map_sizes = ctx
-                .resource::<crate::render_robustness::RenderCapabilities>()
+                .resource::<lunco_render_recovery::RenderCapabilities>()
                 .and_then(|capabilities| capabilities.supported_shadow_map_sizes());
             ui.label(
                 egui::RichText::new(
@@ -6822,9 +6807,9 @@ fn register_graphics_settings_menu(world: &mut World) {
             });
             let validation_error = settings.validate().err().map(str::to_owned).or_else(|| {
                 let capabilities = ctx
-                    .resource::<crate::render_robustness::RenderCapabilities>()
+                    .resource::<lunco_render_recovery::RenderCapabilities>()
                     .filter(|capabilities| capabilities.is_ready())?;
-                crate::render_robustness::validate_profile_for_capabilities(
+                lunco_render_recovery::validate_profile_for_capabilities(
                     settings.profile(),
                     capabilities,
                 )

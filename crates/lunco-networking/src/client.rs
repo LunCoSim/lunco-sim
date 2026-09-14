@@ -10,7 +10,8 @@ use lightyear::prelude::*;
 use std::net::{Ipv4Addr, SocketAddr};
 
 use crate::sync::{SyncInbox, SyncOutbox};
-use lunco_core::{LocalSession, NetStatus, NetworkRole, SessionId, SyncChannel};
+use lunco_core::{SessionId, SyncChannel};
+use lunco_core_session::{LocalSession, NetStatus, NetworkRole};
 
 use crate::protocol::{BulkChannel, CmdChannel, Frame, SnapChannel};
 use crate::shared::{deserialize_env, netcode_key, serialize_env, PROTOCOL_ID};
@@ -303,7 +304,7 @@ fn port_of(server: &str) -> u16 {
         .rsplit(':')
         .next()
         .and_then(|p| p.parse().ok())
-        .unwrap_or(lunco_core::session::DEFAULT_HOST_PORT)
+        .unwrap_or(lunco_core_session::DEFAULT_HOST_PORT)
 }
 
 /// Reflect the handshake (non-zero [`LocalSession`]) into [`NetStatus`] so the

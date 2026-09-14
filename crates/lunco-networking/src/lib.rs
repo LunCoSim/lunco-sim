@@ -1,8 +1,9 @@
 //! LunCoSim networking — a **thin lightyear (WebTransport) adapter**.
 //!
-//! Identity/session/authority primitives (`Provenance`, `GlobalEntityId`,
-//! `SimTick`, `NetworkRole` — whose `is_authoritative()` is the sole authority
-//! flag — and `Mutation`) live always-on in `lunco-core`. The networking **wire** (codec, command capture/apply, snapshot
+//! Identity primitives (`Provenance`, `GlobalEntityId`, `SimTick`, and
+//! `Mutation`) live in `lunco-core`; session/authority primitives (`NetworkRole`
+//! — whose `is_authoritative()` is the sole authority flag — plus status,
+//! possession, and prediction markers) live in `lunco-core-session`. The networking **wire** (codec, command capture/apply, snapshot
 //! state — see [`wire`]) lives in *this* crate behind the `networking` feature,
 //! so single-player builds that omit `lunco-networking` carry no networking code
 //! at all. On top of the wire, this crate's job is to:
@@ -26,16 +27,14 @@ pub mod connect_link;
 /// Client-side netcode over avian bodies: snapshot interpolation, prediction,
 /// rollback, reconciliation and correction smoothing (`NetcodePredictionPlugin`).
 /// Always compiled — it names no lightyear type, only
-/// the always-on `lunco-core` session substrate, so it costs nothing in a build
+/// the always-on `lunco-core-session` substrate, so it costs nothing in a build
 /// without the `networking` feature (every system self-guards on `NetworkRole`).
 pub mod prediction;
 
-/// Wire-fed session state that used to sit in `lunco-core/src/session.rs`
-/// (review C7): the deep-link confirm gate, the wire snapshot sample, the
-/// prediction contact gate, the desync gauge and the reconcile residual.
-/// Every producer AND consumer is in this crate, so core's always-on boundary
-/// rule (a type stays in core only if a non-networking crate consumes it) put
-/// them here. Always compiled — plain data, no lightyear type named.
+/// Wire-fed session state: the deep-link confirm gate, the wire snapshot sample,
+/// the prediction contact gate, the desync gauge, and the reconcile residual.
+/// Every producer and consumer is in this crate. Always compiled — plain data,
+/// no lightyear type named.
 pub mod session;
 
 /// The **bytes plane**: fetch a scenario's CID-addressed assets over HTTP rather
@@ -125,7 +124,7 @@ impl NetworkMode {
                     let port = args
                         .get(i + 1)
                         .and_then(|s| s.parse::<u16>().ok())
-                        .unwrap_or(lunco_core::session::DEFAULT_HOST_PORT);
+                        .unwrap_or(lunco_core_session::DEFAULT_HOST_PORT);
                     return Some(NetworkMode::Host { port });
                 }
                 "--connect" => {
@@ -159,7 +158,7 @@ impl NetworkMode {
                         .is_some_and(|n| n.contains("luncosim-server"));
                 if is_headless {
                     return Some(NetworkMode::Host {
-                        port: lunco_core::session::DEFAULT_HOST_PORT,
+                        port: lunco_core_session::DEFAULT_HOST_PORT,
                     });
                 }
             }
@@ -222,7 +221,7 @@ pub(crate) fn normalize_addr(raw: &str) -> String {
     if raw.contains(':') {
         raw.to_string()
     } else {
-        format!("{raw}:{}", lunco_core::session::DEFAULT_HOST_PORT)
+        format!("{raw}:{}", lunco_core_session::DEFAULT_HOST_PORT)
     }
 }
 
@@ -238,7 +237,7 @@ pub(crate) fn normalize_addr(raw: &str) -> String {
 /// enables/disables the set on the spot. `Option` so a bare test app without
 /// the role resource reads as "no wire" instead of panicking.
 #[cfg(feature = "networking")]
-pub(crate) fn wire_is_live(role: Option<Res<lunco_core::NetworkRole>>) -> bool {
+pub(crate) fn wire_is_live(role: Option<Res<lunco_core_session::NetworkRole>>) -> bool {
     role.is_some_and(|r| r.is_networked())
 }
 
@@ -259,7 +258,7 @@ pub(crate) fn next_client_id() -> u64 {
 pub fn default_connect_host() -> String {
     #[cfg(target_family = "wasm")]
     {
-        use lunco_core::session::DEFAULT_HOST_PORT;
+        use lunco_core_session::DEFAULT_HOST_PORT;
         web_sys::window()
             .and_then(|w| w.location().hostname().ok())
             .filter(|h| !h.is_empty())
@@ -268,7 +267,7 @@ pub fn default_connect_host() -> String {
     }
     #[cfg(not(target_family = "wasm"))]
     {
-        format!("127.0.0.1:{}", lunco_core::session::DEFAULT_HOST_PORT)
+        format!("127.0.0.1:{}", lunco_core_session::DEFAULT_HOST_PORT)
     }
 }
 

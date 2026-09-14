@@ -40,9 +40,12 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use crate::session::{IncomingSnapshots, SnapshotSample};
 use leafwing_input_manager::prelude::ActionState;
 use lunco_core::{
-    authorize, ActivePhysicsFrame, AppliedInputSeq, GlobalEntityId, LocalAvatar, LocalSession,
-    Mutation, NetReplicate, NetSpawn, NetworkRole, OpId, PendingReplicatedSpawns, ReplicatedSpawn,
-    SessionId, SessionProfiles, SessionRegistry, SimTick, SyncApplyGuard, SyncChannel,
+    ActivePhysicsFrame, GlobalEntityId, LocalAvatar, Mutation, OpId, SessionId, SimTick,
+    SyncChannel,
+};
+use lunco_core_session::{
+    authorize, AppliedInputSeq, LocalSession, NetReplicate, NetSpawn, NetworkRole,
+    PendingReplicatedSpawns, ReplicatedSpawn, SessionProfiles, SessionRegistry, SyncApplyGuard,
 };
 use lunco_doc::DocumentId;
 
@@ -270,7 +273,7 @@ pub struct HandshakeMsg {
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct InboundClientCtx<'w, 's> {
     time: Res<'w, Time>,
-    command_policies: Res<'w, lunco_core::session::CommandPolicyRegistry>,
+    command_policies: Res<'w, lunco_core_session::CommandPolicyRegistry>,
     // Host-side AOI view centers, updated from inbound `ViewCenter` reports (B4 Phase 1).
     // Bundled here (vs a top-level param) to keep `drain_sync_inbox` within Bevy's
     // 16-argument system limit.
@@ -305,7 +308,7 @@ pub struct InboundClientCtx<'w, 's> {
 }
 
 /// Host → clients: the authoritative who-owns-what map (`gid → session`).
-/// Replaces the client's view of [`lunco_core::SessionRegistry`] so possession
+/// Replaces the client's view of [`lunco_core_session::SessionRegistry`] so possession
 /// is exclusive and synced across peers — clients refuse to possess an
 /// already-owned vessel and drop control of one they've lost. Broadcast on
 /// change over the reliable CommandBus.
@@ -902,11 +905,11 @@ pub fn apply_sync_command(
     mut commands: Commands,
     type_registry: Res<AppTypeRegistry>,
     session_registry: Res<SessionRegistry>,
-    rbac: Res<lunco_core::session::SessionRbac>,
-    command_policies: Res<lunco_core::session::CommandPolicyRegistry>,
+    rbac: Res<lunco_core_session::SessionRbac>,
+    command_policies: Res<lunco_core_session::CommandPolicyRegistry>,
     // Empty unless a mission declares a blackout, so the gate is unchanged for
     // every app that never uses it.
-    control_paths: Res<lunco_core::session::ControlPathRegistry>,
+    control_paths: Res<lunco_core_session::ControlPathRegistry>,
     channels: Res<SyncChannelRegistry>,
     role: Res<NetworkRole>,
     mut dedup: ResMut<SyncDedup>,
@@ -1030,7 +1033,7 @@ pub fn apply_sync_command(
 // ── Inbox drain (commands / snapshots / spawns / handshake) ───────────────────
 
 /// Host capability gate for inbound envelopes keyed by a well-known capability
-/// (`lunco_core::session::capability::*`): the avatar-control relays
+/// (`lunco_core_session::capability::*`): the avatar-control relays
 /// (`TutorStatus`/`StudentStatus`/`SharePerspective`, which seize peers' camera +
 /// input) and the journal plane (`JournalEdit`, who may mutate shared authored
 /// content). The host drops such an envelope from a sender lacking the capability's
@@ -1043,7 +1046,7 @@ pub fn apply_sync_command(
 /// - host + sender lacks the role → `false` (caller rejects / `continue`s).
 ///
 /// **Policy is data, not hardcoded.** The required role for `capability`
-/// (`lunco_core::session::capability::*`) is resolved from the shared
+/// (`lunco_core_session::capability::*`) is resolved from the shared
 /// [`CommandPolicyRegistry`], exactly like a reflected command goes through
 /// [`authorize`]. By default these capabilities are absent from the registry and
 /// resolve to [`CommandPolicy::OPEN`] (Observer floor), so any authenticated peer
@@ -1058,8 +1061,8 @@ pub fn apply_sync_command(
 #[inline]
 fn authed_for_capability(
     role: &NetworkRole,
-    rbac: &lunco_core::session::SessionRbac,
-    policies: &lunco_core::session::CommandPolicyRegistry,
+    rbac: &lunco_core_session::SessionRbac,
+    policies: &lunco_core_session::CommandPolicyRegistry,
     sender: SessionId,
     capability: &str,
 ) -> bool {
@@ -1083,7 +1086,7 @@ pub fn drain_sync_inbox(
     // Host gates tutor/student/perspective relays on the sender's role (same bar
     // as the other state-mutating commands) and binds their claimed session to the
     // actual sender — these messages seize peers' avatar camera + input.
-    rbac: Res<lunco_core::session::SessionRbac>,
+    rbac: Res<lunco_core_session::SessionRbac>,
     mut profiles: ResMut<SessionProfiles>,
     mut presence: ResMut<Presence>,
     mut outbox: ResMut<SyncOutbox>,
@@ -1354,7 +1357,7 @@ pub fn drain_sync_inbox(
                     &rbac,
                     &ctx.command_policies,
                     sender,
-                    lunco_core::session::capability::TUTOR_STATUS,
+                    lunco_core_session::capability::TUTOR_STATUS,
                 ) {
                     continue;
                 }
@@ -1428,7 +1431,7 @@ pub fn drain_sync_inbox(
                     &rbac,
                     &ctx.command_policies,
                     sender,
-                    lunco_core::session::capability::STUDENT_STATUS,
+                    lunco_core_session::capability::STUDENT_STATUS,
                 ) {
                     continue;
                 }
@@ -1459,7 +1462,7 @@ pub fn drain_sync_inbox(
                     &rbac,
                     &ctx.command_policies,
                     sender,
-                    lunco_core::session::capability::SHARE_PERSPECTIVE,
+                    lunco_core_session::capability::SHARE_PERSPECTIVE,
                 ) {
                     continue;
                 }
@@ -1541,7 +1544,7 @@ pub fn drain_sync_inbox(
                         &rbac,
                         &ctx.command_policies,
                         sender,
-                        lunco_core::session::capability::ASSET_OFFER,
+                        lunco_core_session::capability::ASSET_OFFER,
                     ) {
                         warn!("[net] rejected asset offer from unauthorized session {sender}");
                     } else if offer.data.len() > crate::scenario_sync::MAX_ASSET_OFFER_BYTES {
@@ -1575,7 +1578,7 @@ pub fn drain_sync_inbox(
                     &rbac,
                     &ctx.command_policies,
                     sender,
-                    lunco_core::session::capability::JOURNAL_EDIT,
+                    lunco_core_session::capability::JOURNAL_EDIT,
                 ) {
                     warn!(
                         "[journal-plane] rejected journal edit from unauthorized session {sender}"
@@ -1606,7 +1609,7 @@ pub fn drain_sync_inbox(
                     &rbac,
                     &ctx.command_policies,
                     sender,
-                    lunco_core::session::capability::JOURNAL_EDIT,
+                    lunco_core_session::capability::JOURNAL_EDIT,
                 ) {
                     warn!(
                         "[journal-plane] rejected journal batch ({} entries) from unauthorized \
@@ -1958,7 +1961,7 @@ pub fn recompute_interest(
     mut acc: Local<f32>,
     mut diag_acc: Local<f32>,
     registry: Res<SessionRegistry>,
-    rbac: Res<lunco_core::session::SessionRbac>,
+    rbac: Res<lunco_core_session::SessionRbac>,
     view_centers: Res<ViewCenters>,
     q: Query<(Entity, &GlobalEntityId, Option<&RigidBody>), With<NetReplicate>>,
     q_parents: Query<&ChildOf>,
@@ -3023,13 +3026,13 @@ pub fn block_action_states(
 pub struct SyncPlugin;
 
 /// Startup system to register the host session in SessionRbac (Owner role, authenticated).
-fn setup_host_rbac(local: Res<LocalSession>, mut rbac: ResMut<lunco_core::session::SessionRbac>) {
+fn setup_host_rbac(local: Res<LocalSession>, mut rbac: ResMut<lunco_core_session::SessionRbac>) {
     rbac.sessions.insert(
         local.0 .0,
-        lunco_core::session::UserSession {
+        lunco_core_session::UserSession {
             session_id: local.0,
             username: "Host".to_string(),
-            role: lunco_core::session::AuthorityRole::Owner,
+            role: lunco_core_session::AuthorityRole::Owner,
             authenticated: true,
             // The host issues its own credential — `is_authorized` now requires a
             // server-issued token (review M2), and the host trivially holds one.
@@ -3054,7 +3057,7 @@ fn setup_host_rbac(local: Res<LocalSession>, mut rbac: ResMut<lunco_core::sessio
 ///
 /// TODO(b — fold client-local into the authority substrate): the deeper
 /// unification is NOT with `SyncChannel` (wrong axis — routing ≠ capability) but
-/// with the RBAC gate ([`lunco_core::session::CommandPolicyRegistry`] /
+/// with the RBAC gate ([`lunco_core_session::CommandPolicyRegistry`] /
 /// `authorize`). A client-scoped script is just a low-privilege *principal*; its
 /// `cmd()`s should resolve through the SAME `authorize()` seam every other
 /// command uses, so operator overrides and the `rbac.authorize` hook apply to it
@@ -3090,9 +3093,9 @@ fn validate_client_local_channels(
 /// Observer system to handle Profile updates: marks client as authenticated and promotes role.
 fn on_update_profile_rbac(
     trigger: On<lunco_avatar::UpdateProfile>,
-    guard: Res<lunco_core::SyncApplyGuard>,
+    guard: Res<lunco_core_session::SyncApplyGuard>,
     local: Res<LocalSession>,
-    mut rbac: ResMut<lunco_core::session::SessionRbac>,
+    mut rbac: ResMut<lunco_core_session::SessionRbac>,
 ) {
     let origin = guard.0.unwrap_or(local.0);
     let username = trigger.event().name.clone();
@@ -3286,8 +3289,8 @@ impl Plugin for SyncPlugin {
         // queues, dedup, transport/replication config). Always-on substrate
         // resources — anything read by systems that run even with networking
         // off (e.g. AppliedInputSeq / OwnedInputLog) — belong in
-        // LunCoCorePlugin (lunco-core), never here. SyncPlugin is behind the
-        // `networking` feature, so initializing substrate here panics
+        // LunCoCoreSessionPlugin (lunco-core-session), never here. SyncPlugin is
+        // behind the `networking` feature, so initializing substrate here panics
         // single-player builds.
         app.init_resource::<SyncOutbox>()
             .init_resource::<SyncInbox>()

@@ -177,18 +177,18 @@ fn reset_scene_state(
 
 impl Plugin for CoSimPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<lunco_core::session::CommandPolicyRegistry>();
+        app.init_resource::<lunco_core_session::CommandPolicyRegistry>();
         app.world_mut()
-            .resource_mut::<lunco_core::session::CommandPolicyRegistry>()
+            .resource_mut::<lunco_core_session::CommandPolicyRegistry>()
             .register(
                 "ReleasePort",
-                lunco_core::session::CommandPolicy::OWNED_CONTROL,
+                lunco_core_session::CommandPolicy::OWNED_CONTROL,
             );
         app.world_mut()
-            .resource_mut::<lunco_core::session::CommandPolicyRegistry>()
+            .resource_mut::<lunco_core_session::CommandPolicyRegistry>()
             .register(
                 "ReleaseControl",
-                lunco_core::session::CommandPolicy::OWNED_CONTROL,
+                lunco_core_session::CommandPolicy::OWNED_CONTROL,
             );
         app.register_type::<SimComponent>()
             .register_type::<PendingForces>()
@@ -374,8 +374,11 @@ impl Plugin for CoSimPlugin {
                     .in_set(systems::apply_forces::CosimSet::ApplyForces)
                     .before(avian::apply_pending_forces)
                     .run_if(resource_exists::<Time<avian3d::prelude::Physics>>)
-                    .run_if(|role: Option<Res<lunco_core::NetworkRole>>| {
-                        !matches!(role.as_deref(), Some(lunco_core::NetworkRole::Client))
+                    .run_if(|role: Option<Res<lunco_core_session::NetworkRole>>| {
+                        !matches!(
+                            role.as_deref(),
+                            Some(lunco_core_session::NetworkRole::Client)
+                        )
                     }),
                 avian::apply_pending_forces
                     .in_set(systems::apply_forces::CosimSet::ApplyForces)
@@ -389,10 +392,13 @@ impl Plugin for CoSimPlugin {
                     // applying them while the clock is stopped, so a command
                     // sampled during loading cannot become a later impulse.
                     .run_if(resource_exists::<Time<avian3d::prelude::Physics>>)
-                    .run_if(|role: Option<Res<lunco_core::NetworkRole>>| {
+                    .run_if(|role: Option<Res<lunco_core_session::NetworkRole>>| {
                         // Absent role (single-player, headless tests) → run.
                         // Only a present `Client` role gates it off.
-                        !matches!(role.as_deref(), Some(lunco_core::NetworkRole::Client))
+                        !matches!(
+                            role.as_deref(),
+                            Some(lunco_core_session::NetworkRole::Client)
+                        )
                     }),
             ),
         );

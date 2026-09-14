@@ -1578,13 +1578,13 @@ impl Plugin for ModelicaCorePlugin {
         model_commands::register_all_commands(app);
         #[cfg(feature = "api")]
         app.register_deferred_command::<model_commands::SetModelInput>();
-        app.init_resource::<lunco_core::session::CommandPolicyRegistry>();
+        app.init_resource::<lunco_core_session::CommandPolicyRegistry>();
         app.world_mut()
-            .resource_mut::<lunco_core::session::CommandPolicyRegistry>()
+            .resource_mut::<lunco_core_session::CommandPolicyRegistry>()
             .register(
                 "SetModelInput",
-                lunco_core::session::CommandPolicy {
-                    min_role: lunco_core::session::AuthorityRole::Operator,
+                lunco_core_session::CommandPolicy {
+                    min_role: lunco_core_session::AuthorityRole::Operator,
                     ownership_gated: false,
                 },
             );

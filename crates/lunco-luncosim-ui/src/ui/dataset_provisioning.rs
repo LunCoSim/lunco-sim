@@ -212,7 +212,7 @@ fn policy_action(
         ("show_on_start", H::Bool(show_on_start)),
         ("datasets", H::Array(datasets)),
     ]);
-    match lunco_hooks::invoke(lunco_core::session::DATASET_PROVISION_HOOK, &[context]) {
+    match lunco_hooks::invoke(lunco_core_session::DATASET_PROVISION_HOOK, &[context]) {
         Some(Ok(value)) => value.as_str().map(str::to_owned),
         Some(Err(error)) => {
             warn!("[datasets] provisioning policy failed: {error}");

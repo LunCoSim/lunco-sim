@@ -1158,12 +1158,12 @@ fn process_usd_sim_prim_read(
     {
         commands
             .entity(entity)
-            .try_insert(lunco_core::ArticulatedVehicle);
+            .try_insert(lunco_core_session::ArticulatedVehicle);
     }
     if topology.joint_targets.contains_key(&prim_path.path) {
         commands
             .entity(entity)
-            .try_insert(lunco_core::ArticulatedLink);
+            .try_insert(lunco_core_session::ArticulatedLink);
     }
     // Initialization is a pre-admission policy, not an implicit terrain
     // placement algorithm. The default is installed by the USD→Avian body owner;
@@ -1340,12 +1340,14 @@ fn process_usd_sim_prim_read(
     let net_authority = reader.text(&sdf_path, "lunco:net:authority");
     let (net_excluded, net_opaque) = net_override_markers(net_replicate, net_authority.as_deref());
     if net_excluded {
-        commands.entity(entity).try_insert(lunco_core::NetExcluded);
+        commands
+            .entity(entity)
+            .try_insert(lunco_core_session::NetExcluded);
     }
     if net_opaque {
         commands
             .entity(entity)
-            .try_insert(lunco_core::NotPredictable);
+            .try_insert(lunco_core_session::NotPredictable);
     }
 
     // --- Suspension visual roles: a prim that applies `LunCoSuspensionVisualAPI`
@@ -2222,9 +2224,9 @@ fn process_usd_sim_prim_read(
 /// factored out so the policy vocabulary is unit-testable without a USD/avian build.
 ///
 /// Returns `(excluded, opaque)`:
-/// - `excluded` ⇒ stamp [`lunco_core::NetExcluded`] (skip default replication):
+/// - `excluded` ⇒ stamp [`lunco_core_session::NetExcluded`] (skip default replication):
 ///   `lunco:net:replicate = false` OR `lunco:net:authority = "local"`.
-/// - `opaque` ⇒ stamp [`lunco_core::NotPredictable`] (never client-predicted):
+/// - `opaque` ⇒ stamp [`lunco_core_session::NotPredictable`] (never client-predicted):
 ///   `lunco:net:authority = "opaque"`.
 ///
 /// `server`/`predictable`/absent ⇒ the default (replicated, predictable). See
@@ -2926,7 +2928,7 @@ fn reconstruct_proxy_wheels(
     // ticks the fixed schedule without the full core plugin) there are no
     // replicated proxies to reconstruct, so no-op instead of panicking on a missing
     // resource. Only `NetworkRole::Client` does work here anyway.
-    role: Option<Res<lunco_core::NetworkRole>>,
+    role: Option<Res<lunco_core_session::NetworkRole>>,
     q_chassis: Query<
         (&RigidBody, &Position, &Rotation),
         (With<lunco_core::MobilityRoot>, Without<PhysicalWheel>),
@@ -2941,13 +2943,13 @@ fn reconstruct_proxy_wheels(
             &mut Position,
             &mut Rotation,
         ),
-        Without<lunco_core::OwnedLocally>,
+        Without<lunco_core_session::OwnedLocally>,
     >,
     q_parents: Query<&ChildOf>,
     mut commands: Commands,
 ) {
     let Some(role) = role else { return };
-    if !matches!(*role, lunco_core::NetworkRole::Client) {
+    if !matches!(*role, lunco_core_session::NetworkRole::Client) {
         return;
     }
     for (e, wheel, mount, rb, mut pos, mut rot) in q_wheels.iter_mut() {
@@ -3010,7 +3012,7 @@ fn animate_proxy_physical_wheels(
             &Rotation,
             &lunco_mobility::WheelBodyMount,
         ),
-        Without<lunco_core::NetReplicate>,
+        Without<lunco_core_session::NetReplicate>,
     >,
     q_chassis: Query<
         (
@@ -3018,7 +3020,7 @@ fn animate_proxy_physical_wheels(
             &Position,
             &Rotation,
             &ComputedCenterOfMass,
-            Option<&lunco_core::ReplicatedChassisMotion>,
+            Option<&lunco_core_session::ReplicatedChassisMotion>,
         ),
         (With<lunco_core::MobilityRoot>, Without<PhysicalWheel>),
     >,
@@ -3793,7 +3795,7 @@ mod proxy_wheel_tests {
                 // reconstructs the hub from the chassis pose (CQ-201 fix).
                 Rotation::default(),
                 ComputedCenterOfMass::default(),
-                lunco_core::ReplicatedChassisMotion {
+                lunco_core_session::ReplicatedChassisMotion {
                     lin: DVec3::new(0.0, 0.0, -2.0), // 2 m/s along chassis forward (−Z)
                     ang: DVec3::ZERO,
                 },
@@ -3882,7 +3884,7 @@ mod proxy_wheel_tests {
                 Position(DVec3::ZERO),
                 Rotation::default(),
                 ComputedCenterOfMass::default(),
-                lunco_core::ReplicatedChassisMotion {
+                lunco_core_session::ReplicatedChassisMotion {
                     lin: DVec3::new(0.0, 0.0, -2.0),
                     ang: DVec3::ZERO,
                 },
@@ -3908,7 +3910,7 @@ mod proxy_wheel_tests {
             Rotation::default(),
             ChildOf(chassis),
             // The discriminator under test: a per-link-replicated wheel.
-            lunco_core::NetReplicate,
+            lunco_core_session::NetReplicate,
         ));
 
         app.add_systems(Update, animate_proxy_physical_wheels);
@@ -3962,7 +3964,7 @@ mod proxy_wheel_tests {
                 Position(DVec3::ZERO),
                 Rotation::default(),
                 ComputedCenterOfMass::default(),
-                lunco_core::ReplicatedChassisMotion {
+                lunco_core_session::ReplicatedChassisMotion {
                     lin: DVec3::ZERO,
                     ang,
                 },

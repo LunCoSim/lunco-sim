@@ -181,6 +181,7 @@ fn main() {
         AuthorId::local(),
     ));
     app.add_plugins(lunco_core::LunCoCorePlugin);
+    app.add_plugins(lunco_core_session::LunCoCoreSessionPlugin);
     app.add_plugins(lunco_api_transport::LunCoApiPlugin::default());
     app.add_plugins(LunCoNetworkingPlugin { mode: Some(mode) });
 
@@ -250,7 +251,7 @@ fn host_spawn_rovers(mut commands: Commands) {
                 Transform::default(),
                 GlobalTransform::default(),
                 lunco_core::GlobalEntityId::from_raw(gid),
-                lunco_core::NetReplicate,
+                lunco_core_session::NetReplicate,
                 TestRover,
                 RoverGid(gid),
                 DriveVel::default(),
@@ -278,10 +279,10 @@ fn host_spawn_rovers(mut commands: Commands) {
 /// its drives are authorized (G4). Exclusivity is enforced by `claim`.
 fn host_on_possess(
     trigger: On<lunco_avatar::PossessVessel>,
-    guard: Res<lunco_core::SyncApplyGuard>,
-    local: Res<lunco_core::LocalSession>,
+    guard: Res<lunco_core_session::SyncApplyGuard>,
+    local: Res<lunco_core_session::LocalSession>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
-    mut reg: ResMut<lunco_core::SessionRegistry>,
+    mut reg: ResMut<lunco_core_session::SessionRegistry>,
 ) {
     let cmd = trigger.event();
     let origin = guard.0.unwrap_or(local.0);
@@ -306,7 +307,7 @@ fn host_on_possess(
 fn host_on_drive(
     trigger: On<lunco_cosim::SetPorts>,
     mut q: Query<(&lunco_core::GlobalEntityId, &mut DriveVel)>,
-    mut buf: ResMut<lunco_core::BufferedClientInputs>,
+    mut buf: ResMut<lunco_core_session::BufferedClientInputs>,
 ) {
     let cmd = trigger.event();
     if let Ok((gid, mut v)) = q.get_mut(cmd.target) {
@@ -347,7 +348,7 @@ fn host_despawn_g3(
 fn host_apply_and_integrate(
     time: Res<Time>,
     buffer_on: Res<BufferEnabled>,
-    mut buf: ResMut<lunco_core::BufferedClientInputs>,
+    mut buf: ResMut<lunco_core_session::BufferedClientInputs>,
     mut q: Query<(&RoverGid, &mut DriveVel, &mut Transform), With<TestRover>>,
 ) {
     let dt = time.delta_secs();
@@ -407,7 +408,7 @@ fn client_spawn_proxies(mut commands: Commands) {
 /// then drive **both** every frame. G2's drives are authorized and move it;
 /// G1's are rejected by the host (the client never owns it).
 fn client_act(
-    local: Res<lunco_core::LocalSession>,
+    local: Res<lunco_core_session::LocalSession>,
     rovers: Option<Res<Rovers>>,
     mut commands: Commands,
     mut acted: Local<bool>,
@@ -453,7 +454,7 @@ fn client_act(
 /// with the buffer, and fall short without it.
 fn client_drive_cadence(
     time: Res<Time>,
-    local: Res<lunco_core::LocalSession>,
+    local: Res<lunco_core_session::LocalSession>,
     rovers: Option<Res<Rovers>>,
     mut seq: Local<u32>,
     mut ideal: ResMut<ClientIdealX>,
@@ -629,7 +630,7 @@ fn host_journal_report(time: Res<Time>, mut t: Local<f32>, journal: Option<Res<J
 /// it UP to the host (client→host), the bidirectional leg.
 fn client_author_journal_entry(
     time: Res<Time>,
-    local: Res<lunco_core::LocalSession>,
+    local: Res<lunco_core_session::LocalSession>,
     journal: Option<Res<JournalResource>>,
     mut done: Local<bool>,
 ) {
@@ -646,7 +647,7 @@ fn client_author_journal_entry(
 // ── Shared ────────────────────────────────────────────────────────────────────
 
 fn report_session(
-    local: Res<lunco_core::LocalSession>,
+    local: Res<lunco_core_session::LocalSession>,
     mut mine: ResMut<MySession>,
     mut last: Local<u64>,
 ) {
@@ -665,7 +666,7 @@ fn exit_after_timeout(
     mut exit: MessageWriter<AppExit>,
     maxx: Option<Res<MaxProxyX>>,
     mine: Res<MySession>,
-    registry: Option<Res<lunco_core::SessionRegistry>>,
+    registry: Option<Res<lunco_core_session::SessionRegistry>>,
     q_proxies: Query<&RoverGid, With<TestRover>>,
     journal: Option<Res<JournalResource>>,
 ) {

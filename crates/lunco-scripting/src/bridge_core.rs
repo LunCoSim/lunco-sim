@@ -47,12 +47,12 @@ use lunco_api::executor::{
 use lunco_api::queries::{ApiQueryRegistry, ApiVisibility};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::ApiResponse;
-use lunco_core::session::{authorize, CommandPolicyRegistry, SessionRbac, SessionRegistry};
 use lunco_core::{
     coords::{GridPos, VehicleFrame},
     CelestialBody, CommandResults, GlobalEntityId, NavigationCommand, OpId, SessionId, Severity,
     SimTick, SteeringGeometry, TelemetryEvent, TelemetryValue, SECS_PER_TICK,
 };
+use lunco_core_session::{authorize, CommandPolicyRegistry, SessionRbac, SessionRegistry};
 
 // ── Native value construction ──────────────────────────────────────────────
 
@@ -464,7 +464,7 @@ pub fn enforce_script_authority(
     // `ControlPathRegistry` is a plain default when absent: an app that never
     // declares a blackout has none down, so the gate is unchanged.
     let paths = world
-        .get_resource::<lunco_core::session::ControlPathRegistry>()
+        .get_resource::<lunco_core_session::ControlPathRegistry>()
         .cloned()
         .unwrap_or_default();
     authorize(reg, rbac, pol, &paths, session, op, target_gid).map_err(|r| r.to_string())
@@ -610,7 +610,7 @@ pub fn cmd_raw(name: &str, mut params: serde_json::Value) -> serde_json::Value {
                     .is_some_and(|reg| reg.policy_for(name).ownership_gated)
                 && match (
                     command_target_gid(world, name, &params),
-                    world.get_resource::<lunco_core::LocalSession>(),
+                    world.get_resource::<lunco_core_session::LocalSession>(),
                     world.get_resource::<SessionRegistry>(),
                 ) {
                     (Some(gid), Some(local), Some(reg)) => reg.owns(local.0, gid),
@@ -646,14 +646,13 @@ pub fn cmd_raw(name: &str, mut params: serde_json::Value) -> serde_json::Value {
                     let tick = world
                         .get_resource::<lunco_core::SimTick>()
                         .map_or(0, |t| t.0);
-                    let seq =
-                        world
-                            .get_resource_mut::<lunco_core::OwnedInputLog>()
-                            .map(|mut log| {
-                                let entry = log.0.entry(gid).or_default();
-                                entry.next_seq = entry.next_seq.wrapping_add(1); // seq 0 reserved
-                                entry.next_seq
-                            });
+                    let seq = world
+                        .get_resource_mut::<lunco_core_session::OwnedInputLog>()
+                        .map(|mut log| {
+                            let entry = log.0.entry(gid).or_default();
+                            entry.next_seq = entry.next_seq.wrapping_add(1); // seq 0 reserved
+                            entry.next_seq
+                        });
                     if let (Some(seq), Some(obj)) = (seq, params.as_object_mut()) {
                         obj.insert("seq".into(), serde_json::json!(seq));
                         obj.insert("tick".into(), serde_json::json!(tick));
@@ -1654,7 +1653,7 @@ mod tests {
     use super::*;
     use bevy::math::DQuat;
     use lunco_api::queries::ApiQueryProvider;
-    use lunco_core::session::{AuthorityRole, CommandPolicy, UserSession};
+    use lunco_core_session::{AuthorityRole, CommandPolicy, UserSession};
 
     #[test]
     fn script_pose_reads_are_empty_before_a_simulation_frame_exists() {

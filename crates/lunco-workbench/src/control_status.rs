@@ -26,8 +26,8 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
-use lunco_core::session::ControlPathRegistry;
 use lunco_core::GlobalEntityId;
+use lunco_core_session::ControlPathRegistry;
 
 /// Draws the control-blackout badge described in the module docs.
 ///

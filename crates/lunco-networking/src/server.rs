@@ -18,7 +18,8 @@ use crate::sync::{
     HandshakeMsg, NetworkConfig, OwnershipMsg, PeerInterest, ProfilesMsg, ReplicationState,
     SnapshotMsg, SyncEnvelope, SyncInbox, SyncOutbox, ViewCenters, MAX_SNAPSHOT_ENTRIES,
 };
-use lunco_core::{NetStatus, SessionId, SessionProfiles, SessionRegistry, SimTick, SyncChannel};
+use lunco_core::{SessionId, SimTick, SyncChannel};
+use lunco_core_session::{NetStatus, SessionProfiles, SessionRegistry};
 use lunco_doc_bevy::JournalResource;
 use lunco_workspace::{Twin, TwinAdded, WorkspaceResource};
 
@@ -610,7 +611,7 @@ fn on_server_connected(
     server: Single<&Server>,
     tick: Res<SimTick>,
     mut sender: ServerMultiMessageSender,
-    mut rbac: ResMut<lunco_core::session::SessionRbac>,
+    mut rbac: ResMut<lunco_core_session::SessionRbac>,
     mut assigned: ResMut<AssignedSessions>,
     mut replay: ResMut<PendingJournalReplay>,
 ) {
@@ -636,10 +637,10 @@ fn on_server_connected(
     // deliberately assigned here and never promoted by a client-supplied name.
     rbac.sessions.insert(
         session.0,
-        lunco_core::session::UserSession {
+        lunco_core_session::UserSession {
             session_id: session,
             username: format!("Player {}", session.0),
-            role: lunco_core::session::AuthorityRole::Observer,
+            role: lunco_core_session::AuthorityRole::Observer,
             authenticated: true,
             token: Some(token),
         },
@@ -881,7 +882,7 @@ fn on_server_disconnected(
     q_client: Query<&RemoteId, With<ClientOf>>,
     mut registry: ResMut<SessionRegistry>,
     mut profiles: ResMut<SessionProfiles>,
-    mut rbac: ResMut<lunco_core::session::SessionRbac>,
+    mut rbac: ResMut<lunco_core_session::SessionRbac>,
     mut dedup: ResMut<crate::sync::SyncDedup>,
     mut assigned: ResMut<AssignedSessions>,
     mut view_centers: ResMut<ViewCenters>,
@@ -1513,7 +1514,7 @@ fn on_twin_added_host(
 /// imported locally" trigger) so the host's OWN imports re-advertise too — today a
 /// rebuild only fires on `TwinAdded`, startup, or (now) a client offer.
 fn ingest_asset_offers(
-    role: Res<lunco_core::NetworkRole>,
+    role: Res<lunco_core_session::NetworkRole>,
     mut offers: ResMut<crate::scenario_sync::PendingAssetOffers>,
     workspace: Option<Res<WorkspaceResource>>,
     journal: Option<Res<JournalResource>>,
@@ -1580,7 +1581,7 @@ fn ingest_asset_offers(
 /// off-thread manifest rebuild so already-connected peers pull the new bytes now.
 /// One-shot (resets the flag). Host-only; no-op when idle.
 fn service_manifest_rebuild_request(
-    role: Res<lunco_core::NetworkRole>,
+    role: Res<lunco_core_session::NetworkRole>,
     mut req: ResMut<crate::sync::RequestManifestRebuild>,
     workspace: Option<Res<WorkspaceResource>>,
     journal: Option<Res<JournalResource>>,

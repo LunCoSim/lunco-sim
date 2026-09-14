@@ -1177,9 +1177,9 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Declare that commands can (or cannot) currently reach `target`.
 
- The generic verb behind [`lunco_core::session::ControlPathRegistry`]. A mission
+ The generic verb behind [`lunco_core_session::ControlPathRegistry`]. A mission
  script computes the DOMAIN fact and states the CONSEQUENCE here; an authored
- policy ([`lunco_core::session::AUTHORIZE_HOOK`]) then decides what to refuse.
+ policy ([`lunco_core_session::AUTHORIZE_HOOK`]) then decides what to refuse.
  Space School does exactly that — `ss3_radio_shadow.rhai` reads real link geometry
  with `can_reach(radio, "earth")` and calls this — which keeps doc 49's split one
  layer up: the kernel computes geometry, the script decides what it means, and
