@@ -8090,6 +8090,7 @@ dependencies = [
  "lunco-workspace",
  "openusd",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

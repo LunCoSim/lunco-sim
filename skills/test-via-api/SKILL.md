@@ -41,10 +41,13 @@ falling back to headless mode.
 ## Live shader iteration
 
 Shader source edits are a live-test path. Keep the production luncosim running, edit the
-WGSL under `assets/shaders/`, then dispatch `ReloadShader` through the same API (an empty
-path reloads the standard shader set; pass `shaders/starfield.wgsl` to limit the reload).
-Confirm the command result and inspect the unchanged window. Do not relaunch the app just
-to pick up a starfield or material edit.
+WGSL under `assets/shaders/`, then dispatch `ReloadShader` through the same API. A bare
+engine path such as `shaders/starfield.wgsl` resolves the active default-source or
+`lunco://` asset identity; an explicit `lunco://…` or `twin://…` path is exact. An empty
+path reloads every currently loaded WGSL asset, not an arbitrary hard-coded file list.
+The response reports the queued paths and fails if no active asset matches. Confirm the
+command result, then inspect the unchanged window; shader compiler errors remain in the
+render log. Do not relaunch the app just to pick up a shader edit.
 
 ## Tutorial and Rhai iteration
 
