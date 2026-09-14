@@ -17,13 +17,6 @@ bevy = { workspace = true, features = ["bevy_camera", "bevy_light", "bevy_mesh"]
 # Camera INTENT: `SceneCamera` — "this entity is the scene camera, and this is how it
 # should look" — stated without naming a render pipeline.
 lunco-render = { path = "../lunco-render" }
-# egui + the workbench/theme shell are used ONLY by `src/ui/` (AvatarUiPlugin).
-# Optional so consumers that need just the camera components (e.g. lunco-usd-sim
-# on a headless server) build with `default-features = false` → no egui→winit.
-bevy_egui = { workspace = true, optional = true }
-lunco-workbench = { path = "../lunco-workbench", optional = true }
-lunco-workbench-core = { path = "../lunco-workbench-core", optional = true }
-lunco-theme = { path = "../lunco-theme", optional = true }
 avian3d = { workspace = true }
 big_space = { workspace = true }
 leafwing-input-manager = { workspace = true }
@@ -44,12 +37,6 @@ serde = { workspace = true }
 [dev-dependencies]
 lunco-twin = { path = "../lunco-twin" }
 tempfile = { workspace = true }
-
-[features]
-default = ["ui"]
-# The egui camera/inspector panels (`src/ui/`, AvatarUiPlugin). Off ⇒ no egui;
-# the possession observers + camera components stay available.
-ui = ["dep:bevy_egui", "dep:lunco-workbench", "dep:lunco-workbench-core", "dep:lunco-theme"]
 
 [lints]
 workspace = true

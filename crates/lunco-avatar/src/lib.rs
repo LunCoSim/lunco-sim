@@ -274,9 +274,6 @@ fn report_avatar_policy_error(error: &str, last_error: &mut Option<String>) {
     }
 }
 
-/// UI panels for avatar status, camera mode, and surface coordinates.
-#[cfg(feature = "ui")]
-pub mod ui;
 pub use intents::*;
 
 // ─── Resources ───────────────────────────────────────────────────────────────
@@ -1256,9 +1253,6 @@ impl Plugin for LunCoAvatarPlugin {
             .register_type::<AvatarCollisionSettings>()
             .register_type::<AvatarFlightSettings>();
 
-        #[cfg(feature = "ui")]
-        app.add_systems(Startup, crate::ui::register_avatar_settings);
-
         app.register_settings_section::<CameraInputSettings>();
         app.register_settings_section::<ProfileSettings>();
         app.init_resource::<RoverNameTagSettings>()
@@ -1337,21 +1331,6 @@ impl Plugin for LunCoAvatarPlugin {
         app.add_systems(
             Update,
             (avatar_escape_possession, avatar_global_hotkeys).run_if(scene_keyboard_active),
-        );
-
-        // Possessed-rover name tags: an egui screen-space overlay (the scene has
-        // only a `Camera3d`, so world-anchored `Text2d` never renders). Registered
-        // here — not in `AvatarUiPlugin` — because the luncosim adds only
-        // `LunCoAvatarPlugin`; `AvatarUiPlugin` is luncosim-only.
-        #[cfg(feature = "ui")]
-        app.add_systems(
-            bevy_egui::EguiPrimaryContextPass,
-            crate::ui::draw_rover_name_tags.before(lunco_workbench::WorkbenchRenderSet),
-        );
-        #[cfg(feature = "ui")]
-        app.add_systems(
-            bevy_egui::EguiPrimaryContextPass,
-            crate::ui::draw_notifications.in_set(lunco_workbench::ApplicationOverlayRenderSet),
         );
 
         // Incremental camera modes are stepped at a constant 60 Hz and eased by
@@ -5860,11 +5839,11 @@ fn resolve_declared_body(
 
 /// Global visual settings for floating rover name tags.
 ///
-/// The tags are drawn as an egui overlay (see [`crate::ui::draw_rover_name_tags`])
-/// rather than as `Text2d` world entities: this app renders the scene through a
-/// single `Camera3d` and owns the only 2D camera for egui, so world-anchored
-/// `Text2d` never projects into the 3D viewport. The overlay instead projects
-/// each possessed rover's world position through the avatar camera every frame.
+/// The `lunco-avatar-ui` adapter draws these as an egui overlay rather than as
+/// `Text2d` world entities: this app renders the scene through a single
+/// `Camera3d` and owns the only 2D camera for egui, so world-anchored `Text2d`
+/// never projects into the 3D viewport. The adapter instead projects each
+/// possessed rover's world position through the avatar camera every frame.
 #[derive(Resource, Reflect, Clone, Debug)]
 #[reflect(Resource)]
 pub struct RoverNameTagSettings {
@@ -5930,10 +5909,12 @@ pub struct Toast {
     pub remaining: f32,
 }
 
-/// Queue of transient on-screen notifications drawn by the ui-gated
-/// `draw_notifications` overlay. Written by [`commands::ShowNotification`] (rhai
-/// `notify(...)`), aged by [`tick_notifications`]. Always present (headless too)
-/// so the command never panics on a missing resource; only the draw is gated.
+/// Queue of transient on-screen notifications drawn by the
+/// `lunco-avatar-ui` presentation adapter. Written by
+/// [`commands::ShowNotification`] (rhai `notify(...)`) and aged by
+/// [`tick_notifications`]. Always present, including in headless hosts, so the
+/// command has one authoritative runtime sink while presentation remains
+/// optional.
 #[derive(Resource, Default)]
 pub struct ScreenNotifications {
     pub toasts: Vec<Toast>,

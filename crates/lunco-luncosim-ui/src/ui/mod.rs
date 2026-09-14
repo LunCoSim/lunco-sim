@@ -227,6 +227,8 @@ impl Plugin for LunCoSimUiPlugin {
             // so scene selection / possession / spawn-placement run as click observers.
             .add_plugins(bevy::picking::mesh_picking::MeshPickingPlugin)
             .add_plugins(lunco_workbench::WorkbenchPlugin);
+        #[cfg(feature = "avatar-ui")]
+        app.add_plugins(lunco_avatar_ui::AvatarUiPlugin);
         // An explicit scene launch is a presentation request for the simulator:
         // restore the scene/3D View even if this Twin was last closed in the
         // embedded Modelica workspace. The workspace owner consumes this once;

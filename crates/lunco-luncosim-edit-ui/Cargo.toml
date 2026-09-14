@@ -61,7 +61,7 @@ lunco-environment = { path = "../lunco-environment" }
 lunco-materials = { path = "../lunco-materials" }
 lunco-render = { path = "../lunco-render" }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
-lunco-avatar = { path = "../lunco-avatar", default-features = false, features = ["ui"] }
+lunco-avatar = { path = "../lunco-avatar", default-features = false }
 lunco-assets = { path = "../lunco-assets" }
 lunco-tools = { path = "../lunco-tools" }
 lunco-scripting = { path = "../lunco-scripting" }

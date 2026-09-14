@@ -1,0 +1,21 @@
+[package]
+name = "lunco-avatar-ui"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Egui presentation for the render-free LunCoSim avatar runtime"
+
+[dependencies]
+bevy = { workspace = true, features = ["bevy_camera", "bevy_light", "bevy_mesh"] }
+bevy_egui = { workspace = true }
+lunco-avatar = { path = "../lunco-avatar", default-features = false }
+lunco-celestial = { path = "../lunco-celestial", default-features = false }
+lunco-controller = { path = "../lunco-controller" }
+lunco-core = { path = "../lunco-core" }
+lunco-theme = { path = "../lunco-theme" }
+lunco-workbench = { path = "../lunco-workbench" }
+lunco-workbench-core = { path = "../lunco-workbench-core" }
+lunco-workspace = { path = "../lunco-workspace" }
+
+[lints]
+workspace = true
