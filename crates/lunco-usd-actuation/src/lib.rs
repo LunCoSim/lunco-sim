@@ -1,10 +1,13 @@
-//! Generic USD-authored force and torque actuator lowering.
+//! Composed USD actuation readers for co-simulation projections.
 //!
-//! Actuator descriptions are physical USD intent. This module reads that
-//! intent and produces the generic Avian co-simulation components; controller
-//! policy and command propagation remain in `lunco-cosim`.
+//! Actuator descriptions are physical USD intent. This package reads the
+//! standard composed reader surface and produces the generic co-simulation
+//! actuator components; controller policy and command propagation remain in
+//! `lunco-cosim`.
 
-use crate::transform_in_body_frame;
+#![forbid(unsafe_code)]
+#![warn(missing_docs)]
+
 use bevy::prelude::*;
 use lunco_cosim::{ForceActuator, TorqueActuator};
 use lunco_usd_bevy_core::read::UsdReadObject;
@@ -17,7 +20,6 @@ const TORQUE_ACTUATOR_API: &str = "LunCoTorqueActuatorAPI";
 const TORQUE_AXIS_ATTR: &str = "lunco:torqueActuator:axis";
 const TORQUE_MAX_ATTR: &str = "lunco:torqueActuator:maxTorque";
 
-/// Find the USD rigid-body frame that owns a physical actuator.
 fn actuator_body_path(reader: &dyn UsdReadObject, actuator_path: &SdfPath) -> Option<SdfPath> {
     let mut current = actuator_path.parent();
     while let Some(path) = current {
@@ -32,7 +34,7 @@ fn actuator_body_path(reader: &dyn UsdReadObject, actuator_path: &SdfPath) -> Op
     None
 }
 
-/// Read a force actuator's generic USD description into the Avian boundary.
+/// Read a force actuator's generic USD description.
 pub fn force_actuator_from_usd(
     reader: &dyn UsdReadObject,
     actuator_path: &SdfPath,
@@ -42,14 +44,16 @@ pub fn force_actuator_from_usd(
     }
     let Some(body_path) = actuator_body_path(reader, actuator_path) else {
         warn!(
-            "[usd-avian] force actuator {} has no PhysicsRigidBodyAPI ancestor; actuator ignored",
+            "[usd-actuation] force actuator {} has no PhysicsRigidBodyAPI ancestor; actuator ignored",
             actuator_path
         );
         return None;
     };
-    let Some(relative) = transform_in_body_frame(reader, &body_path, actuator_path) else {
+    let Some(relative) =
+        lunco_usd_bevy_core::transform_in_body_frame(reader, &body_path, actuator_path)
+    else {
         warn!(
-            "[usd-avian] force actuator {} could not derive its body-frame transform",
+            "[usd-actuation] force actuator {} could not derive its body-frame transform",
             actuator_path
         );
         return None;
@@ -67,7 +71,7 @@ pub fn force_actuator_from_usd(
         .filter(|v| v.is_finite() && v.length_squared() > f32::EPSILON);
     let Some(direction_in_prim_frame) = direction else {
         warn!(
-            "[usd-avian] force actuator {} has no finite non-zero {}",
+            "[usd-actuation] force actuator {} has no finite non-zero {}",
             actuator_path, FORCE_DIRECTION_ATTR
         );
         return None;
@@ -75,7 +79,7 @@ pub fn force_actuator_from_usd(
     let direction_local = relative.rotation * direction_in_prim_frame;
     if !direction_local.is_finite() || direction_local.length_squared() <= f32::EPSILON {
         warn!(
-            "[usd-avian] force actuator {} produced an invalid body-frame direction",
+            "[usd-actuation] force actuator {} produced an invalid body-frame direction",
             actuator_path
         );
         return None;
@@ -85,7 +89,7 @@ pub fn force_actuator_from_usd(
         .filter(|v| v.is_finite() && *v > 0.0)
     else {
         warn!(
-            "[usd-avian] force actuator {} has no positive {}",
+            "[usd-actuation] force actuator {} has no positive {}",
             actuator_path, FORCE_MAX_ATTR
         );
         return None;
@@ -97,7 +101,7 @@ pub fn force_actuator_from_usd(
     })
 }
 
-/// Read a torque actuator's generic USD description into the Avian boundary.
+/// Read a torque actuator's generic USD description.
 pub fn torque_actuator_from_usd(
     reader: &dyn UsdReadObject,
     actuator_path: &SdfPath,
@@ -107,7 +111,7 @@ pub fn torque_actuator_from_usd(
     }
     if actuator_body_path(reader, actuator_path).is_none() {
         warn!(
-            "[usd-avian] torque actuator {} has no PhysicsRigidBodyAPI ancestor; actuator ignored",
+            "[usd-actuation] torque actuator {} has no PhysicsRigidBodyAPI ancestor; actuator ignored",
             actuator_path
         );
         return None;
@@ -125,7 +129,7 @@ pub fn torque_actuator_from_usd(
         .filter(|v| v.is_finite() && v.length_squared() > f32::EPSILON);
     let Some(axis_local) = axis else {
         warn!(
-            "[usd-avian] torque actuator {} has no finite non-zero {}",
+            "[usd-actuation] torque actuator {} has no finite non-zero {}",
             actuator_path, TORQUE_AXIS_ATTR
         );
         return None;
@@ -135,7 +139,7 @@ pub fn torque_actuator_from_usd(
         .filter(|v| v.is_finite() && *v > 0.0)
     else {
         warn!(
-            "[usd-avian] torque actuator {} has no positive {}",
+            "[usd-actuation] torque actuator {} has no positive {}",
             actuator_path, TORQUE_MAX_ATTR
         );
         return None;

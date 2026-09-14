@@ -58,8 +58,8 @@ use lunco_usd_avian_core::report_physics_runtime_fault;
 use lunco_usd_avian_filters::collision_groups::{CollisionGroupTable, CollisionGroupTables};
 use lunco_usd_avian_filters::filtered_pairs as collision_filters;
 use lunco_usd_bevy_core::{
-    effective_purpose, local_transform_at, Purpose, TransformReadError, UsdInstanceProjection,
-    UsdInstanceRoot, UsdRead, UsdStageAsset,
+    effective_purpose, local_transform_at, world_transform, Purpose, TransformReadError,
+    UsdInstanceProjection, UsdInstanceRoot, UsdRead, UsdStageAsset,
 };
 use lunco_usd_bevy_scene::{
     instance_key, is_preview_only, read_primitive_axis, read_shape_dims, read_usd_mesh_indexed,
@@ -75,8 +75,6 @@ use openusd::schemas::physics::tokens as ptok;
 // `physics:type` is a schema token with a schema enum — take openusd's rather than
 // re-spelling `"force"`/`"acceleration"` here.
 pub use openusd::schemas::physics::DriveType;
-
-pub mod actuator;
 
 /// Marks an Avian entity synthesized for the currently mounted USD scene.
 ///
@@ -2146,59 +2144,6 @@ fn apply_collision_groups(
     }
 }
 
-/// The composed local-to-world [`Transform`] of `path`: folds the LOCAL transforms
-/// (translate + rotate + **scale**) of every prim available in the read surface down
-/// to it, so an ancestor's scale is baked into a descendant's world position — exactly
-/// how the renderer places it. A prepared reference reader ends at its asset root;
-/// scene ancestors are outside that read surface and contribute no local transform.
-/// The walk skips absent outer ancestors until it reaches the first prim in the
-/// read surface, then requires the remainder of the path to be contiguous. This
-/// preserves the reference-instance boundary without silently bridging a missing
-/// prim inside the composed asset.
-/// An omitted xform stack composes as USD identity; malformed authored data is returned
-/// as an error.
-pub fn world_transform(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
-    path: &SdfPath,
-) -> Result<Transform, TransformReadError> {
-    if !reader.has_prim(path) {
-        return Err(TransformReadError {
-            prim: path.to_string(),
-        });
-    }
-    let mut chain = Vec::new();
-    let mut cur = Some(path.clone());
-    while let Some(p) = cur {
-        if p.is_abs_root() {
-            break;
-        }
-        chain.push(p.clone());
-        cur = p.parent();
-    }
-    let mut acc = Transform::IDENTITY;
-    let mut in_read_surface = false;
-    for p in chain.iter().rev() {
-        // A prepared reference-instance reader deliberately contains the
-        // composed asset subtree, not the owning scene's ancestors. Skip those
-        // absent outer ancestors; once the asset root is found, a missing
-        // interior prim stops composition at that boundary rather than inventing
-        // a transform across the gap. An authored prim that is present still
-        // goes through the strict transform reader below, so malformed USD
-        // remains an error.
-        if !reader.has_prim(p) {
-            if in_read_surface {
-                break;
-            }
-            continue;
-        }
-        in_read_surface = true;
-        if let Some(local) = reader.local_transform_at(p, 0.0)? {
-            acc = acc.mul_transform(local);
-        }
-    }
-    Ok(acc)
-}
-
 /// Rotate a vector authored in a prim's local frame into the composed world
 /// frame. USD physics velocity attributes are local-frame vectors, while
 /// Avian's runtime velocity components are world-frame. Keep that rotation in
@@ -2209,29 +2154,6 @@ fn local_vector_to_world(
     local: DVec3,
 ) -> Result<DVec3, TransformReadError> {
     Ok(world_transform(reader, path)?.rotation.as_dquat() * local)
-}
-
-/// Compose a prim's transform in the local frame of an authored body.
-///
-/// Physical mount points use the body origin and rotation, never the render
-/// world's `GlobalTransform`. The relative transform is derived from the composed
-/// USD read surface so nested component references and intermediate Xforms remain
-/// valid without repeating the mount position in another description.
-pub fn transform_in_body_frame(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
-    body_path: &SdfPath,
-    prim_path: &SdfPath,
-) -> Option<Transform> {
-    let body = world_transform(reader, body_path).ok()?;
-    let prim = world_transform(reader, prim_path).ok()?;
-    let inv = body.rotation.inverse();
-    Some(Transform {
-        translation: inv * (prim.translation - body.translation),
-        rotation: (inv * prim.rotation).normalize(),
-        // Scale is not part of an Avian body frame. The position above already
-        // contains authored ancestor scale, while force directions are vectors.
-        scale: Vec3::ONE,
-    })
 }
 
 /// Derive a joint's local anchors from the composed transform hierarchy, for the

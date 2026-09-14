@@ -10,7 +10,6 @@ avian3d.workspace = true
 openusd = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-spatial = { path = "../lunco-spatial" }
-lunco-cosim = { path = "../lunco-cosim" }
 lunco-physics = { path = "../lunco-physics" }
 lunco-usd-avian-core = { path = "../lunco-usd-avian-core" }
 lunco-usd-avian-filters = { path = "../lunco-usd-avian-filters" }

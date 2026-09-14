@@ -8657,6 +8657,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-usd-actuation"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "lunco-cosim",
+ "lunco-usd-bevy-core",
+ "openusd",
+]
+
+[[package]]
 name = "lunco-usd-avian"
 version = "0.1.0"
 dependencies = [
@@ -8664,7 +8674,6 @@ dependencies = [
  "bevy",
  "big_space",
  "lunco-core",
- "lunco-cosim",
  "lunco-environment",
  "lunco-physics",
  "lunco-spatial",
@@ -8951,6 +8960,7 @@ dependencies = [
  "lunco-physics",
  "lunco-render",
  "lunco-spatial",
+ "lunco-usd-actuation",
  "lunco-usd-avian",
  "lunco-usd-avian-filters",
  "lunco-usd-bevy-camera",
@@ -9064,7 +9074,7 @@ dependencies = [
  "lunco-modelica-core",
  "lunco-modelica-runtime",
  "lunco-signal",
- "lunco-usd-avian",
+ "lunco-usd-actuation",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
  "lunco-usd-compose",
