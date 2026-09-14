@@ -1,0 +1,18 @@
+#usda 1.0
+(
+    defaultPrim = "RouteVariantLifecycle"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# The site choice is authored by the referencing scene, as in the Summer
+# Space School wrapper scene. Route points remain owned by the selected source
+# variant and are edited through canonical composed paths.
+def Xform "RouteVariantLifecycle" (
+    prepend references = @lunco://scenes/base/route_variant_lifecycle_source.usda@</RouteVariantLifecycleSource>
+    variants = {
+        string site = "apollo15"
+    }
+)
+{
+}

@@ -906,6 +906,16 @@ impl UsdDocument {
         .map_err(author_err)?;
         let prim = stage.prim(prim_path.clone());
         if !prim.is_valid().map_err(author_err)? {
+            // A composed child below a reference/payload may have no local
+            // prim spec in this document.  It is still a valid USD local
+            // override target: the stronger layer authors an `over` at the
+            // canonical composed path, then writes the transform opinion.
+            // The live canonical stage remains the authority for resolving
+            // the composed child; the document layer only needs the path and
+            // a fresh local xform order in this case.
+            if self.path_is_under_composed_arc_path(&prim_path) {
+                return Ok((prim_path, Vec::new(), true));
+            }
             return Err(DocumentError::ValidationFailed(format!(
                 "composed transform target `{path}` not found"
             )));
@@ -1976,7 +1986,17 @@ impl Document for UsdDocument {
                         "RemoveXformOp does not support `{name}`"
                     )));
                 }
-                let prim_sdf = self.require_prim_anywhere(&path)?;
+                let prim_sdf = match self.require_prim_anywhere(&path) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        let path = parse_prim_path(&path)?;
+                        if self.path_is_under_composed_arc_path(&path) {
+                            path
+                        } else {
+                            return Err(error);
+                        }
+                    }
+                };
                 let order_path = prim_sdf
                     .append_property("xformOpOrder")
                     .map_err(|error| DocumentError::ValidationFailed(error.to_string()))?;
@@ -2034,7 +2054,17 @@ impl Document for UsdDocument {
                         "RestoreXformOp does not support `{name}`"
                     )));
                 }
-                let prim_sdf = self.require_prim_anywhere(&path)?;
+                let prim_sdf = match self.require_prim_anywhere(&path) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        let path = parse_prim_path(&path)?;
+                        if self.path_is_under_composed_arc_path(&path) {
+                            path
+                        } else {
+                            return Err(error);
+                        }
+                    }
+                };
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
                 stage.override_prim(&prim_sdf).map_err(author_err)?;
                 let conv = authoring_stage_convention(&stage)?;
@@ -4827,9 +4857,16 @@ def Xform \"World\" (\n\
                 .prim_attribute_value::<[f64; 3]>(&rig, "xformOp:scale"),
             Some([2.0, 3.0, 4.0])
         );
-        // The first edit introduced both the attribute and its order entry, so
-        // its inverse remains the existing exact source snapshot.
-        assert!(matches!(first_inverse, UsdOp::ReplaceSource { .. }));
+        // The first edit introduced both the attribute and its order entry;
+        // the generic transform inverse removes only those local opinions.
+        assert!(matches!(
+            first_inverse,
+            UsdOp::RemoveXformOp {
+                name,
+                ref restore_order,
+                ..
+            } if name == "xformOp:scale" && restore_order == &Some(vec!["xformOp:scale".into()])
+        ));
     }
 
     /// The order is the AUTHOR order, not a canonical translate-first order:

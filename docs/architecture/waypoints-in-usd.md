@@ -73,6 +73,10 @@ standard Delete command removes a runtime-only point and deactivates a
 base-authored or referenced point in the runtime layer; it never tries to
 remove a spec from a layer that does not own it. Both paths are journaled and
 feed the same route revision/ribbon refresh.
+For a point below a reference, payload, or selected variant, the canonical
+composed path is the edit identity: the stronger local layer authors an `over`
+and the transform opinion there, and undo/redo removes or restores only that
+local opinion.
 
 ## Progression
 
