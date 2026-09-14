@@ -34,8 +34,8 @@ lunco-luncosim-exposures = { path = "../lunco-luncosim-exposures", default-featu
 lunco-experiments = { path = "../lunco-experiments" }
 serde_json = { workspace = true }
 lunco-cosim = { path = "../lunco-cosim" }
-lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-usd-avian-core = { path = "../lunco-usd-avian-core" }
+lunco-usd-avian-filters = { path = "../lunco-usd-avian-filters" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-scripting = { path = "../lunco-scripting" }
 lunco-usd-bevy-runtime = { path = "../lunco-usd-bevy-runtime" }

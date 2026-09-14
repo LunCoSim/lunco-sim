@@ -6,7 +6,7 @@
 > LunCoSim uses for the 3D world. Bases, rovers, habitats, terrain — everything
 > physical — lives as USD prims in USD stages. See
 > [`../../crates/lunco-usd-core/`](../../crates/lunco-usd-core/), [`../../crates/lunco-usd/`](../../crates/lunco-usd/) and companion crates
-> `lunco-usd-geometry`, `lunco-usd-avian-core`, `lunco-usd-avian`, `lunco-usd-avian-lint`, `lunco-usd-bevy-core`,
+> `lunco-usd-geometry`, `lunco-usd-avian-core`, `lunco-usd-avian-filters`, `lunco-usd-avian`, `lunco-usd-avian-lint`, `lunco-usd-bevy-core`,
 > `lunco-usd-bevy-runtime`, `lunco-usd-bevy-scene`, `lunco-usd-bevy-twin`, `lunco-usd-bevy-camera`, `lunco-usd-bevy-light`, `lunco-usd-bevy-animation`, `lunco-usd-bevy` and
 > `lunco-usd-bevy-lathe`, `lunco-usd-bevy-mesh`, `lunco-usd-queries`, `lunco-usd-sim`,
 > `lunco-usd-sim-core`, `lunco-usd-sim-cosim`, `lunco-usd-sim-cosim-api`,
@@ -46,6 +46,8 @@ directly; and
 `lunco-usd-avian-core` owns the USD-independent Avian/BigSpace physics-frame
 bridge, including f64 pose synchronization, rootless collider propagation,
 frame transport/reset, and backend admission validation;
+`lunco-usd-avian-filters` owns standard USD collision filtering, transient joint
+pair suppression, and Avian's single collision/contact hook;
 `lunco-usd-avian` owns OpenUSD physics projection and generic USD actuator
 lowering;
 `lunco-usd-sim-core` owns the small shared USD-simulation protocol;
@@ -424,7 +426,7 @@ def Cube "Pad" ( prepend apiSchemas = [..., "PhysicsFilteredPairsAPI"] )
 }
 ```
 
-Read by `lunco-usd-avian::filtered_pairs`, which resolves each end to the entity
+Read by `lunco-usd-avian-filters::filtered_pairs`, which resolves each end to the entity
 that actually owns the collider — a collider under a body folds into that body's
 compound shape, so naming either resolves to the body — and hands the pair to
 avian's one `CollisionHooks` slot (`UsdCollisionFilter`, installed by
@@ -444,7 +446,7 @@ Two properties worth knowing:
   place: automatic for adjacency, authored beyond it.
 
 **Group-vs-group** filtering, for when pairs stop scaling (twenty parts is O(n²)
-rels), is `UsdPhysicsCollisionGroup` — read by `lunco-usd-avian::collision_groups`
+rels), is `UsdPhysicsCollisionGroup` — read by `lunco-usd-avian-filters::collision_groups`
 and mapped onto avian `CollisionLayers`, one layer bit per group:
 
 ```usda
@@ -767,6 +769,7 @@ the shipped asset corpus. Ownership follows the narrowest production boundary:
 - `crates/lunco-usd/tests/live_spawn_projection.rs` — document-backed USD authoring and raw asset composition facts
 - `crates/lunco-usd-avian-lint/src/lib.rs` — composed `UsdPhysics` fact production for the authored lint policy
 - `crates/lunco-usd-avian-core/src/lib.rs` — Avian/BigSpace frame bridge and low-level bridge tests
+- `crates/lunco-usd-avian-filters/src/{filtered_pairs,collision_groups}.rs` — standard collision filtering, joint pair suppression, and Avian contact-hook mechanisms; runtime behavior is covered by the production Rhai scene-test assets
 - `crates/lunco-usd-avian/src/lib.rs` — OpenUSD collider/joint extraction mechanisms with in-memory USDA fixtures; shipped asset and runtime ownership stays in the Rhai scene-test gate
 - `crates/lunco-usd-sim-domain/src/lib.rs` — low-level component-network projection and synthesis mechanisms
 - `crates/lunco-usd-sim-cosim/tests/usd_connection_mechanics.rs` — generic connection derivation and transform mechanics

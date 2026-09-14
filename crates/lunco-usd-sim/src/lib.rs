@@ -49,9 +49,8 @@ use avian3d::prelude::*;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
-use lunco_usd_avian::{
-    AuthoredInitialVelocity, PendingJointAdmission, SharedTireContact, ShouldBeDynamic,
-};
+use lunco_usd_avian::{AuthoredInitialVelocity, PendingJointAdmission, ShouldBeDynamic};
+use lunco_usd_avian_filters::filtered_pairs::SharedTireContact;
 use lunco_usd_bevy_camera::camera::{read_camera_exposure_ev100, UsdCameraPose};
 use lunco_usd_bevy_core::read::{read_authored_bool_strict, read_vec3_f64};
 use lunco_usd_bevy_core::{

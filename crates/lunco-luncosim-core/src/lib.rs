@@ -26,8 +26,8 @@ use lunco_modelica_runtime::ModelicaSet;
 use lunco_obstacle_field::ObstacleFieldPlugin;
 use lunco_terrain_globe::TerrainPlugin;
 use lunco_terrain_surface::TerrainSurfacePlugin;
-use lunco_usd_avian::UsdCollisionFilter;
 use lunco_usd_avian_core::BigSpacePhysicsBridgePlugin;
+use lunco_usd_avian_filters::filtered_pairs::UsdCollisionFilter;
 use lunco_usd_bevy_core::read::UsdReadObject;
 use lunco_usd_bevy_core::UsdStageAsset;
 use lunco_usd_bevy_runtime::UsdPlugins;
@@ -1556,7 +1556,7 @@ impl Plugin for LunCoSimCorePlugin {
             // EntityCount is cheap and useful any time we look at perf.
             .add_plugins(bevy::diagnostic::EntityCountDiagnosticsPlugin::default())
             // `with_collision_hooks` installs the ONE pair filter avian allows per
-            // app: authored `PhysicsFilteredPairsAPI` pairs (`lunco-usd-avian`'s
+            // app: authored `PhysicsFilteredPairsAPI` pairs (`lunco-usd-avian-filters`'s
             // `UsdCollisionFilter`). Anything else that must veto a contact belongs
             // in that hook rather than in a second one — there is no second slot.
             .add_plugins(luncosim_physics_plugins())

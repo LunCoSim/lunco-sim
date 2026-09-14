@@ -20,6 +20,7 @@ lunco-usd-sim-celestial = { path = "../lunco-usd-sim-celestial" }
 lunco-usd-sim-shader = { path = "../lunco-usd-sim-shader" }
 lunco-usd-sim-telemetry = { path = "../lunco-usd-sim-telemetry" }
 lunco-usd-avian = { path = "../lunco-usd-avian" }
+lunco-usd-avian-filters = { path = "../lunco-usd-avian-filters" }
 lunco-usd-sim-core = { path = "../lunco-usd-sim-core" }
 # `ShaderLook` + `ParamValue` (the open, WGSL-reflected parameter set).
 # `lunco-materials` is render-free: `shader_material.rs` (the `AsBindGroup` that
