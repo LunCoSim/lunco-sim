@@ -329,7 +329,7 @@ fn ribbon_needs_update(doc, ribbon, geometry, anchor, local_points, local_normal
         || shape.attrs["type"] != "linear"
         || shape.attrs["wrap"] != "nonperiodic"
         || shape.attrs["curveVertexCounts"] != [local_points.len()]
-        || shape.attrs["widths"] != [4.0]
+        || shape.attrs["widths"] != [1.5]
         || !points_equal(shape.attrs["points"], local_points)
         || !points_equal(shape.attrs["normals"], local_normals) {
         return true;
@@ -422,7 +422,7 @@ fn ribbon_ops(doc, route, points) {
         path: geometry,
         name: "widths",
         type_name: "float[]",
-        value: "[4.0]",
+        value: "[1.5]",
     }});
     ops.push(#{ SetAttribute: #{
         edit_target: "@runtime@",

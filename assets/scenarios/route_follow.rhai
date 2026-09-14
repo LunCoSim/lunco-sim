@@ -180,6 +180,16 @@ fn route_entrant_matches(subject, entrant) {
     false
 }
 
+fn route_start_index(me, state) {
+    let cursor = current_point_info(me, state);
+    if cursor.path == () || state.sensor_entered == () { return cursor.index; }
+    let zone = current_zone(me, state);
+    if zone != () && state.sensor_entered[zone] == true {
+        return cursor.index + 1;
+    }
+    cursor.index
+}
+
 fn drive_current_point(me, state) {
     let subject_state = route_subject_state(me);
     let subject = route_subject_for(me, state);
@@ -395,6 +405,7 @@ fn on_start(me) {
     this.route_index = 0;
     this.current_path = ();
     this.subject_id = route_subject(me);
+    this.sensor_entered = #{};
     this.enabled = route_enabled_from_usd(me);
     this.route_revision = ();
     this.route_error = "";
@@ -422,6 +433,18 @@ fn on_event(me, evt) {
         return;
     }
     route_pointer(me, evt);
+    // Avian owns zone occupancy. Keep route-zone enter pulses in the program's
+    // live state even while disabled so starting from the initial point targets
+    // the next point. This is runtime state only; no occupancy is written to
+    // USD.
+    if evt.name.starts_with("enter:") {
+        let subject = route_subject_for(me, this);
+        let zone = evt.name.sub_string(6);
+        if subject >= 0 && route_entrant_matches(subject, evt.value) {
+            if this.sensor_entered == () { this.sensor_entered = #{}; }
+            this.sensor_entered[zone] = true;
+        }
+    }
     let transition = advance_on_sensor(me, evt, this);
     if transition == () { return; }
     if transition.kind == "toggle" {
@@ -429,8 +452,9 @@ fn on_event(me, evt) {
             let started = start_route(me, this);
             if started.ok == true {
                 this.enabled = true;
-                this.route_index = 0;
+                this.route_index = route_start_index(me, this);
                 this.current_path = ();
+                this.sensor_entered = #{};
                 this.route_error = "";
                 emit("route_started");
             } else if this.route_error != started.error {
@@ -447,8 +471,9 @@ fn on_event(me, evt) {
         let started = start_route(me, this);
         if started.ok == true {
             this.enabled = true;
-            this.route_index = 0;
+            this.route_index = route_start_index(me, this);
             this.current_path = ();
+            this.sensor_entered = #{};
             this.route_error = "";
             emit("route_started");
         } else if this.route_error != started.error {

@@ -42,6 +42,17 @@ fn ribbon_count(doc) {
     result.attrs["curveVertexCounts"][0]
 }
 
+fn ribbon_width(doc) {
+    let result = query("QueryUsdPrim", #{
+        doc_id: doc,
+        path: RIBBON_GEOMETRY,
+        attrs: ["widths"],
+    });
+    if result == () || result.ok == false || result.attrs == ()
+        || result.attrs["widths"] == () { return (); }
+    result.attrs["widths"]
+}
+
 fn ribbon_normals_match(doc, count) {
     let result = query("QueryUsdPrim", #{
         doc_id: doc,
@@ -203,6 +214,8 @@ fn on_tick(me) {
             "route program uses the sourceAsset-only USD contract"));
         this.checks.push(t_true(true,
             "route program materializes an oriented ribbon from authored points"));
+        this.checks.push(t_true(ribbon_width(this.doc) == [1.5],
+            "route ribbon keeps a readable annotation width"));
         let listed = program_editor::list(this.doc, ROUTE);
         this.checks.push(t_true(listed.ok && listed.programs.len() == 1
             && listed.programs[0].path == ROUTE + "/Program",

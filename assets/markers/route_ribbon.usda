@@ -48,9 +48,8 @@ def Xform "RouteRibbon"
         int[] curveVertexCounts = [2]
         point3f[] points = [(0, 0, 0), (0, 0, 1)]
         # UsdGeomCurves interprets widths as full ribbon width when normals are
-        # authored. A sub-metre strip collapses to a line at normal terrain
-        # camera distances; the route tool restates this width at runtime.
-        float[] widths = [4.0]
+        # authored. Keep this a readable annotation, not a road-sized surface.
+        float[] widths = [1.5]
         normal3f[] normals = [(0, 1, 0), (0, 1, 0)]
         rel material:binding = </RouteRibbon/Looks/RouteRibbon_Mat>
         bool doubleSided = true
