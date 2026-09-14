@@ -14,6 +14,7 @@ use lunco_api::schema::ApiErrorCode;
 use lunco_core::CommandResults;
 use lunco_core::{on_command, register_commands, Ack, ActiveCommandId, Command, OpId};
 use lunco_doc::DocumentId;
+use lunco_modelica_runtime::ModelicaModel;
 
 use crate::state::ModelicaDocumentRegistry;
 
@@ -217,7 +218,7 @@ pub fn apply_set_model_input(
         }
     }
 
-    let Some(mut model) = world.get_mut::<crate::ModelicaModel>(entity) else {
+    let Some(mut model) = world.get_mut::<ModelicaModel>(entity) else {
         return Err(SetModelInputError::EntityMissingModel { doc: doc.raw() });
     };
     if !model.inputs.contains_key(name) {

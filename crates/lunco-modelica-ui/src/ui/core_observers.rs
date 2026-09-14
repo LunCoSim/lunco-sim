@@ -124,7 +124,7 @@ impl From<&MslLoadState> for MirrorMemo {
     }
 }
 
-/// Drain core live-sim sample batches ([`crate::SimSampleStream`]) into the viz
+/// Drain live-sim sample batches ([`lunco_modelica_runtime::SimSampleStream`]) into the viz
 /// `SignalRegistry` — the reactive UI projection of the running simulation.
 ///
 /// This is the plot-aware half of the old `worker::handle_modelica_responses`
@@ -132,7 +132,7 @@ impl From<&MslLoadState> for MirrorMemo {
 /// clear history on a fresh compile, push every scalar, attach doc-index
 /// descriptions on compile/param-update, and reset the default graph bindings.
 pub fn drain_sim_samples_to_viz(
-    mut stream: ResMut<crate::SimSampleStream>,
+    mut stream: ResMut<lunco_modelica_runtime::SimSampleStream>,
     mut signals: Option<ResMut<SignalRegistry>>,
     mut viz_registry: Option<ResMut<VisualizationRegistry>>,
     doc_registry: Option<Res<crate::state::ModelicaDocumentRegistry>>,
@@ -236,10 +236,10 @@ pub fn drain_sim_samples_to_viz(
     // via the Telemetry panel checkboxes.
 }
 
-/// Reactive UI: project core [`crate::ModelicaNotice`] events into the Console
+/// Reactive UI: project runtime [`lunco_modelica_runtime::ModelicaNotice`] events into the Console
 /// panel. The core worker emits notices; this observer renders them.
 pub fn drain_notices_to_console(
-    mut notices: MessageReader<crate::ModelicaNotice>,
+    mut notices: MessageReader<lunco_modelica_runtime::ModelicaNotice>,
     console: Option<ResMut<crate::ui::panels::console::ConsoleLog>>,
     bus: Option<ResMut<StatusBus>>,
 ) {
@@ -248,12 +248,12 @@ pub fn drain_notices_to_console(
     for n in notices.read() {
         if let Some(console) = console.as_deref_mut() {
             match n.level {
-                crate::NoticeLevel::Info => console.info(n.text.clone()),
-                crate::NoticeLevel::Warn => console.warn(n.text.clone()),
-                crate::NoticeLevel::Error => console.error(n.text.clone()),
+                lunco_modelica_runtime::NoticeLevel::Info => console.info(n.text.clone()),
+                lunco_modelica_runtime::NoticeLevel::Warn => console.warn(n.text.clone()),
+                lunco_modelica_runtime::NoticeLevel::Error => console.error(n.text.clone()),
             }
         }
-        if n.level == crate::NoticeLevel::Error {
+        if n.level == lunco_modelica_runtime::NoticeLevel::Error {
             if let Some(bus) = bus.as_deref_mut() {
                 // A notice is emitted for a worker response, never by a
                 // polling system, so a failure produces one status entry.
@@ -316,11 +316,11 @@ pub fn mirror_source_roots_to_status_bus(
     }
 }
 
-/// Reactive UI: translate core [`crate::CompileRequested`] events into the UI
+/// Reactive UI: translate runtime [`lunco_modelica_runtime::CompileRequested`] events into the UI
 /// `CompileModel` command. The core stepper asks for a compile without ever
 /// naming the UI command type.
 pub fn relay_compile_requests(
-    mut requests: MessageReader<crate::CompileRequested>,
+    mut requests: MessageReader<lunco_modelica_runtime::CompileRequested>,
     mut commands: Commands,
 ) {
     for r in requests.read() {
@@ -475,7 +475,7 @@ mod tests {
     #[test]
     fn standalone_modelica_entities_still_project_live_samples() {
         let mut app = App::new();
-        app.init_resource::<crate::SimSampleStream>()
+        app.init_resource::<lunco_modelica_runtime::SimSampleStream>()
             .init_resource::<SignalRegistry>()
             .init_resource::<VisualizationRegistry>()
             .add_systems(Update, drain_sim_samples_to_viz);
@@ -495,9 +495,9 @@ mod tests {
                 style: serde_json::Value::Null,
             });
         app.world_mut()
-            .resource_mut::<crate::SimSampleStream>()
+            .resource_mut::<lunco_modelica_runtime::SimSampleStream>()
             .batches
-            .push(crate::SimSampleBatch {
+            .push(lunco_modelica_runtime::SimSampleBatch {
                 entity,
                 document: lunco_doc::DocumentId::default(),
                 time: 1.0,
@@ -519,14 +519,14 @@ mod tests {
     #[test]
     fn unselected_modelica_state_is_not_retained() {
         let mut app = App::new();
-        app.init_resource::<crate::SimSampleStream>()
+        app.init_resource::<lunco_modelica_runtime::SimSampleStream>()
             .init_resource::<SignalRegistry>()
             .add_systems(Update, drain_sim_samples_to_viz);
         let entity = app.world_mut().spawn_empty().id();
         app.world_mut()
-            .resource_mut::<crate::SimSampleStream>()
+            .resource_mut::<lunco_modelica_runtime::SimSampleStream>()
             .batches
-            .push(crate::SimSampleBatch {
+            .push(lunco_modelica_runtime::SimSampleBatch {
                 entity,
                 document: lunco_doc::DocumentId::default(),
                 time: 1.0,

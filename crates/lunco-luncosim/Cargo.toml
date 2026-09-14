@@ -67,7 +67,7 @@ lunco-settings = { path = "../lunco-settings", optional = true }
 # not used by the luncosim bin). The `celestial` feature still pulls embed-assets.
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
-lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
+lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 lunco-luncosim-ui = { path = "../lunco-luncosim-ui", default-features = false, optional = true }
 lunco-scripting = { path = "../lunco-scripting" }
 lunco-assets = { workspace = true }
@@ -188,7 +188,6 @@ luncosim = []
 # `window.lunco_api` JS bridge automatically via `cfg(target_arch="wasm32")`.
 api-transport = [
     "dep:lunco-api-transport",
-    "lunco-modelica-core/api",
     "lunco-luncosim-core/api-transport",
     "lunco-luncosim-ui?/api-transport",
 ]

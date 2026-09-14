@@ -37,6 +37,9 @@ use crossbeam_channel::unbounded;
 #[cfg(feature = "api")]
 use lunco_api::executor::DeferredCommandAppExt;
 use lunco_assets::msl_dir;
+use lunco_modelica_runtime::{
+    CompileRequested, ModelicaChannels, ModelicaModel, ModelicaNotice, ModelicaSet, SimSampleStream,
+};
 use rumoca_compile::{Session, SessionConfig};
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
@@ -173,7 +176,6 @@ pub mod sim_target;
 /// Render-free retention of live Modelica variables in the shared telemetry
 /// registry.  Inspection does not depend on a plot binding or a UI plugin.
 pub mod runtime_telemetry;
-pub use runtime_telemetry::{ModelicaSignalLayout, ModelicaSignalProvenance};
 
 /// Core (UI-free) Modelica command helpers — `SetModelInput` application + sim-
 /// bounds resolution — shared by the egui workbench and the headless API server.
@@ -1524,7 +1526,6 @@ pub mod models;
 pub mod msl_remote;
 /// Profile-aware construction boundary for rumoca simulation sessions.
 pub mod simulation_session;
-pub mod source_asset;
 
 pub mod experiments_runner;
 /// The MSL **indexer** — a host-side tool, not a runtime component: it walks the
@@ -1551,11 +1552,7 @@ pub struct ModelicaRunnerResource(pub std::sync::Arc<experiments_runner::Modelic
 /// worker bundle so the UI never blocks on rumoca compile / step.
 #[cfg(target_arch = "wasm32")]
 pub mod worker_transport;
-pub use worker::{
-    handle_modelica_responses, resolve_communication_period_secs, spawn_modelica_requests,
-    validate_communication_period_secs, ModelicaChannels, ModelicaCommand, ModelicaModel,
-    ModelicaResult, DEFAULT_COMMUNICATION_PERIOD_SECS,
-};
+use worker::{handle_modelica_responses, spawn_modelica_requests};
 
 #[cfg(feature = "api")]
 pub mod api_queries;
@@ -1569,81 +1566,6 @@ pub mod api;
 
 /// Shareable model links (encode model source into a URL fragment).
 pub mod model_share;
-/// UI-agnostic per-frame queue of live sim samples.
-///
-/// The core worker handler ([`worker::handle_modelica_responses`]) appends one
-/// [`SimSampleBatch`] per processed step; the reactive UI layer
-/// ([`ui::core_observers::drain_sim_samples_to_viz`]) drains it into
-/// `lunco_viz`. This keeps plot-history capture OUT of the core handler — core
-/// just emits samples; the UI projects them. A headless build has no drainer,
-/// so the queue is bounded at the producer (samples past the cap are dropped —
-/// there's no UI to plot them anyway).
-#[derive(Resource, Default)]
-pub struct SimSampleStream {
-    pub batches: Vec<SimSampleBatch>,
-}
-
-/// UI-agnostic notice emitted by the core (compile lifecycle, worker crash,
-/// …). The reactive UI console observer
-/// ([`ui::core_observers::drain_notices_to_console`]) projects these into the
-/// Console panel. Core never references the console type.
-#[derive(Message, Clone)]
-pub struct ModelicaNotice {
-    pub level: NoticeLevel,
-    pub text: String,
-}
-
-/// Severity of a [`ModelicaNotice`].
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum NoticeLevel {
-    Info,
-    Warn,
-    Error,
-}
-
-/// Core request to (re)compile a model — emitted by the core stepper when a
-/// model needs a stepper but has none yet (interactive "Run before compile").
-/// The reactive UI layer ([`ui::core_observers::relay_compile_requests`])
-/// translates it into the UI `CompileModel` command. Core stays UI-agnostic.
-#[derive(Message, Clone)]
-pub struct CompileRequested {
-    pub doc: lunco_doc::DocumentId,
-    pub class: Option<String>,
-    pub force: bool,
-    pub resume_after_compile: bool,
-}
-
-/// One sim step's observable samples for a single entity.
-pub struct SimSampleBatch {
-    pub entity: Entity,
-    pub document: lunco_doc::DocumentId,
-    pub time: f64,
-    /// `outputs` followed by `detected_symbols` (signal name → value).
-    pub samples: Vec<(String, f64)>,
-    pub is_new_model: bool,
-    pub is_parameter_update: bool,
-}
-
-/// System sets for Modelica's asynchronous worker lifecycle and fixed-step
-/// simulation exchange.
-///
-/// [`HandleResponses`](Self::HandleResponses) belongs to [`Update`]: worker
-/// completion is a wall-clock lifecycle event and must still be applied while
-/// a host temporarily freezes simulation time during scene readiness.  The
-/// [`SpawnRequests`](Self::SpawnRequests) set belongs to [`FixedUpdate`]:
-/// requests advance the deterministic simulation clock and must remain coupled
-/// to the fixed-step transaction.
-///
-/// These sets let downstream code (for example, USD program projection) order
-/// its sync systems relative to the Modelica worker communication.
-#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ModelicaSet {
-    /// Receive async results from the worker thread.
-    HandleResponses,
-    /// Send the next step command to the worker thread.
-    SpawnRequests,
-}
-
 /// Headless Modelica compiler, worker, and simulation plugin.
 ///
 /// UI panels and editor state live in `lunco-modelica-ui` and are not part of
@@ -1785,8 +1707,8 @@ fn build_modelica_core(app: &mut App) {
     // Register the `.mo` asset loader so domain code can fetch source
     // through `AssetServer::load(...)` instead of `std::fs::read_to_string`.
     // See `docs/architecture/40-asset-io.md`.
-    if !app.is_plugin_added::<source_asset::ModelicaSourceAssetPlugin>() {
-        app.add_plugins(source_asset::ModelicaSourceAssetPlugin);
+    if !app.is_plugin_added::<lunco_modelica_runtime::ModelicaSourceAssetPlugin>() {
+        app.add_plugins(lunco_modelica_runtime::ModelicaSourceAssetPlugin);
     }
 
     let msl = msl_dir();

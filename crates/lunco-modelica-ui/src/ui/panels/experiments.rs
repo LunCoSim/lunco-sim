@@ -426,7 +426,7 @@ impl Panel for ExperimentsPanel {
         // simulator entity through the registry (O(1)) and read its
         // `ModelicaModel` directly — no per-frame entity scan (WP-8).
         let live_model = crate::ui::context::simulator_for(ctx, doc_id)
-            .and_then(|e| ctx.get::<crate::worker::ModelicaModel>(e))
+            .and_then(|e| ctx.get::<lunco_modelica_runtime::ModelicaModel>(e))
             .filter(|m| m.document == doc_id);
         if let Some(m) = live_model {
             rows.insert(

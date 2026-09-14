@@ -6,10 +6,9 @@
 //! `handle_modelica_responses` exchange `ModelicaCommand` /
 //! `ModelicaResult` messages with it via crossbeam channels.
 
+use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::VecDeque;
-use std::collections::{BTreeSet, HashMap};
-use std::path::PathBuf;
 
 use bevy::prelude::*;
 use crossbeam_channel::{Receiver, Sender};
@@ -22,6 +21,16 @@ use crate::simulation_session::LiveStepper;
 use crate::ModelicaCompiler;
 use lunco_experiments::solver;
 use lunco_modelica_ast::ast_extract::{strip_input_defaults_with_report, InputDefaultIssue};
+#[cfg(test)]
+use lunco_modelica_runtime::{
+    resolve_communication_period_secs, validate_communication_period_secs,
+    DEFAULT_COMMUNICATION_PERIOD_SECS,
+};
+use lunco_modelica_runtime::{
+    CompileRequested, InFlightModelicaStep, LoadSourceRootPayload, ModelicaChannels,
+    ModelicaCommand, ModelicaModel, ModelicaNotice, ModelicaResult, NoticeLevel, SimSampleBatch,
+    SimSampleStream, MAX_MACRO_STEP_DT,
+};
 use lunco_signal::{SimSnapshot, SimStream};
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -596,7 +605,7 @@ fn finish_compile_work(
                 },
             );
             steppers.insert(entity, (session_id, model_name.clone(), stepper));
-            let _ = tx.send(
+            let _ = tx.send(add_experiment_defaults(
                 ModelicaResult {
                     entity,
                     session_id,
@@ -613,9 +622,9 @@ fn finish_compile_work(
                     loaded_source_root_id: None,
                     compile_diagnostics: unit.default_diagnostics,
                     ..Default::default()
-                }
-                .with_experiment(&comp_res),
-            );
+                },
+                &comp_res,
+            ));
         }
         Err(error) => compile_work_error(tx, &work, &error),
     }
@@ -712,294 +721,7 @@ fn complete_preparation(
     }
 }
 
-/// Channels for communicating with the background simulation worker.
-///
-/// This resource holds the crossbeam channel endpoints that the main Bevy thread
-/// uses to send commands to and receive results from the `modelica_worker` thread.
-#[derive(Resource)]
-pub struct ModelicaChannels {
-    /// Sender for `ModelicaCommand` -> worker
-    pub tx: Sender<ModelicaCommand>,
-    /// Receiver for `ModelicaResult` <- worker
-    pub rx: Receiver<ModelicaResult>,
-    /// Receiver for `ModelicaCommand` <- UI (forwarded to the wasm Web Worker)
-    #[cfg(target_arch = "wasm32")]
-    pub rx_cmd: Receiver<ModelicaCommand>,
-    /// Sender for `ModelicaResult` -> UI (fed by the wasm Web Worker)
-    #[cfg(target_arch = "wasm32")]
-    pub tx_res: Sender<ModelicaResult>,
-}
-
-/// Commands sent to the background simulation worker.
-///
-/// Each command targets a specific Bevy `Entity` and carries a `session_id` for
-/// fencing stale results. The worker owns all `SimulationSession` instances, keyed by entity.
-///
-/// Derives `Serialize`/`Deserialize` so the wasm Web Worker transport can ship
-/// commands over `postMessage`. The `Compile.stream` field carries an
-/// `Arc<ArcSwap<…>>` that can't cross a worker boundary; it's `#[serde(skip)]`
-/// — wasm builds always use the `outputs`-via-result path instead of the
-/// shared snapshot fast-path. Native still uses the shared snapshot
-/// in-process and never touches serde here.
-#[derive(Serialize, Deserialize)]
-pub enum ModelicaCommand {
-    /// Advance simulation by one master-selected communication interval. Sent
-    /// from `spawn_modelica_requests` only at a fixed simulation tick when the
-    /// participant reaches its declared communication point.
-    Step {
-        entity: Entity,
-        session_id: u64,
-        /// Monotonic communication-point sequence within this model session.
-        /// The main thread uses it to reject duplicate, reordered, or late
-        /// results instead of treating every same-session message as the next
-        /// step.
-        step_id: u64,
-        /// FMI-CS-style communication interval selected by the master.
-        /// `dt` is retained as the solver interval; these endpoints are the
-        /// authoritative transaction identity and are validated by the
-        /// worker before integration.
-        start_time: f64,
-        stop_time: f64,
-        model_name: String,
-        inputs: Vec<(String, f64)>,
-        dt: f64,
-    },
-    /// Compile Modelica source code into a DAE and create a new SimulationSession.
-    ///
-    /// The compiled artifact (`DaeCompilationResult`) is cached per entity so
-    /// Reset and Step auto-init rebuild a fresh stepper from it WITHOUT
-    /// recompiling — see [`CachedModel`].
-    Compile {
-        entity: Entity,
-        session_id: u64,
-        model_name: String,
-        source: String,
-        /// Does this model drive a client-predicted body — i.e. did its program
-        /// prim declare `lunco:program:realtimeSafe`?
-        ///
-        /// Carried on the command because the worker thread has no ECS: it is
-        /// the prediction fact solver selection needs. DECLARED upstream, never
-        /// inferred from the compiled DAE: solvability and backend lowering are
-        /// owned by the selected solver.
-        realtime_safe: bool,
-        /// Stable session URI for the primary document (the document's
-        /// canonical identity from `DocumentOrigin::session_uri` — a file
-        /// path, bundled filename, or `Untitled-<id>`). The worker seats
-        /// `source` under THIS key, so the interactive Run, Fast Run,
-        /// Step, and parameter-update paths all key the same document
-        /// identically and rumoca's merge pass never sees it registered
-        /// under two filenames (the duplicate-class bug). NOT a class
-        /// name: a file may declare several top-level classes.
-        doc_uri: String,
-        /// Sources from other open Modelica documents, as
-        /// `(filename, source)` pairs. Loaded into the rumoca
-        /// session before the primary `source` so cross-doc class
-        /// references (e.g. an untitled `RocketStage` referencing
-        /// `AnnotatedRocketStage.Tank` from a sibling untitled
-        /// package) resolve. Empty when only one doc is open.
-        extra_sources: Vec<(String, String)>,
-        /// USD-authored values for Modelica parameters. Parameters are
-        /// compile-time values, so the worker passes these to Rumoca's
-        /// simulation lowering before building the live stepper.
-        #[serde(default)]
-        parameter_overrides: Vec<(String, f64)>,
-        /// Lock-free snapshot handle the worker publishes into after
-        /// every successful Step when the command stays in this address space.
-        /// `None` = result-stream path; main thread still receives per-sample
-        /// data via `ModelicaResult.outputs` and pushes it into
-        /// `SignalRegistry`. When `Some`, the worker updates the
-        /// stream directly and the main-thread handler can skip the
-        /// per-sample push loop.
-        ///
-        /// Skipped by serde: the `Arc<ArcSwap<_>>` only makes sense
-        /// inside one address space. On wasm (Web Worker transport)
-        /// this is always serialized as `None`, using the
-        /// outputs-via-result path. Native is unaffected.
-        #[serde(skip)]
-        stream: Option<SimStream>,
-    },
-    /// Update parameter values by recompiling with modified source code.
-    ///
-    /// Since Modelica parameters are compile-time constants, changing them requires
-    /// recompilation. This command takes the full source with substituted parameter values,
-    /// creates a new stepper, and updates the cached DAE.
-    UpdateParameters {
-        entity: Entity,
-        session_id: u64,
-        model_name: String,
-        source: String,
-    },
-    /// Reset the stepper to initial conditions. Rebuilds a fresh stepper from
-    /// the cached compiled artifact — instant, no recompilation — unless a
-    /// `LoadSourceRoot` has landed since the artifact was built, in which case
-    /// the cached source is recompiled first (see [`rebuild_from_cache`]).
-    Reset { entity: Entity, session_id: u64 },
-    /// Remove the stepper, the cached compiled model, and (native only) the
-    /// entity's on-disk compile temp dirs (entity despawned).
-    Despawn { entity: Entity },
-    /// Load a Modelica source root into the rumoca compile session
-    /// so subsequent Compile commands can resolve types from it.
-    /// Sent by the main-thread pre-Compile gate
-    /// (`source_roots::ensure_loaded`) when a doc references a
-    /// library/package that isn't yet in the session.
-    ///
-    /// Worker handles by routing on `payload`:
-    /// - [`LoadSourceRootPayload::Disk`] → system libraries; calls
-    ///   `compiler.load_source_root(id, &root_dir)`.
-    /// - [`LoadSourceRootPayload::InMemory`] → bundled examples +
-    ///   single workspace files; calls
-    ///   `compiler.load_source_root_in_memory(id, &label, files)`.
-    ///
-    /// Idempotent: rumoca dedups by id. **Blocks the worker thread**
-    /// for the duration of the parse (MSL: ~10-60s cold, ~1-3s
-    /// warm-bundle). Other COMPILE-lane commands queue behind it; Steps of
-    /// already-live models jump ahead via the step lane (see
-    /// [`modelica_worker`]'s scheduling contract).
-    ///
-    /// Bumps the worker's library generation: a newly-loaded root can change
-    /// what cached sources resolve to, so every cached compiled artifact is
-    /// invalidated and the next Reset / Step auto-init recompiles instead of
-    /// reusing it.
-    LoadSourceRoot {
-        /// Library id, e.g. `"Modelica"` or `"AnnotatedRocketStage"`.
-        id: String,
-        /// What to load and how to load it.
-        payload: LoadSourceRootPayload,
-    },
-}
-
-/// Payload for [`ModelicaCommand::LoadSourceRoot`]. Distinguishes
-/// disk-rooted libraries from in-memory sources so the worker can
-/// dispatch to the right rumoca-compile API without losing the
-/// source bytes on the way.
-#[derive(Serialize, Deserialize)]
-pub enum LoadSourceRootPayload {
-    /// Disk-rooted library (MSL, third-party). `root_dir` contains
-    /// `package.mo`. Loaded via
-    /// `Session::load_source_root_tolerant`.
-    Disk { root_dir: PathBuf },
-    /// In-memory `(uri, source)` pairs. Used for bundled examples
-    /// (source comes from the embedded binary via
-    /// `crate::models::get_model`) and workspace files (source
-    /// read from disk by the main thread). `label` shows up in
-    /// rumoca diagnostics.
-    InMemory {
-        label: String,
-        files: Vec<(String, String)>,
-    },
-}
-
 use std::sync::Arc;
-
-/// Results received from the background simulation worker.
-///
-/// Contains simulation outputs, detected symbols, and error information.
-/// The `session_id` field is used by `handle_modelica_responses` to fence stale results.
-///
-/// Derives serde for the wasm Web Worker transport. All fields are plain
-/// data; no special handling required.
-#[derive(Serialize, Deserialize)]
-pub struct ModelicaResult {
-    pub entity: Entity,
-    pub session_id: u64,
-    /// Present on every response to a `Step`, including a step error. Lifecycle
-    /// and source-root responses leave it absent.
-    #[serde(default)]
-    pub step_id: Option<u64>,
-    pub new_time: f64,
-    pub outputs: Vec<(String, f64)>,
-    pub detected_symbols: Vec<(String, f64)>,
-    pub error: Option<String>,
-    pub log_message: Option<String>,
-    pub is_new_model: bool,
-    pub is_parameter_update: bool,
-    pub is_reset: bool,
-    /// Input variable names discovered from the model (input Real ...).
-    /// These can be changed at runtime without recompilation.
-    pub detected_input_names: Vec<String>,
-    /// Modelica `experiment(...)` annotation values, lifted from
-    /// rumoca's `CompilationResult`. Populated only on
-    /// `is_new_model = true` (Compile / UpdateParameters); `None`
-    /// elsewhere. Plumbed end-to-end so the Fast Run toolbar can
-    /// prefill bounds from the model rather than always defaulting
-    /// to 0..1. See `docs/architecture/25-experiments.md` §"Bounds
-    /// from annotation".
-    #[serde(default)]
-    pub experiment_start_time: Option<f64>,
-    #[serde(default)]
-    pub experiment_stop_time: Option<f64>,
-    #[serde(default)]
-    pub experiment_tolerance: Option<f64>,
-    #[serde(default)]
-    pub experiment_interval: Option<f64>,
-    #[serde(default)]
-    pub experiment_solver: Option<String>,
-    /// Detected name of the compiled top-level class. Lets the main
-    /// thread route the `experiment_*` defaults into the runner's
-    /// per-`ModelRef` cache without a second AST pass.
-    #[serde(default)]
-    pub compiled_model_name: Option<String>,
-    /// Set when this result acknowledges a
-    /// [`ModelicaCommand::LoadSourceRoot`]. The main-thread drain
-    /// system uses this to transition the matching
-    /// [`crate::source_roots::SourceRootRegistry`] entry from
-    /// `Loading` to `Ready` (or `Failed` when `error.is_some()`).
-    /// Regular Compile / Step results leave it `None`.
-    #[serde(default)]
-    pub loaded_source_root_id: Option<String>,
-    /// Structured, located compile diagnostics produced alongside
-    /// `error` on a failed Compile (rumoca `StrictCompileReport`
-    /// failures, converted to [`Diagnostic`](lunco_doc::Diagnostic)).
-    /// Each entry may carry a 1-based (line, column) into the user
-    /// document so the Diagnostics panel can render click-to-source
-    /// rows for compile errors — the structured complement to the flat
-    /// `error` summary string. Empty on success and for non-compile
-    /// (solver / reset / parameter) results.
-    #[serde(default)]
-    pub compile_diagnostics: Vec<lunco_doc::Diagnostic>,
-}
-
-impl Default for ModelicaResult {
-    fn default() -> Self {
-        Self {
-            entity: Entity::PLACEHOLDER,
-            session_id: 0,
-            step_id: None,
-            new_time: 0.0,
-            outputs: Vec::new(),
-            detected_symbols: Vec::new(),
-            error: None,
-            log_message: None,
-            is_new_model: false,
-            is_parameter_update: false,
-            is_reset: false,
-            detected_input_names: Vec::new(),
-            experiment_start_time: None,
-            experiment_stop_time: None,
-            experiment_tolerance: None,
-            experiment_interval: None,
-            experiment_solver: None,
-            compiled_model_name: None,
-            loaded_source_root_id: None,
-            compile_diagnostics: Vec::new(),
-        }
-    }
-}
-
-impl ModelicaResult {
-    /// Overlay the `experiment(...)` annotation defaults lifted from a
-    /// compile result onto this message. Single source of the
-    /// `DaeCompilationResult` → `experiment_*` field mapping, which was
-    /// shared by the native and wasm worker compile sites.
-    fn with_experiment(mut self, comp_res: &rumoca_compile::compile::DaeCompilationResult) -> Self {
-        self.experiment_start_time = comp_res.experiment_start_time;
-        self.experiment_stop_time = comp_res.experiment_stop_time;
-        self.experiment_tolerance = comp_res.experiment_tolerance;
-        self.experiment_interval = comp_res.experiment_interval;
-        self.experiment_solver = comp_res.experiment_solver.clone();
-        self
-    }
-}
 
 /// Cached compilation result per entity.
 ///
@@ -1361,6 +1083,9 @@ const LIVE_TOL: f64 = 1e-6;
 /// load, or window focus (A3).
 const LIVE_MICRO_DT: f64 = lunco_core::SECS_PER_TICK / 3.0;
 
+const COMMUNICATION_EPS: f64 = 1e-9;
+const COMMUNICATION_TIME_EPS: f64 = 1e-8;
+
 /// Hard cap on micro-steps integrated inside ONE `Step` command.
 ///
 /// A large deficit can still occur after an intentional pause or a rate change,
@@ -1371,71 +1096,10 @@ const LIVE_MICRO_DT: f64 = lunco_core::SECS_PER_TICK / 3.0;
 /// debt.
 const MAX_MICRO_STEPS_PER_MACRO: u32 = 32;
 
-/// Largest `dt` one `Step` command may carry (= the clamp above, in seconds).
-/// `spawn_modelica_requests` clamps the requested catch-up to this; the worker
-/// clamps again ([`micro_steps_for`]) so a hand-built `Step` can't blow past it.
-pub const MAX_MACRO_STEP_DT: f64 = LIVE_MICRO_DT * MAX_MICRO_STEPS_PER_MACRO as f64;
-
 /// Below this deficit we don't dispatch a `Step` at all — the model is already
 /// at the communication point (within half a micro-step) and a sub-micro-step
 /// `dt` would just round to a full micro-step and overshoot.
 const MIN_MACRO_STEP_DT: f64 = LIVE_MICRO_DT * 0.5;
-
-/// Default communication period for a live Modelica participant.
-///
-/// Modelica is a continuous-time participant, but it is not a 60 Hz render
-/// callback.  The master algorithm samples its inputs and publishes its
-/// outputs at declared communication points; between points the last output is
-/// held.  Ten Hz is the documented semantic default for a participant that
-/// does not author a different period.  A participant that must exchange state
-/// on every physics tick authors one fixed-tick period explicitly.
-pub const DEFAULT_COMMUNICATION_PERIOD_SECS: f64 = 0.1;
-
-const COMMUNICATION_EPS: f64 = 1e-9;
-const COMMUNICATION_TIME_EPS: f64 = 1e-8;
-
-/// Validate a live Modelica communication period against the master clock.
-/// This is shared by USD projection and the runtime participant so a value
-/// cannot be accepted at load time and rejected under a different rule on the
-/// first tick.
-///
-/// The master admits at most one asynchronous transaction for a participant in
-/// one `FixedUpdate`. Communication points therefore must lie on the master
-/// fixed-tick lattice. A sub-tick period would be legal for a standalone FMI
-/// master that runs an inner loop, but this master does not have that second
-/// clock; accepting it would silently make the participant run slow.
-pub fn validate_communication_period_secs(value: f64) -> Result<f64, String> {
-    if !value.is_finite() || !(lunco_core::SECS_PER_TICK..=MAX_MACRO_STEP_DT).contains(&value) {
-        return Err(format!(
-            "invalid Modelica communication period {value:?}; expected a finite value in [{:.9}, {MAX_MACRO_STEP_DT:.9}]s",
-            lunco_core::SECS_PER_TICK
-        ));
-    }
-    let fixed_ticks = (value / lunco_core::SECS_PER_TICK).round();
-    let represented = fixed_ticks * lunco_core::SECS_PER_TICK;
-    if fixed_ticks < 1.0 || (represented - value).abs() > COMMUNICATION_EPS {
-        return Err(format!(
-            "invalid Modelica communication period {value:?}; it must be an integer multiple of the master fixed tick {:.9}s",
-            lunco_core::SECS_PER_TICK
-        ));
-    }
-    Ok(value)
-}
-
-/// Resolve the authored communication-period opinion shared by every USD
-/// Modelica projection. An omitted opinion is the documented schema default;
-/// an explicit missing or invalid value is an authoring error.
-pub fn resolve_communication_period_secs(
-    authored: bool,
-    value: Option<f64>,
-) -> Result<f64, String> {
-    if !authored {
-        return Ok(DEFAULT_COMMUNICATION_PERIOD_SECS);
-    }
-    value
-        .ok_or_else(|| "not a valid authored real value".to_string())
-        .and_then(validate_communication_period_secs)
-}
 
 /// How many [`LIVE_MICRO_DT`] micro-steps a macro step of `dt` seconds becomes.
 ///
@@ -1550,6 +1214,18 @@ fn result_ok(entity: Entity, session_id: u64) -> ModelicaResult {
         session_id,
         ..Default::default()
     }
+}
+
+fn add_experiment_defaults(
+    mut result: ModelicaResult,
+    comp_res: &rumoca_compile::compile::DaeCompilationResult,
+) -> ModelicaResult {
+    result.experiment_start_time = comp_res.experiment_start_time;
+    result.experiment_stop_time = comp_res.experiment_stop_time;
+    result.experiment_tolerance = comp_res.experiment_tolerance;
+    result.experiment_interval = comp_res.experiment_interval;
+    result.experiment_solver = comp_res.experiment_solver.clone();
+    result
 }
 
 fn step_result_ok(entity: Entity, session_id: u64, step_id: u64) -> ModelicaResult {
@@ -3429,7 +3105,7 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
 
                             w.steppers
                                 .insert(entity, (session_id, model_name.clone(), stepper));
-                            send(
+                            send(add_experiment_defaults(
                                 ModelicaResult {
                                     entity,
                                     session_id,
@@ -3449,9 +3125,9 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
                                     // when they'd otherwise run at 0.0 in silence.
                                     compile_diagnostics: unit.default_diagnostics,
                                     ..Default::default()
-                                }
-                                .with_experiment(&comp_res),
-                            );
+                                },
+                                &comp_res,
+                            ));
                         }
                         Err(e) => {
                             send(ModelicaResult {
@@ -3755,189 +3431,6 @@ pub fn process_worker_command<F: FnMut(ModelicaResult)>(
     }
 }
 
-/// One master-issued Modelica communication transaction.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct InFlightModelicaStep {
-    pub step_id: u64,
-    pub start_time: f64,
-    pub stop_time: f64,
-}
-
-/// Component that attaches a Modelica model to an entity.
-///
-/// Holds the model name, session ID, parameters, inputs, and observable variables.
-/// The `is_stepping` flag prevents duplicate Step commands while waiting for results.
-#[derive(Component, Reflect)]
-#[reflect(Component)]
-pub struct ModelicaModel {
-    pub model_name: String,
-    /// Canonical source asset/document URI used for user-facing readiness
-    /// notifications. Empty only for manually constructed models that have no
-    /// source document identity.
-    #[reflect(ignore)]
-    pub source_uri: String,
-    /// The model's OWN clock — `stepper.time()` as of the last result that
-    /// landed. Lags [`Self::target_time`] by at least the in-flight macro step.
-    pub current_time: f64,
-    /// The **world clock this model is coupled to**, in model-local seconds
-    /// (0 at compile/reset). Advanced by exactly one `Time<Fixed>` delta per
-    /// unpaused FIXED TICK — never per render frame (A3). It is compared with
-    /// `next_communication_time`; the worker is asked to integrate only at the
-    /// declared communication points, not at every fixed tick.
-    pub target_time: f64,
-    /// Simulation seconds between Modelica communication points. Inputs are
-    /// sampled and outputs are published at these points; the last published
-    /// output is held between them. This is the explicit co-simulation
-    /// communication policy, not a wall-clock sleep or a render cadence.
-    pub communication_period_secs: f64,
-    /// Next communication point on the model's local clock.
-    #[reflect(ignore)]
-    pub next_communication_time: f64,
-    pub last_step_time: f64,
-    pub session_id: u64,
-    pub paused: bool,
-    /// Tunable constants (parameter Real ...)
-    pub parameters: HashMap<String, f64>,
-    /// Control inputs (input Real ...)
-    pub inputs: HashMap<String, f64>,
-    /// Input names reported by the successfully compiled DAE.
-    ///
-    /// This is deliberately separate from [`Self::inputs`]. Callers may seed
-    /// that map from an authored interface while a source asset is loading, so
-    /// it is a write buffer, not evidence that the compiler accepted a port.
-    /// The worker owns this set because only its compile result is authoritative
-    /// about the live solver interface.
-    #[reflect(ignore)]
-    pub compiled_input_names: BTreeSet<String>,
-    /// All other observable variables (Real soc, etc)
-    pub variables: HashMap<String, f64>,
-    /// Last compile or solver failure for this model.
-    ///
-    /// This persists after the one-shot notice is consumed so status
-    /// projections remain truthful. Any successful worker response clears it.
-    #[reflect(ignore)]
-    pub last_error: Option<String>,
-    /// Canonical id of the Modelica source document backing this entity,
-    /// looked up in [`crate::state::ModelicaDocumentRegistry`]. `DocumentId::default()`
-    /// (`0`) means "no document assigned yet"; systems should treat it as
-    /// a miss. Not reflected — ids are session-local allocations, not
-    /// scene-serializable.
-    #[reflect(ignore)]
-    pub document: lunco_doc::DocumentId,
-    /// `true` while a `Step` request is in flight to the worker.
-    /// Cleared when the response arrives in
-    /// [`handle_modelica_responses`]. Distinct from
-    /// [`Self::is_compiling`] — a long-running compile must NOT count
-    /// as a hung step (that conflation is what made the dispatcher's
-    /// "worker hung?" warning spam every frame for the duration of a
-    /// slow Modelica compile).
-    #[reflect(ignore)]
-    pub is_stepping: bool,
-    /// Exact communication transaction awaiting a worker result. A boolean
-    /// alone cannot fence a reordered or duplicate same-session response.
-    #[reflect(ignore)]
-    pub in_flight_step: Option<InFlightModelicaStep>,
-    /// Next communication-point sequence in the current model session.
-    #[reflect(ignore)]
-    pub next_step_id: u64,
-    /// `true` while a `Compile` request is in flight to the worker.
-    /// Set by the `CompileModel` observer, cleared when a compile-
-    /// shaped result (`is_new_model` / `is_parameter_update`) lands.
-    /// Compiles can take seconds (occasionally minutes for MSL-heavy
-    /// examples); the dispatcher uses this to suppress its
-    /// step-hang warning while a compile is legitimately running.
-    #[reflect(ignore)]
-    pub is_compiling: bool,
-    /// `true` after a successful Compile has installed a stepper for
-    /// this entity in the Modelica worker. `spawn_modelica_requests`
-    /// uses this to dispatch a Compile (instead of a doomed Step) when
-    /// the user clicks Run on a never-compiled model. Reset to `false`
-    /// when a result reports an error or a fresh Compile is in flight.
-    #[reflect(ignore)]
-    pub is_compiled: bool,
-    /// Document `generation_owned()` at the last SUCCESSFUL compile.
-    /// Compared against the document's current generation to decide
-    /// staleness: `stale = !is_compiled || compiled_generation != gen`.
-    /// A stale model needs a recompile before live stepping is valid.
-    #[reflect(ignore)]
-    pub compiled_generation: u64,
-    /// Document generation captured at the moment a Compile is
-    /// dispatched. Promoted to [`Self::compiled_generation`] when that
-    /// compile reports success, so an edit landing mid-compile doesn't
-    /// mark the just-built model as already up to date.
-    #[reflect(ignore)]
-    pub pending_generation: u64,
-    /// Transient flag set by `RunActiveModel` when a compile-if-stale is
-    /// needed before play: the post-compile success handler unpauses the
-    /// model (instead of leaving it paused) and clears this. A plain
-    /// Compile leaves it `false`, so compiling never auto-starts a live
-    /// sim.
-    #[reflect(ignore)]
-    pub resume_after_compile: bool,
-}
-
-impl ModelicaModel {
-    /// Validate the authored communication period before the master uses it.
-    ///
-    /// The schema default is installed by [`Default`] for programmatically
-    /// constructed models and by the USD projection for authored programs.
-    /// Once a value exists, an invalid value is a configuration error—not a
-    /// request to substitute another schedule. This keeps a malformed model
-    /// from producing plausible but incorrectly timed results.
-    #[inline]
-    pub fn validated_communication_period_secs(&self) -> Result<f64, String> {
-        validate_communication_period_secs(self.communication_period_secs)
-    }
-
-    /// Recompute the next communication point from the model's current clock.
-    ///
-    /// No defaulting occurs here: callers must surface the returned error and
-    /// keep the participant out of the live simulation until its authored
-    /// schedule is repaired.
-    #[inline]
-    pub fn reset_communication_schedule(&mut self) -> Result<(), String> {
-        let period = self.validated_communication_period_secs()?;
-        self.next_communication_time = self.current_time + period;
-        Ok(())
-    }
-}
-
-impl Default for ModelicaModel {
-    fn default() -> Self {
-        Self::default_fields()
-    }
-}
-
-impl ModelicaModel {
-    fn default_fields() -> Self {
-        Self {
-            model_name: String::new(),
-            source_uri: String::new(),
-            current_time: 0.0,
-            target_time: 0.0,
-            communication_period_secs: DEFAULT_COMMUNICATION_PERIOD_SECS,
-            next_communication_time: DEFAULT_COMMUNICATION_PERIOD_SECS,
-            last_step_time: 0.0,
-            session_id: 0,
-            paused: false,
-            parameters: HashMap::new(),
-            inputs: HashMap::new(),
-            compiled_input_names: BTreeSet::new(),
-            variables: HashMap::new(),
-            last_error: None,
-            document: lunco_doc::DocumentId::default(),
-            is_stepping: false,
-            in_flight_step: None,
-            next_step_id: 1,
-            is_compiling: false,
-            is_compiled: false,
-            compiled_generation: 0,
-            pending_generation: 0,
-            resume_after_compile: false,
-        }
-    }
-}
-
 /// Tears the model down on the worker when its `ModelicaModel` component goes away, so a
 /// despawned entity does not leave a `SimulationSession` alive in the worker thread.
 /// Registered in `lib.rs` (`.add_observer(worker::on_remove_modelica)`).
@@ -4016,7 +3509,7 @@ pub fn spawn_modelica_requests(
     faults: Option<ResMut<lunco_core::RuntimeFaults>>,
     // Auto-compile request goes out as a core event; the UI relays it to the
     // `CompileModel` command. Core no longer references the UI command.
-    mut compile_requests: MessageWriter<crate::CompileRequested>,
+    mut compile_requests: MessageWriter<CompileRequested>,
 ) {
     // The FIXED delta — constant (1/`FIXED_HZ`) by construction. `rate` bursts
     // show up as MORE fixed ticks, never as a longer one, so accumulating it
@@ -4073,7 +3566,7 @@ pub fn spawn_modelica_requests(
             let doc = model.document;
             let compile_in_flight = model.is_compiling || model.is_stepping;
             if doc != lunco_doc::DocumentId::default() && !compile_in_flight {
-                compile_requests.write(crate::CompileRequested {
+                compile_requests.write(CompileRequested {
                     doc,
                     class: if model.model_name.is_empty() {
                         None
@@ -4282,11 +3775,11 @@ pub fn handle_modelica_responses(
     documents: Option<Res<crate::state::ModelicaDocumentRegistry>>,
     // Lifecycle messages leave as core events; the reactive UI console observer
     // projects them. Core no longer references the console panel.
-    mut notices: MessageWriter<crate::ModelicaNotice>,
+    mut notices: MessageWriter<ModelicaNotice>,
     // Live sim samples leave the core handler through this UI-agnostic queue;
     // the reactive UI viz observer (`ui::core_observers::drain_sim_samples_to_viz`)
     // drains it into `lunco_viz`. Core no longer references any viz/plot types.
-    mut sample_stream: ResMut<crate::SimSampleStream>,
+    mut sample_stream: ResMut<SimSampleStream>,
     runner_res: Option<Res<crate::ModelicaRunnerResource>>,
     source_roots: Option<ResMut<crate::source_roots::SourceRootRegistry>>,
     participants: Option<Res<lunco_core::SimulationBarrierParticipants>>,
@@ -4357,8 +3850,8 @@ pub fn handle_modelica_responses(
         if result.entity == Entity::PLACEHOLDER {
             let msg = "Simulation worker crashed and restarted.";
             warn!("{msg}");
-            notices.write(crate::ModelicaNotice {
-                level: crate::NoticeLevel::Error,
+            notices.write(ModelicaNotice {
+                level: NoticeLevel::Error,
                 text: msg.to_string(),
             });
             continue;
@@ -4493,8 +3986,8 @@ pub fn handle_modelica_responses(
                 // update). Skip the per-Step logs so the console doesn't
                 // flood at 60 Hz.
                 if result.is_new_model || result.is_reset || result.is_parameter_update {
-                    notices.write(crate::ModelicaNotice {
-                        level: crate::NoticeLevel::Info,
+                    notices.write(ModelicaNotice {
+                        level: NoticeLevel::Info,
                         text: format!("[{}] {msg}", model.model_name),
                     });
                 }
@@ -4533,8 +4026,8 @@ pub fn handle_modelica_responses(
                                     "[Modelica] Compile finished with error for `{}` in {}",
                                     model.model_name, human
                                 );
-                                notices.write(crate::ModelicaNotice {
-                                    level: crate::NoticeLevel::Error,
+                                notices.write(ModelicaNotice {
+                                    level: NoticeLevel::Error,
                                     text: format!(
                                         "⏹ Compile FAILED: '{}' in {}",
                                         model.model_name, human
@@ -4546,8 +4039,8 @@ pub fn handle_modelica_responses(
                                     "[Modelica] Compile finished for `{}` in {}",
                                     model.model_name, human
                                 );
-                                notices.write(crate::ModelicaNotice {
-                                    level: crate::NoticeLevel::Info,
+                                notices.write(ModelicaNotice {
+                                    level: NoticeLevel::Info,
                                     text: format!(
                                         "✓ Compile finished: '{}' in {}",
                                         model.model_name, human
@@ -4592,8 +4085,8 @@ pub fn handle_modelica_responses(
                 } else {
                     "Solver error"
                 };
-                notices.write(crate::ModelicaNotice {
-                    level: crate::NoticeLevel::Error,
+                notices.write(ModelicaNotice {
+                    level: NoticeLevel::Error,
                     text: format!("[{}] {prefix}: {err}", model.model_name),
                 });
                 // A failed in-flight solver step has no valid replacement
@@ -4756,7 +4249,7 @@ pub fn handle_modelica_responses(
                     .chain(result.detected_symbols.iter())
                     .map(|(n, v)| (n.clone(), *v))
                     .collect();
-                sample_stream.batches.push(crate::SimSampleBatch {
+                sample_stream.batches.push(SimSampleBatch {
                     entity: result.entity,
                     document: model.document,
                     time: time_val,

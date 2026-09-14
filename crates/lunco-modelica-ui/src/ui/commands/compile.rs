@@ -23,13 +23,15 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_doc::DocumentId;
+use lunco_modelica_runtime::{
+    ModelicaChannels, ModelicaCommand, ModelicaModel, DEFAULT_COMMUNICATION_PERIOD_SECS,
+};
 use std::collections::{BTreeSet, HashMap};
 
 use lunco_core::{on_command, register_commands, Command};
 
 use crate::state::ModelicaDocumentRegistry;
 use crate::ui::workbench_state::WorkbenchState;
-use crate::{ModelicaChannels, ModelicaCommand, ModelicaModel};
 use lunco_doc_bevy::DocumentDiagnostics;
 
 use super::{entity_for_doc, resolve_doc_or_active};
@@ -1007,8 +1009,8 @@ pub fn on_compile_model(
                     // (A3 — the macro-step target, advanced one fixed-tick delta
                     // per tick by `spawn_modelica_requests`).
                     target_time: 0.0,
-                    communication_period_secs: crate::worker::DEFAULT_COMMUNICATION_PERIOD_SECS,
-                    next_communication_time: crate::worker::DEFAULT_COMMUNICATION_PERIOD_SECS,
+                    communication_period_secs: DEFAULT_COMMUNICATION_PERIOD_SECS,
+                    next_communication_time: DEFAULT_COMMUNICATION_PERIOD_SECS,
                     last_step_time: 0.0,
                     session_id,
                     // Newly-compiled model starts paused/ready — no auto-start.
@@ -2349,10 +2351,10 @@ pub fn on_reset_active_model(trigger: On<ResetActiveModel>, mut commands: Comman
             model.variables.clear();
             model.session_id
         };
-        if let Some(channels) = world.get_resource::<crate::ModelicaChannels>() {
+        if let Some(channels) = world.get_resource::<lunco_modelica_runtime::ModelicaChannels>() {
             let _ = channels
                 .tx
-                .send(crate::ModelicaCommand::Reset { entity, session_id });
+                .send(lunco_modelica_runtime::ModelicaCommand::Reset { entity, session_id });
         }
     });
 }

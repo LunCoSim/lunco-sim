@@ -1,8 +1,8 @@
 //! Data snapshots for canvas-visual consumption.
 
 use crate::state::ModelicaDocumentRegistry;
-use crate::ModelicaModel;
 use bevy_egui::egui;
+use lunco_modelica_runtime::ModelicaModel;
 use lunco_workbench_core::PanelCtx;
 
 /// Publish the active diagram's namespace into the canvas snapshot. This is

@@ -6,7 +6,7 @@ use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
 use crate::ui::viz::{is_signal_plotted, set_signal_plotted};
 use crate::ui::workbench_state::WorkbenchState;
-use crate::ModelicaModel;
+use lunco_modelica_runtime::ModelicaModel;
 
 /// Per-input metadata snapshot — built once per render from
 /// [`crate::index::ModelicaIndex`] so the grid loop doesn't reborrow

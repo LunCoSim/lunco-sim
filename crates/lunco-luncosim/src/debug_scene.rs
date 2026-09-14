@@ -145,7 +145,7 @@ use bevy::time::TimeUpdateStrategy;
 use lunco_core::telemetry::{TelemetryEvent, TelemetryValue};
 use lunco_cosim::UsdSourcedCosim;
 use lunco_luncosim_core::LunCoSimHeadlessPlugin;
-use lunco_modelica_core::ModelicaModel;
+use lunco_modelica_runtime::ModelicaModel;
 use lunco_usd_core::document::UsdDocument;
 use lunco_usd_sim_cosim::PendingModelicaSource;
 

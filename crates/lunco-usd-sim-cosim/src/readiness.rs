@@ -25,7 +25,7 @@
 //! wait either still describes the world or it does not.
 
 use bevy::prelude::*;
-use lunco_modelica_core::ModelicaModel;
+use lunco_modelica_runtime::ModelicaModel;
 use lunco_readiness::{kinds, ReadinessRegistry, ReadinessTicket, Subject};
 
 use crate::SceneLoadInFlight;

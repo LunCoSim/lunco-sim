@@ -71,6 +71,7 @@ path = "src/bin/lunica.rs"
 [dependencies]
 bevy.workspace = true
 lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
+lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 # The whole egui IDE stack is UI-only. Optional behind `ui` so the Modelica
 # COMPILE CORE (ModelicaCorePlugin: channels + worker + .mo loader + dispatch)
 # builds headless (`default-features = false`) for a server running cosim — no

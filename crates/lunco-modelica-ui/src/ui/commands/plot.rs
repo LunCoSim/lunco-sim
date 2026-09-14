@@ -71,7 +71,10 @@ pub fn on_new_plot_panel(trigger: On<NewPlotPanel>, mut commands: Commands) {
             format!("Plot #{}", id.0)
         };
         let model_entity = world
-            .query::<(bevy::prelude::Entity, &crate::ModelicaModel)>()
+            .query::<(
+                bevy::prelude::Entity,
+                &lunco_modelica_runtime::ModelicaModel,
+            )>()
             .iter(world)
             .next()
             .map(|(e, _)| e);
@@ -131,7 +134,10 @@ pub fn on_add_signal_to_plot(trigger: On<AddSignalToPlot>, mut commands: Command
             VizId(ev.plot)
         };
         let model_entity = world
-            .query::<(bevy::prelude::Entity, &crate::ModelicaModel)>()
+            .query::<(
+                bevy::prelude::Entity,
+                &lunco_modelica_runtime::ModelicaModel,
+            )>()
             .iter(world)
             .next()
             .map(|(e, _)| e)

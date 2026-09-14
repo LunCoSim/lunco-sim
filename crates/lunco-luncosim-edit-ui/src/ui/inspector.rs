@@ -733,10 +733,10 @@ pub(crate) fn on_modelica_parameter_requested(
 ) {
     let request = trigger.event().clone();
     commands.queue(move |world: &mut World| {
+        use lunco_modelica_runtime::{ModelicaChannels, ModelicaCommand, ModelicaModel};
         use lunco_modelica_ui::document::ModelicaOp;
         use lunco_modelica_ui::state::ModelicaDocumentRegistry;
         use lunco_modelica_ui::ui::panels::canvas_diagram::apply_ops_public;
-        use lunco_modelica_ui::{ModelicaChannels, ModelicaCommand, ModelicaModel};
 
         let mut session_id = 0u64;
         let mut model_name = String::new();
@@ -1864,7 +1864,7 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
 
     // ── Modelica parameters component ───────────────────────────
     let has_modelica = ctx
-        .get::<lunco_modelica_ui::ModelicaModel>(entity)
+        .get::<lunco_modelica_runtime::ModelicaModel>(entity)
         .is_some();
     if has_modelica {
         egui::CollapsingHeader::new("Modelica Parameters")
@@ -3928,7 +3928,7 @@ fn shader_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Enti
 /// entity's Modelica model. Reads params via [`PanelCtx::get`]; the op
 /// dispatch + recompile signal run in the typed request observer.
 fn modelica_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
-    use lunco_modelica_ui::ModelicaModel;
+    use lunco_modelica_runtime::ModelicaModel;
 
     // Snapshot the current params so we can render stable sliders.
     let params = match ctx.get::<ModelicaModel>(entity) {

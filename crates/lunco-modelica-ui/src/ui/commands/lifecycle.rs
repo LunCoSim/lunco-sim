@@ -1374,7 +1374,7 @@ pub fn on_get_file(trigger: On<GetFile>) {
     let path = trigger.event().path.clone();
     // `lunco-storage` (native fs / wasm localStorage): `GetFile` is an API
     // command, and the API is served in the browser build too.
-    match crate::source_asset::read_text_sync(std::path::Path::new(&path)) {
+    match lunco_modelica_runtime::source_asset::read_text_sync(std::path::Path::new(&path)) {
         Ok(content) => {
             bevy::log::info!(
                 "[GetFile] {} ({} bytes) -- BEGIN --\n{}\n-- END --",

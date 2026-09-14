@@ -115,7 +115,7 @@ impl Plugin for ModelicaWorkbenchPlugin {
 fn sim_focus_pace(
     settings: Option<ResMut<bevy::winit::WinitSettings>>,
     pending: Option<Res<experiments_runner::PendingHandles>>,
-    models: Query<&worker::ModelicaModel>,
+    models: Query<&lunco_modelica_runtime::ModelicaModel>,
     keep_awake: Option<Res<lunco_core::KeepAwake>>,
     mut idle: Local<Option<bevy::winit::UpdateMode>>,
 ) {

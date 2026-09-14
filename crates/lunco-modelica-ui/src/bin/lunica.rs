@@ -35,7 +35,9 @@ use bevy::prelude::*;
 use lunco_modelica_ui::ModelicaWorkbenchPlugin;
 
 #[cfg(all(target_arch = "wasm32", feature = "ui"))]
-use lunco_modelica_ui::{models::bundled_models, ModelicaModel};
+use lunco_modelica_runtime::ModelicaModel;
+#[cfg(all(target_arch = "wasm32", feature = "ui"))]
+use lunco_modelica_ui::models::bundled_models;
 #[cfg(all(target_arch = "wasm32", feature = "ui"))]
 use std::path::PathBuf;
 
@@ -176,9 +178,9 @@ fn main() {
     #[cfg(feature = "ui")]
     if !headless {
         app.insert_resource(lunco_workbench::BuildIdentity::new(
-            lunco_modelica_ui::PRODUCT_VERSION,
-            lunco_modelica_ui::GIT_SHA,
-            lunco_modelica_ui::REPOSITORY_URL,
+            lunco_modelica_core::PRODUCT_VERSION,
+            lunco_modelica_core::GIT_SHA,
+            lunco_modelica_core::REPOSITORY_URL,
         ));
         app.add_plugins(ModelicaWorkbenchPlugin::default());
         // Frame pacing: Continuous focused (vsync paces Update); low-power
@@ -200,7 +202,7 @@ fn main() {
     // headless.)
     #[cfg(not(target_arch = "wasm32"))]
     if headless {
-        app.add_plugins(lunco_modelica_ui::ModelicaCorePlugin);
+        app.add_plugins(lunco_modelica_core::ModelicaCorePlugin);
         app.add_plugins(bevy::app::ScheduleRunnerPlugin::run_loop(
             std::time::Duration::from_secs_f64(1.0 / lunco_core::FIXED_HZ),
         ));
@@ -397,7 +399,7 @@ struct WebWorkbench;
 #[cfg(all(target_arch = "wasm32", feature = "ui"))]
 fn setup_web_workbench(
     mut commands: Commands,
-    channels: Res<lunco_modelica_ui::ModelicaChannels>,
+    channels: Res<lunco_modelica_runtime::ModelicaChannels>,
     mut workbench_state: ResMut<lunco_modelica_ui::ui::workbench_state::WorkbenchState>,
     mut doc_registry: ResMut<lunco_modelica_ui::state::ModelicaDocumentRegistry>,
     compile_states: ResMut<lunco_doc_bevy::DocumentDiagnostics>,

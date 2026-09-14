@@ -1,0 +1,20 @@
+[package]
+name = "lunco-modelica-runtime"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Render-free Modelica runtime components, worker protocol, and source assets"
+
+[dependencies]
+anyhow = { workspace = true }
+bevy.workspace = true
+crossbeam-channel = { workspace = true }
+lunco-core = { path = "../lunco-core" }
+lunco-doc = { path = "../lunco-doc" }
+lunco-modelica-ast = { path = "../lunco-modelica-ast" }
+lunco-signal = { path = "../lunco-signal" }
+lunco-storage = { path = "../lunco-storage" }
+serde = { workspace = true }
+
+[lints]
+workspace = true

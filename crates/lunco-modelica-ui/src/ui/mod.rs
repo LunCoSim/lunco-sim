@@ -122,7 +122,7 @@ pub mod doc_pin;
 /// Document hot-exit codec — persists & restores open Modelica buffers.
 pub mod session_codec;
 
-use crate::ModelicaModel;
+use lunco_modelica_runtime::ModelicaModel;
 
 /// Shadow-sync observer: Modelica doc opened → register entry in the
 /// Workspace session. The Workspace list is populated from the Modelica
@@ -163,7 +163,7 @@ fn close_drilled_tabs_on_class_removed(
     mut watermark: ResMut<ClassRemovedWatermark>,
     mut experiments: Option<ResMut<lunco_experiments::ExperimentRegistry>>,
     mut drafts: Option<ResMut<crate::experiments_runner::ExperimentDrafts>>,
-    mut steppers: Query<&mut crate::ModelicaModel>,
+    mut steppers: Query<&mut ModelicaModel>,
 ) {
     use lunco_doc::Document as _;
     let doc = trigger.event().doc;
