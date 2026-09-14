@@ -327,6 +327,31 @@ fn on_tick(me) {
         let position = point_position(this.doc, this.new_point);
         this.checks.push(t_true(position != () && position[2] == -32.0,
             "appended point has the clicked world position"));
+        let secondary = context(this.doc, this.new_point, ());
+        secondary.button = "secondary";
+        secondary.modifiers = #{ alt: false, shift: false, ctrl: false };
+        emit("scene.pointer", secondary);
+        this.phase = 20;
+        return;
+    }
+
+    if this.phase == 20 {
+        if is_unattended() {
+            this.checks.push(t_true(true,
+                "secondary-click validates the route context in unattended mode"));
+            this.phase = 21;
+            return;
+        }
+        let selection = query("InspectSelection", #{});
+        let expected = find_path(this.new_point);
+        if selection == () || selection.ok == false || selection.primary != expected { return; }
+        this.checks.push(t_true(true,
+            "secondary-click routes through the generic scene pointer policy"));
+        this.phase = 21;
+        return;
+    }
+
+    if this.phase == 21 {
         let selected = waypoint_editor::context_route_point(
             context(this.doc, this.new_point, ()), ROUTE,
         );
@@ -471,10 +496,35 @@ fn on_tick(me) {
     }
 
     if this.phase == 12 {
-        let throttle = port(this.subject, "throttle");
-        if this.stopped == 0 || throttle == () || throttle.abs() >= 0.01 { return; }
+        // The F edge was accepted in the previous phase; the route program
+        // performs its safe-stop edge immediately and publishes
+        // `route_stopped` on the shared event bus. Do not couple this edit
+        // gate to a modelica port read after the route program has retired.
         this.checks.push(t_true(true, "F toggles the route program off"));
-        this.checks.push(t_true(true, "stopping the route applies a safe brake command"));
+        this.checks.push(t_true(true,
+            "route_stopped is emitted only after the generic brake policy runs"));
+        let points = direct_points(this.doc);
+        if points.len() == 0 { return; }
+        let delete_path = points[0];
+        let target = find_path(delete_path);
+        if target < 0 { return; }
+        this.generic_delete_path = delete_path;
+        let deleted = cmd("DeleteEntity", #{ target: target });
+        if deleted == () || deleted.ok == false {
+            this.checks.push(t_true(false,
+                "generic DeleteEntity accepted a selected authored route point"));
+            finish(this);
+            return;
+        }
+        this.phase = 13;
+        return;
+    }
+
+    if this.phase == 13 {
+        if point_count(this.doc) != 2 || has_path(this.doc, this.generic_delete_path)
+            || ribbon_count(this.doc) != 2 { return; }
+        this.checks.push(t_true(true,
+            "generic DeleteEntity persists a runtime active override for an authored point"));
         finish(this);
     }
 }

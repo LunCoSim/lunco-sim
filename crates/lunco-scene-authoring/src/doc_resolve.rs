@@ -237,8 +237,14 @@ pub fn resolve_doc_for_entity(world: &World, entity: Entity) -> Option<lunco_doc
         })
 }
 
-/// Resolve the active USD document and the entity's owned prim path for a
+/// Resolve the active USD document and the entity's authorable prim path for a
 /// journaled authoring operation.
+///
+/// A composed child below a reference or payload is not present in either
+/// document layer, but it is still editable through a stronger local opinion.
+/// The live entity already came from the composed stage, while the document
+/// owns the arc that makes that path addressable. Keep that standard USD case
+/// on the same generic authoring path as directly authored prims.
 pub fn authorable_prim(
     entity: Entity,
     q_prim: &Query<&UsdPrimPath>,
@@ -251,5 +257,51 @@ pub fn authorable_prim(
     let prim_sdf = SdfPath::new(&prim.path).ok()?;
     let owned = host.document().data().spec(&prim_sdf).is_some()
         || host.document().runtime_data().spec(&prim_sdf).is_some();
-    owned.then(|| (doc, prim.path.clone()))
+    let under_composed_arc = host
+        .document()
+        .path_is_under_composed_arc(&prim.path)
+        .ok()?;
+    (owned || under_composed_arc).then(|| (doc, prim.path.clone()))
+}
+
+/// The generic persistent-delete target for a document-backed prim.
+///
+/// Runtime-only prims can be removed from the runtime layer. A base-authored
+/// prim, or a child supplied by a reference/payload, must instead receive a
+/// stronger runtime `active = false` opinion: `RemovePrim @runtime@` cannot
+/// remove a spec that the runtime layer does not own. This is the standard USD
+/// non-destructive override and keeps the base Twin layer unchanged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeleteTarget {
+    RemoveRuntime,
+    DeactivateRuntime,
+}
+
+/// Resolve the document/path and the USD operation shape for a persistent
+/// generic delete.
+pub fn delete_target(
+    entity: Entity,
+    q_prim: &Query<&UsdPrimPath>,
+    usd_registry: &DocumentRegistry<UsdDocument>,
+    workspace: Option<&lunco_workspace::WorkspaceResource>,
+) -> Option<(lunco_doc::DocumentId, String, DeleteTarget)> {
+    let doc = workspace?.0.active_document?;
+    let host = usd_registry.host(doc)?;
+    let prim = q_prim.get(entity).ok()?;
+    let prim_sdf = SdfPath::new(&prim.path).ok()?;
+    let root_authored = host.document().data().spec(&prim_sdf).is_some();
+    let runtime_authored = host.document().runtime_data().spec(&prim_sdf).is_some();
+    let under_composed_arc = host
+        .document()
+        .path_is_under_composed_arc(&prim.path)
+        .ok()?;
+
+    let target = if runtime_authored && !root_authored && !under_composed_arc {
+        DeleteTarget::RemoveRuntime
+    } else if root_authored || runtime_authored || under_composed_arc {
+        DeleteTarget::DeactivateRuntime
+    } else {
+        return None;
+    };
+    Some((doc, prim.path.clone(), target))
 }

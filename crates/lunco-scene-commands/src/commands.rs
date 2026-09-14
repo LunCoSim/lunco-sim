@@ -30,7 +30,8 @@ pub struct DetachJoint {
     /// The joint entity to despawn.
     pub target: Entity,
     /// Persistent (default) authors the joint's removal into the scene's runtime
-    /// layer — so it journals, syncs, and survives reload — before despawning.
+    /// layer — removing runtime-only prims and deactivating base/composed prims
+    /// — so it journals, syncs, and survives reload, before despawning.
     /// Interactive just pops the live joint (a throwaway test), no journal. See
     /// [`lunco_core::EditIntent`]. Omitted by API callers → `Persistent`.
     #[serde(default)]
@@ -91,11 +92,10 @@ pub fn on_detach_joint(
     }
 }
 
-/// Persist a **`Persistent`** `DetachJoint` into the active USD document's runtime
-/// overlay by authoring a `RemovePrim` — so the detachment journals, syncs, and
-/// survives reload. Decoupled from [`on_detach_joint`] (which does the live
-/// despawn), mirroring [`persist_move_to_runtime_layer`]: same active-doc +
-/// ownership guard, same `LayerId::runtime()` target. `Interactive` detaches are
+/// Persist a **`Persistent`** `DetachJoint` into the active USD document's
+/// runtime overlay. Runtime-only joints are removed; a joint supplied by the
+/// base scene or a composition arc receives the same standard active=false
+/// override used by generic entity deletion. `Interactive` detaches are
 /// throwaway (no journal), so this early-returns for them.
 pub fn persist_detach_to_runtime_layer(
     trigger: On<DetachJoint>,
@@ -108,7 +108,7 @@ pub fn persist_detach_to_runtime_layer(
     if !cmd.intent.is_persistent() {
         return;
     }
-    let Some((doc, path)) = lunco_scene_authoring::doc_resolve::authorable_prim(
+    let Some((doc, path, target)) = lunco_scene_authoring::doc_resolve::delete_target(
         cmd.target,
         &q_prim,
         &usd_registry,
@@ -117,13 +117,21 @@ pub fn persist_detach_to_runtime_layer(
         return;
     };
 
-    commands.trigger(ApplyUsdOp {
-        doc_id: doc,
-        parent_gen: None,
-        op: UsdOp::RemovePrim {
+    let op = match target {
+        lunco_scene_authoring::doc_resolve::DeleteTarget::RemoveRuntime => UsdOp::RemovePrim {
             edit_target: LayerId::runtime(),
             path,
         },
+        lunco_scene_authoring::doc_resolve::DeleteTarget::DeactivateRuntime => UsdOp::SetActive {
+            edit_target: LayerId::runtime(),
+            path,
+            active: false,
+        },
+    };
+    commands.trigger(ApplyUsdOp {
+        doc_id: doc,
+        parent_gen: None,
+        op,
     });
 }
 
@@ -1324,12 +1332,13 @@ fn is_mount_component(
 
 /// Delete an entity from the scene.
 ///
-/// The typed verb for "remove this" authors a `RemovePrim` in the backing
-/// document, so deletion is journaled, replicated, persisted, and undoable.
+/// The typed verb for "remove this" authors a journaled, replicated, undoable
+/// runtime-layer edit. Runtime-only prims use `RemovePrim`; base-authored and
+/// referenced prims use a stronger `active = false` override so the base scene
+/// and referenced asset remain intact.
 ///
-/// This despawns AND (via [`persist_delete_to_runtime_layer`]) authors a `RemovePrim`
-/// — which is what makes deletion undoable, because the document hands back an
-/// `AddPrim` inverse for free.
+/// This despawns AND (via [`persist_delete_to_runtime_layer`]) authors the
+/// corresponding USD edit, which is what makes deletion journaled and undoable.
 // Plain `#[Command]`, not `#[Command(default)]`: `default` derives `Default`, and
 // `Entity` has none — the same reason `DetachJoint` above is plain.
 #[Command]
@@ -1377,8 +1386,9 @@ pub fn on_delete_entity(
     }
 }
 
-/// Authoring leg: remove the prim, so the deletion persists, journals, replicates —
-/// and undoes. Same shape as every other `persist_*` observer.
+/// Authoring leg: apply the generic USD delete edit, so the deletion persists,
+/// journals, replicates, and undoes. Same shape as every other `persist_*`
+/// observer.
 pub fn persist_delete_to_runtime_layer(
     trigger: On<DeleteEntity>,
     usd_registry: Res<DocumentRegistry<UsdDocument>>,
@@ -1390,7 +1400,7 @@ pub fn persist_delete_to_runtime_layer(
     if !cmd.intent.is_persistent() {
         return;
     }
-    let Some((doc, path)) = lunco_scene_authoring::doc_resolve::authorable_prim(
+    let Some((doc, path, target)) = lunco_scene_authoring::doc_resolve::delete_target(
         cmd.target,
         &q_prim,
         &usd_registry,
@@ -1405,13 +1415,21 @@ pub fn persist_delete_to_runtime_layer(
         );
         return;
     }
-    commands.trigger(ApplyUsdOp {
-        doc_id: doc,
-        parent_gen: None,
-        op: UsdOp::RemovePrim {
+    let op = match target {
+        lunco_scene_authoring::doc_resolve::DeleteTarget::RemoveRuntime => UsdOp::RemovePrim {
             edit_target: LayerId::runtime(),
             path,
         },
+        lunco_scene_authoring::doc_resolve::DeleteTarget::DeactivateRuntime => UsdOp::SetActive {
+            edit_target: LayerId::runtime(),
+            path,
+            active: false,
+        },
+    };
+    commands.trigger(ApplyUsdOp {
+        doc_id: doc,
+        parent_gen: None,
+        op,
     });
 }
 
