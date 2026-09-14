@@ -1,10 +1,11 @@
 # Routes and route points in USD
 
-Route geometry and route execution are scene-level concerns. A route is an
+Route geometry and route execution are program-level concerns. A route is an
 ordinary USD scope containing reusable route-point prims and a child Rhai
-program. The subject is an authored relationship on the program, so a vehicle
-does not own a waypoint list and the Rust core does not know about vehicles or
-autopilot programs.
+program. The scope may be authored in the scene or in a separate route-plan
+USD asset that the scene composes at its canonical path. The subject is an
+authored relationship on the program, so a vehicle does not own a waypoint
+list and the Rust core does not know about vehicles or autopilot programs.
 
 ## Ownership
 
@@ -47,12 +48,35 @@ def Scope "Route"
 
 The program reads its own composed USD parent, enumerates point children in
 authored order, resolves their poses, and reads `inputs:subject`. It does not
-copy coordinates into Rust or into the subject. Multiple routes can coexist by
-using distinct scopes and subject relationships; enablement is a property of
-each program instance. A program emits the generic typed `program.ready` event
-after its `on_start` hook has completed. Runtime controls that send a one-shot
-gesture or semantic edge after a source switch wait for that event instead of
-using a fixed delay or racing the hot-reload boundary.
+copy coordinates into Rust or into the subject. Multiple paths are ordinary
+siblings, for example `/Traverse/RouteNorth/Program` and
+`/Traverse/RouteSouth/Program`, or distinct scopes composed from separate
+route-plan files. The subject binds every executable with the plain USD
+`programs` relationship:
+
+```usda
+rel programs = [
+    </Traverse/RouteNorth/Program>,
+    </Traverse/RouteSouth/Program>
+]
+```
+
+The program browser selects one canonical program path at a time. That
+selection is transient session state, not a scene fact and not a `/Route`
+convention; Alt-click, F, and route presentation resolve against it. With one
+bound program the tool can use the relationship directly. With several, it
+refuses to guess and requires explicit selection. A program emits the generic
+typed `program.ready` event after its `on_start` hook has completed. Runtime
+controls that send a one-shot gesture or semantic edge after a source switch
+wait for that event instead of using a fixed delay or racing the hot-reload
+boundary.
+
+When a route plan is stored separately, keep the route scope and its points in
+that file and reference or payload the scope into the scene; do not duplicate
+points in the scene and the plan. The scene owns subject placement and its
+`programs` binding, while the route-plan file owns route topology. A
+document-backed live edit still uses the composed canonical path and the
+existing USD journal boundary.
 
 The editor's route tool derives a ribbon from the same point children after the
 canonical USD projection has settled. It references the reusable
@@ -79,9 +103,10 @@ and the transform opinion there, and undo/redo removes or restores only that
 local opinion.
 The document layer is authoritative during the short interval before the
 canonical projection contains a newly authored point. Move and delete resolve
-that local target immediately, while selection/context actions report a
-pending projection rather than a user-facing edit error. Once the live entity
-exists, the same canonical path is used for selection and menu dispatch.
+that local target immediately, while a point-name or composed-stage read that
+is not synchronized reports a retryable authoring error rather than guessing
+or silently reusing an existing path. Once the live entity exists, the same
+canonical path is used for selection and menu dispatch.
 
 ## Progression
 
@@ -153,6 +178,14 @@ mechanisms that the production scene surface cannot isolate more directly.
   for document/edit questions.
 - Use exact composed `SdfPath` identity and an authored relationship for the
   subject; do not resolve by display name or query order.
+- Bind every executable to its subject through `rel programs`; do not invent a
+  root-level `/Route`, vehicle-name lookup, or Rust route registry.
+- For more than one program, select the program prim in the generic scene
+  selection/program-browser surface before editing or starting it. Selection
+  is transient; program and point changes are the journaled authored facts.
+- Prefer a separate route-plan USD asset when the route is reusable, imported,
+  or edited independently from the physical scene. Compose it into the Twin
+  rather than copying its points into every scene.
 - Keep route and mission policy in `.rhai`; keep continuous control laws in
   Modelica or the generic navigation mechanism.
 - Add a production Rhai scene test for an observable route/policy contract. Do

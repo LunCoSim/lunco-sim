@@ -24,6 +24,58 @@ use lunco_usd_core::document::UsdDocument;
 use lunco_usd_core::document::{LayerId, UsdOp};
 use openusd::schemas::lux::tokens as ltok;
 
+/// Select one live scene entity through the render-free shared selection
+/// resource. Editor packages may add highlights or gizmos, but authored tools
+/// only need this canonical entity selection so a later pointer context can
+/// carry the selected USD path in both interactive and headless runs.
+#[Command(default)]
+pub struct SelectSceneEntity {
+    /// API-stable global entity ID from the live entity registry. `0` clears.
+    pub entity_id: u64,
+    /// Retain the current selection and add this entity.
+    pub extend: bool,
+    /// Toggle this entity in the current selection.
+    pub toggle: bool,
+    /// Remove this entity without adding it.
+    pub remove_only: bool,
+}
+
+#[on_command(SelectSceneEntity)]
+pub fn on_select_scene_entity(
+    trigger: On<SelectSceneEntity>,
+    registry: Res<lunco_api::registry::ApiEntityRegistry>,
+    selected: Option<ResMut<SelectedEntities>>,
+) {
+    let Some(mut selected) = selected else {
+        return;
+    };
+    let command = trigger.event();
+    if command.entity_id == 0 {
+        selected.entities.clear();
+        return;
+    }
+    let Some(target) = registry.resolve(&lunco_core::GlobalEntityId::from_raw(command.entity_id))
+    else {
+        return;
+    };
+    if command.remove_only {
+        selected.entities.retain(|entity| *entity != target);
+    } else if command.toggle {
+        if selected.entities.contains(&target) {
+            selected.entities.retain(|entity| *entity != target);
+        } else {
+            selected.entities.push(target);
+        }
+    } else if command.extend {
+        if !selected.entities.contains(&target) {
+            selected.entities.push(target);
+        }
+    } else {
+        selected.entities.clear();
+        selected.entities.push(target);
+    }
+}
+
 /// Detach a joint by despawning it.
 #[Command(reflect_default)]
 pub struct DetachJoint {
@@ -1948,6 +2000,7 @@ register_commands!(
     on_set_usd_connection,
     on_spawn_entity_command,
     on_step_physics,
+    on_select_scene_entity,
     on_transform_entity_command,
 );
 

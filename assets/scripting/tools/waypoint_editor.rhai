@@ -113,11 +113,124 @@ fn route_edit_path(context) {
     if explicit != () && explicit != "" {
         return explicit;
     }
-    let scene_root = context["scene_root_path"];
-    if scene_root == () || scene_root == "" {
-        return ();
+    let doc = context["doc_id"];
+    let subject = subject_path(context);
+    if doc == () || subject == () { return (); }
+
+    // A selected program is the unambiguous route identity. This is also how
+    // the dynamic program HUD selects between several programs controlling the
+    // same subject; no scene-root or vehicle-name convention is involved.
+    let selected = [
+        context["selected_path"],
+        context["target_path"],
+        context["hit_path"],
+    ];
+    for path in selected {
+        let route = route_for_path(doc, path, subject);
+        if route != () { return route; }
+        // A HUD selection is already the canonical USD program identity. The
+        // document projection can be one generation behind immediately after
+        // the selection transaction, so retain that explicit choice by its
+        // stable parent path instead of guessing a scene-root route. Pointer
+        // hit paths still require the composed-program validation above.
+        if path == context["selected_path"] && path.ends_with("/Program") {
+            return route_parent_path(path);
+        }
     }
-    scene_root + "/Route"
+
+    let scene_root = context["scene_root_path"];
+    if scene_root != () && scene_root != "" {
+        let state = query("QueryUsdPrim", #{
+            doc_id: doc,
+            path: scene_root + "/__LunCoRuntime/ProgramSelection",
+            attrs: ["selectedPath"],
+        });
+        if state != () && state.ok != false && state.attrs != () {
+            let selected_program = state.attrs["selectedPath"];
+            let route = route_for_path(doc, selected_program, subject);
+            if route != () { return route; }
+        }
+    }
+
+    // Twin-authored bindings may expose one or more programs from the subject
+    // through the standard relationship used by this policy. One binding is
+    // enough for an unattended/one-route workflow; more than one requires the
+    // generic selected program entity so an edit cannot silently land in the
+    // wrong route.
+    let linked = linked_routes(doc, subject);
+    if linked.len() == 1 { return linked[0]; }
+    if linked.len() > 1 { return (); }
+
+    // There is no implicit scene-root route. A Twin must bind its programs to
+    // the subject, and a multi-program subject must first select one of those
+    // program prims through the generic scene selection surface.
+    ()
+}
+
+fn route_parent_path(path) {
+    if path == () || path == "" { return (); }
+    let parts = path.split("/");
+    if parts.len() <= 2 { return "/"; }
+    let last = parts.len() - 1;
+    let result = "";
+    for i in 1..last {
+        if i > 1 { result += "/"; }
+        result += parts[i];
+    }
+    "/" + result
+}
+
+fn is_route_program(doc, path, subject) {
+    if path == () || path == "" { return false; }
+    let parts = path.split("/");
+    if parts[parts.len() - 1] != "Program" { return false; }
+    let record = query("QueryUsdPrim", #{
+        doc_id: doc,
+        path: path,
+        rels: ["inputs:subject"],
+        schemas: true,
+    });
+    if record == () || record.ok == false || record.api_schemas == () {
+        return false;
+    }
+    let program = false;
+    for schema in record.api_schemas {
+        if schema == "LunCoProgramAPI" { program = true; break; }
+    }
+    if !program || record.relationships == () { return false; }
+    let targets = record.relationships["inputs:subject"];
+    targets != () && targets.len() == 1 && targets[0] == subject
+}
+
+fn route_for_path(doc, path, subject) {
+    if path == () || path == "" { return (); }
+    let current = path;
+    for depth in 0..32 {
+        if is_route_program(doc, current, subject) {
+            return route_parent_path(current);
+        }
+        if current == "/" { break; }
+        current = route_parent_path(current);
+        if current == () { break; }
+    }
+    ()
+}
+
+fn linked_routes(doc, subject) {
+    let result = query("QueryUsdPrim", #{
+        doc_id: doc,
+        path: subject,
+        rels: ["programs"],
+    });
+    let routes = [];
+    if result == () || result.ok == false || result.relationships == () { return routes; }
+    let programs = result.relationships["programs"];
+    if programs == () { return routes; }
+    for program in programs {
+        let route = route_for_path(doc, program, subject);
+        if route != () && !routes.contains(route) { routes.push(route); }
+    }
+    routes
 }
 
 fn subject_path(context) {
@@ -162,7 +275,7 @@ fn next_point_name(doc, route) {
         children: true,
     });
     if children == () || children.ok == false || children.children == () {
-        return "P0";
+        return ();
     }
     let prefix = "P";
     for child in children.children {
@@ -561,104 +674,22 @@ fn ensure_ribbon(context) {
     apply_view_ops(context.doc_id, "Update route ribbon", ops)
 }
 
-fn route_setup(doc, route, subject) {
-    let existing = target_record(doc, route, "@root@");
-    if !existing.ok { return existing; }
-    let ops = [];
-    if !existing.exists {
-        if route.index_of("/") < 0 {
-            return #{ ok: false, error: "route path must be rooted" };
-        }
-        let parts = route.split("/");
-        let parent = "";
-        for i in 1..parts.len() - 1 { parent += "/" + parts[i]; }
-        let name = parts[parts.len() - 1];
-        ops.push(#{ AddPrim: #{
-            edit_target: "@root@",
-            parent_path: parent,
-            name: name,
-            type_name: "Scope",
-            reference: (),
-            reference_prim_path: "",
-        }});
-    }
-
-    let program = route + "/Program";
-    let program_record = target_record(doc, program, "@root@");
-    if !program_record.ok { return program_record; }
-    if !program_record.exists {
-        ops.push(#{ AddPrim: #{
-            edit_target: "@root@",
-            parent_path: route,
-            name: "Program",
-            type_name: "Scope",
-            reference: (),
-            reference_prim_path: "",
-        }});
-        ops.push(#{ SetAttribute: #{
-            edit_target: "@root@",
-            path: program,
-            name: "inputs:enabled",
-            type_name: "float",
-            value: "0.0",
-        }});
-        ops.push(#{ SetApiSchemas: #{
-            edit_target: "@root@",
-            path: program,
-            schemas: ["LunCoProgramAPI"],
-        }});
-        ops.push(#{ SetAttribute: #{
-            edit_target: "@root@",
-            path: program,
-            name: "info:implementationSource",
-            type_name: "token",
-            value: "\"sourceAsset\"",
-        }});
-        // `sourceAsset` is the complete program source contract. Do not write
-        // conflicting `info:id` or `info:sourceCode` opinions beside it.
-        ops.push(#{ SetAttribute: #{
-            edit_target: "@root@",
-            path: program,
-            name: "info:sourceAsset",
-            type_name: "asset",
-            value: "@lunco://scenarios/route_follow.rhai@",
-        }});
-        ops.push(#{ SetRelationship: #{
-            edit_target: "@root@",
-            path: program,
-            name: "inputs:subject",
-            targets: [subject],
-        }});
-    } else {
-        let links = query("QueryUsdPrim", #{
-            doc_id: doc,
-            path: program,
-            rels: ["inputs:subject"],
-        });
-        let targets = if links != () && links.ok != false
-            && links.relationships != () { links.relationships["inputs:subject"] } else { () };
-        if targets == () || targets.len() == 0 {
-            ops.push(#{ SetRelationship: #{
-                edit_target: "@root@",
-                path: program,
-                name: "inputs:subject",
-                targets: [subject],
-            }});
-        } else if targets[0] != subject {
-            return #{ ok: false, error: "route is already assigned to another subject" };
-        }
-    }
-    #{ ok: true, created: !existing.exists, ops: ops }
-}
-
 fn marker_ops(doc, route, position) {
     let name = next_point_name(doc, route);
-    if name == () { return #{ ok: false, error: "route contains too many points" }; }
+    if name == () {
+        return #{ ok: false,
+            error: "route stage is not synchronized; retry after program selection settles" };
+    }
     let path = route + "/" + name;
     let zone = "route_" + name;
+    let target = target_record(doc, route, "@root@");
+    if !target.ok || !target.exists {
+        return #{ ok: false, error: "selected route is not present in the composed USD stage" };
+    }
+    let edit_target = if target.under_arc { "@runtime@" } else { "@root@" };
     #{ ok: true, path: path, ops: [
         #{ AddPrim: #{
-            edit_target: "@root@",
+            edit_target: edit_target,
             parent_path: route,
             name: name,
             type_name: "Xform",
@@ -666,12 +697,12 @@ fn marker_ops(doc, route, position) {
             reference_prim_path: "",
         }},
         #{ SetTranslate: #{
-            edit_target: "@root@",
+            edit_target: edit_target,
             path: path,
             value: position,
         }},
         #{ SetAttribute: #{
-            edit_target: "@root@",
+            edit_target: edit_target,
             path: path + "/Trigger",
             name: "lunco:triggerZone",
             type_name: "token",
@@ -688,14 +719,12 @@ fn on_click(context) {
     if subject == () { return failure("select or possess the object that owns this route"); }
     if context.world_position == () { return failure("click has no world position"); }
     let route = route_edit_path(context);
-    if route == () { return failure("active scene root has no route path"); }
-    let setup = route_setup(context.doc_id, route, subject);
-    if !setup.ok { return failure(setup.error); }
+    if route == () {
+        return failure("select an authored route program before adding a point");
+    }
     let point = marker_ops(context.doc_id, route, context.world_position);
     if !point.ok { return failure(point.error); }
-    let ops = setup.ops;
-    for op in point.ops { ops.push(op); }
-    let result = apply_ops(context.doc_id, "Append route point", ops);
+    let result = apply_ops(context.doc_id, "Append route point", point.ops);
     if result.ok { result.path = point.path; }
     result
 }
@@ -710,7 +739,7 @@ fn on_move(context) {
     if point == () { return failure("move target is not a direct route point"); }
     let target = target_record(context.doc_id, point, "@root@");
     if !target.ok || !target.exists { return failure("move target does not exist"); }
-    let edit_target = if target.authored_here || target.under_arc { "@root@" } else { "@runtime@" };
+    let edit_target = if target.authored_here && !target.under_arc { "@root@" } else { "@runtime@" };
     let ops = [#{ SetTranslate: #{
         edit_target: edit_target,
         path: point,
@@ -735,7 +764,7 @@ fn on_delete(context) {
         // A referenced child cannot be removed from the referencing layer. USD
         // expresses this edit as a stronger local active=false opinion, even
         // when the local layer already carries transform or other overrides.
-        #{ SetActive: #{ edit_target: "@root@", path: point, active: false } }
+        #{ SetActive: #{ edit_target: "@runtime@", path: point, active: false } }
     } else if target.authored_here {
         #{ RemovePrim: #{ edit_target: "@root@", path: point } }
     } else {

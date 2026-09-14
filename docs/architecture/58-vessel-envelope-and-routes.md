@@ -130,7 +130,7 @@ exactly where this rover loses traction*, with nobody typing a number. That is
 `13_DRIVER_UI_DESIGN.md`'s "the difficulty ladder, rendered" — obtained by deleting
 constants rather than by building a panel.
 
-## Routes as USD prims
+## Routes as composed USD plans
 
 The same defect, second instance. `route()` — five XZ waypoints — is now
 **duplicated verbatim** in two lesson scripts, because rhai scenarios have no
@@ -147,8 +147,10 @@ def Scope "Route"
 }
 ```
 
-Ordered route-point prims under a scene scope, read by the sibling Rhai program
-and any lesson that needs them. This
+Ordered route-point prims under a route-plan scope, read by the sibling Rhai
+program and any lesson that needs them. The scope may be inline for a small
+fixture, but reusable or imported paths belong in a separate `.usda` route-plan
+asset and are composed into the scene. This
 pays for itself three times:
 
 1. **Kills the duplication** — one route, in the scene, read by both lessons.
@@ -184,10 +186,12 @@ than two active points remain, the tool removes the runtime ribbon atomically.
 
 USD remains authoritative for point identity, composed transforms, active state,
 and mission topology. A transient generation gap while a typed edit is being
-projected is retried by the route program; a missing subject, malformed point,
-or persistent unavailable USD generation is a visible route-program error and
-leaves the subject safely braked. The route program never selects a stale
-derived route. Because the ribbon is generated in the runtime layer, closing
+projected is retried by the route program; a point-name read that is not
+synchronized is rejected instead of guessing a duplicate path. A missing
+subject, malformed point, or persistent unavailable USD generation is a visible
+route-program error and leaves the subject safely braked. The selected program
+path, not a hardcoded `/Route`, determines which plan receives an edit or a
+control edge. Because the ribbon is generated in the runtime layer, closing
 the runtime view leaves the authored Twin and its route points unchanged.
 
 ## Difficulty tiers as a variantSet
@@ -202,9 +206,12 @@ prim path identical. That last part is load-bearing: spawning a replacement rove
 would orphan `/Traverse/Rover/Comms`, the link node the radio-shadow lesson finds
 by path.
 
-## Why this is one document
+## Why composition separates the plan from the scene
 
 Three symptoms, one cause: **data that is derivable, or authorable once, was
-copied instead.** The envelope, the route, and the tier are the same fix applied to
-capability, to geometry, and to configuration. Each one removes constants rather
-than adding a feature — which is why they are cheap, and why they keep paying.
+copied instead.** The envelope, the route, and the tier are the same fix applied
+to capability, to geometry, and to configuration. A reusable route plan is
+therefore composed into the physical scene instead of being copied into it.
+The scene owns placement, subject identity, and program bindings; the plan owns
+ordered points and route policy. Two plans can be composed at distinct scopes
+and selected explicitly without adding a vehicle-specific core registry.

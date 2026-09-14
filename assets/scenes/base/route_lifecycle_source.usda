@@ -35,9 +35,28 @@ def Xform "RouteLifecycleSource" (
     {
         double3 xformOp:translate = (0.0, 1.5, 0.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
+        rel programs = [
+            </RouteLifecycleSource/Route/Program>,
+            </RouteLifecycleSource/AlternateRoute/Program>
+        ]
     }
 
-    def Scope "Route"
+    # The primary route is a separately authored route-plan asset. Its
+    # composed identity remains /RouteLifecycleSource/Route, so tools edit the
+    # canonical path and never need a scene-root route convention.
+    def Scope "Route" (
+        prepend references = @lunco://scenes/base/route_plan_lifecycle.usda@</Route>
+    )
+    {
+        # The reusable plan owns topology; the composed scene owns the
+        # subject binding because the same plan can drive different subjects.
+        over "Program"
+        {
+            rel inputs:subject = </RouteLifecycleSource/Subject>
+        }
+    }
+
+    def Scope "AlternateRoute"
     {
         def Scope "Program" (
             prepend apiSchemas = ["LunCoProgramAPI"]
@@ -53,25 +72,9 @@ def Xform "RouteLifecycleSource" (
             prepend references = @lunco://markers/route_point.usda@</RoutePoint>
         )
         {
-            double3 xformOp:translate = (0.0, 1.0, -8.0)
+            double3 xformOp:translate = (8.0, 1.0, -8.0)
             uniform token[] xformOpOrder = ["xformOp:translate"]
-            over "Trigger" { token lunco:triggerZone = "route_P0" }
-        }
-        def Xform "P1" (
-            prepend references = @lunco://markers/route_point.usda@</RoutePoint>
-        )
-        {
-            double3 xformOp:translate = (0.0, 1.0, -16.0)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
-            over "Trigger" { token lunco:triggerZone = "route_P1" }
-        }
-        def Xform "P2" (
-            prepend references = @lunco://markers/route_point.usda@</RoutePoint>
-        )
-        {
-            double3 xformOp:translate = (0.0, 1.0, -24.0)
-            uniform token[] xformOpOrder = ["xformOp:translate"]
-            over "Trigger" { token lunco:triggerZone = "route_P2" }
+            over "Trigger" { token lunco:triggerZone = "alternate_P0" }
         }
     }
 

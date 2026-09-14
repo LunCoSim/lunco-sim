@@ -103,6 +103,63 @@ fn route_subject_state(me) {
     #{ subject: subject, retryable: false, error: "" }
 }
 
+fn route_subject_path(me) {
+    let route = route_path(me);
+    let doc = route_document(me);
+    if route == () || doc == () { return (); }
+    let result = query("QueryUsdPrim", #{
+        doc_id: doc,
+        path: route + ROUTE_PROGRAM,
+        rels: ["inputs:subject"],
+    });
+    if result == () || result.ok == false || result.relationships == () { return (); }
+    let targets = result.relationships["inputs:subject"];
+    if targets == () || targets.len() != 1 { return (); }
+    targets[0]
+}
+
+fn runtime_selected_program(me) {
+    let route = route_path(me);
+    let doc = route_document(me);
+    if route == () || doc == () { return (); }
+    let parts = route.split("/");
+    if parts.len() < 2 { return (); }
+    let state = query("QueryUsdPrim", #{
+        doc_id: doc,
+        path: "/" + parts[1] + "/__LunCoRuntime/ProgramSelection",
+        attrs: ["selectedPath"],
+    });
+    if state == () || state.ok == false || state.attrs == () { return (); }
+    state.attrs["selectedPath"]
+}
+
+fn route_is_selected(me) {
+    let route = route_path(me);
+    let subject = route_subject_path(me);
+    let doc = route_document(me);
+    if route == () || subject == () || doc == () { return false; }
+    // The generic scene selection is the live control-plane identity. It
+    // survives source replacement without inventing a route-specific registry
+    // and is also available to headless scene tests.
+    let selection = query("InspectSelection", #{});
+    if selection != () && selection.ok != false && selection.primary != () {
+        let selected_path = usd_path(selection.primary);
+        if selected_path == route + ROUTE_PROGRAM { return true; }
+    }
+    let selected = runtime_selected_program(me);
+    if selected != () && selected != "" {
+        return selected == route + ROUTE_PROGRAM;
+    }
+    let result = query("QueryUsdPrim", #{
+        doc_id: doc,
+        path: subject,
+        rels: ["programs"],
+    });
+    if result == () || result.ok == false || result.relationships == () { return false; }
+    let programs = result.relationships["programs"];
+    programs != () && programs.len() == 1 && programs[0] == route + ROUTE_PROGRAM
+}
+
 fn route_enabled_from_usd(me) {
     let route = route_path(me);
     let doc = route_document(me);
@@ -272,17 +329,21 @@ fn runtime_program_action(me, action) {
         notify_kind("Add a path point with Alt-click on the scene", "info");
         return;
     }
-    let parts = action.split(".");
-    if parts.len() != 3 || (parts[0] != "program")
-        || (parts[1] != "select" && parts[1] != "edit") {
+    let select_prefix = "program.select.path.";
+    let edit_prefix = "program.edit.path.";
+    let path = if action.starts_with(select_prefix) {
+        action.sub_string(select_prefix.len())
+    } else if action.starts_with(edit_prefix) {
+        action.sub_string(edit_prefix.len())
+    } else {
+        ()
+    };
+    if path == () || path == "" {
         return;
     }
-    let index = parse_int(parts[2]);
-    if index < 0 { return; }
-    let listed = program_editor::list(doc, route);
-    if !listed.ok || index >= listed.programs.len() { return; }
-    let path = listed.programs[index].path;
-    if parts[1] == "edit" {
+    let record = program_editor::program_record(doc, path);
+    if !record.ok { return; }
+    if action.starts_with(edit_prefix) {
         program_editor::edit(path);
     } else {
         program_editor::select(path);
@@ -290,6 +351,13 @@ fn runtime_program_action(me, action) {
 }
 
 fn advance_on_sensor(me, evt, state) {
+    // Selection is transient runtime state. Reconcile it at the event edge as
+    // well as in the task so a program-selection event and an operator action
+    // cannot cross in the same simulation update.
+    if !state.selected {
+        state.selected = route_is_selected(me);
+        if !state.selected { return; }
+    }
     // Discrete control is a semantic input edge. The controller publishes it
     // for every authored control surface, even when no port named `action`
     // exists; this program owns the route-specific meaning of F.
@@ -343,6 +411,7 @@ fn on_start(me) {
     this.subject_id = route_subject(me);
     this.sensor_entered = #{};
     this.enabled = route_enabled_from_usd(me);
+    this.selected = route_is_selected(me);
     this.route_revision = ();
     this.route_error = "";
     let view = refresh_route_view(me, this);
@@ -364,6 +433,16 @@ fn on_start(me) {
 }
 
 fn on_event(me, evt) {
+    if evt.name == "program.selected" {
+        this.selected = evt.value != () && evt.value["path"] == route_path(me) + ROUTE_PROGRAM;
+        if !this.selected && this.enabled {
+            let subject = route_subject_for(me, this);
+            if subject >= 0 { brake(subject); }
+            this.enabled = false;
+            emit("route_stopped");
+        }
+        return;
+    }
     if evt.name == "runtime.ui.action" {
         runtime_program_action(me, evt.value);
         return;
@@ -427,6 +506,10 @@ fn on_event(me, evt) {
 // ribbon; sensor events remain the sole progression authority.
 fn task(me) {
     forever(step(|m| {
+        // The ribbon is a presentation of the authored program, not the
+        // control authority. Keep it synchronized for every live program so
+        // selecting a different program cannot make the previous view stale.
+        // Only navigation below is gated by the active-program selection.
         let view = refresh_route_view(m, this);
         if view.ok != true {
             if view.retryable == true { return false; }
@@ -437,6 +520,14 @@ fn task(me) {
             return false;
         }
         this.route_revision = view.revision;
+        // Selection state is a transient USD projection and may appear one
+        // frame after a program hot-reload. Reconcile it at the same cadence
+        // as the route view before driving; no route-specific Rust state is
+        // needed.
+        if !this.selected {
+            this.selected = route_is_selected(m);
+            if !this.selected { return false; }
+        }
         let cursor = current_point_info(m, this);
         if cursor.path != () {
             this.current_path = cursor.path;

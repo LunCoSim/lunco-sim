@@ -167,7 +167,9 @@ Resolve authored identities through the authoritative binding map and write the
 derived USD view to `@runtime@` only when the route changes or the view is first
 materialized. Use standard USD geometry and the existing renderer for depth and
 occlusion; do not create a Twin-specific ribbon prim or a per-frame document
-edit. The runtime view must use the typed transient USD projection command, so
+edit. A reusable route may be a separate composed USD plan; the tool follows
+the selected program's canonical parent scope rather than assuming `/Route`.
+The runtime view must use the typed transient USD projection command, so
 it is generation-checked and OpenUSD-backed without entering authored undo,
 save, or Twin journal history. Marker-root placement, annotation geometry,
 labels, and look remain separate owners. Stable frames must do no route

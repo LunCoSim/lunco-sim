@@ -54,6 +54,10 @@ let recipe = model_authoring::scene_recipe(
 `routes`, and `programs`. Review and apply `recipe.ops` with
 `assembly_edit::batch` or the proposal flow. Route entries go to
 `waypoint_editor`; program entries go to `assembly_edit::attach_program`.
+For reusable or independently edited routes, author the route scope in a
+separate USD route-plan asset and compose it into the scene; bind all available
+programs from the subject with `rel programs` and select the active canonical
+program path explicitly when more than one is present.
 Missing parents/paths, invalid `lunco://` identities, and stale generations
 fail before a plan is returned. Use `readiness_report` and
 `port_graph`/`wiring_plan` before running the composed scene. The complete API

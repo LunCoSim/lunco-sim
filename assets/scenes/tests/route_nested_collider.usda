@@ -21,6 +21,7 @@ def Xform "RouteNestedCollider" (
     )
     {
         double3 xformOp:translate = (0.0, 0.75, 0.0)
+        rel programs = [</RouteNestedCollider/Route/Program>]
         uniform token[] xformOpOrder = ["xformOp:translate"]
         # Keep the referenced rover's command surface live: route_follow's
         # Modelica setpoints are generic writes on this subject.

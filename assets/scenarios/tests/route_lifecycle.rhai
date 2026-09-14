@@ -4,6 +4,7 @@
 
 const ROOT = "/RouteLifecycle";
 const ROUTE = "/RouteLifecycle/Route";
+const ALTERNATE_ROUTE = "/RouteLifecycle/AlternateRoute";
 const SUBJECT_PATH = "/RouteLifecycle/Subject";
 const RIBBON_GEOMETRY = "/RouteLifecycle/Route/RouteRibbon/Geometry";
 
@@ -139,6 +140,18 @@ fn modified_context(doc, path, position, modifiers) {
     value
 }
 
+fn implicit_route_context(doc, path, position) {
+    let value = context(doc, path, position);
+    value.route_path = ();
+    value
+}
+
+fn selected_route_context(doc, path, position, program) {
+    let value = implicit_route_context(doc, path, position);
+    value.selected_path = program + "/Program";
+    value
+}
+
 fn invalid_edit_checks(doc) {
     let before = route_revision(doc);
     let missing_context = waypoint_editor::on_click(#{
@@ -179,10 +192,11 @@ fn on_start(me) {
 }
 
 fn on_event(me, evt) {
-    if evt.name == "route_started" { this.started += 1; }
-    if evt.name == "route_stopped" { this.stopped += 1; }
+    let route_source = find_path(ROUTE);
+    if evt.name == "route_started" && evt.source == route_source { this.started += 1; }
+    if evt.name == "route_stopped" && evt.source == route_source { this.stopped += 1; }
     if evt.name == "cmd:PossessVessel" { this.possessed += 1; }
-    if evt.name == "route_point_reached" {
+    if evt.name == "route_point_reached" && evt.source == route_source {
         this.reached += 1;
         this.reached_index = evt.value;
     }
@@ -245,6 +259,9 @@ fn on_tick(me) {
         let hud = program_editor::enable_hud(this.doc, ROUTE, "always");
         this.checks.push(t_true(hud.ok, "Rhai can opt any USD program scope into the standard HUD"));
         if !hud.ok { finish(this); return; }
+        let selected = program_editor::select(ROUTE + "/Program");
+        this.checks.push(t_true(selected.ok,
+            "program selection establishes the active route without a Rust route registry"));
         this.phase = 50;
         return;
     }
@@ -283,13 +300,15 @@ fn on_tick(me) {
             return;
         }
         let pointer = waypoint_editor::on_pointer(
-            context(this.doc, (), [0.0, 1.0, -32.0]),
+            selected_route_context(this.doc, (), [0.0, 1.0, -32.0], ROUTE),
         );
         if pointer.ok != true {
             this.checks.push(t_true(false, "generic pointer policy rejected Alt-click"));
             finish(this);
             return;
         }
+        this.checks.push(t_true(pointer.path != (),
+            "Alt-click resolves the bound program through the subject programs relationship"));
         this.phase = 2;
         return;
     }
@@ -662,6 +681,41 @@ fn on_tick(me) {
             || ribbon_count(this.doc) != 2 { return; }
         this.checks.push(t_true(true,
             "generic DeleteEntity persists a runtime active override for an authored point"));
+        let selected = program_editor::select(ALTERNATE_ROUTE + "/Program");
+        if !selected.ok {
+            this.checks.push(t_true(false, selected.error));
+            finish(this);
+            return;
+        }
+        this.phase = 131;
+        return;
+    }
+
+    if this.phase == 131 {
+        // Program selection is a typed scene transaction. Wait for its
+        // canonical projection before deriving the next authored child name;
+        // do not guess from a stale composed-stage read.
+        let alternate = query("QueryUsdPrim", #{
+            doc_id: this.doc,
+            path: ALTERNATE_ROUTE,
+            children: true,
+        });
+        if alternate == () || alternate.ok == false || alternate.children == () {
+            return;
+        }
+        let added = waypoint_editor::on_click(
+            selected_route_context(this.doc, (), [8.0, 1.0, -16.0], ALTERNATE_ROUTE),
+        );
+        this.checks.push(t_true(added.ok && added.path == ALTERNATE_ROUTE + "/P1",
+            "the selected program chooses which authored route receives a new point"));
+        this.phase = 14;
+        return;
+    }
+
+    if this.phase == 14 {
+        if !has_path(this.doc, ALTERNATE_ROUTE + "/P1") { return; }
+        this.checks.push(t_true(point_count(this.doc) == 2,
+            "editing the alternate program does not mutate the first route"));
         finish(this);
     }
 }

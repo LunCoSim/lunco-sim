@@ -107,8 +107,11 @@ fn runtime_ui_properties(facts) {
             path: program.path,
             source: source,
             status: program.status,
-            select_action: "program.select." + index.to_string(),
-            edit_action: "program.edit." + index.to_string(),
+            // Paths are the canonical program identity. Indexes are only a
+            // presentation order and must not select a different program
+            // after a live edit reorders the collection.
+            select_action: "program.select.path." + program.path,
+            edit_action: "program.edit.path." + program.path,
         });
     }
     result.programs = items;

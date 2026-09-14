@@ -83,6 +83,24 @@ fn program_record(doc, path) {
     }
 }
 
+fn emit_selected(path) {
+    let record = query("QueryUsdPrim", #{ path: path, rels: ["inputs:subject"] });
+    let subjects = if record != () && record.ok != false
+        && record.relationships != () { record.relationships["inputs:subject"] } else { [] };
+    emit("program.selected", #{
+        path: path,
+        subject: if subjects != () && subjects.len() == 1 { subjects[0] } else { () },
+    });
+}
+
+fn runtime_selection_paths(path) {
+    let parts = path.split("/");
+    if parts.len() < 2 { return #{}; }
+    let root = "/" + parts[1];
+    let state = root + "/__LunCoRuntime/ProgramSelection";
+    #{ root: root, state: state }
+}
+
 fn list(doc, scope) {
     let result = query("QueryUsdPrim", #{ doc_id: doc, path: scope, children: true });
     if result == () || result.ok == false || result.children == () {
@@ -155,21 +173,82 @@ fn switch_source(doc, path, source) {
     if result == () || result.ok != true {
         return failure(if result == () { "USD program source edit returned no result" } else { result.error });
     }
+    // A source swap recreates the program instance. Re-emit the generic
+    // selection edge so a selected program stays selected across hot reload.
+    emit_selected(path);
     #{ ok: true, path: path, source_asset: source, generation: result.generation }
 }
 
 fn select(path) {
     let entity_id = find_path(path);
     if entity_id < 0 { return failure("program has no live projection"); }
-    let result = cmd("SelectEntity", #{
+
+    let record = query("QueryUsdPrim", #{ path: path });
+    if record == () || record.ok == false || record.doc_id == () {
+        return failure("program document is unavailable");
+    }
+    let state_paths = runtime_selection_paths(path);
+    if state_paths.root == () || state_paths.state == () {
+        return failure("program path is not rooted");
+    }
+    let state = query("QueryUsdPrim", #{
+        doc_id: record.doc_id,
+        path: state_paths.state,
+    });
+    let runtime_ops = [];
+    if state == () || state.ok == false {
+        let runtime_root = query("QueryUsdPrim", #{
+            doc_id: record.doc_id,
+            path: state_paths.root + "/__LunCoRuntime",
+        });
+        if runtime_root == () || runtime_root.ok == false {
+            runtime_ops.push(#{ AddPrim: #{
+                edit_target: "@runtime@",
+                parent_path: state_paths.root,
+                name: "__LunCoRuntime",
+                type_name: "Scope",
+                reference: (),
+                reference_prim_path: "",
+            }});
+        }
+        runtime_ops.push(#{ AddPrim: #{
+            edit_target: "@runtime@",
+            parent_path: state_paths.root + "/__LunCoRuntime",
+            name: "ProgramSelection",
+            type_name: "Scope",
+            reference: (),
+            reference_prim_path: "",
+        }});
+    }
+    runtime_ops.push(#{ SetAttribute: #{
+        edit_target: "@runtime@",
+        path: state_paths.state,
+        name: "selectedPath",
+        type_name: "string",
+        value: path,
+    }});
+    let runtime_result = cmd("ApplyUsdTransientOps", #{
+        doc_id: record.doc_id,
+        parent_gen: document_generation(record.doc_id),
+        label: "Select authored program",
+        ops: runtime_ops,
+    });
+    if runtime_result == () || runtime_result.ok != true {
+        return failure(if runtime_result == () {
+            "program selection runtime state returned no result"
+        } else { runtime_result.error });
+    }
+
+    let result = cmd("SelectSceneEntity", #{
         entity_id: entity_id,
         extend: false,
         toggle: false,
         remove_only: false,
     });
     if result == () || result.ok == false {
-        return failure(if result == () { "SelectEntity command is unavailable in this host" } else { result.error });
+        return failure(if result == () { "SelectSceneEntity command is unavailable in this host" } else { result.error });
     }
+    emit_selected(path);
     #{ ok: true, path: path, entity_id: entity_id }
 }
 

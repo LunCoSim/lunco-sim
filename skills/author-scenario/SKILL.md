@@ -17,11 +17,12 @@ telemetry and publish a bounded verdict. Continuous rover dynamics remain in
 fixed-step physics/Modelica.
 
 For live route edits, Rhai owns the route policy and calls the generic typed USD
-operation command. The reusable `waypoint_editor` tool authors ordinary scene
-route points, uses a local `active=false` opinion when a point comes from a
-reference arc, and updates the disposable runtime ribbon under the route scope
-from the committed USD route. Keeping the ribbon under that scope preserves
-the route points' USD parent frame. The subject and route owner remain live:
+operation command. The reusable `waypoint_editor` tool authors ordinary USD
+route points, whether their route scope is inline or composed from a separate
+route-plan asset. It uses a local `active=false` opinion when a point comes from
+a reference arc, and updates the disposable runtime ribbon under the selected
+route scope from the committed USD route. Keeping the ribbon under that scope
+preserves the route points' USD parent frame. The subject and route owner remain live:
 route edits do not rebuild
 or reset their physics, Modelica state, pose, possession, or Rhai `this` state.
 The authored `inputs:enabled` value is only an initial policy; F changes the
@@ -30,9 +31,9 @@ this policy with a polling `on_tick` loop or move USD identity resolution,
 terrain sampling, collision events, or fixed-step steering into Rhai.
 Document-backed route edits remain valid during the short projection interval:
 the generic resolver uses a locally authored target before its live ECS entity
-exists, while selection/context policy reports a pending projection instead of
-turning that transient state into an edit error. Composed-only paths still
-require the mounted canonical stage.
+exists. If the canonical child list is not synchronized, the editor reports a
+retryable error rather than guessing a point name or writing to a different
+program. Composed-only paths still require the mounted canonical stage.
 When a source is hot-swapped, the program emits the generic typed
 `program.ready` event after `on_start`; one-shot UI or control actions wait for
 that lifecycle edge rather than relying on a timer. Sensor events may carry a
@@ -55,7 +56,9 @@ a rover, lander, route, or another model. Twin policy may enable the standard
 `program-browser` surface on any USD scope with
 `program_editor::enable_hud(doc, scope, visibility)`. The surface emits typed
 semantic actions; it does not contain vessel-specific Rust or an ad-hoc text
-input protocol.
+input protocol. A subject may bind several programs through `rel programs`; the
+browser and generic scene selection keep one canonical program path active, so
+editing or F control never falls back to a hardcoded `/Route`.
 
 > **Host = mechanism, script = policy.** A scenario touches the world only
 > through the same command/query API the HTTP API, MCP, and UI use — so it

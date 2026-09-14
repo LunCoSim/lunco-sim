@@ -396,10 +396,23 @@ fn authored_program_facts(
     let Ok(root) = SdfPath::new(root_path) else {
         return Vec::new();
     };
-    let mut programs = reader
+    // A surface may own programs directly, or bind them through the generic
+    // USD `programs` relationship. The latter keeps programs in a
+    // separate authored route/program asset while preserving a dynamic HUD.
+    let mut program_paths = reader
         .children(&root)
         .into_iter()
         .filter(|path| reader.has_api_schema(path, "LunCoProgramAPI"))
+        .collect::<Vec<_>>();
+    for path in reader.rel_targets(&root, "programs") {
+        if !program_paths.iter().any(|candidate| candidate == &path)
+            && reader.has_api_schema(&path, "LunCoProgramAPI")
+        {
+            program_paths.push(path);
+        }
+    }
+    let mut programs = program_paths
+        .into_iter()
         .map(|path| {
             let path_text = path.as_str().to_owned();
             let status = q_sim
