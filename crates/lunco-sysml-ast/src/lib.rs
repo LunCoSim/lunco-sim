@@ -10,6 +10,7 @@
 #![warn(missing_docs)]
 
 use serde::{Deserialize, Serialize};
+use std::sync::{Arc, Mutex, OnceLock};
 use sysml_semantics::Workspace;
 use sysml_syntax::TextRange;
 
@@ -19,6 +20,13 @@ thread_local! {
     // introducing an unsafe global or reparsing it for every edit.
     static STANDARD_LIBRARY: std::cell::RefCell<Option<Workspace>> = const { std::cell::RefCell::new(None) };
 }
+
+// Validation queries are often repeated by a single Rhai test (one lookup per
+// SysML attribute). Keep the most recently resolved source set alive so those
+// reads share one parser/resolver snapshot. The key is the caller-provided
+// content revision, not a filesystem path, so a changed Twin cannot reuse a
+// stale analysis and different Twins never share source identity.
+static LAST_ANALYSIS: OnceLock<Mutex<Option<(u64, bool, Arc<SysmlAnalysis>)>>> = OnceLock::new();
 
 /// A source file admitted to a semantic workspace.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -329,6 +337,43 @@ impl SysmlAnalysis {
             source_revision,
             includes_stdlib,
         }
+    }
+
+    /// Build or reuse the most recently requested immutable analysis snapshot.
+    ///
+    /// This is a deliberately bounded one-entry cache for read-heavy API
+    /// consumers such as Rhai. It avoids reparsing a Twin's full source set
+    /// when a test asks for several attributes in one tick, while preserving
+    /// the normal explicit [`Self::build`] path for documents and workers.
+    pub fn build_cached<I, N, T>(files: I, includes_stdlib: bool, source_revision: u64) -> Arc<Self>
+    where
+        I: IntoIterator<Item = (N, T)>,
+        N: Into<String>,
+        T: Into<String>,
+    {
+        let files: Vec<(String, String)> = files
+            .into_iter()
+            .map(|(name, text)| (name.into(), text.into()))
+            .collect();
+        if source_revision != 0 {
+            let cache = LAST_ANALYSIS.get_or_init(|| Mutex::new(None));
+            if let Some((revision, cached_stdlib, analysis)) = cache
+                .lock()
+                .expect("SysML analysis cache mutex poisoned")
+                .as_ref()
+            {
+                if *revision == source_revision && *cached_stdlib == includes_stdlib {
+                    return Arc::clone(analysis);
+                }
+            }
+        }
+        let analysis = Arc::new(Self::build(files, includes_stdlib, source_revision));
+        if source_revision != 0 {
+            let cache = LAST_ANALYSIS.get_or_init(|| Mutex::new(None));
+            *cache.lock().expect("SysML analysis cache mutex poisoned") =
+                Some((source_revision, includes_stdlib, Arc::clone(&analysis)));
+        }
+        analysis
     }
 
     /// Files represented by this snapshot.
@@ -651,5 +696,12 @@ mod tests {
     fn source_revision_is_preserved() {
         let analysis = SysmlAnalysis::build([("a.sysml", "part def A {}")], false, 42);
         assert_eq!(analysis.source_revision(), 42);
+    }
+
+    #[test]
+    fn cached_analysis_reuses_same_revision_snapshot() {
+        let first = SysmlAnalysis::build_cached([("a.sysml", "part def A {}")], false, 0x1234);
+        let second = SysmlAnalysis::build_cached([("a.sysml", "part def A {}")], false, 0x1234);
+        assert!(Arc::ptr_eq(&first, &second));
     }
 }

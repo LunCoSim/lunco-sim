@@ -10,6 +10,7 @@
 use std::sync::Arc;
 
 use lunco_sysml_ast::{SysmlAnalysis, SysmlAttribute, SysmlDiagnostic, SysmlElement, SysmlSubject};
+use rhai::{Dynamic, Map};
 
 /// A requirement declaration/usage projected for a Rhai test report.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -118,17 +119,274 @@ pub fn requirement_report_json(analysis: &SysmlAnalysis) -> String {
     serde_json::to_string(&report).expect("SysML requirement report is serializable")
 }
 
+/// Produce a native Rhai map for a complete immutable SysML snapshot.
+///
+/// This is the preferred in-process path: every field is constructed directly
+/// as a Rhai value, so callers do not serialize to JSON and immediately parse
+/// the same data back into maps.  `source_revision_hex` is retained as the
+/// lossless identity for the u64 source generation.
+pub fn report_dynamic(analysis: &SysmlAnalysis) -> Dynamic {
+    let mut report = Map::new();
+    report.insert(
+        "source_revision_hex".into(),
+        Dynamic::from(format!("0x{:016x}", analysis.source_revision())),
+    );
+    report.insert(
+        "source_revision".into(),
+        Dynamic::from_int(analysis.source_revision() as i64),
+    );
+    report.insert(
+        "stdlib".into(),
+        Dynamic::from_bool(analysis.includes_stdlib()),
+    );
+    report.insert(
+        "files".into(),
+        Dynamic::from_array(
+            analysis
+                .files()
+                .iter()
+                .map(|file| {
+                    let mut value = Map::new();
+                    value.insert("name".into(), Dynamic::from(file.name.clone()));
+                    value.insert("text".into(), Dynamic::from(file.text.clone()));
+                    Dynamic::from_map(value)
+                })
+                .collect(),
+        ),
+    );
+    report.insert(
+        "elements".into(),
+        Dynamic::from_array(analysis.elements().iter().map(element_dynamic).collect()),
+    );
+    report.insert(
+        "references".into(),
+        Dynamic::from_array(
+            analysis
+                .references()
+                .iter()
+                .map(reference_dynamic)
+                .collect(),
+        ),
+    );
+    report.insert(
+        "attributes".into(),
+        Dynamic::from_array(
+            analysis
+                .attributes()
+                .iter()
+                .map(attribute_dynamic)
+                .collect(),
+        ),
+    );
+    report.insert(
+        "requirements".into(),
+        Dynamic::from_array(
+            analysis
+                .requirements()
+                .iter()
+                .map(requirement_dynamic)
+                .collect(),
+        ),
+    );
+    report.insert(
+        "verifications".into(),
+        Dynamic::from_array(
+            analysis
+                .verifications()
+                .iter()
+                .map(verification_dynamic)
+                .collect(),
+        ),
+    );
+    report.insert(
+        "diagnostics".into(),
+        Dynamic::from_array(
+            analysis
+                .diagnostics()
+                .iter()
+                .map(diagnostic_dynamic)
+                .collect(),
+        ),
+    );
+    Dynamic::from_map(report)
+}
+
+/// Produce the compact native Rhai requirement/verification projection.
+pub fn requirement_report_dynamic(analysis: &SysmlAnalysis) -> Dynamic {
+    let mut report = Map::new();
+    report.insert(
+        "source_revision_hex".into(),
+        Dynamic::from(format!("0x{:016x}", analysis.source_revision())),
+    );
+    report.insert(
+        "source_revision".into(),
+        Dynamic::from_int(analysis.source_revision() as i64),
+    );
+    report.insert(
+        "stdlib".into(),
+        Dynamic::from_bool(analysis.includes_stdlib()),
+    );
+    report.insert(
+        "requirements".into(),
+        Dynamic::from_array(analysis.requirements().iter().map(requirement_dynamic).collect()),
+    );
+    report.insert(
+        "verifications".into(),
+        Dynamic::from_array(
+            analysis
+                .verifications()
+                .iter()
+                .map(verification_dynamic)
+                .collect(),
+        ),
+    );
+    report.insert(
+        "diagnostics".into(),
+        Dynamic::from_array(
+            analysis
+                .diagnostics()
+                .iter()
+                .map(diagnostic_dynamic)
+                .collect(),
+        ),
+    );
+    Dynamic::from_map(report)
+}
+
 /// Register the read-only `sysml_report_json()` function in a Rhai engine.
 ///
 /// A snapshot is captured by `Arc`, so script execution does not borrow a
 /// Bevy world or a live document. Callers can create a fresh registration when
 /// a `DocumentChanged` event publishes a newer generation.
 pub fn register_sysml_report(engine: &mut rhai::Engine, analysis: Arc<SysmlAnalysis>) {
-    let report = Arc::clone(&analysis);
-    engine.register_fn("sysml_report_json", move || report_json(&analysis));
-    engine.register_fn("sysml_requirement_report_json", move || {
-        requirement_report_json(&report)
+    let json_report = Arc::clone(&analysis);
+    let dynamic_report = Arc::clone(&analysis);
+    let compact_report = Arc::clone(&analysis);
+    let json_compact_report = Arc::clone(&analysis);
+    engine.register_fn("sysml_report", move || report_dynamic(&dynamic_report));
+    engine.register_fn("sysml_requirement_report", move || {
+        requirement_report_dynamic(&compact_report)
     });
+    engine.register_fn("sysml_report_json", move || report_json(&json_report));
+    engine.register_fn("sysml_requirement_report_json", move || {
+        requirement_report_json(&json_compact_report)
+    });
+}
+
+fn string_array(values: &[String]) -> Dynamic {
+    Dynamic::from_array(values.iter().cloned().map(Dynamic::from).collect())
+}
+
+fn element_dynamic(element: &SysmlElement) -> Dynamic {
+    let mut value = Map::new();
+    value.insert("id".into(), Dynamic::from_int(element.id as i64));
+    value.insert("file".into(), Dynamic::from(element.file.clone()));
+    value.insert(
+        "qualified_name".into(),
+        Dynamic::from(element.qualified_name.clone()),
+    );
+    value.insert("kind".into(), Dynamic::from(element.kind.clone()));
+    value.insert("start".into(), Dynamic::from_int(element.start as i64));
+    value.insert("end".into(), Dynamic::from_int(element.end as i64));
+    Dynamic::from_map(value)
+}
+
+fn reference_dynamic(reference: &lunco_sysml_ast::SysmlReference) -> Dynamic {
+    let mut value = Map::new();
+    value.insert("file".into(), Dynamic::from(reference.file.clone()));
+    value.insert("start".into(), Dynamic::from_int(reference.start as i64));
+    value.insert("end".into(), Dynamic::from_int(reference.end as i64));
+    value.insert("name".into(), Dynamic::from(reference.name.clone()));
+    value.insert("target".into(), Dynamic::from(reference.target.clone()));
+    Dynamic::from_map(value)
+}
+
+fn subject_array(values: &[SysmlSubject]) -> Dynamic {
+    Dynamic::from_array(
+        values
+            .iter()
+            .map(|subject| {
+                let mut value = Map::new();
+                value.insert("name".into(), Dynamic::from(subject.name.clone()));
+                if let Some(type_name) = &subject.type_name {
+                    value.insert("type_name".into(), Dynamic::from(type_name.clone()));
+                }
+                Dynamic::from_map(value)
+            })
+            .collect(),
+    )
+}
+
+fn optional_string(value: &Option<String>) -> Option<Dynamic> {
+    value.as_ref().map(|value| Dynamic::from(value.clone()))
+}
+
+fn literal_dynamic(literal: &lunco_sysml_ast::SysmlLiteral) -> Dynamic {
+    let mut value = Map::new();
+    value.insert("literal".into(), Dynamic::from(literal.literal.clone()));
+    value.insert("kind".into(), Dynamic::from(literal.kind.clone()));
+    if let Some(number) = &literal.number {
+        value.insert("number".into(), Dynamic::from(number.clone()));
+    }
+    Dynamic::from_map(value)
+}
+
+fn attribute_dynamic(attribute: &SysmlAttribute) -> Dynamic {
+    let mut value = Map::new();
+    value.insert("owner".into(), Dynamic::from(attribute.owner.clone()));
+    value.insert("name".into(), Dynamic::from(attribute.name.clone()));
+    value.insert(
+        "qualified_name".into(),
+        Dynamic::from(attribute.qualified_name.clone()),
+    );
+    if let Some(type_name) = optional_string(&attribute.type_name) {
+        value.insert("type_name".into(), type_name);
+    }
+    if let Some(literal) = &attribute.value {
+        value.insert("value".into(), literal_dynamic(literal));
+    }
+    value.insert("file".into(), Dynamic::from(attribute.file.clone()));
+    value.insert("start".into(), Dynamic::from_int(attribute.start as i64));
+    value.insert("end".into(), Dynamic::from_int(attribute.end as i64));
+    Dynamic::from_map(value)
+}
+
+fn requirement_dynamic(record: &lunco_sysml_ast::SysmlRequirementRecord) -> Dynamic {
+    let mut value = Map::new();
+    value.insert("element".into(), element_dynamic(&record.element));
+    value.insert("documentation".into(), string_array(&record.documentation));
+    value.insert("subjects".into(), subject_array(&record.subjects));
+    value.insert(
+        "attributes".into(),
+        Dynamic::from_array(record.attributes.iter().map(attribute_dynamic).collect()),
+    );
+    value.insert("verifies".into(), string_array(&record.verifies));
+    value.insert("satisfies".into(), string_array(&record.satisfies));
+    value.insert("realizations".into(), string_array(&record.realizations));
+    Dynamic::from_map(value)
+}
+
+fn verification_dynamic(record: &lunco_sysml_ast::SysmlVerificationRecord) -> Dynamic {
+    let mut value = Map::new();
+    value.insert("element".into(), element_dynamic(&record.element));
+    value.insert("documentation".into(), string_array(&record.documentation));
+    value.insert("subjects".into(), subject_array(&record.subjects));
+    value.insert("verifies".into(), string_array(&record.verifies));
+    value.insert("realizations".into(), string_array(&record.realizations));
+    Dynamic::from_map(value)
+}
+
+fn diagnostic_dynamic(diagnostic: &SysmlDiagnostic) -> Dynamic {
+    let mut value = Map::new();
+    value.insert("file".into(), Dynamic::from(diagnostic.file.clone()));
+    value.insert(
+        "kind".into(),
+        Dynamic::from(format!("{:?}", diagnostic.kind)),
+    );
+    value.insert("start".into(), Dynamic::from_int(diagnostic.start as i64));
+    value.insert("end".into(), Dynamic::from_int(diagnostic.end as i64));
+    value.insert("message".into(), Dynamic::from(diagnostic.message.clone()));
+    Dynamic::from_map(value)
 }
 
 fn requirement_from_record(record: &lunco_sysml_ast::SysmlRequirementRecord) -> SysmlRequirement {
@@ -160,6 +418,9 @@ mod tests {
         )]));
         let mut engine = rhai::Engine::new();
         register_sysml_report(&mut engine, analysis);
+        let native: Dynamic = engine.eval("sysml_requirement_report()").unwrap();
+        let native = native.cast::<Map>();
+        assert!(native.contains_key("requirements"));
         let json: String = engine.eval("sysml_report_json()").unwrap();
         assert!(json.contains("example.sysml"));
         let requirements: String = engine.eval("sysml_requirement_report_json()").unwrap();

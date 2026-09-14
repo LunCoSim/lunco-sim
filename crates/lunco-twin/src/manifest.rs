@@ -89,6 +89,15 @@ pub struct TwinManifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sysml: Option<SysmlManifest>,
 
+    /// Twin-owned verification-case mappings (`[verification]` section).
+    ///
+    /// SysML names the normative verification case; this registry binds that
+    /// qualified name to the authored USD scene and Rhai observer that execute
+    /// it.  The mapping is metadata only: it never duplicates SysML source or
+    /// embeds a requirement threshold in Rust.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification: Option<VerificationManifest>,
+
     /// Modelica domain settings (`[modelica]` section). Holds the Twin's
     /// Modelica search roots and explicitly declared external libraries.
     /// Absent means the domain discovers package roots from the indexed Twin
@@ -347,6 +356,7 @@ impl TwinManifest {
             children: Vec::new(),
             usd: None,
             sysml: None,
+            verification: None,
             modelica: None,
             journal: None,
             downloads: None,
@@ -429,6 +439,34 @@ impl TwinManifest {
     }
 }
 
+/// The `[verification]` section of `twin.toml`.
+///
+/// A Twin may expose several verification cases over different scenes.  The
+/// list is intentionally small and explicit so a missing or duplicate mapping
+/// cannot silently select a different test.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct VerificationManifest {
+    /// Qualified SysML verification name to scene/backend mappings.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cases: Vec<VerificationCase>,
+}
+
+/// One Twin-owned binding for a SysML verification case.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct VerificationCase {
+    /// Qualified SysML verification-case name.
+    pub name: String,
+    /// Twin-relative USD scene used for the run.
+    pub scene: PathBuf,
+    /// Twin-relative Rhai observer attached to the scene.
+    pub script: PathBuf,
+    /// Optional verdict channel expected from the observer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict_channel: Option<String>,
+}
+
 /// The `[sysml]` section of `twin.toml`.
 ///
 /// SysML documents remain ordinary Twin files. This section only records an
@@ -491,6 +529,7 @@ mod tests {
             children: vec![],
             usd: None,
             sysml: None,
+            verification: None,
             modelica: None,
             journal: None,
             downloads: None,
@@ -529,6 +568,14 @@ mod tests {
                 root: Some("requirements/model.sysml".into()),
                 paths: vec!["requirements".into()],
             }),
+            verification: Some(VerificationManifest {
+                cases: vec![VerificationCase {
+                    name: "Example::VerifyExample".into(),
+                    scene: "tests/example.usda".into(),
+                    script: "scenarios/tests/example.rhai".into(),
+                    verdict_channel: Some("EXAMPLE".into()),
+                }],
+            }),
             modelica: Some(ModelicaManifest {
                 paths: vec![".".into()],
                 externals: vec![ModelicaExternal {
@@ -563,6 +610,7 @@ mod tests {
             children: vec![],
             usd: None,
             sysml: None,
+            verification: None,
             modelica: None,
             journal: None,
             downloads: None,
@@ -743,6 +791,7 @@ uuid = "{id}"
             children: vec![],
             usd: None,
             sysml: None,
+            verification: None,
             modelica: None,
             journal: None,
             downloads: None,

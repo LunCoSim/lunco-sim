@@ -137,6 +137,7 @@
 //! for the blowup. The reported `ticks` counts UPDATES; `sim` is the summed
 //! simulated time, which stays accurate because the jitter is symmetric.
 
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use bevy::prelude::*;
@@ -177,6 +178,10 @@ struct Cli {
     tick_hz: f64,
     /// Optional channel-name filter for the verdict (see module docs).
     verdict_channel: Option<String>,
+    /// Optional Twin-owned SysML verification key. When set, the selected
+    /// scene must be the registry mapping for this qualified name and the
+    /// registry's verdict channel is used unless explicitly overridden.
+    verification: Option<String>,
     /// Compute-pool threads. `1` = the reproducible default, `0` = leave bevy's
     /// default multi-threaded pool alone (what the GUI runs), `n>1` = pin n.
     threads: usize,
@@ -246,6 +251,7 @@ fn parse_args() -> Result<Cli, String> {
     let mut max_ticks = DEFAULT_MAX_TICKS;
     let mut tick_hz = lunco_core::FIXED_HZ;
     let mut verdict_channel: Option<String> = None;
+    let mut verification: Option<String> = None;
     let mut threads: usize = 1;
     let mut jitter = 0.0f64;
     let mut seed = DEFAULT_SEED;
@@ -287,6 +293,10 @@ fn parse_args() -> Result<Cli, String> {
             }
             "--verdict-channel" => {
                 verdict_channel = Some(need(i, "--verdict-channel")?);
+                i += 2;
+            }
+            "--verification" => {
+                verification = Some(need(i, "--verification")?);
                 i += 2;
             }
             "--threads" => {
@@ -352,6 +362,7 @@ fn parse_args() -> Result<Cli, String> {
         max_ticks,
         tick_hz,
         verdict_channel,
+        verification,
         threads,
         jitter,
         seed,
@@ -367,7 +378,8 @@ fn usage() -> String {
     luncosim test — run one authored USD scene + its scenario headless and deterministically.
 
 USAGE:
-    luncosim test --scene <PATH> [--max-ticks N] [--tick-hz HZ] [--verdict-channel NAME]
+    luncosim test --scene <PATH> [--verification QUALIFIED_NAME]
+               [--max-ticks N] [--tick-hz HZ] [--verdict-channel NAME]
                [--threads N] [--jitter FRAC] [--seed U64] [--readiness-timeout SECS]
     luncosim test --list
 
@@ -383,6 +395,9 @@ USAGE:
                              per update.
     --verdict-channel NAME   Only accept a PASS/FAIL from this telemetry channel.
                              Default: the first PASS/FAIL payload on any channel.
+    --verification NAME      Require the scene to match a Twin manifest's
+                             qualified SysML verification mapping and use its
+                             declared verdict channel by default.
 
 DIAGNOSTIC AXES (defaults reproduce the deterministic gate exactly):
     --threads N              Compute-pool threads (default 1).
@@ -417,6 +432,96 @@ EXIT CODES:
         seed = DEFAULT_SEED,
         readiness_timeout = DEFAULT_READINESS_TIMEOUT_SECS,
     )
+}
+
+/// Resolve and validate a Twin-owned verification selection before constructing
+/// the application.  The scene runner still executes the authored Rhai
+/// observer; this guard only proves that the requested qualified SysML case,
+/// scene, script mapping, and verdict channel agree in the Twin manifest.
+fn apply_verification_selection(cli: &mut Cli) -> Result<(), String> {
+    let Some(requested) = cli.verification.as_deref() else {
+        return Ok(());
+    };
+    if requested.trim().is_empty() {
+        return Err("--verification requires a non-empty qualified SysML name".to_owned());
+    }
+
+    let given = Path::new(&cli.scene);
+    let absolute = if given.is_absolute() {
+        given.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|error| format!("cannot resolve scene directory: {error}"))?
+            .join(given)
+    };
+    let absolute = absolute
+        .canonicalize()
+        .map_err(|error| format!("cannot canonicalize scene `{}`: {error}", cli.scene))?;
+
+    let mut candidate = absolute.parent();
+    while let Some(root) = candidate {
+        if root.join(lunco_twin::MANIFEST_FILENAME).is_file() {
+            let mode = lunco_twin::TwinMode::open(root)
+                .map_err(|error| format!("cannot open Twin at {}: {error}", root.display()))?;
+            let twin = match mode {
+                lunco_twin::TwinMode::Twin(twin) | lunco_twin::TwinMode::Folder(twin) => twin,
+                lunco_twin::TwinMode::Orphan(_) => {
+                    return Err(format!("scene `{}` is not inside a Twin folder", cli.scene));
+                }
+            };
+            let canonical_root = twin
+                .root
+                .canonicalize()
+                .map_err(|error| format!("cannot canonicalize Twin root: {error}"))?;
+            let relative = absolute.strip_prefix(&canonical_root).map_err(|_| {
+                format!(
+                    "scene `{}` is outside Twin root `{}`",
+                    cli.scene,
+                    canonical_root.display()
+                )
+            })?;
+            let structural = twin.verification_registry_errors();
+            if !structural.is_empty() {
+                return Err(format!(
+                    "Twin verification registry is invalid: {}",
+                    structural.join("; ")
+                ));
+            }
+            let case = twin.verification_case(requested).ok_or_else(|| {
+                format!(
+                    "Twin `{}` has no mapping for SysML verification `{requested}`",
+                    twin.manifest
+                        .as_ref()
+                        .map(|manifest| manifest.name.as_str())
+                        .unwrap_or("<folder>")
+                )
+            })?;
+            if case.scene != relative {
+                return Err(format!(
+                    "verification `{requested}` maps to `{}`, not scene `{}`",
+                    case.scene.display(),
+                    relative.display()
+                ));
+            }
+            if let Some(expected) = case.verdict_channel.as_deref() {
+                if let Some(actual) = cli.verdict_channel.as_deref() {
+                    if actual != expected {
+                        return Err(format!(
+                            "verification `{requested}` requires verdict channel `{expected}`, got `{actual}`"
+                        ));
+                    }
+                } else {
+                    cli.verdict_channel = Some(expected.to_owned());
+                }
+            }
+            return Ok(());
+        }
+        candidate = root.parent();
+    }
+    Err(format!(
+        "--verification requires a Twin manifest enclosing scene `{}`",
+        cli.scene
+    ))
 }
 
 /// Pin the compute task pool to exactly `threads` threads.
@@ -792,13 +897,17 @@ pub fn run() -> u8 {
     #[cfg(feature = "ui")]
     lunco_settings::use_ephemeral_settings();
 
-    let cli = match parse_args() {
+    let mut cli = match parse_args() {
         Ok(c) => c,
         Err(msg) => {
             eprintln!("{msg}");
             return 2;
         }
     };
+    if let Err(error) = apply_verification_selection(&mut cli) {
+        eprintln!("verification selection failed: {error}");
+        return 2;
+    }
 
     let dt = Duration::from_secs_f64(1.0 / cli.tick_hz);
 

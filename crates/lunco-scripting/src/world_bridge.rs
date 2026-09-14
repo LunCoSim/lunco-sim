@@ -116,6 +116,32 @@ fn sysml_report_json_value(path: &str) -> ImmutableString {
     .into()
 }
 
+fn sysml_requirement_report_json_value(path: &str) -> ImmutableString {
+    match bridge_core::query_raw(
+        "ValidateSysml",
+        serde_json::json!({ "path": path, "compact": true }),
+    ) {
+        Ok(Some(value)) => serde_json::to_string(&value).unwrap_or_else(|error| {
+            serde_json::json!({ "ok": false, "error": error.to_string() }).to_string()
+        }),
+        Ok(None) => serde_json::json!({ "ok": false, "error": "ValidateSysml returned no data" })
+            .to_string(),
+        Err(error) => serde_json::json!({ "ok": false, "error": error }).to_string(),
+    }
+    .into()
+}
+
+/// Read one SysML source/Twin report as native Rhai values.  The query API is
+/// JSON-shaped by definition, but `bridge_core::query` lowers it directly into
+/// `Dynamic` maps/arrays, avoiding the old stringify/`from_json` round-trip.
+fn sysml_report_value(path: &str, compact: bool) -> Dynamic {
+    bridge_core::query(
+        &RhaiBuilder,
+        "ValidateSysml",
+        serde_json::json!({ "path": path, "compact": compact }),
+    )
+}
+
 /// Map a rhai value to the engine-wide TelemetryValue for emit. Scalars, arrays,
 /// and maps retain their structure; unit is a bare pulse.
 fn rhai_to_telemetry(value: &Dynamic) -> TelemetryValue {
@@ -1359,7 +1385,16 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
     );
     engine.register_fn(
         "sysml_requirement_report_json",
-        |path: ImmutableString| -> ImmutableString { sysml_report_json_value(path.as_str()) },
+        |path: ImmutableString| -> ImmutableString {
+            sysml_requirement_report_json_value(path.as_str())
+        },
+    );
+    engine.register_fn("sysml_report", |path: ImmutableString| -> Dynamic {
+        sysml_report_value(path.as_str(), false)
+    });
+    engine.register_fn(
+        "sysml_requirement_report",
+        |path: ImmutableString| -> Dynamic { sysml_report_value(path.as_str(), true) },
     );
 
     // find(name) -> id (i64), or -1 if no entity has that canonical Name.
