@@ -28,6 +28,7 @@ use bevy::prelude::*;
 
 use crate::ports::{AvianGroup, AvianPort};
 use lunco_core::ports::PortDirection;
+use lunco_cosim_core::{ForceActuator, TorqueActuator};
 
 /// The avian input ports that sink into [`PendingForces`] — i.e. **writing one
 /// pushes a rigid body around**. Declared here, beside the port table that
@@ -150,36 +151,6 @@ pub fn sample_solved_acceleration(
         }
         sample.previous_velocity = current;
     }
-}
-
-/// A generic force actuator authored by a USD prim.
-///
-/// The local position is measured from the owning rigid-body origin, not from
-/// its render transform. The direction is the force ON the body, in the body's
-/// local frame; exhaust visuals may point in the opposite direction. The
-/// component is metadata only. The live command is kept separately in
-/// [`PendingActuatorCommand`] so port writes do not mutate the authored
-/// description. An RCS nozzle and a translation thruster use this same type.
-#[derive(Component, Debug, Clone, Copy, Reflect)]
-#[reflect(Component)]
-pub struct ForceActuator {
-    /// Mount position relative to the owning rigid-body origin (m).
-    pub local_position: Vec3,
-    /// Unit force direction in the owning body's local frame.
-    pub direction_local: Vec3,
-    /// Maximum accepted thrust for this nozzle (N).
-    pub max_force_n: f64,
-}
-
-/// A generic torque actuator. A reaction wheel, control-moment gyro, or any
-/// other torque source uses this same type.
-#[derive(Component, Debug, Clone, Copy, Reflect)]
-#[reflect(Component)]
-pub struct TorqueActuator {
-    /// Torque axis in the owning body's local frame.
-    pub axis_local: Vec3,
-    /// Maximum torque magnitude (N·m).
-    pub max_torque_nm: f64,
 }
 
 /// A solved scalar torque applied across a revolute joint.

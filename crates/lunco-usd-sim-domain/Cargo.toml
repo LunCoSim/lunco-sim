@@ -10,7 +10,6 @@ bevy = { workspace = true, features = ["bevy_asset"] }
 openusd = { workspace = true }
 web-time = { workspace = true }
 lunco-core = { path = "../lunco-core" }
-lunco-cosim = { path = "../lunco-cosim" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-hash = { path = "../lunco-hash" }

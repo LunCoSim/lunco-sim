@@ -8661,7 +8661,7 @@ name = "lunco-usd-actuation"
 version = "0.1.0"
 dependencies = [
  "bevy",
- "lunco-cosim",
+ "lunco-cosim-core",
  "lunco-usd-bevy-core",
  "openusd",
 ]
@@ -9064,7 +9064,6 @@ dependencies = [
  "bevy",
  "lunco-assets-core",
  "lunco-core",
- "lunco-cosim",
  "lunco-cosim-core",
  "lunco-doc",
  "lunco-hash",
