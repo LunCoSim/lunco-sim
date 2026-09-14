@@ -13,6 +13,10 @@ description: >
 
 # Interactive USD Assembly Editor
 
+For the short, reusable quality checklist (typed operations only, named
+frames/sockets, independent component framing, SI dimensions, and fail-closed
+visual requirements), also read [`assembly-quality`](../assembly-quality/SKILL.md).
+
 This is the human-and-agent workflow for editing an existing assembly. It is
 not a second authoring API. The running production `target/debug/luncosim`
 window is the shared workspace: the user sees the focused Editor preview, the

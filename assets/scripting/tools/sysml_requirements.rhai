@@ -213,8 +213,40 @@ fn _check_one(report, check) {
     if check.kind == "attribute_equals" {
         let actual_record = _query(check.path, [check.attr]);
         if !_ok(actual_record) || actual_record.attrs[check.attr] == () { return _failure(check, "USD attribute is missing"); }
-        if actual_record.attrs[check.attr] != check.expected { return _failure(check, "USD attribute does not equal expected value"); }
+        let actual = actual_record.attrs[check.attr];
+        let expected = check.expected;
+        // QueryUsdPrim preserves the canonical quoted literal for some
+        // authored string opinions.  Compare string content, not the literal
+        // delimiters, while keeping numeric/bool equality exact.
+        if type_of(actual) == "string" {
+            actual = _text(actual);
+            expected = _text(expected);
+        }
+        if actual != expected { return _failure(check, "USD attribute does not equal expected value"); }
         return #{ok: true, id: check.id, component: check.component, requirement: check.requirement, path: check.path};
+    }
+    if check.kind == "relationship" {
+        if check.rel == () || check.rel == "" {
+            return _failure(check, "USD relationship name is missing");
+        }
+        let actual_record = query("QueryUsdPrim", #{path: check.path, rels: [check.rel]});
+        if !_ok(actual_record) || actual_record.relationships == ()
+            || actual_record.relationships[check.rel] == () {
+            return _failure(check, "USD relationship is missing");
+        }
+        let actual = actual_record.relationships[check.rel];
+        let expected = if check.targets == () { [] } else { check.targets };
+        if actual.len() != expected.len() {
+            return _failure(check, "USD relationship target count disagrees with expected value");
+        }
+        for target in expected {
+            if !actual.contains(target) {
+                return _failure(check, "USD relationship targets disagree with expected value");
+            }
+        }
+        return #{ok: true, id: check.id, component: check.component,
+            requirement: check.requirement, path: check.path, actual: actual,
+            expected: expected};
     }
     _failure(check, "unknown generic SysML/USD check kind " + check.kind)
 }
@@ -242,5 +274,5 @@ fn evaluate(source_report, checks) {
 fn source() {
     let name = twin_name();
     if name == "" { return #{ok: false, error: "active Twin is unavailable"}; }
-    query("ValidateSysml", #{path: "twin://" + name})
+    query("ValidateSysml", #{path: "twin://" + name, compact: true})
 }

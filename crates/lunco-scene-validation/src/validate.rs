@@ -213,9 +213,7 @@ fn sysml_attributes_json(analysis: &lunco_sysml_ast::SysmlAnalysis) -> serde_jso
     serde_json::Value::Object(attributes)
 }
 
-fn sysml_attributes_qualified_json(
-    analysis: &lunco_sysml_ast::SysmlAnalysis,
-) -> serde_json::Value {
+fn sysml_attributes_qualified_json(analysis: &lunco_sysml_ast::SysmlAnalysis) -> serde_json::Value {
     let mut attributes = serde_json::Map::new();
     for attribute in analysis.attributes() {
         attributes.insert(
@@ -226,9 +224,7 @@ fn sysml_attributes_qualified_json(
     serde_json::Value::Object(attributes)
 }
 
-fn sysml_attribute_collisions_json(
-    analysis: &lunco_sysml_ast::SysmlAnalysis,
-) -> serde_json::Value {
+fn sysml_attribute_collisions_json(analysis: &lunco_sysml_ast::SysmlAnalysis) -> serde_json::Value {
     let mut names = std::collections::BTreeMap::<String, Vec<String>>::new();
     for attribute in analysis.attributes() {
         names
@@ -856,34 +852,121 @@ impl ApiQueryProvider for ValidateSysmlProvider {
         let report = validate_sysml_reference(world, path);
         let requirements = qualified_names(report.info.get("requirement_records"));
         let verification_cases = qualified_names(report.info.get("verification_cases"));
-        let value = json!({
-            "path": report.path,
-            "kind": report.kind,
-            "ok": report.ok,
-            "errors": report.errors,
-            "warnings": report.warnings,
-            "source_files": report.info.get("source_files").cloned().unwrap_or_else(|| json!([])),
-            "requirements": requirements,
-            "attributes": report.info.get("attributes").cloned().unwrap_or_else(|| json!({})),
-            "attributes_qualified": report
-                .info
-                .get("attributes_qualified")
-                .cloned()
-                .unwrap_or_else(|| json!({})),
-            "attribute_collisions": report
-                .info
-                .get("attribute_collisions")
-                .cloned()
-                .unwrap_or_else(|| json!([])),
-            "attribute_records": report.info.get("attribute_records").cloned().unwrap_or_else(|| json!([])),
-            "requirement_records": report.info.get("requirement_records").cloned().unwrap_or_else(|| json!([])),
-            "verification_cases": verification_cases,
-            "verification_records": report.info.get("verification_cases").cloned().unwrap_or_else(|| json!([])),
-            "source_revision": report.info.get("source_revision").cloned().unwrap_or(json!(0)),
-            "source_revision_hex": report.info.get("source_revision_hex").cloned().unwrap_or_else(|| json!("0x0000000000000000")),
-        });
+        // Rhai has a deliberately bounded string/value surface.  The normal
+        // ValidateAsset report keeps full AST records for IDE tooling, but a
+        // test only needs names, scalar values, and verification coverage.
+        // `compact=true` therefore projects the same validated snapshot into
+        // a small deterministic record set instead of serializing the whole
+        // AST through the scripting bridge.
+        let compact = params
+            .get("compact")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let value = if compact {
+            json!({
+                "path": report.path,
+                "kind": report.kind,
+                "ok": report.ok,
+                "errors": report.errors,
+                "warnings": report.warnings,
+                "source_files": report.info.get("source_files").cloned().unwrap_or_else(|| json!([])),
+                "requirements": requirements,
+                "attributes": compact_sysml_attributes(report.info.get("attributes")),
+                "requirement_records": compact_requirement_records(report.info.get("requirement_records")),
+                "verification_cases": verification_cases,
+                "verification_records": compact_verification_records(report.info.get("verification_cases")),
+                "source_revision": report.info.get("source_revision").cloned().unwrap_or(json!(0)),
+                "source_revision_hex": report.info.get("source_revision_hex").cloned().unwrap_or_else(|| json!("0x0000000000000000")),
+            })
+        } else {
+            json!({
+                "path": report.path,
+                "kind": report.kind,
+                "ok": report.ok,
+                "errors": report.errors,
+                "warnings": report.warnings,
+                "source_files": report.info.get("source_files").cloned().unwrap_or_else(|| json!([])),
+                "requirements": requirements,
+                "attributes": report.info.get("attributes").cloned().unwrap_or_else(|| json!({})),
+                "attributes_qualified": report
+                    .info
+                    .get("attributes_qualified")
+                    .cloned()
+                    .unwrap_or_else(|| json!({})),
+                "attribute_collisions": report
+                    .info
+                    .get("attribute_collisions")
+                    .cloned()
+                    .unwrap_or_else(|| json!([])),
+                "attribute_records": report.info.get("attribute_records").cloned().unwrap_or_else(|| json!([])),
+                "requirement_records": report.info.get("requirement_records").cloned().unwrap_or_else(|| json!([])),
+                "verification_cases": verification_cases,
+                "verification_records": report.info.get("verification_cases").cloned().unwrap_or_else(|| json!([])),
+                "source_revision": report.info.get("source_revision").cloned().unwrap_or(json!(0)),
+                "source_revision_hex": report.info.get("source_revision_hex").cloned().unwrap_or_else(|| json!("0x0000000000000000")),
+            })
+        };
         ApiResponse::ok(value)
     }
+}
+
+fn compact_sysml_attributes(value: Option<&serde_json::Value>) -> serde_json::Value {
+    let mut output = serde_json::Map::new();
+    let Some(serde_json::Value::Object(attributes)) = value else {
+        return serde_json::Value::Object(output);
+    };
+    for (name, record) in attributes {
+        let scalar = record
+            .get("value")
+            .map(|value| json!({
+                "number": value.get("number").cloned().unwrap_or(serde_json::Value::Null),
+                "literal": value.get("literal").cloned().unwrap_or(serde_json::Value::Null),
+            }))
+            .unwrap_or_else(|| json!({"number": null, "literal": null}));
+        output.insert(name.clone(), json!({"value": scalar}));
+    }
+    serde_json::Value::Object(output)
+}
+
+fn compact_requirement_records(value: Option<&serde_json::Value>) -> serde_json::Value {
+    let records = value
+        .and_then(serde_json::Value::as_array)
+        .map(|records| {
+            records
+                .iter()
+                .filter_map(|record| {
+                    let name = record
+                        .get("element")
+                        .and_then(|element| element.get("qualified_name"))
+                        .or_else(|| record.get("qualified_name"))
+                        .cloned()?;
+                    Some(json!({"qualified_name": name}))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    serde_json::Value::Array(records)
+}
+
+fn compact_verification_records(value: Option<&serde_json::Value>) -> serde_json::Value {
+    let records = value
+        .and_then(serde_json::Value::as_array)
+        .map(|records| {
+            records
+                .iter()
+                .filter_map(|record| {
+                    let name = record
+                        .get("element")
+                        .and_then(|element| element.get("qualified_name"))
+                        .or_else(|| record.get("qualified_name"))
+                        .cloned()?;
+                    let verifies = record.get("verifies").cloned().unwrap_or_else(|| json!([]));
+                    Some(json!({"qualified_name": name, "verifies": verifies}))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    serde_json::Value::Array(records)
 }
 
 fn qualified_names(value: Option<&serde_json::Value>) -> Vec<String> {

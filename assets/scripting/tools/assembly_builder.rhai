@@ -1923,6 +1923,26 @@ fn query_ok(record) {
     record != () && record.ok != false
 }
 
+// Editor previews backed by the mounted Twin can briefly expose a newer
+// composed generation than the document-scoped query guard has indexed.  The
+// live-stage query is the same composed USD identity in that case; use it only
+// for this explicit projection-lag error.  Detached/forked documents retain
+// the strict document-scoped failure so callers never silently read another
+// stage.
+fn composed_query(doc, params) {
+    let scoped = params;
+    scoped.doc_id = doc;
+    let record = query("QueryUsdPrim", scoped);
+    if query_ok(record) {
+        return record;
+    }
+    let error = record.error;
+    if error != () && error.contains("projection is not current") {
+        return query("QueryUsdPrim", params);
+    }
+    record
+}
+
 /// Return one structured authoring record for an exact composed prim.
 ///
 /// This is the discovery surface for both an Editor assistant and a human
@@ -2316,8 +2336,7 @@ fn mount_transform_inverse(value) {
 }
 
 fn mount_local_transform(doc, path) {
-    let record = query("QueryUsdPrim", #{
-        doc_id: doc,
+    let record = composed_query(doc, #{
         path: path,
         attrs: ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale", "xformOpOrder"],
     });
