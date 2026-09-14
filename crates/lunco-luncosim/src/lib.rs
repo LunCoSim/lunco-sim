@@ -517,6 +517,14 @@ fn build_gui_app_with_profile(offscreen: bool, render_profile: LunCoSimRenderPro
         app.add_plugins(lunco_render_bevy::LuncoRenderPlugin);
     }
     app.add_plugins(LunCoSimCorePlugin { headless: false });
+    // Scene-wide ambient fill is a presentation concern. Keep the resource on
+    // the GUI edge so the shared simulation core has no dependency on Bevy's
+    // light/render feature family.
+    #[cfg(feature = "ui")]
+    app.insert_resource(bevy::light::GlobalAmbientLight {
+        brightness: 0.0,
+        ..Default::default()
+    });
     #[cfg(feature = "ui")]
     lunco_luncosim_ui::register_presentation_bridges(&mut app);
     app

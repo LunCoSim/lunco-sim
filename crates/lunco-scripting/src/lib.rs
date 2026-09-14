@@ -264,7 +264,9 @@ pub fn register_builtin_policies() -> Result<(), String> {
             "dataset_provisioning",
         ),
         // Renderer Rust publishes shadow-resource facts only; the authored
-        // Rhai policy owns the warning decision and message.
+        // Rhai policy owns the warning decision and message. The render edge
+        // is deliberately opt-in so a headless scripting host stays GPU-free.
+        #[cfg(feature = "render-policy")]
         (
             "render_shadow_quality",
             lunco_render_recovery::RENDER_SHADOW_QUALITY_HOOK,
@@ -828,7 +830,7 @@ mod journal_tests {
     }
 }
 
-#[cfg(all(test, feature = "rhai"))]
+#[cfg(all(test, feature = "rhai", feature = "render-policy"))]
 mod policy_tests {
     use super::*;
 

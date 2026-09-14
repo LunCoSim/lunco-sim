@@ -33,6 +33,39 @@ wgpu, naga, or `bevy_render` — achieved **without a single `#[cfg(feature = "r
 code.** The gate is *which plugins you add*, not conditional compilation sprinkled through the
 simulation.
 
+## Composition is a crate boundary
+
+The dependency rule is enforced twice: in Cargo and at runtime.
+
+`lunco-luncosim-core` requests only the asset/image/shader stores needed to
+project USD data. Its `default_plugins()` is built from Bevy's
+`MinimalPlugins`, with the schedule runner disabled until the headless host
+chooses its execution mode. It adds only logging, diagnostics, input/state,
+`AssetPlugin`, and the USD data stores. It never constructs `DefaultPlugins`,
+`RenderPlugin`, `PbrPlugin`, `PostProcessPlugin`, a window backend, or a GPU
+resource. This remains true when a GUI package is built in the same Cargo
+feature-unified invocation.
+
+The windowed `lunco-luncosim` shell owns `DefaultPlugins`, Bevy light/window
+features, the `LunCoRenderPlugin`, workbench, and render recovery. The scripted
+render-shadow policy is an explicit `lunco-scripting/render-policy` feature
+enabled by that shell; the default Rhai/world bridge does not depend on the
+render-recovery crate. Likewise, `lunco-usd-queries` disables
+`lunco-doc-bevy`'s egui default because query providers are shared by API and
+headless hosts.
+
+When adding a crate to the simulation core, check both sides before merging:
+
+```sh
+cargo tree -e normal -p lunco-luncosim --no-default-features --features server -i bevy_render
+cargo tree -e normal -p lunco-luncosim --no-default-features --features server -i bevy_egui
+```
+
+Both commands must print `warning: nothing to print.`. A new render or UI edge
+belongs in the GUI composition root, or in a separately named optional feature;
+do not repair the failure by initializing render resources in the headless
+group.
+
 ## The finding that makes this cheap
 
 Bevy 0.19 already split its render stack. Measured with `cargo tree -p <crate> --depth 1`:

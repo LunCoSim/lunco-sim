@@ -35,6 +35,17 @@ use lunco_usd_bevy_scene::UsdPrimPath;
 #[cfg(feature = "networking")]
 use lunco_usd_sim_cosim::LoadScene;
 
+/// Asset registration needed by USD authoring in a headless world. These are
+/// data stores only; no render plugin is installed here.
+struct HeadlessAssetTypePlugin;
+
+impl Plugin for HeadlessAssetTypePlugin {
+    fn build(&self, app: &mut App) {
+        app.init_asset::<bevy::shader::Shader>();
+        app.init_asset::<bevy::image::Image>();
+    }
+}
+
 /// Exit status returned by the production runner.
 pub use bevy::app::AppExit;
 
@@ -106,6 +117,28 @@ mod startup_scene_tests {
     }
 }
 
+#[cfg(test)]
+mod headless_composition_tests {
+    use super::*;
+
+    #[test]
+    fn headless_plugins_install_only_data_asset_stores() {
+        let mut app = App::new();
+        app.add_plugins(default_plugins());
+
+        assert!(app.is_plugin_added::<AssetPlugin>());
+        assert!(app.world().get_resource::<AssetServer>().is_some());
+        assert!(app
+            .world()
+            .get_resource::<Assets<bevy::shader::Shader>>()
+            .is_some());
+        assert!(app
+            .world()
+            .get_resource::<Assets<bevy::image::Image>>()
+            .is_some());
+    }
+}
+
 /// The luncosim's one physics configuration.
 fn luncosim_physics_plugins() -> impl PluginGroup {
     PhysicsPlugins::default()
@@ -121,16 +154,17 @@ pub const SANDBOX_GRAVITY: lunco_environment::Gravity = lunco_environment::Gravi
 );
 
 /// Build the headless Bevy plugin group shared by the server and scene tests.
-/// No render, window backend, or UI feature is enabled in this package.
+///
+/// This is intentionally a hand-selected substrate rather than
+/// `DefaultPlugins` with render plugins disabled. Cargo feature unification can
+/// make a render plugin available in a downstream GUI build even when the core
+/// package did not request it; composing the headless group from `MinimalPlugins`
+/// makes that boundary structural and fail-closed.
 pub fn default_plugins() -> bevy::app::PluginGroupBuilder {
-    let group = DefaultPlugins
-        .set(AssetPlugin {
-            file_path: lunco_assets::assets_dir_abs().to_string_lossy().to_string(),
-            watch_for_changes_override: Some(false),
-            meta_check: AssetMetaCheck::Never,
-            ..default()
-        })
-        .set(bevy::log::LogPlugin {
+    let group = MinimalPlugins
+        .disable::<bevy::app::ScheduleRunnerPlugin>()
+        .add(bevy::app::PanicHandlerPlugin)
+        .add(bevy::log::LogPlugin {
             filter: "wgpu=error,naga=warn,cranelift=warn,cranelift_jit=warn,cranelift_codegen=warn,diffsol=warn,info".into(),
             fmt_layer: |_app| {
                 use bevy::log::tracing_subscriber::Layer;
@@ -146,13 +180,21 @@ pub fn default_plugins() -> bevy::app::PluginGroupBuilder {
             },
             ..default()
         })
-        .set(WindowPlugin {
-            primary_window: None,
-            exit_condition: bevy::window::ExitCondition::DontExit,
-            close_when_requested: false,
+        .add(bevy::diagnostic::DiagnosticsPlugin)
+        .add(bevy::input::InputPlugin)
+        .add(bevy::input_focus::InputFocusPlugin)
+        .add(bevy::input_focus::InputDispatchPlugin)
+        .add(bevy::state::app::StatesPlugin)
+        .add(AssetPlugin {
+            file_path: lunco_assets::assets_dir_abs().to_string_lossy().to_string(),
+            watch_for_changes_override: Some(false),
+            meta_check: AssetMetaCheck::Never,
             ..default()
-        });
+        })
+        .add_after::<AssetPlugin>(HeadlessAssetTypePlugin);
 
+    // BigSpace owns the transform propagation chain for the simulation world;
+    // the ordinary Bevy transform plugin must stay out of this composition.
     group.build().disable::<TransformPlugin>()
 }
 
@@ -1655,12 +1697,6 @@ impl Plugin for LunCoSimCorePlugin {
             .add_plugins(LunCoControllerPlugin)
             .add_plugins(LunCoAvatarPlugin)
             .add_plugins(lunco_scripting::LunCoScriptingPlugin)
-            // Default scene-wide fill for scenes that author no lighting; a
-            // scene-authored UsdLux light takes ambient over.
-            .insert_resource(bevy::light::GlobalAmbientLight {
-                brightness: 0.0,
-                ..Default::default()
-            })
             .add_systems(Startup, setup_luncosim)
             .add_systems(Startup, load_startup_scene_on_boot.after(setup_luncosim))
             // Fail loud if the requested `--scene` never loads (e.g. a wrong
