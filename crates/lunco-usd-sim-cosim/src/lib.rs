@@ -5190,7 +5190,7 @@ impl Plugin for UsdSimCosimPlugin {
         // that plugin; keeping the resources here makes the projection
         // plugin's system contract complete and idempotent.
         app.init_resource::<lunco_modelica_core::state::ModelicaDocumentRegistry>()
-            .init_resource::<lunco_modelica_core::state::GeneratedModelicaSources>()
+            .init_resource::<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>()
             .init_resource::<lunco_cosim::BindingRevision>()
             .init_resource::<lunco_core::SimulationBarrierParticipants>()
             .init_resource::<lunco_scripting::ScriptRegistry>()

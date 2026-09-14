@@ -49,9 +49,12 @@ presentation and the `lunica` application facade.
 
 The shared render-free participant contract is [`lunco-modelica-runtime`](../../crates/lunco-modelica-runtime/).
 It owns `ModelicaModel`, the serialized worker command/result messages, source
-assets, communication scheduling, notices, samples, and telemetry layout. The
-compiler host consumes that contract; USD projection and UI adapters depend on
-the runtime package directly when they do not need Rumoca compilation.
+assets, generated USD-document metadata, communication scheduling, notices,
+samples, and telemetry layout. The compiler host consumes that contract; USD
+projection and UI adapters depend on the runtime package directly when they do
+not need Rumoca compilation. The authored document registry remains in
+`lunco-modelica-core`; generated-document metadata is a separate runtime
+resource because it follows projection lifecycle rather than authored editing.
 
 ## 2. Architecture in layers
 
@@ -326,10 +329,11 @@ mutation signal, so a stale completion cannot leave a changed document asleep.
 Runtime Modelica telemetry is sampled from solver model time at the configured
 rate; its cursor only avoids rebuilding the same batch between due samples, and
 the shared signal registry remains the sole channel-history authority.
-Generated USD Modelica source metadata has a separate invalidation boundary:
-the generated source projection and its document link/removal lifecycle. Live
-`ModelicaModel` output and clock updates do not rebuild that source registry;
-they remain solver state and are consumed through the Modelica runtime paths.
+Generated USD Modelica source metadata has a separate invalidation boundary in
+`lunco_modelica_runtime::generated_source`: the generated source projection and
+its document link/removal lifecycle. Live `ModelicaModel` output and clock
+updates do not rebuild that source registry; they remain solver state and are
+consumed through the Modelica runtime paths.
 Member class discovery follows the Modelica source asset lifecycle: an asset
 load or failure event settles the declaration, and a source modification
 invalidates only that declaration before re-projection. There is no

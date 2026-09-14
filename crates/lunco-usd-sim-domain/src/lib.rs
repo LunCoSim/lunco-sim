@@ -94,9 +94,9 @@ fn retire_generated_document(
     if document.is_unassigned() {
         return;
     }
-    let generated = documents
-        .host(document)
-        .is_some_and(|host| lunco_modelica_core::state::is_generated_document(host.document()));
+    let generated = documents.host(document).is_some_and(|host| {
+        lunco_modelica_runtime::generated_source::is_generated_origin(host.document().origin())
+    });
     if generated {
         documents.remove_document(document);
     }
@@ -2798,7 +2798,9 @@ pub fn sync_generated_network_documents(
         )>,
     >,
     mut documents: ResMut<lunco_modelica_core::state::ModelicaDocumentRegistry>,
-    mut generated_metadata: ResMut<lunco_modelica_core::state::GeneratedModelicaSources>,
+    mut generated_metadata: ResMut<
+        lunco_modelica_runtime::generated_source::GeneratedModelicaSources,
+    >,
 ) {
     for (entity, source, mut model) in &mut generated {
         // Projection errors are represented by an empty diagnostic source and
@@ -2849,7 +2851,9 @@ pub fn on_remove_generated_source(
     trigger: On<Remove, GeneratedModelicaSource>,
     source_query: Query<(&GeneratedModelicaSource, Option<&ModelicaModel>)>,
     mut documents: Option<ResMut<lunco_modelica_core::state::ModelicaDocumentRegistry>>,
-    mut generated: Option<ResMut<lunco_modelica_core::state::GeneratedModelicaSources>>,
+    mut generated: Option<
+        ResMut<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>,
+    >,
 ) {
     let (network_root, doc_uri, model_document) = source_query
         .get(trigger.entity)
@@ -2871,9 +2875,9 @@ pub fn on_remove_generated_source(
                     .strip_suffix(".mo")?;
                 registry.find_bundled(&format!("generated/{model_name}.mo"))
             })?;
-        let is_generated = registry
-            .host(document)
-            .is_some_and(|host| lunco_modelica_core::state::is_generated_document(host.document()));
+        let is_generated = registry.host(document).is_some_and(|host| {
+            lunco_modelica_runtime::generated_source::is_generated_origin(host.document().origin())
+        });
         if is_generated {
             registry.remove_document(document);
             Some(document)
@@ -2895,12 +2899,12 @@ pub fn on_remove_generated_source(
 /// Publish the current generated sources to the UI-facing derived registry.
 pub fn publish_generated_sources(
     q_generated: Query<(&GeneratedModelicaSource, Option<&ModelicaModel>)>,
-    mut generated: ResMut<lunco_modelica_core::state::GeneratedModelicaSources>,
+    mut generated: ResMut<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>,
 ) {
     generated.entries = q_generated
         .iter()
-        .map(
-            |(source, model)| lunco_modelica_core::state::GeneratedModelicaSourceEntry {
+        .map(|(source, model)| {
+            lunco_modelica_runtime::generated_source::GeneratedModelicaSourceEntry {
                 document: model.map(|m| m.document).unwrap_or_default(),
                 uri: model
                     .map(|m| format!("generated://{}.mo", m.model_name))
@@ -2919,13 +2923,15 @@ pub fn publish_generated_sources(
                 units: source
                     .units
                     .iter()
-                    .map(|unit| lunco_modelica_core::state::GeneratedModelicaUnit {
-                        name: unit.name.clone(),
-                        instance: unit.instance.clone(),
-                        members: unit.component_paths.clone(),
-                        inputs: unit.inputs.iter().cloned().collect(),
-                        outputs: unit.outputs.iter().cloned().collect(),
-                    })
+                    .map(
+                        |unit| lunco_modelica_runtime::generated_source::GeneratedModelicaUnit {
+                            name: unit.name.clone(),
+                            instance: unit.instance.clone(),
+                            members: unit.component_paths.clone(),
+                            inputs: unit.inputs.iter().cloned().collect(),
+                            outputs: unit.outputs.iter().cloned().collect(),
+                        },
+                    )
                     .collect(),
                 members: source.members.clone(),
                 source_roots: source.source_roots.clone(),
@@ -2933,8 +2939,8 @@ pub fn publish_generated_sources(
                 boundary_outputs: source.boundary_outputs.clone(),
                 member_output_aliases: source.member_output_aliases.clone(),
                 projection_error: source.projection_error.clone(),
-            },
-        )
+            }
+        })
         .collect();
     generated.dirty = false;
 }
@@ -2945,7 +2951,7 @@ pub fn publish_generated_sources(
 /// outside this metadata contract.
 pub fn generated_sources_need_publish(
     changed: Query<(), Changed<GeneratedModelicaSource>>,
-    generated: Res<lunco_modelica_core::state::GeneratedModelicaSources>,
+    generated: Res<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>,
 ) -> bool {
     generated.dirty || !changed.is_empty()
 }
@@ -4808,7 +4814,7 @@ def Scope "Rig"
     fn removing_generated_source_retires_only_its_ephemeral_document() {
         let mut app = App::new();
         app.init_resource::<lunco_modelica_core::state::ModelicaDocumentRegistry>()
-            .init_resource::<lunco_modelica_core::state::GeneratedModelicaSources>()
+            .init_resource::<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>()
             .add_observer(on_remove_generated_source);
         let document = app
             .world_mut()
@@ -4846,23 +4852,25 @@ def Scope "Rig"
             .resource_mut::<lunco_modelica_core::state::ModelicaDocumentRegistry>()
             .link(entity, document);
         app.world_mut()
-            .resource_mut::<lunco_modelica_core::state::GeneratedModelicaSources>()
+            .resource_mut::<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>()
             .entries
-            .push(lunco_modelica_core::state::GeneratedModelicaSourceEntry {
-                document,
-                uri: "generated://Generated.mo".into(),
-                network_root: "/Rig".into(),
-                model_name: "Generated".into(),
-                source: "model Generated end Generated;".into(),
-                component_paths: Vec::new(),
-                units: Vec::new(),
-                members: Vec::new(),
-                source_roots: Vec::new(),
-                boundary_inputs: Vec::new(),
-                boundary_outputs: Vec::new(),
-                member_output_aliases: Vec::new(),
-                projection_error: None,
-            });
+            .push(
+                lunco_modelica_runtime::generated_source::GeneratedModelicaSourceEntry {
+                    document,
+                    uri: "generated://Generated.mo".into(),
+                    network_root: "/Rig".into(),
+                    model_name: "Generated".into(),
+                    source: "model Generated end Generated;".into(),
+                    component_paths: Vec::new(),
+                    units: Vec::new(),
+                    members: Vec::new(),
+                    source_roots: Vec::new(),
+                    boundary_inputs: Vec::new(),
+                    boundary_outputs: Vec::new(),
+                    member_output_aliases: Vec::new(),
+                    projection_error: None,
+                },
+            );
 
         app.world_mut()
             .entity_mut(entity)
@@ -4876,7 +4884,7 @@ def Scope "Rig"
             .is_none());
         assert!(app
             .world()
-            .resource::<lunco_modelica_core::state::GeneratedModelicaSources>()
+            .resource::<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>()
             .entries
             .is_empty());
     }
@@ -4891,7 +4899,7 @@ def Scope "Rig"
         }
 
         let mut app = App::new();
-        app.init_resource::<lunco_modelica_core::state::GeneratedModelicaSources>()
+        app.init_resource::<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>()
             .init_resource::<PublicationCount>()
             .add_systems(
                 Update,
@@ -4941,7 +4949,7 @@ def Scope "Rig"
         assert_eq!(app.world().resource::<PublicationCount>().0, 2);
 
         app.world_mut()
-            .resource_mut::<lunco_modelica_core::state::GeneratedModelicaSources>()
+            .resource_mut::<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>()
             .dirty = true;
         app.update();
         assert_eq!(app.world().resource::<PublicationCount>().0, 3);

@@ -1781,7 +1781,6 @@ fn build_modelica_core(app: &mut App) {
     // adds core first, so the GUI still gets them. Guarded/idempotent so the
     // UI and headless hosts share the same idempotent initialization.
     app.init_resource::<crate::state::ModelicaDocumentRegistry>();
-    app.init_resource::<crate::state::GeneratedModelicaSources>();
     if !app.is_plugin_added::<crate::api::ModelicaApiEditPlugin>() {
         app.add_plugins(crate::api::ModelicaApiEditPlugin);
     }

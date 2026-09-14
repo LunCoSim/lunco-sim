@@ -198,7 +198,7 @@ impl BrowserSection for ModelicaSection {
         // path as every other model — source editor, diagram, and telemetry —
         // rather than opening in the generic text viewer.
         let generated = ctx
-            .resource::<crate::state::GeneratedModelicaSources>()
+            .resource::<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>()
             .map(|sources| sources.entries.clone())
             .unwrap_or_default();
         if !generated.is_empty() {
@@ -234,9 +234,9 @@ fn render_generated_network_row(
     ui: &mut egui::Ui,
     ctx: &mut BrowserCtx<'_, '_>,
     theme: &lunco_theme::Theme,
-    entry: &crate::state::GeneratedModelicaSourceEntry,
+    entry: &lunco_modelica_runtime::generated_source::GeneratedModelicaSourceEntry,
 ) {
-    let display_name = crate::state::generated_network_display_name(&entry.network_root);
+    let display_name = crate::ui::generated_source::network_display_name(&entry.network_root);
     let member_count = entry
         .units
         .iter()
@@ -303,7 +303,7 @@ fn render_generated_network_row(
             ui.label(
                 egui::RichText::new(format!(
                     "class {}",
-                    crate::state::generated_class_display_name(&entry.model_name)
+                    crate::ui::generated_source::class_display_name(&entry.model_name)
                 ))
                 .small()
                 .color(theme.schematic.text_muted),
@@ -369,7 +369,7 @@ fn render_generated_network_row(
                     }
                 }
                 for unit in &entry.units {
-                    let unit_label = crate::state::generated_unit_display_name(unit);
+                    let unit_label = crate::ui::generated_source::unit_display_name(unit);
                     ui.collapsing(
                         format!("{} · {} member(s)", unit_label, unit.members.len()),
                         |ui| {
@@ -382,12 +382,12 @@ fn render_generated_network_row(
                                 if let Some((_, asset, class)) =
                                     entry.members.iter().find(|(path, _, _)| path == member)
                                 {
-                                    ui.label(crate::state::generated_member_display_name(
+                                    ui.label(crate::ui::generated_source::member_display_name(
                                         member, class,
                                     ))
                                     .on_hover_text(format!("USD: {member}\nSource asset: {asset}"));
                                 } else {
-                                    ui.label(crate::state::generated_path_leaf(member))
+                                    ui.label(crate::ui::generated_source::path_leaf(member))
                                         .on_hover_text(member);
                                 }
                             }
@@ -404,7 +404,7 @@ fn render_generated_network_row(
                                     .color(theme.schematic.text_muted),
                             );
                             for (member, output, alias) in &entry.member_output_aliases {
-                                ui.label(crate::state::generated_member_output_display_name(
+                                ui.label(crate::ui::generated_source::member_output_display_name(
                                     member, output,
                                 ))
                                 .on_hover_text(format!(
@@ -426,7 +426,9 @@ fn render_generated_network_row(
 /// unit instance. Opening the unit class here lets the normal Modelica canvas
 /// show the actual composed members while preserving the root for source,
 /// interface, and multi-unit navigation.
-fn generated_network_open_class(entry: &crate::state::GeneratedModelicaSourceEntry) -> String {
+fn generated_network_open_class(
+    entry: &lunco_modelica_runtime::generated_source::GeneratedModelicaSourceEntry,
+) -> String {
     if entry.units.len() == 1 {
         entry.units[0].name.clone()
     } else {
@@ -471,7 +473,7 @@ fn filter_class_tree(class: &ClassEntry, query: &BrowserQuery) -> Option<ClassEn
 }
 
 fn generated_entry_matches(
-    entry: &crate::state::GeneratedModelicaSourceEntry,
+    entry: &lunco_modelica_runtime::generated_source::GeneratedModelicaSourceEntry,
     query: &BrowserQuery,
 ) -> bool {
     if !query.is_active() {
@@ -479,7 +481,7 @@ fn generated_entry_matches(
     }
     query.matches(&entry.network_root)
         || query.matches(&entry.model_name)
-        || query.matches(&crate::state::generated_network_display_name(
+        || query.matches(&crate::ui::generated_source::network_display_name(
             &entry.network_root,
         ))
         || entry.component_paths.iter().any(|path| query.matches(path))
@@ -1315,15 +1317,15 @@ end CompositeFixture;
     #[test]
     fn generated_network_name_uses_the_composed_network_root_leaf() {
         assert_eq!(
-            crate::state::generated_network_display_name("/Rover"),
+            crate::ui::generated_source::network_display_name("/Rover"),
             "Rover network"
         );
         assert_eq!(
-            crate::state::generated_network_display_name("/Rover/"),
+            crate::ui::generated_source::network_display_name("/Rover/"),
             "Rover network"
         );
         assert_eq!(
-            crate::state::generated_network_display_name("/"),
+            crate::ui::generated_source::network_display_name("/"),
             "Generated network"
         );
     }
@@ -1337,17 +1339,19 @@ end CompositeFixture;
 
     #[test]
     fn single_unit_generated_network_opens_member_class() {
-        let entry = crate::state::GeneratedModelicaSourceEntry {
+        let entry = lunco_modelica_runtime::generated_source::GeneratedModelicaSourceEntry {
             document: DocumentId::new(1),
             uri: "generated://Rover.mo".to_string(),
             network_root: "/Rover".to_string(),
             model_name: "Rover_System".to_string(),
             source: "model Rover_System end Rover_System;".to_string(),
             component_paths: Vec::new(),
-            units: vec![crate::state::GeneratedModelicaUnit {
-                name: "Unit_Rover_Battery".to_string(),
-                ..Default::default()
-            }],
+            units: vec![
+                lunco_modelica_runtime::generated_source::GeneratedModelicaUnit {
+                    name: "Unit_Rover_Battery".to_string(),
+                    ..Default::default()
+                },
+            ],
             members: Vec::new(),
             source_roots: Vec::new(),
             boundary_inputs: Vec::new(),
@@ -1361,22 +1365,22 @@ end CompositeFixture;
     #[test]
     fn generated_details_use_readable_names_and_keep_technical_names_for_tooltips() {
         assert_eq!(
-            crate::state::generated_path_leaf("/Rover/YawHead/SolarPanel"),
+            crate::ui::generated_source::path_leaf("/Rover/YawHead/SolarPanel"),
             "SolarPanel"
         );
         assert_eq!(
-            crate::state::generated_class_display_name("SolarRoverTest_x2f_SolarRover_System"),
+            crate::ui::generated_source::class_display_name("SolarRoverTest_x2f_SolarRover_System"),
             "SolarRoverTest / SolarRover"
         );
         assert_eq!(
-            crate::state::generated_member_display_name(
+            crate::ui::generated_source::member_display_name(
                 "/SolarRoverTest/SolarRover/Motor_FL",
                 "LunCo.Electrical.DCMotor"
             ),
             "Motor_FL · DCMotor"
         );
         assert_eq!(
-            crate::state::generated_member_output_display_name(
+            crate::ui::generated_source::member_output_display_name(
                 "/SolarRoverTest/SolarRover/Motor_FL",
                 "electrical_power"
             ),
@@ -1386,7 +1390,7 @@ end CompositeFixture;
 
     #[test]
     fn multi_unit_generated_network_opens_root_class() {
-        let entry = crate::state::GeneratedModelicaSourceEntry {
+        let entry = lunco_modelica_runtime::generated_source::GeneratedModelicaSourceEntry {
             document: DocumentId::new(1),
             uri: "generated://Rover.mo".to_string(),
             network_root: "/Rover".to_string(),
@@ -1394,11 +1398,11 @@ end CompositeFixture;
             source: "model Rover_System end Rover_System;".to_string(),
             component_paths: Vec::new(),
             units: vec![
-                crate::state::GeneratedModelicaUnit {
+                lunco_modelica_runtime::generated_source::GeneratedModelicaUnit {
                     name: "Unit_Rover_Battery".to_string(),
                     ..Default::default()
                 },
-                crate::state::GeneratedModelicaUnit {
+                lunco_modelica_runtime::generated_source::GeneratedModelicaUnit {
                     name: "Unit_Rover_Controller".to_string(),
                     ..Default::default()
                 },
