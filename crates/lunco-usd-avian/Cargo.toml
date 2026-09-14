@@ -12,6 +12,7 @@ lunco-core = { path = "../lunco-core" }
 lunco-cosim = { path = "../lunco-cosim" }
 lunco-physics = { path = "../lunco-physics" }
 lunco-usd-avian-core = { path = "../lunco-usd-avian-core" }
+lunco-usd-avian-filters = { path = "../lunco-usd-avian-filters" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
@@ -23,6 +24,7 @@ default = ["3d"]
 3d = []
 
 [dev-dependencies]
+big_space = { workspace = true }
 
 [lints]
 workspace = true

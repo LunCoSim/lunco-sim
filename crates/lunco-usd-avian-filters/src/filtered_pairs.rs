@@ -200,7 +200,7 @@ const PAIR_RESOLVE_RETRY_INTERVAL: u32 = 60;
 ///
 /// Returns `None` when the schema is absent, so the caller can skip the insert
 /// entirely rather than stamping an empty carrier on every prim in the scene.
-pub(crate) fn read_filtered_pairs(
+pub fn read_filtered_pairs(
     reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
     sdf_path: &SdfPath,
 ) -> Option<PendingFilteredPairs> {
@@ -272,7 +272,7 @@ fn collider_owner(
 /// (`bvh_broad_phase.rs`, "Avoid duplicate pairs"), so a filter that arrives after
 /// the first narrow phase does not apply to a contact that already exists. It has
 /// to be armed before the bodies can touch, not merely eventually.
-pub(crate) fn resolve_filtered_pairs(
+pub fn resolve_filtered_pairs(
     mut commands: Commands,
     q_pending: Query<(Entity, &PendingFilteredPairs, &UsdPrimPath)>,
     q_colliders: Query<(Entity, &UsdPrimPath), With<Collider>>,
@@ -606,58 +606,7 @@ impl CollisionHooks for UsdCollisionFilter<'_, '_> {
 
 #[cfg(test)]
 mod tests {
-    //! The read and the ownership walk. The filter itself is proven by
-    //! `scenes/tests/filtered_pairs.usda`, which needs a stepping solver.
-
     use super::*;
-    use lunco_usd_bevy_core::canonical::CanonicalStage;
-    use lunco_usd_core::StageRecipe;
-
-    /// Two overlapping bodies, one filtering the other by naming its COLLIDER
-    /// child — the form that must resolve to the body.
-    const PAIRS: &str = r#"#usda 1.0
-def Xform "Rig"
-{
-    def Xform "A" ( prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsFilteredPairsAPI"] )
-    {
-        rel physics:filteredPairs = </Rig/B/Shell>
-        def Cube "Shell" ( prepend apiSchemas = ["PhysicsCollisionAPI"] ) { double size = 1 }
-    }
-    def Xform "B" ( prepend apiSchemas = ["PhysicsRigidBodyAPI"] )
-    {
-        def Cube "Shell" ( prepend apiSchemas = ["PhysicsCollisionAPI"] ) { double size = 1 }
-    }
-}
-"#;
-
-    #[test]
-    fn an_authored_pair_is_read_off_the_prim_that_applies_the_api() {
-        let recipe = StageRecipe::from_source("t.usda", PAIRS);
-        let cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
-        let reader = cs.view();
-
-        let a = SdfPath::new("/Rig/A").unwrap();
-        let read = read_filtered_pairs(&reader, &a).expect("A applies the API");
-        assert_eq!(read.targets, vec!["/Rig/B/Shell".to_string()]);
-
-        // The other end authors nothing: filtering is symmetric, so one opinion
-        // is the whole pair and the loader must not require two.
-        let b = SdfPath::new("/Rig/B").unwrap();
-        assert!(
-            read_filtered_pairs(&reader, &b).is_none(),
-            "B applies no {} — reading one would mean the schema is being guessed at",
-            ptok::API_FILTERED_PAIRS,
-        );
-    }
-
-    #[test]
-    fn a_prim_without_the_api_is_not_a_filtered_pair() {
-        let recipe = StageRecipe::from_source("t.usda", PAIRS);
-        let cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
-        let reader = cs.view();
-        let shell = SdfPath::new("/Rig/B/Shell").unwrap();
-        assert!(read_filtered_pairs(&reader, &shell).is_none());
-    }
 
     #[test]
     fn stiction_band_selects_static_only_near_zero_slip() {

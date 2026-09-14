@@ -55,6 +55,8 @@ use bevy::mesh::VertexAttributeValues;
 use bevy::prelude::*;
 use lunco_core::coords::GridPos;
 use lunco_usd_avian_core::report_physics_runtime_fault;
+use lunco_usd_avian_filters::collision_groups::{CollisionGroupTable, CollisionGroupTables};
+use lunco_usd_avian_filters::filtered_pairs as collision_filters;
 use lunco_usd_bevy_core::{
     effective_purpose, local_transform_at, Purpose, TransformReadError, UsdInstanceProjection,
     UsdInstanceRoot, UsdRead, UsdStageAsset,
@@ -105,15 +107,6 @@ pub fn invalidate_usd_physics_projection(world: &mut World, entity: Entity) -> b
     entity_mut.remove::<UsdAvianProcessed>();
     true
 }
-
-pub mod filtered_pairs;
-pub use filtered_pairs::{
-    enable_shared_tire_contact_hooks, FilteredPairs, JointCollisionPair, JointFilteredPairs,
-    PendingFilteredPairs, SharedTireContact, UsdCollisionFilter,
-};
-
-pub mod collision_groups;
-pub use collision_groups::{CollisionGroupTable, CollisionGroupTables};
 
 /// Bevy plugin for USD physics mapping.
 ///
@@ -269,7 +262,7 @@ impl Plugin for UsdAvianPlugin {
         );
 
         app.register_type::<ShouldBeDynamic>()
-            .register_type::<filtered_pairs::SharedTireContact>()
+            .register_type::<collision_filters::SharedTireContact>()
             .register_type::<lunco_core::Mobility>()
             .add_observer(on_add_usd_prim)
             .add_observer(process_usd_avian_prims)
@@ -297,8 +290,8 @@ impl Plugin for UsdAvianPlugin {
             )
             .add_systems(
                 avian3d::schedule::PhysicsSchedule,
-                filtered_pairs::resolve_filtered_pairs
-                    .run_if(any_with_component::<PendingFilteredPairs>)
+                collision_filters::resolve_filtered_pairs
+                    .run_if(any_with_component::<collision_filters::PendingFilteredPairs>)
                     .in_set(avian3d::prelude::PhysicsSystems::Prepare)
                     .after(avian3d::prelude::PhysicsSystems::First)
                     .before(avian3d::schedule::PhysicsStepSystems::First),
@@ -309,10 +302,10 @@ impl Plugin for UsdAvianPlugin {
                     build_terrain_mesh_colliders
                         .run_if(any_with_component::<PendingTerrainCollider>),
                     enforce_kinematic_on_animated,
-                    filtered_pairs::enable_shared_tire_contact_hooks,
-                    filtered_pairs::enable_static_friction_contact_hooks,
-                    filtered_pairs::synchronize_collision_hook_flags
-                        .after(filtered_pairs::enable_static_friction_contact_hooks),
+                    collision_filters::enable_shared_tire_contact_hooks,
+                    collision_filters::enable_static_friction_contact_hooks,
+                    collision_filters::synchronize_collision_hook_flags
+                        .after(collision_filters::enable_static_friction_contact_hooks),
                     project_mobility_to_rigid_body,
                 ),
             );
@@ -1871,7 +1864,7 @@ fn extract_avian_prim(
     // `PhysicsFilteredPairsAPI` applies to a body OR to a collider under one, and
     // is read before either branch below because it is orthogonal to both: it says
     // which pairs never collide, not what this prim IS.
-    if let Some(pending) = filtered_pairs::read_filtered_pairs(reader, sdf_path) {
+    if let Some(pending) = collision_filters::read_filtered_pairs(reader, sdf_path) {
         commands.entity(entity).try_insert(pending);
     }
 
@@ -3802,7 +3795,7 @@ fn build_usd_physics_joints(
 ///
 /// 1. **A jointed pair never reaches the narrow phase.** `JointCollisionDisabled`
 ///    rides the same bundle as the joint component (never a later insert), and
-///    the pair is entered into [`filtered_pairs::filter_pair`] the moment it is
+///    the pair is entered into [`collision_filters::filter_pair`] the moment it is
 ///    attached — so no contact can form even while the joint is still parked.
 /// 2. **A joint may only enter the graph once BOTH bodies are in avian's island
 ///    graph.** The joint is parked as a [`PendingJoint`] and installed by
@@ -3831,10 +3824,10 @@ pub fn attach_joint<J: Component + Clone>(
     // Rule 1, and it lands NOW rather than with the joint: a jointed pair must
     // never reach the narrow phase, and a contact formed during the wait cannot
     // be cleaned up afterwards without corrupting avian's island bookkeeping.
-    // See `filtered_pairs::filter_pair`.
-    filtered_pairs::filter_pair(commands, joint_entity, body0, body1);
+    // See `collision_filters::filter_pair`.
+    collision_filters::filter_pair(commands, joint_entity, body0, body1);
     commands.entity(joint_entity).try_insert((
-        filtered_pairs::JointCollisionPair { body0, body1 },
+        collision_filters::JointCollisionPair { body0, body1 },
         PendingJoint {
             body0,
             body1,
@@ -3872,7 +3865,7 @@ pub struct JointAdmission;
 
 impl Plugin for JointAttachPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(filtered_pairs::on_remove_joint_collision_pair);
+        app.add_observer(collision_filters::on_remove_joint_collision_pair);
         // One registration per joint type: the ticket is generic over the
         // constraint it carries, so a new joint kind is one line HERE and
         // nothing else anywhere.
@@ -4402,7 +4395,7 @@ fn apply_physics_material(
             if (friction.static_coefficient - friction.dynamic_coefficient).abs()
                 > avian3d::math::Scalar::EPSILON
             {
-                filtered_pairs::enable_collision_hook(
+                collision_filters::enable_collision_hook(
                     commands,
                     entity,
                     ActiveCollisionHooks::MODIFY_CONTACTS,
@@ -4730,10 +4723,11 @@ mod extract_parity_tests {
     //! compound collider → `collect_child_colliders` → `local_transform_at`
     //! → `local_transform_at` → mass props).
 
-    use super::{extract_avian_prim, read_physics_material, CollisionGroupTable};
+    use super::{extract_avian_prim, read_physics_material};
     use avian3d::prelude::*;
     use bevy::ecs::world::CommandQueue;
     use bevy::prelude::*;
+    use lunco_usd_avian_filters::collision_groups::CollisionGroupTable;
     use lunco_usd_bevy_core::canonical::CanonicalStage;
     use lunco_usd_bevy_core::StageView;
     use lunco_usd_core::StageRecipe;
