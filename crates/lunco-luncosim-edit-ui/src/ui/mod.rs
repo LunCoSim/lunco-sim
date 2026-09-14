@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 use lunco_controller::ControllerLink;
 use lunco_core::{Avatar, ControlBinding, InputPorts, SceneMountState, TheLocalAvatar};
+use lunco_modelica_ui_core::{DEFAULT_MODELICA_GRAPH_ID, MODELICA_PLOT_KIND_ID};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_workbench::{
     HelpMouse, HelpShortcut, LiveHelpSection, LiveHelpSections, PerspectiveHelp, ViewportPanel,
@@ -1085,8 +1086,8 @@ impl Perspective for BuildPerspective {
             ..Default::default()
         }
         .open_instance(
-            lunco_modelica_ui::ui::panels::graphs::MODELICA_PLOT_KIND,
-            lunco_modelica_ui::ui::viz::DEFAULT_MODELICA_GRAPH.0,
+            PanelId(MODELICA_PLOT_KIND_ID),
+            DEFAULT_MODELICA_GRAPH_ID,
             PanelSlot::Bottom,
         )
     }
@@ -1222,14 +1223,8 @@ mod tests {
     fn build_perspective_seeds_the_canonical_graph_instance() {
         let plan = BuildPerspective.layout();
         assert_eq!(plan.instance_tabs.len(), 1);
-        assert_eq!(
-            plan.instance_tabs[0].kind,
-            lunco_modelica_ui::ui::panels::graphs::MODELICA_PLOT_KIND
-        );
-        assert_eq!(
-            plan.instance_tabs[0].instance,
-            lunco_modelica_ui::ui::viz::DEFAULT_MODELICA_GRAPH.0
-        );
+        assert_eq!(plan.instance_tabs[0].kind, PanelId(MODELICA_PLOT_KIND_ID));
+        assert_eq!(plan.instance_tabs[0].instance, DEFAULT_MODELICA_GRAPH_ID);
         assert_eq!(plan.instance_tabs[0].slot, PanelSlot::Bottom);
     }
 

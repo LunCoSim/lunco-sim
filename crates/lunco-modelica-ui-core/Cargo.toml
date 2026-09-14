@@ -1,0 +1,14 @@
+[package]
+name = "lunco-modelica-ui-core"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Render-independent Modelica UI commands and stable panel identities"
+
+[dependencies]
+bevy.workspace = true
+lunco-core = { path = "../lunco-core" }
+serde = { workspace = true }
+
+[lints]
+workspace = true

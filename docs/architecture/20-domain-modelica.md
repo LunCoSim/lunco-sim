@@ -94,8 +94,10 @@ resource because it follows projection lifecycle rather than authored editing.
 
 Consumers that need only source facts use `lunco-modelica-ast`; consumers that
 compile or simulate use `lunco-modelica-core`; only workbench hosts use
-`lunco-modelica-ui`. No consumer imports the UI package merely to access the
-compiler or worker.
+`lunco-modelica-ui`. Cross-package UI requests use the render-independent
+`lunco-modelica-ui-core` contracts, so an editor can target a Modelica document
+or reserve its plot identity without importing the complete Modelica workbench.
+Observers, tab lookup, and panel rendering remain in `lunco-modelica-ui`.
 
 ### 2a. Generated network schemas
 

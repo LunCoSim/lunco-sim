@@ -5,6 +5,7 @@ use bevy_egui::egui;
 use lunco_core::{on_command, Command};
 use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_doc_bevy::{CloseDocument, DocumentSaved, NewDocument, OpenFile};
+use lunco_modelica_ui_core::{ClassAction, OpenClass};
 use std::sync::Arc;
 
 use crate::model_tabs::ModelTabs;
@@ -41,30 +42,6 @@ pub struct CreateNewScratchModel {
 #[Command(default)]
 pub struct DuplicateModelFromReadOnly {
     pub source_doc_id: DocumentId,
-}
-
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Default, bevy::reflect::Reflect)]
-#[serde(tag = "kind")]
-pub enum ClassAction {
-    #[default]
-    View,
-    Duplicate {
-        name: String,
-    },
-}
-
-/// Act on a class by its fully-qualified name — how the Package Browser opens
-/// a library model without the caller knowing document ids. `action` decides
-/// whether it is drilled into for viewing or copied into an editable document.
-#[Command(default)]
-pub struct OpenClass {
-    /// Fully-qualified class path, e.g. `"Modelica.Electrical.Analog.Basic.Resistor"`.
-    pub qualified: String,
-    /// `View` (default) drills into the class; `Duplicate { name }` copies it
-    /// into a new editable document — the route for editing a read-only
-    /// library model.
-    #[serde(default)]
-    pub action: ClassAction,
 }
 
 /// Open the same document in a new tab (split / sibling view).

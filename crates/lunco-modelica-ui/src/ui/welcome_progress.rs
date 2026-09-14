@@ -113,7 +113,7 @@ pub fn save_progress(progress: &ExampleProgress) {
 /// Saves to disk inline — there's no in-memory ledger worth
 /// batching at this volume (one write per click).
 pub fn on_open_class_for_progress(
-    trigger: On<crate::ui::commands::OpenClass>,
+    trigger: On<lunco_modelica_ui_core::OpenClass>,
     mut progress: ResMut<ExampleProgress>,
 ) {
     let qualified = trigger.event().qualified.clone();

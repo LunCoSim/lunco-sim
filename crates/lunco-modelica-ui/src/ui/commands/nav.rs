@@ -3,6 +3,7 @@
 use bevy::prelude::*;
 use lunco_core::{on_command, Command};
 use lunco_doc::DocumentId;
+use lunco_modelica_ui_core::FocusDocumentByName;
 
 // ─── Command Structs ─────────────────────────────────────────────────────────
 
@@ -14,15 +15,6 @@ use lunco_doc::DocumentId;
 pub struct AutoArrangeDiagram {
     /// Document to arrange; unassigned (`0` over the API) = active.
     pub doc_id: DocumentId,
-}
-
-/// Focus the first open tab whose title contains `pattern` — the way an agent
-/// says "switch to the rocket model" without knowing document ids. No match is
-/// a logged no-op, not an error.
-#[Command(default)]
-pub struct FocusDocumentByName {
-    /// Case-insensitive substring of the tab title. Empty = no-op.
-    pub pattern: String,
 }
 
 /// Switch how a document is rendered — source text, diagram canvas, icon, or

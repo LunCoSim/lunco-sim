@@ -17,7 +17,8 @@ use lunco_viz::{
 /// allocated via `VizId::next()` (which starts at 1 and ascends)
 /// don't collide. Re-using a fixed value also means a saved
 /// workspace that opens this plot will round-trip cleanly.
-pub const DEFAULT_MODELICA_GRAPH: VizId = VizId(1);
+pub(crate) const DEFAULT_MODELICA_GRAPH: VizId =
+    VizId(lunco_modelica_ui_core::DEFAULT_MODELICA_GRAPH_ID);
 
 /// Look up — or, on first call, create — the singleton Modelica
 /// plot. Returns a mutable handle so callers can edit `inputs`

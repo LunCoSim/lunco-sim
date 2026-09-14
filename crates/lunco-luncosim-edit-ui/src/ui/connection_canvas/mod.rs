@@ -39,7 +39,7 @@ use lunco_canvas::{Canvas, EdgeId, NodeId, PortRef, Scene, SceneEvent, VisualReg
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlot};
 
 use lunco_doc::DocumentId;
-use lunco_modelica_ui::ui::commands::FocusDocumentByName;
+use lunco_modelica_ui_core::FocusDocumentByName;
 use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdStageAsset};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_core::document::{LayerId, UsdOp};
