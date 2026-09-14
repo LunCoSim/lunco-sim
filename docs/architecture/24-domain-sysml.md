@@ -160,6 +160,24 @@ standard SysML verification definition/usage that names the requirement it
 answers. `satisfy`, `verify`, and realization references carry the traceability
 that is currently implicit in Rhai filenames and comments.
 
+### Requirement quality
+
+An informal stakeholder request is not yet a baselined requirement. Each
+requirement should state one subject and one necessary, feasible,
+implementation-independent behavior or characteristic that is clear,
+measurable or otherwise verifiable, and traceable to a parent goal. Its
+operating condition, observable measure, units, threshold/range/tolerance,
+time or sampling window, and verification method must be defined well enough
+for an independent reviewer to decide pass or fail. Vague expectations such as
+“make it look good”, “be stable”, or “handle errors” remain open expectations
+until the stakeholder supplies an approved reference and finite acceptance
+criteria. The authoring question protocol and examples live in the
+[`sysml-requirements` skill](../../skills/sysml-requirements/SKILL.md#requirement-quality-gate).
+
+This quality gate is consistent with
+[`NASA Appendix C`](https://www.nasa.gov/reference/appendix-c-how-to-write-a-good-requirement/)
+and [`NPR 7123.1C`](https://nodis3.gsfc.nasa.gov/displayAll.cfm?Internal_ID=N_PR_7123_001C_&page_name=all).
+
 The first Twin subset should use only portable SysML constructs:
 
 ```sysml
