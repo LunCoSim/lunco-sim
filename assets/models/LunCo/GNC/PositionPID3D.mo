@@ -235,18 +235,16 @@ equation
 
   // Navigation -> PID X/Y/Z. Each axis receives setpoint, feedback, rate, and
   // its own live gains; no axis is a copied or hidden special case. The
-  // lateral feedback point is the predicted intersection with the landing
-  // plane, so cross-range velocity is acted on while there is still altitude
-  // and thrust authority to remove it. The measured position remains the
-  // landing qualification signal below.
+  // observer's measured navigation position is the feedback point; the
+  // ballistic touchdown prediction remains an evidence channel rather than a
+  // second, delayed position loop that can over-correct near the pad.
   pid_x.setpoint = target_x;
-  pid_x.measurement = predicted_landing_x;
-  // The outer lateral loop is a position/velocity PD controller over the
-  // predicted landing point. The navigation observer supplies both terms from
-  // the IMU and terrain-return correction; it never reads the rigid-body truth
-  // pose. A zero target rate is deliberate: the derivative term brakes the
-  // measured cross-range velocity while the proportional term brings the
-  // projected touchdown to the marked pad.
+  pid_x.measurement = navigation.nav_pos_x;
+  // The outer lateral loop is a standard position/velocity PD controller. The
+  // navigation observer supplies both terms from the IMU and terrain-return
+  // correction; it never reads the rigid-body truth pose. A zero target rate is
+  // deliberate: the derivative term brakes the measured cross-range velocity
+  // while the proportional term brings the vehicle to the marked pad.
   pid_x.setpoint_rate = target_vel_x;
   pid_x.measurement_rate = navigation.nav_vel_x;
   pid_x.kp = kp_x;
@@ -368,7 +366,7 @@ equation
   pid_y.anti_windup_gain = anti_windup_gain;
 
   pid_z.setpoint = target_z;
-  pid_z.measurement = predicted_landing_z;
+  pid_z.measurement = navigation.nav_pos_z;
   pid_z.setpoint_rate = target_vel_z;
   pid_z.measurement_rate = navigation.nav_vel_z;
   pid_z.kp = kp_z;

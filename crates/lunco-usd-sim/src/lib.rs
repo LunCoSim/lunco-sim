@@ -1401,7 +1401,14 @@ fn process_usd_sim_prim_read(
     if reader.has_api_schema(&sdf_path, "LunCoRaycastAPI") {
         match read_raycast_observation(reader, &sdf_path) {
             Ok(observation) => {
-                commands.entity(entity).try_insert(observation);
+                // A raw ray is an Avian-backed output surface, not merely a
+                // visual marker. Publish the generic readiness edge so the
+                // USD connection projector can bind Modelica (or any other
+                // authored consumer) to its ports even though this entity has
+                // no SimComponent of its own.
+                commands
+                    .entity(entity)
+                    .try_insert((observation, lunco_core::PortSurfaceReady));
             }
             Err(()) => {
                 push_usd_sim_diagnostic(
@@ -3314,6 +3321,7 @@ fn activate_dynamic_bodies(
         Has<DistanceJoint>,
     )>,
     q_pending_diffs: Query<&UsdPrimPath, With<PendingDifferential>>,
+    q_detached: Query<Option<&lunco_physics::PhysicsJointDetachSet>>,
     topology_index: Res<JointTopologyIndex>,
     mut binding_epoch: ResMut<lunco_usd_sim_cosim::BindingEpochDirty>,
 ) {
@@ -3345,6 +3353,18 @@ fn activate_dynamic_bodies(
                     .iter()
                     .find_map(|(joint_path, (body0, body1))| {
                         if body0 != &path.path && body1 != &path.path {
+                            return None;
+                        }
+                        if q_detached
+                            .get(entity)
+                            .ok()
+                            .flatten()
+                            .is_some_and(|detached| detached.contains(joint_path))
+                        {
+                            // A live DetachJoint deliberately invalidated this
+                            // edge. The canonical stage still contains it until
+                            // a persistent edit/reload, so it must not hold the
+                            // released body at Kinematic forever.
                             return None;
                         }
                         let joint_ready = q_joint_states
@@ -3710,6 +3730,32 @@ mod dynamic_activation_tests {
         assert_eq!(
             app.world().get::<RigidBody>(link),
             Some(&RigidBody::Kinematic)
+        );
+
+        // A live detach invalidates only this authored topology edge. The
+        // canonical stage generation is intentionally unchanged, so the
+        // endpoint marker is the generic handoff that lets admission proceed
+        // without waiting for a scene reload.
+        app.world_mut()
+            .entity_mut(chassis)
+            .insert(lunco_physics::PhysicsJointDetachSet {
+                joint_paths: vec!["/Rover/Joint".into()],
+            });
+        app.world_mut()
+            .entity_mut(link)
+            .insert(lunco_physics::PhysicsJointDetachSet {
+                joint_paths: vec!["/Rover/Joint".into()],
+            });
+        app.update();
+        assert_eq!(
+            app.world().get::<RigidBody>(chassis),
+            Some(&RigidBody::Dynamic),
+            "a released authored joint must not hold body0 kinematic"
+        );
+        assert_eq!(
+            app.world().get::<RigidBody>(link),
+            Some(&RigidBody::Dynamic),
+            "a released authored joint must not hold body1 kinematic"
         );
 
         app.world_mut()
