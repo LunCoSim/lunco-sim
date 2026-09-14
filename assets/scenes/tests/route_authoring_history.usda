@@ -1,0 +1,28 @@
+#usda 1.0
+(
+    defaultPrim = "RouteAuthoringHistory"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+# Headless acceptance fixture for generic route authoring and document history.
+# The scenario creates a separate untitled USD document so scene-owned script
+# projection cannot become part of the history assertion.
+def Xform "RouteAuthoringHistory"
+{
+    def DistantLight "TestLight"
+    {
+        float intensity = 1.0
+    }
+
+    def Scope "Scenario"
+    {
+        def Scope "Test" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://scenarios/tests/route_authoring_history.rhai@
+        }
+    }
+}
