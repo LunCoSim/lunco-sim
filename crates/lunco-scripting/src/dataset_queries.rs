@@ -1,7 +1,7 @@
 //! API/script read surface for the generic dataset registry.
 //!
-//! Download ownership stays in `lunco-assets`; asset identity and storage stay
-//! in `lunco-assets-core`; this module only adapts the authoritative dataset
+//! Download ownership stays in `lunco-assets`; declarations and state stay in
+//! `lunco-assets-datasets`; this module only adapts the authoritative dataset
 //! state to the existing language-neutral query bridge.
 
 use bevy::prelude::*;
@@ -13,7 +13,8 @@ use lunco_api::{ApiErrorCode, ApiResponse};
 /// or `CancelDataset`.
 ///
 /// params: `{ scope?: string }` where `scope` is the engine group or Twin name
-/// · returns `{ datasets: [{ id, key, group, scope, name, state, processed, recommended }] }`
+/// · returns `{ datasets: [{ id, key, group, scope, name, state, processed,
+///   recommended, artifact_uri, metadata }] }`
 pub struct ListDatasetsProvider;
 
 impl ApiQueryProvider for ListDatasetsProvider {
@@ -32,7 +33,7 @@ impl ApiQueryProvider for ListDatasetsProvider {
                 )
             }
         };
-        let Some(registry) = world.get_resource::<lunco_assets::datasets::DatasetRegistry>() else {
+        let Some(registry) = world.get_resource::<lunco_assets_datasets::DatasetRegistry>() else {
             return ApiResponse::error(
                 ApiErrorCode::InternalError,
                 "ListDatasets: dataset registry is not installed",
@@ -44,10 +45,10 @@ impl ApiQueryProvider for ListDatasetsProvider {
             .filter(|entry| filter.is_none_or(|value| entry.scope.label() == value))
             .map(|entry| {
                 let state = match &entry.state {
-                    lunco_assets::datasets::DatasetState::Missing => {
+                    lunco_assets_datasets::DatasetState::Missing => {
                         serde_json::json!({ "kind": "missing" })
                     }
-                    lunco_assets::datasets::DatasetState::Downloading {
+                    lunco_assets_datasets::DatasetState::Downloading {
                         bytes_done,
                         bytes_total,
                     } => serde_json::json!({
@@ -55,19 +56,19 @@ impl ApiQueryProvider for ListDatasetsProvider {
                         "bytes_done": bytes_done,
                         "bytes_total": bytes_total,
                     }),
-                    lunco_assets::datasets::DatasetState::Processing { kind } => {
+                    lunco_assets_datasets::DatasetState::Processing { kind } => {
                         serde_json::json!({ "kind": "processing", "process": kind })
                     }
-                    lunco_assets::datasets::DatasetState::Cancelling => {
+                    lunco_assets_datasets::DatasetState::Cancelling => {
                         serde_json::json!({ "kind": "cancelling" })
                     }
-                    lunco_assets::datasets::DatasetState::Installed => {
+                    lunco_assets_datasets::DatasetState::Installed => {
                         serde_json::json!({ "kind": "installed" })
                     }
-                    lunco_assets::datasets::DatasetState::Cancelled => {
+                    lunco_assets_datasets::DatasetState::Cancelled => {
                         serde_json::json!({ "kind": "cancelled" })
                     }
-                    lunco_assets::datasets::DatasetState::Failed(error) => {
+                    lunco_assets_datasets::DatasetState::Failed(error) => {
                         serde_json::json!({ "kind": "failed", "error": error })
                     }
                 };
@@ -80,6 +81,8 @@ impl ApiQueryProvider for ListDatasetsProvider {
                     "state": state,
                     "processed": entry.spec.process.is_some(),
                     "recommended": entry.recommended,
+                    "artifact_uri": entry.artifact_uri(),
+                    "metadata": &entry.spec.extra,
                 })
             })
             .collect::<Vec<_>>();

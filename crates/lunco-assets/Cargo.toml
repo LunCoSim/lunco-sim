@@ -12,6 +12,7 @@ description = "Dataset provisioning and native offline asset processing for LunC
 # source registration are owned by `lunco-assets-core`.
 bevy = { workspace = true, features = ["bevy_asset"] }
 lunco-assets-core = { path = "../lunco-assets-core" }
+lunco-assets-datasets = { path = "../lunco-assets-datasets" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-workspace = { path = "../lunco-workspace" }
 # A broken `Assets.toml` or a failed dataset download has to REACH the user, and
@@ -20,15 +21,13 @@ lunco-workspace = { path = "../lunco-workspace" }
 # `[dependencies]`, not target-gated: `drain_dataset_status` runs on wasm too.
 # No cycle — lunco-core's only path deps are command-macro/hash/hooks.
 lunco-core = { path = "../lunco-core" }
-serde = { workspace = true }
-serde_json = { workspace = true }
-toml = { workspace = true }
 thiserror = { workspace = true }
 image = { workspace = true }
 sha2 = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+toml = { workspace = true }
 
 # Desktop-only: HTTP client for asset downloads, tarball extraction, and native
 # processing. These dependencies are absent from `lunco-assets-core`.

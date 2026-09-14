@@ -21,7 +21,8 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 | **`lunco-doc-bevy`** | Bevy ECS integration for the Document System: lifecycle events, `JournalResource` (Bevy wrapper around the canonical Twin journal), `BevyJournalSink` for remote-replay, `EditorIntent` keybindings, `Presence` collab seed. |
 | **`lunco-storage`** | I/O abstraction layer (`Storage` trait — Native FS, Memory, future WASM/Remote backends). The single write path; raw `std::fs` is disallowed. |
 | **`lunco-assets-core`** | Lightweight asset identity and resolution: canonical `lunco://`/`twin://` sources, cache/Twin roots, embedded sources, discovery, and storage-facing readers. |
-| **`lunco-assets`** | Explicit dataset provisioning and native offline processing: `Assets.toml` registry, user-authorised downloads, texture/DEM/map/glTF pipelines, and the asset-manager CLI. Depends on `lunco-assets-core`; ordinary asset readers should not depend on this package. |
+| **`lunco-assets-datasets`** | Lightweight `Assets.toml` declarations, scoped dataset identity, artifact-path contracts, lifecycle state, and Bevy registry/command events. It has no HTTP, archive, image, GeoTIFF, or native processing dependencies. |
+| **`lunco-assets`** | Explicit dataset provisioning and native offline processing: download workers, texture/DEM/map/glTF pipelines, and the asset-manager CLI. It consumes `lunco-assets-datasets` and `lunco-assets-core`; ordinary asset readers should not depend on this package. |
 | **`lunco-modelica-assets`** | Native Modelica asset packaging: bundles MSL source and pre-parsed Rumoca definitions for the web runtime; keeps MSL build-only dependencies out of the generic asset manager. |
 | **`lunco-hash`** | Hashing substrate: Fast tier (FNV-1a) for change/cache keys and CID tier (CIDv1 raw+sha2-256) for on-disk/on-wire content-addressing. Draws a firewall between ephemeral process keys and cross-peer persisted content. |
 | **`lunco-precompute`** | Content-addressed precompute disk cache (`bake_or_load`): runs expensive pure functions once, persists results keyed by content hash (via `lunco-hash` + `lunco-storage`), and loads them on subsequent runs/peers. |
@@ -134,7 +135,7 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 | **`lunco-workbench-core`** | Renderer-independent workbench contracts: `Panel`/`PanelCtx`, instance tabs, perspective layout plans, menu contributions, the published `WorkbenchSnapshot`, shell scheduling labels, and perspective command payloads. It uses the Bevy ECS substrate and egui types but does not pull `bevy_render`, `bevy_egui`, `egui_dock`, storage, or window/render services. |
 | **`lunco-workbench`** | The concrete IDE-like shell: `egui_dock` layout materialization, `bevy_egui` rendering, panel registration, persistence, viewport integration, and shell-owned command observers/widgets. It consumes `lunco-workbench-core`; headless adapters use the core contract without linking this shell. |
 | **`lunco-workbench-browser`** | Reusable Twin and Files browser feature: browser section registry and query state, filesystem and library navigation, rename/open actions, and the `TwinBrowserPanel`/`FilesPanel` surfaces. It depends on `lunco-assets-core`, not the dataset processing stack. |
-| **`lunco-workbench-datasets-ui`** | Optional browser presentation for Twin-declared downloadable resources. It projects `lunco-assets`' shared dataset registry and emits its typed request/cancel events without making the generic browser depend on provisioning and processing. |
+| **`lunco-workbench-datasets-ui`** | Optional browser presentation for Twin-declared downloadable resources. It projects `lunco-assets-datasets`' shared registry and emits its typed request/cancel events without making the generic browser depend on provisioning and processing. |
 | **`lunco-capture`** | Render-bound screenshot and deterministic offline-recording capability: typed capture commands, GPU readback, frame pacing, PNG/video sinks, and recording status. It is an application capability shared by the workbench and windowless/offscreen hosts, not a workbench subsystem. |
 | **`lunco-ui`** | Reusable UI infrastructure: cached widgets, 3D world panels, command builders, and the shared bounded log model/renderer. |
 | **`lunco-viz`** | Domain-agnostic visualization: `SignalRegistry`, LinePlots, reusable multi-series trajectory plots, and future 3D/Rerun bridges. |
@@ -235,12 +236,19 @@ embedded Modelica/mission/tutorial/Rhai sources, and project asset discovery.
 It intentionally excludes HTTP, archive, raster, SVG, GeoTIFF, and native
 process dependencies.
 
+**`lunco-assets-datasets`**
+The lightweight dataset contract boundary. It owns `Assets.toml` declarations,
+scoped dataset identity, artifact-path and integrity contracts, lifecycle state,
+and the Bevy registry and command events. It deliberately excludes network,
+archive, image, GeoTIFF, and native processing dependencies so readers and
+domain crates can inspect dataset state without linking the provisioning stack.
+
 **`lunco-assets`**
-The explicit provisioning boundary. It owns `Assets.toml` dataset registration,
-user-authorised download/cancellation/status orchestration, native offline
-texture/DEM/map/glTF processing, and the `lunco-assets` CLI. Applications add it
-only where dataset management is part of the composition; asset-reading crates
-depend on `lunco-assets-core` instead.
+The explicit provisioning boundary. It owns user-authorised download and
+cancellation workers, native offline texture/DEM/map/glTF processing, and the
+`lunco-assets` CLI. Applications add it only where dataset management or native
+processing is part of the composition; asset-reading crates depend on
+`lunco-assets-core` or `lunco-assets-datasets` instead.
 
 **`lunco-hash`**
 The workspace hashing substrate. Fast tier provides dependency-free, wasm-clean FNV-1a hashing for process-local change detection and caching keys. CID tier (via the `cid` feature) provides CIDv1 raw + SHA-256 content-addressing for files/blobs on disk and wire.
@@ -575,9 +583,11 @@ navigation add the separate `lunco-workbench-browser` feature package.
 Reusable navigation feature for the concrete workbench. It owns the Twin and
 Files panels, browser query/actions/resources, built-in filesystem and library
 sections. Domain UI crates register their own `BrowserSection` implementations;
-optional dataset controls live in `lunco-workbench-datasets-ui`, which is the
-only browser extension that depends on the heavier asset-provisioning crate,
-keeping the base workbench shell independent of that dependency.
+optional dataset controls live in `lunco-workbench-datasets-ui`, which depends
+only on the lightweight `lunco-assets-datasets` contract; the native
+asset-provisioning runtime is composed separately by the application. This keeps
+the base workbench shell and the dataset browser independent of HTTP, archive,
+image, and processing dependencies.
 
 **`lunco-capture`**
 Render-bound application capability for screenshots and deterministic offline

@@ -650,7 +650,7 @@ impl Plugin for EphemerisPlugin {
 /// spacecraft orbits the Sun.
 #[cfg(not(target_arch = "wasm32"))]
 fn adopt_ephemeris_datasets(
-    registry: Option<Res<lunco_assets::datasets::DatasetRegistry>>,
+    registry: Option<Res<lunco_assets_datasets::DatasetRegistry>>,
     settings: Option<Res<lunco_settings::DownloadSettings>>,
     vectors: Option<Res<EphemerisVectors>>,
     mut seen: Local<std::collections::HashSet<String>>,
@@ -752,8 +752,8 @@ fn adopt_ephemeris_datasets(
             rel: entry.artifact_rel.clone(),
             abs_path: entry.artifact_path(),
             twin: match &entry.scope {
-                lunco_assets::datasets::DatasetScope::Engine => None,
-                lunco_assets::datasets::DatasetScope::Twin { name, .. } => Some(name.clone()),
+                lunco_assets_datasets::DatasetScope::Engine => None,
+                lunco_assets_datasets::DatasetScope::Twin { name, .. } => Some(name.clone()),
             },
         };
         let key = entry.key.clone();

@@ -2199,14 +2199,14 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
 ## Other (source location unknown)
 
-### `lunco-assets` <a id="lunco-assets"></a>
+### `lunco-assets-datasets` <a id="lunco-assets-datasets"></a>
 
 #### `CancelDataset`
 
  Cancel a declared dataset download. The operation remains owned until its
  worker returns, after which the row becomes requestable again.
 
-- *defined in:* `crates/lunco-assets/src/datasets.rs`
+- *defined in:* `crates/lunco-assets-datasets/src/registry.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -2220,7 +2220,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  the registry remains the only owner of download authorisation and task
  lifecycle.
 
-- *defined in:* `crates/lunco-assets/src/datasets.rs`
+- *defined in:* `crates/lunco-assets-datasets/src/registry.rs`
 
 | Field | Type | Description |
 |---|---|---|

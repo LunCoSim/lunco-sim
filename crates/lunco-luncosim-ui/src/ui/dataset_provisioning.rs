@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_assets::datasets::{
+use lunco_assets_datasets::{
     DatasetEntry, DatasetScope, DatasetScopeReady, DatasetScopeRemoved, DatasetState,
     RequestDataset,
 };
@@ -46,7 +46,7 @@ struct ProvisionedDataset {
 }
 
 fn visible_entries<'a>(
-    registry: &'a lunco_assets::datasets::DatasetRegistry,
+    registry: &'a lunco_assets_datasets::DatasetRegistry,
     scope: &DatasetScope,
 ) -> Vec<&'a DatasetEntry> {
     registry
@@ -320,7 +320,7 @@ pub(crate) fn on_set_missing_asset_prompt_suppressed(
 
 pub(crate) fn on_dataset_scope_ready(
     trigger: On<DatasetScopeReady>,
-    registry: Res<lunco_assets::datasets::DatasetRegistry>,
+    registry: Res<lunco_assets_datasets::DatasetRegistry>,
     workspace: Option<Res<WorkspaceResource>>,
     windows: Query<(), With<Window>>,
     mut state: ResMut<DatasetProvisioningState>,

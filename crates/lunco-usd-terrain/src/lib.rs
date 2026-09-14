@@ -1592,7 +1592,7 @@ fn bridge_usd_dem_terrain(
     stages: Res<Assets<lunco_usd_bevy_core::UsdStageAsset>>,
     twins: Res<lunco_assets_core::twin_source::TwinRoots>,
     asset_server: Res<AssetServer>,
-    datasets: Res<lunco_assets::datasets::DatasetRegistry>,
+    datasets: Res<lunco_assets_datasets::DatasetRegistry>,
     registry: Res<lunco_terrain_surface::TerrainLayerParserRegistry>,
     mut obstacle_spec: ResMut<lunco_obstacle_field::ObstacleFieldSpec>,
     mut canonical: NonSendMut<lunco_usd_bevy_core::canonical::CanonicalStages>,
@@ -1707,7 +1707,7 @@ fn bridge_dem_prim_read(
     scene_root: Option<&std::path::Path>,
     scene_twin_name: Option<&str>,
     twins: &lunco_assets_core::twin_source::TwinRoots,
-    datasets: &lunco_assets::datasets::DatasetRegistry,
+    datasets: &lunco_assets_datasets::DatasetRegistry,
     registry: &lunco_terrain_surface::TerrainLayerParserRegistry,
     obstacle_spec: &mut lunco_obstacle_field::spec::ObstacleFieldSpec,
     commands: &mut Commands,
@@ -1803,7 +1803,7 @@ fn bridge_dem_prim_read(
                 return;
             }
         };
-        let scope = lunco_assets::datasets::DatasetScope::Twin {
+        let scope = lunco_assets_datasets::DatasetScope::Twin {
             name: name.to_owned(),
             root,
         };
@@ -2153,7 +2153,7 @@ fn project_flat_site_surface(
 /// the download, so this small lifecycle boundary is the only coupling needed
 /// between them.
 fn release_pending_dem_datasets(
-    datasets: Res<lunco_assets::datasets::DatasetRegistry>,
+    datasets: Res<lunco_assets_datasets::DatasetRegistry>,
     pending: Query<(Entity, &DemDatasetPending)>,
     mut commands: Commands,
 ) {
@@ -2380,7 +2380,7 @@ def Xform \"Traverse\"\n{\n}\n"
                 Some(std::path::Path::new("/twin/moonbase")),
                 None,
                 &lunco_assets_core::twin_source::TwinRoots::default(),
-                &lunco_assets::datasets::DatasetRegistry::default(),
+                &lunco_assets_datasets::DatasetRegistry::default(),
                 &registry,
                 &mut spec,
                 &mut commands,

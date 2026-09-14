@@ -16,7 +16,7 @@ implementation backed by analytical theories and external mission data.
 - **`EphemerisPlugin`** — apps that need real planetary positions add this; it
   **overwrites** the `EphemerisResource` installed by the semantic/runtime
   setup, registers this crate's `Assets.toml` with
-  `lunco_assets::datasets`, and adopts each declared dataset once its file is on
+  `lunco_assets_datasets`, and adopts each declared dataset once its file is on
   disk.
 
 ## Mission data is DECLARED, never fetched here

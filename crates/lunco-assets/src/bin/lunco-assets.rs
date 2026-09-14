@@ -19,6 +19,10 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 use lunco_assets::{download, process};
+use lunco_assets_datasets::{
+    entry_artifact_path, entry_dest_path, installed_destination_present, processed_output_present,
+    AssetEntry, AssetManifest,
+};
 #[cfg(not(target_arch = "wasm32"))]
 use lunco_settings::DownloadSettings;
 #[cfg(not(target_arch = "wasm32"))]
@@ -235,7 +239,7 @@ fn process_filtered(
     only_key: Option<&str>,
     quality: &str,
 ) -> Result<(), String> {
-    let manifest = download::AssetManifest::from_file(manifest_path)
+    let manifest = AssetManifest::from_file(manifest_path)
         .map_err(|e| format!("Failed to read {}: {}", manifest_path.display(), e))?;
 
     if let Some(key) = only_key {
@@ -251,11 +255,11 @@ fn process_filtered(
         }
         if let Some(ref proc_cfg) = entry.process {
             let owner_cache = twin_root.map(|root| {
-                lunco_assets::datasets::DatasetScope::twin_cache_root(root, entry.shared)
+                lunco_assets_datasets::DatasetScope::twin_cache_root(root, entry.shared)
             });
-            let source_path = download::entry_dest_path(entry, owner_cache.as_deref())
+            let source_path = entry_dest_path(entry, owner_cache.as_deref())
                 .map_err(|error| format!("invalid destination for {key}: {error}"))?;
-            if !download::installed_destination_present(entry, &source_path) {
+            if !installed_destination_present(entry, &source_path) {
                 println!(
                     "  ⚠ {} source not found at {}, skipping",
                     key,
@@ -298,12 +302,9 @@ fn process_filtered(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn entry_cache_root(
-    entry: &download::AssetEntry,
-    twin_root: Option<&std::path::Path>,
-) -> std::path::PathBuf {
+fn entry_cache_root(entry: &AssetEntry, twin_root: Option<&std::path::Path>) -> std::path::PathBuf {
     twin_root
-        .map(|root| lunco_assets::datasets::DatasetScope::twin_cache_root(root, entry.shared))
+        .map(|root| lunco_assets_datasets::DatasetScope::twin_cache_root(root, entry.shared))
         .unwrap_or_else(lunco_assets_core::cache_dir)
 }
 
@@ -369,15 +370,14 @@ fn stage_engine_bundle(
 ) -> Result<(), String> {
     let mut staged = std::collections::BTreeSet::new();
     for (group, path) in lunco_assets_core::engine_manifests().map_err(|e| e.to_string())? {
-        let manifest =
-            download::AssetManifest::from_file(&path).map_err(|e| format!("{group}: {e}"))?;
+        let manifest = AssetManifest::from_file(&path).map_err(|e| format!("{group}: {e}"))?;
         for (key, entry) in manifest.assets {
             if !entry.bundled_for(binary) {
                 continue;
             }
-            let source = download::entry_dest_path(&entry, Some(cache_root))
+            let source = entry_dest_path(&entry, Some(cache_root))
                 .map_err(|e| format!("{group}/{key}: invalid source path: {e}"))?;
-            let artifact = download::entry_artifact_path(&entry, cache_root, None)
+            let artifact = entry_artifact_path(&entry, cache_root, None)
                 .map_err(|e| format!("{group}/{key}: invalid artifact path: {e}"))?;
             let relative = artifact.strip_prefix(cache_root).map_err(|_| {
                 format!(
@@ -386,19 +386,15 @@ fn stage_engine_bundle(
                     cache_root.display()
                 )
             })?;
-            let relative = lunco_assets::asset_path::slashed(relative);
+            let relative = lunco_assets_core::asset_path::slashed(relative);
             if !staged.insert(relative.clone()) {
                 return Err(format!(
                     "{group}/{key}: artifact path collides with another bundled dataset: {relative}"
                 ));
             }
             let complete = match &entry.process {
-                Some(process) => lunco_assets::process::processed_output_present(
-                    &artifact,
-                    process,
-                    Some(&source),
-                ),
-                None => download::installed_destination_present(&entry, &artifact),
+                Some(process) => processed_output_present(&artifact, process, Some(&source)),
+                None => installed_destination_present(&entry, &artifact),
             };
             if !complete {
                 return Err(format!(

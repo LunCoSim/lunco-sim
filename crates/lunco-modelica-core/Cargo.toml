@@ -30,7 +30,7 @@ bevy.workspace = true
 # COMPILE CORE (ModelicaCorePlugin: channels + worker + .mo loader + dispatch)
 # builds headless (`default-features = false`) for a server running cosim — no
 # egui→winit. The GUI/lunica build keeps `default = [..., "ui"]`.
-lunco-assets = { workspace = true }
+lunco-assets-datasets = { path = "../lunco-assets-datasets" }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-core = { path = "../lunco-core" }
 lunco-core-session = { path = "../lunco-core-session" }

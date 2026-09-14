@@ -826,7 +826,7 @@ fn install_window_icon(
 /// manifest entry and no UI change at all.
 fn register_downloadable_assets_settings(world: &mut World) {
     use bevy_egui::egui;
-    use lunco_assets::datasets::{DatasetRegistry, DatasetState};
+    use lunco_assets_datasets::{DatasetRegistry, DatasetState};
     let Some(mut menus) = world.get_resource_mut::<WorkbenchMenuRegistry>() else {
         return;
     };
@@ -939,8 +939,8 @@ fn register_downloadable_assets_settings(world: &mut World) {
             .iter()
             .map(|e| {
                 let owner = match &e.scope {
-                    lunco_assets::datasets::DatasetScope::Engine => e.group.clone(),
-                    lunco_assets::datasets::DatasetScope::Twin { name, .. } => name.clone(),
+                    lunco_assets_datasets::DatasetScope::Engine => e.group.clone(),
+                    lunco_assets_datasets::DatasetScope::Twin { name, .. } => name.clone(),
                 };
                 (e.id.clone(), owner, e.name.clone(), e.state.clone())
             })
@@ -1072,10 +1072,10 @@ fn register_downloadable_assets_settings(world: &mut World) {
         if let Some(action) = requested {
             match action {
                 DatasetAction::Request(id) => {
-                    ctx.trigger(lunco_assets::datasets::RequestDataset { id });
+                    ctx.trigger(lunco_assets_datasets::RequestDataset { id });
                 }
                 DatasetAction::Cancel(id) => {
-                    ctx.trigger(lunco_assets::datasets::CancelDataset { id });
+                    ctx.trigger(lunco_assets_datasets::CancelDataset { id });
                 }
             }
         }

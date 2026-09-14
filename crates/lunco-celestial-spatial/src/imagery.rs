@@ -335,7 +335,7 @@ pub(crate) fn apply_look_to_tiles(
 ///
 /// Split out from the system so the *decision* is testable without an ECS
 /// world: everything downstream is a query and a look assignment.
-fn declared_body(entry: &lunco_assets::datasets::DatasetEntry) -> Option<i32> {
+fn declared_body(entry: &lunco_assets_datasets::DatasetEntry) -> Option<i32> {
     match entry.spec.domain::<BodyImageryDecl>("body") {
         Some(Ok(d)) => Some(d.naif_id),
         // A typo'd `[*.body]` table must be loud: it reads as "this dataset
@@ -360,7 +360,7 @@ fn declared_body(entry: &lunco_assets::datasets::DatasetEntry) -> Option<i32> {
 /// body prim has said what it wants, and a downloaded default must not overrule
 /// content.
 pub(crate) fn bind_dataset_body_imagery(
-    registry: Option<Res<lunco_assets::datasets::DatasetRegistry>>,
+    registry: Option<Res<lunco_assets_datasets::DatasetRegistry>>,
     asset_server: Res<AssetServer>,
     authored: Query<&crate::CelestialBodyDecl, With<crate::AuthoredBodyAlbedo>>,
     mut bound: ResMut<BoundBodyImagery>,
@@ -508,84 +508,7 @@ pub(crate) fn bind_dataset_body_imagery(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lunco_assets::datasets::{DatasetRegistry, DatasetScope};
-
-    /// The SHIPPED manifest, read from the same file the app reads.
-    ///
-    /// Not `include_str!`: that would test a compiled-in copy while the running
-    /// app reads a file, which is exactly the drift that moving manifests out
-    /// of the crates was meant to end. Anchored on `CARGO_MANIFEST_DIR` rather
-    /// than `lunco_assets_core::manifests_dir()` because cargo runs a test with the
-    /// CRATE as its working directory, while the app runs from the workspace
-    /// root — same file, reached the way each caller can actually reach it.
-    fn celestial_manifest() -> String {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../assets/manifests/celestial.toml");
-        std::fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("{} must ship with the library: {e}", path.display()))
-    }
-
-    /// The shipped manifest must actually declare which body each texture is
-    /// of. This is the whole binding: drop the `[earth.body]` table and Earth
-    /// silently renders untextured forever, with nothing in the code to notice.
-    #[test]
-    fn the_shipped_manifest_binds_its_textures_to_bodies() {
-        let mut r = DatasetRegistry::default();
-        assert!(r.register(&celestial_manifest(), "celestial") >= 2);
-        let bodies: Vec<(String, Option<i32>)> = r
-            .entries()
-            .iter()
-            .map(|e| (e.key.clone(), declared_body(e)))
-            .collect();
-        assert!(
-            bodies.contains(&(
-                "earth".to_string(),
-                Some(lunco_celestial::ephemeris_id::EARTH)
-            )),
-            "earth imagery must name NAIF 399: {bodies:?}"
-        );
-        assert!(
-            bodies.contains(&(
-                "moon".to_string(),
-                Some(lunco_celestial::ephemeris_id::MOON)
-            )),
-            "moon imagery must name NAIF 301: {bodies:?}"
-        );
-    }
-
-    /// What the renderer loads is the PROCESSED texture, addressed through
-    /// `lunco://` — the scheme that searches the packed cache and the shared
-    /// pool — never the multi-hundred-megabyte source download.
-    #[test]
-    fn imagery_is_addressed_as_a_library_uri_not_a_cache_path() {
-        let mut r = DatasetRegistry::default();
-        r.register(&celestial_manifest(), "celestial");
-        for (key, source, artifact) in [
-            (
-                "earth",
-                "textures/earth_source.jpg",
-                "lunco://textures/earth.png",
-            ),
-            (
-                "moon",
-                "textures/moon_source.tif",
-                "lunco://textures/moon.png",
-            ),
-        ] {
-            let imagery = r
-                .entries()
-                .iter()
-                .find(|e| e.key == key)
-                .unwrap_or_else(|| panic!("{key} declared"));
-            assert_eq!(imagery.scope, DatasetScope::Engine);
-            assert_eq!(imagery.artifact_uri(), artifact);
-            assert!(
-                imagery.path.ends_with(source),
-                "the download is the source, not the artifact: {:?}",
-                imagery.path
-            );
-        }
-    }
+    use lunco_assets_datasets::DatasetRegistry;
 
     /// A dataset with no `[*.body]` table is simply not imagery — the ephemeris
     /// CSVs share this registry and must not be mistaken for textures.

@@ -1,8 +1,9 @@
 //! Optional Twin dataset controls for the workbench browser.
 //!
 //! The generic browser remains independent from dataset provisioning. Hosts
-//! that install [`TwinDatasetsPlugin`] opt into the `lunco-assets` processing
-//! stack and get the active Twin's declared resources as a browser section.
+//! that install [`TwinDatasetsPlugin`] get the active Twin's declared resources
+//! as a browser section. The host still chooses separately whether to install
+//! the native provisioning runtime.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

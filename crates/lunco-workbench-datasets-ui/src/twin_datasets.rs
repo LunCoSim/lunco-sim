@@ -7,7 +7,7 @@
 //! processing lifecycle.
 
 use bevy_egui::egui;
-use lunco_assets::datasets::{
+use lunco_assets_datasets::{
     CancelDataset, DatasetEntry, DatasetRegistry, DatasetScope, DatasetState, RequestDataset,
 };
 use lunco_workbench_browser::{BrowserCtx, BrowserScope, BrowserSection};

@@ -1,7 +1,9 @@
-//! Asset download and version verification.
+//! Asset download and version verification for the provisioning runtime.
 //!
 //! Each crate can declare its own `Assets.toml` mirroring the `Cargo.toml` pattern.
-//! This module reads those files, downloads the assets, and verifies integrity.
+//! Manifest parsing and shared dataset contracts live in
+//! [`lunco-assets-datasets`]. This module downloads the declared assets and
+//! verifies their integrity.
 //!
 //! ## Assets.toml Format
 //!
@@ -22,371 +24,15 @@
 //! | Textures | `sha256` (content hash) | `"abc123..."` |
 //! | Ephemeris | date in filename | `target_-1024_2026-04-02.csv` |
 
-use crate::process::ProcessConfig;
-use lunco_assets_core::cache_dir;
 #[cfg(not(target_arch = "wasm32"))]
+use lunco_assets_datasets::{
+    archive_extension, entry_dest_path, install_marker_path, installed_destination_present,
+    process_output_path, processed_output_present, AssetEntry, AssetManifest,
+};
 use lunco_settings::DownloadSettings;
-use serde::Deserialize;
-use std::collections::BTreeMap;
 #[cfg(not(target_arch = "wasm32"))]
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-
-/// A single asset entry from `Assets.toml`.
-#[derive(Debug, Clone, Deserialize)]
-pub struct AssetEntry {
-    /// Human-readable name.
-    pub name: String,
-    /// Semantic version (for libraries). Changes trigger re-download.
-    pub version: Option<String>,
-    /// URL to download from.
-    pub url: String,
-    /// Destination path — **optional**. Omit it for plain source downloads:
-    /// the file then lands in the OWNER's source pool,
-    /// `<owner-cache>/sources/<sha256(url)[..16]>/<basename>` — the shared
-    /// cache for a crate manifest, `<twin>/.cache` for a Twin's (see
-    /// [`source_pool_path`], and `shared` below to opt into the global pool).
-    ///
-    /// Author `dest` only when the file must live at a specific path:
-    /// relative to the owner's cache root (safety-checked for twins).
-    ///
-    /// For tarballs without `extract`: the archive is extracted into
-    /// this directory.
-    ///
-    /// For tarballs WITH `extract`: only the named file inside the
-    /// archive is copied to this path (`dest` becomes the final
-    /// output file, not a directory).
-    ///
-    /// For single-file downloads: the bytes are written directly here.
-    #[serde(default)]
-    pub dest: Option<String>,
-    /// Optional archive-internal path of the file to pull out of a
-    /// tarball, relative to the tarball root after the usual
-    /// "first-directory" prefix is stripped. When set, only this one
-    /// file is copied to `dest` and the rest of the archive is
-    /// discarded — handy for fonts / shader collections where the
-    /// upstream ships many files but we only need one.
-    ///
-    /// Example: `extract = "ttf/DejaVuSans.ttf"` picks only
-    /// `DejaVuSans.ttf` out of a full dejavu-fonts release tarball.
-    #[serde(default)]
-    pub extract: Option<String>,
-    /// Put this download in the **global** cache instead of the owner's own
-    /// cache. An authored `dest` remains that relative path under the global
-    /// cache; when `dest` is omitted, the URL-keyed source pool is used.
-    ///
-    /// Default `false`: a Twin's downloads are written to that Twin's `.cache`.
-    /// The reader still checks the global cache after the Twin-local cache, so a
-    /// Twin can consume a product another Twin already shared. Set `shared =
-    /// true` when this declaration owns a reusable upstream product and should
-    /// write its copy to the global cache.
-    ///
-    /// Ignored for engine-scoped entries: their owner's cache IS the shared
-    /// cache, so the two resolve to the same place.
-    #[serde(default)]
-    pub shared: bool,
-    /// Expected SHA-256 hex digest. Empty string means "compute and suggest".
-    pub sha256: Option<String>,
-    /// Offer this dataset in the first-run resource prompt when it is not
-    /// already installed. This is an onboarding recommendation, not a
-    /// runtime dependency: the application remains usable when the user
-    /// declines it.
-    #[serde(default)]
-    pub recommended: bool,
-    /// Distribution targets that require this delivered artifact inside the
-    /// application bundle. An empty list means the dataset remains a user
-    /// provisioned resource. The packager matches the binary name exactly.
-    #[serde(default)]
-    pub bundle: Vec<String>,
-    /// Optional post-processing step (resize, convert).
-    #[serde(default)]
-    pub process: Option<ProcessConfig>,
-    /// Every other key in the entry's table, kept verbatim.
-    ///
-    /// A dataset's DOMAIN metadata belongs with the declaration that produced
-    /// it — the Horizons query's `CENTER` describes those very bytes, and a
-    /// second file repeating it is a second thing to get wrong. But this crate
-    /// must not learn what a NAIF id is, so domain keys ride in a sub-table
-    /// (`[artemis2_vectors.ephemeris]`) that transport carries and never
-    /// interprets. The owning crate reads it back with
-    /// [`domain`](AssetEntry::domain).
-    #[serde(flatten)]
-    pub extra: BTreeMap<String, toml::Value>,
-}
-
-impl AssetEntry {
-    /// Whether this declaration's delivered artifact belongs in `binary`'s
-    /// package. Packaging policy is authored beside the dataset, not repeated
-    /// in shell scripts that can drift from the manifest.
-    pub fn bundled_for(&self, binary: &str) -> bool {
-        self.bundle.iter().any(|target| target == binary)
-    }
-
-    /// Deserialize this entry's `[<key>]` domain sub-table, if present.
-    ///
-    /// `None` when the entry declares no such sub-table; `Err` when it does but
-    /// the shape is wrong — a typo'd declaration must be loud, not ignored.
-    pub fn domain<T: serde::de::DeserializeOwned>(
-        &self,
-        key: &str,
-    ) -> Option<Result<T, toml::de::Error>> {
-        let raw = self.extra.get(key)?.clone();
-        Some(raw.try_into())
-    }
-}
-
-/// Where a manifest entry's downloaded file lives on disk — the ONE
-/// resolver both the download and the process steps use, so they can never
-/// disagree.
-///
-/// - `shared = true` → the global cache, whoever declared it.
-/// - Authored `dest` → `<owner cache>/<dest>` (the shared cache for a crate
-///   manifest, `<twin>/.cache` for a Twin's).
-/// - No `dest` → the owner's source pool, keyed by URL hash.
-pub fn entry_dest_path(
-    entry: &AssetEntry,
-    dest_root: Option<&Path>,
-) -> Result<PathBuf, std::io::Error> {
-    if !entry.shared {
-        if let Some(dest) = entry.dest.as_deref() {
-            if !lunco_assets_core::asset_path::is_safe_relative_path(dest) {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!("asset destination {dest:?} must be a safe relative path"),
-                ));
-            }
-        }
-    }
-    // A shared entry uses the global cache as its owner. Keep an authored
-    // destination below that root; only an entry without `dest` uses the
-    // URL-keyed source pool. Engine entries already pass the global cache as
-    // their owner, so `shared` has no special effect for them.
-    let root = if entry.shared {
-        cache_dir()
-    } else {
-        dest_root.map(Path::to_path_buf).unwrap_or_else(cache_dir)
-    };
-    Ok(match entry.dest.as_deref() {
-        Some(d) => root.join(d),
-        None => source_pool_path(&root, &entry.url),
-    })
-}
-
-/// The delivered artifact path for an engine or Twin declaration. A processed
-/// entry resolves to its output; an unprocessed entry resolves to its download
-/// destination. Both packaging and runtime provisioning use this boundary so
-/// a raw source is never mistaken for the product a consumer loads.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn entry_artifact_path(
-    entry: &AssetEntry,
-    cache_root: &Path,
-    twin_root: Option<&Path>,
-) -> Result<PathBuf, std::io::Error> {
-    match &entry.process {
-        Some(process) => crate::process::process_output_path(process, Some(cache_root), twin_root),
-        None => entry_dest_path(entry, Some(cache_root)),
-    }
-}
-
-/// The completion marker belongs to the destination it describes. A directory
-/// install keeps the marker inside that directory so moving the dataset keeps
-/// its identity; a file install uses a filename-specific sibling so two
-/// versioned files in one directory cannot overwrite one another's marker.
-pub fn version_marker_path(destination: &Path) -> PathBuf {
-    install_marker_path(destination, destination.is_dir(), "version")
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn integrity_marker_path(destination: &Path) -> PathBuf {
-    install_marker_path(destination, destination.is_dir(), "integrity")
-}
-
-fn install_marker_path(destination: &Path, directory: bool, suffix: &str) -> PathBuf {
-    if directory {
-        return destination.join(format!(".{suffix}"));
-    }
-    let name = destination
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("lunco-dataset");
-    destination
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(format!(".{name}.{suffix}"))
-}
-
-/// Validate a non-processed installed destination using the declaration's
-/// integrity contract. A directory is complete only when it has payload and,
-/// for versioned archives, the destination-local version marker. File hashes
-/// are checked before the registry advertises the entry as installed.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn installed_destination_present(entry: &AssetEntry, destination: &Path) -> bool {
-    let expects_directory = is_archive_url(&entry.url) && entry.extract.is_none();
-    if expects_directory != destination.is_dir() {
-        return false;
-    }
-    if destination.is_file() {
-        if destination.metadata().map(|m| m.len() == 0).unwrap_or(true) {
-            return false;
-        }
-        let Some(expected) = entry.sha256.as_deref().filter(|hash| !hash.is_empty()) else {
-            return true;
-        };
-        if is_archive_url(&entry.url) {
-            return std::fs::read_to_string(integrity_marker_path(destination))
-                .is_ok_and(|actual| actual.trim().eq_ignore_ascii_case(expected));
-        }
-        use sha2::{Digest, Sha256};
-        let Ok(bytes) = std::fs::read(destination) else {
-            return false;
-        };
-        let actual: String = Sha256::digest(&bytes)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
-        return actual.eq_ignore_ascii_case(expected);
-    }
-    if !destination.is_dir() {
-        return false;
-    }
-    let has_payload = std::fs::read_dir(destination)
-        .ok()
-        .into_iter()
-        .flatten()
-        .filter_map(Result::ok)
-        .any(|entry| {
-            let name = entry.file_name();
-            name != ".version" && name != ".integrity"
-        });
-    if !has_payload {
-        return false;
-    }
-    let version_matches = entry.version.as_deref().is_none_or(|expected| {
-        std::fs::read_to_string(version_marker_path(destination))
-            .is_ok_and(|actual| actual.trim() == expected.trim())
-    });
-    let integrity_matches = entry.sha256.as_deref().is_none_or(|expected| {
-        expected.is_empty()
-            || std::fs::read_to_string(integrity_marker_path(destination))
-                .is_ok_and(|actual| actual.trim().eq_ignore_ascii_case(expected))
-    });
-    version_matches && integrity_matches
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn is_archive_url(url: &str) -> bool {
-    archive_extension(url).is_some()
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn archive_extension(url: &str) -> Option<&'static str> {
-    if url.ends_with(".tar.gz") {
-        Some("tar.gz")
-    } else if url.ends_with(".tgz") {
-        Some("tgz")
-    } else if url.ends_with(".tar.bz2") {
-        Some("tar.bz2")
-    } else if url.ends_with(".tbz2") {
-        Some("tbz2")
-    } else if url.ends_with(".tbz") {
-        Some("tbz")
-    } else {
-        None
-    }
-}
-
-/// The shared source pool path for a URL:
-/// `<cache>/sources/<sha256(url)[..16]>/<basename>`.
-///
-/// Keyed by URL hash (not just basename) so two products that happen to
-/// share a filename never collide; the basename is kept alongside so the
-/// pool stays human-readable. Integrity is the manifest's `sha256` — the
-/// pool only decides WHERE bytes live, never whether to trust them.
-pub fn shared_source_path(url: &str) -> PathBuf {
-    source_pool_path(&cache_dir(), url)
-}
-
-/// A URL's slot in the source pool UNDER `root`: `<root>/sources/<hash16>/<basename>`.
-///
-/// One layout, two roots: the shared cache holds the pool for engine assets and
-/// entries that opted into `shared = true`; a Twin's own `.cache` holds the
-/// pool for entries with the default ownership. Keying by URL hash (not
-/// basename) means two products that share a filename never collide; the
-/// basename is kept alongside so the pool stays readable.
-pub fn source_pool_path(root: &Path, url: &str) -> PathBuf {
-    use sha2::{Digest, Sha256};
-    let hash: String = Sha256::digest(url.as_bytes())
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
-    // Basename: last path segment, query-string stripped; anything unsafe
-    // (empty, traversal, absolute) falls back to a neutral name — the hash
-    // dir already guarantees uniqueness.
-    let base = url
-        .split(['?', '#'])
-        .next()
-        .and_then(|u| u.rsplit('/').next())
-        .filter(|s| !s.is_empty() && lunco_assets_core::asset_path::is_safe_relative_path(s))
-        .unwrap_or("download.bin");
-    root.join("sources").join(&hash[..16]).join(base)
-}
-
-/// Parsed `Assets.toml` from a crate.
-#[derive(Debug, Clone, Deserialize)]
-pub struct AssetManifest {
-    #[serde(flatten)]
-    pub assets: BTreeMap<String, AssetEntry>,
-}
-
-/// Parse an `Assets.toml` blob from a string. Used by callers that have the
-/// manifest text embedded via `include_str!` (packaged binaries can't read the
-/// workspace source tree at runtime).
-///
-/// This is the `FromStr` TRAIT rather than an inherent `from_str`: the
-/// signature was already exactly the trait's, so an inherent method of that
-/// name shadowed `std::str::FromStr::from_str` at every call site and a reader
-/// could not tell which one they were getting. Implementing the trait removes
-/// the ambiguity and makes `text.parse::<AssetManifest>()` work for free.
-impl std::str::FromStr for AssetManifest {
-    type Err = std::io::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        toml::from_str(s)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))
-    }
-}
-
-impl AssetManifest {
-    /// Reads and parses a manifest FILE — `assets/manifests/<group>.toml` for
-    /// the engine, `<twin>/Assets.toml` for a Twin.
-    pub fn from_file(path: &Path) -> Result<Self, std::io::Error> {
-        if !path.exists() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("No manifest at {}", path.display()),
-            ));
-        }
-        let content = std::fs::read_to_string(path)?;
-        toml::from_str(&content)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))
-    }
-
-    /// Reads and parses `Assets.toml` from a **Twin folder**. Twins keep their
-    /// manifest at the root of the folder they travel as; only the ENGINE's
-    /// declarations moved into `assets/manifests/`.
-    pub fn from_crate_dir(crate_dir: &Path) -> Result<Self, std::io::Error> {
-        let path = crate_dir.join("Assets.toml");
-        if !path.exists() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("No Assets.toml found in {}", crate_dir.display()),
-            ));
-        }
-        let content = std::fs::read_to_string(&path)?;
-        toml::from_str(&content)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))
-    }
-}
 
 /// How long to wait for the TCP/TLS connection to come up.
 ///
@@ -1177,7 +823,7 @@ pub fn download_all_for_twin_with_limit(
     let entries: Vec<(String, AssetEntry)> = manifest.assets.into_iter().collect();
     let label = format!("twin {}", twin_root.display());
     let destination_root = move |entry: &AssetEntry| {
-        Some(crate::datasets::DatasetScope::twin_cache_root(
+        Some(lunco_assets_datasets::DatasetScope::twin_cache_root(
             twin_root,
             entry.shared,
         ))
@@ -1210,7 +856,8 @@ pub fn download_one_for_twin(
         .map_err(|e| DownloadError::ManifestFailed(e.to_string()))?;
     match manifest.assets.get(asset_key) {
         Some(entry) => {
-            let dest_root = crate::datasets::DatasetScope::twin_cache_root(twin_root, entry.shared);
+            let dest_root =
+                lunco_assets_datasets::DatasetScope::twin_cache_root(twin_root, entry.shared);
             download_asset(entry, asset_key, settings, Some(&dest_root))
         }
         None => Err(DownloadError::ManifestFailed(format!(
@@ -1290,7 +937,7 @@ fn list_manifest_with_twin(
     println!("Assets for {label}:");
     for (key, entry) in &manifest.assets {
         let twin_owner_cache = twin_root
-            .map(|root| crate::datasets::DatasetScope::twin_cache_root(root, entry.shared));
+            .map(|root| lunco_assets_datasets::DatasetScope::twin_cache_root(root, entry.shared));
         let owner_cache = twin_owner_cache.as_deref().or(dest_root);
         let dest = entry_dest_path(entry, owner_cache)?;
         let status = if let Some(process) = &entry.process {
@@ -1302,8 +949,8 @@ fn list_manifest_with_twin(
                     Some(default_cache.as_path())
                 }
             };
-            let artifact = crate::process::process_output_path(process, process_cache, twin_root)?;
-            if crate::process::processed_output_present(
+            let artifact = process_output_path(process, process_cache, twin_root)?;
+            if processed_output_present(
                 &artifact,
                 process,
                 Some(dest.as_path()).filter(|path| path.is_file()),

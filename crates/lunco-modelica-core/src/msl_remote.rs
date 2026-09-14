@@ -30,9 +30,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use bevy::prelude::*;
 
-#[cfg(not(target_arch = "wasm32"))]
-use lunco_assets::datasets::{DatasetRegistry, DatasetState};
 use lunco_assets_core::msl::{MslAssetSource, MslLoadPhase, MslLoadState};
+#[cfg(not(target_arch = "wasm32"))]
+use lunco_assets_datasets::{DatasetRegistry, DatasetState};
 
 /// Process-wide pre-parsed MSL documents. Populated on wasm by the
 /// chunked parse driver once the full bundle has been turned into

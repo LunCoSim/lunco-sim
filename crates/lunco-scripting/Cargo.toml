@@ -82,7 +82,7 @@ lunco-hooks-rhai = { path = "../lunco-hooks-rhai", optional = true }
 # is owned by lunco-assets-core (the shared asset-access crate) — we consume it via
 # `lunco_assets_core::scripting::{prelude_files, tool_libraries, examples}`. Drop a
 # `.rhai` in the folder, rebuild, and it's picked up with no code edit here.
-lunco-assets = { path = "../lunco-assets", optional = true }
+lunco-assets-datasets = { path = "../lunco-assets-datasets" }
 lunco-assets-core = { path = "../lunco-assets-core" }
 # Twin persistence: the `TwinAdded` event + `WorkspaceResource` (twin→root path)
 # let the tool-library loader scan `<twin>/tools/*.rhai` on open. Gated on `rhai`
@@ -93,7 +93,7 @@ lunco-workspace = { path = "../lunco-workspace", optional = true }
 # rhai on by default — the browser-capable backend. Turn it off
 # (`--no-default-features`) for a script-free build.
 default = ["rhai"]
-rhai = ["dep:rhai", "dep:serde_json", "dep:getrandom", "dep:lunco-api", "dep:big_space", "dep:lunco-tools", "dep:lunco-tools-rhai", "dep:lunco-workspace", "dep:lunco-assets", "dep:lunco-hooks", "dep:lunco-hooks-rhai", "dep:lunco-controller", "dep:lunco-usd-bevy-scene", "lunco-twin-journal/hooks"]
+rhai = ["dep:rhai", "dep:serde_json", "dep:getrandom", "dep:lunco-api", "dep:big_space", "dep:lunco-tools", "dep:lunco-tools-rhai", "dep:lunco-workspace", "dep:lunco-hooks", "dep:lunco-hooks-rhai", "dep:lunco-controller", "dep:lunco-usd-bevy-scene", "lunco-twin-journal/hooks"]
 # Opt-in bridge for the GUI's render-shadow policy. This edge belongs to the
 # application composition root, never to the generic scripting/runtime crate.
 render-policy = ["dep:lunco-render-recovery"]

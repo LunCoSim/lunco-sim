@@ -15,6 +15,11 @@
 #[cfg(not(target_arch = "wasm32"))]
 use image::GenericImageView;
 #[cfg(not(target_arch = "wasm32"))]
+use lunco_assets_datasets::{
+    bake_key, bake_stamp_path, default_dem_pixel_scale_m, process_output_path,
+    processed_output_present, ProcessConfig,
+};
+#[cfg(not(target_arch = "wasm32"))]
 use resvg::tiny_skia;
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
@@ -71,159 +76,6 @@ impl ProcessControl {
     }
 }
 
-/// Processing configuration from `Assets.toml`.
-///
-/// `kind` selects the pipeline; other fields apply
-/// per pipeline:
-///
-/// - `kind = "texture"`: resize an image to `target_resolution`
-///   and re-encode as PNG. Used by Earth/Moon textures.
-/// - `kind = "gltf"`: run a fixed `gltf-transform` cleanup pipeline on a
-///   downloaded `.glb` to strip extensions Bevy 0.18's `bevy_gltf` doesn't
-///   support. Currently: `KHR_draco_mesh_compression` (geometry) and
-///   `EXT_texture_webp` (textures, re-encoded as PNG). Requires `npx`
-///   (Node.js) on PATH; the CLI is fetched on demand.
-/// - `kind = "dem"`: crop a square region-of-interest out of a raw LROC/NAC
-///   DTM (a non-square float32 raster) and re-encode it as the **square**
-///   float32 `heightmap.tif` the runtime DEM reader expects, georeferenced
-///   with GeoTIFF tags. Pure-Rust (no GDAL) — the DTM's
-///   equirectangular projection is just arithmetic once the manifest
-///   supplies its scale + center (see the `dem_*` fields below).
-///   The source may be a TIFF **or a PDS3 `.IMG`** (attached or detached
-///   label — see [`crate::pds_img`]); for a PDS source the label's own
-///   extent/scale serve as fallbacks for absent `src_*` fields.
-/// - `kind = "map"`: crop the **same geographic ROI** the `dem` pipeline
-///   uses out of a co-registered raster (ortho `.IMG`, `_SHADE`/`_SLOPE`/
-///   `_CLRGRAD` TIFFs) and write an 8-bit PNG at `output` — the file a
-///   terrain Material network's `asset inputs:<role>_map` points at.
-///   Grayscale sources (NAC orthos are radiance floats) get a 1–99
-///   percentile stretch in linear contrast space, then sRGB-encode the result;
-///   RGB sources crop as-is.
-/// - `kind = "normalmap"`: crop + resample like `dem`, then derive a
-///   world-space normal map PNG from the heights (RGB = `n*0.5+0.5`,
-///   the encoding `terrain_layered.wgsl` decodes — same convention as
-///   `lunco-terrain-core`'s derived bake: `normalize(-dh/dx, 1, -dh/dz)`).
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
-pub struct ProcessConfig {
-    /// Pipeline selector.
-    pub kind: String,
-    /// Target [width, height] in pixels (texture pipeline only).
-    #[cfg(not(target_arch = "wasm32"))]
-    #[serde(default)]
-    pub target_resolution: Option<[u32; 2]>,
-    /// Output path **relative to** [`ProcessConfig::output_root`].
-    /// Examples: `"textures/earth.png"`, `"models/perseverance.glb"`,
-    /// `"terrain/apollo15"` (a folder, for the `dem` pipeline — the
-    /// heightmap lands at `<output>/materials/textures/heightmap.tif`).
-    pub output: String,
-    /// Where to write the processed file:
-    /// - `"cache"` (default) — writes under the shared cache root
-    ///   (`<LUNCOSIM_CACHE>/...`). Used by Earth/Moon textures and
-    ///   other regeneratable artifacts that don't need to live in
-    ///   the source tree.
-    /// - `"assets"` — writes under the workspace `assets/` directory
-    ///   (gitignored if the path matches a `.gitignore` rule). Used
-    ///   for files USD `payload`/`references` need to find via
-    ///   layer-relative paths — Bevy's default `assets://` source
-    ///   resolves them, and so does Blender / usdview / Houdini.
-    /// - `"twin"` — writes into a **Twin folder** whose root is supplied
-    ///   by the caller (the CLI's `--twin <DIR>` flag, threaded through
-    ///   [`process_asset`]'s `twin_root` arg). This is what makes a
-    ///   standalone Twin (which is not a workspace crate, e.g. a school
-    ///   project on disk) able to download + process its own assets
-    ///   in place. `output` is interpreted relative to that root.
-    #[serde(default = "default_output_root")]
-    pub output_root: String,
-
-    // ── `kind = "dem"` fields ────────────────────────────────────────────
-    // The runtime DEM reader needs the DTM's *projection* to turn the
-    // author's geographic ROI (center + window) into source pixels. Raw LROC
-    // PDS TIFFs carry no GeoTIFF tags, so these come from the manifest (the
-    // values for the Apollo 15 NAC DTM are in its PDS3 `.LBL`). For an
-    // equirectangular mosaic, pixel→metre is `pixel_scale_m` and
-    // lat/lon→pixel is a linear affine using `center_lat`/`center_lon` +
-    // `pixel_scale_m` over the body radius — no general reprojection.
-    /// Center latitude of the square ROI to crop (degrees, planetocentric).
-    #[cfg(not(target_arch = "wasm32"))]
-    #[serde(default)]
-    pub center_lat: Option<f64>,
-    /// Center longitude of the square ROI to crop (degrees, East-positive).
-    #[cfg(not(target_arch = "wasm32"))]
-    #[serde(default)]
-    pub center_lon: Option<f64>,
-    /// Side length of the square ROI in metres (the crop window). The DTM
-    /// is sampled across this many metres and re-encoded at
-    /// `target_resolution` × `target_resolution` samples.
-    #[cfg(not(target_arch = "wasm32"))]
-    #[serde(default)]
-    pub window_m: Option<f64>,
-    /// DTM source projection: metres per source pixel (e.g. `2.0` for the
-    /// 2 m/px Apollo 15 NAC mosaic). Used to convert the ROI to a source-
-    /// pixel window. Defaults to `2.0` (the recommended mosaic).
-    #[cfg(not(target_arch = "wasm32"))]
-    #[serde(default = "default_dem_pixel_scale_m")]
-    pub pixel_scale_m: f64,
-    /// Vertical unit conversion for the source samples. NASA's floating LOLA
-    /// TIFFs are kilometres relative to the lunar reference radius, so their
-    /// manifest uses `2000.0` to produce metres relative to that radius.
-    #[cfg(not(target_arch = "wasm32"))]
-    #[serde(default = "default_dem_height_scale")]
-    pub source_height_scale_m_per_unit: f64,
-    /// Vertical offset applied after [`Self::source_height_scale_m_per_unit`].
-    /// Nodata values remain non-finite and are not transformed.
-    #[cfg(not(target_arch = "wasm32"))]
-    #[serde(default)]
-    pub source_height_offset_m: f64,
-    /// Geographic extent of the SOURCE DTM, used to map the author's ROI
-    /// (center + window) onto source pixels. These are the `MIN/MAX_LATITUDE`
-    /// / `EASTERNMOST/WESTERNMOST_LONGITUDE` values from the DTM's PDS3
-    /// label (NOT `CENTER_LONGITUDE`, which on some LROC labels carries a
-    /// body-frame quirk inconsistent with the actual extent). All four must
-    /// be set for `kind = "dem"`; a 2-point affine from the extent corners
-    /// to the raster edges makes the projection self-consistent for any
-    /// equirectangular mosaic regardless of longitude convention.
-    #[cfg(not(target_arch = "wasm32"))]
-    #[serde(default)]
-    pub src_min_lat: Option<f64>,
-    #[cfg(not(target_arch = "wasm32"))]
-    #[serde(default)]
-    pub src_max_lat: Option<f64>,
-    #[cfg(not(target_arch = "wasm32"))]
-    #[serde(default)]
-    pub src_min_lon: Option<f64>,
-    #[cfg(not(target_arch = "wasm32"))]
-    #[serde(default)]
-    pub src_max_lon: Option<f64>,
-    /// Site identity. The runtime takes this from the DEM folder name; this
-    /// field remains for manifests that name the site explicitly.
-    #[cfg(not(target_arch = "wasm32"))]
-    #[serde(default)]
-    pub site_id: Option<String>,
-    /// Lunar reference frame of the SOURCE product's coordinates —
-    /// `"MOON_ME"` for anything LROC/LOLA-derived, `"MOON_PA"` for
-    /// ephemeris-frame data. Stamped into the heightmap's GeoTIFF tags as
-    /// provenance. Optional: a manifest that does not know its source's frame
-    /// declares nothing, and every reader sees *unknown* — never a guess
-    /// (ME↔PA disagree by ≈ 875 m on the surface).
-    #[cfg(not(target_arch = "wasm32"))]
-    #[serde(default)]
-    pub frame: Option<String>,
-}
-
-fn default_output_root() -> String {
-    "cache".to_string()
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn default_dem_pixel_scale_m() -> f64 {
-    2.0
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn default_dem_height_scale() -> f64 {
-    1.0
-}
-
 /// Processes a single source asset according to `process.kind`.
 ///
 /// - `"texture"` (default): resize an image to `target_resolution` and
@@ -260,64 +112,6 @@ pub fn process_asset(
     process_asset_to(source_path, process, &output_path, control)
 }
 
-/// Where a `[*.process]` step writes its product — the ONE resolver, so the
-/// step that WRITES the artifact and the registry that reports whether it
-/// EXISTS can never disagree about the path.
-///
-/// `cache_root` is the cache selected by the declaration's owner — a Twin's
-/// `.cache` by default, the global pool for a crate or a Twin entry marked
-/// `shared = true` — and is what the default `output_root = "cache"` resolves
-/// against. Twin readers search the Twin-local and global caches through one
-/// logical path, so processed products do not encode their physical location.
-///
-/// `twin_root` is the Twin FOLDER itself, for `output_root = "twin"` (authored
-/// content the Twin ships, not a cache artifact). The selected root is required
-/// by the corresponding output mode; an invalid declaration is an error.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn process_output_path(
-    process: &ProcessConfig,
-    cache_root: Option<&Path>,
-    twin_root: Option<&Path>,
-) -> Result<std::path::PathBuf, std::io::Error> {
-    if !lunco_assets_core::asset_path::is_safe_relative_path(&process.output) {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!(
-                "process output {:?} must be a safe relative path",
-                process.output
-            ),
-        ));
-    }
-    match process.output_root.as_str() {
-        "assets" => Ok(lunco_assets_core::assets_dir_abs().join(&process.output)),
-        "twin" => {
-            // Caller-supplied Twin folder root (the CLI's --twin flag).
-            let root = twin_root.ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "process output_root=\"twin\" requires an open Twin root",
-                )
-            })?;
-            Ok(root.join(&process.output))
-        }
-        "cache" => {
-            let root = cache_root.ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "process output_root=\"cache\" requires an owning cache root",
-                )
-            })?;
-            Ok(root.join(&process.output))
-        }
-        other => Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!(
-                "unknown process output_root `{other}` (expected \"assets\", \"cache\", or \"twin\")"
-            ),
-        )),
-    }
-}
-
 /// The body of [`process_asset`] once its output path is known.
 #[cfg(not(target_arch = "wasm32"))]
 fn process_asset_to(
@@ -336,7 +130,7 @@ fn process_asset_to(
     // consumer artifact skips the whole decode (the expensive part — a big
     // mosaic decodes to GBs of f64).
     // Anything that could change the result — new source, edited ROI, a
-    // pipeline fix (bump PIPELINE_VERSION) — changes the key and rebakes.
+    // pipeline fix (bump PROCESS_PIPELINE_VERSION) — changes the key and rebakes.
     // Never time-based: a cache that can't go stale beats one that expires.
     let stamp_path = bake_stamp_path(&output_path);
     let key = bake_key(source_path, process)?;
@@ -510,124 +304,6 @@ fn commit_staged_output(
     drop(_gate);
     let _ = std::fs::remove_dir_all(&backup_root);
     Ok(())
-}
-
-/// Bump when any pipeline's OUTPUT changes for identical inputs (resampling
-/// fix, encoding change, new geo tags) — invalidates every stamped bake.
-///
-/// THIS IS THE ONLY THING THAT INVALIDATES A BAKE AFTER A CODE FIX. The key
-/// hashes (source bytes, config, this number). Source bytes and config are data;
-/// the processing code is not in the hash, so a corrected pipeline that reads the
-/// same inputs produces the same key and the stamp says `✓ up-to-date` over the
-/// output the bug produced.
-///
-/// That is not hypothetical: 2026-07-27, the ROI clamp was fixed to bound against
-/// valid data rather than raster dimensions, and re-running the bake reported
-/// `✓ up-to-date (bake key match)` and skipped — the broken texture stayed on
-/// disk, and it took hand-deleting `.bakekey` to notice the fix had never run.
-///
-/// If you changed anything under `process_dem` / `process_map` /
-/// `process_normalmap` / `resolve_roi` / `resample_roi_bilinear` and did not bump
-/// this, your fix does not exist for anyone with a warm cache — including CI.
-///
-/// v6 (2026-09-14): grayscale `map` contrast is sRGB-encoded before writing the
-/// PNG, matching the renderer's sRGB image loader; the sidecar mean remains in
-/// the pre-encoded linear contrast domain.
-/// v5 (2026-08-27): every `map` output writes a normaliser sidecar; RGB maps use
-/// the identity value `1.0`, while grayscale maps retain their measured mean.
-/// v4 (2026-07-27): normalmap fills voids before differencing and encodes a
-/// neutral up-normal for any non-finite sample (was RGB(0,0,0) = inward normal).
-/// v3 (2026-07-27): `resample_roi_bilinear` renormalises over finite neighbours
-/// and PROPAGATES NaN instead of substituting `0.0` — the substitution laundered
-/// voids into finite elevations that the runtime nodata fill could not detect.
-/// v2 (2026-07-27): ROI clamps to the valid-data bounding box, and a crop with
-/// >2% nodata fails the bake instead of shipping (`reject_if_mostly_nodata`).
-#[cfg(not(target_arch = "wasm32"))]
-const PIPELINE_VERSION: u32 = 6;
-
-/// Where the bake stamp lives: inside the output folder for folder outputs
-/// (`dem`), beside the file for file outputs. Both land under the twin's
-/// gitignored terrain artifacts, never in tracked source.
-#[cfg(not(target_arch = "wasm32"))]
-fn bake_stamp_path(output_path: &Path) -> std::path::PathBuf {
-    if output_path.extension().is_none() {
-        output_path.join(".bakekey")
-    } else {
-        let mut name = output_path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        name.push_str(".bakekey");
-        output_path.with_file_name(name)
-    }
-}
-
-/// Whether a processed artifact is complete enough for a consumer to load.
-///
-/// The output itself may be a file or a directory (`dem` delivers a terrain
-/// site folder). The pipeline-specific payload is checked before the completion
-/// stamp is accepted. Some map inputs also emit an optional `.mean` sidecar for
-/// the albedo gain calculation; the PNG remains the map artifact. When the
-/// source is also present, its current content-addressed bake key must match;
-/// packaged builds may omit the raw source, in which case the non-empty
-/// completion stamp is the integrity boundary created by the packaging pipeline.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn processed_output_present(
-    output_path: &Path,
-    process: &ProcessConfig,
-    source_path: Option<&Path>,
-) -> bool {
-    let payload_present = match process.kind.as_str() {
-        "dem" => {
-            output_path.is_dir()
-                && output_path
-                    .join("materials/textures/heightmap.tif")
-                    .is_file()
-        }
-        "map" => output_path.is_file(),
-        "gltf" | "normalmap" | "texture" => output_path.is_file(),
-        _ => false,
-    };
-    if !payload_present {
-        return false;
-    }
-    let Ok(stamp) = std::fs::read_to_string(bake_stamp_path(output_path)) else {
-        return false;
-    };
-    let stamp = stamp.trim();
-    if stamp.is_empty() {
-        return false;
-    }
-    source_path.is_none_or(|source| bake_key(source, process).is_ok_and(|key| key == stamp))
-}
-
-/// Content-address of a bake: sha256 over the SOURCE BYTES (streamed — a
-/// 908 MB mosaic hashes in seconds vs decoding to ~2 GB of f64), the full
-/// serialized [`ProcessConfig`], and [`PIPELINE_VERSION`]. Deliberately not
-/// size+mtime: mtimes differ across machines and bundle unpacks, and a bake
-/// key must mean the same thing on every peer.
-#[cfg(not(target_arch = "wasm32"))]
-fn bake_key(source: &Path, cfg: &ProcessConfig) -> Result<String, std::io::Error> {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    let mut f = std::fs::File::open(source)?;
-    let mut buf = vec![0u8; 1 << 20];
-    loop {
-        let n = std::io::Read::read(&mut f, &mut buf)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    let cfg_json = serde_json::to_string(cfg)
-        .map_err(|e| io_err(format!("serializing ProcessConfig for bake key: {e}")))?;
-    hasher.update(cfg_json.as_bytes());
-    hasher.update(PIPELINE_VERSION.to_le_bytes());
-    Ok(hasher
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect())
 }
 
 /// glb cleanup pipeline. Runs `gltf-transform` twice in series:

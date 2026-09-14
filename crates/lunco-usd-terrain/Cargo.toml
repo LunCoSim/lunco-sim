@@ -23,7 +23,7 @@ lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
 lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-obstacle-field = { path = "../lunco-obstacle-field" }
-lunco-assets = { workspace = true }
+lunco-assets-datasets = { path = "../lunco-assets-datasets" }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-doc = { path = "../lunco-doc" }
 # The canonical change-journal (`JournalResource`): an authored edit is ONE undo

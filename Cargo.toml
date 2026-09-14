@@ -78,6 +78,7 @@ members = [
     "crates/lunco-scene-validation",
     "crates/lunco-ui",
     "crates/lunco-assets-core",
+    "crates/lunco-assets-datasets",
     "crates/lunco-assets",
     "crates/lunco-modelica-assets",
     "crates/lunco-modelica-runtime",
@@ -247,6 +248,7 @@ bevy = { version = "0.19.1", default-features = false, features = [
 # ECS-only substrate for small protocol crates that do not need the Bevy facade.
 bevy_ecs = { version = "0.19.1", default-features = false, features = ["std"] }
 lunco-assets = { path = "crates/lunco-assets" }
+lunco-assets-datasets = { path = "crates/lunco-assets-datasets" }
 sysmlv2-semantics = "=0.1.1"
 sysmlv2-syntax = "=0.1.2"
 sysmlv2-stdlib = "=0.1.0"

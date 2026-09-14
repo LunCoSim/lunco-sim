@@ -191,9 +191,11 @@ supplemented with one Bevy `AssetSource` per storage backend.
 
 ## Declared datasets: the runtime half of `Assets.toml`
 
-`crates/lunco-assets/src/datasets.rs` is where a *running* app meets the
-manifest. `download.rs` knows how to fetch one entry; `DatasetRegistry` knows
-what is declared, what is on disk, and what a user has asked for.
+`crates/lunco-assets-datasets` is where a *running* app describes and observes
+the manifest. Its `DatasetRegistry` knows what is declared, what is on disk,
+and what a user has asked for. `crates/lunco-assets/src/datasets.rs` is the
+optional provisioning runtime: it owns workers and calls `download.rs` to fetch
+one entry.
 
 **The app never reaches the network on its own.** Launch, scene load and twin
 open must not open a connection. `DatasetRegistry::request(key)` is the only
@@ -215,7 +217,8 @@ dies one crate at a time.
 | Concern | Owner |
 |---|---|
 | identity, roots, URI/path resolution, and source readers | `lunco-assets-core` |
-| manifest, URL, cache path, task, bytes, status | `lunco-assets` |
+| manifest, URL, cache path, and lifecycle state | `lunco-assets-datasets` |
+| download/process tasks and byte transfer | `lunco-assets` |
 | declaring datasets + reporting what it loaded | the domain crate |
 | listing and requesting | the UI (knows no dataset by name) |
 

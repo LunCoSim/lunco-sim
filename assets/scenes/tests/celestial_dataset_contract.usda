@@ -1,0 +1,20 @@
+#usda 1.0
+(
+    defaultPrim = "CelestialDatasetContract"
+    upAxis = "Y"
+    metersPerUnit = 1
+)
+
+def Xform "CelestialDatasetContract" (kind = "assembly")
+{
+    def DistantLight "TestLight"
+    {
+        float intensity = 1.0
+    }
+
+    def Scope "Scenario" (prepend apiSchemas = ["LunCoProgramAPI"])
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/celestial_dataset_contract.rhai@
+    }
+}

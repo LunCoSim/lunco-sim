@@ -7094,14 +7094,13 @@ dependencies = [
  "flate2",
  "image",
  "lunco-assets-core",
+ "lunco-assets-datasets",
  "lunco-core",
  "lunco-geotiff",
  "lunco-settings",
  "lunco-workspace",
  "rayon",
  "resvg",
- "serde",
- "serde_json",
  "sha2 0.11.0",
  "tar",
  "tempfile",
@@ -7136,6 +7135,19 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "lunco-assets-datasets"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "lunco-assets-core",
+ "lunco-core",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "toml 1.1.2+spec-1.1.0",
 ]
 
 [[package]]
@@ -7235,8 +7247,8 @@ dependencies = [
  "celestial-core",
  "celestial-ephemeris",
  "celestial-time",
- "lunco-assets",
  "lunco-assets-core",
+ "lunco-assets-datasets",
  "lunco-celestial",
  "lunco-settings",
  "serde",
@@ -7253,8 +7265,8 @@ dependencies = [
  "big_space",
  "futures-lite",
  "lunco-api",
- "lunco-assets",
  "lunco-assets-core",
+ "lunco-assets-datasets",
  "lunco-celestial",
  "lunco-controller",
  "lunco-core",
@@ -7715,6 +7727,7 @@ dependencies = [
  "lunco-api-transport",
  "lunco-assets",
  "lunco-assets-core",
+ "lunco-assets-datasets",
  "lunco-avatar",
  "lunco-avatar-ui",
  "lunco-capture",
@@ -7860,8 +7873,8 @@ dependencies = [
  "js-sys",
  "log",
  "lunco-api",
- "lunco-assets",
  "lunco-assets-core",
+ "lunco-assets-datasets",
  "lunco-core",
  "lunco-core-session",
  "lunco-doc",
@@ -8322,8 +8335,8 @@ dependencies = [
  "getrandom 0.3.4",
  "libloading",
  "lunco-api",
- "lunco-assets",
  "lunco-assets-core",
+ "lunco-assets-datasets",
  "lunco-behavior",
  "lunco-celestial",
  "lunco-celestial-spatial",
@@ -9128,8 +9141,8 @@ name = "lunco-usd-terrain"
 version = "0.1.0"
 dependencies = [
  "bevy",
- "lunco-assets",
  "lunco-assets-core",
+ "lunco-assets-datasets",
  "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",
@@ -9294,8 +9307,8 @@ version = "0.1.0-dev"
 dependencies = [
  "bevy",
  "bevy_egui",
- "lunco-assets",
  "lunco-assets-core",
+ "lunco-assets-datasets",
  "lunco-workbench-browser",
  "lunco-workspace",
 ]
