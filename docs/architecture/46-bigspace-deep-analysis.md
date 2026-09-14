@@ -83,6 +83,12 @@ When a camera, body, rover, trajectory, or line jitters:
    A one-shot raycast support placement uses Avian's exact collider geometry
    before the paused broad-phase schedule has built its acceleration tree; the
    normal spatial-query path remains the reader for all steady-state probes.
+   Initial rigid-support admission uses Avian's maintained narrow-phase
+   `collision::collider::contact_query::contact` against the same live collider
+   pose/filter snapshot, never a support AABB's maximum height. This keeps a
+   rotated collider's broad-phase envelope from becoming a false vertical
+   surface while leaving the solver's ordinary contact pipeline authoritative
+   after admission.
    Also verify the shared `lunco-physics::avian_backend` admission contract:
    changed f64 poses and collider AABBs must remain finite, ordered, and
    representable at Avian's f32 OBVHS boundary. The bridge owns lifecycle

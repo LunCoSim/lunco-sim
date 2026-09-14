@@ -45,10 +45,11 @@
 //! pick the wrong one but cannot invent an unsafe one.
 //!
 //! Actions are re-evaluated **every frame**, not decided once at `begin`. That is
-//! what makes a rule a function of `elapsed_s` — the shipped policy escalates a
-//! slow boot and, past a deadline, gives up and lets the world run rather than
-//! hanging on a compile that is never going to answer. It is also what makes the
-//! policy hot-swappable: re-register the hook and the next frame obeys it.
+//! what makes a rule a function of `elapsed_s` and keeps the policy hot-swappable:
+//! re-register the hook and the next frame obeys it. A pending item that reaches
+//! the deadline is different: it is a terminal readiness failure, so the engine
+//! raises a runtime fault and keeps the hold in force instead of releasing an
+//! unresolved world.
 //!
 //! With no hook registered, [`Action::builtin`] decides — the same rule the
 //! shipped policy states, so an app with no scripting behaves identically.
@@ -173,14 +174,11 @@ impl Action {
     ///   that object only. A rover whose script has not compiled must not roll
     ///   away, but a second rover that is ready has no reason to wait for it.
     /// - The same wait for the world as a whole holds the world.
-    /// - Past the deadline ([`Self::DEADLINE_TICKS`], stated here in the seconds
-    ///   the caller measures in), nothing holds. A hold exists to protect a
-    ///   world that is about to become correct; a wait this long is a failure,
-    ///   and a frozen app hides it where a moving one shows it.
-    pub fn builtin(kind: &str, subject: Subject, elapsed_s: f64) -> Action {
-        if elapsed_s >= Self::DEADLINE_S {
-            return Action::Proceed;
-        }
+    /// - The deadline ([`Self::DEADLINE_TICKS`], stated here in the seconds the
+    ///   caller measures in) is a terminal failure boundary. It is enforced by
+    ///   [`evaluate_readiness`], which raises a runtime fault and keeps the world
+    ///   held; it is never a permission to proceed with an unresolved item.
+    pub fn builtin(kind: &str, subject: Subject, _elapsed_s: f64) -> Action {
         match (kind, subject) {
             (kinds::SCENE_LOAD, _) => Action::HoldWorld,
             (kinds::PROGRAM_COMPILE | kinds::PARTICIPANT_INIT, Subject::Entity(_)) => {
@@ -191,15 +189,13 @@ impl Action {
         }
     }
 
-    /// How long any single item may hold before the engine stops waiting on it,
-    /// **in fixed ticks**: 3600 ticks ≈ 60 s at the default 60 Hz fixed rate
-    /// (`lunco_core::FIXED_HZ`). Generous enough for a cold Modelica compile;
-    /// short enough that a wedged one is a visibly moving world rather than a
-    /// hung app.
+    /// How long any single item may remain pending before the engine raises a
+    /// terminal readiness fault, **in fixed ticks**: 3600 ticks ≈ 60 s at the
+    /// default 60 Hz fixed rate (`lunco_core::FIXED_HZ`).
     ///
-    /// Counted in ticks rather than wall-clock seconds so the give-up is
-    /// *reproducible*: a slow machine and a fast one both stop holding at the
-    /// same tick, hence at the same simulation state, and a recorded run replays.
+    /// Counted in ticks rather than wall-clock seconds so the terminal verdict is
+    /// *reproducible*: a slow machine and a fast one both fault at the same tick,
+    /// hence at the same simulation state, and a recorded run replays.
     pub const DEADLINE_TICKS: u64 = 3_600;
 
     /// [`Self::DEADLINE_TICKS`] expressed in seconds of fixed-clock time, for
@@ -229,7 +225,7 @@ pub struct PendingItem {
     pub label: String,
     /// Fixed ticks since this item was declared. The authoritative age: it is the
     /// same number on every machine for the same run, which is what makes the
-    /// give-up in [`Action::DEADLINE_TICKS`] reproducible.
+    /// terminal fault in [`Action::DEADLINE_TICKS`] reproducible.
     pub elapsed_ticks: u64,
     /// [`Self::elapsed_ticks`] in seconds of fixed-clock time (`ticks × timestep`).
     /// Derived, not measured — kept because policy and the API report seconds.
@@ -256,8 +252,8 @@ impl ReadinessRegistry {
     ///
     /// The returned ticket must be spent with [`finish`](Self::finish) on every
     /// path out — including failure. An abandoned ticket is a wait that never
-    /// clears; the deadline in [`Action::builtin`] keeps that from wedging the
-    /// app, but it is still a bug, and the overdue warning names it.
+    /// clears; the deadline is a terminal fault boundary, and the overdue error
+    /// names a producer that failed to close its ticket.
     pub fn begin(
         &mut self,
         subject: Subject,
@@ -419,16 +415,16 @@ fn decide(
 /// Ages on the **fixed** clock (`Time<Fixed>`), counting whole fixed ticks — the
 /// same steps `lunco_core::SimTick` counts. Wall-clock (`Time<Real>`) was the
 /// obvious choice and the wrong one: a compile does take as long as it takes, but
-/// measuring the *give-up* in wall-clock seconds makes the tick at which physics
-/// is released a function of how fast the machine is, so a slow box starts the
-/// world at a different simulation state than a fast one and a recording does not
-/// replay. Counting ticks gives up at the same tick everywhere.
+/// measuring the terminal verdict in wall-clock seconds makes the tick at which
+/// physics faults a function of how fast the machine is, so a slow box stops at a
+/// different simulation state than a fast one and a recording does not replay.
+/// Counting ticks faults at the same tick everywhere.
 ///
 /// The trade this makes deliberately: a world whose fixed clock is not stepping
-/// (paused) does not age its waits, so the deadline does not burn down while
-/// paused. That is not a hang — pause is a state the user chose and can see —
-/// whereas a wall-clock deadline expiring behind a pause screen is a hold that
-/// silently released against a frozen world.
+/// (paused) does not age its waits, so the terminal threshold does not burn down
+/// while paused. That is not a hang — pause is a state the user chose and can see
+/// — whereas a wall-clock threshold expiring behind a pause screen would fault a
+/// frozen world without a fixed-tick cause.
 ///
 /// Runs in `PreUpdate` (not `FixedPreUpdate`) because the effector reads
 /// [`ReadinessState`] per frame; it simply consumes however many fixed ticks
@@ -439,6 +435,7 @@ pub fn evaluate_readiness(
     mut registry: ResMut<ReadinessRegistry>,
     mut state: ResMut<ReadinessState>,
     settings: Res<ReadinessSettings>,
+    mut faults: ResMut<lunco_core::RuntimeFaults>,
     // Fixed-clock elapsed at the previous run. `Time<Fixed>::delta` is one step's
     // duration whatever happened this frame, so the number of steps has to come
     // from the difference in elapsed time.
@@ -468,22 +465,32 @@ pub fn evaluate_readiness(
     for item in registry.items.values_mut() {
         item.elapsed_ticks += steps;
         item.elapsed_s = item.elapsed_ticks as f64 * timestep;
-        item.action = decide(
-            item.kind,
-            item.subject,
-            &item.label,
-            item.elapsed_ticks,
-            item.elapsed_s,
-            &settings,
-        );
-
-        if !item.warned && item.elapsed_s >= Action::DEADLINE_S {
-            item.warned = true;
-            warn!(
-                "[readiness] {} {:?} '{}' has been pending {} fixed ticks ({:.0}s) \
-                 — no longer holding. Either it never finished, or its ticket was \
-                 dropped without finish().",
-                item.kind, item.subject, item.label, item.elapsed_ticks, item.elapsed_s,
+        if item.elapsed_ticks >= Action::DEADLINE_TICKS {
+            if !item.warned {
+                item.warned = true;
+                let (fault_entity, subject) = match item.subject {
+                    Subject::World => (None, "world".to_string()),
+                    Subject::Entity(entity) => (Some(entity), format!("entity:{entity:?}")),
+                };
+                let detail = format!(
+                    "{} {:?} '{}' remained pending for {} fixed ticks ({:.3}s); \
+                     producer failed to close its readiness ticket",
+                    item.kind, item.subject, item.label, item.elapsed_ticks, item.elapsed_s,
+                );
+                error!("[readiness] terminal failure: {detail}");
+                faults.raise("readiness-timeout", fault_entity, subject, detail);
+            }
+            // A faulted readiness item is never allowed to pass through policy,
+            // including a policy that explicitly returns `proceed`.
+            item.action = Action::HoldWorld;
+        } else {
+            item.action = decide(
+                item.kind,
+                item.subject,
+                &item.label,
+                item.elapsed_ticks,
+                item.elapsed_s,
+                &settings,
             );
         }
 
@@ -550,6 +557,7 @@ impl Plugin for ReadinessPlugin {
         app.register_settings_section::<ReadinessSettings>()
             .init_resource::<ReadinessRegistry>()
             .init_resource::<ReadinessState>()
+            .init_resource::<lunco_core::RuntimeFaults>()
             .add_systems(
                 PreUpdate,
                 (evaluate_readiness, apply_readiness_marks)
@@ -589,7 +597,7 @@ mod tests {
     }
 
     /// Ages come from fixed ticks, so a wait's reported seconds are a multiple of
-    /// the timestep — the property that makes the give-up reproducible.
+    /// the timestep — the property that makes the terminal verdict reproducible.
     #[test]
     fn a_waits_age_is_a_whole_number_of_fixed_ticks() {
         let _guard = policy_lock();
@@ -636,15 +644,15 @@ mod tests {
         );
     }
 
-    /// The app must never stall. A wait that outlives the deadline stops holding
-    /// anything, so a wedged compile leaves a world that visibly runs (and warns)
-    /// instead of an app that appears hung.
+    /// A wait that outlives the deadline is a terminal failure. The engine keeps
+    /// the world held and exposes the fault instead of running against unresolved
+    /// state.
     #[test]
-    fn nothing_holds_past_the_deadline() {
+    fn builtin_never_releases_an_unresolved_wait() {
         let e = Entity::from_raw_u32(1).unwrap();
         assert_eq!(
             Action::builtin(kinds::SCENE_LOAD, Subject::World, Action::DEADLINE_S + 0.1),
-            Action::Proceed
+            Action::HoldWorld
         );
         assert_eq!(
             Action::builtin(
@@ -652,7 +660,42 @@ mod tests {
                 Subject::Entity(e),
                 Action::DEADLINE_S + 0.1
             ),
-            Action::Proceed
+            Action::HoldEntity
+        );
+    }
+
+    #[test]
+    fn overdue_wait_raises_a_terminal_fault_and_keeps_the_world_held() {
+        let _guard = policy_lock();
+        let mut app = app();
+        app.world_mut().resource_mut::<ReadinessRegistry>().begin(
+            Subject::World,
+            kinds::PARTICIPANT_INIT,
+            "USD physics admission",
+        );
+        app.world_mut()
+            .resource_mut::<Time<Fixed>>()
+            .advance_by(std::time::Duration::from_secs_f64(Action::DEADLINE_S));
+
+        app.update();
+
+        let fault = app
+            .world()
+            .resource::<lunco_core::RuntimeFaults>()
+            .first
+            .as_ref()
+            .expect("an overdue readiness item must fault");
+        assert_eq!(fault.kind, "readiness-timeout");
+        assert!(fault.detail.contains("USD physics admission"));
+        assert!(app.world().resource::<ReadinessState>().world_hold);
+        assert_eq!(
+            app.world()
+                .resource::<ReadinessRegistry>()
+                .pending()
+                .next()
+                .expect("the failed ticket remains visible")
+                .action,
+            Action::HoldWorld
         );
     }
 
