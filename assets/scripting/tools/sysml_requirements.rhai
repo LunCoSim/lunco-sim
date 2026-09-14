@@ -198,7 +198,14 @@ fn _check_one(report, check) {
                     error: "USD attribute disagrees with SysML expected value",
                     actual: actual, expected: expected, tolerance: tolerance};
             }
-        } else if actual != expected {
+        } else {
+            // QueryUsdPrim preserves canonical quotes for authored string
+            // literals.  Normalize both sides before comparing, exactly as
+            // the attribute_equals observation does below.
+            if type_of(actual) == "string" { actual = _text(actual); }
+            if type_of(expected) == "string" { expected = _text(expected); }
+        }
+        if actual != expected {
             return #{ok: false, id: check.id, component: check.component,
                 requirement: check.requirement, path: check.path,
                 error: "USD attribute disagrees with SysML expected value",
@@ -266,7 +273,7 @@ fn _check_one(report, check) {
         let actual_record = _query(check.path, [check.attr]);
         if !_ok(actual_record) || actual_record.attrs[check.attr] == () { return _failure(check, "USD attribute is missing"); }
         let actual = actual_record.attrs[check.attr];
-        let expected = check.expected;
+        let expected = if check.expected_attr == () { check.expected } else { _expected(report, check) };
         // QueryUsdPrim preserves the canonical quoted literal for some
         // authored string opinions.  Compare string content, not the literal
         // delimiters, while keeping numeric/bool equality exact.
