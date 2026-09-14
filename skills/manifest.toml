@@ -1,0 +1,273 @@
+# Machine-readable contract for portable LunCoSim skills. Markdown remains the
+# canonical runbook source; this file supplies routing metadata to validators,
+# MCP packaging, and host adapters without requiring a YAML parser.
+version = 1
+
+[contract]
+required = ["name", "category", "primary_for", "defer_to", "evidence"]
+
+[[skills]]
+name = "luncosim-onboarding"
+category = "orientation"
+primary_for = ["where to start", "how skills work", "what LunCoSim can do"]
+defer_to = ["repo-map", "capability-discovery"]
+evidence = "skills/START-HERE.md"
+
+[[skills]]
+name = "repo-map"
+category = "orientation"
+primary_for = ["repository layout", "which binary to run"]
+defer_to = ["capability-discovery"]
+evidence = "docs/crates-index.md"
+
+[[skills]]
+name = "capability-discovery"
+category = "orientation"
+primary_for = ["whether a capability exists", "find an owner"]
+defer_to = ["luncosim-architecture"]
+evidence = "skills/capability-discovery/SKILL.md"
+
+[[skills]]
+name = "use-asset-library"
+category = "authoring"
+primary_for = ["find or add an asset"]
+defer_to = ["validate-assets"]
+evidence = "skills/use-asset-library/SKILL.md"
+
+[[skills]]
+name = "luncosim-architecture"
+category = "architecture"
+primary_for = ["cross-domain architecture"]
+defer_to = ["capability-discovery", "usd-projection"]
+evidence = "docs/architecture/"
+
+[[skills]]
+name = "coordinate-frames"
+category = "architecture"
+primary_for = ["BigSpace", "reference frames", "pose precision"]
+defer_to = ["luncosim-architecture"]
+evidence = "skills/coordinate-frames/SKILL.md"
+
+[[skills]]
+name = "sysml-requirements"
+category = "authoring"
+primary_for = ["SysML requirements", "verification cases"]
+defer_to = ["validate-assets", "compose-multidomain-twin"]
+evidence = "skills/sysml-requirements/SKILL.md"
+
+[[skills]]
+name = "geo-assets"
+category = "authoring"
+primary_for = ["lunar terrain data", "DEM", "terrain maps"]
+defer_to = ["build-usd-scene", "render-quality"]
+evidence = "skills/geo-assets/SKILL.md"
+
+[[skills]]
+name = "author-usd-component"
+category = "authoring"
+primary_for = ["reusable USD component"]
+defer_to = ["author-usd-physics", "validate-assets"]
+evidence = "skills/author-usd-component/SKILL.md"
+
+[[skills]]
+name = "author-rhai-tool"
+category = "authoring"
+primary_for = ["dynamic Rhai tool"]
+defer_to = ["validate-assets", "test-via-api"]
+evidence = "skills/author-rhai-tool/SKILL.md"
+
+[[skills]]
+name = "build-vehicle"
+category = "authoring"
+primary_for = ["rover", "vehicle assembly"]
+defer_to = ["authoring-vessel-controllers", "author-usd-physics"]
+evidence = "skills/build-vehicle/SKILL.md"
+
+[[skills]]
+name = "build-usd-scene"
+category = "authoring"
+primary_for = ["compose assets into a scene"]
+defer_to = ["build-vehicle", "author-scenario"]
+evidence = "skills/build-usd-scene/SKILL.md"
+
+[[skills]]
+name = "edit-usd-assembly"
+category = "authoring"
+primary_for = ["interactive assembly editing"]
+defer_to = ["assembly-quality", "usd-projection"]
+evidence = "skills/edit-usd-assembly/SKILL.md"
+
+[[skills]]
+name = "assembly-quality"
+category = "authoring"
+primary_for = ["assembly quality review"]
+defer_to = ["validate-assets", "inspect-simulation"]
+evidence = "skills/assembly-quality/SKILL.md"
+
+[[skills]]
+name = "author-usd-physics"
+category = "authoring"
+primary_for = ["USD joints", "rigid bodies", "physics authoring"]
+defer_to = ["coordinate-frames", "validate-assets"]
+evidence = "skills/author-usd-physics/SKILL.md"
+
+[[skills]]
+name = "author-scenario"
+category = "authoring"
+primary_for = ["mission behavior", "Rhai scenario"]
+defer_to = ["test-via-api", "compose-multidomain-twin"]
+evidence = "skills/author-scenario/SKILL.md"
+
+[[skills]]
+name = "authoring-vessel-controllers"
+category = "authoring"
+primary_for = ["GNC", "autopilot"]
+defer_to = ["run-modelica", "test-via-api"]
+evidence = "skills/authoring-vessel-controllers/SKILL.md"
+
+[[skills]]
+name = "compose-multidomain-twin"
+category = "authoring"
+primary_for = ["complete Twin", "USD Modelica SysML mission"]
+defer_to = ["sysml-requirements", "author-scenario"]
+evidence = "skills/compose-multidomain-twin/SKILL.md"
+
+[[skills]]
+name = "author-tutorial"
+category = "authoring"
+primary_for = ["guided tutorial", "lesson flow"]
+defer_to = ["author-scenario", "runtime-ui"]
+evidence = "skills/author-tutorial/SKILL.md"
+
+[[skills]]
+name = "run-modelica"
+category = "observe"
+primary_for = ["run Modelica", "compile or sweep"]
+defer_to = ["test-via-api", "inspect-simulation"]
+evidence = "skills/run-modelica/SKILL.md"
+
+[[skills]]
+name = "inspect-simulation"
+category = "observe"
+primary_for = ["observe live simulation"]
+defer_to = ["test-via-api", "record-video"]
+evidence = "skills/inspect-simulation/SKILL.md"
+
+[[skills]]
+name = "record-video"
+category = "observe"
+primary_for = ["record screenshots or video"]
+defer_to = ["inspect-simulation", "render-quality"]
+evidence = "skills/record-video/SKILL.md"
+
+[[skills]]
+name = "test-via-api"
+category = "verify"
+primary_for = ["end-to-end API test"]
+defer_to = ["validate-assets", "inspect-simulation"]
+evidence = "skills/test-via-api/SKILL.md"
+
+[[skills]]
+name = "validate-assets"
+category = "verify"
+primary_for = ["asset preflight", "parse and lint"]
+defer_to = ["test-via-api"]
+evidence = "skills/validate-assets/SKILL.md"
+
+[[skills]]
+name = "usd-projection"
+category = "engine"
+primary_for = ["USD to ECS projection"]
+defer_to = ["luncosim-architecture"]
+evidence = "skills/usd-projection/SKILL.md"
+
+[[skills]]
+name = "visualize-physics-with-shaders"
+category = "engine"
+primary_for = ["make physics visible"]
+defer_to = ["render-quality", "inspect-simulation"]
+evidence = "skills/visualize-physics-with-shaders/SKILL.md"
+
+[[skills]]
+name = "lunco-ui"
+category = "ui"
+primary_for = ["workbench UI", "editor panel"]
+defer_to = ["lunco-theme"]
+evidence = "skills/lunco-ui/SKILL.md"
+
+[[skills]]
+name = "runtime-ui"
+category = "ui"
+primary_for = ["Twin runtime UI"]
+defer_to = ["lunco-theme", "test-via-api"]
+evidence = "skills/runtime-ui/SKILL.md"
+
+[[skills]]
+name = "lunco-theme"
+category = "ui"
+primary_for = ["design tokens", "UI theme"]
+defer_to = ["lunco-ui", "runtime-ui"]
+evidence = "skills/lunco-theme/SKILL.md"
+
+[[skills]]
+name = "deep-audit"
+category = "architecture"
+primary_for = ["workspace audit"]
+defer_to = ["subagent-batches", "luncosim-architecture"]
+evidence = "docs/reviews/"
+
+[[skills]]
+name = "subagent-batches"
+category = "architecture"
+primary_for = ["parallel fix sweep"]
+defer_to = ["deep-audit"]
+evidence = "skills/subagent-batches/SKILL.md"
+
+[[skills]]
+name = "update-documents"
+category = "maintenance"
+primary_for = ["canonical docs", "agent guidance"]
+defer_to = ["capability-discovery"]
+evidence = "skills/update-documents/SKILL.md"
+
+[[skills]]
+name = "nightly-changelog"
+category = "release"
+primary_for = ["nightly release notes"]
+defer_to = ["packaged-builds"]
+evidence = "skills/nightly-changelog/SKILL.md"
+
+[[skills]]
+name = "performance-profiling"
+category = "performance"
+primary_for = ["FPS", "Tracy", "periodic stalls"]
+defer_to = ["inspect-simulation", "deep-audit"]
+evidence = "scripts/perf/README.md"
+
+[[skills]]
+name = "mcp-integration"
+category = "integration"
+primary_for = ["MCP server", "host registration", "skill installation"]
+defer_to = ["luncosim-onboarding", "test-via-api"]
+evidence = "mcp/README.md"
+
+[[skills]]
+name = "networking-deployment"
+category = "deployment"
+primary_for = ["multiplayer", "headless deployment", "WebTransport"]
+defer_to = ["test-via-api", "packaged-builds"]
+evidence = "crates/lunco-networking/DEPLOY.md"
+
+[[skills]]
+name = "packaged-builds"
+category = "release"
+primary_for = ["installer", "AppImage", "Velopack update"]
+defer_to = ["networking-deployment", "mcp-integration"]
+evidence = "scripts/build_native.sh"
+
+[[skills]]
+name = "render-quality"
+category = "visuals"
+primary_for = ["terrain albedo", "shadows", "visual flicker"]
+defer_to = ["geo-assets", "performance-profiling"]
+evidence = "docs/architecture/50-usd-driven-visuals.md"

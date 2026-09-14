@@ -1,7 +1,8 @@
 # LunCoSim agent guide
 
 Compact operating contract. Read `skills/START-HERE.md` for cross-host skill
-routing, then `skills/README.md`, `docs/crates-index.md`,
+routing, `skills/README.md` plus its machine-readable `skills/manifest.toml`,
+then `docs/crates-index.md`,
 `docs/principles.md`, the architecture index, and the relevant open review first.
 If a nested `AGENTS.md` applies, follow the most specific guide and reconcile
 it with this one.
@@ -13,6 +14,12 @@ auto-discover the frontmatter, but agents must also support the explicit path
 `skills/<name>/SKILL.md`. Do not declare a capability absent until the
 capability-discovery procedure has checked skills, docs, source, registrations,
 dependencies, and the live API where relevant.
+
+The canonical skill source is root `skills/`. The MCP package copies that
+validated source into its npm payload during `prepack` and exposes it through
+`list_skills`, `read_skill`, and `lunco://skills`; an installed MCP server does
+not launch the simulator. Run `python3 scripts/validate_skills.py` and the MCP
+package checks after changing skill metadata or packaging.
 
 ## Architecture
 

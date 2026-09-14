@@ -16,6 +16,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
   ListResourcesRequestSchema,
+  ListResourceTemplatesRequestSchema,
   ReadResourceRequestSchema,
   ListPromptsRequestSchema,
   GetPromptRequestSchema,
@@ -30,6 +31,7 @@ import {
   queryEntity,
   captureScreenshot,
 } from './api.js';
+import { listSkills, readSkill } from './skills.js';
 
 const SERVER_NAME = 'lunco-mcp-server';
 const SERVER_VERSION = '0.6.0';
@@ -116,6 +118,22 @@ const STATIC_TOOLS = [
         },
       },
       required: ['command'],
+    },
+  },
+  {
+    name: 'list_skills',
+    description: 'List the portable LunCoSim skill runbooks bundled with this MCP server. Use this before declaring a workflow unavailable; the catalog works without a running simulation API.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'read_skill',
+    description: 'Read one portable LunCoSim skill by its exact name from the bundled Markdown catalog. Call list_skills first, then use the returned name.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Exact skill name returned by list_skills.' },
+      },
+      required: ['name'],
     },
   },
   // ── Model source listing (spec 032) ────────────────────────────────────
@@ -546,9 +564,26 @@ server.setRequestHandler(ListResourcesRequestSchema, async () => {
         description: 'A list of all entities currently in the simulation',
         mimeType: 'application/json',
       },
+      {
+        uri: 'lunco://skills',
+        name: 'LunCoSim Skills',
+        description: 'Portable LunCoSim development runbooks and their trigger descriptions',
+        mimeType: 'application/json',
+      },
     ],
   };
 });
+
+server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => ({
+  resourceTemplates: [
+    {
+      uriTemplate: 'lunco://skills/{name}',
+      name: 'LunCoSim skill runbook',
+      description: 'Read one portable LunCoSim SKILL.md by its exact name',
+      mimeType: 'text/markdown',
+    },
+  ],
+}));
 
 // Handle resource reading
 server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
@@ -564,6 +599,27 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
           text: JSON.stringify(result, null, 2),
         },
       ],
+    };
+  }
+
+  if (uri === 'lunco://skills') {
+    return {
+      contents: [{
+        uri,
+        mimeType: 'application/json',
+        text: JSON.stringify({ skills: await listSkills() }, null, 2),
+      }],
+    };
+  }
+
+  if (uri.startsWith('lunco://skills/')) {
+    const name = decodeURIComponent(uri.slice('lunco://skills/'.length));
+    return {
+      contents: [{
+        uri,
+        mimeType: 'text/markdown',
+        text: await readSkill(name),
+      }],
     };
   }
 
@@ -649,6 +705,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   try {
     switch (name) {
+      case 'list_skills': {
+        return { content: [{ type: 'text', text: JSON.stringify({ skills: await listSkills() }, null, 2) }] };
+      }
+
+      case 'read_skill': {
+        const source = await readSkill(args?.name);
+        return { content: [{ type: 'text', text: source }] };
+      }
+
       case 'discover_schema': {
         const result = await discoverSchema();
         return {

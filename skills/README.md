@@ -15,6 +15,11 @@ choose one primary skill, defer to supporting skills, use the project formats,
 work with installed GitHub builds, create dynamic Rhai tools, and produce an
 evidence-backed handoff.
 
+The machine-readable routing contract is [`manifest.toml`](manifest.toml). It
+contains one entry for every `skills/*/SKILL.md`; the catalogue validator checks
+names, deferred targets, evidence paths, and links so host adapters and the MCP
+skill surface stay aligned with the Markdown runbooks.
+
 ## How to use a skill
 
 Use a skill when the request changes, authors, validates, observes, or reviews
@@ -57,6 +62,7 @@ parse check into runtime evidence.
 
 | Skill | Use it when you want to… |
 |---|---|
+| [**luncosim-onboarding**](luncosim-onboarding/SKILL.md) | Start from an auto-discoverable, cross-host route for a new LunCoSim task |
 | [**START-HERE**](START-HERE.md) | Route a new task, choose a primary skill, understand formats, or prepare a cross-host handoff |
 | [**repo-map**](repo-map/SKILL.md) | Get your bearings — repo layout, which binary to run, where a feature lives |
 | [**capability-discovery**](capability-discovery/SKILL.md) | Find an existing capability and its owner before calling a feature missing or adding a duplicate mechanism |
@@ -92,6 +98,7 @@ parse check into runtime evidence.
 | [**record-video**](record-video/SKILL.md) | Record deterministic video/PNG takes — windowed or windowless (`--offscreen`), CLI or rhai-sequenced |
 | [**test-via-api**](test-via-api/SKILL.md) | Verify a change end-to-end via the API instead of asking the user to click |
 | [**validate-assets**](validate-assets/SKILL.md) | Pre-flight a `.mo`/`.usda`/`.sysml`/`.kerml`/`.wgsl`/`.rhai` or an entire Twin namespace — does it parse, resolve, and lint correctly? — in seconds; plus `ValidateSysml`/`RunLint` for Twin and loaded-scene checks |
+| [**performance-profiling**](performance-profiling/SKILL.md) | Diagnose FPS, physics timing, periodic stalls, Builder/View differences, and Tracy evidence without reducing quality or changing BigSpace/substeps |
 
 ## Extend the engine
 
@@ -99,6 +106,15 @@ parse check into runtime evidence.
 |---|---|
 | [**usd-projection**](usd-projection/SKILL.md) | Work ON the USD layer — teach it a new prim type or attribute, or fix an edit that saved but didn't show up |
 | [**visualize-physics-with-shaders**](visualize-physics-with-shaders/SKILL.md) | Make a simulated value VISIBLE — a strut that reddens under load, a tyre that glows where it slips |
+| [**render-quality**](render-quality/SKILL.md) | Diagnose terrain albedo, shadows, lighting, material bindings, and fast color changes while preserving authored image quality |
+
+## Integrate and deploy
+
+| Skill | Use it when you want to… |
+|---|---|
+| [**mcp-integration**](mcp-integration/SKILL.md) | Install/register MCP, expose the skill bundle, or troubleshoot API and host integration |
+| [**networking-deployment**](networking-deployment/SKILL.md) | Configure multiplayer, WebTransport, headless hosting, TLS, or deployment |
+| [**packaged-builds**](packaged-builds/SKILL.md) | Build and acceptance-test official desktop installers, AppImages, or Velopack updates |
 
 ## Build workbench UI
 
@@ -215,9 +231,15 @@ only when its contract is needed:
 | Add or locate an asset | `use-asset-library` | `validate-assets` for file checks |
 | Run a Modelica model | `run-modelica` | `test-via-api` for generic end-to-end evidence; `inspect-simulation` for read-only observation |
 | Observe live state | `inspect-simulation` | `test-via-api` only when commands or verdicts are required |
+| Prove or diagnose FPS and periodic stalls | `performance-profiling` | `inspect-simulation` for runtime state; `deep-audit` for cross-domain ownership |
+| Diagnose terrain, albedo, shadows, or lighting | `render-quality` | `geo-assets` for asset processing; `performance-profiling` for measured cost |
 | Build a Twin-wide mission | `compose-multidomain-twin` | `author-scenario` for mission policy and `author-tutorial` for lessons |
 | Author or verify SysML requirements | `sysml-requirements` | `validate-assets` for parse-only gates; `compose-multidomain-twin` for complete Twin composition; `test-via-api` for generic runtime evidence |
-| Workbench UI versus Twin UI | `lunco-ui` | `lunco-theme` for tokens; `runtime-ui` for authored Twin-facing surfaces |
+| Workbench UI | `lunco-ui` | `lunco-theme` for tokens |
+| Twin-facing UI | `runtime-ui` | `lunco-theme` for tokens; `test-via-api` for proof |
+| Install or register MCP | `mcp-integration` | `luncosim-onboarding` for general routing; `test-via-api` for live API proof |
+| Deploy networking or a headless host | `networking-deployment` | `packaged-builds` for desktop artifact acceptance |
+| Verify an official desktop package | `packaged-builds` | `mcp-integration` for packaged MCP registration |
 
 ## Writing or changing a skill
 

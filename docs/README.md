@@ -59,6 +59,7 @@ The full catalogue with trigger phrases is in
 |---|---|
 | [repo-map](../skills/repo-map/SKILL.md) | Get oriented — layout, which binary to run, where a feature lives |
 | [capability-discovery](../skills/capability-discovery/SKILL.md) | Check whether an existing feature, owner, or runtime entry point already exists |
+| [luncosim-onboarding](../skills/luncosim-onboarding/SKILL.md) | Start with the auto-discoverable cross-host route, format boundaries, MCP, and installed/source build rules |
 | [build-usd-scene](../skills/build-usd-scene/SKILL.md) | Author/edit the 3D world — load, spawn, place, tune |
 | [update-documents](../skills/update-documents/SKILL.md) | Keep canonical docs, agent guidance, and skills aligned |
 | [author-scenario](../skills/author-scenario/SKILL.md) | Write rhai behaviour — missions, waypoints, reactions |
@@ -67,6 +68,11 @@ The full catalogue with trigger phrases is in
 | [compose-multidomain-twin](../skills/compose-multidomain-twin/SKILL.md) | Assemble USD + Modelica + cosim + rhai into a Twin |
 | [inspect-simulation](../skills/inspect-simulation/SKILL.md) | Observe a running sim — ports, variables, screenshots |
 | [test-via-api](../skills/test-via-api/SKILL.md) | Verify a change without asking a human to click |
+| [performance-profiling](../skills/performance-profiling/SKILL.md) | Diagnose FPS, physics timing, Builder stalls, or Tracy evidence without lowering quality |
+| [render-quality](../skills/render-quality/SKILL.md) | Diagnose terrain albedo, shadows, lighting, and fast color changes |
+| [mcp-integration](../skills/mcp-integration/SKILL.md) | Install/register MCP and read the portable skill bundle |
+| [networking-deployment](../skills/networking-deployment/SKILL.md) | Configure multiplayer, WebTransport, or headless deployment |
+| [packaged-builds](../skills/packaged-builds/SKILL.md) | Verify official desktop installers and Velopack updates |
 | [runtime-ui](../skills/runtime-ui/SKILL.md) | Author reloadable Twin-facing HTML/CSS-like runtime surfaces |
 | [sysml-requirements](../skills/sysml-requirements/SKILL.md) | Author and verify Twin-owned SysML v2 requirements and verification cases |
 

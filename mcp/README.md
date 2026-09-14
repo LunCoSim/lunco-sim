@@ -12,6 +12,7 @@ This MCP server exposes LunCoSim simulation commands as MCP tools, enabling AI a
 - **Typed commands** - Each discovered command becomes a typed MCP tool
 - **Resources** - Entities and simulation state exposed as MCP resources
 - **Static tools** - Always-available tools for schema discovery, entity listing, and screenshots
+- **Portable skills** - The validated LunCoSim Markdown skill bundle is included in the npm package and exposed through MCP
 - **Screenshot support** - Capture simulation viewport as PNG with proper MCP content types
 
 ## Installation
@@ -41,6 +42,32 @@ Example:
 LUNCO_API_HOST=192.168.1.100 LUNCO_API_PORT=4101 npx @lunco/mcp-server
 ```
 
+The server connects to an already-running production `luncosim --api PORT`; it
+does not launch or rebuild the simulator. Start one session, verify
+`/api/ready`, then register this stdio server. The checkout `.mcp.json` is a
+development convenience; the published npm package is the portable install
+for other hosts.
+
+## Skills and onboarding
+
+The canonical runbooks live in the repository's `skills/` directory. During
+`npm pack` the package copies that validated directory into its payload, so a
+GitHub/npm-installed MCP server can provide the same guidance without a
+checkout. The MCP surface is available even when the simulation API is not:
+
+| Surface | Purpose |
+|---|---|
+| `list_skills` | List skill names, trigger descriptions, and `lunco://skills/<name>` URIs |
+| `read_skill(name)` | Read one exact `SKILL.md` runbook |
+| `lunco://skills` | Read the JSON catalog as an MCP resource |
+| `lunco://skills/<name>` | Read one Markdown runbook as an MCP resource |
+
+Use `list_skills` before saying that a capability or workflow is unavailable.
+The runbook then routes to the owning source and verification command. Set
+`LUNCOSIM_BIN` for the simulator itself when it is installed outside `PATH`;
+Python is only an optional LunCoSim integration and is not required for the
+normal workflow.
+
 ## Static Tools
 
 These tools are always available:
@@ -52,6 +79,8 @@ These tools are always available:
 | `query_entity` | Get entity details by ID |
 | `capture_screenshot` | Capture viewport as PNG (optionally save to file) |
 | `execute_command` | Generic command executor |
+| `list_skills` | List the portable skill bundle without contacting the simulation API |
+| `read_skill` | Read one bundled Markdown skill by exact name |
 | `list_bundled` | List embedded `assets/models/*.mo` example models with `bundled://` URIs |
 | `list_open_documents` | List every open document (Modelica / USD / SysML / future kinds) with origin + active flag |
 | `list_twin` | List files in the open Twin folder, paginated, classified by kind |
@@ -132,6 +161,8 @@ These resources provide declarative access to simulation state:
 |--------------|-------------|
 | `lunco://entities` | List of all entities in the simulation (JSON) |
 | `lunco://entities/{id}` | Detailed state of a specific entity (JSON) |
+| `lunco://skills` | Catalog of the portable skill runbooks (JSON) |
+| `lunco://skills/{name}` | One bundled `SKILL.md` runbook (Markdown) |
 
 ## Prompts
 

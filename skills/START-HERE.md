@@ -15,7 +15,8 @@ Use this page when you are unsure which skill to choose. Use
 1. State the outcome, not an implementation guess: “I want a rover with a
    self-driving controller” or “find out whether requirements verification is
    already supported.”
-2. Choose one primary skill from the map below. If you do not know whether a
+2. Choose one primary skill from the routing table in
+   [`README.md`](README.md). If you do not know whether a
    capability exists, start with
    [`capability-discovery`](capability-discovery/SKILL.md), not a feature-
    implementation skill.
@@ -37,52 +38,21 @@ outcome -> primary skill -> owner/source -> smallest authored change
         -> validate -> production/API or visual evidence -> handoff
 ```
 
-## Quick route map
+## Quick routing
 
-| If you want to… | Start with | Defer when needed to… |
-|---|---|---|
-| Get oriented in the repository | [`repo-map`](repo-map/SKILL.md) | [`capability-discovery`](capability-discovery/SKILL.md) |
-| Find out whether LunCoSim already does something | [`capability-discovery`](capability-discovery/SKILL.md) | The owning domain skill it identifies |
-| Author a reusable USD component | [`author-usd-component`](author-usd-component/SKILL.md) | [`author-usd-physics`](author-usd-physics/SKILL.md), [`validate-assets`](validate-assets/SKILL.md) |
-| Compose existing assets into a scene | [`build-usd-scene`](build-usd-scene/SKILL.md) | [`build-vehicle`](build-vehicle/SKILL.md), [`author-scenario`](author-scenario/SKILL.md) |
-| Build a rover or lander | [`build-vehicle`](build-vehicle/SKILL.md) | [`authoring-vessel-controllers`](authoring-vessel-controllers/SKILL.md) |
-| Assemble a complete multi-domain Twin | [`compose-multidomain-twin`](compose-multidomain-twin/SKILL.md) | [`author-scenario`](author-scenario/SKILL.md), [`sysml-requirements`](sysml-requirements/SKILL.md) |
-| Author or verify SysML requirements | [`sysml-requirements`](sysml-requirements/SKILL.md) | [`validate-assets`](validate-assets/SKILL.md), [`test-via-api`](test-via-api/SKILL.md) |
-| Write mission or tutorial behaviour | [`author-scenario`](author-scenario/SKILL.md) | [`author-tutorial`](author-tutorial/SKILL.md) |
-| Add a GNC or autopilot | [`authoring-vessel-controllers`](authoring-vessel-controllers/SKILL.md) | [`run-modelica`](run-modelica/SKILL.md) |
-| Create a reusable AI authoring tool | [`author-rhai-tool`](author-rhai-tool/SKILL.md) | [`edit-usd-assembly`](edit-usd-assembly/SKILL.md) |
-| Inspect or test a running simulation | [`inspect-simulation`](inspect-simulation/SKILL.md) or [`test-via-api`](test-via-api/SKILL.md) | [`validate-assets`](validate-assets/SKILL.md) for preflight |
-| Fix or inspect physics authored in USD | [`author-usd-physics`](author-usd-physics/SKILL.md) | [`coordinate-frames`](coordinate-frames/SKILL.md) |
-| Build a workbench panel | [`lunco-ui`](lunco-ui/SKILL.md) | [`lunco-theme`](lunco-theme/SKILL.md) |
-| Author a Twin-facing runtime surface | [`runtime-ui`](runtime-ui/SKILL.md) | [`lunco-theme`](lunco-theme/SKILL.md) |
-| Investigate a cross-domain architecture issue | [`luncosim-architecture`](luncosim-architecture/SKILL.md) | [`capability-discovery`](capability-discovery/SKILL.md) |
+The complete request-to-primary/deferred routing table is maintained in
+[`README.md`](README.md), with machine-readable metadata in
+[`manifest.toml`](manifest.toml). This page intentionally stays a stable
+cross-host entry point instead of copying that table into a second source.
 
-## Common task recipes
-
-Arrows show deferred contracts, not a requirement to read every skill first.
-
-```text
-new reusable component
-  capability-discovery -> author-usd-component -> author-usd-physics
-                         -> validate-assets -> test-via-api
-
-new rover mission
-  build-vehicle -> authoring-vessel-controllers -> validate-assets
-                 -> test-via-api
-
-complete requirement-backed Twin
-  compose-multidomain-twin -> sysml-requirements -> author-scenario
-                             -> validate-assets -> test-via-api
-
-terrain scene
-  geo-assets -> build-usd-scene -> validate-assets -> inspect-simulation
-
-live reusable assembly
-  edit-usd-assembly -> assembly-quality -> validate-assets
-
-workbench or Twin UI
-  lunco-ui/runtime-ui -> lunco-theme -> test-via-api
-```
+- Unknown capability or owner: [`capability-discovery`](capability-discovery/SKILL.md)
+- New reusable component or scene: [`author-usd-component`](author-usd-component/SKILL.md)
+- Vehicle or mission: [`build-vehicle`](build-vehicle/SKILL.md)
+- SysML requirements and verification: [`sysml-requirements`](sysml-requirements/SKILL.md)
+- Live observation or proof: [`inspect-simulation`](inspect-simulation/SKILL.md)
+- FPS, physics time, Builder stalls, or Tracy: [`performance-profiling`](performance-profiling/SKILL.md)
+- Terrain albedo, shadows, or visual quality: [`render-quality`](render-quality/SKILL.md)
+- MCP installation or host integration: [`mcp-integration`](mcp-integration/SKILL.md)
 
 ## Formats and development boundaries
 

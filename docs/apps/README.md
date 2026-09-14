@@ -20,6 +20,18 @@ cargo build -p lunco-luncosim --bin luncosim -j 4
 target/debug/luncosim --api 4101
 ```
 
+For an installed GitHub build, use the installed command instead of the
+checkout path:
+
+```bash
+export LUNCOSIM_BIN="${LUNCOSIM_BIN:-luncosim}"
+"$LUNCOSIM_BIN" --api 4101
+```
+
+All controllable sessions need an explicit free API port. The source commands
+below intentionally show the freshly built checkout executable; the skills and
+MCP package use `LUNCOSIM_BIN` so the installed/source choice is explicit.
+
 Run from the repository root so the app can find its bundled assets. If 4101 or
 the requested API port is already in use, startup fails before the simulator
 window and loop are started. For contributor setup and verification rules, read
