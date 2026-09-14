@@ -23,7 +23,8 @@ menu in the luncosim.
 You can run your work at any point with:
 
 ```
-target/debug/luncosim --api 4101 --scene scenes/luncosim/my_mission.usda
+export LUNCOSIM_BIN="${LUNCOSIM_BIN:-luncosim}"
+"$LUNCOSIM_BIN" --api 4101 --scene scenes/luncosim/my_mission.usda
 ```
 
 ---
@@ -859,9 +860,11 @@ for mission policy. No vessel-owned waypoint state or Rust waypoint projection i
 needed.
 
 For a visual review, use the authored `assets/scenes/tests/waypoint_visual.usda`
-companion with the production `target/debug/luncosim` binary from the tutorial
-checkout. It places the reusable dome around the parked six-wheel rover so the
-green annotation remains visible while the rover stays readable through it.
+companion with the production binary selected by `LUNCOSIM_BIN`. In a source
+checkout that is normally `target/debug/luncosim`; an installed GitHub build
+can be selected by its command or absolute path. It places the reusable dome
+around the parked six-wheel rover so the green annotation remains visible while
+the rover stays readable through it.
 
 Drop three markers into the scene:
 
