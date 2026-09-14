@@ -148,7 +148,7 @@ impl ViewModelAppExt for App {
 /// that made `produce_usd_canvas` 11 ms a frame. Nothing here early-returns
 /// cheaply, so nothing here may run ungated.
 pub fn usd_selection_view_changed(
-    selection: Res<lunco_scene_commands::SelectedEntities>,
+    selection: Res<lunco_scene_selection::SelectedEntities>,
     target: Res<crate::InspectorTarget>,
     revision: Res<lunco_usd_bevy_scene::UsdStageRevision>,
     viewport: Option<Res<lunco_usd_ui::viewport::UsdViewportState>>,
@@ -190,7 +190,7 @@ pub(crate) fn is_editor_preview_entity(
 /// authored view-model.
 pub(crate) fn selected_entity_in_preview(
     session: &lunco_usd_ui::viewport::UsdPreviewSession,
-    selected: Option<&lunco_scene_commands::SelectedEntities>,
+    selected: Option<&lunco_scene_selection::SelectedEntities>,
     target: Option<&crate::InspectorTarget>,
     q_paths: &Query<&lunco_usd_bevy_scene::UsdPrimPath>,
     q_parents: &Query<&ChildOf>,
@@ -207,7 +207,7 @@ pub(crate) fn selected_entity_in_preview(
         .filter(|entity| belongs(*entity))
         .or_else(|| {
             selected
-                .and_then(lunco_scene_commands::SelectedEntities::primary)
+                .and_then(lunco_scene_selection::SelectedEntities::primary)
                 .filter(|entity| belongs(*entity))
         })
 }
@@ -275,7 +275,7 @@ fn preview_entity_for_path(
 /// gizmo systems.
 fn sync_editor_session_selection(
     viewport: Option<Res<lunco_usd_ui::viewport::UsdViewportState>>,
-    mut selected: ResMut<lunco_scene_commands::SelectedEntities>,
+    mut selected: ResMut<lunco_scene_selection::SelectedEntities>,
     mut inspector_target: ResMut<crate::InspectorTarget>,
     q_paths: Query<(Entity, &UsdPrimPath)>,
     q_parents: Query<&ChildOf>,
@@ -656,7 +656,7 @@ impl Plugin for SceneEditUiPlugin {
         // `lunco_luncosim::ui`), and a run condition that reads a missing resource
         // panics — the producers' own `Option<Res<_>>` tolerance does not cover
         // the gate.
-        app.init_resource::<lunco_scene_commands::SelectedEntities>();
+        app.init_resource::<lunco_scene_selection::SelectedEntities>();
         app.init_resource::<crate::InspectorTarget>();
         app.init_resource::<EditorSessionSelections>();
         app.init_resource::<lunco_api::queries::ApiQueryRegistry>();

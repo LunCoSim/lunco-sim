@@ -76,7 +76,7 @@ impl UsdVariantView {
 /// View-model producer: harvest the selected prim's variant sets into
 /// [`UsdVariantView`].
 pub fn produce_usd_variant_view(
-    selected: Option<Res<lunco_scene_commands::SelectedEntities>>,
+    selected: Option<Res<lunco_scene_selection::SelectedEntities>>,
     q: Query<&UsdPrimPath>,
     q_parents: Query<&ChildOf>,
     stages: Res<Assets<UsdStageAsset>>,

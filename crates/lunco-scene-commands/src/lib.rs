@@ -12,7 +12,11 @@
 //!
 //! - [`commands`] — the command set itself (`SpawnEntity`, `MoveEntity`,
 //!   `TransformEntity`, `DeleteEntity`, and `SetUsdConnection`, …) plus
-//!   [`commands::SpawnCommandPlugin`], the one plugin a headless server adds.
+//!   [`commands::SpawnCommandPlugin`], the mutation plugin used by headless
+//!   and interactive composition roots.
+//! - `lunco-scene-camera` — camera framing commands and their active-frame
+//!   focus transaction, installed by each application composition root that
+//!   exposes camera commands.
 //! - `lunco-scene-catalog` — the spawn and source catalogs, asynchronous asset
 //!   discovery, and the generic USD spawn constructor.
 //! - `lunco-scene-queries` — shared read-only entity and composed-USD query
@@ -37,47 +41,3 @@
 //! source path.
 
 pub mod commands;
-use bevy::prelude::*;
-
-/// Tracks which entities are currently selected.
-///
-/// Lives here, not in the editor: `commands` both mutates it (a deleted entity leaves
-/// the selection) and `init_resource`s it, so it is part of the command layer's own
-/// state. The editor consumes this resource directly.
-#[derive(Resource, Default, Clone)]
-pub struct SelectedEntities {
-    /// The selected entities. The last one added is the "primary" selection.
-    pub entities: Vec<Entity>,
-}
-
-impl SelectedEntities {
-    /// Returns the primary selected entity, if any.
-    pub fn primary(&self) -> Option<Entity> {
-        self.entities.last().copied()
-    }
-}
-
-/// Mirror the selection into [`lunco_signal::TelemetryFocus`] — the render-free
-/// "what is the user looking at" resource every telemetry surface reads to narrow
-/// itself ("the selected vessel's channels", not the whole sim's).
-///
-/// It lives HERE, beside [`SelectedEntities`] itself, rather than in the editor:
-/// selection is command-layer state, and any host that links the command layer —
-/// the sandbox, the Modelica workbench, a headless server driven by
-/// `SelectEntity` over HTTP — should get the same scoping without re-implementing
-/// this. Every host that links the command layer therefore gets the same
-/// selection scoping without a UI dependency.
-///
-/// Change-driven: writes only when the selection actually moved AND the mirror
-/// would differ, so the resource's own change tick stays meaningful downstream.
-pub fn mirror_selection_to_telemetry_focus(
-    selected: Res<SelectedEntities>,
-    mut focus: ResMut<lunco_signal::TelemetryFocus>,
-) {
-    if !selected.is_changed() {
-        return;
-    }
-    if focus.roots != selected.entities {
-        focus.roots.clone_from(&selected.entities);
-    }
-}

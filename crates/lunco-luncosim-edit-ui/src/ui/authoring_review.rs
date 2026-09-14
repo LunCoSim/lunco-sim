@@ -16,7 +16,7 @@ use lunco_core::{
     RuntimeFaults, SceneMountState, SceneViewport, TheLocalAvatar,
 };
 use lunco_render::SceneCamera;
-use lunco_scene_commands::SelectedEntities;
+use lunco_scene_selection::SelectedEntities;
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelMenuGroup, PanelSlot};
 

@@ -30,6 +30,8 @@ impl Plugin for LunCoSimOffscreenPlugin {
         // spawn-command registry both normally arrive via UI plugins.
         app.add_plugins(lunco_modelica_core::ModelicaCorePlugin);
         app.add_plugins(lunco_scene_commands::commands::SpawnCommandPlugin);
+        app.add_plugins(lunco_scene_camera::SceneCameraCommandPlugin);
+        app.add_plugins(lunco_scene_selection::SceneSelectionPlugin);
         // The trail has no egui or picking dependency, but it is still part of
         // the rendered presentation and must be present in offscreen captures.
         app.add_plugins(lunco_luncosim_edit_ui::ui::VehicleTrailPlugin);

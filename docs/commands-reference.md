@@ -282,7 +282,7 @@ actually call, with the fields the deserializer actually accepts. See the
  the camera. `entity_id` is the API id from `ListEntities` (a `u64`), same as
  [`MoveEntity`]/[`SetObjectProperty`].
 
-- *defined in:* `crates/lunco-scene-commands/src/commands.rs`
+- *defined in:* `crates/lunco-scene-camera/src/lib.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -298,7 +298,7 @@ actually call, with the fields the deserializer actually accepts. See the
  runtime-authored surfaces still need a stable subject for scoped telemetry.
  The authored USD path remains stable across entity ids and scene reloads.
 
-- *defined in:* `crates/lunco-scene-commands/src/commands.rs`
+- *defined in:* `crates/lunco-scene-camera/src/lib.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -413,7 +413,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  resource so a previous orbit focus or a canonical render-only grid cannot
  put the camera in a different frame.
 
-- *defined in:* `crates/lunco-scene-commands/src/commands.rs`
+- *defined in:* `crates/lunco-scene-camera/src/lib.rs`
 
 | Field | Type | Description |
 |---|---|---|

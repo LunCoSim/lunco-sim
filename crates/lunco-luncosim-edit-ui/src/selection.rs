@@ -16,7 +16,7 @@ use bevy::math::Isometry3d;
 use lunco_controller::ControllerLink;
 use lunco_core::{on_command, register_commands, Avatar, Command, LocalAvatar};
 use lunco_luncosim_edit_core::SpawnState;
-use lunco_scene_commands::SelectedEntities;
+use lunco_scene_selection::SelectedEntities;
 use lunco_usd_bevy_core::UsdStageAsset;
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_ui::viewport::{UsdPreviewId, UsdViewportState};

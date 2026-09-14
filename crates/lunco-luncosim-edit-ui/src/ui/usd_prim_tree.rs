@@ -304,7 +304,7 @@ impl Panel for UsdPrimTreePanel {
 
 fn prim_tree_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
     let selected = ctx
-        .resource::<lunco_scene_commands::SelectedEntities>()
+        .resource::<lunco_scene_selection::SelectedEntities>()
         .cloned()
         .unwrap_or_default();
 
@@ -380,7 +380,7 @@ fn render_prim_node(
     ui: &mut egui::Ui,
     key: &NodeKey,
     view: &UsdPrimTreeSessionView,
-    selected: &lunco_scene_commands::SelectedEntities,
+    selected: &lunco_scene_selection::SelectedEntities,
     primary: Option<Entity>,
     reveal_path: Option<&str>,
     selection_changed: bool,
@@ -457,7 +457,7 @@ fn prim_select_label(
     ui: &mut egui::Ui,
     node: &PrimTreeNode,
     label: &str,
-    selected: &lunco_scene_commands::SelectedEntities,
+    selected: &lunco_scene_selection::SelectedEntities,
     primary: Option<Entity>,
     selection_changed: bool,
     to_select: &mut Option<Entity>,

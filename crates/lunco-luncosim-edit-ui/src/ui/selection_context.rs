@@ -231,7 +231,7 @@ impl ApiQueryProvider for InspectUsdSelectionProvider {
         // lease uses the shared selection projection; an unfocused lease uses
         // its canonical path cache and is never inferred from the live scene.
         let (selected_paths, target_path) = if focused {
-            let Some(selected) = world.get_resource::<lunco_scene_commands::SelectedEntities>()
+            let Some(selected) = world.get_resource::<lunco_scene_selection::SelectedEntities>()
             else {
                 return ApiResponse::error(
                     ApiErrorCode::InternalError,

@@ -6,11 +6,13 @@ license.workspace = true
 
 [dependencies]
 # THE COMMAND LAYER, now its own crate. Spawn/move/delete/set-property, the spawn +
-# shader catalogs, the runtime-layer USD persisters, `SelectedEntities` — everything
+# shader catalogs and runtime-layer USD persisters — everything
 # a `--no-ui` server needs and an editor is merely one caller of. The editor DEPENDS
 # on it; the direction never reverses. Editor modules import its command and
 # catalog types directly from the owning crate.
 lunco-scene-commands = { path = "../lunco-scene-commands" }
+lunco-scene-camera = { path = "../lunco-scene-camera" }
+lunco-scene-selection = { path = "../lunco-scene-selection" }
 lunco-scene-catalog = { path = "../lunco-scene-catalog" }
 # This crate names no `bevy_pbr` material type. Appearance is stated as intent
 # and bound by `lunco-render-bevy`; see `docs/architecture/render-decoupling.md`.

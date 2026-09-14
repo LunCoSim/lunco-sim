@@ -1,0 +1,20 @@
+[package]
+name = "lunco-scene-camera"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Render-free camera commands and focus transactions for the active scene frame"
+
+[dependencies]
+bevy = { workspace = true }
+big_space = { workspace = true }
+lunco-api = { path = "../lunco-api" }
+lunco-avatar = { path = "../lunco-avatar", default-features = false }
+lunco-celestial = { path = "../lunco-celestial", default-features = false }
+lunco-core = { path = "../lunco-core" }
+lunco-environment = { path = "../lunco-environment" }
+lunco-scene-selection = { path = "../lunco-scene-selection" }
+lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
+
+[lints]
+workspace = true

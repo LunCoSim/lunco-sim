@@ -31,7 +31,7 @@ pub mod terrain_tools;
 
 use bevy::prelude::*;
 use lunco_scene_catalog::catalog;
-use lunco_scene_commands::{commands, SelectedEntities};
+use lunco_scene_commands::commands;
 
 /// Master plugin for all luncosim editing tools.
 pub struct SceneEditPlugin;
@@ -39,7 +39,6 @@ pub struct SceneEditPlugin;
 impl Plugin for SceneEditPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SpawnState>()
-            .init_resource::<SelectedEntities>()
             .init_resource::<catalog::SpawnCatalog>()
             .init_resource::<spawn::FootprintCache>()
             .init_resource::<spawn::SpawnDiagnostics>()
@@ -49,15 +48,15 @@ impl Plugin for SceneEditPlugin {
             .init_resource::<terrain_tools::TerrainToolState>();
 
         app.add_plugins(commands::SpawnCommandPlugin);
+        app.add_plugins(lunco_scene_camera::SceneCameraCommandPlugin);
+        app.add_plugins(lunco_scene_selection::SceneSelectionPlugin);
 
         // Non-UI systems
         app.add_systems(Update, spawn::update_spawn_ghost);
         app.add_systems(Update, spawn::spawn_tool_state_system);
         // Selection → telemetry focus is NOT here: it moved down to the command
-        // layer beside `SelectedEntities` itself
-        // (`lunco_scene_commands::mirror_selection_to_telemetry_focus`, installed
-        // by `SpawnCommandPlugin` above), so every host with the scene verbs gets
-        // scoped telemetry instead of only this editor.
+        // in the shared `lunco-scene-selection` plugin, so every host with the
+        // scene state gets scoped telemetry instead of only this editor.
 
         // Terrain-sculpt tools — arm/disarm gate, brush sizing, cursor ghost.
         app.add_systems(

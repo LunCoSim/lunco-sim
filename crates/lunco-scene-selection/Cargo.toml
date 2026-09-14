@@ -1,0 +1,14 @@
+[package]
+name = "lunco-scene-selection"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Render-free scene selection state shared by runtime hosts and UI adapters"
+
+[dependencies]
+bevy = { workspace = true }
+lunco-core = { path = "../lunco-core" }
+lunco-signal = { path = "../lunco-signal" }
+
+[lints]
+workspace = true
