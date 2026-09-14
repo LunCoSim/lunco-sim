@@ -1,7 +1,8 @@
 //! API/script read surface for the generic dataset registry.
 //!
-//! Download ownership stays in `lunco-assets`; this module only adapts its
-//! authoritative state to the existing language-neutral query bridge.
+//! Download ownership stays in `lunco-assets`; asset identity and storage stay
+//! in `lunco-assets-core`; this module only adapts the authoritative dataset
+//! state to the existing language-neutral query bridge.
 
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};

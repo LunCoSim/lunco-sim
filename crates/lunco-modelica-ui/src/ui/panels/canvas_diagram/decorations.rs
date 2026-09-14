@@ -72,7 +72,7 @@ impl lunco_canvas::Layer for DiagramDecorationLayer {
             .filter(|g| !matches!(g, GraphicItem::Text(_)))
             .cloned()
             .collect();
-        crate::icon_paint::paint_graphics(
+        lunco_modelica_icon_ui::paint_graphics(
             ctx.ui.painter(),
             screen_rect,
             *coord_system,

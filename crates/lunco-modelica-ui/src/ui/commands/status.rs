@@ -7,7 +7,7 @@ use lunco_doc_bevy::DocumentDiagnostics;
 
 pub fn publish_unsaved_modelica_docs(
     registry: Res<ModelicaDocumentRegistry>,
-    unsaved: Option<ResMut<lunco_workbench::UnsavedDocs>>,
+    unsaved: Option<ResMut<lunco_workbench_browser::UnsavedDocs>>,
 ) {
     let Some(mut unsaved) = unsaved else { return };
     if !registry.is_changed() && !unsaved.is_added() {
@@ -23,7 +23,7 @@ pub fn publish_unsaved_modelica_docs(
             let document = host.document();
             let origin = document.origin();
             let is_unsaved = origin.is_untitled() || document.is_dirty();
-            lunco_workbench::UnsavedDocEntry {
+            lunco_workbench_browser::UnsavedDocEntry {
                 id,
                 display_name: origin.display_name(),
                 kind: "Modelica".into(),

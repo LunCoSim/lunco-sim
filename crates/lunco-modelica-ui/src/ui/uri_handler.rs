@@ -81,13 +81,13 @@ impl UriHandler for ModelicaUriHandler {
 }
 
 /// Compute the on-disk path for a `modelica://Pkg.Sub/Resources/...`
-/// URI. Walks down from the MSL cache root (`lunco_assets::msl_dir()`)
+/// URI. Walks down from the MSL cache root (`lunco_assets_core::msl_dir()`)
 /// using each dotted segment as a directory. Packages outside the
 /// MSL tree (user workspace libraries) aren't resolved yet — that's
 /// a follow-up once the Twin / user-library path map is available
 /// from the workbench crate.
 fn resolve_resource(class_dotted: &str, subpath: &str) -> UriResolution {
-    let msl_root = lunco_assets::msl_dir();
+    let msl_root = lunco_assets_core::msl_dir();
     let mut path: PathBuf = msl_root;
     for segment in class_dotted.split('.') {
         if segment.is_empty() {

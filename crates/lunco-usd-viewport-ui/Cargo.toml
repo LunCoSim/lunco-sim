@@ -1,0 +1,45 @@
+[package]
+name = "lunco-usd-viewport-ui"
+version = "0.1.0-dev"
+edition = "2021"
+license.workspace = true
+description = "LunCoSim's interactive USD preview viewport"
+
+[dependencies]
+bevy = { workspace = true, features = [
+    "bevy_asset",
+    "bevy_mesh",
+    "bevy_light",
+    "bevy_render",
+    "bevy_core_pipeline",
+    "bevy_window",
+    "bevy_ui_render",
+    "bevy_post_process",
+    "bevy_anti_alias",
+] }
+bevy_egui = { workspace = true }
+lunco-api = { path = "../lunco-api" }
+lunco-assets-core = { path = "../lunco-assets-core" }
+lunco-core = { path = "../lunco-core" }
+lunco-doc = { path = "../lunco-doc" }
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
+lunco-render = { path = "../lunco-render" }
+lunco-settings = { path = "../lunco-settings" }
+lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
+lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
+lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
+lunco-usd-core = { path = "../lunco-usd-core" }
+lunco-workbench = { path = "../lunco-workbench" }
+lunco-workbench-core = { path = "../lunco-workbench-core" }
+lunco-workspace = { path = "../lunco-workspace" }
+openusd = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+lunco-usd = { path = "../lunco-usd", default-features = false }
+lunco-usd-bevy = { path = "../lunco-usd-bevy" }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

@@ -186,7 +186,7 @@ projections run both ways. Four representations, each edge a descriptor-supplied
 
   **2D icons/diagrams → reachable NOW, no rumoca changes.** Every Modelica class carries structured
   graphics: `annotations::Icon.graphics: Vec<GraphicItem>` — `Rectangle/Line/Polygon/Text/Ellipse/Bitmap`
-  with full attrs (`lunco-modelica-core/src/annotations/graphics.rs`), already **rendered** (`lunco-modelica-ui/src/ui/icon_paint.rs`)
+  with full attrs (`lunco-modelica-core/src/annotations/graphics.rs`), already **rendered** (`lunco-modelica-icon-ui/src/icon_paint.rs`)
   and already **animated by sim outputs** via MLS §18 DynamicSelect (`extent_dynamic`,
   `text_string_dynamic`). A viz projection can surface a model's schematic as a USD overlay / HUD /
   billboard — free, because the data + renderer + animation binding all exist.
@@ -216,7 +216,7 @@ sim-driven authored 3D today; for auto-derived 3D geometry once rumoca MultiBody
   component), synthesize (`CommsLink.mo`), visualize (antenna + link-line), editor (topology graph),
   validate (margin ≥ 0). The reusable multi-layer *component* (doc 36 §1) is a part in this domain's
   library. **This is the worked proof of the principle:** comms used to be a Rust module
-  (`lunco-celestial/src/comms.rs` + a `lunco:comms:*` vocabulary) and it was **deleted**. What the core
+  (`lunco-celestial-spatial/src/comms.rs` + a `lunco:comms:*` vocabulary) and it was **deleted**. What the core
   kept is the domain-neutral geometry it was hiding — the generic link kernel
   (`49-connectivity-link-kernel.md`: `lunco:linkNode` / `lunco:link:*`, a `link.connected` verdict hook,
   a `query("Links")` graph). A comms domain is now authored *on top* of that kernel, exactly as this doc
@@ -565,7 +565,7 @@ AOUSD-IEDT), *not* conforming to a mature space-USD standard — **none exists y
 
 | Standard | Plane | USD relationship | Our seam |
 |---|---|---|---|
-| **SPICE / NAIF** (SPK/FK/CK/PCK ephemeris, frames, body ids 399/301) | astro geometry | **No bridge** — USD holds no frame/ephemeris semantics | We already do the right thing: SPICE-style ephemeris → USD/ECS **xforms** per tick (`lunco-celestial`). Carry NAIF ids as prim **metadata** for traceability. Don't try to make USD a frame authority. |
+| **SPICE / NAIF** (SPK/FK/CK/PCK ephemeris, frames, body ids 399/301) | astro geometry | **No bridge** — USD holds no frame/ephemeris semantics | We already do the right thing: SPICE-style ephemeris → USD/ECS **xforms** per tick (`lunco-celestial` semantics, projected by `lunco-celestial-spatial`). Carry NAIF ids as prim **metadata** for traceability. Don't try to make USD a frame authority. |
 | **SMP2** (ECSS-E-ST-40-07C, ESA sim model portability) | executable C++ models | **Complementary, no contact** | Different plane (our equivalent is Modelica/rumoca). Note for interop credibility with ESA infra; not something to encode in USD. |
 | **FMI / SSP** (solver packaging + system wiring) | co-sim | **PROPOSED convergence** — AOUSD/NVIDIA **USD+FMI** mapping, tied to **OpenExec** + OmniGraph (roadmap, not shipped) | **The one live convergence, and it's exactly our Modelica seam (doc 37).** USD = composition/scene; SSP/FMI = solver wiring — complement, don't compete. A10's "neutral behavior-model reference" is the hook; track USD+FMI as the eventual standard way to reference an FMU from a prim. |
 | **CCSDS / XTCE / PUS** (ECSS-E-70-41) | TM/TC data dictionary | **None** (separate plane) | A USD "telemetry port" is a **local convention** carrying **XTCE parameter refs** as attrs — analogous to our PortRegistry/`lunco:` glue, referencing the XTCE id rather than owning it. (Ties to the XTCE-as-dict / ConOps design.) |

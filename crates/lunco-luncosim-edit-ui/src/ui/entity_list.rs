@@ -33,7 +33,7 @@ pub const ENTITY_LIST_GRID_SCOPE_SETTING: &str = "ui.entity_list.grid_scope";
 /// Which BigSpace grid the entity tree includes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum EntityGridScope {
-    /// Only entities under the live [`lunco_core::ActivePhysicsFrame`].
+    /// Only entities under the live [`lunco_spatial::ActivePhysicsFrame`].
     #[default]
     Current,
     /// Entities from every grid in the mounted scene.
@@ -422,7 +422,7 @@ pub(crate) fn populate_entity_tree_view(
     mut view: ResMut<EntityTreeView>,
     settings: Res<EntityListSettings>,
     workspace: Option<Res<WorkspaceResource>>,
-    active_frame: Option<Res<lunco_core::ActivePhysicsFrame>>,
+    active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
     named_q: Query<(
         Entity,
         &Name,
@@ -651,7 +651,7 @@ pub(crate) fn scene_topology_changed(
     settings: Res<EntityListSettings>,
     view: Res<EntityTreeView>,
     workspace: Option<Res<WorkspaceResource>>,
-    active_frame: Option<Res<lunco_core::ActivePhysicsFrame>>,
+    active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
     grids: Query<Entity, With<big_space::prelude::Grid>>,
     changed_unnamed_parents: Query<Entity, (Changed<ChildOf>, Without<Name>)>,
     changed: Query<

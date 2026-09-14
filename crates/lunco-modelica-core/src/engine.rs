@@ -533,13 +533,13 @@ impl ModelicaEngine {
         if self.failed_library_roots.contains_key(root) {
             return false;
         }
-        if !lunco_assets::models::package_roots_live()
+        if !lunco_assets_core::models::package_roots_live()
             .iter()
             .any(|candidate| candidate == root)
         {
             return false;
         }
-        let files = lunco_assets::models::package_files_live(root);
+        let files = lunco_assets_core::models::package_files_live(root);
         if files.is_empty() {
             return false;
         }
@@ -1113,7 +1113,7 @@ mod tests {
         let mut engine = ModelicaEngine::new();
         assert!(engine.begin_library_root_load("LunCo"));
         assert!(!engine.begin_library_root_load("LunCo"));
-        let files = lunco_assets::models::package_files("LunCo");
+        let files = lunco_assets_core::models::package_files("LunCo");
         assert!(!files.is_empty());
         let parsed = files
             .into_iter()

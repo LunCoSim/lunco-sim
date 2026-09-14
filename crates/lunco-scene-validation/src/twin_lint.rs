@@ -139,7 +139,7 @@ pub fn inspect_twin(twin: &lunco_workspace::Twin) -> TwinNamespaceSnapshot {
     // live registry are both included so a Twin tool that shadows an engine
     // module is reported even though the process registry retains one winner.
     let mut known_tools = HashSet::new();
-    match lunco_assets::scripting::active_tool_libraries() {
+    match lunco_assets_core::scripting::active_tool_libraries() {
         Ok(tools) => {
             for (name, _) in tools {
                 known_tools.insert(name.clone());
@@ -411,7 +411,7 @@ fn modelica_roots(twin: &lunco_workspace::Twin) -> Vec<PathBuf> {
     paths
         .into_iter()
         .filter(|path| lunco_twin::is_safe_relative_path(path))
-        .map(|path| lunco_assets::asset_path::normalize(&path))
+        .map(|path| lunco_assets_core::asset_path::normalize(&path))
         .collect()
 }
 
@@ -433,16 +433,19 @@ fn has_extension(path: &Path, extension: &str) -> bool {
 }
 
 fn slashed(path: &Path) -> String {
-    lunco_assets::asset_path::slashed(path)
+    lunco_assets_core::asset_path::slashed(path)
 }
 
 fn read_twin_text(twin: &lunco_workspace::Twin, rel: &Path) -> Result<String, String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let id = format!("twin://namespace-lint/{}", slashed(rel));
-        let bytes =
-            lunco_assets::read_asset_bytes_with_twin_root(&id, None, Some(twin.root.as_path()))
-                .map_err(|error| error.to_string())?;
+        let bytes = lunco_assets_core::read_asset_bytes_with_twin_root(
+            &id,
+            None,
+            Some(twin.root.as_path()),
+        )
+        .map_err(|error| error.to_string())?;
         String::from_utf8(bytes).map_err(|error| error.to_string())
     }
     #[cfg(target_arch = "wasm32")]

@@ -57,11 +57,13 @@ crate independent of transport and presentation layers.
 Keep the workbench split at the dependency boundary: `lunco-workbench-core`
 owns renderer-independent panel/menu/perspective contracts and the published
 `WorkbenchSnapshot`; `lunco-workbench` owns `egui_dock`, `bevy_egui`, viewport
-rendering, persistence, built-in shell panels, and shell-only widgets. Domain
-UI crates implement contracts from the core crate, read layout facts from the
-snapshot, and depend on the concrete shell only when they use a shell-owned
-command or presentation service. Do not expose or consume the shell's private
-`WorkbenchLayout` outside that crate.
+rendering, persistence, source editing, and shell-only widgets; and
+`lunco-workbench-browser` owns the optional Twin/Files panels, browser state,
+and built-in filesystem/library sections. Domain UI crates implement contracts
+from the core crate, read layout facts from the snapshot, and depend on the
+concrete shell or browser feature only when they use those presentation
+services. Do not expose or consume the shell's private `WorkbenchLayout`
+outside that crate.
 
 For a `ShaderLook` with `vertex_shader`, treat the fragment and vertex sources as
 one linked material contract: both stages read the same `@binding(0)` uniform
@@ -79,6 +81,11 @@ shared transfer must not be bypassed by multiplying the map directly into albedo
 When `weight_albedo` is fully authored, it owns terrain colour variation; scale
 the layered path's procedural dust/mottle colour by `1 - weight_albedo`, while
 keeping relief normals, roughness, ambient occlusion, and photometry independent.
+The packed surface map's G channel is ambient occlusion: route it through the
+shared `terrain_surface_occlusion` helper into Bevy's
+`PbrInput.diffuse_occlusion`, never into base albedo. AO is indirect-light
+visibility; multiplying it into albedo creates broad false colour patches and
+darkens direct sunlight.
 The render-side `ShaderLook` binder owns event-driven preparation of filterable
 authored RGBA8 maps: it deduplicates off-thread mip generation by image asset
 version,

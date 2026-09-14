@@ -336,7 +336,7 @@ system's own output, it is not a gate. (`lunco-usd-sim-cosim/src/lib.rs`)
 **Solve on a cadence when the answer changes slowly.** Ephemeris, solar poses,
 trajectory alignment, sun light and solar-frame anchoring cost ~10 ms/frame
 solved every frame, for increments too small to see.
-(`lunco-celestial/src/cadence.rs`)
+(`lunco-celestial-spatial/src/cadence.rs`)
 
 Trajectory overlays have an additional presentation boundary. Their ephemeris
 sampling and mesh rebuild run only for an active `TrajectoryView` (`is_visible &&
@@ -352,5 +352,5 @@ scaled Celestial clock. The body and frame poses continue to use the current
 epoch. Ephemeris sampling, spline tessellation, and alpha-buffer construction
 are compute tasks; the main schedule performs one non-blocking poll and commits
 only a current, prepared result. Anchored curve alignment reads the already-
-solved tracked/reference frame pose through `lunco_core::coords::pose_in_grid`;
+solved tracked/reference frame pose through `lunco_spatial::coords::pose_in_grid`;
 it does not evaluate ephemeris endpoints again for presentation.

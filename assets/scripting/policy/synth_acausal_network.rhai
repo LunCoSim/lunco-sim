@@ -32,6 +32,12 @@ const COMPONENT_HALF_HEIGHT = 35;
 const UNIT_HALF_WIDTH = 110;
 const UNIT_HALF_HEIGHT = 55;
 
+// Root-unit placement is presentation policy. Rust supplies only the stable
+// connected-component order; this deterministic grid remains editable without
+// rebuilding the USD-simulation domain crate.
+const GENERATED_UNIT_COLUMN_SPACING = 150;
+const GENERATED_UNIT_ROW_SPACING = 100;
+
 const ICON_COORDINATE_HALF_WIDTH = 100;
 const ICON_COORDINATE_HALF_HEIGHT = 70;
 const ICON_BOX_HALF_WIDTH = 92;
@@ -87,6 +93,18 @@ fn unit_position(layout, name) {
         }
     }
     throw "generated Modelica layout is missing unit position: " + name
+}
+
+fn generated_unit_position(index, count) {
+    let columns = count.to_float().sqrt().ceil().to_int();
+    if columns < 1 { columns = 1; }
+    let rows = ((count + columns - 1) / columns).max(1);
+    let origin_x = -((columns - 1) * GENERATED_UNIT_COLUMN_SPACING) / 2;
+    let origin_y = ((rows - 1) * GENERATED_UNIT_ROW_SPACING) / 2;
+    #{
+        x: origin_x + (index % columns) * GENERATED_UNIT_COLUMN_SPACING,
+        y: origin_y - (index / columns) * GENERATED_UNIT_ROW_SPACING
+    }
 }
 
 fn has_member(members, path) {
@@ -284,15 +302,16 @@ fn group_member_layout(net, members) {
 
 fn visual_layout(net, units) {
     let layout = #{ units: [], members: [] };
+    let index = 0;
     for unit in units {
-        // `source_name` is the partition identity from the Rust facts. `name`
-        // is the readable Modelica class name presented to the user.
-        let item = unit_position(net.layout, unit.source_name);
+        // `name` is the readable Modelica class name presented to the user.
+        let item = generated_unit_position(index, units.len);
         layout.units.push(#{
             name: unit.name,
             x: item.x * UNIT_POSITION_SCALE,
             y: item.y * UNIT_POSITION_SCALE
         });
+        index += 1;
     }
     // Unit positions belong to the generated root diagram. Member positions
     // belong to each unit's own diagram, so every group gets the same local

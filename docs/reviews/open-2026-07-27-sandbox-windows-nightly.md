@@ -248,7 +248,7 @@ The first three are the interesting ones. Entity `1277v0` is identified 0.86 s e
 08:36:37.742  INFO  [environment] local Earth direction is available again
 ```
 
-Neither warning is true by the time it is read. The scene *does* reference `@lunco://celestial/solar_system.usda@</SolarSystem>` (`sandbox_scene.usda:46`) and the solar frame *does* anchor — 61 ms later. `place_site_anchored_solar_frame` in `crates/lunco-celestial/src/placement.rs:135` simply runs before the celestial big-space setup has spawned the grid, and its `*warned` latch (line 136) is one-shot, so the false alarm is the permanent record.
+Neither warning is true by the time it is read. The scene *does* reference `@lunco://celestial/solar_system.usda@</SolarSystem>` (`sandbox_scene.usda:46`) and the solar frame *does* anchor — 61 ms later. `place_site_anchored_solar_frame` in `crates/lunco-celestial-spatial/src/placement.rs:135` simply runs before the celestial BigSpace setup has spawned the grid, and its `*warned` latch (line 136) is one-shot, so the false alarm is the permanent record.
 
 The messages are also disproportionate: "the scene will render unlit" and "every Earth-tracking mechanism will hold its authored pose" are exactly the symptoms of the genuine failure this warning was written for, so a tester reading the log will attribute the (real, unrelated) shadow loss from Issue 2 to this line.
 

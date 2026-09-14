@@ -21,7 +21,7 @@ Connectivity is **authored content over a generic kernel**.
 
 | Layer | Owns | Where |
 |---|---|---|
-| **Kernel** (Rust) | The pairwise sweep, the cadence, and the GEOMETRY: range, local elevation, analytic body occlusion, terrain occlusion, authored box occluders. | `lunco-celestial/src/link.rs` |
+| **Kernel** (Rust) | The pairwise sweep, the cadence, and the GEOMETRY: range, local elevation, analytic body occlusion, terrain occlusion, authored box occluders. | `lunco-celestial-spatial/src/link.rs` |
 | **Verdict** (script) | Whether a given pair, with that geometry, counts as a usable link. | `link.connected` hook |
 | **Routing / roles** (script) | Reachability, relay chains, which station is "home", link budgets. | `assets/scripting/prelude/links.rhai` |
 
@@ -97,7 +97,7 @@ station".
 ### Frames: grid-absolute, f64, never `GlobalTransform`
 
 Every occlusion test runs in the **grid-absolute (BigSpace root) frame**, which is what
-`SolarFramePose::local` is. Occluder and DEM poses come from `lunco_core::coords::world_pose`
+`SolarFramePose::local` is. Occluder and DEM poses come from `lunco_spatial::coords::world_pose`
 (the cell-aware chain walk) — **not** `GlobalTransform`, which is origin-RELATIVE and
 shifts by a whole cell whenever the floating origin moves.
 

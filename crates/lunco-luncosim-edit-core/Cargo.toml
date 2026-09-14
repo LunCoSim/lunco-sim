@@ -26,6 +26,7 @@ avian3d = { workspace = true }
 
 big_space.workspace = true
 lunco-core = { path = "../lunco-core" }
+lunco-spatial = { path = "../lunco-spatial" }
 lunco-physics = { path = "../lunco-physics" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }

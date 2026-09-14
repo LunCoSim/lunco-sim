@@ -367,6 +367,29 @@ pub struct PendingActuatorCommand {
     pub value: f64,
 }
 
+/// Reused per-system scratch for the deterministic actuator transaction. The
+/// physics boundary must sort commands by authored identity, but allocating a
+/// fresh vector and cloning `Name` strings on every fixed step would turn the
+/// determinism fence into a frame-time tax.
+#[derive(Default)]
+pub struct ActuatorCommandScratch {
+    force: Vec<(Option<u64>, u64, u64, Entity, ForceActuator, f64)>,
+    torque: Vec<(Option<u64>, u64, u64, Entity, TorqueActuator, f64)>,
+}
+
+/// Stable, allocation-free FNV-1a hash for a local authored name. Networked
+/// USD entities sort by `GlobalEntityId`; this is only the deterministic local
+/// fallback for an authored entity that has not entered the identity registry.
+fn stable_name_hash(name: Option<&Name>) -> u64 {
+    const OFFSET: u64 = 0xcbf29ce484222325;
+    const PRIME: u64 = 0x100000001b3;
+    name.map_or(0, |name| {
+        name.as_str().bytes().fold(OFFSET, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(PRIME)
+        })
+    })
+}
+
 /// Ensure `entity` carries [`PendingForces`], then mutate it. The `force_*`
 /// write closures use this so an un-driven body stays clean until first written.
 fn with_pending(world: &mut World, entity: Entity, set: impl FnOnce(&mut PendingForces)) -> bool {
@@ -1194,14 +1217,27 @@ pub fn apply_pending_forces(
     mut q_pending: Query<(Entity, &mut PendingForces)>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
+    mut scratch: Local<ActuatorCommandScratch>,
     // Force must land only on a body the solver will integrate. A disabled body
     // (frozen while its program compiles, say) never has its accumulators
     // cleared, so force applied to it is stored, not spent, and discharges in
     // full on the step that eventually runs — see `lunco_physics::Integrable`.
     mut forces: Query<Forces, lunco_physics::Integrable>,
     mut actuator_commands: ParamSet<(
-        Query<(Entity, &ForceActuator, &mut PendingActuatorCommand)>,
-        Query<(Entity, &TorqueActuator, &mut PendingActuatorCommand)>,
+        Query<(
+            Entity,
+            &ForceActuator,
+            &mut PendingActuatorCommand,
+            Option<&lunco_core::GlobalEntityId>,
+            Option<&Name>,
+        )>,
+        Query<(
+            Entity,
+            &TorqueActuator,
+            &mut PendingActuatorCommand,
+            Option<&lunco_core::GlobalEntityId>,
+            Option<&Name>,
+        )>,
     )>,
     q_parents: Query<&ChildOf>,
     q_poses: Query<(Entity, &Position, &Rotation), lunco_physics::Integrable>,
@@ -1250,16 +1286,49 @@ pub fn apply_pending_forces(
         pf.torque = DVec3::ZERO;
     }
 
-    // A held physics clock does not consume Avian's force accumulator. Drain
-    // actuator commands without applying them so a command sampled during a
-    // loading/readiness hold cannot become a launch impulse when the hold ends.
+    // Copy and clear actuator commands before applying them. The copy is
+    // sorted by authored identity rather than ECS/archetype iteration order:
+    // USD prims can finish asynchronous projection in different update
+    // batches, which must never change the floating-point order in which
+    // several thrusters add force/torque to the same rigid body. GID is the
+    // network-stable identity; Name is the deterministic local fallback for
+    // non-networked authored entities, and entity bits are only a final tie
+    // breaker for duplicate names.
+    scratch.force.clear();
+    for (entity, actuator, mut command, gid, name) in actuator_commands.p0().iter_mut() {
+        scratch.force.push((
+            gid.map(lunco_core::GlobalEntityId::get),
+            stable_name_hash(name),
+            entity.to_bits(),
+            entity,
+            *actuator,
+            command.value,
+        ));
+        command.value = 0.0;
+    }
+    scratch.force.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then_with(|| a.1.cmp(&b.1))
+            .then_with(|| a.2.cmp(&b.2))
+    });
+
+    scratch.torque.clear();
+    for (entity, actuator, mut command, gid, name) in actuator_commands.p1().iter_mut() {
+        scratch.torque.push((
+            gid.map(lunco_core::GlobalEntityId::get),
+            stable_name_hash(name),
+            entity.to_bits(),
+            entity,
+            *actuator,
+            command.value,
+        ));
+        command.value = 0.0;
+    }
+
+    // A held physics clock does not consume Avian's force accumulator. The
+    // commands were cleared above so a command sampled during loading or a
+    // readiness hold cannot become a launch impulse when the hold ends.
     if !physics_live {
-        for (_, _, mut command) in actuator_commands.p0().iter_mut() {
-            command.value = 0.0;
-        }
-        for (_, _, mut command) in actuator_commands.p1().iter_mut() {
-            command.value = 0.0;
-        }
         return;
     }
 
@@ -1268,9 +1337,7 @@ pub fn apply_pending_forces(
     // the nearest rigid body, then Avian receives the actual world-space force
     // and point. Avian owns the resulting r×F torque calculation and the live
     // center of mass.
-    for (actuator_entity, actuator, mut command) in actuator_commands.p0().iter_mut() {
-        let force_n = command.value;
-        command.value = 0.0;
+    for (_, _, _, actuator_entity, actuator, force_n) in scratch.force.drain(..) {
         if !force_n.is_finite()
             || !actuator.local_position.is_finite()
             || !actuator.direction_local.is_finite()
@@ -1325,9 +1392,7 @@ pub fn apply_pending_forces(
     // Torque actuators (reaction wheels, CMGs, and future devices) use the
     // same description-driven command path. Avian owns the torque integration;
     // no actuator-specific Rust or Modelica r×F calculation is involved.
-    for (actuator_entity, actuator, mut command) in actuator_commands.p1().iter_mut() {
-        let torque_nm = command.value;
-        command.value = 0.0;
+    for (_, _, _, actuator_entity, actuator, torque_nm) in scratch.torque.drain(..) {
         if !torque_nm.is_finite()
             || !actuator.axis_local.is_finite()
             || !actuator.max_torque_nm.is_finite()

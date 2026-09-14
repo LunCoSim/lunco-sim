@@ -29,8 +29,8 @@ use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use lunco_core::architecture::Port;
-use lunco_core::coords::{GridPos, GridRot};
 use lunco_core::{InputPorts, MobilityRoot, OutputPorts};
+use lunco_spatial::coords::{GridPos, GridRot};
 use std::collections::HashSet;
 
 mod jointed_tire;
@@ -2110,7 +2110,7 @@ mod force_law_tests {
     //! broken control (the comments name the bug).
     use super::*;
     use bevy::math::{DQuat, DVec3};
-    use lunco_core::coords::VehicleFrame;
+    use lunco_spatial::coords::VehicleFrame;
 
     #[test]
     fn ray_contact_point_follows_authored_strut_geometry() {

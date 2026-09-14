@@ -1,7 +1,7 @@
 //! Bundled Modelica example models — the domain view.
 //!
 //! The raw embed lives in the asset-owning crate
-//! ([`lunco_assets::models`]): every `*.mo` under `assets/models/` is baked in
+//! ([`lunco_assets_core::models`]): every `*.mo` under `assets/models/` is baked in
 //! at compile time (wasm has no filesystem) and handed here as `(filename,
 //! source)` pairs. Drop a new `.mo` file in, rebuild, and it appears in the
 //! Welcome tab — no edits to this file required.
@@ -58,9 +58,9 @@ fn extract_tagline(source: &str) -> &str {
 
 /// All bundled models, sorted by filename (stable across desktop/wasm). Builds
 /// the list fresh every call (cheap — enumerates the in-memory embed owned by
-/// [`lunco_assets::models`]) and layers on the Modelica tagline parse.
+/// [`lunco_assets_core::models`]) and layers on the Modelica tagline parse.
 pub fn bundled_models() -> Vec<BundledModel> {
-    lunco_assets::models::model_files()
+    lunco_assets_core::models::model_files()
         .into_iter()
         .map(|(filename, source)| BundledModel {
             filename,
@@ -71,9 +71,9 @@ pub fn bundled_models() -> Vec<BundledModel> {
 }
 
 /// Get a bundled model's source by filename. Case-sensitive match on the
-/// basename. Thin re-export of [`lunco_assets::models::model_source`].
+/// basename. Thin re-export of [`lunco_assets_core::models::model_source`].
 pub fn get_model(filename: &str) -> Option<&'static str> {
-    lunco_assets::models::model_source(filename)
+    lunco_assets_core::models::model_source(filename)
 }
 
 #[cfg(test)]

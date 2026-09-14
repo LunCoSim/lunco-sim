@@ -15,10 +15,7 @@ use lunco_core::register_commands;
 /// Installs catalog resources, discovery systems, and catalog-only commands.
 pub struct SceneCatalogPlugin;
 
-register_commands!(
-    catalog::on_rescan_shaders,
-    catalog::on_rescan_spawn_catalog,
-);
+register_commands!(catalog::on_rescan_shaders, catalog::on_rescan_spawn_catalog,);
 
 impl Plugin for SceneCatalogPlugin {
     fn build(&self, app: &mut App) {

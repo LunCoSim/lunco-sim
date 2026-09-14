@@ -54,7 +54,7 @@ impl Plugin for LunCoSimOffscreenPlugin {
         // Recording owns its deterministic clock. Do not inherit a persisted
         // editor cadence (especially the scene-test EXACT setting), which
         // makes the expensive celestial cluster solve on every evaluation.
-        app.insert_resource(lunco_celestial::cadence::CelestialCadenceSettings::default());
+        app.insert_resource(lunco_celestial_spatial::cadence::CelestialCadenceSettings::default());
 
         // Presentation commands remain part of the scenario command surface
         // without requiring the egui workbench in an offscreen run.

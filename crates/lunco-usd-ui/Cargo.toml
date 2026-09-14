@@ -20,32 +20,27 @@ bevy = { workspace = true, features = [
     "bevy_anti_alias",
 ] }
 bevy_egui = { workspace = true }
-lunco-api = { path = "../lunco-api" }
-lunco-assets = { path = "../lunco-assets" }
-lunco-core = { path = "../lunco-core" }
+lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
-lunco-render = { path = "../lunco-render" }
 lunco-status-core = { path = "../lunco-status-core" }
 lunco-storage = { path = "../lunco-storage" }
-lunco-settings = { path = "../lunco-settings" }
 lunco-theme = { path = "../lunco-theme" }
-lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
 lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-compose = { path = "../lunco-usd-compose" }
+lunco-usd-viewport-ui = { path = "../lunco-usd-viewport-ui" }
 lunco-workbench = { path = "../lunco-workbench" }
+lunco-workbench-browser = { path = "../lunco-workbench-browser" }
 lunco-workbench-core = { path = "../lunco-workbench-core" }
 lunco-workspace = { path = "../lunco-workspace" }
 openusd = { workspace = true }
-serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
 lunco-usd = { path = "../lunco-usd", default-features = false }
-lunco-usd-bevy = { path = "../lunco-usd-bevy" }
 tempfile = { workspace = true }
 
 [lints]

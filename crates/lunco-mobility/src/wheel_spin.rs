@@ -7,8 +7,8 @@
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
-use lunco_core::coords::{GridPos, GridRot, VehicleFrame};
 use lunco_core::InputPorts;
+use lunco_spatial::coords::{GridPos, GridRot, VehicleFrame};
 
 use crate::wheel_kinematics::{body_point_velocity, wheel_heading, wheel_hub_pose};
 use crate::{Suspension, WheelBodyMount, WheelRaycast};

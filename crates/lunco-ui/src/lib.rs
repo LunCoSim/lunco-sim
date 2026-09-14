@@ -44,6 +44,8 @@ pub mod theme {
 pub mod diagrams;
 pub use diagrams::*;
 
+pub mod log;
+
 pub mod mission_control;
 pub use mission_control::*;
 

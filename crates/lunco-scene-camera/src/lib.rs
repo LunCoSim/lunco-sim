@@ -69,7 +69,7 @@ pub fn on_focus_entity_by_path(
 /// The command observer fires wherever the API dispatcher happens to sit in
 /// the frame, so this transaction is applied from `First` after any queued
 /// orbit-return commands have flushed. Spatial math uses the authoritative
-/// `(CellCoord, Transform)` chain through `lunco_core::coords`; derived
+/// `(CellCoord, Transform)` chain through `lunco_spatial::coords`; derived
 /// `GlobalTransform` is never a camera-placement input.
 #[derive(Resource, Debug, Clone, Copy)]
 pub struct PendingFocus {
@@ -141,10 +141,10 @@ pub fn apply_pending_focus(
         Without<lunco_core::Avatar>,
     >,
     q_celestial: Query<(), With<lunco_celestial::CelestialBody>>,
-    q_celestial_decl: Query<(), With<lunco_celestial::CelestialBodyDecl>>,
+    q_celestial_decl: Query<(), With<lunco_celestial_spatial::CelestialBodyDecl>>,
     q_children: Query<&Children>,
     mut commands: Commands,
-    mut orbital_pin: Option<ResMut<lunco_celestial::OrbitalViewPin>>,
+    mut orbital_pin: Option<ResMut<lunco_celestial_spatial::OrbitalViewPin>>,
     local_avatar: Option<Res<lunco_core::TheLocalAvatar>>,
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
@@ -227,7 +227,7 @@ pub fn apply_pending_focus(
     let target_pos = if target == avatar_ent {
         avatar_pos
     } else {
-        let Some((target_pos, _)) = lunco_core::coords::pose_in_grid(
+        let Some((target_pos, _)) = lunco_spatial::coords::pose_in_grid(
             target,
             child_of.parent(),
             &q_parents,
@@ -300,7 +300,7 @@ pub fn apply_pending_focus(
 /// planet, spring-arm follow, surface mode), this strips it and reinstates a
 /// `FreeFlightCamera` at the requested pose — an API client asking for a
 /// specific view must always get it. `eye` and `target` speak the semantic
-/// [`lunco_core::ActivePhysicsFrame`]; the concrete grid is resolved from that
+/// [`lunco_spatial::ActivePhysicsFrame`]; the concrete grid is resolved from that
 /// resource so a previous orbit focus or a canonical render-only grid cannot
 /// put the camera in a different frame.
 #[Command(default)]
@@ -323,10 +323,10 @@ pub fn on_set_camera_look_at(
         ),
         (With<lunco_core::Avatar>, With<lunco_core::LocalAvatar>),
     >,
-    active_frame: Res<lunco_core::ActivePhysicsFrame>,
+    active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
     q_grids: Query<&Grid>,
     mut commands: Commands,
-    mut orbital_pin: Option<ResMut<lunco_celestial::OrbitalViewPin>>,
+    mut orbital_pin: Option<ResMut<lunco_celestial_spatial::OrbitalViewPin>>,
     local_avatar: Option<Res<lunco_core::TheLocalAvatar>>,
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
@@ -365,7 +365,7 @@ pub fn on_set_camera_look_at(
             tf.translation = new_translation;
         }
     } else {
-        lunco_core::attach::migrate_to_grid(
+        lunco_spatial::attach::migrate_to_grid(
             &mut commands,
             entity,
             root,
@@ -427,7 +427,7 @@ mod tests {
             .world_mut()
             .spawn((
                 Grid::new(2_000.0, 0.0),
-                lunco_core::WorldGrid,
+                lunco_spatial::WorldGrid,
                 GlobalTransform::default(),
             ))
             .id();
@@ -435,7 +435,7 @@ mod tests {
             .world_mut()
             .spawn((Grid::new(2_000.0, 0.0), GlobalTransform::default()))
             .id();
-        app.insert_resource(lunco_core::ActivePhysicsFrame(active_physics_grid));
+        app.insert_resource(lunco_spatial::ActivePhysicsFrame(active_physics_grid));
         app.insert_resource(lunco_core::TheLocalAvatar::default());
 
         let avatar = app

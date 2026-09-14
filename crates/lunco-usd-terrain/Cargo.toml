@@ -24,6 +24,7 @@ lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-obstacle-field = { path = "../lunco-obstacle-field" }
 lunco-assets = { workspace = true }
+lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-doc = { path = "../lunco-doc" }
 # The canonical change-journal (`JournalResource`): an authored edit is ONE undo
 # step / one journal change set. `default-features = false` keeps `lunco-doc-bevy/ui`

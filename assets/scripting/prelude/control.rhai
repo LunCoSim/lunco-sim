@@ -136,6 +136,18 @@ fn pause()                     { cmd("SetTimeTransport", #{ playing: false }) }
 fn play()                      { cmd("SetTimeTransport", #{ playing: true }) }
 fn set_rate(r)                 { cmd("SetTimeTransport", #{ rate: r }) }
 
+// Clock-tree controls. `clock` is "Celestial", "Interaction", or "Sim";
+// `parent` is "Sim" or "Real". These edits go through SetClock's typed
+// command/journal path, so every peer and replay sees the same affine clock
+// topology. Keep physics-driving clocks on Sim; Real is intentionally for
+// presentation/interaction only because it is wall-clock dependent.
+fn set_clock(clock, parent, scale, offset) {
+    cmd("SetClock", #{ clock: clock, parent: parent, scale: scale, offset: offset })
+}
+fn set_mission_epoch(epoch_jd) {
+    cmd("SetMissionEpoch", #{ epoch_jd: epoch_jd })
+}
+
 // Animation transport — drives the `timeSamples` playhead (keyframed dollies,
 // visibility reveals, material fades). Shared sim clock; play once, all animate.
 fn play_animation()            { cmd("ControlAnimation", #{ playing: true }) }

@@ -100,7 +100,7 @@ impl TwinToolLibraries {
 ///   - every `assets/scripting/tools/*.rhai` — a rhai-source library, name = stem
 ///     (`formation`, `survey`, `debug_viz`, …). Native checkouts read the
 ///     editable files at startup through
-///     [`lunco_assets::scripting::active_tool_libraries`]; packaged and wasm
+///     [`lunco_assets_core::scripting::active_tool_libraries`]; packaged and wasm
 ///     builds use the embedded source. Add or replace a file without a Rust
 ///     rebuild. The runtime Twin scan ([`load_tool_libraries_from_dir`]) remains
 ///     the native-only, user-authored counterpart. The scan only reads source;
@@ -109,7 +109,7 @@ impl TwinToolLibraries {
 ///   - `mathx` — a NATIVE (Rust) tool, proving the backend-agnostic abstraction:
 ///     the same `name::fn(...)` call site works whether the tool is rhai or Rust.
 pub fn register_builtins() {
-    let tools = lunco_assets::scripting::active_tool_libraries().unwrap_or_else(|error| {
+    let tools = lunco_assets_core::scripting::active_tool_libraries().unwrap_or_else(|error| {
         panic!("active Rhai tool libraries must be readable: {error}");
     });
     for (name, src) in tools {
@@ -340,7 +340,7 @@ impl ApiQueryProvider for GetToolLibraryProvider {
         match lunco_tools::get(name) {
             Some(tool) => {
                 let sources = world
-                    .get_resource::<lunco_assets::script_source::ScriptSources>()
+                    .get_resource::<lunco_assets_core::script_source::ScriptSources>()
                     .cloned()
                     .unwrap_or_default();
                 let engine = crate::world_bridge::build_world_engine(sources);
@@ -409,7 +409,7 @@ mod tests {
         }
         // Every embedded tool `.rhai` registered under its stem — future files
         // are picked up automatically, this guards the scan against silent drops.
-        for (stem, _) in lunco_assets::scripting::tool_libraries() {
+        for (stem, _) in lunco_assets_core::scripting::tool_libraries() {
             assert!(
                 names.contains(&stem.to_string()),
                 "embedded {stem}.rhai not registered"

@@ -210,7 +210,7 @@ mod native {
         // run here hits warm bytes from `msl_indexer --warm` and vice
         // versa. Honors an explicit `RUMOCA_CACHE_DIR` if the user set one.
         if std::env::var_os("RUMOCA_CACHE_DIR").is_none() {
-            let target = lunco_assets::cache_dir().join("rumoca");
+            let target = lunco_assets_core::cache_dir().join("rumoca");
             std::env::set_var("RUMOCA_CACHE_DIR", &target);
             eprintln!("[modelica_run] using rumoca cache at {}", target.display());
         }

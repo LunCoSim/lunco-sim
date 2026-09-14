@@ -76,7 +76,7 @@ pub trait SettingsSection:
 ///
 /// This is the single owner of the configuration path used by settings,
 /// recents, identities, layouts, and other per-user state. It is separate
-/// from the regenerable asset cache owned by `lunco-assets`.
+/// from the regenerable asset cache owned by `lunco-assets-core`.
 pub fn user_config_dir() -> PathBuf {
     if let Some(val) = std::env::var_os("LUNCOSIM_CONFIG") {
         return PathBuf::from(val);

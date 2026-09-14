@@ -45,6 +45,10 @@ diagnostic replacement:
    procedural dust/mottle colour by `1 - weight_albedo`. Relief normals,
    roughness, ambient occlusion, and photometry remain independent, so camera
    footprint or CDLOD replacement cannot introduce unrelated colour changes.
+   The packed surface map's G channel is ambient occlusion and is sent to
+   Bevy's `PbrInput.diffuse_occlusion`, where it modulates indirect diffuse
+   light only. It must never be multiplied into base albedo: doing so turns a
+   broad derived field into false colour patches and also darkens direct sun.
 2. `terrain_debug.wgsl` remains the only diagnostic replacement. LOD depth and
    slope are analysis data, not branches or uniforms added to the production
    material.

@@ -253,7 +253,7 @@ fn collect_live_extras(
     ui: &egui::Ui,
     ctx: &PanelCtx,
     viz_id: VizId,
-) -> Vec<crate::ui::panels::experiments::PlotExtraLine> {
+) -> Vec<lunco_viz::multi_series_plot::MultiSeriesOverlay> {
     let Some(reg) = ctx.resource::<VisualizationRegistry>() else {
         return Vec::new();
     };
@@ -292,9 +292,9 @@ fn collect_live_extras(
                         .show_generated_names,
                 )
             });
-            Some(crate::ui::panels::experiments::PlotExtraLine {
+            Some(lunco_viz::multi_series_plot::MultiSeriesOverlay {
                 label,
-                color: (color.r(), color.g(), color.b()),
+                color,
                 points,
             })
         })
@@ -459,14 +459,10 @@ fn export_graph_to_csv(world: &mut World, viz_id: VizId) {
             csv.as_bytes(),
         ),
     ) {
-        if let Some(mut console) =
-            world.get_resource_mut::<crate::ui::panels::console::ConsoleLog>()
-        {
+        if let Some(mut console) = world.get_resource_mut::<lunco_ui::log::LogBuffer>() {
             console.error(format!("CSV export: write failed: {e}"));
         }
-    } else if let Some(mut console) =
-        world.get_resource_mut::<crate::ui::panels::console::ConsoleLog>()
-    {
+    } else if let Some(mut console) = world.get_resource_mut::<lunco_ui::log::LogBuffer>() {
         let path = match &handle {
             lunco_storage::StorageHandle::File(p) => p.display().to_string(),
             _ => "(handle)".to_string(),

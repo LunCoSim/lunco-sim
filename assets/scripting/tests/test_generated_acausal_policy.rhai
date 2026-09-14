@@ -69,17 +69,8 @@ fn test_repeated_power_components() {
     connections.push(#{ left_path: "/Rig/Battery_A", right_path: "/Rig/Battery_B" });
     connections.push(#{ left_path: "/Rig/Battery_A", right_path: "/Rig/Solar_A" });
     connections.push(#{ left_path: "/Rig/Battery_A", right_path: "/Rig/Solar_B" });
-    let members = [];
-    members.push(#{ path: "/Rig/Battery_A", x: 0, y: 0 });
-    members.push(#{ path: "/Rig/Battery_B", x: 0, y: 0 });
-    members.push(#{ path: "/Rig/Solar_A", x: 0, y: 0 });
-    members.push(#{ path: "/Rig/Solar_B", x: 0, y: 0 });
     let net = #{
         components: components,
-        layout: #{
-            units: [],
-            members: members
-        },
         connections: connections
     };
     let layout = visual_layout(net, []);
@@ -132,14 +123,9 @@ fn test_topology_roles_put_sources_opposite_loads() {
     connections.push(#{ left_path: "/Rig/Battery", right_path: "/Rig/Solar" });
     connections.push(#{ left_path: "/Rig/Battery", right_path: "/Rig/Motor_A" });
     connections.push(#{ left_path: "/Rig/Battery", right_path: "/Rig/Motor_B" });
-    let members = [];
-    for component in components {
-        members.push(#{ path: component.path, x: 0, y: 0 });
-    }
     let net = #{
         components: components,
-        connections: connections,
-        layout: #{ units: [], members: members }
+        connections: connections
     };
     let layout = visual_layout(net, []);
     require_connection(connections, "/Rig/Battery", "/Rig/Solar",
@@ -163,19 +149,16 @@ fn test_topology_roles_put_sources_opposite_loads() {
 
 fn test_many_power_components() {
     let components = [];
-    let members = [];
     components.push(#{
         path: "/Rover/Battery",
         class: "LunCo.Electrical.Battery",
         topology_role: "storage"
     });
-    members.push(#{ path: "/Rover/Battery", x: 0, y: 0 });
     components.push(#{
         path: "/Rover/SolarPanel",
         class: "LunCo.Electrical.SolarPanel",
         topology_role: "source"
     });
-    members.push(#{ path: "/Rover/SolarPanel", x: 0, y: 0 });
     let connections = [];
     for index in 0..8 {
         let path = "/Rover/Motor_" + index.to_string();
@@ -184,13 +167,11 @@ fn test_many_power_components() {
             class: "LunCo.Electrical.DCMotor",
             topology_role: "load"
         });
-        members.push(#{ path: path, x: 0, y: 0 });
         connections.push(#{ left_path: "/Rover/Battery", right_path: path });
     }
     connections.push(#{ left_path: "/Rover/Battery", right_path: "/Rover/SolarPanel" });
     let net = #{
         components: components,
-        layout: #{ units: [], members: members },
         connections: connections
     };
     let layout = visual_layout(net, []);
@@ -255,25 +236,16 @@ fn test_multi_unit_layout_uses_local_coordinates() {
     let connections = [];
     connections.push(#{ left_path: "/Rig/Source_A", right_path: "/Rig/Load_A" });
     connections.push(#{ left_path: "/Rig/Source_B", right_path: "/Rig/Load_B" });
-    let root_units = [];
-    root_units.push(#{ name: "SourceLoad_A", x: -200, y: 0 });
-    root_units.push(#{ name: "SourceLoad_B", x: 200, y: 0 });
-    let root_layout = #{};
-    root_layout.units = root_units;
-    root_layout.members = [];
     let net = #{};
     net.components = components;
     net.connections = connections;
-    net.layout = root_layout;
     let unit_a_components = ["/Rig/Source_A", "/Rig/Load_A"];
     let unit_b_components = ["/Rig/Source_B", "/Rig/Load_B"];
     let unit_a = #{};
     unit_a.name = "NetworkUnit_1";
-    unit_a.source_name = "SourceLoad_A";
     unit_a.components = unit_a_components;
     let unit_b = #{};
     unit_b.name = "NetworkUnit_2";
-    unit_b.source_name = "SourceLoad_B";
     unit_b.components = unit_b_components;
     let units = [];
     units.push(unit_a);

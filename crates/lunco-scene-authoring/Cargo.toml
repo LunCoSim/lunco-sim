@@ -11,7 +11,7 @@ description = "USD-backed scene property and shader authoring commands"
 # `lunco-scene-commands` installs it as a sibling plugin.
 bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh", "bevy_light", "bevy_shader"] }
 lunco-api = { path = "../lunco-api" }
-lunco-assets = { path = "../lunco-assets" }
+lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-core = { path = "../lunco-core" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-doc = { path = "../lunco-doc" }
@@ -28,6 +28,7 @@ lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-workspace = { path = "../lunco-workspace" }
 openusd = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

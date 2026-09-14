@@ -1,8 +1,10 @@
 //! Core types and plugins for the LunCo simulation.
 //!
-//! This crate provides the foundational components, resources, and systems used
-//! across the simulation, including physical properties, celestial timing,
-//! and the core plugin registration.
+//! This crate provides the dependency-light engine substrate: foundational
+//! components, resources, typed commands, scene lifecycle, and core plugin
+//! registration. BigSpace topology and coordinate conversion live in
+//! [`lunco_spatial`], so consumers that need only engine semantics do not
+//! compile the spatial implementation.
 
 // The shared `#[Command]` macro addresses this crate through
 // `::lunco_core`, including when it expands here. This self-alias keeps core
@@ -10,13 +12,10 @@
 extern crate self as lunco_core;
 
 pub mod architecture;
-/// Atomic re-parenting helpers for SOI/Grid migration.
-pub mod attach;
 /// Command envelope — `Mutation<P>`, `Ack`, `Reject`, `SyncChannel`.
 /// The shape every locally- or remotely-originated mutation flows
 /// through.
 pub mod commands;
-pub mod coords;
 /// M1 — deterministic identity from `Provenance`. The only place network
 /// ids are *derived*; the session identity-admission system is the only place they
 /// are *minted*.
@@ -24,12 +23,10 @@ pub mod identity;
 /// Shared 53-bit time-sorted id generator backing `GlobalEntityId`
 /// and `commands::OpId`.
 pub mod ids;
-/// Debug-build invariant checks for the big_space hierarchy.
-pub mod invariants;
 /// Shared semantic labels for UI, API, and scripting presentation.
 pub mod labels;
 pub mod log;
-/// Architectural marker components for the big_space integration.
+/// Architectural marker components shared by engine subsystems.
 pub mod markers;
 pub mod mocks;
 pub mod ports;
@@ -42,12 +39,8 @@ pub mod reconcile;
 pub mod scene;
 /// Shared scene teardown schedule for all scene-owned subsystems.
 mod scene_lifecycle;
-pub mod telemetry;
-/// The persistent big_space world shell (single root + `WorldGrid` + one
-/// `FloatingOrigin`) that every scene mounts into.
-pub mod world;
-
 pub mod subsystems;
+pub mod telemetry;
 
 pub mod derived;
 
@@ -59,9 +52,6 @@ pub mod faults;
 pub mod mobility;
 /// Generic authored-model invalidation shared by all backend adapters.
 pub mod model_state;
-/// Shared, capability-aware rover navigation command law.
-pub mod navigation;
-
 pub mod tools;
 
 pub mod pacing;
@@ -79,7 +69,6 @@ pub use markers::NoSelectionBounds;
 pub use mobility::Mobility;
 pub use mocks::*;
 pub use model_state::ModelStateRevision;
-pub use navigation::{approach_factor, nav_setpoint, steering_command, NavigationCommand};
 pub use pacing::{
     KeepAwake, SimulationBarrier, SimulationBarrierParticipants, SimulationExecutionMode,
 };
@@ -94,12 +83,11 @@ pub use commands::{
     EditIntent, MarkClientLocalExt, Mutation, OpId, Reject, SessionId, SpawnEntity, SyncChannel,
 };
 pub use identity::Provenance;
-pub use invariants::BigSpaceInvariantsPlugin;
 pub use labels::{entity_display_name, humanize_identifier};
 pub use log::*;
 pub use markers::{
-    CatalogEntryId, CinematicCameraLock, EmbeddedScenarioPath, EmbeddedScenarioSource, GridAnchor,
-    HorizonShadowTerrain, PhysicsPoseAuthoritative, ScenarioProgramPrim, ScriptParams, SoiMigrant,
+    CatalogEntryId, CinematicCameraLock, EmbeddedScenarioPath, EmbeddedScenarioSource,
+    HorizonShadowTerrain, PhysicsPoseAuthoritative, ScenarioProgramPrim, ScriptParams,
     SunAngularDiameter, TriggerZone, UsdPrimKind, CELESTIAL_COLLISION_LAYER,
     NON_PHYSICAL_QUERY_LAYERS, SOLAR_ANGULAR_DIAMETER_DEG, TRIGGER_COLLISION_LAYER,
 };
@@ -111,10 +99,6 @@ pub use scene::{
 };
 pub use scene_lifecycle::{run_scene_teardown, SceneMountState, SceneTeardown};
 pub use telemetry::Severity;
-pub use world::{
-    ensure_world_root, ActivePhysicsFrame, OriginAnchor, WorldGrid, WorldGridConfig, WorldRoot,
-    WorldShellPlugin, WorldShellSet,
-};
 
 // ── Typed Command Macros ──────────────────────────────────────────────────────
 //
@@ -564,7 +548,7 @@ pub struct CelestialBody {
 /// contract ties that anchor to the baked grid, so perturbing it desyncs the anchor
 /// from the baked DEM (shrinking it by 10 km to lower the rendered globe moved the
 /// anchor ~772 m and tripped the frame check on load). To move the globe shell,
-/// offset the GLOBE RENDER radius (see `lunco_celestial::globe_lod`), never this.
+/// offset the GLOBE RENDER radius (see `lunco_celestial_spatial::globe_lod`), never this.
 ///
 /// It lives HERE, in the one dependency-light leaf every consumer already sees,
 /// rather than in `lunco-celestial`: the offline `lunco-assets` build tool needs
@@ -1023,7 +1007,6 @@ pub enum NetcodeSet {
 impl Plugin for LunCoCorePlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(LunCoLogPlugin);
-        app.add_plugins(BigSpaceInvariantsPlugin);
         // The single-avatar slot the `LocalAvatar` hooks maintain. Init'd here
         // because the invariant is the engine's, not any app's — an app that
         // spawns an avatar must not have to remember to install its bookkeeping.
@@ -1032,10 +1015,8 @@ impl Plugin for LunCoCorePlugin {
         // plugins.  Load/restart/clear invalidate it synchronously, while the
         // deferred root spawner registers the replacement after creation.
         app.init_resource::<SceneMountState>();
-        app.register_type::<GridAnchor>()
-            .register_type::<CinematicCameraLock>()
+        app.register_type::<CinematicCameraLock>()
             .register_type::<PhysicsPoseAuthoritative>()
-            .register_type::<SoiMigrant>()
             // `telemetry::` — bevy 0.19's prelude exports its own `Severity`
             // (log-level type), which shadows ours in glob-import scopes.
             .register_type::<crate::telemetry::Severity>()
@@ -1057,12 +1038,11 @@ impl Plugin for LunCoCorePlugin {
             .register_type::<GlobalEntityId>()
             .register_type::<Provenance>()
             .register_type::<CameraFollow>()
-            .register_type::<SteeringGeometry>()
             .register_type::<SimTick>();
 
         // All always-on core/substrate resources live in one function so a
         // unit test can assert the full set is present without building the
-        // heavier LunCoCorePlugin (log + big-space). See its doc comment for
+        // heavier LunCoCorePlugin (log + core registrations). See its doc comment for
         // the invariant this enforces.
         register_core_resources(app);
         app.add_systems(
@@ -1135,10 +1115,13 @@ fn reset_core_scene_state(
 /// systems use. `effective_speed`, not `relative_speed`: the spine expresses
 /// "frozen" with Bevy's paused flag (which zeroes the former but not the latter),
 /// because `relative_speed` is a rate that consumers divide by.
-/// `Time<Virtual>` is read optionally: a bare world without Bevy's
-/// `TimePlugin` (e.g. a headless unit test) is treated as running.
+/// `Time<Virtual>` is the mandatory admission clock. A schedule that omitted
+/// it (for example, a partially constructed host) fails closed instead of
+/// advancing the master tick outside the shared time spine.
 fn advance_sim_tick(mut tick: ResMut<SimTick>, vtime: Option<Res<Time<Virtual>>>) {
-    let running = vtime.is_none_or(|t| !t.is_paused() && t.relative_speed_f64() > 0.0);
+    // The core time spine is mandatory in a running app. A bare schedule that
+    // omitted Time<Virtual> must not silently advance the master tick.
+    let running = vtime.is_some_and(|t| !t.is_paused() && t.relative_speed_f64() > 0.0);
     if running {
         tick.0 = tick.0.wrapping_add(1);
     }

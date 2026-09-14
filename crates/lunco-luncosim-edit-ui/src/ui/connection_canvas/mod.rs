@@ -43,7 +43,7 @@ use lunco_modelica_ui::ui::commands::FocusDocumentByName;
 use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdStageAsset};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_core::document::{LayerId, UsdOp};
-use lunco_usd_ui::viewport::{UsdPreviewId, UsdPreviewSession, UsdViewportState};
+use lunco_usd_viewport_ui::{UsdPreviewId, UsdPreviewSession, UsdViewportState};
 
 use projection::{
     build_scene, collect_graph, project_schema, schema_roots, PrimNode, UsdPrimNodeData,

@@ -52,7 +52,7 @@ use std::sync::Arc;
 
 use bevy::asset::AssetId;
 use bevy::prelude::*;
-use lunco_assets::twin_source::TwinRoots;
+use lunco_assets_core::twin_source::TwinRoots;
 use lunco_doc::{Document, DocumentId};
 use lunco_usd_bevy_core::{source::UsdSourceText, UsdInstanceProjection, UsdStageAsset};
 use lunco_usd_bevy_scene::{
@@ -364,7 +364,7 @@ pub(crate) fn drain_pending_twin_docs(
     let taken = std::mem::take(&mut pending.items);
     let mut still = Vec::new();
     for item in taken {
-        let twin_path = lunco_assets::twin_uri(&item.name, &item.rel);
+        let twin_path = lunco_assets_core::twin_uri(&item.name, &item.rel);
         if let Some(error) = failed.get(&item.handle.id()) {
             report_twin_doc_load_failed(
                 &mut empty_reason,
@@ -546,7 +546,7 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
     let active_doc: Option<DocumentId> = mounted.and_then(|id| {
         let path = world.resource::<AssetServer>().get_path(id)?;
         let rel = path.path().to_string_lossy().into_owned();
-        let (name, rel) = lunco_assets::split_twin_rel(&rel)?;
+        let (name, rel) = lunco_assets_core::split_twin_rel(&rel)?;
         world.resource::<DocBackedTwinScenes>().doc_for(name, rel)
     });
     for (doc, name, rel, applied, overlay_synced) in entries {
@@ -583,7 +583,7 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
         // replay the **typed ops** the document recorded since the last sync
         // directly onto that stage — the op is the single delta description, so we
         // never re-derive an edit's value by reading it back out of `composed`.
-        let twin_path = lunco_assets::twin_uri(&name, &rel);
+        let twin_path = lunco_assets_core::twin_uri(&name, &rel);
         let scene_id = world
             .resource::<AssetServer>()
             .load::<UsdStageAsset>(twin_path.clone())

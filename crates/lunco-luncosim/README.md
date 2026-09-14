@@ -44,7 +44,7 @@ already manually clocked and runs at the speed the CPU permits.
 
 `lunco-luncosim` serves as an **Integration Layer** (Level 5) in the project hierarchy.
 
-- **Level 1 (Foundation)**: `lunco-core`, `lunco-assets`
+- **Level 1 (Foundation)**: `lunco-core`, `lunco-assets-core`
 - **Level 2 (Domain Logic)**: `lunco-celestial`, `lunco-mobility`, `lunco-usd`
 - **Level 3 (Software)**: `lunco-obc`, `lunco-controller`
 - **Level 4 (Workflow)**: `lunco-ui`, `lunco-workbench`

@@ -10,9 +10,10 @@
 use bevy::prelude::*;
 use lunco_status_core::status_bus::{StatusBus, StatusLevel};
 use lunco_telemetry::TelemetrySettings;
+use lunco_ui::log::LogBuffer;
 use lunco_viz::{SignalMeta, SignalRef, SignalRegistry, VisualizationRegistry};
 
-use lunco_assets::msl::{MslLoadPhase, MslLoadState};
+use lunco_assets_core::msl::{MslLoadPhase, MslLoadState};
 
 const MSL_SOURCE: &str = "MSL";
 
@@ -240,7 +241,7 @@ pub fn drain_sim_samples_to_viz(
 /// panel. The core worker emits notices; this observer renders them.
 pub fn drain_notices_to_console(
     mut notices: MessageReader<lunco_modelica_runtime::ModelicaNotice>,
-    console: Option<ResMut<crate::ui::panels::console::ConsoleLog>>,
+    console: Option<ResMut<LogBuffer>>,
     bus: Option<ResMut<StatusBus>>,
 ) {
     let mut console = console;
@@ -364,7 +365,7 @@ pub fn project_run_results_to_ui(
     registry: Res<lunco_experiments::ExperimentRegistry>,
     sources: Res<crate::experiments_runner::ExperimentSources>,
     mut playback: ResMut<crate::experiments_runner::PlaybackEntities>,
-    mut console: Option<ResMut<crate::ui::panels::console::ConsoleLog>>,
+    mut console: Option<ResMut<LogBuffer>>,
     mut plot_states: Option<ResMut<crate::ui::panels::experiments::PlotPanelStates>>,
     active_plot: Option<Res<crate::ui::panels::experiments::ActivePlot>>,
     mut signals: Option<ResMut<SignalRegistry>>,

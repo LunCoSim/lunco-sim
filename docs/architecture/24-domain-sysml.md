@@ -140,11 +140,12 @@ For production checks, the scene-validation plugin registers the compact
 validates one source; `twin://name` loads the manifest-declared, indexed Twin
 source set. The query returns typed attributes, requirement/verification
 records, source files, diagnostics, and a deterministic source revision. It
-also exposes a qualified attribute map and reports short-name collisions, so a
-Rhai consumer can use a convenient local key when it is unique and fall back
-to the lossless qualified key when definitions reuse a name. This keeps the
-Rhai boundary bounded and avoids a second filesystem walker or
-product-specific Rust projection.
+also exposes a qualified attribute map and reports short-name collisions. A
+Rhai consumer may use a local key only when it is unique; an ambiguous lookup
+is a hard failure and must be rewritten with the qualified key. The shared
+`lunco-sysml-report` crate owns this transport shape, keeping the Rhai/API
+boundary bounded without a second filesystem walker or product-specific Rust
+projection.
 
 Acceptance remains Twin-authored: each Twin keeps its SysML requirements, USD
 fixture, and Rhai scenario together. Core runtime code contains only this

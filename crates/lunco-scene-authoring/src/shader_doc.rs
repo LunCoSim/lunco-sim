@@ -7,14 +7,14 @@
 //! records a [`ShaderOp::SetSource`] into the canonical Twin journal
 //! (`DomainKind::Shader`) — which means it **hot-reloads locally AND syncs +
 //! persists** exactly like a rhai behaviour edit. The op carries the shader's
-//! asset **path** (cross-peer-stable, unlike the locally-minted `DocumentId`), so
-//! a peer routes a replayed edit to the right shader by path — no single-doc
-//! limitation.
+//! canonical asset **path** (cross-peer-stable, unlike the locally-minted
+//! `DocumentId`), so a peer routes a replayed edit to the right shader by path —
+//! no single-doc limitation.
 //!
 //! What this module does NOT do: touch `Assets<Shader>`. The hot-reload hook
-//! (`shaders.insert(handle.id(), Shader::from_wgsl(source, path))`) lives in the
-//! command handler / replay system that owns `ResMut<Assets<Shader>>`; this module
-//! is the source-of-truth document + journaling seam it drives.
+//! (`properties::apply_shader_source_live`) lives in the command handler / replay
+//! system that owns `ResMut<Assets<Shader>>`; this module is the source-of-truth
+//! document + journaling seam it drives.
 
 use bevy::prelude::*;
 use lunco_doc::{Document, DocumentError, DocumentHost, DocumentId, DocumentOp};
@@ -26,19 +26,35 @@ use std::collections::HashMap;
 pub struct ShaderDocument {
     pub id: u64,
     pub generation: u64,
-    /// Asset path (`twin://…/foo.wgsl` or `shaders/foo.wgsl`) — the identity the
-    /// Bevy asset system + every `ShaderMaterial` handle key on, and the stable
-    /// cross-peer routing key.
+    /// Canonical asset path (`twin://…/foo.wgsl` or `lunco://…/foo.wgsl`) — the
+    /// identity the Bevy asset system + every `ShaderMaterial` handle key on,
+    /// and the stable cross-peer routing key.
     pub path: String,
     pub source: String,
 }
 
+/// Return the one persisted identity for a shader asset.
+///
+/// Engine-library shader references are commonly authored without a scheme,
+/// while Bevy loads them from the registered `lunco://` source. Canonicalizing
+/// at the document boundary prevents one shader from acquiring separate
+/// journal documents merely because two callers used different spellings.
+pub fn canonical_shader_path(path: &str) -> String {
+    let path = path.trim();
+    if lunco_assets_core::has_scheme(path) {
+        path.to_string()
+    } else {
+        lunco_assets_core::engine_asset_uri(path)
+    }
+}
+
 impl ShaderDocument {
     pub fn new(id: u64, path: impl Into<String>, source: impl Into<String>) -> Self {
+        let path = path.into();
         Self {
             id,
             generation: 0,
-            path: path.into(),
+            path: canonical_shader_path(&path),
             source: source.into(),
         }
     }
@@ -114,12 +130,10 @@ impl ShaderRegistry {
     /// bumps. The one funnel every live shader edit routes through. Returns the
     /// doc id (caller then hot-reloads `Assets<Shader>`).
     pub fn apply_source(&mut self, path: &str, source: String) -> DocumentId {
-        let id = self.document_for(path, &source);
+        let path = canonical_shader_path(path);
+        let id = self.document_for(&path, &source);
         if let Some(host) = self.documents.get_mut(&id) {
-            let _ = host.apply(ShaderOp::SetSource {
-                path: path.to_string(),
-                source,
-            });
+            let _ = host.apply(ShaderOp::SetSource { path, source });
         }
         id
     }
@@ -129,11 +143,12 @@ impl ShaderRegistry {
     /// `(path, source)` for the caller to hot-reload, or `None` on a bad payload.
     pub fn apply_replayed(&mut self, op: &ShaderOp) -> Option<(String, String)> {
         let ShaderOp::SetSource { path, source } = op;
-        let id = self.document_for(path, source);
+        let path = canonical_shader_path(path);
+        let id = self.document_for(&path, source);
         let host = self.documents.get_mut(&id)?;
         host.document_mut()
             .apply(ShaderOp::SetSource {
-                path: path.clone(),
+                path,
                 source: source.clone(),
             })
             .ok()?;
@@ -143,8 +158,9 @@ impl ShaderRegistry {
 
     /// Current source for `path`, if a document exists.
     pub fn source_of(&self, path: &str) -> Option<&str> {
+        let path = canonical_shader_path(path);
         self.by_path
-            .get(path)
+            .get(&path)
             .and_then(|id| self.documents.get(id))
             .map(|h| h.document().source.as_str())
     }
@@ -187,7 +203,8 @@ mod tests {
         let mut reg = ShaderRegistry::default();
         let id = reg.apply_source("shaders/foo.wgsl", "v1".into());
         assert_eq!(reg.source_of("shaders/foo.wgsl"), Some("v1"));
-        let id2 = reg.apply_source("shaders/foo.wgsl", "v2".into());
+        assert_eq!(reg.source_of("lunco://shaders/foo.wgsl"), Some("v1"));
+        let id2 = reg.apply_source("lunco://shaders/foo.wgsl", "v2".into());
         assert_eq!(id, id2, "same path reuses the doc id");
         assert_eq!(reg.source_of("shaders/foo.wgsl"), Some("v2"));
     }
@@ -202,7 +219,10 @@ mod tests {
             source: "remote".into(),
         };
         let got = reg.apply_replayed(&op).expect("routes by path");
-        assert_eq!(got, ("shaders/bar.wgsl".to_string(), "remote".to_string()));
+        assert_eq!(
+            got,
+            ("lunco://shaders/bar.wgsl".to_string(), "remote".to_string())
+        );
         assert_eq!(reg.source_of("shaders/bar.wgsl"), Some("remote"));
     }
 }

@@ -248,7 +248,7 @@ Runtime plumbing that owns a Document, routes ops from views, records undo histo
 
 ---
 
-## 4d. Workbench Concepts (`lunco-workbench`)
+## 4d. Workbench Concepts (`lunco-workbench`, `lunco-workbench-browser`)
 
 The UI application scaffold. See [`11-workbench.md`](11-workbench.md).
 
@@ -259,12 +259,13 @@ avoid the collision:
 | Concept | Our term | Where |
 |---|---|---|
 | Editor shell + dock engine + panel registry | **Workbench** | `lunco-workbench` |
+| Twin and Files navigation feature | **Browser** | `lunco-workbench-browser` |
 | Editor session: open Twins + documents + recents | **Workspace** | `lunco-workspace` (wrapped as `WorkspaceResource` in `lunco-workbench`) |
 | Task-specific UI chrome preset | **Perspective** | `lunco-workbench` (trait) |
 | A simulation unit on disk | **Twin** | `lunco-twin` |
 
 ### Panel
-A dockable UI element in the workbench. A Panel typically implements `DocumentView<D>` for some Document type, or is a non-document tool (Scene Tree, Spawn Palette, Console, Twin Browser).
+A dockable UI element in the workbench. A Panel typically implements `DocumentView<D>` for some Document type, or is a non-document tool (Scene Tree, Spawn Palette, Console, Twin Browser). The standard Twin/Files browser panels and their section registry live in `lunco-workbench-browser`; the shell only provides the generic panel host.
 
 ### Perspective
 A named task-specific UI configuration. Each Perspective has its own default panel layout, toolbar set, and optionally a camera/view state. Standard LunCoSim Perspectives: **Build** (edit scenes and subsystems), **Simulate** (minimal chrome, maximize viewport), **Analyze** (Modelica/system model deep dive), **Plan** (mission timeline), **Observe** (presentation/cinema mode). Analogous to Eclipse Perspectives (same word) or Blender "Workspaces" (different word, same idea). *Distinct from the broader **Workspace** concept — see §4e.*
@@ -380,7 +381,7 @@ Every entity has BOTH a high-precision truth position and a render-ready Bevy Tr
 **Rules:**
 - The physics engine (avian) integrates in `f64`; its own sync systems write the result back to `Transform`. Never hand-write avian `Position`.
 - An entity's absolute position is its `big_space` cell (`CellCoord`) plus the `f32` `Transform` remainder; `big_space` re-bins the remainder into cells as objects move. Authored positions are grid-absolute; `Transform.translation` holds only the cell remainder.
-- `lunco-core/src/coords.rs` (`world_position`, `grid_absolute`, `grid_local_from_absolute`, …) is the only correct way to convert between absolute `DVec3` and the cell + remainder pair.
+- `lunco-spatial/src/coords.rs` (`world_position`, `grid_absolute`, `grid_local_from_absolute`, …) is the only correct way to convert between absolute `DVec3` and the cell + remainder pair.
 
 ### Multiplayer f64/f32 Split
 - **Server**: Maintains all entity positions in `f64`. Runs all physics, FSW, Modelica.

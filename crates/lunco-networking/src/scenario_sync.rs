@@ -333,7 +333,7 @@ impl Default for CachedTwinsIndex {
 
 /// `<cache>/scenarios/index.json` — the top-level list of cached scenarios.
 fn scenarios_index_path() -> PathBuf {
-    lunco_assets::scenarios_dir().join("index.json")
+    lunco_assets_core::scenarios_dir().join("index.json")
 }
 
 /// Client-side queue: raw chunks pushed by the `AssetChunk` arm of
@@ -408,7 +408,7 @@ pub struct AssetServeTasks(pub Vec<(SessionId, Task<Vec<AssetChunkMsg>>)>);
 
 /// Root of a scenario's local asset cache: `<cache_dir>/scenarios/<hex id>/`.
 pub fn scenario_cache_root(scenario_id: &[u8; 16]) -> PathBuf {
-    lunco_assets::scenarios_dir().join(hex16(scenario_id))
+    lunco_assets_core::scenarios_dir().join(hex16(scenario_id))
 }
 
 /// A safe *relative* `PathBuf` from a `/`-separated manifest asset path,
@@ -936,11 +936,11 @@ pub fn update_scenario_download_status(
 /// a netcode bug far from here. Check the client logs agree with the host on
 /// `twin://<name>/<rel>` for the entry scene, then confirm possession binds.
 pub fn mount_scenario_twin(
-    twins: &lunco_assets::twin_source::TwinRoots,
+    twins: &lunco_assets_core::twin_source::TwinRoots,
     scenario_id: &[u8; 16],
     name: &str,
     rel: &str,
-) -> Result<String, lunco_assets::twin_source::TwinRootsError> {
+) -> Result<String, lunco_assets_core::twin_source::TwinRootsError> {
     // `TwinRoots::register` is `#[must_use]`: it returns the name actually
     // assigned, which may be suffixed (`name-2`, …) if `name` already maps to a
     // different root. The `root_of` guard means we only call `register` when
@@ -954,7 +954,7 @@ pub fn mount_scenario_twin(
         Some(_) => name.to_string(),
         None => twins.register(name, scenario_cache_root(scenario_id))?,
     };
-    Ok(lunco_assets::twin_uri(&assigned, rel))
+    Ok(lunco_assets_core::twin_uri(&assigned, rel))
 }
 
 /// The storage handle for a scenario asset's cache location. A

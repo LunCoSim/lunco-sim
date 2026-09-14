@@ -8,7 +8,7 @@ description = "Transport-free API query providers for Modelica documents and run
 [dependencies]
 bevy = { workspace = true }
 lunco-api = { path = "../lunco-api" }
-lunco-assets = { workspace = true }
+lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-experiments = { path = "../lunco-experiments" }

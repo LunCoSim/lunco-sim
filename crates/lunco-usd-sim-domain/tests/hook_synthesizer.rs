@@ -398,7 +398,7 @@ fn facts_describe_the_whole_graph() {
 
 #[test]
 fn shipped_default_policy_emits_visual_and_executable_topology() {
-    let source = lunco_assets::scripting::policy("synth_acausal_network")
+    let source = lunco_assets_core::scripting::policy("synth_acausal_network")
         .expect("the shipped synthesis policy is embedded");
     lunco_hooks_rhai::register_rhai_hook("synth.acausal-network", "synthesize", source, true)
         .expect("the shipped synthesis policy compiles");
@@ -522,7 +522,7 @@ fn shipped_default_policy_emits_visual_and_executable_topology() {
 
 #[test]
 fn shipped_acausal_policy_contract_runs_in_rhai() {
-    let policy = lunco_assets::scripting::policy("synth_acausal_network")
+    let policy = lunco_assets_core::scripting::policy("synth_acausal_network")
         .expect("the shipped synthesis policy is embedded");
     let contract = scripting_test_source("test_generated_acausal_policy.rhai");
     lunco_hooks_rhai::register_rhai_hook(
@@ -551,7 +551,7 @@ fn shipped_acausal_policy_contract_runs_in_rhai() {
 
 #[test]
 fn shipped_acausal_policy_places_repeated_power_components_in_rhai() {
-    let policy = lunco_assets::scripting::policy("synth_acausal_network")
+    let policy = lunco_assets_core::scripting::policy("synth_acausal_network")
         .expect("the shipped synthesis policy is embedded");
     let contract = scripting_test_source("test_generated_acausal_policy.rhai");
     lunco_hooks_rhai::register_rhai_hook(
@@ -570,7 +570,7 @@ fn shipped_acausal_policy_places_repeated_power_components_in_rhai() {
 
 #[test]
 fn shipped_acausal_policy_scales_power_layout_for_many_members_in_rhai() {
-    let policy = lunco_assets::scripting::policy("synth_acausal_network")
+    let policy = lunco_assets_core::scripting::policy("synth_acausal_network")
         .expect("the shipped synthesis policy is embedded");
     let contract = scripting_test_source("test_generated_acausal_policy.rhai");
     lunco_hooks_rhai::register_rhai_hook(
@@ -589,7 +589,7 @@ fn shipped_acausal_policy_scales_power_layout_for_many_members_in_rhai() {
 
 #[test]
 fn shipped_acausal_policy_keeps_multi_unit_layouts_local_in_rhai() {
-    let policy = lunco_assets::scripting::policy("synth_acausal_network")
+    let policy = lunco_assets_core::scripting::policy("synth_acausal_network")
         .expect("the shipped synthesis policy is embedded");
     let contract = scripting_test_source("test_generated_acausal_policy.rhai");
     lunco_hooks_rhai::register_rhai_hook(
@@ -608,7 +608,7 @@ fn shipped_acausal_policy_keeps_multi_unit_layouts_local_in_rhai() {
 
 #[test]
 fn shipped_actuator_policy_contract_runs_in_rhai() {
-    let policy = lunco_assets::scripting::policy("synth_actuator_wrench")
+    let policy = lunco_assets_core::scripting::policy("synth_actuator_wrench")
         .expect("the shipped actuator policy is embedded");
     let contract = scripting_test_source("test_generated_actuator_policy.rhai");
     lunco_hooks_rhai::register_rhai_hook(

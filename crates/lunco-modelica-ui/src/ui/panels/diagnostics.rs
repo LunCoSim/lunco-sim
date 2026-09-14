@@ -1,7 +1,7 @@
 //! Diagnostics panel — Modelica-specific parse and semantic errors.
 //!
 //! Bottom-dock tab next to Console, sharing the same visual shape
-//! ([`crate::ui::panels::log::render_log_view`]) but scoped to
+//! ([`lunco_ui::log::render_log_view`]) but scoped to
 //! Modelica document diagnostics. Console accumulates every
 //! workbench event; Diagnostics only shows the *current* set of
 //! problems with the open model.
@@ -22,10 +22,10 @@ use std::collections::VecDeque;
 
 use bevy::prelude::*;
 use bevy_egui::egui;
+use lunco_ui::log::{render_log_view, LogEntry, LogLevel, SourceLoc};
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
 use crate::state::ModelicaDocumentRegistry;
-use crate::ui::panels::log::{render_log_view, LogEntry, LogLevel};
 
 /// Panel id.
 pub const DIAGNOSTICS_PANEL_ID: PanelId = PanelId("modelica_diagnostics");
@@ -38,7 +38,7 @@ pub(crate) struct ClearDiagnosticsRequested;
 #[derive(Event)]
 pub(crate) struct DiagnosticJumpRequested {
     pub(crate) doc: Option<lunco_doc::DocumentId>,
-    pub(crate) loc: crate::ui::panels::log::SourceLoc,
+    pub(crate) loc: SourceLoc,
 }
 
 pub(crate) fn on_clear_diagnostics_requested(
@@ -267,7 +267,7 @@ pub fn refresh_diagnostics(
             loc: diag
                 .line
                 .zip(diag.col)
-                .map(|(line, column)| crate::ui::panels::log::SourceLoc { line, column }),
+                .map(|(line, column)| SourceLoc { line, column }),
         });
     }
 
@@ -291,7 +291,7 @@ pub fn refresh_diagnostics(
                 loc: diag
                     .line
                     .zip(diag.col)
-                    .map(|(line, column)| crate::ui::panels::log::SourceLoc { line, column }),
+                    .map(|(line, column)| SourceLoc { line, column }),
             });
         }
     } else if let Some(msg) = compile_states.error_message(doc_id) {
@@ -395,7 +395,7 @@ pub fn refresh_diagnostics(
                                         // carries just rule + message.
                                         text: format!("[{}] {}", msg.rule, msg.message),
                                         model: tag_for_worker.clone(),
-                                        loc: Some(crate::ui::panels::log::SourceLoc {
+                                        loc: Some(SourceLoc {
                                             line: msg.line,
                                             column: msg.column,
                                         }),

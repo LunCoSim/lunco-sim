@@ -31,6 +31,7 @@ bevy = { workspace = true, features = ["bevy_mesh", "bevy_camera", "bevy_light",
 # in wgpu + naga. `wgpu-types` is not `wgpu`.
 wgpu-types = "29"
 lunco-core = { path = "../lunco-core" }
+lunco-spatial = { path = "../lunco-spatial" }
 # The support-placement axis comes from the environment's authoritative local
 # gravity component; terrain does not derive or special-case a world-up axis.
 lunco-environment = { path = "../lunco-environment" }
@@ -77,7 +78,7 @@ lunco-storage = { path = "../lunco-storage" }
 # Shared content-addressed cache directory for the derived-layer bake
 # (P4): persist surface/normal maps keyed by DEM+param hash so the AO march
 # isn't redone every load and peers converge. `cache_dir()` is cross-platform.
-lunco-assets = { path = "../lunco-assets" }
+lunco-assets-core = { path = "../lunco-assets-core" }
 # The content-addressed precompute disk cache (Substrate B). The derived-layer
 # bake (`DerivedBake`) is a `lunco_precompute::Bake`; the crate owns the
 # load/store/rebake orchestration + the FNV-1a key fold (re-exported `Fnv1a`).

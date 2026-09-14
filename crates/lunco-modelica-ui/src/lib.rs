@@ -99,6 +99,9 @@ impl Plugin for ModelicaWorkbenchPlugin {
         if !app.is_plugin_added::<lunco_workbench::WorkbenchPlugin>() {
             app.add_plugins(lunco_workbench::WorkbenchPlugin);
         }
+        if !app.is_plugin_added::<lunco_workbench_browser::TwinBrowserPlugin>() {
+            app.add_plugins(lunco_workbench_browser::TwinBrowserPlugin);
+        }
         app.insert_resource(self.config.clone());
         app.add_plugins(ModelicaPlugin);
 
@@ -227,7 +230,3 @@ pub fn frame_time_probe_stamp_edit(world: &mut World) {
         probe.last_edit = Some(web_time::Instant::now());
     }
 }
-
-/// UI-side painter for Modelica annotation graphics.
-#[cfg(feature = "ui")]
-pub use ui::icon_paint;

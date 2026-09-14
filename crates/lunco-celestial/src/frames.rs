@@ -42,11 +42,9 @@
 //! (`size_of::<Pos<Solar>>() == size_of::<DVec3>()`, asserted in the tests). The refactor
 //! changes no math — only what the compiler will let you *say*.
 //!
-//! BigSpace's grid-local `CellCoord + Transform` remains a representation, not
-//! a second analytical frame system. Its owning Grid carries a semantic
-//! [`crate::ReferenceFrame`] tag, and all public crossings resolve that tag and
-//! convert through the shared frame services. The GPU-facing local remainder
-//! is never exposed as user or wire state.
+//! Runtime adapters may encode these frames in a hierarchy, but that storage
+//! representation is outside this package. This module supplies the f64 math
+//! used to derive poses between semantic frames.
 
 use std::fmt;
 use std::marker::PhantomData;
@@ -363,9 +361,8 @@ impl<F: Frame> Pos<F> {
         self.v.length_squared()
     }
 
-    /// Down to `f32` for the render/GPU boundary. Lossy by nature — that is what big_space's
-    /// cell split exists to contain — so this is the last thing you do, not something you do
-    /// in the middle of the math.
+    /// Down to `f32` for a render or physics boundary. This conversion is
+    /// intentionally explicit because the semantic calculation remains f64.
     #[inline]
     pub fn as_vec3(self) -> bevy::math::Vec3 {
         self.v.as_vec3()

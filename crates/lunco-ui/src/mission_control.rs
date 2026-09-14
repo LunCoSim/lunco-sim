@@ -6,7 +6,8 @@ use lunco_workbench::{icon_text_button, UiIcon};
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
 use lunco_avatar::{FocusTarget, PossessVessel, ReleaseVessel};
-use lunco_celestial::{CelestialBody, LeaveSurface, TeleportToSurface};
+use lunco_celestial::CelestialBody;
+use lunco_celestial_spatial::{LeaveSurface, TeleportToSurface};
 use lunco_controller::{resolved_input_label, InputBindingsSettings};
 use lunco_core::{Avatar, ControlBinding, Spacecraft, UserIntent};
 use lunco_time::{
@@ -454,7 +455,7 @@ pub fn populate_mission_control_view(
         (With<ControlBinding>, Without<Avatar>),
     >,
     surface: Query<(), With<lunco_avatar::SurfaceCamera>>,
-    gravity: Option<Res<lunco_celestial::LocalGravityField>>,
+    gravity: Option<Res<lunco_celestial_spatial::LocalGravityField>>,
     changed: Query<
         (),
         Or<(

@@ -192,7 +192,7 @@ Representative commands already covering the user's surface:
 | Scene editing | `SpawnEntity`, `MoveEntity`, `RotateEntity`, `TransformEntity`, `SelectEntity` (`lunco-scene-commands/src/commands.rs`); `SetObjectProperty` (`lunco-scene-authoring/src/properties.rs`); `SelectUsdPrim` (`lunco-luncosim-edit-ui/src/selection.rs`) |
 | USD geometry editing | `ApplyUsdOp` with `UsdOp::SetAttribute` (`lunco-usd`) — standard USD attributes such as `point3f[] points`; the `gizmo` and `nurbs` Rhai tools are policy libraries over this typed command |
 | Modelica/cosim | `CompileModel`, `SetModelInput`, run/step commands (`lunco-modelica-core/...`, UI adapters in `lunco-modelica-ui/...`) |
-| Celestial | `TeleportToSurface`, `LeaveSurface` (`lunco-celestial/src/commands.rs`) |
+| Celestial | `TeleportToSurface`, `LeaveSurface` (`lunco-celestial-spatial/src/commands.rs`) |
 | Scripting | `RunRhai`, `RunRhaiTool`, `RunPython` (`lunco-scripting/src/commands.rs`) |
 | Reads | `ListEntities`, `DiscoverSchema`, `ReadPorts`, `CausalTrace`, `ReadExposures`, `GetReadiness`, and domain query providers (all use the tagged `ExecuteCommand` envelope where applicable) |
 

@@ -518,7 +518,10 @@ fn bake_or_load(
     oracle: &SurfaceOracle,
     profile: lunco_render::RenderQualityProfile,
 ) -> DerivedMaps {
-    lunco_precompute::bake_or_load(&DerivedBake { oracle, profile }, &lunco_assets::cache_dir())
+    lunco_precompute::bake_or_load(
+        &DerivedBake { oracle, profile },
+        &lunco_assets_core::cache_dir(),
+    )
 }
 
 /// Wasm counterpart of [`bake_or_load`]: `lunco_precompute`'s sync fs tier is

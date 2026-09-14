@@ -54,7 +54,7 @@ Camera systems run in `PostUpdate`, **after** `PhysicsSystems::Writeback` and **
 
 When focusing a target on a different grid (e.g., Earth → Moon):
 1. The orbit command resolves the target pose through the shared
-   `lunco_core::coords::grid_relative_pose` frame path.
+   `lunco_spatial::coords::grid_relative_pose` frame path.
 2. The destination inertial Grid performs the existing f64-to-cell/local split
    through `Grid::translation_to_grid()`.
 3. If the camera changes Grid, `migrate_to_grid()` commits the parent,

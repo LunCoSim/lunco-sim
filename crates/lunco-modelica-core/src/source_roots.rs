@@ -116,11 +116,11 @@ pub struct SourceRoot {
 
 /// Process-wide registry of every named source root. Owned by the
 /// `ModelicaPlugin`; populated at plugin start by inventorying:
-///  - MSL via [`lunco_assets::msl_source_root_path`].
+///  - MSL via [`lunco_assets_core::msl_source_root_path`].
 ///  - Third-party libraries via
 ///    [`crate::package_tree::scanner::discover_third_party_libs`].
 ///  - Bundled examples via [`crate::models::bundled_models`].
-///  - Structured packages via [`lunco_assets::models::package_roots_live`].
+///  - Structured packages via [`lunco_assets_core::models::package_roots_live`].
 ///
 /// Loading remains demand-driven: inventory is cheap, and a root is installed
 /// only when a compile or class lookup actually references it.
@@ -143,7 +143,7 @@ impl SourceRootRegistry {
         // unpacked it, we skip; the dep-scanner will still see
         // `Modelica.*` references and surface the missing-library
         // error via the gate.
-        if let Some(msl_dir) = lunco_assets::msl_source_root_path() {
+        if let Some(msl_dir) = lunco_assets_core::msl_source_root_path() {
             roots.insert(
                 "Modelica".to_string(),
                 SourceRoot {
@@ -162,7 +162,7 @@ impl SourceRootRegistry {
         // implemented for the package-browser tree; we reuse it here
         // for the compile-gate registry.
         for (cache_subdir, root_name) in crate::package_tree::scanner::discover_third_party_libs() {
-            let root_dir = lunco_assets::cache_dir()
+            let root_dir = lunco_assets_core::cache_dir()
                 .join(&cache_subdir)
                 .join(&root_name);
             roots.insert(
@@ -209,11 +209,11 @@ impl SourceRootRegistry {
         // visible without rebuilding; on wasm, use the embedded package tree.
         // This is the standard root-segment search-path inventory, not a
         // library-specific registration.
-        for root_name in lunco_assets::models::package_roots_live() {
+        for root_name in lunco_assets_core::models::package_roots_live() {
             if roots.contains_key(&root_name) {
                 continue;
             }
-            let kind = lunco_assets::models_package_root_path(&root_name)
+            let kind = lunco_assets_core::models_package_root_path(&root_name)
                 .map(|root_dir| SourceRootKind::SystemLibrary {
                     cache_subdir: format!("models/{root_name}"),
                     root_dir,
@@ -401,7 +401,7 @@ fn normalize_twin_source_path(path: &Path) -> Result<PathBuf, String> {
             path.display()
         ));
     }
-    Ok(lunco_assets::asset_path::normalize(path))
+    Ok(lunco_assets_core::asset_path::normalize(path))
 }
 
 fn twin_for_root<'a>(
@@ -425,7 +425,7 @@ fn twin_for_root<'a>(
 /// the shared Twin asset authority; missing declarations are logged by the
 /// caller rather than replaced with an unrelated fallback path.
 fn twin_source_root_specs(
-    twin_roots: &lunco_assets::twin_source::TwinRoots,
+    twin_roots: &lunco_assets_core::twin_source::TwinRoots,
     name: &str,
     root: &Path,
     twin: Option<&lunco_twin::Twin>,
@@ -529,7 +529,7 @@ fn twin_source_root_specs(
 /// the existing `LoadSourceRoot` worker command, so editor and runtime keep
 /// one source-root admission path and one dependency/session view.
 pub fn load_twin_source_roots(
-    twin_roots: Option<Res<lunco_assets::twin_source::TwinRoots>>,
+    twin_roots: Option<Res<lunco_assets_core::twin_source::TwinRoots>>,
     channels: Option<Res<ModelicaChannels>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     mut seen: Local<HashSet<String>>,
@@ -645,7 +645,7 @@ pub fn ensure_loaded(
             )
         }
         SourceRootKind::BundledPackage { root } => {
-            let files = lunco_assets::models::package_files_live(root);
+            let files = lunco_assets_core::models::package_files_live(root);
             if files.is_empty() {
                 bevy::log::warn!(
                     "[source-roots] bundled package `{}`: no Modelica files found",
@@ -806,7 +806,7 @@ paths = [".", "models"]
 externals = [{ name = "Shared", path = "shared" }]
 "#,
         );
-        let roots = lunco_assets::twin_source::TwinRoots::default();
+        let roots = lunco_assets_core::twin_source::TwinRoots::default();
         let assigned = roots.register("demo", twin.root.clone()).unwrap();
         let specs = twin_source_root_specs(&roots, &assigned, &twin.root, Some(&twin)).unwrap();
 
@@ -840,7 +840,7 @@ externals = [{ name = "Shared", path = "shared" }]
         )
         .unwrap();
         let twin = open_twin(temp.path(), "name = \"demo\"\nversion = \"0.1.0\"\n");
-        let roots = lunco_assets::twin_source::TwinRoots::default();
+        let roots = lunco_assets_core::twin_source::TwinRoots::default();
         let assigned = roots.register("demo", twin.root.clone()).unwrap();
         let specs = twin_source_root_specs(&roots, &assigned, &twin.root, Some(&twin)).unwrap();
 

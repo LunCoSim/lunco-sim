@@ -36,7 +36,7 @@ use bevy::prelude::*;
 use crossbeam_channel::unbounded;
 #[cfg(feature = "api")]
 use lunco_api::executor::DeferredCommandAppExt;
-use lunco_assets::msl_dir;
+use lunco_assets_core::msl_dir;
 use lunco_modelica_runtime::{
     CompileRequested, ModelicaChannels, ModelicaModel, ModelicaNotice, ModelicaSet, SimSampleStream,
 };
@@ -244,7 +244,7 @@ fn msl_artifact_revision() -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     MODEL_LIBRARY_REVISION_VERSION.hash(&mut hasher);
     "Modelica".hash(&mut hasher);
-    lunco_assets::msl::EXPECTED_RUMOCA_ARTIFACT_TAG.hash(&mut hasher);
+    lunco_assets_core::msl::EXPECTED_RUMOCA_ARTIFACT_TAG.hash(&mut hasher);
     #[cfg(not(target_arch = "wasm32"))]
     {
         let bundle_path = msl_dir().join("parsed-msl.bin");
@@ -354,10 +354,10 @@ impl ModelicaCompiler {
     ///
     /// MSL discovery order for that admission:
     ///
-    /// 1. The process-wide source from [`lunco_assets::msl::global_msl_source`]
+    /// 1. The process-wide source from [`lunco_assets_core::msl::global_msl_source`]
     ///    if it's been installed. This is how the wasm runtime feeds the
     ///    fetched-from-server MSL bundle in.
-    /// 2. Fall back to [`lunco_assets::msl_source_root_path`] (filesystem).
+    /// 2. Fall back to [`lunco_assets_core::msl_source_root_path`] (filesystem).
     ///
     /// If both are absent, a source that references MSL fails visibly at the
     /// compile owner. A later compile after the source becomes available can
@@ -426,7 +426,7 @@ impl ModelicaCompiler {
         if self.installed_roots.contains(root) {
             return true;
         }
-        if let Some(dir) = lunco_assets::models_package_root_path(root) {
+        if let Some(dir) = lunco_assets_core::models_package_root_path(root) {
             let files = Self::read_package_dir(&dir);
             if !files.is_empty() {
                 let report = self.seat_library_files(root, &dir.display().to_string(), files);
@@ -451,7 +451,7 @@ impl ModelicaCompiler {
                 return true;
             }
         }
-        let files = lunco_assets::models::package_files_live(root);
+        let files = lunco_assets_core::models::package_files_live(root);
         if !files.is_empty() {
             log::info!(
                 "[ModelicaCompiler] seated library `{root}` from the embedded snapshot \
@@ -482,7 +482,7 @@ impl ModelicaCompiler {
             .into_iter()
             .find(|(_, name)| name == root)
         {
-            let root_dir = lunco_assets::cache_dir().join(cache_subdir).join(root);
+            let root_dir = lunco_assets_core::cache_dir().join(cache_subdir).join(root);
             let report = self.load_source_root(root, &root_dir);
             if report.diagnostics.is_empty() && report.inserted_file_count > 0 {
                 return true;
@@ -622,7 +622,7 @@ impl ModelicaCompiler {
             );
             return true;
         }
-        if lunco_assets::msl::has_in_memory_source() {
+        if lunco_assets_core::msl::has_in_memory_source() {
             // wasm: the source bytes are resident but the chunked parser
             // hasn't produced `StoredDefinition`s yet. Report `false`
             // (nothing installed) so `ensure_msl_installed` does NOT latch —
@@ -634,8 +634,8 @@ impl ModelicaCompiler {
             );
             return false;
         }
-        if lunco_assets::msl::primary_filesystem_root().is_some()
-            || lunco_assets::msl_source_root_path().is_some()
+        if lunco_assets_core::msl::primary_filesystem_root().is_some()
+            || lunco_assets_core::msl_source_root_path().is_some()
         {
             // Native: an MSL tree is present (registered as a global source,
             // OR just materialised on disk — headless tests/indexer/embedders
@@ -689,7 +689,7 @@ impl ModelicaCompiler {
                 // Write the bundle (zstd-compressed) BEFORE moving the docs
                 // into the session so we don't clone ~165 MB of defs, and so
                 // the next launch hits the fast path above (~1s).
-                let bundle_path = lunco_assets::msl_dir().join("parsed-msl.bin");
+                let bundle_path = lunco_assets_core::msl_dir().join("parsed-msl.bin");
                 if let Some(parent) = bundle_path.parent() {
                     let _ = std::fs::create_dir_all(parent);
                 }
@@ -1161,7 +1161,7 @@ impl ModelicaCompiler {
                     .insert(id.to_string(), msl_artifact_revision());
                 return rumoca_compile::compile::SourceRootLoadReport {
                     source_set_id: id.to_string(),
-                    source_root_path: lunco_assets::msl_dir()
+                    source_root_path: lunco_assets_core::msl_dir()
                         .join("parsed-msl.bin")
                         .display()
                         .to_string(),
@@ -1720,7 +1720,7 @@ fn build_modelica_core(app: &mut App) {
     // caller wants a sandboxed location (CI, tests).
     #[cfg(not(target_arch = "wasm32"))]
     if std::env::var_os("RUMOCA_CACHE_DIR").is_none() {
-        let target = lunco_assets::cache_dir().join("rumoca");
+        let target = lunco_assets_core::cache_dir().join("rumoca");
         std::env::set_var("RUMOCA_CACHE_DIR", &target);
         log::info!(
             "[ModelicaCorePlugin] using rumoca cache at {} (set RUMOCA_CACHE_DIR to override)",
@@ -1831,7 +1831,13 @@ fn build_modelica_core(app: &mut App) {
         )
         .add_systems(
             FixedUpdate,
-            spawn_modelica_requests.in_set(ModelicaSet::SpawnRequests),
+            spawn_modelica_requests
+                .in_set(ModelicaSet::SpawnRequests)
+                // The shared virtual clock is the sole admission predicate for
+                // continuous Modelica stepping. A held causal barrier may leave
+                // one residual FixedUpdate overstep; do not advance target
+                // clocks or dispatch new requests in that paused boundary.
+                .run_if(lunco_time::simulation_is_running),
         );
 
     #[cfg(target_arch = "wasm32")]
@@ -2004,7 +2010,7 @@ mod source_root_smoke {
     // in the log even if the timing isn't asserted strictly.
 
     fn msl_available() -> bool {
-        lunco_assets::msl_source_root_path().is_some()
+        lunco_assets_core::msl_source_root_path().is_some()
     }
 
     /// Trivial smoke test — compile a self-contained model with no

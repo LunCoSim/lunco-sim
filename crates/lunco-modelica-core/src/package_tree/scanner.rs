@@ -352,7 +352,7 @@ pub fn discover_third_party_libs() -> Vec<(String, String)> {
 }
 
 fn scan_third_party_libs() -> Vec<(String, String)> {
-    let cache = lunco_assets::cache_dir();
+    let cache = lunco_assets_core::cache_dir();
     let Ok(entries) = std::fs::read_dir(&cache) else {
         return Vec::new();
     };

@@ -270,8 +270,8 @@ owner. The unreachable surface branch was removed from `freeflight_system`;
 The implementation reuses the existing coordinate contracts rather than adding
 camera-specific state: `Grid::translation_to_grid` performs the final cell/local
 split, `Grid::grid_position_double` reads the authoritative f64 pose,
-`lunco_core::coords::grid_relative_pose` resolves hierarchy-relative poses, and
-`lunco_core::attach::migrate_to_grid` performs atomic parent/cell/transform
+`lunco_spatial::coords::grid_relative_pose` resolves hierarchy-relative poses, and
+`lunco_spatial::attach::migrate_to_grid` performs atomic parent/cell/transform
 migrations. BigSpace remains responsible for propagation and derived
 `GlobalTransform`; the application owns camera mode and pose policy.
 

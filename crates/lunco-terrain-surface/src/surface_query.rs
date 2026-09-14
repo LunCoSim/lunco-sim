@@ -4,7 +4,7 @@
 //!
 //! The DEM oracle answers in the terrain owner's **local** frame. Streamed tiles
 //! apply that owner's complete pose into its nearest BigSpace grid. This query
-//! performs the same conversion into the one [`lunco_core::ActivePhysicsFrame`]
+//! performs the same conversion into the one [`lunco_spatial::ActivePhysicsFrame`]
 //! before exposing a result. Screen tools therefore cannot accidentally use the
 //! persistent `WorldGrid` while a site scene lives in a rotating lunar branch.
 //!
@@ -26,7 +26,7 @@
 //!
 //! This param **does not expose a `GlobalTransform`**. Its query cannot see one.
 //! The round-trip that caused the bug is not merely discouraged here, it is
-//! unwritable — the same trick [`lunco_core::coords`] used to make render-vs-grid
+//! unwritable — the same trick [`lunco_spatial::coords`] used to make render-vs-grid
 //! mixing a compile error, and [`lunco_physics::GridSpatialQuery`] used to make
 //! "raycast in the wrong frame" a thing you have to opt into by name.
 //!
@@ -36,7 +36,7 @@
 use bevy::ecs::system::SystemParam;
 use bevy::math::{DQuat, DVec3, Dir3};
 use bevy::prelude::*;
-use lunco_core::coords::{GridPos, RenderPos};
+use lunco_spatial::coords::{GridPos, RenderPos};
 use lunco_terrain_core::{normal_at_bounded, HeightSource};
 
 use crate::oracle::DemHeightField;
@@ -97,7 +97,7 @@ pub struct TerrainPoseInPhysicsFrame {
 /// nested grid, so the derived pose is refreshed before input every frame and
 /// only written when its value actually changes.
 pub fn update_terrain_physics_frame_poses(
-    active_frame: Option<Res<lunco_core::ActivePhysicsFrame>>,
+    active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
     terrains: Query<(Entity, Option<&TerrainPoseInPhysicsFrame>), With<DemHeightField>>,
     parents: Query<&ChildOf>,
     grids: Query<&big_space::prelude::Grid>,
@@ -117,7 +117,7 @@ pub fn update_terrain_physics_frame_poses(
 
     for (terrain, current) in &terrains {
         let Some((position, rotation)) =
-            lunco_core::coords::pose_in_grid(terrain, frame, &parents, &grids, &spatial)
+            lunco_spatial::coords::pose_in_grid(terrain, frame, &parents, &grids, &spatial)
         else {
             if current.is_some() {
                 commands
@@ -152,7 +152,7 @@ pub struct GridSurfaceQuery<'w, 's> {
             &'static TerrainPoseInPhysicsFrame,
         ),
     >,
-    active_frame: Option<Res<'w, lunco_core::ActivePhysicsFrame>>,
+    active_frame: Option<Res<'w, lunco_spatial::ActivePhysicsFrame>>,
     grids: Query<'w, 's, &'static big_space::prelude::Grid>,
 }
 
@@ -187,7 +187,7 @@ impl GridSurfaceQuery<'_, '_> {
     /// every screen-space tool makes exactly once, at the top.
     pub fn to_grid(&self, render_point: RenderPos) -> Option<GridPos> {
         let (_, grid) = self.frame()?;
-        Some(lunco_core::coords::render_to_grid_absolute(
+        Some(lunco_spatial::coords::render_to_grid_absolute(
             grid,
             render_point,
         ))
@@ -201,7 +201,7 @@ impl GridSurfaceQuery<'_, '_> {
     /// this once and keep both values together for every downstream query.
     pub fn ray_to_grid(&self, origin: RenderPos, direction: Dir3) -> Option<(GridPos, Dir3)> {
         let (_, grid) = self.frame()?;
-        let origin = lunco_core::coords::render_to_grid_absolute(grid, origin);
+        let origin = lunco_spatial::coords::render_to_grid_absolute(grid, origin);
         let inverse = grid.local_floating_origin().grid_transform().inverse();
         let direction = inverse
             .transform_vector3(direction.as_dvec3())
@@ -518,9 +518,9 @@ mod tests {
         let mut app = App::new();
         let frame = app
             .world_mut()
-            .spawn(lunco_core::WorldGridConfig::default().grid())
+            .spawn(lunco_spatial::WorldGridConfig::default().grid())
             .id();
-        app.insert_resource(lunco_core::ActivePhysicsFrame(frame));
+        app.insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
         let terrain = app
             .world_mut()
             .spawn((DemHeightField(oracle), Transform::IDENTITY, ChildOf(frame)))

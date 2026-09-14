@@ -8,7 +8,7 @@
 //! ([`create_quadsphere_tile_mesh`]), and the tile identity components
 //! ([`TerrainTile`], [`TileCoord`]).
 //!
-//! **The systems that drive it live in [`lunco_celestial::globe_lod`]** —
+//! **The systems that drive it live in [`lunco_celestial_spatial::globe_lod`]** —
 //! `update_globe_lod`, which is registered and runs every frame — because scene
 //! integration (spawn/despawn, grids, textures, appearance intent) needs the
 //! bodies, and `lunco-celestial` owns those. `lunco-usd-avian` also queries
@@ -20,7 +20,7 @@
 //! The globe↔surface handover is supplied by `lunco-celestial`: authored local
 //! DEM footprints clip the globe mesh at the exact tangent-plane square.
 //!
-//! [`lunco_celestial::globe_lod`]: https://docs.rs/lunco-celestial
+//! [`lunco_celestial_spatial::globe_lod`]: https://docs.rs/lunco-celestial-spatial
 
 use bevy::prelude::*;
 

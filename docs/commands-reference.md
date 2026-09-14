@@ -174,12 +174,16 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `ReloadShader`
 
- Force-reload shader assets from disk so live WGSL edits apply without
- restarting the app. Bypasses the file watcher (unreliable in this build):
- calls [`AssetServer::reload`], which re-runs the loader and triggers
- dependent material pipelines to rebuild. Empty `path` → reload the standard
- `assets/shaders/*` set; otherwise reload just that path (e.g.
- `"shaders/wheel.wgsl"`).
+ Force-reload active shader assets from disk so live WGSL edits apply without
+ restarting the app. Calls [`AssetServer::reload`], which re-runs the loader
+ and lets dependent material pipelines rebuild. A bare engine path such as
+ `"shaders/wheel.wgsl"` matches the active default-source and
+ `lunco://shaders/wheel.wgsl` identities; an explicit `lunco://…` or
+ `twin://…` path is matched exactly. An empty `path` reloads every currently
+ loaded WGSL asset. The command returns the queued asset paths and fails
+ visibly when no active asset matches, rather than reporting a successful
+ no-op. The response means reload was queued; shader compilation errors remain
+ visible in the render log.
 
 - *defined in:* `crates/lunco-scene-authoring/src/properties.rs`
 
@@ -231,10 +235,16 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Replace a shader asset's WGSL **source in place** from text sent over the
  API, recompiling it live without touching disk or restarting. Overwrites the
- `Shader` asset currently at `path` (e.g. `"shaders/wheel.wgsl"`), so every
- material using it re-specializes its pipeline next frame. Compile/validation
- outcome surfaces in the render log (naga errors on a bad shader). Pairs with
- [`ReloadShader`] (disk) — this one is for pushing edits directly.
+ active `Shader` asset(s) at `path` (e.g. `"shaders/wheel.wgsl"`), so every
+ material using them re-specializes its pipeline next frame. Bare engine paths
+ resolve the same default-source/`lunco://` identities as `ReloadShader`;
+ explicit sources remain exact. If no matching asset is loaded yet, a bare
+ engine path seeds its canonical `lunco://` asset so a replayed journal edit
+ can be applied before the material is loaded. The response reports the
+ applied paths.
+ Compile/validation outcome surfaces in the render log (naga errors on a bad
+ shader). Pairs with [`ReloadShader`] (disk) — this one is for pushing edits
+ directly.
 
 - *defined in:* `crates/lunco-scene-authoring/src/properties.rs`
 
@@ -335,7 +345,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `entity_id` | `u64` |  API-stable global entity ID from `ListEntities`, resolved to the live  Bevy entity by `ApiEntityRegistry`. |
-| `translation` | `[f64 ; 3]` |  Target translation in the semantic [`lunco_core::ActivePhysicsFrame`].  The concrete BigSpace grid, the entity's actual parent, and the cell/local  split are internal storage details resolved by the observer. The wire  representation is f64 so positions retain precision across API/network  round trips. |
+| `translation` | `[f64 ; 3]` |  Target translation in the semantic [`lunco_spatial::ActivePhysicsFrame`].  The concrete BigSpace grid, the entity's actual parent, and the cell/local  split are internal storage details resolved by the observer. The wire  representation is f64 so positions retain precision across API/network  round trips. |
 
 #### `RotateEntity`
 
@@ -347,7 +357,7 @@ actually call, with the fields the deserializer actually accepts. See the
  script can read an orientation, transform it, and write it back without ever
  converting representation.
 
- The public quaternion is expressed in [`lunco_core::ActivePhysicsFrame`], the
+ The public quaternion is expressed in [`lunco_spatial::ActivePhysicsFrame`], the
  same semantic frame as `MoveEntity`. Rotation is not frame-invariant: a
  rotating body Grid and a rotated assembly parent both change the local
  quaternion that must be stored on the entity. The observer performs that
@@ -415,7 +425,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  planet, spring-arm follow, surface mode), this strips it and reinstates a
  `FreeFlightCamera` at the requested pose — an API client asking for a
  specific view must always get it. `eye` and `target` speak the semantic
- [`lunco_core::ActivePhysicsFrame`]; the concrete grid is resolved from that
+ [`lunco_spatial::ActivePhysicsFrame`]; the concrete grid is resolved from that
  resource so a previous orbit focus or a canonical render-only grid cannot
  put the camera in a different frame.
 
@@ -587,7 +597,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Close one preview session and release all of its presentation resources.
 
-- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -599,7 +609,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  preview session because a session without a presentation view cannot be
  reached from the editor.
 
-- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -657,7 +667,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  This command changes only projected Bevy transforms; it never enters the
  USD document, journal, save state, or simulation projection.
 
-- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -673,7 +683,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Focus an already-open preview session in the USD dock.
 
-- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -683,7 +693,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Focus one presentation view and its parent USD preview session.
 
-- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -693,7 +703,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Fit one preview view to the projected visual bounds of its USD stage.
 
-- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -707,7 +717,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  explicit lease. Other sessions keep their roots, cameras, and stages
  untouched.
 
-- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -721,7 +731,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  The view id is explicit so persisted layouts and agents can address the
  exact camera without relying on tab order or display names.
 
-- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -734,7 +744,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  delta to its camera plane using the current projection and render-target
  viewport.
 
-- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -745,7 +755,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Restore one preview view's default orbit pose and fit it to its stage.
 
-- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -799,7 +809,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  the editor camera; authored USD camera opinions stay read-only presentation
  input and are never rewritten by a navigation gesture.
 
-- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -810,7 +820,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Change which authored/composed snapshot the Text mode displays.
 
-- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -821,7 +831,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Change only the presentation mode of one existing USD preview view.
 
-- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -833,7 +843,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  Zoom one preview view by a positive multiplicative factor. Perspective
  views change orbit distance; orthographic views change projection scale.
 
-- *defined in:* `crates/lunco-usd-ui/src/ui/viewport.rs`
+- *defined in:* `crates/lunco-usd-viewport-ui/src/viewport.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1863,7 +1873,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  Opens a transactional `OrbitCamera` view in the body's explicit star-fixed
  orbit grid. Returning restores the avatar's exact prior surface frame.
 
-- *defined in:* `crates/lunco-celestial/src/commands.rs`
+- *defined in:* `crates/lunco-celestial-spatial/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1873,7 +1883,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Set the connectivity recompute cadence at runtime (any client / language).
 
-- *defined in:* `crates/lunco-celestial/src/link.rs`
+- *defined in:* `crates/lunco-celestial-spatial/src/link.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1885,7 +1895,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Places the camera on the body's Grid in surface-relative mode.
 
-- *defined in:* `crates/lunco-celestial/src/commands.rs`
+- *defined in:* `crates/lunco-celestial-spatial/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|

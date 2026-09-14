@@ -24,7 +24,8 @@ use lunco_doc_bevy::{
 };
 use lunco_status_core::status_bus::{StatusBus, StatusLevel};
 use lunco_usd_bevy_scene::UsdPrimPath;
-use lunco_workbench::{BrowserSectionRegistry, ViewportPlaceholder};
+use lunco_workbench::ViewportPlaceholder;
+use lunco_workbench_browser::{BrowserSectionRegistry, TwinBrowserPlugin};
 use lunco_workbench_core::PanelId;
 
 use lunco_usd_bevy_twin::UsdDocumentUserOwned;
@@ -37,7 +38,6 @@ pub mod browser_section;
 pub mod loaded_stages;
 pub mod scene_files;
 pub mod session_codec;
-pub mod viewport;
 
 /// Stable singleton panel id for the USD wiring graph. The panel renderer is
 /// supplied by the simulator editor, while navigation belongs to the USD
@@ -52,16 +52,6 @@ pub use scene_files::{
     produce_scene_file_view, SceneFileKind, SceneFileRescan, SceneFileRow, SceneFileView,
     SceneFilesSection,
 };
-pub use viewport::{
-    ApplyUsdInspectionPreset, CloseUsdPreview, CloseUsdPreviewView, DeleteUsdInspectionPreset,
-    ExplodeUsdPreview, FocusUsdPreview, FocusUsdPreviewView, FrameUsdPreviewSelection,
-    OpenUsdPreview, OpenUsdPreviewView, SaveUsdInspectionPreset, SetUsdPreviewTextLayer,
-    SetUsdPreviewViewMode, UsdPreviewExplodeAction, UsdPreviewExplodeAxis, UsdPreviewId,
-    UsdPreviewRenderBudget, UsdPreviewSession, UsdPreviewTextLayer, UsdPreviewView,
-    UsdPreviewViewId, UsdPreviewViewMode, UsdPreviewViewPanel, UsdViewportClick, UsdViewportPanel,
-    UsdViewportPlugin, UsdViewportState, EDITOR_PREVIEW_ID, USD_PREVIEW_VIEW_PANEL_ID,
-    USD_VIEWPORT_PANEL_ID,
-};
 
 /// Plugin that installs the USD Twin-browser section and the lifecycle
 /// observers that keep it in sync with the document registry.
@@ -69,6 +59,11 @@ pub struct UsdUiPlugin;
 
 impl Plugin for UsdUiPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<TwinBrowserPlugin>()
+            && app.is_plugin_added::<lunco_workbench::WorkbenchPlugin>()
+        {
+            app.add_plugins(TwinBrowserPlugin);
+        }
         app.init_resource::<LoadedUsdStages>();
         // Change-gated view-model the `UsdSceneSection` reads each frame.
         // The producer refreshes parse caches + flattens stages into it

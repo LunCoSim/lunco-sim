@@ -44,6 +44,10 @@ that need semantics not present in the runtime contract. Runtime UI uses the exi
 egui host and dock geometry; it does not replace the workbench or create a
 second hit-test/camera system.
 
+The standard Twin and Files navigation is the optional
+`lunco-workbench-browser` feature layered on the shell; do not recreate those
+panels in an authored runtime surface.
+
 The shared `lunco-ui::modal` host owns modal queueing, scrim, focus, Esc
 dismissal, outcomes, and the typed `CloseModal` command. Base HUI has no modal
 queue/outcome contract; the optional widget crate only supplies primitive input,
@@ -270,9 +274,17 @@ On native desktop, keep one production `luncosim` process running and edit asset
 | `assets/ui/runtime_surfaces.json` | Surface roots and action registrations are rebuilt. |
 | Rust producer/observer | Rebuild the production binary; replace the session through API `Exit`. |
 
-`ReloadShader` reloads WGSL only. `RunScenario` hot-reloads Rhai only. Neither
-is an HTML/CSS reload. The native file watcher is not present in the headless
-server; web builds use bundled static assets and browser cache rules.
+`ReloadShader` reloads WGSL only. A bare engine path such as
+`shaders/foo.wgsl` resolves whichever active asset identity the renderer holds
+(default source or `lunco://`); explicit `lunco://…` and `twin://…` paths are
+exact. An empty path queues every currently loaded WGSL asset, and an inactive
+target fails visibly instead of being reported as a successful no-op.
+`SetShaderSource` uses the same identity resolution for direct in-memory WGSL
+edits; when a bare target is not loaded yet, it seeds the canonical
+`lunco://` asset for journal replay. `RunScenario` hot-reloads Rhai only. None
+of these commands reloads HTML/CSS. The native file watcher is not present in
+the headless server; web builds use bundled static assets and browser cache
+rules.
 
 HUI caveats: one root per template component, no recursive imports, and a
 nested component template reload may require reloading the top-level template

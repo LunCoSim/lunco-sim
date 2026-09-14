@@ -369,7 +369,7 @@ fn apply_dynamic_fields(
 ///
 /// The prelude is the ergonomic policy layer (drive/distance/arrived/nav/HUD/…)
 /// authored in rhai. Its topic files live under `assets/scripting/prelude/` and are
-/// embedded + enumerated by [`lunco_assets::scripting::prelude_files`] (the
+/// embedded + enumerated by [`lunco_assets_core::scripting::prelude_files`] (the
 /// asset-owning crate) — sorted by stem for a deterministic merge, the files
 /// being pure `fn` definitions so order is semantically irrelevant. Flat
 /// namespace + embedded, identical to compiling one concatenated string, but a
@@ -382,7 +382,7 @@ pub(crate) fn compile_prelude(engine: &Engine) -> Result<AST, String> {
     // Once a source set is selected, an authored parse error is terminal for
     // this engine construction. Running stale embedded helpers would make the
     // visible source disagree with the policy actually executing.
-    let files = lunco_assets::scripting::prelude_files()?;
+    let files = lunco_assets_core::scripting::prelude_files()?;
     compile_prelude_set(engine, files)
 }
 
@@ -616,7 +616,7 @@ fn compile_prelude_set(engine: &Engine, files: Vec<(String, String)>) -> Result<
 ///
 /// Panics if the embedded prelude cannot compile or cannot be installed as the
 /// global module. An engine without its prelude is not a valid runtime.
-pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -> Engine {
+pub fn build_world_engine(sources: lunco_assets_core::script_source::ScriptSources) -> Engine {
     let mut engine = Engine::new();
 
     engine.register_fn(TASK_INVOKER_FN, invoke_task);
@@ -1557,15 +1557,22 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
 
     // dt() -> f64 — the fixed-step integration delta in seconds (1/FIXED_HZ).
     // The per-tick `dt` an on_tick hook should multiply rates by for
-    // frame-rate-independent integration. Falls back to the canonical
-    // SECS_PER_TICK if no `Time<Fixed>` is in scope (e.g. a bare test world).
+    // frame-rate-independent integration. The fixed clock is mandatory in a
+    // running simulation; a missing or invalid clock raises RuntimeFaults.
     engine.register_fn("dt", || -> f64 { bridge_core::dt() });
-    // elapsed_seconds() -> f64 — monotonic simulation seconds since startup, for
-    // second-based timeouts / rate limits (`this.t0`-relative dwell, etc.). Uses
-    // the fixed clock's elapsed time (advances only while the sim steps), 0.0 if
-    // unavailable.
+    // elapsed_seconds() -> f64 — admitted simulation seconds derived from the
+    // deterministic SimTick, for second-based timeouts / rate limits
+    // (`this.t0`-relative dwell, etc.). Scheduler overstep accumulated while a
+    // causal barrier is held is excluded.
     engine.register_fn("elapsed_seconds", || -> f64 {
         bridge_core::elapsed_seconds()
+    });
+    // clock_snapshot() -> #{...} — read every installed clock domain and the
+    // synchronization barrier.  `sim_tick`/`world_sim_s` are deterministic;
+    // `wall_*` values are diagnostics/interaction only and are marked
+    // `wall_time_deterministic: false` in the returned map.
+    engine.register_fn("clock_snapshot", || -> Dynamic {
+        bridge_core::clock_snapshot(&RhaiBuilder)
     });
 
     // twin_root() -> String — absolute path of the ACTIVE twin's folder, i.e. the
@@ -1630,7 +1637,7 @@ pub fn build_world_engine(sources: lunco_assets::script_source::ScriptSources) -
 pub fn validate_tool_library(
     name: &str,
     source: &str,
-    sources: lunco_assets::script_source::ScriptSources,
+    sources: lunco_assets_core::script_source::ScriptSources,
 ) -> Result<Vec<String>, String> {
     let engine = build_world_engine(sources);
     lunco_tools_rhai::validate_rhai_tool_with_engine(name, source, &engine)
@@ -1898,7 +1905,7 @@ pub struct RhaiScenarioRuntime {
     tool_gen: u64,
     /// The script registry backing `import`. Shared (`Arc`) with the engine's
     /// module resolver and with the Bevy resource the asset side fills.
-    sources: lunco_assets::script_source::ScriptSources,
+    sources: lunco_assets_core::script_source::ScriptSources,
 }
 
 impl Default for RhaiScenarioRuntime {
@@ -1908,7 +1915,7 @@ impl Default for RhaiScenarioRuntime {
         // asset-loading side fills) and the copy captured by the engine's module
         // resolver are the same map — a script loaded later is importable without
         // rebuilding the engine.
-        let sources = lunco_assets::script_source::ScriptSources::default();
+        let sources = lunco_assets_core::script_source::ScriptSources::default();
         let mut engine = build_world_engine(sources.clone());
         engine.on_print(|s| info!("[rhai] {s}"));
         let prelude_ast =
@@ -1931,7 +1938,7 @@ impl RhaiScenarioRuntime {
     /// Insert this as a Bevy resource so the asset side and the engine's module
     /// resolver share ONE map — they are `Arc` clones of the same storage, which is
     /// what lets a script loaded after engine construction still be importable.
-    pub fn script_sources(&self) -> lunco_assets::script_source::ScriptSources {
+    pub fn script_sources(&self) -> lunco_assets_core::script_source::ScriptSources {
         self.sources.clone()
     }
 }
@@ -2733,7 +2740,7 @@ pub fn eval_with_world_as(
     // make the REPL a place where imports mysteriously fail — the kind of
     // inconsistency that costs an hour to diagnose.
     let sources = world
-        .get_resource::<lunco_assets::script_source::ScriptSources>()
+        .get_resource::<lunco_assets_core::script_source::ScriptSources>()
         .cloned()
         .unwrap_or_default();
     let mut engine = build_world_engine(sources);
@@ -2793,7 +2800,7 @@ pub fn eval_tool_with_world_as(
 
     use std::sync::{Arc, Mutex};
     let sources = world
-        .get_resource::<lunco_assets::script_source::ScriptSources>()
+        .get_resource::<lunco_assets_core::script_source::ScriptSources>()
         .cloned()
         .unwrap_or_default();
     let mut engine = build_world_engine(sources);
@@ -3071,9 +3078,9 @@ mod tests {
         // crate, so new files are covered automatically (no hand-kept list here).
         // The bundled scenarios include the lander auto-land GUIDANCE, so a
         // syntax slip can't silently disable auto-land at scene load.
-        let examples = lunco_assets::scripting::examples();
-        let tools = lunco_assets::scripting::tool_libraries();
-        let scenarios = lunco_assets::scripting::scenarios();
+        let examples = lunco_assets_core::scripting::examples();
+        let tools = lunco_assets_core::scripting::tool_libraries();
+        let scenarios = lunco_assets_core::scripting::scenarios();
         assert!(
             !examples.is_empty() && !tools.is_empty() && !scenarios.is_empty(),
             "embedded scripting assets empty"
@@ -3138,7 +3145,7 @@ mod tests {
 
     /// Two scripts, one engine, one registry — the shape a scenario compile has.
     fn engine_with_sibling(sibling_id: &str, sibling_src: &str) -> rhai::Engine {
-        let sources = lunco_assets::script_source::ScriptSources::default();
+        let sources = lunco_assets_core::script_source::ScriptSources::default();
         sources.insert(sibling_id, sibling_src);
         super::build_world_engine(sources)
     }
@@ -3479,10 +3486,11 @@ mod tests {
         use bevy::prelude::*;
         use bevy::time::{Fixed, Time};
         let mut world = World::new();
-        let mut t: Time<Fixed> = Default::default();
+        let mut t: Time<Fixed> = Time::from_hz(60.0);
         // Directly advance the fixed clock one step so delta/elapsed are set.
         t.advance_by(std::time::Duration::from_secs_f64(1.0 / 60.0));
         world.insert_resource(t);
+        world.insert_resource(lunco_core::SimTick(1));
 
         let dt: f64 = super::eval_with_world(&mut world, "dt()")
             .unwrap()
@@ -3500,17 +3508,135 @@ mod tests {
     }
 
     #[test]
-    fn dt_falls_back_to_secs_per_tick_without_a_clock() {
+    fn elapsed_uses_admitted_sim_tick_when_the_fixed_clock_has_scheduler_overstep() {
+        use bevy::prelude::*;
+        use bevy::time::{Fixed, Time};
+        let mut world = World::new();
+        let mut fixed: Time<Fixed> = Time::from_hz(60.0);
+        // Simulate a fixed clock that accumulated bookkeeping while a causal
+        // barrier was held: its elapsed value is intentionally ahead of the
+        // admitted simulation tick.
+        fixed.advance_by(std::time::Duration::from_secs(2));
+        world.insert_resource(fixed);
+        world.insert_resource(lunco_core::SimTick(3));
+
+        let elapsed: f64 = super::eval_with_world(&mut world, "elapsed_seconds()")
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert!(
+            (elapsed - 3.0 / 60.0).abs() < 1e-9,
+            "elapsed_seconds() was {elapsed}"
+        );
+    }
+
+    #[test]
+    fn missing_fixed_clock_is_reported_as_a_terminal_contract_fault() {
         use bevy::prelude::World;
         let mut world = World::new();
+        world.insert_resource(lunco_core::RuntimeFaults::default());
         let dt: f64 = super::eval_with_world(&mut world, "dt()")
             .unwrap()
             .trim()
             .parse()
             .unwrap();
         assert!(
-            (dt - lunco_core::SECS_PER_TICK).abs() < 1e-12,
-            "dt() was {dt}"
+            dt.is_nan(),
+            "missing fixed clock must not receive a default: {dt}"
+        );
+        assert_eq!(
+            world
+                .resource::<lunco_core::RuntimeFaults>()
+                .first
+                .as_ref()
+                .unwrap()
+                .kind,
+            "fixed-clock-missing"
+        );
+    }
+
+    #[test]
+    fn clock_snapshot_exposes_the_deterministic_spine_and_barrier() {
+        use bevy::prelude::*;
+        use bevy::time::{Fixed, Real, Time, Virtual};
+
+        let mut world = World::new();
+        let mut fixed = Time::<Fixed>::from_hz(60.0);
+        fixed.advance_by(std::time::Duration::from_secs_f64(1.0 / 60.0));
+        let mut virtual_time = Time::<Virtual>::default();
+        virtual_time.advance_by(std::time::Duration::from_secs_f64(1.0 / 60.0));
+        let mut real = Time::<Real>::default();
+        real.advance_by(std::time::Duration::from_secs_f64(0.25));
+        world.insert_resource(fixed);
+        world.insert_resource(virtual_time);
+        world.insert_resource(real);
+        world.insert_resource(Time::<lunco_physics::Physics>::default());
+        world.insert_resource(lunco_physics::PhysicsDeterminism::from_compute_threads(
+            Some(1),
+        ));
+        world.insert_resource(lunco_core::SimTick(42));
+        world.insert_resource(lunco_time::WorldTime {
+            epoch_jd: 2_451_545.5,
+            sim_secs: 0.7,
+            met_secs: 1.2,
+        });
+        world.insert_resource(lunco_time::MissionClock::anchored(2_451_545.0, 4));
+        world.insert_resource(lunco_time::TimeTransport::default());
+        world.insert_resource(lunco_core::SimulationBarrier {
+            held: true,
+            active_participants: 3,
+            shared_clock_participants: 2,
+            worst_lag_secs: 0.02,
+            worst_entity: None,
+        });
+
+        let value = super::eval_with_world(
+            &mut world,
+            r#"
+                let c = clock_snapshot();
+                if c.sim_tick == 42 && c.fixed_dt_s > 0.016 &&
+                   c.world_sim_s == 0.7 && c.barrier_held &&
+                   c.barrier_active_participants == 3 &&
+                   c.physics_deterministic && c.physics_compute_threads == 1 &&
+                   c.wall_time_deterministic == false &&
+                   c.deterministic_master == "sim_tick" { 1 } else { 0 }
+            "#,
+        )
+        .unwrap();
+        assert_eq!(value.trim(), "1", "clock snapshot was {value}");
+    }
+
+    #[test]
+    fn clock_snapshot_reports_missing_physics_admission_loudly() {
+        use bevy::prelude::*;
+        use bevy::time::{Fixed, Time, Virtual};
+
+        let mut world = World::new();
+        world.insert_resource(Time::<Fixed>::from_hz(60.0));
+        world.insert_resource(Time::<Virtual>::default());
+        world.insert_resource(lunco_core::SimTick(0));
+        world.insert_resource(lunco_core::RuntimeFaults::default());
+
+        let value = super::eval_with_world(
+            &mut world,
+            r#"
+                let c = clock_snapshot();
+                if c.physics_contract_ok == false &&
+                   c.physics_deterministic == false &&
+                   c.physics_contract_error.contains("absent") { 1 } else { 0 }
+            "#,
+        )
+        .unwrap();
+        assert_eq!(value.trim(), "1", "clock snapshot was {value}");
+        assert_eq!(
+            world
+                .resource::<lunco_core::RuntimeFaults>()
+                .first
+                .as_ref()
+                .unwrap()
+                .kind,
+            "physics-determinism-missing"
         );
     }
 
@@ -3606,9 +3732,9 @@ mod tests {
         world.init_resource::<ApiEntityRegistry>();
         world.register_component::<lunco_core::InputPorts>();
         let frame = world
-            .spawn(lunco_core::WorldGridConfig::default().grid())
+            .spawn(lunco_spatial::WorldGridConfig::default().grid())
             .id();
-        world.insert_resource(lunco_core::ActivePhysicsFrame(frame));
+        world.insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
         let real = world
             .spawn((
                 Name::new("/Scene/solar_tower_123"),

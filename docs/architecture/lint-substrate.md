@@ -92,6 +92,7 @@ facts.prims[].connections[].sources[] #{ path, path_valid, prim_exists,
 facts.runtime_connections[] #{ subject, source, source_prim, source_property,
                                direction, port_name, provider, projected,
                                port_exists, pending }  // loaded RunLint only
+facts.control_bindings[] #{ prim, intent, port, valid }
 facts.collision_enabled_without_api[]  ordinary non-terrain, non-wheel paths
                                           authoring `physics:collisionEnabled=true`
                                           without `PhysicsCollisionAPI`; terrain
@@ -124,6 +125,13 @@ policy before a run.
 `prims` is the escape hatch that makes the rhai half real: a rule about a schema
 nobody anticipated (`mass-outside-any-body` is the worked example) needs **no
 Rust change**.
+
+`control_bindings` is a composed-stage projection from the same
+`lunco_core::parse_user_intent` authority used by the loader. Rust supplies only
+the authored binding, port text, and validity bit; `lint_usd.rhai` owns the
+severity and message for an unknown intent. There is no second spelling table
+for suggestions, so adding or removing a canonical intent cannot leave lint
+policy accepting a stale name.
 
 `vehicle_parts` is the composed collision contract for every renderable gprim
 under a `kind = "assembly"` rigid-body root. `contract` is `collider` for a
@@ -342,17 +350,12 @@ of a link inside a link attached to nothing.
 
 ## What keeps it honest
 
-- `crates/lunco-scene-validation/tests/shipped_assets_lint_clean.rs` — every
-  shipped vessel/scene/mission/tutorial must be lint-clean, **and** the
-  deliberately broken scene must still fail through the same path. "All clean"
-  and "the rules never ran" are the same green square without that second test.
-  `assets/components/` is deliberately out of scope: an overlay fragment
-  (`physical_drivetrain.usda` is nothing but joints) cannot answer for
-  joint targets that arrive with the reference arc. Components are covered
-  through the vessels that compose them.
 - `assets/scenes/tests/lint_selftest.usda` + `scenarios/tests/lint_selftest.rhai` —
   the chain end to end (facts → hook → rules → report → query), including the
-  false-positive guard that a correctly jointed nested body stays silent.
+  false-positive guard that a correctly jointed nested body stays silent. This
+  authored scenario is the executable lint gate; its negative USD fixture and
+  Rhai verdict replace a Rust test that walked assets with `std::fs` and called
+  preflight directly.
 - `assets/scenes/tests/connection_preflight.usda` +
   `scenarios/tests/connection_preflight.rhai` — a small standard-USD fixture
   proving terminal command rejection, authored source diagnostics, and the

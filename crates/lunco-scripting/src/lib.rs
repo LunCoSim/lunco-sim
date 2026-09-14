@@ -19,7 +19,7 @@ pub mod dataset_queries;
 pub mod diagnostics;
 pub mod doc;
 /// `import` resolution over the asset pipeline. Holds no path logic of its own —
-/// ids come from `lunco_assets::script_source::ScriptSources`.
+/// ids come from `lunco_assets_core::script_source::ScriptSources`.
 #[cfg(feature = "rhai")]
 pub mod module_resolver;
 #[cfg(feature = "rhai")]
@@ -267,7 +267,9 @@ pub fn register_builtin_policies() -> Result<(), String> {
             "dataset_provisioning",
         ),
         // Renderer Rust publishes shadow-resource facts only; the authored
-        // Rhai policy owns the warning decision and message.
+        // Rhai policy owns the warning decision and message. The render edge
+        // is deliberately opt-in so a headless scripting host stays GPU-free.
+        #[cfg(feature = "render-policy")]
         (
             "render_shadow_quality",
             lunco_render_recovery::RENDER_SHADOW_QUALITY_HOOK,
@@ -310,7 +312,11 @@ pub fn register_builtin_policies() -> Result<(), String> {
         // Direct rover links may use Earth stations, lunar bases, or relays.
         // Rover-to-rover connectivity belongs to a separate authored radio
         // system, not the generic direct-link graph.
-        ("link", lunco_celestial::link::LINK_HOOK, "link_connected"),
+        (
+            "link",
+            lunco_celestial_spatial::link::LINK_HOOK,
+            "link_connected",
+        ),
         // LINT policies — one per DOMAIN, because a USD rule, a script rule and a
         // Modelica rule share no vocabulary and no audience. The domain crate
         // gathers facts and calls `lunco_lint::run_lint(domain, facts)`; the rules
@@ -325,7 +331,7 @@ pub fn register_builtin_policies() -> Result<(), String> {
         // an authored `link.connected` hook overrides the verdict, and routing is
         // rhai over `query("Links")` — see doc 49 / prelude/links.rhai.)
     ];
-    let sources = match lunco_assets::scripting::policy_files() {
+    let sources = match lunco_assets_core::scripting::policy_files() {
         Ok(sources) => sources,
         Err(error) => {
             error!("[policy] active policy assets could not be loaded: {error}");
@@ -385,7 +391,7 @@ impl Plugin for LunCoScriptingPlugin {
         }
         // `.rhai` source asset loader — backs `info:sourceAsset` (file-referenced
         // scenarios). It belongs to the Rhai feature because its discovery and
-        // import registry are owned by `lunco-assets`.
+        // import registry are owned by `lunco-assets-core`.
         #[cfg(feature = "rhai")]
         if !app.is_plugin_added::<source_asset::RhaiSourceAssetPlugin>() {
             app.add_plugins(source_asset::RhaiSourceAssetPlugin);
@@ -449,7 +455,8 @@ impl Plugin for LunCoScriptingPlugin {
                 FixedUpdate,
                 run_scripted_models
                     .in_set(ScriptingSet)
-                    .run_if(scenario::scenario_execution_enabled),
+                    .run_if(scenario::scenario_execution_enabled)
+                    .run_if(scenario::simulation_is_running),
             );
         }
 
@@ -571,7 +578,8 @@ impl Plugin for LunCoScriptingPlugin {
                 // deterministic physics timing.
                 world_bridge::tick_rhai_scenarios
                     .in_set(ScriptingSet)
-                    .run_if(scenario::scenario_execution_enabled),
+                    .run_if(scenario::scenario_execution_enabled)
+                    .run_if(scenario::simulation_is_running),
             );
             app.add_systems(
                 Update,
@@ -830,7 +838,7 @@ mod journal_tests {
     }
 }
 
-#[cfg(all(test, feature = "rhai"))]
+#[cfg(all(test, feature = "rhai", feature = "render-policy"))]
 mod policy_tests {
     use super::*;
 

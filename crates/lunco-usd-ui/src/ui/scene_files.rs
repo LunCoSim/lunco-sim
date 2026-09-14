@@ -2,7 +2,7 @@
 //!
 //! # Why this is not the Files section
 //!
-//! [`FilesSection`](lunco_workbench::FilesSection) shows a FOLDER (the active
+//! [`FilesSection`](lunco_workbench_browser::FilesSection) shows a FOLDER (the active
 //! Twin's tree) and [`UsdSceneSection`](crate::browser_section::UsdSceneSection)
 //! shows the open STAGES. Neither answers "what is this scene composed of", which
 //! is a graph question: a scene pulls its rovers from `assets/vessels/…`, those
@@ -13,9 +13,9 @@
 //! # The `lunco://` hole this had to close first
 //!
 //! Shipped assets are REQUIRED to be referenced as `@lunco://…@`, and
-//! [`lunco_assets::transitive_file_closure`] drops every schemed arc because it
+//! [`lunco_assets_core::transitive_file_closure`] drops every schemed arc because it
 //! has no resolver — so the plain walk reports a library-built scene as one
-//! file. This section uses [`lunco_assets::transitive_file_closure_with`] and
+//! file. This section uses [`lunco_assets_core::transitive_file_closure_with`] and
 //! supplies the resolver: `lunco://` against the shipped asset root, `twin://`
 //! against [`TwinRoots`]. USD dependency interpretation comes from
 //! `lunco-usd-compose`; asset traversal and storage stay in `lunco-assets`.
@@ -42,12 +42,12 @@ use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_assets::TwinRoots;
+use lunco_assets_core::TwinRoots;
 use lunco_doc::DocumentOrigin;
 use lunco_doc_bevy::{DocumentRegistry, OpenFile};
-use lunco_workbench::twin_browser::BrowserQuery;
-use lunco_workbench::twin_browser::BrowserScope;
-use lunco_workbench::{BrowserAction, BrowserCtx, BrowserSection};
+use lunco_workbench_browser::{
+    BrowserAction, BrowserCtx, BrowserQuery, BrowserScope, BrowserSection,
+};
 
 use lunco_usd_core::commands::is_usd_path;
 use lunco_usd_core::document::UsdDocument;
@@ -162,14 +162,14 @@ fn resolve_scheme(
     assets_root: Option<&Path>,
     twins: Option<&TwinRoots>,
 ) -> Option<PathBuf> {
-    if let Some(rel) = lunco_assets::parse_lunco_uri(reference) {
-        if !lunco_assets::asset_path::is_safe_relative_path(rel) {
+    if let Some(rel) = lunco_assets_core::parse_lunco_uri(reference) {
+        if !lunco_assets_core::asset_path::is_safe_relative_path(rel) {
             return None;
         }
         return Some(assets_root?.join(rel));
     }
-    if let Some((name, rel)) = lunco_assets::parse_twin_uri(reference) {
-        let relative = lunco_assets::asset_path::relative_path(rel)?;
+    if let Some((name, rel)) = lunco_assets_core::parse_twin_uri(reference) {
+        let relative = lunco_assets_core::asset_path::relative_path(rel)?;
         return match twins?.resolve_file(name, &relative) {
             Ok(path) => path,
             Err(error) => {
@@ -187,11 +187,11 @@ fn resolve_scheme(
 /// which is the point — the browser must list the files the engine would load.
 fn assets_root_for(roots: &[PathBuf]) -> Option<PathBuf> {
     for r in roots {
-        if let Some(found) = lunco_assets::shipped_asset_root(r) {
+        if let Some(found) = lunco_assets_core::shipped_asset_root(r) {
             return Some(found.to_path_buf());
         }
     }
-    let cwd = lunco_assets::assets_dir_abs();
+    let cwd = lunco_assets_core::assets_dir_abs();
     cwd.is_dir().then_some(cwd)
 }
 
@@ -250,7 +250,7 @@ pub fn produce_scene_file_view(
 
     let assets_root = assets_root_for(&roots);
     let unresolved = std::sync::atomic::AtomicUsize::new(0);
-    let files = lunco_assets::transitive_file_closure_with(
+    let files = lunco_assets_core::transitive_file_closure_with(
         &roots,
         |reference| {
             let resolved = resolve_scheme(reference, assets_root.as_deref(), twins.as_deref());
@@ -538,8 +538,12 @@ mod tests {
     fn twin_references_resolve_against_the_mounted_root() {
         let root = tempfile::tempdir().expect("temporary Twin root");
         let scene = root.path().join("scenes/base.usda");
-        std::fs::create_dir_all(scene.parent().expect("scene parent")).unwrap();
-        std::fs::write(&scene, "#usda 1.0\n").unwrap();
+        lunco_storage::FileStorage::new()
+            .write_sync(
+                &lunco_storage::StorageHandle::File(scene.clone()),
+                b"#usda 1.0\n",
+            )
+            .unwrap();
         let twins = TwinRoots::default();
         let name = twins
             .register("moonbase", root.path())

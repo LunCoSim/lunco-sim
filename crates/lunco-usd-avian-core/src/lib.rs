@@ -14,7 +14,7 @@
 //! domain (`grid_relative_pose` / `pose_in_grid`): render `GlobalTransform`s are big_space's
 //! alone; physics `Position`/`Rotation` are fed from (and written back to)
 //! `CellCoord` + `Transform` truth. The `Position` frame is the explicit
-//! [`lunco_core::ActivePhysicsFrame`] selected for the loaded physical site.
+//! [`lunco_spatial::ActivePhysicsFrame`] selected for the loaded physical site.
 //! Every Avian body and collider uses that one frame; sibling BigSpace branches
 //! are converted through their nearest shared grid. A body-fixed surface frame
 //! therefore keeps Avian local and stationary while the render hierarchy
@@ -70,7 +70,7 @@ use bevy::ecs::entity::{EntityHashMap, EntityHashSet};
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
-use lunco_core::coords::{
+use lunco_spatial::coords::{
     cell_local_remainder, compose_cell_local, grid_relative_pose_seeded,
     grid_transform_between_grids, pose_in_grid, pose_in_grid_seeded, GridPos, GridRot,
 };
@@ -138,7 +138,7 @@ struct PhysicsFrameContractStatus {
 }
 
 fn physics_frame_contract_is_valid(
-    active: Option<Res<lunco_core::ActivePhysicsFrame>>,
+    active: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
     diagnostics: Option<Res<lunco_core::RuntimeDiagnostics>>,
     q_physical: Query<Entity, Or<(With<RigidBody>, With<Collider>)>>,
     q_parents: Query<&ChildOf>,
@@ -155,7 +155,7 @@ fn physics_frame_contract_is_valid(
             .any(|finding| finding.producer == "usd-avian")
     }) && q_grids.get(active.0).is_ok()
         && q_physical.iter().all(|entity| {
-            lunco_core::coords::pose_in_grid(entity, active.0, &q_parents, &q_grids, &q_spatial)
+            lunco_spatial::coords::pose_in_grid(entity, active.0, &q_parents, &q_grids, &q_spatial)
                 .is_some()
         })
 }
@@ -189,7 +189,7 @@ fn physics_subject(entity: Entity, name: Option<&Name>, prim_path: Option<&UsdPr
 /// frame. The full walk remains authoritative, but it only runs when an input
 /// that can change that answer was actually admitted.
 fn physics_frame_contract_inputs_changed(
-    active: Option<Res<lunco_core::ActivePhysicsFrame>>,
+    active: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
     q_changed: Query<
         (),
         Or<(
@@ -221,7 +221,7 @@ fn physics_frame_contract_inputs_changed(
 /// explicitly bound frame; selecting another grid would create load-order
 /// dependent physics and hide the ownership error.
 fn validate_physics_frame_contract(
-    active: Option<Res<lunco_core::ActivePhysicsFrame>>,
+    active: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
     q_physical: Query<Entity, Or<(With<RigidBody>, With<Collider>)>>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
@@ -263,7 +263,7 @@ fn validate_physics_frame_contract(
             });
         } else {
             for entity in &q_physical {
-                if lunco_core::coords::pose_in_grid(
+                if lunco_spatial::coords::pose_in_grid(
                     entity, active.0, &q_parents, &q_grids, &q_spatial,
                 )
                 .is_none()
@@ -302,7 +302,7 @@ fn validate_physics_frame_contract(
 /// physics hold; this pass only refreshes the shared gate for the entities now
 /// present in the fixed schedule.
 fn refresh_physics_frame_contract(
-    active: Option<Res<lunco_core::ActivePhysicsFrame>>,
+    active: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
     diagnostics: Option<Res<lunco_core::RuntimeDiagnostics>>,
     q_physical: Query<Entity, Or<(With<RigidBody>, With<Collider>)>>,
     q_parents: Query<&ChildOf>,
@@ -918,7 +918,7 @@ fn pose_to_position(
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     q_frame_boundary_changes: Query<(), Or<(Changed<ChildOf>, Changed<CellCoord>)>>,
-    active_frame: Res<lunco_core::ActivePhysicsFrame>,
+    active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
     mut frame_state: ResMut<PhysicsFrameTransportState>,
     q_sleeping: Query<(), (With<Sleeping>, With<RigidBody>)>,
     mut moved: Local<EntityHashSet>,
@@ -1279,7 +1279,7 @@ fn position_to_pose(
     mut commands: Commands,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
-    active_frame: Res<lunco_core::ActivePhysicsFrame>,
+    active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
     // Chain nodes that are not bodies or colliders (grids, plain group
     // nodes). Disjoint from `q_dyn`'s `&mut Transform` via the filters.
     q_plain: Query<(Option<&CellCoord>, &Transform), (Without<RigidBody>, Without<Collider>)>,
@@ -1612,7 +1612,7 @@ mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
     use bevy::ecs::system::SystemState;
-    use lunco_core::coords::world_pose;
+    use lunco_spatial::coords::world_pose;
 
     #[test]
     fn disconnected_physics_is_held_before_solver_admission() {

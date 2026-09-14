@@ -150,7 +150,7 @@ fn apply_usd_shader_material_read(
     // identically downstream: the string comparisons below, the `@fragment` pre-check,
     // and `engine_asset_uri` re-adding the scheme for the loader. A `twin://` custom
     // shader is left schemed and passes through untouched.
-    let shader_path = lunco_assets::engine_asset_rel(&raw_shader_path).to_string();
+    let shader_path = lunco_assets_core::engine_asset_rel(&raw_shader_path).to_string();
 
     // ROBUSTNESS: refuse a shader that isn't a usable material shader. A pure
     // library (`#define_import_path`, meant to be `#import`ed — e.g.
@@ -237,8 +237,8 @@ fn apply_usd_shader_material_read(
     // engine library so it resolves from ANYWHERE — including with an external Twin
     // open, where Bevy's default source is the wrong root and the shipped shader
     // would miss (→ a black-hole ShaderMaterial). An already-schemed `twin://…`
-    // custom shader is passed through untouched. See `lunco_assets::engine_asset_uri`.
-    let shader = lunco_assets::engine_asset_uri(&resolved_shader_path);
+    // custom shader is passed through untouched. See `lunco_assets_core::engine_asset_uri`.
+    let shader = lunco_assets_core::engine_asset_uri(&resolved_shader_path);
     // `primvars:doNotCastShadows` — read on the GPRIM, not on the shader, because
     // two prims sharing one material can legitimately disagree about casting. Same
     // attribute and same polarity the `PbrLook` path reads in `lunco-usd-bevy`;
@@ -338,7 +338,9 @@ fn apply_usd_shader_material_read(
         .then(|| {
             reader
                 .asset(&shader_prim, "info:wgsl:vertexAsset")
-                .map(|raw| lunco_assets::engine_asset_uri(lunco_assets::engine_asset_rel(&raw)))
+                .map(|raw| {
+                    lunco_assets_core::engine_asset_uri(lunco_assets_core::engine_asset_rel(&raw))
+                })
         })
         .flatten();
     let look = ShaderLook {
@@ -385,11 +387,11 @@ fn shader_has_fragment_entry(shader_path: &str) -> bool {
     // so a schemed reference is inspected at its real path rather than becoming a
     // bogus `assets/lunco://…` segment that never exists (→ a wrong veto that would
     // starve the wheel's `ShaderLook` and deadlock physics on a render-only visual).
-    let Some(full) = lunco_assets::engine_asset_local_path(shader_path) else {
+    let Some(full) = lunco_assets_core::engine_asset_local_path(shader_path) else {
         // Another scheme's root (`twin://…`) — can't inspect it here; don't veto.
         return true;
     };
-    match lunco_assets::read_asset_file_string(&full) {
+    match lunco_assets_core::read_asset_file_string(&full) {
         // Check the CODE portion of each line (before any `//`), so an EXAMPLE
         // `@fragment` inside a doc comment — as library shaders like pbr_lit.wgsl
         // carry to show how to import them — isn't mistaken for a real entry point.

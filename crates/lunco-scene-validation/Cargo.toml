@@ -9,7 +9,7 @@ description = "Production asset, loaded-stage, and Twin validation for LunCoSim"
 bevy = { workspace = true, features = ["bevy_asset"] }
 openusd = { workspace = true }
 lunco-api = { path = "../lunco-api" }
-lunco-assets = { path = "../lunco-assets" }
+lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-core = { path = "../lunco-core" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
@@ -20,6 +20,7 @@ lunco-lint = { path = "../lunco-lint" }
 lunco-materials = { path = "../lunco-materials" }
 lunco-modelica-ast = { path = "../lunco-modelica-ast" }
 lunco-sysml-ast = { path = "../lunco-sysml-ast" }
+lunco-sysml-report = { path = "../lunco-sysml-report" }
 lunco-tools = { path = "../lunco-tools" }
 lunco-twin = { path = "../lunco-twin" }
 lunco-usd-avian-lint = { path = "../lunco-usd-avian-lint" }
@@ -35,7 +36,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
-lunco-physics = { path = "../lunco-physics" }
 tempfile = { workspace = true }
 
 [lints]

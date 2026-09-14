@@ -9,6 +9,46 @@ fn evidence_error(message) {
     #{ ok: false, kind: "physics_evidence", error: message }
 }
 
+/// Validate the runtime's deterministic admission spine before comparing any
+/// physical samples.  A scene test should call this once near its start and
+/// carry the returned report into its verdict; this keeps clock/thread policy
+/// generic instead of reimplementing tick arithmetic in each Twin.
+fn determinism_acceptance() {
+    let clocks = clock_snapshot();
+    if clocks == () {
+        return #{ ok: false, kind: "determinism_contract", errors: [
+            "clock_snapshot was unavailable",
+        ]};
+    }
+    let errors = [];
+    if clocks.clock_contract_ok != true {
+        errors.push(if clocks.clock_contract_error == "" {
+            "simulation clock contract is invalid"
+        } else {
+            clocks.clock_contract_error
+        });
+    }
+    if clocks.physics_contract_ok != true {
+        errors.push(if clocks.physics_contract_error == "" {
+            "physics determinism admission is invalid"
+        } else {
+            clocks.physics_contract_error
+        });
+    }
+    if clocks.physics_deterministic != true {
+        errors.push("physics compute order is not pinned to a deterministic pool");
+    }
+    if clocks.physics_compute_threads != 1 {
+        errors.push("deterministic acceptance requires exactly one compute thread");
+    }
+    #{
+        ok: errors.len() == 0,
+        kind: "determinism_contract",
+        errors: errors,
+        clocks: clocks,
+    }
+}
+
 /// Capture one entity's pose, velocity, speed, contact manifold, and optional
 /// joint-drive facts at the current simulation instant.
 fn sample(entity) {

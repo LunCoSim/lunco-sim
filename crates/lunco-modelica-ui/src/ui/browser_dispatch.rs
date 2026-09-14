@@ -1,4 +1,4 @@
-//! Drains [`lunco_workbench::BrowserActions`] and routes each into the
+//! Drains [`lunco_workbench_browser::BrowserActions`] and routes each into the
 //! appropriate Modelica subsystem.
 //!
 //! Sections push abstract intents (`OpenFile`, `OpenModelicaClass`)
@@ -11,7 +11,7 @@
 //! the source when it lands.
 
 use bevy::prelude::*;
-use lunco_workbench::{BrowserAction, BrowserActions};
+use lunco_workbench_browser::{BrowserAction, BrowserActions};
 
 /// Drain the Twin Browser action outbox each frame and dispatch.
 ///

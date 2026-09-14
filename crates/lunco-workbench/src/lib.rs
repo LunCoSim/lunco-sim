@@ -83,14 +83,12 @@ mod viewport;
 
 pub mod control_status;
 pub mod file_ops;
-pub mod files_panel;
 pub mod guided_overlay;
 pub mod input_overlay;
 pub mod perf_hud;
 pub mod perspective_command;
 pub mod picker;
 pub mod theme_command;
-pub mod twin_browser;
 pub mod uri;
 pub mod window_command;
 pub mod window_persistence;
@@ -244,12 +242,6 @@ impl HelpAnchors {
     }
 }
 pub use editor_tabs::{EditorTab, EditorTabId, EditorTabs};
-pub use files_panel::{FilesPanel, FILES_PANEL_ID};
-pub use twin_browser::{
-    BrowserAction, BrowserActions, BrowserCtx, BrowserQuery, BrowserSection,
-    BrowserSectionRegistry, FilesSection, LuncoLibrarySection, TwinBrowserPanel, UnsavedDocEntry,
-    UnsavedDocs, TWIN_BROWSER_PANEL_ID,
-};
 pub use uri::{UriClicked, UriHandler, UriRegistry, UriResolution};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -647,35 +639,6 @@ fn drain_pending_panel_focus(
     }
 }
 
-/// Drain panel-navigation intents emitted by Twin Browser sections.
-///
-/// Sections are rendered while `WorkbenchLayout` is temporarily removed from
-/// the world, so they cannot focus a panel inline. Keeping this small bridge
-/// in the shell gives every domain the same navigation path and leaves panel
-/// ownership with the workbench.
-fn drain_browser_navigation(world: &mut World) {
-    let actions = {
-        let Some(mut outbox) = world.get_resource_mut::<BrowserActions>() else {
-            return;
-        };
-        outbox.take_where(|action| matches!(action, BrowserAction::OpenPanel { .. }))
-    };
-    if actions.is_empty() {
-        return;
-    }
-
-    let Some(mut layout) = world.get_resource_mut::<WorkbenchLayout>() else {
-        bevy::log::warn!("Twin Browser emitted panel navigation before WorkbenchLayout was ready");
-        return;
-    };
-    for action in actions {
-        let BrowserAction::OpenPanel { id } = action else {
-            unreachable!("browser navigation filter returned a non-navigation action")
-        };
-        focus_panel_now(&mut layout, &id);
-    }
-}
-
 register_commands!(on_focus_panel,);
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -748,6 +711,14 @@ pub use viewport::{
     EguiPointerState, PanelRect, PanelRects, ScenePickGate, SceneTarget, ViewportPanel,
     ViewportPlaceholder, WorkbenchEguiHost, WorkbenchViewportPlugin, VIEWPORT_PANEL_ID,
 };
+
+/// Return whether a path belongs to the generic source-only text viewer.
+///
+/// Shared UI features such as the Twin browser use this predicate to avoid
+/// duplicating the source-routing policy owned by the workbench editor.
+pub fn is_source_only_text_path(path: &std::path::Path) -> bool {
+    source_viewer::is_source_only_text_path(path)
+}
 
 /// Get the backdrop colour from the active theme.
 fn get_panel_backdrop(theme: &lunco_theme::Theme) -> egui::Color32 {
@@ -1032,16 +1003,7 @@ impl Plugin for WorkbenchPlugin {
             .init_resource::<HelpAnchors>()
             .init_resource::<DockSizes>()
             .init_resource::<PendingTabCloses>()
-            // Twin Browser plumbing — resources are always present so
-            // the panel renders an empty state cleanly when no Twin is
-            // open and no domain sections have registered yet. The
-            // active Twin is tracked on `WorkspaceResource` (installed
-            // by `WorkspacePlugin` above), not a panel-local resource.
-            .init_resource::<BrowserSectionRegistry>()
-            .init_resource::<BrowserActions>()
-            .init_resource::<BrowserQuery>()
             .init_resource::<twin_settings::TwinSettingsView>()
-            .init_resource::<UnsavedDocs>()
             .init_resource::<EditorTabs<source_viewer::SourceTabState>>()
             .init_resource::<source_viewer::PendingSourceRequests>()
             .init_resource::<source_viewer::PendingSourceReads>()
@@ -1056,7 +1018,6 @@ impl Plugin for WorkbenchPlugin {
             .add_observer(on_open_tab_preserve_focus)
             .add_observer(on_close_tab)
             .add_observer(source_viewer::close_source_state_on_twin_closed)
-            .add_observer(twin_browser::clear_browser_state_on_twin_closed)
             .add_observer(twin_settings::clear_on_twin_closed)
             .add_systems(
                 Update,
@@ -1104,7 +1065,6 @@ impl Plugin for WorkbenchPlugin {
             bevy::prelude::Update,
             (maintain_dock_widths, drain_pending_panel_focus),
         )
-        .add_systems(bevy::prelude::Update, drain_browser_navigation)
         .add_systems(
             Startup,
             (
@@ -1112,22 +1072,6 @@ impl Plugin for WorkbenchPlugin {
                 register_workbench_appearance_settings_menu,
             ),
         );
-
-        // Built-in Files section ships with the workbench so apps get
-        // a usable browser even before any domain plugin registers.
-        // Registered after init_resource so the registry definitely
-        // exists. Domain crates push their sections (Modelica, USD, …)
-        // from their own plugin's build, which runs after ours.
-        app.world_mut()
-            .resource_mut::<BrowserSectionRegistry>()
-            .register(FilesSection::default());
-        // LunCo Library: the engine's bundled `assets/`, listed above Files
-        // (order 150 < 200). Names only; click opens as read-only text via
-        // `OpenSourceView`. Registered here, next to FilesSection, so every app
-        // gets the reference collection without a per-app hook.
-        app.world_mut()
-            .resource_mut::<BrowserSectionRegistry>()
-            .register(twin_browser::LuncoLibrarySection::default());
     }
 }
 

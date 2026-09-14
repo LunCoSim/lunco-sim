@@ -24,7 +24,7 @@ struct SceneCommands {
 fn app() -> App {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins);
-    lunco_assets::register_lunco_asset_sources(&mut app);
+    lunco_assets_core::register_lunco_asset_sources(&mut app);
     app.add_plugins(AssetPlugin::default());
     app.init_asset::<UsdSourceText>()
         .register_asset_loader(UsdSourceTextLoader)

@@ -442,7 +442,7 @@ On a native desktop session, the Bevy asset watcher reloads runtime UI assets:
 | `assets/ui/runtime_surfaces.json` | The manifest bridge replaces the registered surface roots and re-registers actions. | No |
 | `assets/ui/runtime_fonts.css` | The stylesheet is reapplied; verify the font asset is available. | No, normally |
 | Rust exposure producer or action observer | Requires a rebuild of the production binary and a controlled session replacement. | Yes |
-| `ReloadShader` | Reloads WGSL materials only; it is not an HTML/CSS reload. | No, but unrelated |
+| `ReloadShader` | Queues reload for active WGSL assets only; bare engine paths resolve the live default-source/`lunco://` identity, explicit sources stay exact, and an empty path covers every loaded WGSL asset. A missing active target fails visibly. | No, but unrelated |
 | `RunScenario` | Hot-reloads Rhai policy only; it is not an HTML/CSS reload. | No, but unrelated |
 
 Keep one production `luncosim` process while editing assets. For a rebuilt

@@ -10,7 +10,6 @@ pub mod experiments;
 pub mod graphs;
 pub mod inspector;
 pub mod journal;
-pub mod log;
 pub mod model_view;
 pub mod package_browser;
 pub mod palette;

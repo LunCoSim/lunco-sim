@@ -47,7 +47,7 @@
 //!
 //! Everything is drawn from `GlobalTransform` — the render frame —
 //! never from avian `Position` (grid-absolute is NOT the render frame,
-//! see `lunco_core::coords`). Grid-frame *vectors* (`tire_force`,
+//! see `lunco_spatial::coords`). Grid-frame *vectors* (`tire_force`,
 //! `Gravity`) are used as directions only: big_space grids never
 //! rotate, so grid and render frames share orientation.
 //!
@@ -75,9 +75,9 @@ use avian3d::prelude::{
 };
 use bevy::color::palettes::tailwind;
 use bevy::prelude::*;
-use lunco_core::coords::ancestor_grid_anchor;
-use lunco_core::GridAnchor;
 use lunco_mobility::WheelRaycast;
+use lunco_spatial::coords::ancestor_grid_anchor;
+use lunco_spatial::GridAnchor;
 
 use lunco_scene_selection::SelectedEntities;
 
