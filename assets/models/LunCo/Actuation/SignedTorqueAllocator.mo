@@ -54,10 +54,14 @@ equation
   z_negative = max(0.0, min(1.0,
     -desired_torque_z / max(1.0e-9, max_torque_z)));
 
-  pitch_pos_a_valve = x_positive;
-  pitch_pos_b_valve = x_negative;
-  pitch_neg_a_valve = x_positive;
-  pitch_neg_b_valve = x_negative;
+  // The authored X-moment nozzles are mounted at opposite Z arms.  Their
+  // local -Y thrust therefore gives the A pair a negative X moment and the B
+  // pair a positive X moment.  Keep the normalized signed request aligned
+  // with the physical wrench rather than with the historical port suffix.
+  pitch_pos_a_valve = x_negative;
+  pitch_pos_b_valve = x_positive;
+  pitch_neg_a_valve = x_negative;
+  pitch_neg_b_valve = x_positive;
 
   // The vehicle's Z-moment pair is cross-named by the historical USD port
   // identities.  The physical mount remains the source of truth; these

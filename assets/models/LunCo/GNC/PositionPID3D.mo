@@ -88,6 +88,8 @@ model PositionPID3D
     "Smallest thrust acceleration used in throttle normalization (m/s²)";
   input Real minimum_engine_alignment = 0.55
     "Minimum upward projection before the main engine may light";
+  parameter Real lateral_support_threshold_mps2 = 0.05
+    "Lateral acceleration deadband before hover support is requested (m/s²)";
 
   // The airframe uses normalized guidance commands.
   input Real piloted = 0.0 "1 while a pilot owns the vehicle";
@@ -398,7 +400,7 @@ equation
   // the COM landing datum and can hold a vehicle above its own pad forever.
   landing_flare_gate = max(0.0, min(1.0, altimeter_altitude_confidence))
     * max(0.0, min(1.0,
-      altitude_above_target
+      (landing_flare_range_m - altitude_above_target)
         / max(1.0e-9, landing_flare_range_m)));
   // A lateral acceleration request is a thrust-vector request, not an
   // independent force channel.  Allowing the vertical law to coast at zero
@@ -409,9 +411,15 @@ equation
   // below then limits lateral acceleration to the amount that this hover thrust
   // can realize.  Solving lateral/tan(tilt) here would add upward acceleration
   // to a channel whose value is the gravity-compensating thrust component.
+  // Tiny numerical observer corrections must not turn a commanded descent
+  // into a permanent hover. Require a meaningful lateral demand before
+  // reserving the full gravity-supporting vertical component, then ramp the
+  // support over one deadband width so the transition stays bounded and
+  // reusable across vehicles.
   lateral_support_vertical_command = g * max(0.0, min(1.0,
-    lateral_accel_magnitude / max(minimum_vertical_accel_mps2,
-      lateral_accel_magnitude)));
+    (lateral_accel_magnitude - lateral_support_threshold_mps2)
+      / max(minimum_vertical_accel_mps2,
+        lateral_support_threshold_mps2)));
   vertical_limiter.command = max(
     target_contact_engine_gate * (g + pid_y_command),
     landing_flare_gate
