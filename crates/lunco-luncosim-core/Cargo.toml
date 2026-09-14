@@ -44,6 +44,8 @@ lunco-usd-sim-cosim = { path = "../lunco-usd-sim-cosim" }
 lunco-usd-sim-domain = { path = "../lunco-usd-sim-domain" }
 lunco-usd-terrain = { path = "../lunco-usd-terrain" }
 lunco-scene-commands = { path = "../lunco-scene-commands" }
+lunco-scene-camera = { path = "../lunco-scene-camera" }
+lunco-scene-selection = { path = "../lunco-scene-selection" }
 lunco-scene-authoring = { path = "../lunco-scene-authoring" }
 lunco-scene-validation = { path = "../lunco-scene-validation" }
 lunco-web = { workspace = true }

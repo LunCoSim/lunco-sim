@@ -7479,7 +7479,9 @@ dependencies = [
  "lunco-obstacle-field",
  "lunco-physics",
  "lunco-scene-authoring",
+ "lunco-scene-camera",
  "lunco-scene-commands",
+ "lunco-scene-selection",
  "lunco-scene-validation",
  "lunco-scripting",
  "lunco-storage",
@@ -7515,8 +7517,10 @@ dependencies = [
  "lunco-core",
  "lunco-physics",
  "lunco-render",
+ "lunco-scene-camera",
  "lunco-scene-catalog",
  "lunco-scene-commands",
+ "lunco-scene-selection",
  "lunco-terrain-surface",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
@@ -7550,8 +7554,10 @@ dependencies = [
  "lunco-physics",
  "lunco-render",
  "lunco-scene-authoring",
+ "lunco-scene-camera",
  "lunco-scene-catalog",
  "lunco-scene-commands",
+ "lunco-scene-selection",
  "lunco-scripting",
  "lunco-settings",
  "lunco-terrain-surface",
@@ -7589,7 +7595,7 @@ dependencies = [
  "lunco-hooks",
  "lunco-mobility",
  "lunco-networking",
- "lunco-scene-commands",
+ "lunco-scene-selection",
  "lunco-signal",
  "lunco-terrain-surface",
  "lunco-twin",
@@ -7637,8 +7643,10 @@ dependencies = [
  "lunco-modelica-ui",
  "lunco-networking",
  "lunco-render",
+ "lunco-scene-camera",
  "lunco-scene-catalog",
  "lunco-scene-commands",
+ "lunco-scene-selection",
  "lunco-scripting",
  "lunco-settings",
  "lunco-status-core",
@@ -7976,6 +7984,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-scene-camera"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "big_space",
+ "lunco-api",
+ "lunco-avatar",
+ "lunco-celestial",
+ "lunco-core",
+ "lunco-environment",
+ "lunco-scene-selection",
+ "lunco-usd-bevy-scene",
+]
+
+[[package]]
 name = "lunco-scene-catalog"
 version = "0.1.0"
 dependencies = [
@@ -8004,8 +8027,6 @@ dependencies = [
  "big_space",
  "lunco-api",
  "lunco-assets",
- "lunco-avatar",
- "lunco-celestial",
  "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",
@@ -8014,7 +8035,7 @@ dependencies = [
  "lunco-scene-authoring",
  "lunco-scene-catalog",
  "lunco-scene-queries",
- "lunco-signal",
+ "lunco-scene-selection",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-light",
  "lunco-usd-bevy-scene",
@@ -8043,6 +8064,15 @@ dependencies = [
  "lunco-usd-core",
  "openusd",
  "serde_json",
+]
+
+[[package]]
+name = "lunco-scene-selection"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "lunco-core",
+ "lunco-signal",
 ]
 
 [[package]]

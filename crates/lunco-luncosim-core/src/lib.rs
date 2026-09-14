@@ -2019,6 +2019,8 @@ impl Plugin for LunCoSimHeadlessPlugin {
         // (the connect baseline is empty) because nothing marks the rovers. The
         // gizmo/selection/physics-viz halves of `SceneEditPlugin` stay UI-only.
         app.add_plugins(lunco_scene_commands::commands::SpawnCommandPlugin);
+        app.add_plugins(lunco_scene_camera::SceneCameraCommandPlugin);
+        app.add_plugins(lunco_scene_selection::SceneSelectionPlugin);
 
         // No winit event loop drives updates headless. Realtime mode uses the
         // fixed cadence as the server's wall-clock pacing; max-speed mode feeds

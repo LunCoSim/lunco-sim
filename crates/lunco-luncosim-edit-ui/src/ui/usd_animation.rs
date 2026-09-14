@@ -100,7 +100,7 @@ fn type_for_channel<R: UsdRead>(stage: &R, path: &SdfPath, name: &str) -> Option
 
 /// Rebuild keyable channels for the selected prim in every open Editor preview.
 pub fn produce_usd_animation_view(
-    selected: Option<Res<lunco_scene_commands::SelectedEntities>>,
+    selected: Option<Res<lunco_scene_selection::SelectedEntities>>,
     target: Option<Res<crate::InspectorTarget>>,
     q: Query<&UsdPrimPath>,
     q_parents: Query<&ChildOf>,

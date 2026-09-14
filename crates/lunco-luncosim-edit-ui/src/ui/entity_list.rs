@@ -12,7 +12,7 @@
 //! [`populate_entity_tree_view`], a change-driven system that only re-derives
 //! when the scene topology actually changes (see [`scene_topology_changed`]),
 //! and stores the render-ready result in the [`EntityTreeView`] resource.
-//! `render` reads that resource and the authoritative [`lunco_scene_commands::SelectedEntities`]
+//! `render` reads that resource and the authoritative [`lunco_scene_selection::SelectedEntities`]
 //! directly, and routes clicks through the same `apply_selection` path as
 //! before. Nothing is scanned, walked, or sorted while painting.
 
@@ -823,7 +823,7 @@ fn render_node(
     ui: &mut egui::Ui,
     entity: Entity,
     view: &EntityTreeView,
-    selected: &lunco_scene_commands::SelectedEntities,
+    selected: &lunco_scene_selection::SelectedEntities,
     to_select: &mut Option<(Entity, bool)>,
     to_focus: &mut Option<Entity>,
 ) {
@@ -891,7 +891,7 @@ fn select_label(
     entity: Entity,
     label: &str,
     full_identity: Option<&str>,
-    selected: &lunco_scene_commands::SelectedEntities,
+    selected: &lunco_scene_selection::SelectedEntities,
     to_select: &mut Option<(Entity, bool)>,
     to_focus: &mut Option<Entity>,
 ) -> bool {
@@ -932,7 +932,7 @@ fn entity_list_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
 
     // Authoritative selection — read directly (small, cheap); never shadowed.
     let selected = ctx
-        .resource::<lunco_scene_commands::SelectedEntities>()
+        .resource::<lunco_scene_selection::SelectedEntities>()
         .cloned()
         .unwrap_or_default();
 
@@ -991,7 +991,7 @@ fn entity_list_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
             .and_then(|r| r.api_id_for(entity))
             .map(|g| g.get());
         if let Some(id) = id {
-            ctx.trigger(lunco_scene_commands::commands::FocusEntityById {
+            ctx.trigger(lunco_scene_camera::FocusEntityById {
                 entity_id: id,
                 distance: 0.0,
             });

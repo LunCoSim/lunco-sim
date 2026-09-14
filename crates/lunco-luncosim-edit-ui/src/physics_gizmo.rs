@@ -79,7 +79,7 @@ use lunco_core::coords::ancestor_grid_anchor;
 use lunco_core::GridAnchor;
 use lunco_mobility::WheelRaycast;
 
-use lunco_scene_commands::SelectedEntities;
+use lunco_scene_selection::SelectedEntities;
 
 // ── Visual constants ─────────────────────────────────────────────────────
 

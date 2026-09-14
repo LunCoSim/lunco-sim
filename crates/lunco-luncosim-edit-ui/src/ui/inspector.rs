@@ -25,7 +25,7 @@ use lunco_render::{PbrLook, SceneCamera};
 
 use lunco_obstacle_field::{plugin::UpdateObstacleFieldSpec, ObstacleFieldSpec, Pattern};
 
-use lunco_scene_commands::SelectedEntities;
+use lunco_scene_selection::SelectedEntities;
 // Doc resolution + material-binding walk: headless-safe, shared verbatim with the
 // command layer (which is why they don't live in this panel — see `doc_resolve`).
 use lunco_scene_authoring::doc_resolve::{
@@ -1027,7 +1027,7 @@ pub(crate) fn inspector_inputs_changed(
     mut joint_poll: Local<f32>,
     time: Res<Time>,
     view: Res<InspectorView>,
-    selection: Res<lunco_scene_commands::SelectedEntities>,
+    selection: Res<lunco_scene_selection::SelectedEntities>,
     ambient: Option<Res<bevy::light::GlobalAmbientLight>>,
     // The SAME sun the producer reads (non-preview, non-fill), so the comparison
     // is against the value that would land in the view.

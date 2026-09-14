@@ -216,7 +216,7 @@ fn scalar_unit(type_name: &str, joint_type: &str, name: &str) -> String {
 
 /// Rebuild authored joint state for every open preview lease.
 pub fn produce_usd_joint_view(
-    selected: Option<Res<lunco_scene_commands::SelectedEntities>>,
+    selected: Option<Res<lunco_scene_selection::SelectedEntities>>,
     target: Option<Res<crate::InspectorTarget>>,
     q: Query<&UsdPrimPath>,
     q_parents: Query<&ChildOf>,

@@ -132,7 +132,7 @@ fn classify_real(raw: Option<f64>, min: f64, max: f64) -> (f64, bool, bool, Opti
 /// View-model producer: harvest the selected prim's `customData`-ranged
 /// attributes into [`UsdParamView`].
 pub fn produce_usd_param_view(
-    selected: Option<Res<lunco_scene_commands::SelectedEntities>>,
+    selected: Option<Res<lunco_scene_selection::SelectedEntities>>,
     target: Option<Res<crate::InspectorTarget>>,
     q: Query<&UsdPrimPath>,
     q_parents: Query<&ChildOf>,

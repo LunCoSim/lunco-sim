@@ -29,7 +29,7 @@ use bevy::picking::pointer::{PointerButton, PointerId};
 use bevy::prelude::*;
 use lunco_controller::ControllerLink;
 use lunco_core::{TelemetryEvent, TelemetryValue, TheLocalAvatar};
-use lunco_scene_commands::SelectedEntities;
+use lunco_scene_selection::SelectedEntities;
 use std::collections::HashSet;
 
 /// Build the language-neutral map passed to a script tool. The map is an

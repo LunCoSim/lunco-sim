@@ -106,7 +106,7 @@ fn leaf(path: &str) -> String {
 
 /// View-model producer: resolve each advertised socket's snap for the selected host.
 pub fn produce_usd_mount_view(
-    selected: Option<Res<lunco_scene_commands::SelectedEntities>>,
+    selected: Option<Res<lunco_scene_selection::SelectedEntities>>,
     q: Query<&UsdPrimPath>,
     q_parents: Query<&ChildOf>,
     stages: Res<Assets<UsdStageAsset>>,

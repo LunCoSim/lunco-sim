@@ -8,7 +8,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_controller::ControllerLink;
 use lunco_core::{GlobalEntityId, TheLocalAvatar};
-use lunco_scene_commands::SelectedEntities;
+use lunco_scene_selection::SelectedEntities;
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
 #[derive(Resource, Default, Clone)]

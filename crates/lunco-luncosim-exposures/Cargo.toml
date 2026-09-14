@@ -17,7 +17,7 @@ lunco-cosim = { path = "../lunco-cosim" }
 lunco-hooks = { path = "../lunco-hooks" }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-networking = { path = "../lunco-networking", default-features = false, optional = true }
-lunco-scene-commands = { path = "../lunco-scene-commands" }
+lunco-scene-selection = { path = "../lunco-scene-selection" }
 lunco-signal = { path = "../lunco-signal" }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-twin = { path = "../lunco-twin" }

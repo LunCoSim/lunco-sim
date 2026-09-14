@@ -14,7 +14,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_doc::DocumentId;
 use lunco_modelica_core::state::ModelicaDocumentRegistry;
-use lunco_scene_commands::SelectedEntities;
+use lunco_scene_selection::SelectedEntities;
 use lunco_scripting::doc::{ScriptLanguage, ScriptedModel};
 use lunco_scripting::ScriptRegistry;
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};

@@ -1400,7 +1400,7 @@ mod tests {
 
     #[test]
     fn test_possessed_entity_gizmo_restoration() {
-        use lunco_scene_commands::SelectedEntities;
+        use lunco_scene_selection::SelectedEntities;
 
         let mut app = App::new();
         app.init_resource::<SelectedEntities>();
@@ -1489,7 +1489,7 @@ mod tests {
     /// the user had merely nudged. Hence `Option`: `None` means remove.
     #[test]
     fn dragging_a_non_body_leaves_it_a_non_body() {
-        use lunco_scene_commands::SelectedEntities;
+        use lunco_scene_selection::SelectedEntities;
 
         let mut app = App::new();
         app.init_resource::<SelectedEntities>();

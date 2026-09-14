@@ -33,7 +33,7 @@ use lunco_cosim::JointTorqueActuator;
 use lunco_mobility::WheelRaycast;
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
-use lunco_scene_commands::SelectedEntities;
+use lunco_scene_selection::SelectedEntities;
 
 // ─────────────────────────────────────────────────────────────────────
 // View-model

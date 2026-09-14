@@ -53,7 +53,7 @@ contracts; they are not silently folded into a global visual registry.
 | Physical frame | `ActivePhysicsFrame`, `GridAnchor`, and BigSpace attachment helpers | target pose conversion; never guessed from camera state |
 | Collider shape and attachment | Avian `Collider`, `ColliderOf`, `ColliderTransform`, and the USD/Avian projection | collider snapshot |
 | Authored collider facts | composed USD `StageView` with standard `UsdGeom` + `UsdPhysics` | identity/diagnostic explanation only; never a second runtime collider |
-| Selection | `lunco_scene_commands::SelectedEntities` | default target policy, when explicitly requested |
+| Selection | `lunco_scene_selection::SelectedEntities` | default target policy, when explicitly requested |
 | Tool discovery | `lunco-tools` and `lunco-tools-rhai` | optional Rhai source library; no per-tool registry |
 | Scene teardown | `SceneTeardown`, `SceneMountState`, `TwinClosed` | lease revocation and store reset |
 
