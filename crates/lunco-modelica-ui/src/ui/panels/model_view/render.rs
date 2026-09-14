@@ -1053,16 +1053,16 @@ fn render_icon_view(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
             .next()
             .unwrap_or(&qualified)
             .to_string();
-        let sub = crate::icon_paint::TextSubstitution {
+        let sub = lunco_modelica_icon_ui::TextSubstitution {
             name: Some(short_name.as_str()),
             class_name: Some(short_name.as_str()),
             parameters: (!parameters.is_empty()).then_some(parameters.as_slice()),
         };
-        crate::icon_paint::paint_graphics_themed(
+        lunco_modelica_icon_ui::paint_graphics_themed(
             painter,
             icon_rect,
             icon.coordinate_system,
-            crate::icon_paint::IconOrientation::default(),
+            lunco_modelica_icon_ui::IconOrientation::default(),
             Some(&sub),
             None,
             Some(&theme.modelica_icons),

@@ -3,9 +3,10 @@
 Modelica workbench UI and `lunica` application facade for LunCoSim.
 
 The headless compiler, document runtime, simulation worker, and CLI tools live
-in [`lunco-modelica-core`](../lunco-modelica-core/). This package adds the
-egui/workbench presentation and composes the core runtime for the standalone
-workbench.
+in [`lunco-modelica-core`](../lunco-modelica-core/). The reusable Modelica
+graphics renderer lives in [`lunco-modelica-icon-ui`](../lunco-modelica-icon-ui/).
+This package adds the egui/workbench presentation and composes the core runtime
+for the standalone workbench.
 
 ## What This Crate Does
 

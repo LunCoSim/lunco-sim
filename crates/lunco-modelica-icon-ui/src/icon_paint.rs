@@ -9,7 +9,8 @@
 //! - the source [`CoordinateSystem`] (Modelica diagram extent, +Y up,
 //!   typically `{{-100,-100},{100,100}}`),
 //! - the slice of [`GraphicItem`]s from
-//!   [`crate::annotations::Icon::graphics`] / `Diagram::graphics`.
+//!   [`lunco_modelica_core::annotations::Icon::graphics`] /
+//!   `Diagram::graphics`.
 //!
 //! The painter maps source → destination with a uniform-scale fit
 //! that preserves aspect ratio (Dymola/OMEdit do the same — non-square
@@ -20,7 +21,7 @@
 
 use bevy_egui::egui;
 
-use crate::annotations::{
+use lunco_modelica_core::annotations::{
     Arrow, Bitmap, Color, CoordinateSystem, Ellipse, EllipseClosure, Extent, FillPattern,
     GraphicItem, Line, LinePattern, Point, Polygon, Rectangle, Text,
 };
@@ -398,7 +399,7 @@ impl CoordXform {
     /// Apply a graphic primitive's local origin + rotation, then
     /// project to screen. `origin` is in Modelica coords, `rotation`
     /// is degrees CCW (matches MLS Annex D). Per-instance orientation
-    /// (rotation + mirror) gets applied by [`crate::ui::icon_paint::to_screen`] downstream.
+    /// (rotation + mirror) gets applied by [`coord_xform_oriented`] downstream.
     pub fn to_screen_rotated(&self, p: Point, origin: Point, rotation_deg: f64) -> egui::Pos2 {
         let theta = (rotation_deg as f32).to_radians();
         let (s, c) = theta.sin_cos();
@@ -1014,7 +1015,7 @@ fn paint_bitmap(painter: &egui::Painter, xf: &CoordXform, b: &Bitmap) {
 /// string so `modelica://Pkg/icon.png` and a plain `icon.png` hit
 /// different slots (they resolve differently).
 fn texture_for_bitmap(ctx: &egui::Context, filename: &str) -> Option<egui::TextureHandle> {
-    use crate::icon_memo::SourceMemo;
+    use lunco_modelica_core::icon_memo::SourceMemo;
     use std::sync::{Mutex, OnceLock};
     // The memo stores `Option<TextureHandle>` so a failed load is remembered and not
     // retried every frame (failure is usually a missing asset, not a transient

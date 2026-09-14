@@ -25,6 +25,7 @@ members = [
     "crates/lunco-hardware",
     "crates/lunco-mobility",
     "crates/lunco-modelica-ui",
+    "crates/lunco-modelica-icon-ui",
     "crates/lunco-modelica-core",
     "crates/lunco-modelica-api",
     "crates/lunco-modelica-ast",

@@ -7898,6 +7898,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-modelica-icon-ui"
+version = "0.1.0"
+dependencies = [
+ "bevy_egui",
+ "image",
+ "lunco-assets-core",
+ "lunco-modelica-core",
+ "lunco-storage",
+ "lunco-theme",
+ "lyon_geom",
+ "lyon_path",
+ "lyon_tessellation",
+]
+
+[[package]]
 name = "lunco-modelica-runtime"
 version = "0.1.0"
 dependencies = [
@@ -7926,7 +7941,6 @@ dependencies = [
  "futures-lite",
  "getrandom 0.3.4",
  "htmd",
- "image",
  "log",
  "lunco-api",
  "lunco-api-transport",
@@ -7940,6 +7954,7 @@ dependencies = [
  "lunco-modelica-api",
  "lunco-modelica-ast",
  "lunco-modelica-core",
+ "lunco-modelica-icon-ui",
  "lunco-modelica-runtime",
  "lunco-scripting",
  "lunco-settings",
@@ -7959,9 +7974,6 @@ dependencies = [
  "lunco-workbench-datasets-ui",
  "lunco-workspace",
  "lunco-workspace-api",
- "lyon_geom",
- "lyon_path",
- "lyon_tessellation",
  "regex",
  "rumoca-compile",
  "rumoca-tool-fmt",

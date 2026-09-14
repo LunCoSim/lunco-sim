@@ -91,7 +91,7 @@ pub(super) fn render_error_overlay(
 ///
 /// Card layout:
 /// 1. **Hero strip** — the class's authored `Icon(graphics={...})`
-///    annotation rendered via [`crate::icon_paint::paint_graphics`].
+///    annotation rendered via [`lunco_modelica_icon_ui::paint_graphics`].
 ///    For classes without one, a stylised type-badge (M / B / C / …).
 /// 2. **Heading** — class name + type label.
 /// 3. **Symbol bands** — named parameters / inputs / outputs (top 6
@@ -185,7 +185,7 @@ pub(super) fn render_empty_diagram_overlay(
             let hero_size = egui::vec2(120.0, 72.0);
             let (_, hero_rect) = child.allocate_space(hero_size);
             if let Some(icon) = &icon {
-                crate::icon_paint::paint_graphics(
+                lunco_modelica_icon_ui::paint_graphics(
                     child.painter(),
                     hero_rect,
                     icon.coordinate_system,

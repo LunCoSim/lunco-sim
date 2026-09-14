@@ -90,7 +90,6 @@ pub use commands::{CompileModel, CreateNewScratchModel, ModelicaCommandsPlugin};
 
 pub mod class_display;
 pub mod context;
-pub mod icon_paint;
 pub mod image_loader;
 /// Debounced AST reparse driver — see module docs.
 pub mod input_activity;

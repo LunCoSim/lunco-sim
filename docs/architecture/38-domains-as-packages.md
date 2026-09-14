@@ -186,7 +186,7 @@ projections run both ways. Four representations, each edge a descriptor-supplied
 
   **2D icons/diagrams → reachable NOW, no rumoca changes.** Every Modelica class carries structured
   graphics: `annotations::Icon.graphics: Vec<GraphicItem>` — `Rectangle/Line/Polygon/Text/Ellipse/Bitmap`
-  with full attrs (`lunco-modelica-core/src/annotations/graphics.rs`), already **rendered** (`lunco-modelica-ui/src/ui/icon_paint.rs`)
+  with full attrs (`lunco-modelica-core/src/annotations/graphics.rs`), already **rendered** (`lunco-modelica-icon-ui/src/icon_paint.rs`)
   and already **animated by sim outputs** via MLS §18 DynamicSelect (`extent_dynamic`,
   `text_string_dynamic`). A viz projection can surface a model's schematic as a USD overlay / HUD /
   billboard — free, because the data + renderer + animation binding all exist.
