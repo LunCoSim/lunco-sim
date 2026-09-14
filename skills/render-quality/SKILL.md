@@ -25,6 +25,10 @@ runtime binder projects that intent to Bevy.
    and `primvars:doNotCastShadows` before changing material brightness. A
    renderer fallback that silently removes shadows is a failure to surface,
    not a quality setting to hide.
+   Treat packed surface-map AO as indirect-light visibility: it belongs in
+   Bevy's PBR diffuse-occlusion input, not in authored albedo or direct-sun
+   multiplication. If broad terrain colour patches match a low-frequency AO
+   map, inspect that channel routing before touching assets or exposure.
 4. Compare a settled frame sequence, not one screenshot. Fast color changes
    usually indicate changing inputs, repeated derived bakes, missing asset
    readiness, or unstable lighting—not a reason to clamp the image in a

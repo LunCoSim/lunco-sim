@@ -84,13 +84,16 @@ fn map_weights(r: f32) -> vec3<f32> {
 /// role is authored by USD versus supplied by the DEM bake. Keeping this in the
 /// shared surface module prevents a path from silently treating a bound derived
 /// texture as authored (or ignoring it altogether). The returned lanes are
-/// `(normal, roughness, AO, relief-tone)` weights.
+/// `(normal, roughness, AO, relief-tone)` weights. Relief tone is a derived
+/// colour fallback, so an authored albedo suppresses it by the same amount as
+/// the procedural colour layers.
 fn terrain_map_weights(
     map_footprint: f32,
     derived_surface_on: f32,
     derived_normal_on: f32,
     authored_surface_on: f32,
     authored_normal_on: f32,
+    authored_albedo_weight: f32,
     authored_rough: f32,
     authored_ao: f32,
     authored_normal: f32,
@@ -99,7 +102,8 @@ fn terrain_map_weights(
     var weight_normal = derived.x * derived_normal_on;
     var weight_ao = derived.y * derived_surface_on;
     var weight_rough = 0.35 * derived.y * derived_surface_on;
-    var weight_tone = derived.z * derived_normal_on;
+    var weight_tone = derived.z * derived_normal_on
+        * (1.0 - clamp(authored_albedo_weight, 0.0, 1.0));
     if (authored_normal_on > 0.5) {
         weight_normal = authored_normal;
         weight_tone = 0.0;
@@ -109,6 +113,25 @@ fn terrain_map_weights(
         weight_ao = authored_ao;
     }
     return vec4(weight_normal, weight_rough, weight_ao, weight_tone);
+}
+
+/// Resolve the packed surface map's ambient-occlusion channel.
+///
+/// AO is indirect-light visibility, not base colour. Keep this transfer shared
+/// so the static and streamed terrain paths agree on the source semantics, then
+/// feed the result to Bevy's `PbrInput.diffuse_occlusion`. Multiplying it into
+/// albedo makes a low-frequency derived field look like broad paint patches and
+/// also darkens direct sunlight, which is not what ambient occlusion means.
+fn terrain_surface_occlusion(
+    surface: vec4<f32>,
+    weight_ao: f32,
+    authored_surface_on: f32,
+) -> f32 {
+    var occlusion = mix(1.0, 0.4 + 0.6 * surface.g, weight_ao);
+    if (authored_surface_on > 0.5) {
+        occlusion = mix(1.0, surface.g, weight_ao);
+    }
+    return clamp(occlusion, 0.0, 1.0);
 }
 
 /// Decode the normal-map convention shared by the DEM baker and terrain

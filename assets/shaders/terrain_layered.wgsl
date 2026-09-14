@@ -38,7 +38,7 @@
 }
 #import lunco::horizon::sun_visibility_resolved
 #import lunco::lunar::{orthophoto_factor, regolith_factor}
-#import lunco::terrain::{aa_fade, bump_layer, dem_normal_to_world, layer_height, ramp, surface_fbm, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position, terrain_map_weights}
+#import lunco::terrain::{aa_fade, bump_layer, dem_normal_to_world, layer_height, ramp, surface_fbm, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position, terrain_map_weights, terrain_surface_occlusion}
 
 //!@ui      albedo            color       "Albedo"
 //!@default albedo            0.13,0.13,0.13
@@ -265,6 +265,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         mat.derived_normal_on,
         mat.authored_surface_on,
         mat.authored_normal_on,
+        authored_albedo_weight,
         mat.weight_rough,
         mat.weight_ao,
         mat.weight_normal,
@@ -273,6 +274,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     let map_weight_rough = map_weights.y;
     let map_weight_ao = map_weights.z;
     let map_weight_tone = map_weights.w;
+    var map_ao = 1.0;
     // Albedo: the real colour mosaic is a percentile-stretched contrast map, not
     // linear reflectance. The shared transfer bounds its tone modulation so map
     // extrema cannot collapse the ground to black or wash it to white. It must
@@ -289,11 +291,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // Surface pack: R=roughness, G=AO (B=rockDens, A=hazard consumed elsewhere).
     if (map_weight_rough > 0.0 || map_weight_ao > 0.0) {
         roughness = clamp(mix(roughness, map_s.r, map_weight_rough), 0.05, 1.0);
-        var map_ao = mix(1.0, 0.4 + 0.6 * map_s.g, map_weight_ao);
-        if (mat.authored_surface_on > 0.5) {
-            map_ao = mix(1.0, map_s.g, map_weight_ao);
-        }
-        albedo *= map_ao;
+        map_ao = terrain_surface_occlusion(
+            map_s, map_weight_ao, mat.authored_surface_on);
     }
     // Normal: perturb the procedural WORLD normal toward the map's baked
     // DEM-local ENU normal.  The mesh instance is the authoritative
@@ -319,6 +318,10 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     pbr_input.is_orthographic = view.clip_from_view[3].w == 1.0;
     pbr_input.N = n;
     pbr_input.V = pbr_functions::calculate_view(in.world_position, pbr_input.is_orthographic);
+    // AO belongs to indirect diffuse light. Keeping it out of base colour
+    // preserves the authored orthophoto and prevents the derived low-frequency
+    // field from becoming broad albedo patches or suppressing direct sunlight.
+    pbr_input.diffuse_occlusion = vec3(map_ao);
     var lunar_k = 1.0;
     let sw = mat.sun_dir_world;
     if (dot(sw, sw) > 0.25) {

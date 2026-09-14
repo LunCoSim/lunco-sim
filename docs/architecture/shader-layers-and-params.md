@@ -101,6 +101,13 @@ the layered static path attenuates its procedural dust/mottle term by
 photometry remain independent. This keeps a real orthophoto spatially stable
 instead of overlaying unrelated fine-scale colour noise on it.
 
+The packed surface map's G channel is ambient occlusion. Both terrain paths
+resolve it through `lunco::terrain::terrain_surface_occlusion` and pass the
+result to Bevy's `PbrInput.diffuse_occlusion` (the shared
+`lunco::pbr_lit::lit_n_occluded` helper is used by the streamed path). AO is
+therefore applied to indirect diffuse light only; it is not an albedo term and
+must not be multiplied into the authored colour raster or direct sunlight.
+
 The render binder also materialises a complete mip chain for filterable authored
 RGBA8 maps when a `ShaderLook` first references them or an image version changes.
 This is a deduplicated,
