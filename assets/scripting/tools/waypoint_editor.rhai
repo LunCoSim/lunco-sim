@@ -308,6 +308,10 @@ fn ribbon_geometry_path(route) {
     ribbon_path(route) + "/Geometry"
 }
 
+fn ribbon_width_matches(widths) {
+    widths != () && widths.len() == 1 && (widths[0] - 0.5).abs() < 0.001
+}
+
 fn ribbon_needs_update(doc, ribbon, geometry, anchor, local_points, local_normals) {
     if !prim_exists(doc, ribbon) { return true; }
     let root = query("QueryUsdPrim", #{
@@ -329,7 +333,7 @@ fn ribbon_needs_update(doc, ribbon, geometry, anchor, local_points, local_normal
         || shape.attrs["type"] != "linear"
         || shape.attrs["wrap"] != "nonperiodic"
         || shape.attrs["curveVertexCounts"] != [local_points.len()]
-        || shape.attrs["widths"] != [1.5]
+        || !ribbon_width_matches(shape.attrs["widths"])
         || !points_equal(shape.attrs["points"], local_points)
         || !points_equal(shape.attrs["normals"], local_normals) {
         return true;
@@ -422,7 +426,7 @@ fn ribbon_ops(doc, route, points) {
         path: geometry,
         name: "widths",
         type_name: "float[]",
-        value: "[1.5]",
+        value: "[0.5]",
     }});
     ops.push(#{ SetAttribute: #{
         edit_target: "@runtime@",
