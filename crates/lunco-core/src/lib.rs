@@ -1135,10 +1135,13 @@ fn reset_core_scene_state(
 /// systems use. `effective_speed`, not `relative_speed`: the spine expresses
 /// "frozen" with Bevy's paused flag (which zeroes the former but not the latter),
 /// because `relative_speed` is a rate that consumers divide by.
-/// `Time<Virtual>` is read optionally: a bare world without Bevy's
-/// `TimePlugin` (e.g. a headless unit test) is treated as running.
+/// `Time<Virtual>` is the mandatory admission clock. A schedule that omitted
+/// it (for example, a partially constructed host) fails closed instead of
+/// advancing the master tick outside the shared time spine.
 fn advance_sim_tick(mut tick: ResMut<SimTick>, vtime: Option<Res<Time<Virtual>>>) {
-    let running = vtime.is_none_or(|t| !t.is_paused() && t.relative_speed_f64() > 0.0);
+    // The core time spine is mandatory in a running app. A bare schedule that
+    // omitted Time<Virtual> must not silently advance the master tick.
+    let running = vtime.is_some_and(|t| !t.is_paused() && t.relative_speed_f64() > 0.0);
     if running {
         tick.0 = tick.0.wrapping_add(1);
     }

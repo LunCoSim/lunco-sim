@@ -37,12 +37,13 @@ use avian3d::dynamics::solver::{
     solver_body::{SolverBody, SolverBodyInertia},
     xpbd::{joints::PrismaticJointSolverData, XpbdConstraint},
 };
+pub use avian3d::prelude::Physics;
 use avian3d::prelude::{
     AngularVelocity, ComputedCenterOfMass, ContactGraph, CustomPositionIntegration, JointDisabled,
-    LinearVelocity, Physics, Position, PrismaticJoint, RigidBody, RigidBodyColliders,
-    RigidBodyDisabled, Rotation, Sensor,
+    LinearVelocity, Position, PrismaticJoint, RigidBody, RigidBodyColliders, RigidBodyDisabled,
+    Rotation, Sensor,
 };
-use avian3d::schedule::PhysicsTime;
+pub use avian3d::schedule::PhysicsTime;
 use bevy::ecs::schedule::ApplyDeferred;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
@@ -69,8 +70,7 @@ pub use support::{
     PhysicsInitializationInvalid, PhysicsInitializationPending, PhysicsInitializationPolicy,
     PhysicsInitializationSubject, PhysicsJointDetachSet, PhysicsJointLink, PhysicsJointPending,
     PhysicsSupportContact, PhysicsSupportFootprint, PhysicsSupportSet,
-    PHYSICS_INITIALIZATION_HOOK_PREFIX,
-    STRICT_AUTHORED_INITIALIZATION_POLICY,
+    PHYSICS_INITIALIZATION_HOOK_PREFIX, STRICT_AUTHORED_INITIALIZATION_POLICY,
 };
 
 /// Number of Avian solver substeps in one authoritative fixed physics tick.

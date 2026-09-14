@@ -446,7 +446,8 @@ impl Plugin for LunCoScriptingPlugin {
                 FixedUpdate,
                 run_scripted_models
                     .in_set(ScriptingSet)
-                    .run_if(scenario::scenario_execution_enabled),
+                    .run_if(scenario::scenario_execution_enabled)
+                    .run_if(scenario::simulation_is_running),
             );
         }
 
@@ -567,7 +568,8 @@ impl Plugin for LunCoScriptingPlugin {
                 // deterministic physics timing.
                 world_bridge::tick_rhai_scenarios
                     .in_set(ScriptingSet)
-                    .run_if(scenario::scenario_execution_enabled),
+                    .run_if(scenario::scenario_execution_enabled)
+                    .run_if(scenario::simulation_is_running),
             );
             app.add_systems(
                 Update,

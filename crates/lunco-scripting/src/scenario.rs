@@ -117,7 +117,7 @@ pub fn open_scenarios_when_scene_ready(
 
 /// Run condition for scenario lifecycle systems.
 pub fn scenario_execution_enabled(gate: Option<Res<ScenarioExecutionGate>>) -> bool {
-    gate.is_none_or(|gate| gate.enabled)
+    gate.is_some_and(|gate| gate.enabled)
 }
 
 /// Run condition for the paused-simulation scenario pass.
@@ -127,6 +127,15 @@ pub fn scenario_execution_enabled(gate: Option<Res<ScenarioExecutionGate>>) -> b
 /// is stopped; it never advances `on_tick`, task, or mission work.
 pub fn simulation_is_paused(time: Option<Res<Time<Virtual>>>) -> bool {
     time.is_some_and(|time| time.is_paused())
+}
+
+/// Run condition for continuous fixed-step scenario behavior. Every consumer
+/// that mutates simulation state must use the same virtual-clock predicate as
+/// the time spine and co-simulation master; otherwise a residual fixed overstep
+/// can execute `on_tick` while the shared barrier is paused and advance Rhai
+/// state without advancing `SimTick` or physics.
+pub fn simulation_is_running(time: Option<Res<Time<Virtual>>>) -> bool {
+    lunco_time::simulation_is_running(time)
 }
 
 #[cfg(test)]

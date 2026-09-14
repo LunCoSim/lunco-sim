@@ -1831,7 +1831,13 @@ fn build_modelica_core(app: &mut App) {
         )
         .add_systems(
             FixedUpdate,
-            spawn_modelica_requests.in_set(ModelicaSet::SpawnRequests),
+            spawn_modelica_requests
+                .in_set(ModelicaSet::SpawnRequests)
+                // The shared virtual clock is the sole admission predicate for
+                // continuous Modelica stepping. A held causal barrier may leave
+                // one residual FixedUpdate overstep; do not advance target
+                // clocks or dispatch new requests in that paused boundary.
+                .run_if(lunco_time::simulation_is_running),
         );
 
     #[cfg(target_arch = "wasm32")]
