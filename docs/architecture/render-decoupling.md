@@ -66,6 +66,26 @@ belongs in the GUI composition root, or in a separately named optional feature;
 do not repair the failure by initializing render resources in the headless
 group.
 
+## Ownership map
+
+The existing package split is sufficient; adding another umbrella runtime crate
+would only duplicate plugin ownership. Keep additions in the smallest package
+whose dependency closure can express the contract:
+
+| Package | Owns | Must not own |
+| --- | --- | --- |
+| `lunco-luncosim-core` | simulation composition, physics, USD load/projection, and the headless execution plugin | windows, GPU resources, egui, or render policy |
+| `lunco-luncosim` | process/CLI shell and windowed composition | simulation rules or a second headless loop |
+| `lunco-scripting` | language-neutral world bridge and authored Rhai policy seams | unconditional render/UI dependencies |
+| `lunco-usd-queries` | UI-free document/query providers | egui defaults or workbench state |
+| `lunco-doc-bevy` | ECS document/journal lifecycle | presentation widgets (its egui bridge is opt-in) |
+| `lunco-render-*` | GPU composition and render-recovery policy | simulation state or USD topology |
+
+When a new capability does not fit one row, split the *contract* first (data
+types and events in a small, UI-free crate), then add one adapter at each edge.
+Do not make the core depend on an application adapter merely to avoid a missing
+resource: a missing edge must fail loudly at the composition boundary.
+
 ## The finding that makes this cheap
 
 Bevy 0.19 already split its render stack. Measured with `cargo tree -p <crate> --depth 1`:
