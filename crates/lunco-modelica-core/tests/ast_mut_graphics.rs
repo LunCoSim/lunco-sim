@@ -16,7 +16,7 @@ use std::sync::Arc;
 use lunco_doc::{DocumentHost, DocumentId, DocumentOrigin};
 use lunco_modelica_ast::parse_to_ast;
 use lunco_modelica_core::document::{ModelicaDocument, ModelicaOp, SyntaxCache};
-use lunco_modelica_core::pretty::{FillPattern, GraphicSpec, LinePattern, LunCoPlotNodeSpec};
+use lunco_modelica_core::pretty::{FillPattern, GraphicSpec, LunCoPlotNodeSpec};
 use rumoca_compile::parsing::ast::Expression;
 
 fn host(source: &str) -> DocumentHost<ModelicaDocument> {
@@ -50,16 +50,6 @@ fn rect() -> GraphicSpec {
         line_color: [0, 0, 0],
         fill_color: [255, 255, 255],
         fill_pattern: FillPattern::Solid,
-    }
-}
-
-#[allow(dead_code)]
-fn line() -> GraphicSpec {
-    GraphicSpec::Line {
-        points: vec![(0.0, 0.0), (10.0, 10.0)],
-        color: [0, 0, 0],
-        thickness: 0.25,
-        pattern: LinePattern::Solid,
     }
 }
 

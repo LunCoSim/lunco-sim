@@ -1494,6 +1494,16 @@ impl Plugin for LunCoSimCorePlugin {
         // without networking; the activation projector is networking-gated for now.
         register_all_commands(app);
 
+        #[cfg(feature = "api-transport")]
+        {
+            if !app.is_plugin_added::<lunco_workspace_api::WorkspaceApiQueriesPlugin>() {
+                app.add_plugins(lunco_workspace_api::WorkspaceApiQueriesPlugin);
+            }
+            if !app.is_plugin_added::<lunco_modelica_api::ModelicaApiQueriesPlugin>() {
+                app.add_plugins(lunco_modelica_api::ModelicaApiQueriesPlugin);
+            }
+        }
+
         // `--scene <path>` is an explicit startup request. With no argument
         // the process owns only the persistent world shell; it must not
         // silently mount the safety-test sandbox and fault the session before

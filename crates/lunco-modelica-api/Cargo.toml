@@ -1,0 +1,24 @@
+[package]
+name = "lunco-modelica-api"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Transport-free API query providers for Modelica documents and runs"
+
+[dependencies]
+bevy = { workspace = true }
+lunco-api = { path = "../lunco-api" }
+lunco-assets = { workspace = true }
+lunco-doc = { path = "../lunco-doc" }
+lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
+lunco-experiments = { path = "../lunco-experiments" }
+lunco-modelica-ast = { path = "../lunco-modelica-ast" }
+lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
+lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+web-time = { workspace = true }
+lunco-workspace = { path = "../lunco-workspace" }
+
+[lints]
+workspace = true

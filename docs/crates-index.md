@@ -141,7 +141,8 @@ Logic engines for dynamic simulation behavior, the tool registry, and industrial
 | Crate | Responsibility |
 | :--- | :--- |
 | **`lunco-modelica-runtime`** | Render-free Modelica runtime contract: the `ModelicaModel` ECS component, worker command/result protocol, source asset loader, generated-source metadata, communication schedule, notices, sample stream, and telemetry layout. It deliberately has no Rumoca compiler, worker implementation, document editor, or UI closure. |
-| **`lunco-modelica-core`** | Headless Modelica compiler host: authored document editing, Rumoca compilation, simulation sessions, worker implementation, MSL indexing, and API-facing commands/queries. It consumes `lunco-modelica-runtime` but does not own the shared runtime protocol or generated USD-document metadata. It has no workbench, egui, tutorial, or UI dependency. |
+| **`lunco-modelica-core`** | Headless Modelica compiler host: authored document editing, Rumoca compilation, simulation sessions, worker implementation, and MSL indexing. It consumes `lunco-modelica-runtime`, keeps API command contracts opt-in, and does not own API query registration, the shared runtime protocol, or generated USD-document metadata. It has no workbench, egui, tutorial, or UI dependency. |
+| **`lunco-modelica-api`** | Production transport-free API capability for Modelica: registers document, compiler, experiment, solver, source, and run query providers. It depends on the headless Modelica core but is not part of the compiler core's default closure; Workspace queries remain in `lunco-workspace-api`. |
 | **`lunco-modelica-ui`** | Modelica workbench UI and `lunica` application facade. It adapts core state to workbench contexts and owns Modelica panels, diagrams, plots, onboarding, and editor presentation; it has no tutorial catalog or lifecycle. |
 | **`lunco-modelica-ast`** | Pure Modelica source boundary: BOM normalization, strict/recovering Rumoca parse wrappers, AST interface/component extraction, shared expression/description display projections, and Modelica lint facts. It has no Bevy, UI, worker, storage, or solver ownership; authored lint policy remains in `assets/scripting/policy/lint_modelica.rhai`. |
 | **`lunco-scripting`** | Runtime-agnostic, language-neutral world bridge with **rhai** as the default (browser-capable) backend; Python is an optional one-shot-eval backend, Lua a reserved (unimplemented) backend id; logic providers cover scenarios and sequencing. Rhai can read/write generic active-Twin settings and read named engine exposures without per-setting bindings. |
@@ -165,7 +166,8 @@ Primary entry points and simulation assembly targets.
 | **`lunco-luncosim-core`** | — | Headless-safe simulation runtime shared by the GUI shell, `luncosim-server`, and scene-test runner. |
 | **`lunco-luncosim-server`** | `luncosim-server` | Thin headless launcher that depends directly on `lunco-luncosim-core` with API + networking enabled; the GUI shell is not linked. |
 | **`lunco-modelica-ui`** | `lunica` | The Modelica workbench application and UI facade. |
-| **`lunco-modelica-core`** | `lunica_worker`, `modelica_run`, `modelica_tester`, `msl_indexer`, `msl_parse_bench` | Headless Modelica worker and CLI/indexing tools; none link the workbench UI. The worker protocol and live ECS component come from `lunco-modelica-runtime`. |
+| **`lunco-modelica-core`** | `lunica_worker`, `modelica_run`, `modelica_tester`, `msl_indexer`, `msl_parse_bench` | Headless Modelica worker and CLI/indexing tools; none link the workbench UI or Modelica API query capability. The worker protocol and live ECS component come from `lunco-modelica-runtime`. |
+| **`lunco-modelica-api`** | — | API query capability installed by API-enabled Modelica and LunCoSim hosts. |
 
 > Other binaries: `build_msl_assets` (`lunco-modelica-assets`), `net_smoke` (`lunco-networking`), `dem_worker` (`lunco-terrain-bake`, the off-thread DEM bake Web Worker — staged next to the wasm by `build_web.sh`).
 
@@ -524,7 +526,10 @@ Shared web frontend for the wasm apps. Provides the streaming loader (`web/lunco
 ### Scripting & Modeling
 
 **`lunco-modelica-core`**
-Modelica language integration. Provides AST-based editing, compilation via Rumoca, and interactive diagramming, allowing complex industrial models to drive simulation entities and vessel subsystems. On wasm, compiles/Fast-Runs are dispatched off the main thread to the `lunica_worker` companion binary; its `worker_transport` composes the generic `lunco-worker-transport::WorkerPool` (spawn/handshake/post/respawn) and layers the Modelica-specific MSL-readiness and per-run routing on top.
+Modelica language integration. Provides AST-based editing, compilation via Rumoca, and simulation sessions, allowing complex industrial models to drive simulation entities and vessel subsystems. On wasm, compiles/Fast-Runs are dispatched off the main thread to the `lunica_worker` companion binary; its `worker_transport` composes the generic `lunco-worker-transport::WorkerPool` (spawn/handshake/post/respawn) and layers the Modelica-specific MSL-readiness and per-run routing on top. API commands are opt-in, and API query providers are owned by `lunco-modelica-api`.
+
+**`lunco-modelica-api`**
+Production API capability for Modelica hosts. It registers the domain-owned query providers for bundled sources, MSL classes, compile/run status, experiment results, document source, model metadata, variables, and share links. `lunco-workspace-api` remains the owner of Workspace queries. Keeping this layer outside `lunco-modelica-core` means a headless compiler-only build does not pull the API query closure, while API-enabled UI/server roots install the required capabilities explicitly.
 
 **`lunco-scripting`**
 Language-neutral world bridge for dynamic logic providers. The default (and only fully-wired) backend is **rhai** — browser-capable and enabled by the default `rhai` feature; build with `--no-default-features` for a script-free build. The bridge exposes ECS verbs and a native `ValueBuilder` (no JSON on the read path) over which each runtime is a thin binding. Python is an optional backend used for one-shot snippet evaluation only; Lua is a reserved (not yet implemented) backend id. rhai also funnels the `lunco-tools` registry into the engine via `lunco-tools-rhai`.

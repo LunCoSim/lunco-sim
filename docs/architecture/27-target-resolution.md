@@ -22,7 +22,8 @@ Initial fixes were **point fixes** (swap `first_non_pkg` → `simulation_candida
 
 ## 2. Current system inventory
 
-File references in `crates/lunco-modelica-core` and `crates/lunco-experiments`:
+File references in `crates/lunco-modelica-core`, `crates/lunco-modelica-api`, and
+`crates/lunco-experiments`:
 
 ### 2.1 Class candidates & ranking — `index.rs`
 - `ClassKind::is_simulatable()` (`index.rs`) → `true` only for `Model | Block | Class`.
@@ -34,7 +35,7 @@ File references in `crates/lunco-modelica-core` and `crates/lunco-experiments`:
 1. **`on_compile_model`** (`compile.rs`) — class precedence: `explicit > drilled > picker(if ambiguous) > detected[0]`. Does not resolve bounds (compile only).
 2. **`dispatch_experiment`** (`compile.rs`) — class precedence: `explicit > drilled > picker > sole`; candidates and bounds use the shared target helpers. Bounds use the canonical `fallback(t_end=1.0) → annotation → draft → cmd_override` ladder.
 3. **`render_setup_section`** (`experiments.rs`) — class: `drilled > simulation_candidates()[0]`; bounds via `resolve_setup_bounds`.
-4. **`QueryExperimentBounds`** (`api_queries.rs`) — lists all non-package classes; per class reports `resolved_bounds` (via `resolve_setup_bounds`) and its source label (`"draft_override" | "runner_cache" | "annotation" | "fallback_1s"`).
+4. **`QueryExperimentBounds`** (`lunco-modelica-api/src/lib.rs`) — lists all non-package classes; per class reports `resolved_bounds` (via `resolve_setup_bounds`) and its source label (`"draft_override" | "runner_cache" | "annotation" | "fallback_1s"`).
 
 ### 2.3 Bounds resolution — `model_commands.rs`
 - `resolve_setup_bounds() -> RunBounds` (`model_commands.rs`): precedence `draft override → annotation → runner cache → fallback(t_end=1.0)` through `sim_target::resolve_bounds`.

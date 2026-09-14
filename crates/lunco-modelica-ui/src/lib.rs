@@ -43,6 +43,10 @@ impl Plugin for ModelicaPlugin {
         if !app.is_plugin_added::<CoreModelicaPlugin>() {
             app.add_plugins(CoreModelicaPlugin);
         }
+        #[cfg(feature = "api")]
+        if !app.is_plugin_added::<lunco_modelica_api::ModelicaApiQueriesPlugin>() {
+            app.add_plugins(lunco_modelica_api::ModelicaApiQueriesPlugin);
+        }
         if !app.is_plugin_added::<lunco_viz::LuncoVizPlugin>() {
             app.add_plugins(lunco_viz::LuncoVizPlugin);
         }

@@ -6,11 +6,10 @@
 //! an outward transport.
 use bevy::prelude::*;
 use lunco_api::{
-    add_plugin_once, ensure_command_core,
+    add_plugin_once,
     discovery::ApiDiscoveryPlugin,
-    executor,
+    ensure_command_core,
     queries::{self, ApiQueryRegistryPlugin, ApiVisibilityPlugin},
-    schema,
     subscription::ApiTelemetryPlugin,
 };
 pub mod transports;

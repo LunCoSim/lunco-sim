@@ -1,6 +1,8 @@
 //! API query providers for Modelica documents and simulation state.
 //!
-//! Registers two [`ApiQueryProvider`]s (see `lunco-api` for the trait):
+//! Registers the Modelica-owned [`ApiQueryProvider`] implementations (see
+//! `lunco-api` for the trait). Workspace queries remain owned by
+//! `lunco-workspace-api`.
 //!
 //! - **`ListBundled`** — embedded `assets/models/*.mo` examples and the complete
 //!   source inventory used by authored validation. Modelica-specific; lives here
@@ -12,28 +14,24 @@ use lunco_doc::{Document, DocumentOrigin};
 use lunco_modelica_runtime::ModelicaModel;
 use lunco_workspace::WorkspaceResource;
 
-use crate::experiments_runner::ExperimentSources;
-use crate::models::bundled_models;
 use lunco_experiments::{ExperimentId, ExperimentRegistry, RunStatus};
+use lunco_modelica_core::experiments_runner::ExperimentSources;
+use lunco_modelica_core::models::bundled_models;
 // `DrilledInClassNames` reads migrated to
-// `crate::sim_default::drilled_class_for_doc`.
-use crate::state::{is_generated_document, ModelicaDocumentRegistry};
-use crate::visual_diagram::msl_class_library;
+// `lunco_modelica_core::sim_default::drilled_class_for_doc`.
 use lunco_doc::CompileState;
 use lunco_doc::DocumentId;
 use lunco_doc_bevy::DocumentDiagnostics;
+use lunco_modelica_core::state::{is_generated_document, ModelicaDocumentRegistry};
+use lunco_modelica_core::visual_diagram::msl_class_library;
 
-/// Plugin that registers the [`ApiQueryProvider`]s exposed by
-/// `lunco-modelica-core`. Wired into [`crate::ModelicaCorePlugin`] when the
-/// `lunco-api` feature is on, so headless and UI hosts expose the same
-/// providers.
+/// Plugin that registers the Modelica [`ApiQueryProvider`]s. Hosts add this
+/// capability alongside the Modelica compiler plugin when they expose the
+/// transport-free API.
 pub struct ModelicaApiQueriesPlugin;
 
 impl Plugin for ModelicaApiQueriesPlugin {
     fn build(&self, app: &mut App) {
-        if !app.is_plugin_added::<lunco_workspace_api::WorkspaceApiQueriesPlugin>() {
-            app.add_plugins(lunco_workspace_api::WorkspaceApiQueriesPlugin);
-        }
         // Idempotent init: `LunCoApiPlugin::ApiQueryRegistryPlugin`
         // installs this resource too, but plugin ordering is not
         // guaranteed — if the modelica plugin builds before lunco-api,
@@ -139,7 +137,7 @@ impl ApiQueryProvider for ListSolversProvider {
         // The builtin backends register on first use rather than at plugin
         // build, so a query that arrives before any run would otherwise see an
         // empty registry and report "no solvers exist".
-        crate::solver_backends::ensure_builtin_solvers();
+        lunco_modelica_core::solver_backends::ensure_builtin_solvers();
         let items: Vec<serde_json::Value> = lunco_experiments::solver::registered()
             .into_iter()
             .map(|s| {
@@ -218,7 +216,7 @@ impl ApiQueryProvider for ListMslProvider {
         // Apply filters in one pass over the static slice. The filter
         // closures are cheap; no allocation until we slice the
         // matching subset for the response.
-        let matched: Vec<&crate::index::ClassEntry> = lib
+        let matched: Vec<&lunco_modelica_core::index::ClassEntry> = lib
             .iter()
             .filter(|c| match prefix {
                 Some(p) => c.name.starts_with(p),
@@ -362,7 +360,7 @@ impl ApiQueryProvider for QueryExperimentBoundsProvider {
                 .index()
                 .classes
                 .values()
-                .filter(|c| !matches!(c.kind, crate::index::ClassKind::Package))
+                .filter(|c| !matches!(c.kind, lunco_modelica_core::index::ClassKind::Package))
                 .filter(|c| {
                     class_filter.as_ref().is_none_or(|f| {
                         c.name == *f || c.name.rsplit('.').next() == Some(f.as_str())
@@ -379,8 +377,8 @@ impl ApiQueryProvider for QueryExperimentBoundsProvider {
             );
         }
 
-        use crate::model_commands::{bounds_from_annotation, resolve_setup_bounds};
         use lunco_experiments::{ExperimentRunner, ModelRef};
+        use lunco_modelica_core::model_commands::{bounds_from_annotation, resolve_setup_bounds};
 
         let classes: Vec<serde_json::Value> = class_list
             .into_iter()
@@ -392,14 +390,14 @@ impl ApiQueryProvider for QueryExperimentBoundsProvider {
                 // label beside the canonical resolver until the API can return
                 // its typed result directly.
                 let has_draft = world
-                    .get_resource::<crate::experiments_runner::ExperimentDrafts>()
+                    .get_resource::<lunco_modelica_core::experiments_runner::ExperimentDrafts>()
                     .and_then(|d| {
                         d.get(doc_id, &mref)
                             .and_then(|dr| dr.bounds_override.clone())
                     })
                     .is_some();
                 let has_runner_cache = world
-                    .get_resource::<crate::ModelicaRunnerResource>()
+                    .get_resource::<lunco_modelica_core::ModelicaRunnerResource>()
                     .and_then(|r| r.0.default_bounds(&mref))
                     .is_some();
                 let source = if has_draft {
@@ -465,7 +463,7 @@ impl ApiQueryProvider for CompileStatusProvider {
         // helper falls back to first-tab-for-doc when no
         // `TabRenderContext` is in scope (which is the case here —
         // API queries run off-render).
-        let drilled_in = crate::sim_default::drilled_class_for_doc(world, doc_id);
+        let drilled_in = lunco_modelica_core::sim_default::drilled_class_for_doc(world, doc_id);
         // `picker_pending` mirrors the gate in `on_compile_model`: we
         // would be in the picker branch if no class is pinned and the
         // doc has 2+ non-package classes. Easier to recompute than to
@@ -484,7 +482,8 @@ impl ApiQueryProvider for CompileStatusProvider {
                 // index walks via simulation_candidates +
                 // simulation_preferred_count).
                 let ranked = index.ranked_simulation_candidates();
-                let top_level = crate::index::ModelicaIndex::preferred_count_of(&ranked);
+                let top_level =
+                    lunco_modelica_core::index::ModelicaIndex::preferred_count_of(&ranked);
                 let cands: Vec<String> = ranked.into_iter().map(|(_, n)| n).collect();
                 (cands, top_level, has_ast)
             }
@@ -1007,7 +1006,7 @@ impl ApiQueryProvider for GetDocumentSourceProvider {
 // command and query namespaces cannot collide; it returns the URL without
 // requiring a clipboard. Optional `doc_id` param; defaults to the active
 // document. Both paths share the wire format + URL builder
-// (`crate::model_share::share_url`), so they can't drift.
+// (`lunco_modelica_core::model_share::share_url`), so they can't drift.
 
 struct GetShareLinkProvider;
 
@@ -1029,7 +1028,7 @@ impl ApiQueryProvider for GetShareLinkProvider {
         let Some(host) = registry.host(doc_id) else {
             return err_doc_not_found(doc_id);
         };
-        let url = crate::model_share::share_url(host.document().source());
+        let url = lunco_modelica_core::model_share::share_url(host.document().source());
         ApiResponse::ok(serde_json::json!({
             "doc_id": doc_id.raw(),
             "url": url,
@@ -1073,7 +1072,7 @@ impl ApiQueryProvider for DescribeModelProvider {
         // helper falls back to first-tab-for-doc when no
         // `TabRenderContext` is in scope (which is the case here —
         // API queries run off-render).
-        let drilled_in = crate::sim_default::drilled_class_for_doc(world, doc_id);
+        let drilled_in = lunco_modelica_core::sim_default::drilled_class_for_doc(world, doc_id);
 
         let registry = world.resource::<ModelicaDocumentRegistry>();
         let Some(host) = registry.host(doc_id) else {
@@ -1097,12 +1096,12 @@ impl ApiQueryProvider for DescribeModelProvider {
         let target_class_name = class_param.or(drilled_in).or_else(|| {
             // First non-package class via the per-doc Index — same
             // pattern used across the inspector / palette / canvas
-            // drill-in code paths (see `crate::ui::panels::*`).
+            // drill-in code paths (see the Modelica UI panels).
             host.document()
                 .index()
                 .classes
                 .values()
-                .find(|c| !matches!(c.kind, crate::index::ClassKind::Package))
+                .find(|c| !matches!(c.kind, lunco_modelica_core::index::ClassKind::Package))
                 .map(|c| c.name.clone())
         });
         let Some(target_name) = target_class_name else {
@@ -1140,8 +1139,8 @@ impl ApiQueryProvider for DescribeModelProvider {
         // the document registry by `drive_engine_sync` so this query
         // sees every open document without a per-call upsert loop.
         let inherited_members = match world
-            .get_resource::<crate::engine_resource::ModelicaEngineHandle>()
-            .and_then(crate::engine_resource::ModelicaEngineHandle::try_lock)
+            .get_resource::<lunco_modelica_core::engine_resource::ModelicaEngineHandle>()
+            .and_then(lunco_modelica_core::engine_resource::ModelicaEngineHandle::try_lock)
         {
             Some(mut engine) => engine.inherited_members_typed(short),
             None => {
@@ -1178,8 +1177,10 @@ impl ApiQueryProvider for DescribeModelProvider {
     }
 }
 
-fn class_member_variability_str(v: &crate::engine::InheritedVariability) -> &'static str {
-    use crate::engine::InheritedVariability;
+fn class_member_variability_str(
+    v: &lunco_modelica_core::engine::InheritedVariability,
+) -> &'static str {
+    use lunco_modelica_core::engine::InheritedVariability;
     match v {
         InheritedVariability::Continuous => "continuous",
         InheritedVariability::Discrete => "discrete",
@@ -1188,8 +1189,8 @@ fn class_member_variability_str(v: &crate::engine::InheritedVariability) -> &'st
     }
 }
 
-fn class_member_causality_str(c: &crate::engine::InheritedCausality) -> &'static str {
-    use crate::engine::InheritedCausality;
+fn class_member_causality_str(c: &lunco_modelica_core::engine::InheritedCausality) -> &'static str {
+    use lunco_modelica_core::engine::InheritedCausality;
     match c {
         InheritedCausality::Internal => "none",
         InheritedCausality::Input => "input",
