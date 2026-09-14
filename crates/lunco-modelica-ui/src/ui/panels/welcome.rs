@@ -885,9 +885,9 @@ impl Panel for WelcomePanel {
             // dispatch as `Duplicate { name: "" }`, which lets the
             // handler derive the default `<short>Copy` name. Replaces
             // the old `OpenExampleInWorkspace` event.
-            ctx.trigger(crate::ui::commands::OpenClass {
+            ctx.trigger(lunco_modelica_ui_core::OpenClass {
                 qualified,
-                action: crate::ui::commands::ClassAction::Duplicate {
+                action: lunco_modelica_ui_core::ClassAction::Duplicate {
                     name: String::new(),
                 },
             });

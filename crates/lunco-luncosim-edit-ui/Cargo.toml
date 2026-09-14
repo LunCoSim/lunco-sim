@@ -44,7 +44,7 @@ lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-api = { path = "../lunco-api" }
 lunco-controller = { path = "../lunco-controller" }
 lunco-mobility = { path = "../lunco-mobility" }
-lunco-modelica-ui = { path = "../lunco-modelica-ui", default-features = false, features = ["ui"] }
+lunco-modelica-ui-core = { path = "../lunco-modelica-ui-core" }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 lunco-usd-geometry = { path = "../lunco-usd-geometry" }
 lunco-usd-bevy-camera = { path = "../lunco-usd-bevy-camera" }

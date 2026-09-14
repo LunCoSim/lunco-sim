@@ -423,8 +423,9 @@ scene tree or a fire-and-forget command acknowledgement as a running model.
      `msl_index.json` (regenerate via
      `cargo run -p lunco-modelica-core --bin msl_indexer`).
 - **"Command 'X' not found or not API-accessible"**: the Event isn't
-  reflect-registered. Give the struct the `#[Command]` attribute, mark
-  its observer with `#[on_command(X)]`, and list that observer in the
+  reflect-registered. Put a shared Modelica-facing payload in
+  `lunco-modelica-ui-core`; keep its observer in the owning UI package, give
+  its observer the `#[on_command(X)]` attribute, and list that observer in the
   `register_commands!(...)` block in
   `crates/lunco-modelica-ui/src/ui/commands/mod.rs` (see [§ Add a command](#add-a-command)).
 - **API returns 500 / silent no-op**: check `params` includes the
@@ -441,9 +442,11 @@ scene tree or a fire-and-forget command acknowledgement as a running model.
 When testing reveals a missing API surface, add the command immediately
 rather than asking the user:
 
-1. In the matching file under `crates/lunco-modelica-ui/src/ui/commands/`,
-   define the struct with the `#[Command]` attribute and the observer
-   with `#[on_command(...)]` (both from `lunco_core`):
+1. Put a shared command payload in `crates/lunco-modelica-ui-core/src/lib.rs`
+   when another UI package must emit it. Define the struct with the
+   `#[Command]` attribute. Keep the behavior-owning observer in the matching
+   file under `crates/lunco-modelica-ui/src/ui/commands/` and mark it with
+   `#[on_command(...)]` (both attributes come from `lunco_core`):
    ```rust
    use lunco_core::{Command, on_command};
 

@@ -33,13 +33,10 @@ pub use doc::{FormatDocument, Redo, SaveActiveDocument, SaveActiveDocumentAs, Un
 pub use inspect::InspectActiveDoc;
 pub use lifecycle::drain_open_file_results;
 pub use lifecycle::{
-    ClassAction, CloseDialogState, CreateNewScratchModel, DuplicateModelFromReadOnly, GetFile,
-    Open, OpenClass, OpenInNewView, PendingCloseAfterSave, PendingTabCloseScopes, TabCloseScope,
+    CloseDialogState, CreateNewScratchModel, DuplicateModelFromReadOnly, GetFile, Open,
+    OpenInNewView, PendingCloseAfterSave, PendingTabCloseScopes, TabCloseScope,
 };
-pub use nav::{
-    AutoArrangeDiagram, FitCanvas, FocusComponent, FocusDocumentByName, PanCanvas, SetViewMode,
-    SetZoom,
-};
+pub use nav::{AutoArrangeDiagram, FitCanvas, FocusComponent, PanCanvas, SetViewMode, SetZoom};
 pub use plot::{AddSignalToPlot, NewPlotPanel};
 // `Exit` now lives in `lunco_api::session` — see `util`.
 

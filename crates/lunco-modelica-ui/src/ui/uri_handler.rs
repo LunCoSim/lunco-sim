@@ -17,7 +17,7 @@
 //! Registered from [`crate::ui::commands::ModelicaCommandsPlugin::build`]
 //! (`ui/commands.rs`); the observer in this module then translates
 //! `UriClicked` with `doc_kind == "modelica"` into the existing
-//! [`crate::ui::commands::OpenClass`] command — so clicks in Documentation reuse the same
+//! [`lunco_modelica_ui_core::OpenClass`] command — so clicks in Documentation reuse the same
 //! drill-in pipeline as clicks from the Welcome tab or the canvas.
 
 use std::path::PathBuf;
@@ -113,7 +113,7 @@ fn resolve_resource(class_dotted: &str, subpath: &str) -> UriResolution {
 }
 
 /// Observer: translate `UriClicked` events for `modelica://` URIs
-/// into the concrete [`crate::ui::commands::OpenClass`](crate::ui::commands::OpenClass)
+/// into the concrete [`lunco_modelica_ui_core::OpenClass`] command
 /// command. Non-Modelica resolutions are ignored — other domain
 /// observers pick them up. Resource opens + anchor navigation are
 /// logged at `debug` for now (no domain command yet wires them; a
@@ -125,9 +125,9 @@ pub fn on_modelica_uri_clicked(trigger: On<UriClicked>, mut commands: Commands) 
             doc_kind: "modelica",
             identifier,
         } => {
-            commands.trigger(crate::ui::commands::OpenClass {
+            commands.trigger(lunco_modelica_ui_core::OpenClass {
                 qualified: identifier.clone(),
-                action: crate::ui::commands::ClassAction::View,
+                action: lunco_modelica_ui_core::ClassAction::View,
             });
         }
         UriResolution::NavigateAnchor { identifier, anchor } => {
@@ -136,9 +136,9 @@ pub fn on_modelica_uri_clicked(trigger: On<UriClicked>, mut commands: Commands) 
             // the link functional even if it doesn't scroll to the
             // specific section.
             bevy::log::debug!("modelica URI anchor not yet wired: {identifier}#{anchor}");
-            commands.trigger(crate::ui::commands::OpenClass {
+            commands.trigger(lunco_modelica_ui_core::OpenClass {
                 qualified: identifier.clone(),
-                action: crate::ui::commands::ClassAction::View,
+                action: lunco_modelica_ui_core::ClassAction::View,
             });
         }
         UriResolution::OpenResource { path } => {

@@ -7631,7 +7631,7 @@ dependencies = [
  "lunco-luncosim-edit-core",
  "lunco-mobility",
  "lunco-modelica-runtime",
- "lunco-modelica-ui",
+ "lunco-modelica-ui-core",
  "lunco-physics",
  "lunco-render",
  "lunco-scene-camera",
@@ -7732,6 +7732,7 @@ dependencies = [
  "lunco-modelica-core",
  "lunco-modelica-runtime",
  "lunco-modelica-ui",
+ "lunco-modelica-ui-core",
  "lunco-networking",
  "lunco-render",
  "lunco-render-recovery",
@@ -7966,6 +7967,7 @@ dependencies = [
  "lunco-modelica-docs-ui",
  "lunco-modelica-icon-ui",
  "lunco-modelica-runtime",
+ "lunco-modelica-ui-core",
  "lunco-scripting",
  "lunco-settings",
  "lunco-signal",
@@ -7994,6 +7996,15 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "web-time",
+]
+
+[[package]]
+name = "lunco-modelica-ui-core"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "lunco-core",
+ "serde",
 ]
 
 [[package]]

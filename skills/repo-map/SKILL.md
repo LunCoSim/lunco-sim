@@ -127,7 +127,7 @@ Use this to jump to the right one; read the index for the full responsibility.
 | **USD integration** | OpenUSD↔Bevy: headless document/core, geometry, visuals, physics, sim schemas, materials | `lunco-usd-core`, `lunco-usd-geometry`, `lunco-usd`, `lunco-usd-bevy`, `lunco-usd-avian`, `lunco-materials` |
 | **Networking & API** | replication, HTTP API, telemetry, attributes | `lunco-networking`, `lunco-api`, `lunco-telemetry` |
 | **Workbench & UI** | IDE shell, reusable Twin/Files browser, widgets, viz, 2D canvas, edit tools, render intent/recovery, web boot | `lunco-workbench`, `lunco-workbench-browser`, `lunco-ui`, `lunco-viz`, `lunco-canvas`, `lunco-luncosim-edit-core`, `lunco-luncosim-edit-ui`, `lunco-render-recovery` |
-| **Scripting & modeling** | Modelica, event-driven Rhai, tools, hooks, behavior trees, authored lessons | `lunco-modelica-core`, `lunco-modelica-ui`, `lunco-scripting`, `lunco-tools`, `lunco-hooks`, `lunco-behavior`, `lunco-luncosim` |
+| **Scripting & modeling** | Modelica, event-driven Rhai, tools, hooks, behavior trees, authored lessons | `lunco-modelica-core`, `lunco-modelica-ui-core`, `lunco-modelica-ui`, `lunco-scripting`, `lunco-tools`, `lunco-hooks`, `lunco-behavior`, `lunco-luncosim` |
 | **Applications** | the entry-point binaries above | `luncosim`, `luncosim-server`, `lunica` |
 
 ## Where does X live? (routing)
@@ -148,7 +148,7 @@ Use this to jump to the right one; read the index for the full responsibility.
 ## Gotchas / naming traps
 
 - **No `apps/` directory** — every binary lives in a `crates/<crate>/src/{main.rs,bin/}`.
-- **`lunica` ≠ the main sim.** It is the Modelica workbench (crates `lunco-modelica-ui` (workbench) and `lunco-modelica-core` (compiler/worker)); `luncosim` is the ground-physics simulator and `luncosim-server` is its headless launcher.
+- **`lunica` ≠ the main sim.** It is the Modelica workbench (crates `lunco-modelica-ui` (workbench), `lunco-modelica-ui-core` (shared UI contracts), and `lunco-modelica-core` (compiler/worker)); `luncosim` is the ground-physics simulator and `luncosim-server` is its headless launcher.
 - **Do not launch LunCoSim through `cargo run`.** Build the named package/bin,
   then execute `$LUNCOSIM_BIN` directly. Bare `cargo run` is also
   ambiguous because the default members are `lunco-luncosim` and `lunco-modelica-ui`.

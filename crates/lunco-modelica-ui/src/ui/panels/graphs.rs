@@ -28,6 +28,7 @@ use crate::ui::panels::experiments::PlotPanelStates;
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_experiments::{ExperimentId, ExperimentRegistry};
+use lunco_modelica_ui_core::MODELICA_PLOT_KIND_ID;
 use lunco_viz::{
     kinds::line_plot::LinePlot, view::Panel2DCtx, viz::VizId, SignalRegistry,
     VisualizationRegistry, VizFitRequests,
@@ -37,7 +38,7 @@ use lunco_workbench_core::{InstancePanel, PanelCtx, PanelId, PanelSlot};
 use crate::ui::viz::{ensure_default_modelica_graph, DEFAULT_MODELICA_GRAPH};
 
 /// Multi-instance kind id. Each instance is a `VizId.0`.
-pub const MODELICA_PLOT_KIND: PanelId = PanelId("modelica_plot");
+pub(crate) const MODELICA_PLOT_KIND: PanelId = PanelId(MODELICA_PLOT_KIND_ID);
 
 /// Export one plot's current curves after the panel has painted.
 #[derive(Event, Clone, Copy)]

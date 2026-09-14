@@ -759,7 +759,7 @@ fn luncosim_boot_from_url(
         if !ready {
             return;
         }
-        commands.trigger(lunco_modelica_ui::ui::commands::OpenClass {
+        commands.trigger(lunco_modelica_ui_core::OpenClass {
             qualified: qual.clone(),
             ..Default::default()
         });
