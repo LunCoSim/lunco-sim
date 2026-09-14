@@ -46,8 +46,11 @@ AST interface projections, and parse-time lint facts. It has no Bevy, document,
 worker, UI, or solver state. `lunco-modelica-core` owns the headless document,
 compiler, worker, and simulation seams; `lunco-modelica-ui` owns workbench
  presentation and the `lunica` application facade. The reusable egui graphics
- renderer is isolated in [`lunco-modelica-icon-ui`](../../crates/lunco-modelica-icon-ui/);
- the diagram canvas and model preview consume that package directly.
+renderer is isolated in [`lunco-modelica-icon-ui`](../../crates/lunco-modelica-icon-ui/);
+the diagram canvas and model preview consume that package directly.
+HTML documentation rendering is isolated in
+[`lunco-modelica-docs-ui`](../../crates/lunco-modelica-docs-ui/); the Modelica
+view supplies only the selected class's documentation fragments.
 
 The transport-free Modelica query surface is a separate production capability
 in [`lunco-modelica-api`](../../crates/lunco-modelica-api/). API-enabled hosts

@@ -865,7 +865,7 @@ fn render_docs_view(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
                     ui.add_space(12.0);
                 }
                 if let Some(html) = info.as_deref().filter(|s| !s.trim().is_empty()) {
-                    render_html_as_markdown(ui, ctx, 760.0, html);
+                    lunco_modelica_docs_ui::render_html_as_markdown(ui, ctx, 760.0, html);
                 } else {
                     ui.label(egui::RichText::new("(no documentation)").italics().weak());
                 }
@@ -875,85 +875,10 @@ fn render_docs_view(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
                     ui.add_space(8.0);
                     ui.label(egui::RichText::new("Revisions").strong().size(15.0));
                     ui.add_space(6.0);
-                    render_html_as_markdown(ui, ctx, 760.0, revs);
+                    lunco_modelica_docs_ui::render_html_as_markdown(ui, ctx, 760.0, revs);
                 }
             });
         });
-}
-
-fn render_html_as_markdown(ui: &mut egui::Ui, ctx: &mut PanelCtx, target_width: f32, html: &str) {
-    use std::sync::Mutex;
-    static CACHE: std::sync::OnceLock<Mutex<egui_commonmark::CommonMarkCache>> =
-        std::sync::OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(egui_commonmark::CommonMarkCache::default()));
-
-    static MD_CACHE: std::sync::OnceLock<Mutex<Option<(u64, String)>>> = std::sync::OnceLock::new();
-    let md_cache = MD_CACHE.get_or_init(|| Mutex::new(None));
-
-    let html_hash = {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        html.hash(&mut h);
-        h.finish()
-    };
-
-    let md = {
-        let mut g = md_cache.lock().unwrap();
-        if let Some((k, v)) = g.as_ref() {
-            if *k == html_hash {
-                v.clone()
-            } else {
-                let v = htmd::convert(html).unwrap_or_else(|_| html.to_string());
-                *g = Some((html_hash, v.clone()));
-                v
-            }
-        } else {
-            let v = htmd::convert(html).unwrap_or_else(|_| html.to_string());
-            *g = Some((html_hash, v.clone()));
-            v
-        }
-    };
-
-    if let Ok(mut c) = cache.lock() {
-        egui_commonmark::CommonMarkViewer::new()
-            .max_image_width(Some(target_width as usize))
-            .show(ui, &mut c, &md);
-    }
-
-    let intercepts: Vec<(usize, String, lunco_workbench::UriResolution)> = {
-        let registry = ctx.resource::<lunco_workbench::UriRegistry>();
-        ui.ctx().output_mut(|o| {
-            o.commands
-                .iter()
-                .enumerate()
-                .filter_map(|(idx, cmd)| {
-                    if let egui::OutputCommand::OpenUrl(open) = cmd {
-                        let res = registry
-                            .map(|r| r.dispatch(&open.url))
-                            .unwrap_or(lunco_workbench::UriResolution::NotHandled);
-                        if !matches!(res, lunco_workbench::UriResolution::NotHandled) {
-                            return Some((idx, open.url.clone(), res));
-                        }
-                    }
-                    None
-                })
-                .collect()
-        })
-    };
-
-    ui.ctx().output_mut(|o| {
-        for (idx, _, _) in intercepts.iter().rev() {
-            if *idx < o.commands.len() {
-                o.commands.remove(*idx);
-            }
-        }
-    });
-    for (_, url, resolution) in intercepts {
-        ctx.trigger(lunco_workbench::UriClicked {
-            uri: url,
-            resolution,
-        });
-    }
 }
 
 fn render_icon_view(ui: &mut egui::Ui, ctx: &mut PanelCtx) {

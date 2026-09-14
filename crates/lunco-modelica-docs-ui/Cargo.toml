@@ -1,0 +1,16 @@
+[package]
+name = "lunco-modelica-docs-ui"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Reusable egui renderer for Modelica HTML documentation"
+
+[dependencies]
+bevy_egui = { workspace = true }
+egui_commonmark = { version = "0.24", features = ["better_syntax_highlighting"] }
+htmd = "0.5"
+lunco-workbench = { path = "../lunco-workbench" }
+lunco-workbench-core = { path = "../lunco-workbench-core" }
+
+[lints]
+workspace = true
