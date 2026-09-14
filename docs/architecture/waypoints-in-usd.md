@@ -66,6 +66,14 @@ editor ribbon prim: removing the runtime view leaves the authored route
 unchanged, and another Twin can use the same tool without importing a
 Twin-specific presentation object.
 
+Route points remain ordinary selectable USD prims after authoring. The standard
+scene gizmo persists translation/rotation through the generic runtime-layer
+authoring commands, including local overrides for referenced children. The
+standard Delete command removes a runtime-only point and deactivates a
+base-authored or referenced point in the runtime layer; it never tries to
+remove a spec from a layer that does not own it. Both paths are journaled and
+feed the same route revision/ribbon refresh.
+
 ## Progression
 
 The generic sensor emits `enter:<zone>` and `exit:<zone>` events. The route

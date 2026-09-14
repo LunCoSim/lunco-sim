@@ -1299,13 +1299,14 @@ fn environment_panel_content(_panel: &mut EnvironmentPanel, ui: &mut egui::Ui, c
 /// Delete `entity` from the scene — the single delete path for both the Del
 /// hotkey and the Delete button.
 ///
-/// Authors the removal into the active document's runtime layer FIRST (so the
-/// delete is a journaled, undoable, networked document op — the editor keeps no
-/// private history), then performs the live despawn for immediate feedback and
-/// drops it from the selection. A non-document entity (a palette spawn the doc
-/// doesn't own) simply isn't authored — it just despawns.
+/// Authors the deletion into the active document's runtime layer FIRST (using a
+/// removal for runtime-only prims and an active=false override for base or
+/// composed prims), so it is a journaled, undoable, networked document op — the
+/// editor keeps no private history — then performs the live despawn for immediate
+/// feedback and drops it from the selection. A non-document entity (a palette
+/// spawn the doc doesn't own) simply isn't authored — it just despawns.
 /// NOTE: there is no local `delete_entity` helper any more. It did the same three things
-/// the typed `commands::DeleteEntity` verb does (author the `RemovePrim`, despawn, drop
+/// the typed `commands::DeleteEntity` verb does (author the USD delete edit, despawn, drop
 /// the selection), so it was a second delete path that the command bus — and hence the
 /// API, the journal and networked peers — never saw. The Inspector triggers the command.
 /// Delete the selected entity through the same typed command as the Inspector

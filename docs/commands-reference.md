@@ -249,19 +249,19 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Delete an entity from the scene.
 
- The typed verb for "remove this" authors a `RemovePrim` in the backing
- document, so deletion is journaled, replicated, persisted, and undoable.
+ The typed verb for "remove this" authors a journaled, replicated, undoable
+ runtime-layer edit. Runtime-only prims use `RemovePrim`; base-authored and
+ referenced prims use a stronger `active = false` override.
 
- This despawns AND (via [`persist_delete_to_runtime_layer`]) authors a `RemovePrim`
- — which is what makes deletion undoable, because the document hands back an
- `AddPrim` inverse for free.
+ This despawns AND (via [`persist_delete_to_runtime_layer`]) authors the
+ corresponding USD edit, which is what makes deletion undoable.
 
 - *defined in:* `crates/lunco-scene-commands/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
 | `target` | `Entity` |  Entity to remove. |
-| `intent` | `lunco_core :: EditIntent` |  `Persistent` (the default) authors the removal into the document; an  `Interactive` delete is live-only and does not journal. |
+| `intent` | `lunco_core :: EditIntent` |  `Persistent` (the default) authors the runtime-layer deletion; an `Interactive` delete is live-only and does not journal. |
 
 #### `DetachJoint`
 
@@ -272,7 +272,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `target` | `Entity` |  The joint entity to despawn. |
-| `intent` | `lunco_core :: EditIntent` |  Persistent (default) authors the joint's removal into the scene's runtime  layer — so it journals, syncs, and survives reload — before despawning.  Interactive just pops the live joint (a throwaway test), no journal. See  [`lunco_core::EditIntent`]. Omitted by API callers → `Persistent`. |
+| `intent` | `lunco_core :: EditIntent` |  Persistent (default) authors the joint's removal into the scene's runtime layer, using active=false when the prim is base-authored or composed. Interactive just pops the live joint (a throwaway test), no journal. See [`lunco_core::EditIntent`]. Omitted by API callers → `Persistent`. |
 
 #### `FocusEntityById`
 

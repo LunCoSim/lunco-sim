@@ -654,6 +654,10 @@ fn on_context(context) {
     let route = route_edit_path(context);
     let point = context_route_point(context, route);
     if point == () { return failure("context target is not a direct route point"); }
+    // Unattended scene tests and server runs intentionally have no editor
+    // selection owner. The route context is still valid there; only an
+    // attended editor has a selection side effect to perform.
+    if is_unattended() { return #{ ok: true, path: point, selected: false }; }
     // The generic pointer target may be a nested visual, or a lower object when
     // the marker passes through primary picking. Once the policy has resolved
     // the exact authored route-point path, resolve that canonical identity
