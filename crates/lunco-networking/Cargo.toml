@@ -53,6 +53,7 @@ lunco-api-transport = { path = "../lunco-api-transport", default-features = fals
 # The generic vessel-control commands `SetPorts` and `ReleaseControl` live here;
 # the wire declares channels for them (replacing the old rover drive/brake pair).
 lunco-cosim = { path = "../lunco-cosim" }
+lunco-cosim-core = { path = "../lunco-cosim-core" }
 # Prediction probes use the same solver-resolution owner as luncosim; they must
 # not carry a second hard-coded substep contract.
 lunco-physics = { path = "../lunco-physics" }

@@ -55,8 +55,8 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use std::collections::HashSet;
 
-use crate::connection::PortDirection;
 use crate::ports::{AvianGroup, AvianPort};
+use lunco_core::ports::PortDirection;
 
 /// The port name a revolute joint exposes in both directions.
 pub const JOINT_ANGLE_PORT: &str = "angle";

@@ -1,6 +1,6 @@
 //! Reactive connection binding.
 //!
-//! [`SimConnection`](crate::SimConnection) is authored topology.  It becomes an
+//! [`SimConnection`](lunco_cosim_core::SimConnection) is authored topology.  It becomes an
 //! executable edge only after both named ports resolve and any asynchronous
 //! endpoint lifecycle is terminal. This keeps loading order out of the fixed-step
 //! master without making synchronous hardware ports pretend to be async.
@@ -8,7 +8,9 @@
 use bevy::prelude::*;
 use lunco_core::ports::PortRegistry;
 
-use crate::{diagnostics::BrokenConnection, CosimDiagnostics, SimConnection, SimStatus};
+use lunco_cosim_core::{
+    BrokenConnection, CosimDiagnostics, SimComponent, SimConnection, SimStatus,
+};
 
 /// Runtime lifecycle of a port-owning endpoint.
 #[derive(Component, Debug, Clone, PartialEq, Eq, Default)]
@@ -175,7 +177,7 @@ pub fn bind_connections(world: &mut World) {
         // it is written by a deferred observer/update path; consulting the
         // authoritative solver status closes the one-frame window on first load
         // before that mirror has been installed.
-        let model_status = |entity| world.get::<crate::SimComponent>(entity).map(|m| &m.status);
+        let model_status = |entity| world.get::<SimComponent>(entity).map(|m| &m.status);
         let endpoints_failed = matches!(src, Some(EndpointLifecycle::Failed(_)))
             || matches!(dst, Some(EndpointLifecycle::Failed(_)))
             || matches!(model_status(spec.start_element), Some(SimStatus::Error(_)))
@@ -372,7 +374,7 @@ mod tests {
         let edge = world
             .spawn(SimConnection {
                 start_element: source,
-                start_connector: crate::ports::PORT_NAME.into(),
+                start_connector: lunco_cosim_core::PORT_NAME.into(),
                 start_is_input: false,
                 end_element: target,
                 end_connector: "drive_left".into(),
@@ -390,7 +392,7 @@ mod tests {
 
     #[test]
     fn declared_output_binds_before_its_first_sample() {
-        use crate::{DeclaredOutputPorts, SimComponent};
+        use lunco_cosim_core::{DeclaredOutputPorts, SimComponent};
 
         let mut world = World::new();
         world.init_resource::<PortRegistry>();
@@ -636,7 +638,7 @@ mod tests {
     #[test]
     fn failed_endpoint_retires_edge_without_secondary_port_fault() {
         let (mut world, source, target) = world_with_ports("target");
-        world.entity_mut(source).insert(crate::SimComponent {
+        world.entity_mut(source).insert(SimComponent {
             status: SimStatus::Error("Python runtime unavailable".into()),
             ..default()
         });

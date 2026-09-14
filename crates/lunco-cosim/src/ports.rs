@@ -29,10 +29,9 @@ use lunco_core::ports::{
     PortRef, PortRegistry, PortTopologyRevision, PortTopologyState,
 };
 
-use crate::{DeclaredOutputPorts, SimComponent};
+use lunco_cosim_core::{DeclaredOutputPorts, SimComponent, SimConnection, PORT_NAME};
 
 /// The fixed port name a [`Port`] exposes (its `f64` `value`).
-pub const PORT_NAME: &str = "value";
 
 /// One avian port: a named scalar on an avian component, with its causality,
 /// physical domain, and read/write realization. Part of an [`AvianGroup`].
@@ -406,7 +405,7 @@ const AVIAN_BACKEND: PortBackend = PortBackend {
 /// SysML/hardware [`Port`] — one bidirectional `f64` scalar named `value`.
 ///
 /// The value crosses this backend unchanged in both directions: a Modelica model
-/// on the far side of a [`crate::SimConnection`] exchanges `f64`, and so does the
+/// on the far side of a [`lunco_cosim_core::SimConnection`] exchanges `f64`, and so does the
 /// port it is wired to.
 const PORT_BACKEND: PortBackend = PortBackend {
     list_entities: |world, out| {
@@ -545,7 +544,7 @@ fn port_surface_topology_key(surface: &PortSurface) -> u64 {
 /// port candidate surface. Endpoint/name/direction edits are structural and
 /// must reopen the durable port projection gate even when the component stays
 /// on the same entity.
-fn connection_topology_key(connection: &crate::SimConnection) -> u64 {
+fn connection_topology_key(connection: &SimConnection) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     connection.start_element.hash(&mut hasher);
     connection.start_connector.hash(&mut hasher);
@@ -670,12 +669,12 @@ pub(crate) fn check_port_owner_structure(
 /// `SimConnection` component without replacing it. Affine value changes are
 /// deliberately excluded because they do not change topology.
 pub(crate) fn check_connection_structure(
-    changed: Query<(Entity, &crate::SimConnection), Changed<crate::SimConnection>>,
+    changed: Query<(Entity, &SimConnection), Changed<SimConnection>>,
     mut state: ResMut<PortTopologyState>,
     mut revision: ResMut<PortTopologyRevision>,
 ) {
     for (entity, connection) in &changed {
-        if state.changed::<crate::SimConnection>(entity, connection_topology_key(connection)) {
+        if state.changed::<SimConnection>(entity, connection_topology_key(connection)) {
             revision.bump();
         }
     }
@@ -702,8 +701,8 @@ pub(crate) fn register_builtin_port_topology(app: &mut App) {
         .add_observer(lunco_core::ports::bump_port_topology_on_remove::<SimComponent>)
         .add_observer(lunco_core::ports::bump_port_topology_on_add::<DeclaredOutputPorts>)
         .add_observer(lunco_core::ports::bump_port_topology_on_remove::<DeclaredOutputPorts>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_add::<crate::SimConnection>)
-        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<crate::SimConnection>);
+        .add_observer(lunco_core::ports::bump_port_topology_on_add::<SimConnection>)
+        .add_observer(lunco_core::ports::bump_port_topology_on_remove::<SimConnection>);
     register_avian_port_topology(app);
 }
 

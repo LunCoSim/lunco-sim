@@ -26,13 +26,13 @@ use avian3d::prelude::{
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 
-use crate::connection::PortDirection;
 use crate::ports::{AvianGroup, AvianPort};
+use lunco_core::ports::PortDirection;
 
 /// The avian input ports that sink into [`PendingForces`] — i.e. **writing one
 /// pushes a rigid body around**. Declared here, beside the port table that
 /// implements them, because a port's meaning belongs to the backend that owns
-/// it. [`crate::connection::is_physics_force_port`] is the consumer.
+/// it. [`is_physics_force_port`] is the consumer.
 ///
 /// ENUMERATED, never matched by spelling. A name test cannot tell a body torque
 /// (N·m about a world axis, applied to a rigid body) from a shaft torque (N·m
@@ -59,6 +59,11 @@ pub const BODY_FORCE_PORTS: &[&str] = &[
 /// [`BODY_FORCE_PORTS`]: an actuator is a child prim, while the accumulator and
 /// Avian rigid body live on its owning body.
 pub const ACTUATOR_FORCE_PORTS: &[&str] = &["force_command", "torque_command"];
+
+/// Returns whether a port writes the Avian force accumulator.
+pub fn is_physics_force_port(port: &str) -> bool {
+    BODY_FORCE_PORTS.contains(&port) || ACTUATOR_FORCE_PORTS.contains(&port)
+}
 
 /// Per-entity force accumulator written by `force_*` input ports and drained
 /// into avian each physics tick by [`apply_pending_forces`].
@@ -1384,6 +1389,36 @@ fn nearest_rigid_body(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn force_ports_are_the_gated_ones() {
+        assert!(is_physics_force_port("force_y"));
+        assert!(is_physics_force_port("torque_z"));
+        assert!(is_physics_force_port("force_local_x"));
+        assert!(!is_physics_force_port("throttle"));
+        assert!(is_physics_force_port("force_command"));
+        assert!(is_physics_force_port("torque_command"));
+        assert!(!is_physics_force_port("angle"));
+        assert!(!is_physics_force_port("torque"));
+    }
+
+    #[test]
+    fn conventionally_named_force_ports_are_all_declared() {
+        for group in crate::ports::AVIAN {
+            for p in group.ports {
+                let looks_like_force =
+                    p.name.starts_with("force_") || p.name.starts_with("torque_");
+                if looks_like_force {
+                    assert!(
+                        is_physics_force_port(p.name),
+                        "avian port `{}` looks like a body-force port but is not in \
+                         BODY_FORCE_PORTS — it would bypass the RealtimeSafe gate",
+                        p.name
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn bounded_brake_torque_stops_without_reversing_in_one_step() {

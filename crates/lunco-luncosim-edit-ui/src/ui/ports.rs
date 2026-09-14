@@ -220,8 +220,8 @@ pub fn populate_port_view(world: &mut World) {
         .map(|request| request.expanded_entities.clone())
         .unwrap_or_default();
     let holds: HashMap<Entity, HashMap<String, f64>> = world
-        .get_resource::<lunco_cosim::PortHolds>()
-        .map(lunco_cosim::PortHolds::snapshot)
+        .get_resource::<lunco_cosim_core::PortHolds>()
+        .map(lunco_cosim_core::PortHolds::snapshot)
         .unwrap_or_default()
         .into_iter()
         .fold(HashMap::new(), |mut by_entity, ((entity, name), value)| {
@@ -229,7 +229,7 @@ pub fn populate_port_view(world: &mut World) {
             by_entity
         });
     let wired: HashMap<Entity, HashSet<String>> = world
-        .query::<&lunco_cosim::SimConnection>()
+        .query::<&lunco_cosim_core::SimConnection>()
         .iter(world)
         .flat_map(|connection| {
             [

@@ -23,7 +23,7 @@
 use bevy::{math::DQuat, prelude::*};
 
 use crate::Earthshine;
-use lunco_cosim::{SUN_MOUNT_X_CONNECTOR, SUN_MOUNT_Y_CONNECTOR, SUN_MOUNT_Z_CONNECTOR};
+use lunco_cosim_core::{SUN_MOUNT_X_CONNECTOR, SUN_MOUNT_Y_CONNECTOR, SUN_MOUNT_Z_CONNECTOR};
 
 /// Semantic sun state produced by the selected physical/provider model.
 ///
@@ -684,7 +684,7 @@ pub fn finalize_sun_render_state(
 /// retaining the schema-declared source contract for later binding.
 pub fn inject_local_solar_into_cosim(
     mut q: Query<
-        (Option<&LocalSolar>, &mut lunco_cosim::SimComponent),
+        (Option<&LocalSolar>, &mut lunco_cosim_core::SimComponent),
         With<crate::EnvironmentProbe>,
     >,
 ) {
@@ -754,12 +754,12 @@ mod tests {
     #[test]
     fn missing_solar_direction_removes_only_solar_outputs() {
         let mut app = App::new();
-        let mut sim = lunco_cosim::SimComponent::default();
+        let mut sim = lunco_cosim_core::SimComponent::default();
         sim.outputs.insert(SUN_MOUNT_X_CONNECTOR.to_owned(), 1.0);
         sim.outputs.insert(SUN_MOUNT_Y_CONNECTOR.to_owned(), 2.0);
         sim.outputs.insert(SUN_MOUNT_Z_CONNECTOR.to_owned(), 3.0);
         sim.outputs
-            .insert(lunco_cosim::GRAVITY_SOURCE_CONNECTOR.to_owned(), 9.81);
+            .insert(lunco_cosim_core::GRAVITY_SOURCE_CONNECTOR.to_owned(), 9.81);
         let entity = app.world_mut().spawn((crate::EnvironmentProbe, sim)).id();
         app.add_systems(Update, inject_local_solar_into_cosim);
 
@@ -767,14 +767,14 @@ mod tests {
 
         let outputs = &app
             .world()
-            .get::<lunco_cosim::SimComponent>(entity)
+            .get::<lunco_cosim_core::SimComponent>(entity)
             .unwrap()
             .outputs;
         assert!(!outputs.contains_key(SUN_MOUNT_X_CONNECTOR));
         assert!(!outputs.contains_key(SUN_MOUNT_Y_CONNECTOR));
         assert!(!outputs.contains_key(SUN_MOUNT_Z_CONNECTOR));
         assert_eq!(
-            outputs.get(lunco_cosim::GRAVITY_SOURCE_CONNECTOR),
+            outputs.get(lunco_cosim_core::GRAVITY_SOURCE_CONNECTOR),
             Some(&9.81)
         );
     }

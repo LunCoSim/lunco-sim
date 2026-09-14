@@ -144,7 +144,7 @@ use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 
 use lunco_core::telemetry::{TelemetryEvent, TelemetryValue};
-use lunco_cosim::UsdSourcedCosim;
+use lunco_cosim_core::UsdSourcedCosim;
 use lunco_luncosim_core::LunCoSimHeadlessPlugin;
 use lunco_modelica_runtime::ModelicaModel;
 use lunco_usd_core::document::UsdDocument;
@@ -689,14 +689,11 @@ fn participants_ready(world: &mut World) -> bool {
 /// the model, terminal error, pause state, and readiness hold that blocked the
 /// scenario so the owning subsystem can be fixed.
 fn log_participant_readiness_blockers(world: &mut World) {
-    let mut models = world.query_filtered::<
-        (
-            Entity,
-            &ModelicaModel,
-            Option<&lunco_cosim::SimComponent>,
-        ),
-        With<UsdSourcedCosim>,
-    >();
+    let mut models = world.query_filtered::<(
+        Entity,
+        &ModelicaModel,
+        Option<&lunco_cosim_core::SimComponent>,
+    ), With<UsdSourcedCosim>>();
     for (entity, model, component) in models.iter(world) {
         let status = component
             .map(|component| format!("{:?}", component.status))
@@ -1345,7 +1342,7 @@ pub fn run() -> u8 {
     let expected = app.world().resource::<ExpectedFaults>().0.clone();
     let faults: Vec<(String, String)> = app
         .world()
-        .get_resource::<lunco_cosim::diagnostics::CosimDiagnostics>()
+        .get_resource::<lunco_cosim_core::CosimDiagnostics>()
         .map(|d| {
             let mut v: Vec<(String, String)> = d
                 .faults

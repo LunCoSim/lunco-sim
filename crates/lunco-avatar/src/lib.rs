@@ -46,7 +46,7 @@ use lunco_core_session::{LocalSession, NetworkRole, SessionProfiles};
 /// a prop tumbles).
 type Controllable = bevy::prelude::Or<(
     bevy::prelude::With<lunco_core::ControlBinding>,
-    bevy::prelude::With<lunco_cosim::SimComponent>,
+    bevy::prelude::With<lunco_cosim_core::SimComponent>,
 )>;
 use lunco_celestial::{geo::LocalTangentFrame, LeaveSurface, LocalGravityField, TeleportToSurface};
 use lunco_core::attach::migrate_to_grid;
@@ -7936,7 +7936,7 @@ fn on_inspect_vessels(_t: On<InspectVessels>, mut commands: Commands) {
         // per-entity component reads below.
         let mut q = world.query_filtered::<Entity, bevy::prelude::Or<(
             bevy::prelude::With<lunco_core::ControlBinding>,
-            bevy::prelude::With<lunco_cosim::SimComponent>,
+            bevy::prelude::With<lunco_cosim_core::SimComponent>,
         )>>();
         let ents: Vec<Entity> = q.iter(world).collect();
         let ents: Vec<Entity> = ents
@@ -7951,7 +7951,7 @@ fn on_inspect_vessels(_t: On<InspectVessels>, mut commands: Commands) {
                 .unwrap_or_default();
             let gid = world.get::<lunco_core::GlobalEntityId>(e).map(|g| g.get());
             let has_cmd = world.get::<lunco_core::InputPorts>(e).is_some();
-            let has_sim = world.get::<lunco_cosim::SimComponent>(e).is_some();
+            let has_sim = world.get::<lunco_cosim_core::SimComponent>(e).is_some();
             let has_sel = world.get::<lunco_core::SelectableRoot>(e).is_some();
             let binding = world.get::<lunco_core::ControlBinding>(e).map(|b| {
                 let ports: Vec<&str> = b.ports().collect();

@@ -22,7 +22,7 @@
 
 use bevy::prelude::*;
 
-use lunco_cosim::{EARTH_MOUNT_X_CONNECTOR, EARTH_MOUNT_Y_CONNECTOR, EARTH_MOUNT_Z_CONNECTOR};
+use lunco_cosim_core::{EARTH_MOUNT_X_CONNECTOR, EARTH_MOUNT_Y_CONNECTOR, EARTH_MOUNT_Z_CONNECTOR};
 
 /// The direction **toward Earth** in the active site's ENU axes, written each
 /// frame by `lunco_celestial`'s sun/sky update once the ecliptic→site rotation
@@ -320,7 +320,7 @@ pub fn inject_local_earth_into_cosim(
         (
             Option<&LocalEarth>,
             Option<&crate::EarthDirectionRequired>,
-            &mut lunco_cosim::SimComponent,
+            &mut lunco_cosim_core::SimComponent,
         ),
         With<crate::EnvironmentProbe>,
     >,
@@ -379,7 +379,7 @@ mod tests {
             .spawn((
                 crate::EnvironmentProbe,
                 crate::EarthDirectionRequired,
-                lunco_cosim::SimComponent::default(),
+                lunco_cosim_core::SimComponent::default(),
             ))
             .id();
         app.update();
@@ -408,12 +408,12 @@ mod tests {
     #[test]
     fn missing_earth_direction_removes_only_earth_outputs() {
         let mut app = App::new();
-        let mut sim = lunco_cosim::SimComponent::default();
+        let mut sim = lunco_cosim_core::SimComponent::default();
         sim.outputs.insert(EARTH_MOUNT_X_CONNECTOR.to_owned(), 1.0);
         sim.outputs.insert(EARTH_MOUNT_Y_CONNECTOR.to_owned(), 2.0);
         sim.outputs.insert(EARTH_MOUNT_Z_CONNECTOR.to_owned(), 3.0);
         sim.outputs
-            .insert(lunco_cosim::GRAVITY_SOURCE_CONNECTOR.to_owned(), 9.81);
+            .insert(lunco_cosim_core::GRAVITY_SOURCE_CONNECTOR.to_owned(), 9.81);
         let entity = app
             .world_mut()
             .spawn((crate::EnvironmentProbe, crate::EarthDirectionRequired, sim))
@@ -424,14 +424,14 @@ mod tests {
 
         let outputs = &app
             .world()
-            .get::<lunco_cosim::SimComponent>(entity)
+            .get::<lunco_cosim_core::SimComponent>(entity)
             .unwrap()
             .outputs;
         assert!(!outputs.contains_key(EARTH_MOUNT_X_CONNECTOR));
         assert!(!outputs.contains_key(EARTH_MOUNT_Y_CONNECTOR));
         assert!(!outputs.contains_key(EARTH_MOUNT_Z_CONNECTOR));
         assert_eq!(
-            outputs.get(lunco_cosim::GRAVITY_SOURCE_CONNECTOR),
+            outputs.get(lunco_cosim_core::GRAVITY_SOURCE_CONNECTOR),
             Some(&9.81)
         );
     }
@@ -450,7 +450,7 @@ mod tests {
             .spawn((
                 crate::EnvironmentProbe,
                 crate::EarthDirectionRequired,
-                lunco_cosim::SimComponent::default(),
+                lunco_cosim_core::SimComponent::default(),
                 Transform::default(),
                 GlobalTransform::IDENTITY,
             ))
@@ -460,7 +460,7 @@ mod tests {
         assert!(app.world().get::<LocalEarth>(entity).is_some());
         assert!(app
             .world()
-            .get::<lunco_cosim::SimComponent>(entity)
+            .get::<lunco_cosim_core::SimComponent>(entity)
             .unwrap()
             .outputs
             .contains_key(EARTH_MOUNT_Z_CONNECTOR));
@@ -474,7 +474,7 @@ mod tests {
         );
         let outputs = &app
             .world()
-            .get::<lunco_cosim::SimComponent>(entity)
+            .get::<lunco_cosim_core::SimComponent>(entity)
             .unwrap()
             .outputs;
         assert!(!outputs.contains_key(EARTH_MOUNT_X_CONNECTOR));
@@ -504,7 +504,7 @@ mod tests {
             .spawn((
                 crate::EnvironmentProbe,
                 crate::EarthDirectionRequired,
-                lunco_cosim::SimComponent::default(),
+                lunco_cosim_core::SimComponent::default(),
             ))
             .id();
         app.update();
@@ -540,7 +540,7 @@ mod tests {
             .spawn((
                 crate::EnvironmentProbe,
                 crate::EarthDirectionRequired,
-                lunco_cosim::SimComponent::default(),
+                lunco_cosim_core::SimComponent::default(),
                 facing_east,
                 GlobalTransform::IDENTITY,
             ))
@@ -575,7 +575,7 @@ mod tests {
             .spawn((
                 crate::EnvironmentProbe,
                 crate::EarthDirectionRequired,
-                lunco_cosim::SimComponent::default(),
+                lunco_cosim_core::SimComponent::default(),
                 Transform::from_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)),
                 GlobalTransform::IDENTITY,
             ))

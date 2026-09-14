@@ -19,7 +19,7 @@
 //! Signals move between subsystems through **[Port]**: one `f64` value — a
 //! command, an actuator setpoint, a sensor reading, or a value exchanged with a
 //! Modelica co-simulation. A directed link between two ports is a
-//! `lunco_cosim::SimConnection` (the SSP connection: element + named connector,
+//! `lunco_cosim_core::SimConnection` (the SSP connection: element + named connector,
 //! with factor and offset), which is where a unit conversion belongs when two
 //! ports are authored in different units.
 //!
@@ -565,7 +565,7 @@ impl ControlBinding {
 /// One port type carries every signal in the simulation — commands from the
 /// control surface, actuator setpoints consumed by the physics solvers, sensor
 /// readings, and the values a Modelica co-simulation exchanges. Values are `f64`
-/// in whatever unit the signal is authored in; a `lunco_cosim::SimConnection`
+/// in whatever unit the signal is authored in; a `lunco_cosim_core::SimConnection`
 /// applies factor/offset when two ports are expressed in different units.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Default, Reflect)]
 #[reflect(Component)]

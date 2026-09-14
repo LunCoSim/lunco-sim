@@ -8,7 +8,7 @@
 use bevy::prelude::*;
 use lunco_api::queries::ApiQueryProvider;
 use lunco_api::schema::ApiResponse;
-use lunco_cosim::CosimDiagnostics;
+use lunco_cosim_core::CosimDiagnostics;
 
 /// `GetBrokenConnections` — backs `GET /api/diagnostics`. Reports the co-sim
 /// connection targets after their interface lifecycle has reached a terminal
@@ -45,7 +45,7 @@ impl ApiQueryProvider for BrokenConnectionsProvider {
                     "detail": fault.detail,
                 })
             });
-        let encode = |items: &[lunco_cosim::BrokenConnection]| {
+        let encode = |items: &[lunco_cosim_core::BrokenConnection]| {
             items
                 .iter()
                 .map(|b| {

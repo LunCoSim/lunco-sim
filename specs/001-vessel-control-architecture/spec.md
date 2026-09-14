@@ -48,7 +48,7 @@ struct Port {
 ```
 
 ### 2. The SimConnection Component (Signal Link)
-`lunco_cosim::SimConnection` is the single wiring fabric. It names two endpoints by entity + connector and applies the SSP affine transform `source * scale + offset`, which is where a unit conversion or an actuator gain belongs when two ports are authored in different units.
+`lunco_cosim_core::SimConnection` is the single wiring fabric. It names two endpoints by entity + connector and applies the SSP affine transform `source * scale + offset`, which is where a unit conversion or an actuator gain belongs when two ports are authored in different units.
 ```rust
 struct SimConnection {
     pub start_element: Entity,

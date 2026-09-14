@@ -317,7 +317,7 @@ pub fn apply_gravity_to_rigid_bodies(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Publishes each entity's [`LocalGravity`] magnitude as a [`SimComponent`]
-/// **output** named [`lunco_cosim::GRAVITY_SOURCE_CONNECTOR`], so co-sim models
+/// **output** named [`lunco_cosim_core::GRAVITY_SOURCE_CONNECTOR`], so co-sim models
 /// that take a gravity input (`g`, `gravity`, …) receive the *real* local value
 /// through an ordinary output→input wire.
 ///
@@ -333,31 +333,38 @@ pub fn apply_gravity_to_rigid_bodies(
 /// outputs map. In surface-gravity scenes where no provider has resolved yet,
 /// removes the gravity output rather than exposing a stale value.
 pub fn inject_local_gravity_into_cosim(
-    mut q: Query<(Option<&LocalGravity>, &mut lunco_cosim::SimComponent), With<EnvironmentProbe>>,
+    mut q: Query<
+        (Option<&LocalGravity>, &mut lunco_cosim_core::SimComponent),
+        With<EnvironmentProbe>,
+    >,
 ) {
     for (gravity, mut comp) in &mut q {
         if let Some(gravity) = gravity {
             comp.outputs.insert(
-                lunco_cosim::GRAVITY_SOURCE_CONNECTOR.to_string(),
+                lunco_cosim_core::GRAVITY_SOURCE_CONNECTOR.to_string(),
                 gravity.magnitude(),
             );
             comp.outputs.insert(
-                lunco_cosim::GRAVITY_X_SOURCE_CONNECTOR.to_string(),
+                lunco_cosim_core::GRAVITY_X_SOURCE_CONNECTOR.to_string(),
                 gravity.0.x,
             );
             comp.outputs.insert(
-                lunco_cosim::GRAVITY_Y_SOURCE_CONNECTOR.to_string(),
+                lunco_cosim_core::GRAVITY_Y_SOURCE_CONNECTOR.to_string(),
                 gravity.0.y,
             );
             comp.outputs.insert(
-                lunco_cosim::GRAVITY_Z_SOURCE_CONNECTOR.to_string(),
+                lunco_cosim_core::GRAVITY_Z_SOURCE_CONNECTOR.to_string(),
                 gravity.0.z,
             );
         } else {
-            comp.outputs.remove(lunco_cosim::GRAVITY_SOURCE_CONNECTOR);
-            comp.outputs.remove(lunco_cosim::GRAVITY_X_SOURCE_CONNECTOR);
-            comp.outputs.remove(lunco_cosim::GRAVITY_Y_SOURCE_CONNECTOR);
-            comp.outputs.remove(lunco_cosim::GRAVITY_Z_SOURCE_CONNECTOR);
+            comp.outputs
+                .remove(lunco_cosim_core::GRAVITY_SOURCE_CONNECTOR);
+            comp.outputs
+                .remove(lunco_cosim_core::GRAVITY_X_SOURCE_CONNECTOR);
+            comp.outputs
+                .remove(lunco_cosim_core::GRAVITY_Y_SOURCE_CONNECTOR);
+            comp.outputs
+                .remove(lunco_cosim_core::GRAVITY_Z_SOURCE_CONNECTOR);
         }
     }
 }

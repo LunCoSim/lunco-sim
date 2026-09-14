@@ -1,12 +1,12 @@
 //! Collider synchronization from simulation outputs.
 //!
-//! Watches [`crate::SimComponent`] outputs for `volume` and updates
+//! Watches [`lunco_cosim_core::SimComponent`] outputs for `volume` and updates
 //! the entity's [`Collider`] to a sphere with the corresponding radius.
 
 use avian3d::prelude::{Collider, RigidBody};
 use bevy::prelude::*;
 
-use crate::SimComponent;
+use lunco_cosim_core::SimComponent;
 
 /// Last `volume` value applied to an entity's collider by [`sync_collider`].
 ///

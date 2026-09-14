@@ -184,7 +184,7 @@ The universal interface for data and power flow between architectural layers.
 - **Compatibility**: Maps 1:1 to SysML `Proxy Ports`, Modelica `Connectors`, and ROS `Hardware Interfaces`.
 
 ### Connection
-The logical and electrical link between two **Ports**. A Connection is a Bevy entity (typically [`SimConnection`](../../crates/lunco-cosim/src/connection.rs)) that facilitates the transfer of `PortState` between ports — for example, between Level 1 (Plant) and Level 2 (OBC), or between two `SimComponent`s in a co-simulation graph.
+The logical and electrical link between two **Ports**. A Connection is a Bevy entity (typically [`SimConnection`](../../crates/lunco-cosim-core/src/connection.rs)) that facilitates the transfer of `PortState` between ports — for example, between Level 1 (Plant) and Level 2 (OBC), or between two `SimComponent`s in a co-simulation graph.
 
 A Connection addresses its endpoints **by port name**, carries an SSP `factor`/`offset`, and is
 authored in USD as an attribute connection (`inputs:x.connect = </Path>.outputs:y`). The term

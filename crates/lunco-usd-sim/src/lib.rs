@@ -3320,7 +3320,7 @@ fn activate_dynamic_bodies(
     q_pending_diffs: Query<&UsdPrimPath, With<PendingDifferential>>,
     q_detached: Query<Option<&lunco_physics::PhysicsJointDetachSet>>,
     topology_index: Res<JointTopologyIndex>,
-    mut binding_epoch: ResMut<lunco_cosim::BindingEpochDirty>,
+    mut binding_epoch: ResMut<lunco_cosim_core::BindingEpochDirty>,
 ) {
     // USD/Avian topology is built in the fixed schedule, while this admission
     // pass runs in Update. A body may not become dynamic until every authored
@@ -3607,7 +3607,7 @@ mod dynamic_activation_tests {
         let mut app = App::new();
         app.init_resource::<GroundColliderPending>()
             .init_resource::<JointTopologyIndex>()
-            .init_resource::<lunco_cosim::BindingEpochDirty>()
+            .init_resource::<lunco_cosim_core::BindingEpochDirty>()
             .add_systems(Update, activate_dynamic_bodies);
 
         let stage = Handle::<UsdStageAsset>::default();
@@ -3672,7 +3672,7 @@ mod dynamic_activation_tests {
         let mut app = App::new();
         app.init_resource::<GroundColliderPending>()
             .init_resource::<JointTopologyIndex>()
-            .init_resource::<lunco_cosim::BindingEpochDirty>()
+            .init_resource::<lunco_cosim_core::BindingEpochDirty>()
             .add_systems(Update, activate_dynamic_bodies);
 
         let stage = Handle::<UsdStageAsset>::default();

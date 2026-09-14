@@ -159,12 +159,12 @@ Internally: `pick` the class over one borrowed `ResolveCtx` (index, drafts, cach
 ### 5.2 The realization: LunCoSim is a private fork of FMI + SSP
 | Standard | LunCoSim equivalent | File |
 |---|---|---|
-| FMU (component) | `SimComponent { model_name, inputs, outputs, parameters, .. }` | `lunco-cosim/src/component.rs` |
+| FMU (component) | `SimComponent { model_name, inputs, outputs, parameters, .. }` | `lunco-cosim-core/src/component.rs` |
 | FMU `DefaultExperiment` | `RunBounds` (`h0` ≈ `stepSize`) + `experiment(...)` annotation | `lunco-experiments/src/lib.rs:97` |
 | FMI master algorithm | cosim master loop (`sync_outputs → propagate → sync_inputs → step`) | `lunco-cosim/src/lib.rs`, see [22-domain-cosim](22-domain-cosim.md) |
 | SSP System | USD Stage / active `scene.usda` | [21-domain-usd](21-domain-usd.md) |
 | SSP Component (FMU ref) | a `LunCoProgramAPI` prim + `info:sourceAsset` + `lunco://` payload | |
-| SSP Connection (+ `factor`/`offset`) | `SimConnection { start/end element+connector, scale }` | `lunco-cosim/src/connection.rs` |
+| SSP Connection (+ `factor`/`offset`) | `SimConnection { start/end element+connector, scale }` | `lunco-cosim-core/src/connection.rs` |
 | SSP `.ssv` parameter sets | USD attributes + layer/reference overrides; `Experiment.overrides` | |
 
 **USD already plays SSP's role, and plays it better:** USD composition (layers, references, payloads, overrides) is a superset of SSP's flat `.ssv`/`.ssm`. So the correct mental model is three layers:

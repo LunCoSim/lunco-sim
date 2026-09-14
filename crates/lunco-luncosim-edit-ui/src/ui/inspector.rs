@@ -967,7 +967,7 @@ pub fn populate_inspector_view(world: &mut World) {
             let commanded = registry
                 .read_input_port(world, holder, JOINT_ANGLE_PORT)
                 .unwrap_or(0.0);
-            let mut cq = world.query::<&lunco_cosim::SimConnection>();
+            let mut cq = world.query::<&lunco_cosim_core::SimConnection>();
             let wired = cq
                 .iter(world)
                 .any(|c| c.end_element == holder && c.end_connector == JOINT_ANGLE_PORT);
