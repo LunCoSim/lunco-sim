@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 use avian3d::prelude::{
     Collider, ColliderAabb, ColliderDisabled, ColliderOf, ColliderTransform, CollisionLayers,
-    Position, RayHitData, RayHits, RigidBody, Rotation, SimpleCollider, SpatialQueryFilter,
+    Position, RayHitData, RayHits, RigidBody, Rotation, Sensor, SimpleCollider, SpatialQueryFilter,
 };
 use bevy::ecs::system::SystemParam;
 use bevy::math::{DQuat, DVec3, Dir3};
@@ -1494,46 +1494,44 @@ fn joint_component(seed: Entity, adj: &HashMap<Entity, Vec<Entity>>) -> Vec<Enti
 /// penetration remains an authoring error.
 const INITIAL_POSE_TOLERANCE: f64 = 1.0e-6;
 
+#[derive(Clone)]
+struct InitialCollider {
+    entity: Entity,
+    body: Entity,
+    collider: Collider,
+    position: DVec3,
+    rotation: DQuat,
+    layers: CollisionLayers,
+}
+
+#[derive(Debug)]
+enum InitialContactError {
+    UnsupportedShape,
+    NonFinitePenetration,
+}
+
 /// Cast an initial-state probe against Avian's authored collider geometry.
 /// `Collider::cast_ray` is the same maintained shape-intersection kernel used
 /// by Avian's normal spatial query; this pass only supplies the pre-step
 /// admission boundary and never runs during ordinary movement.
 fn cast_initial_support_ray(
-    colliders: &Query<
-        '_,
-        '_,
-        (
-            Entity,
-            &Collider,
-            &Position,
-            &Rotation,
-            Option<&ColliderAabb>,
-            Option<&ColliderOf>,
-            Option<&ColliderTransform>,
-            Option<&CollisionLayers>,
-            Option<&ColliderDisabled>,
-        ),
-    >,
+    colliders: &[InitialCollider],
     origin: DVec3,
     direction: Dir3,
     max_distance: f64,
     filter: &SpatialQueryFilter,
 ) -> Option<RayHitData> {
     let mut closest = None;
-    for (entity, collider, position, rotation, _, owner, _, layers, disabled) in colliders.iter() {
-        if disabled.is_some() {
-            continue;
-        }
-        let body = owner.map_or(entity, |owner| owner.body);
-        if filter.excluded_entities.contains(&entity)
-            || filter.excluded_entities.contains(&body)
-            || !filter.test(entity, layers.copied().unwrap_or_default())
+    for initial in colliders {
+        if filter.excluded_entities.contains(&initial.entity)
+            || filter.excluded_entities.contains(&initial.body)
+            || !filter.test(initial.entity, initial.layers)
         {
             continue;
         }
-        let Some((distance, normal)) = collider.cast_ray(
-            position.0,
-            rotation.0,
+        let Some((distance, normal)) = initial.collider.cast_ray(
+            initial.position,
+            initial.rotation,
             origin,
             direction.as_dvec3(),
             max_distance,
@@ -1549,7 +1547,7 @@ fn cast_initial_support_ray(
             continue;
         }
         closest = Some(RayHitData {
-            entity,
+            entity: initial.entity,
             distance,
             normal,
         });
@@ -1557,22 +1555,50 @@ fn cast_initial_support_ray(
     closest
 }
 
-fn static_support_penetration(
-    body_bounds: (DVec3, DVec3),
-    support_bounds: &[(DVec3, DVec3)],
-) -> Option<f64> {
-    let (body_min, body_max) = body_bounds;
+/// Find actual initial overlap against the colliders that Avian considers
+/// authored support. A support AABB is only a broad-phase candidate: using its
+/// maximum Y as a surface height turns a rotated ramp into a vertical slab and
+/// rejects valid bodies beside its high end. The narrow-phase query is used only
+/// while a body is pending admission, so this does not enter the simulation
+/// hot path.
+fn exact_static_support_penetration(
+    members: &[Entity],
+    colliders: &[InitialCollider],
+    static_supports: &[InitialCollider],
+) -> Result<Option<f64>, InitialContactError> {
     let mut penetration = None;
-    for &(support_min, support_max) in support_bounds {
-        let overlaps_x = body_min.x <= support_max.x && body_max.x >= support_min.x;
-        let overlaps_z = body_min.z <= support_max.z && body_max.z >= support_min.z;
-        if !overlaps_x || !overlaps_z {
-            continue;
+    for dynamic in colliders
+        .iter()
+        .filter(|collider| members.contains(&collider.body))
+    {
+        for support in static_supports {
+            if members.contains(&support.body) || !dynamic.layers.interacts_with(support.layers) {
+                continue;
+            }
+            let contact = avian3d::collision::collider::contact_query::contact(
+                &dynamic.collider,
+                dynamic.position,
+                dynamic.rotation,
+                &support.collider,
+                support.position,
+                support.rotation,
+                0.0,
+            )
+            .map_err(|_| InitialContactError::UnsupportedShape)?;
+            let Some(contact) = contact else {
+                continue;
+            };
+            if !contact.penetration.is_finite() {
+                return Err(InitialContactError::NonFinitePenetration);
+            }
+            if contact.penetration > INITIAL_POSE_TOLERANCE {
+                penetration = Some(penetration.map_or(contact.penetration, |previous: f64| {
+                    previous.max(contact.penetration)
+                }));
+            }
         }
-        let required = support_max.y - body_min.y;
-        penetration = Some(penetration.map_or(required, |previous: f64| previous.max(required)));
     }
-    penetration
+    Ok(penetration)
 }
 
 // A raycast contact is the *wheel axle*, not a rigid tyre volume. Validation
@@ -1619,6 +1645,7 @@ pub fn validate_initial_physics_poses(
             Option<&ColliderTransform>,
             Option<&CollisionLayers>,
             Option<&ColliderDisabled>,
+            Option<&Sensor>,
         )>,
     )>,
     dynamics: Query<(&RigidBody, Option<&lunco_core::PhysicsStatePending>)>,
@@ -1714,9 +1741,24 @@ pub fn validate_initial_physics_poses(
     let mut static_support_present = false;
     let mut static_support_live = false;
     let mut static_support_bounds = Vec::new();
-    for (entity, collider, position, rotation, _, owner, collider_transform, _, _) in
-        avian.p1().iter()
+    let mut initial_colliders = Vec::new();
+    let mut static_support_colliders = Vec::new();
+    for (
+        entity,
+        collider,
+        position,
+        rotation,
+        _,
+        owner,
+        collider_transform,
+        layers,
+        disabled,
+        sensor,
+    ) in avian.p1().iter()
     {
+        if disabled.is_some() || sensor.is_some() {
+            continue;
+        }
         let body = owner.map_or(entity, |owner| owner.body);
         let (shape_position, shape_rotation) = if let Some(owner) = owner {
             let (Some(body_position), Some(body_rotation), Some(collider_transform)) = (
@@ -1751,6 +1793,18 @@ pub fn validate_initial_physics_poses(
         if !bounds_live {
             continue;
         }
+        let initial = InitialCollider {
+            entity,
+            body,
+            collider: collider.clone(),
+            position: shape_position,
+            rotation: shape_rotation,
+            layers: layers.copied().unwrap_or_default(),
+        };
+        if is_authored_support {
+            static_support_colliders.push(initial.clone());
+        }
+        initial_colliders.push(initial);
         collider_bounds
             .entry(body)
             .and_modify(|(min, max)| {
@@ -1884,10 +1938,9 @@ pub fn validate_initial_physics_poses(
                 }
                 -gravity.0.normalize()
             };
-            let root_rot = avian
-                .p1()
-                .get(footprint_owner)
-                .map(|(_, _, _, rotation, _, _, _, _, _)| rotation.0)
+            let root_rot = rotation_of
+                .get(&footprint_owner)
+                .copied()
                 .unwrap_or(DQuat::IDENTITY);
             let mut filter = SpatialQueryFilter::from_mask(avian3d::prelude::LayerMask(
                 !lunco_core::NON_PHYSICAL_QUERY_LAYERS,
@@ -1932,9 +1985,13 @@ pub fn validate_initial_physics_poses(
                     },
                     |(_, _, _, half, _)| (2.0 * *half).max(contact.probe_length),
                 );
-                let Some(hit) =
-                    cast_initial_support_ray(&avian.p1(), origin, direction, max_distance, &filter)
-                else {
+                let Some(hit) = cast_initial_support_ray(
+                    &initial_colliders,
+                    origin,
+                    direction,
+                    max_distance,
+                    &filter,
+                ) else {
                     continue;
                 };
                 // Measure along the physical support axis, not an assumed global
@@ -1953,24 +2010,60 @@ pub fn validate_initial_physics_poses(
             }
         } else {
             // Physical wheels are real bodies, so measure the deepest dynamic
-            // member. Prefer a live terrain oracle; otherwise use the live
-            // static support AABB that Avian will use for contact admission.
+            // member. Prefer a live terrain oracle; otherwise use Avian's exact
+            // narrow-phase geometry against live static support colliders.
+            if terrain_context.is_none() {
+                if static_support_present && !static_support_live {
+                    continue;
+                }
+                match exact_static_support_penetration(
+                    &members,
+                    &initial_colliders,
+                    &static_support_colliders,
+                ) {
+                    Ok(Some(penetration)) => {
+                        findings.push(lunco_core::RuntimeDiagnostic {
+                            code: "physics-initialization-terrain-penetration".to_string(),
+                            severity: lunco_core::DiagnosticSeverity::Error,
+                            producer: "physics-initialization".to_string(),
+                            subject: subject.to_string(),
+                            message: format!(
+                                "authored initial pose penetrates the support surface by {penetration:.6} m; author the body above terrain or provide an explicit initialization policy"
+                            ),
+                        });
+                    }
+                    Ok(None) => {
+                        for &member in &members {
+                            commands
+                                .entity(member)
+                                .try_remove::<lunco_physics::PhysicsInitializationPending>();
+                        }
+                    }
+                    Err(InitialContactError::UnsupportedShape) => {
+                        findings.push(lunco_core::RuntimeDiagnostic {
+                            code: "physics-initialization-unsupported-shape".to_string(),
+                            severity: lunco_core::DiagnosticSeverity::Error,
+                            producer: "physics-initialization".to_string(),
+                            subject: subject.to_string(),
+                            message: "initial-pose admission could not evaluate an Avian collider shape; authored pose remains held".to_string(),
+                        });
+                    }
+                    Err(InitialContactError::NonFinitePenetration) => {
+                        findings.push(lunco_core::RuntimeDiagnostic {
+                            code: "physics-initialization-non-finite".to_string(),
+                            severity: lunco_core::DiagnosticSeverity::Error,
+                            producer: "physics-initialization".to_string(),
+                            subject: subject.to_string(),
+                            message: "initial-pose contact validation produced a non-finite penetration; authored pose remains held".to_string(),
+                        });
+                    }
+                }
+                continue;
+            }
             for &m in &members {
                 let Some((aabb_min, aabb_max)) = collider_bounds.get(&m).copied() else {
                     continue;
                 };
-                if terrain_context.is_none() {
-                    if static_support_present && !static_support_live {
-                        continue;
-                    }
-                    if let Some(penetration) =
-                        static_support_penetration((aabb_min, aabb_max), &static_support_bounds)
-                    {
-                        over_terrain = true;
-                        rigid_penetration = rigid_penetration.max(penetration);
-                    }
-                    continue;
-                }
                 // A ColliderAabb is expressed in the same physics frame as
                 // Position. Test all corners in the terrain frame; using only
                 // its global-Y lower corner is wrong for a rotated terrain.
@@ -2396,14 +2489,55 @@ mod tests {
     }
 
     #[test]
-    fn static_support_penetration_uses_only_overlapping_support_bounds() {
-        let body = (DVec3::new(-0.4, -0.05, -0.4), DVec3::new(0.4, 0.75, 0.4));
-        let supports = [
-            (DVec3::new(-2.0, -1.0, -2.0), DVec3::new(2.0, 0.0, 2.0)),
-            (DVec3::new(10.0, -1.0, 10.0), DVec3::new(12.0, 0.0, 12.0)),
-        ];
+    fn exact_support_contact_does_not_turn_a_rotated_ramp_into_a_slab() {
+        let body = InitialCollider {
+            entity: Entity::from_raw_u32(1).unwrap(),
+            body: Entity::from_raw_u32(1).unwrap(),
+            collider: Collider::cuboid(1.0, 1.0, 1.0),
+            position: DVec3::new(-2.0, 6.0, 5.0),
+            rotation: DQuat::IDENTITY,
+            layers: CollisionLayers::default(),
+        };
+        let ramp = InitialCollider {
+            entity: Entity::from_raw_u32(2).unwrap(),
+            body: Entity::from_raw_u32(2).unwrap(),
+            collider: Collider::cuboid(60.0, 2.0, 80.0),
+            position: DVec3::new(25.0, 7.91, 0.0),
+            rotation: DQuat::from_rotation_z(17.1887_f64.to_radians()),
+            layers: CollisionLayers::default(),
+        };
 
-        assert_eq!(static_support_penetration(body, &supports), Some(0.05));
+        assert_eq!(
+            exact_static_support_penetration(&[body.body], &[body], &[ramp]).unwrap(),
+            None,
+            "the body's footprint overlaps the ramp AABB, but not the ramp geometry"
+        );
+    }
+
+    #[test]
+    fn exact_support_contact_reports_real_overlap() {
+        let body = InitialCollider {
+            entity: Entity::from_raw_u32(1).unwrap(),
+            body: Entity::from_raw_u32(1).unwrap(),
+            collider: Collider::cuboid(1.0, 1.0, 1.0),
+            position: DVec3::new(0.0, 0.4, 0.0),
+            rotation: DQuat::IDENTITY,
+            layers: CollisionLayers::default(),
+        };
+        let support = InitialCollider {
+            entity: Entity::from_raw_u32(2).unwrap(),
+            body: Entity::from_raw_u32(2).unwrap(),
+            collider: Collider::cuboid(10.0, 1.0, 10.0),
+            position: DVec3::ZERO,
+            rotation: DQuat::IDENTITY,
+            layers: CollisionLayers::default(),
+        };
+
+        assert!(
+            exact_static_support_penetration(&[body.body], &[body], &[support])
+                .unwrap()
+                .is_some_and(|penetration| penetration > INITIAL_POSE_TOLERANCE)
+        );
     }
 
     /// Downward parry ray in TILE-LOCAL coordinates → ABSOLUTE surface altitude at

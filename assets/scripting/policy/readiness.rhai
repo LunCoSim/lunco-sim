@@ -10,24 +10,27 @@
 //   entity      the entity id, or -1 when subject is "world"
 //   label       a model name / scene path, for rules that care about one thing
 //   elapsed_ticks  how long this item has been pending, in FIXED ticks — the
-//                  authoritative age. Ticks, not wall-clock, so the give-up
-//                  lands on the same tick on every machine and a replay
+//                  authoritative age. Ticks, not wall-clock, so the terminal
+//                  verdict lands on the same tick on every machine and a replay
 //                  reproduces. A paused clock does not burn the deadline down.
-//   deadline_ticks the engine's own give-up point, same units
+//   deadline_ticks the engine's terminal-fault threshold, same units
 //   elapsed_s      elapsed_ticks x the fixed timestep, for rules that prefer
 //                  seconds. Derived, so it is always a whole number of ticks
-//   deadline_s     deadline_ticks x the fixed timestep
+//   deadline_s     deadline_ticks x the fixed timestep; reaching it faults and
+//                  holds the world before this policy may authorize proceed
 //   default_action  the persisted default selected by the engine
 //   ignore_failed_models explicit best-effort setting for failed Modelica
 //
 // and must return exactly one of:
 //
-//   "proceed"      let everything run; the wait is tracked but costs nothing
+//   "proceed"      let everything run before the terminal deadline; the wait is
+//                  tracked but costs nothing
 //   "hold_entity"  freeze THIS OBJECT — no motion, no collisions — world runs on
 //   "hold_world"   freeze all physics until it clears
 //
-// Anything else is refused and the engine's built-in rule applies instead, so a
-// typo here degrades to the default rather than to undefined behaviour.
+// Anything else is refused and the engine's built-in rule applies instead. Once
+// the deadline is reached, Rust raises a terminal readiness fault and overrides
+// every policy answer, including "proceed".
 //
 // ── Editing this ────────────────────────────────────────────────────────────
 //
@@ -38,9 +41,9 @@
 //       fn readiness_action(ctx) { "proceed" }
 //   `);
 //
-// which is how a test disables holding entirely, or how a demo makes a slow
-// compile freeze the whole world so the recording never shows a half-built
-// vehicle.
+// which is how a test disables holding entirely before the terminal threshold,
+// or how a demo makes a slow compile freeze the whole world so the recording
+// never shows a half-built vehicle.
 
 /// Deliberately mirrors `lunco_readiness::Action::builtin`. The two must agree:
 /// an app with no scripting runs the Rust rule, and a scene should not behave
@@ -53,12 +56,6 @@ fn readiness_action(ctx) {
     if ctx.kind == "program_failed" {
         return ctx.default_action;
     }
-    // Nothing waits forever. Past the deadline the world runs and the engine
-    // logs the overdue item — a frozen app hides the bug, a moving one shows it.
-    if ctx.elapsed_s >= ctx.deadline_s {
-        return "proceed";
-    }
-
     // A scene mid-spawn has no trustworthy state at all: colliders, terrain and
     // joints are still arriving, and a body integrated against a world that is
     // half there falls through it.
