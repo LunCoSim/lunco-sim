@@ -267,6 +267,12 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Detach a joint by despawning it.
 
+ The live command also records the authored joint path on both linked bodies.
+ Dynamic admission uses that endpoint-local marker to retire the detached
+ topology edge immediately, so an interactive release does not require a scene
+ reload before the bodies can become dynamic. Persistent intent additionally
+ journals the authored removal as described below.
+
 - *defined in:* `crates/lunco-scene-commands/src/commands.rs`
 
 | Field | Type | Description |
