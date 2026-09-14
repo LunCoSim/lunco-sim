@@ -332,7 +332,7 @@ pub fn drill_into_class(world: &mut World, qualified: &str) {
     // inside a panel render.
     world
         .commands()
-        .trigger(lunco_workbench::perspective_command::ActivatePerspective {
+        .trigger(lunco_workbench_core::commands::ActivatePerspective {
             id: "modelica_analyze".into(),
         });
 

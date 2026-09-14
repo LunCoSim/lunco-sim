@@ -19,8 +19,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
-use lunco_core::{NetConnectRequest, NetDisconnectRequest};
-use lunco_core_session::{LocalSession, NetStatus};
+use lunco_core_session::{LocalSession, NetConnectRequest, NetDisconnectRequest, NetStatus};
 use lunco_doc_bevy::Presence;
 use lunco_workbench_core::WorkbenchMenuRegistry;
 
@@ -38,10 +37,10 @@ impl Plugin for LunCoNetworkingUiPlugin {
             .add_systems(
                 bevy_egui::EguiPrimaryContextPass,
                 (draw_collaborator_cursors, draw_pending_connect_prompt)
-                    .in_set(lunco_workbench::ApplicationOverlayRenderSet),
+                    .in_set(lunco_workbench_core::ApplicationOverlayRenderSet),
             );
 
-        #[cfg(feature = "workbench")]
+        #[cfg(feature = "layout-sync")]
         app.add_systems(Startup, register_settings_submenu);
     }
 }
@@ -125,7 +124,7 @@ fn draw_pending_connect_prompt(
     }
 }
 
-#[cfg(feature = "workbench")]
+#[cfg(feature = "layout-sync")]
 fn register_settings_submenu(world: &mut World) {
     let Some(mut menus) = world.get_resource_mut::<WorkbenchMenuRegistry>() else {
         return;

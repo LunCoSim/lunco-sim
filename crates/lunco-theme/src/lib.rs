@@ -25,7 +25,7 @@
 //! a plain dependency on this crate. If they need tokens, the dep must be
 //! **optional and behind their existing `ui` feature** — which is already how
 //! `lunco-networking` gates egui
-//! (`ui = ["networking", "dep:bevy_egui", "workbench"]`, CQ-601).
+//! (`ui = ["networking", "dep:bevy_egui", "layout-sync"]`, CQ-601).
 //! The application lesson menu keeps this dependency on its UI path, so
 //! headless scenario execution does not pull the render stack.
 //!

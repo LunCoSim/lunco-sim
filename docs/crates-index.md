@@ -130,8 +130,8 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-workbench-core`** | Renderer-independent workbench contracts: `Panel`/`PanelCtx`, instance tabs, perspective layout plans, menu contributions, and the published `WorkbenchSnapshot`. It uses the Bevy ECS substrate and egui types but does not pull `bevy_render`, `bevy_egui`, `egui_dock`, storage, or window/render services. |
-| **`lunco-workbench`** | The concrete IDE-like shell: `egui_dock` layout materialization, `bevy_egui` rendering, panel registration, persistence, viewport integration, and shell-only commands/widgets. It publishes `WorkbenchSnapshot`, consumes `lunco-workbench-core`, installs capture only when its API surface is enabled, and renders status data supplied by `lunco-status-core`. |
+| **`lunco-workbench-core`** | Renderer-independent workbench contracts: `Panel`/`PanelCtx`, instance tabs, perspective layout plans, menu contributions, the published `WorkbenchSnapshot`, shell scheduling labels, and perspective command payloads. It uses the Bevy ECS substrate and egui types but does not pull `bevy_render`, `bevy_egui`, `egui_dock`, storage, or window/render services. |
+| **`lunco-workbench`** | The concrete IDE-like shell: `egui_dock` layout materialization, `bevy_egui` rendering, panel registration, persistence, viewport integration, and shell-owned command observers/widgets. It consumes `lunco-workbench-core`; headless adapters use the core contract without linking this shell. |
 | **`lunco-workbench-browser`** | Reusable Twin and Files browser feature: browser section registry and query state, filesystem and library navigation, rename/open actions, and the `TwinBrowserPanel`/`FilesPanel` surfaces. It depends on `lunco-assets-core`, not the dataset processing stack. |
 | **`lunco-workbench-datasets-ui`** | Optional browser presentation for Twin-declared downloadable resources. It projects `lunco-assets`' shared dataset registry and emits its typed request/cancel events without making the generic browser depend on provisioning and processing. |
 | **`lunco-capture`** | Render-bound screenshot and deterministic offline-recording capability: typed capture commands, GPU readback, frame pacing, PNG/video sinks, and recording status. It is an application capability shared by the workbench and windowless/offscreen hosts, not a workbench subsystem. |
@@ -536,6 +536,11 @@ Shader appearance **intent** — **render-free**. Holds `ShaderLook` (a `.wgsl` 
 
 **`lunco-networking`**
 Multiplayer transport adapter. Handles ECS replication, transport abstraction (UDP/WebSockets), and collaborative editing. Physics snapshots and camera/perspective state transfer f64 named-frame state; capture/apply automatically convert between each peer's private `ActivePhysicsFrame` and the semantic frame. No `CellCoord` is a public/wire reference-frame identity.
+
+Its optional `layout-sync` feature carries `WorkbenchSnapshot` and perspective
+command payloads through `lunco-workbench-core` only; it does not depend on the
+concrete egui docking shell. The `ui` feature enables that contract layer for
+the in-sim overlays and menu bridge.
 
 **`lunco-api`**
 Transport-free API core. Owns typed command/query contracts, reflection-based discovery and execution, and the process-local entity registry used by external control and inspection. Native HTTP and browser transports live in `lunco-api-transport`.

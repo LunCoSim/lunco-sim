@@ -329,7 +329,7 @@ pub fn build_input_overlay(app: &mut App) {
     register_input_overlay_commands(app);
     app.add_systems(
         bevy_egui::EguiPrimaryContextPass,
-        draw_input_overlay.in_set(crate::ApplicationOverlayRenderSet),
+        draw_input_overlay.in_set(lunco_workbench_core::ApplicationOverlayRenderSet),
     );
     app.add_systems(
         PreUpdate,

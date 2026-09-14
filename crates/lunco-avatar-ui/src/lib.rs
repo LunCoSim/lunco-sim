@@ -429,11 +429,11 @@ impl Plugin for AvatarUiPlugin {
         app.add_systems(Startup, register_avatar_settings);
         app.add_systems(
             EguiPrimaryContextPass,
-            draw_rover_name_tags.before(lunco_workbench::WorkbenchRenderSet),
+            draw_rover_name_tags.before(lunco_workbench_core::WorkbenchRenderSet),
         );
         app.add_systems(
             EguiPrimaryContextPass,
-            draw_notifications.in_set(lunco_workbench::ApplicationOverlayRenderSet),
+            draw_notifications.in_set(lunco_workbench_core::ApplicationOverlayRenderSet),
         );
         app.register_panel(AvatarStatusPanel);
     }

@@ -107,7 +107,7 @@ impl Plugin for PerspectiveHelpPlugin {
         app.init_resource::<LiveHelpSections>();
         app.add_systems(
             EguiPrimaryContextPass,
-            render_help_popup.in_set(crate::ApplicationOverlayRenderSet),
+            render_help_popup.in_set(lunco_workbench_core::ApplicationOverlayRenderSet),
         );
     }
 }

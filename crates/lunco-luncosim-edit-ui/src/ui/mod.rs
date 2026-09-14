@@ -929,7 +929,7 @@ impl Plugin for SceneEditUiPlugin {
             .add_systems(
                 bevy_egui::EguiPrimaryContextPass,
                 billboard_overlay::draw_billboard_overlay
-                    .before(lunco_workbench::WorkbenchRenderSet),
+                    .before(lunco_workbench_core::WorkbenchRenderSet),
             );
         cinematic::register_all_commands(app);
     }

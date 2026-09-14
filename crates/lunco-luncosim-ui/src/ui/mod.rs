@@ -387,7 +387,7 @@ impl Plugin for LunCoSimUiPlugin {
                 bevy_egui::EguiPrimaryContextPass,
                 (
                     celestial_time::draw_celestial_time
-                        .in_set(lunco_workbench::ApplicationOverlayRenderSet)
+                        .in_set(lunco_workbench_core::ApplicationOverlayRenderSet)
                         .run_if(not(recording_offline))
                         .run_if(in_view_perspective)
                         .run_if(overlays::sky_clock_visible),
@@ -743,9 +743,8 @@ fn luncosim_boot_from_url(
         }
         if let Some(ws) = state.workspace.as_ref() {
             let id: &'static str = Box::leak(ws.clone().into_boxed_str());
-            commands.trigger(lunco_workbench::perspective_command::ActivatePerspective {
-                id: ws.clone(),
-            });
+            commands
+                .trigger(lunco_workbench_core::commands::ActivatePerspective { id: ws.clone() });
             bevy::log::info!("[luncosim_boot_from_url] activated perspective `{ws}`");
         }
         state.parsed = true;

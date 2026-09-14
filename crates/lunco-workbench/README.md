@@ -39,7 +39,9 @@ for that.
 ## Core types
 
 The stable panel, menu, and perspective contracts live in
-`lunco-workbench-core`. This crate owns the concrete egui/egui_dock shell and
+`lunco-workbench-core`. That contract crate also owns scheduling labels and
+perspective command payloads; this crate owns their concrete observers. This
+crate owns the concrete egui/egui_dock shell and
 publishes `WorkbenchSnapshot` for consumers that need current layout facts.
 The Twin and Files browser is a separate reusable feature package,
 `lunco-workbench-browser`; hosts compose it explicitly when they need those

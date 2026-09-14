@@ -56,8 +56,9 @@ crate independent of transport and presentation layers.
 
 Keep the workbench split at the dependency boundary: `lunco-workbench-core`
 owns renderer-independent panel/menu/perspective contracts and the published
-`WorkbenchSnapshot`; `lunco-workbench` owns `egui_dock`, `bevy_egui`, viewport
-rendering, persistence, source editing, and shell-only widgets; and
+`WorkbenchSnapshot`, scheduling labels, and perspective command payloads;
+`lunco-workbench` owns `egui_dock`, `bevy_egui`, viewport rendering,
+persistence, source editing, command observers, and shell-only widgets; and
 `lunco-workbench-browser` owns the optional Twin/Files panels, browser state,
 and built-in filesystem/library sections. Domain UI crates implement contracts
 from the core crate, read layout facts from the snapshot, and depend on the

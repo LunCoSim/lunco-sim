@@ -424,6 +424,11 @@ authoritative and never predicts). The richer per-transport feature matrix
 (`transport-udp/-ws/-wt/-server`) was part of the aspirational multi-transport plan and is not
 how the crate is gated today.
 
+The optional `layout-sync` feature carries perspective state and typed
+perspective commands through `lunco-workbench-core`. It intentionally does not
+depend on `lunco-workbench` or `egui_dock`; the concrete shell is only needed
+by a rendered host that installs the workbench plugin.
+
 ---
 
 ## References
