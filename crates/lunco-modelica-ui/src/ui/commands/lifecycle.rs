@@ -922,9 +922,10 @@ pub fn drain_open_file_results(world: &mut bevy::prelude::World) {
                     // STACK and journals it — so Ctrl+Z after a re-open would
                     // "undo" the reload and hand back pre-reload text that no
                     // longer matches disk, leaving the document dirty with stale
-                    // content. `reload_base` goes through `Document::apply`, which
-                    // keeps generation and the op ring coherent without touching
-                    // undo. Same semantics as USD's re-open.
+                    // content. `reload_base` uses the document's typed source
+                    // lowering without the user-edit origin guard, keeps the
+                    // generation/op ring coherent, and does not touch host undo.
+                    // Same semantics as USD's re-open.
                     lunco_doc::FileBacked::reload_base(host.document_mut(), &source);
                     if read_only_library {
                         host.document_mut().set_origin(DocumentOrigin::File {

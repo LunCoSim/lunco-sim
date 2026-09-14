@@ -922,15 +922,18 @@ impl lunco_doc::FileBacked for ModelicaDocument {
             // Byte-identical to disk — no generation bump, no needless reparse.
             return true;
         }
-        // Route through the op, never a raw field poke: `ReplaceSource` is what
-        // keeps generation and the op log coherent (undo/redo, journal replay).
-        // It cannot fail today, but the trait signature is fallible.
-        let _ = Document::apply(
-            self,
-            ModelicaOp::ReplaceSource {
+        // Use the same typed source mutation as an editor edit, but bypass the
+        // origin guard: a read-only generated/library document still needs to
+        // follow its authoritative external source. Because this call is made
+        // on the document rather than its host, it creates no editor history.
+        if self
+            .apply_internal(ModelicaOp::ReplaceSource {
                 new: source.to_string(),
-            },
-        );
+            })
+            .is_err()
+        {
+            return false;
+        }
         // A re-open is a one-shot commit, not a keystroke burst — reparse on the
         // next tick instead of waiting out the typing debounce.
         self.waive_ast_debounce();
@@ -957,6 +960,18 @@ impl Document for ModelicaDocument {
         if !self.origin.accepts_mutations() {
             return Err(DocumentError::ReadOnly);
         }
+        self.apply_internal(op)
+    }
+}
+
+impl ModelicaDocument {
+    /// Apply a typed source mutation without checking document origin.
+    ///
+    /// The public [`Document`] path adds the user-edit/read-only policy. The
+    /// file-backed reload path uses this lower-level operation to refresh
+    /// generated and read-only sources while keeping one source-to-AST/index
+    /// implementation and no host undo entry.
+    fn apply_internal(&mut self, op: ModelicaOp) -> Result<ModelicaOp, DocumentError> {
         let kind = op.classify();
         // Structured ops (AddComponent/AddConnection/…) rewrite a class by its
         // byte-`location` span, so the AST MUST match the current source exactly.

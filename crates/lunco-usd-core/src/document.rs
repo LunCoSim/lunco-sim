@@ -293,6 +293,38 @@ pub enum UsdOp {
         /// authoring boundary converts it to the target stage convention.
         value: [f64; 3],
     },
+    /// Remove a locally authored standard xform operation and its token from
+    /// `xformOpOrder`. This is the typed inverse for the first local opinion
+    /// on a composed prim; using a source replacement here would reproject the
+    /// whole scene just to reveal the weaker USD value again.
+    RemoveXformOp {
+        /// Layer to write.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim whose local xform operation to clear.
+        path: String,
+        /// One of `xformOp:translate`, `xformOp:rotateXYZ`, or `xformOp:scale`.
+        name: String,
+        /// Canonical value used to construct the redo inverse.
+        restore_value: [f64; 3],
+        /// The target-layer order to restore when the operation is undone.
+        /// `None` means the xform order belonged to a weaker composed layer.
+        restore_order: Option<Vec<String>>,
+    },
+    /// Restore a standard xform operation and the target-layer order captured
+    /// by `RemoveXformOp`. This remains a typed document operation so redo is
+    /// incremental and does not fall back to `ReplaceSource`.
+    RestoreXformOp {
+        /// Layer to write.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim whose local xform operation to restore.
+        path: String,
+        /// One of `xformOp:translate`, `xformOp:rotateXYZ`, or `xformOp:scale`.
+        name: String,
+        /// Canonical value to restore.
+        value: [f64; 3],
+        /// Target-layer xform order to restore, if this edit authored one.
+        order: Option<Vec<String>>,
+    },
     /// Set the `xformOp:rotateXYZ` attribute (Euler XYZ, **degrees**) on the
     /// prim at `path` — the rotation counterpart of [`UsdOp::SetTranslate`].
     /// Authors `xformOpOrder` too if the prim has none yet (like `SetTranslate`,
@@ -560,6 +592,16 @@ pub enum UsdOp {
         /// `false` prunes the prim and its descendants from the composed stage.
         active: bool,
     },
+    /// Remove the target-layer `active` opinion, revealing the weaker composed
+    /// state. This is the typed inverse of the first local deactivation of a
+    /// referenced prim; `active = true` would incorrectly preserve a local
+    /// opinion and still forces a needless source replacement in history.
+    ClearActive {
+        /// Layer to write.
+        edit_target: LayerId,
+        /// Absolute USD path of the prim whose local active opinion to clear.
+        path: String,
+    },
 }
 
 impl Default for UsdOp {
@@ -584,6 +626,8 @@ impl UsdOp {
             | Self::AddPrim { edit_target, .. }
             | Self::RemovePrim { edit_target, .. }
             | Self::SetTranslate { edit_target, .. }
+            | Self::RemoveXformOp { edit_target, .. }
+            | Self::RestoreXformOp { edit_target, .. }
             | Self::SetRotate { edit_target, .. }
             | Self::SetScale { edit_target, .. }
             | Self::SetAttribute { edit_target, .. }
@@ -598,7 +642,8 @@ impl UsdOp {
             | Self::SetVariantSelection { edit_target, .. }
             | Self::SetPayload { edit_target, .. }
             | Self::SetReferenceArcs { edit_target, .. }
-            | Self::SetActive { edit_target, .. } => edit_target,
+            | Self::SetActive { edit_target, .. }
+            | Self::ClearActive { edit_target, .. } => edit_target,
         }
     }
 
@@ -618,6 +663,8 @@ impl UsdOp {
             }],
             Self::RemovePrim { path, .. }
             | Self::SetTranslate { path, .. }
+            | Self::RemoveXformOp { path, .. }
+            | Self::RestoreXformOp { path, .. }
             | Self::SetRotate { path, .. }
             | Self::SetScale { path, .. }
             | Self::SetAttribute { path, .. }
@@ -630,7 +677,8 @@ impl UsdOp {
             | Self::SetVariantSelection { path, .. }
             | Self::SetPayload { path, .. }
             | Self::SetReferenceArcs { path, .. }
-            | Self::SetActive { path, .. } => vec![path.clone()],
+            | Self::SetActive { path, .. }
+            | Self::ClearActive { path, .. } => vec![path.clone()],
             Self::MovePrim {
                 from_path, to_path, ..
             } => vec![from_path.clone(), to_path.clone()],
@@ -1675,6 +1723,8 @@ impl Document for UsdDocument {
             | UsdOp::AddPrim { edit_target, .. }
             | UsdOp::RemovePrim { edit_target, .. }
             | UsdOp::SetTranslate { edit_target, .. }
+            | UsdOp::RemoveXformOp { edit_target, .. }
+            | UsdOp::RestoreXformOp { edit_target, .. }
             | UsdOp::SetRotate { edit_target, .. }
             | UsdOp::SetScale { edit_target, .. }
             | UsdOp::SetAttribute { edit_target, .. }
@@ -1689,7 +1739,8 @@ impl Document for UsdDocument {
             | UsdOp::SetVariantSelection { edit_target, .. }
             | UsdOp::SetPayload { edit_target, .. }
             | UsdOp::SetReferenceArcs { edit_target, .. }
-            | UsdOp::SetActive { edit_target, .. } => edit_target.clone(),
+            | UsdOp::SetActive { edit_target, .. }
+            | UsdOp::ClearActive { edit_target, .. } => edit_target.clone(),
         };
         let target = TargetLayer::from_id(&id).ok_or_else(|| {
             DocumentError::ValidationFailed(format!(
@@ -1841,7 +1892,7 @@ impl Document for UsdDocument {
                 // the op is missing, materialise that order plus the new op into
                 // the target layer — append, never clobber.
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
-                stage.override_prim(prim_sdf).map_err(author_err)?;
+                stage.override_prim(&prim_sdf).map_err(author_err)?;
                 // CANONICAL IN, STAGE ON DISK. A `UsdOp`'s spatial values are always
                 // canonical (Y-up, metres) — that is what makes an op portable: the
                 // same journalled edit replays correctly against a centimetre stage
@@ -1866,9 +1917,23 @@ impl Document for UsdDocument {
                 }
                 let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
 
-                // Typed inverse only when this purely overwrote an existing
-                // translate in this layer (no `xformOpOrder` was authored).
-                let inverse = if translate_existed && !append_op {
+                let restore_order = append_op.then(|| {
+                    let mut order = xform_op_order_tokens(&self.composed_arc(), &prim_sdf);
+                    order.push("xformOp:translate".into());
+                    order
+                });
+                // A first local opinion on a composed prim is undone by
+                // removing only that opinion. Replacing the whole layer would
+                // reproject unrelated live entities and restart programs.
+                let inverse = if !translate_existed {
+                    UsdOp::RemoveXformOp {
+                        edit_target: id.clone(),
+                        path: path.clone(),
+                        name: "xformOp:translate".into(),
+                        restore_value: value,
+                        restore_order,
+                    }
+                } else if !append_op {
                     old_translate
                         // Back to canonical: `old_translate` was read raw out of the
                         // layer, so it is in the STAGE's frame, while a `SetTranslate`
@@ -1896,6 +1961,113 @@ impl Document for UsdDocument {
                 Ok(inverse)
             }
 
+            UsdOp::RemoveXformOp {
+                path,
+                name,
+                restore_value,
+                restore_order,
+                ..
+            } => {
+                if !matches!(
+                    name.as_str(),
+                    "xformOp:translate" | "xformOp:rotateXYZ" | "xformOp:scale"
+                ) {
+                    return Err(DocumentError::ValidationFailed(format!(
+                        "RemoveXformOp does not support `{name}`"
+                    )));
+                }
+                let prim_sdf = self.require_prim_anywhere(&path)?;
+                let order_path = prim_sdf
+                    .append_property("xformOpOrder")
+                    .map_err(|error| DocumentError::ValidationFailed(error.to_string()))?;
+                let layer = self.layer(target);
+                let value_path = prim_sdf
+                    .append_property(&name)
+                    .map_err(|error| DocumentError::ValidationFailed(error.to_string()))?;
+                let authored_value = layer.field(&value_path, "default").is_some();
+                let authored_order = layer.field(&order_path, "default").is_some();
+                let existing_order = xform_op_order_tokens(layer, &prim_sdf);
+                let inverse = UsdOp::RestoreXformOp {
+                    edit_target: id.clone(),
+                    path: path.clone(),
+                    name: name.clone(),
+                    value: restore_value,
+                    order: restore_order,
+                };
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                stage.override_prim(&prim_sdf).map_err(author_err)?;
+                if authored_value {
+                    stage.remove_property(value_path).map_err(author_err)?;
+                }
+                if authored_order {
+                    let remaining = existing_order
+                        .into_iter()
+                        .filter(|token| token != &name)
+                        .collect::<Vec<_>>();
+                    if remaining.is_empty() {
+                        stage.remove_property(order_path).map_err(author_err)?;
+                    } else {
+                        stage
+                            .create_attribute(format!("{path}.xformOpOrder"), "token[]")
+                            .map_err(author_err)?
+                            .set(sdf::Value::token_vec(remaining))
+                            .map_err(author_err)?;
+                    }
+                }
+                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                self.commit(target, new_data, UsdChange::InfoOnly { path, attr: name });
+                Ok(inverse)
+            }
+
+            UsdOp::RestoreXformOp {
+                path,
+                name,
+                value,
+                order,
+                ..
+            } => {
+                if !matches!(
+                    name.as_str(),
+                    "xformOp:translate" | "xformOp:rotateXYZ" | "xformOp:scale"
+                ) {
+                    return Err(DocumentError::ValidationFailed(format!(
+                        "RestoreXformOp does not support `{name}`"
+                    )));
+                }
+                let prim_sdf = self.require_prim_anywhere(&path)?;
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                stage.override_prim(&prim_sdf).map_err(author_err)?;
+                let conv = authoring_stage_convention(&stage)?;
+                let authored = match name.as_str() {
+                    "xformOp:translate" => conv.stage_point_d(DVec3::from_array(value)).to_array(),
+                    "xformOp:rotateXYZ" => conv.stage_euler_xyz_deg(value),
+                    "xformOp:scale" => conv.stage_scale_vec_d(DVec3::from_array(value)).to_array(),
+                    _ => unreachable!(),
+                };
+                stage
+                    .create_attribute(format!("{path}.{name}"), "double3")
+                    .map_err(author_err)?
+                    .set(authored)
+                    .map_err(author_err)?;
+                if let Some(order) = &order {
+                    stage
+                        .create_attribute(format!("{path}.xformOpOrder"), "token[]")
+                        .map_err(author_err)?
+                        .set(sdf::Value::token_vec(order.clone()))
+                        .map_err(author_err)?;
+                }
+                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                let inverse = UsdOp::RemoveXformOp {
+                    edit_target: id.clone(),
+                    path: path.clone(),
+                    name: name.clone(),
+                    restore_value: value,
+                    restore_order: order,
+                };
+                self.commit(target, new_data, UsdChange::InfoOnly { path, attr: name });
+                Ok(inverse)
+            }
+
             UsdOp::SetRotate { path, value, .. } => {
                 // Direct mirror of `SetTranslate` for `xformOp:rotateXYZ`
                 // (Euler XYZ degrees). Same target-layer pre-state read, same
@@ -1911,7 +2083,7 @@ impl Document for UsdDocument {
                 let old_rotate =
                     layer.prim_attribute_value::<[f64; 3]>(&prim_sdf, "xformOp:rotateXYZ");
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
-                stage.override_prim(prim_sdf).map_err(author_err)?;
+                stage.override_prim(&prim_sdf).map_err(author_err)?;
                 // Canonical in, stage on disk — see `SetTranslate`.
                 //
                 // Rotations convert through a quaternion (a Euler triple has no
@@ -1932,7 +2104,20 @@ impl Document for UsdDocument {
                 }
                 let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
 
-                let inverse = if rotate_existed && !append_op {
+                let restore_order = append_op.then(|| {
+                    let mut order = xform_op_order_tokens(&self.composed_arc(), &prim_sdf);
+                    order.push("xformOp:rotateXYZ".into());
+                    order
+                });
+                let inverse = if !rotate_existed {
+                    UsdOp::RemoveXformOp {
+                        edit_target: id.clone(),
+                        path: path.clone(),
+                        name: "xformOp:rotateXYZ".into(),
+                        restore_value: value,
+                        restore_order,
+                    }
+                } else if !append_op {
                     old_rotate
                         // Stage frame on the way back out — see `SetTranslate`'s inverse.
                         .map(|old| UsdOp::SetRotate {
@@ -1971,7 +2156,7 @@ impl Document for UsdDocument {
                     .is_some();
                 let old_scale = layer.prim_attribute_value::<[f64; 3]>(&prim_sdf, "xformOp:scale");
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
-                stage.override_prim(prim_sdf).map_err(author_err)?;
+                stage.override_prim(&prim_sdf).map_err(author_err)?;
                 let conv = authoring_stage_convention(&stage)?;
                 let authored = conv.stage_scale_vec_d(DVec3::from_array(value)).to_array();
                 stage
@@ -1984,7 +2169,20 @@ impl Document for UsdDocument {
                 }
                 let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
 
-                let inverse = if scale_existed && !append_op {
+                let restore_order = append_op.then(|| {
+                    let mut order = xform_op_order_tokens(&self.composed_arc(), &prim_sdf);
+                    order.push("xformOp:scale".into());
+                    order
+                });
+                let inverse = if !scale_existed {
+                    UsdOp::RemoveXformOp {
+                        edit_target: id.clone(),
+                        path: path.clone(),
+                        name: "xformOp:scale".into(),
+                        restore_value: value,
+                        restore_order,
+                    }
+                } else if !append_op {
                     old_scale
                         .map(|old| UsdOp::SetScale {
                             edit_target: id.clone(),
@@ -2818,11 +3016,25 @@ impl Document for UsdDocument {
                         }
                     }
                 };
-                // NOT `SetActive { active: !active }`: that assumes the prim was in
-                // the opposite state. Deactivating an already-inactive prim would
-                // then "undo" into activating it. The snapshot inverse restores the
-                // target layer's real prior opinion, including *unauthored*.
-                let inverse = self.coarse_inverse(target, &id);
+                // Restore the target layer's exact prior active opinion. An
+                // unauthored active field must be cleared on undo, not replaced
+                // with `active = true`, because the weaker composed state owns
+                // the prim's actual active value.
+                let inverse = match self
+                    .layer(target)
+                    .field(&prim_path, sdf::FieldKey::Active.as_str())
+                    .cloned()
+                {
+                    Some(sdf::Value::Bool(previous)) => UsdOp::SetActive {
+                        edit_target: id.clone(),
+                        path: path.clone(),
+                        active: previous,
+                    },
+                    _ => UsdOp::ClearActive {
+                        edit_target: id.clone(),
+                        path: path.clone(),
+                    },
+                };
                 let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
                 // A `SetActive` must be authorable onto a layer that does not yet
                 // carry a spec for the prim — most importantly a local override
@@ -2834,6 +3046,48 @@ impl Document for UsdDocument {
                 stage
                     .prim(prim_path.as_str())
                     .set_active(active)
+                    .map_err(author_err)?;
+                let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
+                self.commit(target, new_data, UsdChange::Resync { path });
+                Ok(inverse)
+            }
+
+            UsdOp::ClearActive { path, .. } => {
+                let prim_path = match self.require_prim_anywhere(&path) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        let prim_path = parse_prim_path(&path)?;
+                        if self.path_is_under_composed_arc_path(&prim_path) {
+                            prim_path
+                        } else {
+                            return Err(error);
+                        }
+                    }
+                };
+                let inverse = match self
+                    .layer(target)
+                    .field(&prim_path, sdf::FieldKey::Active.as_str())
+                    .cloned()
+                {
+                    Some(sdf::Value::Bool(previous)) => UsdOp::SetActive {
+                        edit_target: id.clone(),
+                        path: path.clone(),
+                        active: previous,
+                    },
+                    _ => UsdOp::ClearActive {
+                        edit_target: id.clone(),
+                        path: path.clone(),
+                    },
+                };
+                let stage = open_doc_stage(self.layer(target)).map_err(author_err)?;
+                let root_id = stage.root_layer().identifier().to_owned();
+                stage
+                    .batch_edit(&[root_id.as_str()], |edits| {
+                        edits[0]
+                            .data_mut()
+                            .erase_field(&prim_path, sdf::FieldKey::Active.as_str());
+                        Ok(())
+                    })
                     .map_err(author_err)?;
                 let new_data = extract_root_layer_data(&stage).map_err(author_err)?;
                 self.commit(target, new_data, UsdChange::Resync { path });

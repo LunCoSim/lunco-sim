@@ -34,6 +34,14 @@ that lifecycle edge rather than relying on a timer. Sensor events may carry a
 nested collider; match the entrant through the generic `parent()` chain to the
 authored subject instead of adding a route-specific child relationship.
 
+Script source edits made by a user go through the `ScriptDocument` host, so
+undo, redo, and the Twin journal see the same typed `ScriptOp`. A file-backed
+or USD-embedded source refresh uses the shared external-baseline path instead;
+it advances the runtime generation without duplicating the source owner's
+journal entry. The disposable ribbon follows the same rule: its typed runtime
+projection is rebuilt from the committed route and is never authored as Twin
+content or placed in user history.
+
 Reusable authored programs are managed through the generic Rhai
 `program_editor` tool. It lists `LunCoProgramAPI` children, selects or opens a
 program in the existing editor, atomically switches its `info:sourceAsset` arm,

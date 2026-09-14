@@ -128,6 +128,14 @@ that same USD operation path. `UsdOp` implements
 both `DocumentOp` and `lunco_twin_journal::OpPayload` — so **authoring an edit *is*
 journaling it *is* syncing it** (see the [networking sync architecture](../../crates/lunco-networking/SYNC_ARCHITECTURE.md)).
 
+Derived presentation has a separate typed boundary: `ApplyUsdTransientOps`
+updates the runtime view from already-authored facts (for example, the route
+ribbon) without becoming a user `UsdOp`. It still checks the document
+generation and advances the live projection when its values change, but it
+does not enter the document undo/redo stacks, save output, or Twin journal.
+This keeps derived geometry reusable across Twin scenes without turning a
+rendering cache into authored USD history.
+
 Views observing a `UsdDocument`:
 
 - **3D viewport / Grid** — renders the stage via Bevy + avian3d (the *live*

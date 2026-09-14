@@ -67,7 +67,7 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-usd-core`** | Headless USD document, authoring, shared `ApplyUsdOp`/`ApplyUsdOps` command contracts, operation, schema, unit-conversion, and asset-closure substrate. No runtime, physics, rendering, or UI. |
+| **`lunco-usd-core`** | Headless USD document, authored `ApplyUsdOp`/`ApplyUsdOps` and disposable `ApplyUsdTransientOps` command contracts, operation, schema, unit-conversion, and asset-closure substrate. No runtime, physics, rendering, or UI. |
 | **`lunco-usd-queries`** | UI-free public USD query providers for document inspection, edit-session state, explicit assembly-target resolution, and document synchronization. Tests live with this owning package. |
 | **`lunco-usd`** | UI-free USD runtime orchestration, document commands, and engineering metadata mapping. |
 | **`lunco-usd-bevy-runtime`** | Application-level USD plugin bundle composing visual, diagnostics, physics, simulation, and document-command projections. |

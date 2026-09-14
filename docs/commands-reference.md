@@ -520,6 +520,28 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 | `label` | `String` |  Human-readable undo/journal label. |
 | `ops` | `Vec < UsdOp >` |  Ordered primitive USD operations comprising the one intent. |
 
+#### `ApplyUsdTransientOps`
+
+ Apply typed, disposable USD projection operations for a derived runtime view.
+ The command is used by presentation tools such as the route ribbon after
+ they resolve their authored facts. It applies atomically against the supplied
+ document generation and updates the live USD projection, but it does not
+ create a user undo/redo entry, save an authored layer, or append to the Twin
+ journal.
+
+ Use `ApplyUsdOp`/`ApplyUsdOps` for anything the user authored or expects to
+ survive save-and-reload. Use this command only for a derived view whose
+ source can be rebuilt from authored state.
+
+- *defined in:* `crates/lunco-usd-core/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `doc_id` | `DocumentId` | Target document. |
+| `parent_gen` | `Option < u64 >` | Generation the derived view was resolved from; stale requests are rejected. |
+| `label` | `String` | Diagnostic/projection label; not a journal label. |
+| `ops` | `Vec < UsdOp >` | Typed runtime-layer operations for the derived view. |
+
 #### `AttachComponent`
 
  Attach one component asset to a host body as one journalled USD change set.

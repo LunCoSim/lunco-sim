@@ -214,9 +214,9 @@ boundary as authored top-level prims.
 
 ## Law 1 — every edit goes through `ApplyUsdOp`
 
-An edit that does not lower to a `UsdOp` is absent from **save, journal, undo,
-and network replication**. Route every editor and runtime mutation through the
-same projection boundary.
+An authored edit that does not lower to a `UsdOp` is absent from **save,
+journal, undo, and network replication**. Route every authored editor/runtime
+mutation through the same projection boundary.
 
 ```rust
 commands.trigger(ApplyUsdOp { doc_id: doc, parent_gen: None, op });      // one op
@@ -226,6 +226,13 @@ apply_ops_as_change_set(world, doc, "Edit material", ops);       // N ops, ONE u
 Prefer `apply_ops_as_change_set` whenever an intent lowers to more than one op —
 a loop of `ApplyUsdOp` journals N independent entries, and undo then peels off
 one and leaves the object half-edited.
+
+This law is for authored edits. A derived presentation may use the typed
+`ApplyUsdTransientOps` command after resolving its source from the composed
+stage. That path is generation-checked and projected through OpenUSD, but is
+explicitly outside save, undo/redo, and the Twin journal. Do not use it for a
+user edit, and do not make a derived view durable by quietly authoring a second
+`UsdOp`.
 
 Writing an ECS component directly is legitimate **only** for state that is
 genuinely not part of the document (a camera's current yaw, a hover highlight).

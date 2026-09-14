@@ -3044,7 +3044,7 @@ pub fn sync_generated_network_documents(
                     },
                 )
             };
-        documents.checkpoint_source(document, source.source.clone());
+        documents.reload_external_source(document, &source.source);
         documents.link(entity, document);
         model.document = document;
         generated_metadata.dirty = true;

@@ -937,6 +937,43 @@ impl<D: Document> DocumentHost<D> {
         Ok(ack)
     }
 
+    /// Apply a compound edit to the document state without adding a user
+    /// undo/redo entry or recording it in the external journal.
+    ///
+    /// The typed operation log still advances with the document, so live
+    /// projections can replay the transient view edit and later document
+    /// edits keep an exact generation boundary. This is for disposable,
+    /// derived presentation state; durable user intent must use
+    /// [`apply_group`](Self::apply_group).
+    pub fn apply_group_transient<I>(&mut self, ops: I) -> Result<Ack, Reject>
+    where
+        D: Clone,
+        I: IntoIterator<Item = D::Op>,
+    {
+        let ops: Vec<D::Op> = ops.into_iter().collect();
+        if ops.is_empty() {
+            let mut ack = Ack::new(OpId::new());
+            ack.new_gen = Some(self.document.generation());
+            return Ok(ack);
+        }
+
+        let mut candidate = self.document.clone();
+        for op in &ops {
+            match candidate.apply(op.clone()) {
+                Ok(_) => {}
+                Err(DocumentError::ReadOnly) => return Err(Reject::ReadOnly),
+                Err(DocumentError::ValidationFailed(msg)) | Err(DocumentError::Internal(msg)) => {
+                    return Err(Reject::InvalidOp(msg))
+                }
+            }
+        }
+        self.document = candidate;
+
+        let mut ack = Ack::new(OpId::new());
+        ack.new_gen = Some(self.document.generation());
+        Ok(ack)
+    }
+
     /// Apply a history group to the live document, rolling back already
     /// applied members if a later member rejects. The returned pairs are in
     /// application order and are recorded only after the whole group commits.

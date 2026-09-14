@@ -146,10 +146,19 @@ Resolve authored identities through the authoritative binding map and write the
 derived USD view to `@runtime@` only when the route changes or the view is first
 materialized. Use standard USD geometry and the existing renderer for depth and
 occlusion; do not create a Twin-specific ribbon prim or a per-frame document
-edit. Marker-root placement, annotation geometry, labels, and look remain
-separate owners. Stable frames must do no route parsing, binding lookup, mesh
-generation, or marker writes; camera-dependent label projection is the only
-remaining per-frame presentation work.
+edit. The runtime view must use the typed transient USD projection command, so
+it is generation-checked and OpenUSD-backed without entering authored undo,
+save, or Twin journal history. Marker-root placement, annotation geometry,
+labels, and look remain separate owners. Stable frames must do no route
+parsing, binding lookup, mesh generation, or marker writes; camera-dependent
+label projection is the only remaining per-frame presentation work.
+
+The same boundary applies across document domains: user Rhai/Modelica edits
+use their `DocumentHost` operation path, while file-backed, USD-embedded, and
+generated source refreshes use the shared `FileBacked::reload_base` contract.
+External refreshes advance the live generation and invalidate consumers but do
+not create a second undo/journal entry. Never replace a host to hot-swap source;
+that discards history and breaks the canonical document identity.
 
 Failure-path acceptance must use an owner-local, transient fixture or typed test
 command. For example, the Scenarios menu may inject its unavailable presentation

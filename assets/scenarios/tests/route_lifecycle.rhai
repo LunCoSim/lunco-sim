@@ -391,6 +391,51 @@ fn on_tick(me) {
         this.checks.push(t_true(true, "deleting a point updates ribbon topology"));
         this.checks.push(t_true(find(SUBJECT_PATH) == this.subject,
             "deleting a point does not rebuild the subject"));
+        let moved = waypoint_editor::on_move(context(
+            this.doc, ROUTE + "/P2", [2.0, 1.0, -26.0],
+        ));
+        this.checks.push(t_true(moved.ok == true && moved.path == ROUTE + "/P2",
+            "moving a referenced route point authors a local USD transform opinion"));
+        this.phase = 40;
+        return;
+    }
+
+    if this.phase == 40 {
+        let position = point_position(this.doc, ROUTE + "/P2");
+        if position == () || position[0] != 2.0 || position[2] != -26.0
+            || ribbon_count(this.doc) != 3 { return; }
+        this.checks.push(t_true(true,
+            "moving a referenced route point updates its composed ribbon"));
+        this.checks.push(t_true(find(SUBJECT_PATH) == this.subject,
+            "moving a referenced point preserves the subject identity"));
+        let undone = cmd("UndoDocument", #{ doc_id: this.doc });
+        if undone == () || undone.ok != true { return; }
+        this.phase = 41;
+        return;
+    }
+
+    if this.phase == 41 {
+        let position = point_position(this.doc, ROUTE + "/P2");
+        if position == () || position[0] != 0.0 || position[2] != -24.0
+            || ribbon_count(this.doc) != 3 { return; }
+        this.checks.push(t_true(true,
+            "undo removes only the local transform opinion from a referenced point"));
+        this.checks.push(t_true(find(SUBJECT_PATH) == this.subject,
+            "undoing a referenced transform preserves the subject identity"));
+        let redone = cmd("RedoDocument", #{ doc_id: this.doc });
+        if redone == () || redone.ok != true { return; }
+        this.phase = 42;
+        return;
+    }
+
+    if this.phase == 42 {
+        let position = point_position(this.doc, ROUTE + "/P2");
+        if position == () || position[0] != 2.0 || position[2] != -26.0
+            || ribbon_count(this.doc) != 3 { return; }
+        this.checks.push(t_true(true,
+            "redo reapplies the referenced transform without scene reprojection"));
+        this.checks.push(t_true(find(SUBJECT_PATH) == this.subject,
+            "redoing a referenced transform preserves the subject identity"));
         let deleted = waypoint_editor::on_delete(context(this.doc, ROUTE + "/P2", ()));
         this.checks.push(t_true(deleted.ok == true,
             "referenced route point uses a local USD active override on delete"));
@@ -402,6 +447,32 @@ fn on_tick(me) {
         if point_count(this.doc) != 2 || has_path(this.doc, ROUTE + "/P2")
             || ribbon_count(this.doc) != 2 { return; }
         this.checks.push(t_true(true, "deactivating a referenced point does not rebuild the subject"));
+        let undone = cmd("UndoDocument", #{ doc_id: this.doc });
+        if undone == () || undone.ok != true { return; }
+        this.phase = 51;
+        return;
+    }
+
+    if this.phase == 51 {
+        if point_count(this.doc) != 3 || !has_path(this.doc, ROUTE + "/P2")
+            || ribbon_count(this.doc) != 3 { return; }
+        this.checks.push(t_true(true,
+            "undo restores a referenced route point and its ribbon"));
+        this.checks.push(t_true(find(SUBJECT_PATH) == this.subject,
+            "undoing a referenced route edit preserves the subject identity"));
+        let redone = cmd("RedoDocument", #{ doc_id: this.doc });
+        if redone == () || redone.ok != true { return; }
+        this.phase = 52;
+        return;
+    }
+
+    if this.phase == 52 {
+        if point_count(this.doc) != 2 || has_path(this.doc, ROUTE + "/P2")
+            || ribbon_count(this.doc) != 2 { return; }
+        this.checks.push(t_true(true,
+            "redo reapplies the referenced route-point deletion"));
+        this.checks.push(t_true(find(SUBJECT_PATH) == this.subject,
+            "redoing a referenced route edit preserves the subject identity"));
         waypoint_editor::on_delete(context(this.doc, ROUTE + "/P1", ()));
         this.phase = 6;
         return;

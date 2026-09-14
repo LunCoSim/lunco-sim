@@ -49,9 +49,9 @@ use lunco_twin::{DocumentKindId, DocumentKindMeta, DocumentKindRegistry};
 use lunco_usd_bevy_core::{source::UsdSourceText, UsdRead, UsdStageAsset};
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneRoot};
 use lunco_usd_core::commands::{
-    is_usd_path, ApplyUsdOp, ApplyUsdOps, AttachComponent, AttachProgram, CommitUsdProposal,
-    CreateUsdProposal, DetachComponent, EmptyViewportReason, ReviewUsdProposal, UsdDocumentReady,
-    UsdProposalReviewAction, USD_DOCUMENT_KIND,
+    is_usd_path, ApplyUsdOp, ApplyUsdOps, ApplyUsdTransientOps, AttachComponent, AttachProgram,
+    CommitUsdProposal, CreateUsdProposal, DetachComponent, EmptyViewportReason, ReviewUsdProposal,
+    UsdDocumentReady, UsdProposalReviewAction, USD_DOCUMENT_KIND,
 };
 use lunco_usd_core::document::{LayerId, UsdOp};
 use lunco_usd_core::edit_session::{
@@ -311,6 +311,7 @@ impl Plugin for UsdCommandsPlugin {
         );
         app.register_deferred_command::<ApplyUsdOp>()
             .register_deferred_command::<ApplyUsdOps>()
+            .register_deferred_command::<ApplyUsdTransientOps>()
             .register_deferred_command::<CreateUsdProposal>()
             .register_deferred_command::<ReviewUsdProposal>()
             .register_deferred_command::<CommitUsdProposal>()
@@ -745,6 +746,7 @@ register_commands!(
     on_load_scene,
     on_apply_usd_op,
     on_apply_usd_ops,
+    on_apply_usd_transient_ops,
     on_create_usd_proposal,
     on_review_usd_proposal,
     on_commit_usd_proposal,
@@ -1924,6 +1926,53 @@ fn on_apply_usd_ops(
     });
 }
 
+#[on_command(ApplyUsdTransientOps)]
+fn on_apply_usd_transient_ops(
+    trigger: On<ApplyUsdTransientOps>,
+    mut commands: Commands,
+    active_id: Res<ActiveCommandId>,
+    pending_request: Option<Res<PendingApiRequest>>,
+) {
+    let command = trigger.event().clone();
+    let command_id = active_id.get();
+    let correlation_id = pending_request
+        .map(|request| request.correlation_id)
+        .filter(|id| *id != 0);
+    commands.queue(move |world: &mut World| {
+        let total = command.ops.len();
+        let outcome = apply_transient_ops_result(
+            world,
+            command.doc_id,
+            command.parent_gen,
+            command.label,
+            command.ops,
+        )
+        .and_then(|(ack, applied)| {
+            if applied == total {
+                Ok(ack)
+            } else {
+                Err(format!(
+                    "USD document {} applied {applied}/{total} transient operations",
+                    command.doc_id
+                ))
+            }
+        });
+        if let Err(error) = &outcome {
+            bevy::log::warn!(
+                "[ApplyUsdTransientOps] {} rejected: {error}",
+                command.doc_id
+            );
+        }
+        finish_command_result(
+            world,
+            command_id,
+            correlation_id,
+            outcome,
+            ApiErrorCode::CommandRejected,
+        );
+    });
+}
+
 #[on_command(ApplyUsdOp)]
 fn on_apply_usd_op(
     trigger: On<ApplyUsdOp>,
@@ -2188,6 +2237,47 @@ fn apply_ops_as_change_set_result(
         ack.new_gen.unwrap_or_default(),
         change_set_id,
         journal.as_ref(),
+    ));
+    Ok((ack, total))
+}
+
+fn apply_transient_ops_result(
+    world: &mut World,
+    doc: DocumentId,
+    parent_gen: Option<u64>,
+    _label: String,
+    ops: Vec<UsdOp>,
+) -> Result<(Ack, usize), String> {
+    refresh_authoring_recipe(world, doc);
+    validate_live_attribute_types(world, doc, &ops)?;
+    let total = ops.len();
+    let result = {
+        let mut registry = world.resource_mut::<DocumentRegistry<UsdDocument>>();
+        let Some(host) = registry.host_mut(doc) else {
+            return Err(format!("USD document {doc} is not open"));
+        };
+        if let Some(parent) = parent_gen {
+            let current = host.generation();
+            if parent != current {
+                return Err(format!(
+                    "USD document {doc} has stale parent generation {parent}; current is {current}"
+                ));
+            }
+        }
+        host.apply_group_transient(ops)
+            .map_err(|reject| format!("USD transient edit rejected: {reject}"))?
+    };
+    world
+        .resource_mut::<DocumentRegistry<UsdDocument>>()
+        .mark_changed(doc);
+    let mut ack = result;
+    ack.data = Some(usd_ack_data(
+        doc,
+        &[],
+        &[],
+        ack.new_gen.unwrap_or_default(),
+        None,
+        world.get_resource::<lunco_doc_bevy::JournalResource>(),
     ));
     Ok((ack, total))
 }

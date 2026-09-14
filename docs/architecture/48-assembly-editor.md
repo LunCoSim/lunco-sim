@@ -48,8 +48,10 @@ name convention, or ECS-only grouping state is introduced.
   the host copies undo/redo state by value and the registry attaches a new
   recorder to the same Twin journal. Save-As is the first operation that can
   bind the snapshot to a filesystem path.
-- `UsdOp` plus `ApplyUsdOp`/`ApplyUsdOps` is the only write path. It supplies journaling,
-  inverse operations, save, undo, and live projection.
+- `UsdOp` plus `ApplyUsdOp`/`ApplyUsdOps` is the only **authored** write path. It
+  supplies journaling, inverse operations, save, undo, and live projection.
+  Derived presentation may use the typed `ApplyUsdTransientOps` path; that
+  path updates the live runtime view only and never creates authored history.
 - Reusable editor policy is authored as Rhai tool libraries. Direct
   `name::function(...)` calls remain available to hooks, while dependencies use
   Rhai's normal `import "name" as name` resolver and load from the registered

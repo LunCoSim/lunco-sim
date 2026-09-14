@@ -22,12 +22,11 @@ use crate::backend::ScriptBackends;
 #[cfg(any(feature = "rhai", feature = "python"))]
 use crate::doc::ScriptLanguage;
 #[cfg(feature = "rhai")]
-use crate::world_bridge::{PendingWorldScript, PendingWorldScripts};
+use crate::doc::{ScenarioReloadPolicy, ScriptDocument, ScriptedModel};
 #[cfg(feature = "rhai")]
-use crate::{
-    doc::{ScenarioReloadPolicy, ScriptDocument, ScriptedModel},
-    ScriptRegistry,
-};
+use crate::world_bridge::{PendingWorldScript, PendingWorldScripts};
+#[cfg(any(feature = "rhai", feature = "python"))]
+use crate::ScriptRegistry;
 #[cfg(any(feature = "rhai", feature = "python"))]
 use bevy::prelude::*;
 #[cfg(feature = "rhai")]
@@ -39,8 +38,10 @@ use lunco_core::ActiveCommandId;
 use lunco_core::TelemetryValue;
 #[cfg(any(feature = "rhai", feature = "python"))]
 use lunco_core::{on_command, Ack, Command, OpId};
-#[cfg(feature = "rhai")]
+#[cfg(any(feature = "rhai", feature = "python"))]
 use lunco_doc::DocumentId;
+#[cfg(any(feature = "rhai", feature = "python"))]
+use lunco_doc_bevy::{RedoDocument, UndoDocument};
 
 // Pause/stop scenario commands are language-agnostic (`any(rhai, python)`) and
 // touch `ScriptedModel`; rhai already imports it above, so a python-only build
@@ -248,13 +249,14 @@ fn on_run_scenario(
         // A `RunScenario` carries SOURCE TEXT, not a location — there is no asset
         // id to anchor a relative import against.
         None,
+        ScenarioSourceMode::UserEdit,
         false,
         cmd.reload_policy,
         guard.and_then(|g| g.0),
         &mut registry,
         &q_existing,
         &mut commands,
-    );
+    )?;
     Ok(Ack::with_data(
         OpId::new(),
         serde_json::json!({ "document_id": doc_id_raw, "generation": generation }),
@@ -323,11 +325,89 @@ fn resolve_scenario_target(
         .ok_or_else(|| "RunScenarioAsset: no WorldRoot exists for the default host".to_string())
 }
 
+/// Script documents own their history just like USD and Modelica documents.
+/// This observer is intentionally a no-op for other document domains; their
+/// owners receive the same generic command and apply their own host stack.
+#[cfg(any(feature = "rhai", feature = "python"))]
+#[on_command(UndoDocument)]
+fn on_undo_script_document(
+    trigger: On<UndoDocument>,
+    mut registry: ResMut<ScriptRegistry>,
+    journal: Option<Res<lunco_doc_bevy::JournalResource>>,
+) {
+    let doc = trigger.event().doc_id;
+    if registry.documents.get(&doc).is_none() {
+        return;
+    }
+    let mut apply = || {
+        registry
+            .documents
+            .get_mut(&doc)
+            .map_or(Ok(false), |host| host.undo())
+    };
+    let outcome = match journal {
+        Some(journal) => journal
+            .as_ref()
+            .change_set(format!("Undo script document {doc}"), apply),
+        None => apply(),
+    };
+    match outcome {
+        Ok(true) => info!("[script] undo applied on {doc}"),
+        Ok(false) => info!("[script] nothing to undo on {doc}"),
+        Err(error) => warn!("[script] undo failed on {doc}: {error:?}"),
+    }
+}
+
+#[cfg(any(feature = "rhai", feature = "python"))]
+#[on_command(RedoDocument)]
+fn on_redo_script_document(
+    trigger: On<RedoDocument>,
+    mut registry: ResMut<ScriptRegistry>,
+    journal: Option<Res<lunco_doc_bevy::JournalResource>>,
+) {
+    let doc = trigger.event().doc_id;
+    if registry.documents.get(&doc).is_none() {
+        return;
+    }
+    let mut apply = || {
+        registry
+            .documents
+            .get_mut(&doc)
+            .map_or(Ok(false), |host| host.redo())
+    };
+    let outcome = match journal {
+        Some(journal) => journal
+            .as_ref()
+            .change_set(format!("Redo script document {doc}"), apply),
+        None => apply(),
+    };
+    match outcome {
+        Ok(true) => info!("[script] redo applied on {doc}"),
+        Ok(false) => info!("[script] nothing to redo on {doc}"),
+        Err(error) => warn!("[script] redo failed on {doc}: {error:?}"),
+    }
+}
+
 /// Register a rhai source as a `ScriptDocument` and attach a `ScriptedModel` to
 /// `target`, reusing the doc id (hot-reload, generation bump) if one already
 /// exists. Shared by `RunScenario` and `RunTimeline`. Returns `(doc_id, generation)`.
 #[cfg(feature = "rhai")]
-pub(crate) fn attach_rhai_scenario(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScenarioSourceMode {
+    /// An explicit editor/API source edit. It is a ScriptOp and therefore
+    /// undoable, journaled, and replayable through the script document host.
+    UserEdit,
+    /// Source projected from an authored USD prim or an asset file. That owner
+    /// already journals/persists the source change, so this refreshes the
+    /// script projection without creating a duplicate ScriptOp.
+    External,
+    /// A generated runtime program such as a timeline executor. It changes the
+    /// running program but is not an authored source edit.
+    Runtime,
+}
+
+#[cfg(feature = "rhai")]
+fn attach_rhai_scenario(
     target: Entity,
     source: String,
     params: String,
@@ -338,57 +418,57 @@ pub(crate) fn attach_rhai_scenario(
     // location, so a RELATIVE `import` in it cannot be anchored and must fail
     // rather than silently resolve against some invented root.
     asset_id: Option<String>,
-    // Whether the source was authored on a prim in the currently loaded USD
-    // scene. API and timeline scenarios have their own explicit lifecycle.
+    source_mode: ScenarioSourceMode,
+    // Whether the scenario document is owned by the authored scene and must
+    // be wound down with that scene.
     scene_owned: bool,
     reload_policy: ScenarioReloadPolicy,
     authority: Option<lunco_core::SessionId>,
     registry: &mut ScriptRegistry,
     q_existing: &Query<&ScriptedModel>,
     commands: &mut Commands,
-) -> (u64, u64) {
+) -> Result<(u64, u64), String> {
     // Reuse the doc id if a scenario is already attached (hot-reload), else mint.
     let existing = q_existing.get(target).ok().and_then(|m| m.document_id);
-    let (doc_id_raw, generation) = match existing {
-        Some(id) => {
-            let next_gen = registry
-                .documents
-                .get(&DocumentId::new(id))
-                .map(|h| h.document().generation + 1)
-                .unwrap_or(0);
-            (id, next_gen)
-        }
-        None => (DocumentId::fresh().raw(), 0),
-    };
+    let doc_id_raw = existing.unwrap_or_else(|| DocumentId::fresh().raw());
 
     // Execution scope from a `// @scope client|both` directive in the source, so
     // it works identically for API-attached (`RunScenario`) and USD-embedded
     // scenarios (both funnel through here) with no wire/schema change.
     let scope = crate::scenario::ScriptScope::from_source(&source);
-    let mut doc = ScriptDocument::new(doc_id_raw, ScriptLanguage::Rhai, source);
-    // Hot-reload reuses the doc id and bumps generation; `new` resets it to 0,
-    // so carry the computed generation through.
-    doc.generation = generation;
-    // Scenario parameters (JSON object string) — the runtime exposes them to the
-    // script as a `params` constant, so the same source serves many entities.
-    doc.params = params;
-    // Script IDENTITY. Carried on the document (not just used at attach time)
-    // because the runtime recompiles from the document on every hot-reload, and
-    // the compiled `AST` needs its id each time: rhai hands `AST::source()` to
-    // `ModuleResolver::resolve` as the importing script's location, which is the
-    // anchor a relative `import "shot_camera"` resolves against.
-    doc.asset_id = asset_id;
-    // USD-embedded persistence: the LOAD half is done — a prim's
-    // `info:sourceCode` is read by lunco-usd-bevy into `EmbeddedScenarioSource`
-    // and attached by `attach_embedded_scenarios` below, so scene-authored
-    // scenarios run on spawn. The SAVE half belongs to the application USD
-    // command (`lunco-luncosim-ui::SaveScenario`), which owns the stage-asset to
-    // editable-document mapping and authors `info:sourceCode` through
-    // `ApplyUsdOp`. Keeping that write in the USD-facing application seam avoids
-    // a scripting-to-USD dependency and preserves one authoring path.
-    // The one insert funnel — attaches a journal recorder when the Twin journal
-    // is wired, so this live edit (and every hot-reload SetSource) auto-records.
-    registry.insert_document(DocumentId::new(doc_id_raw), doc);
+    if let Some(id) = existing {
+        let doc_id = DocumentId::new(id);
+        let source_changed = registry
+            .documents
+            .get(&doc_id)
+            .is_some_and(|host| host.document().source != source);
+        if source_changed {
+            match source_mode {
+                ScenarioSourceMode::UserEdit => {
+                    registry
+                        .apply(doc_id, crate::doc::ScriptOp::SetSource(source.clone()))
+                        .map_err(|reject| format!("scenario source edit rejected: {reject:?}"))?;
+                }
+                ScenarioSourceMode::External | ScenarioSourceMode::Runtime => {
+                    registry.reload_external_source(doc_id, &source);
+                }
+            }
+        }
+        let host = registry
+            .documents
+            .get_mut(&doc_id)
+            .ok_or_else(|| format!("script document {doc_id} disappeared during attach"))?;
+        host.document_mut().params = params;
+        host.document_mut().asset_id = asset_id;
+    } else {
+        let mut doc = ScriptDocument::new(doc_id_raw, ScriptLanguage::Rhai, source);
+        // Script IDENTITY is carried on the document because the runtime
+        // recompiles from it and uses the asset id as the relative-import
+        // anchor. A missing id is meaningful for inline/generated sources.
+        doc.params = params;
+        doc.asset_id = asset_id;
+        registry.insert_document(DocumentId::new(doc_id_raw), doc);
+    }
 
     commands.entity(target).try_insert((
         ScriptedModel {
@@ -410,7 +490,12 @@ pub(crate) fn attach_rhai_scenario(
         commands.entity(target).remove::<crate::SceneOwnedScript>();
     }
 
-    (doc_id_raw, generation)
+    let generation = registry
+        .documents
+        .get(&DocumentId::new(doc_id_raw))
+        .map(|host| host.document().generation)
+        .ok_or_else(|| format!("script document {doc_id_raw} missing after attach"))?;
+    Ok((doc_id_raw, generation))
 }
 
 /// A generic file-backed scenario waiting for its root asset and import graph
@@ -465,18 +550,22 @@ pub fn attach_requested_scenarios(
             continue;
         };
         let request = request.clone();
-        attach_rhai_scenario(
+        match attach_rhai_scenario(
             entity,
             source.text.clone(),
             request.params,
             Some(asset_id),
+            ScenarioSourceMode::External,
             false,
             request.reload_policy,
             request.authority,
             &mut registry,
             &q_existing,
             &mut commands,
-        );
+        ) {
+            Ok(_) => {}
+            Err(error) => error!("[rhai] scenario asset attach rejected for {entity:?}: {error}"),
+        }
         commands
             .entity(entity)
             .try_insert(ScenarioAssetHandle(request.handle))
@@ -510,13 +599,14 @@ pub fn attach_embedded_scenarios(
     mut commands: Commands,
 ) {
     for (entity, embedded, asset_id) in q.iter() {
-        attach_rhai_scenario(
+        match attach_rhai_scenario(
             entity,
             embedded.0.clone(),
             String::new(),
             // Present only for the FILE-backed path below; inline `info:sourceCode`
             // authored straight into USD legitimately has no asset id.
             asset_id.map(|id| id.0.clone()),
+            ScenarioSourceMode::External,
             true,
             ScenarioReloadPolicy::Retain,
             // Scene-authored (loaded by the host from USD) → host-trusted, ungated.
@@ -524,11 +614,17 @@ pub fn attach_embedded_scenarios(
             &mut registry,
             &q_existing,
             &mut commands,
-        );
-        commands
-            .entity(entity)
-            .remove::<lunco_core::EmbeddedScenarioSource>()
-            .remove::<ScenarioAssetId>();
+        ) {
+            Ok(_) => {
+                commands
+                    .entity(entity)
+                    .remove::<lunco_core::EmbeddedScenarioSource>();
+            }
+            Err(error) => {
+                error!("[rhai] embedded scenario attach rejected for {entity:?}: {error}")
+            }
+        }
+        commands.entity(entity).remove::<ScenarioAssetId>();
         if asset_id.is_none() {
             // Inline source replaced a previous file-backed scenario. Its old
             // root handle must leave with the old source; otherwise the Bevy
@@ -1015,13 +1111,14 @@ fn on_run_timeline(
         String::new(),
         // Generated source — no file, no id, no relative imports.
         None,
+        ScenarioSourceMode::Runtime,
         false,
         ScenarioReloadPolicy::Retain,
         guard.and_then(|g| g.0),
         &mut registry,
         &q_existing,
         &mut commands,
-    );
+    )?;
     Ok(Ack::with_data(
         OpId::new(),
         serde_json::json!({
@@ -1135,13 +1232,14 @@ fn on_run_stored_timeline(
         String::new(),
         // Generated source — no file, no id, no relative imports.
         None,
+        ScenarioSourceMode::Runtime,
         false,
         ScenarioReloadPolicy::Retain,
         guard.and_then(|g| g.0),
         &mut registry,
         &q_existing,
         &mut commands,
-    );
+    )?;
     Ok(Ack::with_data(
         OpId::new(),
         serde_json::json!({
@@ -1320,6 +1418,8 @@ pub(crate) fn register_command_policies(app: &mut App) {
 // `register_all_commands` is emitted (covers the script-free build too).
 #[cfg(all(feature = "rhai", feature = "python"))]
 register_commands!(
+    on_undo_script_document,
+    on_redo_script_document,
     on_run_rhai,
     on_run_rhai_tool,
     on_run_scenario,
@@ -1334,6 +1434,8 @@ register_commands!(
 );
 #[cfg(all(feature = "rhai", not(feature = "python")))]
 register_commands!(
+    on_undo_script_document,
+    on_redo_script_document,
     on_run_rhai,
     on_run_rhai_tool,
     on_run_scenario,
@@ -1346,7 +1448,13 @@ register_commands!(
     on_stop_scenario
 );
 #[cfg(all(not(feature = "rhai"), feature = "python"))]
-register_commands!(on_run_python, on_set_scenario_paused, on_stop_scenario);
+register_commands!(
+    on_undo_script_document,
+    on_redo_script_document,
+    on_run_python,
+    on_set_scenario_paused,
+    on_stop_scenario
+);
 #[cfg(all(not(feature = "rhai"), not(feature = "python")))]
 register_commands!();
 

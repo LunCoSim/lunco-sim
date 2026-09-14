@@ -384,11 +384,14 @@ pub fn on_format_document(trigger: On<FormatDocument>, mut commands: Commands) {
         if formatted == original {
             return;
         }
-        let mut registry = world.resource_mut::<ModelicaDocumentRegistry>();
-        if let Some(host) = registry.host_mut(doc) {
-            if let Err(e) = host.apply(ModelicaOp::ReplaceSource { new: formatted }) {
-                bevy::log::warn!("[FormatDocument] apply failed: {e:?}");
-            }
+        let result = crate::doc_ops::apply_one_op_as(
+            world,
+            doc,
+            ModelicaOp::ReplaceSource { new: formatted },
+            lunco_twin_journal::AuthorTag::for_tool("format-document"),
+        );
+        if let Err(error) = result {
+            bevy::log::warn!("[FormatDocument] apply failed: {error:?}");
         }
     });
 }
