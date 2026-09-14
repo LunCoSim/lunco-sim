@@ -5,7 +5,7 @@
 const ROOT = "/RouteLifecycle";
 const ROUTE = "/RouteLifecycle/Route";
 const SUBJECT_PATH = "/RouteLifecycle/Subject";
-const RIBBON_GEOMETRY = "/RouteLifecycle/RouteRibbon_RouteLifecycle_Route/Geometry";
+const RIBBON_GEOMETRY = "/RouteLifecycle/Route/RouteRibbon/Geometry";
 
 fn direct_points(doc) {
     let result = query("QueryUsdPrim", #{ doc_id: doc, path: ROUTE, children: true });
@@ -14,7 +14,8 @@ fn direct_points(doc) {
     let prefix = ROUTE + "/";
     for path in result.children {
         let rest = path.sub_string(prefix.len());
-        if rest != "" && rest.index_of("/") < 0 && rest != "Program"
+        if rest != "" && rest.index_of("/") < 0
+            && rest != "Program" && rest != "RouteRibbon"
             && has_path(doc, path) {
             points.push(path);
         }
@@ -49,6 +50,24 @@ fn ribbon_normals_match(doc, count) {
     });
     result != () && result.ok != false && result.attrs != ()
         && result.attrs["normals"] != () && result.attrs["normals"].len() == count
+}
+
+fn ribbon_anchor_matches_point(doc, point_path) {
+    let point = query("QueryUsdPrim", #{
+        doc_id: doc,
+        path: point_path,
+    });
+    let ribbon = query("QueryUsdPrim", #{
+        doc_id: doc,
+        path: "/RouteLifecycle/Route/RouteRibbon",
+    });
+    if point == () || ribbon == () || point.world_position == ()
+        || ribbon.world_position == () { return false; }
+    let a = point.world_position;
+    let b = ribbon.world_position;
+    (a[0] - b[0]).abs() < 0.001
+        && (a[1] - b[1]).abs() < 0.001
+        && (a[2] - b[2]).abs() < 0.001
 }
 
 fn has_path(doc, path) {
@@ -124,6 +143,7 @@ fn on_start(me) {
     this.active_edit = false;
     this.hold_started = 0;
     this.program_switch_complete = false;
+    this.route_ready = false;
     this.program_switch_subject = -1;
 }
 
@@ -136,6 +156,14 @@ fn on_event(me, evt) {
         this.reached_index = evt.value;
     }
     if evt.name == "program_switch_hold_started" { this.hold_started += 1; }
+    if evt.name == "program.ready" && this.phase >= 101
+        && evt.value != () && evt.value["path"] == ROUTE {
+        let current = query("InspectUsdDocument", #{ doc_id: this.doc });
+        if current != () && current.ok != false
+            && evt.value["generation"] == current.generation {
+            this.route_ready = true;
+        }
+    }
 }
 
 fn finish(me) {
@@ -158,7 +186,8 @@ fn on_tick(me) {
         this.doc = route.doc_id;
         this.subject = find(SUBJECT_PATH);
         if this.subject < 0 || point_count(this.doc) != 3 || ribbon_count(this.doc) != 3
-            || !ribbon_normals_match(this.doc, 3) {
+            || !ribbon_normals_match(this.doc, 3)
+            || !ribbon_anchor_matches_point(this.doc, ROUTE + "/P0") {
             return;
         }
         let program = query("QueryUsdPrim", #{
@@ -208,6 +237,7 @@ fn on_tick(me) {
     if this.phase == 1 {
         if !this.program_switch_complete {
             this.program_switch_subject = find(SUBJECT_PATH);
+            this.route_ready = false;
             let switched = program_editor::switch_source(
                 this.doc,
                 ROUTE + "/Program",
@@ -261,14 +291,11 @@ fn on_tick(me) {
             "the original program source can be restored without rebuilding its subject"));
         this.checks.push(t_true(find(SUBJECT_PATH) == this.program_switch_subject,
             "program replacement does not recreate the physical subject"));
-        let added = waypoint_editor::on_click(
-            context(this.doc, (), [0.0, 1.0, -32.0]),
-        );
-        if !added.ok {
-            this.checks.push(t_true(false, added.error));
-            finish(this);
-            return;
-        }
+        // Wait for the restored program's lifecycle start before delivering a
+        // one-shot scene event. A semantic event is not a durable command and
+        // must not be sent into a program that is still being replaced.
+        if !this.route_ready { return; }
+        emit("scene.pointer", context(this.doc, (), [0.0, 1.0, -32.0]));
         this.program_switch_complete = true;
         this.phase = 2;
         return;
@@ -287,6 +314,14 @@ fn on_tick(me) {
         );
         this.checks.push(t_true(selected == this.new_point,
             "secondary-click policy selects the direct route point"));
+        if find_path(this.new_point) < 0 { return; }
+        let nested = context(this.doc, this.new_point + "/Dome", ());
+        nested.target_path = this.new_point + "/Dome";
+        nested.hit_path = this.new_point + "/Dome";
+        nested.prim_paths = [this.new_point + "/Dome", this.new_point];
+        let selected_nested = waypoint_editor::context_route_point(nested, ROUTE);
+        this.checks.push(t_true(selected_nested == this.new_point,
+            "secondary-click resolves nested marker visuals to the canonical route point"));
         let moved = waypoint_editor::on_move(context(this.doc, this.new_point, [4.0, 1.0, -32.0]));
         this.checks.push(t_true(moved.ok == true && moved.path == this.new_point,
             "route-point move is a typed USD edit"));
@@ -357,6 +392,12 @@ fn on_tick(me) {
         if point_count(this.doc) != 2 || ribbon_count(this.doc) != 2 { return; }
         emit("scene.pointer", modified_context(this.doc, (), [0.0, 1.0, -24.0],
             #{ alt: true, shift: true, ctrl: true }));
+        this.phase = 90;
+        return;
+    }
+
+    if this.phase == 90 {
+        if point_count(this.doc) != 2 || ribbon_count(this.doc) != 2 { return; }
         let edge = intent_pulse(this.subject, "action");
         this.checks.push(t_true(edge != () && edge.ok != false,
             "F is delivered through the generic semantic action edge"));

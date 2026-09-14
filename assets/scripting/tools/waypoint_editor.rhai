@@ -86,7 +86,8 @@ fn direct_route_point(path, route) {
     let prefix = route + "/";
     if !path.starts_with(prefix) { return false; }
     let remainder = path.sub_string(prefix.len());
-    remainder != "" && remainder.index_of("/") < 0 && remainder != "Program"
+    remainder != "" && remainder.index_of("/") < 0
+        && remainder != "Program" && remainder != "RouteRibbon"
 }
 
 fn context_route_point(context, route) {
@@ -155,7 +156,7 @@ fn route_positions(doc, route, edited_path, replacement, appended) {
     for child in result.children {
         let parts = child.split("/");
         let leaf = parts[parts.len() - 1];
-        if leaf == "Program" { continue; }
+        if leaf == "Program" || leaf == "RouteRibbon" { continue; }
         let record = query("QueryUsdPrim", #{ doc_id: doc, path: child });
         if record == () || record.ok == false {
             return #{ ok: false, retryable: true,
@@ -223,14 +224,10 @@ fn points_equal(a, b) {
 }
 
 fn ribbon_path(route) {
-    let name = "RouteRibbon";
-    for segment in route.split("/") {
-        if segment != "" { name += "_" + segment; }
-    }
-    let parts = route.split("/");
-    let scene_root = "";
-    for i in 1..parts.len() - 1 { scene_root += "/" + parts[i]; }
-    scene_root + "/" + name
+    // Keep the generated view under the route scope. Route points and their
+    // annotation then share the same USD parent frame, including when a Twin
+    // places the route below a transformed scene scope.
+    route + "/RouteRibbon"
 }
 
 fn ribbon_geometry_path(route) {
@@ -304,12 +301,10 @@ fn ribbon_ops(doc, route, points) {
             reference_prim_path: "",
         }});
     }
-    ops.push(#{ SetAttribute: #{
+    ops.push(#{ SetTranslate: #{
         edit_target: "@runtime@",
         path: ribbon,
-        name: "xformOp:translate",
-        type_name: "double3",
-        value: point_literal(anchor),
+        value: anchor,
     }});
     ops.push(#{ SetAttribute: #{
         edit_target: "@runtime@",
@@ -565,9 +560,12 @@ fn on_context(context) {
     let route = route_edit_path(context);
     let point = context_route_point(context, route);
     if point == () { return failure("context target is not a direct route point"); }
-    let entity_id = context.target_entity_id;
-    if entity_id == () { entity_id = context.hit_entity_id; }
-    if entity_id == () { return failure("route point has no selectable entity"); }
+    // The generic pointer target may be a nested visual, or a lower object when
+    // the marker passes through primary picking. Once the policy has resolved
+    // the exact authored route-point path, resolve that canonical identity
+    // directly instead of trusting the semantic target chosen for selection.
+    let entity_id = find_path(point);
+    if entity_id < 0 { return failure("route point has no live projection"); }
     let result = cmd("SelectEntity", #{
         entity_id: entity_id,
         extend: false,
