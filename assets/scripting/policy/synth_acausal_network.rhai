@@ -96,7 +96,15 @@ fn unit_position(layout, name) {
 }
 
 fn generated_unit_position(index, count) {
-    let columns = count.to_float().sqrt().ceil().to_int();
+    // Keep the generated-layout hook portable across the embedded Rhai
+    // runtimes.  `ceil()` is not part of the minimal scripting surface used
+    // by the headless Modelica synthesizer, so compute the integer ceiling of
+    // sqrt(count) explicitly.  This is presentation-only and remains
+    // deterministic for every connected-component count.
+    let columns = 1;
+    while columns * columns < count {
+        columns += 1;
+    }
     if columns < 1 { columns = 1; }
     let rows = ((count + columns - 1) / columns).max(1);
     let origin_x = -((columns - 1) * GENERATED_UNIT_COLUMN_SPACING) / 2;
