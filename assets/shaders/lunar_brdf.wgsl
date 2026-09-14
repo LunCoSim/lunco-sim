@@ -32,28 +32,32 @@
 //
 // `process.rs` (`kind = "map"`) bakes grayscale orthos as a 1–99 PERCENTILE
 // STRETCH: the full 0..255 range is spent on the site's brightness spread, so
-// the PNG is a CONTRAST map, not a linear reflectance map. A direct multiply
-// therefore turns its zero/one extrema into near-black/washed-out terrain.
+// the image is a CONTRAST map, not a linear reflectance map. The bake
+// sRGB-encodes that normalized linear signal because the texture loader decodes
+// authored colour layers from sRGB to linear. The value below is therefore the
+// original normalized contrast, not a display-space byte.
 //
-// The texture loader decodes the authored colour layer from sRGB to linear. The
-// shared transfer below maps that linear contrast signal to a bounded albedo
-// factor [0.85, 1.75] for `ORTHO_GAIN = 3.0`; on the shipped Apollo 15 bake its
-// linear mean (~0.175) gives a near-unit mean factor while retaining relief tone.
+// Map contrast around its neutral midpoint instead of treating zero as a
+// physically meaningful albedo. This preserves local orthophoto detail while
+// keeping the authored layer a bounded, site-independent tone modulation.
 //
 // LIVES HERE, not in either terrain shader, because `terrain_geomorph.wgsl` (the
 // streamed CDLOD path) and `terrain_layered.wgsl` (the static-mesh path) must
 // agree on what a given `weight_albedo` MEANS — the same authored scene has to
 // read identically whether or not its site streams.
-const ORTHO_GAIN: f32 = 3.0;
-const ORTHO_BASE: f32 = 0.85;
-const ORTHO_CONTRAST: f32 = 0.30;
+const ORTHO_MID: f32 = 0.5;
+const ORTHO_GAIN: f32 = 0.55;
 
 /// Convert a percentile-stretched orthophoto sample into a bounded linear
 /// albedo multiplier. Keeping this in the shared lunar module makes the streamed
 /// and static terrain paths use one transfer contract.
 fn orthophoto_factor(map: vec3<f32>) -> vec3<f32> {
     let contrast = clamp(map, vec3<f32>(0.0), vec3<f32>(1.0));
-    return vec3<f32>(ORTHO_BASE) + ORTHO_CONTRAST * contrast * ORTHO_GAIN;
+    return clamp(
+        vec3<f32>(1.0) + (contrast - vec3<f32>(ORTHO_MID)) * ORTHO_GAIN,
+        vec3<f32>(0.7),
+        vec3<f32>(1.3),
+    );
 }
 
 /// Floor on μ = cos(emission). At a grazing view μ → 0 and the Lommel-Seeliger

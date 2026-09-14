@@ -378,7 +378,9 @@ not its download. The processor's `.bakekey` completion stamp is part of that
 contract, including for directory products such as DEM sites; a partial output
 directory is still missing. File-based `map` products also require their
 normaliser sidecar (`<output>.mean`); RGB maps write the explicit identity value
-`1.0`, while measured grayscale maps retain their sampled mean. An in-app fetch
+`1.0`, while measured grayscale maps retain their sampled mean in normalized
+linear contrast space (the PNG itself is sRGB-encoded for the runtime loader).
+An in-app fetch
 therefore runs the `[*.process]` step before reporting installed. Otherwise the
 UI says "installed" while every consumer still finds nothing — the CLI's
 two-command flow (`download` then `process`) has no equivalent second command in

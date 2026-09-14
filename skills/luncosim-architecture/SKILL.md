@@ -63,8 +63,10 @@ a multi-stage shader pair. See
 [`shader-layers-and-params.md`](../../docs/architecture/shader-layers-and-params.md).
 
 Keep authored grayscale orthophoto handling in the shared
-`lunco::lunar::orthophoto_factor` transfer: percentile-stretched maps are contrast
-signals, not linear reflectance, and must not be multiplied directly into albedo.
+`lunco::lunar::orthophoto_factor` transfer: percentile-stretched maps are linear
+contrast signals, not linear reflectance. The map processor sRGB-encodes that
+signal for the 8-bit PNG, the texture loader decodes it back to linear, and the
+shared transfer must not be bypassed by multiplying the map directly into albedo.
 When `weight_albedo` is fully authored, it owns terrain colour variation; scale
 the layered path's procedural dust/mottle colour by `1 - weight_albedo`, while
 keeping relief normals, roughness, ambient occlusion, and photometry independent.

@@ -89,16 +89,17 @@ keeps that ABI duplicated at the stage boundary and the cross-shader contract te
 guards it against drift.
 
 Authored grayscale orthophotos are another shared shader contract. The asset
-pipeline's percentile stretch produces a contrast map rather than linear
-reflectance, so both terrain paths pass samples through the single
+pipeline's percentile stretch produces a normalized linear contrast map rather
+than linear reflectance, then sRGB-encodes it for the 8-bit PNG contract. The
+texture-role loader decodes that image back to linear samples, so both terrain
+paths pass the recovered contrast through the single
 `lunco::lunar::orthophoto_factor` transfer. It bounds the albedo modulation and
-keeps map extrema from becoming black or washed-out terrain; the texture-role
-loader supplies the color layer as linear samples. When `weight_albedo` is
-fully authored, that raster owns terrain colour variation: the layered static
-path attenuates its procedural dust/mottle term by `1 - weight_albedo`, while
-normal, roughness, ambient occlusion, and lunar photometry remain independent.
-This keeps a real orthophoto spatially stable instead of overlaying unrelated
-fine-scale colour noise on it.
+keeps map extrema from becoming black or washed-out terrain. When
+`weight_albedo` is fully authored, that raster owns terrain colour variation:
+the layered static path attenuates its procedural dust/mottle term by
+`1 - weight_albedo`, while normal, roughness, ambient occlusion, and lunar
+photometry remain independent. This keeps a real orthophoto spatially stable
+instead of overlaying unrelated fine-scale colour noise on it.
 
 The render binder also materialises a complete mip chain for filterable authored
 RGBA8 maps when a `ShaderLook` first references them or an image version changes.
