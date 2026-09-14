@@ -21,9 +21,10 @@ use lunco_workbench::{
 };
 
 use crate::model_tabs::ModelTabs;
-use crate::state::{is_generated_document, is_generated_origin, ModelicaDocumentRegistry};
+use crate::state::{is_generated_document, ModelicaDocumentRegistry};
 use crate::ui::panels::canvas_diagram::CanvasDiagramState;
 use crate::ui::MODEL_VIEW_KIND;
+use lunco_modelica_runtime::generated_source::is_generated_origin;
 
 const KIND: &str = "modelica";
 

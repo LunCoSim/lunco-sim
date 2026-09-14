@@ -501,7 +501,7 @@ impl Panel for UsdCanvasPanel {
                             "The executable topology is generated from the composed USD network and is available in the standard Modelica diagram.",
                         );
                         let entries = ctx
-                            .resource::<lunco_modelica_ui::state::GeneratedModelicaSources>()
+                            .resource::<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>()
                             .map(|sources| sources.entries.clone())
                             .unwrap_or_default();
                         if entries.is_empty() {

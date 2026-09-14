@@ -124,7 +124,7 @@ So that I do not need to know whether the target is bundled, MSL, on disk, or al
 
 ### Key Entities
 
-- **`ApiQueryProvider` (new trait, `lunco-api`)**: A registered query provider that answers a typed request for a list of items. Domain crates (`lunco-modelica-core`, `lunco-workspace`) register implementations for bundled, twin, MSL, and open-documents queries. Keeps lunco-api free of domain knowledge.
+- **`ApiQueryProvider` (new trait, `lunco-api`)**: A registered query provider that answers a typed request for a list of items. Domain capability crates (`lunco-modelica-api`, `lunco-workspace-api`) register implementations for bundled, twin, MSL, and open-documents queries. Keeps both `lunco-api` and the Modelica compiler core free of domain-query registration.
 - **`ListBundledRequest` / `ListTwinRequest` / `ListMslRequest` / `ListOpenDocumentsRequest` / `MslStatusRequest` / `OpenRequest` (new `ApiRequest` variants)**: Transport-agnostic enum variants. The transport layer parses them from the same `command` field used today; the executor routes them to the registered query providers.
 - **`PaginationCursor` (new, `lunco-api`)**: Opaque base64-encoded JSON `{offset: u32, filter_hash: u64}`. Filter hash invalidates cursors when filter parameters change between calls — caller must restart pagination if they swap the filter.
 - **`MslLoadFlag` (new, `lunco-modelica-core`)**: `AtomicBool` set true at the end of `prewarm_msl_library`. Read by `msl_status` and consulted by `list_msl` to decide whether to log a "blocking on prewarm" warning.

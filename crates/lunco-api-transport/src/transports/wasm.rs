@@ -18,9 +18,9 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use std::cell::RefCell;
 use wasm_bindgen::prelude::*;
 
-use lunco_api::schema::{ApiRequest, ApiResponse};
 use crate::transports::envelope::{ApiRequestUnified, ApiResponseEnvelope};
 use crate::transports::HttpBridge;
+use lunco_api::schema::{ApiRequest, ApiResponse};
 
 thread_local! {
     /// The bridge tx, installed by `LunCoApiPlugin` during `build()`. `None`

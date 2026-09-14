@@ -15,12 +15,16 @@
 
 // Native-only CLI on the documented `clippy.toml` allow-list — owns
 // raw `std::fs` access to the on-disk asset cache.
-#![allow(clippy::disallowed_methods)]
+#![cfg_attr(not(target_arch = "wasm32"), allow(clippy::disallowed_methods))]
 
+#[cfg(not(target_arch = "wasm32"))]
 use lunco_assets::{download, process};
+#[cfg(not(target_arch = "wasm32"))]
 use lunco_settings::DownloadSettings;
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
 
+#[cfg(not(target_arch = "wasm32"))]
 fn main() {
     let args: Vec<_> = std::env::args().skip(1).collect();
 
@@ -210,6 +214,9 @@ fn main() {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+fn main() {}
+
 /// Process every `[*.process]` entry in a folder's `Assets.toml`.
 ///
 /// Each entry's *source* is wherever the download step put it — resolved
@@ -221,6 +228,7 @@ fn main() {
 /// so a single territory can be re-baked without touching every other
 /// entry's sources — and the `--quality` preset (`coarse` quarters
 /// `target_resolution`, floor 64, for a quick first bake).
+#[cfg(not(target_arch = "wasm32"))]
 fn process_filtered(
     manifest_path: &std::path::Path,
     twin_root: Option<&std::path::Path>,
@@ -289,6 +297,7 @@ fn process_filtered(
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn entry_cache_root(
     entry: &download::AssetEntry,
     twin_root: Option<&std::path::Path>,
@@ -299,6 +308,7 @@ fn entry_cache_root(
 }
 
 /// Process one engine manifest group (`assets/manifests/<group>.toml`).
+#[cfg(not(target_arch = "wasm32"))]
 fn process_group(group: &str) -> Result<(), String> {
     println!("Processing `{group}`...");
     process_filtered(
@@ -310,6 +320,7 @@ fn process_group(group: &str) -> Result<(), String> {
 }
 
 /// Process every engine manifest group.
+#[cfg(not(target_arch = "wasm32"))]
 fn process_all_groups() -> Result<(), String> {
     let manifests = lunco_assets::engine_manifests().map_err(|error| error.to_string())?;
     for (group, _) in manifests {
@@ -319,6 +330,7 @@ fn process_all_groups() -> Result<(), String> {
 }
 
 /// List every engine manifest group.
+#[cfg(not(target_arch = "wasm32"))]
 fn list_all_groups() -> Result<(), String> {
     let manifests = lunco_assets::engine_manifests().map_err(|error| error.to_string())?;
     for (group, _) in manifests {
@@ -332,6 +344,7 @@ fn list_all_groups() -> Result<(), String> {
 /// outputs both resolve against the Twin root (the `--twin <DIR>` path).
 /// `only_key` narrows to a single entry (`-a KEY`); `quality` is the
 /// `--quality` preset.
+#[cfg(not(target_arch = "wasm32"))]
 fn process_for_twin(
     twin_root: &std::path::Path,
     only_key: Option<&str>,
@@ -348,6 +361,7 @@ fn process_for_twin(
 /// Stage the complete set of manifest-declared artifacts for one binary. The
 /// manifest owns both the artifact path and the package target; this command
 /// only materialises that declaration into a bundle directory.
+#[cfg(not(target_arch = "wasm32"))]
 fn stage_engine_bundle(
     binary: &str,
     cache_root: &std::path::Path,
@@ -401,6 +415,7 @@ fn stage_engine_bundle(
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn copy_bundle_path(
     source: &std::path::Path,
     destination: &std::path::Path,
@@ -433,6 +448,7 @@ fn copy_bundle_path(
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn print_usage() {
     println!("LunCoSim Asset Manager");
     println!();

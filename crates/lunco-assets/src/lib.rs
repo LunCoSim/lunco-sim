@@ -455,8 +455,8 @@ pub fn assets_dir() -> PathBuf {
 /// Anything reaching library bytes off the `AssetServer` must anchor here rather
 /// than joining `"assets"` itself: a bare relative join silently follows the CWD
 /// of whoever calls it, which is how the same reference resolved two ways.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn assets_dir_abs() -> PathBuf {
-    #[cfg(not(target_arch = "wasm32"))]
     if let Some(configured) = std::env::var_os(ASSET_ROOT_ENV) {
         let root = PathBuf::from(configured);
         if !root.is_dir() {
@@ -473,7 +473,6 @@ pub fn assets_dir_abs() -> PathBuf {
         });
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
             if let Some(root) = find_assets_dir(parent) {
@@ -489,6 +488,11 @@ pub fn assets_dir_abs() -> PathBuf {
         return cwd.join(assets_dir());
     }
 
+    assets_dir()
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn assets_dir_abs() -> PathBuf {
     assets_dir()
 }
 

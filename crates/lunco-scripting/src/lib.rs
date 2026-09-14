@@ -559,13 +559,17 @@ impl Plugin for LunCoScriptingPlugin {
         // feature, so the language only appears on the API when its runtime
         // is actually compiled in (no "accepted but no-op" lie). Python is
         // the only backend today.
-        #[allow(unused_mut)]
-        let mut backends = backend::ScriptBackends::default();
         #[cfg(feature = "python")]
-        backends.insert(
-            doc::ScriptLanguage::Python,
-            Box::new(backend::PythonBackend),
-        );
+        let backends = {
+            let mut backends = backend::ScriptBackends::default();
+            backends.insert(
+                doc::ScriptLanguage::Python,
+                Box::new(backend::PythonBackend),
+            );
+            backends
+        };
+        #[cfg(not(feature = "python"))]
+        let backends = backend::ScriptBackends::default();
         app.insert_resource(backends);
 
         commands::register_all_commands(app);

@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 
+pub mod generated_source;
 pub mod source_asset;
 
 pub use source_asset::{ModelicaSource, ModelicaSourceAssetPlugin, ModelicaSourceLoader};

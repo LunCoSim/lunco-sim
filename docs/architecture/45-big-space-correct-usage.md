@@ -168,7 +168,7 @@ correction or offset.
 ## Physics boundary
 
 `ActivePhysicsFrame` identifies the single local frame used by Avian for the
-currently mounted physical scene. `BigSpacePhysicsBridgePlugin` owns the f64
+currently mounted physical scene. `lunco-usd-avian-core::BigSpacePhysicsBridgePlugin` owns the f64
 `Position`/`Rotation` ↔ BigSpace representation and collider propagation.
 The persistent `WorldRoot`/`WorldGrid` shell does not install this resource;
 the application binds `WorldGrid` explicitly for a flat scene, and scene

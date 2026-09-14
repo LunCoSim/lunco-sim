@@ -1,0 +1,28 @@
+[package]
+name = "lunco-usd-sim-cosim-api"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "API query providers for the USD co-simulation runtime"
+
+[dependencies]
+avian3d = { workspace = true }
+bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh", "bevy_light"] }
+lunco-api = { path = "../lunco-api" }
+lunco-core = { path = "../lunco-core" }
+lunco-cosim = { path = "../lunco-cosim" }
+lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
+lunco-physics = { path = "../lunco-physics" }
+lunco-render = { path = "../lunco-render" }
+lunco-signal = { path = "../lunco-signal" }
+lunco-usd-avian = { path = "../lunco-usd-avian" }
+lunco-usd-avian-core = { path = "../lunco-usd-avian-core" }
+lunco-usd-bevy-camera = { path = "../lunco-usd-bevy-camera" }
+lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
+lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
+lunco-usd-sim-core = { path = "../lunco-usd-sim-core" }
+lunco-usd-sim-cosim = { path = "../lunco-usd-sim-cosim" }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

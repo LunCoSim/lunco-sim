@@ -1,14 +1,12 @@
 //! `GetBrokenConnections` API query — the read side of co-simulation and
 //! scene-scoped runtime diagnostics.
 //!
-//! Lives here, not in `lunco-cosim` or `lunco-api`, because this is the crate that
-//! already sees BOTH: `lunco-api` (the query trait + registry) and `lunco-cosim`
-//! (the diagnostics resource). Keeping the provider here means the simulation
-//! master never has to depend on the transport surface, and the transport never
-//! has to depend on the cosim engine — the same layering the port registry uses.
+//! This optional package depends on both the API registry and the co-simulation
+//! diagnostics resource; the runtime remains independent from the transport
+//! surface.
 
 use bevy::prelude::*;
-use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
+use lunco_api::queries::ApiQueryProvider;
 use lunco_api::schema::ApiResponse;
 use lunco_cosim::CosimDiagnostics;
 
@@ -27,7 +25,7 @@ use lunco_cosim::CosimDiagnostics;
 /// `{ cosim_tracked, broken_count, pending_count, algebraic_loop_count,
 ///    fault_count, broken: [...], pending: [...], algebraic_loops: [...],
 ///    runtime_fault: ... }`
-pub struct BrokenConnectionsProvider;
+pub(crate) struct BrokenConnectionsProvider;
 
 impl ApiQueryProvider for BrokenConnectionsProvider {
     fn name(&self) -> &'static str {
@@ -95,13 +93,4 @@ impl ApiQueryProvider for BrokenConnectionsProvider {
             "runtime_fault": runtime_fault,
         }))
     }
-}
-
-/// Registers [`BrokenConnectionsProvider`]. Idempotent: `init_resource` no-ops if
-/// the registry already exists (it's owned by `ApiQueryRegistryPlugin`).
-pub fn register(app: &mut App) {
-    app.init_resource::<ApiQueryRegistry>();
-    app.world_mut()
-        .resource_mut::<ApiQueryRegistry>()
-        .register(BrokenConnectionsProvider);
 }

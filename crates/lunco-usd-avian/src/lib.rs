@@ -54,6 +54,7 @@ use bevy::math::{DQuat, DVec3};
 use bevy::mesh::VertexAttributeValues;
 use bevy::prelude::*;
 use lunco_core::coords::GridPos;
+use lunco_usd_avian_core::report_physics_runtime_fault;
 use lunco_usd_bevy_core::{
     effective_purpose, local_transform_at, Purpose, TransformReadError, UsdInstanceProjection,
     UsdInstanceRoot, UsdRead, UsdStageAsset,
@@ -72,9 +73,6 @@ use openusd::schemas::physics::tokens as ptok;
 // `physics:type` is a schema token with a schema enum — take openusd's rather than
 // re-spelling `"force"`/`"acceleration"` here.
 pub use openusd::schemas::physics::DriveType;
-
-pub mod big_space_bridge;
-pub use big_space_bridge::{BigSpacePhysicsBridgePlugin, PhysicsBridgeSystems};
 
 pub mod actuator;
 
@@ -123,27 +121,6 @@ pub use collision_groups::{CollisionGroupTable, CollisionGroupTables};
 /// USD physics attributes to Avian3D components. The deferred system runs in the
 /// `Update` schedule **after** `sync_usd_visuals` to ensure assets are loaded.
 pub struct UsdAvianPlugin;
-
-/// Report an invalid Avian input at the owner that can stop further admission.
-/// The shared backend predicate lives in `lunco-physics`; this helper only
-/// applies the scene lifecycle policy and preserves the first causal subject.
-pub(crate) fn raise_physics_runtime_fault(
-    faults: Option<&mut lunco_core::RuntimeFaults>,
-    holds: Option<&mut lunco_physics::PhysicsHolds>,
-    entity: Entity,
-    subject: String,
-    kind: &'static str,
-    detail: String,
-) {
-    if let Some(holds) = holds {
-        holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
-    }
-    if let Some(faults) = faults {
-        if faults.raise(kind, Some(entity), subject.clone(), detail.clone()) {
-            error!("[usd-avian] runtime physics admission fault on {subject}: {kind}: {detail}");
-        }
-    }
-}
 
 /// Remove scene physics from Avian's graphs before the scene entities are
 /// despawned.
@@ -308,7 +285,7 @@ impl Plugin for UsdAvianPlugin {
                 (
                     build_usd_physics_joints
                         .in_set(avian3d::prelude::PhysicsSystems::Prepare)
-                        .after(big_space_bridge::PhysicsBridgeSystems::Read)
+                        .after(lunco_usd_avian_core::PhysicsBridgeSystems::Read)
                         .after(
                             avian3d::dynamics::rigid_body::mass_properties::MassPropertySystems::UpdateComputedMassProperties,
                         )
@@ -1300,7 +1277,7 @@ fn report_collider_projection_error(
     sdf_path: &SdfPath,
     error: &ColliderProjectionError,
 ) {
-    crate::raise_physics_runtime_fault(
+    report_physics_runtime_fault(
         faults,
         holds,
         entity,
@@ -1476,7 +1453,7 @@ fn build_terrain_mesh_colliders(
                     let subject = prim_path
                         .map(|path| path.path.clone())
                         .unwrap_or_else(|| format!("entity {entity:?}"));
-                    crate::raise_physics_runtime_fault(
+                    report_physics_runtime_fault(
                         faults.as_deref_mut(),
                         holds.as_deref_mut(),
                         entity,
@@ -1834,7 +1811,7 @@ fn project_pending_joint(
     } else if reader.boolean(sdf_path, ptok::A_JOINT_ENABLED) != Some(false) {
         let detail = "standard UsdPhysics joint was not projected: invalid body relationship, frame, axis, limit, or drive authoring";
         error!("USD physics joint {} rejected: {detail}", sdf_path);
-        crate::raise_physics_runtime_fault(
+        report_physics_runtime_fault(
             faults,
             holds,
             entity,
@@ -3385,7 +3362,7 @@ fn build_usd_physics_joints(
     )>,
     // **Pose readiness gate**: has the physics-transform bridge written a real
     // world pose into `Position` yet? See `BridgeShadow::is_seeded`.
-    q_shadow: Query<&big_space_bridge::BridgeShadow>,
+    q_shadow: Query<&lunco_usd_avian_core::BridgeShadow>,
     // Ground placement may have authored the final active-frame pose directly
     // while the bridge was intentionally excluded from that transaction. That
     // marker is the provenance for an already-valid Position in that case.

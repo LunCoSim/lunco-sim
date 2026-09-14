@@ -240,14 +240,13 @@ pub fn apply_set_model_input(
 /// Read the `experiment(...)` annotation bounds for a model from live document
 /// state. `None` if the class or annotation is absent.
 ///
-/// Callers are the egui workbench (`ui::commands::compile`) and the API query
-/// path (`api_queries`, behind modelica's `lunco-api`); a pure compile-core
-/// build (e.g. the physics sandbox server) links neither, hence `allow(dead_code)`.
+/// Callers are the egui workbench (`ui::commands::compile`) and the Modelica
+/// API query package (`lunco-modelica-api`); a pure compile-core build can
+/// omit the API caller without changing this shared resolver.
 /// Generic over the resource-read context (see
 /// [`crate::sim_default::ResourceRead`]) so the egui panels (`PanelCtx`) and
 /// the `&World` callers resolve annotation bounds through one body, not
 /// hand-synced copies.
-#[allow(dead_code)]
 pub(crate) fn bounds_from_annotation_in<R: crate::sim_default::ResourceRead>(
     ctx: &R,
     doc: DocumentId,
@@ -268,11 +267,10 @@ pub(crate) fn bounds_from_annotation_in<R: crate::sim_default::ResourceRead>(
 /// `&World` reader for the `experiment(...)` annotation bounds — see
 /// [`bounds_from_annotation_in`]. `None` if the class or annotation is absent.
 ///
-/// Callers are the egui workbench (`ui::commands::compile`) and the API query
-/// path (`api_queries`, behind modelica's `lunco-api`); a pure compile-core
-/// build (e.g. the physics sandbox server) links neither, hence `allow(dead_code)`.
-#[allow(dead_code)]
-pub(crate) fn bounds_from_annotation(
+/// Callers are the egui workbench (`ui::commands::compile`) and the Modelica
+/// API query package (`lunco-modelica-api`); a pure compile-core build can
+/// omit both callers without changing this shared resolver.
+pub fn bounds_from_annotation(
     world: &World,
     doc: DocumentId,
     model_ref: &lunco_experiments::ModelRef,
@@ -295,7 +293,6 @@ pub(crate) fn bounds_from_annotation(
 /// [`crate::sim_default::ResourceRead`]) so the Experiments Setup form resolves
 /// through `PanelCtx` during paint without a second inlined copy of this
 /// precedence — exactly the disagreement this helper exists to prevent.
-#[allow(dead_code)]
 pub fn resolve_setup_bounds_in<R: crate::sim_default::ResourceRead>(
     ctx: &R,
     doc: DocumentId,
@@ -316,7 +313,6 @@ pub fn resolve_setup_bounds_in<R: crate::sim_default::ResourceRead>(
 }
 
 /// `&World` reader for the canonical setup bounds — see [`resolve_setup_bounds_in`].
-#[allow(dead_code)] // see `bounds_from_annotation` — no caller in a pure compile-core build
 pub fn resolve_setup_bounds(
     world: &World,
     doc: DocumentId,

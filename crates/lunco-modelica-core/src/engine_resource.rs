@@ -8,7 +8,7 @@
 //! across every cross-file query the workbench makes — completion,
 //! inheritance walks, icon merging, compile, future hover-info.
 //! Building a fresh engine per call (the previous shape in
-//! `api_queries.rs`) re-uploads every open document on each request;
+//! `lunco-modelica-api` re-uploads every open document on each request;
 //! with this handle that work runs once at edit-time and every reader
 //! sees the same warm session.
 //!

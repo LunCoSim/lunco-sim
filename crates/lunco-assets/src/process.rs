@@ -107,7 +107,7 @@ pub struct ProcessConfig {
     /// Pipeline selector.
     pub kind: String,
     /// Target [width, height] in pixels (texture pipeline only).
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    #[cfg(not(target_arch = "wasm32"))]
     #[serde(default)]
     pub target_resolution: Option<[u32; 2]>,
     /// Output path **relative to** [`ProcessConfig::output_root`].
@@ -143,35 +143,35 @@ pub struct ProcessConfig {
     // lat/lon→pixel is a linear affine using `center_lat`/`center_lon` +
     // `pixel_scale_m` over the body radius — no general reprojection.
     /// Center latitude of the square ROI to crop (degrees, planetocentric).
+    #[cfg(not(target_arch = "wasm32"))]
     #[serde(default)]
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub center_lat: Option<f64>,
     /// Center longitude of the square ROI to crop (degrees, East-positive).
+    #[cfg(not(target_arch = "wasm32"))]
     #[serde(default)]
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub center_lon: Option<f64>,
     /// Side length of the square ROI in metres (the crop window). The DTM
     /// is sampled across this many metres and re-encoded at
     /// `target_resolution` × `target_resolution` samples.
+    #[cfg(not(target_arch = "wasm32"))]
     #[serde(default)]
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub window_m: Option<f64>,
     /// DTM source projection: metres per source pixel (e.g. `2.0` for the
     /// 2 m/px Apollo 15 NAC mosaic). Used to convert the ROI to a source-
     /// pixel window. Defaults to `2.0` (the recommended mosaic).
+    #[cfg(not(target_arch = "wasm32"))]
     #[serde(default = "default_dem_pixel_scale_m")]
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub pixel_scale_m: f64,
     /// Vertical unit conversion for the source samples. NASA's floating LOLA
     /// TIFFs are kilometres relative to the lunar reference radius, so their
     /// manifest uses `2000.0` to produce metres relative to that radius.
+    #[cfg(not(target_arch = "wasm32"))]
     #[serde(default = "default_dem_height_scale")]
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub source_height_scale_m_per_unit: f64,
     /// Vertical offset applied after [`Self::source_height_scale_m_per_unit`].
     /// Nodata values remain non-finite and are not transformed.
+    #[cfg(not(target_arch = "wasm32"))]
     #[serde(default)]
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub source_height_offset_m: f64,
     /// Geographic extent of the SOURCE DTM, used to map the author's ROI
     /// (center + window) onto source pixels. These are the `MIN/MAX_LATITUDE`
@@ -181,22 +181,22 @@ pub struct ProcessConfig {
     /// be set for `kind = "dem"`; a 2-point affine from the extent corners
     /// to the raster edges makes the projection self-consistent for any
     /// equirectangular mosaic regardless of longitude convention.
+    #[cfg(not(target_arch = "wasm32"))]
     #[serde(default)]
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub src_min_lat: Option<f64>,
+    #[cfg(not(target_arch = "wasm32"))]
     #[serde(default)]
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub src_max_lat: Option<f64>,
+    #[cfg(not(target_arch = "wasm32"))]
     #[serde(default)]
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub src_min_lon: Option<f64>,
+    #[cfg(not(target_arch = "wasm32"))]
     #[serde(default)]
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub src_max_lon: Option<f64>,
     /// Site identity. The runtime takes this from the DEM folder name; this
     /// field remains for manifests that name the site explicitly.
+    #[cfg(not(target_arch = "wasm32"))]
     #[serde(default)]
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub site_id: Option<String>,
     /// Lunar reference frame of the SOURCE product's coordinates —
     /// `"MOON_ME"` for anything LROC/LOLA-derived, `"MOON_PA"` for
@@ -204,8 +204,8 @@ pub struct ProcessConfig {
     /// provenance. Optional: a manifest that does not know its source's frame
     /// declares nothing, and every reader sees *unknown* — never a guess
     /// (ME↔PA disagree by ≈ 875 m on the surface).
+    #[cfg(not(target_arch = "wasm32"))]
     #[serde(default)]
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub frame: Option<String>,
 }
 
@@ -213,10 +213,12 @@ fn default_output_root() -> String {
     "cache".to_string()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn default_dem_pixel_scale_m() -> f64 {
     2.0
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn default_dem_height_scale() -> f64 {
     1.0
 }

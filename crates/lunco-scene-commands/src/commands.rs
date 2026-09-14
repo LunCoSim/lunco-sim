@@ -666,7 +666,7 @@ pub fn on_move_entity_command(
 ///
 /// Written through `Transform`, never through avian's `Rotation`, for exactly
 /// the reason `MoveEntity` never hand-writes `Position`:
-/// `BigSpacePhysicsBridgePlugin::pose_to_position` fires on the external
+/// `lunco-usd_avian_core::PhysicsBridgeSystems::Read` detects the external
 /// `Transform` write and derives the physics pose from it (carrying it to
 /// jointed descendants); a hand-written `Rotation` is a second, wronger opinion
 /// that the bridge's writeback then undoes. The body is pinned Kinematic for the

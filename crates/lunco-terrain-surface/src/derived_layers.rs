@@ -513,7 +513,7 @@ impl lunco_precompute::Bake for DerivedBake<'_> {
 /// them through. Pure-function bake → byte-identical key across runs and peers, so
 /// a second load (or a second peer) skips the expensive AO march. The machine-global
 /// cache directory is shared with the rest of the asset stack.
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+#[cfg(not(target_arch = "wasm32"))]
 fn bake_or_load(
     oracle: &SurfaceOracle,
     profile: lunco_render::RenderQualityProfile,
@@ -550,7 +550,7 @@ async fn bake_or_load_web(
 /// Single-blob OPFS layout for [`DerivedMaps`]: `[res: u32 LE][surface][normal]`
 /// — both maps are `res²·4` RGBA8 bytes, so the lengths derive from `res` and
 /// need no framing.
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+#[cfg(any(target_arch = "wasm32", test))]
 fn encode_derived_blob(maps: &DerivedMaps) -> Vec<u8> {
     let mut out = Vec::with_capacity(4 + maps.surface_rgba.len() + maps.normal_rgba.len());
     out.extend_from_slice(&(maps.res as u32).to_le_bytes());
@@ -561,7 +561,7 @@ fn encode_derived_blob(maps: &DerivedMaps) -> Vec<u8> {
 
 /// Decode [`encode_derived_blob`]'s layout, validating sizes — `None` (a cache
 /// miss → rebake) on a truncated or foreign blob.
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+#[cfg(any(target_arch = "wasm32", test))]
 fn decode_derived_blob(bytes: &[u8]) -> Option<DerivedMaps> {
     let res = u32::from_le_bytes(bytes.get(0..4)?.try_into().ok()?) as usize;
     if res == 0 {

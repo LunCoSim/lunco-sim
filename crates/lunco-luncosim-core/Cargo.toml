@@ -26,13 +26,16 @@ lunco-terrain-globe = { path = "../lunco-terrain-globe" }
 lunco-obstacle-field = { path = "../lunco-obstacle-field" }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
+lunco-modelica-api = { path = "../lunco-modelica-api", default-features = false, optional = true }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
+lunco-workspace-api = { path = "../lunco-workspace-api", optional = true }
 lunco-sysml = { path = "../lunco-sysml", optional = true }
 lunco-luncosim-exposures = { path = "../lunco-luncosim-exposures", default-features = false }
 lunco-experiments = { path = "../lunco-experiments" }
 serde_json = { workspace = true }
 lunco-cosim = { path = "../lunco-cosim" }
 lunco-usd-avian = { path = "../lunco-usd-avian" }
+lunco-usd-avian-core = { path = "../lunco-usd-avian-core" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-scripting = { path = "../lunco-scripting" }
 lunco-usd-bevy-runtime = { path = "../lunco-usd-bevy-runtime" }
@@ -66,7 +69,13 @@ mimalloc = "0.1"
 default = []
 server = ["api-transport", "transport-http", "networking"]
 celestial = ["lunco-celestial/embed-assets"]
-api-transport = ["dep:lunco-api-transport", "lunco-modelica-core/api"]
+api-transport = [
+    "dep:lunco-api-transport",
+    "dep:lunco-modelica-api",
+    "dep:lunco-workspace-api",
+    "lunco-usd-bevy-runtime/api",
+    "lunco-modelica-core/api",
+]
 transport-http = ["lunco-api-transport/transport-http", "lunco-networking?/transport-http"]
 networking = [
     "dep:lunco-networking",

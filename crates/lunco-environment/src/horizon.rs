@@ -532,11 +532,11 @@ struct BakeResult {
 /// Kicks off an async heightfield bake for every opted-in terrain whose
 /// mesh has loaded. Steady-state cost: the query is empty once every
 /// terrain carries a `HorizonMap`.
-#[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut, unused_variables))]
 pub fn start_horizon_bakes(
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut images: ResMut<Assets<Image>>,
+    #[cfg(not(target_arch = "wasm32"))] meshes: Res<Assets<Mesh>>,
+    #[cfg(target_arch = "wasm32")] mut meshes: ResMut<Assets<Mesh>>,
+    #[cfg(target_arch = "wasm32")] mut images: ResMut<Assets<Image>>,
     q: Query<
         (Entity, &HorizonShadowTerrain, &Mesh3d),
         // `Without<RenderLayers>` mirrors `pick_sun`: terrain spawned under the
@@ -844,13 +844,12 @@ fn make_shadow_cache_image(images: &mut Assets<Image>, bytes: Vec<u8>, res: u32)
 /// `shadow_cache_on` to 0 so the shader falls back to that cheap march instead
 /// of sampling a stale above-horizon cache. A fresh bake fires when the sun
 /// rises past the threshold again.
-#[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut, unused_variables))]
 // `Instant` is bevy's portable clock (see `bake_heightfield`) — the
 // `disallowed_methods` hit is the documented native-only false positive.
 #[allow(clippy::type_complexity, clippy::disallowed_methods)]
 pub fn start_shadow_cache_bake(
     mut commands: Commands,
-    mut images: ResMut<Assets<Image>>,
+    #[cfg(target_arch = "wasm32")] mut images: ResMut<Assets<Image>>,
     cfg: Res<HorizonShadowCacheConfig>,
     sun: SunQuery,
     render_sun: Option<Res<SunRenderState>>,

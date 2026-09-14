@@ -407,8 +407,10 @@ fn stash_compressed_source(bytes: Vec<u8>, meta: lunco_assets::msl::MslBundleEnt
 /// too); on web the bundle already carries every shipped library in the
 /// one in-memory root, so the primary stands alone.
 fn sources_with_extras(primary: MslAssetSource) -> Vec<MslAssetSource> {
-    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+    #[cfg(not(target_arch = "wasm32"))]
     let mut sources = vec![primary];
+    #[cfg(target_arch = "wasm32")]
+    let sources = vec![primary];
     #[cfg(not(target_arch = "wasm32"))]
     {
         if matches!(sources[0], MslAssetSource::Filesystem(_)) {

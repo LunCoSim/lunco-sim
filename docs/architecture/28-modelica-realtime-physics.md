@@ -132,7 +132,7 @@ public surface in two ways worth stating plainly:
   registered backend (the registered id is `"rk45"`). An API caller or saved
   `RunBounds` carrying a pre-registry name gets an `Unknown` error naming every
   valid id. There is no compatibility shim: one form, discoverable.
-- **`ListSolvers` is how you discover them** (`lunco-modelica-core/src/api_queries.rs`)
+- **`ListSolvers` is how you discover them** (`lunco-modelica-api/src/lib.rs`)
   — id, label, rank and every capability flag, straight from the registry. It
   exists so that "what may I pass?" has an answer that cannot drift from what
   `resolve` accepts.

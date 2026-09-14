@@ -86,8 +86,10 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-usd-avian-lint`** | Render-free composed `UsdPhysics` fact producer for the authored Rhai lint policy. It reuses Avian's authoritative geometry/joint readers without making the runtime physics crate own lint orchestration. |
 | **`lunco-usd-sim`** | Vehicle-specific simulation-schema bridge (`UsdSimPlugin`): intercepts specialized schemas such as PhysX Vehicles and maps them to LunCo mobility models. It no longer installs the heavy USD cosim translator. |
 | **`lunco-usd-sim-core`** | Small render-free protocol package for the shared USD simulation schedule, processed marker, and pending differential contract used by vehicle and cosim projectors. It contains no projection systems. |
-| **`lunco-usd-sim-cosim`** | USD-authored program discovery, connection wiring, scene lifecycle, readiness, cosim API providers, and Modelica/Rhai participant projection (`UsdSimCosimPlugin`). |
-| **`lunco-usd-sim-domain`** | Render-free USD domain projection: reads component-network facts, resolves Modelica member classes, invokes Rhai synthesizers, and publishes generated Modelica sources. Generic USD actuator lowering is owned by `lunco-usd-avian`. |
+| **`lunco-usd-sim-cosim`** | USD-authored program discovery, connection wiring, scene lifecycle, readiness, and Modelica/Rhai participant projection (`UsdSimCosimPlugin`). API query providers are isolated in `lunco-usd-sim-cosim-api`. |
+| **`lunco-usd-sim-cosim-api`** | Optional API query providers for cosimulation ports, status, causal traces, binding diagnostics, camera audits, and broken-connection reports. It depends on the runtime projection but keeps API/JSON serialization out of the default cosimulation crate's direct source and dependency set. |
+| **`lunco-usd-sim-domain`** | Render-free USD domain projection: reads component-network facts, resolves Modelica member classes, invokes Rhai synthesizers, and publishes generated Modelica sources. Generic USD actuator lowering is owned by `lunco-usd-avian`; its optional API query providers live in `lunco-usd-sim-domain-api`. |
+| **`lunco-usd-sim-domain-api`** | Optional API query providers for generated Modelica source inspection. Kept outside the render-free domain projector so its direct dependency set does not include the `lunco-api`/JSON query surface. |
 | **`lunco-usd-sim-celestial`** | Independent render-free projector for USD-authored celestial anchors, orbits, link nodes, occluders, and reflected-light metadata. It owns the celestial projection marker and does not depend on vehicle or cosimulation projection. |
 | **`lunco-usd-sim-shader`** | Independent render-free projector for `UsdShade` WGSL material intent. It authors `ShaderLook` and owns the shader-resolution marker without pulling the vehicle/cosimulation implementation into the shader source crate. |
 | **`lunco-usd-sim-telemetry`** | Independent render-free Avian rigid-body and wheel telemetry recorder. It publishes through the shared signal/telemetry registries and is isolated from USD vehicle projection changes. |
@@ -140,8 +142,9 @@ Logic engines for dynamic simulation behavior, the tool registry, and industrial
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-modelica-runtime`** | Render-free Modelica runtime contract: the `ModelicaModel` ECS component, worker command/result protocol, source asset loader, communication schedule, notices, sample stream, and telemetry layout. It deliberately has no Rumoca compiler, worker implementation, document editor, or UI closure. |
-| **`lunco-modelica-core`** | Headless Modelica compiler host: document editing, Rumoca compilation, simulation sessions, worker implementation, MSL indexing, and API-facing commands/queries. It consumes `lunco-modelica-runtime` but does not own the shared runtime protocol. It has no workbench, egui, tutorial, or UI dependency. |
+| **`lunco-modelica-runtime`** | Render-free Modelica runtime contract: the `ModelicaModel` ECS component, worker command/result protocol, source asset loader, generated-source metadata, communication schedule, notices, sample stream, and telemetry layout. It deliberately has no Rumoca compiler, worker implementation, document editor, or UI closure. |
+| **`lunco-modelica-core`** | Headless Modelica compiler host: authored document editing, Rumoca compilation, simulation sessions, worker implementation, and MSL indexing. It consumes `lunco-modelica-runtime`, keeps API command contracts opt-in, and does not own API query registration, the shared runtime protocol, or generated USD-document metadata. It has no workbench, egui, tutorial, or UI dependency. |
+| **`lunco-modelica-api`** | Production transport-free API capability for Modelica: registers document, compiler, experiment, solver, source, and run query providers. It depends on the headless Modelica core but is not part of the compiler core's default closure; Workspace queries remain in `lunco-workspace-api`. |
 | **`lunco-modelica-ui`** | Modelica workbench UI and `lunica` application facade. It adapts core state to workbench contexts and owns Modelica panels, diagrams, plots, onboarding, and editor presentation; it has no tutorial catalog or lifecycle. |
 | **`lunco-modelica-ast`** | Pure Modelica source boundary: BOM normalization, strict/recovering Rumoca parse wrappers, AST interface/component extraction, shared expression/description display projections, and Modelica lint facts. It has no Bevy, UI, worker, storage, or solver ownership; authored lint policy remains in `assets/scripting/policy/lint_modelica.rhai`. |
 | **`lunco-scripting`** | Runtime-agnostic, language-neutral world bridge with **rhai** as the default (browser-capable) backend; Python is an optional one-shot-eval backend, Lua a reserved (unimplemented) backend id; logic providers cover scenarios and sequencing. Rhai can read/write generic active-Twin settings and read named engine exposures without per-setting bindings. |
@@ -165,7 +168,8 @@ Primary entry points and simulation assembly targets.
 | **`lunco-luncosim-core`** | — | Headless-safe simulation runtime shared by the GUI shell, `luncosim-server`, and scene-test runner. |
 | **`lunco-luncosim-server`** | `luncosim-server` | Thin headless launcher that depends directly on `lunco-luncosim-core` with API + networking enabled; the GUI shell is not linked. |
 | **`lunco-modelica-ui`** | `lunica` | The Modelica workbench application and UI facade. |
-| **`lunco-modelica-core`** | `lunica_worker`, `modelica_run`, `modelica_tester`, `msl_indexer`, `msl_parse_bench` | Headless Modelica worker and CLI/indexing tools; none link the workbench UI. The worker protocol and live ECS component come from `lunco-modelica-runtime`. |
+| **`lunco-modelica-core`** | `lunica_worker`, `modelica_run`, `modelica_tester`, `msl_indexer`, `msl_parse_bench` | Headless Modelica worker and CLI/indexing tools; none link the workbench UI or Modelica API query capability. The worker protocol and live ECS component come from `lunco-modelica-runtime`. |
+| **`lunco-modelica-api`** | — | API query capability installed by API-enabled Modelica and LunCoSim hosts. |
 
 > Other binaries: `build_msl_assets` (`lunco-modelica-assets`), `net_smoke` (`lunco-networking`), `dem_worker` (`lunco-terrain-bake`, the off-thread DEM bake Web Worker — staged next to the wasm by `build_web.sh`).
 
@@ -405,8 +409,23 @@ tessellation, quality invalidation, and the low-level geometry tests. The
 hierarchy loader retains async projection orchestration and material intent but
 does not depend directly on the heavy geometry evaluator stack.
 
+**`lunco-usd-avian-core`**
+Core Avian/BigSpace physics-frame bridge. Owns f64 pose synchronization,
+rootless collider propagation, active-frame transport/reset, backend admission
+validation, and `BridgeShadow`; it does not read USD stages or contain UI
+policy. Its bridge tests live with this production package so changing the USD
+reader does not rebuild the bridge implementation.
+
 **`lunco-usd-avian`**
-Physics bridge for OpenUSD (`UsdAvianPlugin`). Maps `UsdPhysics` schemas — rigid bodies + mass-properties, all collider shapes, and **all joints** (revolute/prismatic/fixed/spherical/distance, D6-reduced) with `UsdPhysicsDriveAPI` motor drive — to Avian3D. The single home for Avian joint construction (incl. the programmatic wheel hinge). Runtime-only; its Rust tests cover low-level mechanics with in-memory USDA fixtures, while shipped asset/runtime assertions are owned by the Rhai scene-test gate. Lint fact extraction is isolated in `lunco-usd-avian-lint`.
+Physics projection for OpenUSD (`UsdAvianPlugin`). Maps `UsdPhysics` schemas —
+rigid bodies + mass-properties, all collider shapes, and **all joints**
+(revolute/prismatic/fixed/spherical/distance, D6-reduced) with
+`UsdPhysicsDriveAPI` motor drive — to Avian3D. The single home for USD-driven
+Avian joint construction (including the programmatic wheel hinge). It consumes
+the separate Avian/BigSpace core bridge. Runtime-only; its Rust tests cover
+low-level mechanics with in-memory USDA fixtures, while shipped asset/runtime
+assertions are owned by the Rhai scene-test gate. Lint fact extraction is
+isolated in `lunco-usd-avian-lint`.
 
 **`lunco-usd-avian-lint`**
 Render-free composed-`UsdPhysics` fact producer for the authored Rhai lint
@@ -426,14 +445,29 @@ implementation crate.
 **`lunco-usd-sim-cosim`**
 USD-to-cosim translator and scene lifecycle package. `UsdSimCosimPlugin`
 installs source discovery, wiring, readiness, scene commands, telemetry
-projection, and cosim API providers independently from vehicle realization.
+projection independently from vehicle realization. Its optional API query
+providers live in `lunco-usd-sim-cosim-api`.
+
+**`lunco-usd-sim-cosim-api`**
+Optional API query providers for the cosimulation runtime: uniform ports,
+causal traces, cosimulation status, binding status, scene-camera audits, and
+broken-connection diagnostics. API-enabled composition installs this package
+alongside the runtime; default cosimulation hosts do not inherit its direct
+`lunco-api`/JSON serialization edge.
 
 **`lunco-usd-sim-domain`**
 Render-free USD domain projection. It reads composed component-network facts,
 resolves Modelica member classes, invokes authored Rhai synthesizers, and
 publishes generated Modelica sources. Generic force/torque actuator lowering
 belongs to `lunco-usd-avian`, while USD wiring and participant lifecycle belong
-to `lunco-usd-sim-cosim`.
+to `lunco-usd-sim-cosim`. Optional generated-source API queries are provided by
+the separate `lunco-usd-sim-domain-api` package.
+
+**`lunco-usd-sim-domain-api`**
+Optional API query providers for the generated Modelica source projection. The
+package is installed only by API-enabled runtime composition, keeping the
+render-free domain projector's direct dependency set independent from
+`lunco-api` and `serde_json`.
 
 **`lunco-usd-sim-celestial`**
 Independent render-free projection of USD-authored celestial and connectivity facts. It converts anchors, orbits, link nodes, occluder extents, and reflected-light declarations to `lunco-celestial` components. Its separate package boundary prevents celestial authoring changes from rebuilding the vehicle and cosimulation projector.
@@ -524,7 +558,10 @@ Shared web frontend for the wasm apps. Provides the streaming loader (`web/lunco
 ### Scripting & Modeling
 
 **`lunco-modelica-core`**
-Modelica language integration. Provides AST-based editing, compilation via Rumoca, and interactive diagramming, allowing complex industrial models to drive simulation entities and vessel subsystems. On wasm, compiles/Fast-Runs are dispatched off the main thread to the `lunica_worker` companion binary; its `worker_transport` composes the generic `lunco-worker-transport::WorkerPool` (spawn/handshake/post/respawn) and layers the Modelica-specific MSL-readiness and per-run routing on top.
+Modelica language integration. Provides AST-based editing, compilation via Rumoca, and simulation sessions, allowing complex industrial models to drive simulation entities and vessel subsystems. On wasm, compiles/Fast-Runs are dispatched off the main thread to the `lunica_worker` companion binary; its `worker_transport` composes the generic `lunco-worker-transport::WorkerPool` (spawn/handshake/post/respawn) and layers the Modelica-specific MSL-readiness and per-run routing on top. API commands are opt-in, and API query providers are owned by `lunco-modelica-api`.
+
+**`lunco-modelica-api`**
+Production API capability for Modelica hosts. It registers the domain-owned query providers for bundled sources, MSL classes, compile/run status, experiment results, document source, model metadata, variables, and share links. `lunco-workspace-api` remains the owner of Workspace queries. Keeping this layer outside `lunco-modelica-core` means a headless compiler-only build does not pull the API query closure, while API-enabled UI/server roots install the required capabilities explicitly.
 
 **`lunco-scripting`**
 Language-neutral world bridge for dynamic logic providers. The default (and only fully-wired) backend is **rhai** — browser-capable and enabled by the default `rhai` feature; build with `--no-default-features` for a script-free build. The bridge exposes ECS verbs and a native `ValueBuilder` (no JSON on the read path) over which each runtime is a thin binding. Python is an optional backend used for one-shot snippet evaluation only; Lua is a reserved (not yet implemented) backend id. rhai also funnels the `lunco-tools` registry into the engine via `lunco-tools-rhai`.

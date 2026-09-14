@@ -34,7 +34,13 @@ ui = [
 ]
 # Compile the transport-free API contracts. The native HTTP listener is a
 # separate feature on `lunco-api-transport`; its wasm bridge is target-selected.
-api = ["dep:lunco-api", "dep:lunco-api-transport", "lunco-modelica-core/api"]
+api = [
+    "dep:lunco-api",
+    "dep:lunco-api-transport",
+    "dep:lunco-modelica-api",
+    "dep:lunco-workspace-api",
+    "lunco-modelica-core/api",
+]
 # Native HTTP server for the `lunica --api` entry point. The browser uses the
 # transport package's wasm bridge automatically and does not enable this feature.
 transport-http = ["api", "lunco-api-transport/transport-http"]
@@ -71,7 +77,9 @@ path = "src/bin/lunica.rs"
 [dependencies]
 bevy.workspace = true
 lunco-modelica-core = { path = "../lunco-modelica-core", default-features = false }
+lunco-modelica-api = { path = "../lunco-modelica-api", default-features = false, optional = true }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
+lunco-workspace-api = { path = "../lunco-workspace-api", optional = true }
 # The whole egui IDE stack is UI-only. Optional behind `ui` so the Modelica
 # COMPILE CORE (ModelicaCorePlugin: channels + worker + .mo loader + dispatch)
 # builds headless (`default-features = false`) for a server running cosim — no

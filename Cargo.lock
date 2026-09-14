@@ -7439,6 +7439,7 @@ dependencies = [
  "lunco-terrain-surface",
  "lunco-twin",
  "lunco-usd-avian",
+ "lunco-usd-avian-core",
  "lunco-usd-bevy-scene",
  "lunco-usd-core",
  "lunco-usd-sim",
@@ -7474,6 +7475,7 @@ dependencies = [
  "lunco-hardware",
  "lunco-luncosim-exposures",
  "lunco-mobility",
+ "lunco-modelica-api",
  "lunco-modelica-core",
  "lunco-modelica-runtime",
  "lunco-networking",
@@ -7493,6 +7495,7 @@ dependencies = [
  "lunco-twin",
  "lunco-twin-journal",
  "lunco-usd-avian",
+ "lunco-usd-avian-core",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-runtime",
  "lunco-usd-bevy-scene",
@@ -7504,6 +7507,7 @@ dependencies = [
  "lunco-usd-terrain",
  "lunco-web",
  "lunco-workspace",
+ "lunco-workspace-api",
  "mimalloc",
  "serde_json",
 ]
@@ -7705,6 +7709,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "lunco-modelica-api"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "lunco-api",
+ "lunco-assets",
+ "lunco-doc",
+ "lunco-doc-bevy",
+ "lunco-experiments",
+ "lunco-modelica-ast",
+ "lunco-modelica-core",
+ "lunco-modelica-runtime",
+ "lunco-workspace",
+ "serde_json",
+ "uuid",
+ "web-time",
+]
+
+[[package]]
 name = "lunco-modelica-assets"
 version = "0.1.0"
 dependencies = [
@@ -7762,7 +7785,6 @@ dependencies = [
  "lunco-twin-journal",
  "lunco-worker-transport",
  "lunco-workspace",
- "lunco-workspace-api",
  "rayon",
  "regex",
  "rumoca-compile",
@@ -7823,6 +7845,7 @@ dependencies = [
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-experiments",
+ "lunco-modelica-api",
  "lunco-modelica-ast",
  "lunco-modelica-core",
  "lunco-modelica-runtime",
@@ -7841,6 +7864,7 @@ dependencies = [
  "lunco-workbench",
  "lunco-workbench-core",
  "lunco-workspace",
+ "lunco-workspace-api",
  "lyon_geom",
  "lyon_path",
  "lyon_tessellation",
@@ -8455,16 +8479,28 @@ version = "0.1.0"
 dependencies = [
  "avian3d",
  "bevy",
- "big_space",
  "lunco-core",
  "lunco-cosim",
  "lunco-environment",
  "lunco-physics",
  "lunco-terrain-globe",
+ "lunco-usd-avian-core",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
  "lunco-usd-core",
  "openusd",
+]
+
+[[package]]
+name = "lunco-usd-avian-core"
+version = "0.1.0"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "big_space",
+ "lunco-core",
+ "lunco-physics",
+ "lunco-usd-bevy-scene",
 ]
 
 [[package]]
@@ -8611,6 +8647,8 @@ dependencies = [
  "lunco-usd-bevy-diagnostics",
  "lunco-usd-sim",
  "lunco-usd-sim-cosim",
+ "lunco-usd-sim-cosim-api",
+ "lunco-usd-sim-domain-api",
 ]
 
 [[package]]
@@ -8754,10 +8792,8 @@ dependencies = [
  "avian3d",
  "bevy",
  "big_space",
- "lunco-api",
  "lunco-assets",
  "lunco-celestial",
- "lunco-controller",
  "lunco-core",
  "lunco-cosim",
  "lunco-doc",
@@ -8767,9 +8803,7 @@ dependencies = [
  "lunco-modelica-runtime",
  "lunco-physics",
  "lunco-readiness",
- "lunco-render",
  "lunco-scripting",
- "lunco-signal",
  "lunco-time",
  "lunco-usd-avian",
  "lunco-usd-bevy-camera",
@@ -8779,6 +8813,28 @@ dependencies = [
  "lunco-usd-sim-core",
  "lunco-usd-sim-domain",
  "openusd",
+]
+
+[[package]]
+name = "lunco-usd-sim-cosim-api"
+version = "0.1.0"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "lunco-api",
+ "lunco-core",
+ "lunco-cosim",
+ "lunco-modelica-runtime",
+ "lunco-physics",
+ "lunco-render",
+ "lunco-signal",
+ "lunco-usd-avian",
+ "lunco-usd-avian-core",
+ "lunco-usd-bevy-camera",
+ "lunco-usd-bevy-core",
+ "lunco-usd-bevy-scene",
+ "lunco-usd-sim-core",
+ "lunco-usd-sim-cosim",
  "serde_json",
 ]
 
@@ -8787,7 +8843,6 @@ name = "lunco-usd-sim-domain"
 version = "0.1.0"
 dependencies = [
  "bevy",
- "lunco-api",
  "lunco-assets",
  "lunco-core",
  "lunco-cosim",
@@ -8805,8 +8860,18 @@ dependencies = [
  "lunco-usd-compose",
  "lunco-usd-core",
  "openusd",
- "serde_json",
  "web-time",
+]
+
+[[package]]
+name = "lunco-usd-sim-domain-api"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "lunco-api",
+ "lunco-modelica-runtime",
+ "lunco-usd-sim-domain",
+ "serde_json",
 ]
 
 [[package]]

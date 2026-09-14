@@ -203,6 +203,11 @@ fn main() {
     #[cfg(not(target_arch = "wasm32"))]
     if headless {
         app.add_plugins(lunco_modelica_core::ModelicaCorePlugin);
+        #[cfg(feature = "api")]
+        {
+            app.add_plugins(lunco_workspace_api::WorkspaceApiQueriesPlugin);
+            app.add_plugins(lunco_modelica_api::ModelicaApiQueriesPlugin);
+        }
         app.add_plugins(bevy::app::ScheduleRunnerPlugin::run_loop(
             std::time::Duration::from_secs_f64(1.0 / lunco_core::FIXED_HZ),
         ));

@@ -162,7 +162,7 @@ Worker-side Modelica state is cleaned up with the scene transition.
 
 ### Live status
 
-`CosimStatus` (registered by `lunco-usd-sim-cosim`) returns one row per
+`CosimStatus` (registered by `lunco-usd-sim-cosim-api`) returns one row per
 `lunco-cosim::UsdSourcedCosim` entity with position, velocity, Modelica timing, and
 the value currently flowing through `SimComponent.inputs["force_y"]`. Each row
 also has a `status` string (`Unbound`, `Compiling`, `Running`, `Paused`, or

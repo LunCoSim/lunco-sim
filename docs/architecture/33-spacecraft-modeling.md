@@ -410,7 +410,7 @@ Rocker-bogie fidelity needs G4+G5+G2.
 
 - Cosim force path: `crates/lunco-cosim/src/avian.rs:57,143`, `systems/propagate.rs:50`
 - Gravity: `crates/lunco-environment/src/lib.rs:167`
-- USD physics/joints: `crates/lunco-usd-avian/src/lib.rs:457,583,685`
+- USD physics/joints: `crates/lunco-usd-avian/src/lib.rs` (USD projection and joint construction); `crates/lunco-usd-avian-core/src/lib.rs` (Avian/BigSpace frame bridge)
 - USD vehicle/wheel spawn: `crates/lunco-usd-sim/src/lib.rs:335,636,690,1026`
 - Wheel physics: `crates/lunco-mobility/src/lib.rs` (raycast), `wheel_spin.rs`
 - Model binding (USD→cosim): `crates/lunco-usd-sim-cosim/src/lib.rs`

@@ -26,7 +26,8 @@ use lunco_modelica_runtime::ModelicaSet;
 use lunco_obstacle_field::ObstacleFieldPlugin;
 use lunco_terrain_globe::TerrainPlugin;
 use lunco_terrain_surface::TerrainSurfacePlugin;
-use lunco_usd_avian::{BigSpacePhysicsBridgePlugin, UsdCollisionFilter};
+use lunco_usd_avian::UsdCollisionFilter;
+use lunco_usd_avian_core::BigSpacePhysicsBridgePlugin;
 use lunco_usd_bevy_core::read::UsdReadObject;
 use lunco_usd_bevy_core::UsdStageAsset;
 use lunco_usd_bevy_runtime::UsdPlugins;
@@ -1493,6 +1494,16 @@ impl Plugin for LunCoSimCorePlugin {
         // doc ops (journals → syncs → projector activates). Authoring works with or
         // without networking; the activation projector is networking-gated for now.
         register_all_commands(app);
+
+        #[cfg(feature = "api-transport")]
+        {
+            if !app.is_plugin_added::<lunco_workspace_api::WorkspaceApiQueriesPlugin>() {
+                app.add_plugins(lunco_workspace_api::WorkspaceApiQueriesPlugin);
+            }
+            if !app.is_plugin_added::<lunco_modelica_api::ModelicaApiQueriesPlugin>() {
+                app.add_plugins(lunco_modelica_api::ModelicaApiQueriesPlugin);
+            }
+        }
 
         // `--scene <path>` is an explicit startup request. With no argument
         // the process owns only the persistent world shell; it must not

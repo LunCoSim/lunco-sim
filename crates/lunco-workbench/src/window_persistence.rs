@@ -144,8 +144,10 @@ impl WindowGeometry {
 /// `merged_titlebar_window(title)` (the binary still adds its `canvas`
 /// fields).
 pub fn restored_window(title: impl Into<String>) -> Window {
-    #[allow(unused_mut)]
+    #[cfg(not(target_arch = "wasm32"))]
     let mut window = crate::merged_titlebar_window(title);
+    #[cfg(target_arch = "wasm32")]
+    let window = crate::merged_titlebar_window(title);
     #[cfg(not(target_arch = "wasm32"))]
     {
         let g = load_window_geometry();

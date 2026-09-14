@@ -6,10 +6,11 @@
 > LunCoSim uses for the 3D world. Bases, rovers, habitats, terrain — everything
 > physical — lives as USD prims in USD stages. See
 > [`../../crates/lunco-usd-core/`](../../crates/lunco-usd-core/), [`../../crates/lunco-usd/`](../../crates/lunco-usd/) and companion crates
-> `lunco-usd-geometry`, `lunco-usd-avian`, `lunco-usd-avian-lint`, `lunco-usd-bevy-core`,
+> `lunco-usd-geometry`, `lunco-usd-avian-core`, `lunco-usd-avian`, `lunco-usd-avian-lint`, `lunco-usd-bevy-core`,
 > `lunco-usd-bevy-runtime`, `lunco-usd-bevy-scene`, `lunco-usd-bevy-twin`, `lunco-usd-bevy-camera`, `lunco-usd-bevy-light`, `lunco-usd-bevy-animation`, `lunco-usd-bevy` and
 > `lunco-usd-bevy-lathe`, `lunco-usd-bevy-mesh`, `lunco-usd-queries`, `lunco-usd-sim`,
-> `lunco-usd-sim-core`, `lunco-usd-sim-cosim`, `lunco-usd-sim-domain`.
+> `lunco-usd-sim-core`, `lunco-usd-sim-cosim`, `lunco-usd-sim-cosim-api`,
+> `lunco-usd-sim-domain`, `lunco-usd-sim-domain-api`.
 
 Package ownership follows the same boundary: `lunco-usd-core` contains the
 headless document/authoring surface, schemas, pure probes, and shared USD
@@ -42,13 +43,19 @@ NurbsPatch visual mesh projection plus quality invalidation;
 material intent while consuming the camera, light, lathe, and mesh packages
 directly; and
 `lunco-usd-avian-lint` owns composed `UsdPhysics` lint facts;
-`lunco-usd-avian` owns generic USD actuator lowering;
+`lunco-usd-avian-core` owns the USD-independent Avian/BigSpace physics-frame
+bridge, including f64 pose synchronization, rootless collider propagation,
+frame transport/reset, and backend admission validation;
+`lunco-usd-avian` owns OpenUSD physics projection and generic USD actuator
+lowering;
 `lunco-usd-sim-core` owns the small shared USD-simulation protocol;
 `lunco-usd-sim-domain` owns composed component-network and Modelica projection;
-`lunco-usd-sim` owns vehicle projection; and `lunco-usd-sim-cosim` owns
-participant discovery, wiring, readiness, and scene lifecycle. The application
-bundle installs the two implementation plugins explicitly, so vehicle changes
-do not make the vehicle package depend on the 6.5k-line cosim implementation.
+`lunco-usd-sim-domain-api` owns optional generated-source API queries;
+`lunco-usd-sim` owns vehicle projection; `lunco-usd-sim-cosim` owns participant
+discovery, wiring, readiness, and scene lifecycle; and
+`lunco-usd-sim-cosim-api` owns optional API query serialization. The application
+bundle installs the implementation plugins explicitly, so vehicle changes do
+not make the vehicle package depend on the 6.5k-line cosim implementation.
 
 Public command and document-lifecycle coverage for the runtime boundary lives
 in `crates/lunco-usd/tests/commands.rs`, so changes to those tests do not
@@ -333,7 +340,7 @@ section.
 1. **UsdVisualPlugin** — Spawns child entities for USD prims and attaches meshes + transforms.
 2. **UsdAnimationPlugin** — Binds projected animated prims to the shared time domains and samples authored `timeSamples` into transform and material intent.
 3. **UsdDiagnosticsPlugin** — Handles visual glTF placeholder hiding and failure-stub diagnostics; render-free stage failure state belongs to the `UsdScenePlugin`.
-4. **UsdAvianPlugin** — Maps USD physics to Avian3D: rigid bodies (`PhysicsRigidBodyAPI`, with its `physics:rigidBodyEnabled`), mass-properties (`physics:mass`, `physics:diagonalInertia`, `physics:centerOfMass`), colliders (`physics:collisionEnabled`, all `UsdGeom` shapes), and **all joints** (see [Physics joints](#physics-joints)). The single home for Avian joint construction.
+4. **UsdAvianPlugin** — Maps USD physics to Avian3D: rigid bodies (`PhysicsRigidBodyAPI`, with its `physics:rigidBodyEnabled`), mass-properties (`physics:mass`, `physics:diagonalInertia`, `physics:centerOfMass`), colliders (`physics:collisionEnabled`, all `UsdGeom` shapes), and **all joints** (see [Physics joints](#physics-joints)). The single home for USD-driven Avian joint construction. The separate `lunco-usd-avian-core` plugin owns the USD-independent Avian/BigSpace frame bridge and is installed directly by application composition.
 5. **UsdSimPlugin** — Detects the standard vehicle/wheel schemas and authored vehicle topology, then creates the topology-derived `lunco_core::MobilityRoot`, `WheelRaycast`, `OutputPorts`, generic joint/shaft endpoints, `DifferentialCoupling`, and sensors. **UsdSimCosimPlugin** separately discovers programs, publishes model surfaces, and derives co-simulation wires. Vehicle motion allocation and wheel heading are produced by the composed Modelica/Rhai network; Rust only realizes the resulting generic values (see [`22-domain-cosim.md`](22-domain-cosim.md)).
 
 ### Compound collision ownership
@@ -759,7 +766,8 @@ the shipped asset corpus. Ownership follows the narrowest production boundary:
 - `crates/lunco-usd-queries/tests/query_api.rs` — public inspection, edit-session, assembly-target, and document-sync query contracts
 - `crates/lunco-usd/tests/live_spawn_projection.rs` — document-backed USD authoring and raw asset composition facts
 - `crates/lunco-usd-avian-lint/src/lib.rs` — composed `UsdPhysics` fact production for the authored lint policy
-- `crates/lunco-usd-avian/src/lib.rs` — low-level Avian collider/joint extraction mechanisms with in-memory USDA fixtures; shipped asset and runtime ownership stays in the Rhai scene-test gate
+- `crates/lunco-usd-avian-core/src/lib.rs` — Avian/BigSpace frame bridge and low-level bridge tests
+- `crates/lunco-usd-avian/src/lib.rs` — OpenUSD collider/joint extraction mechanisms with in-memory USDA fixtures; shipped asset and runtime ownership stays in the Rhai scene-test gate
 - `crates/lunco-usd-sim-domain/src/lib.rs` — low-level component-network projection and synthesis mechanisms
 - `crates/lunco-usd-sim-cosim/tests/usd_connection_mechanics.rs` — generic connection derivation and transform mechanics
 - `assets/scenarios/tests/*.rhai` through the production `luncosim test` gate — composed USD → Bevy → Avian → simulation outcomes, including rover structure, wheel realization, wiring, EPS, link visibility, catalog discovery, and mounted component/material contracts; shipped rover composition/migration assertions also live here through `QueryUsdPrim`

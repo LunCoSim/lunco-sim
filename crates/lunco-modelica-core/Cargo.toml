@@ -6,14 +6,13 @@ license.workspace = true
 description = "Headless Modelica compiler, worker, and simulation runtime for LunCoSim"
 
 [features]
-# The transport-free API contracts are on by default so `cargo run --bin lunica
-# -- --api` Just Works for screenshot-driven debugging. Building without them
-# (`cargo build --no-default-features`) keeps the compile core independent of
-# the outward HTTP/browser transport.
-default = ["api"]
+# The compiler core is transport-free by default. API command completion is an
+# explicit host capability; Modelica query providers live in the separate
+# `lunco-modelica-api` package.
+default = []
 # Compile the transport-free API contracts. Application roots add
 # `lunco-api-transport` when they expose native HTTP or the browser bridge.
-api = ["dep:lunco-api", "dep:lunco-workspace-api"]
+api = ["dep:lunco-api"]
 # Headless Modelica compile/run server: the HTTP API, no `ui`. Build the lunica
 # bin with `--no-default-features --features server`. No rendered capture capability
 # (`lunco-capture/api`; the server captures no screenshots) and no winit/egui.
@@ -43,7 +42,6 @@ lunco-signal = { path = "../lunco-signal" }
 lunco-telemetry = { path = "../lunco-telemetry" }
 lunco-twin = { path = "../lunco-twin", features = ["bevy"] }
 lunco-workspace = { path = "../lunco-workspace" }
-lunco-workspace-api = { path = "../lunco-workspace-api", optional = true }
 lunco-storage = { path = "../lunco-storage" }
 # base64url encode/decode for shareable model links (see `model_share.rs`).
 # Already resolved transitively (0.22.x) — no new download.

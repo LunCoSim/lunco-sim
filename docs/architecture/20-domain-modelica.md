@@ -47,11 +47,20 @@ worker, UI, or solver state. `lunco-modelica-core` owns the headless document,
 compiler, worker, and simulation seams; `lunco-modelica-ui` owns workbench
 presentation and the `lunica` application facade.
 
+The transport-free Modelica query surface is a separate production capability
+in [`lunco-modelica-api`](../../crates/lunco-modelica-api/). API-enabled hosts
+install it alongside the compiler; compiler-only builds do not inherit query
+registration or Workspace API dependencies. Workspace queries remain owned by
+[`lunco-workspace-api`](../../crates/lunco-workspace-api/).
+
 The shared render-free participant contract is [`lunco-modelica-runtime`](../../crates/lunco-modelica-runtime/).
 It owns `ModelicaModel`, the serialized worker command/result messages, source
-assets, communication scheduling, notices, samples, and telemetry layout. The
-compiler host consumes that contract; USD projection and UI adapters depend on
-the runtime package directly when they do not need Rumoca compilation.
+assets, generated USD-document metadata, communication scheduling, notices,
+samples, and telemetry layout. The compiler host consumes that contract; USD
+projection and UI adapters depend on the runtime package directly when they do
+not need Rumoca compilation. The authored document registry remains in
+`lunco-modelica-core`; generated-document metadata is a separate runtime
+resource because it follows projection lifecycle rather than authored editing.
 
 ## 2. Architecture in layers
 
@@ -326,10 +335,11 @@ mutation signal, so a stale completion cannot leave a changed document asleep.
 Runtime Modelica telemetry is sampled from solver model time at the configured
 rate; its cursor only avoids rebuilding the same batch between due samples, and
 the shared signal registry remains the sole channel-history authority.
-Generated USD Modelica source metadata has a separate invalidation boundary:
-the generated source projection and its document link/removal lifecycle. Live
-`ModelicaModel` output and clock updates do not rebuild that source registry;
-they remain solver state and are consumed through the Modelica runtime paths.
+Generated USD Modelica source metadata has a separate invalidation boundary in
+`lunco_modelica_runtime::generated_source`: the generated source projection and
+its document link/removal lifecycle. Live `ModelicaModel` output and clock
+updates do not rebuild that source registry; they remain solver state and are
+consumed through the Modelica runtime paths.
 Member class discovery follows the Modelica source asset lifecycle: an asset
 load or failure event settles the declaration, and a source modification
 invalidates only that declaration before re-projection. There is no
@@ -1233,6 +1243,7 @@ finishing the acausal-connector visuals on `lunco-canvas`.
 ### Source
 
 - [`../../crates/lunco-modelica-core/`](../../crates/lunco-modelica-core/) — crate root
+- [`../../crates/lunco-modelica-api/`](../../crates/lunco-modelica-api/) — transport-free Modelica query capability
 - [`../../crates/lunco-modelica-ast/`](../../crates/lunco-modelica-ast/) — normalized Rumoca parse boundary, AST projections, and Modelica lint facts
 - [`../../crates/lunco-modelica-core/src/document/core.rs`](../../crates/lunco-modelica-core/src/document/core.rs) — `ModelicaDocument`, op set, apply pipeline, span-based patch helpers, qualified-path `resolve_class`
 - [`../../crates/lunco-modelica-core/src/pretty.rs`](../../crates/lunco-modelica-core/src/pretty.rs) — subset pretty-printer, `PrettyOptions`

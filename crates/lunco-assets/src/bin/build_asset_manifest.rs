@@ -27,10 +27,12 @@
 //! So the packager calls the scanner. One rule, one place.
 //!
 //! Native-only (it writes a file, and the web build runs it on the host).
-#![allow(clippy::disallowed_methods)]
+#![cfg_attr(not(target_arch = "wasm32"), allow(clippy::disallowed_methods))]
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
 
+#[cfg(not(target_arch = "wasm32"))]
 fn main() {
     let Some(dir) = std::env::args().nth(1).map(PathBuf::from) else {
         eprintln!(
@@ -77,3 +79,6 @@ fn main() {
 
     println!("{} asset(s) → {}", rels.len(), out.display());
 }
+
+#[cfg(target_arch = "wasm32")]
+fn main() {}

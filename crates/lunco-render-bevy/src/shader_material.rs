@@ -443,26 +443,34 @@ pub struct ShaderMaterialPlugin;
 /// ray-march) loaded so `#import lunco::horizon::sun_visibility` resolves in
 /// any per-instance shader.
 #[derive(Resource)]
-pub struct HorizonMarchModule(#[allow(dead_code)] Handle<bevy::shader::Shader>);
+pub struct HorizonMarchModule {
+    pub(crate) _handle: Handle<bevy::shader::Shader>,
+}
 
 /// Keeps the shared `lunco::pbr_lit` WGSL module (PBR-lit mode) loaded so
 /// `#import lunco::pbr_lit::lit` resolves in any per-instance shader — letting
 /// a self-describing shader opt into bevy's full lighting without hand-copying
 /// the PbrInput boilerplate.
 #[derive(Resource)]
-pub struct PbrLitModule(#[allow(dead_code)] Handle<bevy::shader::Shader>);
+pub struct PbrLitModule {
+    pub(crate) _handle: Handle<bevy::shader::Shader>,
+}
 
 /// Keeps the shared `lunco::lunar` WGSL module (lunar regolith photometry —
 /// Lommel-Seeliger + opposition surge) loaded so `#import lunco::lunar` resolves
 /// in the terrain shaders.
 #[derive(Resource)]
-pub struct LunarBrdfModule(#[allow(dead_code)] Handle<bevy::shader::Shader>);
+pub struct LunarBrdfModule {
+    pub(crate) _handle: Handle<bevy::shader::Shader>,
+}
 
 /// Keeps the shared `lunco::noise` WGSL module (procedural value noise — the
 /// hash/vnoise/fbm family) loaded so `#import lunco::noise` resolves in the
 /// terrain and starfield shaders.
 #[derive(Resource)]
-pub struct NoiseModule(#[allow(dead_code)] Handle<bevy::shader::Shader>);
+pub struct NoiseModule {
+    pub(crate) _handle: Handle<bevy::shader::Shader>,
+}
 
 /// Keeps the shared `lunco::terrain` WGSL module (the regolith surface kernel —
 /// `ramp`/`aa_fade`/`layer_height`/`bump_layer`, plus the native-vs-web noise
@@ -474,14 +482,18 @@ pub struct NoiseModule(#[allow(dead_code)] Handle<bevy::shader::Shader>);
 /// flat untextured grey, which reads as "the ground went transparent" rather than
 /// as a shader error. Anything under `#define_import_path` needs a line here.
 #[derive(Resource)]
-pub struct TerrainSurfaceModule(#[allow(dead_code)] Handle<bevy::shader::Shader>);
+pub struct TerrainSurfaceModule {
+    pub(crate) _handle: Handle<bevy::shader::Shader>,
+}
 
 /// Keeps the shared `lunco::transfer` WGSL module (the value→colour plane of
 /// Data → Transfer → Blend) loaded so `#import lunco::transfer` resolves in the
 /// terrain shaders. The GPU twin of `lunco_terrain_core::transfer` — one ramp,
 /// so the terrain diagnostic material and the legend explaining it cannot disagree.
 #[derive(Resource)]
-pub struct TransferModule(#[allow(dead_code)] Handle<bevy::shader::Shader>);
+pub struct TransferModule {
+    pub(crate) _handle: Handle<bevy::shader::Shader>,
+}
 
 impl Plugin for ShaderMaterialPlugin {
     fn build(&self, app: &mut App) {
@@ -498,32 +510,34 @@ impl Plugin for ShaderMaterialPlugin {
             .world()
             .resource::<AssetServer>()
             .load("shaders/horizon_march.wgsl");
-        app.insert_resource(HorizonMarchModule(module));
+        app.insert_resource(HorizonMarchModule { _handle: module });
         let pbr_lit = app
             .world()
             .resource::<AssetServer>()
             .load("shaders/pbr_lit.wgsl");
-        app.insert_resource(PbrLitModule(pbr_lit));
+        app.insert_resource(PbrLitModule { _handle: pbr_lit });
         let lunar = app
             .world()
             .resource::<AssetServer>()
             .load("shaders/lunar_brdf.wgsl");
-        app.insert_resource(LunarBrdfModule(lunar));
+        app.insert_resource(LunarBrdfModule { _handle: lunar });
         let noise = app
             .world()
             .resource::<AssetServer>()
             .load("shaders/lunco_noise.wgsl");
-        app.insert_resource(NoiseModule(noise));
+        app.insert_resource(NoiseModule { _handle: noise });
         let terrain_surface = app
             .world()
             .resource::<AssetServer>()
             .load("shaders/terrain_surface.wgsl");
-        app.insert_resource(TerrainSurfaceModule(terrain_surface));
+        app.insert_resource(TerrainSurfaceModule {
+            _handle: terrain_surface,
+        });
         let transfer = app
             .world()
             .resource::<AssetServer>()
             .load("shaders/transfer.wgsl");
-        app.insert_resource(TransferModule(transfer));
+        app.insert_resource(TransferModule { _handle: transfer });
     }
 }
 

@@ -102,7 +102,7 @@ different loading/saving sequences.
 | Loader | Asset type | Where | Extensions |
 |---|---|---|---|
 | `UsdLoader` | `UsdStageAsset` | `lunco-usd-bevy-core` | `.usda` |
-| `ModelicaSourceLoader` | `ModelicaSource` | `lunco-modelica-core` | `.mo` |
+| `ModelicaSourceLoader` | `ModelicaSource` | `lunco-modelica-runtime` | `.mo` |
 | `PythonSourceLoader` | `PythonSource` | `lunco-scripting` (`python` feature) | `.py` |
 | `RhaiSourceLoader` | `RhaiSource` | `lunco-scripting` | `.rhai` |
 

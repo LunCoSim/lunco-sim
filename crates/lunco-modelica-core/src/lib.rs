@@ -1554,9 +1554,6 @@ pub struct ModelicaRunnerResource(pub std::sync::Arc<experiments_runner::Modelic
 pub mod worker_transport;
 use worker::{handle_modelica_responses, spawn_modelica_requests};
 
-#[cfg(feature = "api")]
-pub mod api_queries;
-
 // Always built — the UI (palette, inspector, canvas) dispatches these
 // `ApplyModelicaOps` Reflect events directly. The module is named `api_*`
 // because external HTTP callers also use it when `lunco-api` is enabled,
@@ -1591,11 +1588,6 @@ impl Plugin for ModelicaCorePlugin {
                     ownership_gated: false,
                 },
             );
-        // Modelica's structured API providers are domain capability, not UI
-        // capability. Register them in the shared core so headless production
-        // hosts expose the same authoring and simulation surface as the GUI.
-        #[cfg(feature = "api")]
-        app.add_plugins(api_queries::ModelicaApiQueriesPlugin);
     }
 }
 
@@ -1781,7 +1773,6 @@ fn build_modelica_core(app: &mut App) {
     // adds core first, so the GUI still gets them. Guarded/idempotent so the
     // UI and headless hosts share the same idempotent initialization.
     app.init_resource::<crate::state::ModelicaDocumentRegistry>();
-    app.init_resource::<crate::state::GeneratedModelicaSources>();
     if !app.is_plugin_added::<crate::api::ModelicaApiEditPlugin>() {
         app.add_plugins(crate::api::ModelicaApiEditPlugin);
     }

@@ -67,6 +67,7 @@ lunco-settings = { path = "../lunco-settings", optional = true }
 # not used by the luncosim bin). The `celestial` feature still pulls embed-assets.
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
+lunco-usd-avian-core = { path = "../lunco-usd-avian-core" }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 lunco-luncosim-ui = { path = "../lunco-luncosim-ui", default-features = false, optional = true }
 lunco-scripting = { path = "../lunco-scripting" }
