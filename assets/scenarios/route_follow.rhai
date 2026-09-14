@@ -42,7 +42,10 @@ fn route_children(me) {
     for path in result.children {
         let parts = path.split("/");
         let leaf = parts[parts.len() - 1];
-        if leaf == "Program" { continue; }
+        // The presentation asset is authored under the route scope so it can
+        // share the route's document/frame, but it is not a route point. Keep
+        // visual infrastructure out of the ordered control set.
+        if leaf == "Program" || leaf == "RouteRibbon" { continue; }
         let point = query("QueryUsdPrim", #{ doc_id: doc, path: path });
         if point != () && point.ok != false && point.active == true {
             points.push(path);
