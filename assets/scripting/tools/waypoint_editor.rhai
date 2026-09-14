@@ -187,6 +187,80 @@ fn route_positions(doc, route, edited_path, replacement, appended) {
     #{ ok: true, points: positions }
 }
 
+// Sample the authoritative DEM for presentation points. If a Twin has no
+// terrain oracle (for example a flat unit-test fixture), retain the authored
+// route point and an up normal; that is the documented geometry of that scene,
+// not a guessed origin or a vehicle-specific fallback.
+fn terrain_ribbon_sample(point) {
+    let result = query("TerrainHeight", #{
+        x: point[0],
+        z: point[2],
+        eps: 1.0,
+    });
+    if result != () && result.found == true
+        && result.height != () && result.normal != () {
+        let normal = vnorm(result.normal);
+        if normal != () {
+            return #{
+                point: [point[0], result.height, point[2]],
+                normal: normal,
+                surface: true,
+            };
+        }
+    }
+    #{ point: point, normal: [0.0, 1.0, 0.0], surface: false }
+}
+
+// Densify long authored legs and project each sample onto the DEM. This keeps
+// the ribbon a terrain-following annotation instead of a sparse straight chord
+// between distant waypoints. It runs only when the disposable view is rebuilt,
+// never in the per-frame route-control task.
+fn ribbon_surface_samples(points) {
+    let sampled_points = [];
+    let sampled_normals = [];
+    if points.len() == 0 {
+        return #{ points: sampled_points, normals: sampled_normals };
+    }
+    if points.len() == 1 {
+        let sample = terrain_ribbon_sample(points[0]);
+        sampled_points.push(sample.point);
+        sampled_normals.push(sample.normal);
+        return #{ points: sampled_points, normals: sampled_normals };
+    }
+    let first = terrain_ribbon_sample(points[0]);
+    if first.surface != true {
+        for point in points {
+            sampled_points.push(point);
+            sampled_normals.push([0.0, 1.0, 0.0]);
+        }
+        return #{ points: sampled_points, normals: sampled_normals };
+    }
+    for i in 0..(points.len() - 1) {
+        let a = points[i];
+        let b = points[i + 1];
+        let distance = vlen([b[0] - a[0], 0.0, b[2] - a[2]]);
+        let steps = 1;
+        while steps.to_float() * 4.0 < distance {
+            steps += 1;
+        }
+        for j in 0..steps {
+            let t = j.to_float() / steps.to_float();
+            let point = [
+                a[0] + (b[0] - a[0]) * t,
+                a[1] + (b[1] - a[1]) * t,
+                a[2] + (b[2] - a[2]) * t,
+            ];
+            let sample = terrain_ribbon_sample(point);
+            sampled_points.push(sample.point);
+            sampled_normals.push(sample.normal);
+        }
+    }
+    let last = terrain_ribbon_sample(points[points.len() - 1]);
+    sampled_points.push(last.point);
+    sampled_normals.push(last.normal);
+    #{ points: sampled_points, normals: sampled_normals }
+}
+
 fn point_literal(point) {
     "(" + point[0].to_string() + ", "
         + point[1].to_string() + ", " + point[2].to_string() + ")"
@@ -201,10 +275,10 @@ fn points_literal(points) {
     text + "]"
 }
 
-fn ribbon_normals_literal(count) {
-    let normals = [];
-    for i in 0..count { normals.push([0.0, 1.0, 0.0]); }
-    points_literal(normals)
+fn ribbon_normals_literal(input_normals) {
+    let literals = [];
+    for normal in input_normals { literals.push(normal); }
+    points_literal(literals)
 }
 
 fn vector_equal(a, b) {
@@ -234,7 +308,7 @@ fn ribbon_geometry_path(route) {
     ribbon_path(route) + "/Geometry"
 }
 
-fn ribbon_needs_update(doc, ribbon, geometry, anchor, local_points, count) {
+fn ribbon_needs_update(doc, ribbon, geometry, anchor, local_points, local_normals) {
     if !prim_exists(doc, ribbon) { return true; }
     let root = query("QueryUsdPrim", #{
         doc_id: doc,
@@ -244,7 +318,7 @@ fn ribbon_needs_update(doc, ribbon, geometry, anchor, local_points, count) {
     let shape = query("QueryUsdPrim", #{
         doc_id: doc,
         path: geometry,
-        attrs: ["type", "wrap", "curveVertexCounts", "points", "normals"],
+        attrs: ["type", "wrap", "curveVertexCounts", "points", "widths", "normals"],
     });
     if root == () || root.ok == false || root.attrs == ()
         || shape == () || shape.ok == false || shape.attrs == () {
@@ -254,9 +328,10 @@ fn ribbon_needs_update(doc, ribbon, geometry, anchor, local_points, count) {
         || !vector_equal(root.attrs["xformOp:translate"], anchor)
         || shape.attrs["type"] != "linear"
         || shape.attrs["wrap"] != "nonperiodic"
-        || shape.attrs["curveVertexCounts"] != [count]
-        || shape.attrs["normals"] == () || shape.attrs["normals"].len() != count
-        || !points_equal(shape.attrs["points"], local_points) {
+        || shape.attrs["curveVertexCounts"] != [local_points.len()]
+        || shape.attrs["widths"] != [4.0]
+        || !points_equal(shape.attrs["points"], local_points)
+        || !points_equal(shape.attrs["normals"], local_normals) {
         return true;
     }
     false
@@ -273,17 +348,25 @@ fn ribbon_ops(doc, route, points) {
         }
         return [];
     }
+    let sampled = ribbon_surface_samples(points);
+    let surface_points = sampled.points;
+    let surface_normals = sampled.normals;
+    if surface_points.len() < 2 || surface_normals.len() != surface_points.len() {
+        return [];
+    }
     let geometry = ribbon_geometry_path(route);
-    let anchor = points[0];
+    let anchor = surface_points[0];
     let local_points = [];
-    for point in points {
+    for point in surface_points {
         local_points.push([
             point[0] - anchor[0],
             point[1] - anchor[1],
             point[2] - anchor[2],
         ]);
     }
-    if !ribbon_needs_update(doc, ribbon, geometry, anchor, local_points, points.len()) {
+    if !ribbon_needs_update(
+        doc, ribbon, geometry, anchor, local_points, surface_normals
+    ) {
         return [];
     }
 
@@ -325,7 +408,7 @@ fn ribbon_ops(doc, route, points) {
         path: geometry,
         name: "curveVertexCounts",
         type_name: "int[]",
-        value: "[" + points.len().to_string() + "]",
+        value: "[" + surface_points.len().to_string() + "]",
     }});
     ops.push(#{ SetAttribute: #{
         edit_target: "@runtime@",
@@ -337,9 +420,16 @@ fn ribbon_ops(doc, route, points) {
     ops.push(#{ SetAttribute: #{
         edit_target: "@runtime@",
         path: geometry,
+        name: "widths",
+        type_name: "float[]",
+        value: "[4.0]",
+    }});
+    ops.push(#{ SetAttribute: #{
+        edit_target: "@runtime@",
+        path: geometry,
         name: "normals",
         type_name: "normal3f[]",
-        value: ribbon_normals_literal(points.len()),
+        value: ribbon_normals_literal(surface_normals),
     }});
     ops
 }
