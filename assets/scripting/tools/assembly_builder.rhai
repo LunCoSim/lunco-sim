@@ -567,7 +567,8 @@ fn editable_property_patch_plan(doc, edit_target, path, edits, parent_gen) {
 /// The parent and target are inspected before a plan is returned, so a recipe
 /// cannot silently create a duplicate or write below a missing frame. The
 /// typed document owner still validates the reference, composition, and
-/// operation ordering when the plan is reviewed.
+/// operation ordering when the plan is reviewed. Both package (`lunco://`)
+/// and Twin-local (`twin://`) asset identities are accepted.
 fn referenced_instance_plan(doc, edit_target, parent, name, type_name, asset,
     translation, rotation, scale, api_schemas, attributes) {
     referenced_instance_targeted_plan(
@@ -595,9 +596,12 @@ fn referenced_instance_targeted_plan(doc, edit_target, parent, name, type_name, 
     if type_name == "" {
         return plan_error("referenced_instance_plan requires an explicit USD type");
     }
-    if !asset.starts_with("lunco://") || asset.len() <= "lunco://".len()
+    let is_lunco_asset = asset.starts_with("lunco://");
+    let is_twin_asset = asset.starts_with("twin://");
+    if (!is_lunco_asset && !is_twin_asset)
+        || asset.len() <= if is_lunco_asset { "lunco://".len() } else { "twin://".len() }
         || asset.contains(" ") || asset.contains("@") {
-        return plan_error("referenced_instance_plan asset must be a non-empty lunco:// URI without USDA delimiters");
+        return plan_error("referenced_instance_plan asset must be a non-empty lunco:// or twin:// URI without USDA delimiters");
     }
     if reference_prim_path != () && (!reference_prim_path.starts_with("/")
         || reference_prim_path.ends_with("/")) {
@@ -1919,6 +1923,26 @@ fn query_ok(record) {
     record != () && record.ok != false
 }
 
+// Editor previews backed by the mounted Twin can briefly expose a newer
+// composed generation than the document-scoped query guard has indexed.  The
+// live-stage query is the same composed USD identity in that case; use it only
+// for this explicit projection-lag error.  Detached/forked documents retain
+// the strict document-scoped failure so callers never silently read another
+// stage.
+fn composed_query(doc, params) {
+    let scoped = params;
+    scoped.doc_id = doc;
+    let record = query("QueryUsdPrim", scoped);
+    if query_ok(record) {
+        return record;
+    }
+    let error = record.error;
+    if error != () && error.contains("projection is not current") {
+        return query("QueryUsdPrim", params);
+    }
+    record
+}
+
 /// Return one structured authoring record for an exact composed prim.
 ///
 /// This is the discovery surface for both an Editor assistant and a human
@@ -2312,8 +2336,7 @@ fn mount_transform_inverse(value) {
 }
 
 fn mount_local_transform(doc, path) {
-    let record = query("QueryUsdPrim", #{
-        doc_id: doc,
+    let record = composed_query(doc, #{
         path: path,
         attrs: ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale", "xformOpOrder"],
     });

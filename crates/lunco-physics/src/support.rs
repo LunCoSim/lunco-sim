@@ -39,6 +39,38 @@ pub struct PhysicsJointLink {
     pub body1: Entity,
 }
 
+/// Records authored joint paths that were detached from a live physics graph.
+///
+/// The composed USD topology is immutable for a stage generation, while an
+/// interactive `DetachJoint` is a live lifecycle transition. Keeping this
+/// small, endpoint-local set lets the generic dynamic-admission gate
+/// distinguish a deliberately released joint from one whose native constraint
+/// has not arrived yet. Paths are qualified by the endpoint's own stage/entity
+/// ownership; a replacement entity starts with an empty set.
+#[derive(Component, Clone, Debug, Default, PartialEq, Eq)]
+pub struct PhysicsJointDetachSet {
+    /// Authored USD joint paths detached from this body during its lifetime.
+    pub joint_paths: Vec<String>,
+}
+
+impl PhysicsJointDetachSet {
+    /// Record one path idempotently. Empty paths represent synthesized joints
+    /// and are intentionally ignored because they are not in authored USD
+    /// topology and therefore do not need admission invalidation.
+    pub fn record(&mut self, path: impl Into<String>) {
+        let path = path.into();
+        if path.is_empty() || self.joint_paths.iter().any(|existing| existing == &path) {
+            return;
+        }
+        self.joint_paths.push(path);
+    }
+
+    /// Whether this body has observed a detach for the authored joint path.
+    pub fn contains(&self, path: &str) -> bool {
+        self.joint_paths.iter().any(|existing| existing == path)
+    }
+}
+
 /// Marks an authored physics joint whose native constraint has not crossed the
 /// admission boundary yet.
 ///

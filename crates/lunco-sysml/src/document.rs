@@ -228,16 +228,16 @@ mod tests {
         let inverse = document
             .apply(SysmlOp::EditText {
                 range: 9..14,
-                replacement: "Griffin".into(),
+                replacement: "Example".into(),
             })
             .unwrap();
-        assert_eq!(document.source(), "part def Griffin {}");
+        assert_eq!(document.source(), "part def Example {}");
         assert_eq!(document.generation(), 1);
         assert!(document
             .analysis()
             .elements()
             .iter()
-            .any(|element| element.qualified_name == "Griffin"));
+            .any(|element| element.qualified_name == "Example"));
         document.apply(inverse).unwrap();
         assert_eq!(document.source(), "part def Rover {}");
     }

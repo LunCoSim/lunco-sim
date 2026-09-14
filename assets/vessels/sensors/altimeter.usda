@@ -35,6 +35,20 @@ def Xform "Altimeter" (
     float lunco:raycast:maxDistance = 220.0
     double3 lunco:raycast:offset = (0.0, 0.0, 0.0)
 
+    # Raw Avian observations are public ports on the sensor prim.  The
+    # Modelica conversion below consumes these names; without the declarations
+    # the runtime component exists and the ray is sampled, but the USD wiring
+    # has no authored source endpoint and the conversion remains at defaults.
+    float outputs:ray_distance
+    float outputs:ray_hit_valid
+    float outputs:ray_hit_position_x
+    float outputs:ray_hit_position_y
+    float outputs:ray_hit_position_z
+    float outputs:ray_hit_normal_x
+    float outputs:ray_hit_normal_y
+    float outputs:ray_hit_normal_z
+    float outputs:ray_sample_time
+
     # This is a Modelica conversion attached to the raw ray query. The
     # connections are local to this reusable sensor, while the vehicle owns
     # the final connection from range_m to its guidance computer.

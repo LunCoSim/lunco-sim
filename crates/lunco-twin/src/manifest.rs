@@ -82,6 +82,13 @@ pub struct TwinManifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usd: Option<UsdManifest>,
 
+    /// SysML v2 domain settings (`[sysml]` section). `root` selects the
+    /// entry-point source; `paths` declares additional Twin-relative source
+    /// roots. When omitted, the indexed Twin files remain the discovery
+    /// authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sysml: Option<SysmlManifest>,
+
     /// Modelica domain settings (`[modelica]` section). Holds the Twin's
     /// Modelica search roots and explicitly declared external libraries.
     /// Absent means the domain discovers package roots from the indexed Twin
@@ -339,6 +346,7 @@ impl TwinManifest {
             default_perspective: None,
             children: Vec::new(),
             usd: None,
+            sysml: None,
             modelica: None,
             journal: None,
             downloads: None,
@@ -421,6 +429,36 @@ impl TwinManifest {
     }
 }
 
+/// The `[sysml]` section of `twin.toml`.
+///
+/// SysML documents remain ordinary Twin files. This section only records an
+/// optional entry point and additional roots for source-set discovery; it does
+/// not duplicate source text or semantic model state.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SysmlManifest {
+    /// Twin-relative entry-point `.sysml` or `.kerml` source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<PathBuf>,
+
+    /// Twin-relative directories containing SysML/KerML sources.
+    #[serde(default = "default_sysml_paths")]
+    pub paths: Vec<PathBuf>,
+}
+
+impl Default for SysmlManifest {
+    fn default() -> Self {
+        Self {
+            root: None,
+            paths: default_sysml_paths(),
+        }
+    }
+}
+
+fn default_sysml_paths() -> Vec<PathBuf> {
+    vec![PathBuf::from(".")]
+}
+
 fn validate_setting_key(key: &str) -> Result<(), String> {
     if key.is_empty() || key.len() > 128 {
         return Err("setting key must be 1..=128 bytes".to_string());
@@ -452,6 +490,7 @@ mod tests {
             default_perspective: None,
             children: vec![],
             usd: None,
+            sysml: None,
             modelica: None,
             journal: None,
             downloads: None,
@@ -486,6 +525,10 @@ mod tests {
                 default_scene: Some("main_scene.usda".into()),
                 scenes: Some(vec!["scenes/**".into()]),
             }),
+            sysml: Some(SysmlManifest {
+                root: Some("requirements/model.sysml".into()),
+                paths: vec!["requirements".into()],
+            }),
             modelica: Some(ModelicaManifest {
                 paths: vec![".".into()],
                 externals: vec![ModelicaExternal {
@@ -519,6 +562,7 @@ mod tests {
             default_perspective: None,
             children: vec![],
             usd: None,
+            sysml: None,
             modelica: None,
             journal: None,
             downloads: None,
@@ -698,6 +742,7 @@ uuid = "{id}"
             default_perspective: None,
             children: vec![],
             usd: None,
+            sysml: None,
             modelica: None,
             journal: None,
             downloads: None,

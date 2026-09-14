@@ -567,7 +567,8 @@ let defaulted = assembly_edit::default_prim(
 ```
 
 Use `assembly_edit::references` to edit an existing prim's USD reference list
-without flattening it. Entries are `#{ asset_path: "lunco://…", prim_path: () }`;
+without flattening it. Entries are `#{ asset_path: "lunco://…" or
+"twin://…", prim_path: () }`;
 `Prepend`, `Append`, `Add`, and `Delete` retain weaker-layer arcs, while
 `Explicit` replaces the selected layer's list and an empty list clears it.
 `InspectUsdDocument` exposes `prim.references.authored` and
@@ -702,6 +703,8 @@ For reusable referenced models, `referenced_instance_plan` authors one
 explicit identity, asset URI, parent, and local placement using the source
 layer's `defaultPrim`. `referenced_instance_targeted_plan` accepts an explicit
 absolute source prim when the composition asset requires that identity.
+Package (`lunco://`) and Twin-local (`twin://`) asset identities use the same
+typed path.
 First-use reference loading and variant reconfiguration are separate reviewed
 plans: wait until the composed instance children are queryable, then use
 `select_variants_plan`. Parameter edits use `parameter_plan`, which returns

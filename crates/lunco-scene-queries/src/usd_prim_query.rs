@@ -32,6 +32,10 @@
 //! `lunco_usd_bevy_scene::collision::collision_aabb` reader, so nested compound
 //! ownership, standard shape dimensions, purpose filtering, transforms, and
 //! malformed-data errors have one owner for API, Rhai, and other consumers.
+//! A request with `geometry_bounds: true` adds the selected prim's composed
+//! geometry AABB, including render-only shapes. This is the dimension-checking
+//! primitive for visual requirements; callers do not need to reconstruct
+//! bounds from `size`, `radius`, or transform opinions.
 //! A request with `relationships: true` adds every composed relationship and
 //! `connections: true` adds every composed attribute connection. Both are
 //! opt-in because they enumerate the prim's full property surface; the default
@@ -52,6 +56,7 @@
 //! {"type":"ExecuteCommand","command": "QueryUsdPrim", "params": {"path": "…", "attrs": ["radius", "points"]}}
 //! {"type":"ExecuteCommand","command": "QueryUsdPrim", "params": {"path": "…", "rels": ["lunco:mount:attachmentJoint"]}}
 //! {"type":"ExecuteCommand","command": "QueryUsdPrim", "params": {"doc_id": 7, "path": "…", "collision_bounds": true}}
+//! {"type":"ExecuteCommand","command": "QueryUsdPrim", "params": {"path": "…", "geometry_bounds": true}}
 //! {"type":"ExecuteCommand","command": "QueryUsdPrim", "params": {"path": "…", "topology": true}}
 //! {"type":"ExecuteCommand","command": "QueryUsdPrim", "params": {"path": "…", "relationships": true, "connections": true, "schemas": true}}
 //! ```
@@ -449,6 +454,7 @@ type PrimRead = (
     bool,
     Option<serde_json::Value>,
     Option<serde_json::Value>,
+    Option<serde_json::Value>,
 );
 
 fn read_prim_from_view(
@@ -462,6 +468,7 @@ fn read_prim_from_view(
     include_schemas: bool,
     include_children: bool,
     include_collision_bounds: bool,
+    include_geometry_bounds: bool,
     include_topology: bool,
     doc: Option<DocumentId>,
 ) -> Result<Option<PrimRead>, String> {
@@ -475,6 +482,20 @@ fn read_prim_from_view(
                 .map_err(|error| format!("QueryUsdPrim: invalid authored transform: {error}"))?
                 .translation,
         )
+    } else {
+        None
+    };
+
+    let geometry_bounds = if include_geometry_bounds {
+        match prim_geometry_aabb(view, path) {
+            Ok(Some(aabb)) => Some(aabb_json(aabb)),
+            Ok(None) => Some(serde_json::Value::Null),
+            Err(error) => {
+                return Err(format!(
+                    "QueryUsdPrim: invalid geometry bounds at `{path}`: {error}"
+                ));
+            }
+        }
     } else {
         None
     };
@@ -567,11 +588,12 @@ fn read_prim_from_view(
         children,
         view.is_active(prim),
         collision_bounds,
+        geometry_bounds,
         topology,
     )))
 }
 
-/// `QueryUsdPrim { doc_id?, path, attrs?, rels?, children?, collision_bounds?, topology? }`
+/// `QueryUsdPrim { doc_id?, path, attrs?, rels?, children?, collision_bounds?, geometry_bounds?, topology? }`
 /// → composed attributes, active state, requested relationships, optional
 /// direct children, optional aggregate collision bounds, optional scoped
 /// topology facts, and world pose.
@@ -631,6 +653,10 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
             .unwrap_or(false);
         let include_collision_bounds = params
             .get("collision_bounds")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let include_geometry_bounds = params
+            .get("geometry_bounds")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
         let include_topology = params
@@ -753,6 +779,7 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
                     include_schemas,
                     include_children,
                     include_collision_bounds,
+                    include_geometry_bounds,
                     include_topology,
                     doc,
                 ) {
@@ -791,6 +818,7 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
                     include_schemas,
                     include_children,
                     include_collision_bounds,
+                    include_geometry_bounds,
                     include_topology,
                     Some(doc),
                 ) {
@@ -815,6 +843,7 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
             children,
             active,
             collision_bounds,
+            geometry_bounds,
             topology,
         )) = read
         else {
@@ -859,6 +888,9 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
         }
         if include_collision_bounds {
             out["collision_bounds"] = collision_bounds.unwrap_or(serde_json::Value::Null);
+        }
+        if include_geometry_bounds {
+            out["geometry_bounds"] = geometry_bounds.unwrap_or(serde_json::Value::Null);
         }
         if include_topology {
             let mut topology = topology.unwrap_or(serde_json::Value::Null);

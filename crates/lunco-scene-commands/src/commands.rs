@@ -49,8 +49,39 @@ impl Default for DetachJoint {
 /// Observer that handles DetachJoint commands — despawns the live joint entity in
 /// BOTH modes (the visible effect). Persistence is a decoupled observer below.
 #[on_command(DetachJoint)]
-pub fn on_detach_joint(trigger: On<DetachJoint>, mut commands: Commands) {
+pub fn on_detach_joint(
+    trigger: On<DetachJoint>,
+    mut commands: Commands,
+    q_joint: Query<(
+        Option<&lunco_physics::PhysicsJointLink>,
+        Option<&UsdPrimPath>,
+    )>,
+    q_detached: Query<Option<&lunco_physics::PhysicsJointDetachSet>>,
+) {
     let cmd = trigger.event();
+    let (link, path) = q_joint
+        .get(cmd.target)
+        .ok()
+        .map(|(link, path)| (link.copied(), path.map(|path| path.path.clone())))
+        .unwrap_or((None, None));
+    if let (Some(link), Some(path)) = (link, path) {
+        // The marker is written to both endpoints before the joint entity is
+        // despawned. Admission can then retire exactly this authored topology
+        // edge without promoting a body that still has another unresolved
+        // joint. Keep the existing endpoint list when several joints release.
+        for body in [link.body0, link.body1] {
+            let mut detached = q_detached
+                .get(body)
+                .ok()
+                .flatten()
+                .cloned()
+                .unwrap_or_default();
+            detached.record(path.clone());
+            if let Ok(mut entity) = commands.get_entity(body) {
+                entity.try_insert(detached);
+            }
+        }
+    }
     if let Ok(mut entity) = commands.get_entity(cmd.target) {
         entity.try_despawn();
         info!(

@@ -67,8 +67,9 @@ pub use spatial::{GridSpatialQuery, GridSpatialQueryState};
 pub use support::{
     evaluate_initialization_policy, PhysicsInitializationExternalValidator,
     PhysicsInitializationInvalid, PhysicsInitializationPending, PhysicsInitializationPolicy,
-    PhysicsInitializationSubject, PhysicsJointLink, PhysicsJointPending, PhysicsSupportContact,
-    PhysicsSupportFootprint, PhysicsSupportSet, PHYSICS_INITIALIZATION_HOOK_PREFIX,
+    PhysicsInitializationSubject, PhysicsJointDetachSet, PhysicsJointLink, PhysicsJointPending,
+    PhysicsSupportContact, PhysicsSupportFootprint, PhysicsSupportSet,
+    PHYSICS_INITIALIZATION_HOOK_PREFIX,
     STRICT_AUTHORED_INITIALIZATION_POLICY,
 };
 

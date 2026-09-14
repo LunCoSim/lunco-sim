@@ -8105,6 +8105,7 @@ dependencies = [
  "lunco-core",
  "lunco-doc",
  "lunco-doc-bevy",
+ "lunco-hash",
  "lunco-hooks",
  "lunco-hooks-rhai",
  "lunco-lint",

@@ -87,6 +87,90 @@ pub struct SysmlReference {
     pub target: String,
 }
 
+/// A literal value written on a SysML attribute.
+///
+/// The semantic model keeps the authored expression text.  This projection
+/// preserves that text and classifies simple literals without evaluating user
+/// expressions.  Numeric text is retained so consumers can choose their own
+/// lossless numeric representation at the boundary.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SysmlLiteral {
+    /// Authored expression, without the trailing semicolon.
+    pub literal: String,
+    /// `integer`, `real`, `boolean`, `string`, or `expression`.
+    pub kind: String,
+    /// Canonical numeric text when the literal is an integer or real.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number: Option<String>,
+}
+
+/// An authored SysML attribute with its source span and owning element.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SysmlAttribute {
+    /// Qualified owner (`Package::Part`).
+    pub owner: String,
+    /// Attribute name.
+    pub name: String,
+    /// Qualified attribute name (`Package::Part::mass`).
+    pub qualified_name: String,
+    /// Declared type text, if present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub type_name: Option<String>,
+    /// Authored literal, if the attribute has an initializer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<SysmlLiteral>,
+    /// Logical source file.
+    pub file: String,
+    /// Declaration byte-range start.
+    pub start: u32,
+    /// Declaration byte-range end.
+    pub end: u32,
+}
+
+/// A subject declared on a requirement or verification case.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SysmlSubject {
+    /// Local subject name.
+    pub name: String,
+    /// Declared subject type, if present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub type_name: Option<String>,
+}
+
+/// A structured requirement declaration or usage.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SysmlRequirementRecord {
+    /// Source-backed requirement element.
+    pub element: SysmlElement,
+    /// Documentation blocks owned by the requirement.
+    pub documentation: Vec<String>,
+    /// Declared subjects.
+    pub subjects: Vec<SysmlSubject>,
+    /// Attributes declared inside this requirement.
+    pub attributes: Vec<SysmlAttribute>,
+    /// Qualified or written requirements named by `verify` memberships.
+    pub verifies: Vec<String>,
+    /// Written satisfaction targets, when present.
+    pub satisfies: Vec<String>,
+    /// Written realization targets, when present.
+    pub realizations: Vec<String>,
+}
+
+/// A structured verification case declaration or usage.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SysmlVerificationRecord {
+    /// Source-backed verification element.
+    pub element: SysmlElement,
+    /// Documentation blocks owned by the verification case.
+    pub documentation: Vec<String>,
+    /// Declared subjects.
+    pub subjects: Vec<SysmlSubject>,
+    /// Requirements named by `verify` memberships.
+    pub verifies: Vec<String>,
+    /// Written realization targets, when present.
+    pub realizations: Vec<String>,
+}
+
 /// The immutable, serializable projection of one resolved SysML workspace.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SysmlAnalysis {
@@ -94,6 +178,9 @@ pub struct SysmlAnalysis {
     diagnostics: Vec<SysmlDiagnostic>,
     elements: Vec<SysmlElement>,
     references: Vec<SysmlReference>,
+    attributes: Vec<SysmlAttribute>,
+    requirements: Vec<SysmlRequirementRecord>,
+    verifications: Vec<SysmlVerificationRecord>,
     source_revision: u64,
     includes_stdlib: bool,
 }
@@ -227,11 +314,18 @@ impl SysmlAnalysis {
             });
         }
 
+        let attributes = project_attributes(&files, &elements);
+        let requirements = project_requirements(&files, &elements, &attributes);
+        let verifications = project_verifications(&files, &elements);
+
         Self {
             files,
             diagnostics,
             elements,
             references,
+            attributes,
+            requirements,
+            verifications,
             source_revision,
             includes_stdlib,
         }
@@ -255,6 +349,21 @@ impl SysmlAnalysis {
     /// Successfully resolved source references in project files.
     pub fn references(&self) -> &[SysmlReference] {
         &self.references
+    }
+
+    /// Source-backed attributes with typed literal classification.
+    pub fn attributes(&self) -> &[SysmlAttribute] {
+        &self.attributes
+    }
+
+    /// Structured requirement definitions and usages.
+    pub fn requirements(&self) -> &[SysmlRequirementRecord] {
+        &self.requirements
+    }
+
+    /// Structured verification-case definitions and usages.
+    pub fn verifications(&self) -> &[SysmlVerificationRecord] {
+        &self.verifications
     }
 
     /// Source generation used to produce this snapshot.
@@ -291,6 +400,209 @@ fn standard_library_workspace() -> Workspace {
     })
 }
 
+fn project_attributes(files: &[SysmlFile], elements: &[SysmlElement]) -> Vec<SysmlAttribute> {
+    elements
+        .iter()
+        .filter(|element| element.kind == "AttributeDefinition" || element.kind == "AttributeUsage")
+        .filter_map(|element| {
+            let source = files
+                .iter()
+                .find(|file| file.name == element.file)?
+                .text
+                .as_str();
+            let declaration = source.get(element.start as usize..element.end as usize)?;
+            let rest = declaration.trim().strip_prefix("attribute")?.trim_start();
+            let rest = rest
+                .strip_prefix("def")
+                .map(str::trim_start)
+                .unwrap_or(rest);
+            let name_end =
+                rest.find(|c: char| c == ':' || c == '=' || c == ';' || c.is_whitespace())?;
+            let name = rest[..name_end].trim();
+            if name.is_empty() {
+                return None;
+            }
+            let type_name = rest
+                .split_once(':')
+                .map(|(_, tail)| tail.split(['=', ';']).next().unwrap_or(tail).trim())
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned);
+            let value = rest
+                .split_once('=')
+                .map(|(_, tail)| tail.trim().trim_end_matches(';').trim())
+                .filter(|literal| !literal.is_empty())
+                .map(parse_literal);
+            let owner = element
+                .qualified_name
+                .rsplit_once("::")
+                .map(|(owner, _)| owner.to_owned())
+                .unwrap_or_default();
+            Some(SysmlAttribute {
+                owner,
+                name: name.to_owned(),
+                qualified_name: element.qualified_name.clone(),
+                type_name,
+                value,
+                file: element.file.clone(),
+                start: element.start,
+                end: element.end,
+            })
+        })
+        .collect()
+}
+
+fn parse_literal(literal: &str) -> SysmlLiteral {
+    let number = literal
+        .parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite());
+    let kind = if literal.parse::<i64>().is_ok() {
+        "integer"
+    } else if number.is_some() {
+        "real"
+    } else if literal == "true" || literal == "false" {
+        "boolean"
+    } else if literal.starts_with('"') && literal.ends_with('"') {
+        "string"
+    } else {
+        "expression"
+    };
+    SysmlLiteral {
+        literal: literal.to_owned(),
+        kind: kind.to_owned(),
+        number: number.map(|_| literal.to_owned()),
+    }
+}
+
+fn project_requirements(
+    files: &[SysmlFile],
+    elements: &[SysmlElement],
+    attributes: &[SysmlAttribute],
+) -> Vec<SysmlRequirementRecord> {
+    elements
+        .iter()
+        .filter(|element| {
+            element.kind == "RequirementDefinition" || element.kind == "RequirementUsage"
+        })
+        .filter_map(|element| {
+            let source = files
+                .iter()
+                .find(|file| file.name == element.file)?
+                .text
+                .as_str();
+            let block = source.get(element.start as usize..element.end as usize)?;
+            // The semantic metamodel represents a `verify R;` membership as a
+            // RequirementUsage as well.  It is owned by the verification case,
+            // not a standalone requirement record, so keep only declarations
+            // whose source actually starts with `requirement`.
+            if !block.trim_start().starts_with("requirement") {
+                return None;
+            }
+            let fields = parse_block_fields(block);
+            let owned_attributes = attributes
+                .iter()
+                .filter(|attribute| {
+                    attribute.file == element.file
+                        && attribute.start >= element.start
+                        && attribute.end <= element.end
+                })
+                .cloned()
+                .collect();
+            Some(SysmlRequirementRecord {
+                element: element.clone(),
+                documentation: fields.documentation,
+                subjects: fields.subjects,
+                attributes: owned_attributes,
+                verifies: fields.verifies,
+                satisfies: fields.satisfies,
+                realizations: fields.realizations,
+            })
+        })
+        .collect()
+}
+
+fn project_verifications(
+    files: &[SysmlFile],
+    elements: &[SysmlElement],
+) -> Vec<SysmlVerificationRecord> {
+    elements
+        .iter()
+        .filter(|element| {
+            element.kind == "VerificationCaseDefinition" || element.kind == "VerificationCaseUsage"
+        })
+        .filter_map(|element| {
+            let source = files
+                .iter()
+                .find(|file| file.name == element.file)?
+                .text
+                .as_str();
+            let block = source.get(element.start as usize..element.end as usize)?;
+            let fields = parse_block_fields(block);
+            Some(SysmlVerificationRecord {
+                element: element.clone(),
+                documentation: fields.documentation,
+                subjects: fields.subjects,
+                verifies: fields.verifies,
+                realizations: fields.realizations,
+            })
+        })
+        .collect()
+}
+
+#[derive(Default)]
+struct BlockFields {
+    documentation: Vec<String>,
+    subjects: Vec<SysmlSubject>,
+    verifies: Vec<String>,
+    satisfies: Vec<String>,
+    realizations: Vec<String>,
+}
+
+fn parse_block_fields(block: &str) -> BlockFields {
+    let mut fields = BlockFields::default();
+    for line in block.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("doc /*") {
+            let text = rest
+                .split_once("*/")
+                .map(|(text, _)| text)
+                .unwrap_or(rest)
+                .trim();
+            if !text.is_empty() {
+                fields.documentation.push(text.to_owned());
+            }
+        } else if let Some(rest) = line.strip_prefix("subject ") {
+            let rest = rest.trim().trim_end_matches(';').trim();
+            let (name, type_name) = rest
+                .split_once(':')
+                .map(|(name, ty)| (name.trim(), Some(ty.trim().to_owned())))
+                .unwrap_or((rest, None));
+            if !name.is_empty() {
+                fields.subjects.push(SysmlSubject {
+                    name: name.to_owned(),
+                    type_name,
+                });
+            }
+        } else if let Some(rest) = line.strip_prefix("verify ") {
+            let target = rest.trim().trim_end_matches(';').trim();
+            if !target.is_empty() {
+                fields.verifies.push(target.to_owned());
+            }
+        } else if let Some(rest) = line.strip_prefix("satisfy ") {
+            let target = rest.trim().trim_end_matches(';').trim();
+            if !target.is_empty() {
+                fields.satisfies.push(target.to_owned());
+            }
+        } else if let Some(rest) = line.strip_prefix("realize ") {
+            let target = rest.trim().trim_end_matches(';').trim();
+            if !target.is_empty() {
+                fields.realizations.push(target.to_owned());
+            }
+        }
+    }
+    fields
+}
+
 fn diagnostic_from_finding(
     workspace: &Workspace,
     file: usize,
@@ -314,14 +626,14 @@ mod tests {
     #[test]
     fn parses_project_elements_with_standard_library() {
         let analysis = SysmlAnalysis::from_files([(
-            "griffin.sysml",
-            "package Griffin { part def Rover { } }",
+            "example.sysml",
+            "package Example { part def Rover { } }",
         )]);
         assert_eq!(analysis.files().len(), 1);
         assert!(analysis
             .elements()
             .iter()
-            .any(|element| element.qualified_name == "Griffin::Rover"));
+            .any(|element| element.qualified_name == "Example::Rover"));
         assert!(analysis.includes_stdlib());
     }
 
