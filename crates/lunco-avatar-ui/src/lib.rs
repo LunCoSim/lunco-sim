@@ -6,7 +6,8 @@ use lunco_workbench::{PanelRects, WorkbenchAppExt, VIEWPORT_PANEL_ID};
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
 use lunco_avatar::RoverNameTagSettings;
-use lunco_celestial::{CelestialBody, LeaveSurface, LocalGravityField};
+use lunco_celestial::CelestialBody;
+use lunco_celestial_spatial::{LeaveSurface, LocalGravityField, SurfacePoseQuery};
 use lunco_controller::{resolved_input_label, ControllerLink, InputBindingsSettings};
 use lunco_core::{Avatar, CameraFollow, ControlBinding, GlobalEntityId, LocalAvatar, UserIntent};
 use lunco_core_session::{SessionProfiles, SessionRegistry};
@@ -340,7 +341,7 @@ pub fn populate_avatar_status_view(
     palette: Option<Res<lunco_theme::Theme>>,
     gravity: Option<Res<LocalGravityField>>,
     avatars: Query<Entity, (With<Avatar>, With<LocalAvatar>)>,
-    surface_pose: lunco_celestial::SurfacePoseQuery,
+    surface_pose: SurfacePoseQuery,
     bodies: Query<&CelestialBody>,
     spring: Query<&SpringArmCamera>,
     orbit: Query<&OrbitCamera>,

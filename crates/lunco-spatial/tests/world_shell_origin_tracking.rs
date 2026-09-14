@@ -19,7 +19,7 @@
 use bevy::prelude::*;
 use big_space::plugin::BigSpaceMinimalPlugins;
 use big_space::prelude::{CellCoord, Grid};
-use lunco_core::{ensure_world_root, OriginAnchor, WorldGrid, WorldShellPlugin};
+use lunco_spatial::{ensure_world_root, OriginAnchor, WorldGrid, WorldShellPlugin};
 
 #[test]
 fn world_grid_global_transform_tracks_traveling_origin() {

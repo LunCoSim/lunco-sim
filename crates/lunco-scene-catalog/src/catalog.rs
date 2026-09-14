@@ -378,7 +378,7 @@ impl SpawnAnchor {
 /// Spawns a USD-based entry at a grid-direct scene position.
 ///
 /// `cell` and `local_pos` are the storage representation produced by
-/// `lunco_core::coords::pose_in_grid_to_parent_storage`; they are not a
+/// `lunco_spatial::coords::pose_in_grid_to_parent_storage`; they are not a
 /// second semantic coordinate system.
 ///
 /// Returns the root entity that was spawned. The USD asset is loaded
@@ -1092,7 +1092,7 @@ mod spawn_anchor_tests {
             "every runtime USD instance root must suppress content-derived identity"
         );
         assert!(
-            world.get::<lunco_core::GridAnchor>(root).is_none(),
+            world.get::<lunco_spatial::GridAnchor>(root).is_none(),
             "only the scene-root is the grid anchor; a spawn inherits its frame"
         );
     }

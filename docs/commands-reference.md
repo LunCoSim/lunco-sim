@@ -335,7 +335,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `entity_id` | `u64` |  API-stable global entity ID from `ListEntities`, resolved to the live  Bevy entity by `ApiEntityRegistry`. |
-| `translation` | `[f64 ; 3]` |  Target translation in the semantic [`lunco_core::ActivePhysicsFrame`].  The concrete BigSpace grid, the entity's actual parent, and the cell/local  split are internal storage details resolved by the observer. The wire  representation is f64 so positions retain precision across API/network  round trips. |
+| `translation` | `[f64 ; 3]` |  Target translation in the semantic [`lunco_spatial::ActivePhysicsFrame`].  The concrete BigSpace grid, the entity's actual parent, and the cell/local  split are internal storage details resolved by the observer. The wire  representation is f64 so positions retain precision across API/network  round trips. |
 
 #### `RotateEntity`
 
@@ -347,7 +347,7 @@ actually call, with the fields the deserializer actually accepts. See the
  script can read an orientation, transform it, and write it back without ever
  converting representation.
 
- The public quaternion is expressed in [`lunco_core::ActivePhysicsFrame`], the
+ The public quaternion is expressed in [`lunco_spatial::ActivePhysicsFrame`], the
  same semantic frame as `MoveEntity`. Rotation is not frame-invariant: a
  rotating body Grid and a rotated assembly parent both change the local
  quaternion that must be stored on the entity. The observer performs that
@@ -415,7 +415,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  planet, spring-arm follow, surface mode), this strips it and reinstates a
  `FreeFlightCamera` at the requested pose — an API client asking for a
  specific view must always get it. `eye` and `target` speak the semantic
- [`lunco_core::ActivePhysicsFrame`]; the concrete grid is resolved from that
+ [`lunco_spatial::ActivePhysicsFrame`]; the concrete grid is resolved from that
  resource so a previous orbit focus or a canonical render-only grid cannot
  put the camera in a different frame.
 
@@ -1841,7 +1841,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  Opens a transactional `OrbitCamera` view in the body's explicit star-fixed
  orbit grid. Returning restores the avatar's exact prior surface frame.
 
-- *defined in:* `crates/lunco-celestial/src/commands.rs`
+- *defined in:* `crates/lunco-celestial-spatial/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1851,7 +1851,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Set the connectivity recompute cadence at runtime (any client / language).
 
-- *defined in:* `crates/lunco-celestial/src/link.rs`
+- *defined in:* `crates/lunco-celestial-spatial/src/link.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1863,7 +1863,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Places the camera on the body's Grid in surface-relative mode.
 
-- *defined in:* `crates/lunco-celestial/src/commands.rs`
+- *defined in:* `crates/lunco-celestial-spatial/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|

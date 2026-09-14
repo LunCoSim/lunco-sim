@@ -13,10 +13,20 @@
 
 use bevy::prelude::*;
 use big_space::prelude::*;
-use lunco_core::attach::migrate_to_grid;
-use lunco_core::markers::SoiMigrant;
+use lunco_spatial::attach::migrate_to_grid;
 
-use crate::{CelestialBodyRegistry, ReferenceFrame, ReferenceFrameIndex};
+use crate::frame_index::ReferenceFrameIndex;
+use lunco_celestial::{inherited_reference_frame, CelestialBodyRegistry, ReferenceFrame};
+
+/// Marks a moving object whose concrete BigSpace frame follows the catalog's
+/// sphere-of-influence selection.
+///
+/// This marker belongs to the celestial domain: `lunco-spatial` owns the
+/// generic grid topology and migration primitive, while only celestial
+/// mechanics can decide when an object changes dominant centre.
+#[derive(Component, Debug, Default, Clone, Copy, Reflect)]
+#[reflect(Component)]
+pub struct SoiMigrant;
 
 /// Automatically re-encode moving objects when their dominant celestial
 /// centre changes.
@@ -35,12 +45,11 @@ pub fn soi_transition_system(
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<SoiMigrant>>,
 ) {
     for (entity, cell, transform, child_of) in &q_migrants {
-        let current_frame =
-            crate::registry::inherited_reference_frame(child_of.parent(), &q_parents, &q_frames);
+        let current_frame = inherited_reference_frame(child_of.parent(), &q_parents, &q_frames);
 
         // Outside every catalog SOI, use the canonical heliocentric ecliptic
         // frame. This is an explicit semantic target, not a raw-root fallback.
-        let mut target_center = crate::ephemeris_id::SUN;
+        let mut target_center = lunco_celestial::ephemeris_id::SUN;
         let mut nearest_distance = f64::INFINITY;
 
         for body in &registry.bodies {
@@ -53,7 +62,7 @@ pub fn soi_transition_system(
             let Some(candidate_grid) = frame_index.resolve(candidate_frame) else {
                 continue;
             };
-            let Some((local_position, _)) = lunco_core::coords::pose_in_grid_seeded(
+            let Some((local_position, _)) = lunco_spatial::coords::pose_in_grid_seeded(
                 entity,
                 candidate_grid,
                 Some(cell),
@@ -95,7 +104,7 @@ pub fn soi_transition_system(
             );
             continue;
         };
-        let Some((target_position, target_rotation)) = lunco_core::coords::pose_in_grid_seeded(
+        let Some((target_position, target_rotation)) = lunco_spatial::coords::pose_in_grid_seeded(
             entity,
             target_grid_entity,
             Some(cell),
@@ -131,7 +140,6 @@ pub fn soi_transition_system(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::registry::update_reference_frame_index;
     use bevy::math::DVec3;
 
     const EDGE_M: f32 = 10_000.0;
@@ -159,7 +167,7 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<ReferenceFrameIndex>()
             .insert_resource(CelestialBodyRegistry::default_system())
-            .add_systems(First, update_reference_frame_index)
+            .add_systems(First, crate::frame_index::update_reference_frame_index)
             .add_systems(Update, soi_transition_system);
         app
     }
@@ -179,7 +187,7 @@ mod tests {
             app.world_mut(),
             root,
             ReferenceFrame::EclipticJ2000 {
-                center: crate::ephemeris_id::SUN,
+                center: lunco_celestial::ephemeris_id::SUN,
             },
             DVec3::ZERO,
         );
@@ -188,7 +196,7 @@ mod tests {
             app.world_mut(),
             sun,
             ReferenceFrame::EclipticJ2000 {
-                center: crate::ephemeris_id::EARTH,
+                center: lunco_celestial::ephemeris_id::EARTH,
             },
             earth_offset,
         );
@@ -230,7 +238,7 @@ mod tests {
             app.world_mut(),
             root,
             ReferenceFrame::EclipticJ2000 {
-                center: crate::ephemeris_id::SUN,
+                center: lunco_celestial::ephemeris_id::SUN,
             },
             DVec3::ZERO,
         );
@@ -239,7 +247,7 @@ mod tests {
             app.world_mut(),
             sun,
             ReferenceFrame::EclipticJ2000 {
-                center: crate::ephemeris_id::EARTH,
+                center: lunco_celestial::ephemeris_id::EARTH,
             },
             earth_offset,
         );
@@ -247,7 +255,7 @@ mod tests {
             app.world_mut(),
             sun,
             ReferenceFrame::BodyFixed {
-                body: crate::ephemeris_id::EARTH,
+                body: lunco_celestial::ephemeris_id::EARTH,
             },
             earth_offset,
         );

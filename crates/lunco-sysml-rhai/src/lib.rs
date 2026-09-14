@@ -228,7 +228,13 @@ pub fn requirement_report_dynamic(analysis: &SysmlAnalysis) -> Dynamic {
     );
     report.insert(
         "requirements".into(),
-        Dynamic::from_array(analysis.requirements().iter().map(requirement_dynamic).collect()),
+        Dynamic::from_array(
+            analysis
+                .requirements()
+                .iter()
+                .map(requirement_dynamic)
+                .collect(),
+        ),
     );
     report.insert(
         "verifications".into(),

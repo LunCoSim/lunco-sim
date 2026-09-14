@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use big_space::prelude::*;
-use lunco_celestial::CelestialPlugin;
 use lunco_celestial::{EphemerisProvider, EphemerisResource};
+use lunco_celestial_spatial::CelestialPlugin;
 use lunco_time::WorldTime;
 use std::sync::Arc;
 
@@ -57,7 +57,7 @@ fn celestial_test_app() -> App {
         lunco_celestial::ephemeris_id::MOON,
     ] {
         app.world_mut()
-            .spawn(lunco_celestial::CelestialBodyDecl { naif });
+            .spawn(lunco_celestial_spatial::CelestialBodyDecl { naif });
     }
     app
 }
@@ -123,14 +123,14 @@ fn site_anchor_mounts_under_the_body_surface_grid() {
 
     let world_grid = app
         .world_mut()
-        .query_filtered::<Entity, With<lunco_core::WorldGrid>>()
+        .query_filtered::<Entity, With<lunco_spatial::WorldGrid>>()
         .iter(app.world())
         .next()
         .expect("the canonical WorldGrid exists");
     let site = app
         .world_mut()
         .spawn((
-            lunco_core::GridAnchor,
+            lunco_spatial::GridAnchor,
             lunco_celestial::geo::SiteAnchor,
             lunco_celestial::geo::GeodeticAnchor {
                 body: lunco_celestial::ephemeris_id::MOON,
@@ -563,7 +563,7 @@ fn scene_reload_without_bodies_tears_the_whole_sky_down() {
         .single(app.world())
         .expect("Moon surface frame should exist");
     app.world_mut()
-        .insert_resource(lunco_core::ActivePhysicsFrame(surface_frame));
+        .insert_resource(lunco_spatial::ActivePhysicsFrame(surface_frame));
 
     // Reload into a scene WITHOUT bodies. The scene owner runs the explicit
     // teardown transaction while the outgoing declarations still exist, then
@@ -571,7 +571,7 @@ fn scene_reload_without_bodies_tears_the_whole_sky_down() {
     lunco_core::run_scene_teardown(app.world_mut());
     let decls: Vec<Entity> = app
         .world_mut()
-        .query_filtered::<Entity, With<lunco_celestial::CelestialBodyDecl>>()
+        .query_filtered::<Entity, With<lunco_celestial_spatial::CelestialBodyDecl>>()
         .iter(app.world())
         .collect();
     for e in decls {
@@ -596,11 +596,13 @@ fn scene_reload_without_bodies_tears_the_whole_sky_down() {
     );
     let persistent_grid = app
         .world_mut()
-        .query_filtered::<Entity, With<lunco_core::WorldGrid>>()
+        .query_filtered::<Entity, With<lunco_spatial::WorldGrid>>()
         .single(app.world())
         .expect("the persistent world grid must survive scene teardown");
     assert_eq!(
-        app.world().resource::<lunco_core::ActivePhysicsFrame>().0,
+        app.world()
+            .resource::<lunco_spatial::ActivePhysicsFrame>()
+            .0,
         persistent_grid,
         "scene teardown must restore Avian's frame before despawning the celestial surface Grid"
     );
@@ -612,7 +614,7 @@ fn scene_reload_without_bodies_tears_the_whole_sky_down() {
         lunco_celestial::ephemeris_id::MOON,
     ] {
         app.world_mut()
-            .spawn(lunco_celestial::CelestialBodyDecl { naif });
+            .spawn(lunco_celestial_spatial::CelestialBodyDecl { naif });
     }
     app.update();
     app.update();
@@ -656,7 +658,7 @@ fn test_celestial_startup_and_movement() {
         lunco_celestial::ephemeris_id::MOON,
     ] {
         app.world_mut()
-            .spawn(lunco_celestial::CelestialBodyDecl { naif });
+            .spawn(lunco_celestial_spatial::CelestialBodyDecl { naif });
     }
     // Install the provider whose output depends on the epoch, so the clock seek
     // below actually repositions Earth's grid via `ephemeris_update_system`.
@@ -972,7 +974,7 @@ fn descendant_link_endpoint_uses_nearest_geodetic_anchor() {
         .spawn((
             Transform::from_xyz(0.0, 27.0, 0.0),
             ChildOf(station),
-            lunco_celestial::link::LinkNode {
+            lunco_celestial_spatial::link::LinkNode {
                 class: Some("earth".into()),
                 ..Default::default()
             },
@@ -986,11 +988,11 @@ fn descendant_link_endpoint_uses_nearest_geodetic_anchor() {
 
     let station_pose = *app
         .world()
-        .get::<lunco_celestial::pose::SolarFramePose>(station)
+        .get::<lunco_celestial_spatial::pose::SolarFramePose>(station)
         .expect("the anchored station must receive a solar pose");
     let endpoint_pose = *app
         .world()
-        .get::<lunco_celestial::pose::SolarFramePose>(endpoint)
+        .get::<lunco_celestial_spatial::pose::SolarFramePose>(endpoint)
         .expect("the descendant link endpoint must receive a solar pose");
 
     assert_eq!(station_pose.body(), lunco_celestial::ephemeris_id::EARTH);

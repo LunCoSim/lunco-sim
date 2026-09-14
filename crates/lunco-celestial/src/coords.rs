@@ -37,5 +37,3 @@ pub const AU_TO_M: f64 = 1.495_978_707e11;
 
 /// Kilometres in an astronomical unit.
 pub const AU_KM: f64 = 149_597_870.7;
-
-pub(crate) use lunco_core::coords::world_position_seeded;

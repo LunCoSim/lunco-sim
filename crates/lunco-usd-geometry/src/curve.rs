@@ -91,7 +91,7 @@ fn eval_linear_with_tangent(points: &[Vec3], periodic: bool, u: f32) -> Option<(
 /// than 4 CVs cannot form a cubic segment and are rejected.
 ///
 /// The numeric core is `bevy_math`'s [`CubicCardinalSpline`] at tension 0.5 —
-/// the same generator `lunco-celestial/src/trajectories.rs` uses, and the same
+/// the same generator `lunco-celestial-spatial/src/trajectories.rs` uses, and the same
 /// basis matrix the old hand-rolled evaluator carried. Only the USD CV
 /// bookkeeping lives here:
 /// - cyclic: bevy's `to_curve_cyclic` segment `i` reads exactly the window

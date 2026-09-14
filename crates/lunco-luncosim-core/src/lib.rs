@@ -1590,7 +1590,7 @@ impl Plugin for LunCoSimCorePlugin {
             // headless hosts publish identical facts, while exposure edits no
             // longer recompile this application composition root.
             .add_plugins(lunco_luncosim_exposures::RuntimeExposuresPlugin)
-            .add_plugins(lunco_core::WorldShellPlugin)
+            .add_plugins(lunco_spatial::WorldShellPlugin)
             // Parameter telemetry — the PRODUCER of `SampledParameter`. Its consumer
             // side (`lunco_api`'s `sampled_param_observer`, i.e. `SubscribeTelemetry`,
             // plus `TelemetryResponse::from_sampled` and core's logger) was already
@@ -1631,10 +1631,10 @@ impl Plugin for LunCoSimCorePlugin {
             // generic link kernel (doc 49) is always on — it needs no hierarchy —
             // and publishes `LinkState` + `link.aos`/`link.los`, NOT `comms:*`
             // ports (there is no comms subsystem to own them).
-            .insert_resource(lunco_celestial::CelestialConfig {
+            .insert_resource(lunco_celestial_spatial::CelestialConfig {
                 spawn_observer_camera: false,
             })
-            .add_plugins(lunco_celestial::CelestialPlugin)
+            .add_plugins(lunco_celestial_spatial::CelestialPlugin)
             // Real VSOP2013/ELP body positions on ALL platforms (wasm too) —
             // this is the explicit provider required by orbital scenes.
             .add_plugins(lunco_celestial_ephemeris::EphemerisPlugin)
@@ -2085,12 +2085,12 @@ fn setup_luncosim(world: &mut World) {
     // Rust-spawned sun and no restore-on-switch machinery; see
     // `lunco_usd_bevy_light::light` for the single light path and the
     // post-load light-existence check that errors if a scene ships without one.
-    let grid = lunco_core::ensure_world_root(world);
+    let grid = lunco_spatial::ensure_world_root(world);
     // The shell owns topology; the application owns which grid Avian uses.
     // Bind the canonical WorldGrid explicitly for the empty/sandbox state.
     // Scene mounts replace this binding with their authored site frame when
     // celestial placement completes.
-    world.insert_resource(lunco_core::ActivePhysicsFrame(grid));
+    world.insert_resource(lunco_spatial::ActivePhysicsFrame(grid));
 }
 
 /// Load the explicitly requested startup scene.

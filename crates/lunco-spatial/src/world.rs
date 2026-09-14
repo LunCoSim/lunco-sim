@@ -27,9 +27,9 @@
 //! valid origin owner, and camera projection never changes BigSpace hierarchy
 //! archetypes.
 
-use crate::{DiagnosticSeverity, RuntimeDiagnostic, RuntimeDiagnostics};
 use bevy::prelude::*;
 use big_space::prelude::{BigSpace, BigSpaceSystems, CellCoord, FloatingOrigin, Grid};
+use lunco_core::{DiagnosticSeverity, RuntimeDiagnostic, RuntimeDiagnostics};
 
 /// Marks the one canonical `Grid` scenes mount under. Consumers query for this
 /// marker rather than picking "the first `Grid`" — there may be other grids
@@ -258,6 +258,10 @@ pub struct WorldShellPlugin;
 
 impl Plugin for WorldShellPlugin {
     fn build(&self, app: &mut App) {
+        // The shell and its hierarchy audit are one spatial ownership boundary.
+        // Keeping the invariant plugin here preserves the startup contract for
+        // hosts that install the shell without the generic core plugin.
+        app.add_plugins(crate::invariants::BigSpaceInvariantsPlugin);
         app.register_type::<WorldGrid>()
             .register_type::<WorldRoot>()
             .register_type::<OriginAnchor>()
@@ -512,9 +516,9 @@ fn audit_cells_under_non_grid_parents(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::RuntimeDiagnostics;
     use bevy::math::DVec3;
     use big_space::plugin::BigSpaceMinimalPlugins;
+    use lunco_core::RuntimeDiagnostics;
 
     /// The canonical `WorldGrid` must actually BIN into cells.
     ///

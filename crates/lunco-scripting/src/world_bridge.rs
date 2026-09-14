@@ -3546,9 +3546,9 @@ mod tests {
         world.init_resource::<ApiEntityRegistry>();
         world.register_component::<lunco_core::InputPorts>();
         let frame = world
-            .spawn(lunco_core::WorldGridConfig::default().grid())
+            .spawn(lunco_spatial::WorldGridConfig::default().grid())
             .id();
-        world.insert_resource(lunco_core::ActivePhysicsFrame(frame));
+        world.insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
         let real = world
             .spawn((
                 Name::new("/Scene/solar_tower_123"),

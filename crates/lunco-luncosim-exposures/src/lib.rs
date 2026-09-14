@@ -14,8 +14,8 @@ use avian3d::prelude::{AngularVelocity, ComputedCenterOfMass, LinearVelocity, Ro
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
-use lunco_celestial::link::LinkState;
-use lunco_celestial::OrbitalViewPin;
+use lunco_celestial_spatial::link::LinkState;
+use lunco_celestial_spatial::OrbitalViewPin;
 use lunco_controller::ControllerLink;
 use lunco_core::exposure::{
     EngineExposures, ExposureRefresh, ExposureValue, ExposureWriter, EXPOSURE_UPDATE_HZ,
@@ -229,7 +229,7 @@ fn runtime_ui_facts(
 
     let position = root
         .and_then(|root| {
-            lunco_core::coords::world_position(root, q_parents, q_grids, q_spatial).ok()
+            lunco_spatial::coords::world_position(root, q_parents, q_grids, q_spatial).ok()
         })
         .map(|position| {
             HookValue::Array(
@@ -563,11 +563,11 @@ struct DrivenVessel {
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum DrivenVesselPose {
     /// Canonical site/body-fixed coordinates in a site-anchored scene.
-    Surface(lunco_celestial::SurfacePose),
+    Surface(lunco_celestial_spatial::SurfacePose),
     /// Explicit non-celestial sandbox coordinates.
     World {
-        position: lunco_core::coords::GridPos,
-        rotation: lunco_core::coords::GridRot,
+        position: lunco_spatial::coords::GridPos,
+        rotation: lunco_spatial::coords::GridRot,
     },
 }
 
@@ -604,7 +604,7 @@ impl DrivenVesselPose {
 /// coordinate readout.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct GeodeticHud<'w, 's> {
-    surface_pose: lunco_celestial::SurfacePoseQuery<'w, 's>,
+    surface_pose: lunco_celestial_spatial::SurfacePoseQuery<'w, 's>,
 }
 
 /// The tilt bands to paint, in degrees: (amber, red).
@@ -863,13 +863,13 @@ fn resolve_driven(
     q_ids: &Query<(Entity, &GlobalEntityId)>,
     q_wheels: &Query<(Entity, &WheelRaycast, &Transform)>,
     q_com: &Query<&ComputedCenterOfMass>,
-    surface_pose: &lunco_celestial::SurfacePoseQuery,
+    surface_pose: &lunco_celestial_spatial::SurfacePoseQuery,
 ) -> Option<DrivenVessel> {
     let vessel = q_avatar.get(local_avatar.0?).ok()?.vessel_entity;
     let pose = match surface_pose.site_count() {
         0 => {
             let (position, rotation) =
-                lunco_core::coords::world_pose(vessel, q_parents, q_grids, q_spatial).ok()?;
+                lunco_spatial::coords::world_pose(vessel, q_parents, q_grids, q_spatial).ok()?;
             DrivenVesselPose::World { position, rotation }
         }
         1 => DrivenVesselPose::Surface(surface_pose.get(vessel)?),
@@ -1076,13 +1076,13 @@ mod exposure_schedule_tests {
 mod exposure_tests {
     use super::*;
 
-    fn lunar_surface_pose(geo: lunco_celestial::Geodetic) -> lunco_celestial::SurfacePose {
-        lunco_celestial::SurfacePose {
+    fn lunar_surface_pose(geo: lunco_celestial::Geodetic) -> lunco_celestial_spatial::SurfacePose {
+        lunco_celestial_spatial::SurfacePose {
             site: Entity::from_bits(1),
             body: 301,
-            site_position: lunco_celestial::SitePosition(DVec3::ZERO),
+            site_position: lunco_celestial_spatial::SitePosition(DVec3::ZERO),
             site_rotation: DQuat::IDENTITY,
-            body_fixed_position: lunco_celestial::BodyFixedPosition(DVec3::ZERO),
+            body_fixed_position: lunco_celestial_spatial::BodyFixedPosition(DVec3::ZERO),
             body_fixed_rotation: DQuat::IDENTITY,
             geodetic: geo,
         }
@@ -1590,7 +1590,7 @@ pub(crate) fn publish_exposure(
             if let Some(slope_deg) = trace_inputs
                 .surface
                 .slope_at(
-                    lunco_core::coords::GridPos(vessel.pose.display_position()),
+                    lunco_spatial::coords::GridPos(vessel.pose.display_position()),
                     1.0,
                 )
                 .map(|slope| slope.to_degrees() as f32)
@@ -1705,7 +1705,7 @@ fn publish_celestial_capability(
     orbital_pin: Option<&OrbitalViewPin>,
     local_avatar: &TheLocalAvatar,
     avatars: &Query<&ControllerLink, (With<Avatar>, With<LocalAvatar>)>,
-    surface_pose: &lunco_celestial::SurfacePoseQuery,
+    surface_pose: &lunco_celestial_spatial::SurfacePoseQuery,
     workspace: Option<&lunco_workspace::WorkspaceResource>,
 ) {
     let mut moon = false;
@@ -1798,7 +1798,7 @@ fn project_lunar_map(
     map_visible: bool,
     moon_present: bool,
     active_body: Option<i32>,
-    pose: Option<lunco_celestial::SurfacePose>,
+    pose: Option<lunco_celestial_spatial::SurfacePose>,
 ) -> LunarMapProjection {
     if !map_visible || !moon_present {
         return LunarMapProjection::hidden();

@@ -179,13 +179,13 @@ fn build_app() -> App {
     let frame = app
         .world_mut()
         .spawn((
-            lunco_core::WorldGridConfig::default().grid(),
+            lunco_spatial::WorldGridConfig::default().grid(),
             Transform::default(),
             GlobalTransform::default(),
         ))
         .id();
     app.world_mut()
-        .insert_resource(lunco_core::ActivePhysicsFrame(frame));
+        .insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
     app
 }
 
@@ -194,7 +194,10 @@ fn build_app() -> App {
 /// TransformPlugin to propagate it. Maps gid → entity so cmd() target
 /// resolution + world_pos lookups work.
 fn spawn_rover(app: &mut App) -> Entity {
-    let frame = app.world().resource::<lunco_core::ActivePhysicsFrame>().0;
+    let frame = app
+        .world()
+        .resource::<lunco_spatial::ActivePhysicsFrame>()
+        .0;
     let rover = app
         .world_mut()
         .spawn((
@@ -205,7 +208,7 @@ fn spawn_rover(app: &mut App) -> Entity {
             // receives. Navigation is fail-closed without this component;
             // the fixture must not exercise a vehicle type the runtime cannot
             // authoritatively identify.
-            lunco_core::SteeringGeometry::Differential,
+            lunco_spatial::SteeringGeometry::Differential,
             ChildOf(frame),
         ))
         .id();
@@ -218,7 +221,10 @@ fn spawn_rover(app: &mut App) -> Entity {
 /// Spawn a second entity with an explicit identity and pose for generic bridge
 /// operations such as `despawn()`.
 fn spawn_entity_at(app: &mut App, gid: u64, x: f32) -> Entity {
-    let frame = app.world().resource::<lunco_core::ActivePhysicsFrame>().0;
+    let frame = app
+        .world()
+        .resource::<lunco_spatial::ActivePhysicsFrame>()
+        .0;
     let e = app
         .world_mut()
         .spawn((

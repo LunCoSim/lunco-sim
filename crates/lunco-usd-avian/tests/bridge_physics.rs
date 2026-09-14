@@ -13,7 +13,7 @@ use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use big_space::prelude::{BigSpace, CellCoord, FloatingOrigin, Grid};
 use core::time::Duration;
-use lunco_core::ActivePhysicsFrame;
+use lunco_spatial::ActivePhysicsFrame;
 use lunco_usd_avian_core::BigSpacePhysicsBridgePlugin;
 
 // Exercise the nested body/contact mass-frame contract at a high-resolution

@@ -785,7 +785,7 @@ fn camera_position_in_surface_grid(
     q_grids: &Query<&Grid>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
 ) -> Option<DVec3> {
-    lunco_core::coords::pose_in_grid(camera, surface_grid, q_parents, q_grids, q_spatial)
+    lunco_spatial::coords::pose_in_grid(camera, surface_grid, q_parents, q_grids, q_spatial)
         .map(|(position, _)| position)
 }
 
@@ -1303,7 +1303,7 @@ mod tests {
     #[test]
     fn cross_body_lod_camera_uses_the_authoritative_big_space_pose() {
         let mut world = World::new();
-        let grid = lunco_core::WorldGridConfig::default().grid();
+        let grid = lunco_spatial::WorldGridConfig::default().grid();
         let root = world.spawn(grid.clone()).id();
 
         let earth_center = DVec3::new(-4_671_234.375, 81_234.625, -19_876.125);

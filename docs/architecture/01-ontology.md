@@ -380,7 +380,7 @@ Every entity has BOTH a high-precision truth position and a render-ready Bevy Tr
 **Rules:**
 - The physics engine (avian) integrates in `f64`; its own sync systems write the result back to `Transform`. Never hand-write avian `Position`.
 - An entity's absolute position is its `big_space` cell (`CellCoord`) plus the `f32` `Transform` remainder; `big_space` re-bins the remainder into cells as objects move. Authored positions are grid-absolute; `Transform.translation` holds only the cell remainder.
-- `lunco-core/src/coords.rs` (`world_position`, `grid_absolute`, `grid_local_from_absolute`, …) is the only correct way to convert between absolute `DVec3` and the cell + remainder pair.
+- `lunco-spatial/src/coords.rs` (`world_position`, `grid_absolute`, `grid_local_from_absolute`, …) is the only correct way to convert between absolute `DVec3` and the cell + remainder pair.
 
 ### Multiplayer f64/f32 Split
 - **Server**: Maintains all entity positions in `f64`. Runs all physics, FSW, Modelica.

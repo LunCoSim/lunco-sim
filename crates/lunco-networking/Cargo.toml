@@ -44,6 +44,7 @@ bevy = { workspace = true }
 lunco-workbench = { path = "../lunco-workbench", optional = true }
 lunco-workbench-core = { path = "../lunco-workbench-core", optional = true }
 lunco-core = { path = "../lunco-core" }
+lunco-spatial = { path = "../lunco-spatial" }
 lunco-core-session = { path = "../lunco-core-session" }
 # `default-features = false`: we only use the registry/executor types + plugin,
 # never the native `transport-http` server (axum/tokio/mio — wasm-incompatible).
@@ -65,6 +66,7 @@ lunco-avatar = { path = "../lunco-avatar", default-features = false }
 # always-compiled registry component) for snapshot grid parenting — never
 # celestial's egui inspector (`ui` feature). Keeps the headless server egui-free.
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
+lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }
 # NO editor-package EDGE. The wire needs exactly two symbols the
 # editor used to own — `SpawnEntity` (channel declaration) and `PendingCorrection`
 # (prediction diagnostics) — and both now live in `lunco-core`, where the wire and

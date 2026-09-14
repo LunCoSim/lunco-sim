@@ -9,6 +9,7 @@ description = "Render-free USD celestial and link-component projection for LunCo
 bevy = { workspace = true, features = ["bevy_asset"] }
 openusd = { workspace = true }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
+lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }
 lunco-environment = { path = "../lunco-environment" }
 lunco-time = { path = "../lunco-time" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }

@@ -11,8 +11,8 @@ use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
-use lunco_core::coords::GridPos;
 use lunco_core::{Severity, TelemetryEvent, TelemetryValue, TriggerZone};
+use lunco_spatial::coords::GridPos;
 
 /// Parse a `[x, y, z]` JSON array under `key`.
 fn parse_vec3(params: &serde_json::Value, key: &str) -> Option<DVec3> {
@@ -108,7 +108,7 @@ impl ApiQueryProvider for GroundHeightProvider {
 /// when the collider has no registered id, e.g. unregistered terrain).
 ///
 /// `origin` is a [`GridPos`] in the explicit
-/// [`lunco_core::ActivePhysicsFrame`] — the same f64 frame used by Avian,
+/// [`lunco_spatial::ActivePhysicsFrame`] — the same f64 frame used by Avian,
 /// `TerrainHeight`, spawn commands, position ports, and site-local navigation.
 /// API callers never provide a camera-relative render point: that frame moves
 /// whenever BigSpace recentres and is therefore not stable user or simulation
@@ -403,7 +403,7 @@ mod tests {
 
         let frame = app.world_mut().spawn_empty().id();
         app.world_mut()
-            .insert_resource(lunco_core::ActivePhysicsFrame(frame));
+            .insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
         app.world_mut().spawn((
             RigidBody::Static,
             Collider::cuboid(20.0, 1.0, 20.0),

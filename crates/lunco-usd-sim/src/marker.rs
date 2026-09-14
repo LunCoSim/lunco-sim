@@ -79,7 +79,7 @@ fn marker_scale(angular_deg: f32, distance: f64) -> f64 {
 
 /// Hold every [`ScreenConstantMarker`] at its authored apparent size.
 ///
-/// Distance comes from [`lunco_core::coords::world_position`] on both ends, not
+/// Distance comes from [`lunco_spatial::coords::world_position`] on both ends, not
 /// from `GlobalTransform`: these markers sit on OTHER bodies' grids (a ground
 /// station is parented to Earth's rotating grid, 384,000 km from the scene the
 /// camera is standing in), and an f32 world position at that range has already
@@ -116,7 +116,7 @@ pub fn scale_screen_constant_markers(
     let [(cam_entity, _, cam_cell, cam_tf)] = active_cameras.as_slice() else {
         return;
     };
-    let Ok(cam) = lunco_core::coords::world_position_seeded(
+    let Ok(cam) = lunco_spatial::coords::world_position_seeded(
         *cam_entity,
         *cam_cell,
         cam_tf,
@@ -128,7 +128,7 @@ pub fn scale_screen_constant_markers(
     };
 
     for (entity, marker, cell, mut tf, mut vis) in q_markers.iter_mut() {
-        let Ok(pos) = lunco_core::coords::world_position_seeded(
+        let Ok(pos) = lunco_spatial::coords::world_position_seeded(
             entity, cell, &tf, &q_parents, &q_grids, &q_spatial,
         ) else {
             continue;

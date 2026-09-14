@@ -30,10 +30,9 @@
 use bevy::camera::{primitives::Aabb, RenderTarget, Viewport};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
-use lunco_core::{
-    on_command, Command, LocalAvatar, OriginAnchor, SceneViewport, TheLocalAvatar, WorldGrid,
-};
+use lunco_core::{on_command, Command, LocalAvatar, SceneViewport, TheLocalAvatar};
 use lunco_render::{GraphicsCameraDefaults, LightGraphicsDefaults, SceneCamera};
+use lunco_spatial::{OriginAnchor, WorldGrid};
 use lunco_usd_bevy_core::UsdStageAsset;
 
 use lunco_usd_bevy_scene::UsdPrimPath;
@@ -849,9 +848,11 @@ pub fn update_camera_origin(
     if let Ok((mut origin_cell, mut origin_transform)) = q_origin.single_mut() {
         if let Some(world_grid) = world_grid.filter(|_| world_grid_count == 1) {
             if let Some(active) = vp.active_camera {
-                if let Some((camera_position, _camera_rotation)) = lunco_core::coords::pose_in_grid(
-                    active, world_grid, &q_parents, &q_grids, &q_spatial,
-                ) {
+                if let Some((camera_position, _camera_rotation)) =
+                    lunco_spatial::coords::pose_in_grid(
+                        active, world_grid, &q_parents, &q_grids, &q_spatial,
+                    )
+                {
                     if let Ok(world_grid_component) = q_grids.get(world_grid) {
                         let (new_cell, new_translation) =
                             world_grid_component.translation_to_grid(camera_position);
@@ -2296,7 +2297,7 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .init_resource::<SceneViewport>()
             .init_resource::<lunco_core::RuntimeDiagnostics>();
-        let world_grid = lunco_core::ensure_world_root(app.world_mut());
+        let world_grid = lunco_spatial::ensure_world_root(app.world_mut());
         let camera = app
             .world_mut()
             .spawn((

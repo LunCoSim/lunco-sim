@@ -45,7 +45,7 @@ pub fn emit_terrain_hits(
             continue;
         }
         let Some(hit) = surface.raycast_render(
-            lunco_core::coords::RenderPos(ray.origin.as_dvec3()),
+            lunco_spatial::coords::RenderPos(ray.origin.as_dvec3()),
             ray.direction,
             f64::INFINITY,
         ) else {

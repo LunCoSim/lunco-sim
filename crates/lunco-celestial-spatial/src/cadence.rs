@@ -29,6 +29,7 @@
 //! `docs/architecture/42-ui-frame-discipline.md` §6.
 
 use bevy::prelude::*;
+use lunco_celestial::{CelestialBodyRegistry, KeplerOrbit};
 use lunco_settings::SettingsSection;
 use lunco_time::WorldTime;
 use serde::{Deserialize, Serialize};
@@ -111,7 +112,7 @@ impl Default for CelestialMotionBound {
     }
 }
 
-fn kepler_max_rate_rad_per_day(orbit: &crate::KeplerOrbit, gm: f64) -> f64 {
+fn kepler_max_rate_rad_per_day(orbit: &KeplerOrbit, gm: f64) -> f64 {
     let a = orbit.elements.semi_major_axis_m;
     let e = orbit.elements.eccentricity;
     if !a.is_finite() || a <= 0.0 || !e.is_finite() || !(0.0..1.0).contains(&e) {
@@ -127,9 +128,9 @@ fn kepler_max_rate_rad_per_day(orbit: &crate::KeplerOrbit, gm: f64) -> f64 {
 
 /// Rebuild the bound after the motion model or celestial inputs change.
 pub fn refresh_motion_bound(
-    registry: Res<crate::CelestialBodyRegistry>,
-    ephemeris: Option<Res<crate::ephemeris::EphemerisResource>>,
-    q_orbits: Query<&crate::KeplerOrbit>,
+    registry: Res<CelestialBodyRegistry>,
+    ephemeris: Option<Res<lunco_celestial::ephemeris::EphemerisResource>>,
+    q_orbits: Query<&KeplerOrbit>,
     mut bound: ResMut<CelestialMotionBound>,
 ) {
     let provider_revision = ephemeris
@@ -161,7 +162,7 @@ pub fn refresh_motion_bound(
 }
 
 pub(crate) fn provider_motion_changed(
-    ephemeris: Option<Res<crate::ephemeris::EphemerisResource>>,
+    ephemeris: Option<Res<lunco_celestial::ephemeris::EphemerisResource>>,
     bound: Res<CelestialMotionBound>,
 ) -> bool {
     ephemeris
@@ -212,14 +213,14 @@ pub struct CelestialInputsRevision(pub u64);
 /// whole cluster in the SAME frame it happens.
 pub fn bump_celestial_inputs_revision(
     mut rev: ResMut<CelestialInputsRevision>,
-    site_added: Query<(), Added<crate::geo::SiteAnchor>>,
-    site_moved: Query<(), Changed<crate::geo::GeodeticAnchor>>,
+    site_added: Query<(), Added<lunco_celestial::geo::SiteAnchor>>,
+    site_moved: Query<(), Changed<lunco_celestial::geo::GeodeticAnchor>>,
     decl_added: Query<(), Added<crate::CelestialBodyDecl>>,
     grid_added: Query<(), Added<crate::big_space_setup::SolarSystemRoot>>,
-    orbit_changed: Query<(), Or<(Added<crate::KeplerOrbit>, Changed<crate::KeplerOrbit>)>>,
+    orbit_changed: Query<(), Or<(Added<KeplerOrbit>, Changed<KeplerOrbit>)>>,
     directional_light_added: Query<(), Added<bevy::light::DirectionalLight>>,
     mut decl_removed: RemovedComponents<crate::CelestialBodyDecl>,
-    mut orbit_removed: RemovedComponents<crate::KeplerOrbit>,
+    mut orbit_removed: RemovedComponents<KeplerOrbit>,
     // [frames, bumps, site_added, site_moved, decl_added, grid_added,
     //  orbit_changed, directional_light_added, removed]
     mut stats: Local<[u32; 9]>,
@@ -445,9 +446,9 @@ mod tests {
 
     #[test]
     fn earth_rotation_is_included_in_the_motion_bound() {
-        let registry = crate::CelestialBodyRegistry::default_system();
+        let registry = CelestialBodyRegistry::default_system();
         let earth = registry
-            .get(crate::ephemeris_id::EARTH)
+            .get(lunco_celestial::ephemeris_id::EARTH)
             .expect("built-in Earth");
         assert!(earth.rotation_rate_rad_per_day() > 6.0);
         let step = CelestialCadenceSettings::default()
@@ -479,7 +480,7 @@ mod tests {
     #[test]
     fn kepler_rate_bound_uses_periapsis_not_mean_motion() {
         let orbit = crate::KeplerOrbit {
-            body: crate::ephemeris_id::EARTH,
+            body: lunco_celestial::ephemeris_id::EARTH,
             elements: crate::KeplerianElements {
                 semi_major_axis_m: 7_000_000.0,
                 eccentricity: 0.5,

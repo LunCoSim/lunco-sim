@@ -1,12 +1,12 @@
 use bevy::prelude::*;
 use big_space::prelude::*;
 
-use crate::coords::ecliptic_to_bevy;
-use crate::coords::world_position_seeded;
-use crate::ephemeris::EphemerisResource;
-use crate::geo::solar_tangent_frame;
-use crate::registry::{CelestialBody, CelestialBodyRegistry, ReferenceFrame};
+use lunco_celestial::coords::ecliptic_to_bevy;
+use lunco_celestial::ephemeris::EphemerisResource;
+use lunco_celestial::geo::solar_tangent_frame;
+use lunco_celestial::{CelestialBody, CelestialBodyRegistry, ReferenceFrame};
 use lunco_materials::{ParamValue, ShaderLook};
+use lunco_spatial::coords::world_position_seeded;
 use lunco_time::WorldTime;
 
 /// Update body and frame positions based on ephemeris data.
@@ -85,7 +85,7 @@ pub fn body_rotation_system(
                 if desc.spins() {
                     // Shared with the geodesy math (`geo::body_rotation`) so
                     // rendered grids and comms/anchor positions cannot diverge.
-                    let next = crate::geo::body_rotation(desc, world.epoch_jd).as_quat();
+                    let next = lunco_celestial::geo::body_rotation(desc, world.epoch_jd).as_quat();
                     // Guarded write: an unconditional `tf.rotation = …` dirties the
                     // Transform every frame even when the value is unchanged (paused
                     // clock), re-running propagation and re-rounding the f32 compose
@@ -116,11 +116,11 @@ pub fn body_rotation_system(
 /// EQUATORIAL vectors while claiming to be ecliptic, and put the sun 45° below the horizon at
 /// Shackleton. A raw `DVec3` can no longer be handed to it.
 pub fn sun_emit_direction(
-    p_sun: crate::frames::EclipticAu,
-    p_moon: crate::frames::EclipticAu,
+    p_sun: lunco_celestial::frames::EclipticAu,
+    p_moon: lunco_celestial::frames::EclipticAu,
 ) -> Option<Vec3> {
     // `to_sun` = Moon→Sun in Bevy world space; the light emits the other way.
-    let to_sun = crate::coords::ecliptic_to_bevy(p_sun - p_moon)
+    let to_sun = lunco_celestial::coords::ecliptic_to_bevy(p_sun - p_moon)
         .raw()
         .as_vec3()
         .normalize_or_zero();
@@ -169,7 +169,7 @@ pub fn update_sun_light_system(
         ),
     >,
     // Query the site anchor so observer body is dynamic (Earth 399, Moon 301, etc.)
-    q_site: Query<&crate::geo::GeodeticAnchor, With<crate::geo::SiteAnchor>>,
+    q_site: Query<&lunco_celestial::geo::GeodeticAnchor, With<lunco_celestial::geo::SiteAnchor>>,
     orbital_pin: Option<Res<crate::placement::OrbitalViewPin>>,
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
     // Last reported sun elevation, so the aim is logged on material change only.
@@ -230,7 +230,7 @@ pub fn update_sun_light_system(
     let (Some(p_sun), Some(p_observer)) = (
         ephemeris
             .provider
-            .global_position(crate::ephemeris_id::SUN, world.epoch_jd),
+            .global_position(lunco_celestial::ephemeris_id::SUN, world.epoch_jd),
         ephemeris
             .provider
             .global_position(observer_body, world.epoch_jd),
@@ -262,12 +262,7 @@ pub fn update_sun_light_system(
     // the one explicit conversion for a light authored under that site.
     // It is derived from the same body-fixed pose as terrain and physics,
     // rather than from an ECS entity re-posed as a camera pin.
-    let solar_to_site = bevy::math::DQuat::from_mat3(&bevy::math::DMat3::from_cols(
-        site_frame.east,
-        site_frame.up,
-        -site_frame.north,
-    ))
-    .inverse();
+    let solar_to_site = site_frame.frame_to_scene_rotation();
     let dir = (solar_to_site
         * bevy::math::DVec3::new(
             ecliptic_dir.x as f64,
@@ -311,9 +306,9 @@ pub fn update_sun_light_system(
         earth_dir_out.as_mut(),
         ephemeris
             .provider
-            .global_position(crate::ephemeris_id::EARTH, world.epoch_jd),
+            .global_position(lunco_celestial::ephemeris_id::EARTH, world.epoch_jd),
     ) {
-        let to_earth = crate::coords::ecliptic_to_bevy(p_earth - p_observer)
+        let to_earth = lunco_celestial::coords::ecliptic_to_bevy(p_earth - p_observer)
             .raw()
             .as_vec3()
             .normalize_or_zero();
@@ -350,7 +345,7 @@ pub fn celestial_visuals_system(
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
-    q_site: Query<(), With<crate::geo::SiteAnchor>>,
+    q_site: Query<(), With<lunco_celestial::geo::SiteAnchor>>,
     // Tiles the globe LOD streamed in since last frame — they spawn carrying a
     // clone of the body's look, which has no `transition` in it yet. The filter
     // reads `TileCoord`/`TerrainTile` only, never `ShaderLook`, so it does not
@@ -496,8 +491,8 @@ pub fn celestial_visuals_system(
 mod sun_dir_tests {
     //! Pure ephemeris→sun-direction math ([`sun_emit_direction`], doc 19 — T2).
     use super::*;
-    use crate::frames::EclipticAu;
     use bevy::math::DVec3;
+    use lunco_celestial::frames::EclipticAu;
 
     #[test]
     fn degenerate_ephemeris_yields_no_direction() {

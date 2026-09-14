@@ -15,7 +15,7 @@
 //! `GridPos − GridPos` is the one legal way to build a lever arm.
 
 use bevy::math::{DQuat, DVec3};
-use lunco_core::coords::{GridPos, GridRot, VehicleFrame};
+use lunco_spatial::coords::{GridPos, GridRot, VehicleFrame};
 
 /// World pose of a wheel hub in the grid-absolute physics frame, reconstructed
 /// from the chassis body pose and the wheel's chassis-local transform.

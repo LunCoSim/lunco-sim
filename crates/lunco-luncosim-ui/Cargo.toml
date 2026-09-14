@@ -57,6 +57,7 @@ lunco-capture = { path = "../lunco-capture", features = ["api"] }
 lunco-avatar = { path = "../lunco-avatar", default-features = false }
 lunco-avatar-ui = { path = "../lunco-avatar-ui", optional = true }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
+lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }
 lunco-core = { path = "../lunco-core" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-doc = { path = "../lunco-doc" }

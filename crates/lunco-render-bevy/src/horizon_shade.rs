@@ -420,8 +420,8 @@ pub fn wire_sun_for_non_terrain_materials(
 /// pose through the WorldGrid would round the same nested hierarchy a second,
 /// different way and make periodic lines move at large coordinates.
 pub fn wire_blueprint_origin(
-    origin: Query<(&CellCoord, &Grid), With<lunco_core::OriginAnchor>>,
-    active_frame: Option<Res<lunco_core::ActivePhysicsFrame>>,
+    origin: Query<(&CellCoord, &Grid), With<lunco_spatial::OriginAnchor>>,
+    active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
     frame_render: Query<&GlobalTransform>,
     shader_mats: Option<ResMut<Assets<ShaderMaterial>>>,
     meshes: Query<&MeshMaterial3d<ShaderMaterial>, Without<RenderLayers>>,
@@ -537,7 +537,7 @@ mod tests {
         use big_space::prelude::BigSpaceSystems;
         use std::sync::Arc;
 
-        fn move_origin_once(mut origins: Query<&mut CellCoord, With<lunco_core::OriginAnchor>>) {
+        fn move_origin_once(mut origins: Query<&mut CellCoord, With<lunco_spatial::OriginAnchor>>) {
             origins
                 .single_mut()
                 .expect("the test has one canonical origin anchor")
@@ -553,11 +553,11 @@ mod tests {
             .init_asset::<bevy::pbr::StandardMaterial>()
             .init_asset::<ShaderMaterial>();
 
-        let world_grid = lunco_core::ensure_world_root(app.world_mut());
+        let world_grid = lunco_spatial::ensure_world_root(app.world_mut());
         let origin = {
             let mut query = app
                 .world_mut()
-                .query_filtered::<Entity, With<lunco_core::OriginAnchor>>();
+                .query_filtered::<Entity, With<lunco_spatial::OriginAnchor>>();
             query.single(app.world()).expect("one origin anchor")
         };
         app.world_mut()
@@ -575,7 +575,7 @@ mod tests {
             ))
             .id();
         app.world_mut()
-            .insert_resource(lunco_core::ActivePhysicsFrame(frame));
+            .insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
 
         let schema = lunco_materials::ParamSchema::parse(
             "struct Material {\n\
@@ -611,10 +611,10 @@ mod tests {
                 .world()
                 .get::<Grid>(world_grid)
                 .expect("canonical WorldGrid must remain a BigSpace grid");
-            lunco_core::coords::grid_absolute_pose_to_render(
+            lunco_spatial::coords::grid_absolute_pose_to_render(
                 world_grid_component,
-                lunco_core::coords::GridPos(bevy::math::DVec3::new(5.0, 0.0, 0.0)),
-                lunco_core::coords::GridRot(bevy::math::DQuat::IDENTITY),
+                lunco_spatial::coords::GridPos(bevy::math::DVec3::new(5.0, 0.0, 0.0)),
+                lunco_spatial::coords::GridRot(bevy::math::DQuat::IDENTITY),
             )
             .0
              .0
@@ -645,11 +645,11 @@ mod tests {
             .init_asset::<bevy::pbr::StandardMaterial>()
             .init_asset::<ShaderMaterial>();
 
-        let world_grid = lunco_core::ensure_world_root(app.world_mut());
+        let world_grid = lunco_spatial::ensure_world_root(app.world_mut());
         let origin = {
             let mut query = app
                 .world_mut()
-                .query_filtered::<Entity, With<lunco_core::OriginAnchor>>();
+                .query_filtered::<Entity, With<lunco_spatial::OriginAnchor>>();
             query.single(app.world()).expect("one origin anchor")
         };
         app.world_mut()
@@ -690,7 +690,7 @@ mod tests {
             ))
             .id();
         app.world_mut()
-            .insert_resource(lunco_core::ActivePhysicsFrame(frame));
+            .insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
 
         let schema = lunco_materials::ParamSchema::parse(
             "struct Material {\n\
@@ -710,7 +710,7 @@ mod tests {
             .spawn(MeshMaterial3d::<ShaderMaterial>(material_handle.clone()));
 
         build(&mut app);
-        fn move_origin_once(mut origins: Query<&mut CellCoord, With<lunco_core::OriginAnchor>>) {
+        fn move_origin_once(mut origins: Query<&mut CellCoord, With<lunco_spatial::OriginAnchor>>) {
             origins
                 .single_mut()
                 .expect("the test has one canonical origin anchor")

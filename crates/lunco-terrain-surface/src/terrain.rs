@@ -18,7 +18,7 @@ use bevy::math::DVec3;
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task};
 use big_space::prelude::CellCoord;
-use lunco_core::{on_command, register_commands, Command, GridAnchor, WorldGrid};
+use lunco_core::{on_command, register_commands, Command};
 use lunco_materials::ShaderLook;
 use lunco_obstacle_field::field::{HeightGrid, MeshData};
 use lunco_obstacle_field::sampler::{salt, sample_layer};
@@ -28,6 +28,7 @@ use lunco_obstacle_field::spec::{CraterLayer, Pattern};
 // `lunco-terrain-bake` crate, so the wasm Web Worker (`dem_worker`) offloads the
 // heavy GeoTIFF decode; the analytic oracle composition + avian collider + Bevy
 // mesh derive stay here (on the main thread on web — they're cheap).
+use lunco_spatial::{GridAnchor, WorldGrid};
 use lunco_terrain_bake::bake::{crop_centered, resample};
 use lunco_terrain_bake::dem::height_grid_from_geotiff;
 #[cfg(target_arch = "wasm32")]

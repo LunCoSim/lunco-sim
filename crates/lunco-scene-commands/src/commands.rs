@@ -211,7 +211,7 @@ pub fn on_spawn_entity_command(
     mut commands: Commands,
     catalog: Res<SpawnCatalog>,
     asset_server: Res<AssetServer>,
-    active_frame: Res<lunco_core::ActivePhysicsFrame>,
+    active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
     q_scene_root: Query<(Entity, &UsdPrimPath), With<UsdSceneRoot>>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
@@ -263,7 +263,7 @@ pub fn on_spawn_entity_command(
         .map(DQuat::from_array)
         .unwrap_or(DQuat::IDENTITY)
         .normalize();
-    let Some((position, rotation)) = lunco_core::coords::pose_in_parent_local(
+    let Some((position, rotation)) = lunco_spatial::coords::pose_in_parent_local(
         requested_position,
         requested_rotation,
         scene_root,
@@ -355,7 +355,7 @@ pub fn apply_replicated_spawns(
     mut commands: Commands,
     catalog: Res<SpawnCatalog>,
     asset_server: Res<AssetServer>,
-    active_frame: Res<lunco_core::ActivePhysicsFrame>,
+    active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
     q_scene_root: Query<Entity, With<UsdSceneRoot>>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
@@ -400,7 +400,7 @@ pub fn apply_replicated_spawns(
             continue;
         };
         let Some((Some(cell), local_position, local_rotation)) =
-            lunco_core::coords::pose_in_grid_to_parent_storage(
+            lunco_spatial::coords::pose_in_grid_to_parent_storage(
                 job.position,
                 job.rotation,
                 scene_root,
@@ -458,7 +458,7 @@ pub struct MoveEntity {
     /// API-stable global entity ID from `ListEntities`, resolved to the live
     /// Bevy entity by `ApiEntityRegistry`.
     pub entity_id: u64,
-    /// Target translation in the semantic [`lunco_core::ActivePhysicsFrame`].
+    /// Target translation in the semantic [`lunco_spatial::ActivePhysicsFrame`].
     /// The concrete BigSpace grid, the entity's actual parent, and the cell/local
     /// split are internal storage details resolved by the observer. The wire
     /// representation is f64 so positions retain precision across API/network
@@ -496,7 +496,7 @@ pub fn on_move_entity_command(
     trigger: On<MoveEntity>,
     time: Res<Time>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
-    active_frame: Res<lunco_core::ActivePhysicsFrame>,
+    active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
     mut commands: Commands,
     mut spatial: ParamSet<(
         Query<(Option<&CellCoord>, &Transform)>,
@@ -542,7 +542,7 @@ pub fn on_move_entity_command(
             );
             return;
         };
-        let Some((prev_abs, _)) = lunco_core::coords::pose_in_grid(
+        let Some((prev_abs, _)) = lunco_spatial::coords::pose_in_grid(
             target,
             active_frame.0,
             &q_parents,
@@ -556,7 +556,7 @@ pub fn on_move_entity_command(
             );
             return;
         };
-        let Some((new_cell, new_local)) = lunco_core::coords::position_in_grid_to_parent_local(
+        let Some((new_cell, new_local)) = lunco_spatial::coords::position_in_grid_to_parent_local(
             target,
             target_abs,
             active_frame.0,
@@ -666,7 +666,7 @@ pub fn on_move_entity_command(
 /// script can read an orientation, transform it, and write it back without ever
 /// converting representation.
 ///
-/// The public quaternion is expressed in [`lunco_core::ActivePhysicsFrame`], the
+/// The public quaternion is expressed in [`lunco_spatial::ActivePhysicsFrame`], the
 /// same semantic frame as `MoveEntity`. Rotation is not frame-invariant: a
 /// rotating body Grid and a rotated assembly parent both change the local
 /// quaternion that must be stored on the entity. The observer performs that
@@ -702,7 +702,7 @@ pub fn on_rotate_entity_command(
     trigger: On<RotateEntity>,
     time: Res<Time>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
-    active_frame: Res<lunco_core::ActivePhysicsFrame>,
+    active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
     mut commands: Commands,
     mut spatial: ParamSet<(
         Query<(Option<&CellCoord>, &Transform)>,
@@ -731,7 +731,7 @@ pub fn on_rotate_entity_command(
     let q_in = q_in.normalize();
     let (previous_rotation, local_rotation) = {
         let q_spatial = spatial.p0();
-        let Some((_, previous_rotation)) = lunco_core::coords::pose_in_grid(
+        let Some((_, previous_rotation)) = lunco_spatial::coords::pose_in_grid(
             target,
             active_frame.0,
             &q_parents,
@@ -745,7 +745,7 @@ pub fn on_rotate_entity_command(
             );
             return;
         };
-        let Some(local_rotation) = lunco_core::coords::rotation_in_grid_to_parent_local(
+        let Some(local_rotation) = lunco_spatial::coords::rotation_in_grid_to_parent_local(
             target,
             q_in,
             active_frame.0,
@@ -829,7 +829,7 @@ pub fn on_transform_entity_command(
     trigger: On<TransformEntity>,
     time: Res<Time>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
-    active_frame: Res<lunco_core::ActivePhysicsFrame>,
+    active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
     mut commands: Commands,
     mut spatial: ParamSet<(
         Query<(Option<&CellCoord>, &Transform)>,
@@ -881,7 +881,7 @@ pub fn on_transform_entity_command(
             warn!("TRANSFORM_ENTITY: entity {:?} has no Transform", target);
             return;
         };
-        let Some((previous_position, previous_rotation)) = lunco_core::coords::pose_in_grid(
+        let Some((previous_position, previous_rotation)) = lunco_spatial::coords::pose_in_grid(
             target,
             active_frame.0,
             &q_parents,
@@ -896,7 +896,7 @@ pub fn on_transform_entity_command(
             return;
         };
         let Some((new_cell, new_translation)) =
-            lunco_core::coords::position_in_grid_to_parent_local(
+            lunco_spatial::coords::position_in_grid_to_parent_local(
                 target,
                 target_position,
                 active_frame.0,
@@ -912,7 +912,7 @@ pub fn on_transform_entity_command(
             );
             return;
         };
-        let Some(new_rotation) = lunco_core::coords::rotation_in_grid_to_parent_local(
+        let Some(new_rotation) = lunco_spatial::coords::rotation_in_grid_to_parent_local(
             target,
             rotation.normalize(),
             active_frame.0,
@@ -1023,7 +1023,7 @@ pub fn on_transform_entity_command(
 pub fn persist_transform_to_runtime_layer(
     trigger: On<TransformEntity>,
     api_registry: Res<lunco_api::registry::ApiEntityRegistry>,
-    active_frame: Res<lunco_core::ActivePhysicsFrame>,
+    active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
     usd_registry: Res<DocumentRegistry<UsdDocument>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     q_prim: Query<&UsdPrimPath>,
@@ -1045,7 +1045,7 @@ pub fn persist_transform_to_runtime_layer(
     ) else {
         return;
     };
-    let Some((cell, local_translation)) = lunco_core::coords::position_in_grid_to_parent_local(
+    let Some((cell, local_translation)) = lunco_spatial::coords::position_in_grid_to_parent_local(
         target,
         DVec3::from_array(cmd.translation),
         active_frame.0,
@@ -1060,7 +1060,7 @@ pub fn persist_transform_to_runtime_layer(
         );
         return;
     };
-    let Some(local_rotation) = lunco_core::coords::rotation_in_grid_to_parent_local(
+    let Some(local_rotation) = lunco_spatial::coords::rotation_in_grid_to_parent_local(
         target,
         DQuat::from_array(cmd.rotation).normalize(),
         active_frame.0,
@@ -1122,7 +1122,7 @@ pub fn persist_transform_to_runtime_layer(
 pub fn persist_move_to_runtime_layer(
     trigger: On<MoveEntity>,
     api_registry: Res<lunco_api::registry::ApiEntityRegistry>,
-    active_frame: Res<lunco_core::ActivePhysicsFrame>,
+    active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
     usd_registry: Res<DocumentRegistry<UsdDocument>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     q_prim: Query<&UsdPrimPath>,
@@ -1145,7 +1145,7 @@ pub fn persist_move_to_runtime_layer(
         return;
     };
 
-    let Some((cell, local)) = lunco_core::coords::position_in_grid_to_parent_local(
+    let Some((cell, local)) = lunco_spatial::coords::position_in_grid_to_parent_local(
         target,
         DVec3::from_array(cmd.translation),
         active_frame.0,
@@ -1200,7 +1200,7 @@ pub fn persist_move_to_runtime_layer(
 pub fn persist_rotation_to_runtime_layer(
     trigger: On<RotateEntity>,
     api_registry: Res<lunco_api::registry::ApiEntityRegistry>,
-    active_frame: Res<lunco_core::ActivePhysicsFrame>,
+    active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
     usd_registry: Res<DocumentRegistry<UsdDocument>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     q_prim: Query<&UsdPrimPath>,
@@ -1226,7 +1226,7 @@ pub fn persist_rotation_to_runtime_layer(
     if !requested.is_finite() || requested.length_squared() < 1.0e-12 {
         return;
     }
-    let Some(local) = lunco_core::coords::rotation_in_grid_to_parent_local(
+    let Some(local) = lunco_spatial::coords::rotation_in_grid_to_parent_local(
         target,
         requested.normalize(),
         active_frame.0,
@@ -2025,7 +2025,7 @@ mod tests {
         use big_space::prelude::{CellCoord, Grid};
 
         let mut world = World::new();
-        let active_grid = lunco_core::WorldGridConfig::default().grid();
+        let active_grid = lunco_spatial::WorldGridConfig::default().grid();
         let root_cell = CellCoord::new(200, -100, 350);
         let root_rotation = DQuat::from_rotation_x(0.7) * DQuat::from_rotation_y(-1.1);
         let root_transform =
@@ -2043,9 +2043,10 @@ mod tests {
             Query<(Option<&big_space::prelude::CellCoord>, &Transform)>,
         )> = SystemState::new(&mut world);
         let (parents, grids, spatial) = state.get(&world).unwrap();
-        let (root_position, stored_root_rotation) =
-            lunco_core::coords::grid_relative_pose(scene_root, active, &parents, &grids, &spatial)
-                .expect("scene root pose is available in the active physics frame");
+        let (root_position, stored_root_rotation) = lunco_spatial::coords::grid_relative_pose(
+            scene_root, active, &parents, &grids, &spatial,
+        )
+        .expect("scene root pose is available in the active physics frame");
         let stored_root_rotation = stored_root_rotation.normalize();
         assert!(
             root_position.length() > 1.0e5,
@@ -2053,7 +2054,7 @@ mod tests {
         );
         let requested_position = root_position + stored_root_rotation * expected_local;
         let requested_rotation = stored_root_rotation * expected_rotation;
-        let (actual_position, actual_rotation) = lunco_core::coords::pose_in_parent_local(
+        let (actual_position, actual_rotation) = lunco_spatial::coords::pose_in_parent_local(
             requested_position,
             requested_rotation,
             scene_root,
@@ -2102,7 +2103,7 @@ mod tests {
                 GlobalTransform::default(),
             ))
             .id();
-        app.insert_resource(lunco_core::ActivePhysicsFrame(grid));
+        app.insert_resource(lunco_spatial::ActivePhysicsFrame(grid));
         // Starts at grid-absolute (0, 3947, 0) = cell y=2 + local y=-53.
         let body = app
             .world_mut()
@@ -2159,7 +2160,7 @@ mod tests {
             .world_mut()
             .spawn((Grid::new(2_000.0, 0.0), GlobalTransform::default()))
             .id();
-        app.insert_resource(lunco_core::ActivePhysicsFrame(grid));
+        app.insert_resource(lunco_spatial::ActivePhysicsFrame(grid));
         let parent = app
             .world_mut()
             .spawn((Transform::from_xyz(10.0, 0.0, 0.0), ChildOf(grid)))
@@ -2205,7 +2206,7 @@ mod tests {
                 GlobalTransform::default(),
             ))
             .id();
-        app.insert_resource(lunco_core::ActivePhysicsFrame(grid));
+        app.insert_resource(lunco_spatial::ActivePhysicsFrame(grid));
 
         let body = app
             .world_mut()
@@ -2253,7 +2254,7 @@ mod tests {
                 GlobalTransform::default(),
             ))
             .id();
-        app.insert_resource(lunco_core::ActivePhysicsFrame(grid));
+        app.insert_resource(lunco_spatial::ActivePhysicsFrame(grid));
 
         let body = app
             .world_mut()
@@ -2295,11 +2296,11 @@ mod tests {
         let active = app
             .world_mut()
             .spawn((
-                lunco_core::WorldGridConfig::default().grid(),
+                lunco_spatial::WorldGridConfig::default().grid(),
                 GlobalTransform::default(),
             ))
             .id();
-        app.insert_resource(lunco_core::ActivePhysicsFrame(active));
+        app.insert_resource(lunco_spatial::ActivePhysicsFrame(active));
         let parent_rotation = Quat::from_rotation_y(0.7);
         let parent = app
             .world_mut()
@@ -2331,7 +2332,7 @@ mod tests {
         )> = bevy::ecs::system::SystemState::new(app.world_mut());
         let (parents, grids, spatial) = state.get(app.world()).unwrap();
         let (_, round_trip) =
-            lunco_core::coords::pose_in_grid(body, active, &parents, &grids, &spatial)
+            lunco_spatial::coords::pose_in_grid(body, active, &parents, &grids, &spatial)
                 .expect("body remains connected to active frame");
         assert!(round_trip.as_quat().dot(desired.as_quat()).abs() > 1.0 - 1.0e-6);
     }
@@ -2348,11 +2349,11 @@ mod tests {
         let active = app
             .world_mut()
             .spawn((
-                lunco_core::WorldGridConfig::default().grid(),
+                lunco_spatial::WorldGridConfig::default().grid(),
                 GlobalTransform::default(),
             ))
             .id();
-        app.insert_resource(lunco_core::ActivePhysicsFrame(active));
+        app.insert_resource(lunco_spatial::ActivePhysicsFrame(active));
         let body = app
             .world_mut()
             .spawn((

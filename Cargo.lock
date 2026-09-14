@@ -7168,6 +7168,7 @@ dependencies = [
  "big_space",
  "leafwing-input-manager",
  "lunco-celestial",
+ "lunco-celestial-spatial",
  "lunco-controller",
  "lunco-core",
  "lunco-core-session",
@@ -7177,6 +7178,7 @@ dependencies = [
  "lunco-physics",
  "lunco-render",
  "lunco-settings",
+ "lunco-spatial",
  "lunco-time",
  "lunco-twin",
  "lunco-usd-bevy-scene",
@@ -7193,6 +7195,7 @@ dependencies = [
  "bevy_egui",
  "lunco-avatar",
  "lunco-celestial",
+ "lunco-celestial-spatial",
  "lunco-controller",
  "lunco-core",
  "lunco-core-session",
@@ -7239,31 +7242,10 @@ dependencies = [
 name = "lunco-celestial"
 version = "0.6.0-dev"
 dependencies = [
- "avian3d",
  "bevy",
- "bevy_egui",
- "bevy_mesh",
- "big_space",
- "futures-lite",
- "lunco-api",
- "lunco-assets",
- "lunco-controller",
  "lunco-core",
- "lunco-environment",
- "lunco-hooks",
- "lunco-materials",
- "lunco-obstacle-field",
- "lunco-render",
- "lunco-settings",
- "lunco-terrain-core",
- "lunco-terrain-globe",
- "lunco-terrain-surface",
- "lunco-theme",
  "lunco-time",
- "lunco-workbench",
- "lunco-workbench-core",
  "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -7276,7 +7258,41 @@ dependencies = [
  "celestial-time",
  "lunco-assets",
  "lunco-celestial",
+ "lunco-settings",
  "serde",
+]
+
+[[package]]
+name = "lunco-celestial-spatial"
+version = "0.6.0-dev"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "bevy_egui",
+ "bevy_mesh",
+ "big_space",
+ "futures-lite",
+ "lunco-api",
+ "lunco-assets",
+ "lunco-celestial",
+ "lunco-controller",
+ "lunco-core",
+ "lunco-environment",
+ "lunco-hooks",
+ "lunco-materials",
+ "lunco-obstacle-field",
+ "lunco-render",
+ "lunco-settings",
+ "lunco-spatial",
+ "lunco-terrain-core",
+ "lunco-terrain-globe",
+ "lunco-terrain-surface",
+ "lunco-theme",
+ "lunco-time",
+ "lunco-workbench",
+ "lunco-workbench-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -7308,7 +7324,6 @@ name = "lunco-core"
 version = "0.6.0-dev"
 dependencies = [
  "bevy",
- "big_space",
  "getrandom 0.2.17",
  "leafwing-input-manager",
  "lunco-command-macro",
@@ -7338,6 +7353,7 @@ dependencies = [
  "lunco-core-session",
  "lunco-cosim-core",
  "lunco-physics",
+ "lunco-spatial",
  "lunco-time",
 ]
 
@@ -7384,6 +7400,7 @@ dependencies = [
  "lunco-cosim-core",
  "lunco-physics",
  "lunco-render",
+ "lunco-spatial",
  "wgpu-types",
 ]
 
@@ -7456,7 +7473,7 @@ dependencies = [
  "lunco-api-transport",
  "lunco-assets",
  "lunco-capture",
- "lunco-celestial",
+ "lunco-celestial-spatial",
  "lunco-core",
  "lunco-core-session",
  "lunco-cosim-core",
@@ -7501,8 +7518,8 @@ dependencies = [
  "lunco-api-transport",
  "lunco-assets",
  "lunco-avatar",
- "lunco-celestial",
  "lunco-celestial-ephemeris",
+ "lunco-celestial-spatial",
  "lunco-controller",
  "lunco-core",
  "lunco-core-session",
@@ -7525,6 +7542,7 @@ dependencies = [
  "lunco-scene-selection",
  "lunco-scene-validation",
  "lunco-scripting",
+ "lunco-spatial",
  "lunco-storage",
  "lunco-sysml",
  "lunco-telemetry",
@@ -7564,6 +7582,7 @@ dependencies = [
  "lunco-scene-catalog",
  "lunco-scene-commands",
  "lunco-scene-selection",
+ "lunco-spatial",
  "lunco-terrain-surface",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
@@ -7582,6 +7601,7 @@ dependencies = [
  "lunco-avatar",
  "lunco-canvas",
  "lunco-celestial",
+ "lunco-celestial-spatial",
  "lunco-controller",
  "lunco-core",
  "lunco-cosim",
@@ -7605,6 +7625,7 @@ dependencies = [
  "lunco-scene-selection",
  "lunco-scripting",
  "lunco-settings",
+ "lunco-spatial",
  "lunco-terrain-surface",
  "lunco-theme",
  "lunco-time",
@@ -7634,6 +7655,7 @@ dependencies = [
  "bevy",
  "big_space",
  "lunco-celestial",
+ "lunco-celestial-spatial",
  "lunco-controller",
  "lunco-core",
  "lunco-cosim-core",
@@ -7642,6 +7664,7 @@ dependencies = [
  "lunco-networking",
  "lunco-scene-selection",
  "lunco-signal",
+ "lunco-spatial",
  "lunco-terrain-surface",
  "lunco-twin",
  "lunco-usd-bevy-camera",
@@ -7677,6 +7700,7 @@ dependencies = [
  "lunco-avatar-ui",
  "lunco-capture",
  "lunco-celestial",
+ "lunco-celestial-spatial",
  "lunco-core",
  "lunco-core-session",
  "lunco-cosim-core",
@@ -7747,6 +7771,7 @@ dependencies = [
  "lunco-cosim",
  "lunco-environment",
  "lunco-physics",
+ "lunco-spatial",
  "lunco-time",
  "serde_json",
 ]
@@ -7947,6 +7972,7 @@ dependencies = [
  "lunco-assets",
  "lunco-avatar",
  "lunco-celestial",
+ "lunco-celestial-spatial",
  "lunco-core",
  "lunco-core-session",
  "lunco-cosim",
@@ -7957,6 +7983,7 @@ dependencies = [
  "lunco-physics",
  "lunco-scripting",
  "lunco-settings",
+ "lunco-spatial",
  "lunco-storage",
  "lunco-twin",
  "lunco-twin-journal",
@@ -8003,6 +8030,7 @@ dependencies = [
  "lunco-core",
  "lunco-hooks",
  "lunco-readiness",
+ "lunco-spatial",
  "lunco-time",
  "serde_json",
 ]
@@ -8041,12 +8069,13 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "big_space",
- "lunco-celestial",
+ "lunco-celestial-spatial",
  "lunco-core",
  "lunco-cosim",
  "lunco-environment",
  "lunco-materials",
  "lunco-render",
+ "lunco-spatial",
  "lunco-terrain-surface",
 ]
 
@@ -8099,9 +8128,11 @@ dependencies = [
  "lunco-api",
  "lunco-avatar",
  "lunco-celestial",
+ "lunco-celestial-spatial",
  "lunco-core",
  "lunco-environment",
  "lunco-scene-selection",
+ "lunco-spatial",
  "lunco-usd-bevy-scene",
 ]
 
@@ -8120,6 +8151,7 @@ dependencies = [
  "lunco-materials",
  "lunco-scene-validation",
  "lunco-settings",
+ "lunco-spatial",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
  "serde_json",
@@ -8145,6 +8177,7 @@ dependencies = [
  "lunco-scene-catalog",
  "lunco-scene-queries",
  "lunco-scene-selection",
+ "lunco-spatial",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-light",
  "lunco-usd-bevy-scene",
@@ -8232,6 +8265,7 @@ dependencies = [
  "lunco-assets",
  "lunco-behavior",
  "lunco-celestial",
+ "lunco-celestial-spatial",
  "lunco-controller",
  "lunco-core",
  "lunco-core-session",
@@ -8243,6 +8277,7 @@ dependencies = [
  "lunco-physics",
  "lunco-readiness",
  "lunco-render-recovery",
+ "lunco-spatial",
  "lunco-storage",
  "lunco-time",
  "lunco-tools",
@@ -8276,6 +8311,15 @@ dependencies = [
  "indexmap",
  "lunco-core",
  "serde",
+]
+
+[[package]]
+name = "lunco-spatial"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "big_space",
+ "lunco-core",
 ]
 
 [[package]]
@@ -8404,6 +8448,7 @@ dependencies = [
  "lunco-precompute",
  "lunco-render",
  "lunco-settings",
+ "lunco-spatial",
  "lunco-storage",
  "lunco-terrain-bake",
  "lunco-terrain-core",
@@ -8496,6 +8541,7 @@ dependencies = [
  "egui_plot",
  "lunco-avatar",
  "lunco-celestial",
+ "lunco-celestial-spatial",
  "lunco-controller",
  "lunco-core",
  "lunco-core-session",
@@ -8552,6 +8598,7 @@ dependencies = [
  "lunco-cosim",
  "lunco-environment",
  "lunco-physics",
+ "lunco-spatial",
  "lunco-terrain-globe",
  "lunco-usd-avian-core",
  "lunco-usd-avian-filters",
@@ -8570,6 +8617,7 @@ dependencies = [
  "big_space",
  "lunco-core",
  "lunco-physics",
+ "lunco-spatial",
  "lunco-usd-bevy-scene",
 ]
 
@@ -8639,6 +8687,7 @@ dependencies = [
  "big_space",
  "lunco-core",
  "lunco-render",
+ "lunco-spatial",
  "lunco-time",
  "lunco-usd-bevy-core",
  "lunco-usd-bevy-scene",
@@ -8832,6 +8881,7 @@ dependencies = [
  "lunco-mobility",
  "lunco-physics",
  "lunco-render",
+ "lunco-spatial",
  "lunco-usd-avian",
  "lunco-usd-avian-filters",
  "lunco-usd-bevy-camera",
@@ -8854,6 +8904,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "lunco-celestial",
+ "lunco-celestial-spatial",
  "lunco-environment",
  "lunco-time",
  "lunco-usd-bevy-core",
@@ -8878,7 +8929,7 @@ dependencies = [
  "bevy",
  "big_space",
  "lunco-assets",
- "lunco-celestial",
+ "lunco-celestial-spatial",
  "lunco-core",
  "lunco-core-session",
  "lunco-cosim",
@@ -8891,6 +8942,7 @@ dependencies = [
  "lunco-physics",
  "lunco-readiness",
  "lunco-scripting",
+ "lunco-spatial",
  "lunco-time",
  "lunco-usd-avian",
  "lunco-usd-bevy-camera",

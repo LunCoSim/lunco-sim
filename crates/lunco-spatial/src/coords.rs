@@ -11,8 +11,8 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::*;
 
-use crate::markers::GridAnchor;
-use crate::world::WorldGrid;
+use crate::world::{ActivePhysicsFrame, WorldGrid};
+use crate::GridAnchor;
 
 /// Failure while resolving a BigSpace coordinate chain.
 ///
@@ -214,12 +214,12 @@ impl RenderPos {
 /// This is the user/runtime boundary for generic positions and orientations.
 /// Callers do not inspect a `Grid`, choose an ancestor, or read a
 /// camera-relative [`GlobalTransform`]; the application/scene-mount owner binds
-/// [`crate::ActivePhysicsFrame`] explicitly and this parameter performs the complete
+/// [`crate::world::ActivePhysicsFrame`] explicitly and this parameter performs the complete
 /// BigSpace hierarchy conversion. Explicit astronomical products continue to
 /// use their typed semantic reference frames instead.
 #[derive(SystemParam)]
 pub struct ActiveFramePoseQuery<'w, 's> {
-    active_frame: Res<'w, crate::ActivePhysicsFrame>,
+    active_frame: Res<'w, ActivePhysicsFrame>,
     parents: Query<'w, 's, &'static ChildOf>,
     grids: Query<'w, 's, &'static Grid>,
     spatial: Query<'w, 's, (Option<&'static CellCoord>, &'static Transform)>,
@@ -259,7 +259,7 @@ impl ActiveFramePoseQuery<'_, '_> {
 #[cfg(test)]
 mod active_frame_pose_tests {
     use super::*;
-    use crate::WorldGridConfig;
+    use crate::world::WorldGridConfig;
     use bevy::ecs::system::SystemState;
 
     fn read_pose(world: &mut World, entity: Entity) -> (GridPos, GridRot) {
@@ -296,7 +296,7 @@ mod active_frame_pose_tests {
                 ChildOf(body),
             ))
             .id();
-        world.insert_resource(crate::ActivePhysicsFrame(site));
+        world.insert_resource(crate::world::ActivePhysicsFrame(site));
         let local_position = DVec3::new(123.25, -1_901.5, -88.5);
         let local_rotation = DQuat::from_rotation_y(0.2);
         let entity = world
@@ -594,7 +594,7 @@ pub fn common_grid_poses<F: QueryFilter>(
 #[cfg(test)]
 mod common_grid_tests {
     use super::common_grid;
-    use crate::WorldGridConfig;
+    use crate::world::WorldGridConfig;
     use bevy::ecs::system::SystemState;
     use bevy::prelude::*;
     use big_space::prelude::{CellCoord, Grid};
@@ -904,7 +904,7 @@ pub fn pose_in_grid_to_parent_storage<F: QueryFilter>(
 /// `entity`'s actual parent.
 ///
 /// This is the inverse boundary used by user-facing placement commands. Callers
-/// speak one stable semantic frame (normally [`crate::ActivePhysicsFrame`]); this
+/// speak one stable semantic frame (normally [`crate::world::ActivePhysicsFrame`]); this
 /// helper walks the existing hierarchy once, removes the parent's complete f64
 /// pose, and performs BigSpace's cell split only when the parent is a [`Grid`].
 /// A disconnected entity returns `None` rather than silently treating either
@@ -1437,7 +1437,7 @@ mod tests {
     //! module is that missing safety net. Locks the contract before the snapshot
     //! apply path is made cell-aware.
     use super::*;
-    use crate::WorldGridConfig;
+    use crate::world::WorldGridConfig;
     use bevy::ecs::system::SystemState;
 
     const EDGE: f32 = 2000.0;

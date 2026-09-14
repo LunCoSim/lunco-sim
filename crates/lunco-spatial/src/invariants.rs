@@ -8,7 +8,7 @@
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 
-use crate::markers::{GridAnchor, SoiMigrant};
+use crate::GridAnchor;
 
 /// Warns when a newly-inserted `CellCoord` lands on an entity whose parent
 /// is not a `Grid`. big_space's `propagate_high_precision` will silently
@@ -49,22 +49,6 @@ fn warn_on_orphaned_grid_anchor(
                 name.map(|n| n.as_str()).unwrap_or("<unnamed>"),
             );
         }
-    }
-}
-
-/// Warns when `SoiMigrant` lacks `GridAnchor`. SOI migration writes
-/// `(ChildOf, CellCoord, Transform)` assuming the entity is a Grid-direct
-/// child; a non-anchor migrant ends up half-migrated.
-fn warn_on_soi_migrant_without_anchor(
-    q: Query<(Entity, Option<&Name>), (Added<SoiMigrant>, Without<GridAnchor>)>,
-) {
-    for (e, name) in q.iter() {
-        warn!(
-            "[bigspace-invariant] SoiMigrant on entity {:?} ({}) is missing GridAnchor. \
-             SOI re-parenting requires a Grid-direct anchor.",
-            e,
-            name.map(|n| n.as_str()).unwrap_or("<unnamed>"),
-        );
     }
 }
 
@@ -114,7 +98,6 @@ impl Plugin for BigSpaceInvariantsPlugin {
             (
                 warn_on_mid_hierarchy_cellcoord,
                 warn_on_orphaned_grid_anchor,
-                warn_on_soi_migrant_without_anchor,
                 warn_on_nested_grid_anchor,
             ),
         );

@@ -214,7 +214,7 @@ fn gravity_at_body(
     q_bodies: &Query<&GravityProvider>,
 ) -> Option<(DVec3, DVec3, DVec3, f64)> {
     let (_, body_rotation) =
-        lunco_core::coords::world_pose(body_entity, q_parents, q_grids, q_spatial).ok()?;
+        lunco_spatial::coords::world_pose(body_entity, q_parents, q_grids, q_spatial).ok()?;
     let relative_body =
         local_body_relative_position(body_entity, camera_entity, q_parents, q_grids, q_spatial)?;
     let provider = q_bodies.get(body_entity).ok()?;
@@ -242,9 +242,14 @@ fn local_body_relative_position(
     q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
 ) -> Option<DVec3> {
     let body_frame = q_parents.get(body_entity).ok()?.parent();
-    let (camera_position, _) =
-        lunco_core::coords::pose_in_grid(camera_entity, body_frame, q_parents, q_grids, q_spatial)?;
-    let (body_position, body_rotation) = lunco_core::coords::grid_relative_pose(
+    let (camera_position, _) = lunco_spatial::coords::pose_in_grid(
+        camera_entity,
+        body_frame,
+        q_parents,
+        q_grids,
+        q_spatial,
+    )?;
+    let (body_position, body_rotation) = lunco_spatial::coords::grid_relative_pose(
         body_entity,
         body_frame,
         q_parents,

@@ -9,7 +9,8 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-core`** | Core primitives (`Port`, the typed `Mutation<P>` command substrate, `SimTick`), f64 coordinate/frame helpers, the persistent BigSpace world shell, typed scene transitions, `SceneMountState` and the `SceneTeardown` schedule, the `SceneViewport` (active-camera binding), canonical diagram data types, shared human-readable entity labels, and shared terminal runtime faults/fixed-step coupling state. Core carries no session/authority policy or vehicle-specific motion policy. |
+| **`lunco-core`** | Dependency-light engine primitives (`Port`, the typed `Mutation<P>` command substrate, `SimTick`), typed scene transitions, `SceneMountState` and the `SceneTeardown` schedule, the `SceneViewport` (active-camera binding), canonical diagram data types, shared human-readable entity labels, and shared terminal runtime faults/fixed-step coupling state. Core carries no BigSpace dependency, session/authority policy, or vehicle-specific motion policy. |
+| **`lunco-spatial`** | BigSpace spatial substrate: f64 coordinate/frame helpers, the persistent `WorldRoot`/`WorldGrid` shell, atomic grid migration, hierarchy invariants, spatial markers, and the vehicle-neutral navigation law. It depends on `lunco-core` for the shared runtime-diagnostic resource, but core does not depend on spatial. |
 | **`lunco-core-session`** | Always-on session and authority substrate: network role/status, possession and RBAC policy, prediction markers/input watermarks, and session-dependent identity admission. It depends on `lunco-core`; the lower-level core remains usable without session policy. |
 | **`lunco-command-macro`** | Procedural macros for the typed command system (`#[Command]`, `#[on_command]`, `register_commands!`; re-exported by `lunco-core`). |
 | **`lunco-workspace`** | Headless editor session management: open Twins, active documents, perspectives, recents, and generic active-Twin setting persistence (`SetTwinSetting` / `ResetTwinSetting`). |
@@ -36,7 +37,8 @@ The "Laws of Nature" — celestial mechanics, environmental state, terrain, obst
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-celestial`** | Orbital mechanics, canonical body catalog/NAIF identities, typed analytical frame transforms, named BigSpace frame projection, gravity, body rotation, and automatic SOI/frame transitions; sun-light driven from ephemeris. |
+| **`lunco-celestial`** | Headless celestial semantics: canonical body catalog/NAIF identities, ephemeris contracts, typed f64 frame transforms, geodesy, body rotation, and Kepler propagation. |
+| **`lunco-celestial-spatial`** | Bevy/BigSpace projection of celestial semantics: scene hierarchy, gravity, surface placement, terrain/globe integration, links, trajectories, cadence, and runtime celestial commands. |
 | **`lunco-celestial-ephemeris`** | Concrete high-fidelity ephemeris provider for `lunco-celestial` (VSOP2013 + ELP/MPP02 via `celestial-ephemeris`); the heavy, non-Windows-MSVC half of the celestial split and the one place `celestial-time` is allowed. |
 | **`lunco-environment`** | Per-entity position-dependent environment state (atmosphere, radiation, local gravity). |
 | **`lunco-terrain-core`** | Projection-agnostic terrain LOD spine: quadtree-CDLOD selection, tile-grid math, and the `HeightSource` trait. Pure (std + serde), shared by both the planar DEM streamer and the cube-sphere planetary tiler. |
@@ -187,7 +189,10 @@ Below, selected crates whose responsibilities benefit from extra detail. (Crates
 ### Core Foundation
 
 **`lunco-core`**
-The bedrock of the simulation. Defines the shared scalar port substrate (`PortRegistry`, `PortInfo`, owner-supplied metadata, backend-owned topology keys, and the durable owner-published `PortTopologyRevision`/`PortTopologyState` structural invalidation pair) for software/hardware interaction, the typed `Mutation<P>` command substrate, `SimTick`, and the `ComponentGraph` canonical data structure for all 2D diagram visualizations (Modelica, FSW, SysML). Owns the canonical BigSpace world shell, arbitrary-grid f64 pose composition/conversion, atomic grid migration, and the `ActivePhysicsFrame` boundary; it does not assign celestial semantics.
+The bedrock of the simulation. Defines the shared scalar port substrate (`PortRegistry`, `PortInfo`, owner-supplied metadata, backend-owned topology keys, and the durable owner-published `PortTopologyRevision`/`PortTopologyState` structural invalidation pair) for software/hardware interaction, the typed `Mutation<P>` command substrate, `SimTick`, and the `ComponentGraph` canonical data structure for all 2D diagram visualizations (Modelica, FSW, SysML). It owns generic engine lifecycle and runtime state but has no BigSpace dependency and does not assign celestial semantics.
+
+**`lunco-spatial`**
+Owns the BigSpace-specific boundary: arbitrary-grid f64 pose composition/conversion, the persistent world shell, atomic grid migration, `ActivePhysicsFrame`, spatial markers, hierarchy invariants, and the vehicle-neutral navigation law. It depends on `lunco-core` for shared runtime diagnostics; the dependency direction is one-way, so changing spatial code does not rebuild core.
 
 **`lunco-core-session`**
 The session/authority layer above `lunco-core`. It owns network role and status,
@@ -241,7 +246,10 @@ The generic Web Worker pool transport (wasm-only; `#![cfg(target_arch = "wasm32"
 ### Simulation Engine
 
 **`lunco-celestial`**
-Orbital mechanics and solar-system simulation spine. Owns the canonical body catalog and named semantic reference frames, the typed f64 `FrameTree`, body-fixed rotation, gravity vectors, and automatic Sphere-of-Influence/frame migration. User-facing anchors/orbits declare physical intent; the crate resolves concrete BigSpace grids and performs the projection. Owns the `EphemerisResource` abstraction; the concrete high-fidelity provider lives in `lunco-celestial-ephemeris`.
+Headless celestial semantics. Owns the canonical body catalog and named semantic reference frames, the typed f64 `FrameTree`, body-fixed rotation, geodesy, Kepler propagation, and the `EphemerisResource` abstraction. It has no scene hierarchy, BigSpace, terrain, rendering, or UI dependency. The concrete high-fidelity provider lives in `lunco-celestial-ephemeris`.
+
+**`lunco-celestial-spatial`**
+Bevy/BigSpace runtime adapter for `lunco-celestial`. Owns scene hierarchy and grid projection, gravity application, surface placement, SOI migration, globe/imagery integration, links, trajectories, cadence, and runtime commands. It is the scene-facing package; semantic consumers should depend on `lunco-celestial` directly.
 
 **`lunco-celestial-ephemeris`**
 Concrete high-fidelity ephemeris provider for `lunco-celestial`. The heavy half of the celestial split and the one place `celestial-time` is allowed: pulls in `celestial-ephemeris` (VSOP2013 + ELP/MPP02), `celestial-time`, and `celestial-core` (none of which build on Windows MSVC). Apps that need real planetary positions add `EphemerisPlugin`, which overwrites the default `EphemerisResource`.

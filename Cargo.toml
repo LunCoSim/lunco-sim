@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/lunco-core",
+    "crates/lunco-spatial",
     "crates/lunco-core-session",
     "crates/lunco-hash",
     "crates/lunco-geotiff",
@@ -18,6 +19,7 @@ members = [
     "crates/lunco-luncosim-server",
     "crates/lunco-telemetry",
     "crates/lunco-celestial",
+    "crates/lunco-celestial-spatial",
     "crates/lunco-celestial-ephemeris",
     "crates/lunco-hardware",
     "crates/lunco-mobility",

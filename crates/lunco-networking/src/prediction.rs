@@ -17,8 +17,8 @@ use avian3d::prelude::{
 use avian3d::schedule::{Physics, PhysicsSchedule, Substeps};
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
-use lunco_core::coords::GridPos;
 use lunco_core::{on_command, register_commands, Command};
+use lunco_spatial::coords::GridPos;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Client: force replicated proxies to `Kinematic` so the host-authoritative

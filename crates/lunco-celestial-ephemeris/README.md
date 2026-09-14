@@ -14,8 +14,8 @@ implementation backed by analytical theories and external mission data.
   external mission vectors (JPL Horizons CSV) held behind `Arc<RwLock<…>>`, so a
   dataset downloaded mid-session is visible to `position()` without a restart.
 - **`EphemerisPlugin`** — apps that need real planetary positions add this; it
-  **overwrites** the `EphemerisResource` installed by
-  `lunco_celestial::CelestialPlugin`, registers this crate's `Assets.toml` with
+  **overwrites** the `EphemerisResource` installed by the semantic/runtime
+  setup, registers this crate's `Assets.toml` with
   `lunco_assets::datasets`, and adopts each declared dataset once its file is on
   disk.
 
@@ -42,7 +42,7 @@ high-fidelity provider is opt-in.
 ## Usage
 
 ```rust
-app.add_plugins(lunco_celestial::CelestialPlugin);
+app.add_plugins(lunco_celestial_spatial::CelestialPlugin);
 app.add_plugins(lunco_celestial_ephemeris::EphemerisPlugin); // overrides the default provider
 ```
 

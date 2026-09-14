@@ -12,21 +12,21 @@
 //! sensors): mark a prim [`SolarTracked`] (or give it an anchor/orbit) and its
 //! solar pose follows from placement — no domain concept here.
 
-use bevy::math::{DMat3, DQuat, DVec3};
+use bevy::math::{DQuat, DVec3};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 
 use lunco_time::WorldTime;
 
-use crate::coords::ecliptic_to_bevy;
-use crate::ephemeris::EphemerisResource;
-use crate::frames::{BodyInertial, Pos};
-use crate::geo::{solar_tangent_frame, GeodeticAnchor, SiteAnchor};
-use crate::kepler::KeplerOrbit;
 use crate::link::LinkNode;
-use crate::registry::CelestialBodyRegistry;
-use crate::transform::{FrameTree, LibrationAnchor};
+use lunco_celestial::coords::ecliptic_to_bevy;
+use lunco_celestial::ephemeris::EphemerisResource;
+use lunco_celestial::frames::{BodyInertial, Pos};
+use lunco_celestial::geo::{solar_tangent_frame, GeodeticAnchor, SiteAnchor};
+use lunco_celestial::kepler::KeplerOrbit;
+use lunco_celestial::transform::{FrameTree, LibrationAnchor};
+use lunco_celestial::CelestialBodyRegistry;
 
 /// Opt-in marker: track this entity's solar pose even though it has no anchor or
 /// orbit (a scene-local prim positioned through the site frame — e.g. an antenna
@@ -111,8 +111,8 @@ impl SolarFramePose {
 
 /// Rotation that maps the scene's ENU axes (East=+X, Up=+Y, North=−Z) into the
 /// frame coordinates represented by `frame`.
-fn tangent_rotation(frame: &crate::geo::LocalTangentFrame) -> DQuat {
-    DQuat::from_mat3(&DMat3::from_cols(frame.east, frame.up, -frame.north))
+fn tangent_rotation(frame: &lunco_celestial::geo::LocalTangentFrame) -> DQuat {
+    frame.scene_to_frame_rotation()
 }
 
 #[derive(Clone, Copy)]
@@ -189,9 +189,9 @@ fn placement_offset(
         return Some(DVec3::ZERO);
     }
     let (entity_pos, _) =
-        lunco_core::coords::world_pose(entity, q_parents, q_grids, q_spatial).ok()?;
+        lunco_spatial::coords::world_pose(entity, q_parents, q_grids, q_spatial).ok()?;
     let (placement_pos, _) =
-        lunco_core::coords::world_pose(placement, q_parents, q_grids, q_spatial).ok()?;
+        lunco_spatial::coords::world_pose(placement, q_parents, q_grids, q_spatial).ok()?;
     Some(entity_pos.0 - placement_pos.0)
 }
 
@@ -292,7 +292,7 @@ pub fn update_solar_poses(
                         continue;
                     };
                     let Some((_, entity_rotation)) =
-                        lunco_core::coords::world_pose(entity, &q_parents, &q_grids, &q_spatial)
+                        lunco_spatial::coords::world_pose(entity, &q_parents, &q_grids, &q_spatial)
                             .ok()
                     else {
                         continue;
@@ -323,7 +323,7 @@ pub fn update_solar_poses(
                         continue;
                     };
                     let Some((_, entity_rotation)) =
-                        lunco_core::coords::world_pose(entity, &q_parents, &q_grids, &q_spatial)
+                        lunco_spatial::coords::world_pose(entity, &q_parents, &q_grids, &q_spatial)
                             .ok()
                     else {
                         continue;
@@ -356,7 +356,7 @@ pub fn update_solar_poses(
                         continue;
                     };
                     let Some((_, entity_rotation)) =
-                        lunco_core::coords::world_pose(entity, &q_parents, &q_grids, &q_spatial)
+                        lunco_spatial::coords::world_pose(entity, &q_parents, &q_grids, &q_spatial)
                             .ok()
                     else {
                         continue;
@@ -373,7 +373,7 @@ pub fn update_solar_poses(
         } else if let Some((site_body, frame)) = &site {
             // Scene-local: the position is wherever the transform hierarchy puts it.
             let Some((world_position, world_rotation)) =
-                lunco_core::coords::world_pose(entity, &q_parents, &q_grids, &q_spatial).ok()
+                lunco_spatial::coords::world_pose(entity, &q_parents, &q_grids, &q_spatial).ok()
             else {
                 continue;
             };

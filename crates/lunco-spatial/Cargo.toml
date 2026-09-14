@@ -1,0 +1,14 @@
+[package]
+name = "lunco-spatial"
+version = "0.1.0-dev"
+edition = "2021"
+license.workspace = true
+description = "BigSpace world shell, high-precision coordinates, and spatial navigation"
+
+[dependencies]
+bevy = { workspace = true, features = ["bevy_camera"] }
+big_space = { workspace = true }
+lunco-core = { path = "../lunco-core" }
+
+[lints]
+workspace = true

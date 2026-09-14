@@ -24,6 +24,7 @@ lunco-twin-journal = { path = "../lunco-twin-journal" }
 # lunco-core. The API discovers it by reflection (AppTypeRegistry) — no direct
 # lunco-api dep. Lua remains only a reserved language id; it has no command.
 lunco-core = { path = "../lunco-core" }
+lunco-spatial = { path = "../lunco-spatial" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-render-recovery = { path = "../lunco-render-recovery", optional = true }
 # The Rhai tutorial bridge reads the controller-owned resolved keymap. Optional
@@ -63,6 +64,7 @@ big_space = { workspace = true, optional = true }
 # headless-capable and must not pull bevy_egui/workbench in behind it.
 # No cycle — lunco-celestial depends on lunco-core, never on lunco-scripting.
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
+lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }
 # Tool libraries: the runtime-agnostic registry (lunco-tools) + its rhai binding
 # (lunco-tools-rhai). Gated on `rhai` since the binding + scenario runtime are
 # rhai; the registry itself is dependency-light.

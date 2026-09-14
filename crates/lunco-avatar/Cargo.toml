@@ -26,8 +26,10 @@ lunco-controller = { path = "../lunco-controller" }
 lunco-cosim = { path = "../lunco-cosim" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
+lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }
 lunco-environment = { path = "../lunco-environment" }
 lunco-core = { path = "../lunco-core" }
+lunco-spatial = { path = "../lunco-spatial" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-physics = { path = "../lunco-physics" }
 lunco-time = { path = "../lunco-time" }

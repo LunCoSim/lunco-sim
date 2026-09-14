@@ -83,7 +83,7 @@ pub struct LocalEarth {
 pub fn compute_local_earth(
     mut commands: Commands,
     dir: Option<Res<EarthDirectionWorld>>,
-    active_frame: Option<Res<lunco_core::ActivePhysicsFrame>>,
+    active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&big_space::prelude::Grid>,
     q_spatial: Query<(Option<&big_space::prelude::CellCoord>, &Transform)>,
@@ -203,7 +203,7 @@ pub fn compute_local_earth(
         return;
     };
     let Ok((_, frame_rotation)) =
-        lunco_core::coords::world_pose(active_frame.0, &q_parents, &q_grids, &q_spatial)
+        lunco_spatial::coords::world_pose(active_frame.0, &q_parents, &q_grids, &q_spatial)
     else {
         for (entity, existing) in &q_targets {
             if existing.is_some() {
@@ -251,7 +251,7 @@ pub fn compute_local_earth(
     let mut missing_mounts = 0;
     for (entity, existing) in &q_targets {
         let Ok((_, mount_rotation)) =
-            lunco_core::coords::world_pose(entity, &q_parents, &q_grids, &q_spatial)
+            lunco_spatial::coords::world_pose(entity, &q_parents, &q_grids, &q_spatial)
         else {
             missing_mounts += 1;
             if existing.is_some() {
@@ -360,7 +360,7 @@ mod tests {
                 GlobalTransform::IDENTITY,
             ))
             .id();
-        app.insert_resource(lunco_core::ActivePhysicsFrame(frame));
+        app.insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
     }
 
     /// The no-data case must publish NOTHING, not zero.
@@ -607,7 +607,7 @@ mod tests {
                 GlobalTransform::IDENTITY,
             ))
             .id();
-        app.insert_resource(lunco_core::ActivePhysicsFrame(frame));
+        app.insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
         app.insert_resource(EarthDirectionWorld(Vec3::NEG_Z));
         app.add_systems(Update, compute_local_earth);
 

@@ -15,13 +15,14 @@ avian3d = { workspace = true }
 big_space = { workspace = true }
 lunco-physics = { workspace = true }
 lunco-core = { path = "../lunco-core" }
+lunco-spatial = { path = "../lunco-spatial" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-hardware = { path = "../lunco-hardware" }
 lunco-telemetry = { path = "../lunco-telemetry" }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-controller = { path = "../lunco-controller" }
 lunco-avatar = { path = "../lunco-avatar", default-features = false }
-lunco-celestial = { path = "../lunco-celestial", default-features = false }
+lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }
 lunco-celestial-ephemeris = { path = "../lunco-celestial-ephemeris" }
 lunco-terrain-globe = { path = "../lunco-terrain-globe" }
 lunco-obstacle-field = { path = "../lunco-obstacle-field" }
@@ -69,7 +70,7 @@ mimalloc = "0.1"
 [features]
 default = []
 server = ["api-transport", "transport-http", "networking"]
-celestial = ["lunco-celestial/embed-assets"]
+celestial = ["lunco-celestial-spatial/embed-assets"]
 api-transport = [
     "dep:lunco-api-transport",
     "dep:lunco-modelica-api",

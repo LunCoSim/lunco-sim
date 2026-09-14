@@ -34,7 +34,7 @@ use lunco_materials::{ParamValue, TextureLayer};
 use serde::Deserialize;
 
 use crate::globe_lod::{GlobeLod, GlobeTiles};
-use crate::registry::CelestialBody;
+use lunco_celestial::CelestialBody;
 
 /// The `[<key>.body]` sub-table of a manifest entry: which body these pixels
 /// are of. Domain metadata rides with the declaration that produced the bytes —
@@ -538,11 +538,17 @@ mod tests {
             .map(|e| (e.key.clone(), declared_body(e)))
             .collect();
         assert!(
-            bodies.contains(&("earth".to_string(), Some(crate::ephemeris_id::EARTH))),
+            bodies.contains(&(
+                "earth".to_string(),
+                Some(lunco_celestial::ephemeris_id::EARTH)
+            )),
             "earth imagery must name NAIF 399: {bodies:?}"
         );
         assert!(
-            bodies.contains(&("moon".to_string(), Some(crate::ephemeris_id::MOON))),
+            bodies.contains(&(
+                "moon".to_string(),
+                Some(lunco_celestial::ephemeris_id::MOON)
+            )),
             "moon imagery must name NAIF 301: {bodies:?}"
         );
     }

@@ -31,6 +31,7 @@ bevy = { workspace = true, features = ["bevy_mesh", "bevy_camera", "bevy_light",
 # in wgpu + naga. `wgpu-types` is not `wgpu`.
 wgpu-types = "29"
 lunco-core = { path = "../lunco-core" }
+lunco-spatial = { path = "../lunco-spatial" }
 # The support-placement axis comes from the environment's authoritative local
 # gravity component; terrain does not derive or special-case a world-up axis.
 lunco-environment = { path = "../lunco-environment" }

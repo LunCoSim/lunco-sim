@@ -26,12 +26,13 @@ use big_space::prelude::{CellCoord, Grid};
 
 use lunco_time::WorldTime;
 
-use crate::geo::{
+use crate::frame_index::ReferenceFrameIndex;
+use lunco_celestial::geo::{
     body_rotation, equatorial_frame, geodetic_to_body_fixed, GeodeticAnchor, LocalTangentFrame,
     SiteAnchor,
 };
-use crate::kepler::KeplerOrbit;
-use crate::registry::{CelestialBodyRegistry, ReferenceFrame};
+use lunco_celestial::kepler::KeplerOrbit;
+use lunco_celestial::{CelestialBody, CelestialBodyRegistry, ReferenceFrame};
 
 /// Map a site-authored pose into the body's rotating surface frame.
 ///
@@ -48,36 +49,11 @@ fn site_enu_to_body_fixed_pose(
     scene_rotation: DQuat,
 ) -> (DVec3, DQuat) {
     let tangent = LocalTangentFrame::body_fixed(&anchor.geodetic, radius_m);
-    let scene_to_body = DQuat::from_mat3(&bevy::math::DMat3::from_cols(
-        tangent.east,
-        tangent.up,
-        -tangent.north,
-    ));
+    let scene_to_body = tangent.scene_to_frame_rotation();
     (
-        tangent.origin + scene_to_body * scene_position,
+        tangent.to_frame(scene_position),
         scene_to_body * scene_rotation,
     )
-}
-
-/// Read an entity's pose in its direct Grid frame.
-///
-/// The USD loader mounts a site scene under the canonical world grid before
-/// celestial handoff. Its authored coordinates are already local ENU values;
-/// composing them through the full solar hierarchy would mix that semantic
-/// frame with BigSpace storage cells. The helper stops at the direct parent
-/// grid, after which the site-anchor conversion changes semantic frames.
-fn direct_grid_pose(
-    entity: Entity,
-    parent: Entity,
-    q_grids: &Query<&Grid>,
-    q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
-) -> Option<(DVec3, DQuat)> {
-    let grid = q_grids.get(parent).ok()?;
-    let (cell, transform) = q_spatial.get(entity).ok()?;
-    let position = cell.map_or(transform.translation.as_dvec3(), |cell| {
-        grid.grid_position_double(cell, transform)
-    });
-    Some((position, transform.rotation.as_dquat()))
 }
 
 /// Orbital view mode state.
@@ -109,18 +85,14 @@ pub struct OrbitalViewPin {
 /// The scene is initially mounted under `WorldGrid` because the USD loader has
 /// no celestial knowledge at mount time. As soon as the root's `SiteAnchor` is
 /// projected, it becomes a nested BigSpace [`Grid`] and Avian's one stable
-/// [`lunco_core::ActivePhysicsFrame`]. When the body's rotating surface grid is
+/// [`lunco_spatial::ActivePhysicsFrame`]. When the body's rotating surface grid is
 /// ready, the same root is atomically migrated beneath it; the active frame
 /// does not change. The Moon/Earth rotation remains above it, so celestial
 /// motion changes rendering but never rewrites local physics position,
 /// velocity, contacts, or joints.
 pub fn attach_site_scene_to_surface_grid(
     q_site: Query<(Entity, &GeodeticAnchor, &ChildOf), With<SiteAnchor>>,
-    q_bodies: Query<(
-        Entity,
-        &crate::registry::CelestialBody,
-        &crate::globe_lod::GlobeLod,
-    )>,
+    q_bodies: Query<(Entity, &CelestialBody, &crate::globe_lod::GlobeLod)>,
     // Environment probes are physical assembly consumers too: a probe nested
     // under a rigid body samples that body's local environment. Keep the
     // celestial ownership binding on the probe instead of making the
@@ -145,8 +117,8 @@ pub fn attach_site_scene_to_surface_grid(
             Without<Grid>,
         ),
     >,
-    grid_config: Res<lunco_core::WorldGridConfig>,
-    active_physics_frame: Option<Res<lunco_core::ActivePhysicsFrame>>,
+    grid_config: Res<lunco_spatial::WorldGridConfig>,
+    active_physics_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
     mut commands: Commands,
 ) {
     let Ok((scene_root, anchor, child_of)) = q_site.single() else {
@@ -167,7 +139,7 @@ pub fn attach_site_scene_to_surface_grid(
         stamp_low_precision_roots(scene_root, &q_children, &q_desc_spatial, &mut commands);
     }
     if active_physics_frame.is_none_or(|frame| frame.0 != scene_root) {
-        commands.insert_resource(lunco_core::ActivePhysicsFrame(scene_root));
+        commands.insert_resource(lunco_spatial::ActivePhysicsFrame(scene_root));
     }
 
     let Some((body_entity, body, lod)) = q_bodies
@@ -182,15 +154,19 @@ pub fn attach_site_scene_to_surface_grid(
     };
     let needs_surface_mount = child_of.parent() != body_surface_grid;
     if needs_surface_mount {
-        let Some((scene_position, scene_rotation)) =
-            direct_grid_pose(scene_root, child_of.parent(), &q_grids, &q_spatial)
-        else {
+        let Some((scene_position, scene_rotation)) = lunco_spatial::coords::grid_relative_pose(
+            scene_root,
+            child_of.parent(),
+            &q_parents,
+            &q_grids,
+            &q_spatial,
+        ) else {
             return;
         };
         let (body_position, body_rotation) =
             site_enu_to_body_fixed_pose(anchor, body.radius_m, scene_position, scene_rotation);
         let (cell, translation) = body_surface_grid_component.translation_to_grid(body_position);
-        lunco_core::attach::migrate_to_grid(
+        lunco_spatial::attach::migrate_to_grid(
             &mut commands,
             scene_root,
             body_surface_grid,
@@ -249,7 +225,7 @@ pub fn orbital_pin_scene_visibility(
     q_local: Query<
         Entity,
         (
-            With<lunco_core::GridAnchor>,
+            With<lunco_spatial::GridAnchor>,
             Without<GeodeticAnchor>,
             Without<KeplerOrbit>,
         ),
@@ -306,7 +282,7 @@ pub fn orbital_pin_scene_visibility(
 pub fn place_celestial_bound_entities(
     world_time: Res<WorldTime>,
     registry: Res<CelestialBodyRegistry>,
-    frame_index: Res<crate::ReferenceFrameIndex>,
+    frame_index: Res<ReferenceFrameIndex>,
     q_grids: Query<&Grid>,
     mut q_bound: Query<
         (
@@ -398,8 +374,10 @@ pub fn place_celestial_bound_entities(
         };
 
         let (new_cell, new_translation) = grid.translation_to_grid(local);
-        commands.entity(entity).try_insert(lunco_core::GridAnchor);
-        lunco_core::attach::migrate_to_grid(
+        commands
+            .entity(entity)
+            .try_insert(lunco_spatial::GridAnchor);
+        lunco_spatial::attach::migrate_to_grid(
             &mut commands,
             entity,
             grid_entity,
@@ -499,7 +477,7 @@ pub struct TerrainCurvatureChangeTracker<'w, 's> {
             Changed<lunco_terrain_surface::DemTerrainRequest>,
             Changed<lunco_terrain_surface::TerrainGeoref>,
             Changed<lunco_terrain_surface::FlatSiteSurface>,
-            Changed<crate::registry::CelestialBody>,
+            Changed<CelestialBody>,
             Changed<crate::globe_lod::GlobeLod>,
         )>,
     >,
@@ -509,7 +487,7 @@ pub struct TerrainCurvatureChangeTracker<'w, 's> {
     removed_request: RemovedComponents<'w, 's, lunco_terrain_surface::DemTerrainRequest>,
     removed_georef: RemovedComponents<'w, 's, lunco_terrain_surface::TerrainGeoref>,
     removed_flat: RemovedComponents<'w, 's, lunco_terrain_surface::FlatSiteSurface>,
-    removed_body: RemovedComponents<'w, 's, crate::registry::CelestialBody>,
+    removed_body: RemovedComponents<'w, 's, CelestialBody>,
     removed_lod: RemovedComponents<'w, 's, crate::globe_lod::GlobeLod>,
 }
 
@@ -548,7 +526,7 @@ pub fn sync_terrain_body_curvature(
     q_flat: Query<&lunco_terrain_surface::FlatSiteSurface>,
     q_globes: Query<(
         Entity,
-        &crate::registry::CelestialBody,
+        &CelestialBody,
         Option<&crate::globe_lod::GlobeHandoff>,
     )>,
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
@@ -842,7 +820,7 @@ pub fn sync_terrain_body_curvature(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geo::{solar_tangent_frame, Geodetic};
+    use lunco_celestial::geo::{solar_tangent_frame, Geodetic};
 
     /// The align quaternion maps the site ENU axes onto the scene axes.
     #[test]
@@ -851,16 +829,12 @@ mod tests {
         let desc = registry
             .bodies
             .iter()
-            .find(|b| b.ephemeris_id == crate::ephemeris_id::MOON)
+            .find(|b| b.ephemeris_id == lunco_celestial::ephemeris_id::MOON)
             .unwrap();
         let center = DVec3::new(1.0e11, 2.0e10, -3.0e10);
         let geo = Geodetic::new(-89.45, -136.7, 1200.0);
         let frame = solar_tangent_frame(desc, &geo, center, 2461000.5);
-        let align = DQuat::from_mat3(&bevy::math::DMat3::from_cols(
-            DVec3::new(frame.east.x, frame.up.x, -frame.north.x),
-            DVec3::new(frame.east.y, frame.up.y, -frame.north.y),
-            DVec3::new(frame.east.z, frame.up.z, -frame.north.z),
-        ));
+        let align = frame.frame_to_scene_rotation();
         assert!((align * frame.east - DVec3::X).length() < 1e-9);
         assert!((align * frame.up - DVec3::Y).length() < 1e-9);
         assert!((align * frame.north - DVec3::NEG_Z).length() < 1e-9);
@@ -879,10 +853,10 @@ mod tests {
         let body = registry
             .bodies
             .iter()
-            .find(|b| b.ephemeris_id == crate::ephemeris_id::MOON)
+            .find(|b| b.ephemeris_id == lunco_celestial::ephemeris_id::MOON)
             .unwrap();
         let anchor = GeodeticAnchor {
-            body: crate::ephemeris_id::MOON,
+            body: lunco_celestial::ephemeris_id::MOON,
             geodetic: Geodetic::new(25.28, 307.60, 0.0),
         };
         let (position, rotation) =
@@ -899,7 +873,7 @@ mod tests {
         let mut app = App::new();
         app.insert_resource(OrbitalViewPin {
             active: true,
-            body: crate::ephemeris_id::MOON,
+            body: lunco_celestial::ephemeris_id::MOON,
             ..default()
         });
         app.add_systems(Update, orbital_pin_scene_visibility);
@@ -909,10 +883,10 @@ mod tests {
             .spawn((
                 SiteAnchor,
                 GeodeticAnchor {
-                    body: crate::ephemeris_id::MOON,
+                    body: lunco_celestial::ephemeris_id::MOON,
                     geodetic: Geodetic::new(25.28, 307.60, 0.0),
                 },
-                lunco_core::GridAnchor,
+                lunco_spatial::GridAnchor,
                 Visibility::Visible,
             ))
             .id();
@@ -943,21 +917,21 @@ mod tests {
     #[test]
     fn site_scene_and_physics_share_the_authored_surface_grid() {
         let mut app = App::new();
-        app.insert_resource(lunco_core::WorldGridConfig::default());
+        app.insert_resource(lunco_spatial::WorldGridConfig::default());
         app.add_systems(Update, attach_site_scene_to_surface_grid);
 
         let world_grid = app
             .world_mut()
             .spawn((
-                lunco_core::WorldGridConfig::default().grid(),
+                lunco_spatial::WorldGridConfig::default().grid(),
                 CellCoord::ZERO,
-                lunco_core::WorldGrid,
+                lunco_spatial::WorldGrid,
             ))
             .id();
         let body_fixed_grid = app
             .world_mut()
             .spawn((
-                lunco_core::WorldGridConfig::default().grid(),
+                lunco_spatial::WorldGridConfig::default().grid(),
                 CellCoord::ZERO,
                 Transform::default(),
                 ChildOf(world_grid),
@@ -966,7 +940,7 @@ mod tests {
         let surface_grid = app
             .world_mut()
             .spawn((
-                lunco_core::WorldGridConfig::default().grid(),
+                lunco_spatial::WorldGridConfig::default().grid(),
                 CellCoord::ZERO,
                 Transform::default(),
                 ChildOf(body_fixed_grid),
@@ -975,13 +949,13 @@ mod tests {
         let body = app
             .world_mut()
             .spawn((
-                crate::CelestialBody {
+                CelestialBody {
                     name: "Moon".into(),
-                    ephemeris_id: crate::ephemeris_id::MOON,
-                    radius_m: crate::MOON_MEAN_RADIUS_M,
+                    ephemeris_id: lunco_celestial::ephemeris_id::MOON,
+                    radius_m: lunco_celestial::MOON_MEAN_RADIUS_M,
                 },
                 crate::globe_lod::GlobeLod {
-                    radius_m: crate::MOON_MEAN_RADIUS_M,
+                    radius_m: lunco_celestial::MOON_MEAN_RADIUS_M,
                     surface_grid,
                     look: lunco_materials::ShaderLook::new("shaders/blueprint.wgsl"),
                     res: 8,
@@ -995,7 +969,7 @@ mod tests {
             .spawn((
                 SiteAnchor,
                 GeodeticAnchor {
-                    body: crate::ephemeris_id::MOON,
+                    body: lunco_celestial::ephemeris_id::MOON,
                     geodetic: Geodetic::new(25.28, 307.60, 0.0),
                 },
                 CellCoord::ZERO,
@@ -1017,7 +991,10 @@ mod tests {
         app.update();
 
         let world = app.world();
-        assert_eq!(world.resource::<lunco_core::ActivePhysicsFrame>().0, site);
+        assert_eq!(
+            world.resource::<lunco_spatial::ActivePhysicsFrame>().0,
+            site
+        );
         assert_eq!(world.get::<ChildOf>(site).unwrap().parent(), surface_grid);
         assert!(world.get::<Grid>(site).is_some());
         assert_eq!(world.get::<ChildOf>(rigid_body).unwrap().parent(), site);
@@ -1045,16 +1022,16 @@ mod tests {
     #[test]
     fn site_frame_is_stable_while_celestial_hierarchy_loads() {
         let mut app = App::new();
-        app.insert_resource(lunco_core::WorldGridConfig::default());
+        app.insert_resource(lunco_spatial::WorldGridConfig::default());
         app.add_systems(Update, attach_site_scene_to_surface_grid);
 
         let world_grid = app
             .world_mut()
             .spawn((
-                lunco_core::WorldGridConfig::default().grid(),
+                lunco_spatial::WorldGridConfig::default().grid(),
                 CellCoord::ZERO,
                 Transform::default(),
-                lunco_core::WorldGrid,
+                lunco_spatial::WorldGrid,
             ))
             .id();
         let site = app
@@ -1062,7 +1039,7 @@ mod tests {
             .spawn((
                 SiteAnchor,
                 GeodeticAnchor {
-                    body: crate::ephemeris_id::MOON,
+                    body: lunco_celestial::ephemeris_id::MOON,
                     geodetic: Geodetic::new(25.28, 307.60, 0.0),
                 },
                 CellCoord::ZERO,
@@ -1078,7 +1055,9 @@ mod tests {
         app.update();
         assert!(app.world().get::<Grid>(site).is_some());
         assert_eq!(
-            app.world().resource::<lunco_core::ActivePhysicsFrame>().0,
+            app.world()
+                .resource::<lunco_spatial::ActivePhysicsFrame>()
+                .0,
             site
         );
         assert_eq!(
@@ -1089,7 +1068,7 @@ mod tests {
         let body_fixed_grid = app
             .world_mut()
             .spawn((
-                lunco_core::WorldGridConfig::default().grid(),
+                lunco_spatial::WorldGridConfig::default().grid(),
                 CellCoord::ZERO,
                 Transform::default(),
                 ChildOf(world_grid),
@@ -1098,20 +1077,20 @@ mod tests {
         let surface_grid = app
             .world_mut()
             .spawn((
-                lunco_core::WorldGridConfig::default().grid(),
+                lunco_spatial::WorldGridConfig::default().grid(),
                 CellCoord::ZERO,
                 Transform::default(),
                 ChildOf(body_fixed_grid),
             ))
             .id();
         app.world_mut().spawn((
-            crate::CelestialBody {
+            CelestialBody {
                 name: "Moon".into(),
-                ephemeris_id: crate::ephemeris_id::MOON,
-                radius_m: crate::MOON_MEAN_RADIUS_M,
+                ephemeris_id: lunco_celestial::ephemeris_id::MOON,
+                radius_m: lunco_celestial::MOON_MEAN_RADIUS_M,
             },
             crate::globe_lod::GlobeLod {
-                radius_m: crate::MOON_MEAN_RADIUS_M,
+                radius_m: lunco_celestial::MOON_MEAN_RADIUS_M,
                 surface_grid,
                 look: lunco_materials::ShaderLook::new("shaders/blueprint.wgsl"),
                 res: 8,
@@ -1126,7 +1105,9 @@ mod tests {
             surface_grid
         );
         assert_eq!(
-            app.world().resource::<lunco_core::ActivePhysicsFrame>().0,
+            app.world()
+                .resource::<lunco_spatial::ActivePhysicsFrame>()
+                .0,
             site
         );
     }
@@ -1134,16 +1115,16 @@ mod tests {
     #[test]
     fn site_frame_is_published_before_declared_surface_grid_is_ready() {
         let mut app = App::new();
-        app.insert_resource(lunco_core::WorldGridConfig::default());
+        app.insert_resource(lunco_spatial::WorldGridConfig::default());
         app.add_systems(Update, attach_site_scene_to_surface_grid);
 
         let world_grid = app
             .world_mut()
             .spawn((
-                lunco_core::WorldGridConfig::default().grid(),
+                lunco_spatial::WorldGridConfig::default().grid(),
                 CellCoord::ZERO,
                 Transform::default(),
-                lunco_core::WorldGrid,
+                lunco_spatial::WorldGrid,
             ))
             .id();
         let surface_grid = app.world_mut().spawn(ChildOf(world_grid)).id();
@@ -1152,7 +1133,7 @@ mod tests {
             .spawn((
                 SiteAnchor,
                 GeodeticAnchor {
-                    body: crate::ephemeris_id::MOON,
+                    body: lunco_celestial::ephemeris_id::MOON,
                     geodetic: Geodetic::new(25.28, 307.60, 0.0),
                 },
                 CellCoord::ZERO,
@@ -1162,13 +1143,13 @@ mod tests {
             ))
             .id();
         app.world_mut().spawn((
-            crate::CelestialBody {
+            CelestialBody {
                 name: "Moon".into(),
-                ephemeris_id: crate::ephemeris_id::MOON,
-                radius_m: crate::MOON_MEAN_RADIUS_M,
+                ephemeris_id: lunco_celestial::ephemeris_id::MOON,
+                radius_m: lunco_celestial::MOON_MEAN_RADIUS_M,
             },
             crate::globe_lod::GlobeLod {
-                radius_m: crate::MOON_MEAN_RADIUS_M,
+                radius_m: lunco_celestial::MOON_MEAN_RADIUS_M,
                 surface_grid,
                 look: lunco_materials::ShaderLook::new("shaders/blueprint.wgsl"),
                 res: 8,
@@ -1182,7 +1163,9 @@ mod tests {
         app.update();
         assert!(app.world().get::<Grid>(site).is_some());
         assert_eq!(
-            app.world().resource::<lunco_core::ActivePhysicsFrame>().0,
+            app.world()
+                .resource::<lunco_spatial::ActivePhysicsFrame>()
+                .0,
             site
         );
         assert_eq!(
@@ -1191,7 +1174,7 @@ mod tests {
         );
 
         app.world_mut().entity_mut(surface_grid).insert((
-            lunco_core::WorldGridConfig::default().grid(),
+            lunco_spatial::WorldGridConfig::default().grid(),
             CellCoord::ZERO,
             Transform::default(),
         ));
@@ -1201,7 +1184,9 @@ mod tests {
             surface_grid
         );
         assert_eq!(
-            app.world().resource::<lunco_core::ActivePhysicsFrame>().0,
+            app.world()
+                .resource::<lunco_spatial::ActivePhysicsFrame>()
+                .0,
             site
         );
     }
@@ -1209,14 +1194,14 @@ mod tests {
     #[test]
     fn site_placement_leaves_camera_frame_ownership_alone() {
         let mut app = App::new();
-        app.insert_resource(lunco_core::WorldGridConfig::default());
+        app.insert_resource(lunco_spatial::WorldGridConfig::default());
         app.add_systems(Update, attach_site_scene_to_surface_grid);
 
-        let world_grid = app.world_mut().spawn(lunco_core::WorldGrid).id();
+        let world_grid = app.world_mut().spawn(lunco_spatial::WorldGrid).id();
         let body_fixed_grid = app
             .world_mut()
             .spawn((
-                lunco_core::WorldGridConfig::default().grid(),
+                lunco_spatial::WorldGridConfig::default().grid(),
                 CellCoord::ZERO,
                 Transform::default(),
                 ChildOf(world_grid),
@@ -1225,7 +1210,7 @@ mod tests {
         let surface_grid = app
             .world_mut()
             .spawn((
-                lunco_core::WorldGridConfig::default().grid(),
+                lunco_spatial::WorldGridConfig::default().grid(),
                 CellCoord::ZERO,
                 Transform::default(),
                 ChildOf(body_fixed_grid),
@@ -1234,13 +1219,13 @@ mod tests {
         let body = app
             .world_mut()
             .spawn((
-                crate::CelestialBody {
+                CelestialBody {
                     name: "Moon".into(),
-                    ephemeris_id: crate::ephemeris_id::MOON,
-                    radius_m: crate::MOON_MEAN_RADIUS_M,
+                    ephemeris_id: lunco_celestial::ephemeris_id::MOON,
+                    radius_m: lunco_celestial::MOON_MEAN_RADIUS_M,
                 },
                 crate::globe_lod::GlobeLod {
-                    radius_m: crate::MOON_MEAN_RADIUS_M,
+                    radius_m: lunco_celestial::MOON_MEAN_RADIUS_M,
                     surface_grid,
                     look: lunco_materials::ShaderLook::new("shaders/blueprint.wgsl"),
                     res: 8,
@@ -1254,20 +1239,20 @@ mod tests {
             .spawn((
                 SiteAnchor,
                 GeodeticAnchor {
-                    body: crate::ephemeris_id::MOON,
+                    body: lunco_celestial::ephemeris_id::MOON,
                     geodetic: Geodetic::new(25.28, 307.60, 0.0),
                 },
                 CellCoord::ZERO,
                 Transform::default(),
                 GlobalTransform::default(),
-                lunco_core::WorldGridConfig::default().grid(),
+                lunco_spatial::WorldGridConfig::default().grid(),
                 ChildOf(surface_grid),
             ))
             .id();
         let camera_grid = app
             .world_mut()
             .spawn((
-                lunco_core::WorldGridConfig::default().grid(),
+                lunco_spatial::WorldGridConfig::default().grid(),
                 CellCoord::ZERO,
                 Transform::default(),
                 ChildOf(body_fixed_grid),
@@ -1295,13 +1280,15 @@ mod tests {
             .get::<lunco_environment::GravityBody>(avatar)
             .is_none());
         assert_eq!(
-            app.world().resource::<lunco_core::ActivePhysicsFrame>().0,
+            app.world()
+                .resource::<lunco_spatial::ActivePhysicsFrame>()
+                .0,
             site
         );
-        assert!(app.world().get::<crate::CelestialBody>(body).is_some());
+        assert!(app.world().get::<CelestialBody>(body).is_some());
         assert!(app
             .world()
-            .get::<lunco_core::WorldGrid>(world_grid)
+            .get::<lunco_spatial::WorldGrid>(world_grid)
             .is_some());
     }
 }

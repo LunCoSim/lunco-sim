@@ -149,7 +149,7 @@ pub struct LocalSolar {
 pub fn compute_local_solar(
     mut commands: Commands,
     sun: Option<Res<SunState>>,
-    active_frame: Option<Res<lunco_core::ActivePhysicsFrame>>,
+    active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&big_space::prelude::Grid>,
     q_spatial: Query<(Option<&big_space::prelude::CellCoord>, &Transform)>,
@@ -200,7 +200,7 @@ pub fn compute_local_solar(
         return;
     };
     let Ok((_, frame_rotation)) =
-        lunco_core::coords::world_pose(active_frame.0, &q_parents, &q_grids, &q_spatial)
+        lunco_spatial::coords::world_pose(active_frame.0, &q_parents, &q_grids, &q_spatial)
     else {
         for (entity, existing) in &q_targets {
             if existing.is_some() {
@@ -248,7 +248,7 @@ pub fn compute_local_solar(
     let mut missing_mounts = 0;
     for (entity, existing) in &q_targets {
         let Ok((_, mount_rotation)) =
-            lunco_core::coords::world_pose(entity, &q_parents, &q_grids, &q_spatial)
+            lunco_spatial::coords::world_pose(entity, &q_parents, &q_grids, &q_spatial)
         else {
             missing_mounts += 1;
             if existing.is_some() {
@@ -328,15 +328,15 @@ fn spatial_rotation(
         (Option<&big_space::prelude::CellCoord>, &Transform),
         Without<bevy::light::DirectionalLight>,
     >,
-) -> Result<DQuat, lunco_core::coords::CoordinateError> {
-    lunco_core::coords::world_pose(entity, q_parents, q_grids, q_spatial)
+) -> Result<DQuat, lunco_spatial::coords::CoordinateError> {
+    lunco_spatial::coords::world_pose(entity, q_parents, q_grids, q_spatial)
         .map(|(_, rotation)| rotation.0)
 }
 
 pub fn project_sun_state_to_light(
     sun: Option<Res<SunState>>,
     mount: Option<Res<lunco_core::SceneMountState>>,
-    active_frame: Option<Res<lunco_core::ActivePhysicsFrame>>,
+    active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&big_space::prelude::Grid>,
     q_spatial: Query<
@@ -482,11 +482,11 @@ pub fn project_sun_state_to_light(
     let sun_revision = sun.as_deref().map(|state| state.revision);
     let frame_changed = !projection_cache.initialized
         || projection_cache.active_frame != Some(active_frame.0)
-        || lunco_core::coords::world_pose_changed(active_frame.0, &q_parents, &q_changed);
+        || lunco_spatial::coords::world_pose_changed(active_frame.0, &q_parents, &q_changed);
     let parent_changed = !projection_cache.initialized
         || projection_cache.sun_parent != sun_parent
         || sun_parent.is_some_and(|parent| {
-            lunco_core::coords::world_pose_changed(parent, &q_parents, &q_changed)
+            lunco_spatial::coords::world_pose_changed(parent, &q_parents, &q_changed)
         });
     let sun_changed = !projection_cache.initialized
         || projection_cache.scene_sun != Some(scene_sun)
@@ -608,7 +608,7 @@ pub fn project_sun_state_to_light(
 /// different floating-origin render epochs during recentering.
 pub fn finalize_sun_render_state(
     sun: Option<Res<SunState>>,
-    active_frame: Option<Res<lunco_core::ActivePhysicsFrame>>,
+    active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
     q_frames: Query<&GlobalTransform>,
     q_sun: Query<
         &GlobalTransform,
@@ -793,7 +793,7 @@ mod tests {
                 GlobalTransform::IDENTITY,
             ))
             .id();
-        app.insert_resource(lunco_core::ActivePhysicsFrame(frame));
+        app.insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
         app.insert_resource(SunState {
             direction_to_sun: Some(Vec3::NEG_Z),
             ..Default::default()
@@ -835,7 +835,7 @@ mod tests {
                 GlobalTransform::IDENTITY,
             ))
             .id();
-        app.insert_resource(lunco_core::ActivePhysicsFrame(frame));
+        app.insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
         app.insert_resource(SunState {
             direction_to_sun: Some(Vec3::NEG_Z),
             ..Default::default()
@@ -872,7 +872,7 @@ mod tests {
                 GlobalTransform::IDENTITY,
             ))
             .id();
-        app.insert_resource(lunco_core::ActivePhysicsFrame(frame));
+        app.insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
         app.insert_resource(SunState {
             direction_to_sun: Some(Vec3::NEG_Z),
             ..Default::default()
@@ -928,7 +928,7 @@ mod tests {
                 Transform::from_rotation(parent_rotation),
             ))
             .id();
-        app.insert_resource(lunco_core::ActivePhysicsFrame(frame));
+        app.insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
         app.insert_resource(SunState {
             direction_to_sun: Some(Vec3::NEG_Z),
             ..Default::default()
@@ -965,7 +965,7 @@ mod tests {
                 big_space::prelude::Grid::default(),
             ))
             .id();
-        app.insert_resource(lunco_core::ActivePhysicsFrame(frame));
+        app.insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
         app.insert_resource(SunState {
             direction_to_sun: Some(Vec3::X),
             ..Default::default()

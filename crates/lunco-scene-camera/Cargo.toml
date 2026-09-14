@@ -11,7 +11,9 @@ big_space = { workspace = true }
 lunco-api = { path = "../lunco-api" }
 lunco-avatar = { path = "../lunco-avatar", default-features = false }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
+lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }
 lunco-core = { path = "../lunco-core" }
+lunco-spatial = { path = "../lunco-spatial" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-scene-selection = { path = "../lunco-scene-selection" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }

@@ -104,7 +104,8 @@ by a per-frame offset.
 
 To add a new reference frame:
 
-1. define its semantic identity and f64 transform in `lunco-celestial`;
+1. define its semantic identity and f64 transform in `lunco-celestial`, then
+   project it through `lunco-celestial-spatial`;
 2. add one concrete grid declaration and register it in the frame index;
 3. route placement/camera/trajectory/physics consumers through the existing
    frame conversion and atomic mount APIs;

@@ -1950,7 +1950,7 @@ fn camera_projection_section(
 /// authors `xformOp:translate` in and the frame `MoveEntity` takes.
 ///
 /// The `PanelCtx` (one-component-at-a-time) spelling of
-/// [`lunco_core::coords::grid_absolute`], which needs `Query`s the panel doesn't
+/// [`lunco_spatial::coords::grid_absolute`], which needs `Query`s the panel doesn't
 /// have. Same rule: no parent `Grid` ⇒ no cell ⇒ the local translation already
 /// IS the authored value.
 fn grid_absolute_of(ctx: &PanelCtx, entity: Entity) -> Option<bevy::math::DVec3> {

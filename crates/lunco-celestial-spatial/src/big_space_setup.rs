@@ -77,12 +77,12 @@
 //! and broke Moon positioning. The two-layer design is correct.
 
 use crate::gravity::PointMassGravity;
-use crate::registry::{CelestialBodyRegistry, ReferenceFrame};
 use avian3d::prelude::{Collider, CollisionLayers};
 use bevy::camera::visibility::NoFrustumCulling;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use big_space::prelude::*;
+use lunco_celestial::{CelestialBody, CelestialBodyRegistry, ReferenceFrame};
 use lunco_environment::{Gravity, GravityProvider};
 use lunco_materials::{ParamValue, ShaderLook};
 use lunco_render::PbrLook;
@@ -116,7 +116,7 @@ const CELESTIAL_PICKING_LAYERS: CollisionLayers =
 pub fn adopt_authored_body_look(
     q_decl: Query<(&crate::CelestialBodyDecl, &ShaderLook), Changed<ShaderLook>>,
     mut q_globes: Query<(
-        &crate::registry::CelestialBody,
+        &CelestialBody,
         &mut crate::globe_lod::GlobeLod,
         &crate::globe_lod::GlobeTiles,
     )>,
@@ -234,11 +234,11 @@ pub fn setup_big_space_hierarchy(
     registry: Res<CelestialBodyRegistry>,
     config: Res<crate::CelestialConfig>,
     quality: Res<lunco_render::RenderingQualitySettings>,
-    grid_config: Res<lunco_core::WorldGridConfig>,
+    grid_config: Res<lunco_spatial::WorldGridConfig>,
     mut meshes: ResMut<Assets<Mesh>>,
     // (No `AssetServer`: this hierarchy loads no textures — see the imagery note below.)
     // The single world-shell grid (WorldShellPlugin) to nest under.
-    q_world_grid: Query<Entity, (With<lunco_core::WorldGrid>, With<Grid>)>,
+    q_world_grid: Query<Entity, (With<lunco_spatial::WorldGrid>, With<Grid>)>,
     subsystems: Option<ResMut<lunco_core::subsystems::SubsystemToggles>>,
     bindings: Res<lunco_controller::InputBindingsSettings>,
 ) {
@@ -320,9 +320,9 @@ pub fn setup_big_space_hierarchy(
     // a partial hierarchy with guessed radii/GM/SOI is more dangerous than no
     // hierarchy because it looks valid while using inconsistent frames.
     let (Some(sun), Some(earth), Some(moon)) = (
-        registry.get(crate::ephemeris_id::SUN).cloned(),
-        registry.get(crate::ephemeris_id::EARTH).cloned(),
-        registry.get(crate::ephemeris_id::MOON).cloned(),
+        registry.get(lunco_celestial::ephemeris_id::SUN).cloned(),
+        registry.get(lunco_celestial::ephemeris_id::EARTH).cloned(),
+        registry.get(lunco_celestial::ephemeris_id::MOON).cloned(),
     ) else {
         error!(
             "[celestial] required Sun/Earth/Moon catalog entries are missing; refusing to build the celestial hierarchy"
@@ -365,7 +365,7 @@ pub fn setup_big_space_hierarchy(
             CelestialDerived,
             SolarSystemRoot,
             ReferenceFrame::EclipticJ2000 {
-                center: crate::ephemeris_id::SUN,
+                center: lunco_celestial::ephemeris_id::SUN,
             },
             make_grid(),
             CellCoord::default(),
@@ -465,7 +465,7 @@ pub fn setup_big_space_hierarchy(
         .spawn((
             EMBRoot,
             ReferenceFrame::EclipticJ2000 {
-                center: crate::ephemeris_id::EARTH_MOON_BARYCENTER,
+                center: lunco_celestial::ephemeris_id::EARTH_MOON_BARYCENTER,
             },
             // Same configured precision contract as the canonical WorldGrid.
             make_grid(),
@@ -484,7 +484,7 @@ pub fn setup_big_space_hierarchy(
         .spawn((
             EarthRoot,
             ReferenceFrame::BodyFixed {
-                body: crate::ephemeris_id::EARTH,
+                body: lunco_celestial::ephemeris_id::EARTH,
             },
             // Same configured precision contract as the canonical WorldGrid.
             make_grid(),
@@ -507,7 +507,7 @@ pub fn setup_big_space_hierarchy(
     let earth_inertial = commands
         .spawn((
             ReferenceFrame::EclipticJ2000 {
-                center: crate::ephemeris_id::EARTH,
+                center: lunco_celestial::ephemeris_id::EARTH,
             },
             // Same configured precision contract as every other celestial grid.
             make_grid(),
@@ -592,7 +592,7 @@ pub fn setup_big_space_hierarchy(
         .spawn((
             MoonRoot,
             ReferenceFrame::BodyFixed {
-                body: crate::ephemeris_id::MOON,
+                body: lunco_celestial::ephemeris_id::MOON,
             },
             // Same configured precision contract as the canonical WorldGrid.
             make_grid(),
@@ -611,7 +611,7 @@ pub fn setup_big_space_hierarchy(
     // orbit camera belongs in this co-located non-rotating sibling instead.
     commands.spawn((
         ReferenceFrame::EclipticJ2000 {
-            center: crate::ephemeris_id::MOON,
+            center: lunco_celestial::ephemeris_id::MOON,
         },
         make_grid(),
         CellCoord::default(),
@@ -730,10 +730,10 @@ pub fn setup_big_space_hierarchy(
 
     // ── Other Planets (simple entities on Solar Grid) ──────────────────────
     for body_desc in registry.bodies.iter() {
-        if body_desc.ephemeris_id == crate::ephemeris_id::SUN
-            || body_desc.ephemeris_id == crate::ephemeris_id::EARTH
-            || body_desc.ephemeris_id == crate::ephemeris_id::MOON
-            || body_desc.ephemeris_id == crate::ephemeris_id::EARTH_MOON_BARYCENTER
+        if body_desc.ephemeris_id == lunco_celestial::ephemeris_id::SUN
+            || body_desc.ephemeris_id == lunco_celestial::ephemeris_id::EARTH
+            || body_desc.ephemeris_id == lunco_celestial::ephemeris_id::MOON
+            || body_desc.ephemeris_id == lunco_celestial::ephemeris_id::EARTH_MOON_BARYCENTER
         {
             continue;
         }
@@ -784,7 +784,7 @@ pub fn setup_big_space_hierarchy(
 /// same body-fixed frame as the terrain and rigid bodies. The authored physics
 /// scene remains the flat-world default for scenes without a site anchor.
 pub fn sync_site_gravity(
-    q_site: Query<(), With<crate::geo::SiteAnchor>>,
+    q_site: Query<(), With<lunco_celestial::geo::SiteAnchor>>,
     mut gravity: ResMut<Gravity>,
 ) {
     if q_site.is_empty() || *gravity == Gravity::Surface {
@@ -816,7 +816,7 @@ mod tests {
     fn site_gravity_uses_body_frame_after_stage_gravity_is_authored() {
         let mut app = App::new();
         app.insert_resource(Gravity::flat(1.62, DVec3::NEG_Y));
-        app.world_mut().spawn(crate::geo::SiteAnchor);
+        app.world_mut().spawn(lunco_celestial::geo::SiteAnchor);
         app.add_systems(PostUpdate, sync_site_gravity);
         app.update();
 

@@ -52,19 +52,19 @@ use big_space::prelude::{CellCoord, Grid};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use lunco_core::coords::world_pose;
 use lunco_core::{
     on_command, register_commands, Command, Severity, TelemetryEvent, TelemetryValue,
 };
 use lunco_hooks::HookValue;
+use lunco_spatial::coords::world_pose;
 use lunco_terrain_surface::{DemHeightField, SurfaceOracle};
 use lunco_time::WorldTime;
 
-use crate::coords::ecliptic_to_bevy;
-use crate::ephemeris::EphemerisResource;
-use crate::geo::{segment_hits_obb, segment_hits_sphere};
 use crate::pose::SolarFramePose;
-use crate::registry::CelestialBodyRegistry;
+use lunco_celestial::coords::ecliptic_to_bevy;
+use lunco_celestial::ephemeris::EphemerisResource;
+use lunco_celestial::geo::{segment_hits_obb, segment_hits_sphere};
+use lunco_celestial::CelestialBodyRegistry;
 
 /// Speed of light in vacuum, m/s — the SI definition (exact).
 pub const SPEED_OF_LIGHT_M_PER_S: f64 = 299_792_458.0;
@@ -1615,7 +1615,7 @@ mod tests {
                     rotation: DQuat::IDENTITY,
                     local: pos,
                     horizon: crate::pose::Horizon::Surface {
-                        body: crate::ephemeris_id::MOON,
+                        body: lunco_celestial::ephemeris_id::MOON,
                         up: DVec3::Y,
                     },
                 },
@@ -2040,7 +2040,7 @@ mod tests {
                     rotation: DQuat::IDENTITY,
                     local: DVec3::ZERO,
                     horizon: crate::pose::Horizon::Surface {
-                        body: crate::ephemeris_id::MOON,
+                        body: lunco_celestial::ephemeris_id::MOON,
                         up: DVec3::Y,
                     },
                 },
@@ -2118,7 +2118,7 @@ mod tests {
                 rotation: DQuat::IDENTITY,
                 local: DVec3::new(10.0, 0.0, 0.0),
                 horizon: crate::pose::Horizon::Surface {
-                    body: crate::ephemeris_id::MOON,
+                    body: lunco_celestial::ephemeris_id::MOON,
                     up: DVec3::Y,
                 },
             },
@@ -2150,7 +2150,7 @@ mod tests {
             rotation: DQuat::from_xyzw(q.x as f64, q.y as f64, q.z as f64, q.w as f64),
             local: pos,
             horizon: crate::pose::Horizon::Surface {
-                body: crate::ephemeris_id::MOON,
+                body: lunco_celestial::ephemeris_id::MOON,
                 up: DVec3::Y,
             },
         }

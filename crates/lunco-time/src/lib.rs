@@ -7,7 +7,7 @@
 //! the derived [`WorldTime`] view that consumers read.
 //!
 //! The load-bearing rule is invariant 1 — **derive, never accumulate**. The old
-//! `epoch += Δt` (`lunco-celestial/src/clock.rs`) drifted, was frame-rate
+//! `epoch += Δt` (the former celestial clock) drifted, was frame-rate
 //! dependent and could not seek; here `epoch = epoch0 + (tick − tick0)/86400` is
 //! an exact pure function of the integer tick.
 //!

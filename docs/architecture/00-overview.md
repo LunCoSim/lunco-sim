@@ -95,7 +95,8 @@ Apps (luncosim, luncosim-server, lunica)
    │     lunco-storage    ← I/O backend (read/write only)
    │          │
    │          ▼
-   ├── lunco-core         ← f64 math foundation, Mutation<P> command substrate, fundamentals
+   ├── lunco-core         ← dependency-light engine substrate, Mutation<P> command substrate, fundamentals
+   ├── lunco-spatial      ← BigSpace shell, f64 coordinate conversion, and spatial invariants
    └── lunco-core-session ← session, authority, and prediction layer above core
 ```
 

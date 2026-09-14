@@ -184,7 +184,7 @@ fn clear_unresolved_local_gravity(
 pub fn compute_local_gravity(
     mut commands: Commands,
     gravity: Res<Gravity>,
-    active_frame: Option<Res<lunco_core::ActivePhysicsFrame>>,
+    active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
     q_bodies: Query<Ref<GravityProvider>>,
     mut removed_providers: RemovedComponents<GravityProvider>,
     mut removed_body_links: RemovedComponents<GravityBody>,
@@ -215,7 +215,7 @@ pub fn compute_local_gravity(
         || provider_changed
         || body_link_removed;
     let frame_rotation = active_frame.as_deref().and_then(|frame| {
-        lunco_core::coords::world_pose(frame.0, &q_parents, &q_grids, &q_spatial)
+        lunco_spatial::coords::world_pose(frame.0, &q_parents, &q_grids, &q_spatial)
             .ok()
             .map(|(_, rotation)| rotation.0)
     });
@@ -244,12 +244,13 @@ pub fn compute_local_gravity(
                     continue;
                 };
                 let Some((entity_world, _)) =
-                    lunco_core::coords::world_pose(entity, &q_parents, &q_grids, &q_spatial).ok()
+                    lunco_spatial::coords::world_pose(entity, &q_parents, &q_grids, &q_spatial)
+                        .ok()
                 else {
                     clear_unresolved_local_gravity(&mut commands, entity, existing);
                     continue;
                 };
-                let Some((body_world, body_rotation)) = lunco_core::coords::world_pose(
+                let Some((body_world, body_rotation)) = lunco_spatial::coords::world_pose(
                     body_link.body_entity,
                     &q_parents,
                     &q_grids,
@@ -653,7 +654,7 @@ register_commands!(on_set_environment_light);
 
 /// Registers environment components, computation, and consumption systems.
 ///
-/// Add after [`lunco_celestial::GravityPlugin`]. Ordering in `FixedUpdate`:
+/// Add after [`lunco_celestial_spatial::GravityPlugin`]. Ordering in `FixedUpdate`:
 /// 1. [`EnvironmentSet::Compute`] — writes `LocalGravity` (and future `Local*`)
 /// 2. [`EnvironmentSet::Apply`] — applies gravity forces to Avian RigidBodies
 pub struct EnvironmentPlugin;
@@ -875,7 +876,7 @@ mod tests {
         let frame = app
             .world_mut()
             .spawn((
-                lunco_core::WorldGridConfig::default().grid(),
+                lunco_spatial::WorldGridConfig::default().grid(),
                 Transform::from_rotation(Quat::from_rotation_z(0.8)),
                 GlobalTransform::default(),
             ))
@@ -888,7 +889,7 @@ mod tests {
                 ChildOf(frame),
             ))
             .id();
-        app.insert_resource(lunco_core::ActivePhysicsFrame(frame));
+        app.insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
 
         app.update();
 

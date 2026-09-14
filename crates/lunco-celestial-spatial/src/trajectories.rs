@@ -1,5 +1,4 @@
-use crate::ephemeris::{EphemerisProvider, EphemerisResource};
-use crate::registry::{BodyDescriptor, CelestialBodyRegistry, ReferenceFrame};
+use crate::ReferenceFrameIndex;
 use bevy::asset::RenderAssetUsages;
 use bevy::math::DVec3;
 use bevy::prelude::*;
@@ -7,6 +6,8 @@ use bevy::tasks::Task;
 use bevy_mesh::PrimitiveTopology;
 use big_space::prelude::CellCoord;
 use futures_lite::future;
+use lunco_celestial::ephemeris::{EphemerisProvider, EphemerisResource};
+use lunco_celestial::{BodyDescriptor, CelestialBodyRegistry, ReferenceFrame};
 use lunco_time::WorldTime;
 use std::sync::Arc;
 
@@ -41,8 +42,8 @@ pub enum TrajectoryFrame {
 impl Default for TrajectoryView {
     fn default() -> Self {
         Self {
-            tracked_id: crate::ephemeris_id::EARTH,
-            reference_id: crate::ephemeris_id::SUN,
+            tracked_id: lunco_celestial::ephemeris_id::EARTH,
+            reference_id: lunco_celestial::ephemeris_id::SUN,
             frame: TrajectoryFrame::Inertial,
             color: LinearRgba::WHITE,
             is_visible: true,
@@ -445,7 +446,7 @@ fn sample_trajectory(
         ) else {
             return Err(TrajectorySampleError::MissingAnchor);
         };
-        let anchor = crate::coords::ecliptic_to_bevy(target - reference).raw();
+        let anchor = lunco_celestial::coords::ecliptic_to_bevy(target - reference).raw();
         if !anchor.is_finite() {
             return Err(TrajectorySampleError::NonFiniteSample);
         }
@@ -462,13 +463,14 @@ fn sample_trajectory(
         ) else {
             return Ok(());
         };
-        let mut relative = crate::coords::ecliptic_to_bevy(target - reference).raw();
+        let mut relative = lunco_celestial::coords::ecliptic_to_bevy(target - reference).raw();
         if view.frame == TrajectoryFrame::BodyFixed {
             // The IAU model is the sole owner of the body-fixed conversion.
             let Some(body_descriptor) = body_descriptor else {
                 return Err(TrajectorySampleError::MissingBodyDescriptor);
             };
-            relative = crate::geo::body_rotation(body_descriptor, jd).inverse() * relative;
+            relative =
+                lunco_celestial::geo::body_rotation(body_descriptor, jd).inverse() * relative;
         }
         let point = relative - anchor;
         if !point.is_finite() {
@@ -582,7 +584,7 @@ fn spawn_trajectory_update_task(
             Without<TrajectoryAlphaTask>,
         ),
     >,
-    frame_index: Res<crate::ReferenceFrameIndex>,
+    frame_index: Res<ReferenceFrameIndex>,
     q_domains: Query<&lunco_time::TimeDomain>,
 ) {
     let celestial_domain = clocks
@@ -726,7 +728,7 @@ fn spawn_trajectory_update_task(
 
 fn handle_trajectory_tasks(
     mut commands: Commands,
-    frame_index: Res<crate::ReferenceFrameIndex>,
+    frame_index: Res<ReferenceFrameIndex>,
     ephemeris: Option<Res<EphemerisResource>>,
     mut q_tasks: Query<(
         Entity,
@@ -1329,7 +1331,7 @@ fn trajectory_visibility_system(
 
 fn trajectory_alignment_system(
     mut commands: Commands,
-    frame_index: Res<crate::ReferenceFrameIndex>,
+    frame_index: Res<ReferenceFrameIndex>,
     q_grids: Query<&big_space::prelude::Grid>,
     q_parents: Query<&ChildOf>,
     // Trajectory views are the only mutable spatial entities in this system.
@@ -1413,7 +1415,7 @@ fn trajectory_alignment_system(
                             center: view.reference_id,
                         })
                         .and_then(|reference_grid| {
-                            lunco_core::coords::pose_in_grid(
+                            lunco_spatial::coords::pose_in_grid(
                                 f_entity,
                                 reference_grid,
                                 &q_parents,
@@ -1466,7 +1468,7 @@ fn trajectory_alignment_system(
             let next_transform =
                 Transform::from_translation(new_translation).with_rotation(Quat::IDENTITY);
             if !is_current_parent {
-                lunco_core::attach::migrate_to_grid(
+                lunco_spatial::attach::migrate_to_grid(
                     &mut commands,
                     v_entity,
                     parent_ent,
@@ -1538,7 +1540,7 @@ fn trajectory_frame_assignment_changed(
             )>,
         ),
     >,
-    frame_index: Res<crate::ReferenceFrameIndex>,
+    frame_index: Res<ReferenceFrameIndex>,
 ) -> bool {
     frame_index.is_changed() || !changed.is_empty()
 }

@@ -70,7 +70,7 @@ fn probe_error_m(chain: &Chain) -> f64 {
 /// tick; the local surface pose must not be changed by that upstream motion.
 fn probe_render_pos(chain: &Chain, drift: DVec3) -> DVec3 {
     let emb_in_solar = EMB_IN_SOLAR + drift;
-    let root = lunco_core::WorldGridConfig::default().grid();
+    let root = lunco_spatial::WorldGridConfig::default().grid();
     let solar = Grid::new(chain.solar.0, chain.solar.1);
     let emb = Grid::new(chain.emb.0, chain.emb.1);
     let body = Grid::new(chain.body.0, chain.body.1);
@@ -84,7 +84,7 @@ fn probe_render_pos(chain: &Chain, drift: DVec3) -> DVec3 {
     let (surf_cell, surf_tf) = body.translation_to_grid(SITE_IN_MOON);
 
     let (solar_cell, solar_tf) = root.translation_to_grid(DVec3::ZERO);
-    let world_grid = lunco_core::WorldGridConfig::default().grid();
+    let world_grid = lunco_spatial::WorldGridConfig::default().grid();
     let site_in_world = EMB_IN_SOLAR + drift + MOON_IN_EMB + SITE_IN_MOON;
     let (origin_cell, origin_translation) = world_grid.translation_to_grid(site_in_world);
 
@@ -116,7 +116,7 @@ fn probe_render_pos(chain: &Chain, drift: DVec3) -> DVec3 {
         // complete f64 pose into this grid and updates its cell/local split.
         origin = world
             .spawn((
-                lunco_core::OriginAnchor,
+                lunco_spatial::OriginAnchor,
                 world_grid.clone(),
                 Transform::default(),
                 GlobalTransform::default(),
@@ -155,7 +155,7 @@ fn probe_render_pos(chain: &Chain, drift: DVec3) -> DVec3 {
 
         let world_grid_e = world
             .spawn((
-                lunco_core::WorldGrid,
+                lunco_spatial::WorldGrid,
                 Transform::default(),
                 GlobalTransform::default(),
                 CellCoord::default(),

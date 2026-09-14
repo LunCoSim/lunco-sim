@@ -35,8 +35,10 @@ lunco-settings = { path = "../lunco-settings" }
 avian3d = { workspace = true }
 big_space.workspace = true
 lunco-core = { path = "../lunco-core" }
+lunco-spatial = { path = "../lunco-spatial" }
 lunco-physics = { path = "../lunco-physics" }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
+lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }
 lunco-time = { path = "../lunco-time" }
 lunco-doc = { path = "../lunco-doc" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }

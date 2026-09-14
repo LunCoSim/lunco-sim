@@ -459,7 +459,7 @@ fn on_runtime_ui_action(
     q_avatar: Query<Entity, (With<lunco_core::Avatar>, With<lunco_core::LocalAvatar>)>,
     q_bodies: Query<(Entity, &lunco_core::CelestialBody)>,
     q_tags: Query<&bevy_hui::prelude::Tags>,
-    orbital_pin: Option<Res<lunco_celestial::OrbitalViewPin>>,
+    orbital_pin: Option<Res<lunco_celestial_spatial::OrbitalViewPin>>,
     camera_status: Option<Res<CameraSelectionStatus>>,
     mut commands: Commands,
 ) {

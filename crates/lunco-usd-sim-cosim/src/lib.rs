@@ -26,10 +26,10 @@ use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_core::telemetry::{ChannelSource, Parameter};
 use lunco_core::{
-    on_command, register_commands, Command, DiagnosticSeverity, OriginAnchor, RuntimeDiagnostic,
+    on_command, register_commands, Command, DiagnosticSeverity, RuntimeDiagnostic,
     RuntimeDiagnostics, SceneTransition, SceneTransitionAdmission, SceneTransitionAdmitted,
     SceneTransitionCompleted, SceneTransitionCoordinator, SceneTransitionFailed,
-    SceneTransitionIntent, SceneTransitionRequest, WorldGrid,
+    SceneTransitionIntent, SceneTransitionRequest,
 };
 use lunco_cosim::ConnectionBinding;
 use lunco_cosim_core::{
@@ -53,6 +53,7 @@ use lunco_scripting::{
     doc::ScriptedModel, scenario::ScenarioDriver, world_bridge::RhaiScenarioRuntime,
     SceneOwnedScript, ScriptRegistry,
 };
+use lunco_spatial::{OriginAnchor, WorldGrid};
 use lunco_usd_bevy_core::read::read_authored_bool_strict;
 use lunco_usd_bevy_core::read::UsdReadObject;
 use lunco_usd_bevy_core::{
@@ -4018,11 +4019,11 @@ pub fn spawn_scene_root_with_stage(
     // the first scene load and returns the same grid on every reload — so the root
     // is never duplicated and never absent. Replaces the old "first `Grid` found"
     // heuristic, which was ambiguous once celestial / preview grids also existed.
-    let grid = lunco_core::ensure_world_root(world);
+    let grid = lunco_spatial::ensure_world_root(world);
     // Scene mounting owns the physics-frame binding. The canonical WorldGrid
     // is the scene frame; WorldRoot is only the persistent BigSpace shell and
     // must never become an implicit Avian frame.
-    world.insert_resource(lunco_core::ActivePhysicsFrame(grid));
+    world.insert_resource(lunco_spatial::ActivePhysicsFrame(grid));
 
     // The scene root is the frame for its top-level USD prims as well as the
     // scene identity. Making it a nested Grid lets each top-level physical or
@@ -4058,7 +4059,7 @@ pub fn spawn_scene_root_with_stage(
             InheritedVisibility::default(),
             ViewVisibility::default(),
             CellCoord::default(),
-            lunco_core::GridAnchor,
+            lunco_spatial::GridAnchor,
             ChildOf(grid),
         ))
         .id();
@@ -4199,8 +4200,10 @@ impl Plugin for UsdSimCosimPlugin {
             // Link port names are derived from the classes of the other authored
             // LinkNodes. A node arriving after its wire must therefore reopen the
             // same binding transaction as any other projected endpoint.
-            .add_observer(request_binding_epoch::<lunco_celestial::link::LinkNode>)
-            .add_observer(request_binding_epoch_on_remove::<lunco_celestial::link::LinkNode>)
+            .add_observer(request_binding_epoch::<lunco_celestial_spatial::link::LinkNode>)
+            .add_observer(
+                request_binding_epoch_on_remove::<lunco_celestial_spatial::link::LinkNode>,
+            )
             .add_observer(request_binding_epoch::<ModelicaModel>)
             .add_observer(request_binding_epoch_on_remove::<ModelicaModel>)
             .add_observer(lunco_usd_sim_domain::on_remove_generated_source)

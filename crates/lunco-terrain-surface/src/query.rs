@@ -32,7 +32,7 @@ use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_api::schema::{ApiErrorCode, ApiResponse};
-use lunco_core::coords::GridPos;
+use lunco_spatial::coords::GridPos;
 use lunco_terrain_core::{
     field_map, normal_at_bounded, AspectField, BoundedHeightSource, ElevationField, SlopeField,
     Square, SurfaceField,

@@ -15,6 +15,7 @@
 use crate::trajectories::{
     TrajectoryFrame, TrajectoryPath, TrajectoryRuntimeState, TrajectoryView,
 };
+use crate::ReferenceFrameIndex;
 use bevy::prelude::*;
 use big_space::prelude::CellCoord;
 use lunco_render::{PbrLook, WorldLabel};
@@ -420,7 +421,7 @@ pub fn spawn_declared_missions(
 
 pub fn update_spacecraft_position_system(
     world: Res<lunco_time::WorldTime>,
-    ephemeris: Option<Res<crate::ephemeris::EphemerisResource>>,
+    ephemeris: Option<Res<lunco_celestial::ephemeris::EphemerisResource>>,
     q_grids: Query<&big_space::prelude::Grid>,
     mut q_spacecraft: Query<(&Spacecraft, &mut Transform, &mut CellCoord, &ChildOf)>,
 ) {
@@ -435,7 +436,7 @@ pub fn update_spacecraft_position_system(
     // panels — the per-craft `continue` below became this early-out.
     let p_sun = ephemeris
         .provider
-        .global_position(crate::ephemeris_id::SUN, jd);
+        .global_position(lunco_celestial::ephemeris_id::SUN, jd);
     for (sc, mut tf, mut cell, child_of) in q_spacecraft.iter_mut() {
         // P8(d): a spacecraft whose ephemeris CSV failed to fetch used to be placed at its
         // reference body's centre — inside the Earth, looking exactly like a real position.
@@ -446,7 +447,7 @@ pub fn update_spacecraft_position_system(
         ) else {
             continue;
         };
-        let rel_pos = crate::coords::ecliptic_to_bevy(p_target - p_ref).raw();
+        let rel_pos = lunco_celestial::coords::ecliptic_to_bevy(p_target - p_ref).raw();
 
         // Split through the parent (reference) grid so the spacecraft stays
         // within one cell — precise placement instead of a raw f32 at up to
@@ -472,7 +473,7 @@ pub fn update_spacecraft_position_system(
         let Some(p_sun) = p_sun else {
             continue;
         };
-        let to_sun = crate::coords::ecliptic_to_bevy(p_sun - p_target)
+        let to_sun = lunco_celestial::coords::ecliptic_to_bevy(p_sun - p_target)
             .raw()
             .as_vec3()
             .normalize_or_zero();
@@ -490,7 +491,7 @@ pub fn update_spacecraft_position_system(
 
 pub fn spacecraft_alignment_system(
     mut commands: Commands,
-    frame_index: Res<crate::ReferenceFrameIndex>,
+    frame_index: Res<ReferenceFrameIndex>,
     q_sc: Query<(Entity, &Spacecraft, &Transform, Option<&ChildOf>)>,
     q_children: Query<&Children>,
 ) {
@@ -510,7 +511,7 @@ pub fn spacecraft_alignment_system(
                     rotation: transform.rotation,
                     scale: transform.scale,
                 };
-                lunco_core::attach::migrate_to_grid(
+                lunco_spatial::attach::migrate_to_grid(
                     &mut commands,
                     sc_entity,
                     f_entity,

@@ -234,7 +234,7 @@ impl Default for RunScenario {
 fn on_run_scenario(
     _t: On<RunScenario>,
     entities: Query<Entity>,
-    world_root: Query<Entity, With<lunco_core::WorldRoot>>,
+    world_root: Query<Entity, With<lunco_spatial::WorldRoot>>,
     mut registry: ResMut<ScriptRegistry>,
     q_existing: Query<&ScriptedModel>,
     guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
@@ -266,7 +266,7 @@ fn on_run_scenario(
 fn on_run_scenario_asset(
     trigger: On<RunScenarioAsset>,
     entities: Query<Entity>,
-    world_root: Query<Entity, With<lunco_core::WorldRoot>>,
+    world_root: Query<Entity, With<lunco_spatial::WorldRoot>>,
     asset_server: Res<AssetServer>,
     guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
     mut commands: Commands,
@@ -309,7 +309,7 @@ fn on_run_scenario_asset(
 fn resolve_scenario_target(
     requested: Entity,
     entities: &Query<Entity>,
-    world_root: &Query<Entity, With<lunco_core::WorldRoot>>,
+    world_root: &Query<Entity, With<lunco_spatial::WorldRoot>>,
 ) -> Result<Entity, String> {
     if requested != Entity::PLACEHOLDER {
         if entities.get(requested).is_ok() {

@@ -14,6 +14,7 @@ big_space.workspace = true
 lunco-api = { path = "../lunco-api" }
 lunco-assets = { path = "../lunco-assets" }
 lunco-core = { path = "../lunco-core" }
+lunco-spatial = { path = "../lunco-spatial" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-materials = { path = "../lunco-materials" }
 lunco-scene-validation = { path = "../lunco-scene-validation" }

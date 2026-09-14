@@ -7,7 +7,7 @@
 use bevy::prelude::*;
 use big_space::plugin::BigSpaceMinimalPlugins;
 use big_space::prelude::*;
-use lunco_core::attach::migrate_to_grid;
+use lunco_spatial::attach::migrate_to_grid;
 
 fn spawn_grid(world: &mut World) -> Entity {
     world

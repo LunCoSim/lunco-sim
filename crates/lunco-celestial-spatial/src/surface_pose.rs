@@ -18,8 +18,9 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 
-use crate::geo::{body_fixed_to_geodetic, Geodetic, GeodeticAnchor, SiteAnchor};
-use crate::registry::{CelestialBodyRegistry, ReferenceFrame, ReferenceFrameIndex};
+use crate::frame_index::ReferenceFrameIndex;
+use lunco_celestial::geo::{body_fixed_to_geodetic, Geodetic, GeodeticAnchor, SiteAnchor};
+use lunco_celestial::{CelestialBodyRegistry, ReferenceFrame};
 
 /// Position in the scene's authored topocentric frame.
 ///
@@ -76,13 +77,13 @@ pub fn resolve_surface_pose<F: QueryFilter>(
         entity_common_rotation,
         site_common_position,
         site_common_rotation,
-    ) = lunco_core::coords::common_grid_poses(entity, site, parents, grids, spatial)?;
+    ) = lunco_spatial::coords::common_grid_poses(entity, site, parents, grids, spatial)?;
     let common_to_site = site_common_rotation.inverse();
     let site_position = common_to_site * (entity_common_position - site_common_position);
     let site_rotation = (common_to_site * entity_common_rotation).normalize();
 
     let (body_fixed_position, body_fixed_rotation) =
-        lunco_core::coords::pose_in_grid(entity, body_grid, parents, grids, spatial)?;
+        lunco_spatial::coords::pose_in_grid(entity, body_grid, parents, grids, spatial)?;
 
     Some(SurfacePose {
         site,
@@ -134,16 +135,13 @@ impl SurfacePoseQuery<'_, '_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geo::{geodetic_to_body_fixed, LocalTangentFrame};
-    use crate::registry::{update_reference_frame_index, MOON_MEAN_RADIUS_M};
+    use crate::frame_index::update_reference_frame_index;
+    use lunco_celestial::geo::{geodetic_to_body_fixed, LocalTangentFrame};
+    use lunco_celestial::MOON_MEAN_RADIUS_M;
 
     fn scene_to_body_rotation(anchor: &Geodetic) -> DQuat {
         let tangent = LocalTangentFrame::body_fixed(anchor, MOON_MEAN_RADIUS_M);
-        DQuat::from_mat3(&bevy::math::DMat3::from_cols(
-            tangent.east,
-            tangent.up,
-            -tangent.north,
-        ))
+        tangent.scene_to_frame_rotation()
     }
 
     fn read_pose(app: &mut App, entity: Entity) -> Option<SurfacePose> {
@@ -163,14 +161,14 @@ mod tests {
         let root = app
             .world_mut()
             .spawn((
-                lunco_core::WorldGridConfig::default().grid(),
+                lunco_spatial::WorldGridConfig::default().grid(),
                 GlobalTransform::default(),
             ))
             .id();
         let inertial = app
             .world_mut()
             .spawn((
-                lunco_core::WorldGridConfig::default().grid(),
+                lunco_spatial::WorldGridConfig::default().grid(),
                 CellCoord::new(75_000_000, -4_000, 11_000),
                 Transform::from_rotation(Quat::from_rotation_z(0.4)),
                 ChildOf(root),
@@ -180,9 +178,9 @@ mod tests {
             .world_mut()
             .spawn((
                 ReferenceFrame::BodyFixed {
-                    body: crate::ephemeris_id::MOON,
+                    body: lunco_celestial::ephemeris_id::MOON,
                 },
-                lunco_core::WorldGridConfig::default().grid(),
+                lunco_spatial::WorldGridConfig::default().grid(),
                 CellCoord::new(192_000, 2_000, -8_000),
                 Transform::from_rotation(Quat::from_rotation_y(0.7)),
                 ChildOf(inertial),
@@ -191,7 +189,7 @@ mod tests {
         let surface_grid = app
             .world_mut()
             .spawn((
-                lunco_core::WorldGridConfig::default().grid(),
+                lunco_spatial::WorldGridConfig::default().grid(),
                 CellCoord::ZERO,
                 Transform::IDENTITY,
                 ChildOf(body_grid),
@@ -208,7 +206,7 @@ mod tests {
             .spawn((
                 SiteAnchor,
                 GeodeticAnchor {
-                    body: crate::ephemeris_id::MOON,
+                    body: lunco_celestial::ephemeris_id::MOON,
                     geodetic: anchor,
                 },
                 site_cell,
@@ -279,15 +277,15 @@ mod tests {
         let root = app
             .world_mut()
             .spawn((
-                lunco_core::WorldGridConfig::default().grid(),
+                lunco_spatial::WorldGridConfig::default().grid(),
                 GlobalTransform::default(),
             ))
             .id();
         app.world_mut().spawn((
             ReferenceFrame::BodyFixed {
-                body: crate::ephemeris_id::MOON,
+                body: lunco_celestial::ephemeris_id::MOON,
             },
-            lunco_core::WorldGridConfig::default().grid(),
+            lunco_spatial::WorldGridConfig::default().grid(),
             CellCoord::ZERO,
             Transform::IDENTITY,
             ChildOf(root),
@@ -296,7 +294,7 @@ mod tests {
             app.world_mut().spawn((
                 SiteAnchor,
                 GeodeticAnchor {
-                    body: crate::ephemeris_id::MOON,
+                    body: lunco_celestial::ephemeris_id::MOON,
                     geodetic: Geodetic::new(0.0, longitude, 0.0),
                 },
                 Transform::IDENTITY,

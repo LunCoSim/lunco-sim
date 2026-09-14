@@ -3,9 +3,9 @@
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use lunco_core::coords::GridPos;
 use lunco_core::{on_command, register_commands, Command, SceneViewport};
 use lunco_render::SceneCamera;
+use lunco_spatial::coords::GridPos;
 use lunco_usd_bevy_core::UsdStageAsset;
 use lunco_usd_bevy_core::{canonical::CanonicalStages, stage_default_prim};
 use std::collections::HashMap;
@@ -393,7 +393,7 @@ pub fn update_spawn_ghost(
     // ONE complete ray crossing, at the top. The site grid may be rotated, so
     // origin and direction must cross the frame boundary together.
     let Some((origin_grid, direction_grid)) =
-        surface.ray_to_grid(lunco_core::coords::RenderPos(origin), direction)
+        surface.ray_to_grid(lunco_spatial::coords::RenderPos(origin), direction)
     else {
         if diagnostics.enabled {
             info!(cursor = ?cursor, "[spawn-trace] ghost rejected: active physics frame unavailable");
@@ -478,7 +478,7 @@ pub fn update_spawn_ghost(
             );
         }
         if let Some((ghost, _)) = q_ghost.iter().next() {
-            lunco_core::attach::migrate_to_grid(
+            lunco_spatial::attach::migrate_to_grid(
                 &mut commands,
                 ghost,
                 grid_ent,
@@ -635,7 +635,7 @@ pub fn on_scene_click_spawn(
     // fit, in the SAME frame, so an asset always lands where its ghost was shown.
     let origin = ray.origin.as_dvec3();
     let Some((origin_grid, direction_grid)) =
-        surface.ray_to_grid(lunco_core::coords::RenderPos(origin), ray.direction)
+        surface.ray_to_grid(lunco_spatial::coords::RenderPos(origin), ray.direction)
     else {
         if diagnostics.enabled {
             info!("[spawn-trace] click rejected: active physics frame unavailable");

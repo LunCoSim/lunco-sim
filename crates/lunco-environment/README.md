@@ -138,7 +138,7 @@ set, `apply_gravity_to_rigid_bodies` + `inject_local_gravity_into_cosim` in
 presentation half. Add it once during app setup:
 
 ```rust
-app.add_plugins(lunco_celestial::GravityPlugin);
+app.add_plugins(lunco_celestial_spatial::GravityPlugin);
 app.add_plugins(lunco_environment::EnvironmentPlugin);
 ```
 
