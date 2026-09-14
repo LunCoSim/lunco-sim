@@ -1522,6 +1522,16 @@ pub fn clock_snapshot<B: ValueBuilder>(b: &B) -> B::Value {
                     time.is_paused(),
                 )
             });
+        let physics_contract = world
+            .get_resource::<lunco_physics::PhysicsDeterminism>()
+            .copied();
+        let physics_contract_error = if physics_contract.is_none() {
+            let error = "PhysicsDeterminism is absent; physics admission is not enforceable";
+            report_clock_contract_fault(world, "physics-determinism-missing", error.to_owned());
+            error
+        } else {
+            ""
+        };
         let world_time = world
             .get_resource::<WorldTime>()
             .copied()
@@ -1587,6 +1597,26 @@ pub fn clock_snapshot<B: ValueBuilder>(b: &B) -> B::Value {
             (
                 "physics_paused".to_owned(),
                 b.bool(physics_snapshot.is_some_and(|(_, _, paused)| paused)),
+            ),
+            (
+                "physics_deterministic".to_owned(),
+                b.bool(physics_contract.is_some_and(|contract| contract.deterministic)),
+            ),
+            (
+                "physics_compute_threads".to_owned(),
+                b.int(
+                    physics_contract
+                        .and_then(|contract| contract.compute_threads)
+                        .map_or(-1, |value| value as i64),
+                ),
+            ),
+            (
+                "physics_contract_ok".to_owned(),
+                b.bool(physics_contract.is_some_and(|contract| contract.deterministic)),
+            ),
+            (
+                "physics_contract_error".to_owned(),
+                b.string(physics_contract_error),
             ),
             ("world_sim_s".to_owned(), b.float(world_time.sim_secs)),
             ("world_met_s".to_owned(), b.float(world_time.met_secs)),

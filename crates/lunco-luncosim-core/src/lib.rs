@@ -162,7 +162,7 @@ pub const SANDBOX_GRAVITY: lunco_environment::Gravity = lunco_environment::Gravi
 /// makes that boundary structural and fail-closed.
 pub fn default_plugins() -> bevy::app::PluginGroupBuilder {
     let group = MinimalPlugins
-        .disable::<bevy::app::ScheduleRunnerPlugin>()
+        .build()
         .add(bevy::app::PanicHandlerPlugin)
         .add(bevy::log::LogPlugin {
             filter: "wgpu=error,naga=warn,cranelift=warn,cranelift_jit=warn,cranelift_codegen=warn,diffsol=warn,info".into(),
@@ -194,8 +194,8 @@ pub fn default_plugins() -> bevy::app::PluginGroupBuilder {
         .add_after::<AssetPlugin>(HeadlessAssetTypePlugin);
 
     // BigSpace owns the transform propagation chain for the simulation world;
-    // the ordinary Bevy transform plugin must stay out of this composition.
-    group.build().disable::<TransformPlugin>()
+    // the ordinary Bevy transform plugin is deliberately not added here.
+    group.build()
 }
 
 /// Build the production headless simulation app with an optional fixed
@@ -232,6 +232,9 @@ pub fn build_headless_app_with_threads(compute_threads: Option<usize>) -> App {
         },
     });
     app.add_plugins(plugins);
+    app.insert_resource(lunco_physics::PhysicsDeterminism::from_compute_threads(
+        compute_threads,
+    ));
     app.add_plugins(log_dedup::LogDedupPlugin);
     app.add_plugins(LunCoSimCorePlugin { headless: true });
     app
@@ -239,7 +242,10 @@ pub fn build_headless_app_with_threads(compute_threads: Option<usize>) -> App {
 
 /// Build the normal headless app with the production schedule runner.
 pub fn build_headless_app() -> App {
-    let mut app = build_headless_app_with_threads(None);
+    // Production headless physics is an acceptance/replay surface. Keep its
+    // compute order explicit; callers that need the multi-threaded diagnostic
+    // matrix must use `build_headless_app_with_threads(None)` deliberately.
+    let mut app = build_headless_app_with_threads(Some(1));
     app.add_plugins(LunCoSimHeadlessPlugin::default());
     app
 }
@@ -262,7 +268,9 @@ pub fn run_headless() -> AppExit {
     } else {
         lunco_core::SimulationExecutionMode::Realtime
     };
-    let mut app = build_headless_app_with_threads(None);
+    // The server is also a deterministic simulation authority by default.
+    // Multi-threaded order studies remain an explicit scene-test override.
+    let mut app = build_headless_app_with_threads(Some(1));
 
     #[cfg(all(
         feature = "api-transport",

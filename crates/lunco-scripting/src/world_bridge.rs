@@ -3512,6 +3512,9 @@ mod tests {
         world.insert_resource(virtual_time);
         world.insert_resource(real);
         world.insert_resource(Time::<lunco_physics::Physics>::default());
+        world.insert_resource(lunco_physics::PhysicsDeterminism::from_compute_threads(
+            Some(1),
+        ));
         world.insert_resource(lunco_core::SimTick(42));
         world.insert_resource(lunco_time::WorldTime {
             epoch_jd: 2_451_545.5,
@@ -3535,12 +3538,46 @@ mod tests {
                 if c.sim_tick == 42 && c.fixed_dt_s > 0.016 &&
                    c.world_sim_s == 0.7 && c.barrier_held &&
                    c.barrier_active_participants == 3 &&
+                   c.physics_deterministic && c.physics_compute_threads == 1 &&
                    c.wall_time_deterministic == false &&
                    c.deterministic_master == "sim_tick" { 1 } else { 0 }
             "#,
         )
         .unwrap();
         assert_eq!(value.trim(), "1", "clock snapshot was {value}");
+    }
+
+    #[test]
+    fn clock_snapshot_reports_missing_physics_admission_loudly() {
+        use bevy::prelude::*;
+        use bevy::time::{Fixed, Time, Virtual};
+
+        let mut world = World::new();
+        world.insert_resource(Time::<Fixed>::from_hz(60.0));
+        world.insert_resource(Time::<Virtual>::default());
+        world.insert_resource(lunco_core::SimTick(0));
+        world.insert_resource(lunco_core::RuntimeFaults::default());
+
+        let value = super::eval_with_world(
+            &mut world,
+            r#"
+                let c = clock_snapshot();
+                if c.physics_contract_ok == false &&
+                   c.physics_deterministic == false &&
+                   c.physics_contract_error.contains("absent") { 1 } else { 0 }
+            "#,
+        )
+        .unwrap();
+        assert_eq!(value.trim(), "1", "clock snapshot was {value}");
+        assert_eq!(
+            world
+                .resource::<lunco_core::RuntimeFaults>()
+                .first
+                .as_ref()
+                .unwrap()
+                .kind,
+            "physics-determinism-missing"
+        );
     }
 
     #[test]
