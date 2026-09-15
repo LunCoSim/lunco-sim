@@ -79,6 +79,11 @@ name convention, or ECS-only grouping state is introduced.
   The projected preview root carries `UsdPreviewOnly`; possession, physics, and
   operator-exposure systems use that USD-owned marker to keep preview descendants
   render-only, while live entities require `UsdSceneRoot` ownership.
+  `NewDocument` starts every USD stage with explicit `upAxis = "Y"` and
+  `metersPerUnit = 1.0`; component authors therefore begin in the same
+  canonical metre frame used by typed transform operations. Imported
+  non-canonical stages remain supported, but their metrics must be visible and
+  verified before authoring.
 - A `UsdPreviewSession` owns one projected composed stage, scene root, and
   render layer. A `UsdPreviewView` owns only one camera, light, render target,
   projection mode, orbit pose, and navigation scale over that session.
@@ -167,6 +172,64 @@ name convention, or ECS-only grouping state is introduced.
   session's projected stage and only add presentation cameras and targets.
 - ECS entities and view-models are projections. They must not become a second
   source of component topology or authored values.
+
+### Automatic component-to-assembly refresh
+
+An open component document is the source of truth for its authored geometry,
+datums, parameters, and mount interfaces. An assembly document owns only the
+reference, instance transform, variant choice, and host wiring. Therefore an
+Editor edit is always submitted to the component document selected in the
+focused preview; the assembly is never patched with a flattened copy merely to
+make the current image change.
+
+After the typed operation is accepted, the normal document projection updates
+the component preview. The same projection pass also finds already-loaded
+`UsdStageAsset` recipes containing the changed `twin://` layer, replaces that
+layer's bytes, rebuilds the existing OpenUSD canonical stage, and refreshes
+only that stage's projected entities. This is automatic and bounded to actual
+dependents: unrelated assemblies are not touched, no duplicate geometry is
+created, and no preview is closed or reopened. The `UsdViewportState` and
+session-local `UsdPreviewView` camera/selection are retained, so the user sees
+the edit at the same orbit and zoom. Newly opened instances use the updated
+recipe as well. A malformed dependent composition is reported as a visible
+diagnostic and its previous projection remains in place; it is never silently
+replaced by a guessed or flattened fallback.
+
+File-origin previews inside an open Twin are admitted under that Twin's real
+authority and relative path before a stage is loaded. This keeps live
+dependency matching exact: a component such as
+`components/lander/tank.usda` is keyed as
+`twin://<assigned-twin>/components/lander/tank.usda` in both its own preview
+and every assembly recipe. A synthetic viewport authority is reserved for
+files outside registered Twins. `InspectUsdViewport` exposes each preview's
+`stage_asset_path` and sorted `recipe_layers`, making the dependency closure
+auditable before and after an edit.
+
+The default policy is `propagate`. A Twin may override this local presentation
+decision through the generic Rhai hook registry:
+
+```rhai
+register_hook("usd.component_refresh", "decide_refresh", #"
+    fn decide_refresh(facts) {
+        // facts.changed_layer, facts.dependent_stage,
+        // facts.default_action == "propagate", facts.camera_policy == "preserve"
+        if facts.changed_layer.contains("experimental") {
+            return #{ action: "defer" };
+        }
+        #{ action: "propagate" }
+    }
+"#);
+```
+
+The hook is called once per dependent stage and must return a map with an
+`action` field set to one supported value: `propagate`, `defer`, or `reject`.
+`defer` leaves the
+dependent stage unchanged for an intentional later refresh; `reject` records a
+policy rejection. A hook error, missing `action`, or unknown action is loud and
+conservative: that dependent stage is not rebuilt. Unregistering the hook
+restores the built-in `propagate` policy. This hook controls local editor
+projection only; it does not alter USD ownership, simulation state, physics,
+or saved files.
 
 ### Dynamic shader parameter edits
 

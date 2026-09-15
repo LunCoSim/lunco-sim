@@ -66,6 +66,7 @@ use lunco_usd_sim_cosim::LoadScene;
 use crate::TWIN_SCENE_LOAD_FAILED;
 use lunco_doc::OpenOutcome;
 use lunco_doc_bevy::{DocumentChanged, DocumentRegistry};
+use lunco_hooks::HookValue;
 use lunco_usd_core::commands::EmptyViewportReason;
 use lunco_usd_document::document::UsdOp;
 
@@ -734,7 +735,10 @@ fn refresh_dependent_stage_assets(
     source: &str,
 ) {
     let source_bytes = source.as_bytes().to_vec();
-    let candidates: Vec<(AssetId<UsdStageAsset>, lunco_usd_compose::recipe::StageRecipe)> = {
+    let candidates: Vec<(
+        AssetId<UsdStageAsset>,
+        lunco_usd_compose::recipe::StageRecipe,
+    )> = {
         let assets = world.resource::<Assets<UsdStageAsset>>();
         assets
             .iter()
@@ -743,16 +747,42 @@ fn refresh_dependent_stage_assets(
                     return None;
                 }
                 let recipe = asset.recipe.as_ref()?;
-                recipe.bytes.contains_key(layer_id).then(|| (id, recipe.clone()))
+                recipe
+                    .bytes
+                    .contains_key(layer_id)
+                    .then(|| (id, recipe.clone()))
             })
             .collect()
     };
 
+    info!(
+        "[usd-live] component layer changed: doc={changed_doc} layer={layer_id} dependent_candidates={}",
+        candidates.len()
+    );
+
     for (stage_id, mut recipe) in candidates {
+        match component_refresh_decision(changed_doc, layer_id, stage_id) {
+            ComponentRefreshDecision::Propagate => {}
+            ComponentRefreshDecision::Defer => {
+                info!(
+                    "[usd-live] component refresh deferred by hook for dependent stage {stage_id:?} (layer {layer_id})"
+                );
+                continue;
+            }
+            ComponentRefreshDecision::Reject => {
+                warn!(
+                    "[usd-live] component refresh rejected by hook for dependent stage {stage_id:?} (layer {layer_id})"
+                );
+                continue;
+            }
+        }
         if recipe.bytes.get(layer_id) == Some(&source_bytes) {
+            info!("[usd-live] dependent stage {stage_id:?} already has current layer {layer_id}");
             continue;
         }
-        recipe.bytes.insert(layer_id.to_string(), source_bytes.clone());
+        recipe
+            .bytes
+            .insert(layer_id.to_string(), source_bytes.clone());
         let projection_plan = match UsdStageProjectionPlan::from_recipe(&recipe) {
             Ok(plan) => plan,
             Err(error) => {
@@ -766,7 +796,10 @@ fn refresh_dependent_stage_assets(
         // Keep the async asset cache and the live canonical stage on the same
         // closure.  Future previews opened against this asset therefore see the
         // same component bytes without a process restart or stale fallback.
-        if let Some(asset) = world.resource_mut::<Assets<UsdStageAsset>>().get_mut(stage_id) {
+        if let Some(mut asset) = world
+            .resource_mut::<Assets<UsdStageAsset>>()
+            .get_mut(stage_id)
+        {
             asset.recipe = Some(recipe.clone());
             asset.projection_plan = Arc::new(projection_plan);
         }
@@ -779,7 +812,82 @@ fn refresh_dependent_stage_assets(
             // detached preview camera is owned by `UsdViewportState` and stays
             // exactly where the user left it.
             refresh_scene_visuals(world, stage_id);
+        } else {
+            warn!(
+                "[usd-live] dependent stage {stage_id:?} matched layer {layer_id} but has no canonical stage to rebuild"
+            );
         }
+    }
+}
+
+/// Rhai-overridable decision for a live component refresh.
+///
+/// The default is `propagate`: a component document is authoritative for every
+/// already-mounted stage whose recipe references that `twin://` layer.  A local
+/// policy hook may return `#{action: "propagate"|"defer"|"reject"}`.  Hook
+/// failures and malformed results are loud and conservative: no dependent
+/// stage is rebuilt.  This is a UI/local projection policy, not simulation
+/// state, so the hook is intentionally not required to be deterministic.
+const COMPONENT_REFRESH_POLICY_HOOK: &str = "usd.component_refresh";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ComponentRefreshDecision {
+    Propagate,
+    Defer,
+    Reject,
+}
+
+fn component_refresh_decision(
+    changed_doc: DocumentId,
+    layer_id: &str,
+    dependent_stage: AssetId<UsdStageAsset>,
+) -> ComponentRefreshDecision {
+    let args = [HookValue::map([
+        ("changed_document", HookValue::Int(changed_doc.0 as i64)),
+        ("changed_layer", HookValue::str(layer_id)),
+        (
+            "dependent_stage",
+            HookValue::str(format!("{dependent_stage:?}")),
+        ),
+        ("default_action", HookValue::str("propagate")),
+        ("camera_policy", HookValue::str("preserve")),
+    ])];
+
+    let Some(result) = lunco_hooks::invoke(COMPONENT_REFRESH_POLICY_HOOK, &args) else {
+        return ComponentRefreshDecision::Propagate;
+    };
+
+    let value = match result {
+        Ok(value) => value,
+        Err(error) => {
+            warn!(
+                "[usd-live] hook {COMPONENT_REFRESH_POLICY_HOOK} failed; dependent stage will not refresh: {error}"
+            );
+            return ComponentRefreshDecision::Reject;
+        }
+    };
+    match parse_component_refresh_decision(&value) {
+        Ok(decision) => decision,
+        Err(error) => {
+            warn!(
+                "[usd-live] hook {COMPONENT_REFRESH_POLICY_HOOK} returned invalid policy ({error}); dependent stage will not refresh: {value:?}"
+            );
+            ComponentRefreshDecision::Reject
+        }
+    }
+}
+
+fn parse_component_refresh_decision(
+    value: &HookValue,
+) -> Result<ComponentRefreshDecision, &'static str> {
+    let Some(action) = value.get("action").and_then(HookValue::as_str) else {
+        return Err("expected map with action=propagate|defer|reject");
+    };
+    match action {
+        "propagate" => Ok(ComponentRefreshDecision::Propagate),
+        "defer" => Ok(ComponentRefreshDecision::Defer),
+        "reject" => Ok(ComponentRefreshDecision::Reject),
+        _ => Err("unknown action; expected propagate|defer|reject"),
     }
 }
 
@@ -1882,6 +1990,37 @@ mod tests {
     use lunco_usd_document::document::{LayerId, UsdOp};
 
     const TINY: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n";
+
+    #[test]
+    fn component_refresh_policy_accepts_only_explicit_actions() {
+        assert_eq!(
+            parse_component_refresh_decision(&HookValue::map([(
+                "action",
+                HookValue::str("propagate"),
+            )])),
+            Ok(ComponentRefreshDecision::Propagate)
+        );
+        assert_eq!(
+            parse_component_refresh_decision(&HookValue::map([(
+                "action",
+                HookValue::str("defer"),
+            )])),
+            Ok(ComponentRefreshDecision::Defer)
+        );
+        assert_eq!(
+            parse_component_refresh_decision(&HookValue::map([(
+                "action",
+                HookValue::str("reject"),
+            )])),
+            Ok(ComponentRefreshDecision::Reject)
+        );
+        assert!(parse_component_refresh_decision(&HookValue::Unit).is_err());
+        assert!(parse_component_refresh_decision(&HookValue::map([(
+            "action",
+            HookValue::str("unknown"),
+        )]))
+        .is_err());
+    }
 
     #[test]
     fn projection_wake_coalesces_and_consumes_explicitly() {

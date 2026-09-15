@@ -1448,7 +1448,7 @@ fn on_new_document(trigger: On<NewDocument>, mut commands: Commands) {
 /// — enough that the parser is happy and the user has somewhere to
 /// add prims.
 const DEFAULT_USDA_SCAFFOLD: &str =
-    "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\n\ndef Xform \"World\"\n{\n}\n";
+    "#usda 1.0\n(\n    defaultPrim = \"World\"\n    upAxis = \"Y\"\n    metersPerUnit = 1.0\n)\n\ndef Xform \"World\"\n{\n}\n";
 
 // ─────────────────────────────────────────────────────────────────────
 // SaveDocument — gated on registry membership
