@@ -4,7 +4,6 @@
 //! serialized semantic snapshot; it never parses source or mutates a
 //! document, keeping the language boundary small and deterministic.
 
-
 use std::sync::Arc;
 
 use lunco_sysml_ast::{SysmlAnalysis, SysmlAttribute, SysmlDiagnostic, SysmlElement, SysmlSubject};
@@ -244,10 +243,7 @@ pub fn requirement_report_dynamic(analysis: &SysmlAnalysis) -> Dynamic {
                 .collect(),
         ),
     );
-    report.insert(
-        "attributes".into(),
-        attributes_short_dynamic(analysis),
-    );
+    report.insert("attributes".into(), attributes_short_dynamic(analysis));
     report.insert(
         "attributes_qualified".into(),
         attributes_qualified_dynamic(analysis),

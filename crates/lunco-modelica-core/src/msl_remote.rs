@@ -30,12 +30,12 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use bevy::prelude::*;
 
+#[cfg(target_arch = "wasm32")]
+use lunco_assets_core::library::InMemoryLibrary as MslInMemory;
 use lunco_assets_core::library::{
     LibraryLoadPhase as MslLoadPhase, LibraryLoadState as MslLoadState,
     LibrarySource as MslAssetSource,
 };
-#[cfg(target_arch = "wasm32")]
-use lunco_assets_core::library::InMemoryLibrary as MslInMemory;
 #[cfg(not(target_arch = "wasm32"))]
 use lunco_assets_datasets::{DatasetRegistry, DatasetState};
 
@@ -1050,10 +1050,7 @@ struct SlotInner {
     pending_parsed_compressed: Option<Vec<u8>>,
     /// Raw **compressed** `sources-*.tar.zst` bytes + their manifest entry,
     /// stashed for lazy unpack on first editor drill-in.
-    pending_source_compressed: Option<(
-        Vec<u8>,
-        lunco_assets_core::library::LibraryBundleEntry,
-    )>,
+    pending_source_compressed: Option<(Vec<u8>, lunco_assets_core::library::LibraryBundleEntry)>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1235,7 +1232,8 @@ mod web {
             ));
         }
 
-        if manifest.rumoca_artifact_tag != lunco_assets_core::library::EXPECTED_RUMOCA_ARTIFACT_TAG {
+        if manifest.rumoca_artifact_tag != lunco_assets_core::library::EXPECTED_RUMOCA_ARTIFACT_TAG
+        {
             return Err(format!(
                 "MSL parsed artifact tag `{}` does not match runtime `{}`; rebuild the MSL bundle",
                 manifest.rumoca_artifact_tag,

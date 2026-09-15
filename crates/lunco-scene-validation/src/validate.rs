@@ -742,6 +742,15 @@ impl ApiQueryProvider for ValidateSysmlProvider {
             .get("compact")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
+        let selected_attributes = params
+            .get("attributes")
+            .and_then(serde_json::Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .collect::<std::collections::BTreeSet<_>>()
+            });
         let value = if compact {
             json!({
                 "path": report.path,
@@ -758,7 +767,13 @@ impl ApiQueryProvider for ValidateSysmlProvider {
                 // short/qualified maps are serialized through its bounded
                 // value budget.
                 "attributes": json!({}),
-                "attributes_qualified": compact_sysml_attributes(report.info.get("attributes_qualified")),
+                // Rhai tests normally use the lazy projection (`attributes: []`)
+                // and request only the qualified literals they need.  A caller
+                // asking for a selection receives exactly that selection; an
+                // omitted selector retains the complete compact report for
+                // non-Rhai tooling.
+                "attribute_projection": if selected_attributes.is_some() { "selected" } else { "complete" },
+                "attributes_qualified": compact_sysml_attributes(report.info.get("attributes_qualified"), selected_attributes.as_ref()),
                 "attribute_collisions": report
                     .info
                     .get("attribute_collisions")
@@ -810,7 +825,10 @@ impl ApiQueryProvider for ValidateSysmlProvider {
     }
 }
 
-fn compact_sysml_attributes(value: Option<&serde_json::Value>) -> serde_json::Value {
+fn compact_sysml_attributes(
+    value: Option<&serde_json::Value>,
+    selected: Option<&std::collections::BTreeSet<&str>>,
+) -> serde_json::Value {
     // Preserve the qualified identity in every compact record; Rhai uses it
     // to resolve cross-package source references without short-name guessing.
     let mut output = serde_json::Map::new();
@@ -818,12 +836,20 @@ fn compact_sysml_attributes(value: Option<&serde_json::Value>) -> serde_json::Va
         return serde_json::Value::Object(output);
     };
     for (name, record) in attributes {
+        if let Some(selected) = selected {
+            let short = name.rsplit("::").next().unwrap_or(name);
+            if !selected.contains(name.as_str()) && !selected.contains(short) {
+                continue;
+            }
+        }
         // Keep only the identity and typed literal needed by the Rhai
         // requirement bridge.  The full ValidateAsset report remains the
-        // source-span/IDE projection; duplicating owner/name/start/end for
-        // both short and qualified maps can exceed Rhai's 64 KiB string
-        // budget as a Twin grows.  `attribute_collisions` still prevents an
-        // ambiguous short name from being used accidentally.
+        // source-span/IDE projection; duplicating type/file metadata for every
+        // attribute can exceed Rhai's 64 KiB value budget as a Twin grows.
+        // `attribute_collisions` still prevents an ambiguous short name from
+        // being used accidentally.  The compact boundary is intentionally a
+        // projection, not a truncation: a caller that needs source spans must
+        // use the full ValidateSysml report or the source viewer.
         let value = record
             .get("value")
             .cloned()
@@ -835,9 +861,7 @@ fn compact_sysml_attributes(value: Option<&serde_json::Value>) -> serde_json::Va
                     .get("qualified_name")
                     .cloned()
                     .unwrap_or_else(|| json!(name)),
-                "type_name": record.get("type_name").cloned().unwrap_or(serde_json::Value::Null),
                 "value": value,
-                "file": record.get("file").cloned().unwrap_or(serde_json::Value::Null),
             }),
         );
     }
@@ -1190,13 +1214,11 @@ def Xform \"Battery\" (\n\
         );
         let report = validate_asset(path.to_str().unwrap());
         assert!(report.ok, "{:?}", report.errors);
-        let compact = compact_sysml_attributes(report.info.get("attributes_qualified"));
+        let compact = compact_sysml_attributes(report.info.get("attributes_qualified"), None);
         let mass = &compact["Example::Lander::mass"];
         assert_eq!(mass["qualified_name"], "Example::Lander::mass");
         assert_eq!(mass["value"]["kind"], "real");
-        assert!(mass["file"]
-            .as_str()
-            .is_some_and(|file| file.ends_with("/compact_attributes.sysml")));
+        assert!(mass.get("file").is_none());
     }
 
     #[test]
@@ -1215,9 +1237,27 @@ def Xform \"Battery\" (\n\
         // The compact bridge has one identity-preserving table. Short names
         // are intentionally empty: emitting both maps doubles every record
         // and cannot represent colliding component attributes.
-        let compact = compact_sysml_attributes(report.info.get("attributes_qualified"));
+        let compact = compact_sysml_attributes(report.info.get("attributes_qualified"), None);
         assert!(compact["Example::Lander::mass"].is_object());
         assert!(compact["Example::Rover::mass"].is_object());
         assert!(compact.get("mass").is_none());
+    }
+
+    #[test]
+    fn compact_sysml_projection_can_select_one_qualified_literal() {
+        let path = temp_sysml(
+            "selected_attributes.sysml",
+            "package Example {
+                private import ScalarValues::Real;
+                part def Lander { attribute mass : Real = 1.0; attribute height : Real = 2.0; }
+            }",
+        );
+        let report = validate_asset(path.to_str().unwrap());
+        assert!(report.ok, "{:?}", report.errors);
+        let selected = std::collections::BTreeSet::from(["Example::Lander::mass"]);
+        let compact =
+            compact_sysml_attributes(report.info.get("attributes_qualified"), Some(&selected));
+        assert!(compact.get("Example::Lander::mass").is_some());
+        assert!(compact.get("Example::Lander::height").is_none());
     }
 }

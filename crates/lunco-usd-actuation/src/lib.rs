@@ -5,7 +5,6 @@
 //! actuator components; controller policy and command propagation remain in
 //! `lunco-cosim`.
 
-
 use bevy::prelude::*;
 use lunco_cosim_core::{ForceActuator, TorqueActuator};
 use lunco_usd_bevy_core::read::UsdReadObject;

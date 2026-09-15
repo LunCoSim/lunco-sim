@@ -9,7 +9,6 @@
 //! recompile validation code, while the headless application can still install
 //! the same validation plugin and CLI entry point.
 
-
 pub mod lint_command;
 /// Static discovery of authored scene tests and their headless/graphics kind.
 /// The scene supplies the USD program binding; the Rhai test source supplies

@@ -52,7 +52,6 @@
 //! domains?" — useful for replay, audit, debugging, the journal panel,
 //! and future cross-doc transactions / multi-user sync.
 
-
 pub mod diagnostics;
 pub mod rename;
 pub use diagnostics::DocumentDiagnostics;

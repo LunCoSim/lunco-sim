@@ -119,10 +119,12 @@ pub fn has_in_memory_library() -> bool {
 
 /// Return the first filesystem-backed library root, if any.
 pub fn primary_filesystem_library_root() -> Option<&'static std::path::Path> {
-    global_library_sources().iter().find_map(|source| match source {
-        LibrarySource::Filesystem(path) => Some(path.as_path()),
-        LibrarySource::InMemory(_) => None,
-    })
+    global_library_sources()
+        .iter()
+        .find_map(|source| match source {
+            LibrarySource::Filesystem(path) => Some(path.as_path()),
+            LibrarySource::InMemory(_) => None,
+        })
 }
 
 impl LibrarySource {
@@ -203,10 +205,7 @@ fn build_native_path_set() -> std::collections::HashSet<PathBuf> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn collect_modelica_files(
-    dir: &std::path::Path,
-    files: &mut std::collections::HashSet<PathBuf>,
-) {
+fn collect_modelica_files(dir: &std::path::Path, files: &mut std::collections::HashSet<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };

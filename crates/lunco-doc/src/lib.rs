@@ -54,7 +54,6 @@
 //! assert_eq!(host.document().value, 5);
 //! ```
 
-
 use std::collections::VecDeque;
 use std::fmt;
 use std::path::{Path, PathBuf};

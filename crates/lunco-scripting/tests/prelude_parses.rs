@@ -200,7 +200,12 @@ fn assembly_builder_exposes_the_native_albedo_bake_as_usd_policy() {
         ))
         .expect("the albedo policy must evaluate without a host command");
     assert_eq!(result.get("ok").and_then(|v| v.as_bool().ok()), Some(true));
-    assert_eq!(result.get("ops").map(|v| v.clone().into_array().unwrap().len()), Some(4));
+    assert_eq!(
+        result
+            .get("ops")
+            .map(|v| v.clone().into_array().unwrap().len()),
+        Some(4)
+    );
 }
 
 #[test]

@@ -7,7 +7,6 @@
 //! dependencies only at the application boundary that explicitly downloads or
 //! processes data.
 
-
 mod manifest;
 mod plugin;
 mod registry;

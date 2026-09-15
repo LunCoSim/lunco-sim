@@ -6,7 +6,6 @@
 //! `lunco-usd`; UI packages consume this contract without importing that
 //! aggregate runtime crate.
 
-
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 

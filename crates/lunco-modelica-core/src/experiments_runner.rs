@@ -1796,10 +1796,8 @@ mod tests {
         // connectors — the lazy on-demand hook returns stubs that `connect()`
         // rejects for this connector-heavy model.
         let mut compiler = crate::ModelicaCompiler::new();
-        let report = compiler.load_source_root(
-            "Modelica",
-            &lunco_assets_core::source_library_dir("msl"),
-        );
+        let report =
+            compiler.load_source_root("Modelica", &lunco_assets_core::source_library_dir("msl"));
         println!(
             "[memprobe] MSL installed: {} docs from {}",
             report.inserted_file_count, report.source_root_path

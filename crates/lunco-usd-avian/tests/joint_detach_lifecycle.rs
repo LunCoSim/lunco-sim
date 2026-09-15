@@ -51,11 +51,7 @@ fn spawn_scene(mut commands: Commands) {
     });
 }
 
-fn request_detach(
-    ids: Res<JointIds>,
-    mut commands: Commands,
-    mut updates: Local<u32>,
-) {
+fn request_detach(ids: Res<JointIds>, mut commands: Commands, mut updates: Local<u32>) {
     *updates += 1;
     if *updates == 30 {
         commands
@@ -74,7 +70,9 @@ fn make_app() -> App {
         JointAttachPlugin,
     ));
     app.init_asset::<Mesh>();
-    app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(17)));
+    app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+        17,
+    )));
     app.add_systems(Startup, spawn_scene);
     app.add_systems(Update, request_detach);
     app.finish();

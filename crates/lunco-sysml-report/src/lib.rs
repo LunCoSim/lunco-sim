@@ -5,7 +5,6 @@
 //! crate owns only the lossless JSON shape shared at those boundaries; it has
 //! no Bevy, filesystem, Twin, or scripting dependency.
 
-
 use lunco_sysml_ast::{SysmlAnalysis, SysmlAttribute};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;

@@ -49,7 +49,6 @@
 //!   `&'static str`).
 //! - **Command palette** — `Ctrl+P` unbound.
 
-
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 use egui_dock::{

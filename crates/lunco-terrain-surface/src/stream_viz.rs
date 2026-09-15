@@ -3657,7 +3657,7 @@ mod draw_partition_tests {
     fn camera_projection_uses_the_nearest_shared_grid_for_sibling_branches() {
         let mut world = World::new();
         let root = world
-            .spawn(lunco_spatial::WorldGridConfig::default().grid())
+            .spawn(lunco_core::WorldGridConfig::default().grid())
             .id();
 
         let camera_grid_cell = CellCoord::new(2, 0, -1);

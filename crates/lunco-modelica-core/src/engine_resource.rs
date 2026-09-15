@@ -1127,11 +1127,9 @@ fn drive_msl_bootstrap(
     // This keeps the Bevy update thread available for input, rendering, and
     // API wakeups while the shared engine is being prepared.
     if let Some(background) = task.0.as_mut() {
-        if let Some(count) =
-            bevy::tasks::futures_lite::future::block_on(
-                bevy::tasks::futures_lite::future::poll_once(background),
-            )
-        {
+        if let Some(count) = bevy::tasks::futures_lite::future::block_on(
+            bevy::tasks::futures_lite::future::poll_once(background),
+        ) {
             task.0 = None;
             *bootstrap = MslBootstrapState::Done;
             bevy::log::info!(

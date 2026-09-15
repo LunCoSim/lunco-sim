@@ -57,7 +57,6 @@
 //! - **Save/export of Documents.** Manifest save only (`save_manifest`);
 //!   Document serialization is each domain's responsibility.
 
-
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -653,15 +652,8 @@ impl Twin {
                         "[sysml].root `{}` must end in .sysml or .kerml",
                         root.display()
                     ));
-                } else if !self
-                    .files
-                    .iter()
-                    .any(|entry| entry.relative_path == *root)
-                {
-                    errors.push(format!(
-                        "[sysml].root `{}` is not indexed",
-                        root.display()
-                    ));
+                } else if !self.files.iter().any(|entry| entry.relative_path == *root) {
+                    errors.push(format!("[sysml].root `{}` is not indexed", root.display()));
                 }
             }
 
@@ -1087,9 +1079,18 @@ root = "requirements/main.sysml"
 paths = ["requirements"]
 "#,
         );
-        write(&tmp.path().join("requirements/part.sysml"), "package Part {}");
-        write(&tmp.path().join("requirements/main.sysml"), "package Main {}");
-        write(&tmp.path().join("notes/ignored.sysml"), "package Ignored {}");
+        write(
+            &tmp.path().join("requirements/part.sysml"),
+            "package Part {}",
+        );
+        write(
+            &tmp.path().join("requirements/main.sysml"),
+            "package Main {}",
+        );
+        write(
+            &tmp.path().join("notes/ignored.sysml"),
+            "package Ignored {}",
+        );
 
         let TwinMode::Twin(twin) = TwinMode::open(tmp.path()).unwrap() else {
             panic!("expected Twin mode");
@@ -1117,7 +1118,10 @@ root = "requirements/missing.sysml"
 paths = ["requirements"]
 "#,
         );
-        write(&tmp.path().join("requirements/actual.sysml"), "package Actual {}");
+        write(
+            &tmp.path().join("requirements/actual.sysml"),
+            "package Actual {}",
+        );
 
         let TwinMode::Twin(twin) = TwinMode::open(tmp.path()).unwrap() else {
             panic!("expected Twin mode");

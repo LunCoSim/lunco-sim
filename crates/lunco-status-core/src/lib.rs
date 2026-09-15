@@ -6,6 +6,5 @@
 //! workbench-shell dependency. The status bar is one consumer of this crate,
 //! not its owner.
 
-
 pub mod status_bus;
 pub mod tracked_task;

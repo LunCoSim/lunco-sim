@@ -62,7 +62,6 @@
 //! `world_hold` into a `PhysicsHolds` reason and [`HeldForReadiness`] into
 //! disabled bodies and colliders.
 
-
 use std::collections::BTreeMap;
 
 use bevy::prelude::*;

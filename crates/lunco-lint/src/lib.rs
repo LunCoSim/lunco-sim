@@ -52,7 +52,6 @@
 //! faults, yields no findings and logs why — a broken linter must never be able to
 //! stop a scene from loading.
 
-
 use bevy::prelude::*;
 use lunco_hooks::HookValue as H;
 

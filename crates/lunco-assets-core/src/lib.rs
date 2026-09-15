@@ -53,6 +53,7 @@ pub mod asset_sources;
 pub mod closure;
 pub mod discovery;
 pub mod font;
+pub mod library;
 /// `lunco://` asset source — the engine asset *library*. Resolves `assets/`
 /// first, then the download cache, so a logical `lunco://` address covers both
 /// git-tracked content and externally-fetched binaries without any authored
@@ -61,7 +62,6 @@ pub mod lunco_source;
 pub mod missions;
 pub mod modelica;
 pub mod models;
-pub mod library;
 /// Scheme → local filesystem root, as an open registry — the read-side mirror of
 /// [`register_lunco_asset_sources`].
 pub mod scheme_registry;

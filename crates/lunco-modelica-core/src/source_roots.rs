@@ -143,9 +143,7 @@ impl SourceRootRegistry {
         // unpacked it, we skip; the dep-scanner will still see
         // `Modelica.*` references and surface the missing-library
         // error via the gate.
-        if let Some(msl_dir) =
-            lunco_assets_core::source_library_root_path("msl", "Modelica")
-        {
+        if let Some(msl_dir) = lunco_assets_core::source_library_root_path("msl", "Modelica") {
             roots.insert(
                 "Modelica".to_string(),
                 SourceRoot {

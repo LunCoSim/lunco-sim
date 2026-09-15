@@ -41,7 +41,6 @@
 //! of Untitled buffers, external-change watchers. Those land in follow-up
 //! milestones once this surface is wired into the UI.
 
-
 pub mod journal_persistence;
 pub mod open;
 pub mod recents;
