@@ -16,6 +16,14 @@ reserved for authored tests under `assets/scenarios/tests/` to sample live
 telemetry and publish a bounded verdict. Continuous rover dynamics remain in
 fixed-step physics/Modelica.
 
+For mission operations, read the generic
+[mission and engineering quality gates](../interactive-component-authoring/references/mission-engineering-quality.md)
+before authoring the scenario. Treat the ConOps, mode transitions, command and
+telemetry contract, timing/resources, nominal path, and contingency/recovery
+paths as explicit requirements. Exercise fault stimuli and safe/degraded modes
+through event-driven policy and tests; do not turn missing telemetry or an
+invalid command into a silent fallback.
+
 For live route edits, Rhai owns the route policy and calls the generic typed USD
 operation command. The reusable `waypoint_editor` tool authors ordinary USD
 route points, whether their route scope is inline or composed from a separate

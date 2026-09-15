@@ -38,6 +38,15 @@ traceability; Rhai observes the composed stage and emits the executable verdict.
 Rhai is the default scenario backend. Python is optional and is not part of the
 normal Twin workflow.
 
+For mission-level work, apply the generic
+[mission and engineering quality gates](../interactive-component-authoring/references/mission-engineering-quality.md)
+before composing domains. Establish the ConOps and operating modes, allocate
+requirements and interfaces down the product tree, choose fidelity by intended
+use, and define nominal, off-nominal, and recovery scenarios. Verify detached
+components before integration, validate the integrated Twin against ConOps, and
+baseline the exact sources, clocks, solver settings, and seeds used for each
+evidence run.
+
 ## Start with a capability and exemplar audit
 
 Before authoring a new vehicle, domain, controller, or Rust mechanism, inspect the

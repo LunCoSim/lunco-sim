@@ -34,6 +34,15 @@ why; USD states what is authored and observable; Modelica states equations;
 Rhai executes the observation and policy. A verification registry selects a
 scene and script but does not duplicate requirement text or thresholds.
 
+For a mission Twin, apply the generic
+[mission and engineering quality gates](../interactive-component-authoring/references/mission-engineering-quality.md)
+alongside this parser/runtime contract. Requirements are the baselined bridge
+from mission intent and ConOps to component and interface acceptance; record
+provenance, assumptions, operating conditions, margins, and configuration
+revision. Keep verification against requirements separate from validation in a
+realistic nominal/off-nominal/recovery scenario, and make unresolved TBDs or
+fault-response requirements visible failures rather than defaults.
+
 The existing Rhai lint substrate is part of this path: `RunLint` executes the
 domain policy in `assets/scripting/policy/lint_<domain>.rhai` over Rust-produced
 facts, while Twin verification scripts use
