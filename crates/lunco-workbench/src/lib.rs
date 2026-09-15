@@ -62,6 +62,7 @@ use lunco_settings::{AppSettingsExt, SettingsSection};
 use lunco_theme::ColorAlpha;
 use lunco_workbench_core::commands::{CloseTab, FocusPanel, OpenTab, OpenTabPreserveFocus};
 use lunco_workbench_core::scene::{CurrentSceneName, CurrentScenePath};
+use lunco_workbench_core::scene_pick::ScenePickGate;
 use lunco_workbench_core::tabs::{EditorTabs, PendingTabCloses};
 use lunco_workbench_core::uri::UriRegistry;
 use lunco_workbench_core::viewport::{PanelRects, VIEWPORT_PANEL_ID};
@@ -573,8 +574,7 @@ register_commands!(on_focus_panel,);
 // `session` here is just the workbench-side recents persistence.
 use lunco_workspace::WorkspaceResource;
 pub use viewport::{
-    EguiPointerState, ScenePickGate, SceneTarget, ViewportPanel, ViewportPlaceholder,
-    WorkbenchEguiHost, WorkbenchViewportPlugin,
+    ViewportPanel, ViewportPlaceholder, WorkbenchEguiHost, WorkbenchViewportPlugin,
 };
 
 /// Get the backdrop colour from the active theme.
@@ -1713,7 +1713,7 @@ impl WorkbenchLayout {
     }
 
     /// The registered singleton panel that IS the full-window 3D scene
-    /// (`Panel::scene_target() == Some(SceneTarget::MainViewport)`), if any.
+    /// (`Panel::scene_target() == Some(lunco_workbench_core::scene_pick::SceneTarget::MainViewport)`), if any.
     /// App-agnostic — every workbench app that hosts a 3D scene registers exactly
     /// one such panel (the luncosim's `ViewportPanel`); tooling apps register none.
     /// Used to keep that panel foregrounded so a co-tenant tab can never blank the
@@ -2641,7 +2641,7 @@ fn render_workbench(world: &mut World) {
     // Tell the pick gate its per-frame inputs are real this frame. (The inputs
     // themselves were cleared in `First` by `reset_scene_pick_gate`, which — unlike
     // this pass — is guaranteed to run every frame. See `ScenePickGate`.)
-    if let Some(mut gate) = world.get_resource_mut::<viewport::ScenePickGate>() {
+    if let Some(mut gate) = world.get_resource_mut::<ScenePickGate>() {
         gate.mark_rendered();
     }
 
@@ -2794,7 +2794,7 @@ where
 ///   top-left and the entire body read as gap.)
 fn record_chrome(world: &mut World, ui: &egui::Ui, body: egui::Rect, transparent: bool) {
     let card = if transparent { ui.min_rect() } else { body };
-    if let Some(mut gate) = world.get_resource_mut::<viewport::ScenePickGate>() {
+    if let Some(mut gate) = world.get_resource_mut::<ScenePickGate>() {
         gate.record_chrome_panel(body, card);
     }
 }
@@ -4685,7 +4685,7 @@ fn render_layout(
                     a.set("panel.bottom", rect);
                 }
             }
-            if let Some(mut g) = world.get_resource_mut::<viewport::ScenePickGate>() {
+            if let Some(mut g) = world.get_resource_mut::<ScenePickGate>() {
                 g.set_dock_rect(dock_rect);
                 g.set_scene_viewport_rect(scene_vp_rect);
             }

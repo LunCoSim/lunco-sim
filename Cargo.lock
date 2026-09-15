@@ -9204,7 +9204,6 @@ dependencies = [
  "lunco-usd-bevy-scene",
  "lunco-usd-bevy-twin",
  "lunco-usd-core",
- "lunco-workbench",
  "lunco-workbench-core",
  "lunco-workbench-widgets",
  "lunco-workspace",

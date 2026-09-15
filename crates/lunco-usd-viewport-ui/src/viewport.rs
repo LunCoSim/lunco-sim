@@ -78,7 +78,7 @@ use lunco_usd_bevy_scene::{
     UsdPreviewOnly, UsdPrimPath, UsdSceneAwaitingStage, UsdSceneGeometryPending, UsdSceneProjected,
     UsdSceneProjectionFailed, UsdSceneProjectionQueued, UsdStageRevision,
 };
-use lunco_workbench::{ScenePickGate, SceneTarget};
+use lunco_workbench_core::scene_pick::{ScenePickGate, SceneTarget};
 use lunco_workbench_core::viewport::{PanelRect, PanelRects};
 use lunco_workbench_core::{
     commands::{CloseTab, OpenTab},
@@ -4305,7 +4305,7 @@ fn render_preview_view(
 
     let gizmo_pointer_capture = ctx
         .resource::<ScenePickGate>()
-        .is_some_and(ScenePickGate::gizmo_pointer_capture);
+        .is_some_and(ScenePickGate::tool_pointer_capture);
     let (drag, pan) = if response.dragged() {
         let shift = ui.ctx().input(|input| input.modifiers.shift);
         let (orbit, pan) = preview_drag_channels(

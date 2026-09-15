@@ -13,6 +13,7 @@ mod panel;
 mod perspective;
 mod registration;
 pub mod scene;
+pub mod scene_pick;
 mod snapshot;
 pub mod source;
 pub mod tabs;

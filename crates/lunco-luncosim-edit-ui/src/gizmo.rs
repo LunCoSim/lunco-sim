@@ -31,7 +31,7 @@ use lunco_usd_core::document::LayerId;
 use lunco_usd_viewport_ui::{
     UsdPreviewId, UsdViewportState, USD_PREVIEW_VIEW_PANEL_ID, USD_VIEWPORT_PANEL_ID,
 };
-use lunco_workbench::{ScenePickGate, SceneTarget};
+use lunco_workbench_core::scene_pick::{ScenePickGate, SceneTarget};
 use lunco_workbench_core::viewport::{PanelRect, PanelRects};
 use transform_gizmo_bevy::{
     GizmoCamera, GizmoDragStarted, GizmoDragging, GizmoMode, GizmoOptions, GizmoTarget,
@@ -1032,7 +1032,7 @@ pub fn drive_gizmo_drag(
         && !modifier_held
         && q_targets.iter().any(|target| target.is_focused());
     if let Some(gate) = gate.as_deref_mut() {
-        gate.set_gizmo_pointer_capture(gizmo_pointer_capture);
+        gate.set_tool_pointer_capture(gizmo_pointer_capture);
     }
     let live_owns_pointer = !egui_focus.wants_pointer && !preview_pointer;
 

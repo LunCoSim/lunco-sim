@@ -23,7 +23,8 @@ use lunco_core::exposure::EngineExposures;
 use lunco_core::SceneViewport;
 use lunco_hooks::HookValue;
 use lunco_render::SceneCamera;
-use lunco_workbench::{RuntimeSurfaceLayout, RuntimeSurfaceLayouts, ScenePickGate};
+use lunco_workbench::{RuntimeSurfaceLayout, RuntimeSurfaceLayouts};
+use lunco_workbench_core::scene_pick::ScenePickGate;
 use lunco_workbench_core::viewport::PanelRects;
 use lunco_workbench_core::{PanelId, WorkbenchSnapshot};
 use serde::Deserialize;
@@ -2177,7 +2178,7 @@ fn placement_is_applied(node: &Node, rect: egui::Rect) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lunco_workbench::EguiPointerState;
+    use lunco_workbench_core::scene_pick::EguiPointerState;
 
     #[test]
     fn manifest_accepts_viewport_dock_and_window_surfaces() {
