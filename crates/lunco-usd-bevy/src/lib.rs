@@ -45,8 +45,7 @@ use big_space::prelude::CellCoord;
 // `MeshMaterial3d`/`StandardMaterial` (they live in `bevy_pbr` → wgpu + naga).
 // `lunco-render-bevy` observes these and binds the real material.
 // See docs/architecture/render-decoupling.md.
-use lunco_materials::ProceduralSkybox;
-use lunco_render::{PbrLook, PbrTextures, SurfaceAlpha};
+use lunco_render::{PbrLook, PbrTextures, ProceduralSkybox, SurfaceAlpha};
 use openusd::sdf::Path as SdfPath;
 use openusd::sdf::Value;
 
@@ -396,9 +395,8 @@ fn usd_projection_provenance(
 ///    ordinary children rooted in the prim's low-precision subtree.
 /// 5. Marks the entity with `UsdSceneProjected` to prevent re-processing.
 ///
-/// Custom materials (solar panels, blueprint grids, etc.) are applied
-/// by independent material plugins in `lunco-materials` that observe
-/// the `UsdSceneProjected` insertion.
+/// Custom shader looks (solar panels, blueprint grids, etc.) are applied by
+/// the independent `lunco-usd-sim-shader` projector after this scene projection.
 #[allow(clippy::too_many_arguments)]
 fn instantiate_usd_prim(
     entity: Entity,

@@ -18,7 +18,7 @@ pub mod camera;
 pub mod quality;
 pub mod sun;
 
-pub use appearance::{PbrLook, PbrLookKey, PbrTextures, SurfaceAlpha};
+pub use appearance::{PbrLook, PbrLookKey, PbrTextures, ProceduralSkybox, SurfaceAlpha};
 pub use camera::{
     scene_camera_look_with_profile, usd_default_perspective_projection, BloomLook,
     GraphicsCameraDefaults, MsaaLevel, SceneCamera, ToneMap, WorldLabel,

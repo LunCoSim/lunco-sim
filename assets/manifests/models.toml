@@ -6,10 +6,9 @@
 #   cargo run -p lunco-assets -- download   # raw `_source` glb → <cache>/
 #   cargo run -p lunco-assets -- process    # processed glb → <cache>/
 #
-# The `process` step strips glTF extensions Bevy 0.18 doesn't support
-# (`KHR_draco_mesh_compression`, `EXT_texture_webp`) by re-emitting
-# the file via `npx @gltf-transform/cli`. Node.js / `npx` must be on
-# PATH for the process step.
+# The `process` step decodes `KHR_draco_mesh_compression` through the
+# pure-Rust GLB processor. `EXT_texture_webp` remains authored data and is
+# intentionally rejected until lossless Rust WebP conversion is implemented.
 #
 # The processed `.glb` lands in `<cache>/models/perseverance.glb`, but
 # nothing authored refers to the cache. USD authors the LOGICAL address

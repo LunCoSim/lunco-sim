@@ -30,7 +30,6 @@ lunco-usd-bevy-mesh = { path = "../lunco-usd-bevy-mesh" }
 openusd = { workspace = true }
 lunco-core = { path = "../lunco-core" }
 lunco-render = { path = "../lunco-render" }
-lunco-materials = { path = "../lunco-materials" }
 big_space = { workspace = true }
 web-time = { workspace = true }
 

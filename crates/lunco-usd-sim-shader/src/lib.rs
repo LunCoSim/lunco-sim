@@ -34,9 +34,9 @@
 use bevy::prelude::*;
 use lunco_materials::engine_params::prim_color_value;
 use lunco_materials::{
-    to_snake_case, AttrRead, EngineSource, ParamValue, ProceduralSkybox, ShaderLook, TextureLayer,
+    to_snake_case, AttrRead, EngineSource, ParamValue, ShaderLook, TextureLayer,
 };
-use lunco_render::{PbrLook, SurfaceAlpha};
+use lunco_render::{PbrLook, ProceduralSkybox, SurfaceAlpha};
 use lunco_usd_bevy_core::read::get_attribute_as_vec3;
 use lunco_usd_bevy_core::read::{
     read_authored_bool_strict, read_primvar_f32_strict, read_primvar_vec3_strict, UsdReadObject,
@@ -156,7 +156,11 @@ fn apply_usd_shader_material_read(
     let Some(raw_shader_path) = reader.asset(&shader_prim, "info:wgsl:sourceAsset") else {
         return None;
     };
-    if reader.text(&shader_prim, "info:implementationSource").as_deref() != Some("sourceAsset") {
+    if reader
+        .text(&shader_prim, "info:implementationSource")
+        .as_deref()
+        != Some("sourceAsset")
+    {
         return Some(reject_shader_material(
             commands,
             entity,
@@ -222,7 +226,7 @@ fn apply_usd_shader_material_read(
                 .with_settings(move |settings: &mut bevy::image::ImageLoaderSettings| {
                     settings.is_srgb = is_srgb;
                 })
-            .load::<Image>(uri),
+                .load::<Image>(uri),
         );
     }
     if let Some(detail) = texture_error {
@@ -259,23 +263,20 @@ fn apply_usd_shader_material_read(
     // it has to be carried here too because taking the shader path REMOVES the
     // `PbrLook`, which dropped the author's shadow intent on the floor the moment a
     // prim gained a `.wgsl`.
-    let no_shadow_cast = match read_authored_bool_strict(
-        reader,
-        sdf_path,
-        "primvars:doNotCastShadows",
-    ) {
-        Ok(value) => value.unwrap_or(false),
-        Err(_) => {
-            return Some(reject_shader_material(
-                commands,
-                entity,
-                visual_target,
-                prim_path,
-                "material-attribute",
-                "malformed authored material attribute `primvars:doNotCastShadows`",
-            ));
-        }
-    };
+    let no_shadow_cast =
+        match read_authored_bool_strict(reader, sdf_path, "primvars:doNotCastShadows") {
+            Ok(value) => value.unwrap_or(false),
+            Err(_) => {
+                return Some(reject_shader_material(
+                    commands,
+                    entity,
+                    visual_target,
+                    prim_path,
+                    "material-attribute",
+                    "malformed authored material attribute `primvars:doNotCastShadows`",
+                ));
+            }
+        };
     // `doubleSided` — the standard `UsdGeomGprim` attribute, read on the GPRIM like
     // the two above and carried for the same reason: the PBR path maps it to
     // `cull_mode: None`, and removing the `PbrLook` dropped it on the floor. This

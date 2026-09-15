@@ -173,9 +173,9 @@ impl Default for ProcessorRegistry {
 ///
 /// - `"texture"`: resize an image to `target_resolution` and
 ///   save as PNG. Supports JPEG, PNG, TIFF, BMP, WebP, SVG inputs.
-/// - `"gltf"`: clean a `.glb` for Bevy 0.18 — decode Draco geometry,
-///   re-encode WebP textures as PNG. Shells out to `npx
-///   @gltf-transform/cli`.
+/// - `"gltf"`: clean a `.glb` for Bevy by decoding Draco geometry. Inputs
+///   using `EXT_texture_webp` are rejected until a lossless Rust-owned WebP
+///   conversion path is available; the extension is never discarded.
 /// - `"dem"`: crop a square ROI from a raw LROC/NAC DTM and write the
 ///   square, georeferenced float32 `heightmap.tif` the runtime DEM reader
 ///   expects. `output` is a **folder** (the `demSource` target);
@@ -445,97 +445,61 @@ fn process_gltf_adapter(
     process_gltf(source, output, control)
 }
 
-/// glb cleanup pipeline. Runs `gltf-transform` twice in series:
+/// Normalize Draco geometry in a GLB using the pure-Rust glTF implementation.
 ///
-/// 1. **`copy`** — re-emits the file, decoding `KHR_draco_mesh_compression`
-///    transparently along the way. Bevy 0.18's `bevy_gltf` has no Draco
-///    decoder; this strips the extension.
-/// 2. **`png --formats "*"`** — re-encodes every embedded texture as PNG,
-///    irrespective of source format (WebP, JPEG, PNG). Drops
-///    `EXT_texture_webp` since none of the resulting textures need it.
-///
-/// Shells out to `npx --yes @gltf-transform/cli`. Node.js / `npx` must be
-/// on `PATH`; the gltf-transform CLI itself is fetched by `npx` on first
-/// run and cached. Native-only — wasm builds skip this whole module.
+/// Draco geometry is materialized as ordinary glTF accessors. WebP texture
+/// extensions remain authored data: dropping the extension without converting
+/// its image bytes would silently change texture selection. The processor
+/// therefore rejects such input until the conversion is implemented. The
+/// resulting document is emitted as a GLB while non-transformed authored data
+/// remains intact. Native-only — wasm builds skip this whole module.
 #[cfg(not(target_arch = "wasm32"))]
 fn process_gltf(source: &Path, output: &Path, control: &ProcessControl) -> std::io::Result<()> {
-    use std::process::Command;
-
-    // Resolve the absolute path once, rather than spawning the bare name
-    // `npx`. On Windows the executable is `npx.cmd` (a batch shim), which
-    // `Command::new("npx")` won't find — `which` honors `PATHEXT` and
-    // returns the real `npx.cmd`, which modern std launches via cmd.exe.
-    let npx = which::which("npx").map_err(|_| {
-        std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "gltf process step requires Node.js / `npx` on PATH (install Node 18+, then re-run)",
-        )
-    })?;
-
-    // Stage 1 → temp file. We deliberately use a temp intermediate
-    // rather than rewriting `source` so a failed second stage doesn't
-    // leave the source corrupted, and so re-running `process` is
-    // idempotent (the source is the immutable Assets.toml-pinned blob).
-    static GLTF_STAGE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let stage_id = GLTF_STAGE.fetch_add(1, Ordering::Relaxed);
-    let tmp = lunco_assets_core::temp_dir().join(format!(
-        "gltf_decoded_{}-{stage_id}.glb",
-        std::process::id()
-    ));
-
-    let result = (|| {
-        let s1 = run_process_command(
-            Command::new(&npx)
-                .args(["--yes", "@gltf-transform/cli", "copy"])
-                .arg(source)
-                .arg(&tmp),
-            control,
-        )?;
-        if !s1.success() {
-            return Err(std::io::Error::other(format!(
-                "gltf-transform copy failed: exit {:?}",
-                s1.code()
-            )));
-        }
-
-        let s2 = run_process_command(
-            Command::new(&npx)
-                .args(["--yes", "@gltf-transform/cli", "png"])
-                .arg(&tmp)
-                .arg(output)
-                .args(["--formats", "*"]),
-            control,
-        )?;
-        if !s2.success() {
-            return Err(std::io::Error::other(format!(
-                "gltf-transform png failed: exit {:?}",
-                s2.code()
-            )));
-        }
-        Ok(())
-    })();
-    let _ = std::fs::remove_file(&tmp);
-    result
+    control.check()?;
+    let mut import = draco_gltf::open(source, draco_gltf::ValidationProfile::Gltf20)
+        .map_err(|error| io_err(format!("reading GLB for normalization: {error}")))?;
+    control.check()?;
+    import
+        .decompress_in_place()
+        .map_err(|error| io_err(format!("decoding Draco geometry: {error}")))?;
+    control.check()?;
+    // TODO: Add a Rust-owned, lossless WebP conversion path. It must decode
+    // every image selected by EXT_texture_webp, encode the replacement bytes,
+    // update image MIME types and buffer-view references, and remove the
+    // extension only after those authored texture semantics are preserved.
+    if json_contains_key(import.document.as_value(), "EXT_texture_webp") {
+        return Err(io_err(
+            "GLB uses EXT_texture_webp; Rust WebP conversion is not implemented yet; refusing to discard the authored texture extension".into(),
+        ));
+    }
+    control.check()?;
+    let bytes = import
+        .to_bytes(draco_gltf::OutputFormat::GlbV2)
+        .map_err(|error| io_err(format!("writing normalized GLB: {error}")))?;
+    std::fs::write(output, bytes)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn run_process_command(
-    command: &mut std::process::Command,
-    control: &ProcessControl,
-) -> std::io::Result<std::process::ExitStatus> {
-    control.check()?;
-    let mut child = command.spawn()?;
-    loop {
-        if let Some(status) = child.try_wait()? {
-            return Ok(status);
+fn json_contains_key(value: &draco_gltf::JsonValue, key: &str) -> bool {
+    let mut pending = vec![value];
+    while let Some(value) = pending.pop() {
+        match value {
+            draco_gltf::JsonValue::Array(values) => pending.extend(values),
+            draco_gltf::JsonValue::Object(entries) => {
+                for (name, value) in entries {
+                    if name == key {
+                        return true;
+                    }
+                    pending.push(value);
+                }
+            }
+            draco_gltf::JsonValue::Null
+            | draco_gltf::JsonValue::Bool(_)
+            | draco_gltf::JsonValue::Number(_)
+            | draco_gltf::JsonValue::String(_) => {}
         }
-        if let Err(error) = control.check() {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(error);
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
     }
+    false
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1674,6 +1638,19 @@ mod tests {
 
     fn control() -> ProcessControl {
         ProcessControl::unrestricted()
+    }
+
+    #[test]
+    fn gltf_webp_extension_is_detected_without_rewriting_authored_json() {
+        let document = draco_gltf::Document::from_json_bytes(
+            br#"{"asset":{"version":"2.0"},"textures":[{"extensions":{"EXT_texture_webp":{"source":1}}}]}"#,
+        )
+        .expect("valid glTF JSON");
+        assert!(json_contains_key(document.as_value(), "EXT_texture_webp"));
+        assert_eq!(
+            document.to_json_bytes().expect("serialize glTF JSON"),
+            br#"{"asset":{"version":"2.0"},"textures":[{"extensions":{"EXT_texture_webp":{"source":1}}}]}"#
+        );
     }
 
     #[test]

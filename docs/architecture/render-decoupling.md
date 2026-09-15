@@ -157,6 +157,7 @@ surface, but neither recovery nor the workbench is reachable from the headless s
 | intent | in | binds to | notes |
 |---|---|---|---|
 | **`PbrLook`** | `lunco-render` | `MeshMaterial3d<StandardMaterial>` | a plain surface as data: colour, roughness, metallic, emissive, IOR, clearcoat, specular tint, `SurfaceAlpha::{Opaque,Mask,Blend,Add}`, and all five `Handle<Image>` texture channels (`bevy_image` is render-free) |
+| **`ProceduralSkybox`** | `lunco-render` | fullscreen background pass | a scene-owned marker that tells the render binder to use the accompanying shader look as a camera background without projecting a finite mesh |
 
 `PbrLook` states the **physics**, not one backend's parameterisation of it. IOR is the
 worked example: `PbrLook` carries `ior` (as does `UsdPreviewSurface`), while Bevy's
@@ -179,7 +180,7 @@ and the horizon-shadow path. Do not replace this with a wider Gaussian/PCSS filt
 or change authored light range, cascades, bias, or caster policy to compensate for
 soft edges. Fast mode deliberately does not attach the standard PBR shadow filter.
 
-`ProceduralSkybox` is a render-free scene intent that may accompany `ShaderLook`.
+`ProceduralSkybox` is a render-free scene intent owned by `lunco-render` that may accompany `ShaderLook` from `lunco-materials`.
 The USD projection reads the authored `lunco:surface:skybox` flag once on its
 `Xform` owner, stamps this intent, and projects no `UsdGeomGprim` for that
 background. The `lunco-render-bevy` binder keeps the same reflected

@@ -155,7 +155,7 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 | **`lunco-luncosim-edit-ui`** | Rendered scene-editing presentation: egui/workbench panels, transform-gizmo and selection adapters, and physics diagnostics. |
 | **`lunco-luncosim-edit-inspector-ui`** | Domain-heavy Inspector and authored USD panels: standard USD joint/animation/mount/variant/parameter view models plus environment/entity authoring surfaces. It is installed explicitly by windowed composition roots. |
 | **`lunco-usd-prim-tree-ui`** | Reusable composed-USD prim hierarchy panel and reactive view model. It is independent of the domain Inspector and its physics/environment authoring dependencies. |
-| **`lunco-render`** | Appearance **intent**, render-free: `PbrLook`, `SceneCamera`, `WorldLabel`, sun/shadow look. Names `Mesh3d`, never `MeshMaterial3d`. |
+| **`lunco-render`** | Appearance **intent**, render-free: `PbrLook`, `ProceduralSkybox`, `SceneCamera`, `WorldLabel`, sun/shadow look. Names `Mesh3d`, never `MeshMaterial3d`. |
 | **`lunco-render-recovery`** | Render-bound GPU health and presentation recovery: wgpu error handling, adapter shadow-capability admission, bounded failure escalation, presentation gating, and scene-teardown rearming. It is independent of the workbench shell. |
 | **`lunco-render-bevy`** | The **only** crate that names `bevy_pbr`. Binds the intent (`PbrLook`/`ShaderLook`/`SceneCamera`/`WorldLabel`) to real materials & cameras; owns `ShaderMaterial`. Headless never adds it. |
 | **`lunco-web`** | Shared web frontend for wasm apps: streaming loader, `WebReadyPlugin`, and the HTML/CSS/Rhai tool host routed through `lunco_rhai`. |
@@ -600,7 +600,7 @@ Independent render-free `UsdShade` material-intent projection. It reads authored
 Independent render-free recorder for post-step Avian rigid-body and wheel state. It owns the transient telemetry cursor and publishes through the shared signal registry; telemetry implementation changes are isolated from USD schema projection.
 
 **`lunco-materials`**
-Shader appearance **intent** — **render-free**. Holds `ShaderLook` (a `.wgsl` path + an open `dyn_params` map + named texture layers), the WGSL-reflected `ParamSchema` (parameter names/ranges/defaults are parsed from each shader's own `struct Material` — **none are hardcoded in Rust**, so adding a parameter is editing a shader), and the CDLOD geomorph vertex attribute. It names **no** material type and no render pipeline, so a domain crate may depend on it without linking `bevy_render`. The concrete `ShaderMaterial` it describes lives in `lunco-render-bevy`. See [architecture/shader-layers-and-params.md](architecture/shader-layers-and-params.md).
+Custom shader appearance **intent** — **render-free**. Holds `ShaderLook` (a `.wgsl` path + an open `dyn_params` map + named texture layers), the WGSL-reflected `ParamSchema` (parameter names/ranges/defaults are parsed from each shader's own `struct Material` — **none are hardcoded in Rust**, so adding a parameter is editing a shader), and the CDLOD geomorph vertex attribute. It names **no** material type and no render pipeline, so a domain crate may depend on it without linking `bevy_render`. Generic procedural-background intent lives in `lunco-render`; the concrete `ShaderMaterial` described here lives in `lunco-render-bevy`. See [architecture/shader-layers-and-params.md](architecture/shader-layers-and-params.md).
 
 ---
 
@@ -714,7 +714,7 @@ owns no editor interaction implementation and can be installed by any
 workbench host that provides the shared viewport and selection contracts.
 
 **`lunco-render`**
-Appearance **intent** and persisted Graphics quality policy — **render-free**. The vocabulary a domain crate uses to say what a thing should look like without naming a renderer: `PbrLook` (a plain surface as data — colour, roughness, metallic, emissive, alpha mode, texture channels), `SceneCamera`, `WorldLabel`, the sun/shadow look settings, and `RenderingQualitySettings` for shared camera, light, sky, terrain, shadow, and tessellation budgets. It names `Mesh3d` but **never `MeshMaterial3d`** — that one line is the whole rule.
+Appearance **intent** and persisted Graphics quality policy — **render-free**. The vocabulary a domain crate uses to say what a thing should look like without naming a renderer: `PbrLook` (a plain surface as data — colour, roughness, metallic, emissive, alpha mode, texture channels), `ProceduralSkybox`, `SceneCamera`, `WorldLabel`, the sun/shadow look settings, and `RenderingQualitySettings` for shared camera, light, sky, terrain, shadow, and tessellation budgets. It names `Mesh3d` but **never `MeshMaterial3d`** — that one line is the whole rule.
 
 **`lunco-render-bevy`**
 The **only** crate that names `bevy_pbr`. Binds the intent above to real Bevy materials: `PbrLook` → `StandardMaterial`, `ShaderLook` → `ShaderMaterial` (the one general self-describing `AsBindGroup`, any `.wgsl` per-instance), plus `SceneCamera` → camera bundle, `WorldLabel` → billboard text, environment light and horizon shading. Headless simply never adds this plugin — which is why `--no-ui` links **no wgpu, no `bevy_render`, no `bevy_pbr`, no egui, no winit**. See [architecture/render-decoupling.md](architecture/render-decoupling.md).

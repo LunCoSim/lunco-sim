@@ -472,7 +472,7 @@ fn print_usage() {
     println!();
     println!("Process kinds (in an Assets.toml [name.process] section):");
     println!("  kind = \"texture\"  resize/re-encode an image (PNG/JPEG/TIFF/...) [default]");
-    println!("  kind = \"gltf\"     clean a .glb for Bevy 0.18 (needs Node/npx)");
+    println!("  kind = \"gltf\"     normalize Draco geometry in a .glb (WebP extension conversion pending)");
     println!("  kind = \"dem\"      crop a square georeferenced float32 heightmap from a raw DTM (GeoTIFF or PDS3 .IMG)");
     println!("  kind = \"map\"      crop a co-registered ortho/shade/slope raster to the same ROI as an 8-bit PNG layer map");
     println!("  kind = \"albedo\"   bake a stable material albedo from a calibrated raster or illumination-bearing orthophoto");

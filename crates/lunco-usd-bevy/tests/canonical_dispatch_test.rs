@@ -12,8 +12,7 @@
 //! up to and including the emitted ECS components is checked here.
 
 use bevy::prelude::*;
-use lunco_materials::ProceduralSkybox;
-use lunco_render::PbrLook;
+use lunco_render::{PbrLook, ProceduralSkybox};
 use lunco_usd_bevy_core::canonical::{CanonicalStage, CanonicalStages};
 use lunco_usd_bevy_core::UsdStageAsset;
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneProjectionFailed, UsdSceneProjectionQueued};
