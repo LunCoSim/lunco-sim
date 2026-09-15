@@ -120,6 +120,52 @@ fn _verification_covers(report, requirement, verification_name) {
     false
 }
 
+// Build lookup tables once per evaluation.  Component checks can be numerous
+// (one transform observation per station), so repeatedly walking the complete
+// SysML requirement and verification arrays makes an otherwise linear test
+// quadratic and can exhaust Rhai's per-tick operation budget.
+fn _indexes(report) {
+    let requirements = #{};
+    if report.requirement_records != () {
+        for record in report.requirement_records {
+            let name = _record_name(record);
+            if name != "" {
+                requirements[name] = true;
+                requirements[_short_name(name)] = true;
+            }
+        }
+    }
+    let coverage = #{};
+    if report.verification_records != () {
+        for verification in report.verification_records {
+            let verification_name = _record_name(verification);
+            if verification_name == "" || verification.verifies == () { continue; }
+            let verification_short = _short_name(verification_name);
+            for covered in verification.verifies {
+                coverage[verification_name + "|" + covered] = true;
+                coverage[verification_name + "|" + _short_name(covered)] = true;
+                coverage[verification_short + "|" + covered] = true;
+                coverage[verification_short + "|" + _short_name(covered)] = true;
+            }
+        }
+    }
+    #{requirements: requirements, coverage: coverage}
+}
+
+fn _indexed_requirement(indexes, expected) {
+    expected != () && expected != ""
+        && (indexes.requirements[expected] == true
+            || indexes.requirements[_short_name(expected)] == true)
+}
+
+fn _indexed_coverage(indexes, requirement, verification_name) {
+    if requirement == () || verification_name == () { return false; }
+    indexes.coverage[verification_name + "|" + requirement] == true
+        || indexes.coverage[_short_name(verification_name) + "|" + requirement] == true
+        || indexes.coverage[verification_name + "|" + _short_name(requirement)] == true
+        || indexes.coverage[_short_name(verification_name) + "|" + _short_name(requirement)] == true
+}
+
 fn _expected(report, check) {
     if check.expected_attr == () { return check.expected; }
     let resolved = attribute(report, check.expected_attr);
@@ -142,15 +188,15 @@ fn _failure(check, message) {
        kind: check.kind, path: check.path, error: message }
 }
 
-fn _check_one(report, check) {
+fn _check_one(report, check, indexes) {
     if check == () || check.id == () || check.requirement == ()
         || check.verification == () || check.kind == () {
         return #{ok: false, id: "<invalid>", error: "check requires id, requirement, verification, and kind"};
     }
-    if _find_requirement(report, check.requirement) == () {
+    if !_indexed_requirement(indexes, check.requirement) {
         return _failure(check, "SysML requirement usage is missing");
     }
-    if !_verification_covers(report, check.requirement, check.verification) {
+    if !_indexed_coverage(indexes, check.requirement, check.verification) {
         return _failure(check, "no SysML verification case covers this requirement");
     }
     let expected_error = _expected_error(report, check);
@@ -348,8 +394,9 @@ fn evaluate(source_report, checks) {
     if source_report == () || source_report.ok != true {
         return #{ok: false, results: [], failures: ["SysML source report is unavailable"]};
     }
+    let indexes = _indexes(source_report);
     for check in checks {
-        let result = _check_one(source_report, check);
+        let result = _check_one(source_report, check, indexes);
         // Stamp the authored identity on every result, including helper
         // failures.  This keeps the evidence table self-describing and makes
         // it possible to aggregate reports without retaining the check list.
