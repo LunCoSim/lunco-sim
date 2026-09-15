@@ -945,7 +945,7 @@ fn render_icon_view(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         let icon = ctx
             .resource::<crate::engine_resource::ModelicaEngineHandle>()
             .and_then(|handle| handle.try_cached_icon_for(&qpath))
-            .or_else(|| crate::annotations::extract_icon(&class.annotation));
+            .or_else(|| lunco_modelica_ast::annotations::extract_icon(&class.annotation));
         let parameters: Vec<(String, String)> = class
             .components
             .iter()

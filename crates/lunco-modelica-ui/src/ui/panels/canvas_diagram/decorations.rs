@@ -66,7 +66,7 @@ impl lunco_canvas::Layer for DiagramDecorationLayer {
         // via its `NodeVisual` and the decoration would sit on top
         // with stale text. Other graphics (Rectangle / Line /
         // Polygon / Ellipse / Bitmap) stay as background decoration.
-        use crate::annotations::GraphicItem;
+        use lunco_modelica_ast::annotations::GraphicItem;
         let decoration: Vec<GraphicItem> = graphics
             .iter()
             .filter(|g| !matches!(g, GraphicItem::Text(_)))
@@ -106,11 +106,11 @@ impl lunco_canvas::Layer for DiagramDecorationLayer {
 /// Returns the set of emitted origin keys.
 pub(super) fn emit_diagram_decorations(
     scene: &mut lunco_canvas::scene::Scene,
-    graphics: &[crate::annotations::GraphicItem],
-    plot_nodes: &[crate::annotations::LunCoPlotNode],
+    graphics: &[lunco_modelica_ast::annotations::GraphicItem],
+    plot_nodes: &[lunco_modelica_ast::annotations::LunCoPlotNode],
     doc_id: Option<lunco_doc::DocumentId>,
 ) -> std::collections::HashSet<String> {
-    use crate::annotations::GraphicItem;
+    use lunco_modelica_ast::annotations::GraphicItem;
     let mut origins: std::collections::HashSet<String> = Default::default();
     let mut text_idx: usize = 0;
     for item in graphics.iter() {
@@ -214,7 +214,7 @@ pub(super) fn emit_diagram_decorations(
 /// the standard `Diagram(graphics=…)` shapes AND the LunCo
 /// `__LunCo(plotNodes=…)` live tiles, extracted *independently*.
 ///
-/// The two are orthogonal annotations (see [`crate::annotations::Diagram`]):
+/// The two are orthogonal annotations (see [`lunco_modelica_ast::annotations::Diagram`]):
 /// a model can have diagram graphics, plot tiles, both, or neither.
 /// We therefore never gate one on the other — a pure behaviour model
 /// with only plot tiles (no `Diagram` block) still returns its tiles.
@@ -223,9 +223,9 @@ pub(super) fn diagram_annotation_for_target(
     ast: &rumoca_compile::parsing::ast::StoredDefinition,
     target: Option<&str>,
 ) -> Option<(
-    crate::annotations::CoordinateSystem,
-    Vec<crate::annotations::GraphicItem>,
-    Vec<crate::annotations::LunCoPlotNode>,
+    lunco_modelica_ast::annotations::CoordinateSystem,
+    Vec<lunco_modelica_ast::annotations::GraphicItem>,
+    Vec<lunco_modelica_ast::annotations::LunCoPlotNode>,
 )> {
     // Route through the canonical AST class lookup
     // `crate::diagram::find_class_by_qualified_name`. It already
@@ -255,8 +255,8 @@ pub(super) fn diagram_annotation_for_target(
     // gates the other:
     //   * standard `Diagram(graphics=…)` → background shapes
     //   * `__LunCo(plotNodes=…)`          → live signal tiles
-    let diagram = crate::annotations::extract_diagram(&class.annotation);
-    let plot_nodes = crate::annotations::extract_lunco_plot_nodes(&class.annotation);
+    let diagram = lunco_modelica_ast::annotations::extract_diagram(&class.annotation);
+    let plot_nodes = lunco_modelica_ast::annotations::extract_lunco_plot_nodes(&class.annotation);
     if diagram.is_none() && plot_nodes.is_empty() {
         return None;
     }

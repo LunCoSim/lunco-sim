@@ -7,7 +7,7 @@
 //! parser and then passed through the same typed extractor as class and
 //! component annotations; this is not a second annotation grammar.
 
-use super::LineRoute;
+use lunco_modelica_ast::annotations::{extract_line_full, LineRoute};
 use lunco_modelica_ast::ast_mut::{annotation_clause, find_keyword, line_start, statement_end};
 use lunco_modelica_ast::ast_mut::{parse_stub_cached, FRAGMENT_CLASS_NAME};
 use rumoca_compile::parsing::ast::{ComponentReference, Equation, StoredDefinition};
@@ -53,7 +53,7 @@ pub fn line_route_for_connect(source: &str, location: usize) -> Option<LineRoute
     );
     let parsed = parse_stub_cached(&stub)?;
     let class = parsed.classes.get(FRAGMENT_CLASS_NAME)?;
-    super::extract_line_full(&class.annotation)
+    extract_line_full(&class.annotation)
 }
 
 fn collect_class_routes(

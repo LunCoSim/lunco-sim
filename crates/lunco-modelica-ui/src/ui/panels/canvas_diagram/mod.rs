@@ -265,9 +265,9 @@ pub mod coords {
 pub type BackgroundDiagramHandle = std::sync::Arc<
     std::sync::RwLock<
         Option<(
-            crate::annotations::CoordinateSystem,
-            Vec<crate::annotations::GraphicItem>,
-            Vec<crate::annotations::LunCoPlotNode>,
+            lunco_modelica_ast::annotations::CoordinateSystem,
+            Vec<lunco_modelica_ast::annotations::GraphicItem>,
+            Vec<lunco_modelica_ast::annotations::LunCoPlotNode>,
         )>,
     >,
 >;

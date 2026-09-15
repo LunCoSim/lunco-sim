@@ -274,7 +274,7 @@ pub(super) fn empty_overlay_class_info(
     doc_id: Option<lunco_doc::DocumentId>,
     class_name: &str,
 ) -> (
-    Option<crate::annotations::Icon>,
+    Option<lunco_modelica_ast::annotations::Icon>,
     Option<&'static str>,
     Option<String>,
     Vec<String>,
@@ -328,7 +328,7 @@ pub(super) fn empty_overlay_class_info(
     let icon = ctx
         .resource::<crate::engine_resource::ModelicaEngineHandle>()
         .and_then(|handle| handle.try_cached_icon_for(&class_context))
-        .or_else(|| crate::annotations::extract_icon(&class.annotation));
+        .or_else(|| lunco_modelica_ast::annotations::extract_icon(&class.annotation));
     let class_type = match class.class_type {
         ClassType::Model => Some("model"),
         ClassType::Block => Some("block"),

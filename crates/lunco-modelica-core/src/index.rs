@@ -151,9 +151,9 @@ pub struct ClassEntry {
     #[serde(default)]
     pub children: Vec<String>,
     /// Authored Icon annotation, if present. Populated from
-    /// [`crate::annotations::extract_icon`] during rebuild.
+    /// [`lunco_modelica_ast::annotations::extract_icon`] during rebuild.
     #[serde(default)]
-    pub icon: Option<crate::annotations::Icon>,
+    pub icon: Option<lunco_modelica_ast::annotations::Icon>,
     /// `(info, revisions)` from the class's `Documentation(...)`
     /// annotation. Both are `None` when no documentation was authored.
     #[serde(default)]
@@ -179,7 +179,7 @@ pub struct ClassEntry {
     /// all other candidates so the Compile / Fast Run picker picks
     /// the author-tagged target by default.
     #[serde(default)]
-    pub experiment: Option<crate::annotations::Experiment>,
+    pub experiment: Option<lunco_modelica_ast::annotations::Experiment>,
     /// Extends-flattened port list. Populated by the indexer for
     /// source library classes (pre-baked into `library_index.json`) and by the
     /// projector for live user code on first paint. Empty by
@@ -195,7 +195,7 @@ pub struct ClassEntry {
     /// the icon used at port markers. Renderer prefers this for
     /// connector instances at top-level when present.
     #[serde(default)]
-    pub diagram_graphics: Option<crate::annotations::Diagram>,
+    pub diagram_graphics: Option<lunco_modelica_ast::annotations::Diagram>,
     /// Schematic text label authored on the class (e.g. `"cosh"` for
     /// a hyperbolic-cosine block). Populated by the indexer.
     #[serde(default)]
@@ -363,7 +363,7 @@ impl ModelicaIndex {
     ///
     /// Phase 1 (this commit): components + classes + within. Annotations
     /// (Placement, Icon, Diagram, connection waypoints) are populated by
-    /// downstream commits — they live in `crate::annotations` /
+    /// downstream commits — they live in `lunco_modelica_ast::annotations` /
     /// `crate::diagram` today and will move to `annotation_parse.rs`
     /// when the placement metamodel lands.
     pub fn rebuild_from_ast(&mut self, ast: &ast::StoredDefinition, source: &str) {
@@ -833,9 +833,9 @@ fn insert_class_recursive(
 
     // Annotation extraction reuses the existing helpers so Index stays
     // in lockstep with the model_view / canvas_diagram extractors.
-    let icon = crate::annotations::extract_icon(&class_def.annotation);
+    let icon = lunco_modelica_ast::annotations::extract_icon(&class_def.annotation);
     let documentation = crate::doc_extract::extract_documentation(&class_def.annotation);
-    let experiment = crate::annotations::extract_experiment(&class_def.annotation);
+    let experiment = lunco_modelica_ast::annotations::extract_experiment(&class_def.annotation);
 
     // Count non-trivial equations: skip `Empty` placeholders and
     // `Connect` (tracked separately via `connections`). Mirrors the
@@ -904,11 +904,11 @@ fn insert_class_recursive(
             .map(|i| (i.description, i.modifications))
             .unwrap_or_default();
         // Placement extraction reuses the metamodel
-        // [`crate::annotations::extract_placement`] and converts the
+        // [`lunco_modelica_ast::annotations::extract_placement`] and converts the
         // annotation-shaped `Placement(transformation(...))` to the
         // simpler `pretty::Placement` (centre+size) that the wire
         // format uses.
-        let placement = crate::annotations::extract_placement(&comp.annotation)
+        let placement = lunco_modelica_ast::annotations::extract_placement(&comp.annotation)
             .map(annotation_placement_to_pretty);
         let entry = ComponentEntry {
             key,
@@ -962,7 +962,10 @@ fn insert_class_recursive(
             let waypoints = lhs
                 .get_location()
                 .and_then(|location| {
-                    crate::annotations::line_route_for_connect(source, location.start as usize)
+                    crate::annotation_source::line_route_for_connect(
+                        source,
+                        location.start as usize,
+                    )
                 })
                 .map(|route| route.points)
                 .unwrap_or_default();
@@ -1012,7 +1015,7 @@ fn endpoint_from_component_ref(cr: &ast::ComponentReference) -> ComponentEndpoin
     }
 }
 
-fn annotation_placement_to_pretty(p: crate::annotations::Placement) -> Placement {
+fn annotation_placement_to_pretty(p: lunco_modelica_ast::annotations::Placement) -> Placement {
     let (cx, cy, w, h) = p.transformation.centre_size();
     Placement {
         x: cx as f32,

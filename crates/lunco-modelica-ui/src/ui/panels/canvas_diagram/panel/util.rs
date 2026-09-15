@@ -12,7 +12,7 @@ pub(crate) static LAST_APPLY_AT: Mutex<Option<web_time::Instant>> = Mutex::new(N
 // it; its only caller was its own `invalidate`, wired to a `DocumentChanged`
 // observer that dutifully cleared a map which was always empty. Port icons resolve
 // through `ModelicaEngine::icon_for`, which memoises them properly (see
-// `crate::icon_memo`).
+// `lunco_modelica_ast::source_memo`).
 
 /// Mark a phase in the render loop for tracing.
 pub(crate) fn mark(

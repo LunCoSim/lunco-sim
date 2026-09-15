@@ -451,11 +451,11 @@ fn shipped_default_policy_emits_visual_and_executable_topology() {
         lunco_modelica_core::diagram::find_class_by_qualified_name(&ast, "Rig_System")
             .map(|class| {
                 assert!(
-                    lunco_modelica_core::annotations::extract_icon(&class.annotation).is_some(),
+                    lunco_modelica_ast::annotations::extract_icon(&class.annotation).is_some(),
                     "the generated root needs a compact standard Icon"
                 );
                 assert!(
-                    lunco_modelica_core::annotations::extract_diagram(&class.annotation).is_some(),
+                    lunco_modelica_ast::annotations::extract_diagram(&class.annotation).is_some(),
                     "the generated root needs a standard Diagram"
                 );
                 let unit_name = &plan
@@ -476,7 +476,7 @@ fn shipped_default_policy_emits_visual_and_executable_topology() {
                         .values()
                         .filter(|component| component.type_name.to_string() == *unit_name)
                         .all(|component| {
-                            lunco_modelica_core::annotations::extract_placement(
+                            lunco_modelica_ast::annotations::extract_placement(
                                 &component.annotation,
                             )
                             .is_some()
@@ -495,8 +495,8 @@ fn shipped_default_policy_emits_visual_and_executable_topology() {
     let unit = lunco_modelica_core::diagram::find_class_by_qualified_name(&ast, unit_name)
         .expect("the generated unit class is emitted");
     assert!(
-        lunco_modelica_core::annotations::extract_icon(&unit.annotation).is_some()
-            && lunco_modelica_core::annotations::extract_diagram(&unit.annotation).is_some(),
+        lunco_modelica_ast::annotations::extract_icon(&unit.annotation).is_some()
+            && lunco_modelica_ast::annotations::extract_diagram(&unit.annotation).is_some(),
         "each generated unit needs standard Icon and Diagram annotations"
     );
     assert!(
@@ -514,7 +514,7 @@ fn shipped_default_policy_emits_visual_and_executable_topology() {
             .values()
             .filter(|component| component.type_name.to_string().starts_with("LunCo."))
             .all(|component| {
-                lunco_modelica_core::annotations::extract_placement(&component.annotation).is_some()
+                lunco_modelica_ast::annotations::extract_placement(&component.annotation).is_some()
             }),
         "native members need placements so their authored icons can render"
     );

@@ -970,7 +970,7 @@ pub fn numeric_of(expr: &Expression) -> Option<f64> {
 /// across nested levels are resolved by the outer-most occurrence.
 ///
 /// NOTE: this is a *distinct concern* from MLS §5.3 scope resolution
-/// ([`crate::diagram::scope_chain_candidates`]) — it's an intra-document
+/// ([`crate::scope_chain_candidates`]) — it's an intra-document
 /// leaf search for navigate-to-symbol, with no enclosing-scope/import
 /// context and no library lookup. It is intentionally NOT folded into
 /// the scope-chain resolver.

@@ -13,5 +13,8 @@ rumoca-ir-ast = { workspace = true }
 rumoca-phase-parse = { workspace = true }
 serde = { workspace = true }
 
+[dev-dependencies]
+serde_json = { workspace = true }
+
 [lints]
 workspace = true

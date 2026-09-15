@@ -4,9 +4,8 @@ use super::graphics::*;
 use super::layers::*;
 use super::placement::*;
 use super::types::*;
-use rumoca_compile::parsing::ast::{ClassDef, Expression, Import, TerminalType};
-use rumoca_compile::parsing::ir_core::OpUnary;
-use rumoca_compile::parsing::OpBinary;
+use rumoca_core::{OpBinary, OpUnary};
+use rumoca_ir_ast::{ClassDef, Expression, Import, TerminalType};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -83,7 +82,7 @@ pub fn extract_lunco_plot_nodes(annotations: &[Expression]) -> Vec<LunCoPlotNode
 }
 
 fn extract_lunco_plot_node_record(expr: &Expression) -> Option<LunCoPlotNode> {
-    if !lunco_modelica_ast::ast_extract::is_plot_node_record_call(expr) {
+    if !crate::ast_extract::is_plot_node_record_call(expr) {
         return None;
     }
     let args = call_args(expr)?;
@@ -129,12 +128,9 @@ pub fn extract_experiment(annotations: &[Expression]) -> Option<Experiment> {
 /// Walk a class's `extends` chain and merge inherited + local icon
 /// graphics into a single [`Icon`]. The merge algorithm (recurse into
 /// bases first, append local graphics last, inherit the coordinate
-/// system from the first source that declares one) is shared by both
-/// the indexer (closure resolver over the scanned class map) and the
-/// runtime ([`extract_icon_via_engine`], engine resolver). Only the
-/// resolver and the *source* of `falsy_params` differ — the caller
-/// computes the falsy set once over the full chain and passes it down
-/// unchanged.
+/// system from the first source that declares one) is shared by index and
+/// runtime callers. The resolver and the source of `falsy_params` remain
+/// owned by those callers.
 fn merge_inherited_icon<F>(
     class_name: &str,
     class: &ClassDef,
@@ -204,7 +200,7 @@ where
 /// (bool params explicitly bound to `false`, used to drop conditionally
 /// hidden graphics) is collected once over the *whole* chain — a
 /// superset of any single level — so it matches the flattened semantics
-/// of [`extract_icon_via_engine`].
+/// of the runtime engine adapter.
 pub fn extract_icon_inherited<F>(
     class_name: &str,
     class: &ClassDef,
@@ -226,32 +222,22 @@ where
     merge_inherited_icon(class_name, class, resolver, &falsy_params, visited)
 }
 
-/// Runtime entry point: merge a class's inherited icon via the live
-/// [`ModelicaEngine`]. The falsy set comes from the engine's typed,
-/// modification-aware member view (`inherited_members_typed`), so an
-/// overridden `useHeatPort = true` correctly *un-hides* a base graphic.
-pub fn extract_icon_via_engine(
-    qualified: &str,
-    engine: &mut crate::engine::ModelicaEngine,
-) -> Option<Icon> {
-    let falsy_params: HashSet<String> = engine
-        .inherited_members_typed(qualified)
-        .into_iter()
-        .filter(|m| {
-            matches!(
-                m.variability,
-                crate::engine::InheritedVariability::Parameter
-            )
-        })
-        .filter(|m| m.default_value.as_deref() == Some("false"))
-        .map(|m| m.name)
-        .collect();
-
-    let top = engine.class_def(qualified)?;
-    let mut resolver =
-        |name: &str| -> Option<Arc<ClassDef>> { engine.class_def(name).map(Arc::new) };
-    let mut visited = HashSet::new();
-    merge_inherited_icon(qualified, &top, &mut resolver, &falsy_params, &mut visited)
+/// Merge a class's inherited icon with a caller-owned falsy-parameter set.
+///
+/// Engine and index adapters use this same AST operation while retaining
+/// ownership of class lookup and parameter semantics at their respective
+/// boundaries.
+pub fn extract_icon_inherited_with_falsy_params<F>(
+    class_name: &str,
+    class: &ClassDef,
+    resolver: &mut F,
+    falsy_params: &HashSet<String>,
+    visited: &mut HashSet<String>,
+) -> Option<Icon>
+where
+    F: FnMut(&str) -> Option<Arc<ClassDef>>,
+{
+    merge_inherited_icon(class_name, class, resolver, falsy_params, visited)
 }
 
 // ---------------------------------------------------------------------------
@@ -267,8 +253,7 @@ fn build_extends_candidates(class_name: &str, base_name: &str, imports: &[Import
         None => (base_name, None),
     };
     for imp in imports {
-        use rumoca_compile::parsing::ast::Import;
-        let import_path_name = |path: &rumoca_compile::parsing::ast::Name| -> String {
+        let import_path_name = |path: &rumoca_ir_ast::Name| -> String {
             path.name
                 .iter()
                 .map(|t| t.text.as_ref())
@@ -326,11 +311,11 @@ fn build_extends_candidates(class_name: &str, base_name: &str, imports: &[Import
     }
 
     // Scope-chain candidates (sibling → parent → root) come from the single
-    // canonical §5.3 resolver `diagram::scope_chain_candidates`, so the walk
+    // canonical §5.3 resolver `crate::scope_chain_candidates`, so the walk
     // can't drift from the rest of the crate. Its trailing bare `base_name` is
     // the one we already pushed first, so skip it. The import candidates above
     // are layered on top — they are not part of the scope walk.
-    for cand in crate::diagram::scope_chain_candidates(base_name, Some(class_name)) {
+    for cand in crate::scope_chain_candidates(base_name, Some(class_name)) {
         if cand != base_name {
             out.push(cand);
         }
@@ -790,7 +775,7 @@ fn extract_color(expr: &Expression) -> Option<Color> {
 /// canonical `lunco_modelica_ast::ast_extract::numeric_of` so the Terminal/Unary decoding
 /// lives in one place.
 fn extract_number(expr: &Expression) -> Option<f64> {
-    lunco_modelica_ast::ast_extract::numeric_of(expr)
+    crate::ast_extract::numeric_of(expr)
 }
 
 fn extract_string(expr: &Expression) -> Option<String> {

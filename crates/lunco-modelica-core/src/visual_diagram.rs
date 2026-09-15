@@ -225,7 +225,7 @@ pub struct DiagramNode {
     /// port positioning, edge-stub directions, the icon's bounding
     /// rect, and (eventually) the icon body itself.
     #[serde(default)]
-    pub icon_transform: crate::icon_transform::IconTransform,
+    pub icon_transform: lunco_modelica_ast::icon_transform::IconTransform,
     /// Whether the node is selected.
     pub selected: bool,
     /// True when the source declares the component with an `if <cond>`
@@ -331,7 +331,7 @@ impl VisualDiagram {
         // that have a real Placement override this immediately.
         // `from_placement` bakes in the Y flip — recovered cleanly by
         // flipping `position.y` above (Modelica +Y up, position is screen-Y).
-        let icon_transform = crate::icon_transform::IconTransform::from_placement(
+        let icon_transform = lunco_modelica_ast::icon_transform::IconTransform::from_placement(
             (position.x, -position.y),
             (20.0, 20.0),
             false,

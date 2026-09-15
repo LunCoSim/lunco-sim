@@ -312,7 +312,7 @@ pub(super) fn port_fallback_offset_for_size(
 pub(super) fn resolve_port_icons(
     parent_qualified: &str,
     ports: &[crate::visual_diagram::PortDef],
-) -> Vec<Option<crate::annotations::Icon>> {
+) -> Vec<Option<lunco_modelica_ast::annotations::Icon>> {
     let palette = crate::visual_diagram::library_class_library();
     let palette_lookup: HashMap<&str, &crate::index::ClassEntry> =
         palette.iter().map(|d| (d.name.as_str(), d)).collect();
@@ -325,14 +325,15 @@ pub(super) fn resolve_port_icons(
                 vec![path.clone()]
             } else if !path.is_empty() {
                 // Canonical MLS §5.3 scope chain (single source of truth in
-                // `diagram::scope_chain_candidates`), augmented with the
+                // `lunco_modelica_ast::scope_chain_candidates`), augmented with the
                 // connector convention that a port's connector class usually
                 // lives in an `Interfaces` subpackage of each enclosing
                 // package: for each scope candidate `<prefix>.<path>` also try
                 // `<prefix>.Interfaces.<path>`. Produces the same candidates,
                 // in the same order, as the previous inline walk.
                 let mut out = Vec::new();
-                for cand in crate::diagram::scope_chain_candidates(path, Some(parent_qualified)) {
+                for cand in lunco_modelica_ast::scope_chain_candidates(path, Some(parent_qualified))
+                {
                     if let Some(prefix) = cand.strip_suffix(&format!(".{path}")) {
                         out.push(format!("{prefix}.Interfaces.{path}"));
                     }
@@ -358,7 +359,9 @@ pub(super) fn resolve_port_icons(
                             return Some(icon);
                         }
                         if let Some(cd) = engine.class_def(c) {
-                            if let Some(icon) = crate::annotations::extract_icon(&cd.annotation) {
+                            if let Some(icon) =
+                                lunco_modelica_ast::annotations::extract_icon(&cd.annotation)
+                            {
                                 return Some(icon);
                             }
                         }

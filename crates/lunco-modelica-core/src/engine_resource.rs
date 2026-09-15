@@ -137,7 +137,10 @@ impl ModelicaEngineHandle {
     /// standard-library class. Cache misses are therefore left to the
     /// background projection task, and the caller can use a local AST icon
     /// until that task requests a repaint.
-    pub fn try_cached_icon_for(&self, qualified: &str) -> Option<crate::annotations::Icon> {
+    pub fn try_cached_icon_for(
+        &self,
+        qualified: &str,
+    ) -> Option<lunco_modelica_ast::annotations::Icon> {
         let mut engine = self.engine.try_lock().ok()?;
         engine.cached_icon_for(qualified).flatten()
     }
