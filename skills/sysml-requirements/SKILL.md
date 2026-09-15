@@ -234,6 +234,13 @@ the source attribute's short name),
 use JSON only at an external/logging boundary. The full non-compact report
 also exposes `attributes_qualified` and `attribute_collisions` for tooling.
 
+Repeated source queries reuse one immutable semantic snapshot only when the
+caller revision, ordered source-set fingerprint, embedded standard-library
+contents, and cache format all match. Do not treat a document generation or a
+short revision number as a complete source identity: separate documents or
+Twins can reuse those counters. The cache uses the shared `lunco-hash` fast
+tier and does not add a second source registry or durable content store.
+
 ## Write the Rhai verification observer
 
 The observer is the executable policy. It reads the canonical source snapshot,

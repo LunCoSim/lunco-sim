@@ -6,6 +6,7 @@ license.workspace = true
 description = "Pure SysML v2 parsing, resolution, and source diagnostics"
 
 [dependencies]
+lunco-hash = { path = "../lunco-hash" }
 serde = { workspace = true }
 sysml_semantics = { package = "sysmlv2-semantics", version = "=0.1.1" }
 sysml_syntax = { package = "sysmlv2-syntax", version = "=0.1.2" }

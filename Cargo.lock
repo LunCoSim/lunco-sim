@@ -8462,6 +8462,7 @@ dependencies = [
 name = "lunco-sysml-ast"
 version = "0.1.0"
 dependencies = [
+ "lunco-hash",
  "serde",
  "sysmlv2-semantics",
  "sysmlv2-stdlib",

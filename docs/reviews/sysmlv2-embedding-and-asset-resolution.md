@@ -348,8 +348,10 @@ absolute cache path.
   than adding a SysML walk.
 - Keep a content/source-set revision and reject stale async parse results, as
   Modelica does.
-- Cache semantic snapshots by source-set revision, per-file content hashes,
-  standard-library release, and parser version.
+- Cache semantic snapshots by source-set revision, an ordered per-file content
+  fingerprint, the embedded standard-library sources, and the cache format
+  version. A caller revision alone is not a safe identity because separate
+  documents or Twins can reuse a generation number.
 - Rebuild a workspace snapshot when a changed file has the same logical name;
   `Workspace::add_file` appends a second file for changed text.
 - Clone a resolved standard-library workspace for read-only queries rather than

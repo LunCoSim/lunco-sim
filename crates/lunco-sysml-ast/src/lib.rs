@@ -23,10 +23,23 @@ thread_local! {
 
 // Validation queries are often repeated by a single Rhai test (one lookup per
 // SysML attribute). Keep the most recently resolved source set alive so those
-// reads share one parser/resolver snapshot. The key is the caller-provided
-// content revision, not a filesystem path, so a changed Twin cannot reuse a
-// stale analysis and different Twins never share source identity.
-static LAST_ANALYSIS: OnceLock<Mutex<Option<(u64, bool, Arc<SysmlAnalysis>)>>> = OnceLock::new();
+// reads share one parser/resolver snapshot. The caller's revision remains part
+// of the identity, but is not sufficient on its own: document generations and
+// independently indexed Twins can legitimately reuse the same number. The
+// content fingerprint closes that stale-snapshot hole without making callers
+// serialize or retain a second source registry.
+static LAST_ANALYSIS: OnceLock<Mutex<Option<(AnalysisCacheKey, Arc<SysmlAnalysis>)>>> =
+    OnceLock::new();
+static STANDARD_LIBRARY_FINGERPRINT: OnceLock<u64> = OnceLock::new();
+
+const ANALYSIS_CACHE_FORMAT: u64 = 1;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AnalysisCacheKey {
+    source_revision: u64,
+    includes_stdlib: bool,
+    source_fingerprint: u64,
+}
 
 /// A source file admitted to a semantic workspace.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -355,14 +368,19 @@ impl SysmlAnalysis {
             .into_iter()
             .map(|(name, text)| (name.into(), text.into()))
             .collect();
+        let key = AnalysisCacheKey {
+            source_revision,
+            includes_stdlib,
+            source_fingerprint: source_fingerprint(&files, includes_stdlib),
+        };
         if source_revision != 0 {
             let cache = LAST_ANALYSIS.get_or_init(|| Mutex::new(None));
-            if let Some((revision, cached_stdlib, analysis)) = cache
+            if let Some((cached_key, analysis)) = cache
                 .lock()
                 .expect("SysML analysis cache mutex poisoned")
                 .as_ref()
             {
-                if *revision == source_revision && *cached_stdlib == includes_stdlib {
+                if *cached_key == key {
                     return Arc::clone(analysis);
                 }
             }
@@ -371,7 +389,7 @@ impl SysmlAnalysis {
         if source_revision != 0 {
             let cache = LAST_ANALYSIS.get_or_init(|| Mutex::new(None));
             *cache.lock().expect("SysML analysis cache mutex poisoned") =
-                Some((source_revision, includes_stdlib, Arc::clone(&analysis)));
+                Some((key, Arc::clone(&analysis)));
         }
         analysis
     }
@@ -443,6 +461,36 @@ fn standard_library_workspace() -> Workspace {
             .expect("standard library cache initialized")
             .clone()
     })
+}
+
+fn source_fingerprint(files: &[(String, String)], includes_stdlib: bool) -> u64 {
+    let mut hash = lunco_hash::Fnv1a::new();
+    hash.write_u64(ANALYSIS_CACHE_FORMAT)
+        .write_u64(u64::from(includes_stdlib));
+    if includes_stdlib {
+        hash.write_u64(*STANDARD_LIBRARY_FINGERPRINT.get_or_init(|| {
+            // Include the actual embedded sources rather than only the crate
+            // version so a regenerated library invalidates a cached projection.
+            let mut library_hash = lunco_hash::Fnv1a::new();
+            library_hash.write_u64(sysml_stdlib::FILES.len() as u64);
+            for (name, text) in sysml_stdlib::FILES {
+                library_hash
+                    .write_u64(name.len() as u64)
+                    .write_bytes(name.as_bytes())
+                    .write_u64(text.len() as u64)
+                    .write_bytes(text.as_bytes());
+            }
+            library_hash.finish()
+        }));
+    }
+    hash.write_u64(files.len() as u64);
+    for (name, text) in files {
+        hash.write_u64(name.len() as u64)
+            .write_bytes(name.as_bytes())
+            .write_u64(text.len() as u64)
+            .write_bytes(text.as_bytes());
+    }
+    hash.finish()
 }
 
 fn project_attributes(files: &[SysmlFile], elements: &[SysmlElement]) -> Vec<SysmlAttribute> {
@@ -703,5 +751,16 @@ mod tests {
         let first = SysmlAnalysis::build_cached([("a.sysml", "part def A {}")], false, 0x1234);
         let second = SysmlAnalysis::build_cached([("a.sysml", "part def A {}")], false, 0x1234);
         assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn cached_analysis_never_reuses_revision_for_different_sources() {
+        let first = SysmlAnalysis::build_cached([("a.sysml", "part def A {}")], false, 0x1234);
+        let second = SysmlAnalysis::build_cached([("a.sysml", "part def B {}")], false, 0x1234);
+        assert!(!Arc::ptr_eq(&first, &second));
+        assert!(second
+            .elements()
+            .iter()
+            .any(|element| element.qualified_name == "B"));
     }
 }
