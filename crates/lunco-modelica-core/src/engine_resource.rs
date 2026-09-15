@@ -54,7 +54,7 @@ use lunco_doc::{Document, DocumentId};
 /// `Res<ModelicaEngineHandle>` parameter.
 ///
 /// Returns `None` before `ModelicaEnginePlugin::build` has run —
-/// callers should treat that as "no engine yet" (same as MSL bundle
+/// callers should treat that as "no engine yet" (same as source library bundle
 /// loading: a query before boot returns empty).
 static GLOBAL_ENGINE: OnceLock<ModelicaEngineHandle> = OnceLock::new();
 
@@ -145,14 +145,14 @@ impl ModelicaEngineHandle {
     /// Make a bundled source root available to the shared engine. This is a
     /// generic source-loading seam used by generated documents before the
     /// canvas asks the resolver for class icons, ports, or inherited members.
-    pub fn ensure_library_root(&self, root: &str) -> bool {
-        self.lock().ensure_library_root(root)
+    pub fn ensure_source_root(&self, root: &str) -> bool {
+        self.lock().ensure_source_root(root)
     }
 
     /// Schedule loading of a bundled source root without blocking the caller.
     ///
     /// The reservation is deliberately made inside the worker, rather than
-    /// before spawning it. A projection, parse install, or MSL bootstrap may
+    /// before spawning it. A projection, parse install, or source library bootstrap may
     /// be using the engine when a generated document first requests its
     /// library; waiting for that mutex on the update thread was the second
     /// source of apparent "projection stalls" after the recursive projection
@@ -160,15 +160,15 @@ impl ModelicaEngineHandle {
     /// reserves the root and the others observe the pending/resident state.
     ///
     /// Returns `true` when a worker was scheduled. Completion is published by
-    /// `ModelicaLibraryBecameReady`; the return value is not a readiness claim.
-    pub fn ensure_library_root_async(&self, root: &str) -> bool {
+    /// `SourceRootBecameReady`; the return value is not a readiness claim.
+    pub fn ensure_source_root_async(&self, root: &str) -> bool {
         let root = root.to_string();
         let handle = self.clone();
         bevy::tasks::AsyncComputeTaskPool::get()
             .spawn(async move {
                 {
                     let mut engine = handle.lock();
-                    if !engine.begin_library_root_load(&root) {
+                    if !engine.begin_source_root_load(&root) {
                         return;
                     }
                 }
@@ -183,7 +183,7 @@ impl ModelicaEngineHandle {
                     }
                 }
                 let mut engine = handle.lock();
-                let count = engine.finish_library_root_load(&root, parsed, diagnostics);
+                let count = engine.finish_source_root_load(&root, parsed, diagnostics);
                 handle.wake_sync();
                 bevy::log::info!(
                     "[ModelicaLibrary] source root `{root}` ready: {count} parsed document(s)",
@@ -447,10 +447,10 @@ pub fn drive_engine_sync(
         let Some(mut engine) = handle.try_lock() else {
             return;
         };
-        engine.drain_completed_library_roots()
+        engine.drain_completed_source_roots()
     };
     for root in completed_roots {
-        commands.trigger(ModelicaLibraryBecameReady { root });
+        commands.trigger(SourceRootBecameReady { root });
     }
     // Active tab's doc id (if any). Used below to prioritise its
     // reparse over any background tabs queued behind it. `None` until
@@ -756,21 +756,21 @@ pub fn drive_engine_sync(
         #[cfg(target_arch = "wasm32")]
         let dispatched_to_worker = match handle.mark_pending_for_worker(doc_id) {
             Some(uri) => {
-                // MSL-bundle short-circuit: every file under
+                // source library-bundle short-circuit: every file under
                 // `Modelica/` (and the extra-library trees) was
                 // pre-parsed at build time and bincode-shipped in
                 // `parsed-<sha>.bin.zst`; on wasm those ASTs live in
-                // `crate::msl_remote::global_parsed_msl()` keyed by
-                // their original MSL-relative path
+                // `crate::library_remote::global_parsed_source_bundle()` keyed by
+                // their original source library-relative path
                 // (`Modelica/Blocks/Sources.mo`, etc.). If the doc
                 // we're about to parse came from one of those files,
                 // grab the cached `StoredDefinition` and skip the
-                // worker round-trip — re-parsing a 150 KB MSL file
+                // worker round-trip — re-parsing a 150 KB source library file
                 // takes minutes on wasm and produces a byte-identical
                 // result.
                 //
                 // Identification: the doc's `DocumentOrigin::File`
-                // path is the same key the MSL bundle uses.
+                // path is the same key the source library bundle uses.
                 let cached_ast: Option<rumoca_compile::parsing::ast::StoredDefinition> = {
                     let host = registry.host(doc_id);
                     let origin_path =
@@ -781,7 +781,7 @@ pub fn drive_engine_sync(
                             });
                     origin_path.and_then(|path| {
                         let key = path.to_string_lossy().to_string();
-                        crate::msl_remote::global_parsed_msl().and_then(|bundle| {
+                        crate::library_remote::global_parsed_source_bundle().and_then(|bundle| {
                             bundle
                                 .iter()
                                 .find(|(k, _)| k == &key)
@@ -807,7 +807,7 @@ pub fn drive_engine_sync(
                     registry.mark_changed(doc_id);
                     let t_doc = t1.elapsed().as_secs_f64() * 1000.0;
                     bevy::log::info!(
-                        "[EngineSync] reuse pre-parsed MSL AST doc={} gen={} \
+                        "[EngineSync] reuse pre-parsed source library AST doc={} gen={} \
                          engine={:.0}ms doc={:.0}ms",
                         doc_id.raw(),
                         gen,
@@ -950,13 +950,13 @@ impl Plugin for ModelicaEnginePlugin {
         app.insert_resource(handle)
             .init_resource::<EngineSyncCursor>()
             .init_resource::<ParsePacing>()
-            .init_resource::<MslBootstrapState>()
-            .init_resource::<MslBootstrapTask>()
+            .init_resource::<SourceBundleBootstrapState>()
+            .init_resource::<SourceBundleBootstrapTask>()
             .add_systems(
                 Update,
                 (
                     drive_engine_sync.run_if(engine_sync_due),
-                    drive_msl_bootstrap,
+                    drive_source_bundle_bootstrap,
                 ),
             );
         #[cfg(target_arch = "wasm32")]
@@ -1030,18 +1030,18 @@ mod tests {
     }
 }
 
-/// Tracks whether the MSL bundle has been bootstrapped into the
-/// workspace engine. Once `Done`, `drive_msl_bootstrap` becomes a
+/// Tracks whether the source library bundle has been bootstrapped into the
+/// workspace engine. Once `Done`, `drive_source_bundle_bootstrap` becomes a
 /// no-op for the rest of the session.
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MslBootstrapState {
+pub enum SourceBundleBootstrapState {
     #[default]
     Pending,
     Loading,
     Done,
 }
 
-/// Background source-index install for a resident MSL bundle.
+/// Background source-index install for a resident source library bundle.
 ///
 /// `Session::replace_parsed_source_set` builds the cross-file scope index and
 /// can take hundreds of milliseconds even when parsing has already happened.
@@ -1049,38 +1049,38 @@ pub enum MslBootstrapState {
 /// only rendezvous and UI readers use `try_lock`/cache-only APIs while it is
 /// held.
 #[derive(Resource, Default)]
-struct MslBootstrapTask(Option<bevy::tasks::Task<usize>>);
+struct SourceBundleBootstrapTask(Option<bevy::tasks::Task<usize>>);
 
 /// Notification event emitted exactly once per session by
-/// [`drive_msl_bootstrap`] the frame MSL is installed into the
+/// [`drive_source_bundle_bootstrap`] the frame source library is installed into the
 /// workspace engine session.
 ///
-/// This is a *notification* (system tells the world "MSL is now
+/// This is a *notification* (system tells the world "source library is now
 /// resolvable"), **not** a user-facing command — observe it with
 /// `app.add_observer(fn)` rather than dispatching it from UI.
 ///
 /// Typical observer: re-trigger canvas diagram projection so
 /// standard-library component icons resolve (they show as blank
-/// boxes when projected before MSL was available).
+/// boxes when projected before source library was available).
 #[derive(Event, Clone, Debug)]
-pub struct MslBecameReady;
+pub struct SourceBundleBecameReady;
 
 /// Generic source-root completion. The UI uses the same re-projection seam
-/// for MSL, LunCo, and future bundled libraries.
+/// for source library, LunCo, and future bundled libraries.
 #[derive(Event, Clone, Debug)]
-pub struct ModelicaLibraryBecameReady {
+pub struct SourceRootBecameReady {
     pub root: String,
 }
 
-/// Bevy system: once the pre-parsed MSL bundle is **resident in memory**,
+/// Bevy system: once the pre-parsed source library bundle is **resident in memory**,
 /// bulk-install it into the workspace engine as a `DurableExternal` source root
-/// so main-thread hover/diagnostics/resolution see all of MSL at once. Runs at
-/// most once per session — flips [`MslBootstrapState`] to `Done` and idles.
+/// so main-thread hover/diagnostics/resolution see all of source library at once. Runs at
+/// most once per session — flips [`SourceBundleBootstrapState`] to `Done` and idles.
 ///
 /// **The parsed source slot is the readiness predicate.** Install fires iff
-/// `msl_remote::global_parsed_msl()` is populated (the in-process slot holds the
+/// `library_remote::global_parsed_source_bundle()` is populated (the in-process slot holds the
 /// parsed `Vec<(uri, StoredDefinition)>`); install is a clone plus the engine's
-/// source-set boundary, with no re-parsing. `MslLoadState::Ready` only means
+/// source-set boundary, with no re-parsing. `LibraryLoadState::Ready` only means
 /// that the source tree/index is available; native fills the parsed slot lazily
 /// after a class is first opened, so using that UI state as the bootstrap gate
 /// would strand the shared engine before the actual AST source set exists. The
@@ -1088,19 +1088,19 @@ pub struct ModelicaLibraryBecameReady {
 /// in *who fills that slot*:
 ///
 /// - **Web:** the worker-decoded bundle is installed into the slot during boot,
-///   so this runs the bulk install → instant full-MSL resolution.
-/// - **Native:** the slot is filled **lazily** (first `parsed_msl_bundle()` disk
+///   so this runs the bulk install → instant full-source library resolution.
+/// - **Native:** the slot is filled **lazily** (first `parsed_source_bundle()` disk
 ///   read), so at boot it is empty and this system waits without reading the
 ///   bundle. The first class lookup seats the complete bundle through the same
 ///   engine source-set boundary; this system then publishes the common ready
 ///   notification for documents that were projected before that lookup.
-fn drive_msl_bootstrap(
+fn drive_source_bundle_bootstrap(
     handle: Res<ModelicaEngineHandle>,
-    mut bootstrap: ResMut<MslBootstrapState>,
-    mut task: ResMut<MslBootstrapTask>,
+    mut bootstrap: ResMut<SourceBundleBootstrapState>,
+    mut task: ResMut<SourceBundleBootstrapTask>,
     mut commands: Commands,
 ) {
-    if matches!(*bootstrap, MslBootstrapState::Done) {
+    if matches!(*bootstrap, SourceBundleBootstrapState::Done) {
         return;
     }
 
@@ -1111,14 +1111,14 @@ fn drive_msl_bootstrap(
     // from installing the immutable source set twice.
     if handle
         .try_lock()
-        .is_some_and(|engine| engine.source_set_installed("msl"))
+        .is_some_and(|engine| engine.source_set_installed("source-bundle"))
     {
         task.0 = None;
-        *bootstrap = MslBootstrapState::Done;
-        bevy::log::info!("[EngineBootstrap] MSL source set already installed by class lookup");
-        commands.trigger(MslBecameReady);
+        *bootstrap = SourceBundleBootstrapState::Done;
+        bevy::log::info!("[EngineBootstrap] source bundle already installed by class lookup");
+        commands.trigger(SourceBundleBecameReady);
         #[cfg(target_arch = "wasm32")]
-        crate::worker_transport::prewarm_pool_on_msl_ready();
+        crate::worker_transport::prewarm_pool_on_source_bundle_ready();
         return;
     }
 
@@ -1131,13 +1131,13 @@ fn drive_msl_bootstrap(
             bevy::tasks::futures_lite::future::poll_once(background),
         ) {
             task.0 = None;
-            *bootstrap = MslBootstrapState::Done;
+            *bootstrap = SourceBundleBootstrapState::Done;
             bevy::log::info!(
-                "[EngineBootstrap] installed MSL into workspace engine: {count} pre-parsed docs"
+                "[EngineBootstrap] installed source library into workspace engine: {count} pre-parsed docs"
             );
-            commands.trigger(MslBecameReady);
+            commands.trigger(SourceBundleBecameReady);
             #[cfg(target_arch = "wasm32")]
-            crate::worker_transport::prewarm_pool_on_msl_ready();
+            crate::worker_transport::prewarm_pool_on_source_bundle_ready();
         }
         return;
     }
@@ -1146,7 +1146,7 @@ fn drive_msl_bootstrap(
     // the update thread; copying the definitions and building the source index
     // happen on the worker. The install still uses the one shared Modelica
     // session, so all readers observe the same standard Modelica namespace.
-    let Some(docs) = crate::msl_remote::global_parsed_msl().cloned() else {
+    let Some(docs) = crate::library_remote::global_parsed_source_bundle().cloned() else {
         return;
     };
     let handle = handle.clone();
@@ -1158,12 +1158,12 @@ fn drive_msl_bootstrap(
         let count = defs.len();
         let mut engine = handle.lock();
         engine.replace_parsed_source_set(
-            "msl",
+            "source-bundle",
             rumoca_compile::compile::SourceRootKind::DurableExternal,
             defs,
         );
         count
     }));
-    *bootstrap = MslBootstrapState::Loading;
-    bevy::log::info!("[EngineBootstrap] installing resident MSL source index in background");
+    *bootstrap = SourceBundleBootstrapState::Loading;
+    bevy::log::info!("[EngineBootstrap] installing resident source index in background");
 }

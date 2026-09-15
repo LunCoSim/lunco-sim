@@ -4,10 +4,9 @@
 //! load into the rumoca compile session. A "source root" is any
 //! qualified-path-root segment that compiles can depend on:
 //!
-//! - **System libraries**: MSL (`Modelica`), third-party libraries
-//!   discovered in the `lunco-assets` cache (`ThermofluidStream`,
-//!   etc.). Loaded from disk via
-//!   `session.load_source_root_tolerant(...)`.
+//! - **Disk source roots**: any library or package explicitly registered by
+//!   the application or an active Twin. They are loaded from their declared
+//!   path; no cache-wide discovery is performed.
 //! - **Bundled examples**: `.mo` files compiled into the binary
 //!   (`AnnotatedRocketStage`, `Balloon`, etc.). Loaded via
 //!   [`crate::models::get_model`].
@@ -16,8 +15,8 @@
 //!
 //! ## Design intent
 //!
-//! Generalises the MSL-only load path
-//! ([`crate::msl_remote::MslRemotePlugin`]) so that every source the
+//! Generalises the source-bundle load path
+//! ([`crate::library_remote::LibraryRemotePlugin`]) so that every source the
 //! compiler needs goes through one registry with one state machine.
 //! Adding a fourth system library, a new bundled example, or a
 //! workspace folder becomes a data change, not new plumbing.
@@ -31,7 +30,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use web_time::Instant;
 
-/// Per-source-root state. Mirrors the `MslLoadState` shape, but
+/// Per-source-root state. Mirrors the `LibraryLoadState` shape, but
 /// keyed at the entry level instead of being a singleton.
 #[derive(Debug, Clone)]
 pub enum LoadState {
@@ -56,13 +55,8 @@ pub enum LoadState {
 /// The source-root loader matches on this enum to pick the correct strategy.
 #[derive(Debug, Clone)]
 pub enum SourceRootKind {
-    /// On-disk Modelica library (MSL or third-party). Loaded via
-    /// `session.load_source_root_tolerant`.
-    SystemLibrary {
-        /// `lunco-assets` cache subdirectory the library was unpacked
-        /// to. `"msl"` for MSL, `"thermofluidstream"` for
-        /// ThermofluidStream, etc.
-        cache_subdir: String,
+    /// On-disk source root explicitly registered by the application or Twin.
+    Disk {
         /// Absolute path to the package root directory containing
         /// `package.mo`.
         root_dir: PathBuf,
@@ -98,13 +92,13 @@ pub enum SourceRootKind {
 }
 
 /// One source root the workbench knows about. Keyed by the
-/// qualified-path root segment (the value the dep-scanner extracts
-/// from a `Modelica.Blocks.X` reference is `"Modelica"`).
+/// qualified-path root segment (the value the dependency scanner extracts
+/// from an external qualified reference).
 #[derive(Debug, Clone)]
 pub struct SourceRoot {
     /// Root segment of qualified names that resolve into this source.
-    /// MSL: `"Modelica"`. ThermofluidStream: `"ThermofluidStream"`.
-    /// Bundled `AnnotatedRocketStage.mo`: `"AnnotatedRocketStage"`.
+    /// A package rooted at `Modelica` or another authored package name uses
+    /// that name here; bundled examples use their own authored root.
     pub id: String,
     /// How to actually load this root when the gate decides to.
     pub kind: SourceRootKind,
@@ -116,9 +110,6 @@ pub struct SourceRoot {
 
 /// Process-wide registry of every named source root. Owned by the
 /// `ModelicaPlugin`; populated at plugin start by inventorying:
-///  - MSL via [`lunco_assets_core::msl_source_root_path`].
-///  - Third-party libraries via
-///    [`crate::package_tree::scanner::discover_third_party_libs`].
 ///  - Bundled examples via [`crate::models::bundled_models`].
 ///  - Structured packages via [`lunco_assets_core::models::package_roots_live`].
 ///
@@ -139,45 +130,6 @@ impl SourceRootRegistry {
     pub fn build() -> Self {
         let mut roots: HashMap<String, SourceRoot> = HashMap::new();
 
-        // MSL — the canonical system library. If `lunco-assets` hasn't
-        // unpacked it, we skip; the dep-scanner will still see
-        // `Modelica.*` references and surface the missing-library
-        // error via the gate.
-        if let Some(msl_dir) = lunco_assets_core::source_library_root_path("msl", "Modelica") {
-            roots.insert(
-                "Modelica".to_string(),
-                SourceRoot {
-                    id: "Modelica".to_string(),
-                    kind: SourceRootKind::SystemLibrary {
-                        cache_subdir: "msl".to_string(),
-                        root_dir: msl_dir,
-                    },
-                    state: LoadState::NotLoaded,
-                },
-            );
-        }
-
-        // Third-party libraries — every package with a `package.mo`
-        // under a sibling of `<cache>/msl/`. Discovery already
-        // implemented for the package-browser tree; we reuse it here
-        // for the compile-gate registry.
-        for (cache_subdir, root_name) in crate::package_tree::scanner::discover_third_party_libs() {
-            let root_dir = lunco_assets_core::cache_dir()
-                .join(&cache_subdir)
-                .join(&root_name);
-            roots.insert(
-                root_name.clone(),
-                SourceRoot {
-                    id: root_name,
-                    kind: SourceRootKind::SystemLibrary {
-                        cache_subdir,
-                        root_dir,
-                    },
-                    state: LoadState::NotLoaded,
-                },
-            );
-        }
-
         // Bundled examples — keyed by filename stem (the convention
         // every bundled `.mo` follows: `Foo.mo` contains `package Foo`
         // or `model Foo`). The dep-scanner extracts `Foo` from a
@@ -186,9 +138,7 @@ impl SourceRootRegistry {
             let Some(id) = model.filename.strip_suffix(".mo") else {
                 continue;
             };
-            // Don't shadow a system library with a bundled entry —
-            // MSL / third-party wins. (No current bundled file
-            // collides, but worth being explicit.)
+            // Keep the first explicit registration authoritative.
             if roots.contains_key(id) {
                 continue;
             }
@@ -214,10 +164,7 @@ impl SourceRootRegistry {
                 continue;
             }
             let kind = lunco_assets_core::models_package_root_path(&root_name)
-                .map(|root_dir| SourceRootKind::SystemLibrary {
-                    cache_subdir: format!("models/{root_name}"),
-                    root_dir,
-                })
+                .map(|root_dir| SourceRootKind::Disk { root_dir })
                 .unwrap_or_else(|| SourceRootKind::BundledPackage {
                     root: root_name.clone(),
                 });
@@ -233,7 +180,7 @@ impl SourceRootRegistry {
 
         let lib_count = roots
             .values()
-            .filter(|r| matches!(r.kind, SourceRootKind::SystemLibrary { .. }))
+            .filter(|r| matches!(r.kind, SourceRootKind::Disk { .. }))
             .count();
         let bundled_count = roots
             .values()
@@ -245,7 +192,7 @@ impl SourceRootRegistry {
             })
             .count();
         bevy::log::info!(
-            "[source-roots] registry built: {} system libraries, {} bundled examples \
+            "[source-roots] registry built: {} disk roots, {} bundled examples \
              (all NotLoaded)",
             lib_count,
             bundled_count,
@@ -262,6 +209,19 @@ impl SourceRootRegistry {
         self.roots.contains_key(id)
     }
 
+    /// Register one explicitly configured disk source root.
+    pub fn register_disk_root(&mut self, id: impl Into<String>, root_dir: PathBuf) {
+        let id = id.into();
+        self.roots.insert(
+            id.clone(),
+            SourceRoot {
+                id,
+                kind: SourceRootKind::Disk { root_dir },
+                state: LoadState::NotLoaded,
+            },
+        );
+    }
+
     /// Insert / refresh an entry for a workspace-or-document-backed
     /// source root and mark it `Ready`. Used by the doc-opened
     /// observer to register every open doc's top-level package
@@ -271,15 +231,13 @@ impl SourceRootRegistry {
     /// without a worker round-trip.
     ///
     /// Idempotent: re-registering an existing entry keeps the
-    /// existing `kind` if it's a SystemLibrary (a workspace doc
-    /// must not shadow MSL), otherwise overwrites with the new
+    /// existing `kind` if it's an explicit disk root (a workspace doc
+    /// must not shadow it), otherwise overwrites with the new
     /// metadata. Always flips state to `Ready`.
     pub fn register_open_doc_root(&mut self, id: String, path: Option<PathBuf>) {
-        // Don't let an opened doc shadow a system library entry —
-        // MSL contents are loaded via its own kind, not as workspace
-        // files.
+        // Don't let an opened document shadow an explicit disk root.
         if let Some(existing) = self.roots.get(&id) {
-            if matches!(existing.kind, SourceRootKind::SystemLibrary { .. }) {
+            if matches!(existing.kind, SourceRootKind::Disk { .. }) {
                 return;
             }
         }
@@ -309,10 +267,9 @@ impl SourceRootRegistry {
 /// decide whether the corresponding source root needs to be loaded
 /// before compile.
 ///
-/// For example, an AST that contains
-/// `Modelica.Blocks.Interfaces.RealOutput x;` and
-/// `extends ThermofluidStream.Boundaries.Base;` yields
-/// `{"Modelica", "ThermofluidStream"}`.
+/// For example, an AST that contains qualified references rooted at
+/// `Control.Blocks.Interfaces.RealOutput` and
+/// `extends Thermal.Boundaries.Base` yields `{"Control", "Thermal"}`.
 ///
 /// Filters out:
 /// - Built-in scalar types (`Real`, `Integer`, etc.) — handled by
@@ -483,14 +440,10 @@ fn twin_source_root_specs(
     if let Some(modelica) = modelica {
         for external in &modelica.externals {
             let path = external.path.to_string_lossy();
-            if path == "@bundled:msl" {
-                continue;
-            }
             if path.starts_with("@bundled:") {
-                log::error!(
-                    "[source-roots] Twin `{name}` external Modelica library `{}` is unsupported",
-                    external.path.display()
-                );
+                // A bundled source selector is owned by the application source
+                // bundle loader. It is a declaration, not a filesystem path;
+                // the selector after `@bundled:` remains data owned by the Twin.
                 continue;
             }
             let root_dir = if external.path.is_absolute() {
@@ -532,6 +485,7 @@ pub fn load_twin_source_roots(
     twin_roots: Option<Res<lunco_assets_core::twin_source::TwinRoots>>,
     channels: Option<Res<ModelicaChannels>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    mut registry: Option<ResMut<SourceRootRegistry>>,
     mut seen: Local<HashSet<String>>,
 ) {
     let (Some(twin_roots), Some(channels)) = (twin_roots, channels) else {
@@ -573,13 +527,21 @@ pub fn load_twin_source_roots(
             if seen.contains(&spec.id) {
                 continue;
             }
-            let cmd = ModelicaCommand::LoadSourceRoot {
-                id: spec.id.clone(),
-                payload: LoadSourceRootPayload::Disk {
-                    root_dir: spec.root_dir.clone(),
-                },
+            let loaded = if let Some(registry) = registry.as_deref_mut() {
+                registry.register_disk_root(spec.id.clone(), spec.root_dir.clone());
+                ensure_loaded(registry, &spec.id, &channels)
+            } else {
+                channels
+                    .tx
+                    .send(ModelicaCommand::LoadSourceRoot {
+                        id: spec.id.clone(),
+                        payload: LoadSourceRootPayload::Disk {
+                            root_dir: spec.root_dir.clone(),
+                        },
+                    })
+                    .is_ok()
             };
-            if channels.tx.send(cmd).is_ok() {
+            if loaded {
                 seen.insert(spec.id.clone());
                 log::info!(
                     "[source-roots] loading Twin `{name}` Modelica source root `{}` from {}",
@@ -609,10 +571,7 @@ pub fn ensure_loaded(
     // Each branch can fail early (e.g. missing bundled blob, unreadable
     // workspace file); on failure mark `Failed` and bail.
     let (payload, summary) = match &entry.kind {
-        SourceRootKind::SystemLibrary {
-            cache_subdir: _,
-            root_dir,
-        } => {
+        SourceRootKind::Disk { root_dir } => {
             let summary = format!("disk {}", root_dir.display());
             (
                 LoadSourceRootPayload::Disk {

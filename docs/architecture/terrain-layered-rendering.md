@@ -12,22 +12,44 @@ system, without a bespoke shader per layer.
 
 ## Terrain material decision record (2026-09-03)
 
-The current source inventory has three terrain-capable shader contracts, plus
-one general-purpose regolith material. Runtime ownership matters here: the
-streamed CDLOD path and the non-authored fallback are selected in this
-checkout, while `terrain_layered.wgsl` remains a maintained static-mesh
-contract covered by shader tests but is not selected by an in-repository scene.
+The current source inventory has one authored terrain appearance contract, one
+optional geometry stage, one explicit non-authored material, and one general-purpose
+regolith material. Runtime ownership matters here: USD selects the fragment
+source and may select the vertex source on the same Shader prim. The terrain
+runtime consumes that projected look; it does not choose a shader filename.
 
 | Path | Authoritative source | Current contract | Design defect to remove |
 |---|---|---|---|
-| Streamed DEM | `assets/shaders/terrain_geomorph.wgsl` | CDLOD vertex morphing, DEM/layer maps, one anti-aliased close detail layer, lunar photometry, and the pre-baked horizon cache | Its intentionally small fragment path can read visibly different from the static path at close and middle distances when the same site changes between streamed and static presentation. |
-| Static layered DEM | `assets/shaders/terrain_layered.wgsl` | DEM-anchored procedural macro/mid/fine detail, authored raster layers, lunar photometry, and the horizon-shadow path | The additional procedural layers and raster blend make it a separate visual contract rather than the same base material used by streamed tiles; no local authored scene currently selects it. |
-| Non-authored terrain fallback | `assets/shaders/terrain_shadow.wgsl` | Plain authored/display albedo, scene PBR, and heightfield sun visibility | It is a truthful fallback for a terrain that has no authored material, but it is not a suitable third visual mode for an authored DEM. |
+| Authored DEM fragment | `assets/shaders/terrain_layered.wgsl` | The single canonical DEM material: authored albedo/layers, DEM relief, filtered detail, lunar photometry, and terrain self-shadow | None; this is the only production appearance implementation for authored DEMs. |
+| Streamed DEM vertex stage | `assets/shaders/terrain_geomorph.wgsl` | Optional CDLOD morphing and crack-free edge stitching; no fragment entry point and no second material law | Its `Material` declaration is only the shared uniform ABI; all appearance remains in the fragment above. |
+| Explicit non-authored terrain material | `assets/shaders/terrain_shadow.wgsl` | Plain authored/display albedo, scene PBR, and heightfield sun visibility | It may be selected by an authored Rhai/tool policy for a terrain with no authored material; Rust never installs it to hide a missing or invalid authored source. |
 
 `assets/shaders/regolith.wgsl` is excluded from this inventory: it is the
 general `ShaderMaterial` for ordinary regolith meshes, not a terrain source
 selection. `assets/shaders/terrain_debug.wgsl` is already the separate
 diagnostic material and must remain outside the production material contract.
+
+### USD stage authoring
+
+An authored terrain material uses standard `UsdShade` stage metadata:
+
+```usda
+uniform token info:implementationSource = "sourceAsset"
+uniform asset info:wgsl:sourceAsset = @lunco://shaders/terrain_layered.wgsl@
+uniform asset info:wgsl:vertexAsset = @lunco://shaders/terrain_geomorph.wgsl@
+```
+
+`sourceAsset` is the canonical fragment/material contract. `vertexAsset` is
+optional: omit it for a static or otherwise ordinary mesh vertex path, and use
+it for streamed CDLOD geometry. The USD projection resolves both assets into
+one `ShaderLook`; Rust does not contain a terrain shader selector or a hidden
+default for this production path. The explicit `SpawnDemTerrain` command
+remains a generic tool API and requires its caller to provide a look.
+
+Static and streamed terrain therefore differ only in geometry delivery. A
+static mesh is effectively the non-morphing/root LOD of the same appearance
+contract; the streamed ECS quadtree may still manage residency, colliders, and
+LOD selection independently.
 
 ### Decision
 
@@ -56,9 +78,10 @@ diagnostic replacement:
 2. `terrain_debug.wgsl` remains the only diagnostic replacement. LOD depth and
    slope are analysis data, not branches or uniforms added to the production
    material.
-3. `terrain_shadow.wgsl` remains the automatic fallback for non-authored
-   terrain. It is not a user-selectable DEM quality mode, and it must not hide
-   missing authored source data.
+3. `terrain_shadow.wgsl` remains an explicit material for non-authored terrain.
+   A Rhai assembly or recovery policy may select it when that is the authored
+   scenario behavior. Rust never selects it automatically and never uses it to
+   hide missing or invalid authored source data.
 
 The existing `terrain_surface.wgsl` and `lunar_brdf.wgsl` modules remain the
 authoritative owners for shared procedural detail and lunar photometry. Heavy
@@ -95,9 +118,12 @@ terrain shadow casting.
 | Far | Stable authored albedo and large-scale relief with horizon visibility; no noisy high-frequency colour detail or mode switch | Use the existing derived/authored map source contract and pre-baked horizon cache. |
 
 Missing authored maps have one semantic: the source-presence/weight contract
-selects the documented derived product or the base material. A missing tile or
-map is not converted into a second visual fallback. Height, collider,
-streaming, and lighting/time ownership remain unchanged by this decision.
+selects the documented derived product or the base material inside the authored
+shader. A missing tile or map is not converted into a second Rust-selected
+visual material. An invalid shader stage is different: it is an authoring error,
+reported through `RuntimeDiagnostics`, and leaves the material unbound until an
+explicit USD/Rhai edit repairs or replaces it. Height, collider, streaming, and
+lighting/time ownership remain unchanged by this decision.
 
 Filterable authored RGBA8 roles are prepared once per image asset version by the
 render binder. The CPU mip chain is built off-thread and deduplicated across all tiles:

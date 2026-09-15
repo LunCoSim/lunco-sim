@@ -293,7 +293,7 @@ impl Ack {
 /// fresher generation, or surface a banner to the user.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Reject {
-    /// Document is read-only (e.g. an MSL library tab). Optimistic
+    /// Document is read-only (e.g. a source-library tab). Optimistic
     /// mutation should be reverted; UI surfaces the "Duplicate to
     /// Workspace" hint.
     ReadOnly,

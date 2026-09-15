@@ -1,7 +1,7 @@
 //! Resource state and result types for the Package Browser.
 
 use super::types::{InMemoryEntry, PackageNode};
-use crate::state::ModelLibrary;
+use crate::state::ModelSource;
 use bevy::prelude::*;
 use bevy::tasks::Task;
 
@@ -30,7 +30,7 @@ pub struct PackageTreeCache {
     pub bundled_tree_indexed: bool,
     /// Whether the library roots have been reconciled against the provider
     /// after construction. Native is complete at `new()`; web gains its
-    /// bundle-derived extra roots once `MslLoadState::Ready`. See
+    /// bundle-derived extra roots once `LibraryLoadState::Ready`. See
     /// [`Self::reconcile_library_roots`].
     pub library_roots_synced: bool,
 }
@@ -60,7 +60,7 @@ impl PackageTreeCache {
             is_loading: false,
         });
 
-        let bundled_tree_indexed = !crate::visual_diagram::msl_bundled_nodes().is_empty();
+        let bundled_tree_indexed = !crate::visual_diagram::library_bundled_nodes().is_empty();
 
         Self {
             roots,
@@ -82,10 +82,10 @@ impl PackageTreeCache {
             return;
         }
 
-        // Cancel any in-flight library scans that started before MSL was ready.
+        // Cancel any in-flight library scans that started before source library was ready.
         self.tasks.clear();
 
-        // Reset library roots (e.g. Modelica) so they retry expanding with the now-available MSL.
+        // Reset library roots (e.g. Modelica) so they retry expanding with the now-available source library.
         for root in &mut self.roots {
             if let PackageNode::Category {
                 id,
@@ -135,7 +135,7 @@ impl Default for PackageTreeCache {
 }
 
 /// Initial bundled-models tree from the asset-owned embedded inventory.
-/// `MslEditorIndexBecameReady` replaces these leaves with the generated tree
+/// `LibraryEditorIndexBecameReady` replaces these leaves with the generated tree
 /// after its decode completes off-thread.
 fn build_bundled_tree() -> Vec<PackageNode> {
     crate::models::bundled_models()
@@ -147,7 +147,7 @@ fn build_bundled_tree() -> Vec<PackageNode> {
                 .strip_suffix(".mo")
                 .unwrap_or(m.filename)
                 .to_string(),
-            library: ModelLibrary::Bundled,
+            library: ModelSource::Bundled,
             class_kind: Some(crate::index::ClassKind::Model),
         })
         .collect()

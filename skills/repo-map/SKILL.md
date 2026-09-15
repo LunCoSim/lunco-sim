@@ -53,7 +53,7 @@ verified” or “externally blocked”.
 |---|---|---|
 | Ground physics / rovers / USD scenes / Modelica / visual evidence | **`luncosim`** | The production scene/runtime binary; use it for scene tests, screenshots, and visual acceptance. |
 | Numeric headless simulation / CI automation | **`luncosim-server`** | The same simulation through `run_headless()`, with no GUI evidence; use it for numeric/API automation. |
-| Author / compile / simulate Modelica models, browse MSL | **`lunica`** | The **Modelica** workbench (⚠️ NOT the main sim). |
+| Author / compile / simulate Modelica models, browse source libraries | **`lunica`** | The **Modelica** workbench (⚠️ NOT the main sim). |
 | Download / verify / process external assets | **`lunco-assets` + `lunco-assets-{transport,download,processing}`** | `-- download\|list\|process`; explicit workers/CLI compose shared transport, atomic installation, and native processors. |
 
 Launch the installed production executable, or explicitly select a checkout
@@ -83,9 +83,9 @@ export LUNICA_BIN="${LUNICA_BIN:-lunica}"
 ```
 
 **Utility / dev bins** (all in `lunco-modelica-core` unless noted): `modelica_run`
-(headless Modelica CLI → CSV), `msl_indexer` (rebuild the MSL search index — re-run
-after an MSL change), `lunica_worker` (wasm compile worker, bundled not run),
-`build_msl_assets` (`lunco-modelica-assets`), `net_smoke` (`lunco-networking`, transport smoke
+(headless Modelica CLI → CSV), `modelica_library_indexer` (rebuild the Modelica-library search index — re-run
+after a source-library change), `lunica_worker` (wasm compile worker, bundled not run),
+`build_modelica_library_assets` (`lunco-modelica-assets`), `net_smoke` (`lunco-networking`, transport smoke
 test). Authored luncosim behavior tests run through `luncosim test` plus their Rhai scenarios.
 Details:
 [`docs/apps/README.md`](../../docs/apps/README.md).
@@ -124,7 +124,7 @@ Use this to jump to the right one; read the index for the full responsibility.
 | **Core foundation** | primitives, session/authority substrate, docs/journal, time, storage, hashing, cache, settings, theme | `lunco-core`, `lunco-core-session`, `lunco-doc`, `lunco-twin-journal`, `lunco-time`, `lunco-storage`, `lunco-hash` |
 | **Simulation engine** | celestial, environment, terrain, experiments, cosim | `lunco-celestial`, `lunco-cosim`, `lunco-experiments`, `lunco-terrain-*` |
 | **Vessel control & hardware** | mobility, robotics, avatar, FSW/OBC/hardware, controller | `lunco-mobility`, `lunco-controller`, `lunco-cosim` |
-| **USD integration** | OpenUSD↔Bevy: authored document, operation core, geometry, visuals, physics, sim schemas, actuation, materials | `lunco-usd-document`, `lunco-usd-core`, `lunco-usd-geometry`, `lunco-usd`, `lunco-usd-bevy`, `lunco-usd-avian`, `lunco-usd-actuation`, `lunco-materials` |
+| **USD integration** | OpenUSD↔Bevy: authored document, operation core, geometry, visuals, physics, sim schemas, actuation, materials | `lunco-usd-document`, `lunco-usd-core`, `lunco-usd-geometry`, `lunco-usd-commands`, `lunco-usd-bevy`, `lunco-usd-avian`, `lunco-usd-actuation`, `lunco-materials` |
 | **Networking & API** | replication, HTTP API, telemetry, attributes | `lunco-networking`, `lunco-api`, `lunco-telemetry` |
 | **Workbench & UI** | IDE shell, shell-independent widgets, optional guided presentation, reusable Twin/Files browser, viz, 2D canvas, edit tools, render intent/recovery, web boot | `lunco-workbench`, `lunco-workbench-core`, `lunco-workbench-widgets`, `lunco-workbench-guided-ui`, `lunco-workbench-browser`, `lunco-ui`, `lunco-viz`, `lunco-canvas`, `lunco-luncosim-edit-core`, `lunco-luncosim-edit-ui`, `lunco-render-recovery` |
 | **Scripting & modeling** | Modelica, event-driven Rhai, tools, hooks, behavior trees, authored lessons | `lunco-modelica-core`, `lunco-modelica-ui-core`, `lunco-modelica-ui`, `lunco-scripting`, `lunco-tools`, `lunco-hooks`, `lunco-behavior`, `lunco-luncosim` |

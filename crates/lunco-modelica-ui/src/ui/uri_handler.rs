@@ -12,7 +12,7 @@
 //!   path (dotted), the remainder is a subpath inside that class's
 //!   package directory on disk. Resolved to
 //!   [`UriResolution::OpenResource`] pointing at the concrete file
-//!   under the MSL cache.
+//!   under the source library cache.
 //!
 //! Registered from [`crate::ui::commands::ModelicaCommandsPlugin::build`]
 //! (`ui/commands.rs`); the observer in this module then translates
@@ -37,7 +37,7 @@ impl UriHandler for ModelicaUriHandler {
         // Strip `modelica://` prefix case-insensitively. `UriRegistry`
         // lower-cases the scheme for dispatch, but the rest of the
         // URI is passed through verbatim — tolerant of `Modelica://`
-        // we sometimes see in older MSL docs.
+        // we sometimes see in older source library docs.
         let Some(body) = uri
             .strip_prefix("modelica://")
             .or_else(|| uri.strip_prefix("Modelica://"))
@@ -81,14 +81,14 @@ impl UriHandler for ModelicaUriHandler {
 }
 
 /// Compute the on-disk path for a `modelica://Pkg.Sub/Resources/...`
-/// URI. Walks down from the MSL cache root (`lunco_assets_core::msl_dir()`)
+/// URI. Walks down from the source library cache root (`lunco_assets_core::library_dir()`)
 /// using each dotted segment as a directory. Packages outside the
-/// MSL tree (user workspace libraries) aren't resolved yet — that's
+/// source library tree (user workspace libraries) aren't resolved yet — that's
 /// a follow-up once the Twin / user-library path map is available
 /// from the workbench crate.
 fn resolve_resource(class_dotted: &str, subpath: &str) -> UriResolution {
-    let msl_root = lunco_assets_core::source_library_dir("msl");
-    let mut path: PathBuf = msl_root;
+    let library_root = lunco_assets_core::source_library_dir("library");
+    let mut path: PathBuf = library_root;
     for segment in class_dotted.split('.') {
         if segment.is_empty() {
             return UriResolution::NotHandled;
@@ -143,7 +143,7 @@ pub fn on_modelica_uri_clicked(trigger: On<UriClicked>, mut commands: Commands) 
         }
         UriResolution::OpenResource { path } => {
             // TODO: pipe to a generic "open this file" command once
-            // the workbench has one. For MSL Documentation links
+            // the workbench has one. For source library Documentation links
             // most resources are images already rendered inline, so
             // this path mostly fires for intentional right-click
             // "open resource" flows we haven't built yet.

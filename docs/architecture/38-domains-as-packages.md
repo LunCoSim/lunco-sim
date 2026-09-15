@@ -118,7 +118,7 @@ library prim) declares namespace, connector kinds, part library, and rule-script
 
 **(g) Domain-neutral reader.** The USD core never branches on a domain — it reads generic
 attrs/rels/schemas; all domain knowledge is in the descriptor (USD) + rules (rhai). This is the whole
-point: `lunco-usd` stays domain-agnostic forever.
+point: the USD runtime packages stay domain-agnostic forever.
 
 > Net USD shape: `Rover` (assembly and, when appropriate, the network root) owns a
 > `CollectionAPI:components` working set and typed boundary ports. A separate `Thermal` scope is
@@ -139,7 +139,7 @@ domain-neutral `SceneEvent` stream. **Proven by three coexisting domains today**
 Four things are currently hardcoded per-domain as free functions — these become the `DomainDescriptor`'s
 **editor** slot:
 
-1. **Palette source** — `msl_class_library()` → descriptor's part library.
+1. **Palette source** — `library_class_library()` → descriptor's part library.
 2. **Forward projection** `project(model) → Scene` — `project_scene` (Modelica) → descriptor-supplied.
 3. **Reverse bridge** `SceneEvent → Vec<BackendOp>` — `build_ops_from_events` (→ `ModelicaOp`) →
    descriptor-supplied (→ `ModelicaOp` *or* `UsdOp` *or* …).

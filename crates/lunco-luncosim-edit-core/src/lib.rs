@@ -7,7 +7,7 @@
 //! - **Undo** — Ctrl+Z / Ctrl+Shift+Z → `UndoDocument` / `RedoDocument` on the active
 //!   document (see `commands::handle_undo_input`). Editor edits are USD ops, so undo is
 //!   the *document's* typed-inverse history (journaled, networked) — there is no
-//!   editor-side undo stack. USD's half of the verb lives in `lunco-usd`.
+//!   editor-side undo stack. USD's half of the verb lives in `lunco-usd-commands`.
 //!
 //! Selection, transform gizmos, and egui/workbench panels are in the sibling
 //! `lunco-luncosim-edit-ui` package. This package owns the editor mechanisms

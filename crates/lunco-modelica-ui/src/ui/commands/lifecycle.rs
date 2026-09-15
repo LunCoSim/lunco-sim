@@ -639,9 +639,9 @@ pub fn spawn_duplicate_class_task(world: &mut World, qualified: String, name_hin
     // Resolve the origin source on the main thread — the unified
     // resolver reads `World` (the open-document registry is one of its
     // backends), so it can't run inside the bg task. It spans every
-    // backend (MSL/third-party index, filesystem libraries, open docs,
+    // backend (source library/third-party index, filesystem libraries, open docs,
     // bundled examples), which is what fixes "(no classes yet)" when
-    // duplicating a bundled composite: the old MSL-index-only lookup
+    // duplicating a bundled composite: the old source library-index-only lookup
     // missed bundled files and emitted a comment-only document.
     let resolved = crate::ui::class_source::resolve_class_source(world, &qualified);
 
@@ -670,7 +670,7 @@ pub fn spawn_duplicate_class_task(world: &mut World, qualified: String, name_hin
             .map(|p| collect_parent_imports(p))
             .unwrap_or_default();
 
-        // Prefer the path-cached spans (cheap on repeat MSL duplications);
+        // Prefer the path-cached spans (cheap on repeat source library duplications);
         // fall back to an inline parse (always used for sources with no
         // on-disk path). Either way the spans are absolute in
         // `source_full` and `build_duplicate_source` slices to the class
@@ -805,7 +805,7 @@ pub fn on_open_file(trigger: On<OpenFile>, mut commands: Commands) {
             });
         }
 
-        // Native: read the file off the main thread. A 150 KB MSL
+        // Native: read the file off the main thread. A 150 KB source library
         // package file synchronously read on the input path is ~30 ms
         // of stutter; spawn on AsyncCompute and re-enter the World via
         // a one-shot channel drained on the Update tick.

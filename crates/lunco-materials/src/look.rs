@@ -29,7 +29,7 @@
 //! slots are part of the look, and they are **named**, not positional:
 //!
 //! ```ignore
-//! ShaderLook::new("shaders/terrain_geomorph.wgsl")
+//! ShaderLook::new("shaders/terrain_layered.wgsl")
 //!     .with("dust_scale", ParamValue::F32(0.004))
 //!     .with_texture(TextureLayer::Albedo, albedo_handle)
 //!     .with_texture(TextureLayer::Normal, dem_normals)
@@ -48,7 +48,7 @@
 //! — arbitrary-N textures needs bindless, which WebGL2 does not have. That is a
 //! hardware ceiling, not a design preference. Within it the layers are general: a
 //! shader that does not declare a binding simply ignores it (`None` binds Bevy's
-//! fallback image), so one slot set serves every shader.
+//! neutral image binding), so one slot set serves every shader.
 //!
 //! # Why this is render-free
 //!
@@ -99,7 +99,7 @@ pub enum TextureLayer {
 /// per-instance and you mint a material per instance; bucket it instead.
 #[derive(Component, Clone, Debug, Default, PartialEq)]
 pub struct ShaderLook {
-    /// Fragment shader asset path, e.g. `"shaders/terrain_geomorph.wgsl"`.
+    /// Fragment shader asset path, e.g. `"shaders/terrain_layered.wgsl"`.
     ///
     /// A path, not a `Handle<Shader>`, on purpose: `bevy::shader::Shader` lives in
     /// `bevy_shader`, which pulls **naga**. The binder loads the handle.
@@ -140,7 +140,7 @@ pub struct ShaderLook {
     /// Not part of [`key`](Self::key): it says where values come from, not what the
     /// material looks like.
     pub driven: BTreeSet<String>,
-    /// Named texture layers. Absent = the shader's fallback.
+    /// Named texture layers. Absent = the shader's declared absence behavior.
     pub textures: BTreeMap<TextureLayer, Handle<Image>>,
     /// Opt out of material sharing — this look gets a **private** material that the
     /// binder mutates in place.
@@ -223,7 +223,7 @@ pub struct ShaderLookBound;
 /// material handle. Dynamic shader uniforms are initially packed against an
 /// empty schema, however, so the handle alone is not a readiness guarantee.
 /// The render binder adds this marker only after the shader source is loaded
-/// and the material has its reflected layout (or a synchronous fallback).
+/// and the material has its reflected layout.
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct ShaderLookReady;
 

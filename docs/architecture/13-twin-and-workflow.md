@@ -260,7 +260,7 @@ paths = ["."]
 
 # External libraries (optional).
 externals = [
-    { name = "MSL", path = "@bundled:msl" },          # the bundled MSL
+    { name = "BundledModelicaLibraries", path = "@bundled:source-bundle" },
     { name = "MyPkg", path = "../shared_library/" },  # sibling folder
     { name = "Partners", path = "/opt/partner-lib/" }, # absolute
 ]
@@ -972,12 +972,12 @@ Other modes — `path` (everything relative) and `uuid` (everything stable-ID)
 ```toml
 [modelica]
 externals = [
-    { name = "MSL", path = "@bundled:msl" },
+    { name = "BundledModelicaLibraries", path = "@bundled:source-bundle" },
     { name = "MyPkg", path = "../shared_library/" },
 ]
 ```
 
-- **Bundled libraries** (`@bundled:msl`) ship with LunCoSim and are
+- **Bundled libraries** (`@bundled:source-bundle`) ship with LunCoSim and are
   always available.
 - **Relative paths** work great for sibling-folder libraries in a
   monorepo.

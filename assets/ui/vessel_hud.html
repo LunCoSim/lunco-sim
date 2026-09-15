@@ -1,5 +1,6 @@
 <template>
   <property name="label">VESSEL</property>
+  <property name="program_label">PROGRAM UNAVAILABLE</property>
   <property name="tilt">—</property>
   <property name="tilt_status">STABLE</property>
   <property name="tilt_limits">generic limits</property>
@@ -26,6 +27,7 @@
   <property name="comms_los_display">none</property>
   <property name="comms_color">var(--muted-color)</property>
   <property name="telemetry_display">none</property>
+  <property name="program_color">var(--muted-color)</property>
 
   <node id="vessel-hud-root">
     <node id="vessel-hud-attitude">
@@ -53,6 +55,9 @@
     <node id="vessel-hud-nav">
       <node id="vessel-hud-nav-heading">
         <text id="vessel-hud-label">{label}</text>
+        <button id="vessel-hud-program" on_press="runtime_ui_authored_action" tag:action="program.toggle">
+          <text id="vessel-hud-program-label">{program_label}</text>
+        </button>
       </node>
       <text id="vessel-hud-frame">site frame · metres</text>
       <node id="vessel-hud-nav-details">

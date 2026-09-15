@@ -231,7 +231,7 @@ pub fn broadcast_journal_entries(
 /// edits — already applied locally), of **USD** domain, not already applied.
 /// Returns `(EntryId, op payload)` in apply order. Pure over the journal +
 /// inputs (unit-tested); the Bevy driver applies each via
-/// `lunco_usd::DocumentRegistry::<UsdDocument>::replay_op` and records the id.
+/// `lunco_usd_commands::DocumentRegistry::<UsdDocument>::replay_op` and records the id.
 ///
 /// - `base = None` ⇒ the scenario had no journal head at build (empty history)
 ///   ⇒ every remote USD op is new.

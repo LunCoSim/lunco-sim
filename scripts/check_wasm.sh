@@ -16,7 +16,7 @@
 #
 # Failure modes this gate has caught historically:
 #   * lunco-api dep dragging axum/tokio/mio into the wasm build
-#   * lunco-modelica-core MSL preloader binding to std::thread
+#   * lunco-modelica-core source-library preloader binding to std::thread
 #   * UsdComposer's sublayer reads through std::fs::read_to_string
 #   * crossbeam-channel unconditionally pulled into lunco-scripting
 #

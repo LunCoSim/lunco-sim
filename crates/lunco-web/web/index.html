@@ -30,7 +30,7 @@
         // render-scale needs a reduced-resolution render target, not a DPR hack.
 
         // ── Modelica worker preload (memory) ─────────────────────────────────
-        // The Modelica engine can preload the full parsed MSL (~140 MB) into every
+        // The Modelica engine can preload the full parsed source library (~140 MB) into every
         // Fast-Run worker at boot for parallel experiment runs. That costs hundreds
         // of MB and OOMs a memory-constrained tab, so it is OFF by default (single
         // compiles/runs still work; Fast Runs serialize on one worker). Turn it back

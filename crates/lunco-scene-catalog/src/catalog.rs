@@ -153,6 +153,10 @@ impl ApiQueryProvider for UsdAssetMetadataProvider {
                 pending += 1;
                 entries.push(serde_json::json!({
                     "path": path,
+                    "read_ok": serde_json::Value::Null,
+                    "read_error": serde_json::Value::Null,
+                    "parse_ok": serde_json::Value::Null,
+                    "parse_error": serde_json::Value::Null,
                     "spawnable": false,
                     "description": serde_json::Value::Null,
                 }));
@@ -160,6 +164,22 @@ impl ApiQueryProvider for UsdAssetMetadataProvider {
             };
             entries.push(serde_json::json!({
                 "path": path,
+                "read_ok": meta.read_error.is_none(),
+                "read_error": meta
+                    .read_error
+                    .as_deref()
+                    .map(serde_json::Value::from)
+                    .unwrap_or(serde_json::Value::Null),
+                "parse_ok": meta
+                    .read_error
+                    .is_none()
+                    .then(|| meta.parse_error.is_none())
+                    .unwrap_or_default(),
+                "parse_error": meta
+                    .parse_error
+                    .as_deref()
+                    .map(serde_json::Value::from)
+                    .unwrap_or(serde_json::Value::Null),
                 "spawnable": meta.spawnable,
                 "description": meta
                     .description
@@ -178,6 +198,22 @@ impl ApiQueryProvider for UsdAssetMetadataProvider {
             }
             entries.push(serde_json::json!({
                 "path": path,
+                "read_ok": meta.read_error.is_none(),
+                "read_error": meta
+                    .read_error
+                    .as_deref()
+                    .map(serde_json::Value::from)
+                    .unwrap_or(serde_json::Value::Null),
+                "parse_ok": meta
+                    .read_error
+                    .is_none()
+                    .then(|| meta.parse_error.is_none())
+                    .unwrap_or_default(),
+                "parse_error": meta
+                    .parse_error
+                    .as_deref()
+                    .map(serde_json::Value::from)
+                    .unwrap_or(serde_json::Value::Null),
                 "spawnable": meta.spawnable,
                 "description": meta
                     .description
@@ -833,7 +869,10 @@ pub async fn read_asset_meta(
                 "CATALOG: {} unreadable, treating as not-spawnable: {e}",
                 asset.rel
             );
-            SpawnMeta::default()
+            SpawnMeta {
+                read_error: Some(e.to_string()),
+                ..Default::default()
+            }
         }
     }
 }
@@ -1223,6 +1262,8 @@ mod tests {
                     .map(|(name, _)| name.to_string()),
             },
             meta: SpawnMeta {
+                read_error: None,
+                parse_error: None,
                 spawnable: true,
                 description: None,
             },
@@ -1292,6 +1333,8 @@ mod tests {
             by_path: [(
                 "a.usda".into(),
                 SpawnMeta {
+                    read_error: None,
+                    parse_error: None,
                     spawnable: true,
                     description: Some("First authored asset".into()),
                 },
@@ -1330,6 +1373,8 @@ mod tests {
             by_path: [(
                 "scenes/luncosim/arena.usda".into(),
                 SpawnMeta {
+                    read_error: None,
+                    parse_error: None,
                     spawnable: false,
                     description: Some("Arena".into()),
                 },
@@ -1381,6 +1426,8 @@ mod tests {
         store.by_path.insert(
             "scenes/luncosim/x.usda".into(),
             SpawnMeta {
+                read_error: None,
+                parse_error: None,
                 spawnable: false,
                 description: None,
             },

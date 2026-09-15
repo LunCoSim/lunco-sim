@@ -1,6 +1,6 @@
 //! Tree node types and basic structures for the Package Browser.
 
-use crate::state::ModelLibrary;
+use crate::state::ModelSource;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum PackageNode {
@@ -23,9 +23,9 @@ pub enum PackageNode {
     Model {
         id: String,
         name: String,
-        library: ModelLibrary,
+        library: ModelSource,
         /// Modelica class kind, derived from the rumoca-parsed AST
-        /// (or pre-baked from `msl_index.json` for bundled rows).
+        /// (or pre-baked from `library_index.json` for bundled rows).
         /// `None` when the source metadata does not provide a class kind.
         class_kind: Option<crate::index::ClassKind>,
     },

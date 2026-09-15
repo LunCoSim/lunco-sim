@@ -769,8 +769,11 @@ Verification in the USD checkout used the normal `target/debug/luncosim`:
 
 - The focused owner suites passed: `lunco-usd-sim` 129/129,
   `lunco-modelica-core` 289 passed/1 ignored, and `lunco-luncosim-edit-core` 59/59.
-- USD integration suites passed: `lunco-usd` 175 unit tests plus all
-  integration targets; `lunco-usd-sim` 129 unit tests plus 6 reader, 6
+- The pre-split USD integration coverage was owned by the aggregate USD
+  package; current coverage is distributed across `lunco-usd-commands`,
+  `lunco-usd-sim`, and the focused USD projection packages. The historical
+  aggregate test count is not a current contract.
+- `lunco-usd-sim` 129 unit tests plus 6 reader, 6
   drivetrain, 15 Rhai hook, and 20 connection tests; `lunco-usd-bevy` 250
   unit tests plus all integration targets.
 - A normal sandbox launch reached the API readiness contract in 887 ms with

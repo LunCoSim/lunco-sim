@@ -1,7 +1,7 @@
 //! Welcome-panel progress tracking.
 //!
 //! A tiny persisted ledger of "how many times has this example been
-//! opened" keyed by MSL qualified name. Drives the progress dots
+//! opened" keyed by source library qualified name. Drives the progress dots
 //! (⚪/✅) and "X of N" counters on the Welcome learning paths.
 //!
 //! Scope is deliberately small:
@@ -16,7 +16,7 @@
 //!    cheap at 15-entry scale and means a crash can't eat the
 //!    progress.
 //!
-//!  * **Storage location** matches `msl_index.json` — both live in
+//!  * **Storage location** matches `library_index.json` — both live in
 //!    the workspace cache so power-users can reset by deleting the
 //!    cache dir, and so CI/test runs don't pollute a user's real
 //!    home directory.
@@ -107,7 +107,7 @@ pub fn save_progress(progress: &ExampleProgress) {
 
 /// Observer registered in the Modelica commands plugin that bumps
 /// the open-counter for the target qualified name every time the
-/// user opens a class via `OpenClass` (drill-in, MSL palette click,
+/// user opens a class via `OpenClass` (drill-in, source library palette click,
 /// Welcome card click all route through this event).
 ///
 /// Saves to disk inline — there's no in-memory ledger worth

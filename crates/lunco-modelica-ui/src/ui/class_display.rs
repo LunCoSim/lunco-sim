@@ -2,7 +2,7 @@
 
 /// Whether this is a graphics-only "Icons" class.
 ///
-/// MSL conventionally puts purely graphical partial classes under
+/// source library conventionally puts purely graphical partial classes under
 /// `*.Icons.*` namespaces. They have no equations and exist only to be
 /// `extends`-mixed into real components for shared glyph appearance.
 ///

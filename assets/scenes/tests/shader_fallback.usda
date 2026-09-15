@@ -5,14 +5,15 @@
     metersPerUnit = 1
 )
 
-# Robustness probe: a cube that (wrongly) points its material at pbr_lit.wgsl —
-# a shader LIBRARY with no @fragment entry. The app must NOT storm the pipeline
-# cache; it should keep the StandardMaterial (displayColor) and warn once.
+# Negative contract probe: a cube that (wrongly) points its material at
+# pbr_lit.wgsl — a shader library with no @fragment entry. The render shader owner
+# must reject the binding and publish a structured error. No renderer-selected
+# material is acceptable for an invalid authored shader.
 # Scene root: an `assembly` — a thing you OPEN, not a part you place.
 def Xform "ShaderFallbackTest" (
     prepend references = @lunco://scenes/base/lunar_surface.usda@</LunarSurface>
     kind = "assembly"
-    doc = "Robustness probe: a cube that wrongly points its material at a shader library with no fragment entry. The app must keep the StandardMaterial and warn once instead of storming the pipeline cache."
+    doc = "Negative shader contract probe: a cube points at a shader library with no fragment entry and must be rejected by the render shader owner."
 )
 {
     # The test observer declares that the assertion needs the graphics stack.

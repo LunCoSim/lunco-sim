@@ -3,7 +3,7 @@
 //! Sibling of [`TwinBrowserPanel`](crate::TwinBrowserPanel) (which
 //! shows typed Twin content like Modelica classes and drafts) and
 //! [`LuncoLibrarySection`](crate::LuncoLibrarySection) (which shows app-level
-//! reference content like MSL). The three panels tab together in the
+//! reference content like source library). The three panels tab together in the
 //! side dock by default — separate tabs rather than sub-tabs of one
 //! browser, matching peer tools that keep "what's in this project",
 //! "what's on disk", and "what's available globally" as distinct

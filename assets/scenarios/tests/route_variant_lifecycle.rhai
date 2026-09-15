@@ -53,6 +53,18 @@ fn context(doc, path, position) {
     }
 }
 
+fn unselected_pointer_context(doc, position) {
+    let value = context(doc, (), position);
+    value.route_path = ();
+    value.controlled_path = ();
+    value.selected_path = ();
+    value.target_path = ();
+    value.hit_path = ();
+    value.prim_paths = [];
+    value.pointer_intents = ["route.add_point"];
+    value
+}
+
 fn finish(me, checks) {
     me.done = true;
     report_verdict(checks, "ROUTE VARIANT LIFECYCLE", "ROUTE_VARIANT_LIFECYCLE");
@@ -164,7 +176,9 @@ fn on_tick(me) {
         if active_points(this.doc) != 3 { return; }
         this.checks.push(t_true(true,
             "undo restores the variant point and its route membership"));
-        let added = waypoint_editor::on_click(context(this.doc, (), [30.0, 1.0, -32.0]));
+        let added = waypoint_editor::on_pointer(
+            unselected_pointer_context(this.doc, [30.0, 1.0, -32.0]),
+        );
         if !query_ok(added) || added.path != P3 {
             fail(this, "adding a point to the variant-composed route was rejected");
             return;

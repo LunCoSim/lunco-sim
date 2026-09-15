@@ -224,6 +224,11 @@ fn asset_metadata_contract() {
     if metadata == () || metadata.ready != true { return false; }
     let checked = 0;
     for entry in metadata.entries {
+        if entry.read_ok != true || entry.parse_ok != true {
+            let detail = if entry.read_error != () { entry.read_error } else { entry.parse_error };
+            print("[sandbox-smoke] invalid USD " + entry.path + ": " + detail);
+            return false;
+        }
         if entry.path.starts_with("scenes/luncosim/") {
             checked += 1;
             if entry.description == () || entry.description.len() == 0 {
@@ -231,7 +236,7 @@ fn asset_metadata_contract() {
             }
         }
     }
-    checked >= 4
+    metadata.count >= 50 && checked >= 4
 }
 
 fn scene_contract() {

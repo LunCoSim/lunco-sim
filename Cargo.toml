@@ -70,7 +70,7 @@ members = [
     "crates/lunco-usd-sim-shader",
     "crates/lunco-usd-sim-telemetry",
     "crates/lunco-usd-terrain",
-    "crates/lunco-usd",
+    "crates/lunco-usd-commands",
     "crates/lunco-luncosim-edit-core",
     "crates/lunco-luncosim-edit-ui",
     "crates/lunco-luncosim-edit-inspector-ui",

@@ -77,13 +77,11 @@ pub fn tutorial_source(rel: &str) -> Option<String> {
 /// A Twin's own lessons are NOT here: they load from `<twin>/sim/tutorials/`, so a
 /// track like the Summer Space School is enumerated by that Twin, not by this.
 ///
-/// The EMBEDDED copies specifically: this is the enumerator, and there is no
-/// on-disk walk behind it, because its purpose is to let a test hold every tutorial
-/// at once (see `lunco-scripting/tests/prelude_parses.rs`). A rhai asset is
-/// invisible to `cargo check` — a syntax error in one surfaces only when a student
-/// launches that lesson — so being able to enumerate them is what makes them
-/// testable. For LOADING one, use [`tutorial_source`], which prefers the on-disk
-/// file so live edits replay without a rebuild.
+/// The EMBEDDED copies specifically: this is a portable catalog/source
+/// enumerator and has no on-disk walk behind it. It lets the application and
+/// asset tools inspect the complete bundled tutorial set on every target. For
+/// LOADING one, use [`tutorial_source`], which prefers the on-disk file so live
+/// edits replay without a rebuild.
 pub fn tutorial_files() -> Vec<(String, String)> {
     fn walk(dir: &'static Dir<'static>, out: &mut Vec<(String, String)>) {
         for f in dir.files() {

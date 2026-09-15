@@ -23,7 +23,7 @@ use lunco_doc::CompileState;
 use lunco_doc::DocumentId;
 use lunco_doc_bevy::DocumentDiagnostics;
 use lunco_modelica_core::state::{is_generated_document, ModelicaDocumentRegistry};
-use lunco_modelica_core::visual_diagram::msl_class_library;
+use lunco_modelica_core::visual_diagram::library_class_library;
 
 /// Plugin that registers the Modelica [`ApiQueryProvider`]s. Hosts add this
 /// capability alongside the Modelica compiler plugin when they expose the
@@ -42,7 +42,7 @@ impl Plugin for ModelicaApiQueriesPlugin {
         let mut registry = app.world_mut().resource_mut::<ApiQueryRegistry>();
         registry.register(ListBundledProvider);
         registry.register(ListSolversProvider);
-        registry.register(ListMslProvider);
+        registry.register(ListLibraryProvider);
         registry.register(ListCompileCandidatesProvider);
         registry.register(QueryExperimentBoundsProvider);
         registry.register(CompileStatusProvider);
@@ -158,21 +158,21 @@ impl ApiQueryProvider for ListSolversProvider {
     }
 }
 
-// ─── ListMsl ───────────────────────────────────────────────────────────
+// ─── ListLibrary ───────────────────────────────────────────────────────────
 
-/// Default MSL page size if `limit` is not supplied. Picked so a single
+/// Default source library page size if `limit` is not supplied. Picked so a single
 /// page is comfortably under typical agent context budgets while still
 /// being useful for prefix-narrowed queries.
-const MSL_DEFAULT_LIMIT: usize = 200;
+const LIBRARY_DEFAULT_LIMIT: usize = 200;
 /// Hard cap on `limit`. Above this the response gets unwieldy and
 /// agents should be paginating anyway.
-const MSL_MAX_LIMIT: usize = 1000;
+const LIBRARY_MAX_LIMIT: usize = 1000;
 
-struct ListMslProvider;
+struct ListLibraryProvider;
 
-impl ApiQueryProvider for ListMslProvider {
+impl ApiQueryProvider for ListLibraryProvider {
     fn name(&self) -> &'static str {
-        "ListMsl"
+        "ListLibrary"
     }
 
     fn execute(&self, _world: &World, params: &serde_json::Value) -> ApiResponse {
@@ -192,8 +192,8 @@ impl ApiQueryProvider for ListMslProvider {
         let limit = params
             .get("limit")
             .and_then(|v| v.as_u64())
-            .map(|n| (n as usize).min(MSL_MAX_LIMIT))
-            .unwrap_or(MSL_DEFAULT_LIMIT);
+            .map(|n| (n as usize).min(LIBRARY_MAX_LIMIT))
+            .unwrap_or(LIBRARY_DEFAULT_LIMIT);
 
         let filter = params.get("filter");
         let prefix = filter
@@ -207,11 +207,10 @@ impl ApiQueryProvider for ListMslProvider {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        // First call here will block on the JSON parse (~hundreds of
-        // ms). The agent can preflight `MslStatus` to decide whether to
-        // wait. We accept the blocking cost rather than returning an
-        // empty result — better to be slow than to lie.
-        let lib = msl_class_library();
+        // The first call may block on the JSON parse (~hundreds of ms). The
+        // provider waits for the authoritative index rather than returning
+        // an empty result — better to be slow than to lie.
+        let lib = library_class_library();
 
         // Apply filters in one pass over the static slice. The filter
         // closures are cheap; no allocation until we slice the
@@ -224,12 +223,10 @@ impl ApiQueryProvider for ListMslProvider {
             })
             .filter(|c| match category {
                 Some(cat) => {
-                    // Top-level package: drop the `Modelica.` prefix
-                    // and take the first segment. Matches the
-                    // categories the Welcome tab and palette already
-                    // surface.
-                    let after_modelica = c.name.strip_prefix("Modelica.").unwrap_or(&c.name);
-                    let top = after_modelica.split('.').next().unwrap_or("");
+                    // The first package segment after the source-root name
+                    // is the category. This works for every installed source
+                    // root, regardless of its authored top-level name.
+                    let top = c.name.split('.').nth(1).unwrap_or("");
                     top.eq_ignore_ascii_case(cat)
                 }
                 None => true,
@@ -1313,7 +1310,7 @@ impl ApiQueryProvider for SnapshotVariablesProvider {
 // ─── FindModel (spec 033 P3) ───────────────────────────────────────────
 //
 // Cross-source fuzzy search. Scans bundled examples, the active
-// Twin's documents, the MSL library, and currently-open documents,
+// Twin's documents, the source-library index, and currently-open documents,
 // scores each entry against the caller's query, and returns a
 // ranked list with canonical URIs. Eliminates the
 // list-then-grep-then-guess pattern an agent otherwise has to
@@ -1413,18 +1410,18 @@ impl ApiQueryProvider for FindModelProvider {
             }
         }
 
-        // ── MSL library ──────────────────────────────────────────
+        // ── source-library index ────────────────────────────────────────────
         // Scan the cached library if it's been initialized; force
         // initialization here would block on the JSON parse, which
         // is acceptable since the result is cached after the first
         // call. Subsequent finds hit the warm cache.
-        for c in msl_class_library() {
+        for c in library_class_library() {
             if let Some(score) = score(&q, c.short_name(), &c.name) {
                 let label = c.short_name().to_string();
                 hits.push(FindHit {
                     uri: c.name.clone(),
                     label,
-                    source: "msl",
+                    source: "library",
                     description: if c.description.is_empty() {
                         c.name.clone()
                     } else {

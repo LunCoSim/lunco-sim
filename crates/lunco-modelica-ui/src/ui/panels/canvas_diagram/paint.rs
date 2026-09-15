@@ -19,7 +19,7 @@ pub(super) struct WireStyle {
 
 /// Map a Modelica connector type's leaf name to its canonical presentation.
 ///
-/// Returns the **canonical MSL Icon line color** for that connector
+/// Returns the **canonical source library Icon line color** for that connector
 /// kind — the same value the connector's authored `Icon(... lineColor=…)`
 /// uses in the standard library. The diagram-level palette remap
 /// (`Theme::modelica_icons`) re-tones these for the active theme on
@@ -31,27 +31,27 @@ pub(super) fn wire_style_for(connector_type: &str) -> WireStyle {
     let leaf = connector_type.rsplit('.').next().unwrap_or(connector_type);
     use egui::Color32 as C;
     let (color, domain) = match leaf {
-        // Electrical: red (positive) — MSL Pin uses {0,0,255}; OMEdit
+        // Electrical: red (positive) — source library Pin uses {0,0,255}; OMEdit
         // renders these as solid red, but the canonical RGB is blue.
         // We follow the AST line color via icon_color when available.
         "Pin" | "PositivePin" | "NegativePin" | "Plug" | "PositivePlug" | "NegativePlug" => {
             (C::from_rgb(0, 0, 255), "electrical")
         }
         // Translational + rotational mechanics: BLACK — `Flange`
-        // connectors author lineColor=black in MSL. OMEdit renders
+        // connectors author lineColor=black in source library. OMEdit renders
         // mechanical wires black on the white canvas.
         "Flange_a" | "Flange_b" | "Flange" | "Support" => (C::from_rgb(0, 0, 0), "mechanical"),
         // Heat transfer: red (191,0,0) — canonical thermal color.
         "HeatPort_a" | "HeatPort_b" | "HeatPort" => (C::from_rgb(191, 0, 0), "thermal"),
         // Fluid: blue (canonical Modelica.Fluid uses lineColor blue).
         "FluidPort" | "FluidPort_a" | "FluidPort_b" => (C::from_rgb(0, 127, 255), "fluid"),
-        // Real signals: deep blue {0,0,127} — what every MSL Real
+        // Real signals: deep blue {0,0,127} — what every source library Real
         // signal connector authors as its lineColor. OMEdit renders
         // these as bold blue with arrowheads.
         "RealInput" | "RealOutput" => (C::from_rgb(0, 0, 127), "signal"),
-        // Boolean signals: purple {255,0,255} per MSL Interfaces.
+        // Boolean signals: purple {255,0,255} per source library Interfaces.
         "BooleanInput" | "BooleanOutput" => (C::from_rgb(255, 0, 255), "boolean signal"),
-        // Integer signals: green {255,127,0} (orange) per MSL.
+        // Integer signals: green {255,127,0} (orange) per source library.
         "IntegerInput" | "IntegerOutput" => (C::from_rgb(255, 127, 0), "integer signal"),
         // Frame_a/Frame_b (multibody): orange-brown.
         "Frame" | "Frame_a" | "Frame_b" => (C::from_rgb(95, 95, 95), "multibody frame"),

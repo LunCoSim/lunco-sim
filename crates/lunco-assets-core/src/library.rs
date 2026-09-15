@@ -313,8 +313,6 @@ pub struct LibraryManifest {
     pub parsed: LibraryBundleEntry,
     /// Tag identifying the parser/codec that produced `parsed`.
     pub rumoca_artifact_tag: String,
-    /// Relative path that must exist after source extraction.
-    pub source_root_marker: String,
 }
 
 /// Metadata for one bundle member.

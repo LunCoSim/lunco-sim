@@ -1,14 +1,12 @@
 // ── Self-test for the rhai assertion harness ────────────────────────────────
 //
-// TEST-ONLY. Runs under the standard cargo workflow, no sandbox required:
+// TEST-ONLY. Runs through the production Rhai bridge:
 //
-//     cargo test -p lunco-scripting --test rhai_test_harness
+//     scripts/api/run_rhai_test.sh 4101 assets/scripting/tests/test_harness_selftest.rhai
 //
 // Needs NO scene and NO host functions — every check here is pure arithmetic and
-// string work, so it executes in a bare `rhai::Engine`. That is why it is a
-// cargo test rather than a live one: if this is red, every other suite's greens
-// are worthless, and that must be caught in the default test run rather than
-// behind a sandbox nobody starts.
+// string work, so it does not need a populated scene. Running it through the
+// production bridge still verifies the actual limits and assertion surface.
 //
 // ## Why a test suite needs its own tests
 //

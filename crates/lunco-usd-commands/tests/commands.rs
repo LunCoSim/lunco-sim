@@ -11,7 +11,7 @@ use lunco_doc_bevy::{
     DiscardDocument, DocumentRegistry, ForkDocument, NewDocument, OpenFile, UndoDocument,
 };
 use lunco_twin::{DocumentKindId, DocumentKindRegistry};
-use lunco_usd::commands::UsdCommandsPlugin;
+use lunco_usd_commands::UsdCommandsPlugin;
 use lunco_usd_core::commands::{
     ApplyUsdOp, CommitUsdProposal, CreateUsdProposal, ReviewUsdProposal, UsdProposalReviewAction,
     USD_DOCUMENT_KIND,

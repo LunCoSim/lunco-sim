@@ -179,15 +179,23 @@ value with `setting_default`.
 The camera-status surface is the reference composition. Rust publishes the
 full current camera fact (`active_name`) and a deterministic compact identity
 projection (`active_label`) through the generic `camera-status` exposure. Rhai
-owns the authored camera-selection policy: it maps the typed camera facts to
-ordered `camera_items` records, including optional observe-avatar and
-resume-director actions. HUI/CSS owns the retained presentation and the
-generic keyed collection host creates rows from the authored row template.
-Camera row actions resolve to the existing typed camera commands; no camera
-registry or selection heuristic is duplicated in the exposure producer.
-The collection host retains row order, clips long lists, and consumes wheel
-input at the host boundary; Rhai remains the owner of records, ordering, and
-actions rather than a per-surface Rust list implementation.
+adds a typed option array and authored dimensions to that snapshot. The
+manifest declares only the option field names and the trigger action; the
+authored HUI button is the stable trigger, and the shared egui renderer reads
+the generic records. It forwards the selected authored action as a typed
+`runtime.ui.action` event. Rhai handles that event through the normal typed
+command bridge, so the runtime UI crate does not know camera names, camera
+commands, or camera selection rules. HUI 0.7 has no native select/accessibility
+tree; the generic egui primitive is therefore the low-level dropdown option,
+not a camera widget.
+
+The same contract is usable for any option list: the exposure value is an
+array of maps, the manifest identifies the key/label/action fields plus
+`width_source` and `max_height_source`, and Rhai supplies both records and
+dimensions. HTML/CSS can bind those dimensions for the authored trigger while
+the egui popup uses the same values for its bounded content area. Missing or
+malformed dimensions are an authored UI error and do not silently fall back to
+a Rust size.
 The shared `lunco-usd-bevy-camera::camera_switch::camera_display_labels` policy
 is used by the exposure, Camera menu, USD prim tree, entity tree, and
 Inspector: unique authored leaves stand alone; duplicate leaves gain the

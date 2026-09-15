@@ -4,7 +4,7 @@
 //! writing per-step variable values to a CSV. Reuses the same compile
 //! path the workbench uses (`ModelicaCompiler` → `SimulationSession`), so a
 //! model that runs in the workbench runs here, and the rumoca cache
-//! warmed by `msl_indexer --warm` benefits both.
+//! warmed by `modelica_library_indexer --warm` benefits both.
 //!
 //! Mission/scenario files (input profiles over time, parameter overrides,
 //! pass/fail verifiers) are intentionally **not** part of this binary —
@@ -60,7 +60,7 @@ mod native {
     use lunco_modelica_core::ModelicaCompiler;
 
     /// CLI options. Hand-parsed (no `clap`) so the binary stays cheap to
-    /// build and link — same rationale as `msl_indexer`.
+    /// build and link — same rationale as `modelica_library_indexer`.
     struct Options {
         file: PathBuf,
         class: String,
@@ -205,9 +205,9 @@ mod native {
     }
 
     pub(crate) fn main() {
-        // Same one-liner as msl_indexer / ClassCachePlugin: route rumoca's
+        // Same one-liner as modelica_library_indexer / ClassCachePlugin: route rumoca's
         // on-disk cache to the workspace's shared `.cache/rumoca`, so a
-        // run here hits warm bytes from `msl_indexer --warm` and vice
+        // run here hits warm bytes from `modelica_library_indexer --warm` and vice
         // versa. Honors an explicit `RUMOCA_CACHE_DIR` if the user set one.
         if std::env::var_os("RUMOCA_CACHE_DIR").is_none() {
             let target = lunco_assets_core::cache_dir().join("rumoca");

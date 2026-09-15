@@ -1,7 +1,7 @@
 //! Idle / activity tracker.
 //!
 //! The workbench's CPU-expensive background work (rumoca AST parses,
-//! MSL extends-chain prewarm) is **gated on user activity**: while the
+//! source library extends-chain prewarm) is **gated on user activity**: while the
 //! user is actively interacting (mouse moves, clicks, keystrokes,
 //! editor ops, canvas drags), no rumoca parse is allowed to spawn.
 //! After 500 ms of true idle, queued parses run. This is the load-

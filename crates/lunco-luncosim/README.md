@@ -58,7 +58,7 @@ does not duplicate component geometry or requirements.
 `lunco-luncosim` serves as an **Integration Layer** (Level 5) in the project hierarchy.
 
 - **Level 1 (Foundation)**: `lunco-core`, `lunco-assets-core`
-- **Level 2 (Domain Logic)**: `lunco-celestial`, `lunco-mobility`, `lunco-usd`
+- **Level 2 (Domain Logic)**: `lunco-celestial`, `lunco-mobility`, `lunco-usd-commands`
 - **Level 3 (Software)**: `lunco-obc`, `lunco-controller`
 - **Level 4 (Workflow)**: `lunco-ui`, `lunco-workbench`
 - **Level 5 (Application)**: `lunco-luncosim-core`, `lunco-luncosim` (this crate),

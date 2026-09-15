@@ -339,12 +339,14 @@ pub fn apply_ops_as(
         }
     }
 
-    // Preload any newly-referenced MSL class on a background task so the
+    // Preload any newly-referenced external class on a background task so the
     // engine session is warm by the time projection re-runs. Fire-and-forget;
     // rumoca's content-hash artifact cache dedupes repeated requests.
     for op in &ops {
         if let ModelicaOp::AddComponent { decl, .. } = op {
-            if decl.type_name.starts_with("Modelica.") {
+            if decl.type_name.contains('.')
+                && !lunco_modelica_ast::ast_extract::is_builtin_type_name(&decl.type_name)
+            {
                 let qualified = decl.type_name.clone();
                 bevy::tasks::AsyncComputeTaskPool::get()
                     .spawn(async move {
@@ -372,7 +374,7 @@ pub fn apply_ops_as(
         for op in ops {
             match apply_one_op_kernel(host, op, &author) {
                 Ok(_) => any_applied = true,
-                // Document layer rejects mutations on read-only origins (MSL
+                // Document layer rejects mutations on read-only origins (source library
                 // drill-in, bundled library) — surface ONE banner per batch.
                 Err(lunco_doc::Reject::ReadOnly) => hit_read_only = true,
                 Err(e) => bevy::log::warn!("[doc_ops] op failed: {e}"),

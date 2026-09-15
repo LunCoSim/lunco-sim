@@ -17,8 +17,5 @@ lunco-usd-compose = { path = "../lunco-usd-compose" }
 lunco-usd-document = { path = "../lunco-usd-document" }
 serde = { workspace = true }
 
-[dev-dependencies]
-tempfile = { workspace = true }
-
 [lints]
 workspace = true

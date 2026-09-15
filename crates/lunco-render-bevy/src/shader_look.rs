@@ -43,129 +43,16 @@ use bevy::render::render_resource::{TextureDimension, TextureFormat};
 use bevy::shader::Shader;
 use bevy::tasks::{futures_lite::future, AsyncComputeTaskPool, Task};
 use lunco_materials::{
-    rgba8_mip_chain, ParamSchema, ProceduralSkybox, Rgba8MipMode, ShaderLook, ShaderLookBound,
-    ShaderLookKey, ShaderLookReady, TextureLayer,
+    rgba8_mip_chain, validate_shader_stage, ParamSchema, ProceduralSkybox, Rgba8MipMode,
+    ShaderLook, ShaderLookBound, ShaderLookKey, ShaderLookReady, ShaderStage, TextureLayer,
 };
 use lunco_render::SurfaceAlpha;
 use std::sync::Arc;
-
-/// The small set of blend-state variants the fast custom-shader fallback needs.
-/// Mask cutoffs intentionally use one conservative threshold: this profile is
-/// about avoiding shader pipelines, not reproducing a user shader's details.
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
-enum FastAlpha {
-    Opaque,
-    Mask,
-    Blend,
-    Add,
-}
-
-impl FastAlpha {
-    fn from_surface(alpha: SurfaceAlpha) -> Self {
-        match alpha {
-            SurfaceAlpha::Opaque => Self::Opaque,
-            SurfaceAlpha::Mask(_) => Self::Mask,
-            SurfaceAlpha::Blend => Self::Blend,
-            SurfaceAlpha::Add => Self::Add,
-        }
-    }
-
-    fn material_alpha_mode(self) -> AlphaMode {
-        match self {
-            Self::Opaque => AlphaMode::Opaque,
-            Self::Mask => AlphaMode::Mask(0.5),
-            Self::Blend => AlphaMode::Blend,
-            Self::Add => AlphaMode::Add,
-        }
-    }
-}
-
-/// Fast mode keeps one unlit fallback for each required pipeline state. This
-/// preserves batching for the hundreds of terrain tiles that normally share a
-/// WGSL material, while avoiding shader and texture asset loading altogether.
-#[derive(Resource, Default)]
-struct FastShaderFallbacks {
-    materials: HashMap<(FastAlpha, bool), Handle<StandardMaterial>>,
-}
 
 /// Shared `ShaderMaterial` per distinct [`ShaderLookKey`] — see the module docs.
 /// Sharing, the `unshared` bypass, and eviction all live in
 /// [`LookCache`](crate::look_cache::LookCache), shared with the PBR binder.
 pub type ShaderLookCache = LookCache<ShaderLook>;
-
-/// Bind custom-shader intent without loading custom shaders.
-///
-/// This is intentionally a separate build path rather than a flag threaded
-/// through the regular binder: `ShaderMaterialPlugin` must not be registered in
-/// fast mode, otherwise wgpu still compiles every authored WGSL pipeline.
-pub(crate) fn build_fast(app: &mut App) {
-    app.init_resource::<FastShaderFallbacks>()
-        .add_observer(bind_fast_shader_look)
-        .add_systems(Update, rebind_changed_fast_shader_look);
-}
-
-fn fast_material_for(
-    look: &ShaderLook,
-    fallbacks: &mut FastShaderFallbacks,
-    materials: &mut Assets<StandardMaterial>,
-) -> Handle<StandardMaterial> {
-    let key = (FastAlpha::from_surface(look.alpha), look.double_sided);
-    fallbacks
-        .materials
-        .entry(key)
-        .or_insert_with(|| {
-            materials.add(StandardMaterial {
-                // ShaderLook has no universal base-colour field. A neutral
-                // lunar grey is an honest, stable fallback for arbitrary WGSL.
-                base_color: Color::srgb(0.42, 0.42, 0.42),
-                unlit: true,
-                alpha_mode: key.0.material_alpha_mode(),
-                double_sided: key.1,
-                cull_mode: if key.1 {
-                    None
-                } else {
-                    Some(bevy::render::render_resource::Face::Back)
-                },
-                ..default()
-            })
-        })
-        .clone()
-}
-
-fn bind_fast_shader_look(
-    add: On<Add, ShaderLook>,
-    looks: Query<&ShaderLook>,
-    mut fallbacks: ResMut<FastShaderFallbacks>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut commands: Commands,
-) {
-    let entity = add.entity;
-    let Ok(look) = looks.get(entity) else {
-        return;
-    };
-    let handle = fast_material_for(look, &mut fallbacks, &mut materials);
-    commands
-        .entity(entity)
-        .try_remove::<MeshMaterial3d<ShaderMaterial>>()
-        .try_insert((MeshMaterial3d(handle), ShaderLookBound, ShaderLookReady));
-    apply_shadow_intent(&mut commands, entity, look);
-}
-
-fn rebind_changed_fast_shader_look(
-    changed: Query<(Entity, &ShaderLook), Changed<ShaderLook>>,
-    mut fallbacks: ResMut<FastShaderFallbacks>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut commands: Commands,
-) {
-    for (entity, look) in &changed {
-        let handle = fast_material_for(look, &mut fallbacks, &mut materials);
-        commands
-            .entity(entity)
-            .try_remove::<MeshMaterial3d<ShaderMaterial>>()
-            .try_insert((MeshMaterial3d(handle), ShaderLookBound, ShaderLookReady));
-        apply_shadow_intent(&mut commands, entity, look);
-    }
-}
 
 impl CachedLook for ShaderLook {
     type Key = ShaderLookKey;
@@ -225,6 +112,87 @@ fn shader_material(look: &ShaderLook, asset_server: &AssetServer) -> ShaderMater
     // `ShaderMaterial` in the codebase.
     m.repack();
     build_shader_material(asset_server.load::<Shader>(look.shader.clone()), m)
+}
+
+/// Return a stage error only when the requested shader asset is already loaded.
+/// Unloaded assets are not errors yet: the normal asset event will validate them
+/// at publication time. Keeping this distinction lets a command-created look
+/// added after an asset event obey the same no-invalid-pipeline contract without
+/// turning asset loading into a polling loop.
+fn loaded_shader_stage_failure(
+    look: &ShaderLook,
+    shaders: Option<&Assets<Shader>>,
+    asset_server: &AssetServer,
+) -> Option<(ShaderStage, String)> {
+    let shaders = shaders?;
+    let fragment = asset_server.load::<Shader>(look.shader.clone());
+    if let Some(source) = shaders.get(&fragment).and_then(wgsl_source) {
+        if let Err(error) = validate_shader_stage(source, ShaderStage::Fragment) {
+            return Some((ShaderStage::Fragment, error.to_string()));
+        }
+    }
+    let Some(vertex_path) = look.vertex_shader.as_ref() else {
+        return None;
+    };
+    let vertex = asset_server.load::<Shader>(vertex_path.clone());
+    shaders
+        .get(&vertex)
+        .and_then(wgsl_source)
+        .and_then(|source| {
+            validate_shader_stage(source, ShaderStage::Vertex)
+                .err()
+                .map(|error| (ShaderStage::Vertex, error.to_string()))
+        })
+}
+
+fn shader_id_for(
+    path: &str,
+    ids: &mut HashMap<String, AssetId<Shader>>,
+    asset_server: &AssetServer,
+) -> AssetId<Shader> {
+    if let Some(id) = ids.get(path) {
+        return *id;
+    }
+    let id = asset_server.load::<Shader>(path.to_owned()).id();
+    ids.insert(path.to_owned(), id);
+    id
+}
+
+fn clear_shader_render_components(commands: &mut Commands, entity: Entity) {
+    commands
+        .entity(entity)
+        .try_remove::<MeshMaterial3d<ShaderMaterial>>()
+        .try_remove::<MeshMaterial3d<StandardMaterial>>()
+        .try_remove::<ShaderLookBound>()
+        .try_remove::<ShaderLookReady>()
+        .try_remove::<crate::procedural_sky::ProceduralSkyboxMaterial>();
+}
+
+fn record_loaded_shader_stage_failure(
+    diagnostics: &mut lunco_core::RuntimeDiagnostics,
+    entity: Entity,
+    look: &ShaderLook,
+    stage: ShaderStage,
+    detail: String,
+) {
+    let subject = format!("entity {entity:?}");
+    diagnostics
+        .findings
+        .retain(|finding| !(finding.producer == "shader-render" && finding.subject == subject));
+    diagnostics.findings.push(lunco_core::RuntimeDiagnostic {
+        code: "render-shader-stage".to_string(),
+        severity: lunco_core::DiagnosticSeverity::Error,
+        producer: "shader-render".to_string(),
+        subject,
+        message: format!(
+            "{} shader asset for `{}` is invalid: {detail}",
+            match stage {
+                ShaderStage::Fragment => "fragment",
+                ShaderStage::Vertex => "vertex",
+            },
+            look.shader
+        ),
+    });
 }
 
 /// Resolve a look to a handle. Sharing + the `unshared` bypass are
@@ -301,10 +269,21 @@ fn bind_shader_look(
     mut cache: ResMut<ShaderLookCache>,
     mut materials: ResMut<Assets<ShaderMaterial>>,
     asset_server: Res<AssetServer>,
+    shaders: Option<Res<Assets<Shader>>>,
+    mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
     mut commands: Commands,
 ) {
     let e = add.entity;
     let Ok(look) = looks.get(e) else { return };
+    if let Some((stage, detail)) =
+        loaded_shader_stage_failure(look, shaders.as_deref(), &asset_server)
+    {
+        clear_shader_render_components(&mut commands, e);
+        if let Some(diagnostics) = diagnostics.as_deref_mut() {
+            record_loaded_shader_stage_failure(diagnostics, e, look, stage, detail);
+        }
+        return;
+    }
     let handle = material_for(look, &mut cache, &mut materials, &asset_server);
     // Appearance intent is exclusive, but USD's visual projection and this
     // observer run in different schedules. A `PbrLook` may therefore already
@@ -325,10 +304,21 @@ fn bind_added_skybox_shader_look(
     mut cache: ResMut<ShaderLookCache>,
     mut materials: ResMut<Assets<ShaderMaterial>>,
     asset_server: Res<AssetServer>,
+    shaders: Option<Res<Assets<Shader>>>,
+    mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
     mut commands: Commands,
 ) {
     let e = add.entity;
     let Ok(look) = looks.get(e) else { return };
+    if let Some((stage, detail)) =
+        loaded_shader_stage_failure(look, shaders.as_deref(), &asset_server)
+    {
+        clear_shader_render_components(&mut commands, e);
+        if let Some(diagnostics) = diagnostics.as_deref_mut() {
+            record_loaded_shader_stage_failure(diagnostics, e, look, stage, detail);
+        }
+        return;
+    }
     let handle = material_for(look, &mut cache, &mut materials, &asset_server);
     bind_shader_render_components(e, handle, look, true, &asset_server, &mut commands);
 }
@@ -339,14 +329,14 @@ fn bind_added_skybox_shader_look(
 /// *here*, in the only crate that binds materials, so the render-free half of the
 /// graph states the intent and never names the flag.
 ///
-/// **Insert-only, deliberately.** Clearing the flag here whenever a look says
-/// nothing about shadows would re-enable a shadow pass that some other authoring
-/// path switched off. The cost is that turning `primvars:doNotCastShadows` back
-/// off needs a reload rather than taking effect live — a fair trade against
-/// silently re-enabling a shadow pass someone else switched off.
+/// The shader look is the exclusive appearance owner, so this is a full
+/// reconciliation: clearing the authored opt-out must remove a stale derived
+/// `NotShadowCaster` marker as well as setting it when requested.
 fn apply_shadow_intent(commands: &mut Commands, e: Entity, look: &ShaderLook) {
     if look.no_shadow_cast {
         commands.entity(e).try_insert(NotShadowCaster);
+    } else {
+        commands.entity(e).try_remove::<NotShadowCaster>();
     }
 }
 
@@ -373,6 +363,7 @@ fn rebind_changed_shader_look(
     images: Option<Res<Assets<Image>>>,
     schemas: Option<Res<crate::ShaderSchemas>>,
     mut commands: Commands,
+    mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
     // Shader path → resolved `AssetId`, so the driven hot path can compare shader
     // identity WITHOUT `asset_server.load::<Shader>()` per prim per tick. A path's
     // id is minted once and the bound material's own `Handle<Shader>` keeps the
@@ -386,6 +377,15 @@ fn rebind_changed_shader_look(
     let mut written: HashSet<AssetId<ShaderMaterial>> = HashSet::default();
 
     for (e, look, current, was_ready, skybox) in &changed {
+        if let Some((stage, detail)) =
+            loaded_shader_stage_failure(look, shaders.as_deref(), &asset_server)
+        {
+            clear_shader_render_components(&mut commands, e);
+            if let Some(diagnostics) = diagnostics.as_deref_mut() {
+                record_loaded_shader_stage_failure(diagnostics, e, look, stage, detail);
+            }
+            continue;
+        }
         apply_shadow_intent(&mut commands, e, look);
         if look.unshared {
             // Private material: overwrite the asset it already owns, rather than
@@ -418,16 +418,15 @@ fn rebind_changed_shader_look(
                 // per-tick id compare. Textures compare slot-by-slot
                 // (`textures_match`): a TEXTURED look whose texture SET is
                 // unchanged takes the cheap param path like everything else.
-                let want_shader_id = match shader_ids.get(look.shader.as_str()) {
-                    Some(id) => *id,
-                    None => {
-                        let id = asset_server.load::<Shader>(look.shader.clone()).id();
-                        shader_ids.insert(look.shader.clone(), id);
-                        id
-                    }
-                };
+                let want_shader_id =
+                    shader_id_for(&look.shader, &mut shader_ids, &asset_server);
+                let want_vertex_shader_id = look
+                    .vertex_shader
+                    .as_deref()
+                    .map(|path| shader_id_for(path, &mut shader_ids, &asset_server));
                 let structural = existing.shader.id() != want_shader_id
-                    || existing.vertex_shader.is_some() != look.vertex_shader.is_some()
+                    || existing.vertex_shader.as_ref().map(Handle::id)
+                        != want_vertex_shader_id
                     || !textures_match(&existing, look);
                 if structural {
                     let schema = existing.schema.clone();
@@ -436,6 +435,12 @@ fn rebind_changed_shader_look(
                     // The rebuild loaded the shader afresh; make the id cache agree
                     // with the material so the compare above stays quiet next tick.
                     shader_ids.insert(look.shader.clone(), existing.shader.id());
+                    if let (Some(path), Some(id)) = (
+                        look.vertex_shader.as_deref(),
+                        existing.vertex_shader.as_ref().map(Handle::id),
+                    ) {
+                        shader_ids.insert(path.to_owned(), id);
+                    }
                 } else {
                     existing.set_many(
                         look.values
@@ -507,6 +512,157 @@ fn rebind_changed_shader_look(
                 );
             }
         }
+    }
+}
+
+/// Validate loaded shader stages on the asset event that changed them.
+///
+/// This is deliberately event-driven. A shader failure removes the concrete
+/// material instead of substituting `StandardMaterial`, which keeps an authored
+/// error visible to the runtime diagnostic surface and prevents an invalid
+/// pipeline from being submitted every frame. A corrected asset is rebound by
+/// the same owner, so an authored USD/Rhai edit can repair the scene without a
+/// process restart.
+fn validate_shader_assets_on_change(
+    mut events: MessageReader<AssetEvent<Shader>>,
+    looks: Query<(
+        Entity,
+        &ShaderLook,
+        Option<&MeshMaterial3d<ShaderMaterial>>,
+        Has<ProceduralSkybox>,
+    )>,
+    shaders: Option<Res<Assets<Shader>>>,
+    mut cache: ResMut<ShaderLookCache>,
+    mut materials: ResMut<Assets<ShaderMaterial>>,
+    asset_server: Res<AssetServer>,
+    mut commands: Commands,
+    diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
+) {
+    let mut changed: HashSet<AssetId<Shader>> = HashSet::default();
+    let mut removed: HashSet<AssetId<Shader>> = HashSet::default();
+    for event in events.read() {
+        match event {
+            AssetEvent::Added { id }
+            | AssetEvent::Modified { id }
+            | AssetEvent::LoadedWithDependencies { id } => {
+                changed.insert(*id);
+            }
+            AssetEvent::Removed { id } | AssetEvent::Unused { id } => {
+                changed.insert(*id);
+                removed.insert(*id);
+            }
+        }
+    }
+    if changed.is_empty() {
+        return;
+    }
+    let Some(shaders) = shaders else {
+        return;
+    };
+
+    let mut findings = Vec::new();
+    let mut repairs = Vec::new();
+    let mut rejections = Vec::new();
+
+    for (entity, look, current, skybox) in &looks {
+        let fragment = asset_server.load::<Shader>(look.shader.clone());
+        let vertex = look
+            .vertex_shader
+            .as_ref()
+            .map(|path| asset_server.load::<Shader>(path.clone()));
+        let fragment_changed = changed.contains(&fragment.id());
+        let vertex_changed = vertex
+            .as_ref()
+            .is_some_and(|handle| changed.contains(&handle.id()));
+        let affected = fragment_changed || vertex_changed;
+
+        // Inspect every live look whenever any shader asset changes. The event
+        // identifies when validation is needed, but the diagnostic set is the
+        // complete current state for this producer; otherwise an unrelated
+        // reload would erase an older shader error from the status surface.
+        let fragment_source = shaders.get(&fragment).and_then(wgsl_source);
+        let fragment_loaded = fragment_source.is_some() || removed.contains(&fragment.id());
+        let mut failure = fragment_source
+            .and_then(|source| {
+                validate_shader_stage(source, ShaderStage::Fragment)
+                    .err()
+                    .map(|error| (ShaderStage::Fragment, error.to_string()))
+            })
+            .or_else(|| {
+                removed.contains(&fragment.id()).then_some((
+                    ShaderStage::Fragment,
+                    "shader asset was removed before a valid stage was available".to_string(),
+                ))
+            });
+
+        let vertex_loaded = vertex.as_ref().is_none_or(|vertex_handle| {
+            shaders.get(vertex_handle).and_then(wgsl_source).is_some()
+                || removed.contains(&vertex_handle.id())
+        });
+        if failure.is_none() {
+            if let Some(vertex_handle) = vertex.as_ref() {
+                failure = shaders
+                    .get(vertex_handle)
+                    .and_then(wgsl_source)
+                    .and_then(|source| {
+                        validate_shader_stage(source, ShaderStage::Vertex)
+                            .err()
+                            .map(|error| (ShaderStage::Vertex, error.to_string()))
+                    })
+                    .or_else(|| {
+                        removed.contains(&vertex_handle.id()).then_some((
+                            ShaderStage::Vertex,
+                            "shader asset was removed before a valid stage was available"
+                                .to_string(),
+                        ))
+                    });
+            }
+        }
+
+        if let Some((stage, detail)) = failure {
+            let message = format!(
+                "{} shader asset for `{}` is invalid: {detail}",
+                match stage {
+                    ShaderStage::Fragment => "fragment",
+                    ShaderStage::Vertex => "vertex",
+                },
+                look.shader
+            );
+            findings.push(lunco_core::RuntimeDiagnostic {
+                code: "render-shader-stage".to_string(),
+                severity: lunco_core::DiagnosticSeverity::Error,
+                producer: "shader-render".to_string(),
+                subject: format!("entity {entity:?}"),
+                message,
+            });
+            if affected {
+                rejections.push(entity);
+            }
+        } else if affected && current.is_none() && fragment_loaded && vertex_loaded {
+            repairs.push((entity, skybox));
+        }
+    }
+
+    for entity in rejections {
+        clear_shader_render_components(&mut commands, entity);
+    }
+    for (entity, skybox) in repairs {
+        let Ok((_, look, _, _)) = looks.get(entity) else {
+            continue;
+        };
+        let handle = material_for(look, &mut cache, &mut materials, &asset_server);
+        bind_shader_render_components(
+            entity,
+            handle,
+            look,
+            skybox,
+            &asset_server,
+            &mut commands,
+        );
+        apply_shadow_intent(&mut commands, entity, look);
+    }
+    if let Some(mut diagnostics) = diagnostics {
+        diagnostics.replace_producer("shader-render", findings);
     }
 }
 
@@ -588,12 +744,12 @@ fn authored_shader_image_base(image: &Image, mode: Rgba8MipMode) -> Option<(Vec<
 /// descriptor into the existing image asset.
 fn prepare_authored_shader_image_mips(
     changed: Query<&ShaderLook, Changed<ShaderLook>>,
-    mut image_events: MessageReader<AssetEvent<Image>>,
+    mut image_events: Option<MessageReader<AssetEvent<Image>>>,
     mut state: ResMut<ShaderImageMipState>,
     images: Option<ResMut<Assets<Image>>>,
     quality: Option<Res<lunco_render::RenderingQualitySettings>>,
 ) {
-    let Some(mut images) = images else {
+    let (Some(image_events), Some(mut images)) = (image_events.as_mut(), images) else {
         return;
     };
 
@@ -783,6 +939,7 @@ pub(crate) fn build(app: &mut App) {
                 rebind_changed_shader_look,
                 invalidate_shader_look_ready,
                 mark_shader_look_ready.after(crate::reflect_shader_schemas),
+                validate_shader_assets_on_change.after(crate::reflect_shader_schemas),
                 sweep_look_cache::<ShaderLook>,
             ),
         )
@@ -881,15 +1038,24 @@ fn material_is_render_ready(
     let Some(shader) = shaders.get(&material.shader) else {
         return false;
     };
+    let Some(source) = wgsl_source(shader) else {
+        return false;
+    };
+    if validate_shader_stage(source, ShaderStage::Fragment).is_err() {
+        return false;
+    }
     let schema_ready = if let Some(reflected) = schemas.get(material.shader.id()) {
         Arc::ptr_eq(reflected, &material.schema)
     } else {
-        let Some(source) = wgsl_source(shader) else {
-            return false;
-        };
         ParamSchema::parse(source).is_none()
     };
-    schema_ready && material_texture_dependencies_ready(material, images)
+    let vertex_ready = material.vertex_shader.as_ref().is_none_or(|vertex_handle| {
+        shaders
+            .get(vertex_handle)
+            .and_then(wgsl_source)
+            .is_some_and(|source| validate_shader_stage(source, ShaderStage::Vertex).is_ok())
+    });
+    schema_ready && vertex_ready && material_texture_dependencies_ready(material, images)
 }
 
 /// A material is render-ready only when every texture it declares has an image
@@ -1000,7 +1166,7 @@ mod tests {
             .world_mut()
             .resource_mut::<Assets<Shader>>()
             .add(Shader::from_wgsl(
-                "// no dynamic Material struct",
+                "@fragment fn fragment() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }",
                 "test.wgsl",
             ));
         let mut material = ShaderMaterial {
@@ -1064,7 +1230,7 @@ mod tests {
     #[test]
     fn identical_looks_share_one_material() {
         let mut app = app();
-        let look = ShaderLook::new("shaders/terrain_geomorph.wgsl")
+        let look = ShaderLook::new("shaders/terrain_layered.wgsl")
             .with_vertex_shader("shaders/terrain_geomorph.wgsl")
             .with("morph_start", ParamValue::F32(0.7))
             .with("morph_end", ParamValue::F32(1.0));
@@ -1087,11 +1253,11 @@ mod tests {
     fn different_looks_get_different_materials() {
         let mut app = app();
         app.world_mut().spawn(
-            ShaderLook::new("shaders/terrain_geomorph.wgsl")
+            ShaderLook::new("shaders/terrain_layered.wgsl")
                 .with("morph_start", ParamValue::F32(0.0)),
         );
         app.world_mut().spawn(
-            ShaderLook::new("shaders/terrain_geomorph.wgsl")
+            ShaderLook::new("shaders/terrain_layered.wgsl")
                 .with("morph_start", ParamValue::F32(1.0)),
         );
         // A different shader path is also a different material.
@@ -1109,7 +1275,7 @@ mod tests {
         let e = app
             .world_mut()
             .spawn(
-                ShaderLook::new("shaders/terrain_geomorph.wgsl")
+                ShaderLook::new("shaders/terrain_layered.wgsl")
                     .with("morph_start", ParamValue::F32(0.0)),
             )
             .id();
@@ -1155,13 +1321,13 @@ mod tests {
         let e = app
             .world_mut()
             .spawn(
-                ShaderLook::new("shaders/terrain_geomorph.wgsl")
+                ShaderLook::new("shaders/terrain_layered.wgsl")
                     .with_texture(TextureLayer::Surface, surface.clone())
                     .with_texture(TextureLayer::Normal, normal.clone()),
             )
             .id();
         app.world_mut()
-            .spawn(ShaderLook::new("shaders/terrain_geomorph.wgsl"));
+            .spawn(ShaderLook::new("shaders/terrain_layered.wgsl"));
         app.update();
 
         let h = material_of(&app, e);
@@ -1195,7 +1361,7 @@ mod tests {
         let entity = app
             .world_mut()
             .spawn(
-                ShaderLook::new("shaders/terrain_geomorph.wgsl")
+                ShaderLook::new("shaders/terrain_layered.wgsl")
                     .with_texture(TextureLayer::Albedo, image.clone()),
             )
             .id();
@@ -1259,39 +1425,6 @@ mod tests {
             })
         ));
         assert!(app.world().entity(entity).contains::<ShaderLookBound>());
-    }
-
-    #[test]
-    fn fast_mode_falls_back_without_creating_a_shader_material() {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
-            .init_asset::<StandardMaterial>();
-        build_fast(&mut app);
-        let e = app
-            .world_mut()
-            .spawn(ShaderLook::new("shaders/terrain_geomorph.wgsl"))
-            .id();
-
-        app.update();
-
-        let material = app
-            .world()
-            .entity(e)
-            .get::<MeshMaterial3d<StandardMaterial>>()
-            .expect("fast fallback material")
-            .0
-            .clone();
-        assert!(
-            app.world()
-                .resource::<Assets<StandardMaterial>>()
-                .get(&material)
-                .expect("fallback asset")
-                .unlit
-        );
-        assert!(!app
-            .world()
-            .entity(e)
-            .contains::<MeshMaterial3d<ShaderMaterial>>());
     }
 
     /// A USD material can be projected as plain PBR before its WGSL binding is

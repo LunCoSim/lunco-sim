@@ -16,7 +16,7 @@ $ cargo tree -e normal -p lunco-luncosim-server -i winit              # warning:
 Both flags are load-bearing. Absence is reported as `warning: nothing to print.` on
 **stdout with exit code 0** — not a non-zero exit — so a check that keys on the exit
 status passes unconditionally. And without `-e normal`, `-i` also walks dev- and
-build-dependencies, where wgpu legitimately appears (visual examples, `lunco-usd`'s
+build-dependencies, where wgpu legitimately appears in visual examples,
 dev-only `bevy_pbr`), reporting a regression that is not one.
 
 `naga` remains, via `bevy_shader` — the WGSL **compiler**, kept for live shader editing
@@ -207,6 +207,13 @@ rule: an already-ready replacement preserves the latch, while a replacement
 whose shader layout or declared images are not ready clears it until the normal
 readiness pass proves the dependency contract again. This keeps terrain edge
 stitch variants from entering a deferred remove/re-add cycle.
+
+Stage readiness is a positive contract: the fragment source must expose
+`@fragment`, and an authored optional vertex source must expose `@vertex`.
+Combined WGSL modules are valid. A missing stage is not converted to a PBR or
+neutral material; the shader owner removes the invalid concrete binding and
+publishes a `RuntimeDiagnostics` error. Any recovery is an explicit USD/Rhai
+authoring decision, not a renderer fallback.
 
 ### Two rules you must not break
 

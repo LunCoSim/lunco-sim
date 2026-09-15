@@ -150,7 +150,7 @@ lunco-scripting = { path = "../lunco-scripting", optional = true }
 # bridge forces the `log` facade's max level to TRACE (so all log records
 # reach `tracing` for filtering). That makes every `log::trace!` CONSTRUCT
 # and format its record before tracing drops it at info-level — the cost is
-# paid millions of times. Measured: a cold MSL parse went from <2 s
+# paid millions of times. Measured: a cold source-library parse went from <2 s
 # (standalone, no logger) to 5+ minutes in-app. Same parser, same machine —
 # the only difference was the installed logger. (Repro: set log max level to
 # TRACE in a standalone bin → identical blow-up.) Per-target filtering can't
@@ -195,8 +195,8 @@ wasm-bindgen-futures = { workspace = true }
 # (`wasm_js`) feature must be enabled here too; build_web.sh sets the matching
 # `--cfg getrandom_backend="wasm_js"` (cfg + feature are both required).
 getrandom = { version = "0.3", features = ["wasm_js"] }
-# `Response`, `Request`, `RequestInit`, `Headers` for the MSL fetcher
-# (see `src/msl_remote.rs`); the rest predate this work.
+# `Response`, `Request`, `RequestInit`, `Headers` for the source-library fetcher
+# (see `src/library_remote.rs`); the rest predate this work.
 web-sys = { workspace = true, features = [
     "console",
     "Document",
@@ -246,6 +246,10 @@ web-sys = { workspace = true, features = [
     "AddEventListenerOptions",
 ] }
 console_error_panic_hook = { workspace = true }
+
+[package.metadata.cargo-machete]
+# Feature-only browser RNG backend for the transitive Bevy/Rhai graph.
+ignored = ["getrandom"]
 
 [lints]
 workspace = true

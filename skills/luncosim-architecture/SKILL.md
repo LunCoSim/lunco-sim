@@ -76,8 +76,14 @@ For a `ShaderLook` with `vertex_shader`, treat the fragment and vertex sources a
 one linked material contract: both stages read the same `@binding(0)` uniform
 block, so their `Material` fields, order, and WGSL types must agree. The
 fragment schema is the packed layout; do not invent a second vertex schema or
-silently select a replacement shader. Add a cross-file ABI test when maintaining
-a multi-stage shader pair. See
+silently select a replacement shader. Validate the requested stage positively:
+`sourceAsset` needs `@fragment` and `vertex_shader` needs `@vertex`; a combined
+WGSL module is valid for either role. A missing or invalid stage is a structured
+runtime diagnostic and an unbound material. Rust must not install a
+`StandardMaterial`, neutral shader, or another guessed source as recovery. If a
+scenario needs recovery, make it an explicit Rhai policy that can be replaced
+or disabled without rebuilding the renderer. Add a cross-file ABI test when
+maintaining a multi-stage shader pair. See
 [`shader-layers-and-params.md`](../../docs/architecture/shader-layers-and-params.md).
 
 Treat an illumination-bearing grayscale orthophoto as measured imagery, not
@@ -513,9 +519,11 @@ current default.
   the explicit empty-table case. Rust may validate known member/output pairs and
   identifier uniqueness, but must not choose aliases or emit visual source for a
   policy.
-- Keep policy contracts in Rhai assets under `assets/scripting/tests/`. The
-  Rust host supplies composed facts and invokes the shipped policy; Rhai owns
-  assertions about generated source, topology, layout, and presentation.
+- Keep policy contracts in authored Rhai scene tests under
+  `assets/scenarios/tests/`; reusable standalone assertions may remain under
+  `assets/scripting/tests/` and run through `scripts/api/run_rhai_test.sh`.
+  The Rust host supplies composed facts and invokes the shipped policy; Rhai
+  owns assertions about generated source, topology, layout, and presentation.
   Literal top-level Rhai constants are supported inside policy helper functions
   by the shared hook binding, so presentation policy can remain editable without
   adding Rust-side layout parameters.
@@ -552,7 +560,7 @@ Run the smallest relevant checks first, then the production binary:
 ```bash
 python3 scripts/gen_schema.py
 RUSTC_WRAPPER= cargo fmt --all -- --check
-RUSTC_WRAPPER= cargo test -p lunco-usd-document --test schema_generation -j 4
+python3 scripts/gen_schema.py
 "$LUNCOSIM_BIN" test --scene scenes/tests/sensor.usda
 RUSTC_WRAPPER= cargo test -p lunco-usd-sim --test usd_connection_mechanics -j 4
 CARGO_INCREMENTAL=1 RUSTC_WRAPPER= cargo build -p lunco-luncosim --bin luncosim -j 4

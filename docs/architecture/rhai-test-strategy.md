@@ -9,7 +9,7 @@ claim can be observed through a public production surface.
 
 | Claim | Owner | Test form |
 |---|---|---|
-| USD identity, composition, schema shape, asset edges | USD / asset crates | Rust structural tests plus `--validate` |
+| USD identity, composition, schema shape, asset edges | USD / asset crates | Authored USD + Rhai scene gate; Rust only for a generic reader/parser seam |
 | Dynamic assembly construction and authored rejection policy | Rhai tools over USD commands/queries | Production scene + authored negative plans |
 | Modelica parsing, AST/source contract, solver/math kernel | Modelica / Rust mechanism | Rust unit and integration tests |
 | Avian joint, collider, contact and numerical mechanics | Avian / Rust mechanism | Rust mechanism tests |
@@ -154,10 +154,11 @@ The Rust target retains only generic `PbrLook` projection cases such as opacity,
 masking, additive blending, malformed values, and workflow binding; changing a
 marker asset no longer requires a Rust fixture rebuild.
 
-The generic command path, script lifecycle, hot-reload generation, and
-resource/reflection seams remain in
-`crates/lunco-scripting/tests/rhai_rover_live_test.rs` because those tests own
-runtime mechanisms rather than a particular Twin's route or expected outcome.
+Generic scripting behavior is exercised through authored production scene
+gates. The scripting crate does not maintain a second Rust integration harness
+for scenario product behavior; low-level Rust tests, when needed for mechanisms
+that authored runtime tests cannot observe, use inline fixtures at their
+owning crate boundary.
 The task/mission semantics are exercised by the production
 `scripting_task_contract` scene and
 `assets/scenarios/tests/scripting_task_contract.rhai`; the Rust harness no
@@ -169,6 +170,14 @@ attachment, add/move/delete (including referenced-point deactivation), empty
 and recovered ribbons, semantic start/stop, invalid edits, and sensor-driven
 arrival. There is no Rust test or Rust runtime path for a vessel-owned waypoint
 list.
+
+The same rule now covers the scripting asset surface itself. The production
+`scripting_asset_contracts` scene validates the active prelude and policies
+through `ScriptingCatalog` and `ValidateAsset`, and exercises the shipped Rhai
+tool libraries through their registered modules. Rust no longer enumerates or
+opens `assets/scripting/` from a package integration test; standalone probes in
+`assets/scripting/tests/` are run by `scripts/api/run_rhai_test.sh` when a live
+bridge is required.
 
 The same boundary applies to authored physics and editor outcomes: when a
 public USD/query/event surface can observe the claim, the acceptance assertion
@@ -375,6 +384,14 @@ observe them with an authored Rhai scene. Rust mechanism tests may use the
 smallest programmatic stage needed to isolate a lower-level seam that has no
 production observation; they must not recreate a full asset or scenario.
 
+The same rule applies to shader assets. A Rust integration test that opens a
+named file under `assets/shaders/` is an asset test even when it reaches the
+file through `lunco-assets-core` or `lunco-storage`; changing the reader does
+not change ownership. WGSL schema facts are exposed by `ValidateAsset` and are
+asserted by `assets/scenes/tests/shader_asset_contracts.usda` with its Rhai
+observer. Rust keeps only inline `ParamSchema`/packing tests that do not name a
+repository asset.
+
 ### USD simulation boundary
 
 The authored production scenarios own public USD simulation outcomes: composed
@@ -393,7 +410,7 @@ system (`tests/usd_connection_mechanics.rs`), pure wheel-parameter validation in
 tests in their owning crates. The separate wheel/tire/suspension target contract
 is now an authored `wheel_attachment_contract` USD + Rhai gate. Raw authoring
 facts that do not require Bevy or Avian stay with
-`lunco-usd/tests/live_spawn_projection.rs`, which already owns the document
+`lunco-usd-viewport-ui/tests/live_spawn_projection.rs`, which already owns the document
 projection target. If a future public query exposes one of these mechanism
 claims end-to-end, move that exact assertion to an authored scene and remove
 the Rust duplicate in the same change.

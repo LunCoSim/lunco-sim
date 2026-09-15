@@ -39,6 +39,27 @@ fn production_on_tick(facts) {
     out
 }
 
+fn build_profile_gate(facts) {
+    let out = [];
+    if is_lint_policy(facts.path) { return out; }
+    if !facts.source.contains("is_debug(")
+        && !facts.source.contains("debug_assertions") {
+        return out;
+    }
+
+    out.push(finding(
+        "rhai-build-profile-gate",
+        "error",
+        facts.path,
+        "Rhai behavior must not branch on the Rust build profile; use the authored audience/runtime contract instead."
+    ));
+    out
+}
+
 fn lint_rhai(facts) {
-    production_on_tick(facts)
+    let out = production_on_tick(facts);
+    for finding in build_profile_gate(facts) {
+        out.push(finding);
+    }
+    out
 }

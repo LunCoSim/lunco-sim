@@ -47,7 +47,7 @@ interactive window therefore have one policy and one cache/path resolver.
 - **Shared cache** — the OS-global cache (`~/.cache/lunco` on Linux,
   `~/Library/Caches/lunco` on macOS, `%LOCALAPPDATA%\\lunco` on Windows).
   `LUNCOSIM_CACHE` remains an explicit CI/custom-install override. Every
-  worktree and Twin therefore shares one pool of regenerable data (MSL,
+  worktree and Twin therefore shares one pool of regenerable data (source libraries,
   textures, ephemeris, downloaded sources).
 - **Twin cache** — `<TWIN>/.cache`. A Twin's default-owned downloads land
   beside the Twin. `twin://` reads resolve `<twin>/<rel>` first, then
@@ -162,7 +162,10 @@ def Scope "Looks"
 
         def Shader "Surface"
         {
+            uniform token info:implementationSource = "sourceAsset"
             uniform asset info:wgsl:sourceAsset = @lunco://shaders/terrain_layered.wgsl@
+            # Optional for streamed CDLOD; omit for a static/root mesh.
+            uniform asset info:wgsl:vertexAsset = @lunco://shaders/terrain_geomorph.wgsl@
             asset inputs:albedo_map  = @terrain/<site>/materials/textures/albedo.png@
             float inputs:weight_albedo = 1.0
             asset inputs:normal_map  = @terrain/<site>/materials/textures/normal.png@
@@ -216,6 +219,14 @@ one `ShaderLook`; the terrain source reconciler derives the typed roles from tha
 same look. Roles are `albedo`, `mineral`, `surface` (packed R=rough G=AO B=rockDens),
 and `normal`.
 
+The bound Shader also owns the render stages: `info:wgsl:sourceAsset` must expose
+`@fragment`, and optional `info:wgsl:vertexAsset` must expose `@vertex`. A single
+WGSL module may provide both. Missing or invalid stages are reported as a
+structured diagnostic and leave the material unbound. Rust never swaps in a
+neutral or terrain shader to hide a bad asset; if a Twin wants an explicit
+non-authored material, author that choice in USD/Rhai so it can be changed
+without rebuilding the renderer.
+
 - Every `inputs:*` is a live-tunable, journaled knob (networked, undoable) and
   the network is inspectable in usdview/Blender.
 - **CONNECTED** map inputs are skipped — a connected port is fed by a producer
@@ -237,8 +248,8 @@ and `normal`.
   terrain tile streaming, so it cannot hide tile progress or make a presentable
   ground scene wait for an optional map.
 - For multi-site scenes, author these inputs **inside a terrain variant** and
-  verify with
-  `cargo run -p lunco-usd --example variant_probe -- <scene.usda>`.
+  verify the composed variant through the production scene-test command; do
+  not add a package-specific USD probe for this asset contract.
 
 Node-graph authoring is outside this asset pipeline. Read the current
 multi-domain architecture before introducing a new graph owner.

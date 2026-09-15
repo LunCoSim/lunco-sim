@@ -3308,7 +3308,7 @@ mod draw_partition_tests {
     }
 
     fn production_template() -> ShaderLook {
-        ShaderLook::new("shaders/terrain_geomorph.wgsl")
+        ShaderLook::new("shaders/terrain_layered.wgsl")
             .with_vertex_shader("shaders/terrain_geomorph.wgsl")
     }
 
@@ -3378,8 +3378,8 @@ mod draw_partition_tests {
             );
         }
         assert!(!near.values.contains_key("map_ratio"));
-        assert_eq!(near.shader, "shaders/terrain_geomorph.wgsl");
-        assert_eq!(far.shader, "shaders/terrain_geomorph.wgsl");
+        assert_eq!(near.shader, "shaders/terrain_layered.wgsl");
+        assert_eq!(far.shader, "shaders/terrain_layered.wgsl");
         for name in ["mode", "overlay_mode", "overlay_opacity", "lod_depth"] {
             assert!(
                 !near.values.contains_key(name),
@@ -3521,7 +3521,7 @@ mod draw_partition_tests {
             .world_mut()
             .spawn((
                 DemTerrainSurface,
-                ShaderLook::new("shaders/terrain_geomorph.wgsl")
+                ShaderLook::new("shaders/terrain_layered.wgsl")
                     .with_texture(TextureLayer::Albedo, first.clone()),
             ))
             .id();
@@ -3537,7 +3537,7 @@ mod draw_partition_tests {
 
         *app.world_mut()
             .get_mut::<ShaderLook>(terrain)
-            .expect("terrain look") = ShaderLook::new("shaders/terrain_geomorph.wgsl")
+            .expect("terrain look") = ShaderLook::new("shaders/terrain_layered.wgsl")
             .with_texture(TextureLayer::Albedo, second.clone());
         app.update();
 
@@ -3591,7 +3591,7 @@ mod draw_partition_tests {
 
         let tile = app
             .world_mut()
-            .spawn(ShaderLook::new("shaders/terrain_geomorph.wgsl"))
+            .spawn(ShaderLook::new("shaders/terrain_layered.wgsl"))
             .id();
         let mut tile_entity = app.world_mut().entity_mut(tile);
         let mut shader_look = tile_entity.get_mut::<ShaderLook>().expect("tile look");
@@ -3760,7 +3760,7 @@ mod draw_partition_tests {
         let tile = app
             .world_mut()
             .spawn((
-                ShaderLook::new("shaders/terrain_geomorph.wgsl"),
+                ShaderLook::new("shaders/terrain_layered.wgsl"),
                 // A resident tile may carry stale shadow flags when its cache
                 // is rebound. The shared helper must restore the current
                 // terrain caster/receiver contract.
@@ -3814,7 +3814,7 @@ mod draw_partition_tests {
         let tile = app
             .world_mut()
             .spawn((
-                ShaderLook::new("shaders/terrain_geomorph.wgsl"),
+                ShaderLook::new("shaders/terrain_layered.wgsl"),
                 bevy::light::NotShadowCaster,
                 bevy::light::NotShadowReceiver,
             ))

@@ -8,7 +8,7 @@
 //!    picking is limited) we show "Open File".
 //! 3. **example paths** — three hand-authored example paths
 //!    (Circuits 101, Control basics, Moving parts), each a sequence
-//!    of 5 MSL classes with a one-line goal. Progress dots
+//!    of 5 source library classes with a one-line goal. Progress dots
 //!    (⚪ not opened · ✅ opened) drive a subtle game-feel;
 //!    `opened` state is read from the persisted `ExampleProgress`
 //!    ledger (bumped by the `OpenClass` observer in
@@ -17,11 +17,11 @@
 //!    the earlier draft.
 //! 4. **Browse all examples** — collapsed by default, behind a
 //!    `CollapsingHeader`. Search box + domain chips + 2-col card
-//!    grid over the full ~700 MSL examples. For power-users who
+//!    grid over the full ~700 source library examples. For power-users who
 //!    know what they want; no progress tracking here.
 //! 5. **Shortcuts footer**.
 //!
-//! Every example — bundled or MSL — opens as a **read-only tab** via
+//! Every example — bundled or source library — opens as a **read-only tab** via
 //! `OpenClass`. The canvas read-only guard surfaces an explanation
 //! on first edit attempt (see `canvas_diagram::apply_ops`).
 //!
@@ -35,18 +35,18 @@ use serde::{Deserialize, Serialize};
 
 use crate::models::bundled_models;
 use crate::ui::welcome_progress::ExampleProgress;
-use crate::visual_diagram::msl_class_library;
+use crate::visual_diagram::library_class_library;
 
 /// Panel id.
 pub const WELCOME_PANEL_ID: PanelId = PanelId("modelica_welcome");
 
-/// One step in a learning path — a concrete MSL class and the
+/// One step in a learning path — a concrete source library class and the
 /// human-authored goal that tells the learner *what to look for*
 /// when they hit Run. Keep the goal short (< 90 chars) so cards stay
 /// visually uniform.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ExamplePathStep {
-    /// Fully-qualified MSL class to open (read-only).
+    /// Fully-qualified source library class to open (read-only).
     pub qualified: String,
     /// Short display name (falls back to the trailing segment of
     /// `qualified` when empty).
@@ -56,7 +56,7 @@ pub struct ExamplePathStep {
     pub goal: String,
 }
 
-/// A hand-curated example arc across ~5 MSL classes.
+/// A hand-curated example arc across ~5 source library classes.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ExamplePath {
     /// Leading glyph for the header.
@@ -74,7 +74,7 @@ pub struct ExamplePath {
 /// `lunco-assets` crate) in [`ExamplePathRegistry::with_builtins`]; any plugin
 /// can [`register`](Self::register) more — the example paths are editable **data**,
 /// not a `const` array welded into the render (spec 011 §6). Class-based (open
-/// MSL classes to read/run), lunica-local example navigation data.
+/// source library classes to read/run), lunica-local example navigation data.
 #[derive(Resource, Default, Clone, Serialize, Deserialize)]
 pub struct ExamplePathRegistry {
     /// Registered paths, in display order.
@@ -149,14 +149,14 @@ fn is_top_level_example(c: &crate::index::ClassEntry) -> bool {
     matches!(parts.next(), Some("Examples"))
 }
 
-/// Memoized top-level-example subset of the MSL library, plus the
-/// per-domain counts the Browse-all chips show. The MSL library is
-/// immutable once loaded ([`msl_class_library`] is a `&'static` cache),
+/// Memoized top-level-example subset of the source-library index, plus the
+/// per-domain counts the Browse-all chips show. The source-library index is
+/// immutable once loaded ([`library_class_library`] is a `&'static` cache),
 /// so this filter+tally — previously rebuilt **every frame**, even with
 /// the Browse-all section collapsed, just to show the header count
 /// (CQ-208) — runs once and is read thereafter.
 ///
-/// Returns empty until the MSL bundle has loaded (the cache is only set
+/// Returns empty until the source library bundle has loaded (the cache is only set
 /// once the library is non-empty, so an early call on wasm doesn't
 /// poison it). `domain_counts` is sorted by count desc, then name.
 struct WelcomeCatalog {
@@ -173,10 +173,10 @@ fn welcome_catalog() -> &'static WelcomeCatalog {
     if let Some(c) = CACHE.get() {
         return c;
     }
-    let lib = msl_class_library();
+    let lib = library_class_library();
     if lib.is_empty() {
         // Not loaded yet — return the shared empty catalog and retry next
-        // call, exactly as `msl_class_library` retries its own load.
+        // call, exactly as `library_class_library` retries its own load.
         return &EMPTY;
     }
     let examples: Vec<&'static crate::index::ClassEntry> =
@@ -234,7 +234,7 @@ impl Panel for WelcomePanel {
         let mut create_new = false;
         let mut open_folder = false;
         let mut open_file = false;
-        let mut open_msl: Option<String> = None;
+        let mut open_library: Option<String> = None;
         let mut open_bundled: Option<&'static str> = None;
 
         // Theme tokens.
@@ -334,7 +334,7 @@ impl Panel for WelcomePanel {
             ui.add_space(32.0);
 
             // ── LunCoSim demos (bundled) ───────────────────
-            // Our own authored starters. Separate from the MSL
+            // Our own authored starters. Separate from the source library
             // `.Examples.*` set because these files live
             // in-repo (`assets/models/*.mo`), are small, and
             // showcase LunCoSim-specific annotation fixtures
@@ -558,8 +558,9 @@ impl Panel for WelcomePanel {
                             // Resolve index entry for path-exists
                             // validation (rare missing means label
                             // still renders but click is disabled).
-                            let exists =
-                                msl_class_library().iter().any(|c| c.name == step.qualified);
+                            let exists = library_class_library()
+                                .iter()
+                                .any(|c| c.name == step.qualified);
 
                             let step_h = 48.0;
                             let indent = 32.0;
@@ -588,7 +589,7 @@ impl Panel for WelcomePanel {
                                     ))
                                 } else {
                                     resp.on_hover_text(
-                                        "Missing from msl_index.json — \
+                                        "Missing from library_index.json — \
                                          re-run the indexer.",
                                     )
                                 };
@@ -637,7 +638,7 @@ impl Panel for WelcomePanel {
                                 }
 
                                 if exists && resp.clicked() {
-                                    open_msl = Some(step.qualified.clone());
+                                    open_library = Some(step.qualified.clone());
                                 }
                             });
                             ui.add_space(4.0);
@@ -669,7 +670,7 @@ impl Panel for WelcomePanel {
                 .show(ui, |ui| {
                     ui.label(
                         egui::RichText::new(
-                            "The full Modelica Standard Library example set. \
+                            "The full installed source-library example set. \
                              Filter by domain; search across name or description.",
                         )
                         .size(11.0)
@@ -827,7 +828,7 @@ impl Panel for WelcomePanel {
                                         muted,
                                     );
                                     if resp.clicked() {
-                                        open_msl = Some(c.name.clone());
+                                        open_library = Some(c.name.clone());
                                     }
                                 }
                             });
@@ -882,7 +883,7 @@ impl Panel for WelcomePanel {
                 },
             );
         }
-        if let Some(qualified) = open_msl {
+        if let Some(qualified) = open_library {
             // Welcome examples are "open as my copy to play with" —
             // dispatch as `Duplicate { name: "" }`, which lets the
             // handler derive the default `<short>Copy` name. Replaces

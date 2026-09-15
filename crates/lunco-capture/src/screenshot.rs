@@ -1331,7 +1331,7 @@ struct PendingShotStart {
 ///
 /// An ALLOWLIST, not "is anything busy at all". The bus is shared with work that has
 /// nothing to do with what the camera sees — a Modelica compile, a document save, an
-/// MCP request — and the MSL download in particular re-pushes progress every frame
+/// MCP request — and the source library download in particular re-pushes progress every frame
 /// from boot (see `lunco_status_core::status_bus::tests::mirrored_progress_preserves_start_time_…`). Gating
 /// on the whole bus would therefore stall every shot on unrelated work, adding
 /// minutes to an episode and hiding the actual visual blocker.

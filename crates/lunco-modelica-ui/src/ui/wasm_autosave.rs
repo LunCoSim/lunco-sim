@@ -316,7 +316,7 @@ impl IsGestureActive {
 pub fn should_autosave(active: bool, is_untitled: bool) -> bool {
     // Two filters, both required:
     //   1. Untitled docs only — File-backed docs have a real save
-    //      path, library/MSL/bundled docs are read-only.
+    //      path, library/source library/bundled docs are read-only.
     //   2. No active gesture — autosave snapshotting a half-drag
     //      writes "one component in two places" to disk.
     is_untitled && !active
@@ -324,7 +324,7 @@ pub fn should_autosave(active: bool, is_untitled: bool) -> bool {
 
 /// Persist the document's current source to `localStorage` after
 /// every change. Filters to Untitled docs only — File-backed docs
-/// have a real save path; library/MSL/bundled docs are read-only.
+/// have a real save path; library/source library/bundled docs are read-only.
 /// Bails when an `IsGestureActive` resource indicates the user is
 /// mid-gesture (R1).
 #[cfg(target_arch = "wasm32")]
@@ -346,7 +346,7 @@ fn autosave_on_changed(
     // Persist any *writable* doc the browser would otherwise lose on reload:
     //   - Untitled scratch docs        → keyed by display name (KEY_PREFIX)
     //   - uploaded / editable `.mo`     → keyed by path        (KEY_PREFIX_FILE)
-    // Read-only origins (library/MSL/bundled) are never persisted. Both share
+    // Read-only origins (library/source library/bundled) are never persisted. Both share
     // the R1 gesture gate (`should_autosave` for the untitled side; the same
     // `!gesture.any()` for files) so a half-drag is never snapshotted.
     let key = if origin.is_untitled() {

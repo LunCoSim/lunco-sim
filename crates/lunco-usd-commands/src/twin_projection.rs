@@ -61,7 +61,7 @@ use lunco_usd_bevy_scene::{
 use lunco_usd_bevy_twin::{DocBackedTwinScenes, LiveRebuildExempt, TwinProjectionWake};
 use lunco_usd_sim_cosim::LoadScene;
 
-use crate::commands::TWIN_SCENE_LOAD_FAILED;
+use crate::TWIN_SCENE_LOAD_FAILED;
 use lunco_doc::OpenOutcome;
 use lunco_doc_bevy::{DocumentChanged, DocumentRegistry};
 use lunco_usd_core::commands::EmptyViewportReason;

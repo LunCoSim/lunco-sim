@@ -1,7 +1,7 @@
 //! Dedicated streamed-terrain diagnostic material.
 //!
 //! This file is selected by the terrain diagnostic tool. It is deliberately a
-//! separate material from `terrain_geomorph.wgsl`: diagnostic colouring must not
+//! separate material from the canonical terrain fragment: diagnostic colouring must not
 //! add branches, uniforms, texture reads, or material variants to production
 //! lunar rendering.
 //!

@@ -179,7 +179,7 @@ pub fn resolve_requested_class(
     // 3. Fully-qualified request that is a segment-aligned SUPERSET of an
     //    under-qualified candidate — i.e. a candidate is a trailing dotted
     //    suffix of the request. Return the request: it carries the full
-    //    prefix the compiler needs. This is the drilled-MSL-class case: the
+    //    prefix the compiler needs. This is the drilled-source library-class case: the
     //    pin is the true FQN `Modelica.Blocks.Examples.PID_Controller`, while
     //    the in-doc candidate is the `within`-relative
     //    `Blocks.Examples.PID_Controller` (the doc's `within Modelica.Blocks.

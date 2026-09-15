@@ -178,6 +178,11 @@ pub(crate) struct RuntimeUiSurfaceDefinition {
     /// array of typed records; the runtime only reconciles rows by key.
     #[serde(default)]
     pub collections: Vec<RuntimeUiCollectionDefinition>,
+    /// Generic option dropdowns. Each dropdown reads an exposure array of
+    /// typed records and uses authored field names for identity, display, and
+    /// action dispatch. The runtime does not know what the options represent.
+    #[serde(default)]
+    pub dropdowns: Vec<RuntimeUiDropdownDefinition>,
     #[serde(default)]
     pub visible_in_perspective: Option<String>,
     #[serde(default)]
@@ -230,6 +235,27 @@ pub(crate) struct RuntimeUiCollectionDefinition {
     pub key: String,
 }
 
+/// Generic dropdown mechanics for an authored runtime surface.
+///
+/// `width_source` and `max_height_source` name text or numeric exposure
+/// properties. Rhai owns those values, so a Twin can size a dropdown without a
+/// Rust constant or a camera-specific branch. The HTML surface may bind the
+/// same properties to CSS custom properties for its trigger styling.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RuntimeUiDropdownDefinition {
+    pub id: String,
+    pub trigger_action: String,
+    pub source: String,
+    pub key: String,
+    pub label: String,
+    pub action: String,
+    pub width_source: String,
+    pub max_height_source: String,
+    #[serde(default)]
+    pub selected_source: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum RuntimeUiPlacementDefinition {
@@ -260,6 +286,28 @@ pub(crate) enum RuntimeUiWindowAnchor {
 }
 
 impl RuntimeUiManifest {
+    pub(crate) fn dropdown_key_for_action(&self, action: &str) -> Option<String> {
+        self.surfaces.iter().find_map(|surface| {
+            surface
+                .dropdowns
+                .iter()
+                .find(|dropdown| dropdown.trigger_action == action)
+                .map(|dropdown| runtime_ui_dropdown_key(&surface.id, &dropdown.id))
+        })
+    }
+
+    pub(crate) fn dropdown_for_key(
+        &self,
+        key: &str,
+    ) -> Option<(&RuntimeUiSurfaceDefinition, &RuntimeUiDropdownDefinition)> {
+        self.surfaces.iter().find_map(|surface| {
+            surface.dropdowns.iter().find_map(|dropdown| {
+                (runtime_ui_dropdown_key(&surface.id, &dropdown.id) == key)
+                    .then_some((surface, dropdown))
+            })
+        })
+    }
+
     /// Validate the authored runtime UI contract before it reaches HUI or the
     /// semantic action bridge. Invalid manifests are rejected as data errors,
     /// so a typo cannot silently create an inert or globally overwritten UI.
@@ -267,6 +315,7 @@ impl RuntimeUiManifest {
         let mut ids = HashSet::new();
         let mut namespaces = HashSet::new();
         let mut callbacks = HashSet::new();
+        let mut dropdown_triggers = HashSet::new();
 
         for surface in &self.surfaces {
             require_non_empty("surface id", &surface.id)?;
@@ -333,6 +382,39 @@ impl RuntimeUiManifest {
                     ));
                 }
             }
+            let mut dropdown_ids = HashSet::new();
+            let mut dropdown_sources = HashSet::new();
+            for dropdown in &surface.dropdowns {
+                require_non_empty("dropdown id", &dropdown.id)?;
+                require_non_empty("dropdown trigger action", &dropdown.trigger_action)?;
+                require_non_empty("dropdown source", &dropdown.source)?;
+                require_non_empty("dropdown key", &dropdown.key)?;
+                require_non_empty("dropdown label", &dropdown.label)?;
+                require_non_empty("dropdown action", &dropdown.action)?;
+                require_non_empty("dropdown width source", &dropdown.width_source)?;
+                require_non_empty("dropdown max height source", &dropdown.max_height_source)?;
+                if !dropdown_ids.insert(dropdown.id.as_str()) {
+                    return Err(format!(
+                        "duplicate runtime UI dropdown id `{}` on `{}`",
+                        dropdown.id, surface.id
+                    ));
+                }
+                if !dropdown_triggers.insert(dropdown.trigger_action.as_str()) {
+                    return Err(format!(
+                        "duplicate runtime UI dropdown trigger `{}` on `{}`",
+                        dropdown.trigger_action, surface.id
+                    ));
+                }
+                if !dropdown_sources.insert(dropdown.source.as_str()) {
+                    return Err(format!(
+                        "duplicate runtime UI dropdown source `{}` on `{}`",
+                        dropdown.source, surface.id
+                    ));
+                }
+                if let Some(selected_source) = &dropdown.selected_source {
+                    require_non_empty("dropdown selected source", selected_source)?;
+                }
+            }
             for action in &surface.actions {
                 require_non_empty("action callback", &action.callback)?;
                 require_non_empty("action name", &action.action)?;
@@ -347,6 +429,10 @@ impl RuntimeUiManifest {
         }
         Ok(())
     }
+}
+
+fn runtime_ui_dropdown_key(surface_id: &str, dropdown_id: &str) -> String {
+    format!("{surface_id}::{dropdown_id}")
 }
 
 fn require_non_empty(label: &str, value: &str) -> Result<(), String> {
@@ -445,6 +531,23 @@ pub(crate) struct RuntimeUiManifestState {
     handle: Handle<RuntimeUiManifest>,
     applied: Option<AssetId<RuntimeUiManifest>>,
     rebuild_pending: bool,
+}
+
+impl RuntimeUiManifestState {
+    pub(crate) fn manifest<'a>(
+        &self,
+        manifests: &'a Assets<RuntimeUiManifest>,
+    ) -> Option<&'a RuntimeUiManifest> {
+        manifests.get(&self.handle)
+    }
+
+    pub(crate) fn dropdown_key_for_action(
+        &self,
+        manifests: &Assets<RuntimeUiManifest>,
+        action: &str,
+    ) -> Option<String> {
+        self.manifest(manifests)?.dropdown_key_for_action(action)
+    }
 }
 
 /// Twin-authored capture contract for runtime surfaces.
@@ -647,6 +750,18 @@ impl RuntimeUiSurface {
             applied_revision: 0,
             applied_placement: None,
         }
+    }
+
+    pub(crate) fn namespace(&self) -> &str {
+        &self.namespace
+    }
+
+    pub(crate) fn is_mounted(&self) -> bool {
+        self.mounted
+    }
+
+    pub(crate) fn applied_rect(&self) -> Option<egui::Rect> {
+        self.applied_placement.map(|placement| placement.rect)
     }
 }
 
@@ -1735,7 +1850,7 @@ pub(crate) fn scroll_runtime_ui_collections(
     }
 }
 
-fn collection_item_fields(
+pub(crate) fn collection_item_fields(
     value: &lunco_core::exposure::ExposureValue,
     key: &str,
 ) -> Option<Vec<(String, String)>> {

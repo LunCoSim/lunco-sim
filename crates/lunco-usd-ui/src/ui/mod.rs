@@ -448,7 +448,7 @@ mod tests {
     fn workspace_stage_registered_on_doc_opened() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.add_plugins(lunco_usd::commands::UsdCommandsPlugin);
+        app.add_plugins(lunco_usd_commands::UsdCommandsPlugin);
         app.add_plugins(UsdUiPlugin);
         app.update();
 
@@ -483,7 +483,7 @@ mod tests {
     fn twin_scene_document_is_hidden_until_user_owned() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.add_plugins(lunco_usd::commands::UsdCommandsPlugin);
+        app.add_plugins(lunco_usd_commands::UsdCommandsPlugin);
         app.add_plugins(UsdUiPlugin);
         app.update();
 
@@ -517,7 +517,7 @@ mod tests {
     fn workspace_stage_dropped_on_doc_closed() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.add_plugins(lunco_usd::commands::UsdCommandsPlugin);
+        app.add_plugins(lunco_usd_commands::UsdCommandsPlugin);
         app.add_plugins(UsdUiPlugin);
         app.update();
 

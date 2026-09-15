@@ -764,7 +764,7 @@ impl Plugin for FileOpsPlugin {
         // CopyShareLink: workbench owns the typed struct so HTTP-API
         // introspection sees it; the observer lives in lunco-modelica-core.
         app.register_type::<CopyShareLink>();
-        // USD scene-root resolution is owned by `lunco-usd` so GUI and
+        // USD scene-root resolution is owned by `lunco-usd-commands` so GUI and
         // headless launches use the same doc-first world-mount path.
         app.add_observer(on_pick_resolved);
         // Off-thread folder-scan pipeline: each `Open*` / `Add*` parks

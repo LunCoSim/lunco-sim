@@ -835,7 +835,7 @@ pub fn on_move_entity_command(
 ///
 /// Written through `Transform`, never through avian's `Rotation`, for exactly
 /// the reason `MoveEntity` never hand-writes `Position`:
-/// `lunco-usd_avian_core::PhysicsBridgeSystems::Read` detects the external
+/// `lunco_usd_avian_core::PhysicsBridgeSystems::Read` detects the external
 /// `Transform` write and derives the physics pose from it (carrying it to
 /// jointed descendants); a hand-written `Rotation` is a second, wronger opinion
 /// that the bridge's writeback then undoes. The body is pinned Kinematic for the
@@ -1421,7 +1421,7 @@ pub fn persist_rotation_to_runtime_layer(
 // document's history: Lamport-ordered, op+inverse, journaled, networked.
 // `UndoDocument`/`RedoDocument` are the generic verbs; each domain observes them
 // and acts only on documents its own registry owns. USD's observers live in
-// `lunco-usd` (the crate that owns `DocumentRegistry<UsdDocument>`) — NOT here, so that a
+// `lunco-usd-commands` (the crate that owns `DocumentRegistry<UsdDocument>`) — NOT here, so that a
 // headless binary with documents but no 3D editor can still undo. The editor's
 // only job is to bind the key.
 // ─────────────────────────────────────────────────────────────────────

@@ -42,7 +42,7 @@ pub struct IconNodeData {
     pub resolution_message: Option<String>,
     /// Decoded `Diagram(graphics={...})` annotation, populated only
     /// for connector classes that author one. When set the renderer
-    /// uses this instead of `icon_graphics` — MSL signal connectors
+    /// uses this instead of `icon_graphics` — source library signal connectors
     /// (RealInput, RealOutput, …) put the `%name` text label and
     /// the larger filled triangle in their Diagram annotation, while
     /// keeping a stripped-down Icon for use as a port marker.
@@ -123,7 +123,7 @@ pub(super) struct IconNodeVisual {
     /// Per-instance rotation (degrees CCW, Modelica frame) applied to
     /// the icon body itself — rotates both the SVG raster and the
     /// `paint_graphics` primitives uniformly. Without this, mirror /
-    /// rotated MSL placements showed correct port positions but a
+    /// rotated source library placements showed correct port positions but a
     /// wrong-looking body.
     pub(super) rotation_deg: f32,
     /// Mirror flags applied to the icon body, before rotation
@@ -298,7 +298,7 @@ impl NodeVisual for IconNodeVisual {
             // Source coord system: prefer the icon's *graphics* bbox
             // (visible body, excluding labels) so the icon body fills
             // the placement instead of leaving 30–50 % empty padding
-            // around it. MSL convention is to author at -100..100, but
+            // around it. source library convention is to author at -100..100, but
             // many components actually draw at -50..50 / -60..60 etc.,
             // which makes them look small inside the standard
             // placement. Excluding text from the bbox is intentional:
@@ -416,7 +416,7 @@ impl NodeVisual for IconNodeVisual {
             // Try the OMEdit-parity path first: render the connector
             // class's authored `Icon` at the port location. Falls
             // through to the generic per-shape marker if the class
-            // can't be resolved (rare — typically only when the MSL
+            // can't be resolved (rare — typically only when the source library
             // pre-warm hasn't reached that connector yet) or the
             // class has no `Icon` annotation in its inheritance chain.
             let port_info = self
@@ -445,7 +445,7 @@ impl NodeVisual for IconNodeVisual {
                     // Render the connector's icon at the port
                     // location, sized to the port's authored
                     // `Placement(extent=...)` in the parent's icon
-                    // coords. MSL convention: parent icon coord
+                    // coords. source library convention: parent icon coord
                     // system spans 200 units (-100..100) and the
                     // parent is placed at `node.rect` in world
                     // coords. So 1 icon-unit = node_world / 200.
@@ -456,7 +456,7 @@ impl NodeVisual for IconNodeVisual {
                     let parent_w = node.rect.width().max(1.0);
                     let parent_h = node.rect.height().max(1.0);
                     // Use the authored placement extent as-is for
-                    // every connector class — that is the size MSL
+                    // every connector class — that is the size source library
                     // authors intended (Flange_a's 20×20 dot, the
                     // 20×20 RealInput triangle on plain blocks, the
                     // 40×40 RealInput on LimPID). OMEdit / Dymola

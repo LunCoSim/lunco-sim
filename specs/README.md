@@ -22,7 +22,7 @@ Status legend: **Implemented** (built, in tree) · **Partial** (core built, gaps
 | 017 | Advanced Interop (Robotics/Kinematics) | Partial | USD export built; URDF/ROS2/DDS planned; overlaps 013 |
 | 018 | Astronomical Environment | Implemented | |
 | 020 | World State & Replay | Partial | doc journal + snapshot + replay; no ECS WorldSnapshot/MCAP |
-| 021 | Asset Pipeline | Partial | sourcing/caching/MSL built; no decimation/KTX/GIS |
+| 021 | Asset Pipeline | Partial | sourcing/caching of Modelica source libraries built; no decimation/KTX/GIS |
 | 025 | Terramechanics | Partial | wheel kinematics built; Bekker-Wong soil absent |
 | 030 | USD Scene Integration | Implemented | |
 | 031 | Sandbox Editing Tools | Implemented | overlaps 015 (spawn/assembly) |

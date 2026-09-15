@@ -5,7 +5,7 @@
 > USD (Pixar Universal Scene Description) is the scene-graph and asset format
 > LunCoSim uses for the 3D world. Bases, rovers, habitats, terrain — everything
 > physical — lives as USD prims in USD stages. See
-> [`../../crates/lunco-usd-document/`](../../crates/lunco-usd-document), [`../../crates/lunco-usd-data/`](../../crates/lunco-usd-data), [`../../crates/lunco-usd-authoring/`](../../crates/lunco-usd-authoring), [`../../crates/lunco-usd-core/`](../../crates/lunco-usd-core), [`../../crates/lunco-usd/`](../../crates/lunco-usd/) and companion crates
+> [`../../crates/lunco-usd-document/`](../../crates/lunco-usd-document), [`../../crates/lunco-usd-data/`](../../crates/lunco-usd-data), [`../../crates/lunco-usd-authoring/`](../../crates/lunco-usd-authoring), [`../../crates/lunco-usd-core/`](../../crates/lunco-usd-core), [`../../crates/lunco-usd-commands/`](../../crates/lunco-usd-commands/) and companion crates
 > `lunco-usd-geometry`, `lunco-usd-avian-core`, `lunco-usd-avian-filters`, `lunco-usd-avian`, `lunco-usd-avian-lint`, `lunco-usd-bevy-core`,
 > `lunco-usd-bevy-runtime`, `lunco-usd-bevy-scene`, `lunco-usd-bevy-twin`, `lunco-usd-bevy-camera`, `lunco-usd-bevy-light`, `lunco-usd-bevy-animation`, `lunco-usd-bevy` and
 > `lunco-usd-bevy-lathe`, `lunco-usd-bevy-mesh`, `lunco-usd-queries`, `lunco-usd-sim`,
@@ -20,7 +20,7 @@ contains path-addressed authored-layer operations, USDA conversion, reference
 helpers, and the schema registry; `lunco-usd-compose` contains send-safe stage
 recipes and dependency interpretation; `lunco-usd-core` contains pure operation
 lowerings, assembly, edit-session, and shared USD command/event contracts;
-`lunco-usd` contains UI-free runtime orchestration
+`lunco-usd-commands` contains UI-free runtime orchestration
 and the observers that execute those contracts; `lunco-usd-queries` owns the
 UI-free public query providers for document inspection, edit sessions,
 document synchronization, and explicit assembly-target resolution;
@@ -38,7 +38,7 @@ owning a second curve implementation;
 `lunco-usd-bevy-twin` owns the render-free document-to-`twin://` identity map,
 workspace and preview leases, projection cursors, user-ownership events, and
 the event-driven wake signal and document-to-mounted-stage lookup;
-`lunco-usd-bevy-core` owns canonical-stage storage, while `lunco-usd` owns
+`lunco-usd-bevy-core` owns canonical-stage storage, while `lunco-usd-commands` owns
 stage loading and the live ECS projection systems that consume that state;
 `lunco-usd-bevy-lathe` owns the independent parametric NURBS/lathe mesh
 projection; `lunco-usd-bevy-mesh` owns built-in, native-mesh, curve, and
@@ -67,7 +67,7 @@ bundle installs the implementation plugins explicitly, so vehicle changes do
 not make the vehicle package depend on the 6.5k-line cosim implementation.
 
 Public command and document-lifecycle coverage for the runtime boundary lives
-in `crates/lunco-usd/tests/commands.rs`, so changes to those tests do not
+in `crates/lunco-usd-commands/tests/commands.rs`, so changes to those tests do not
 recompile the command library's normal target. Private pending-load and
 grouped-edit seams remain beside their owning implementation because they
 cannot be observed through the public contract. Shared contract helpers are
@@ -140,7 +140,7 @@ named source prim when the asset's composition or variants depend on it.
 Programmatic and UI edits go through the
 **`ApplyUsdOp { doc_id, parent_gen, op }`** or **`ApplyUsdOps { doc_id, parent_gen, label, ops }`** command
 (`lunco-usd-core/src/commands.rs`). The observers that apply those contracts to
-the document registry remain in `lunco-usd/src/commands.rs`; the commands return
+the document registry remain in `lunco-usd-commands/src/lib.rs`; the commands return
 a generation-ack and direct source mutation is out.
 Multi-op intents use one change set. `AttachProgram` is the typed source-backed
 program authoring intent and lowers its complete source/port/wire contract to
@@ -192,7 +192,7 @@ by re-flattening the scene per edit:
 UsdOp ─apply→ UsdDocument (base⊕runtime, op_log, generation++)
         │
         ├─ journal records op + inverse (undo / sync)
-        └─ sync_twin_overlays replays op → CanonicalStage.author_*  (lunco-usd/twin_projection.rs)
+        └─ sync_twin_overlays replays op → CanonicalStage.author_*  (lunco-usd-commands/twin_projection.rs)
                     │  fires openusd change sink
                     └─ project_stage_changes drains sink → reconcile ECS  (live_consume.rs)
                          · InfoOnly xformOp:translate → cheap pose update
@@ -309,7 +309,7 @@ scene loads as a **single root** (the typed `SceneTransitionIntent` →
 Loading another scene re-points that single active stage; it never stacks.
 
 On `TwinAssetMounted` (`open_usd_docs_on_twin_asset_mounted`,
-`lunco-usd/src/commands.rs`), exactly **one** stage resolves per the table above,
+`lunco-usd-commands/src/lib.rs`), exactly **one** stage resolves per the table above,
 after the asset boundary has registered the exact `twin://` authority, and the mount is
 **doc-first**: the scene's document opens first (its base read through the
 `twin://` source, web-ready). Generated runtime spawns and moves are restored
@@ -344,7 +344,7 @@ section.
 | **Open a loose scene** | Open a `.usda` → owning-folder scan → folder Twin → doc-first `twin://…` scene becomes active → Grid | `OpenFile` (USD owns root resolution, document open, and the typed scene transition) |
 | **Built-in demo** | implicit Twin opened at startup | startup |
 | **Add object / import** | author into the explicit document: `ApplyUsdOp { doc_id, parent_gen, op: AddPrim { reference: Some(...) } }` (primitives use `reference: None`); recompose into Grid; save with `SaveDocument` | existing `ApplyUsdOp` |
-| **Attach a simulation program** | `AttachProgram { doc_id, spec }`; author a `LunCoProgramAPI` child, declared scalar ports, defaults, and USD connections as one change set | `lunco-usd::program` + normal USD projection |
+| **Attach a simulation program** | `AttachProgram { doc_id, spec }`; author a `LunCoProgramAPI` child, declared scalar ports, defaults, and USD connections as one change set | `lunco-usd-commands::program_runtime` + normal USD projection |
 | **Promote loose → Twin** | `SaveAsTwin` | existing |
 | **Run / server** | `TwinCommand`s | existing `--api` surface (spec 14 "Headless + remote") |
 
@@ -783,7 +783,7 @@ the shipped asset corpus. Ownership follows the narrowest production boundary:
 - `crates/lunco-usd-bevy-core/src/animation.rs` — low-level time-sample topology, value decoding, rotation, and transform-reader mechanisms
 - `crates/lunco-usd-bevy-animation/src/lib.rs` — production animation planning, time-domain binding, and ECS sampling systems
 - `crates/lunco-usd-queries/tests/query_api.rs` — public inspection, edit-session, assembly-target, and document-sync query contracts
-- `crates/lunco-usd/tests/live_spawn_projection.rs` — document-backed USD authoring and raw asset composition facts
+- `crates/lunco-usd-viewport-ui/tests/live_spawn_projection.rs` — document-backed USD authoring and raw asset composition facts
 - `crates/lunco-usd-avian-lint/src/lib.rs` — composed `UsdPhysics` fact production for the authored lint policy
 - `crates/lunco-usd-avian-core/src/lib.rs` — Avian/BigSpace frame bridge and low-level bridge tests
 - `crates/lunco-usd-avian-filters/src/{filtered_pairs,collision_groups}.rs` — standard collision filtering, joint pair suppression, and Avian contact-hook mechanisms; runtime behavior is covered by the production Rhai scene-test assets

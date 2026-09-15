@@ -85,7 +85,7 @@ an authored generation exists. `read.rs` folds relationship targets and `.connec
 live stage on the UI thread.
 
 - **P1.0 [in place] — `UsdOp::SetConnection`, the sole authoring op.** Variant
-  `SetConnection { edit_target, path, name, type_name, sources: Vec<String> }` in `lunco-usd/document.rs`;
+  `SetConnection { edit_target, path, name, type_name, sources: Vec<String> }` in `lunco-usd-document`;
   apply = `require_prim_anywhere` → parse `sources`→`SdfPath` → `stage.create_attribute(path.name, type_name)`
   → `set_connections(...)` (explicit `connectionPaths` list-op; **empty `sources` = clear**).
   `ApplyUsdOp{doc_id,parent_gen,op:UsdOp}` is generic → auto-dispatches via API/MCP/rhai, records as `EntryKind::Op{domain:Usd}`
@@ -257,7 +257,7 @@ Depends on Phases 1–2 (ports/connections/identity) + optionally 5 (electrical 
 
 The right home for standard-shaped library gaps (doc 38 §12.4). In dependency order:
 1. **`connectionPaths` through flatten** — **in place**; no longer a required contribution.
-2. **`UsdOp::SetConnection`** (P1.0) — **in place, in our repo** (`lunco-usd`), not `openusd`: a typed
+2. **`UsdOp::SetConnection`** (P1.0) — **in place, in our repo** (`lunco-usd-core`), not `openusd`: a typed
    journal op so connection edits replicate finely instead of via `ReplaceSource`.
 3. **Codeless applied-schema registry** (P2.1) — nice-to-have; typed views suffice interim.
 4. **`ConnectableAPIBehavior` mechanism** (P4.3) — optional; rhai rules suffice interim.

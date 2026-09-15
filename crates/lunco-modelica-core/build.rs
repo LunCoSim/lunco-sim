@@ -10,7 +10,7 @@
 //! from two builds), the worker's baked id differs and the boot handshake in
 //! `worker_transport` reports it loudly instead of letting every bincode
 //! message silently mis-decode (`UUID parsing failed`, `unexpected end of
-//! file`, MSL "33 docs" instead of 2670).
+//! file`, source library "33 docs" instead of 2670).
 //!
 //! The id is a hash of the workspace `Cargo.lock` (captures dep-version moves
 //! that change wire types) plus this crate's `src/` tree (captures edits to the

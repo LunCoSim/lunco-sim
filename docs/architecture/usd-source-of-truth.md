@@ -77,13 +77,13 @@ document ownership available to the asset differs.
   `sdf::Data`, `commit`s (bumps `generation`), and **returns an inverse op** → undo for
   free.
 - Projected into ECS by the state contract in `lunco-usd-bevy-twin` and the
-  runtime systems in `lunco-usd/src/twin_projection.rs` and
-  `lunco-usd/src/live_consume.rs`: `sync_twin_overlays` publishes the composed
+  runtime systems in `lunco-usd-commands/src/twin_projection.rs` and
+  `lunco-usd-commands/src/live_consume.rs`: `sync_twin_overlays` publishes the composed
   `base ⊕ runtime` source and applies incremental authored changes; the live
   consumer drains the OpenUSD change sink and reconciles the ECS projection.
-- The public Twin-start decision is covered by the existing
-  `lunco-usd/tests/twin_scene_commands.rs` integration target, which installs
-  the same asset-source and USD loaders as production.
+- The public Twin-start decision is implemented by the USD command runtime and
+  exercised through the production scene-test binary; authored USD/Rhai
+  fixtures own the observable scene-loading contract.
 
 **This is already "USD is source of truth → project to ECS."**
 
@@ -296,9 +296,9 @@ prim→entity.
 - `lunco-scene-authoring/src/properties.rs` — `on_set_object_property`
 - `lunco-usd-document/src/document.rs` — `UsdOp::SetAttribute` apply (commit + inverse)
 - `lunco-usd-bevy-twin/src/lib.rs` — document-backed Twin identity, leases, document-to-mounted-stage lookup, and stage ownership state
-- `lunco-usd/src/twin_projection.rs` — `sync_twin_overlays` and document-backed mounts
-- `lunco-usd/src/live_consume.rs` — `project_stage_changes` (E1/E2 consumer)
-- `lunco-usd/src/commands.rs` — scene command admission and document registration
+- `lunco-usd-commands/src/twin_projection.rs` — `sync_twin_overlays` and document-backed mounts
+- `lunco-usd-commands/src/live_consume.rs` — `project_stage_changes` (E1/E2 consumer)
+- `lunco-usd-commands/src/lib.rs` — scene command admission and document registration
 - `lunco-usd-bevy-core/src/asset.rs` — `UsdStageAsset`; `lunco-usd-bevy-scene/src/lib.rs` — `UsdPrimPath`
 - `lunco-usd-data/src/usd_data.rs` — `UsdDataExt` (read composed attrs)
 - `lunco-usd-sim-cosim/src/lib.rs` — `LoadScene` / `spawn_scene_root_with_stage`; ad-hoc prim→entity index

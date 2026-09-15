@@ -71,7 +71,7 @@ fn twin_for_path<'a>(
 /// Omitted means disabled. A malformed value is an authoring error and is
 /// returned to the caller so the owner can report it rather than silently
 /// interpreting a typo as permission to write project state.
-pub fn runtime_persistence_enabled(
+pub(crate) fn runtime_persistence_enabled(
     workspace: &WorkspaceResource,
     doc_path: &Path,
 ) -> Result<bool, String> {

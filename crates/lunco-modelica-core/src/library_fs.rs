@@ -1,4 +1,4 @@
-//! MSL filesystem layout — qualified-name → on-disk (or in-memory)
+//! source library filesystem layout — qualified-name → on-disk (or in-memory)
 //! `.mo` file resolution.
 //!
 //! Pure path / index logic, no parsing. The resolver tier consumed
@@ -9,11 +9,11 @@
 //!
 //! - [`class_to_file_index`] — `qualified → PathBuf` for every
 //!   class the visual palette knows about. Built from
-//!   [`crate::visual_diagram::msl_class_library`].
+//!   [`crate::visual_diagram::library_class_library`].
 //!
 //! [`locate_library_file`] is the single source-of-truth resolver: it
 //! walks the in-memory bundle (web) or filesystem roots (native,
-//! including extra libraries like ThermofluidStream) to map any
+//! including additional Twin-declared source roots) to map any
 //! qualified (fully-qualified only) name to its containing file.
 //!
 //! Short-form / scoped / import-based name lookup (MLS §5) is NOT done
@@ -32,13 +32,13 @@ pub fn class_to_file_index() -> &'static std::collections::HashMap<String, std::
     if let Some(idx) = INDEX.get() {
         return idx;
     }
-    // On web, the palette library is empty until the MSL bundle has
-    // been fetched + decompressed (see `msl_class_library` for the
+    // On web, the palette library is empty until the source library bundle has
+    // been fetched + decompressed (see `library_class_library` for the
     // same trick). If we'd `OnceLock::set` an empty map here, the
     // index would stay empty for the lifetime of the page even after
-    // MSL lands. So: return an empty placeholder *without* memoising,
+    // source library lands. So: return an empty placeholder *without* memoising,
     // so the next caller retries the build.
-    let lib = crate::visual_diagram::msl_class_library();
+    let lib = crate::visual_diagram::library_class_library();
     if lib.is_empty() {
         return EMPTY.get_or_init(std::collections::HashMap::new);
     }
@@ -47,7 +47,7 @@ pub fn class_to_file_index() -> &'static std::collections::HashMap<String, std::
 
 fn build_class_to_file_index() -> std::collections::HashMap<String, std::path::PathBuf> {
     let start = web_time::Instant::now();
-    let lib = crate::visual_diagram::msl_class_library();
+    let lib = crate::visual_diagram::library_class_library();
     let mut map = std::collections::HashMap::with_capacity(lib.len());
     for comp in lib {
         if let Some(path) = locate_library_file(&comp.name) {
@@ -55,7 +55,7 @@ fn build_class_to_file_index() -> std::collections::HashMap<String, std::path::P
         }
     }
     info!(
-        "[MslFs] MSL class index built: {} classes in {:?}",
+        "[LibraryFs] source library class index built: {} classes in {:?}",
         map.len(),
         start.elapsed()
     );
@@ -68,7 +68,7 @@ pub fn locate_library_file(qualified: &str) -> Option<std::path::PathBuf> {
         return None;
     }
 
-    // Search every installed library root in priority order (MSL
+    // Search every installed library root in priority order (source library
     // first, then any extra libraries). The walk (`resolve_in_root`:
     // longest-prefix-first, package.mo over flat `.mo`) is pure §13
     // path logic; each root's backend membership (`contains`) and its

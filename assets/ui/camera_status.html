@@ -1,11 +1,12 @@
 <template>
   <property name="active_label">NO ACTIVE CAMERA</property>
+  <property name="dropdown_width">280px</property>
+  <property name="dropdown_max_height">240px</property>
 
-  <node id="camera-status-root">
+  <button id="camera-status-root" on_press="runtime_ui_authored_action" tag:action="camera.picker.toggle">
     <node id="camera-status-header">
       <text id="camera-status-label">CAMERA</text>
       <text id="camera-status-name">{active_label}</text>
     </node>
-    <node id="camera-list"></node>
-  </node>
+  </button>
 </template>

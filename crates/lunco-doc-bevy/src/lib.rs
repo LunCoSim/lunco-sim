@@ -255,7 +255,7 @@ pub struct RedoDocument {
 /// canonical path, writes the source, and fires [`DocumentSaved`] on
 /// success. No-ops if the document has no canonical path (Save-As
 /// needed — separate command, not defined yet) or if the backing
-/// library is read-only (MSL, Bundled in Modelica's case).
+/// library is read-only (source library, Bundled in Modelica's case).
 ///
 /// Dirty state (generation vs. last-saved generation) is a per-document
 /// concern; the owning domain updates its internal tracker in the
@@ -363,7 +363,7 @@ pub struct NewDocument {
 /// path without any UI.
 ///
 /// The actual loading is domain-specific: `lunco-modelica-core` observes this
-/// and reads `.mo` files; `lunco-usd` observes it for `.usd*`. Each
+/// and reads `.mo` files; `lunco-usd-commands` observes it for `.usd*`. Each
 /// domain's observer ignores paths it doesn't own, so they coexist.
 ///
 /// Lives here (not in the egui workbench) so headless / sandbox / server
@@ -1456,7 +1456,7 @@ fn file_mtime(path: &std::path::Path) -> Option<std::time::SystemTime> {
 /// close-time [`DocumentDiagnostics`] cleanup shared by every document
 /// domain.
 ///
-/// Domain crates (lunco-modelica-core, lunco-usd, …) add this plugin once
+/// Domain crates (lunco-modelica-core, lunco-usd-commands, …) add this plugin once
 /// per app. Events from any domain's registry flow into one canonical
 /// journal.
 ///

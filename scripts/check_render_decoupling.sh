@@ -26,8 +26,8 @@
 # failure this script exists to prevent, so the check keys on that string.
 #
 # `-e normal` is REQUIRED. Without it `cargo tree -i` also walks dev- and
-# build-dependencies, where wgpu legitimately appears (visual examples,
-# `lunco-usd`'s dev-only bevy_pbr), reporting a regression that is not one.
+# build-dependencies, where wgpu legitimately appears in visual examples,
+# reporting a regression that is not one.
 #
 # Usage:
 #   scripts/check_render_decoupling.sh
@@ -117,18 +117,15 @@ done
 #                   stack is unconditional there by design.
 #   * `lunco-workbench` — the rendered GUI shell; it validates Bevy's PBR shadow
 #                        limits while it owns the workbench presentation.
-#   * `lunco-usd` — enables it under [dev-dependencies] ONLY, so that
-#                   `cargo check -p lunco-usd --all-targets` is honest; the
-#                   library itself is render-free. Without that line the
-#                   examples only built under `--workspace`, where feature
-#                   unification silently borrowed bevy_pbr from another crate.
+#   * USD command and document packages — remain render-free; visual examples
+#     belong to an explicit render host rather than the headless command path.
 #
 # Detection is textual on purpose: it fires the moment a NEW crate adds the
 # feature, which is a reviewable event, rather than waiting for the graph to
 # already be poisoned.
 echo
 echo "── bevy_pbr feature is confined to render boundaries ───────"
-ALLOWED_RE='lunco-render-bevy|lunco-render-recovery|luncosim|lunco-workbench|lunco-usd'
+ALLOWED_RE='lunco-render-bevy|lunco-render-recovery|luncosim|lunco-workbench'
 offenders="$(grep -l '^bevy = .*"bevy_pbr"' crates/*/Cargo.toml 2>/dev/null \
     | grep -Ev "crates/($ALLOWED_RE)/Cargo.toml" || true)"
 if [ -n "$offenders" ]; then

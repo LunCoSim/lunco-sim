@@ -1,4 +1,4 @@
-//! Build-time MSL bundler for the web target.
+//! Build-time source-library bundler for the web target.
 //!
 //! Reads the configured source-library tree (the default Modelica library is
 //! resolved through `lunco_assets_core::source_library_root_path`)
@@ -10,8 +10,8 @@
 //!
 //! ```text
 //! <out>/
-//!   manifest.json           # { source_root_marker, sources, parsed, ... }
-//!   sources-<sha8>.tar.zst  # tar of *.mo files relative to MSL root
+//!   manifest.json           # { sources, parsed, ... }
+//!   sources-<sha8>.tar.zst  # tar of *.mo files relative to each source root
 //! ```
 //!
 //! The wasm runtime fetches `manifest.json` first, then the blob whose name
@@ -21,18 +21,17 @@
 //! ## Usage
 //!
 //! ```bash
-//! cargo run -p lunco-modelica-assets --bin build_msl_assets -- \
-//!     --out dist/lunica/msl
+//! cargo run -p lunco-modelica-assets --bin build_modelica_library_assets -- \
+//!     --out dist/lunica/library
 //! ```
 //!
-//! To ship third-party libraries alongside MSL in the same bundle (so they
-//! resolve on web exactly like native does from `cache_dir()`):
+//! To ship additional libraries, pass each explicitly. The paths are source
+//! containers whose immediate children are package roots:
 //!
 //! ```bash
-//! cargo run -p lunco-modelica-assets --bin build_msl_assets -- \
-//!     --out dist/lunica/msl \
-//!     --extra-root ~/.cache/lunco/thermofluidstream \
-//!     --discover-extras
+//! cargo run -p lunco-modelica-assets --bin build_modelica_library_assets -- \
+//!     --out dist/lunica/library \
+//!     --source-root /path/to/another/source-container
 //! ```
 //!
 //! No CLI deps — uses bare `std::env::args` to keep this binary cheap to
@@ -40,23 +39,18 @@
 //!
 //! ## What gets packed
 //!
-//! - All `.mo` files under MSL root (recursive).
-//! - Top-level `.mo` files like `Complex.mo`, `ObsoleteModelica4.mo`.
-//! - All `.mo` files under each `--extra-root` (and, with `--discover-extras`,
-//!   every third-party library found in `cache_dir()`). Each root's files are
-//!   stored under their own top-level package dir (`Modelica/…`, `Buildings/…`),
-//!   so a single combined tar + parsed bundle yields one in-memory source whose
-//!   keys never collide. The web resolver iterates roots automatically — no
-//!   wasm-side change is needed.
+//! - All `.mo` files under each explicit `--source-root` (recursive).
+//! - Top-level `.mo` files such as `Complex.mo`.
+//! - Each source root contributes its own relative namespace, so one bundle
+//!   can contain multiple independently authored packages without selecting a
+//!   library by name.
 //! - Skipped: `Resources/` images and matrix data. Step 1b will add these
 //!   once we know the wasm runtime needs them — most compile paths don't.
 //! - Skipped: any top-level package named by `--exclude <name>` (repeatable;
-//!   `<name>*` is a prefix match). Used to drop the MSL distribution's in-tree
-//!   test suites (`--exclude 'ModelicaTest*'`) — they ship inside the MSL tree
-//!   but aren't part of the library. Applied only at each root's top level.
+//!   `<name>*` is a prefix match). Applied to every explicit source root.
 
 // Native-only build-time bundler on the documented `clippy.toml`
-// allow-list — owns raw `std::fs` access to the on-disk MSL tree.
+// allow-list — owns raw `std::fs` access to explicit source roots.
 #![allow(clippy::disallowed_methods)]
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -79,9 +73,7 @@ mod native {
     pub(super) fn run() {
         let args: Vec<String> = std::env::args().collect();
         let mut out_dir: Option<PathBuf> = None;
-        let mut msl_root_override: Option<PathBuf> = None;
-        let mut extra_roots: Vec<PathBuf> = Vec::new();
-        let mut discover_extras = false;
+        let mut source_roots: Vec<PathBuf> = Vec::new();
         let mut exclude: Vec<String> = Vec::new();
         let mut i = 1;
         while i < args.len() {
@@ -90,16 +82,9 @@ mod native {
                     i += 1;
                     out_dir = Some(PathBuf::from(&args[i]));
                 }
-                "--msl-root" => {
+                "--source-root" => {
                     i += 1;
-                    msl_root_override = Some(PathBuf::from(&args[i]));
-                }
-                "--extra-root" => {
-                    i += 1;
-                    extra_roots.push(PathBuf::from(&args[i]));
-                }
-                "--discover-extras" => {
-                    discover_extras = true;
+                    source_roots.push(PathBuf::from(&args[i]));
                 }
                 "--exclude" => {
                     i += 1;
@@ -107,9 +92,9 @@ mod native {
                 }
                 "-h" | "--help" => {
                     eprintln!(
-                        "usage: build_msl_assets --out <dir> [--msl-root <dir>] \
-                     [--extra-root <dir>]... [--discover-extras] [--exclude <name>]..."
-                    );
+                    "usage: build_modelica_library_assets --out <dir> [--source-root <dir>]... \
+                     [--exclude <name>]..."
+                );
                     return;
                 }
                 other => {
@@ -124,62 +109,54 @@ mod native {
             std::process::exit(2);
         };
 
-        let msl_root = msl_root_override
-            .or_else(|| lunco_assets_core::source_library_root_path("msl", "Modelica"))
-            .unwrap_or_else(|| {
+        if source_roots.is_empty() {
+            let Some(root) = lunco_assets_core::source_library_root_path("library") else {
                 eprintln!(
-                    "error: no MSL tree on disk (run `lunco-assets -- download` first \
-                 or pass --msl-root)"
+                    "error: no source root on disk (run `lunco-assets -- download` first \
+                 or pass --source-root)"
                 );
                 std::process::exit(1);
-            });
-        eprintln!("MSL root: {}", msl_root.display());
-        eprintln!("Output:   {}", out_dir.display());
-
-        // The bundle's first root is always MSL; extras are appended in a stable
-        // order. Mirrors native's `sources_with_extras`: primary MSL root +
-        // third-party libs discovered under `cache_dir()`.
-        if discover_extras {
-            for root in discover_extra_roots() {
-                if !extra_roots.contains(&root) {
-                    extra_roots.push(root);
-                }
+            };
+            source_roots.push(root);
+        }
+        source_roots.sort();
+        source_roots.dedup();
+        for root in &source_roots {
+            if !root.is_dir() {
+                eprintln!("error: source root is not a directory: {}", root.display());
+                std::process::exit(1);
             }
         }
-        let mut roots: Vec<PathBuf> = vec![msl_root.clone()];
-        for r in extra_roots {
-            eprintln!("extra root: {}", r.display());
-            roots.push(r);
-        }
+        eprintln!("source roots: {}", source_roots.len());
+        eprintln!("Output:   {}", out_dir.display());
 
         fs::create_dir_all(&out_dir).expect("create out dir");
 
-        // Entries carry their OWN root so the tar/URI key is computed relative to
-        // it — each root contributes its own top-level package dir as a namespace
-        // (`Modelica/…`, `Buildings/…`). A single combined tar + parsed set holds
-        // them all; the web resolver iterates roots, so keys must not collide.
+        // Entries carry their own root so the tar/URI key is computed relative to
+        // it. A single combined tar + parsed set holds all explicitly selected
+        // sources.
         if !exclude.is_empty() {
             eprintln!("excluding top-level packages: {}", exclude.join(", "));
         }
         let mut entries: Vec<(PathBuf, PathBuf)> = Vec::new();
-        for root in &roots {
+        for root in &source_roots {
             let mut files: Vec<PathBuf> = Vec::new();
             collect_mo_files(root, root, &exclude, &mut files);
             for f in files {
                 entries.push((root.clone(), f));
             }
         }
-        // Also pack the precomputed palette index if present (MSL root only). The
-        // web runtime reads it via `MslAssetSource::read("msl_index.json")` to
-        // populate `msl_component_library()` — without this the palette ships
+        // Also pack the precomputed palette index if present (first source root). The
+        // web runtime reads it via `LibraryAssetSource::read("library_index.json")` to
+        // populate `library_component_library()` — without this the palette ships
         // empty on wasm.
-        let index_path = msl_root.join("msl_index.json");
+        let index_path = source_roots[0].join("library_index.json");
         if index_path.is_file() {
-            entries.push((msl_root, index_path));
+            entries.push((source_roots[0].clone(), index_path));
         } else {
             eprintln!(
                 "error: {} is required for the web editor bundle. \
-             Run `cargo run -p lunco-modelica-core --bin msl_indexer` first.",
+             Run `cargo run -p lunco-modelica-core --bin modelica_library_indexer` first.",
                 index_path.display()
             );
             std::process::exit(1);
@@ -204,7 +181,7 @@ mod native {
         eprintln!(
             "found {} files to pack across {} root(s)",
             entries.len(),
-            roots.len()
+            source_roots.len()
         );
 
         // Tar → zstd → write to a temp file, then rename to hashed final path.
@@ -254,10 +231,9 @@ mod native {
                 "file_count": parsed_count,
             },
             "rumoca_artifact_tag": RUMOCA_ARTIFACT_TAG,
-            "source_root_marker": "Modelica/package.mo",
-            // Top-level packages filtered out of this bundle (e.g. `ModelicaTest*`).
-            // Recorded so the bundle is self-describing and the build script can
-            // tell whether a cached bundle matches the requested exclude config.
+            // Top-level packages filtered out of this bundle. Recorded so the
+            // bundle is self-describing and the build script can compare the
+            // requested exclusion policy with a cached artifact.
             "excluded_packages": exclude,
         });
         let manifest_path = out_dir.join("manifest.json");
@@ -291,7 +267,7 @@ mod native {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         // Only `.mo` files are Modelica source; the bundle may also carry
-        // ancillary files (e.g. `msl_index.json` for the palette) that we
+        // ancillary files (e.g. `library_index.json` for the palette) that we
         // pack as bytes but don't try to parse here.
         let mo_entries: Vec<&(PathBuf, PathBuf)> = entries
             .iter()
@@ -356,7 +332,7 @@ mod native {
     /// A pattern ending in `*` is a prefix match (e.g. `ModelicaTest*` catches the
     /// `ModelicaTest/` dir plus the `ModelicaTestConversion4.mo` /
     /// `ModelicaTestOverdetermined.mo` siblings, and any future `ModelicaTest…`
-    /// suite an MSL bump adds). A top-level `.mo`'s package name is its file stem.
+    /// suite a source-library bump adds). A top-level `.mo`'s package name is its file stem.
     fn collect_mo_files(root: &Path, dir: &Path, exclude: &[String], out: &mut Vec<PathBuf>) {
         let Ok(rd) = fs::read_dir(dir) else { return };
         let at_top = dir == root;
@@ -371,7 +347,7 @@ mod native {
                 }
             }
             if path.is_dir() {
-                // Skip rumoca's own caches inside the MSL tree, if present.
+                // Skip rumoca's own caches inside the source library tree, if present.
                 if matches!(name, ".cache" | "target" | "Resources") {
                     continue;
                 }
@@ -411,7 +387,7 @@ mod native {
             header.set_size(bytes.len() as u64);
             header.set_mode(0o644);
             // Zero out mtime so the bundle hash is reproducible across builds
-            // of the same MSL tree.
+            // of the same source library tree.
             header.set_mtime(0);
             header.set_cksum();
             tar_w
@@ -429,40 +405,6 @@ mod native {
         lunco_assets_core::asset_path::slashed(
             path.strip_prefix(root).expect("entry under its root"),
         )
-    }
-
-    /// Discover third-party library roots under `cache_dir()`, mirroring native's
-    /// `discover_third_party_libs`: each direct cache subdirectory that contains a
-    /// `<Package>/package.mo` is a library root. Skips `msl` (the primary) and
-    /// dot-dirs. Returns the root dirs (the parent of the package dir), sorted.
-    fn discover_extra_roots() -> Vec<PathBuf> {
-        let cache = lunco_assets_core::cache_dir();
-        let mut roots: Vec<PathBuf> = Vec::new();
-        let Ok(rd) = fs::read_dir(&cache) else {
-            return roots;
-        };
-        for entry in rd.flatten() {
-            let p = entry.path();
-            if !p.is_dir() {
-                continue;
-            }
-            let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
-            if name == "msl" || name.starts_with('.') {
-                continue;
-            }
-            let Ok(inner) = fs::read_dir(&p) else {
-                continue;
-            };
-            let has_pkg = inner.flatten().any(|sub| {
-                let sp = sub.path();
-                sp.is_dir() && sp.join("package.mo").is_file()
-            });
-            if has_pkg {
-                roots.push(p);
-            }
-        }
-        roots.sort();
-        roots
     }
 
     fn file_sha256(path: &Path) -> String {

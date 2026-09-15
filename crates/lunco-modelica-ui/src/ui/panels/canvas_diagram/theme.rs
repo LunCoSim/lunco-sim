@@ -28,7 +28,7 @@ pub struct CanvasThemeSnapshot {
     pub icon_only_stroke: egui::Color32,
     pub warning_stroke: egui::Color32,
     pub error_stroke: egui::Color32,
-    /// When false (default), authored MSL icons render without a
+    /// When false (default), authored source library icons render without a
     /// workbench-drawn hairline frame around them. The icon's own
     /// primitives are the bounds. Selection / icon-only / expandable
     /// rings still draw — they carry semantic info, not just bounds.
@@ -42,7 +42,7 @@ impl CanvasThemeSnapshot {
         let s = &theme.schematic;
         Self {
             // Card background tuned to contrast cleanly with the
-            // blue-heavy MSL icon palette (Modelica Blocks / many
+            // blue-heavy source library icon palette (Modelica Blocks / many
             // Electrical components use strong blues). Delegates to
             // the theme's dedicated `canvas_card` schematic token.
             card_fill: s.canvas_card,
@@ -66,7 +66,7 @@ pub(super) fn canvas_theme_from_ctx(ctx: &egui::Context) -> CanvasThemeSnapshot 
     CanvasThemeSnapshot::from_theme(&lunco_theme::active(ctx))
 }
 
-/// The active theme's MSL icon-remap palette, read from this frame's
+/// The active theme's source library icon-remap palette, read from this frame's
 /// published theme.
 pub(super) fn modelica_icon_palette_from_ctx(
     ctx: &egui::Context,

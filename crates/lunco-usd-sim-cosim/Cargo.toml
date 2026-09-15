@@ -37,7 +37,6 @@ lunco-usd-sim-domain = { path = "../lunco-usd-sim-domain" }
 openusd = { workspace = true }
 
 [dev-dependencies]
-lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-compose = { path = "../lunco-usd-compose" }
 
 [lints]

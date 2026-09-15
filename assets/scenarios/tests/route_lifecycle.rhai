@@ -43,6 +43,31 @@ fn ribbon_count(doc) {
     result.attrs["curveVertexCounts"][0]
 }
 
+fn ribbon_is_open(doc) {
+    let result = query("QueryUsdPrim", #{
+        doc_id: doc,
+        path: RIBBON_GEOMETRY,
+        attrs: ["wrap", "curveVertexCounts", "points"],
+    });
+    if result == () || result.ok == false || result.attrs == ()
+        || result.attrs["wrap"] != "nonperiodic"
+        || result.attrs["curveVertexCounts"] == ()
+        || result.attrs["points"] == () {
+        return false;
+    }
+    let points = result.attrs["points"];
+    let counts = result.attrs["curveVertexCounts"];
+    if counts.len() != 1 || counts[0] != points.len() || points.len() < 2 {
+        return false;
+    }
+    let first = points[0];
+    let last = points[points.len() - 1];
+    first.len() == 3 && last.len() == 3
+        && ((first[0] - last[0]).abs() > 0.000001
+            || (first[1] - last[1]).abs() > 0.000001
+            || (first[2] - last[2]).abs() > 0.000001)
+}
+
 fn ribbon_width(doc) {
     let result = query("QueryUsdPrim", #{
         doc_id: doc,
@@ -273,6 +298,8 @@ fn on_tick(me) {
             "route program materializes an oriented ribbon from authored points"));
         this.checks.push(t_true(ribbon_width_matches(this.doc, 0.12),
             "route ribbon keeps a narrow terrain annotation width"));
+        this.checks.push(t_true(ribbon_is_open(this.doc),
+            "route ribbon is open and never connects the last point to the first"));
         this.checks.push(t_true(ribbon_clearance_matches(this.doc),
             "route ribbon clears the surface along its support normal"));
         let listed = program_editor::list(this.doc, ROUTE);
@@ -695,25 +722,28 @@ fn on_tick(me) {
         if reached_color == () || points.len() < 2 { return; }
         let pending_path = if points[0] == this.reached_point_path { points[1] } else { points[0] };
         let pending_color = marker_color(this.doc, pending_path);
-        if !color_matches(reached_color, [0.10, 0.95, 0.22])
-            || !color_matches(pending_color, [1.0, 0.35, 0.02]) { return; }
+        if !color_matches(reached_color, [0.55, 0.55, 0.55])
+            || !color_matches(pending_color, [0.10, 0.95, 0.22]) { return; }
         this.checks.push(t_true(true,
-            "reached route points turn green while pending points stay amber"));
+            "visited route points turn gray while unvisited points stay green"));
         this.checks.push(t_true(this.reached_index == 0,
             "the sensor event advances the stable current route point"));
-        intent_pulse(this.subject, "action");
+        let hud_toggle = emit("runtime.ui.action", "program.toggle");
+        this.checks.push(t_true(hud_toggle,
+            "the authored program HUD dispatches a generic toggle action"));
         this.phase = 12;
         return;
     }
 
     if this.phase == 12 {
-        // The F edge was accepted in the previous phase; the route program
-        // performs its safe-stop edge immediately and publishes
-        // `route_stopped` on the shared event bus. Do not couple this edit
-        // gate to a modelica port read after the route program has retired.
-        this.checks.push(t_true(true, "F toggles the route program off"));
+        // The authored HUD action is delivered on the shared event bus; wait
+        // for the route program's stop edge before checking the authority
+        // release. This keeps the test at the same lifecycle boundary as the
+        // production UI and avoids a fixed-delay assertion.
+        if this.stopped == 0 || is_controlled(this.subject) { return; }
+        this.checks.push(t_true(true, "the program HUD toggles the route off"));
         this.checks.push(t_true(true,
-            "route_stopped is emitted only after the generic brake policy runs"));
+            "stopping the route releases its generic control claim"));
         let points = direct_points(this.doc);
         if points.len() == 0 { return; }
         let delete_path = points[0];

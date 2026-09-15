@@ -48,7 +48,7 @@ def Xform "TerrainShaderAppearance" (
             def Shader "Shader"
             {
                 uniform token info:implementationSource = "sourceAsset"
-                uniform asset info:wgsl:sourceAsset = @lunco://shaders/terrain_geomorph.wgsl@
+                uniform asset info:wgsl:sourceAsset = @lunco://shaders/terrain_layered.wgsl@
                 uniform asset info:wgsl:vertexAsset = @lunco://shaders/terrain_geomorph.wgsl@
 
                 # These are scene-owned presentation facts. The remaining

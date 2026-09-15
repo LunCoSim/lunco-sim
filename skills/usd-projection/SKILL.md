@@ -34,7 +34,7 @@ UsdOp  ──►  UsdDocumentRegistry::apply   (journals + inverts)
           openusd Stage (the live CanonicalStage, NonSend)
               │  StageSink fires → RawStageChange { resynced, info_only }
               ▼
-          project_stage_changes            (lunco-usd/src/live_consume.rs)
+          project_stage_changes            (lunco-usd-commands/src/live_consume.rs)
               ├── resynced   → structural: spawn / despawn prims
               └── info_only  → attribute-only: translate, rotate, domes …
               │

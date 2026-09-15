@@ -114,16 +114,16 @@ pub fn sync_active_tab_to_doc(world: &mut World, doc: DocumentId, _drilled_class
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_else(|| format!("mem://{display_name}"));
             let library = match document.origin() {
-                lunco_doc::DocumentOrigin::Untitled { .. } => crate::state::ModelLibrary::InMemory,
-                lunco_doc::DocumentOrigin::Bundled { .. } => crate::state::ModelLibrary::Bundled,
+                lunco_doc::DocumentOrigin::Untitled { .. } => crate::state::ModelSource::InMemory,
+                lunco_doc::DocumentOrigin::Bundled { .. } => crate::state::ModelSource::Bundled,
                 lunco_doc::DocumentOrigin::File { writable: true, .. } => {
-                    crate::state::ModelLibrary::User
+                    crate::state::ModelSource::User
                 }
                 lunco_doc::DocumentOrigin::File {
                     writable: false, ..
-                } => crate::state::ModelLibrary::Bundled,
+                } => crate::state::ModelSource::Bundled,
             };
-            let read_only = matches!(library, crate::state::ModelLibrary::Bundled);
+            let read_only = matches!(library, crate::state::ModelSource::Bundled);
             let detected_name = document
                 .index()
                 .classes
@@ -151,11 +151,11 @@ pub fn sync_active_tab_to_doc(world: &mut World, doc: DocumentId, _drilled_class
                 .map(str::to_string)
                 .unwrap_or_else(|| qualified.clone());
             return Some((
-                format!("msl://{qualified}"),
+                format!("library://{qualified}"),
                 short.clone(),
                 String::new(),
                 true,
-                crate::state::ModelLibrary::Bundled,
+                crate::state::ModelSource::Bundled,
                 Some(short),
             ));
         }
@@ -166,7 +166,7 @@ pub fn sync_active_tab_to_doc(world: &mut World, doc: DocumentId, _drilled_class
                 display.clone(),
                 String::new(),
                 false,
-                crate::state::ModelLibrary::InMemory,
+                crate::state::ModelSource::InMemory,
                 Some(display),
             ));
         }

@@ -1,8 +1,8 @@
-//! CLI wrapper for the MSL indexer.
+//! CLI wrapper for the source-library indexer.
 //!
 //! The actual indexer lives in `lunco_modelica_core::indexer` as a library
 //! entry point so the workbench can drive the same workflow in-process
-//! on `AsyncComputeTaskPool` after a fresh MSL download. This binary
+//! on `AsyncComputeTaskPool` after a fresh source download. This binary
 //! parses CLI arguments and invokes `indexer::run`.
 //!
 //! Native-only: `lunco_modelica_core::indexer` is `#[cfg(not(wasm32))]` (it walks a

@@ -359,11 +359,16 @@ fn refresh_route_view(me, state) {
 
 // The runtime program HUD emits generic semantic actions. This route policy
 // owns the route-specific scope binding; the editor library remains generic.
-fn runtime_program_action(me, action) {
+fn runtime_program_action(me, action, state) {
     if action == () { return; }
     let route = route_path(me);
     let doc = route_document(me);
     if route == () || doc == () { return; }
+    if action == "program.toggle" {
+        if !route_is_selected(me) { return; }
+        apply_toggle_transition(me, state, !state.enabled);
+        return;
+    }
     if action == "program.add" {
         if !is_unattended() { cmd("FocusPanel", #{ id: "rhai_repl" }); }
         notify_kind("Add a program with program_editor::add(doc, host, name, source)", "info");
@@ -440,6 +445,9 @@ fn start_route(me, state) {
     if subject < 0 {
         return route_failure("the route has no valid subject");
     }
+    if is_controlled(subject) {
+        return route_failure("the route subject is already controlled");
+    }
     // Route-point presentation is a transient USD view and may still be
     // settling after an edit. Prepare it before taking control so a retry
     // cannot issue PossessVessel repeatedly after a partial start.
@@ -457,6 +465,33 @@ fn start_route(me, state) {
         return route_failure("the subject rejected autonomous control");
     }
     #{ ok: true, subject: subject }
+}
+
+fn apply_toggle_transition(me, state, enabled) {
+    if enabled {
+        let started = start_route(me, state);
+        if started.ok == true {
+            state.enabled = true;
+            state.safe_stopped = false;
+            state.route_index = route_start_index(me, state);
+            state.current_path = ();
+            state.sensor_entered = #{};
+            state.route_error = "";
+            state.start_requested = false;
+            emit("route_started");
+        } else if started.retryable == true {
+            state.start_requested = true;
+        } else if state.route_error != started.error {
+            notify_kind("Route program stopped: " + started.error, "error");
+            state.route_error = started.error;
+        }
+        return;
+    }
+    state.enabled = false;
+    ensure_route_safe_stop(me, state);
+    let subject = route_subject_for(me, state);
+    if subject >= 0 { release_control_claim(subject); }
+    emit("route_stopped");
 }
 
 fn on_start(me) {
@@ -498,13 +533,15 @@ fn on_event(me, evt) {
         if !this.selected && this.enabled {
             let subject = route_subject_for(me, this);
             if subject >= 0 { brake(subject); }
+            if subject >= 0 { release_control_claim(subject); }
             this.enabled = false;
             emit("route_stopped");
         }
         return;
     }
     if evt.name == "runtime.ui.action" {
-        runtime_program_action(me, evt.value);
+        if handle_camera_ui_action(evt.value) { return; }
+        runtime_program_action(me, evt.value, this);
         return;
     }
     // Avian owns zone occupancy. Keep route-zone enter pulses in the program's
@@ -522,28 +559,7 @@ fn on_event(me, evt) {
     let transition = advance_on_sensor(me, evt, this);
     if transition == () { return; }
     if transition.kind == "toggle" {
-        if transition.enabled {
-            let started = start_route(me, this);
-            if started.ok == true {
-                this.enabled = true;
-                this.safe_stopped = false;
-                this.route_index = route_start_index(me, this);
-                this.current_path = ();
-                this.sensor_entered = #{};
-                this.route_error = "";
-                this.start_requested = false;
-                emit("route_started");
-            } else if started.retryable == true {
-                this.start_requested = true;
-            } else if this.route_error != started.error {
-                notify_kind("Route program stopped: " + started.error, "error");
-                this.route_error = started.error;
-            }
-        } else {
-            this.enabled = false;
-            ensure_route_safe_stop(me, this);
-            emit("route_stopped");
-        }
+        apply_toggle_transition(me, this, transition.enabled);
     } else if transition.kind == "start" {
         let started = start_route(me, this);
         if started.ok == true {

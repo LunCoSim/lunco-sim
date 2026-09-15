@@ -269,7 +269,7 @@ on every request, or not at all):
         brotli_static on;        # serve `<file>.br` for `Accept-Encoding: br`
         gzip_static on;          # serve `<file>.gz` for `Accept-Encoding: gzip`
 
-        # Long cache for hashed assets (msl/sources-<sha>.tar.zst etc).
+        # Long cache for hashed source bundles (library/sources-<sha>.tar.zst etc).
         # The wasm filename isn't hashed by default — if you want
         # immutable caching for it too, mention it and we can add a
         # post-build step to inject a content hash.

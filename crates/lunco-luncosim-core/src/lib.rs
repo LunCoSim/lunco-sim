@@ -1925,7 +1925,7 @@ impl Plugin for LunCoSimCorePlugin {
         // deterministic physics, and the crate links no render code.
         app.add_plugins(lunco_usd_terrain::UsdTerrainPlugin);
         // The activation gate stays here — it is the assembly point that sees both the
-        // terrain request and `lunco-usd`'s `GroundColliderPending`.
+        // terrain request and `lunco-usd-sim`'s `GroundColliderPending`.
         app.add_systems(
             Update,
             track_ground_collider_pending.after(lunco_usd_terrain::UsdTerrainSet::Bridge),

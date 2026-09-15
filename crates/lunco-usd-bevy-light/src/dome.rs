@@ -235,8 +235,8 @@ fn load_dome_texture(asset_server: &AssetServer, path: &str) -> Handle<Image> {
 /// remain untouched.
 ///
 /// The single definition of how a dome's attributes are read, shared by the
-/// load path (`instantiate_light_prim`) and the live-edit path
-/// (`lunco_usd::live_consume`). Two copies would drift, and the symptom would
+/// load path (`instantiate_light_prim`) and the live-edit path in the USD
+/// command runtime. Two copies would drift, and the symptom would
 /// be a dome that loads one way from disk and another way after an edit.
 pub fn read_dome_environment(
     reader: &impl lunco_usd_bevy_core::UsdRead,
@@ -410,7 +410,7 @@ fn project_dome_textures(
 /// Re-apply a `DomeLight` prim's authored state to its live entity after an
 /// attribute-only edit (a `SetDomeLight`, or a hand edit to the `.usda`).
 ///
-/// Called by `lunco_usd::live_consume` — the USD change sink is the only thing
+/// Called by the USD command runtime's live-change sink — that sink is the only
 /// that knows an attribute moved. `next` is the re-read intent (`None` = the
 /// author removed `inputs:texture:file`, so the dome reverts to the scalar
 /// ambient it means without one), and `ambient` is that fallback's

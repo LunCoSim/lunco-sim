@@ -201,7 +201,8 @@ fn verified(cid: Vec<u8>, url: String, fetched: Result<Vec<u8>, String>) -> Fetc
     FetchOutcome { cid, bytes }
 }
 
-/// Native byte-GET. Blocking (`ureq`) — hence the `IoTaskPool`, not the compute pool.
+/// Native byte-GET through the shared asset transport — hence the `IoTaskPool`,
+/// not the compute pool.
 #[cfg(not(target_arch = "wasm32"))]
 fn fetch_bytes_native(
     url: &str,

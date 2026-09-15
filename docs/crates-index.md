@@ -26,7 +26,7 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 | **`lunco-assets-download`** | Manifest-aware native download, SHA-256 verification, archive extraction, staging, and atomic source installation. It has no Bevy or raster-processing dependency. |
 | **`lunco-assets-processing`** | Native offline image/DEM/map/albedo/normal-map/glTF processors, with shared staging/commit and an open `ProcessorRegistry` selected by `ProcessConfig.kind`. Heavy decode and raster math live here. |
 | **`lunco-assets`** | Explicit Bevy provisioning workers and the asset-manager CLI. It composes the lightweight dataset contract with the transport, download, and processing crates; ordinary asset readers should not depend on this package. Rhai selects and sequences authored provisioning policy. |
-| **`lunco-modelica-assets`** | Native Modelica asset packaging: bundles MSL source and pre-parsed Rumoca definitions for the web runtime; keeps MSL build-only dependencies out of the generic asset manager. |
+| **`lunco-modelica-assets`** | Native Modelica asset packaging: bundles source-library files and pre-parsed Rumoca definitions for the web runtime; keeps Modelica build-only dependencies out of the generic asset manager. |
 | **`lunco-hash`** | Hashing substrate: Fast tier (FNV-1a) for change/cache keys and CID tier (CIDv1 raw+sha2-256) for on-disk/on-wire content-addressing. Draws a firewall between ephemeral process keys and cross-peer persisted content. |
 | **`lunco-precompute`** | Content-addressed precompute disk cache (`bake_or_load`): runs expensive pure functions once, persists results keyed by content hash (via `lunco-hash` + `lunco-storage`), and loads them on subsequent runs/peers. |
 | **`lunco-settings`** | Centralised user-settings: one JSON file (`<OS config dir>/lunco/settings.json`), namespaced sections, auto-persist on change; also owns the shared `DownloadSettings` retry/backoff policy. |
@@ -84,7 +84,7 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-usd-authoring`** | OpenUSD authored-layer operations and schema registry: path-addressed authoring, USDA conversion, reference/list-op helpers, and registered schema metadata. No document lifecycle, runtime, physics, rendering, or UI. |
 | **`lunco-usd-core`** | Headless typed USD operation, assembly, edit-session, and edit-policy substrate: `ApplyUsdOp`/`ApplyUsdOps`, disposable `ApplyUsdTransientOps`, and operation lowerings. No document implementation, runtime, physics, rendering, or UI. |
 | **`lunco-usd-queries`** | UI-free public USD query providers for document inspection, edit-session state, explicit assembly-target resolution, and document synchronization. Tests live with this owning package. |
-| **`lunco-usd`** | UI-free USD runtime orchestration, document commands, and engineering metadata mapping. |
+| **`lunco-usd-commands`** | Headless USD document and Twin-scene command boundary: document kind registration, open/new/save/undo/redo, scene-transition admission, and typed USD authoring commands. It owns no UI or visual projection. |
 | **`lunco-usd-bevy-runtime`** | Application-level USD plugin bundle composing visual, diagnostics, physics, simulation, and document-command projections. |
 | **`lunco-usd-geometry`** | Render-free USD geometry substrate: BasisCurves evaluation, NURBS evaluators, trimmed-domain tessellation, and rotation-minimizing curve-sweep mesh data. Isolates heavy numeric geometry dependencies from stage and camera policy. |
 | **`lunco-usd-bevy-core`** | Headless composed-USD reader/view, stage composition, prepared stage assets, canonical live-stage ownership, authored-layer readers, instance identity, send-safe projection plans, program/variant resolution, material binding, world/body-frame transform decoding, and unit conversion. Its public composed-stage integration contracts live in `tests/stage_reads.rs` and use in-memory `StageRecipe` closures. Uses Bevy's asset/ECS substrate but has no mesh, light, camera, renderer, window, or UI projection. |
@@ -114,7 +114,7 @@ Modular bridge between OpenUSD and Bevy, covering visuals, physics, simulation m
 | **`lunco-scene-commands`** | The render-free scene/document **mutation layer**: runtime spawn, move, delete, and USD connection edits. It is the shared command path for rhai, HTTP API, peer replay, and editor tools; catalog resources live in `lunco-scene-catalog`, document-backed property and shader authoring live in `lunco-scene-authoring`, and camera commands live in `lunco-scene-camera`. |
 | **`lunco-scene-camera`** | Render-free camera framing commands (`FocusEntityById`, `FocusEntityByPath`, and `SetCameraLookAt`) plus the active-physics-frame focus transaction. Application composition roots install it alongside the independent `lunco-scene-selection` plugin when path focus and telemetry focus are exposed. |
 | **`lunco-scene-selection`** | Render-free scene-lifetime selection state and the shared selection-to-telemetry-focus projection. It is independent from scene mutation commands so exposure and other headless consumers do not inherit the command layer's dependency closure. |
-| **`lunco-scene-catalog`** | Production USD-backed catalog boundary: asynchronous asset enumeration, authored `doc`/`lunco:spawnable` metadata, shader/source listings, `SpawnCatalog`, and the generic runtime USD spawn constructor. `ListSpawnCatalog` and `ListUsdAssetMetadata` publish the same authored `doc` text consumed by the catalog UI and Rhai scene tests. It also owns catalog-only rescan commands and is installed by `SpawnCommandPlugin`. |
+| **`lunco-scene-catalog`** | Production USD-backed catalog boundary: asynchronous asset enumeration, authored `doc`/`lunco:spawnable` metadata, parser/read status, shader/source listings, `SpawnCatalog`, and the generic runtime USD spawn constructor. `ListSpawnCatalog` and `ListUsdAssetMetadata` publish the same authored `doc` text consumed by the catalog UI and Rhai scene tests. It also owns catalog-only rescan commands and is installed by `SpawnCommandPlugin`. |
 | **`lunco-scene-queries`** | Production read-only scene boundary: `QueryEntity` for active-physics identity/pose and `QueryUsdPrim` for composed USD attributes, relationships, topology, and collision bounds. Installed by `SpawnCommandPlugin`; shared by Rhai, HTTP, MCP, and headless hosts. |
 | **`lunco-scene-authoring`** | Production USD authoring boundary: document ownership resolution, `SetObjectProperty`, standard USD property persistence, and journaled/live shader source commands. Installed by `SpawnCommandPlugin`; it has no dependency on scene mutation handlers. |
 | **`lunco-scene-validation`** | Production asset, loaded-stage, scene-test discovery, and Twin pre-flight: `ValidateAsset`, `ValidateTwin`, `luncosim test --list`, live `RunLint`, USD lint-fact aggregation, and Twin namespace inspection. It owns composition/parse/lint integration while `lunco-scene-commands` owns scene mutation. |
@@ -168,11 +168,11 @@ Logic engines for dynamic simulation behavior, the tool registry, and industrial
 | Crate | Responsibility |
 | :--- | :--- |
 | **`lunco-modelica-runtime`** | Render-free Modelica runtime contract: the `ModelicaModel` ECS component, worker command/result protocol, source asset loader, generated-source metadata, communication schedule, notices, sample stream, and telemetry layout. It deliberately has no Rumoca compiler, worker implementation, document editor, or UI closure. |
-| **`lunco-modelica-core`** | Headless Modelica compiler host: authored document editing, Rumoca compilation, simulation sessions, worker implementation, and MSL indexing. It consumes `lunco-modelica-runtime`, keeps API command contracts opt-in, and does not own API query registration, the shared runtime protocol, or generated USD-document metadata. It has no workbench, egui, tutorial, or UI dependency. |
+| **`lunco-modelica-core`** | Headless Modelica compiler host: authored document editing, Rumoca compilation, simulation sessions, worker implementation, and source-library indexing. It consumes `lunco-modelica-runtime`, keeps API command contracts opt-in, and does not own API query registration, the shared runtime protocol, or generated USD-document metadata. It has no workbench, egui, tutorial, or UI dependency. |
 | **`lunco-modelica-api`** | Production transport-free API capability for Modelica: registers document, compiler, experiment, solver, source, and run query providers. It depends on the headless Modelica core but is not part of the compiler core's default closure; Workspace queries remain in `lunco-workspace-api`. |
 | **`lunco-modelica-ui-core`** | Render-independent Modelica UI contracts: shared command/event payloads (`OpenClass`, `FocusDocumentByName`, `SetModelicaParameter`) and stable plot identities. It has no Modelica compiler, workbench shell, panel, or renderer dependency; observers remain in the owning UI package. |
 | **`lunco-modelica-ui`** | Modelica workbench UI and `lunica` application facade. It adapts core state to workbench contexts and owns Modelica panels, diagram/editor adapters, onboarding, and experiment-result view-models; reusable log, icon, documentation, and trajectory rendering lives in shared UI crates. It has no tutorial catalog or lifecycle. |
-| **`lunco-modelica-icon-ui`** | Reusable egui renderer for authored Modelica `Icon`/`Diagram` graphics, including orientation, text substitution, themed colors, polygon tessellation, and bitmap loading through the MSL asset-source boundary. It has no workbench panel or document lifecycle ownership. |
+| **`lunco-modelica-icon-ui`** | Reusable egui renderer for authored Modelica `Icon`/`Diagram` graphics, including orientation, text substitution, themed colors, polygon tessellation, and bitmap loading through the source-library asset boundary. It has no workbench panel or document lifecycle ownership. |
 | **`lunco-modelica-docs-ui`** | Reusable egui Modelica documentation renderer: cached HTML-to-Markdown conversion, CommonMark presentation, and workbench URI-link dispatch. It does not resolve documents or own panel selection. |
 | **`lunco-modelica-ast`** | Pure Modelica source boundary: BOM normalization, strict/recovering Rumoca parse wrappers, AST interface/component extraction, shared expression/description display projections, and Modelica lint facts. It has no Bevy, UI, worker, storage, or solver ownership; authored lint policy remains in `assets/scripting/policy/lint_modelica.rhai`. |
 | **`lunco-sysml-ast`** | Pure SysML v2 parser/resolver projection: source files, qualified elements, typed literals, requirements, verification links, diagnostics, and neutral facts for the authored `lint.sysml` policy. It has no Bevy, filesystem, Twin, or scripting ownership. |
@@ -202,10 +202,10 @@ Primary entry points and simulation assembly targets.
 | **`lunco-modelica-ui`** | `lunica` | The Modelica workbench application and UI facade. |
 | **`lunco-modelica-icon-ui`** | — | Reusable egui Modelica icon/diagram graphics renderer used by the diagram canvas and model preview. |
 | **`lunco-modelica-docs-ui`** | — | Reusable egui Modelica documentation renderer used by the model view. |
-| **`lunco-modelica-core`** | `lunica_worker`, `modelica_run`, `modelica_tester`, `msl_indexer`, `msl_parse_bench` | Headless Modelica worker and CLI/indexing tools; none link the workbench UI or Modelica API query capability. The worker protocol and live ECS component come from `lunco-modelica-runtime`. |
+| **`lunco-modelica-core`** | `lunica_worker`, `modelica_run`, `modelica_tester`, `modelica_library_indexer`, `modelica_library_parse_bench` | Headless Modelica worker and CLI/indexing tools; none link the workbench UI or Modelica API query capability. The worker protocol and live ECS component come from `lunco-modelica-runtime`. |
 | **`lunco-modelica-api`** | — | API query capability installed by API-enabled Modelica and LunCoSim hosts. |
 
-> Other binaries: `build_msl_assets` (`lunco-modelica-assets`), `net_smoke` (`lunco-networking`), `dem_worker` (`lunco-terrain-bake`, the off-thread DEM bake Web Worker — staged next to the wasm by `build_web.sh`).
+> Other binaries: `build_modelica_library_assets` (`lunco-modelica-assets`), `net_smoke` (`lunco-networking`), `dem_worker` (`lunco-terrain-bake`, the off-thread DEM bake Web Worker — staged next to the wasm by `build_web.sh`).
 
 ---
 
@@ -399,14 +399,13 @@ substrate. It owns `ApplyUsdOp`/`ApplyUsdOps`, disposable
 `ApplyUsdTransientOps`, and operation lowerings, while depending on the
 document package for authored-layer state.
 
-**`lunco-usd`**
-UI-free USD runtime orchestration and engineering metadata bridge. Maps
-LunCo-specific metadata (`lunco:*` namespace) from USD stages to Bevy
-components, enriching 3D models with simulation-critical data like Ephemeris
-IDs. Its document commands are available to headless consumers; complete
-application plugin composition lives in
-`lunco-usd-bevy-runtime`, while interactive presentation lives in
-`lunco-usd-ui`.
+**`lunco-usd-commands`**
+Headless USD document and Twin-scene runtime boundary. It registers the USD
+document kind, owns file/open/save and scene-transition observers, lowers typed
+USD document commands through the canonical journal path, and runs the live
+document-backed projection bridges. It is a production capability shared by
+the runtime bundle and UI shells; it does not own visual projection or
+presentation.
 
 **`lunco-usd-queries`**
 UI-free public query providers for the USD document boundary. It owns
@@ -465,10 +464,10 @@ authoring, terrain, validation, and UI adapters. It owns the
 `UsdDocumentUserOwned`, `LiveRebuildExempt`, and the event-driven
 `TwinProjectionWake` signal. It depends on the stage-asset identity and asset
 path contracts, but it does not load or compose USD stages and does not depend
-on the aggregate `lunco-usd` runtime.
+on the command/runtime boundary.
 
 **`lunco-usd-ui`**
-Interactive USD browser and document presentation. Owns workbench sections, loaded-stage and scene-file views, browser dispatch, Save-As picker integration, and UI status/placeholder adapters while consuming the document and projection APIs from `lunco-usd`. Add `lunco-usd-viewport-ui` when an application needs the render-heavy preview surface.
+Interactive USD browser and document presentation. Owns workbench sections, loaded-stage and scene-file views, browser dispatch, Save-As picker integration, and UI status/placeholder adapters while consuming the document and projection APIs from `lunco-usd-commands`. Add `lunco-usd-viewport-ui` when an application needs the render-heavy preview surface.
 
 **`lunco-usd-viewport-ui`**
 Render-heavy USD preview surface. Owns preview sessions/views, offscreen cameras and images, viewport interaction, inspection commands/queries, and the viewport panels. It consumes the document and projection APIs but does not own Twin-browser lifecycle or document navigation.
@@ -735,10 +734,10 @@ Shared web frontend for the wasm apps. Provides the streaming loader (`web/lunco
 ### Scripting & Modeling
 
 **`lunco-modelica-core`**
-Modelica language integration. Provides AST-based editing, compilation via Rumoca, and simulation sessions, allowing complex industrial models to drive simulation entities and vessel subsystems. On wasm, compiles/Fast-Runs are dispatched off the main thread to the `lunica_worker` companion binary; its `worker_transport` composes the generic `lunco-worker-transport::WorkerPool` (spawn/handshake/post/respawn) and layers the Modelica-specific MSL-readiness and per-run routing on top. API commands are opt-in, and API query providers are owned by `lunco-modelica-api`.
+Modelica language integration. Provides AST-based editing, compilation via Rumoca, and simulation sessions, allowing complex industrial models to drive simulation entities and vessel subsystems. On wasm, compiles/Fast-Runs are dispatched off the main thread to the `lunica_worker` companion binary; its `worker_transport` composes the generic `lunco-worker-transport::WorkerPool` (spawn/handshake/post/respawn) and layers source-library readiness and per-run routing on top. API commands are opt-in, and API query providers are owned by `lunco-modelica-api`.
 
 **`lunco-modelica-api`**
-Production API capability for Modelica hosts. It registers the domain-owned query providers for bundled sources, MSL classes, compile/run status, experiment results, document source, model metadata, variables, and share links. `lunco-workspace-api` remains the owner of Workspace queries. Keeping this layer outside `lunco-modelica-core` means a headless compiler-only build does not pull the API query closure, while API-enabled UI/server roots install the required capabilities explicitly.
+Production API capability for Modelica hosts. It registers the domain-owned query providers for bundled sources, source-library classes, compile/run status, experiment results, document source, model metadata, variables, and share links. `lunco-workspace-api` remains the owner of Workspace queries. Keeping this layer outside `lunco-modelica-core` means a headless compiler-only build does not pull the API query closure, while API-enabled UI/server roots install the required capabilities explicitly.
 
 **`lunco-scripting`**
 Language-neutral world bridge for dynamic logic providers. The default (and only fully-wired) backend is **rhai** — browser-capable and enabled by the default `rhai` feature; build with `--no-default-features` for a script-free build. The bridge exposes ECS verbs and a native `ValueBuilder` (no JSON on the read path) over which each runtime is a thin binding. Python is an optional backend used for one-shot snippet evaluation only; Lua is a reserved (not yet implemented) backend id. rhai also funnels the `lunco-tools` registry into the engine via `lunco-tools-rhai`.

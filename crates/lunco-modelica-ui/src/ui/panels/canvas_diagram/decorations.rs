@@ -11,7 +11,7 @@ use super::BackgroundDiagramHandle;
 
 /// Paints the target class's `Diagram(graphics={...})` annotation as
 /// canvas background — the red labelled rectangles, text callouts,
-/// and accent lines MSL example diagrams carry for reader orientation
+/// and accent lines source library example diagrams carry for reader orientation
 /// (the PID example's "reference speed generation" / "PI controller"
 /// / "plant" regions are the canonical case). Holds an
 /// `Arc<RwLock<…>>` handle so the projector can push a new class's
@@ -84,7 +84,7 @@ impl lunco_canvas::Layer for DiagramDecorationLayer {
 /// Extract the `Diagram(graphics={...})` annotation for the target
 /// class — full-qualified drill-in target, or the first non-package
 /// class when no drill-in is active. Used by the background
-/// decoration layer to paint MSL-style diagram callouts (labelled
+/// decoration layer to paint source library-style diagram callouts (labelled
 /// regions, accent text) behind the nodes.
 /// Emit canvas Nodes for every interactive item in the active
 /// class's diagram. Two sources, intentionally split:
@@ -118,7 +118,7 @@ pub(super) fn emit_diagram_decorations(
             // Editable label. Strip surrounding quotes the parser
             // left on `textString` so the visual sees the raw
             // string. Skip `%name` / `%class` substitutions and
-            // empty strings — those are MSL conventions for
+            // empty strings — those are source library conventions for
             // icon-internal Text and aren't meaningful as Diagram
             // callouts.
             let raw = t.text_string.trim_matches('"');
