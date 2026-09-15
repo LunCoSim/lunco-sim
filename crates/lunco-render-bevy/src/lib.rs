@@ -44,7 +44,8 @@ use lunco_render::{PbrLook, PbrLookKey, SurfaceAlpha};
 /// ordinary PBR materials with texture-free unlit materials. GPU rendering still
 /// requires Bevy's built-in shader; it avoids the expensive lighting, texture
 /// sampling, HDR/bloom and MSAA paths rather than promising an impossible
-/// "no-shader" renderer.
+/// "no-shader" renderer. It does not replace or bypass an authored
+/// `ShaderLook`; custom shader stage errors remain errors in every profile.
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RenderProfile {
     #[default]
@@ -143,22 +144,15 @@ impl Plugin for LuncoRenderPlugin {
         // `shader_look::build` first: it registers the `ShaderMaterial` + `Shader`
         // asset stores (idempotently), which `ShaderMaterialPlugin` needs in place
         // before it loads the shared WGSL modules through the `AssetServer`.
-        if app.world().resource::<RenderProfile>().is_fast() {
-            // Do not register the user-WGSL material pipeline in fast mode. The
-            // fallback keeps those meshes visible with one shared unlit material;
-            // terrain map and horizon wiring only feed that retired pipeline.
-            shader_look::build_fast(app);
-        } else {
-            shader_look::build(app);
-            procedural_sky::build(app);
-            // The `ShaderMaterial` RENDER PIPELINE. Added here and ONLY here — it used
-            // to be added by hand in `lunco-luncosim`'s UI plugin and `luncosim`'s main;
-            // both were deleted when the material moved into this crate, because Bevy
-            // panics on a duplicate plugin.
-            app.add_plugins(shader_material::ShaderMaterialPlugin);
-            horizon_shade::build(app);
-            env_light::build(app);
-        }
+        shader_look::build(app);
+        procedural_sky::build(app);
+        // The `ShaderMaterial` RENDER PIPELINE. Added here and ONLY here — it used
+        // to be added by hand in `lunco-luncosim`'s UI plugin and `luncosim`'s main;
+        // both were deleted when the material moved into this crate, because Bevy
+        // panics on a duplicate plugin.
+        app.add_plugins(shader_material::ShaderMaterialPlugin);
+        horizon_shade::build(app);
+        env_light::build(app);
         world_label::build(app);
         sensor_beams::build(app);
         // Connectivity beams: runtime-spawned mesh, authored look, local Transform (no

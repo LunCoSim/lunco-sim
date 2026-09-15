@@ -2574,9 +2574,11 @@ actually call, with the fields the deserializer actually accepts. See the
  active `Shader` asset(s) at `path` (e.g. `"shaders/wheel.wgsl"`), so every
  material using them re-specializes its pipeline next frame. Bare engine
  paths resolve the same `lunco://`/default-source aliases as [`ReloadShader`].
- Compile/validation outcome surfaces in the render log (naga errors on a bad
- shader). Pairs with [`ReloadShader`] (disk) — this one is for pushing edits
- directly.
+ Compile/validation outcome surfaces in the render log and the structured
+ runtime diagnostics. A stage-less source is rejected for the USD role that
+ requests it; the renderer does not substitute a `StandardMaterial` or another
+ guessed shader. Pairs with [`ReloadShader`] (disk) — this one is for pushing
+ edits directly.
 
 - *defined in:* `crates/lunco-scene-authoring/src/properties.rs`
 

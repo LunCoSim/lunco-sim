@@ -187,15 +187,8 @@ for scene in "${SCENES[@]}"; do
     fi
 
     if [[ -z "$reason" && "$name" == "shader_fallback" ]]; then
-        warning_count="$(grep -Fc 'has no `@fragment` entry point' "$log")"
-        if [[ "$warning_count" -ne 1 ]]; then
-            reason="expected exactly one invalid-shader warning, found ${warning_count}"
-        else
-            read -r red green blue < <(identify -format '%[fx:mean.r] %[fx:mean.g] %[fx:mean.b]' "$last")
-            if ! awk -v r="$red" -v g="$green" -v b="$blue" \
-                'BEGIN { exit !(r > 0.02 && r > g * 1.15 && r > b * 1.15) }'; then
-                reason="fallback cube pixels are not visibly red (rgb=${red:-?},${green:-?},${blue:-?})"
-            fi
+        if ! grep -Fq 'SHADER_STAGE_CONTRACT: PASS' "$log"; then
+            reason="authored invalid-shader rejection verdict was not observed"
         fi
     fi
 

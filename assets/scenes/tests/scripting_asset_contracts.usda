@@ -1,0 +1,19 @@
+#usda 1.0
+(
+    defaultPrim = "ScriptingAssetContracts"
+    metersPerUnit = 1
+)
+
+# Authored Rhai prelude, tools, and policies are validated at their public
+# runtime boundaries. The Rust core does not enumerate or open these assets in
+# a package integration test.
+def Xform "ScriptingAssetContracts"
+{
+    def Scope "Test" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/scripting_asset_contracts.rhai@
+    }
+}

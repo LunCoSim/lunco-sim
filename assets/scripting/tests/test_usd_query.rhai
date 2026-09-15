@@ -7,8 +7,9 @@
 //     target/debug/luncosim rhai --api <port> --stdout \
 //         -e "<test-libs>\nlet PROBE = \"/Some/Prim\";\n< this file >" | tail -1
 //
-// `cargo test -p lunco-scripting --test rhai_test_harness` parse-checks this
-// file, so a syntax error here still fails CI without a sandbox.
+// `scripts/api/run_rhai_test.sh` sends this authored test through the
+// production Rhai bridge; a syntax or provider error therefore fails the
+// same public path used by callers.
 //
 // This pins the MECHANISM every model suite stands on. If `QueryUsdPrim` stops
 // resolving prims, a model suite fails with dozens of "MISSING attribute" lines

@@ -1,0 +1,18 @@
+#usda 1.0
+(
+    defaultPrim = "ShaderAssetContracts"
+    metersPerUnit = 1
+)
+
+# WGSL schema and USD/render bindings are authored assets. The observer uses
+# ValidateAsset, so this gate does not duplicate a filesystem reader in Rust.
+def Xform "ShaderAssetContracts"
+{
+    def Scope "Test" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/shader_asset_contracts.rhai@
+    }
+}

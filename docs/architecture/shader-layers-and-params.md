@@ -85,8 +85,37 @@ second parameter block. Both stages read `@binding(0)` from the one 256-byte blo
 the fragment stage's reflected schema is the layout that gets packed. A linked vertex
 shader must therefore declare the same `Material` fields, order, and WGSL types as its
 fragment shader. The terrain pair (`terrain_layered.wgsl` + `terrain_geomorph.wgsl`)
-keeps that ABI duplicated at the stage boundary and the cross-shader contract test
-guards it against drift.
+uses one canonical fragment and a vertex-only geomorph stage; the cross-shader
+contract test guards the required ABI at that stage boundary.
+
+For USD-authored terrain, the Shader prim owns the selection:
+
+```usda
+uniform token info:implementationSource = "sourceAsset"
+uniform asset info:wgsl:sourceAsset = @lunco://shaders/terrain_layered.wgsl@
+uniform asset info:wgsl:vertexAsset = @lunco://shaders/terrain_geomorph.wgsl@
+```
+
+The second property is omitted when the default mesh vertex stage is sufficient.
+Rust consumes the projected `ShaderLook`; it must not hardcode which terrain
+fragment or vertex asset a scene uses. `info:implementationSource =
+"sourceAsset"` is the standard UsdShade selector. The `info:wgsl:sourceAsset`
+spelling follows UsdShade's standard source-type convention; `vertexAsset` is a
+LunCo renderer extension because UsdShade has no second stage selector. A
+portable material can instead keep both entry points in one source asset and
+use that same asset for both projected stages.
+
+Stage selection is a positive contract, not a blacklist. A source asset used as
+`sourceAsset` must declare a callable `@fragment` entry point; an optional
+`vertexAsset` must declare a callable `@vertex` entry point. One WGSL module may
+declare both stages and is valid for either role. The render binder validates
+the requested stage after the asset is loaded. If
+the contract is invalid, the owning material is rejected and a structured
+`RuntimeDiagnostics` error is published; Rust does not substitute a
+`StandardMaterial`, a guessed terrain shader, or another guessed source. An
+authored Rhai policy may observe that diagnostic and explicitly author a
+replacement or stop the scenario, so recovery remains visible and easy to
+override rather than hidden in the renderer.
 
 Authored grayscale orthophotos are not intrinsic albedo: their broad brightness
 field contains acquisition illumination and would be lit a second time by the
@@ -158,7 +187,8 @@ pub enum TextureLayer {
 ```
 
 ```rust
-let moon = ShaderLook::new("shaders/terrain_geomorph.wgsl")
+let moon = ShaderLook::new("shaders/terrain_layered.wgsl")
+    .with_vertex_shader("shaders/terrain_geomorph.wgsl")
     .with_texture(TextureLayer::Albedo,  colour_mosaic)
     .with_texture(TextureLayer::Normal,  dem_normals)
     .with_texture(TextureLayer::Surface, packed_scalars)
@@ -173,7 +203,7 @@ look for a tool-created terrain, but the streamed terrain path never selects a
 shader in Rust.
 
 The shader merges them. A shader that does not declare a binding is unaffected by
-that layer being set (`None` binds Bevy's fallback image), so **one slot set serves
+that layer being set (`None` binds Bevy's neutral image binding), so **one slot set serves
 every shader** — you do not get a new material type per look.
 
 ---

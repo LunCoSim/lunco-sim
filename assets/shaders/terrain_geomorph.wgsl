@@ -1,7 +1,11 @@
-//! CDLOD geomorph terrain tile — the production lunar material with a custom
-//! `@vertex` morph stage. Macro and meso relief come from the DEM and authored
-//! terrain layers; this material adds only one anti-aliased close-range
-//! regolith micro-normal and the measured lunar photometric response.
+//! CDLOD geomorph vertex stage for the canonical terrain material.
+//!
+//! The fragment/material contract is authored by the USD Shader prim through
+//! `info:wgsl:sourceAsset` and is normally `terrain_layered.wgsl`. This file is
+//! only the optional `info:wgsl:vertexAsset` stage for streamed CDLOD tiles.
+//! Keeping geometry selection here and appearance selection in USD means the
+//! static and streamed representations cannot silently acquire different
+//! shading laws.
 //!
 //! Each LOD-tile vertex carries two positions: its own LOD `POSITION` and the
 //! `MORPH_TARGET` (the vertex snapped to the parent's coarser even lattice, baked
@@ -9,19 +13,12 @@
 //! camera distance over the node's CDLOD morph band, so a tile collapses smoothly
 //! onto its parent. No texture fetch, no compute → wasm-safe.
 //!
-//! The micro-normal needs only the terrain's authored DEM extent, so per-tile
-//! materials remain independent of the `wire_terrain_materials` heightfield
-//! wiring (which only reaches the single static terrain entity). It therefore
-//! omits `regolith.wgsl`'s live horizon ray-march. Streamed tiles use
-//! the pre-baked DEM horizon cache for terrain self-shadow at every distance and
-//! receive Bevy's CSM for shadows cast by dynamic objects.
-//!
-//! Driven by `ShaderMaterial` (NOT a bespoke material): `m.shader` and
-//! `m.vertex_shader` both point here; `m.vertex_shader = Some` makes
-//! `ShaderMaterial::specialize` swap the vertex stage and bind
-//! `ATTRIBUTE_MORPH_TARGET` at `@location(8)`, `ATTRIBUTE_MORPH_NORMAL` at
-//! `@location(9)`, and `ATTRIBUTE_MORPH_EDGE` at `@location(10)`. Params are reflected from
-//! `struct Material` like any self-describing shader.
+//! `ShaderMaterial::specialize` swaps this stage in when the USD projection
+//! supplies `vertex_shader` and binds `ATTRIBUTE_MORPH_TARGET` at `@location(8)`,
+//! `ATTRIBUTE_MORPH_NORMAL` at `@location(9)`, and `ATTRIBUTE_MORPH_EDGE` at
+//! `@location(10)`. Params are reflected from the canonical fragment's
+//! `struct Material`; this file repeats that layout only because the vertex
+//! stage reads the morph fields from the same uniform block.
 
 #import bevy_pbr::{
     mesh_functions,
@@ -29,82 +26,9 @@
     forward_io::VertexOutput,
     mesh_view_bindings::view,
 }
-#import lunco::pbr_lit::lit_n_occluded
-#import lunco::terrain::{aa_fade, bump_layer, decode_dem_normal, dem_normal_to_world, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position, terrain_map_weights, terrain_surface_occlusion}
-#import lunco::lunar::regolith_factor
-
-//!@ui      albedo            color  "Albedo"
-//!@default albedo            0.13,0.13,0.13
-//!@ui      micro_scale       8 80    "Regolith micro scale (/m)"
-//!@default micro_scale       35
-//!@ui      micro_bump        0 0.05  "Regolith micro-normal strength"
-//!@default micro_bump        0.015
-//!@ui      roughness         0 1     "Base regolith roughness"
-//!@default roughness         0.88
-//!@ui      macro_clump_scale 1 20    "Macro clump scale (/m)"
-//!@default macro_clump_scale 8
-//!@ui      macro_bump        0 0.3   "Macro bump strength"
-//!@default macro_bump        0.06
-//!@ui      mid_scale         0.02 1  "Mid hummock scale (/m)"
-//!@default mid_scale         0.15
-//!@ui      mid_bump          0 1.5   "Mid hummock strength"
-//!@default mid_bump          0.6
-//!@ui      fine_scale        50 400   "Fine grain scale (/m)"
-//!@default fine_scale        180
-//!@ui      fine_bump         0 0.1    "Fine grain strength"
-//!@default fine_bump         0.025
-//!@ui      rough_mix         0 1      "Roughness mix"
-//!@default rough_mix         0.35
-//!@ui      mottle            0 0.6    "Albedo mottle"
-//!@default mottle            0.22
-// Derived-map weights come from the screen-space surface footprint and the map's
-// physical texel size. Authored-map weights come from USD. Mesh LOD is deliberately
-// absent, so replacing a tile by its parent cannot change colour.
-//!@default map_texel_size_m 1.0
-//!@default derived_surface_on 0
-//!@default derived_normal_on  0
-//!@default authored_surface_on 0
-//!@default authored_normal_on  0
-//!@default terrain_half_extent 1.0
-//!@ui      weight_albedo     0 1    "Authored material albedo weight"
-//!@default weight_albedo     0
-//!@ui      weight_mineral    0 1     "Overlay drape weight (unlit)"
-//!@default weight_mineral    0
-//!@ui      weight_rough      0 1    "Authored surface roughness weight"
-//!@default weight_rough      0
-//!@ui      weight_ao         0 1    "Authored surface AO weight"
-//!@default weight_ao         0
-//!@ui      weight_normal     0 1    "Authored normal map weight"
-//!@default weight_normal     0
-// --- lunar photometry (lunco::lunar) ---------------------------------------
-// The knobs that decide whether this reads as the Moon or as grey PBR. Defaults
-// are the fitted lunar values from the Chrono/UW-Madison sensor simulator
-// (arxiv 2410.04371 Table 1), NOT taste: `Bs0 = 1.80238`, `hs = 0.07145 rad`.
-// Ranges bracket maria (darker, less backscatter) through highlands.
-//!@ui      surge_amp         0 3    "Opposition surge amplitude (Hapke Bs0)"
-//!@default surge_amp         1.80
-//!@ui      surge_width       0.01 0.3 "Opposition surge width, rad (Hapke hs)"
-//!@default surge_width       0.0715
-//!@ui      photometry_gain   0.2 2  "Photometry gain (1 = Lambert parity at mu0==mu)"
-//!@default photometry_gain   1.0
-// The CANONICAL scene sun, picked STRUCTURALLY on the CPU (`pick_sun`) and
-// written to every non-terrain ShaderMaterial by `wire_sun_for_non_terrain_materials`
-// — streamed tiles included, since a tile carries no `HorizonMap`. This shader
-// used to re-derive the sun in-shader with `sun_to_light()`, which picked the
-// BRIGHTEST directional light: correct only while the sun happens to be the
-// brightest, silent when it is not, and a different answer from the one the
-// static-mesh terrain shaders were already using from this very uniform.
-//!@engine  sun_dir
-//!@engine  sun_dir_world
-//!@engine  sun_tan_radius
-//!@engine  hf_size
-//!@engine  hf_res
-//!@engine  csm_far
-//!@engine  shadow_cache_on
-//!@engine  horizon_march_steps
-//!@default morph_start  1.0e20
-//!@default morph_end    1.0e21
-//!@default stitch_edges 0,0,0,0
+// Keep this layout byte-for-byte compatible with terrain_layered.wgsl. The
+// fragment stage owns the reflected UI/default/engine annotations; this stage
+// only needs the final morph fields, but the uniform is shared by both stages.
 struct Material {
     albedo:            vec3<f32>,
     micro_scale:       f32,
@@ -118,93 +42,38 @@ struct Material {
     fine_bump:         f32,
     rough_mix:         f32,
     mottle:            f32,
-    weight_albedo:     f32,  // AUTHORED linear material-albedo raster over procedural regolith
-    weight_mineral:    f32,  // AUTHORED mineral/classification overlay weight
-    weight_rough:      f32,  // AUTHORED surface roughness weight
-    weight_ao:         f32,  // AUTHORED surface AO weight
-    weight_normal:     f32,  // AUTHORED normal weight
-    surge_amp:         f32,  // Hapke Bs0 — opposition surge amplitude
-    surge_width:       f32,  // Hapke hs (rad) — opposition surge angular width
-    photometry_gain:   f32,  // trim on the Lommel-Seeliger x surge multiplier
-    sun_tan_radius:    f32,  // engine-filled: tan(sun angular radius)
-    sun_dir:           vec3<f32>,  // engine-filled: terrain-local to-sun direction
-    sun_dir_world:     vec3<f32>,  // engine-filled: world-space to-sun direction
-    hf_size:           vec2<f32>,  // engine-filled: heightfield extent (m)
-    hf_res:            f32,  // engine-filled: heightfield resolution
-    csm_far:           f32,  // engine-filled: CSM far bound (m)
-    shadow_cache_on:   f32,  // engine-filled: 1 = far-shadow cache is active
-    horizon_march_steps: f32, // engine-filled: configured live ray-march iterations
-    map_texel_size_m:  f32,  // engine-filled: level-zero map texel spacing (m)
-    derived_surface_on: f32, // engine-filled: derived surface map is active
-    derived_normal_on:  f32, // engine-filled: derived normal map is active
-    authored_surface_on: f32, // engine-filled: USD surface map is active
-    authored_normal_on:  f32, // engine-filled: USD normal map is active
-    terrain_half_extent: f32, // engine-filled: authored DEM half side (m)
-    morph_start:       f32,  // distance where geomorph toward the parent begins
-    morph_end:         f32,  // distance where the parent fully takes over
-    stitch_edges:      vec4<f32>, // [top,bottom,left,right] coarser-neighbour mask
+    weight_albedo:     f32,
+    weight_mineral:    f32,
+    weight_rough:      f32,
+    weight_ao:         f32,
+    weight_normal:     f32,
+    surge_amp:         f32,
+    surge_width:       f32,
+    photometry_gain:   f32,
+    sun_tan_radius:    f32,
+    sun_dir:           vec3<f32>,
+    sun_dir_world:     vec3<f32>,
+    hf_size:           vec2<f32>,
+    hf_res:            f32,
+    csm_far:           f32,
+    shadow_cache_on:   f32,
+    horizon_march_steps: f32,
+    map_texel_size_m:  f32,
+    derived_surface_on: f32,
+    derived_normal_on:  f32,
+    authored_surface_on: f32,
+    authored_normal_on:  f32,
+    terrain_half_extent: f32,
+    morph_start:       f32,
+    morph_end:         f32,
+    stitch_edges:      vec4<f32>,
 }
+
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)
 var<uniform> mat: Material;
 
-// Rasters from the terrain's UsdShade Material network (doc 18 §3.1) use the
-// same slots and whole-DEM planar UV as the static-mesh terrain shader. The
-// CPU material reconciler selects an authored surface/normal role over the
-// engine-derived source for that role; the shader only receives one source in
-// each fixed slot. Weight-gated like everything else, so an unbound map (Bevy's
-// fallback white) contributes nothing at weight 0.
-@group(#{MATERIAL_BIND_GROUP}) @binding(2)
-var albedo_tex: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(3)
-var albedo_smp: sampler;
-
-// Baked derived maps (lunco-terrain-surface derived_layers; whole-DEM planar
-// UV). `None` binds Bevy's fallback white — every read is weight-gated so an
-// unbound map contributes nothing. surface: R=roughness G=AO B=rockDens
-// A=hazard; normal: RGB = DEM-local ENU normal biased, A = albedo scalar
-// (0.5 neutral).  The fragment transforms it through the tile instance before
-// mixing it with world-space lighting normals.
-@group(#{MATERIAL_BIND_GROUP}) @binding(6)
-var surface_tex: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(7)
-var surface_smp: sampler;
-@group(#{MATERIAL_BIND_GROUP}) @binding(8)
-var normal_tex: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(9)
-var normal_smp: sampler;
-
-// Pre-baked horizon shadow cache (R8Unorm 0..1 sun visibility, whole-DEM
-// planar UV — same texture the static regolith/layered shaders sample). One
-// fetch replaces the live ray-march; gated by `shadow_cache_on`. Streamed
-// terrain does not cast into the directional cascade, so this is the one
-// terrain-on-terrain self-shadow solution at every distance. Tiles still
-// receive the cascade, which carries rover/rock shadows independently.
-@group(#{MATERIAL_BIND_GROUP}) @binding(10)
-var shadow_cache: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(11)
-var shadow_cache_sampler: sampler;
-
-// NOTE (Phase 1, 2026-07-05): the fragment previously faked crater + rock relief
-// here as a Voronoi HEIGHT field perturbing only the shading normal. That read as
-// a painted-on "mess" up close — normal-only features have no silhouette/parallax,
-// and the hard Voronoi cell/rim boundaries creased the normal under grazing sun.
-// All macro/meso SHAPE now belongs to real geometry: the DEM + the crater HeightSource
-// (sampled by the CDLOD baker + collider) and scattered rock meshes. The fragment
-// does ONLY believable sub-decimetre regolith micro-tooth + lunar photometry + broad
-// albedo variation. (crater_octave/rock_octave/relief_height/hash21 removed.)
-//
-// The "proper" lunar look (research, 2026-06-29):
-//   * Real macro relief = crater/rock GEOMETRY, not FBM (isotropic FBM reads as
-//     cottage-cheese; regolith is smooth BETWEEN impacts). — SIGGRAPH Asia 2025,
-//     "Materials for the Moon": https://dl.acm.org/doi/10.1145/3757374.3771428
-//   * Photometry: dark albedo (~0.08-0.13) + Hapke / Lommel-Seeliger + opposition
-//     surge (see lunar_brdf.wgsl). — JPL/arXiv: https://arxiv.org/html/2410.04371v1
-//   * Airless → NO haze: high-contrast, crisp to the horizon.
-
-// --- vertex: CDLOD geomorph ---------------------------------------------
-
-// Standard mesh attributes + the morph-target at location 8 (added to the layout
-// by ShaderMaterial::specialize when vertex_shader is set).
+// Standard mesh attributes plus the morph target at location 8 (added to the
+// layout by ShaderMaterial::specialize when vertex_shader is set).
 struct GeoVertex {
     @builtin(instance_index) instance_index: u32,
     @location(0) position: vec3<f32>,
@@ -222,7 +91,10 @@ fn vertex(vertex: GeoVertex) -> VertexOutput {
 
     // Camera distance from the un-morphed world position (big_space rebases both
     // view and mesh into the same render frame → true eye→vertex distance).
-    let base_world = mesh_functions::mesh_position_local_to_world(world_from_local, vec4<f32>(vertex.position, 1.0));
+    let base_world = mesh_functions::mesh_position_local_to_world(
+        world_from_local,
+        vec4<f32>(vertex.position, 1.0),
+    );
     let dist = distance(base_world.xyz, view.world_position);
 
     // CDLOD morph: 0 near (own LOD) → 1 far (collapse onto parent lattice). Root
@@ -238,19 +110,23 @@ fn vertex(vertex: GeoVertex) -> VertexOutput {
     // either the same depth or one level coarser. On the latter boundary the
     // fine edge uses its parent lattice immediately, the exact surface sampled
     // by the coarser tile. Same-depth edges remain untouched.
-    let edge_stitch = max(max(vertex.edge_mask.x * mat.stitch_edges.x,
-                              vertex.edge_mask.y * mat.stitch_edges.y),
-                          max(vertex.edge_mask.z * mat.stitch_edges.z,
-                              vertex.edge_mask.w * mat.stitch_edges.w));
+    let edge_stitch = max(
+        max(vertex.edge_mask.x * mat.stitch_edges.x, vertex.edge_mask.y * mat.stitch_edges.y),
+        max(vertex.edge_mask.z * mat.stitch_edges.z, vertex.edge_mask.w * mat.stitch_edges.w),
+    );
     let m = max(morph, edge_stitch);
     let local_pos = mix(vertex.position, vertex.morph_target, m);
     // Shade the surface we actually DRAW: the position lerps toward the parent
     // lattice, so the normal must lerp with it. Leaving the fine normal here made
-    // a fully-morphed tile shade with detail its geometry no longer has — up to ~22 deg of error,
-    // flipping N.L negative on some quads, i.e. new LOD tiles appearing BLACK.
+    // a fully-morphed tile shade with detail its geometry no longer has — up to
+    // ~22 deg of error, flipping N.L negative on some quads and making new LOD
+    // tiles appear black.
     let local_normal = normalize(mix(vertex.normal, vertex.morph_normal, m));
 
-    out.world_position = mesh_functions::mesh_position_local_to_world(world_from_local, vec4<f32>(local_pos, 1.0));
+    out.world_position = mesh_functions::mesh_position_local_to_world(
+        world_from_local,
+        vec4<f32>(local_pos, 1.0),
+    );
     out.position = position_world_to_clip(out.world_position.xyz);
     out.world_normal = mesh_functions::mesh_normal_local_to_world(local_normal, vertex.instance_index);
 #ifdef VERTEX_UVS_A
@@ -260,170 +136,4 @@ fn vertex(vertex: GeoVertex) -> VertexOutput {
     out.instance_index = vertex.instance_index;
 #endif
     return out;
-}
-
-// --- fragment: procedural regolith (ported from regolith.wgsl) -----------
-
-@fragment
-fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
-    let authored_albedo_weight = clamp(mat.weight_albedo, 0.0, 1.0);
-    var albedo = mat.albedo;
-
-    let world_p = in.world_position.xyz;
-    var detail_p = world_p;
-    var detail_n = normalize(in.world_normal);
-    var n = normalize(in.world_normal);
-#ifdef VERTEX_UVS_A
-    detail_p = terrain_detail_position(in.uv, mat.terrain_half_extent);
-#endif
-    // Pixel footprint in world metres (BEFORE any branch — fwidth needs uniform
-    // control flow). Drives the footprint-based detail fades.
-    let pw = length(fwidth(detail_p));
-
-    // Baked derived maps (sampled unconditionally — uniform control flow; the
-    // weight gates make an unbound/fallback map a no-op). UVs are DEM-global.
-    var map_n = vec4(0.5, 1.0, 0.5, 0.5);
-    var map_s = vec4(0.6, 1.0, 0.0, 0.0);
-    // Authored rasters. Neutral defaults so a shader compiled without UVs (or
-    // with the maps unbound) behaves exactly as before these existed.
-    var map_a = vec3(1.0, 1.0, 1.0);
-#ifdef VERTEX_UVS_A
-    map_n = textureSample(normal_tex, normal_smp, in.uv);
-    map_s = textureSample(surface_tex, surface_smp, in.uv);
-    map_a = textureSample(albedo_tex, albedo_smp, in.uv).rgb;
-#endif
-
-    // All macro/meso SHAPE comes from the mesh (DEM + crater geometry) and from
-    // scattered rock meshes — the fragment no longer fakes relief. It adds only
-    // one believable normal-only micro-texture layer (features small enough that
-    // the absence of parallax is imperceptible) and lunar photometry.
-    // Physical material detail is a property of the map and the projected
-    // surface, not of whichever quadtree mesh currently represents it. `pw` is
-    // continuous across a CDLOD edge, while an integer tile depth is not.
-    let map_footprint = pw / mat.map_texel_size_m;
-    // Optional GPU bindings are always populated by the material binder, but
-    // their fallback texels are not terrain data. The CPU source bits are the
-    // authoritative boundary between authored, derived, and procedural terms.
-    let map_weights = terrain_map_weights(
-        map_footprint,
-        mat.derived_surface_on,
-        mat.derived_normal_on,
-        mat.authored_surface_on,
-        mat.authored_normal_on,
-        authored_albedo_weight,
-        mat.weight_rough,
-        mat.weight_ao,
-        mat.weight_normal,
-    );
-    let weight_normal = map_weights.x;
-    let weight_rough = map_weights.y;
-    let weight_ao = map_weights.z;
-    let weight_tone = map_weights.w;
-
-    // Baked meso normal: once a screen pixel covers roughly a map texel, the map
-    // carries stable filtered crater slopes. Below that physical scale the mesh
-    // and procedural close-detail layers remain sharper, so the map fades out.
-    if (weight_normal > 0.0) {
-        // The derived map is baked from the DEM oracle, whose coordinates are
-        // site-local ENU.  `n` is in Bevy's current render world.  Mixing the
-        // two directly only happened to work while the site grid was aligned
-        // with that world; after a Moon/Earth camera-frame change it made the
-        // coarse LODs (where this weight rises) shade from a different sun
-        // angle, often all the way to black.  The tile instance is the
-        // authoritative local->render transform, including BigSpace's current
-        // floating-origin frame.
-        let n_map = dem_normal_to_world(map_n.xyz, in.instance_index);
-        n = normalize(mix(n, n_map, weight_normal));
-    }
-
-#ifdef VERTEX_UVS_A
-    detail_n = terrain_detail_normal_to_local(n, in.instance_index);
-#endif
-
-    // Regolith grain is a material response, not terrain shape. Keep one
-    // footprint-filtered layer so it disappears before it can alias or shimmer.
-    let micro_scale = clamp(mat.micro_scale, 8.0, 80.0);
-    let micro_fade = aa_fade(micro_scale, pw);
-    var micro_h = 0.5;
-    if (micro_fade > 0.0) {
-        detail_n = bump_layer(
-            detail_n, detail_p, micro_scale, 2, 0.5, 0.42, 0.58,
-            mat.micro_bump * micro_fade, &micro_h);
-    }
-
-    n = detail_n;
-#ifdef VERTEX_UVS_A
-    n = terrain_detail_normal_to_world(detail_n, in.instance_index);
-#endif
-
-    // Baked relief tone: rims/ejecta brighter, bowls darker (normal_tex alpha,
-    // 0.5 = neutral). This is what keeps distant relief legible after the
-    // procedural layers and even the mesh detail have faded out.
-    albedo *= 1.0 + (map_n.a - 0.5) * (0.6 * weight_tone);
-
-    // Baked ambient occlusion belongs to indirect diffuse light, not base
-    // colour. Sending it through the shared PBR helper preserves the authored
-    // orthophoto and keeps direct sunlight independent of the broad AO field.
-    let map_ao = terrain_surface_occlusion(
-        map_s, weight_ao, mat.authored_surface_on);
-
-    // AUTHORED material albedo. The asset pipeline owns conversion from a
-    // measured orthophoto to a stable linear material colour; the shader only
-    // samples that sRGB-authored texture (decoded to linear by the binder).
-    // Lighting, relief and shadows remain entirely in the renderer path.
-    if (authored_albedo_weight > 0.0) {
-        albedo = mix(albedo, map_a, authored_albedo_weight);
-    }
-
-    // --- Lunar photometry: the actual realism lever -----------------------
-    // Lommel-Seeliger + opposition surge (retroreflective backscatter) from the
-    // scene sun — read from the light bindings, so streamed tiles get it WITHOUT
-    // the per-material sun wiring the static mesh needs. Pre-multiplies albedo;
-    // lit_n's Lambert + the two-owner shadow pipeline complete the response. This is what makes the
-    // surface read as the Moon (flat, then a bright surge toward opposition)
-    // instead of generic grey PBR.
-    // Same guard as the static-mesh path: before the wiring system has run the
-    // uniform is zero, and `normalize` of that is NaN — which would propagate
-    // through the albedo multiply and paint black holes across the terrain.
-    let V = normalize(view.world_position - world_p);
-    var lunar_k = 1.0;
-    let sw = mat.sun_dir_world;
-    if (dot(sw, sw) > 0.25) {
-        lunar_k = regolith_factor(
-            n, normalize(sw), V, mat.surge_amp, mat.surge_width, mat.photometry_gain);
-    }
-    let base_albedo = albedo;
-    albedo = albedo * lunar_k;
-
-    // Shadow fill: a whisper of hemispheric bounce (earthshine + regolith
-    // inter-reflection) rides the emissive slot so hard shadows don't crush to
-    // pure black — shadowed crater floors stay readable without washing out the
-    // raking-light contrast that sells the surface. Hemispheric fill is a
-    // half-sky integral — insensitive to micro-relief — so it reads the
-    // GEOMETRIC normal, not the bump-perturbed one: driving it with `n` turned
-    // every shadowed slope into high-contrast micro-speckle static.
-    let n_geo = normalize(in.world_normal);
-    let fill = base_albedo * (0.02 + 0.03 * max(n_geo.y, 0.0));
-
-    // Regolith is rough and non-metallic; the baked slope-derived roughness
-    // (surface_tex R) replaces the base only where its source contract is active.
-    let roughness = clamp(
-        mix(mat.roughness, map_s.r, weight_rough),
-        0.05,
-        1.0,
-    );
-    var color = lit_n_occluded(
-        in, is_front, n, albedo, roughness, 0.0, fill, vec3(map_ao));
-
-    // Terrain self-shadow: sample the pre-baked sun-visibility cache at every
-    // distance. The directional cascade intentionally contains dynamic casters
-    // but not streamed terrain, so multiplying the two combines independent
-    // occluder sets instead of double-shadowing the ground.
-#ifdef VERTEX_UVS_A
-    if (mat.shadow_cache_on > 0.5) {
-        let vis = textureSampleLevel(shadow_cache, shadow_cache_sampler, in.uv, 0.0).r;
-        color = vec4(color.rgb * vis, color.a);
-    }
-#endif
-    return color;
 }
