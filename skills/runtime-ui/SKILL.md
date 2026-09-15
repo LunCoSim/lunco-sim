@@ -20,8 +20,9 @@ Before changing a runtime surface, read:
    egui, the workbench, or docking
 4. [`skills/test-via-api/SKILL.md`](../test-via-api/SKILL.md) for live verification
 
-The current implementation is the `luncosim` windowed UI layer in
-`crates/lunco-luncosim-ui/src/ui/`. Do not assume that `lunica` or a headless
+The generic implementation is `lunco-workbench-runtime-ui`; the `luncosim`
+windowed host in `crates/lunco-luncosim-ui/src/ui/` supplies app-specific gates,
+capture mode, and action handling. Do not assume that `lunica` or a headless
 server has this surface manifest.
 
 The current compatible dependency baseline is `bevy_hui 0.7.0`,

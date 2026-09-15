@@ -469,8 +469,8 @@ not cached or duplicated.
 
 Focused verification passed:
 
-- `cargo test -p lunco-luncosim --lib ui::runtime_exposure -j 4 --
-  --nocapture`: **18/18**.
+- `cargo test -p lunco-workbench-runtime-ui -j 4 --
+  --nocapture`: **21/21**.
 - `cargo build -p lunco-luncosim --bin luncosim -j 4`: passed and produced the
   production `usd/target/debug/luncosim` binary.
 - `rustfmt --check`, `git diff --check`: passed.

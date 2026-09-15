@@ -1,11 +1,11 @@
 //! Generic retained exposure boundary for runtime-authored HTML UI.
 //!
-//! This module is deliberately domain-free. Engine systems publish named,
+//! This crate is deliberately domain-free. Engine systems publish named,
 //! already-sampled values into [`EngineExposures`]; HUI/Flair consume that
 //! snapshot and own the retained tree, layout, and styling. A template does not
 //! know whether a value came from a port, telemetry, physics, a script, or a
 //! derived engine capability.
-use bevy::asset::{io::Reader, Asset, AssetLoader, LoadContext};
+use bevy::asset::{Asset, AssetLoader, LoadContext, io::Reader};
 use bevy::ecs::entity::EntityHashSet;
 use bevy::input::mouse::AccumulatedMouseScroll;
 use bevy::picking::events::{Click, Drag, Pointer};
@@ -13,14 +13,14 @@ use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy::render::{ExtractSchedule, MainWorld, Render, RenderApp, RenderSystems};
 use bevy::window::PrimaryWindow;
-use bevy_egui::{egui, PrimaryEguiContext};
+use bevy_egui::{PrimaryEguiContext, egui};
 use bevy_flair::prelude::{InlineStyle, StyleSheet, Styled};
 use bevy_hui::prelude::{
-    CompileContextEvent, HtmlFunctions, HtmlNode, HtmlStyle, HtmlTemplate, OnUiPress,
+    CompileContextEvent, HtmlFunctions, HtmlNode, HtmlStyle, HtmlTemplate, OnUiPress, Tags,
     TemplateProperties, UiId,
 };
-use lunco_core::exposure::EngineExposures;
 use lunco_core::SceneViewport;
+use lunco_core::exposure::EngineExposures;
 use lunco_hooks::HookValue;
 use lunco_render::SceneCamera;
 use lunco_workbench_core::scene_pick::ScenePickGate;
@@ -33,51 +33,24 @@ use std::io;
 
 /// A semantic action emitted by an authored runtime surface.
 ///
-/// HUI deliberately passes only the pressed element to a bound function. The
-/// bridge keeps built-in actions typed and transports Twin-authored identifiers
-/// as typed events, so application code never needs to inspect HTML ids or
-/// mutate simulation state from a template callback.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum RuntimeUiActionKind {
-    ViewSurface,
-    ViewBodyMoon,
-    ViewBodyEarth,
-    DismissTerrainOverlay,
-    /// A Twin-authored semantic action. The runtime UI layer transports the
-    /// identifier, but does not interpret its domain meaning; Rhai policy owns
-    /// the resulting command or USD edit.
-    Authored(String),
-}
-
-impl RuntimeUiActionKind {
-    fn parse(value: &str) -> Result<Self, String> {
-        match value {
-            "view.surface" => Ok(Self::ViewSurface),
-            "view.body.moon" => Ok(Self::ViewBodyMoon),
-            "view.body.earth" => Ok(Self::ViewBodyEarth),
-            "overlay.terrain.dismiss" => Ok(Self::DismissTerrainOverlay),
-            _ if value.trim().is_empty() => Err("runtime UI action must not be empty".into()),
-            _ => Ok(Self::Authored(value.to_owned())),
-        }
-    }
-}
-
-#[derive(Event, Clone, Debug, PartialEq, Eq)]
-pub(crate) struct RuntimeUiAction {
-    /// Built-in or Twin-authored semantic action emitted by the surface.
-    pub action: RuntimeUiActionKind,
+/// The runtime transports the authored identifier without interpreting its
+/// domain meaning. The host or Rhai policy owns the resulting command/event.
+#[derive(Event, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct RuntimeUiAction {
+    /// Twin-authored semantic action identifier.
+    pub action: String,
     /// HUI node that emitted the action.
     pub source: Entity,
 }
 
 #[derive(Message, Clone, Copy, Debug)]
-pub(crate) struct RuntimeUiSurfaceDragged {
+struct RuntimeUiSurfaceDragged {
     entity: Entity,
     delta: Vec2,
 }
 
 #[derive(Message, Clone, Copy, Debug)]
-pub(crate) struct RuntimeUiSurfaceReset {
+struct RuntimeUiSurfaceReset {
     entity: Entity,
 }
 
@@ -124,11 +97,7 @@ fn emit_runtime_ui_surface_reset(
 }
 
 /// Bind one HUI callback name to a semantic runtime action.
-pub(crate) fn register_action(
-    functions: &mut HtmlFunctions,
-    callback: impl Into<String>,
-    action: RuntimeUiActionKind,
-) {
+fn register_action(functions: &mut HtmlFunctions, callback: impl Into<String>, action: String) {
     functions.register(
         callback,
         move |In(source): In<Entity>, mut world: bevy::ecs::world::DeferredWorld| {
@@ -143,14 +112,16 @@ pub(crate) fn register_action(
 /// Bind the HUI `tag:action` convention once. The action value is a
 /// dynamic template property, so Twin/Rhai can choose it without adding a
 /// manifest callback or a Rust enum arm.
-pub(crate) fn register_dynamic_action(functions: &mut HtmlFunctions) {
+fn register_dynamic_action(functions: &mut HtmlFunctions) {
     functions.register(
         "runtime_ui_authored_action",
         |In(source): In<Entity>, mut world: bevy::ecs::world::DeferredWorld| {
-            world.trigger(RuntimeUiAction {
-                action: RuntimeUiActionKind::Authored(String::new()),
-                source,
-            });
+            let action = world
+                .get::<Tags>(source)
+                .and_then(|tags| tags.tags().get("action"))
+                .cloned()
+                .unwrap_or_default();
+            world.trigger(RuntimeUiAction { action, source });
         },
     );
 }
@@ -158,13 +129,13 @@ pub(crate) fn register_dynamic_action(functions: &mut HtmlFunctions) {
 /// Authored registration for runtime UI surfaces.
 #[derive(Asset, Deserialize, TypePath, Debug, Clone)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct RuntimeUiManifest {
+pub struct RuntimeUiManifest {
     pub surfaces: Vec<RuntimeUiSurfaceDefinition>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct RuntimeUiSurfaceDefinition {
+pub struct RuntimeUiSurfaceDefinition {
     /// Stable identity used to validate and reconcile an authored surface.
     pub id: String,
     pub template: String,
@@ -210,7 +181,7 @@ pub(crate) struct RuntimeUiSurfaceDefinition {
 /// authored state translations such as a boolean display or an active color.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct RuntimeUiBindingDefinition {
+pub struct RuntimeUiBindingDefinition {
     pub source: String,
     #[serde(default)]
     pub map: HashMap<String, String>,
@@ -221,14 +192,14 @@ pub(crate) struct RuntimeUiBindingDefinition {
 /// registration.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct RuntimeUiActionDefinition {
+pub struct RuntimeUiActionDefinition {
     pub callback: String,
     pub action: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct RuntimeUiCollectionDefinition {
+pub struct RuntimeUiCollectionDefinition {
     pub source: String,
     pub container: String,
     pub template: String,
@@ -243,7 +214,7 @@ pub(crate) struct RuntimeUiCollectionDefinition {
 /// same properties to CSS custom properties for its trigger styling.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct RuntimeUiDropdownDefinition {
+pub struct RuntimeUiDropdownDefinition {
     pub id: String,
     pub trigger_action: String,
     pub source: String,
@@ -258,7 +229,7 @@ pub(crate) struct RuntimeUiDropdownDefinition {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum RuntimeUiPlacementDefinition {
+pub enum RuntimeUiPlacementDefinition {
     Viewport,
     DockPanel {
         panel: PanelId,
@@ -276,7 +247,7 @@ pub(crate) enum RuntimeUiPlacementDefinition {
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum RuntimeUiWindowAnchor {
+pub enum RuntimeUiWindowAnchor {
     TopLeft,
     TopCenter,
     TopRight,
@@ -286,7 +257,7 @@ pub(crate) enum RuntimeUiWindowAnchor {
 }
 
 impl RuntimeUiManifest {
-    pub(crate) fn dropdown_key_for_action(&self, action: &str) -> Option<String> {
+    pub fn dropdown_key_for_action(&self, action: &str) -> Option<String> {
         self.surfaces.iter().find_map(|surface| {
             surface
                 .dropdowns
@@ -296,7 +267,7 @@ impl RuntimeUiManifest {
         })
     }
 
-    pub(crate) fn dropdown_for_key(
+    pub fn dropdown_for_key(
         &self,
         key: &str,
     ) -> Option<(&RuntimeUiSurfaceDefinition, &RuntimeUiDropdownDefinition)> {
@@ -311,7 +282,7 @@ impl RuntimeUiManifest {
     /// Validate the authored runtime UI contract before it reaches HUI or the
     /// semantic action bridge. Invalid manifests are rejected as data errors,
     /// so a typo cannot silently create an inert or globally overwritten UI.
-    pub(crate) fn validate(&self) -> Result<(), String> {
+    fn validate(&self) -> Result<(), String> {
         let mut ids = HashSet::new();
         let mut namespaces = HashSet::new();
         let mut callbacks = HashSet::new();
@@ -424,7 +395,6 @@ impl RuntimeUiManifest {
                         action.callback
                     ));
                 }
-                RuntimeUiActionKind::parse(&action.action)?;
             }
         }
         Ok(())
@@ -484,7 +454,7 @@ fn validate_placement(placement: &RuntimeUiPlacementDefinition) -> Result<(), St
 }
 
 #[derive(Default, TypePath)]
-pub(crate) struct RuntimeUiManifestLoader;
+struct RuntimeUiManifestLoader;
 
 impl AssetLoader for RuntimeUiManifestLoader {
     type Asset = RuntimeUiManifest;
@@ -514,7 +484,7 @@ impl AssetLoader for RuntimeUiManifestLoader {
     }
 }
 
-pub(crate) struct RuntimeUiManifestPlugin;
+struct RuntimeUiManifestPlugin;
 
 impl Plugin for RuntimeUiManifestPlugin {
     fn build(&self, app: &mut App) {
@@ -526,22 +496,91 @@ impl Plugin for RuntimeUiManifestPlugin {
     }
 }
 
+/// Generic HUI/Flair runtime-surface presentation plugin.
+///
+/// Hosts provide exposure values, workbench snapshots, Twin workspace state,
+/// named gates, and capture mode; this crate owns manifest loading, retained
+/// tree lifecycle, placement, styling, input regions, and render readiness.
+pub struct RuntimeUiPlugin;
+
+impl Plugin for RuntimeUiPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_plugins((
+            bevy_hui::HuiPlugin,
+            bevy_flair::FlairPlugin,
+            RuntimeUiManifestPlugin,
+        ))
+        .init_resource::<RuntimeSurfaceLayouts>()
+        .init_resource::<RuntimeUiRenderState>()
+        .init_resource::<RuntimeUiPresentationGeneration>()
+        .init_resource::<RuntimeUiRecordingContract>()
+        .init_resource::<RuntimeUiCaptureState>()
+        .init_resource::<RuntimeUiGates>()
+        .add_systems(Startup, load_runtime_ui_manifest)
+        .add_systems(
+            Update,
+            (
+                sync_runtime_ui_manifest,
+                mount_runtime_ui_surfaces
+                    .after(sync_runtime_ui_manifest)
+                    .before(bevy_hui::HuiSystems::Build),
+                bind_runtime_ui_to_camera.after(sync_runtime_ui_manifest),
+                attach_runtime_ui_names
+                    .after(sync_runtime_ui_manifest)
+                    .before(bevy_flair::style::StyleSystems::Prepare),
+                hand_runtime_ui_styling_to_flair
+                    .after(bevy_hui::HuiSystems::Style)
+                    .after(sync_runtime_ui_manifest)
+                    .before(bevy_flair::style::StyleSystems::Prepare),
+                apply_runtime_ui_exposures
+                    .after(sync_runtime_ui_manifest)
+                    .after(bevy_hui::HuiSystems::Build)
+                    .before(bevy_hui::HuiSystems::Style),
+                apply_runtime_ui_surface_interactions
+                    .after(apply_runtime_ui_exposures)
+                    .before(bevy_hui::HuiSystems::Style),
+                reconcile_runtime_ui_collections
+                    .after(apply_runtime_ui_exposures)
+                    .after(bevy_hui::HuiSystems::Build)
+                    .before(bevy_hui::HuiSystems::Style),
+                register_runtime_ui_input_regions.after(apply_runtime_ui_exposures),
+            ),
+        )
+        .add_systems(
+            PostUpdate,
+            (
+                scroll_runtime_ui_collections.after(bevy::ui::UiSystems::PostLayout),
+                apply_runtime_ui_placement_after_style
+                    .after(bevy_flair::style::StyleSystems::ApplyComputedProperties)
+                    .after(bevy::ui::UiSystems::Propagate)
+                    .before(bevy::ui::UiSystems::Content),
+                update_runtime_ui_recording_contract.after(apply_runtime_ui_placement_after_style),
+                report_runtime_ui_readiness
+                    .after(update_runtime_ui_recording_contract)
+                    .after(apply_runtime_ui_placement_after_style)
+                    .after(bevy::ui::UiSystems::PostLayout),
+            ),
+        );
+        install_runtime_ui_render_readiness(app);
+    }
+}
+
 #[derive(Resource)]
-pub(crate) struct RuntimeUiManifestState {
+pub struct RuntimeUiManifestState {
     handle: Handle<RuntimeUiManifest>,
     applied: Option<AssetId<RuntimeUiManifest>>,
     rebuild_pending: bool,
 }
 
 impl RuntimeUiManifestState {
-    pub(crate) fn manifest<'a>(
+    pub fn manifest<'a>(
         &self,
         manifests: &'a Assets<RuntimeUiManifest>,
     ) -> Option<&'a RuntimeUiManifest> {
         manifests.get(&self.handle)
     }
 
-    pub(crate) fn dropdown_key_for_action(
+    pub fn dropdown_key_for_action(
         &self,
         manifests: &Assets<RuntimeUiManifest>,
         action: &str,
@@ -557,7 +596,7 @@ impl RuntimeUiManifestState {
 /// the current capture. The recorder consumes the readiness status below; it
 /// does not know what a surface represents.
 #[derive(Resource, Debug, Default)]
-pub(crate) struct RuntimeUiRecordingContract {
+struct RuntimeUiRecordingContract {
     required_namespaces: HashSet<String>,
     manifest_id: Option<AssetId<RuntimeUiManifest>>,
     exposure_revision: u64,
@@ -566,13 +605,24 @@ pub(crate) struct RuntimeUiRecordingContract {
     error: Option<String>,
 }
 
+/// Host-provided capture mode for the generic runtime UI layer.
+///
+/// The host mirrors its recorder's active state into this resource. Keeping the
+/// recorder type out of this crate prevents the reusable UI mechanism from
+/// depending on screenshot/video implementation details.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RuntimeUiCaptureState {
+    /// Whether the host is currently preparing an offline capture.
+    pub active: bool,
+}
+
 /// Acknowledgement from the render extraction boundary. Main-world layout is
 /// not enough to arm offline capture: the render world must have extracted at
 /// least one visible UI node for every required surface in the current
 /// presentation generation. This is the presentation event the recorder
 /// consumes indirectly through [`StatusBus`].
 #[derive(Resource, Clone, Copy, Debug, Default)]
-pub(crate) struct RuntimeUiRenderState {
+struct RuntimeUiRenderState {
     pub extracted_generation: u64,
     pub extracted_surface_count: u32,
 }
@@ -585,7 +635,7 @@ pub(crate) struct RuntimeUiRenderState {
 /// only when a required surface becomes visible and ready, so a new render
 /// submission can be matched to the presentation that needs to be captured.
 #[derive(Resource, Debug, Default)]
-pub(crate) struct RuntimeUiPresentationGeneration {
+struct RuntimeUiPresentationGeneration {
     next: u64,
 }
 
@@ -618,12 +668,12 @@ struct RuntimeUiRenderAck {
 
 /// Generic named visibility gates supplied by the host application.
 #[derive(Resource, Debug, Default)]
-pub(crate) struct RuntimeUiGates {
+pub struct RuntimeUiGates {
     values: HashMap<String, bool>,
 }
 
 impl RuntimeUiGates {
-    pub(crate) fn set(&mut self, name: impl Into<String>, value: bool) {
+    pub fn set(&mut self, name: impl Into<String>, value: bool) {
         self.values.insert(name.into(), value);
     }
 
@@ -678,7 +728,7 @@ struct ResolvedRuntimeUiPlacement {
 /// Root marker for a retained runtime-authored HTML surface. The namespace is
 /// the only contract between an engine exposure producer and a template.
 #[derive(Component, Debug)]
-pub(crate) struct RuntimeUiSurface {
+pub struct RuntimeUiSurface {
     layout_id: String,
     namespace: String,
     template: Handle<HtmlTemplate>,
@@ -752,15 +802,18 @@ impl RuntimeUiSurface {
         }
     }
 
-    pub(crate) fn namespace(&self) -> &str {
+    /// Return the exposure namespace owned by this surface.
+    pub fn namespace(&self) -> &str {
         &self.namespace
     }
 
-    pub(crate) fn is_mounted(&self) -> bool {
+    /// Return whether HUI has mounted the retained surface tree.
+    pub fn is_mounted(&self) -> bool {
         self.mounted
     }
 
-    pub(crate) fn applied_rect(&self) -> Option<egui::Rect> {
+    /// Return the last resolved outer rectangle, if placement has completed.
+    pub fn applied_rect(&self) -> Option<egui::Rect> {
         self.applied_placement.map(|placement| placement.rect)
     }
 }
@@ -774,24 +827,24 @@ struct RuntimeUiCollection {
 }
 
 #[derive(Component, Debug)]
-pub(crate) struct RuntimeUiCollectionRow {
+struct RuntimeUiCollectionRow {
     host: Entity,
     key: String,
     property_names: Vec<String>,
 }
 
 #[derive(Component)]
-pub(crate) struct RuntimeUiCollectionHost;
+struct RuntimeUiCollectionHost;
 
 /// Resolve the active Twin's typed capture contract once per exposure/policy
 /// revision. A normal interactive session has no contract; when the recorder
 /// becomes active the Twin policy may select any currently visible surfaces by
 /// stable authored ID.
-pub(crate) fn update_runtime_ui_recording_contract(
+fn update_runtime_ui_recording_contract(
     exposures: Res<EngineExposures>,
     manifests: Res<Assets<RuntimeUiManifest>>,
     manifest_state: Res<RuntimeUiManifestState>,
-    recording: Option<Res<lunco_capture::screenshot::OfflineRecordingState>>,
+    recording: Option<Res<RuntimeUiCaptureState>>,
     mut contract: ResMut<RuntimeUiRecordingContract>,
 ) {
     let recording_active = recording.is_some_and(|state| state.active);
@@ -897,7 +950,7 @@ pub(crate) fn update_runtime_ui_recording_contract(
 /// must have been submitted by the render world. The recorder can therefore
 /// consume one semantic state transition instead of guessing how many render
 /// passes a retained UI needs.
-pub(crate) fn report_runtime_ui_readiness(
+fn report_runtime_ui_readiness(
     exposures: Res<EngineExposures>,
     contract: Res<RuntimeUiRecordingContract>,
     mut presentation_generation: ResMut<RuntimeUiPresentationGeneration>,
@@ -1120,7 +1173,7 @@ fn acknowledge_runtime_ui_render_submission(mut render_ack: ResMut<RuntimeUiRend
 
 /// Install the cross-world presentation acknowledgement after Bevy has
 /// extracted all authored UI nodes for the current render frame.
-pub(crate) fn install_runtime_ui_render_readiness(app: &mut App) {
+fn install_runtime_ui_render_readiness(app: &mut App) {
     let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
         return;
     };
@@ -1143,7 +1196,7 @@ pub(crate) fn install_runtime_ui_render_readiness(app: &mut App) {
 /// Load the authored surface manifest. The asset watcher can replace it while
 /// the application is running; `sync_runtime_ui_manifest` then rebuilds only
 /// the registered surface roots.
-pub(crate) fn load_runtime_ui_manifest(mut commands: Commands, server: Res<AssetServer>) {
+fn load_runtime_ui_manifest(mut commands: Commands, server: Res<AssetServer>) {
     commands.insert_resource(RuntimeUiManifestState {
         handle: server.load("ui/runtime_surfaces.json"),
         applied: None,
@@ -1168,7 +1221,7 @@ fn spawn_runtime_ui_surface(
     }
 }
 
-pub(crate) fn sync_runtime_ui_manifest(
+fn sync_runtime_ui_manifest(
     mut commands: Commands,
     manifests: Res<Assets<RuntimeUiManifest>>,
     mut events: MessageReader<AssetEvent<RuntimeUiManifest>>,
@@ -1210,14 +1263,11 @@ pub(crate) fn sync_runtime_ui_manifest(
 
     for surface in &manifest.surfaces {
         for action in &surface.actions {
-            let Ok(action_kind) = RuntimeUiActionKind::parse(&action.action) else {
-                // `validate` above already checked this. Keep this branch
-                // explicit so a future programmatic manifest cannot bypass
-                // the closed action boundary.
-                error!("runtime UI action rejected: `{}`", action.action);
-                return;
-            };
-            register_action(&mut functions, action.callback.clone(), action_kind);
+            register_action(
+                &mut functions,
+                action.callback.clone(),
+                action.action.clone(),
+            );
         }
     }
 
@@ -1238,7 +1288,7 @@ pub(crate) fn sync_runtime_ui_manifest(
 /// visible again, this system creates a fresh root from the authoritative
 /// manifest before HUI builds it. This keeps HUI's private build state and all
 /// template-owned presentation components within one lifecycle.
-pub(crate) fn mount_runtime_ui_surfaces(
+pub fn mount_runtime_ui_surfaces(
     mut commands: Commands,
     manifest_state: Res<RuntimeUiManifestState>,
     manifests: Res<Assets<RuntimeUiManifest>>,
@@ -1370,7 +1420,7 @@ fn active_twin_setting_is_true(
 /// not create a window or egui host, so the same authored surface is bound to
 /// the active authored `SceneCamera` instead. This is what makes a runtime HUD
 /// part of the captured render target rather than editor chrome.
-pub(crate) fn bind_runtime_ui_to_camera(
+fn bind_runtime_ui_to_camera(
     mut commands: Commands,
     viewport: Option<Res<SceneViewport>>,
     cameras: Query<(Entity, &Camera, Has<PrimaryEguiContext>, Has<SceneCamera>)>,
@@ -1413,7 +1463,7 @@ pub(crate) fn bind_runtime_ui_to_camera(
 
 /// Bridge HUI's stable IDs to Bevy names, which is the selector identity used
 /// by Flair. This is shared by all runtime-authored templates.
-pub(crate) fn attach_runtime_ui_names(
+fn attach_runtime_ui_names(
     mut commands: Commands,
     ids: Query<(Entity, &UiId), (With<Node>, Or<(Added<UiId>, Changed<UiId>)>)>,
 ) {
@@ -1427,7 +1477,7 @@ pub(crate) fn attach_runtime_ui_names(
 /// HUI's inline-style cache is not the style authority for runtime surfaces;
 /// Flair's stylesheet is. Remove only HUI style components below a runtime
 /// surface, leaving unrelated HUI templates untouched.
-pub(crate) fn hand_runtime_ui_styling_to_flair(
+fn hand_runtime_ui_styling_to_flair(
     mut commands: Commands,
     roots: Query<Entity, With<RuntimeUiSurface>>,
     nodes: Query<(Entity, &HtmlStyle), Or<(Added<HtmlStyle>, Changed<HtmlStyle>)>>,
@@ -1456,7 +1506,7 @@ pub(crate) fn hand_runtime_ui_styling_to_flair(
 /// Apply only changed exposure snapshots to retained HUI properties and Flair
 /// custom properties. Parsing, entity creation, and style writes therefore do
 /// not run on idle render frames.
-pub(crate) fn apply_runtime_ui_exposures(
+fn apply_runtime_ui_exposures(
     mut commands: Commands,
     exposures: Res<EngineExposures>,
     mut manifest_state: ResMut<RuntimeUiManifestState>,
@@ -1672,7 +1722,7 @@ pub(crate) fn apply_runtime_ui_exposures(
 /// This is the only collection mechanic: it knows neither programs nor
 /// cameras, and it never serializes rows through JSON. Rhai supplies ordered
 /// records and semantic action strings; HUI supplies the row template.
-pub(crate) fn reconcile_runtime_ui_collections(
+fn reconcile_runtime_ui_collections(
     mut commands: Commands,
     exposures: Res<EngineExposures>,
     roots: Query<(Entity, &RuntimeUiSurface, &Visibility)>,
@@ -1824,7 +1874,7 @@ pub(crate) fn reconcile_runtime_ui_collections(
 /// mechanic: the collection manifest owns the host, while Rhai owns the row
 /// data and ordering. HUI/Bevy provide the retained scroll position; the
 /// runtime only maps the existing mouse-wheel input to that position.
-pub(crate) fn scroll_runtime_ui_collections(
+fn scroll_runtime_ui_collections(
     windows: Query<&Window, With<PrimaryWindow>>,
     scroll: Res<AccumulatedMouseScroll>,
     mut hosts: Query<
@@ -1850,7 +1900,7 @@ pub(crate) fn scroll_runtime_ui_collections(
     }
 }
 
-pub(crate) fn collection_item_fields(
+pub fn collection_item_fields(
     value: &lunco_core::exposure::ExposureValue,
     key: &str,
 ) -> Option<Vec<(String, String)>> {
@@ -1909,7 +1959,7 @@ fn css_color(color: egui::Color32) -> String {
 /// (and for an actual resize/style rebuild), then goes dormant; there is no
 /// per-frame geometry write. The manifest owns the outer rectangle and the
 /// stylesheet owns the contents of that rectangle.
-pub(crate) fn apply_runtime_ui_placement_after_style(
+fn apply_runtime_ui_placement_after_style(
     rects: Option<Res<PanelRects>>,
     surface_layouts: Res<RuntimeSurfaceLayouts>,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -1981,7 +2031,7 @@ fn apply_runtime_ui_property(
 /// target, and written through Workbench's per-Twin workspace state. A
 /// primary-button double click removes the override and restores the authored
 /// anchor/default.
-pub(crate) fn apply_runtime_ui_surface_interactions(
+fn apply_runtime_ui_surface_interactions(
     mut drags: MessageReader<RuntimeUiSurfaceDragged>,
     mut resets: MessageReader<RuntimeUiSurfaceReset>,
     mut layouts: ResMut<RuntimeSurfaceLayouts>,
@@ -2075,7 +2125,7 @@ fn runtime_ui_surface_ancestor(
 /// placement rectangle would make the complete 3D scene non-interactive. HUI's
 /// explicit `OnUiPress` marker is the input contract; Bevy's computed node
 /// geometry supplies the actual child hit rectangle.
-pub(crate) fn register_runtime_ui_input_regions(
+fn register_runtime_ui_input_regions(
     roots: Query<(Entity, &RuntimeUiSurface, &Visibility)>,
     controls: Query<(
         Entity,
@@ -2351,107 +2401,6 @@ mod tests {
             manifest.surfaces[2].setting.as_deref(),
             Some("ui.camera_status")
         );
-    }
-
-    #[test]
-    fn shipped_manifest_validates() {
-        let manifest: RuntimeUiManifest =
-            serde_json::from_str(include_str!("../../../../assets/ui/runtime_surfaces.json"))
-                .expect("shipped runtime UI manifest should parse");
-        manifest
-            .validate()
-            .expect("shipped runtime UI manifest should validate");
-
-        let celestial_view = manifest
-            .surfaces
-            .iter()
-            .find(|surface| surface.id == "celestial-view")
-            .expect("shipped manifest should contain the celestial-view surface");
-        match &celestial_view.placement {
-            RuntimeUiPlacementDefinition::Window {
-                anchor,
-                offset,
-                width,
-                height,
-            } => {
-                assert_eq!(*anchor, RuntimeUiWindowAnchor::TopCenter);
-                assert_eq!(*offset, [0.0, 34.0]);
-                assert_eq!(*width, 444.0);
-                assert_eq!(*height, 276.0);
-            }
-            _ => panic!("celestial-view must use an authored top-center window placement"),
-        }
-    }
-
-    #[test]
-    fn shipped_view_switcher_is_draggable_from_its_authored_top_center_anchor() {
-        let manifest: RuntimeUiManifest =
-            serde_json::from_str(include_str!("../../../../assets/ui/runtime_surfaces.json"))
-                .expect("shipped runtime UI manifest should parse");
-        let surface = manifest
-            .surfaces
-            .iter()
-            .find(|surface| surface.id == "celestial-view")
-            .expect("shipped manifest should author the celestial-view surface");
-
-        assert!(surface.draggable);
-        match &surface.placement {
-            RuntimeUiPlacementDefinition::Window {
-                anchor,
-                offset,
-                width,
-                height,
-            } => {
-                assert_eq!(*anchor, RuntimeUiWindowAnchor::TopCenter);
-                assert_eq!(*offset, [0.0, 34.0]);
-                assert_eq!(*width, 444.0);
-                assert_eq!(*height, 276.0);
-            }
-            _ => panic!("view-mode must use a top-center window placement"),
-        }
-    }
-
-    #[test]
-    fn draggable_view_switcher_uses_a_persisted_layout_override() {
-        let manifest: RuntimeUiManifest =
-            serde_json::from_str(include_str!("../../../../assets/ui/runtime_surfaces.json"))
-                .expect("shipped runtime UI manifest should parse");
-        let definition = manifest
-            .surfaces
-            .iter()
-            .find(|surface| surface.id == "celestial-view")
-            .expect("shipped manifest should author the celestial-view surface");
-        let surface = RuntimeUiSurface::from_definition(
-            definition,
-            Handle::default(),
-            Handle::default(),
-            None,
-        );
-        let mut layouts = RuntimeSurfaceLayouts::default();
-        layouts.set(
-            "celestial-view",
-            RuntimeSurfaceLayout {
-                left: 120.0,
-                top: 72.0,
-            },
-        );
-
-        let placement =
-            resolve_surface_placement(&surface, &layouts, None, None, Some(&Window::default()))
-                .expect("draggable view switcher placement should resolve");
-
-        assert_eq!(placement.rect.min.x, 120.0);
-        assert_eq!(placement.rect.min.y, 72.0);
-
-        assert!(layouts.reset("celestial-view"));
-        let reset_placement =
-            resolve_surface_placement(&surface, &layouts, None, None, Some(&Window::default()))
-                .expect("reset view switcher placement should resolve");
-        assert_eq!(
-            reset_placement.rect.min.x,
-            (Window::default().width() - 444.0) * 0.5
-        );
-        assert_eq!(reset_placement.rect.min.y, 34.0);
     }
 
     #[test]
@@ -2990,7 +2939,7 @@ mod tests {
     }
 
     #[test]
-    fn manifest_validation_rejects_duplicate_identity_and_unknown_action() {
+    fn manifest_validation_rejects_duplicate_identity_and_accepts_authored_action() {
         let manifest: RuntimeUiManifest = serde_json::from_str(
             r#"{
                 "surfaces": [
@@ -3016,7 +2965,7 @@ mod tests {
         let error = manifest.validate().expect_err("identity must be unique");
         assert!(error.contains("duplicate runtime UI surface id"));
 
-        let unknown_action: RuntimeUiManifest = serde_json::from_str(
+        let authored_action: RuntimeUiManifest = serde_json::from_str(
             r#"{
                 "surfaces": [{
                     "id": "action-surface",
@@ -3029,13 +2978,9 @@ mod tests {
             }"#,
         )
         .expect("JSON shape should parse");
-        unknown_action
+        authored_action
             .validate()
             .expect("Twin-authored semantic actions must be accepted");
-        assert!(matches!(
-            RuntimeUiActionKind::parse("not.allowed"),
-            Ok(RuntimeUiActionKind::Authored(action)) if action == "not.allowed"
-        ));
     }
 
     #[test]

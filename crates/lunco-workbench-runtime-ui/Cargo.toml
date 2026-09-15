@@ -1,0 +1,33 @@
+[package]
+name = "lunco-workbench-runtime-ui"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Reusable HUI/Flair runtime-authored surface presentation for LunCoSim hosts"
+
+[dependencies]
+bevy = { workspace = true, features = [
+    "bevy_asset",
+    "bevy_render",
+    "bevy_ui",
+    "bevy_ui_render",
+    "bevy_window",
+    "bevy_picking",
+] }
+bevy_egui = { workspace = true }
+bevy_flair = { workspace = true }
+bevy_hui = { workspace = true }
+lunco-core = { path = "../lunco-core" }
+lunco-hooks = { path = "../lunco-hooks" }
+lunco-render = { path = "../lunco-render" }
+lunco-status-core = { path = "../lunco-status-core" }
+lunco-theme = { path = "../lunco-theme" }
+lunco-twin = { path = "../lunco-twin" }
+lunco-workbench-core = { path = "../lunco-workbench-core" }
+lunco-workbench-state = { path = "../lunco-workbench-state" }
+lunco-workspace = { path = "../lunco-workspace" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

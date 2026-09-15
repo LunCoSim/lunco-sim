@@ -91,8 +91,9 @@ The shipped luncosim surfaces live in [`assets/ui/`](../../assets/ui/):
 - [`assets/ui/README.md`](../../assets/ui/README.md) is the short asset-level
   reference.
 
-The runtime bridge is in
-`crates/lunco-luncosim-ui/src/ui/runtime_exposure.rs`.
+The reusable runtime bridge is in
+`crates/lunco-workbench-runtime-ui/src/lib.rs`; the application host in
+`lunco-luncosim-ui` supplies capture mode and app-specific action handling.
 Runtime snapshot projection is in
 `crates/lunco-luncosim-exposures/src/lib.rs`; it is intentionally independent
 of domain calculations. Modelica and Rhai own domain values and

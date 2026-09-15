@@ -44,8 +44,6 @@ bevy = { workspace = true, features = [
 ] }
 big_space = { workspace = true }
 bevy_egui = { workspace = true }
-bevy_hui = { workspace = true }
-bevy_flair = { workspace = true }
 bevy_winit = { version = "0.19" }
 winit = { version = "0.30.13" }
 
@@ -101,6 +99,7 @@ lunco-usd-sim-cosim = { path = "../lunco-usd-sim-cosim" }
 lunco-usd-ui = { path = "../lunco-usd-ui" }
 lunco-usd-viewport-ui = { path = "../lunco-usd-viewport-ui" }
 lunco-workbench = { path = "../lunco-workbench", features = ["api"] }
+lunco-workbench-runtime-ui = { path = "../lunco-workbench-runtime-ui" }
 lunco-workbench-state = { path = "../lunco-workbench-state" }
 lunco-workbench-window = { path = "../lunco-workbench-window" }
 lunco-workbench-browser = { path = "../lunco-workbench-browser" }

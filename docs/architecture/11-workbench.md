@@ -918,6 +918,11 @@ dependency chain. In particular, `lunco-workbench-state` and
    │     - document/Twin save and rename coordination
    │         │
    │         ▼
+   ├── lunco-workbench-runtime-ui  (runtime-authored surface capability)
+   │     - HUI/Flair manifest loading and retained surface lifecycle
+   │     - authored placement, input regions, readiness, and semantic actions
+   │         │
+   │         ▼
    ├── lunco-workbench-text-editor  (generic source editor)
    │     - source tabs and async storage-backed text I/O
    │     - source panel registration and Twin-close lifecycle

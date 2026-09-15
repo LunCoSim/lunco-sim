@@ -7,6 +7,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
+use lunco_workbench_runtime_ui as runtime_ui;
 
 use lunco_modelica_ui::{ModelicaUiConfig, ModelicaWorkbenchPlugin};
 use lunco_usd_bevy_camera::camera_switch::{
@@ -29,9 +30,6 @@ mod rhai_editor_panel;
 /// In-app rhai REPL panel (web + native). Empty unless the API bridge is
 /// available — the file carries its own `#![cfg(…)]`.
 mod rhai_repl_panel;
-/// Generic retained HUI/Flair exposure boundary shared by runtime-authored
-/// templates and engine value producers.
-mod runtime_exposure;
 /// Explicit production-harness injection for the Scenarios menu failure path.
 mod scenario_fixture;
 /// Application-owned tutorial catalog menu. Tutorial behavior itself remains
@@ -124,74 +122,22 @@ pub struct LunCoSimUiPlugin {
 /// Bevy UI render pass and a scene camera, so authored HUDs must use the same
 /// HUI/Flair and exposure path in both modes.
 pub fn add_runtime_ui_layer(app: &mut App) {
-    app.add_plugins((
-        bevy_hui::HuiPlugin,
-        bevy_flair::FlairPlugin,
-        runtime_exposure::RuntimeUiManifestPlugin,
-    ))
-    .init_resource::<lunco_workbench_state::RuntimeSurfaceLayouts>()
-    .init_resource::<runtime_exposure::RuntimeUiRenderState>()
-    .init_resource::<runtime_exposure::RuntimeUiPresentationGeneration>()
-    .init_resource::<runtime_exposure::RuntimeUiRecordingContract>()
-    .init_resource::<runtime_exposure::RuntimeUiGates>()
-    .add_systems(Startup, runtime_exposure::load_runtime_ui_manifest)
-    .add_systems(
-        Update,
-        (
-            runtime_exposure::sync_runtime_ui_manifest,
-            update_runtime_ui_gates,
-            runtime_exposure::mount_runtime_ui_surfaces
-                .after(runtime_exposure::sync_runtime_ui_manifest)
-                .after(update_runtime_ui_gates)
-                .before(bevy_hui::HuiSystems::Build),
-            runtime_exposure::bind_runtime_ui_to_camera
-                .after(runtime_exposure::sync_runtime_ui_manifest),
-            runtime_exposure::attach_runtime_ui_names
-                .after(runtime_exposure::sync_runtime_ui_manifest)
-                .before(bevy_flair::style::StyleSystems::Prepare),
-            runtime_exposure::hand_runtime_ui_styling_to_flair
-                .after(bevy_hui::HuiSystems::Style)
-                .after(runtime_exposure::sync_runtime_ui_manifest)
-                // HUI emits HtmlStyle during its style pass; the bridge must
-                // hand that tree to Flair before Flair snapshots selectors and
-                // computes authored properties, otherwise a newly mounted
-                // surface paints one frame with raw HUI text.
-                .before(bevy_flair::style::StyleSystems::Prepare),
-            runtime_exposure::apply_runtime_ui_exposures
-                .after(runtime_exposure::sync_runtime_ui_manifest)
-                // Exposure values populate HUI TemplateProperties and inline
-                // style inputs. They must be visible to the same style pass
-                // that computes the retained tree; applying them after Style
-                // paints one frame of raw text before the authored panel is
-                // laid out and styled.
-                .after(bevy_hui::HuiSystems::Build)
-                .before(bevy_hui::HuiSystems::Style),
-            runtime_exposure::apply_runtime_ui_surface_interactions
-                .after(runtime_exposure::apply_runtime_ui_exposures)
-                .before(bevy_hui::HuiSystems::Style),
-            runtime_exposure::reconcile_runtime_ui_collections
-                .after(runtime_exposure::apply_runtime_ui_exposures)
-                .after(bevy_hui::HuiSystems::Build)
-                .before(bevy_hui::HuiSystems::Style),
-        ),
-    )
-    .add_systems(
-        PostUpdate,
-        (
-            runtime_exposure::scroll_runtime_ui_collections.after(bevy::ui::UiSystems::PostLayout),
-            runtime_exposure::apply_runtime_ui_placement_after_style
-                .after(bevy_flair::style::StyleSystems::ApplyComputedProperties)
-                .after(bevy::ui::UiSystems::Propagate)
-                .before(bevy::ui::UiSystems::Content),
-            runtime_exposure::update_runtime_ui_recording_contract
-                .after(runtime_exposure::apply_runtime_ui_placement_after_style),
-            runtime_exposure::report_runtime_ui_readiness
-                .after(runtime_exposure::update_runtime_ui_recording_contract)
-                .after(runtime_exposure::apply_runtime_ui_placement_after_style)
-                .after(bevy::ui::UiSystems::PostLayout),
-        ),
-    );
-    runtime_exposure::install_runtime_ui_render_readiness(app);
+    app.add_plugins(runtime_ui::RuntimeUiPlugin)
+        .add_systems(Update, sync_runtime_ui_capture_state)
+        .add_systems(
+            Update,
+            update_runtime_ui_gates.before(runtime_ui::mount_runtime_ui_surfaces),
+        );
+}
+
+fn sync_runtime_ui_capture_state(
+    recording: Option<Res<lunco_capture::screenshot::OfflineRecordingState>>,
+    mut state: ResMut<runtime_ui::RuntimeUiCaptureState>,
+) {
+    let active = recording.is_some_and(|recording| recording.active);
+    if state.active != active {
+        state.active = active;
+    }
 }
 
 impl Plugin for LunCoSimUiPlugin {
@@ -321,11 +267,6 @@ impl Plugin for LunCoSimUiPlugin {
                 app.add_observer(on_runtime_ui_action)
                     .add_observer(on_dismiss_terrain_overlay)
                     .add_observer(dataset_provisioning::on_set_missing_asset_prompt_suppressed);
-                app.add_systems(
-                    Update,
-                    runtime_exposure::register_runtime_ui_input_regions
-                        .after(runtime_exposure::apply_runtime_ui_exposures),
-                );
                 // Rover-specific panels and the attach-a-model click flow.
                 app.register_panel(code_panel::CodePanel);
                 // Rhai behaviour editor (Editor). Its view-model is
@@ -463,7 +404,7 @@ fn update_runtime_ui_gates(
     layout: Option<Res<WorkbenchSnapshot>>,
     overlays: Option<Res<overlays::OverlaySettings>>,
     recording: Option<Res<lunco_capture::screenshot::OfflineRecordingState>>,
-    mut gates: ResMut<runtime_exposure::RuntimeUiGates>,
+    mut gates: ResMut<runtime_ui::RuntimeUiGates>,
     mut initialized: Local<bool>,
 ) {
     let changed = !*initialized
@@ -495,18 +436,17 @@ fn in_view_perspective(layout: Option<Res<WorkbenchSnapshot>>) -> bool {
 }
 
 fn on_runtime_ui_action(
-    trigger: On<runtime_exposure::RuntimeUiAction>,
+    trigger: On<runtime_ui::RuntimeUiAction>,
     q_avatar: Query<Entity, (With<lunco_core::Avatar>, With<lunco_core::LocalAvatar>)>,
     q_bodies: Query<(Entity, &lunco_core::CelestialBody)>,
-    q_tags: Query<&bevy_hui::prelude::Tags>,
     orbital_pin: Option<Res<lunco_celestial_spatial::OrbitalViewPin>>,
-    manifests: Res<Assets<runtime_exposure::RuntimeUiManifest>>,
-    manifest_state: Res<runtime_exposure::RuntimeUiManifestState>,
+    manifests: Res<Assets<runtime_ui::RuntimeUiManifest>>,
+    manifest_state: Res<runtime_ui::RuntimeUiManifestState>,
     mut dropdowns: ResMut<RuntimeUiDropdownState>,
     mut commands: Commands,
 ) {
-    match &trigger.event().action {
-        runtime_exposure::RuntimeUiActionKind::ViewSurface => {
+    match trigger.event().action.as_str() {
+        "view.surface" => {
             if !orbital_pin.is_some_and(|pin| pin.active) {
                 return;
             }
@@ -514,7 +454,7 @@ fn on_runtime_ui_action(
                 commands.trigger(lunco_avatar_core::commands::ReturnFromOrbit { target });
             }
         }
-        runtime_exposure::RuntimeUiActionKind::ViewBodyMoon => {
+        "view.body.moon" => {
             if !runtime_focus_body(
                 lunco_celestial::ephemeris_id::MOON,
                 &q_bodies,
@@ -523,7 +463,7 @@ fn on_runtime_ui_action(
                 report_runtime_ui_failure(&mut commands, "Moon is not present in the loaded scene");
             }
         }
-        runtime_exposure::RuntimeUiActionKind::ViewBodyEarth => {
+        "view.body.earth" => {
             if !runtime_focus_body(
                 lunco_celestial::ephemeris_id::EARTH,
                 &q_bodies,
@@ -535,25 +475,15 @@ fn on_runtime_ui_action(
                 );
             }
         }
-        runtime_exposure::RuntimeUiActionKind::DismissTerrainOverlay => {
-            commands.trigger(DismissTerrainOverlay)
-        }
-        runtime_exposure::RuntimeUiActionKind::Authored(action) => {
+        "overlay.terrain.dismiss" => commands.trigger(DismissTerrainOverlay),
+        action => {
             // The UI bridge remains domain-neutral. A Twin/Rhai program owns
             // the meaning of an authored action and reaches USD or simulation
             // state through the normal typed command/query/event surface.
-            let action = if action.is_empty() {
-                q_tags
-                    .get(trigger.event().source)
-                    .ok()
-                    .and_then(|tags| tags.tags().get("action"))
-                    .cloned()
-            } else {
-                Some(action.clone())
-            };
-            let Some(action) = action.filter(|action| !action.trim().is_empty()) else {
+            if action.trim().is_empty() {
                 return;
-            };
+            }
+            let action = action.to_owned();
             if let Some(key) = manifest_state.dropdown_key_for_action(&manifests, &action) {
                 dropdowns.toggle(&key);
                 return;
@@ -613,7 +543,7 @@ const CAMERA_RESUME_DIRECTOR: &str = "Resume authored director";
 fn runtime_ui_dropdown_options(
     ui: &mut egui::Ui,
     exposure: &lunco_core::exposure::ExposureSurface,
-    definition: &runtime_exposure::RuntimeUiDropdownDefinition,
+    definition: &runtime_ui::RuntimeUiDropdownDefinition,
     selected_key: Option<&str>,
 ) -> Option<String> {
     let Some(lunco_core::exposure::ExposureValue::Array(values)) =
@@ -625,7 +555,7 @@ fn runtime_ui_dropdown_options(
 
     let mut selected = None;
     for value in values {
-        let Some(fields) = runtime_exposure::collection_item_fields(value, &definition.key) else {
+        let Some(fields) = runtime_ui::collection_item_fields(value, &definition.key) else {
             continue;
         };
         let Some(key) = fields
@@ -688,9 +618,9 @@ fn draw_runtime_ui_dropdowns(
     mut egui_ctx: EguiContexts,
     mut dropdowns: ResMut<RuntimeUiDropdownState>,
     exposures: Res<lunco_core::exposure::EngineExposures>,
-    roots: Query<(&runtime_exposure::RuntimeUiSurface, &Visibility)>,
-    manifest_state: Res<runtime_exposure::RuntimeUiManifestState>,
-    manifests: Res<Assets<runtime_exposure::RuntimeUiManifest>>,
+    roots: Query<(&runtime_ui::RuntimeUiSurface, &Visibility)>,
+    manifest_state: Res<runtime_ui::RuntimeUiManifestState>,
+    manifests: Res<Assets<runtime_ui::RuntimeUiManifest>>,
     layout: Option<Res<WorkbenchSnapshot>>,
     theme: Option<Res<lunco_theme::Theme>>,
     mut commands: Commands,
@@ -847,9 +777,9 @@ fn register_camera_menu(world: &mut World) {
             }
             ui.separator();
             let dropdown = ctx
-                .resource::<runtime_exposure::RuntimeUiManifestState>()
+                .resource::<runtime_ui::RuntimeUiManifestState>()
                 .and_then(|state| {
-                    ctx.resource::<Assets<runtime_exposure::RuntimeUiManifest>>()
+                    ctx.resource::<Assets<runtime_ui::RuntimeUiManifest>>()
                         .and_then(|manifests| state.manifest(manifests))
                 })
                 .and_then(|manifest| {
@@ -871,8 +801,8 @@ fn register_camera_menu(world: &mut World) {
                 if let Some(action) =
                     runtime_ui_dropdown_options(ui, exposure, dropdown, selected_key.as_deref())
                 {
-                    ctx.trigger(runtime_exposure::RuntimeUiAction {
-                        action: runtime_exposure::RuntimeUiActionKind::Authored(action),
+                    ctx.trigger(runtime_ui::RuntimeUiAction {
+                        action,
                         source: Entity::PLACEHOLDER,
                     });
                     ui.close();
@@ -882,23 +812,14 @@ fn register_camera_menu(world: &mut World) {
             ui.label("Camera state is not ready.");
         }
         let actions = [
-            (
-                "Surface view",
-                runtime_exposure::RuntimeUiActionKind::ViewSurface,
-            ),
-            (
-                "Orbit Moon",
-                runtime_exposure::RuntimeUiActionKind::ViewBodyMoon,
-            ),
-            (
-                "Orbit Earth",
-                runtime_exposure::RuntimeUiActionKind::ViewBodyEarth,
-            ),
+            ("Surface view", "view.surface"),
+            ("Orbit Moon", "view.body.moon"),
+            ("Orbit Earth", "view.body.earth"),
         ];
         for (label, action) in actions {
             if ui.button(label).clicked() {
-                ctx.trigger(runtime_exposure::RuntimeUiAction {
-                    action,
+                ctx.trigger(runtime_ui::RuntimeUiAction {
+                    action: action.to_owned(),
                     source: Entity::PLACEHOLDER,
                 });
                 ui.close();

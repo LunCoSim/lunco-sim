@@ -147,6 +147,7 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 | **`lunco-workbench-guided-ui`** | Optional application-level guided presentation: Rhai-driven persistent HUDs, widget spotlights, coach-mark tours, and recoverable guided-target surfaces. It consumes the workbench core's generic anchors and render-set contracts but does not make the base shell depend on guided/tutorial behavior. |
 | **`lunco-workbench-file-dialog`** | Reusable native/wasm file-dialog capability: typed open/save/folder requests, backend resolution events, browser-picked text, and browser downloads. It owns dialog dependencies (`rfd`/wasm DOM) outside storage, document, and shell contracts. |
 | **`lunco-workbench-file-ops`** | Reusable windowed file-workflow adapter: typed picker commands, picker-result routing, Twin/document save and rename coordination. It reuses `lunco-storage`, `lunco-workbench-file-dialog`, `lunco-workspace`, and document contracts without making storage own UI policy. |
+| **`lunco-workbench-runtime-ui`** | Reusable HUI/Flair runtime-authored surface mechanism: manifest loading, retained surface lifecycle, placement, styling, input regions, capture readiness, and generic semantic action transport. Hosts supply exposures, gates, Twin state, and recorder mode; application-specific actions stay outside this crate. |
 | **`lunco-workbench-text-editor`** | Reusable generic source editor: source-only text paths, asset/Twin/ephemeral source loading, async storage writes, tab lifecycle, and source-editor panel registration. It reuses the core source/tab contracts and shared text-editor widget without depending on the concrete docking shell. |
 | **`lunco-workbench-state`** | Reusable per-Twin session state: persisted document snapshots, domain codec registry, dock snapshot schema, runtime-surface layout state, storage-backed load/save, and the layout-provider contract used by concrete shells. |
 | **`lunco-workbench-window`** | Reusable OS-window capability: typed minimize/maximize/close commands, merged-titlebar construction, settings-backed geometry persistence, and explicit native placement. It depends on Bevy window APIs and `lunco-settings`, not the concrete Workbench shell. |
@@ -683,6 +684,15 @@ The production file-dialog capability used by the workbench and domain UI.
 It owns native `rfd` and browser dialog/download adapters plus the typed
 picker request/result events. `lunco-storage` remains an I/O abstraction and
 does not acquire dialog or platform-window dependencies.
+
+**`lunco-workbench-runtime-ui`**
+Reusable HUI/Flair surface presentation. It owns the generic manifest asset
+loader, retained tree lifecycle, authored placement and styling bridge, input
+regions, render-readiness acknowledgement, and open semantic action transport.
+The `lunco-luncosim-ui` host supplies capture mode and named gates and handles
+application actions; the runtime UI crate does not name cameras, terrain, or
+models. Runtime surface assets remain under `assets/ui/` and are loaded through
+Bevy's asset system rather than embedded in Rust tests.
 
 **`lunco-workbench-window`**
 Reusable OS-window capability. It owns typed window commands, merged-titlebar
