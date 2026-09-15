@@ -71,7 +71,7 @@ fn route_context(doc, path, position) {
         target_path: path,
         hit_path: path,
         prim_paths: [path],
-        world_position: position,
+        world_position: point3(position, "active_physics"),
     }
 }
 

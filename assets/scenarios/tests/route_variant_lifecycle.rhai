@@ -49,7 +49,7 @@ fn context(doc, path, position) {
         target_path: path,
         hit_path: path,
         prim_paths: if path == () { [] } else { [path] },
-        world_position: position,
+        world_position: point3(position, "active_physics"),
     }
 }
 

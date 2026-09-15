@@ -181,6 +181,44 @@ fn t_report_surfaces_a_failure() {
     );
 }
 
+/// The coordinate point contract is authored Rhai policy. This small harness
+/// executes it with the same prelude and native vector math the production
+/// runtime installs; it does not duplicate the policy in Rust.
+#[test]
+fn coordinate_point_contract_executes() {
+    use std::sync::{Arc, Mutex};
+
+    let source = lunco_assets_core::scripting::prelude_files()
+        .expect("active prelude source")
+        .into_iter()
+        .map(|(_, source)| source)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let test = std::fs::read_to_string(tests_dir().join("test_coordinates.rhai"))
+        .expect("coordinate test asset must exist");
+    let output = Arc::new(Mutex::new(Vec::new()));
+    let sink = output.clone();
+    let mut engine = runtime_engine();
+    lunco_scripting::rhai_math::register(&mut engine);
+    engine.on_print(move |line| {
+        sink.lock()
+            .expect("print sink poisoned")
+            .push(line.to_string())
+    });
+    let script = format!("{source}\n{test}");
+    engine
+        .run(&script)
+        .expect("coordinate Rhai contract must execute");
+    let printed = output.lock().expect("print sink poisoned").clone();
+    assert_eq!(
+        printed
+            .last()
+            .is_some_and(|line| line.starts_with("TESTS_OK")),
+        true,
+        "coordinate contract failed: {printed:?}"
+    );
+}
+
 /// Modelica lint policy tests stay authored. Rust supplies only the tiny
 /// harness that concatenates the replaceable policy with its Rhai self-test;
 /// no shipped Modelica file is opened by this target.

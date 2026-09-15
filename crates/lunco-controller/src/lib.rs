@@ -34,8 +34,14 @@
 //! can drive a vessel by naming intents — the same consistent vocabulary. All writes
 //! land through the same [`lunco_core::ports::PortRegistry`].
 
-use bevy::input::mouse::MouseButton;
+use bevy::input::{
+    keyboard::{Key, KeyCode, KeyboardInput, NativeKey},
+    mouse::{MouseButton, MouseButtonInput, MouseScrollUnit, MouseWheel},
+    touch::TouchPhase,
+    ButtonState,
+};
 use bevy::prelude::*;
+use bevy::window::{CursorMoved, PrimaryWindow, WindowEvent};
 use leafwing_input_manager::prelude::ActionState;
 use lunco_core::{on_command, register_commands, Ack, Command, OpId, UserIntent};
 use lunco_cosim_core::ControlLink;
@@ -62,6 +68,284 @@ use std::collections::BTreeMap;
 pub struct SimulatedIntents(
     pub std::collections::HashMap<Entity, std::collections::HashSet<UserIntent>>,
 );
+
+/// A physical keyboard or pointer event delivered through Bevy's native input
+/// message fan-out. The command is intentionally device-level: Rhai composes
+/// these events into clicks, drags, chords, and workflows while picking, egui,
+/// input bindings, and application tools continue to consume their normal
+/// event streams.
+#[derive(Reflect, Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[reflect(Clone, PartialEq)]
+pub enum WindowInputEvent {
+    /// A physical key transition. `key` accepts a Bevy `KeyCode` name such as
+    /// `KeyW` or `AltLeft`, plus the active keymap's compact label such as `W`.
+    Key {
+        key: String,
+        state: WindowInputState,
+        #[serde(default)]
+        text: Option<String>,
+        #[serde(default)]
+        repeat: bool,
+    },
+    /// Move the primary pointer to logical window coordinates.
+    PointerMove { x: f32, y: f32 },
+    /// Move the primary pointer and transition a mouse button at that position.
+    PointerButton {
+        button: WindowPointerButton,
+        state: WindowInputState,
+        x: f32,
+        y: f32,
+    },
+    /// Emit a native mouse-wheel event in line units.
+    Scroll { x: f32, y: f32 },
+}
+
+/// Press/release state used by [`WindowInputEvent`].
+#[derive(Reflect, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[reflect(Clone, PartialEq)]
+pub enum WindowInputState {
+    Pressed,
+    Released,
+}
+
+impl WindowInputState {
+    fn button_state(self) -> ButtonState {
+        match self {
+            Self::Pressed => ButtonState::Pressed,
+            Self::Released => ButtonState::Released,
+        }
+    }
+}
+
+/// Pointer buttons supported by Bevy's picking and egui mouse paths.
+#[derive(Reflect, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[reflect(Clone, PartialEq)]
+pub enum WindowPointerButton {
+    #[serde(alias = "left")]
+    Primary,
+    #[serde(alias = "right")]
+    Secondary,
+    Middle,
+}
+
+impl WindowPointerButton {
+    fn mouse_button(self) -> MouseButton {
+        match self {
+            Self::Primary => MouseButton::Left,
+            Self::Secondary => MouseButton::Right,
+            Self::Middle => MouseButton::Middle,
+        }
+    }
+}
+
+/// Inject one native-style input event into the local application window.
+///
+/// This is the generic automation boundary for Rhai, API clients, playback,
+/// and accessibility tooling. It does not invoke a scene tool or semantic
+/// command directly. Instead, the next input phase receives the same Bevy
+/// `WindowEvent` plus typed keyboard/mouse messages that the winit backend
+/// normally emits, so every existing consumer follows its ordinary path.
+#[Command]
+pub struct InjectWindowInput {
+    pub event: WindowInputEvent,
+}
+
+#[derive(Message)]
+struct PendingWindowInput(WindowInputEvent);
+
+/// The window cursor is temporarily projected for the frame that consumes an
+/// injected pointer event. Restoring the authored/native value before Bevy's
+/// winit synchronization prevents automation from asking Wayland/X11 to move
+/// the operating-system pointer while still letting systems that read
+/// `Window::cursor_position()` follow the injected gesture.
+#[derive(Resource, Default)]
+struct InjectedCursorRestore(Option<(Entity, Option<Vec2>)>);
+
+fn finite_position(x: f32, y: f32) -> Result<Vec2, String> {
+    if !x.is_finite() || !y.is_finite() {
+        return Err("window input position must be finite".to_string());
+    }
+    Ok(Vec2::new(x, y))
+}
+
+fn finite_scroll(x: f32, y: f32) -> Result<(), String> {
+    if x.is_finite() && y.is_finite() {
+        Ok(())
+    } else {
+        Err("window input scroll values must be finite".to_string())
+    }
+}
+
+fn resolve_window_key(settings: &InputBindingsSettings, label: &str) -> Result<KeyCode, String> {
+    let label = label.trim();
+    if label.is_empty() {
+        return Err("window input key must not be empty".to_string());
+    }
+    if let Some(key) = settings.key_code(label)? {
+        return Ok(key);
+    }
+    serde_json::from_value(serde_json::Value::String(label.to_string()))
+        .map_err(|_| format!("unknown Bevy key code '{label}'"))
+}
+
+fn validate_window_input(
+    settings: &InputBindingsSettings,
+    event: &WindowInputEvent,
+) -> Result<(), String> {
+    match event {
+        WindowInputEvent::Key { key, .. } => {
+            resolve_window_key(settings, key)?;
+        }
+        WindowInputEvent::PointerMove { x, y } | WindowInputEvent::PointerButton { x, y, .. } => {
+            finite_position(*x, *y)?;
+        }
+        WindowInputEvent::Scroll { x, y } => finite_scroll(*x, *y)?,
+    }
+    Ok(())
+}
+
+fn logical_key(key_code: KeyCode, text: Option<&str>) -> Key {
+    if let Some(text) = text.filter(|text| !text.is_empty()) {
+        return Key::Character(text.into());
+    }
+    match key_code {
+        KeyCode::AltLeft | KeyCode::AltRight => Key::Alt,
+        KeyCode::ControlLeft | KeyCode::ControlRight => Key::Control,
+        KeyCode::ShiftLeft | KeyCode::ShiftRight => Key::Shift,
+        KeyCode::SuperLeft | KeyCode::SuperRight => Key::Super,
+        _ => Key::Unidentified(NativeKey::Unidentified),
+    }
+}
+
+#[on_command(InjectWindowInput)]
+fn on_inject_window_input(
+    trigger: On<InjectWindowInput>,
+    settings: Res<InputBindingsSettings>,
+    primary_window: Query<Entity, With<PrimaryWindow>>,
+    mut pending: MessageWriter<PendingWindowInput>,
+) -> Result<Ack, String> {
+    let cmd = trigger.event();
+    validate_window_input(&settings, &cmd.event)?;
+    primary_window
+        .single()
+        .map_err(|_| "window input requires exactly one primary window".to_string())?;
+    pending.write(PendingWindowInput(cmd.event.clone()));
+    Ok(Ack::with_data(
+        OpId::new(),
+        serde_json::json!({"queued": true}),
+    ))
+}
+
+/// Fan out pending input through the same typed messages that `bevy_winit`
+/// emits after receiving an operating-system event. Keeping the aggregate
+/// `WindowEvent` and typed messages together is important: picking/egui read
+/// the aggregate stream, while input state and keyboard focus read the typed
+/// streams.
+fn emit_pending_window_input(
+    mut pending: MessageReader<PendingWindowInput>,
+    mut windows: Query<(Entity, &mut Window), With<PrimaryWindow>>,
+    settings: Res<InputBindingsSettings>,
+    mut cursor_restore: ResMut<InjectedCursorRestore>,
+    mut window_events: MessageWriter<WindowEvent>,
+    mut cursor_moved: MessageWriter<CursorMoved>,
+    mut keyboard_input: MessageWriter<KeyboardInput>,
+    mut mouse_button_input: MessageWriter<MouseButtonInput>,
+    mut mouse_wheel: MessageWriter<MouseWheel>,
+) {
+    let Ok((window, mut window_state)) = windows.single_mut() else {
+        return;
+    };
+    for PendingWindowInput(event) in pending.read() {
+        match event {
+            WindowInputEvent::Key {
+                key,
+                state,
+                text,
+                repeat,
+            } => {
+                let Ok(key_code) = resolve_window_key(&settings, key) else {
+                    continue;
+                };
+                let input = KeyboardInput {
+                    key_code,
+                    logical_key: logical_key(key_code, text.as_deref()),
+                    state: state.button_state(),
+                    text: text
+                        .as_deref()
+                        .filter(|value| !value.is_empty())
+                        .map(Into::into),
+                    repeat: *repeat,
+                    window,
+                };
+                window_events.write(WindowEvent::KeyboardInput(input.clone()));
+                keyboard_input.write(input);
+            }
+            WindowInputEvent::PointerMove { x, y } => {
+                let position = Vec2::new(*x, *y);
+                if cursor_restore.0.is_none() {
+                    cursor_restore.0 = Some((window, window_state.cursor_position()));
+                }
+                window_state.set_cursor_position(Some(position));
+                let moved = CursorMoved {
+                    window,
+                    position,
+                    delta: None,
+                };
+                window_events.write(WindowEvent::CursorMoved(moved.clone()));
+                cursor_moved.write(moved);
+            }
+            WindowInputEvent::PointerButton {
+                button,
+                state,
+                x,
+                y,
+            } => {
+                let position = Vec2::new(*x, *y);
+                if cursor_restore.0.is_none() {
+                    cursor_restore.0 = Some((window, window_state.cursor_position()));
+                }
+                window_state.set_cursor_position(Some(position));
+                let moved = CursorMoved {
+                    window,
+                    position,
+                    delta: None,
+                };
+                window_events.write(WindowEvent::CursorMoved(moved.clone()));
+                cursor_moved.write(moved);
+                let input = MouseButtonInput {
+                    button: button.mouse_button(),
+                    state: state.button_state(),
+                    window,
+                };
+                window_events.write(WindowEvent::MouseButtonInput(input));
+                mouse_button_input.write(input);
+            }
+            WindowInputEvent::Scroll { x, y } => {
+                let input = MouseWheel {
+                    unit: MouseScrollUnit::Line,
+                    x: *x,
+                    y: *y,
+                    window,
+                    phase: TouchPhase::Moved,
+                };
+                window_events.write(WindowEvent::MouseWheel(input));
+                mouse_wheel.write(input);
+            }
+        }
+    }
+}
+
+fn restore_injected_cursor(
+    mut cursor_restore: ResMut<InjectedCursorRestore>,
+    mut windows: Query<&mut Window>,
+) {
+    let Some((window, position)) = cursor_restore.0.take() else {
+        return;
+    };
+    if let Ok(mut window_state) = windows.get_mut(window) {
+        window_state.set_cursor_position(position);
+    }
+}
 
 /// Force an intent held or released, as if a key were pressed — the headless way to
 /// drive a possessed vessel over the API or from rhai.
@@ -309,6 +593,7 @@ register_commands!(
     on_simulate_intent,
     on_simulate_intent_edge,
     on_set_control_path,
+    on_inject_window_input,
 );
 
 /// Plugin for managing vessel input and command translation.
@@ -339,8 +624,11 @@ impl Plugin for LunCoControllerPlugin {
         // mid-replay would overwrite the very history we are replaying (and mint new
         // seqs for ticks that already happened).
         app.init_resource::<SimulatedIntents>()
+            .init_resource::<InjectedCursorRestore>()
             .register_type::<InputBindingsSettings>()
             .register_settings_section::<InputBindingsSettings>();
+        app.add_message::<PendingWindowInput>();
+        lunco_core::MarkClientLocalExt::mark_client_local::<InjectWindowInput>(app);
         app.init_resource::<lunco_core_session::CommandPolicyRegistry>();
         app.world_mut()
             .resource_mut::<lunco_core_session::CommandPolicyRegistry>()
@@ -389,6 +677,15 @@ impl Plugin for LunCoControllerPlugin {
             drive_self_drivers.in_set(InteractionControlSet),
         );
         app.add_systems(Update, refresh_live_input_maps);
+        // WindowEvent is consumed by Bevy Picking in First, while the typed
+        // keyboard/mouse messages are consumed by InputSystems in PreUpdate.
+        // Emit before Picking so one pending gesture reaches both consumers in
+        // the same frame; the typed messages remain available for PreUpdate.
+        app.add_systems(
+            First,
+            emit_pending_window_input.before(bevy::picking::PickingSystems::Input),
+        );
+        app.add_systems(PostUpdate, restore_injected_cursor);
         // The SINGLE input-bookkeeping chokepoint: every `SetPorts` — keyboard,
         // API, or wire-replayed — flows through this observer, so the client
         // prediction log and the host reconcile-ack no longer depend on how the
@@ -884,6 +1181,45 @@ pub struct InputBindingsSettings {
     /// Pointer button activating the semantic look intent.
     #[serde(default = "default_look_button")]
     pub look_button: String,
+    /// Physical pointer chords mapped to open-ended semantic intent names.
+    #[serde(default)]
+    pub pointer_bindings: BTreeMap<String, Vec<PointerBinding>>,
+}
+
+/// One exact pointer chord in the shared input configuration.
+///
+/// This is a generic input contract. The scene adapter resolves a pointer
+/// event against these bindings and publishes only matching intent names to
+/// authored policy code.
+#[derive(Reflect, Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+pub struct PointerBinding {
+    pub button: String,
+    #[serde(default)]
+    pub alt: bool,
+    #[serde(default)]
+    pub shift: bool,
+    #[serde(default)]
+    pub ctrl: bool,
+}
+
+impl PointerBinding {
+    pub fn matches(&self, button: &str, alt: bool, shift: bool, ctrl: bool) -> bool {
+        self.alt == alt
+            && self.shift == shift
+            && self.ctrl == ctrl
+            && pointer_button_matches(&self.button, button)
+    }
+}
+
+fn pointer_button_matches(configured: &str, event: &str) -> bool {
+    let configured = configured.trim().to_ascii_lowercase();
+    let event = event.trim().to_ascii_lowercase();
+    match event.as_str() {
+        "primary" => configured == "left" || configured == "primary",
+        "secondary" => configured == "right" || configured == "secondary",
+        "middle" => configured == "middle",
+        _ => configured == event,
+    }
 }
 
 #[derive(Deserialize)]
@@ -892,6 +1228,8 @@ struct InputBindingsFile {
     bindings: BTreeMap<String, Vec<KeyCode>>,
     #[serde(default = "default_look_button")]
     look_button: String,
+    #[serde(default)]
+    pointer_bindings: BTreeMap<String, Vec<PointerBinding>>,
 }
 
 fn bundled_input_bindings() -> InputBindingsFile {
@@ -905,6 +1243,7 @@ impl Default for InputBindingsSettings {
         Self {
             bindings: bundled.bindings,
             look_button: bundled.look_button,
+            pointer_bindings: bundled.pointer_bindings,
         }
     }
 }
@@ -920,17 +1259,23 @@ impl<'de> Deserialize<'de> for InputBindingsSettings {
             bindings: BTreeMap<String, Vec<KeyCode>>,
             #[serde(default = "default_look_button")]
             look_button: String,
+            #[serde(default)]
+            pointer_bindings: BTreeMap<String, Vec<PointerBinding>>,
         }
 
         let stored = StoredInputBindings::deserialize(deserializer)?;
-        let mut bindings = bundled_input_bindings().bindings;
+        let bundled = bundled_input_bindings();
+        let mut bindings = bundled.bindings;
+        let mut pointer_bindings = bundled.pointer_bindings;
         // A settings file is an override layer, not a second copy of the
         // bundled schema. Missing semantic inputs inherit the current authored
         // defaults; an explicit empty array still means "unbound".
         bindings.extend(stored.bindings);
+        pointer_bindings.extend(stored.pointer_bindings);
         Ok(Self {
             bindings,
             look_button: stored.look_button,
+            pointer_bindings,
         })
     }
 }
@@ -945,6 +1290,19 @@ impl SettingsSection for InputBindingsSettings {
         for intent in self.bindings.keys() {
             if lunco_core::parse_user_intent(intent).is_none() {
                 return Err(format!("unknown input intent '{intent}'"));
+            }
+        }
+        for (intent, bindings) in &self.pointer_bindings {
+            if intent.trim().is_empty() {
+                return Err("pointer input intent must not be empty".to_string());
+            }
+            for binding in bindings {
+                if parse_look_button(&binding.button).is_none() {
+                    return Err(format!(
+                        "invalid pointer button '{}' for intent '{intent}'",
+                        binding.button
+                    ));
+                }
             }
         }
         Ok(())
@@ -987,6 +1345,20 @@ impl InputBindingsSettings {
                 debug.eq_ignore_ascii_case(needle)
                     || key_label(std::slice::from_ref(key)).eq_ignore_ascii_case(needle)
             }))
+    }
+
+    /// Resolve an exact physical pointer chord into all configured semantic
+    /// intent names. Multiple names may share a gesture intentionally.
+    pub fn pointer_intents(&self, button: &str, alt: bool, shift: bool, ctrl: bool) -> Vec<String> {
+        self.pointer_bindings
+            .iter()
+            .filter_map(|(intent, bindings)| {
+                bindings
+                    .iter()
+                    .any(|binding| binding.matches(button, alt, shift, ctrl))
+                    .then(|| intent.clone())
+            })
+            .collect()
     }
 
     /// Human-readable key or pointer labels for tutorial/help copy.
@@ -1287,6 +1659,95 @@ mod tests {
     use lunco_core::UserIntent;
 
     #[derive(Resource, Default)]
+    struct WindowInputObserved {
+        aggregate: Vec<WindowEvent>,
+        cursors: Vec<CursorMoved>,
+        keys: Vec<KeyboardInput>,
+        buttons: Vec<MouseButtonInput>,
+        scroll: Vec<MouseWheel>,
+    }
+
+    fn collect_window_input(
+        mut aggregate: MessageReader<WindowEvent>,
+        mut cursors: MessageReader<CursorMoved>,
+        mut keys: MessageReader<KeyboardInput>,
+        mut buttons: MessageReader<MouseButtonInput>,
+        mut scroll: MessageReader<MouseWheel>,
+        mut observed: ResMut<WindowInputObserved>,
+    ) {
+        observed.aggregate.extend(aggregate.read().cloned());
+        observed.cursors.extend(cursors.read().cloned());
+        observed.keys.extend(keys.read().cloned());
+        observed.buttons.extend(buttons.read().cloned());
+        observed.scroll.extend(scroll.read().cloned());
+    }
+
+    #[test]
+    fn injected_window_input_fanout_matches_native_messages() {
+        let mut app = App::new();
+        app.add_message::<PendingWindowInput>()
+            .add_message::<WindowEvent>()
+            .add_message::<CursorMoved>()
+            .add_message::<KeyboardInput>()
+            .add_message::<MouseButtonInput>()
+            .add_message::<MouseWheel>()
+            .init_resource::<InputBindingsSettings>()
+            .init_resource::<InjectedCursorRestore>()
+            .init_resource::<WindowInputObserved>()
+            .add_systems(
+                Update,
+                (emit_pending_window_input, collect_window_input).chain(),
+            )
+            .add_systems(PostUpdate, restore_injected_cursor);
+        app.world_mut().spawn((Window::default(), PrimaryWindow));
+
+        app.world_mut()
+            .resource_mut::<Messages<PendingWindowInput>>()
+            .write(PendingWindowInput(WindowInputEvent::Key {
+                key: "KeyA".into(),
+                state: WindowInputState::Pressed,
+                text: None,
+                repeat: false,
+            }));
+        app.world_mut()
+            .resource_mut::<Messages<PendingWindowInput>>()
+            .write(PendingWindowInput(WindowInputEvent::PointerButton {
+                button: WindowPointerButton::Primary,
+                state: WindowInputState::Pressed,
+                x: 12.0,
+                y: 34.0,
+            }));
+        app.world_mut()
+            .resource_mut::<Messages<PendingWindowInput>>()
+            .write(PendingWindowInput(WindowInputEvent::Scroll {
+                x: 0.0,
+                y: 1.0,
+            }));
+
+        app.update();
+
+        let observed = app.world().resource::<WindowInputObserved>();
+        assert_eq!(observed.keys.len(), 1);
+        assert_eq!(observed.keys[0].key_code, KeyCode::KeyA);
+        assert_eq!(observed.buttons.len(), 1);
+        assert_eq!(observed.buttons[0].button, MouseButton::Left);
+        assert_eq!(observed.cursors.len(), 1);
+        assert_eq!(observed.cursors[0].position, Vec2::new(12.0, 34.0));
+        assert_eq!(observed.scroll.len(), 1);
+        assert_eq!(observed.aggregate.len(), 4);
+        assert!(matches!(
+            observed.aggregate[0],
+            WindowEvent::KeyboardInput(_)
+        ));
+        assert!(matches!(observed.aggregate[1], WindowEvent::CursorMoved(_)));
+        assert!(matches!(
+            observed.aggregate[2],
+            WindowEvent::MouseButtonInput(_)
+        ));
+        assert!(matches!(observed.aggregate[3], WindowEvent::MouseWheel(_)));
+    }
+
+    #[derive(Resource, Default)]
     struct SemanticEdgeObserved {
         typed: Vec<lunco_core::SemanticIntentEdge>,
         telemetry: Vec<lunco_core::TelemetryEvent>,
@@ -1514,6 +1975,41 @@ mod tests {
     }
 
     #[test]
+    fn pointer_intents_are_exact_and_configurable() {
+        let settings = InputBindingsSettings::default();
+        assert_eq!(
+            settings.pointer_intents("primary", true, false, false),
+            vec!["route.add_point".to_string()]
+        );
+        assert!(settings
+            .pointer_intents("primary", true, true, false)
+            .is_empty());
+        assert_eq!(
+            settings.pointer_intents("secondary", false, false, false),
+            vec!["route.context".to_string()]
+        );
+
+        let rebound: InputBindingsSettings = serde_json::from_str(
+            r#"{
+                "pointer_bindings": {
+                    "route.add_point": [{"button":"Middle", "ctrl":true}]
+                }
+            }"#,
+        )
+        .expect("valid pointer input override");
+        assert!(rebound
+            .pointer_intents("primary", true, false, false)
+            .is_empty());
+        assert_eq!(
+            rebound.pointer_intents("middle", false, false, true),
+            vec!["route.add_point".to_string()]
+        );
+        rebound
+            .validate_section()
+            .expect("pointer input override is valid");
+    }
+
+    #[test]
     fn simulated_key_labels_are_resolved_from_the_keymap() {
         let settings = InputBindingsSettings::default();
         assert_eq!(settings.key_code("W").unwrap(), Some(KeyCode::KeyW));
@@ -1680,6 +2176,12 @@ mod tests {
         for (name, val) in obj {
             if name == "look_button" {
                 assert_eq!(val.as_str(), Some("Right"));
+                continue;
+            }
+            if name == "pointer_bindings" {
+                let bindings = val.as_object().expect("pointer_bindings must be an object");
+                assert!(bindings.contains_key("route.add_point"));
+                assert!(bindings.contains_key("route.context"));
                 continue;
             }
             assert!(
