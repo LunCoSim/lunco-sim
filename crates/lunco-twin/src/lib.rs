@@ -74,9 +74,9 @@ pub use document_kind_registry::{DocumentKindId, DocumentKindMeta, DocumentKindR
 pub use error::TwinError;
 pub use file_kind::{FileEntry, FileKind};
 pub use manifest::{
-    glob_matches, DownloadManifest, JournalManifest, ModelicaExternal, ModelicaManifest,
-    SysmlManifest, TwinChildRef, TwinManifest, TwinSettingValue, UsdManifest, VerificationCase,
-    VerificationManifest, DEFAULT_SCENE_GLOBS, MANIFEST_FILENAME,
+    glob_matches, ComponentManifest, DownloadManifest, JournalManifest, ModelicaExternal,
+    ModelicaManifest, SysmlManifest, TwinChildRef, TwinManifest, TwinSettingValue, UsdManifest,
+    VerificationCase, VerificationManifest, DEFAULT_SCENE_GLOBS, MANIFEST_FILENAME,
 };
 
 // Re-export lunco-doc and lunco-storage so downstream crates don't need
@@ -442,6 +442,7 @@ impl Twin {
                     }),
                     sysml: None,
                     verification: None,
+                    components: Vec::new(),
                     modelica: None,
                     journal: None,
                     downloads: None,
@@ -628,6 +629,88 @@ impl Twin {
         sources
     }
 
+    /// Discover the manifest-scoped SysML/KerML source set and reject a
+    /// manifest that silently excludes a declared root or directory.
+    ///
+    /// [`discover_sysml_sources`](Self::discover_sysml_sources) remains a
+    /// lightweight index accessor for browsers. Validation and execution
+    /// callers should use this checked form so a typo in `[sysml]` cannot
+    /// quietly select a different document set. The returned paths are still
+    /// Twin-relative, deterministic, and owned by the indexed file list.
+    pub fn discover_sysml_sources_checked(&self) -> Result<Vec<PathBuf>, Vec<String>> {
+        let mut errors = Vec::new();
+        if let Some(sysml) = self
+            .manifest
+            .as_ref()
+            .and_then(|manifest| manifest.sysml.as_ref())
+        {
+            if let Some(root) = &sysml.root {
+                if !is_safe_relative_path(root) || root == Path::new(".") {
+                    errors.push(format!(
+                        "[sysml].root `{}` must be a safe Twin-relative file",
+                        root.display()
+                    ));
+                } else if !is_sysml_path(root) {
+                    errors.push(format!(
+                        "[sysml].root `{}` must end in .sysml or .kerml",
+                        root.display()
+                    ));
+                } else if !self
+                    .files
+                    .iter()
+                    .any(|entry| entry.relative_path == *root)
+                {
+                    errors.push(format!(
+                        "[sysml].root `{}` is not indexed",
+                        root.display()
+                    ));
+                }
+            }
+
+            for path in &sysml.paths {
+                if !is_safe_relative_path(path) {
+                    errors.push(format!(
+                        "[sysml].paths entry `{}` must be a safe Twin-relative directory",
+                        path.display()
+                    ));
+                    continue;
+                }
+                if path != Path::new(".")
+                    && !self.files.iter().any(|entry| {
+                        is_sysml_path(&entry.relative_path)
+                            && (entry.relative_path == *path
+                                || entry.relative_path.starts_with(path))
+                    })
+                {
+                    errors.push(format!(
+                        "[sysml].paths entry `{}` contains no indexed .sysml or .kerml source",
+                        path.display()
+                    ));
+                }
+            }
+
+            if let Some(root) = &sysml.root {
+                let selected = self.discover_sysml_sources();
+                if !selected.iter().any(|path| path == root) {
+                    errors.push(format!(
+                        "[sysml].root `{}` is excluded by the declared [sysml].paths",
+                        root.display()
+                    ));
+                }
+            }
+        }
+
+        let sources = self.discover_sysml_sources();
+        if sources.is_empty() {
+            errors.push("Twin declares no indexed .sysml or .kerml sources".to_owned());
+        }
+        if errors.is_empty() {
+            Ok(sources)
+        } else {
+            Err(errors)
+        }
+    }
+
     /// Return the Twin-owned verification registry in declaration order.
     ///
     /// The registry is metadata over the existing indexed files: it does not
@@ -645,6 +728,120 @@ impl Twin {
         self.verification_cases()
             .iter()
             .find(|case| case.name == qualified_name)
+    }
+
+    /// Return the explicit component ownership records in declaration order.
+    pub fn components(&self) -> &[ComponentManifest] {
+        self.manifest
+            .as_ref()
+            .map(|manifest| manifest.components.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Validate component ownership and its verification binding.
+    ///
+    /// Every declared component must own an indexed SysML/KerML requirement
+    /// source and reference one exact verification mapping.  The mapped case
+    /// in turn owns the indexed USD fixture and Rhai observer checked by
+    /// [`verification_registry_errors`](Self::verification_registry_errors).
+    /// Duplicate sources, verification cases, scenes, or scripts are rejected
+    /// so a component cannot silently share another component's acceptance
+    /// artifact.
+    pub fn component_registry_errors(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        let selected_sources = self.discover_sysml_sources();
+        let mut names = HashSet::new();
+        let mut requirement_paths = HashSet::new();
+        let mut verification_names = HashSet::new();
+        let mut scene_paths = HashSet::new();
+        let mut script_paths = HashSet::new();
+
+        for component in self.components() {
+            let name = component.name.trim();
+            if name.is_empty() {
+                errors.push("component record has an empty name".to_owned());
+            } else if !names.insert(name.to_owned()) {
+                errors.push(format!("duplicate component record `{name}`"));
+            }
+
+            let requirements = component.requirements.as_path();
+            if !is_safe_relative_path(requirements) || requirements == Path::new(".") {
+                errors.push(format!(
+                    "component `{name}` requirements path `{}` must be a safe Twin-relative file",
+                    requirements.display()
+                ));
+            } else if !is_sysml_path(requirements) {
+                errors.push(format!(
+                    "component `{name}` requirements must use .sysml or .kerml: `{}`",
+                    requirements.display()
+                ));
+            } else if !self
+                .files
+                .iter()
+                .any(|entry| entry.relative_path == requirements)
+            {
+                errors.push(format!(
+                    "component `{name}` requirements are not indexed: `{}`",
+                    requirements.display()
+                ));
+            } else if !selected_sources.iter().any(|path| path == requirements) {
+                errors.push(format!(
+                    "component `{name}` requirements `{}` are excluded by [sysml].paths",
+                    requirements.display()
+                ));
+            }
+            if !requirement_paths.insert(requirements.to_path_buf()) {
+                errors.push(format!(
+                    "multiple components share requirement source `{}`",
+                    requirements.display()
+                ));
+            }
+
+            let verification = component.verification.trim();
+            if verification.is_empty() {
+                errors.push(format!("component `{name}` has an empty verification name"));
+            } else if !verification_names.insert(verification.to_owned()) {
+                errors.push(format!(
+                    "multiple components share verification `{verification}`"
+                ));
+            }
+            let Some(case) = self.verification_case(verification) else {
+                if !verification.is_empty() {
+                    errors.push(format!(
+                        "component `{name}` verification `{verification}` is not registered"
+                    ));
+                }
+                continue;
+            };
+            if !scene_paths.insert(case.scene.clone()) {
+                errors.push(format!(
+                    "multiple components share verification scene `{}`",
+                    case.scene.display()
+                ));
+            }
+            if !script_paths.insert(case.script.clone()) {
+                errors.push(format!(
+                    "multiple components share verification script `{}`",
+                    case.script.display()
+                ));
+            }
+
+            if let Some(usd_path) = component.usd_path.as_deref() {
+                let valid = usd_path.starts_with('/')
+                    && !usd_path.trim().is_empty()
+                    && !usd_path.trim_start_matches('/').is_empty()
+                    && !usd_path
+                        .trim_start_matches('/')
+                        .split('/')
+                        .any(|part| part == "." || part == ".." || part.is_empty());
+                if !valid {
+                    errors.push(format!(
+                        "component `{name}` usd_path `{usd_path}` must be an absolute USD prim path"
+                    ));
+                }
+            }
+        }
+        errors
     }
 
     /// Validate the Twin-owned verification registry against the indexed file
@@ -879,6 +1076,166 @@ mod tests {
     }
 
     #[test]
+    fn checked_sysml_sources_are_manifest_scoped_and_root_first() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(
+            &tmp.path().join("twin.toml"),
+            r#"
+name = "sysml_twin"
+version = "0.1.0"
+
+[sysml]
+root = "requirements/main.sysml"
+paths = ["requirements"]
+"#,
+        );
+        write(&tmp.path().join("requirements/part.sysml"), "package Part {}");
+        write(&tmp.path().join("requirements/main.sysml"), "package Main {}");
+        write(&tmp.path().join("notes/ignored.sysml"), "package Ignored {}");
+
+        let TwinMode::Twin(twin) = TwinMode::open(tmp.path()).unwrap() else {
+            panic!("expected Twin mode");
+        };
+        assert_eq!(
+            twin.discover_sysml_sources_checked().unwrap(),
+            vec![
+                PathBuf::from("requirements/main.sysml"),
+                PathBuf::from("requirements/part.sysml")
+            ]
+        );
+    }
+
+    #[test]
+    fn checked_sysml_sources_reject_a_missing_or_excluded_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(
+            &tmp.path().join("twin.toml"),
+            r#"
+name = "invalid_sysml_twin"
+version = "0.1.0"
+
+[sysml]
+root = "requirements/missing.sysml"
+paths = ["requirements"]
+"#,
+        );
+        write(&tmp.path().join("requirements/actual.sysml"), "package Actual {}");
+
+        let TwinMode::Twin(twin) = TwinMode::open(tmp.path()).unwrap() else {
+            panic!("expected Twin mode");
+        };
+        let errors = twin.discover_sysml_sources_checked().unwrap_err();
+        assert!(
+            errors.iter().any(|error| error.contains("is not indexed")),
+            "{errors:?}"
+        );
+        assert!(
+            errors.iter().any(|error| error.contains("excluded by")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn component_registry_requires_unique_owned_requirement_and_verification() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(
+            &tmp.path().join("twin.toml"),
+            r#"
+name = "component_twin"
+version = "0.1.0"
+
+[sysml]
+paths = ["requirements"]
+
+[[components]]
+name = "lander.bus"
+requirements = "requirements/bus.sysml"
+verification = "Bus::Verify"
+usd_path = "/World/Lander/Bus"
+
+[[components]]
+name = "rover.wheels"
+requirements = "requirements/wheels.sysml"
+verification = "Wheels::Verify"
+usd_path = "/World/Rover/Wheels"
+
+[verification]
+[[verification.cases]]
+name = "Bus::Verify"
+scene = "tests/bus.usda"
+script = "tests/bus.rhai"
+
+[[verification.cases]]
+name = "Wheels::Verify"
+scene = "tests/wheels.usda"
+script = "tests/wheels.rhai"
+"#,
+        );
+        for (path, contents) in [
+            ("requirements/bus.sysml", "package Bus {}"),
+            ("requirements/wheels.sysml", "package Wheels {}"),
+            ("tests/bus.usda", "#usda 1.0\n"),
+            ("tests/wheels.usda", "#usda 1.0\n"),
+            ("tests/bus.rhai", ""),
+            ("tests/wheels.rhai", ""),
+        ] {
+            write(&tmp.path().join(path), contents);
+        }
+        let TwinMode::Twin(twin) = TwinMode::open(tmp.path()).unwrap() else {
+            panic!("expected Twin mode");
+        };
+        let errors = twin.component_registry_errors();
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn component_registry_rejects_shared_acceptance_artifacts() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(
+            &tmp.path().join("twin.toml"),
+            r#"
+name = "invalid_component_twin"
+version = "0.1.0"
+
+[[components]]
+name = "a"
+requirements = "a.sysml"
+verification = "A::Verify"
+
+[[components]]
+name = "b"
+requirements = "a.sysml"
+verification = "A::Verify"
+
+[verification]
+[[verification.cases]]
+name = "A::Verify"
+scene = "test.usda"
+script = "test.rhai"
+"#,
+        );
+        write(&tmp.path().join("a.sysml"), "package A {}");
+        write(&tmp.path().join("test.usda"), "#usda 1.0\n");
+        write(&tmp.path().join("test.rhai"), "");
+        let TwinMode::Twin(twin) = TwinMode::open(tmp.path()).unwrap() else {
+            panic!("expected Twin mode");
+        };
+        let errors = twin.component_registry_errors();
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("share requirement source")));
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("share verification `A::Verify`")));
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("share verification scene")));
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("share verification script")));
+    }
+
+    #[test]
     fn twin_mode_with_manifest() {
         let tmp = tempfile::tempdir().unwrap();
         write(
@@ -935,6 +1292,7 @@ version = "0.1.0"
             usd: None,
             sysml: None,
             verification: None,
+            components: Vec::new(),
             modelica: None,
             journal: None,
             downloads: None,

@@ -70,10 +70,10 @@ fn attribute(report, name) {
         return #{ok: false, error: "SysML attribute name is missing"};
     }
     if name.contains("::") {
-        if report.attributes_qualified == () || report.attributes_qualified[name] == () {
-            return #{ok: false, error: "qualified SysML attribute is missing: " + name};
+        if report.attributes_qualified != () && report.attributes_qualified[name] != () {
+            return #{ok: true, record: report.attributes_qualified[name]};
         }
-        return #{ok: true, record: report.attributes_qualified[name]};
+        return #{ok: false, error: "qualified SysML attribute is missing: " + name};
     }
     if report.attribute_collisions != () {
         for collision in report.attribute_collisions {

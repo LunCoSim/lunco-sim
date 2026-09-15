@@ -115,13 +115,15 @@ should be introduced.
 The current compact bridge is `query("ValidateSysml", #{path: ...})`. It uses
 the same `lunco-scene-validation` parser/resolver as `ValidateAsset`; a
 `twin://name` path uses the indexed Twin source set and manifest `[sysml]`
-roots. The bounded result contains typed `attributes`, requirement and
-verification records, source files, diagnostics, and `source_revision`. It
-also exposes a qualified attribute map and reports short-name collisions, so a
-Rhai consumer can use a convenient local key when it is unique and fall back
-to the lossless qualified key when definitions reuse a name. Rhai therefore
-reads the canonical SysML source through the existing asset path without
-copying the full element graph or walking the Twin filesystem a second time.
+roots. The bounded result contains typed attributes, requirement and
+verification records, source files, diagnostics, and `source_revision`. Its
+compact attribute table is keyed only by the qualified SysML name; the
+short-name projection is deliberately empty so colliding component literals
+are never duplicated or silently overwritten. Rhai therefore reads the
+canonical SysML source through the existing asset path without copying the
+full element graph or walking the Twin filesystem a second time. The full
+`ValidateAsset` report remains available for IDE/source-span tooling and may
+include short-name collisions.
 
 For component-level suites, `sysml_requirements::evaluate(source, checks)`
 returns one structured result per check. The shared

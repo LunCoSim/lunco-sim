@@ -139,13 +139,14 @@ For production checks, the scene-validation plugin registers the compact
 `ValidateSysml { path }` query. A filesystem path or `twin://name/relative`
 validates one source; `twin://name` loads the manifest-declared, indexed Twin
 source set. The query returns typed attributes, requirement/verification
-records, source files, diagnostics, and a deterministic source revision. It
-also exposes a qualified attribute map and reports short-name collisions. A
-Rhai consumer may use a local key only when it is unique; an ambiguous lookup
-is a hard failure and must be rewritten with the qualified key. The shared
-`lunco-sysml-report` crate owns this transport shape, keeping the Rhai/API
-boundary bounded without a second filesystem walker or product-specific Rust
-projection.
+records, source files, diagnostics, and a deterministic source revision. The
+compact Rhai projection uses one lossless map keyed by qualified SysML names;
+it does not duplicate a short-name map that could overwrite colliding
+component literals. Short-name collisions remain available in the full
+validation report for tooling, while a requirement script must use the
+qualified key. The shared `lunco-sysml-report` crate owns this transport shape,
+keeping the Rhai/API boundary bounded without a second filesystem walker or
+product-specific Rust projection.
 
 Acceptance remains Twin-authored: each Twin keeps its SysML requirements, USD
 fixture, and Rhai scenario together. Core runtime code contains only this
@@ -226,13 +227,18 @@ authored runtime verdict:
    qualified verification-case name to an indexed production scene and Rhai
    observer. Missing, duplicate, unsafe or mismatched mappings are explicit
    errors; the SysML file remains standard and portable.
-4. **Read-only Rhai bridge.** `ValidateSysml`,
+4. **Component ownership.** Optional `[[components]]` records make the split
+   enforceable: each component names one indexed `.sysml`/`.kerml` requirement
+   source and one qualified verification case. Shared requirement sources,
+   scenes, scripts, missing mappings, and unsafe USD prim roots are rejected;
+   the case supplies the component's Twin-local USD fixture and Rhai observer.
+5. **Read-only Rhai bridge.** `ValidateSysml`,
    `sysml_requirements::source()` and the native report helpers expose the
    resolved requirement/verification snapshot and source revision. The generic
    `sysml_requirements::evaluate` tool observes the composed USD stage and
    `report_structured_verdict` emits machine-readable evidence plus the normal
    test verdict envelope. No requirement-specific Rust assertion is added.
-5. **Production selector.** `luncosim test --scene <PATH> --verification
+6. **Production selector.** `luncosim test --scene <PATH> --verification
    QUALIFIED_NAME` validates the Twin mapping before constructing the
    simulation and selects its declared verdict channel. The mapped Rhai
    observer still owns measurement and verdict policy.

@@ -453,8 +453,9 @@ EXIT CODES:
 
 /// Resolve and validate a Twin-owned verification selection before constructing
 /// the application.  The scene runner still executes the authored Rhai
-/// observer; this guard only proves that the requested qualified SysML case,
-/// scene, script mapping, and verdict channel agree in the Twin manifest.
+/// observer; this guard proves that the requested qualified SysML case,
+/// component ownership, scene/script mapping, and verdict channel agree in
+/// the Twin manifest.
 fn apply_verification_selection(cli: &mut Cli) -> Result<(), String> {
     let Some(requested) = cli.verification.as_deref() else {
         return Ok(());
@@ -497,10 +498,11 @@ fn apply_verification_selection(cli: &mut Cli) -> Result<(), String> {
                     canonical_root.display()
                 )
             })?;
-            let structural = twin.verification_registry_errors();
+            let mut structural = twin.verification_registry_errors();
+            structural.extend(twin.component_registry_errors());
             if !structural.is_empty() {
                 return Err(format!(
-                    "Twin verification registry is invalid: {}",
+                    "Twin verification/component registry is invalid: {}",
                     structural.join("; ")
                 ));
             }

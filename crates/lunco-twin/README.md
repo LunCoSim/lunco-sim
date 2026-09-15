@@ -44,7 +44,8 @@ remote-twin milestone.
 |------|------|
 | [`TwinMode`] | `Orphan(PathBuf)` / `Folder(Twin)` / `Twin(Twin)` — the three ways to open content |
 | [`Twin`] | Loaded folder: `root` + optional `manifest` + file index + sub-twins |
-| [`TwinManifest`] | Serde-backed `twin.toml` (name, version, optional description + default perspective + `children` + project settings) |
+| [`TwinManifest`] | Serde-backed `twin.toml` (name, version, optional description + default perspective + `children` + SysML/verification/component ownership + project settings) |
+| [`ComponentManifest`] | One component-owned SysML/KerML source and qualified verification binding |
 | [`TwinChildRef`] | One `[[children]]` entry — `name` + (`path` or `url`) |
 | [`FileEntry`] | One discovered file: `relative_path` + `kind` |
 | [`FileKind`] | `Document(DocumentKindId)` / `FileReference` / `Unknown` |
@@ -63,6 +64,9 @@ remote-twin milestone.
 | `owns(handle)` | Returns `true` if `handle`'s path is under this Twin's folder or any sub-Twin's folder. **Core predicate for the Workspace's document-routing rule.** |
 | `find_owning(handle)` | Returns the **deepest** Twin in the subtree whose folder contains `handle` (sub-Twins win over their parent — matches Cargo's "nearest Cargo.toml" rule). |
 | `promote_to_twin(manifest)` | Writes `twin.toml` into a plain folder, registering it as a Twin. |
+| `discover_sysml_sources_checked()` | Returns the manifest-scoped SysML/KerML source set or explicit errors for missing/excluded declarations. |
+| `verification_registry_errors()` | Rejects unsafe, missing, duplicate, or mismatched Twin verification bindings. |
+| `component_registry_errors()` | Rejects components without unique indexed requirement sources and verification fixtures/scripts. |
 | `save_manifest()` / `reload()` | Manifest persistence + folder re-scan. |
 
 ## Minimal usage
