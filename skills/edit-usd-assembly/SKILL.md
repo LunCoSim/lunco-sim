@@ -67,6 +67,29 @@ the final file. After each coherent change set:
 5. show the result to the user and take feedback before the next material
    change or final save.
 
+The edited document must be the owner of the part being changed. A component
+edit is authored in that component's own USD document; the assembly receives
+only references, instance transforms, variants, and host wiring. Once the
+typed operation is accepted, live projection automatically refreshes every
+already-mounted dependent stage that references the changed `twin://` layer.
+This refresh is dependency-scoped (unrelated stages are untouched), preserves
+the existing preview camera, orbit/zoom, selection, and view tab, and does not
+close/reopen the preview. Do not add a manual reload loop or duplicate the
+component under the assembly to force a visual update. If a Twin has a
+deliberate local policy, it may register the generic `usd.component_refresh`
+Rhai hook and return `#{action: "propagate"}`, `#{action: "defer"}`, or
+`#{action: "reject"}`. Invalid hook output is a visible diagnostic and does
+not silently fall back to a different authoring path; unregistering the hook
+restores the built-in automatic propagation policy.
+
+When opening a file from inside a registered Twin, verify that
+`InspectUsdViewport` reports the Twin-relative `stage_asset_path` and the
+component URI in `recipe_layers`. The viewport resolves the assigned Twin
+authority before loading the stage; synthetic `__viewport_*` authorities are
+only for files outside registered Twins. If the authority or layer closure is
+wrong, stop and report it before editing—the assembly cannot refresh a
+different asset identity.
+
 Use a project-local ignored artifact path such as
 `target/assembly-editor/lander-after-mount.png` for screenshots. Do not create
 an alternate screenshot or state protocol in `/tmp`, and do not treat a
@@ -639,6 +662,12 @@ Use the smallest existing typed intent that expresses the change:
   `data.change_set_id` before treating the edit as accepted. Use
   `nurbs::set_point(doc, path, index, point)` only when the boolean convenience
   result is sufficient. Never infer the document from the active editor tab.
+- Every newly authored component must declare `upAxis = "Y"` and
+  `metersPerUnit = 1.0` in its own stage header. `NewDocument` supplies this
+  canonical scaffold. If an imported stage reports different metrics, stop,
+  record the stage convention, and verify the component in its own preview
+  before placing it in an assembly; never compensate with unexplained scale
+  or translation constants.
 - `assembly_edit::references(doc, edit_target, path, references, list_op,
   parent_gen)` authors existing reference arcs through `SetReferenceArcs`.
   Each entry carries an asset identity and optional absolute target prim path.

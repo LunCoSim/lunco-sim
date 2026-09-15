@@ -8934,6 +8934,7 @@ dependencies = [
  "lunco-core-session",
  "lunco-doc",
  "lunco-doc-bevy",
+ "lunco-hooks",
  "lunco-render",
  "lunco-storage",
  "lunco-twin",

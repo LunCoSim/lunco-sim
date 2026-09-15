@@ -696,7 +696,10 @@ fn new_document_with_usd_kind_creates_untitled() {
     let reg = app.world().resource::<DocumentRegistry<UsdDocument>>();
     assert_eq!(reg.ids().count(), 1);
     let id = reg.ids().next().unwrap();
-    assert!(reg.host(id).unwrap().document().origin().is_untitled());
+    let doc = reg.host(id).unwrap().document();
+    assert!(doc.origin().is_untitled());
+    assert!(doc.source().contains("upAxis = \"Y\""));
+    assert!(doc.source().contains("metersPerUnit = 1.0"));
 }
 
 #[test]

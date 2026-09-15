@@ -128,6 +128,23 @@ impl ApiQueryProvider for InspectUsdViewportProvider {
         let mut previews: Vec<_> = viewport
             .sessions()
             .map(|session| {
+                let (stage_asset_path, recipe_layers) = world
+                    .get_resource::<Assets<UsdStageAsset>>()
+                    .and_then(|assets| assets.get(session.stage_handle()))
+                    .map(|asset| {
+                        let mut layers = asset
+                            .recipe
+                            .as_ref()
+                            .map(|recipe| recipe.bytes.keys().cloned().collect::<Vec<_>>())
+                            .unwrap_or_default();
+                        layers.sort();
+                        let path = world
+                            .get_resource::<AssetServer>()
+                            .and_then(|server| server.get_path(session.stage_handle().id()))
+                            .map(|path| path.path().to_string_lossy().into_owned());
+                        (path, layers)
+                    })
+                    .unwrap_or((None, Vec::new()));
                 let mut views: Vec<_> = viewport
                     .views()
                     .filter(|view| view.preview() == session.id())
@@ -154,6 +171,9 @@ impl ApiQueryProvider for InspectUsdViewportProvider {
                     "preview": session.id().0,
                     "doc_id": session.doc(),
                     "edit_target": session.edit_target().as_str(),
+                    "stage_asset_id": format!("{:?}", session.stage_handle().id()),
+                    "stage_asset_path": stage_asset_path,
+                    "recipe_layers": recipe_layers,
                     "projected_generation": session.projected_generation(),
                     "projection_ready": session.projection_ready(),
                     "text_ready": session.text_ready(),
@@ -3980,6 +4000,38 @@ fn viewport_twin_coords(world: &mut World, doc: DocumentId) -> Option<(String, S
         // is enough for the overlay to serve the composed source.
         _ => (std::path::PathBuf::from("."), "scene.usda".to_string()),
     };
+
+    // A file opened from inside an already registered Twin must keep that
+    // Twin's real authority.  Using a synthetic `__viewport_*` authority here
+    // would make a component edit invisible to an assembly recipe whose
+    // resolver keys the same layer as `twin://<twin>/<relative-path>`.
+    // Resolve the deepest matching registered root so nested authorities remain
+    // deterministic when more than one Twin contains the file.
+    if matches!(host.document().origin(), DocumentOrigin::File { .. }) {
+        let roots = world.resource::<TwinRoots>();
+        if let Ok(names) = roots.names() {
+            let mut matches = names
+                .into_iter()
+                .filter_map(|name| {
+                    let root = roots.root_for(&name).ok().flatten()?;
+                    let relative = base.join(&rel).strip_prefix(&root).ok()?.to_path_buf();
+                    Some((root, name, relative))
+                })
+                .collect::<Vec<_>>();
+            matches.sort_by(|left, right| {
+                right
+                    .0
+                    .components()
+                    .count()
+                    .cmp(&left.0.components().count())
+                    .then_with(|| left.1.cmp(&right.1))
+            });
+            if let Some((_, name, relative)) = matches.into_iter().next() {
+                return Some((name, relative.to_string_lossy().replace('\\', "/")));
+            }
+        }
+    }
+
     // A stable, URI-safe synthetic twin name for this document.
     let name =
         format!("__viewport_{doc}").replace(|c: char| !c.is_ascii_alphanumeric() && c != '_', "_");
