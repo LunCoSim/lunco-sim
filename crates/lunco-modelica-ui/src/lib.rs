@@ -12,6 +12,8 @@ pub mod ui;
 #[cfg(feature = "ui")]
 use bevy::prelude::*;
 #[cfg(feature = "ui")]
+use lunco_modelica_ast::pretty;
+#[cfg(feature = "ui")]
 use lunco_modelica_core::ModelicaCorePlugin as CoreModelicaPlugin;
 
 #[cfg(feature = "ui")]
