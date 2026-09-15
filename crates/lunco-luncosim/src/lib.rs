@@ -231,7 +231,7 @@ mod render_profile_tests {
 /// `--no-vsync`, `--log-diag`), `ui::mod` (`--no-throttle`),
 /// `lunco_networking::NetworkMode::from_args` (`--host`, `--connect`),
 /// `lunco_networking::server::resolve_cert_paths` (`--cert`, `--key`) and
-/// `lunco_workbench::window_placement` (`--window-pos`). Grep all of them before
+/// `lunco_workbench_window::window_placement` (`--window-pos`). Grep all of them before
 /// editing this: an undocumented flag is invisible, and a documented flag that
 /// nothing parses is a lie.
 #[cfg(not(target_family = "wasm"))]
@@ -555,7 +555,7 @@ fn luncosim_window(
         fit_canvas_to_parent: true,
         present_mode,
         // Centralized merged-titlebar chrome + persisted geometry.
-        ..lunco_workbench::restored_window(title)
+        ..lunco_workbench_window::restored_window(title)
     };
     if render_profile == LunCoSimRenderProfile::Fast {
         // A smaller default framebuffer is the largest predictable saving on

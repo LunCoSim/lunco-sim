@@ -866,12 +866,12 @@ impl Panel for WelcomePanel {
         if open_folder {
             // Native OpenFolder picker. Classified at the observer
             // level (twin.toml → OpenTwin, else Folder).
-            ctx.trigger(lunco_workbench::file_ops::ShowOpenFolderPicker {});
+            ctx.trigger(lunco_workbench_file_ops::ShowOpenFolderPicker {});
         }
         if open_file {
             // Native OpenFile picker. Web doesn't support folder
             // pickers yet, so we offer file picking instead.
-            ctx.trigger(lunco_workbench::file_ops::ShowOpenFilePicker {});
+            ctx.trigger(lunco_workbench_file_ops::ShowOpenFilePicker {});
         }
         if let Some(filename) = open_bundled {
             let stem = filename.strip_suffix(".mo").unwrap_or(filename).to_string();

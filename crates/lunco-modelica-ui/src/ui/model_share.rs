@@ -11,11 +11,11 @@
 
 use bevy::prelude::*;
 use lunco_core::{on_command, register_commands};
-use lunco_workbench::file_ops::CopyShareLink;
+use lunco_workbench_file_ops::CopyShareLink;
 
 use crate::model_share::share_url;
 
-// The typed struct is owned by `lunco-workbench` (so HTTP-API introspection sees
+// The typed struct is owned by `lunco-workbench-file-ops` (so HTTP-API introspection sees
 // the verb even in a `--no-ui` server that never installs this plugin); the
 // observer that actually touches the clipboard lives here, and registers itself
 // the same way as every other command.

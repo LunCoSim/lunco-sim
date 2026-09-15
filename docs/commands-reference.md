@@ -1175,7 +1175,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Close the primary window (sends `AppExit::Success`).
 
-- *defined in:* `crates/lunco-workbench/src/window_command.rs`
+- *defined in:* `crates/lunco-workbench-window/src/window_command.rs`
 - *fields:* none — call with `CloseWindow` (no params)
 
 #### `CopyShareLink`
@@ -1198,7 +1198,7 @@ actually call, with the fields the deserializer actually accepts. See the
  Maximize / restore the primary OS window. `maximized = None`
  toggles based on [`WindowMaximized`].
 
-- *defined in:* `crates/lunco-workbench/src/window_command.rs`
+- *defined in:* `crates/lunco-workbench-window/src/window_command.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1208,7 +1208,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Minimize the primary OS window.
 
-- *defined in:* `crates/lunco-workbench/src/window_command.rs`
+- *defined in:* `crates/lunco-workbench-window/src/window_command.rs`
 - *fields:* none — call with `MinimizeWindow` (no params)
 
 #### `SaveAll`

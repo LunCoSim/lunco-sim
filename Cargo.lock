@@ -7549,7 +7549,7 @@ dependencies = [
  "lunco-usd-sim",
  "lunco-usd-sim-core",
  "lunco-usd-sim-cosim",
- "lunco-workbench",
+ "lunco-workbench-window",
  "lunco-workspace",
  "serde_json",
  "velopack",
@@ -7837,6 +7837,7 @@ dependencies = [
  "lunco-workbench-core",
  "lunco-workbench-guided-ui",
  "lunco-workbench-widgets",
+ "lunco-workbench-window",
  "lunco-workspace",
  "resvg",
  "serde",
@@ -8060,8 +8061,10 @@ dependencies = [
  "lunco-workbench-core",
  "lunco-workbench-datasets-ui",
  "lunco-workbench-file-dialog",
+ "lunco-workbench-file-ops",
  "lunco-workbench-guided-ui",
  "lunco-workbench-widgets",
+ "lunco-workbench-window",
  "lunco-workspace",
  "lunco-workspace-api",
  "rumoca-compile",
@@ -9408,6 +9411,7 @@ dependencies = [
  "lunco-workbench-file-ops",
  "lunco-workbench-text-editor",
  "lunco-workbench-widgets",
+ "lunco-workbench-window",
  "lunco-workspace",
  "lunco-workspace-api",
  "serde",
@@ -9516,6 +9520,16 @@ name = "lunco-workbench-widgets"
 version = "0.1.0-dev"
 dependencies = [
  "bevy_egui",
+]
+
+[[package]]
+name = "lunco-workbench-window"
+version = "0.1.0-dev"
+dependencies = [
+ "bevy",
+ "lunco-core",
+ "lunco-settings",
+ "serde",
 ]
 
 [[package]]

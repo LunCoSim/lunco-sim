@@ -147,6 +147,7 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 | **`lunco-workbench-file-dialog`** | Reusable native/wasm file-dialog capability: typed open/save/folder requests, backend resolution events, browser-picked text, and browser downloads. It owns dialog dependencies (`rfd`/wasm DOM) outside storage, document, and shell contracts. |
 | **`lunco-workbench-file-ops`** | Reusable windowed file-workflow adapter: typed picker commands, picker-result routing, Twin/document save and rename coordination. It reuses `lunco-storage`, `lunco-workbench-file-dialog`, `lunco-workspace`, and document contracts without making storage own UI policy. |
 | **`lunco-workbench-text-editor`** | Reusable generic source editor: source-only text paths, asset/Twin/ephemeral source loading, async storage writes, tab lifecycle, and source-editor panel registration. It reuses the core source/tab contracts and shared text-editor widget without depending on the concrete docking shell. |
+| **`lunco-workbench-window`** | Reusable OS-window capability: typed minimize/maximize/close commands, merged-titlebar construction, settings-backed geometry persistence, and explicit native placement. It depends on Bevy window APIs and `lunco-settings`, not the concrete Workbench shell. |
 | **`lunco-workbench-browser`** | Reusable Twin and Files browser feature: browser section registry and query state, filesystem and library navigation, rename/open actions, and the `TwinBrowserPanel`/`FilesPanel` surfaces. It depends on workbench core/widgets and document/workspace contracts, but not the concrete docking shell or dataset processing stack. |
 | **`lunco-workbench-datasets-ui`** | Optional browser presentation for Twin-declared downloadable resources. It projects `lunco-assets-datasets`' shared registry and emits its typed request/cancel events without making the generic browser depend on provisioning and processing. |
 | **`lunco-capture`** | Render-bound screenshot and deterministic offline-recording capability: typed capture commands, GPU readback, frame pacing, PNG/video sinks, and recording status. It is an application capability shared by the workbench and windowless/offscreen hosts, not a workbench subsystem. |
@@ -670,6 +671,13 @@ The production file-dialog capability used by the workbench and domain UI.
 It owns native `rfd` and browser dialog/download adapters plus the typed
 picker request/result events. `lunco-storage` remains an I/O abstraction and
 does not acquire dialog or platform-window dependencies.
+
+**`lunco-workbench-window`**
+Reusable OS-window capability. It owns typed window commands, merged-titlebar
+construction, settings-backed geometry persistence, and explicit native window
+placement. Application binaries use this package directly when constructing
+their primary window; the concrete Workbench composes its command and
+persistence plugins but does not re-export their APIs.
 
 **`lunco-workbench-browser`**
 Reusable navigation feature for a rendered host. It owns the Twin and Files

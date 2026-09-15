@@ -1,12 +1,12 @@
 //! Persisted OS-window geometry (size / position / maximized).
 //!
 //! VSCode reopens with the same window bounds it closed with. We do the
-//! same: the *global default* geometry rides in the one shared
-//! the shared LunCoSim settings file under the `"window"` key, via
+//! same: the *global default* geometry rides in the shared LunCoSim settings
+//! file under the `"window"` key, via
 //! [`lunco_settings`] — the canonical home for persisted user
-//! preferences (AGENTS.md §3). Per-Twin window bounds layer on top in
-//! [`crate::workspace_state`] (VSCode's `workspaceStorage`); this module
-//! owns only the global baseline.
+//! preferences (AGENTS.md §3). Per-Twin window bounds layer on top in the
+//! concrete Workbench's workspace-state capability (VSCode's
+//! `workspaceStorage`); this module owns only the global baseline.
 //!
 //! ## Restore happens before the window exists
 //!
@@ -19,9 +19,9 @@
 //!
 //! ## Save happens reactively
 //!
-//! [`WorkbenchPlugin`](crate::WorkbenchPlugin) registers
-//! [`WindowGeometry`] as a settings section (so `lunco-settings` flushes
-//! it on change) and adds [`save_window_geometry`], which mirrors the
+//! [`WindowPersistencePlugin`] registers [`WindowGeometry`] as a settings
+//! section (so `lunco-settings` flushes it on change) and adds
+//! [`save_window_geometry`], which mirrors the
 //! live `Window` back into the resource only when the window actually
 //! moved/resized (`Changed<Window>`-gated — no per-frame polling, per
 //! AGENTS.md §7.1).
@@ -136,7 +136,7 @@ impl WindowGeometry {
 /// // native:
 /// primary_window: Some(Window {
 ///     present_mode,
-///     ..lunco_workbench::restored_window("My App")
+///     ..lunco_workbench_window::restored_window("My App")
 /// }),
 /// ```
 ///

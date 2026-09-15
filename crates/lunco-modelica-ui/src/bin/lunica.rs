@@ -329,7 +329,7 @@ fn default_plugins(headless: bool) -> bevy::app::PluginGroupBuilder {
                 fit_canvas_to_parent: true,
                 #[cfg(target_arch = "wasm32")]
                 prevent_default_event_handling: true,
-                ..lunco_workbench::restored_window(window_title)
+                ..lunco_workbench_window::restored_window(window_title)
             }),
             close_when_requested: false,
             ..default()

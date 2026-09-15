@@ -35,7 +35,7 @@
 //!
 //! - **Window geometry** (size / position / maximized) — global default
 //!   in the OS config directory via `lunco-settings`. See
-//!   [`window_persistence`].
+//!   [`lunco_workbench_window::WindowPersistencePlugin`].
 //! - **Per-Twin UI state** (active perspective + open-document list) —
 //!   `workspace-state/<hash>.json` in the shared LunCoSim config directory,
 //!   keyed by Twin path,
@@ -86,25 +86,12 @@ pub mod input_overlay;
 pub mod perf_hud;
 pub mod perspective_command;
 pub mod theme_command;
-pub mod window_command;
-pub mod window_persistence;
-pub mod window_placement;
 pub mod workspace_state;
 
 pub use perspective_help::{
     HelpMouse, HelpPopup, HelpShortcut, LiveHelpSection, LiveHelpSections, PerspectiveHelp,
     PerspectiveHelpPlugin, PerspectiveHelpRegistry,
 };
-pub use window_command::{
-    merged_titlebar_window, CloseWindow, MaximizeWindow, MinimizeWindow, WindowMaximized,
-};
-pub use window_persistence::{
-    load_window_geometry, restored_window, SkipWindowGeometrySave, WindowGeometry,
-    WindowPersistencePlugin, DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH,
-};
-pub use window_placement::wire_window_placement;
-#[cfg(not(target_arch = "wasm32"))]
-pub use window_placement::WindowPlacement;
 pub use workspace_state::{
     finalize_revision, revision_term, workspace_state_path, AppDocumentSessionExt,
     DocumentSessionCodec, DocumentSessionRegistry, DocumentSnapshot, RuntimeSurfaceLayout,
@@ -756,16 +743,16 @@ impl Plugin for WorkbenchPlugin {
         if !app.is_plugin_added::<theme_command::ThemeCommandPlugin>() {
             app.add_plugins(theme_command::ThemeCommandPlugin);
         }
-        if !app.is_plugin_added::<window_command::WindowCommandPlugin>() {
-            app.add_plugins(window_command::WindowCommandPlugin);
+        if !app.is_plugin_added::<lunco_workbench_window::WindowCommandPlugin>() {
+            app.add_plugins(lunco_workbench_window::WindowCommandPlugin);
         }
         if !app.is_plugin_added::<perspective_command::PerspectiveCommandPlugin>() {
             app.add_plugins(perspective_command::PerspectiveCommandPlugin);
         }
         // Persist & restore primary-window geometry (size / position /
         // maximized) via `lunco-settings`. Native-only; no-op on wasm.
-        if !app.is_plugin_added::<window_persistence::WindowPersistencePlugin>() {
-            app.add_plugins(window_persistence::WindowPersistencePlugin);
+        if !app.is_plugin_added::<lunco_workbench_window::WindowPersistencePlugin>() {
+            app.add_plugins(lunco_workbench_window::WindowPersistencePlugin);
         }
         // Per-Twin (per-project) volatile UI state — active perspective +
         // open-document list — keyed by Twin path, VSCode `workspaceStorage`
@@ -3721,7 +3708,7 @@ fn render_layout(
             }
         }
         if drag_resp.double_clicked() {
-            world.trigger(window_command::MaximizeWindow { maximized: None });
+            world.trigger(lunco_workbench_window::MaximizeWindow { maximized: None });
         }
 
         // Window title — read straight off the primary Bevy window so the
@@ -4289,14 +4276,14 @@ fn render_layout(
                 #[cfg(all(not(target_os = "macos"), not(target_arch = "wasm32")))]
                 {
                     let is_max = world
-                        .get_resource::<window_command::WindowMaximized>()
+                        .get_resource::<lunco_workbench_window::WindowMaximized>()
                         .map(|s| s.0)
                         .unwrap_or(false);
                     let close_response =
                         icon_button_sized(ui, UiIcon::Close, "Close", titlebar_control_size);
                     anchor_rects.push(("window.close".to_owned(), close_response.rect));
                     if close_response.clicked() {
-                        world.trigger(window_command::CloseWindow {});
+                        world.trigger(lunco_workbench_window::CloseWindow {});
                     }
                     let max_icon = if is_max {
                         UiIcon::Restore
@@ -4308,7 +4295,7 @@ fn render_layout(
                         icon_button_sized(ui, max_icon, max_hover, titlebar_control_size);
                     anchor_rects.push(("window.maximize".to_owned(), maximize_response.rect));
                     if maximize_response.clicked() {
-                        world.trigger(window_command::MaximizeWindow { maximized: None });
+                        world.trigger(lunco_workbench_window::MaximizeWindow { maximized: None });
                     }
                     let minimize_response = icon_button_sized(
                         ui,
@@ -4318,7 +4305,7 @@ fn render_layout(
                     );
                     anchor_rects.push(("window.minimize".to_owned(), minimize_response.rect));
                     if minimize_response.clicked() {
-                        world.trigger(window_command::MinimizeWindow {});
+                        world.trigger(lunco_workbench_window::MinimizeWindow {});
                     }
                     ui.separator();
                 }

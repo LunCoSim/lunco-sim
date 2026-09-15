@@ -21,7 +21,7 @@
 //!
 //! Global, app-wide preferences (theme, perf HUD, **default window
 //! geometry**) stay in the shared LunCoSim settings file via `lunco-settings` —
-//! see [`crate::window_persistence`]. This module owns only the
+//! see [`lunco_workbench_window::WindowPersistencePlugin`]. This module owns only the
 //! per-project slice.
 //!
 //! ## Persistence pattern

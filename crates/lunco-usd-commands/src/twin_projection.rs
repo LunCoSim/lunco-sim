@@ -734,7 +734,10 @@ fn refresh_dependent_stage_assets(
     source: &str,
 ) {
     let source_bytes = source.as_bytes().to_vec();
-    let candidates: Vec<(AssetId<UsdStageAsset>, lunco_usd_compose::recipe::StageRecipe)> = {
+    let candidates: Vec<(
+        AssetId<UsdStageAsset>,
+        lunco_usd_compose::recipe::StageRecipe,
+    )> = {
         let assets = world.resource::<Assets<UsdStageAsset>>();
         assets
             .iter()
@@ -743,7 +746,10 @@ fn refresh_dependent_stage_assets(
                     return None;
                 }
                 let recipe = asset.recipe.as_ref()?;
-                recipe.bytes.contains_key(layer_id).then(|| (id, recipe.clone()))
+                recipe
+                    .bytes
+                    .contains_key(layer_id)
+                    .then(|| (id, recipe.clone()))
             })
             .collect()
     };
@@ -752,7 +758,9 @@ fn refresh_dependent_stage_assets(
         if recipe.bytes.get(layer_id) == Some(&source_bytes) {
             continue;
         }
-        recipe.bytes.insert(layer_id.to_string(), source_bytes.clone());
+        recipe
+            .bytes
+            .insert(layer_id.to_string(), source_bytes.clone());
         let projection_plan = match UsdStageProjectionPlan::from_recipe(&recipe) {
             Ok(plan) => plan,
             Err(error) => {
@@ -766,7 +774,10 @@ fn refresh_dependent_stage_assets(
         // Keep the async asset cache and the live canonical stage on the same
         // closure.  Future previews opened against this asset therefore see the
         // same component bytes without a process restart or stale fallback.
-        if let Some(asset) = world.resource_mut::<Assets<UsdStageAsset>>().get_mut(stage_id) {
+        if let Some(mut asset) = world
+            .resource_mut::<Assets<UsdStageAsset>>()
+            .get_mut(stage_id)
+        {
             asset.recipe = Some(recipe.clone());
             asset.projection_plan = Arc::new(projection_plan);
         }

@@ -1,7 +1,7 @@
 //! OS window commands — Minimize / Maximize / Close — and the
 //! `merged_titlebar_window()` helper that configures a `Window` so the
-//! egui menu bar in [`crate::WorkbenchPlugin`] doubles as the OS title
-//! bar (decorations off on Linux/Windows, transparent fullsize titlebar on
+//! host's egui menu bar doubles as the OS title bar (decorations off on
+//! Linux/Windows, transparent fullsize titlebar on
 //! macOS).
 //!
 //! Buttons in the merged title bar fire these commands rather than
@@ -10,7 +10,7 @@
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use lunco_core::{on_command, register_commands, Command};
+use lunco_core::{Command, on_command, register_commands};
 
 /// Mirrors the last-requested maximize state. Bevy's `Window` exposes
 /// `set_maximized(bool)` but no symmetric reader, so we keep the bit
@@ -110,7 +110,7 @@ impl Plugin for WindowCommandPlugin {
 ///
 /// ```ignore
 /// WindowPlugin {
-///     primary_window: Some(lunco_workbench::merged_titlebar_window("My App")),
+///     primary_window: Some(lunco_workbench_window::merged_titlebar_window("My App")),
 ///     ..default()
 /// }
 /// ```

@@ -1,0 +1,15 @@
+[package]
+name = "lunco-workbench-window"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Reusable LunCoSim OS-window commands, placement, and geometry persistence"
+
+[dependencies]
+bevy = { workspace = true }
+lunco-core = { path = "../lunco-core" }
+lunco-settings = { path = "../lunco-settings" }
+serde = { workspace = true }
+
+[lints]
+workspace = true

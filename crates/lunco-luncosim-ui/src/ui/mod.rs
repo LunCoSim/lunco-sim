@@ -449,7 +449,7 @@ impl Plugin for LunCoSimUiPlugin {
         // present) inserts the resource, suppresses geometry persistence, and
         // registers the placer system — all in `lunco-workbench` so any binary
         // gets the same behaviour.
-        lunco_workbench::wire_window_placement(app, &args);
+        lunco_workbench_window::wire_window_placement(app, &args);
 
         // URL-driven boot (wasm). Lets headless test harnesses drive the
         // workbench without firing canvas pointer events. See

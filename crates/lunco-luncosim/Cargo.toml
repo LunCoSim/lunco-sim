@@ -92,7 +92,7 @@ lunco-luncosim-edit-ui = { path = "../lunco-luncosim-edit-ui", optional = true }
 # ── UI-only crate deps (gated behind the `ui` feature) ────────────────────
 # The headless server does not depend on this package, so these stay outside
 # its dependency closure: egui workbench, material editors, and UI presentation.
-lunco-workbench = { path = "../lunco-workbench", optional = true }
+lunco-workbench-window = { path = "../lunco-workbench-window", optional = true }
 lunco-capture = { path = "../lunco-capture", optional = true }
 # `default-features = false` lets the application choose the outward transport
 # explicitly: native `transport-http` or the target-selected wasm bridge.
@@ -137,7 +137,6 @@ ui = [
     # Screenshot capture is a rendered application capability kept on the UI edge.
     "dep:lunco-capture",
     "lunco-capture/api",
-    "lunco-workbench/api",
     "dep:lunco-render-bevy",
     "lunco-scripting/render-policy",
     "lunco-luncosim-ui/avatar-ui",
@@ -148,7 +147,7 @@ ui = [
     # is also enabled (`?`); the headless core leaves this off.
     "lunco-networking?/ui",
     "lunco-api-transport?/winit",
-    "dep:lunco-workbench",
+    "dep:lunco-workbench-window",
     "dep:lunco-settings",
     "bevy/bevy_winit",
     "bevy/x11",

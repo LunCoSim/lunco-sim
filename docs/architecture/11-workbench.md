@@ -614,7 +614,7 @@ restart:
   `<OS config dir>/lunco/workspace-state/<fnv1a-hex>.json`. This is VS Code's
   `workspaceStorage/<hash>/` model — repos stay clean, no `.gitignore`
   churn, and personal layout never leaks into a shared project.
-The `lunco-workbench::window_persistence` module restores the global `WindowGeometry` settings section before the main `Window` is created (default size is configured via `DEFAULT_WINDOW_{WIDTH,HEIGHT}` constants). Volatile UI state is managed via `lunco-workbench::workspace_state`, which loads a per-Twin `WorkspaceState` upon Twin activation and saves it when changes occur. Runtime-authored `window` surfaces that declare `draggable` store only their validated logical top-left override there; the manifest remains the default geometry and visibility authority, and stale surface ids are discarded during manifest reconciliation.
+The `lunco-workbench-window` crate restores the global `WindowGeometry` settings section before the main `Window` is created (default size is configured via `DEFAULT_WINDOW_{WIDTH,HEIGHT}` constants). Volatile UI state is managed via `lunco-workbench::workspace_state`, which loads a per-Twin `WorkspaceState` upon Twin activation and saves it when changes occur. Runtime-authored `window` surfaces that declare `draggable` store only their validated logical top-left override there; the manifest remains the default geometry and visibility authority, and stale surface ids are discarded during manifest reconciliation.
 
 An explicit host launch may provide a one-shot
 `WorkspaceStateRestorePolicy` initial perspective. The policy is consumed when
@@ -918,6 +918,11 @@ simulation default.
    │     - source panel registration and Twin-close lifecycle
    │         │
    │         ▼
+   ├── lunco-workbench-window  (OS-window capability)
+   │     - typed window commands and merged-titlebar construction
+   │     - settings-backed geometry and explicit native placement
+   │         │
+   │         ▼
    ├── lunco-workbench  (concrete app shell — this document)
    │     - Root layout (SidePanel + CentralPanel)
    │     - egui_dock materialization and persistence
@@ -953,8 +958,9 @@ simulation default.
   picker events; `lunco-workbench-file-ops` composes those events with the
   existing document/workspace commands.
 - `lunco-workbench-text-editor` owns generic source editing, while
-  `lunco-workbench` remains the concrete app framework — layout, persistence,
-  viewport composition, and panel host.
+  `lunco-workbench-window` owns OS-window commands and geometry/placement
+  persistence. `lunco-workbench` remains the concrete app framework — layout,
+  per-Twin workspace state, viewport composition, and panel host.
 - `lunco-workbench-browser` is the optional navigation feature — Twin/Files
   panels, browser state/actions, and the built-in generic sections.
 - `lunco-ui` is the widget library — draws things inside panels.
