@@ -110,6 +110,21 @@ pub fn library_read(rel: &std::path::Path) -> Option<Vec<u8>> {
         .find_map(|source| source.read(rel))
 }
 
+/// Open a relative file from the first installed filesystem source that
+/// contains it, returning the resolved path for diagnostics.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn library_open(rel: &std::path::Path) -> Option<(PathBuf, std::fs::File)> {
+    global_library_sources()
+        .iter()
+        .find_map(|source| match source {
+            LibrarySource::Filesystem(root) => {
+                let path = root.join(rel);
+                std::fs::File::open(&path).ok().map(|file| (path, file))
+            }
+            LibrarySource::InMemory(_) => None,
+        })
+}
+
 /// Return whether an installed source is in memory.
 pub fn has_in_memory_library() -> bool {
     global_library_sources()
@@ -125,6 +140,16 @@ pub fn primary_filesystem_library_root() -> Option<&'static std::path::Path> {
             LibrarySource::Filesystem(path) => Some(path.as_path()),
             LibrarySource::InMemory(_) => None,
         })
+}
+
+/// Count the Modelica source files in the installed filesystem roots.
+///
+/// The resident path set is the shared filesystem traversal used by source
+/// membership queries, so callers do not need to maintain a second recursive
+/// walker just to populate a load-status count.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn filesystem_library_file_count() -> usize {
+    native_path_set().len()
 }
 
 impl LibrarySource {

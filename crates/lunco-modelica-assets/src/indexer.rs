@@ -9,13 +9,12 @@ use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
-// `web_time::Instant`, NOT `std::time::Instant`: this module is unconditionally
-// `pub mod indexer` (lib.rs), so it ships to wasm — where `std::time::Instant::now()`
-// PANICS. `web_time` is a drop-in that uses `performance.now()` there.
+// `web_time::Instant` keeps the elapsed-time type portable if this module is
+// inspected from a cross-target build; the module itself is native-only.
 use web_time::Instant;
 
 /// Indexer options. Used by both the CLI binary and the in-process
-/// startup task in `LibraryRemotePlugin`. Kept tiny on purpose — adding
+/// startup task in `NativeLibraryIndexerPlugin`. Kept tiny on purpose — adding
 /// `clap` would pull megabytes of build into a tool whose whole point
 /// is to make the workbench start faster.
 #[derive(Default, Clone, Debug)]
@@ -39,7 +38,7 @@ impl Options {
     /// Index the supplied native source library root while writing generated artifacts
     /// beside that root. The CLI keeps using the canonical cache through
     /// [`Default`].
-    pub(crate) fn for_source_root(source_root: std::path::PathBuf) -> Self {
+    pub fn for_source_root(source_root: std::path::PathBuf) -> Self {
         Self {
             source_root: Some(source_root),
             ..Self::default()
@@ -106,6 +105,30 @@ fn print_help() {
     );
 }
 
+const PARSED_BUNDLE_ZSTD_LEVEL: i32 = 9;
+
+/// Write the runtime's native parsed-source bundle beside the indexed source.
+/// The compiler only reads this artifact; the host asset boundary is its sole
+/// producer.
+fn write_parsed_bundle(
+    path: &std::path::Path,
+    docs: &[(String, rumoca_compile::parsing::StoredDefinition)],
+) -> std::io::Result<()> {
+    let file = std::fs::File::create(path)?;
+    encode_parsed_bundle(std::io::BufWriter::new(file), docs)
+}
+
+fn encode_parsed_bundle<W: std::io::Write>(
+    writer: W,
+    docs: &[(String, rumoca_compile::parsing::StoredDefinition)],
+) -> std::io::Result<()> {
+    let mut encoder = zstd::stream::write::Encoder::new(writer, PARSED_BUNDLE_ZSTD_LEVEL)?;
+    bincode::serde::encode_into_std_write(docs, &mut encoder, bincode::config::standard())
+        .map_err(std::io::Error::other)?;
+    encoder.finish()?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Fallback strategy for ports without a Placement annotation
 // ---------------------------------------------------------------------------
@@ -149,8 +172,9 @@ fn fallback_port_position(causality: &Causality, port_index: usize) -> (f32, f32
     }
 }
 
-// The indexer emits the canonical [`crate::index::ClassEntry`] and
-// [`crate::visual_diagram::{PortDef, ParamDef}`] directly — `library_index.json`
+// The indexer emits the canonical
+// [`lunco_modelica_core::index::ClassEntry`] and
+// [`lunco_modelica_core::visual_diagram::{PortDef, ParamDef}`] directly — `library_index.json`
 // deserialises straight back into those types at runtime, so there is no
 // indexer-local mirror to keep field-aligned by hand.
 
@@ -193,7 +217,7 @@ struct SourceLibraryIndexer {
     /// prebuilt source library bundle. Indexer and runtime then have the
     /// SAME session shape; any `extends` chain that resolves at
     /// runtime resolves here too.
-    engine: crate::engine::ModelicaEngine,
+    engine: lunco_modelica_core::engine::ModelicaEngine,
     /// Flat map of fully-qualified-name → own ClassDef. Used for
     /// fields that don't need inheritance (description,
     /// class_kind, own diagram_graphics, port/param walks until
@@ -266,7 +290,8 @@ fn collect_documentation(
     class_def: &rumoca_compile::parsing::ast::ClassDef,
     out: &mut HashMap<String, String>,
 ) {
-    let (info, _revisions) = crate::doc_extract::extract_documentation(&class_def.annotation);
+    let (info, _revisions) =
+        lunco_modelica_core::doc_extract::extract_documentation(&class_def.annotation);
     if let Some(info) = info {
         out.insert(short_name.to_string(), clean_info_text(&info));
     }
@@ -334,7 +359,7 @@ fn clean_info_text(raw: &str) -> String {
 impl SourceLibraryIndexer {
     fn new() -> Self {
         Self {
-            engine: crate::engine::ModelicaEngine::new(),
+            engine: lunco_modelica_core::engine::ModelicaEngine::new(),
             classes: HashMap::new(),
             doc_infos: HashMap::new(),
             verbose: false,
@@ -530,8 +555,8 @@ impl SourceLibraryIndexer {
     fn resolve_inheritance(
         &self,
         class_name: &str,
-        ports: &mut Vec<crate::visual_diagram::PortDef>,
-        params: &mut Vec<crate::visual_diagram::ParamDef>,
+        ports: &mut Vec<lunco_modelica_core::visual_diagram::PortDef>,
+        params: &mut Vec<lunco_modelica_core::visual_diagram::ParamDef>,
         visited: &mut HashSet<String>,
     ) {
         if visited.contains(class_name) {
@@ -603,7 +628,7 @@ impl SourceLibraryIndexer {
                     // `canvas_diagram::si_unit_suffix`) can read
                     // `p.unit` directly. Until then `unit` is None
                     // and user-defined SI types lose their suffix.
-                    params.push(crate::visual_diagram::ParamDef {
+                    params.push(lunco_modelica_core::visual_diagram::ParamDef {
                         name: comp.name.clone(),
                         param_type: comp.type_name.to_string(),
                         default,
@@ -731,7 +756,7 @@ impl SourceLibraryIndexer {
                             self.resolve_in_scope(class_name, &type_str)
                                 .unwrap_or_else(|| type_str.clone())
                         };
-                        ports.push(crate::visual_diagram::PortDef {
+                        ports.push(lunco_modelica_core::visual_diagram::PortDef {
                             name: comp.name.clone(),
                             connector_type: type_str.clone(),
                             library_path: resolved_path,
@@ -745,7 +770,7 @@ impl SourceLibraryIndexer {
                             // projector/painter fills wire color, port
                             // kind, and flow-var metadata at runtime.
                             color: None,
-                            kind: crate::visual_diagram::PortKind::default(),
+                            kind: lunco_modelica_core::visual_diagram::PortKind::default(),
                             flow_vars: Vec::new(),
                         });
                     }
@@ -754,7 +779,7 @@ impl SourceLibraryIndexer {
         }
     }
 
-    fn index_all(&mut self) -> Vec<crate::index::ClassEntry> {
+    fn index_all(&mut self) -> Vec<lunco_modelica_core::index::ClassEntry> {
         use std::sync::Arc;
         let mut all_comps = Vec::new();
 
@@ -849,9 +874,9 @@ impl SourceLibraryIndexer {
                 // typed enum so consumers don't need a separate flag.
                 let class_kind = match (&class.class_type, class.expandable) {
                     (rumoca_compile::parsing::ClassType::Connector, true) => {
-                        crate::index::ClassKind::ExpandableConnector
+                        lunco_modelica_core::index::ClassKind::ExpandableConnector
                     }
-                    (t, _) => crate::index::map_class_type(t),
+                    (t, _) => lunco_modelica_core::index::map_class_type(t),
                 };
 
                 // Emit the canonical `ClassEntry` directly. Per-doc
@@ -859,7 +884,7 @@ impl SourceLibraryIndexer {
                 // equation_count, experiment) stay at their defaults —
                 // the live AST producer fills them when a user opens
                 // the file.
-                all_comps.push(crate::index::ClassEntry {
+                all_comps.push(lunco_modelica_core::index::ClassEntry {
                     name: full_name.to_string(),
                     kind: class_kind,
                     description: short_description.unwrap_or_default(),
@@ -876,7 +901,7 @@ impl SourceLibraryIndexer {
                     children: Vec::new(),
                     equation_count: 0,
                     experiment: None,
-                    resolution: crate::index::ClassResolutionState::Resolved,
+                    resolution: lunco_modelica_core::index::ClassResolutionState::Resolved,
                     resolution_message: None,
                 });
             }
@@ -1151,14 +1176,14 @@ pub fn run_with_cancel(
         bundled_nodes.len()
     );
 
-    // Borrowing mirror of `crate::visual_diagram::LibraryIndex` — same
+    // Borrowing mirror of `lunco_modelica_core::visual_diagram::LibraryIndex` — same
     // field shape, but holds slices so we serialise without cloning
     // `components`/`bundled` into an owned `LibraryIndex`. Both fields are
     // the canonical types the runtime deserialises into directly.
     #[derive(Serialize)]
     struct LocalLibraryIndex<'a> {
-        components: &'a [crate::index::ClassEntry],
-        bundled: &'a [crate::package_tree::types::PackageNode],
+        components: &'a [lunco_modelica_core::index::ClassEntry],
+        bundled: &'a [lunco_modelica_core::package_tree::types::PackageNode],
     }
     let output_path = library_root.join("library_index.json");
     let index = LocalLibraryIndex {
@@ -1180,14 +1205,13 @@ pub fn run_with_cancel(
     // directly via `Session::replace_parsed_source_set`, bypassing
     // every per-file cache key concern.
     bail_if_cancelled!();
-    // Native-only: the `modelica_library_indexer` binary never compiles to wasm, but
-    // `mod indexer` does, and `write_parsed_bundle` (zstd encoder) is
-    // native-gated — so cfg the write block to keep the wasm build clean.
+    // The package is native-only for this module, while the surrounding asset
+    // package keeps a wasm-safe empty library surface.
     #[cfg(not(target_arch = "wasm32"))]
     {
         let bundle_path = library_root.join("parsed-library.bin");
         let t_bundle = Instant::now();
-        match crate::library_remote::write_parsed_bundle(&bundle_path, &indexer.parsed_bundle) {
+        match write_parsed_bundle(&bundle_path, &indexer.parsed_bundle) {
             Ok(()) => {
                 let mb = fs::metadata(&bundle_path)
                     .map(|m| m.len() as f64 / (1024.0 * 1024.0))
@@ -1228,8 +1252,8 @@ pub fn run_with_cancel(
 /// Pure function over the in-memory `bundled_models()` list — no
 /// disk I/O beyond what `include_dir!` already inlined at compile
 /// time, so the cost is `n * parse(file)`, ≤ ~10 small files.
-fn scan_bundled_examples() -> Vec<crate::package_tree::types::PackageNode> {
-    use crate::models::bundled_models;
+fn scan_bundled_examples() -> Vec<lunco_modelica_core::package_tree::types::PackageNode> {
+    use lunco_modelica_core::models::bundled_models;
 
     // `parse_to_syntax(...).best_effort()` is the same path
     // `SyntaxCache::from_source` uses and is what the workspace
@@ -1253,13 +1277,13 @@ fn bundled_class_node(
     short_name: &str,
     class_def: &ClassDef,
     parent_path: &str,
-) -> crate::package_tree::types::PackageNode {
-    use crate::index::ClassKind;
-    use crate::package_tree::types::PackageNode;
-    use crate::state::ModelSource;
+) -> lunco_modelica_core::package_tree::types::PackageNode {
+    use lunco_modelica_core::index::ClassKind;
+    use lunco_modelica_core::package_tree::types::PackageNode;
+    use lunco_modelica_core::state::ModelSource;
 
     let qualified = lunco_modelica_ast::ast_extract::qualify(parent_path, short_name);
-    let kind = crate::index::map_class_type(&class_def.class_type);
+    let kind = lunco_modelica_core::index::map_class_type(&class_def.class_type);
     let id = format!("bundled://{filename}#{qualified}");
     let is_package = matches!(kind, ClassKind::Package);
     let children: Vec<PackageNode> = class_def
@@ -1303,14 +1327,14 @@ fn bundled_class_node(
 ///      qualified path.
 ///   3. If neither (1) nor (2) yielded anything, no warm work is performed.
 ///
-/// Each compile is gated by [`crate::ModelicaCompiler::compile_loaded`]'s
+/// Each compile is gated by [`lunco_modelica_core::ModelicaCompiler::compile_loaded`]'s
 /// existing 5-second heartbeat (see lib.rs), so even a multi-minute
 /// source library-heavy compile prints proof-of-life every 5s.
 fn warm_compile_pass(opts: &Options) {
     println!("[warm] starting compile pass — populating rumoca semantic-summary cache");
     let t_total = Instant::now();
 
-    let mut compiler = crate::ModelicaCompiler::new();
+    let mut compiler = lunco_modelica_core::ModelicaCompiler::new();
     // The warm pass compiles source library classes by name, so it needs the full
     // library resident up front. `new()` no longer preloads source library (Layer A:
     // source compilation admits roots from source text), so install it
@@ -1496,4 +1520,41 @@ enum WarmKind {
         source: String,
         filename: String,
     },
+}
+
+#[cfg(test)]
+mod parsed_bundle_tests {
+    use super::encode_parsed_bundle;
+    use std::io::Read;
+
+    /// The generated parsed-source artifact is a zstd-compressed bincode
+    /// stream. Keep this codec contract next to its sole producer without
+    /// pulling the asset writer into the compiler-core test target.
+    #[test]
+    fn parsed_bundle_roundtrips_in_memory() {
+        let source = "model M Real x; equation der(x) = -x; end M;";
+        let definition =
+            lunco_modelica_ast::parse_to_ast(source, "M.mo").expect("parse sample model");
+        let docs = vec![("M.mo".to_string(), definition)];
+
+        let mut encoded = Vec::new();
+        {
+            encode_parsed_bundle(&mut encoded, &docs).expect("encode parsed bundle");
+        }
+        assert_eq!(&encoded[..4], &[0x28, 0xB5, 0x2F, 0xFD]);
+
+        let mut decoder =
+            ruzstd::StreamingDecoder::new(encoded.as_slice()).expect("create zstd decoder");
+        let mut decoded = Vec::new();
+        decoder
+            .read_to_end(&mut decoded)
+            .expect("decode zstd stream");
+        let back: Vec<(String, rumoca_compile::parsing::StoredDefinition)> =
+            bincode::serde::decode_from_slice(&decoded, bincode::config::standard())
+                .expect("decode parsed bundle")
+                .0;
+
+        assert_eq!(back.len(), docs.len());
+        assert_eq!(back[0].0, docs[0].0);
+    }
 }

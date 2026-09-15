@@ -5,25 +5,11 @@ edition = "2021"
 license.workspace = true
 description = "Headless Modelica compiler, worker, and simulation runtime for LunCoSim"
 
-[[bin]]
-name = "modelica_library_indexer"
-path = "src/bin/modelica_library_indexer.rs"
-required-features = ["native-library-indexer"]
-
-[[bin]]
-name = "modelica_library_parse_bench"
-path = "src/bin/modelica_library_parse_bench.rs"
-required-features = ["native-library-indexer"]
-
 [features]
 # The compiler core is transport-free by default. API command completion is an
 # explicit host capability; Modelica query providers live in the separate
 # `lunco-modelica-api` package.
 default = []
-# Native source-library indexing is a provisioning/build capability. Keep it
-# out of headless compiler and server consumers; the Modelica UI enables it
-# when it owns the source-library browser and its rebuild action.
-native-library-indexer = ["dep:lunco-assets-datasets", "dep:regex"]
 # Compile the transport-free API contracts. Application roots add
 # `lunco-api-transport` when they expose native HTTP or the browser bridge.
 api = ["dep:lunco-api"]
@@ -71,6 +57,9 @@ web-time = { workspace = true }
 # (uri, StoredDefinition) shipped at build time, skipping a ~27-min
 # per-file parse on the page.
 bincode = { workspace = true }
+# Pure-Rust decoder for the native and web parsed-source bundles. The host
+# asset/indexer boundary owns the zstd encoder; runtime consumers only decode.
+ruzstd = "0.7"
 # Raster decoders used by egui_extras' `all_loaders`. Only the formats
 # actually present in source-library Resources/Images are enabled to keep the
 # compile surface small.
@@ -147,12 +136,10 @@ uuid = { workspace = true }
 # (missing `RelationProcessorDie` enumerant in pre-2004 Win10 SDKs).
 # Enable with `cargo run --features tracy --bin lunica` when profiling.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# The worker still uses rayon for native solve preparation. The indexer's
-# dataset/regex edges are optional below because source indexing is a
-# provisioning capability, not part of the default compiler runtime.
-lunco-assets-datasets = { path = "../lunco-assets-datasets", optional = true }
+# The worker still uses rayon for native solve preparation.
 rayon = { workspace = true }
-regex = { version = "1.10", optional = true }
+# Persistent prepared-solve cache compression used by the native worker.
+zstd = { workspace = true }
 
 # OS clipboard for the code editor's menu / toolbar / right-click Paste
 # buttons on native. Ctrl/Cmd+V already works through bevy_egui's own
@@ -161,14 +148,6 @@ regex = { version = "1.10", optional = true }
 # wasm-only; the native branch reads via arboard so the buttons match
 # the keyboard path. Already transitively present via bevy_egui's
 # `manage_clipboard` feature — no new compile.
-
-# zstd codec for the native pre-parsed source bundle (`.cache/library/parsed-library.bin`).
-# The bundle is now zstd-compressed bincode (~10× smaller on disk than the raw
-# bincode it replaced — matters because the cache is large and disk has filled
-# up before). C-backed, but native already links it via
-# `lunco-modelica-assets`'s `build_modelica_library_assets`, and
-# it's target-gated so wasm keeps using the pure-Rust `ruzstd` decoder below.
-zstd = { workspace = true }
 
 # Web-specific: wasm32-unknown-unknown needs JS interop for console output,
 # panic hooks, and RNG (std::time is unavailable).
@@ -236,11 +215,6 @@ web-sys = { workspace = true, features = [
 ] }
 js-sys = { workspace = true }
 console_error_panic_hook = { workspace = true }
-# Pure-Rust zstd decoder for the source bundle. Smaller than the
-# `zstd` crate (which uses a C dep) and the encoder side already runs
-# on native (see `lunco-modelica-assets/src/bin/build_modelica_library_assets.rs`).
-ruzstd = "0.7"
-
 [package.metadata.cargo-machete]
 # Feature-only browser RNG backend for transitive Bevy/Rumoca dependencies.
 ignored = ["getrandom"]

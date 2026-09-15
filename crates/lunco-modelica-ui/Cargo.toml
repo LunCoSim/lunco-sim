@@ -15,7 +15,8 @@ default = ["api", "transport-http", "ui", "scripting"]
 # no workbench shell. Consumers that need only the compiler (lunco-usd-sim on a
 # server) build with `default-features = false`.
 ui = [
-    "lunco-modelica-core/native-library-indexer",
+    "dep:lunco-modelica-assets",
+    "dep:lunco-assets-datasets",
     # Workbench API queries are UI-only, and NOT on `lunco-api` (a server build enables that).
     "lunco-workbench/api",
     "dep:bevy_egui", "dep:lunco-theme", "dep:lunco-workbench", "dep:lunco-workbench-state", "dep:lunco-workbench-window", "dep:lunco-workbench-browser", "dep:lunco-workbench-datasets-ui", "dep:lunco-workbench-core", "dep:lunco-workbench-guided-ui", "dep:lunco-workbench-file-dialog", "dep:lunco-workbench-file-ops", "dep:lunco-workbench-widgets", "dep:lunco-status-core", "dep:lunco-ui",
@@ -180,6 +181,8 @@ log = { version = "0.4", features = ["max_level_debug", "release_max_level_info"
 # (missing `RelationProcessorDie` enumerant in pre-2004 Win10 SDKs).
 # Enable with `cargo run --features tracy --bin lunica` when profiling.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+lunco-modelica-assets = { path = "../lunco-modelica-assets", optional = true }
+lunco-assets-datasets = { path = "../lunco-assets-datasets", optional = true }
 # OS clipboard for the code editor's menu / toolbar / right-click Paste
 # buttons on native. Ctrl/Cmd+V already works through bevy_egui's own
 # arboard plumbing, but the buttons go through

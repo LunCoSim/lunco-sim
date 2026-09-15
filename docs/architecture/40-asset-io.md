@@ -131,7 +131,9 @@ Three classes of crate legitimately bypass `AssetServer`:
 - **Filesystem-owning crates.** `lunco-assets-core` (asset roots, source
   resolution, and embedded asset access), `lunco-assets-download`
   (download/extract/install), `lunco-assets-processing` (native processing),
-  `lunco-assets` (worker lifecycle and CLI composition), `lunco-storage`
+  `lunco-assets` (worker lifecycle and CLI composition),
+  `lunco-modelica-assets` (native Modelica packaging and indexing tools),
+  `lunco-storage`
   (user-data persistence), and `lunco-twin`
   (Twin-folder traversal and manifest semantics). These are the owners of
   their respective filesystem concerns; the workbench and domain consumers
@@ -187,8 +189,9 @@ trail.
 > **Do not move these entries back into the root `clippy.toml`.**
 
 **Known debt, counted rather than hidden:** `lunco-modelica-core` has ~16 `std::fs`
-calls that *are* reachable on wasm (the Modelica library indexer, the package
-browser, the icon loader) — the long-standing source-library-on-web gap. They are **not**
+calls that *are* reachable on wasm (the package browser and icon loader) — the
+ long-standing source-library-on-web gap. The native Modelica indexer now lives
+ in `lunco-modelica-assets` and is not part of the wasm package. These sites are **not**
 `#[allow]`ed: a non-fatal CI step prints the count and the sites every run, and it
 must trend to zero. An `#[allow]` would hide the debt *and* blind the gate to new
 wasm bugs in those same files.

@@ -917,7 +917,7 @@ build_source_library_index() {
         return 0
     fi
     info "Reindexing source library → library_index.json (set SOURCE_LIBRARY_REINDEX=force to always run)..."
-    cargo run --release -q -p lunco-modelica-core --bin modelica_library_indexer -- -v
+    cargo run --release -q -p lunco-modelica-assets --bin modelica_library_indexer -- -v
     if [ $? -ne 0 ]; then
         error "Source-library indexing failed"
         exit 1

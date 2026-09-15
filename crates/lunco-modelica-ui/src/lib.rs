@@ -9,6 +9,9 @@ pub use lunco_modelica_core::*;
 #[cfg(feature = "ui")]
 pub mod ui;
 
+#[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
+mod native_library;
+
 #[cfg(feature = "ui")]
 use bevy::prelude::*;
 #[cfg(feature = "ui")]
@@ -44,6 +47,10 @@ impl Plugin for ModelicaPlugin {
     fn build(&self, app: &mut App) {
         if !app.is_plugin_added::<CoreModelicaPlugin>() {
             app.add_plugins(CoreModelicaPlugin);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if !app.is_plugin_added::<native_library::NativeLibraryIndexerPlugin>() {
+            app.add_plugins(native_library::NativeLibraryIndexerPlugin);
         }
         #[cfg(feature = "api")]
         if !app.is_plugin_added::<lunco_modelica_api::ModelicaApiQueriesPlugin>() {

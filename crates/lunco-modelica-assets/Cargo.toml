@@ -9,18 +9,34 @@ description = "Native Modelica asset packaging tools for LunCoSim"
 name = "build_modelica_library_assets"
 path = "src/bin/build_modelica_library_assets.rs"
 
+[[bin]]
+name = "modelica_library_indexer"
+path = "src/bin/modelica_library_indexer.rs"
+
+[[bin]]
+name = "modelica_library_parse_bench"
+path = "src/bin/modelica_library_parse_bench.rs"
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# This package is a native build tool. Its wasm target is an intentionally
-# empty bin, so keep the archive/parser toolchain out of web dependency builds.
+# This package is a native asset/tool boundary. Its wasm target keeps an empty
+# library/bin surface, so the archive/indexer toolchain stays out of web builds.
 lunco-assets-core = { path = "../lunco-assets-core" }
+lunco-modelica-core = { path = "../lunco-modelica-core" }
+lunco-modelica-ast = { path = "../lunco-modelica-ast" }
+log = "0.4"
 serde_json = { workspace = true }
+serde = { workspace = true }
 sha2 = { workspace = true }
 tar = { workspace = true }
 zstd = { workspace = true }
 rayon = { workspace = true }
+regex = "1.10"
+rumoca-compile = { workspace = true }
 rumoca-phase-parse = { workspace = true }
 rumoca-ir-ast = { workspace = true }
 bincode = { workspace = true }
+ruzstd = "0.7"
+web-time = { workspace = true }
 
 [lints]
 workspace = true

@@ -749,8 +749,9 @@ impl ModelicaCompiler {
     }
 
     /// Compile a source-library class that is already loaded into the session
-    /// (no `update_document` call). Used by the `modelica_library_indexer --warm`
-    /// pass to populate rumoca's semantic-summary cache for common
+    /// (no `update_document` call). Used by the
+    /// `lunco-modelica-assets` indexer's `--warm` pass to populate rumoca's
+    /// semantic-summary cache for common
     /// examples — the workbench's first compile of those classes is
     /// then a cache hit instead of paying the full multi-minute walk.
     pub fn compile_library_class(
@@ -1207,19 +1208,6 @@ pub mod models;
 pub mod simulation_session;
 
 pub mod experiments_runner;
-/// The Modelica source-library **indexer** — a host-side tool, not a runtime component: it walks the
-/// on-disk source library tree, parses every `.mo`, and emits `library_index.json` + the
-/// pre-parsed `parsed-library.bin` bundle. It is `std::fs`-shaped by definition and
-/// has no wasm caller — the browser never *builds* an index, it *consumes* the
-/// artifacts this produces (`library_remote` fetches the bundle over HTTP and
-/// installs it via `install_global_parsed_source_bundle`). It used to be an unconditional
-/// `pub mod`, so ~1.6k lines of dead directory-walking code shipped in the wasm
-/// bundle and tripped the wasm lint. It is now behind the explicit
-/// `native-library-indexer` feature: the web source-library path is
-/// `library_remote`, and headless compiler consumers do not compile the host
-/// scanner or dataset integration.
-#[cfg(all(not(target_arch = "wasm32"), feature = "native-library-indexer"))]
-pub mod indexer;
 pub mod modelica_library_settings;
 pub mod worker;
 
@@ -1392,10 +1380,10 @@ fn build_modelica_core(app: &mut App) {
     }
 
     // Point rumoca at the workspace's shared `.cache/rumoca/`, the
-    // same one `modelica_run` and `modelica_library_indexer` use. Without this
+    // same one `modelica_run` and the `lunco-modelica-assets` indexer use. Without this
     // alignment, the workbench reads XDG default (`~/.cache/rumoca`)
     // while the CLI tools warm `<workspace>/.cache/rumoca` —
-    // `modelica_library_indexer --warm` then does NOTHING for first workbench
+    // the indexer's `--warm` pass then does NOTHING for first workbench
     // compile, which stretches from ~12 s (warm) to 13+ minutes (cold,
     // observed). Honor an externally-set `RUMOCA_CACHE_DIR` if the
     // caller wants a sandboxed location (CI, tests).

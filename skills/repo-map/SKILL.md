@@ -82,9 +82,9 @@ export LUNICA_BIN="${LUNICA_BIN:-lunica}"
 # export LUNICA_BIN=target/debug/lunica
 ```
 
-**Utility / dev bins** (all in `lunco-modelica-core` unless noted): `modelica_run`
-(headless Modelica CLI → CSV), `modelica_library_indexer` (rebuild the Modelica-library search index — re-run
-after a source-library change), `lunica_worker` (wasm compile worker, bundled not run),
+**Utility / dev bins**: `modelica_run` (`lunco-modelica-core`, headless Modelica CLI → CSV),
+`modelica_library_indexer` (`lunco-modelica-assets`, rebuild the Modelica-library search index — re-run
+after a source-library change), `lunica_worker` (`lunco-modelica-core`, wasm compile worker, bundled not run),
 `build_modelica_library_assets` (`lunco-modelica-assets`), `net_smoke` (`lunco-networking`, transport smoke
 test). Authored luncosim behavior tests run through `luncosim test` plus their Rhai scenarios.
 Details:

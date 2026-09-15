@@ -156,8 +156,7 @@ mod native {
         } else {
             eprintln!(
                 "error: {} is required for the web editor bundle. \
-             Run `cargo run -p lunco-modelica-core --features native-library-indexer \
-             --bin modelica_library_indexer` first.",
+             Run `cargo run -p lunco-modelica-assets --bin modelica_library_indexer` first.",
                 index_path.display()
             );
             std::process::exit(1);

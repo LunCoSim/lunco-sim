@@ -156,12 +156,13 @@ Users can drag, split, tab, and float panels freely. Layout persists via `lunco-
 |--------|--------|-------------|
 | `lunica` | Desktop | Full Modelica workbench with all panels |
 | `lunica` | wasm32 | Web version (Modelica work in a dedicated Web Worker) |
-The headless tools are binaries of `lunco-modelica-core`:
+The headless Modelica tools are split between the compiler core and the native
+asset/tool package:
 
 | Binary | Target | Description |
 |--------|--------|-------------|
 | `modelica_tester` | CLI | Standalone tester for Modelica compilation |
-| `modelica_library_indexer` | CLI | Build `library_index.json`; with `--warm` also full-compiles explicitly selected classes so rumoca's semantic-summary cache is hot before the workbench opens |
+| `modelica_library_indexer` | CLI | `lunco-modelica-assets` tool that builds `library_index.json`; with `--warm` also full-compiles explicitly selected classes so rumoca's semantic-summary cache is hot before the workbench opens |
 | `modelica_run` | CLI | Headless: compile a `.mo`, step it for a fixed duration, optionally dump per-step CSV |
 
 ### CLI workflow — warm cache, then run headless
@@ -173,8 +174,7 @@ The two CLI binaries compose:
 #    every bundled asset model + any explicitly requested source classes.
 #    Takes ~7 min cold, ~30s if the parse cache from a prior run is intact.
 LUNCOSIM_WARM_DIRS="$(pwd)/assets/models" \
-  cargo run --release -p lunco-modelica-core --features native-library-indexer \
-    --bin modelica_library_indexer -- --warm
+  cargo run --release -p lunco-modelica-assets --bin modelica_library_indexer -- --warm
 
 # 2. Run AnnotatedRocketStage.RocketStage for 10s, dump per-step telemetry
 #    to CSV. After the warm pass above, compile is ~ms instead of minutes.

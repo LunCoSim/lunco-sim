@@ -4,10 +4,10 @@
 //!
 //! ## Native
 //!
-//! If the configured source-library root returns a path, we use it and
-//! build the editor index in the background. If it is absent, the generic
-//! dataset registry owns the explicit download; this plugin never opens a
-//! native network connection.
+//! If the configured source-library root returns a path, we install it as the
+//! runtime source. Native editor indexing/provisioning is composed separately
+//! by `lunco-modelica-assets`; this plugin never opens a native network
+//! connection.
 //!
 //! ## Web
 //!
@@ -32,11 +32,9 @@ use bevy::prelude::*;
 
 #[cfg(target_arch = "wasm32")]
 use lunco_assets_core::library::InMemoryLibrary as LibraryInMemory;
-#[cfg(any(target_arch = "wasm32", feature = "native-library-indexer"))]
+#[cfg(target_arch = "wasm32")]
 use lunco_assets_core::library::LibraryLoadPhase;
 use lunco_assets_core::library::{LibraryLoadState, LibrarySource as LibraryAssetSource};
-#[cfg(all(not(target_arch = "wasm32"), feature = "native-library-indexer"))]
-use lunco_assets_datasets::{DatasetRegistry, DatasetState};
 
 /// Process-wide pre-parsed source library documents. Populated on wasm by the
 /// chunked parse driver once the full bundle has been turned into
@@ -105,19 +103,18 @@ pub fn parsed_source_bundle(
         if let Some(bundle) = GLOBAL_PARSED_SOURCE_BUNDLE.get() {
             return Some(bundle);
         }
-        let bundle_path =
-            lunco_assets_core::source_library_dir("library").join("parsed-library.bin");
+        let bundle_rel = std::path::Path::new("parsed-library.bin");
         // The bundle is zstd-compressed bincode (~10× smaller on disk than the
         // raw bincode it replaced). A stale/foreign bundle that fails to decode
         // returns `Err` below → the caller cold-parses and rewrites it. The
         // decode streams — it never holds the whole file as a `Vec<u8>`.
-        match read_parsed_bundle_file(&bundle_path) {
+        match read_parsed_bundle_file() {
             Ok(Some(docs)) => {
                 info!(
                     "[source library] lazy-loaded pre-parsed bundle ({} docs) from `{}` \
                      into process-wide slot",
                     docs.len(),
-                    bundle_path.display()
+                    "installed source library"
                 );
                 install_global_parsed_source_bundle(docs);
             }
@@ -129,19 +126,13 @@ pub fn parsed_source_bundle(
                 warn!(
                     "[source library] parsed bundle at `{}` failed to decode ({e}); \
                      drill-in will parse source directly",
-                    bundle_path.display()
+                    bundle_rel.display()
                 );
             }
         }
     }
     GLOBAL_PARSED_SOURCE_BUNDLE.get()
 }
-
-/// zstd level for the native `parsed-library.bin` write. 9 is a good
-/// ratio/speed balance for a one-time (cold-parse / indexer) write — the
-/// disk win over raw bincode is ~10× either way; higher levels buy little.
-#[cfg(all(not(target_arch = "wasm32"), feature = "native-library-indexer"))]
-const PARSED_BUNDLE_ZSTD_LEVEL: i32 = 9;
 
 /// Read the native `parsed-library.bin` fast-path bundle (zstd-compressed
 /// bincode), streaming the decode so the whole file is never held as a
@@ -152,16 +143,16 @@ const PARSED_BUNDLE_ZSTD_LEVEL: i32 = 9;
 /// bundle) so the caller cold-parses the source root and rewrites it.
 #[cfg(not(target_arch = "wasm32"))]
 fn read_parsed_bundle_file(
-    path: &std::path::Path,
 ) -> Result<Option<Vec<(String, rumoca_compile::parsing::StoredDefinition)>>, String> {
-    let file = match std::fs::File::open(path) {
-        Ok(f) => f,
-        Err(_) => return Ok(None),
+    let Some((_, file)) =
+        lunco_assets_core::library::library_open(std::path::Path::new("parsed-library.bin"))
+    else {
+        return Ok(None);
     };
     if file.metadata().map(|m| m.len() == 0).unwrap_or(false) {
         return Ok(None); // empty / truncated
     }
-    let mut decoder = zstd::stream::read::Decoder::new(std::io::BufReader::new(file))
+    let mut decoder = ruzstd::StreamingDecoder::new(std::io::BufReader::new(file))
         .map_err(|e| format!("zstd decoder: {e}"))?;
     bincode::serde::decode_from_std_read::<
         Vec<(String, rumoca_compile::parsing::StoredDefinition)>,
@@ -170,25 +161,6 @@ fn read_parsed_bundle_file(
     >(&mut decoder, bincode::config::standard())
     .map(Some)
     .map_err(|e| format!("bincode: {e}"))
-}
-
-/// Write `docs` to `path` as zstd-compressed bincode (the native
-/// `parsed-library.bin` fast-path bundle). Streams straight into the encoder, so
-/// the ~165 MB of uncompressed bincode is never held in memory, and the file
-/// lands ~10× smaller than the raw bincode it replaces. Used by the native
-/// `modelica_library_indexer` build step.
-#[cfg(all(not(target_arch = "wasm32"), feature = "native-library-indexer"))]
-pub(crate) fn write_parsed_bundle(
-    path: &std::path::Path,
-    docs: &[(String, rumoca_compile::parsing::StoredDefinition)],
-) -> std::io::Result<()> {
-    let file = std::fs::File::create(path)?;
-    let mut encoder =
-        zstd::stream::write::Encoder::new(std::io::BufWriter::new(file), PARSED_BUNDLE_ZSTD_LEVEL)?;
-    bincode::serde::encode_into_std_write(docs, &mut encoder, bincode::config::standard())
-        .map_err(std::io::Error::other)?;
-    encoder.finish()?;
-    Ok(())
 }
 
 /// Inflate a `parsed-*.bin.zst` blob to the raw bincode bytes, *without*
@@ -545,8 +517,8 @@ fn kick_web_library_fetcher(
 /// Plugin that owns source library asset loading. Add once during app build.
 pub struct LibraryRemotePlugin;
 
-/// Web-only user intent for the source library bundle fetcher. Native downloads are
-/// owned by [`DatasetRegistry`] and requested by the generic data panel.
+/// Web-only user intent for the source library bundle fetcher. Native download
+/// requests remain owned by the generic dataset registry and data panel.
 #[cfg(target_arch = "wasm32")]
 #[derive(Event, Clone, Copy, Debug)]
 pub enum LibraryInstallAction {
@@ -570,81 +542,32 @@ impl Plugin for LibraryRemotePlugin {
 
         #[cfg(target_arch = "wasm32")]
         app.add_observer(on_library_install_action);
-        #[cfg(all(not(target_arch = "wasm32"), feature = "native-library-indexer"))]
-        {
-            app.add_observer(on_native_library_index_action);
-            app.add_systems(
-                Update,
-                (
-                    drain_native_library_install,
-                    drive_native_library_dataset,
-                    drive_native_library_index,
-                )
-                    .chain(),
-            );
-        }
-
         // (The source library-state → status-bus mirror is a UI reactive observer; it
         // lives in `ui::core_observers` and is registered by the UI plugin.
         // Core just owns `LibraryLoadState`.)
 
         // Native: use an already-materialised tree (workspace dev cache or a
-        // user-supplied override). The generic dataset registry owns any
-        // explicit download; this plugin only turns the installed tree into
-        // the Modelica source/index used by the domain.
+        // user-supplied override). Provisioning and editor-index generation
+        // are optional host capabilities composed by `lunco-modelica-assets`.
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let resolved_root = configured_native_library_root(app);
+            let settings = app
+                .world()
+                .resource::<crate::modelica_library_settings::LibrarySettings>();
+            let resolved_root = configured_native_library_root(settings);
 
             if let Some(root) = resolved_root {
-                let count = count_mo_files(&root);
-                let index_present = root.join("library_index.json").is_file();
-                info!(
-                    "[source library] using on-disk root {} ({count} .mo files)",
-                    root.display()
-                );
+                info!("[source library] using on-disk root {}", root.display());
                 lunco_assets_core::library::install_global_library_sources(vec![
                     LibraryAssetSource::Filesystem(root.clone()),
                 ]);
-                #[cfg(feature = "native-library-indexer")]
-                {
-                    app.insert_resource(NativeLibraryIndexLoad::new());
-                    if index_present {
-                        app.insert_resource(LibraryLoadState::Ready {
-                            file_count: count,
-                            compressed_bytes: 0,
-                            uncompressed_bytes: 0,
-                        });
-                    } else {
-                        info!(
-                            "[source library] source root is present but its generated editor index is missing; indexing in the background"
-                        );
-                        app.insert_resource(LibraryLoadState::Loading {
-                            phase: LibraryLoadPhase::Parsing,
-                            bytes_done: 0,
-                            bytes_total: 0,
-                        });
-                        app.insert_resource(native_index_resources(root));
-                    }
-                }
-                #[cfg(not(feature = "native-library-indexer"))]
-                {
-                    if !index_present {
-                        info!(
-                            "[source library] editor index is absent; runtime source access remains available, but indexing is disabled in this build"
-                        );
-                    }
-                    app.insert_resource(LibraryLoadState::Ready {
-                        file_count: count,
-                        compressed_bytes: 0,
-                        uncompressed_bytes: 0,
-                    });
-                }
+                app.insert_resource(LibraryLoadState::Ready {
+                    file_count: lunco_assets_core::library::filesystem_library_file_count(),
+                    compressed_bytes: 0,
+                    uncompressed_bytes: 0,
+                });
             } else {
-                #[cfg(feature = "native-library-indexer")]
-                info!("[source library] no on-disk root — waiting for the dataset registry");
-                #[cfg(not(feature = "native-library-indexer"))]
-                info!("[source library] no on-disk root — source-library provisioning is disabled in this build");
+                info!("[source library] no on-disk root — source-library provisioning is not composed");
                 app.insert_resource(LibraryLoadState::NotStarted);
             }
 
@@ -678,11 +601,9 @@ impl Plugin for LibraryRemotePlugin {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn configured_native_library_root(app: &App) -> Option<std::path::PathBuf> {
-    let settings = app
-        .world()
-        .resource::<crate::modelica_library_settings::LibrarySettings>();
-
+pub fn configured_native_library_root(
+    settings: &crate::modelica_library_settings::LibrarySettings,
+) -> Option<std::path::PathBuf> {
     // A settings-level override wins: the user explicitly selected a local
     // Modelica checkout or system installation.
     let override_root = settings.local_root_override.as_ref().and_then(|path| {
@@ -698,351 +619,6 @@ fn configured_native_library_root(app: &App) -> Option<std::path::PathBuf> {
     });
 
     override_root.or_else(|| lunco_assets_core::source_library_root_path("library"))
-}
-
-// ─── Optional native dataset bridge and background index ───────────
-//
-// `lunco-assets` owns the manifest, download, processing, cancellation and
-// operation lifetime. This module observes that one authoritative state and owns
-// only the Modelica-specific post-download index. The whole native bridge is
-// feature-gated because a headless compiler does not need to provision or index
-// a source library.
-
-#[cfg(all(not(target_arch = "wasm32"), feature = "native-library-indexer"))]
-type NativeInstallSlot = Arc<Mutex<NativeInstallSlotInner>>;
-
-#[cfg(all(not(target_arch = "wasm32"), feature = "native-library-indexer"))]
-#[derive(Default)]
-struct NativeInstallSlotInner {
-    /// Latest load-state the worker has reported; drained each frame.
-    pending_state: Option<LibraryLoadState>,
-}
-
-#[cfg(all(not(target_arch = "wasm32"), feature = "native-library-indexer"))]
-#[derive(Resource)]
-struct NativeLibraryInstallSlot {
-    state: NativeInstallSlot,
-    cancel: Arc<std::sync::atomic::AtomicBool>,
-}
-
-#[cfg(all(not(target_arch = "wasm32"), feature = "native-library-indexer"))]
-#[derive(Resource)]
-struct NativeLibraryIndexLoad {
-    task: Option<bevy::tasks::Task<Result<crate::visual_diagram::LibraryIndex, String>>>,
-    failed: bool,
-}
-
-#[cfg(all(not(target_arch = "wasm32"), feature = "native-library-indexer"))]
-impl NativeLibraryIndexLoad {
-    fn new() -> Self {
-        Self {
-            task: None,
-            failed: false,
-        }
-    }
-}
-
-#[cfg(all(not(target_arch = "wasm32"), feature = "native-library-indexer"))]
-fn native_index_resources(root: std::path::PathBuf) -> NativeLibraryInstallSlot {
-    let slot: NativeInstallSlot = Arc::new(Mutex::new(NativeInstallSlotInner::default()));
-    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    lunco_assets_core::library::install_global_library_sources(vec![
-        LibraryAssetSource::Filesystem(root.clone()),
-    ]);
-    spawn_native_index(slot.clone(), root, cancel.clone());
-    NativeLibraryInstallSlot {
-        state: slot,
-        cancel,
-    }
-}
-
-#[cfg(all(not(target_arch = "wasm32"), feature = "native-library-indexer"))]
-fn spawn_native_index(
-    slot: NativeInstallSlot,
-    root: std::path::PathBuf,
-    cancel: Arc<std::sync::atomic::AtomicBool>,
-) {
-    bevy::tasks::AsyncComputeTaskPool::get()
-        .spawn(async move {
-            bevy::log::info!(
-                "[source library] indexing editor metadata for {}…",
-                root.display()
-            );
-            let completed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                crate::indexer::run_with_cancel(
-                    crate::indexer::Options::for_source_root(root.clone()),
-                    Some(cancel.clone()),
-                );
-            }))
-            .is_ok();
-
-            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-                return;
-            }
-
-            if !completed || !root.join("library_index.json").is_file() {
-                set_install_state(
-                    &slot,
-                    LibraryLoadState::Failed(format!(
-                        "source library editor index was not generated at {}",
-                        root.join("library_index.json").display()
-                    )),
-                );
-                return;
-            }
-
-            set_install_state(
-                &slot,
-                LibraryLoadState::Ready {
-                    file_count: count_mo_files(&root),
-                    compressed_bytes: 0,
-                    uncompressed_bytes: 0,
-                },
-            );
-        })
-        .detach();
-}
-
-#[cfg(target_arch = "wasm32")]
-fn on_library_install_action(
-    trigger: On<LibraryInstallAction>,
-    mut request: ResMut<WebLibraryInstallRequest>,
-) {
-    match *trigger.event() {
-        LibraryInstallAction::Install => request.0 = true,
-        LibraryInstallAction::Reinstall => {
-            crate::worker_transport::reset_worker_pipeline();
-            request.0 = true;
-        }
-    }
-}
-
-#[cfg(all(not(target_arch = "wasm32"), feature = "native-library-indexer"))]
-fn set_install_state(slot: &NativeInstallSlot, state: LibraryLoadState) {
-    if let Ok(mut inner) = slot.lock() {
-        inner.pending_state = Some(state);
-    }
-}
-
-#[cfg(all(not(target_arch = "wasm32"), feature = "native-library-indexer"))]
-fn drain_native_library_install(
-    slot: Option<Res<NativeLibraryInstallSlot>>,
-    mut state: ResMut<LibraryLoadState>,
-) {
-    let Some(slot) = slot else { return };
-    let Ok(mut inner) = slot.state.lock() else {
-        return;
-    };
-    if let Some(new_state) = inner.pending_state.take() {
-        match (&*state, &new_state) {
-            (
-                LibraryLoadState::Loading { phase: a, .. },
-                LibraryLoadState::Loading { phase: b, .. },
-            ) if a == b => {}
-            _ => log_state_transition(&new_state),
-        }
-        *state = new_state;
-    }
-}
-
-#[cfg(all(not(target_arch = "wasm32"), feature = "native-library-indexer"))]
-const NATIVE_LIBRARY_DATASET_ID: &str = "engine/modelica/library";
-
-/// User intent to rebuild the native editor index after a failed post-download
-/// indexing attempt. Downloading remains the generic dataset registry's job;
-/// this action only restarts Modelica's domain projection.
-#[cfg(all(not(target_arch = "wasm32"), feature = "native-library-indexer"))]
-#[derive(Event, Clone, Copy, Debug)]
-pub enum NativeLibraryIndexAction {
-    Rebuild,
-}
-
-#[cfg(all(not(target_arch = "wasm32"), feature = "native-library-indexer"))]
-fn on_native_library_index_action(
-    trigger: On<NativeLibraryIndexAction>,
-    state: Res<LibraryLoadState>,
-    existing: Option<Res<NativeLibraryInstallSlot>>,
-    mut commands: Commands,
-) {
-    if !matches!(*trigger.event(), NativeLibraryIndexAction::Rebuild)
-        || !matches!(*state, LibraryLoadState::Failed(_))
-    {
-        return;
-    }
-    let Some(root) = lunco_assets_core::source_library_root_path("library") else {
-        return;
-    };
-    if let Some(existing) = existing {
-        existing
-            .cancel
-            .store(true, std::sync::atomic::Ordering::Relaxed);
-    }
-    commands.insert_resource(LibraryLoadState::Loading {
-        phase: LibraryLoadPhase::Parsing,
-        bytes_done: 0,
-        bytes_total: 0,
-    });
-    commands.insert_resource(NativeLibraryIndexLoad::new());
-    commands.insert_resource(native_index_resources(root));
-}
-
-#[cfg(all(not(target_arch = "wasm32"), feature = "native-library-indexer"))]
-fn drive_native_library_dataset(
-    registry: Option<Res<DatasetRegistry>>,
-    slot: Option<Res<NativeLibraryInstallSlot>>,
-    index_load: Option<Res<NativeLibraryIndexLoad>>,
-    mut state: ResMut<LibraryLoadState>,
-    mut commands: Commands,
-) {
-    let Some(registry) = registry else { return };
-    let Some(dataset) = registry
-        .entries()
-        .iter()
-        .find(|entry| entry.id == NATIVE_LIBRARY_DATASET_ID)
-    else {
-        return;
-    };
-
-    match &dataset.state {
-        DatasetState::Missing => *state = LibraryLoadState::NotStarted,
-        DatasetState::Downloading {
-            bytes_done,
-            bytes_total,
-        } => {
-            *state = LibraryLoadState::Loading {
-                phase: LibraryLoadPhase::FetchingBundle,
-                bytes_done: *bytes_done,
-                bytes_total: *bytes_total,
-            };
-        }
-        DatasetState::Processing { .. } => {
-            *state = LibraryLoadState::Loading {
-                phase: LibraryLoadPhase::Parsing,
-                bytes_done: 0,
-                bytes_total: 0,
-            };
-        }
-        DatasetState::Cancelling => {
-            *state = LibraryLoadState::Loading {
-                phase: LibraryLoadPhase::FetchingBundle,
-                bytes_done: 0,
-                bytes_total: 0,
-            };
-        }
-        DatasetState::Cancelled => *state = LibraryLoadState::NotStarted,
-        DatasetState::Failed(error) => *state = LibraryLoadState::Failed(error.clone()),
-        DatasetState::Installed => {
-            // A slot remains as the lifecycle marker for the one index attempt.
-            // This prevents a failed indexer from being relaunched every frame.
-            if slot.is_some() {
-                return;
-            }
-            // The source can remain usable while the generated editor index
-            // has failed. Preserve that explicit failure until the user asks
-            // for a rebuild; do not relaunch the decoder every frame.
-            if index_load.as_ref().is_some_and(|load| load.failed) {
-                return;
-            }
-            let Some(root) = lunco_assets_core::source_library_root_path("library") else {
-                *state = LibraryLoadState::Failed(
-                    "dataset is installed but no Modelica/ tree exists in the cache".into(),
-                );
-                return;
-            };
-            if root.join("library_index.json").is_file() {
-                lunco_assets_core::library::install_global_library_sources(vec![
-                    LibraryAssetSource::Filesystem(root.clone()),
-                ]);
-                *state = LibraryLoadState::Ready {
-                    file_count: count_mo_files(&root),
-                    compressed_bytes: 0,
-                    uncompressed_bytes: 0,
-                };
-                if index_load.is_none() {
-                    commands.insert_resource(NativeLibraryIndexLoad::new());
-                }
-                return;
-            }
-            *state = LibraryLoadState::Loading {
-                phase: LibraryLoadPhase::Parsing,
-                bytes_done: 0,
-                bytes_total: 0,
-            };
-            commands.insert_resource(native_index_resources(root));
-        }
-    }
-}
-
-#[cfg(all(not(target_arch = "wasm32"), feature = "native-library-indexer"))]
-fn drive_native_library_index(
-    index_load: Option<ResMut<NativeLibraryIndexLoad>>,
-    state: Option<Res<LibraryLoadState>>,
-    mut commands: Commands,
-) {
-    use bevy::tasks::futures_lite::future;
-
-    let Some(mut index_load) = index_load else {
-        return;
-    };
-
-    if index_load.failed || crate::visual_diagram::library_index_available() {
-        return;
-    }
-
-    if index_load.task.is_some() {
-        let result = {
-            let task = index_load
-                .task
-                .as_mut()
-                .expect("source library index task disappeared while being polled");
-            future::block_on(future::poll_once(task))
-        };
-        let Some(result) = result else {
-            return;
-        };
-        index_load.task = None;
-        match result {
-            Ok(index) => {
-                if crate::visual_diagram::install_library_index(index) {
-                    bevy::log::info!("[source library] editor index loaded off-thread");
-                    commands.trigger(crate::visual_diagram::LibraryEditorIndexBecameReady);
-                }
-            }
-            Err(error) => {
-                index_load.failed = true;
-                bevy::log::error!("[source library] editor index load failed: {error}");
-            }
-        }
-        return;
-    }
-
-    if !state.is_some_and(|state| state.is_ready()) {
-        return;
-    }
-
-    bevy::log::info!("[source library] loading editor index off-thread");
-    index_load.task = Some(
-        bevy::tasks::AsyncComputeTaskPool::get()
-            .spawn(async { crate::visual_diagram::load_library_index_from_assets() }),
-    );
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn count_mo_files(root: &std::path::Path) -> usize {
-    fn walk(p: &std::path::Path, n: &mut usize) {
-        let Ok(rd) = std::fs::read_dir(p) else { return };
-        for e in rd.flatten() {
-            let path = e.path();
-            if path.is_dir() {
-                walk(&path, n);
-            } else if path.extension().and_then(|s| s.to_str()) == Some("mo") {
-                *n += 1;
-            }
-        }
-    }
-    let mut n = 0;
-    walk(root, &mut n);
-    n
 }
 
 // ─── Shared slot the wasm fetcher writes into ───────────────────────
@@ -1086,7 +662,7 @@ fn drain_library_load_slot(slot: Res<LibraryLoadSlot>, mut state: ResMut<Library
                 LibraryLoadState::Loading { phase: a, .. },
                 LibraryLoadState::Loading { phase: b, .. },
             ) if a == b => {}
-            _ => log_state_transition(&new_state),
+            _ => log_library_state_transition(&new_state),
         }
         *state = new_state;
     }
@@ -1118,8 +694,9 @@ fn drain_library_load_slot(slot: Res<LibraryLoadSlot>, mut state: ResMut<Library
     }
 }
 
-#[cfg(any(target_arch = "wasm32", feature = "native-library-indexer"))]
-fn log_state_transition(s: &LibraryLoadState) {
+/// Log a source-library state transition without duplicating status formatting
+/// in the native and web lifecycle adapters.
+pub fn log_library_state_transition(s: &LibraryLoadState) {
     match s {
         LibraryLoadState::NotStarted => {}
         LibraryLoadState::Loading {
@@ -1337,44 +914,5 @@ mod web {
         } else {
             LibraryLoadPhase::FetchingBundle
         }
-    }
-}
-
-#[cfg(all(test, not(target_arch = "wasm32"), feature = "native-library-indexer"))]
-mod parsed_bundle_tests {
-    use super::{read_parsed_bundle_file, write_parsed_bundle};
-
-    fn sample_docs() -> Vec<(String, rumoca_compile::parsing::StoredDefinition)> {
-        let src = "model M Real x; equation der(x) = -x; end M;";
-        let def = lunco_modelica_ast::parse_to_ast(src, "M.mo").expect("parse sample model");
-        vec![("M.mo".to_string(), def)]
-    }
-
-    /// `write_parsed_bundle` emits a zstd frame, and the reader decodes it
-    /// back to the same docs.
-    #[test]
-    fn zstd_bundle_roundtrips() {
-        let dir = std::env::temp_dir().join("lunco_parsed_bundle_zstd");
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("parsed-library.bin");
-        let docs = sample_docs();
-
-        write_parsed_bundle(&path, &docs).expect("write compressed bundle");
-
-        // On disk it must be a real zstd frame (magic 0x28 0xB5 0x2F 0xFD).
-        let head = std::fs::read(&path).expect("read bundle bytes");
-        assert_eq!(
-            &head[0..4],
-            &[0x28, 0xB5, 0x2F, 0xFD],
-            "bundle must be zstd-compressed"
-        );
-
-        let back = read_parsed_bundle_file(&path)
-            .expect("decode ok")
-            .expect("bundle present");
-        assert_eq!(back.len(), docs.len());
-        assert_eq!(back[0].0, docs[0].0);
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

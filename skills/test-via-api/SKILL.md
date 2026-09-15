@@ -424,7 +424,7 @@ scene tree or a fire-and-forget command acknowledgement as a running model.
      `panels/canvas_projection.rs`, the `local_classes_by_short`
      registration); connector types need to be in
      `library_index.json` (regenerate via
-     `cargo run -p lunco-modelica-core --bin modelica_library_indexer`).
+     `cargo run -p lunco-modelica-assets --bin modelica_library_indexer`).
 - **"Command 'X' not found or not API-accessible"**: the Event isn't
   reflect-registered. Put a shared Modelica-facing payload in
   `lunco-modelica-ui-core`; keep its observer in the owning UI package, give

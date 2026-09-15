@@ -1119,7 +1119,7 @@ fn render_assets_settings(ui: &mut bevy_egui::egui::Ui, ctx: &mut MenuCtx) {
             )
             .clicked()
     {
-        ctx.trigger(crate::library_remote::NativeLibraryIndexAction::Rebuild);
+        ctx.trigger(crate::native_library::NativeLibraryIndexAction::Rebuild);
     }
 
     // Local-root override — wins over an explicit download. Restart needed

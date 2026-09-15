@@ -53,7 +53,7 @@ mod native {
         let t = Instant::now();
         match mode.as_str() {
             "perfile" => {
-                let docs = lunco_modelica_core::indexer::parse_native_library_bundle();
+                let docs = lunco_modelica_assets::indexer::parse_native_library_bundle();
                 println!(
                     "perfile: {} docs in {:.2}s",
                     docs.len(),
@@ -76,7 +76,7 @@ mod native {
                 // Exact production code path (raw parse_to_ast + dedicated pool).
                 // Thread count via LUNCO_LIBRARY_PARSE_THREADS. Standalone = clean
                 // floor (no Bevy contention).
-                let docs = lunco_modelica_core::indexer::parse_native_library_bundle();
+                let docs = lunco_modelica_assets::indexer::parse_native_library_bundle();
                 println!(
                     "raw(threads={}): {} docs in {:.2}s",
                     std::env::var("LUNCO_LIBRARY_PARSE_THREADS").unwrap_or_else(|_| "auto".into()),
