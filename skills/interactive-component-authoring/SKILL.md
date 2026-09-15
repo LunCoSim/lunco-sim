@@ -22,6 +22,14 @@ read [`author-usd-component`](../author-usd-component/SKILL.md).
 
 ## The mandatory cycle
 
+Keep one production Editor session open for the assembly and use **Editor
+Perspective** for every authoring checkpoint. The unit of progress is one
+component task, not a vehicle-wide script. After each task, stop and inspect
+the live projection; do not begin the next component until the typed readback
+and the Rhai gate agree with what is visible. This is the short interactive
+loop the agent must run itself, even when the user is not watching the
+terminal:
+
 For each component, in order:
 
 ```text
@@ -36,6 +44,13 @@ discover the exact USD document, preview, view, edit target and generation
   -> show the checkpoint / collect feedback before the next component
   -> save only after the visual and typed gates agree
 ```
+
+If a component is wrong, change only that component (or its explicit mount
+contract), re-project it in the same session, and repeat the checkpoint. Do
+not accumulate several speculative edits and then ask for a final review.
+When a task genuinely needs multiple dependent parts, make the dependency
+boundary explicit (for example, a wheel and its strut), run the local gate,
+then continue with the next separately named task.
 
 Do not queue a bus, tanks, legs, engines, ramps and panels into one unobserved
 call. A component task may contain the minimum atomic operations needed for
