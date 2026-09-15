@@ -335,7 +335,7 @@ def Xform "World"
 
     fn plan(source: &str) -> UsdStageProjectionPlan {
         let recipe =
-            lunco_usd_document::recipe::StageRecipe::from_source("point-instancer.usda", source);
+            lunco_usd_compose::recipe::StageRecipe::from_source("point-instancer.usda", source);
         UsdStageProjectionPlan::from_recipe(&recipe).expect("projection plan builds")
     }
 

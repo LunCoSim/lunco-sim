@@ -465,6 +465,7 @@ impl BrowserSection for SceneFilesSection {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lunco_storage::Storage;
 
     #[test]
     fn kinds_route_by_extension() {

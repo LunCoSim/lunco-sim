@@ -10,8 +10,8 @@ pub use ops::{FreshAst, ModelicaChange, ModelicaOp, OpKind, CHANGE_HISTORY_CAPAC
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pretty::ComponentDecl;
     use lunco_doc::{DocumentHost, DocumentId, Reject};
+    use lunco_modelica_ast::pretty::ComponentDecl;
 
     fn doc() -> DocumentHost<ModelicaDocument> {
         DocumentHost::new(ModelicaDocument::new(

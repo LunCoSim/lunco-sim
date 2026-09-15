@@ -51,6 +51,7 @@ pub use binding::*;
 pub use joint::*;
 pub use ports::*;
 
+use lunco_core_session::ControlAuthorityChanged;
 use lunco_cosim_core::{
     BrokenConnection, ControlWriteFence, CosimDiagnostics, ForceActuator, PortHolds, RealtimeSafe,
     SimComponent, SimConnection, SimStatus, TorqueActuator,
@@ -245,7 +246,8 @@ impl Plugin for CoSimPlugin {
             .add_observer(mark_causal_state_sink::<avian3d::prelude::PrismaticJoint>)
             .add_observer(mark_causal_state_sink::<ForceActuator>)
             .add_observer(mark_causal_state_sink::<TorqueActuator>)
-            .add_observer(mark_joint_torque_port);
+            .add_observer(mark_joint_torque_port)
+            .add_observer(on_control_authority_changed);
         // Every built-in port owner installs its lifecycle hooks in the backend
         // module. Avian groups additionally carry their hooks beside their
         // predicates and port definitions, so adding a group cannot silently
@@ -1103,6 +1105,24 @@ fn on_release_control(
             }
         }
     });
+}
+
+/// Translate released session authority into the backend's safe-stop command.
+///
+/// Session authority is expressed in stable global ids, while the co-simulation
+/// backend applies the stop to the live endpoint entity. Keeping that translation
+/// here lets every higher-level controller reuse the same authority transition.
+fn on_control_authority_changed(
+    trigger: On<ControlAuthorityChanged>,
+    q_endpoints: Query<(Entity, &lunco_core::GlobalEntityId), With<lunco_core::InputPorts>>,
+    mut commands: Commands,
+) {
+    let released = &trigger.event().released;
+    for (entity, gid) in q_endpoints.iter() {
+        if released.contains(&gid.get()) {
+            commands.trigger(ReleaseControl { target: entity });
+        }
+    }
 }
 
 register_commands!(on_set_ports, on_release_port, on_release_control);

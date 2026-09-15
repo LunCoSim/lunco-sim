@@ -222,7 +222,7 @@ mod animation_tests {
     /// live, PCP-composed stage — which is the ONLY read path now that the
     /// Runtime reads come from the live canonical stage. Tests read what the app reads.
     fn parse(usda: &str) -> CanonicalStage {
-        CanonicalStage::from_recipe(&lunco_usd_document::recipe::StageRecipe::from_source(
+        CanonicalStage::from_recipe(&lunco_usd_compose::recipe::StageRecipe::from_source(
             "t.usda", usda,
         ))
         .expect("build canonical stage")

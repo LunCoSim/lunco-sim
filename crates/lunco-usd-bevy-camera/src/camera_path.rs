@@ -405,7 +405,11 @@ pub fn resolve_camera_paths(
     canonical: NonSend<CanonicalStages>,
     clocks: Option<Res<Clocks>>,
     q_new: Query<(Entity, &UsdPrimPath), (Without<CameraPath>, Without<NotACameraPath>)>,
-    q_prims: Query<(Entity, &UsdPrimPath)>,
+    q_prims: Query<(
+        Entity,
+        &UsdPrimPath,
+        Option<&lunco_camera_core::CameraPoseMode>,
+    )>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
@@ -435,7 +439,12 @@ pub fn resolve_camera_paths(
         // The camera prim may not have spawned yet — retry next frame.
         let Some((camera, _)) = q_prims
             .iter()
-            .find(|(_, p)| p.path.as_str() == cam_path.as_str())
+            .find(|(_, p, pose)| {
+                p.path.as_str() == cam_path.as_str()
+                    && !pose
+                        .is_some_and(|pose| *pose == lunco_camera_core::CameraPoseMode::Explicit)
+            })
+            .map(|(camera, path, _)| (camera, path))
         else {
             continue;
         };
@@ -887,7 +896,7 @@ pub fn resolve_camera_paths(
             .entity(camera)
             .remove::<crate::camera_mount::MountedCamera>()
             .try_insert((
-                crate::camera::UsdCameraPose::Path,
+                lunco_camera_core::CameraPoseMode::Path,
                 lunco_spatial::GridAnchor,
                 // Bind the camera to THIS path's clock, not the shared preview.
                 TimeBinding { domain },
@@ -905,7 +914,7 @@ pub fn resolve_camera_paths(
                 // as a whole take recorded at the spawn heading while the path
                 // moved the eye. The marker is the cross-crate contract; the
                 // avatar side honours it at every mode-transition boundary.
-                lunco_core::CinematicCameraLock,
+                lunco_core::CameraPoseLock,
             ));
         lunco_spatial::attach::migrate_to_grid(
             &mut commands,

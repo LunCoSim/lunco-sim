@@ -12,7 +12,6 @@ openusd = { workspace = true }
 big_space = { workspace = true }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-celestial-spatial = { path = "../lunco-celestial-spatial", default-features = false }
-lunco-controller = { path = "../lunco-controller" }
 lunco-core = { path = "../lunco-core" }
 lunco-spatial = { path = "../lunco-spatial" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }

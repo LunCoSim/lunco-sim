@@ -64,7 +64,7 @@ samples. This keeps a captured frame a pure function of the path clock and avoid
 mixing a fixed-step accumulator with a render-frame clock.
 
 The driver writes a grid-absolute target and keeps the camera grid-direct. The
-camera receives `CameraPathDriven` and `CinematicCameraLock`; the path removes the
+camera receives `CameraPathDriven` and `CameraPoseLock`; the path removes the
 mounted follower and the avatar camera systems honour the lock. This gives one
 writer ownership of the camera pose and preserves big-space precision. A path
 must not write a parent-local AU-scale translation or compete with the avatar

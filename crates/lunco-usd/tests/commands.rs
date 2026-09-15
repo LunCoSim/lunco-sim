@@ -550,7 +550,7 @@ fn apply_usd_op_builds_a_rover_through_typed_command_bus() {
     // One more tick to flush any final queued world commands.
     app.update();
 
-    use lunco_usd_document::usd_data::UsdDataExt;
+    use lunco_usd_data::usd_data::UsdDataExt;
     use openusd::sdf::Path as SdfPath;
     let reg = app.world().resource::<DocumentRegistry<UsdDocument>>();
     let host = reg.host(doc_id).expect("doc still alive");

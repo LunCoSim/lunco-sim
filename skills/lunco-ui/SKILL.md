@@ -214,6 +214,16 @@ path, not a raw `KeyCode` or an assumption that an isolated USD preview has a
 local avatar. `CancelIntent` suppresses the action while egui owns keyboard
 focus, preserving text-field editing.
 
+For authored UI workflows, use the controller's `InjectWindowInput` command and
+the Rhai helpers in `prelude/input.rhai`. They enqueue typed key, pointer, and
+scroll events through the same Bevy aggregate `WindowEvent` and typed input
+messages produced by `bevy_winit`; picking, egui, focus, and semantic bindings
+therefore keep their normal owners. Rhai composes chords, clicks, drags, and
+workflow timing. Do not call a scene tool directly, synthesize a
+`ScenePointer`/intent event, or create a second UI automation command for a
+particular panel. Coordinates are logical primary-window pixels, and the
+command is local to the client window.
+
 In View, a click on a vehicle part resolves through the enclosing authored
 `ControlBinding`/`MobilityRoot` before considering nested component input
 surfaces, so the vehicle remains the possession target. Standalone non-avatar

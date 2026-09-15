@@ -4543,7 +4543,7 @@ mod collider_parity_tests {
     use super::build_collider_from_usd;
     use bevy::math::DVec3;
     use lunco_usd_bevy_core::canonical::CanonicalStage;
-    use lunco_usd_document::recipe::StageRecipe;
+    use lunco_usd_compose::recipe::StageRecipe;
     use openusd::sdf::Path as SdfPath;
 
     fn stage_from_source(source: &str) -> CanonicalStage {
@@ -4652,7 +4652,7 @@ mod extract_parity_tests {
     use lunco_usd_avian_filters::collision_groups::CollisionGroupTable;
     use lunco_usd_bevy_core::canonical::CanonicalStage;
     use lunco_usd_bevy_core::StageView;
-    use lunco_usd_document::recipe::StageRecipe;
+    use lunco_usd_compose::recipe::StageRecipe;
     use openusd::sdf::Path as SdfPath;
 
     fn stage_from_source(source: &str) -> CanonicalStage {
@@ -4909,7 +4909,7 @@ mod joint_reader_tests {
     use avian3d::prelude::MotorModel;
     use bevy::math::DVec3;
     use lunco_usd_bevy_core::canonical::CanonicalStage;
-    use lunco_usd_document::recipe::StageRecipe;
+    use lunco_usd_compose::recipe::StageRecipe;
     use openusd::sdf::Path as SdfPath;
 
     fn stage_from_source(source: &str) -> CanonicalStage {
@@ -5134,7 +5134,7 @@ def PhysicsPrismaticJoint "FixtureSpring" (
 }
 "#;
         let stage = lunco_usd_bevy_core::canonical::CanonicalStage::from_recipe(
-            &lunco_usd_document::recipe::StageRecipe::from_source("lint_only.usda", source),
+            &lunco_usd_compose::recipe::StageRecipe::from_source("lint_only.usda", source),
         )
         .expect("compose lint-only fixture");
         let view = stage.view();
@@ -5548,7 +5548,7 @@ def Xform \"Host\" ( prepend apiSchemas = [\"PhysicsRigidBodyAPI\"] )\n{\n\
 mod collider_ownership_tests {
     use super::*;
     use lunco_usd_bevy_core::canonical::CanonicalStage;
-    use lunco_usd_document::recipe::StageRecipe;
+    use lunco_usd_compose::recipe::StageRecipe;
     use std::collections::HashMap;
 
     #[test]

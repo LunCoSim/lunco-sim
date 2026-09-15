@@ -37,11 +37,6 @@ lunco-spatial = { path = "../lunco-spatial" }
 # authoritative cell/grid types to compose body-relative positions; it does
 # not enable any renderer or own scene placement.
 big_space = { workspace = true }
-# Avian's own global `Gravity` resource is zero because LunCoSim evaluates a
-# per-body field. The environment projects that field into Avian's standard
-# `ConstantLinearAcceleration` component; Avian's integrator consumes it in both
-# live and rollback physics without force-accumulator bookkeeping.
-lunco-physics = { path = "../lunco-physics" }
 # Render-free intent crate (only `bevy_light` component types — no wgpu), so
 # this stays consistent with the render-free gate above. The environment uses
 # the shared Graphics profile only for the default exposure on its authored

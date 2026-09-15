@@ -24,7 +24,7 @@ default = ["3d"]
 
 [dev-dependencies]
 big_space = { workspace = true }
-lunco-usd-document = { path = "../lunco-usd-document" }
+lunco-usd-compose = { path = "../lunco-usd-compose" }
 
 [lints]
 workspace = true

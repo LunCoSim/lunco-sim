@@ -30,19 +30,23 @@ use big_space::prelude::{CellCoord, Grid};
 use leafwing_input_manager::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use lunco_avatar_core::camera::{
-    AdaptiveNearPlane, AvatarFlightSettings, CameraZoomInput, CurrentRegionArrival,
-    FollowAttitude, FreeFlightCamera, OrbitCamera, OrbitReturnBehavior, OrbitViewReturn,
-    RadialArrival, SpringArmCamera, SurfaceCamera, SurfaceRelativeMode,
-};
 use lunco_avatar_core::commands::{
     FocusTarget, FollowTarget, PossessVessel, ReleaseVessel, ReturnFromOrbit, SetCameraInput,
 };
 use lunco_avatar_core::lifecycle::AvatarSceneHandoffSet;
-use lunco_controller::{ControllerLink, InputBindingsSettings};
-use lunco_core::{on_command, register_commands, Avatar, CelestialBody, LocalAvatar, Spacecraft};
-use lunco_core_session::{LocalSession, NetworkRole, SessionProfiles};
+use lunco_camera_core::{
+    AdaptiveNearPlane, CameraRigIntent, CameraRigMode, CameraZoomInput, CurrentRegionArrival,
+    FollowAttitude, FreeFlightCamera, FreeFlightSettings, OrbitCamera, OrbitReturnBehavior,
+    OrbitViewReturn, RadialArrival, SpringArmCamera, SurfaceCamera, SurfaceRelativeMode,
+};
+use lunco_controller::InputBindingsSettings;
+use lunco_core::{
+    on_command, register_commands, Avatar, CelestialBody, IntentAnalogState, IntentState,
+    LocalAvatar, Spacecraft, UserIntent,
+};
 use lunco_core_session::commands::UpdateProfile;
+use lunco_core_session::{LocalSession, NetworkRole, SessionProfiles};
+use lunco_cosim_core::ControlLink;
 /// Capability test for "**accepts commands**": carries an authored intent→port
 /// binding (`ControlBinding`, from its USD `Controls` scope) or a Modelica actuation
 /// backend (`SimComponent`).
@@ -71,7 +75,6 @@ use commands::ShowNotification;
 // Render-bound screenshots and deterministic offline recording are owned by
 // `lunco-capture`; this crate remains responsible for camera intent,
 // possession, and interaction, without linking the render-world readback pipeline.
-mod intents;
 
 /// Upper bound on parent-chain walks when resolving an entity's owning Grid
 /// or nearest clickable root. The scene hierarchies here are shallow (a few
@@ -250,8 +253,6 @@ fn report_avatar_policy_error(error: &str, last_error: &mut Option<String>) {
         *last_error = Some(error.to_string());
     }
 }
-
-pub use intents::*;
 
 // ─── Resources ───────────────────────────────────────────────────────────────
 
@@ -765,18 +766,6 @@ fn trigger_vessel_hard_stop(commands: &mut Commands, vessel_entity: Entity) {
     });
 }
 
-fn stop_released_vessels(
-    commands: &mut Commands,
-    released: &[u64],
-    q_vessels: &Query<(Entity, &lunco_core::GlobalEntityId)>,
-) {
-    for (entity, gid) in q_vessels.iter() {
-        if released.contains(&gid.get()) {
-            trigger_vessel_hard_stop(commands, entity);
-        }
-    }
-}
-
 fn stop_previous_vessel(
     commands: &mut Commands,
     previous: Option<Entity>,
@@ -792,8 +781,9 @@ fn stop_previous_vessel(
 }
 
 /// Commit one possession to the authoritative registry after the command has
-/// validated its endpoint and any requested local binding. The same command
-/// observer owns both this table and the local `ControllerLink` transaction.
+/// validated its endpoint and any requested local binding. The generic session
+/// transition owns the authority table; this observer owns the avatar link and
+/// camera transaction that compose it.
 fn commit_possession_authority(
     commands: &mut Commands,
     authority: &mut PossessionAuthority,
@@ -801,44 +791,31 @@ fn commit_possession_authority(
 ) -> Option<Vec<u64>> {
     let origin = authority.guard.0.unwrap_or(authority.session.0);
     let target_gid = authority.q_owned.get(target).ok().map(|gid| gid.get());
-    if let Some(gid) = target_gid {
-        if !lunco_core_session::may_control(&authority.registry, &authority.rbac, origin, gid) {
-            info!("[possess] vessel {gid} owned by another session — refused (policy)");
-            return None;
-        }
-    }
-
     // Clients keep the host's table as the authority and only use the shared
-    // predicate above for optimistic local binding.
+    // table as the authority and only use the shared predicate for optimistic
+    // local binding.
     if matches!(*authority.role, lunco_core_session::NetworkRole::Client) {
         return Some(Vec::new());
     }
 
-    let mut released = if let Some(gid) = target_gid {
-        if let Some(current) = authority.registry.owner_of(gid) {
-            if current != origin {
-                let taken = authority.registry.release_session(current);
-                info!("[auth] session {origin} took control of entity {gid} from {current}");
-                taken
-            } else {
-                Vec::new()
+    let change = if let Some(gid) = target_gid {
+        match lunco_core_session::claim_control(
+            &mut authority.registry,
+            &authority.rbac,
+            origin,
+            gid,
+        ) {
+            Ok(change) => change,
+            Err(error) => {
+                warn!("[auth] session {origin} claim for entity {gid} refused: {error}");
+                return None;
             }
-        } else {
-            Vec::new()
         }
     } else {
-        Vec::new()
+        lunco_core_session::release_control(&mut authority.registry, origin)
     };
-    if let Some(gid) = target_gid {
-        released.extend(authority.registry.release_session_except(origin, gid));
-        if authority.registry.claim(origin, gid).is_err() {
-            warn!("[auth] entity {gid} possession changed during commit; refused");
-            return None;
-        }
-    } else {
-        released.extend(authority.registry.release_session(origin));
-    }
-    stop_released_vessels(commands, &released, &authority.q_vessels);
+    let released = change.released.clone();
+    commands.trigger(change);
     Some(released)
 }
 
@@ -871,7 +848,7 @@ fn enforce_ownership(
     role: Res<lunco_core_session::NetworkRole>,
     registry: Res<lunco_core_session::SessionRegistry>,
     session: Res<lunco_core_session::LocalSession>,
-    q_avatar: Query<(Entity, &ControllerLink), (With<Avatar>, With<LocalAvatar>)>,
+    q_avatar: Query<(Entity, &ControlLink), (With<Avatar>, With<LocalAvatar>)>,
     q_gid: Query<&lunco_core::GlobalEntityId>,
     mut commands: Commands,
 ) {
@@ -879,7 +856,7 @@ fn enforce_ownership(
         return;
     }
     for (avatar, link) in q_avatar.iter() {
-        let Ok(gid) = q_gid.get(link.vessel_entity) else {
+        let Ok(gid) = q_gid.get(link.target) else {
             commands.trigger(ReleaseVessel { target: avatar });
             continue;
         };
@@ -909,7 +886,7 @@ impl Plugin for LunCoAvatarPlugin {
         // render-world readback this crate deliberately cannot link.
         app.add_plugins(InputManagerPlugin::<UserIntent>::default());
         // Possession and release commands own both authority bookkeeping and
-        // local binding, so the registry and `ControllerLink` commit together.
+        // local binding, so the registry and `ControlLink` commit together.
         app.add_systems(lunco_core::SceneTeardown, clear_scene_possession_claims);
         // Scene-click possession/follow/focus is now bevy_picking-driven: a
         // global `Pointer<Click>` observer (egui occlusion handled by the
@@ -959,7 +936,9 @@ impl Plugin for LunCoAvatarPlugin {
             .register_type::<SurfaceModeThreshold>()
             .register_type::<CameraInputSettings>()
             .register_type::<AvatarCollisionSettings>()
-            .register_type::<AvatarFlightSettings>();
+            .register_type::<FreeFlightSettings>()
+            .register_type::<CameraRigMode>()
+            .register_type::<CameraRigIntent>();
 
         app.register_settings_section::<CameraInputSettings>();
         app.register_settings_section::<ProfileSettings>();
@@ -1139,7 +1118,7 @@ fn rebase_freeflight_state(
             With<Avatar>,
             With<LocalAvatar>,
             Changed<ChildOf>,
-            Without<lunco_core::CinematicCameraLock>,
+            Without<lunco_core::CameraPoseLock>,
         ),
     >,
 ) {
@@ -1369,7 +1348,7 @@ fn sync_avatar_easing(
             Has<OrbitCamera>,
             Has<SurfaceCamera>,
             Has<lunco_time::InteractionEased>,
-            Has<lunco_core::CinematicCameraLock>,
+            Has<lunco_core::CameraPoseLock>,
         ),
         (With<Avatar>, With<LocalAvatar>),
     >,
@@ -1421,7 +1400,7 @@ fn reset_easing_before_spatial_rebase(
         (
             With<Avatar>,
             With<LocalAvatar>,
-            Without<lunco_core::CinematicCameraLock>,
+            Without<lunco_core::CameraPoseLock>,
             Or<(Changed<CellCoord>, Changed<ChildOf>)>,
         ),
     >,
@@ -1519,7 +1498,7 @@ pub fn spawn_avatar_camera(
                 control_binding,
                 input_ports,
                 CameraZoomInput::default(),
-                AvatarFlightSettings::default(),
+                FreeFlightSettings::default(),
                 Name::new("Avatar Camera"),
                 ChildOf(grid_entity),
             ),
@@ -1535,11 +1514,12 @@ fn demote_former_avatar(trigger: On<Remove, LocalAvatar>, mut commands: Commands
         FreeFlightCamera,
         OrbitCamera,
         SpringArmCamera,
+        CameraRigIntent,
         SurfaceRelativeMode,
         OrbitViewHistory,
         OrbitUserInput,
         CurrentRegionArrival,
-        lunco_controller::ControllerLink,
+        ControlLink,
         IntentAnalogState,
     )>();
     // RETIRE IT FROM THE VIEWPORT POOL, not merely from the avatar role.
@@ -2178,7 +2158,7 @@ fn spring_arm_system(
             Without<OrbitCamera>,
             Without<FreeFlightCamera>,
             Without<SurfaceCamera>,
-            Without<lunco_core::CinematicCameraLock>,
+            Without<lunco_core::CameraPoseLock>,
         ),
     >,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
@@ -2443,7 +2423,7 @@ fn orbit_system(
             Without<SpringArmCamera>,
             Without<FreeFlightCamera>,
             Without<SurfaceCamera>,
-            Without<lunco_core::CinematicCameraLock>,
+            Without<lunco_core::CameraPoseLock>,
         ),
     >,
     q_world_grid: Query<Entity, With<lunco_spatial::WorldGrid>>,
@@ -2714,7 +2694,7 @@ fn freeflight_system(
             Without<OrbitCamera>,
             Without<SpringArmCamera>,
             Without<SurfaceCamera>,
-            Without<lunco_core::CinematicCameraLock>,
+            Without<lunco_core::CameraPoseLock>,
         ),
     >,
     drag_mode: Option<Res<lunco_core::DragModeActive>>,
@@ -2761,7 +2741,7 @@ fn freeflight_scroll_transit_system(
             Option<&OrbitViewHistory>,
             Option<&GravityBody>,
             Has<SurfaceRelativeMode>,
-            Has<lunco_core::CinematicCameraLock>,
+            Has<lunco_core::CameraPoseLock>,
         ),
         (
             With<Avatar>,
@@ -2972,7 +2952,7 @@ fn surface_camera_system(
             Without<SpringArmCamera>,
             Without<FreeFlightCamera>,
             Without<OrbitCamera>,
-            Without<lunco_core::CinematicCameraLock>,
+            Without<lunco_core::CameraPoseLock>,
         ),
     >,
     q_grids: Query<&Grid>,
@@ -3148,7 +3128,7 @@ fn apply_fly(
             &mut CellCoord,
             &ChildOf,
             &lunco_core::InputPorts,
-            &AvatarFlightSettings,
+            &FreeFlightSettings,
             Has<FreeFlightCamera>,
             Has<SurfaceCamera>,
             Option<&SurfaceRelativeMode>,
@@ -3156,7 +3136,7 @@ fn apply_fly(
         (
             With<Avatar>,
             With<LocalAvatar>,
-            Without<lunco_core::CinematicCameraLock>,
+            Without<lunco_core::CameraPoseLock>,
         ),
     >,
     q_grids: Query<&Grid>,
@@ -3208,7 +3188,7 @@ fn apply_fly(
         }
 
         // Input values (each −1..=1 from the
-        // `ControlBinding`). When free (no ControllerLink)
+        // `ControlBinding`). When free (no ControlLink)
         // `drive_from_bindings` writes these; while possessing they stay 0 (control is
         // redirected to the vessel).
         let forward = inputs.cmd("forward") as f32;
@@ -3364,7 +3344,7 @@ fn avatar_behavior_input_system(
         (
             With<Avatar>,
             With<LocalAvatar>,
-            Without<lunco_core::CinematicCameraLock>,
+            Without<lunco_core::CameraPoseLock>,
         ),
     >,
     mut q_orbit: Query<
@@ -3372,7 +3352,7 @@ fn avatar_behavior_input_system(
         (
             With<Avatar>,
             With<LocalAvatar>,
-            Without<lunco_core::CinematicCameraLock>,
+            Without<lunco_core::CameraPoseLock>,
         ),
     >,
     mut q_freeflight: Query<
@@ -3380,7 +3360,7 @@ fn avatar_behavior_input_system(
         (
             With<Avatar>,
             With<LocalAvatar>,
-            Without<lunco_core::CinematicCameraLock>,
+            Without<lunco_core::CameraPoseLock>,
         ),
     >,
     mut q_surface: Query<
@@ -3388,7 +3368,7 @@ fn avatar_behavior_input_system(
         (
             With<Avatar>,
             With<LocalAvatar>,
-            Without<lunco_core::CinematicCameraLock>,
+            Without<lunco_core::CameraPoseLock>,
         ),
     >,
     mut q_tf: Query<
@@ -3396,7 +3376,7 @@ fn avatar_behavior_input_system(
         (
             With<Avatar>,
             With<LocalAvatar>,
-            Without<lunco_core::CinematicCameraLock>,
+            Without<lunco_core::CameraPoseLock>,
         ),
     >,
     q_grids: Query<&Grid>,
@@ -3827,7 +3807,7 @@ pub fn avatar_raycast_possession(
 
 /// The `Cancel` intent (default `Backspace`) releases possession, plain follow
 /// **and** body-orbit focus — all unwind through the same `ReleaseVessel` path
-/// (which strips ControllerLink, SpringArm, OrbitCamera, interpolation, and
+/// (which strips ControlLink, SpringArm, OrbitCamera, interpolation, and
 /// reinstates a free-flight camera).
 ///
 /// Reads the intent (not the raw key) so it flows through the shared
@@ -3840,11 +3820,7 @@ fn avatar_escape_possession(
         (
             With<Avatar>,
             With<LocalAvatar>,
-            Or<(
-                With<ControllerLink>,
-                With<SpringArmCamera>,
-                With<OrbitCamera>,
-            )>,
+            Or<(With<ControlLink>, With<SpringArmCamera>, With<OrbitCamera>)>,
         ),
     >,
     cursor_mode: lunco_core::CursorModeActive,
@@ -3925,7 +3901,7 @@ fn on_return_from_orbit(
             Option<&OrbitCamera>,
             Option<&mut OrbitViewHistory>,
             Has<OrbitUserInput>,
-            Has<lunco_core::CinematicCameraLock>,
+            Has<lunco_core::CameraPoseLock>,
         ),
         (With<Avatar>, With<LocalAvatar>),
     >,
@@ -3994,14 +3970,14 @@ fn on_release_command(
         (
             &mut Transform,
             &mut CellCoord,
-            Option<&ControllerLink>,
+            Option<&ControlLink>,
             Option<&SurfaceRelativeMode>,
             &ChildOf,
             Option<&OrbitViewReturn>,
             Option<&OrbitCamera>,
             Option<&mut OrbitViewHistory>,
             Has<OrbitUserInput>,
-            Has<lunco_core::CinematicCameraLock>,
+            Has<lunco_core::CameraPoseLock>,
         ),
         (With<Avatar>, With<LocalAvatar>),
     >,
@@ -4010,7 +3986,6 @@ fn on_release_command(
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Avatar>>,
-    q_vessels: Query<(Entity, &lunco_core::GlobalEntityId)>,
     q_owned: Query<&lunco_core::GlobalEntityId>,
     q_bodies: Query<&CelestialBody>,
     gravity: Res<LocalGravityField>,
@@ -4026,8 +4001,9 @@ fn on_release_command(
     if guard.is_from_sync() {
         if !matches!(*role, lunco_core_session::NetworkRole::Client) {
             let origin = guard.0.unwrap_or(local.0);
-            let released = registry.release_session(origin);
-            stop_released_vessels(&mut commands, &released, &q_vessels);
+            let change = lunco_core_session::release_control(&mut registry, origin);
+            let released = change.released.clone();
+            commands.trigger(change);
             if !released.is_empty() {
                 info!(
                     "[auth] session {origin} released {} vessel(s)",
@@ -4047,8 +4023,9 @@ fn on_release_command(
     let released = if matches!(*role, lunco_core_session::NetworkRole::Client) {
         Vec::new()
     } else {
-        let freed = registry.release_session(local.0);
-        stop_released_vessels(&mut commands, &freed, &q_vessels);
+        let change = lunco_core_session::release_control(&mut registry, local.0);
+        let freed = change.released.clone();
+        commands.trigger(change);
         if !freed.is_empty() {
             info!(
                 "[auth] session {} released {} vessel(s)",
@@ -4085,7 +4062,7 @@ fn on_release_command(
     )) =
         q_avatar.get_mut(avatar_ent)
     {
-        let opt_vessel = link.map(|link| link.vessel_entity);
+        let opt_vessel = link.map(|link| link.target);
         if cinematic_lock {
             if let Some(vessel_entity) = opt_vessel {
                 let old_gid = q_owned.get(vessel_entity).ok().map(|gid| gid.get());
@@ -4093,7 +4070,7 @@ fn on_release_command(
                     trigger_vessel_hard_stop(&mut commands, vessel_entity);
                 }
             }
-            commands.entity(avatar_ent).remove::<ControllerLink>();
+            commands.entity(avatar_ent).remove::<ControlLink>();
             return;
         }
         if orbit_user_input {
@@ -4157,11 +4134,11 @@ fn on_release_command(
         }
     }
 
-    // Dropping the `ControllerLink` stops `drive_from_bindings` (the vessel keeps
+    // Dropping the `ControlLink` stops `drive_from_bindings` (the target keeps
     // its own `ControlBinding` for the next possession).
     commands
         .entity(avatar_ent)
-        .remove::<ControllerLink>()
+        .remove::<ControlLink>()
         .remove::<SpringArmCamera>()
         .remove::<OrbitCamera>()
         // Release is a mode transition. Clear both stepped camera modes before
@@ -4304,17 +4281,13 @@ struct PossessAvatarQueries<'w, 's> {
             Entity,
             &'static Transform,
             &'static ChildOf,
-            Option<&'static ControllerLink>,
-            Has<lunco_core::CinematicCameraLock>,
+            Option<&'static ControlLink>,
+            Has<lunco_core::CameraPoseLock>,
         ),
         (With<Avatar>, With<LocalAvatar>),
     >,
-    controller: Query<
-        'w,
-        's,
-        Option<&'static ControllerLink>,
-        (With<Avatar>, With<ActionState<UserIntent>>),
-    >,
+    controller:
+        Query<'w, 's, Option<&'static ControlLink>, (With<Avatar>, With<ActionState<UserIntent>>)>,
 }
 
 #[derive(bevy::ecs::system::SystemParam)]
@@ -4324,7 +4297,6 @@ struct PossessionAuthority<'w, 's> {
     registry: ResMut<'w, lunco_core_session::SessionRegistry>,
     rbac: Res<'w, lunco_core_session::SessionRbac>,
     session: Res<'w, lunco_core_session::LocalSession>,
-    q_vessels: Query<'w, 's, (Entity, &'static lunco_core::GlobalEntityId)>,
     q_owned: Query<'w, 's, &'static lunco_core::GlobalEntityId>,
 }
 
@@ -4388,13 +4360,13 @@ fn on_possess_command(
             };
             stop_previous_vessel(
                 &mut commands,
-                previous.map(|link| link.vessel_entity),
+                previous.map(|link| link.target),
                 &released,
                 &possession_authority.q_owned,
             );
-            commands.entity(requested).try_insert(ControllerLink {
-                vessel_entity: cmd.target,
-            });
+            commands
+                .entity(requested)
+                .try_insert(ControlLink { target: cmd.target });
             if let Some(a) = authority.as_mut() {
                 a.piloted = true;
             }
@@ -4427,7 +4399,7 @@ fn on_possess_command(
         .get(avatar_ent)
         .ok()
         .flatten()
-        .map(|link| link.vessel_entity);
+        .map(|link| link.target);
 
     let Ok((avatar_ent, cam_tf, _child_of, existing_link, cinematic_lock)) =
         possession_avatars.camera.get(avatar_ent)
@@ -4445,9 +4417,9 @@ fn on_possess_command(
             &released,
             &possession_authority.q_owned,
         );
-        commands.entity(avatar_ent).try_insert(ControllerLink {
-            vessel_entity: cmd.target,
-        });
+        commands
+            .entity(avatar_ent)
+            .try_insert(ControlLink { target: cmd.target });
         if let Some(a) = authority.as_mut() {
             a.piloted = true;
         }
@@ -4458,7 +4430,7 @@ fn on_possess_command(
     // A possession command may still establish control, but it cannot replace
     // the pose owner of a cinematic camera. The caller must explicitly release
     // the authored camera path before requesting an interactive camera bind.
-    let already_bound = existing_link.is_some_and(|link| link.vessel_entity == cmd.target);
+    let already_bound = existing_link.is_some_and(|link| link.target == cmd.target);
 
     if already_bound || cinematic_lock {
         let Some(released) =
@@ -4472,9 +4444,9 @@ fn on_possess_command(
             &released,
             &possession_authority.q_owned,
         );
-        commands.entity(avatar_ent).try_insert(ControllerLink {
-            vessel_entity: cmd.target,
-        });
+        commands
+            .entity(avatar_ent)
+            .try_insert(ControlLink { target: cmd.target });
         if let Some(a) = authority.as_mut() {
             a.piloted = true;
         }
@@ -4516,9 +4488,9 @@ fn on_possess_command(
     if let Some(a) = authority.as_mut() {
         a.piloted = true;
     }
-    commands.entity(avatar_ent).try_insert(ControllerLink {
-        vessel_entity: cmd.target,
-    });
+    commands
+        .entity(avatar_ent)
+        .try_insert(ControlLink { target: cmd.target });
     replace_avatar_diagnostic(&mut diagnostics, None);
 
     // Camera-follow mode is authored on the vessel's control profile
@@ -4603,7 +4575,7 @@ fn on_possess_command(
         &q_grids,
     );
 
-    // The controller link goes on the **avatar** (it carries the shared
+    // The control link goes on the **producer** (it carries the shared
     // `ActionState<UserIntent>` that `drive_from_bindings` reads); the intent→port
     // `ControlBinding` lives on the **vessel** as its own property, authored purely
     // from USD (a `Controls` child scope referencing a shared profile in
@@ -4611,9 +4583,9 @@ fn on_possess_command(
     // drivable iff its USD carries that scope. `drive_from_bindings` reads the
     // binding off the vessel and skips any vessel that has none, so possession is a
     // pure camera+link bind here.
-    commands.entity(avatar_ent).try_insert(ControllerLink {
-        vessel_entity: cmd.target,
-    });
+    commands
+        .entity(avatar_ent)
+        .try_insert(ControlLink { target: cmd.target });
 
     // Detect if target is a surface vehicle (has GravityBody) and propagate surface mode.
     let is_surface_vehicle = q_vessel
@@ -4692,7 +4664,7 @@ fn on_follow_command(
             Entity,
             &ChildOf,
             Option<&SpringArmCamera>,
-            Has<lunco_core::CinematicCameraLock>,
+            Has<lunco_core::CameraPoseLock>,
         ),
         (With<Avatar>, With<LocalAvatar>),
     >,
@@ -4795,7 +4767,7 @@ fn on_follow_command(
     // `ControlBinding`).
     let mut cmd_ent = commands.entity(avatar_ent);
     cmd_ent
-        .remove::<ControllerLink>()
+        .remove::<ControlLink>()
         .remove::<FreeFlightCamera>()
         .remove::<SurfaceCamera>()
         .remove::<OrbitCamera>()
@@ -4850,7 +4822,7 @@ fn on_focus_command(
             Option<&FreeFlightCamera>,
             Option<&GravityBody>,
             Has<SurfaceRelativeMode>,
-            Has<lunco_core::CinematicCameraLock>,
+            Has<lunco_core::CameraPoseLock>,
         ),
         (With<Avatar>, With<LocalAvatar>),
     >,
@@ -5020,13 +4992,20 @@ fn on_focus_command(
 /// Inserts `FreeFlightCamera` as the default behavior with the entity's
 /// current transform orientation.
 ///
-/// `Without<CinematicCameraLock>` is load-bearing, not hygiene: a path-driven
+/// `Without<CameraPoseLock>` is load-bearing, not hygiene: a path-driven
 /// camera has no interactive mode, and this initializer must never create one
 /// after the authored path has claimed pose ownership.
 fn avatar_init_system(
     mut commands: Commands,
     q_avatar: Query<
-        (Entity, &Transform, Option<&OrbitViewHistory>),
+        (
+            Entity,
+            &Transform,
+            Option<&OrbitViewHistory>,
+            Option<&CameraRigIntent>,
+            Option<&InputMap<UserIntent>>,
+            Option<&ActionState<UserIntent>>,
+        ),
         (
             With<Avatar>,
             With<LocalAvatar>,
@@ -5037,7 +5016,7 @@ fn avatar_init_system(
             // behavior component. Without this guard init would reinsert
             // FreeFlightCamera over it on the next Update tick.
             Without<SurfaceCamera>,
-            Without<lunco_core::CinematicCameraLock>,
+            Without<lunco_core::CameraPoseLock>,
         ),
     >,
     q_proj: Query<
@@ -5049,19 +5028,100 @@ fn avatar_init_system(
             With<Projection>,
         ),
     >,
+    bindings: Res<InputBindingsSettings>,
+    active_sun: Option<Res<lunco_environment::LunarSun>>,
 ) {
-    for (entity, tf, history) in q_avatar.iter() {
+    for (entity, tf, history, intent, input_map, action_state) in q_avatar.iter() {
         if history.is_none() {
             commands
                 .entity(entity)
                 .try_insert(OrbitViewHistory::default());
         }
-        let (yaw, pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
-        commands.entity(entity).try_insert(FreeFlightCamera {
-            yaw,
-            pitch,
-            damping: None,
+
+        let Some(intent) = intent.copied() else {
+            let (yaw, pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
+            commands.entity(entity).try_insert(FreeFlightCamera {
+                yaw,
+                pitch,
+                damping: None,
+            });
+            continue;
+        };
+
+        // USD-authored avatars are the one non-native path that needs the
+        // local input surface assembled here. Raw device bindings stay inside
+        // this specialized avatar owner; simulation projection never imports
+        // the input crate or chooses a device policy.
+        let resolved_input_map = if input_map.is_none() {
+            match bindings.input_map() {
+                Ok(input_map) => Some(input_map),
+                Err(error) => {
+                    error!(
+                        "USD-authored avatar {entity:?} has invalid input bindings; refusing interactive initialization: {error}"
+                    );
+                    continue;
+                }
+            }
+        } else {
+            None
+        };
+        let ev100 = intent.exposure_ev100.unwrap_or_else(|| {
+            active_sun
+                .as_deref()
+                .copied()
+                .unwrap_or_default()
+                .exposure_ev100
         });
+        let mut avatar = commands.entity(entity);
+        avatar.try_insert((
+            lunco_render::SceneCamera::agx(),
+            lunco_render::GraphicsCameraDefaults,
+            bevy::camera::Exposure { ev100 },
+            AdaptiveNearPlane,
+            IntentAnalogState::default(),
+            intent.flight_settings,
+        ));
+        if let Some(input_map) = resolved_input_map {
+            avatar.try_insert(input_map);
+        }
+        if action_state.is_none() {
+            avatar.try_insert(ActionState::<UserIntent>::default());
+        }
+        match intent.mode {
+            CameraRigMode::FreeFlight => {
+                avatar.try_insert(FreeFlightCamera {
+                    yaw: intent.yaw,
+                    pitch: intent.pitch,
+                    damping: None,
+                });
+            }
+            CameraRigMode::Orbit => {
+                avatar.try_insert(OrbitCamera {
+                    target: Entity::PLACEHOLDER,
+                    distance: intent.orbit_distance,
+                    yaw: intent.yaw,
+                    pitch: intent.pitch,
+                    damping: None,
+                    vertical_offset: 0.0,
+                });
+            }
+            CameraRigMode::SpringArm => {
+                avatar.try_insert((
+                    SpringArmCamera {
+                        target: Entity::PLACEHOLDER,
+                        distance: intent.spring_arm_distance,
+                        yaw: intent.yaw,
+                        pitch: intent.pitch,
+                        damping: None,
+                        vertical_offset: intent.spring_arm_vertical_offset,
+                        track_heading: intent.spring_arm_track_heading,
+                        attitude: intent.spring_arm_attitude,
+                    },
+                    avian3d::prelude::TranslationInterpolation,
+                    avian3d::prelude::RotationInterpolation,
+                ));
+            }
+        }
     }
     for entity in q_proj.iter() {
         commands.entity(entity).try_insert(AdaptiveNearPlane);
@@ -5137,7 +5197,7 @@ fn on_surface_teleport_command(
             &Transform,
             &CellCoord,
             &ChildOf,
-            Has<lunco_core::CinematicCameraLock>,
+            Has<lunco_core::CameraPoseLock>,
         ),
         (With<Avatar>, With<LocalAvatar>),
     >,
@@ -5328,7 +5388,7 @@ fn on_leave_surface_command(
         (
             Entity,
             Option<&GravityBody>,
-            Has<lunco_core::CinematicCameraLock>,
+            Has<lunco_core::CameraPoseLock>,
         ),
         (With<Avatar>, With<LocalAvatar>),
     >,
@@ -5394,7 +5454,7 @@ fn surface_mode_transition_system(
             With<Avatar>,
             With<LocalAvatar>,
             Without<OrbitCamera>,
-            Without<lunco_core::CinematicCameraLock>,
+            Without<lunco_core::CameraPoseLock>,
         ),
     >,
     q_bodies: Query<&CelestialBody>,
@@ -5788,10 +5848,7 @@ mod tests {
         app.world_mut().flush();
 
         assert_eq!(
-            app.world()
-                .get::<ControllerLink>(avatar)
-                .unwrap()
-                .vessel_entity,
+            app.world().get::<ControlLink>(avatar).unwrap().target,
             rover,
             "control binding must not wait for camera readiness"
         );
@@ -6874,9 +6931,7 @@ mod tests {
                 original_transform,
                 ChildOf(surface_grid),
                 original_spring.clone(),
-                ControllerLink {
-                    vessel_entity: rover,
-                },
+                ControlLink { target: rover },
                 GravityBody { body_entity: moon },
                 SurfaceRelativeMode,
             ))
@@ -6895,10 +6950,7 @@ mod tests {
             OrbitReturnBehavior::SpringArm(_)
         ));
         assert_eq!(
-            app.world()
-                .get::<ControllerLink>(avatar)
-                .unwrap()
-                .vessel_entity,
+            app.world().get::<ControlLink>(avatar).unwrap().target,
             rover,
             "entering a presentation view must not release control"
         );
@@ -6927,7 +6979,7 @@ mod tests {
         assert_eq!(restored_spring.yaw, original_spring.yaw);
         assert_eq!(restored_spring.pitch, original_spring.pitch);
         assert_eq!(
-            world.get::<ControllerLink>(avatar).unwrap().vessel_entity,
+            world.get::<ControlLink>(avatar).unwrap().target,
             rover,
             "returning from a presentation view must preserve possession"
         );
@@ -7480,7 +7532,7 @@ mod tests {
 
         let avatar = app
             .world_mut()
-            .spawn((Avatar, LocalAvatar, lunco_core::CinematicCameraLock))
+            .spawn((Avatar, LocalAvatar, lunco_core::CameraPoseLock))
             .id();
 
         app.update();
@@ -7499,7 +7551,7 @@ mod tests {
             app.world()
                 .get::<lunco_time::InteractionEased>(avatar)
                 .is_none(),
-            "a cinematic lock must remove stale avatar interpolation history"
+            "a pose lock must remove stale avatar interpolation history"
         );
     }
 

@@ -38,7 +38,7 @@ openusd = { workspace = true }
 
 [dev-dependencies]
 lunco-usd-core = { path = "../lunco-usd-core" }
-lunco-usd-document = { path = "../lunco-usd-document" }
+lunco-usd-compose = { path = "../lunco-usd-compose" }
 
 [lints]
 workspace = true

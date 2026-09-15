@@ -5,7 +5,7 @@
 > USD (Pixar Universal Scene Description) is the scene-graph and asset format
 > LunCoSim uses for the 3D world. Bases, rovers, habitats, terrain — everything
 > physical — lives as USD prims in USD stages. See
-> [`../../crates/lunco-usd-document/`](../../crates/lunco-usd-document), [`../../crates/lunco-usd-core/`](../../crates/lunco-usd-core), [`../../crates/lunco-usd/`](../../crates/lunco-usd/) and companion crates
+> [`../../crates/lunco-usd-document/`](../../crates/lunco-usd-document), [`../../crates/lunco-usd-data/`](../../crates/lunco-usd-data), [`../../crates/lunco-usd-authoring/`](../../crates/lunco-usd-authoring), [`../../crates/lunco-usd-core/`](../../crates/lunco-usd-core), [`../../crates/lunco-usd/`](../../crates/lunco-usd/) and companion crates
 > `lunco-usd-geometry`, `lunco-usd-avian-core`, `lunco-usd-avian-filters`, `lunco-usd-avian`, `lunco-usd-avian-lint`, `lunco-usd-bevy-core`,
 > `lunco-usd-bevy-runtime`, `lunco-usd-bevy-scene`, `lunco-usd-bevy-twin`, `lunco-usd-bevy-camera`, `lunco-usd-bevy-light`, `lunco-usd-bevy-animation`, `lunco-usd-bevy` and
 > `lunco-usd-bevy-lathe`, `lunco-usd-bevy-mesh`, `lunco-usd-queries`, `lunco-usd-sim`,
@@ -13,8 +13,12 @@
 > `lunco-usd-sim-domain`, `lunco-usd-sim-domain-api`.
 
 Package ownership follows the same boundary: `lunco-usd-document` contains
-the headless authored document/layer surface, schema registry, authoring
-helpers, recipes, and data readers; `lunco-usd-core` contains pure operation
+the headless authored document/layer surface, layer identity, typed operations,
+and edit history; `lunco-usd-data` contains reusable authored-data contracts,
+stage convention conversion, and composed-value readers; `lunco-usd-authoring`
+contains path-addressed authored-layer operations, USDA conversion, reference
+helpers, and the schema registry; `lunco-usd-compose` contains send-safe stage
+recipes and dependency interpretation; `lunco-usd-core` contains pure operation
 lowerings, assembly, edit-session, and shared USD command/event contracts;
 `lunco-usd` contains UI-free runtime orchestration
 and the observers that execute those contracts; `lunco-usd-queries` owns the

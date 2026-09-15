@@ -142,6 +142,12 @@ package checks after changing skill metadata or packaging.
   Remove compatibility shims, aliases, fallbacks, old-behavior tests, and
   migration/history descriptions of the retired behavior; never preserve both
   generations behind a conditional or fallback path.
+- Worktree integration must preserve the newest target-branch changes: inspect
+  both heads, resolve conflicts by combining current contracts, and regenerate
+  derived API documentation from the merged runtime schema. Never resolve a
+  conflict by wholesale selection of one branch when that drops a newer API or
+  implementation. After the merge, repeat the legacy/shim/fallback/history
+  review against the integrated tree.
 
 ## Coding guide
 

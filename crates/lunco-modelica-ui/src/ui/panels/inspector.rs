@@ -648,7 +648,7 @@ fn apply_plot_binding(
     if !signal_path.is_empty() {
         ops.push(ModelicaOp::AddPlotNode {
             class,
-            plot: crate::pretty::LunCoPlotNodeSpec {
+            plot: lunco_modelica_ast::pretty::LunCoPlotNodeSpec {
                 x1: rect.min.x,
                 y1: rect.min.y,
                 x2: rect.max.x,

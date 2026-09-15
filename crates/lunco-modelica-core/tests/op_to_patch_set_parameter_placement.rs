@@ -15,8 +15,8 @@ use std::sync::Arc;
 
 use lunco_doc::{DocumentHost, DocumentId, DocumentOrigin};
 use lunco_modelica_ast::parse_to_ast;
+use lunco_modelica_ast::pretty::Placement;
 use lunco_modelica_core::document::{ModelicaDocument, ModelicaOp, SyntaxCache};
-use lunco_modelica_core::pretty::Placement;
 
 /// Construct a `DocumentHost<ModelicaDocument>` with `source` and a
 /// **fresh, sync-parsed** SyntaxCache wired in.

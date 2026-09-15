@@ -42,8 +42,8 @@ fn op_modify_waypoints(
     let modelica_pts: Vec<(f32, f32)> = pts.iter().map(|p| (p.x, -p.y)).collect();
     Some(ModelicaOp::SetConnectionLine {
         class: class.to_string(),
-        from: crate::pretty::PortRef::new(&from_instance, edge.from.port.as_str()),
-        to: crate::pretty::PortRef::new(&to_instance, edge.to.port.as_str()),
+        from: lunco_modelica_ast::pretty::PortRef::new(&from_instance, edge.from.port.as_str()),
+        to: lunco_modelica_ast::pretty::PortRef::new(&to_instance, edge.to.port.as_str()),
         points: modelica_pts,
     })
 }
@@ -375,8 +375,14 @@ pub(super) fn render_edge_menu(
                     {
                         out.push(ModelicaOp::ReverseConnection {
                             class: class.to_string(),
-                            from: crate::pretty::PortRef::new(&from_inst, edge.from.port.as_str()),
-                            to: crate::pretty::PortRef::new(&to_inst, edge.to.port.as_str()),
+                            from: lunco_modelica_ast::pretty::PortRef::new(
+                                &from_inst,
+                                edge.from.port.as_str(),
+                            ),
+                            to: lunco_modelica_ast::pretty::PortRef::new(
+                                &to_inst,
+                                edge.to.port.as_str(),
+                            ),
                         });
                     }
                 }
@@ -438,8 +444,8 @@ pub(super) fn render_edge_menu(
     let mk_op = |color: Option<[u8; 3]>, thickness: Option<f64>, smooth_bezier: Option<bool>| {
         ModelicaOp::SetConnectionLineStyle {
             class: class.to_string(),
-            from: crate::pretty::PortRef::new(&from_instance, &from_port),
-            to: crate::pretty::PortRef::new(&to_instance, &to_port),
+            from: lunco_modelica_ast::pretty::PortRef::new(&from_instance, &from_port),
+            to: lunco_modelica_ast::pretty::PortRef::new(&to_instance, &to_port),
             color,
             thickness,
             smooth_bezier,

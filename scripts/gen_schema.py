@@ -38,7 +38,7 @@ import sys
 from collections import OrderedDict
 from pathlib import Path
 
-SCHEMA_DIR = Path("crates/lunco-usd-document/schema")
+SCHEMA_DIR = Path("crates/lunco-usd-authoring/schema")
 SRC = SCHEMA_DIR / "schema.usda"
 OUT = SCHEMA_DIR / "generatedSchema.usda"
 PLUGINFO = SCHEMA_DIR / "plugInfo.json"

@@ -13,6 +13,7 @@ license.workspace = true
 bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh", "bevy_light"] }
 openusd = { workspace = true }
 lunco-usd-bevy-camera = { path = "../lunco-usd-bevy-camera" }
+lunco-camera-core = { path = "../lunco-camera-core" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-light = { path = "../lunco-usd-bevy-light" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
@@ -35,11 +36,9 @@ lunco-spatial = { path = "../lunco-spatial" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }
 lunco-environment = { path = "../lunco-environment" }
-# Only the camera components (FreeFlightCamera/OrbitCamera/…) — egui-free.
-# `default-features = false` keeps avatar's egui UI (+ workbench shell) out of a
-# headless server build.
+# Typed avatar lifecycle and authored camera-intent handoff only. Camera mode
+# realization and all raw input translation belong to `lunco-avatar`.
 lunco-avatar-core = { path = "../lunco-avatar-core" }
-lunco-controller = { path = "../lunco-controller" }
 lunco-cosim = { path = "../lunco-cosim" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
 # Hook substrate for authored policies and typed USD lint facts for the custom
@@ -50,7 +49,6 @@ lunco-hooks = { path = "../lunco-hooks" }
 lunco-physics = { path = "../lunco-physics" }
 avian3d = { workspace = true }
 big_space = { workspace = true }
-leafwing-input-manager = { workspace = true }
 web-time = { workspace = true }
 
 [lints]
@@ -59,5 +57,4 @@ workspace = true
 [dev-dependencies]
 lunco-hooks-rhai = { path = "../lunco-hooks-rhai" }
 lunco-usd-core = { path = "../lunco-usd-core" }
-lunco-usd-document = { path = "../lunco-usd-document" }
 lunco-usd-compose = { path = "../lunco-usd-compose" }

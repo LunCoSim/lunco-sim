@@ -23,6 +23,25 @@ fn modelica_apply(doc, ops) {
     cmd("ApplyModelicaOps", #{ doc_id: doc, ops: ops })
 }
 
+// Each constructor below returns one `ApiOp` payload. Keep these constructors
+// in Rhai so authored tools and tutorials can describe Modelica edits without
+// depending on Rust enum constructors. `modelica_apply` remains the only
+// submission path, preserving one journal/undo transaction for a batch.
+
+fn modelica_noop() { "Noop" }
+
+fn modelica_replace_source(source) {
+    #{ ReplaceSource: #{ source: source } }
+}
+
+fn modelica_edit_text(range_start, range_end, replacement) {
+    #{ EditText: #{
+        range_start: range_start,
+        range_end: range_end,
+        replacement: replacement,
+    }}
+}
+
 fn modelica_placement(x, y, width, height) {
     #{ x: x, y: y, width: width, height: height }
 }
@@ -39,6 +58,10 @@ fn modelica_add_component(class, type_name, name, placement, modifications) {
     }}
 }
 
+fn modelica_remove_component(class, name) {
+    #{ RemoveComponent: #{ class: class, name: name } }
+}
+
 fn modelica_connect(class, from_component, from_port, to_component, to_port) {
     #{ AddConnection: #{
         class: class,
@@ -50,9 +73,191 @@ fn modelica_connect(class, from_component, from_port, to_component, to_port) {
     }}
 }
 
+fn modelica_disconnect(class, from_component, from_port, to_component, to_port) {
+    #{ RemoveConnection: #{
+        class: class,
+        from_component: from_component,
+        from_port: from_port,
+        to_component: to_component,
+        to_port: to_port,
+    }}
+}
+
+fn modelica_set_connection_line(class, from_component, from_port, to_component, to_port, line_points) {
+    #{ SetConnectionLine: #{
+        class: class,
+        from_component: from_component,
+        from_port: from_port,
+        to_component: to_component,
+        to_port: to_port,
+        line_points: line_points,
+    }}
+}
+
+fn modelica_set_connection_line_style(class, from_component, from_port, to_component, to_port, color, thickness, smooth_bezier) {
+    #{ SetConnectionLineStyle: #{
+        class: class,
+        from_component: from_component,
+        from_port: from_port,
+        to_component: to_component,
+        to_port: to_port,
+        color: color,
+        thickness: thickness,
+        smooth_bezier: smooth_bezier,
+    }}
+}
+
+fn modelica_reverse_connection(class, from_component, from_port, to_component, to_port) {
+    #{ ReverseConnection: #{
+        class: class,
+        from_component: from_component,
+        from_port: from_port,
+        to_component: to_component,
+        to_port: to_port,
+    }}
+}
+
+fn modelica_set_placement(class, name, placement) {
+    #{ SetPlacement: #{ class: class, name: name, placement: placement } }
+}
+
 fn modelica_set_parameter(class, component, param, value) {
     #{ SetParameter: #{
         class: class, component: component, param: param, value: value
+    }}
+}
+
+fn modelica_add_plot_node(class, signal, title, x1, y1, x2, y2) {
+    #{ AddPlotNode: #{
+        class: class,
+        signal: signal,
+        title: title,
+        x1: x1,
+        y1: y1,
+        x2: x2,
+        y2: y2,
+    }}
+}
+
+fn modelica_remove_plot_node(class, signal) {
+    #{ RemovePlotNode: #{ class: class, signal: signal } }
+}
+
+fn modelica_set_plot_node_extent(class, signal, x1, y1, x2, y2) {
+    #{ SetPlotNodeExtent: #{
+        class: class,
+        signal: signal,
+        x1: x1,
+        y1: y1,
+        x2: x2,
+        y2: y2,
+    }}
+}
+
+fn modelica_set_plot_node_title(class, signal, title) {
+    #{ SetPlotNodeTitle: #{ class: class, signal: signal, title: title } }
+}
+
+fn modelica_set_diagram_text_extent(class, index, x1, y1, x2, y2) {
+    #{ SetDiagramTextExtent: #{
+        class: class,
+        index: index,
+        x1: x1,
+        y1: y1,
+        x2: x2,
+        y2: y2,
+    }}
+}
+
+fn modelica_set_diagram_text_string(class, index, text) {
+    #{ SetDiagramTextString: #{ class: class, index: index, text: text } }
+}
+
+fn modelica_remove_diagram_text(class, index) {
+    #{ RemoveDiagramText: #{ class: class, index: index } }
+}
+
+fn modelica_add_class(parent, name, kind, description, partial) {
+    #{ AddClass: #{
+        parent: parent,
+        name: name,
+        kind: kind,
+        description: description,
+        partial: partial,
+    }}
+}
+
+fn modelica_remove_class(qualified) {
+    #{ RemoveClass: #{ qualified: qualified } }
+}
+
+fn modelica_add_short_class(parent, name, kind, base, prefixes, modifications) {
+    #{ AddShortClass: #{
+        parent: parent,
+        name: name,
+        kind: kind,
+        base: base,
+        prefixes: prefixes,
+        modifications: modifications,
+    }}
+}
+
+fn modelica_add_variable(class, name, type_name, causality, variability, flow, modifications, value, description) {
+    #{ AddVariable: #{
+        class: class,
+        name: name,
+        type_name: type_name,
+        causality: causality,
+        variability: variability,
+        flow: flow,
+        modifications: modifications,
+        value: value,
+        description: description,
+    }}
+}
+
+fn modelica_remove_variable(class, name) {
+    #{ RemoveVariable: #{ class: class, name: name } }
+}
+
+fn modelica_add_equation(class, lhs, rhs) {
+    #{ AddEquation: #{ class: class, lhs: lhs, rhs: rhs } }
+}
+
+fn modelica_rectangle(x1, y1, x2, y2, line_color, fill_color, fill_pattern) {
+    #{ kind: "Rectangle", x1: x1, y1: y1, x2: x2, y2: y2,
+       line_color: line_color, fill_color: fill_color, fill_pattern: fill_pattern }
+}
+
+fn modelica_polygon(points, line_color, fill_color, fill_pattern) {
+    #{ kind: "Polygon", points: points,
+       line_color: line_color, fill_color: fill_color, fill_pattern: fill_pattern }
+}
+
+fn modelica_line(points, color, thickness, pattern) {
+    #{ kind: "Line", points: points, color: color, thickness: thickness, pattern: pattern }
+}
+
+fn modelica_text(x1, y1, x2, y2, text, color, font_size) {
+    #{ kind: "Text", x1: x1, y1: y1, x2: x2, y2: y2,
+       text: text, color: color, font_size: font_size }
+}
+
+fn modelica_add_icon_graphic(class, graphic) {
+    #{ AddIconGraphic: #{ class: class, graphic: graphic } }
+}
+
+fn modelica_add_diagram_graphic(class, graphic) {
+    #{ AddDiagramGraphic: #{ class: class, graphic: graphic } }
+}
+
+fn modelica_set_experiment(class, start_time, stop_time, tolerance, interval) {
+    #{ SetExperimentAnnotation: #{
+        class: class,
+        start_time: start_time,
+        stop_time: stop_time,
+        tolerance: tolerance,
+        interval: interval,
     }}
 }
 

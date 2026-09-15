@@ -454,7 +454,7 @@ pub fn populate_mission_control_view(
         (Entity, &Name, Option<&lunco_core::GlobalEntityId>),
         (With<ControlBinding>, Without<Avatar>),
     >,
-    surface: Query<(), With<lunco_avatar_core::camera::SurfaceCamera>>,
+    surface: Query<(), With<lunco_camera_core::SurfaceCamera>>,
     gravity: Option<Res<lunco_celestial_spatial::LocalGravityField>>,
     changed: Query<
         (),

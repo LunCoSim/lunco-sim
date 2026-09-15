@@ -1,6 +1,6 @@
 //! Operation and change types for Modelica documents.
 
-use crate::pretty::{self, ComponentDecl, ConnectEquation, Placement, PortRef};
+use lunco_modelica_ast::pretty::{self, ComponentDecl, ConnectEquation, Placement, PortRef};
 use std::ops::Range;
 
 /// How many structured changes the document retains for consumer
@@ -375,7 +375,7 @@ pub enum FreshAst {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pretty::{ComponentDecl, Placement};
+    use lunco_modelica_ast::pretty::{ComponentDecl, Placement};
 
     /// A2: structured ops serialize **losslessly** — `serde_json` round-trips
     /// an `AddComponent` (nested `ComponentDecl` + `Placement`) back to an

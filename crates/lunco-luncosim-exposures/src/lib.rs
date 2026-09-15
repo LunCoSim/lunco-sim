@@ -16,13 +16,13 @@ use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_celestial_spatial::link::LinkState;
 use lunco_celestial_spatial::OrbitalViewPin;
-use lunco_controller::ControllerLink;
 use lunco_core::exposure::{
     EngineExposures, ExposureRefresh, ExposureValue, ExposureWriter, EXPOSURE_UPDATE_HZ,
 };
 use lunco_core::{
     Avatar, CelestialBody, GlobalEntityId, LocalAvatar, SceneMountState, TheLocalAvatar,
 };
+use lunco_cosim_core::ControlLink;
 use lunco_cosim_core::{SimComponent, SimStatus};
 use lunco_hooks::HookValue;
 use lunco_mobility::WheelRaycast;
@@ -863,7 +863,7 @@ fn resolve_authored_telemetry(
 /// Resolve the vessel the local avatar is driving, or `None` in free flight.
 fn resolve_driven(
     local_avatar: &TheLocalAvatar,
-    q_avatar: &Query<&ControllerLink, (With<Avatar>, With<LocalAvatar>)>,
+    q_avatar: &Query<&ControlLink, (With<Avatar>, With<LocalAvatar>)>,
     q_name: &Query<&Name>,
     q_callsign: &Query<&lunco_core::markers::Callsign>,
     q_catalog_id: &Query<&lunco_core::CatalogEntryId>,
@@ -878,7 +878,7 @@ fn resolve_driven(
     q_com: &Query<&ComputedCenterOfMass>,
     surface_pose: &lunco_celestial_spatial::SurfacePoseQuery,
 ) -> Option<DrivenVessel> {
-    let vessel = q_avatar.get(local_avatar.0?).ok()?.vessel_entity;
+    let vessel = q_avatar.get(local_avatar.0?).ok()?.target;
     let pose = match surface_pose.site_count() {
         0 => {
             let (position, rotation) =
@@ -1268,11 +1268,7 @@ pub(crate) fn mark_exposure_dirty(
         (),
         (
             With<LocalAvatar>,
-            Or<(
-                Changed<ControllerLink>,
-                Changed<Avatar>,
-                Changed<LocalAvatar>,
-            )>,
+            Or<(Changed<ControlLink>, Changed<Avatar>, Changed<LocalAvatar>)>,
         ),
     >,
     q_velocity: Query<(), Changed<LinearVelocity>>,
@@ -1427,7 +1423,7 @@ pub(crate) struct ExposureRuntime<'w, 's> {
 /// function when seminar tracing adds another input.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct ExposureQueries<'w, 's> {
-    avatar: Query<'w, 's, &'static ControllerLink, (With<Avatar>, With<LocalAvatar>)>,
+    avatar: Query<'w, 's, &'static ControlLink, (With<Avatar>, With<LocalAvatar>)>,
     name: Query<'w, 's, &'static Name>,
     callsign: Query<'w, 's, &'static lunco_core::markers::Callsign>,
     catalog_id: Query<'w, 's, &'static lunco_core::CatalogEntryId>,
@@ -1717,7 +1713,7 @@ fn publish_celestial_capability(
     bodies: &Query<&CelestialBody>,
     orbital_pin: Option<&OrbitalViewPin>,
     local_avatar: &TheLocalAvatar,
-    avatars: &Query<&ControllerLink, (With<Avatar>, With<LocalAvatar>)>,
+    avatars: &Query<&ControlLink, (With<Avatar>, With<LocalAvatar>)>,
     surface_pose: &lunco_celestial_spatial::SurfacePoseQuery,
     workspace: Option<&lunco_workspace::WorkspaceResource>,
 ) {
@@ -1735,7 +1731,7 @@ fn publish_celestial_capability(
     let local_surface_pose = local_avatar
         .0
         .and_then(|avatar| avatars.get(avatar).ok())
-        .and_then(|controller| surface_pose.get(controller.vessel_entity));
+        .and_then(|controller| surface_pose.get(controller.target));
     let lunar_map = project_lunar_map(
         twin_setting_is_enabled(workspace, LUNAR_MAP_SETTING_KEY),
         moon,
@@ -2108,7 +2104,7 @@ fn publish_runtime_surface_exposures(
     roots: &[AuthoredRuntimeSurface],
     retired_surface_ids: &[String],
     local_avatar: &TheLocalAvatar,
-    q_avatar: &Query<&ControllerLink, (With<Avatar>, With<LocalAvatar>)>,
+    q_avatar: &Query<&ControlLink, (With<Avatar>, With<LocalAvatar>)>,
 ) {
     for surface_id in retired_surface_ids {
         let mut ui = exposures.writer(surface_id);
@@ -2209,13 +2205,13 @@ fn publish_selected_control_exposure(
 
 fn locally_possesses(
     local_avatar: &TheLocalAvatar,
-    q_avatar: &Query<&ControllerLink, (With<Avatar>, With<LocalAvatar>)>,
+    q_avatar: &Query<&ControlLink, (With<Avatar>, With<LocalAvatar>)>,
     subject: Entity,
 ) -> bool {
     local_avatar
         .0
         .and_then(|avatar| q_avatar.get(avatar).ok())
-        .is_some_and(|controller| controller.vessel_entity == subject)
+        .is_some_and(|controller| controller.target == subject)
 }
 
 /// Discover roots that explicitly opt into a runtime surface.

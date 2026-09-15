@@ -1,16 +1,18 @@
-//! Pure Modelica source analysis shared by runtime, validation, and UI crates.
+//! Modelica source and AST contracts shared by runtime, validation, and UI crates.
 //!
-//! This package owns parse-time facts only: source normalization, recovered
-//! AST extraction, interface metadata, and lint facts. It deliberately has no
-//! Bevy, document, worker, storage, or renderer dependency, so a validator or
-//! a co-simulation projection can use the same authoritative extraction path
-//! without linking the Modelica workbench.
+//! This package owns source normalization and parsing, AST extraction and
+//! lossless mutation, diagram graph data, source-fragment rendering, interface
+//! metadata, and lint facts. A validator, source editor, or co-simulation
+//! projection can use the same authoritative Modelica representation.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
 pub mod ast_extract;
+pub mod ast_mut;
+pub mod diagram_model;
 pub mod lint_facts;
+pub mod pretty;
 
 /// Rumoca's causality classification, re-exported from the Modelica AST
 /// boundary so downstream domain projections do not depend on Rumoca's core
@@ -21,6 +23,26 @@ pub use rumoca_core::Causality;
 pub use rumoca_ir_ast::StoredDefinition;
 
 use std::borrow::Cow;
+
+/// Remove the authored `within` prefix from a qualified name.
+///
+/// Rumoca stores a class's name relative to its source document while callers
+/// often address it through the document's package-qualified name. Keeping
+/// this normalization at the AST boundary lets source editors and Modelica
+/// projections share the same package rule.
+pub fn strip_within_prefix<'a>(
+    qualified: &'a str,
+    within: Option<&rumoca_ir_ast::Name>,
+) -> &'a str {
+    let Some(within) = within else {
+        return qualified;
+    };
+    let prefix = within.to_string();
+    let Some(rest) = qualified.strip_prefix(&prefix) else {
+        return qualified;
+    };
+    rest.strip_prefix('.').unwrap_or(rest)
+}
 
 /// Normalize text accepted at the Modelica source boundary.
 ///

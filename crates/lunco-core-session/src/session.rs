@@ -268,7 +268,7 @@ impl SessionRegistry {
     }
 
     /// Free every entity a dropped session held; returns the freed gids so the
-    /// caller can release the corresponding `ControllerLink`s (G5).
+    /// caller can release the corresponding `ControlLink`s (G5).
     pub fn release_session(&mut self, session: SessionId) -> Vec<u64> {
         let freed: Vec<u64> = self
             .owners
@@ -951,12 +951,12 @@ pub const AUTHORIZE_HOOK: &str = "rbac.authorize";
 
 /// The [`lunco_hooks`] id of the **control-authority takeover** policy (spec 034).
 ///
-/// When one actor tries to possess a vessel **another session already owns**, the
-/// possession path ([`SessionRegistry::claim`] is `Exclusive` by default and would
-/// refuse) asks this hook whether the takeover is allowed. The rule — e.g. "a human
-/// may take a vessel from an autopilot (`AiAgent`), but an autopilot may not take
-/// one a human holds" — is authored in **rhai**, not Rust, so a deployment tunes it
-/// without recompiling (`policy→rhai`). The hook receives a map
+/// When one actor tries to claim an endpoint **another session already owns**, the
+/// generic authority transition (`SessionRegistry::claim` is `Exclusive` by
+/// default and would refuse) asks this hook whether the takeover is allowed. The
+/// rule — e.g. "a human may take an endpoint from an autopilot (`AiAgent`), but an
+/// autopilot may not take one a human holds" — is authored in **rhai**, not Rust,
+/// so a deployment tunes it without recompiling (`policy→rhai`). The hook receives a map
 /// `{ taker, taker_role, owner, owner_role, target }` and returns a bool (`true` =
 /// the taker may steal, so the prior owner is released first). It fails **closed**:
 /// absent hook or a non-bool/faulting policy ⇒ no takeover (the vessel stays with
@@ -1227,15 +1227,16 @@ pub fn authorize_policy(
 }
 
 /// **The** answer to "may `session` take control of `gid` right now?" — the single
-/// predicate the possession command must ask before it mutates authority.
+/// predicate a control-authority transition must ask before it mutates authority.
 ///
 /// It is [`SessionRegistry::may_possess`] (free, or already ours, or `LastWins`) OR an
 /// authored takeover of a *different* session's vessel via [`may_take_control`]. Both
 /// halves are the rule; either alone is not.
 ///
-/// The possession command owns both semantic binding and authority mutation. It asks
-/// this predicate before claiming a vessel, so a policy-approved takeover cannot leave
-/// the authority table and the local `ControllerLink` in different states.
+/// The generic claim transition asks this predicate before claiming an endpoint. A
+/// higher-level command such as `PossessVessel` composes that transition with its
+/// local `ControlLink` and camera transaction, so a policy-approved takeover cannot
+/// leave those state changes in disagreement.
 ///
 /// Deliberately permissive on an *unknown* vessel (no owner recorded): a client's table is
 /// a replicated copy that can lag its own claim, and single-player's is empty until the
@@ -1332,7 +1333,7 @@ mod tests {
         }
     }
 
-    /// `may_control` is the ONE predicate the `PossessVessel` command asks, so it
+    /// `may_control` is the shared predicate the authority transition asks, so it
     /// must agree with `may_possess` on the easy cases and additionally honour takeover.
     ///
     /// The regression it guards is that an authority decision and a local bind could

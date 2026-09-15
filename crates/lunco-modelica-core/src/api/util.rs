@@ -1,8 +1,8 @@
 //! Shared utilities for API handlers.
 
-use crate::pretty::PortRef;
 use bevy::prelude::*;
 use lunco_doc::DocumentId;
+use lunco_modelica_ast::pretty::PortRef;
 
 pub fn resolve_doc(world: &World, raw: DocumentId) -> Option<DocumentId> {
     if raw.is_unassigned() {

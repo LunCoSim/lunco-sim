@@ -1,0 +1,13 @@
+[package]
+name = "lunco-usd-data"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+description = "Reusable authored USD data, metadata, and stage-convention contracts"
+
+[dependencies]
+bevy = { workspace = true }
+openusd = { workspace = true }
+
+[lints]
+workspace = true

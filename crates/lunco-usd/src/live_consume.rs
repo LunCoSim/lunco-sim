@@ -1065,7 +1065,7 @@ mod tests {
         use bevy::asset::AssetApp;
         use bevy::prelude::*;
         use lunco_usd_bevy_core::canonical::CanonicalStages;
-        use lunco_usd_document::recipe::StageRecipe;
+        use lunco_usd_compose::recipe::StageRecipe;
 
         let mut app = App::new();
         app.add_plugins(bevy::asset::AssetPlugin::default())
@@ -1143,7 +1143,7 @@ mod tests {
         use bevy::prelude::*;
         use lunco_usd_bevy_core::canonical::CanonicalStages;
         use lunco_usd_bevy_scene::UsdPreviewOnly;
-        use lunco_usd_document::recipe::StageRecipe;
+        use lunco_usd_compose::recipe::StageRecipe;
 
         let mut app = App::new();
         app.add_plugins(bevy::asset::AssetPlugin::default())
@@ -1217,7 +1217,7 @@ mod tests {
         use bevy::asset::AssetApp;
         use bevy::prelude::*;
         use lunco_usd_bevy_core::canonical::CanonicalStages;
-        use lunco_usd_document::recipe::StageRecipe;
+        use lunco_usd_compose::recipe::StageRecipe;
 
         const SCENE: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n    metersPerUnit = 1.0\n    upAxis = \"Y\"\n)\ndef Xform \"World\"\n{\n    def Xform \"Rover\"\n    {\n        double3 xformOp:translate = (0, -1900, 0)\n        uniform token[] xformOpOrder = [\"xformOp:translate\"]\n    }\n}\n";
 
@@ -1280,7 +1280,7 @@ mod tests {
         use bevy::asset::AssetApp;
         use bevy::prelude::*;
         use lunco_usd_bevy_core::canonical::CanonicalStages;
-        use lunco_usd_document::recipe::StageRecipe;
+        use lunco_usd_compose::recipe::StageRecipe;
 
         const SCENE: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n    def Xform \"Rover\" (\n        prepend apiSchemas = [\"PhysicsRigidBodyAPI\", \"PhysxVehicleContextAPI\"]\n    )\n    {\n    }\n}\n";
 
@@ -1338,7 +1338,7 @@ mod tests {
         use bevy::asset::AssetApp;
         use bevy::prelude::*;
         use lunco_usd_bevy_core::canonical::CanonicalStages;
-        use lunco_usd_document::recipe::StageRecipe;
+        use lunco_usd_compose::recipe::StageRecipe;
 
         const SCENE: &str =
             "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n";
@@ -1431,7 +1431,7 @@ mod tests {
         use bevy::asset::AssetApp;
         use bevy::prelude::*;
         use lunco_usd_bevy_core::canonical::CanonicalStages;
-        use lunco_usd_document::recipe::StageRecipe;
+        use lunco_usd_compose::recipe::StageRecipe;
 
         let mut app = App::new();
         app.add_plugins(bevy::asset::AssetPlugin::default())

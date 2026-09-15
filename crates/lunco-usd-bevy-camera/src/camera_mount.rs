@@ -23,7 +23,7 @@ use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_render::SceneCamera;
 
-use crate::camera::UsdCameraPose;
+use lunco_camera_core::CameraPoseMode;
 
 /// A camera that rigidly rides `mount` at a fixed local `offset` (grid-direct;
 /// see module docs). Realised from a `def Camera` authored nested under `mount`.
@@ -40,7 +40,7 @@ pub struct MountedCamera {
 #[derive(Component)]
 pub struct CameraMountResolved;
 
-/// Realise only cameras whose explicit [`UsdCameraPose`] is `Mounted` as
+/// Realise only cameras whose explicit [`CameraPoseMode`] is `Mounted` as
 /// grid-direct mount followers.
 /// Runs once per camera. Retries next frame if the mount's grid isn't spawned
 /// yet (async scene load).
@@ -50,7 +50,7 @@ pub struct CameraMountResolved;
 /// samples; a path driver changes the pose to `Path` before this system runs.
 pub fn resolve_camera_mounts(
     q_new: Query<
-        (Entity, &ChildOf, &Transform, &UsdCameraPose),
+        (Entity, &ChildOf, &Transform, &CameraPoseMode),
         (With<SceneCamera>, Without<CameraMountResolved>),
     >,
     q_grids: Query<&Grid>,
@@ -58,7 +58,7 @@ pub fn resolve_camera_mounts(
     mut commands: Commands,
 ) {
     for (cam, child_of, tf, pose) in q_new.iter() {
-        if *pose != UsdCameraPose::Mounted {
+        if *pose != CameraPoseMode::Mounted {
             continue;
         }
         let parent = child_of.parent();
@@ -174,7 +174,7 @@ mod tests {
             .world_mut()
             .spawn((
                 SceneCamera::default(),
-                UsdCameraPose::Avatar,
+                CameraPoseMode::Interactive,
                 Transform::default(),
                 ChildOf(scene_root),
             ))
@@ -196,7 +196,7 @@ mod tests {
             .world_mut()
             .spawn((
                 SceneCamera::default(),
-                UsdCameraPose::Authored,
+                CameraPoseMode::Authored,
                 Transform::default(),
                 ChildOf(scene_root),
             ))
@@ -218,7 +218,7 @@ mod tests {
             .world_mut()
             .spawn((
                 SceneCamera::default(),
-                UsdCameraPose::Mounted,
+                CameraPoseMode::Mounted,
                 Transform::from_xyz(0.0, 1.0, 2.0),
                 ChildOf(rover),
             ))

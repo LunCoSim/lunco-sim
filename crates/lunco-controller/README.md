@@ -26,7 +26,7 @@ The controller acts as the **Human-Machine Interface (HMI)** layer, decoupling r
 lunco-controller/
   ├── InputBindingsSettings — persisted semantic key/pointer map
   ├── UserIntent            — shared abstract action vocabulary
-  ├── ControllerLink    — Component linking a controller entity to a vessel
+  ├── ControlLink       — Component from lunco-cosim-core linking a producer to a target
   └── lib.rs             — translation, authority, and input projection
 ```
 
@@ -39,7 +39,7 @@ app.add_plugins(LunCoControllerPlugin);
 commands.spawn((
     ActionState::<UserIntent>::default(),
     InputBindingsSettings::default().input_map().expect("bundled keymap"),
-    ControllerLink { vessel_entity: rover_id },
+    ControlLink { target: rover_id },
 ));
 ```
 
@@ -70,6 +70,22 @@ and releasing an intent writes zero to every authored command port.
 The default W/S/A/D/Q/E labels are only the current `input_bindings` projection.
 UI help resolves them from `InputBindingsSettings`, so remapping changes the
 display without introducing a second control scheme.
+
+### Native UI input automation
+
+`InjectWindowInput` is the generic local automation boundary for Rhai, API
+clients, playback, and accessibility tooling. It accepts one typed
+`WindowInputEvent` at a time: `key`, `pointer_move`, `pointer_button`, or
+`scroll`. The controller delivers the event through both Bevy's aggregate
+`WindowEvent` stream and its typed keyboard/mouse messages, matching the
+`bevy_winit` delivery boundary. Picking, egui, focus, input bindings, and scene
+tools therefore see the same event path as hardware input.
+
+Rhai owns gesture policy and sequencing. For example, an authored Alt-click is
+composed from `input_key_press("AltLeft")`, `input_click("primary", x, y)`,
+and `input_key_release("AltLeft")`; no waypoint or editor code is called
+directly. The command is client-local and requires a primary window, so it is
+not a simulation/network control channel.
 
 `SetPorts` latches each named command value at the shared port receiver, so a
 one-shot API/Rhai write remains deterministic across fixed ticks. Use

@@ -7,8 +7,8 @@
 use std::collections::HashMap;
 
 use bevy::prelude::*;
-use lunco_controller::ControllerLink;
 use lunco_core::{Avatar, ControlBinding, InputPorts, SceneMountState, TheLocalAvatar};
+use lunco_cosim_core::ControlLink;
 use lunco_modelica_ui_core::{DEFAULT_MODELICA_GRAPH_ID, MODELICA_PLOT_KIND_ID};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_workbench::{
@@ -269,7 +269,7 @@ fn sync_editor_session_selection(
 fn refresh_view_help_controls(
     bindings: Res<lunco_controller::InputBindingsSettings>,
     local_avatar: Res<TheLocalAvatar>,
-    q_avatar: Query<&ControllerLink, (With<Avatar>, With<lunco_core::LocalAvatar>)>,
+    q_avatar: Query<&ControlLink, (With<Avatar>, With<lunco_core::LocalAvatar>)>,
     q_names: Query<Ref<Name>>,
     q_callsigns: Query<&lunco_core::markers::Callsign>,
     q_catalog_ids: Query<&lunco_core::CatalogEntryId>,
@@ -282,7 +282,7 @@ fn refresh_view_help_controls(
     let target = local_avatar
         .0
         .and_then(|entity| q_avatar.get(entity).ok())
-        .map(|link| link.vessel_entity);
+        .map(|link| link.target);
     let target_changed = *last_target != target;
     let endpoint_changed = target.is_some_and(|entity| {
         q_names.get(entity).is_ok_and(|name| name.is_changed())
@@ -517,7 +517,7 @@ impl Plugin for SceneEditUiPlugin {
                 cinematic::draw_camera_paths,
             ),
         );
-        // One `ControllerLink` lookup and three `Ref` checks on a single entity,
+        // One `ControlLink` lookup and three `Ref` checks on a single entity,
         // then an early return — an O(1) live readout, the sanctioned
         // `every_frame` shape.
         app.add_view_model_every_frame(refresh_view_help_controls);

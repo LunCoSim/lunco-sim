@@ -891,8 +891,6 @@ fn on_server_disconnected(
     mut pending_requests: ResMut<crate::scenario_sync::PendingAssetRequests>,
     mut serve_tasks: ResMut<crate::scenario_sync::AssetServeTasks>,
     mut replay: ResMut<PendingJournalReplay>,
-    q_vessels: Query<(Entity, &lunco_core::GlobalEntityId)>,
-    holds: Option<Res<lunco_cosim_core::PortHolds>>,
     mut commands: Commands,
 ) {
     // `TelemetrySubscriptions` is not reaped here: a disconnecting client's
@@ -920,7 +918,9 @@ fn on_server_disconnected(
     let Some(session) = assigned.remove(peer_key) else {
         return;
     };
-    let freed = registry.release_session(session);
+    let change = lunco_core_session::release_control(&mut registry, session);
+    let freed = change.released.clone();
+    commands.trigger(change);
     profiles.profiles.remove(&session.0);
     rbac.sessions.remove(&session.0);
     dedup.forget(session);
@@ -934,16 +934,6 @@ fn on_server_disconnected(
     pending_offers.0.retain(|(s, _)| *s != session);
     pending_requests.0.retain(|(s, _)| *s != session);
     serve_tasks.0.retain(|(s, _)| *s != session);
-    if holds.is_some() {
-        for (entity, gid) in &q_vessels {
-            if freed.contains(&gid.get()) {
-                // A disconnected owner has no opportunity to send ReleaseControl.
-                // Apply the same safe state as an explicit handoff before another
-                // session can claim the freed vessel.
-                commands.trigger(lunco_cosim_core::commands::ReleaseControl { target: entity });
-            }
-        }
-    }
     info!(
         "[net] client disconnected: session={} freed {} entities, profiles updated",
         session.0,

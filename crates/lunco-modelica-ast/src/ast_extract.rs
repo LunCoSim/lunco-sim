@@ -18,6 +18,20 @@ use rumoca_core::{Causality, ClassType, OpBinary, OpUnary, Variability};
 use rumoca_ir_ast::{AstIndexMap, ClassDef, Expression, StoredDefinition, TerminalType};
 use std::collections::{BTreeSet, HashMap};
 
+/// True when an expression names a `PlotNode` record in a `__LunCo` annotation.
+///
+/// Both qualified (`LunCoAnnotations.PlotNode`) and imported bare record names
+/// are accepted by Modelica source, so the extractor intentionally checks the
+/// final name segment only.
+pub fn is_plot_node_record_call(expr: &Expression) -> bool {
+    let parts = match expr {
+        Expression::FunctionCall { comp, .. } => &comp.parts,
+        Expression::ClassModification { target, .. } => &target.parts,
+        _ => return false,
+    };
+    parts.last().map(|part| &*part.ident.text) == Some("PlotNode")
+}
+
 // ---------------------------------------------------------------------------
 // Parsing entry point
 // ---------------------------------------------------------------------------

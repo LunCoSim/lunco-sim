@@ -188,11 +188,13 @@ broader command/op vs state-replication split is in
 
 ## Authority & Possession
 
-Possession negotiation runs through the server so only one session controls a vessel at a
-time. A `NetworkAuthority { owner_session, pending_request }` component tracks control;
-`RequestAuthority` → server grants/denies → `AuthorityGranted` → local control begins, and
-the authority change replicates to all clients. The command itself flows as any other:
-client raycast → possess command (`PossessVessel`) → serialize (`SyncCommand`) → server auth+ACL check → execute on server → update `NetworkAuthority` status.
+Control authority runs through the server so the host can arbitrate one active
+session per endpoint. `SessionRegistry` stores the stable global-id ownership
+table. A generic `ClaimControl` or `ReleaseControlClaim` command crosses the
+same reflected command path as `PossessVessel`; the host applies the session
+transition and broadcasts the resulting ownership snapshot. `PossessVessel`
+adds avatar `ControlLink` and camera composition on top of that generic
+transition.
 
 Ownership/authority is mechanism **M3** (totally-ordered-from-authority) in
 [SYNC_ARCHITECTURE.md](./SYNC_ARCHITECTURE.md). Note: *ownership ≠ predictability* — owning
@@ -280,7 +282,7 @@ stable cross-process identity, derived as follows:
 conflate them.
 
 **Design rule that still holds: `GlobalEntityId` is a component, never a field type.**
-Domain code uses `Entity` everywhere (queries, `Wire.source`, `ControllerLink.vessel_entity`,
+Domain code uses `Entity` everywhere (queries, `Wire.source`, `ControlLink.target`,
 `ChildOf`); the networking layer reads `GlobalEntityId` only when crossing boundaries
 (serialize, command resolution, edit logging). Putting `GlobalEntityId` in component fields
 would force a HashMap lookup into every system iteration — Bevy needs `Entity` for component

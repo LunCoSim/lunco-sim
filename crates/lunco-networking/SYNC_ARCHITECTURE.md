@@ -66,7 +66,7 @@ Seven. That's the whole vocabulary. Everything below is *routing*.
 | Parameter change (inspector) | — | Discrete | Opaque | **M3** |
 | Modelica `.mo` source | Content baseline + live edits | ConcurrentText | — | **M1** baseline + **M5** edits |
 | Sim clock / dt / time-warp / pause | — | Continuous tick | — | **M6** |
-| Ownership / `NetworkAuthority` | — | Discrete | Opaque | **M2** (replicated component) or **M3** |
+| Session ownership (`SessionRegistry`) | — | Discrete | Opaque | **M3** (authority command + ownership snapshot) |
 | Session / roles / presence | — | Discrete | Opaque | **M3** + presence list via **M2** |
 | Awareness (others' cursors/cameras) | — | High-rate, soft | — | **M4**-style ephemeral |
 | Edit history / undo log | — | Discrete | — | **M3** (the op-log *is* M3) |
@@ -259,9 +259,12 @@ Domain authors touch a tiny API — never a socket, backend, or serializer:
 
 ```rust
 app.sync::<Transform>(SyncClass::Continuous);                   // → M2 (role decided at runtime)
-app.sync::<NetworkAuthority>(SyncClass::Discrete);              // → M2 replicated / M3
+// Session ownership uses ClaimControl/ReleaseControlClaim on M3 and the
+// existing ownership snapshot for peer readback.
 app.declare_channel::<SetPorts>(SyncChannel::ControlStream);    // → M4/M3 (reuses #[Command])
 app.declare_channel::<ReleaseControl>(SyncChannel::CommandBus); // → M3 lifecycle release
+app.declare_channel::<ClaimControl>(SyncChannel::CommandBus); // → M3 authority claim
+app.declare_channel::<ReleaseControlClaim>(SyncChannel::CommandBus); // → M3 authority release
 commands.spawn((MyBundle, Provenance::Content { namespace:"usd", source, path }));  // → M1
 // keep something local: do nothing — Local is the DEFAULT (undeclared never crosses the layer)
 ```

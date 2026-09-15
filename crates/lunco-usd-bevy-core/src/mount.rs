@@ -433,7 +433,7 @@ mod mount_reader_tests {
 
     use super::{read_plug, read_sockets};
     use crate::canonical::CanonicalStage;
-    use lunco_usd_document::recipe::StageRecipe;
+    use lunco_usd_compose::recipe::StageRecipe;
 
     // Base at (5,6,5); a socket 2.5 up under an arbitrary Interfaces group
     // naming a child Arm; Arm (off at +2 X) carries a plug frame under

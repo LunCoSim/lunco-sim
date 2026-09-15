@@ -14,5 +14,13 @@
   "switch_mode": ["KeyV"],
   "pause":      ["KeyP"],
   "cancel":     ["Backspace", "Escape"],
-  "delete_selection": ["Delete"]
+  "delete_selection": ["Delete"],
+  "pointer_bindings": {
+    "route.add_point": [
+      {"button": "Left", "alt": true}
+    ],
+    "route.context": [
+      {"button": "Right"}
+    ]
+  }
 }

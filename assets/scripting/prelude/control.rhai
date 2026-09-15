@@ -108,6 +108,11 @@ fn set_world_pose(id, p, q) {
     cmd("TransformEntity", #{ entity_id: id, translation: p, rotation: q })
 }
 fn detach_joint(joint)         { cmd("DetachJoint", #{ target: joint }) }
+/// Claim an endpoint for the active session without binding an avatar camera.
+/// Use this for an autopilot, device controller, or other authored producer.
+fn claim_control(endpoint)     { cmd("ClaimControl", #{ target: endpoint }) }
+/// Release one endpoint's session authority without changing its producer.
+fn release_control_claim(endpoint) { cmd("ReleaseControlClaim", #{ target: endpoint }) }
 fn possess(vessel)             { cmd("PossessVessel", #{ target: vessel }) }
 
 // ── Cinematic camera helpers (all generic cmd() under the hood) ──

@@ -10,7 +10,7 @@ use bevy::prelude::*;
 use lunco_cosim_core::SimConnection;
 use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdStageAsset, UsdWiringDirty};
 use lunco_usd_bevy_scene::UsdPrimPath;
-use lunco_usd_document::recipe::StageRecipe;
+use lunco_usd_compose::recipe::StageRecipe;
 use lunco_usd_sim_cosim::install_wiring_system;
 use openusd::sdf::Path as SdfPath;
 

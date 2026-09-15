@@ -51,7 +51,7 @@ use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_usd_avian::{AuthoredInitialVelocity, PendingJointAdmission, ShouldBeDynamic};
 use lunco_usd_avian_filters::filtered_pairs::SharedTireContact;
-use lunco_usd_bevy_camera::camera::{read_camera_exposure_ev100, UsdCameraPose};
+use lunco_usd_bevy_camera::avatar::read_avatar_camera_intent;
 use lunco_usd_bevy_core::read::{read_authored_bool_strict, read_vec3_f64};
 use lunco_usd_bevy_core::{
     canonical::CanonicalStages, UsdInstanceProjection, UsdInstanceRoot, UsdStageAsset,
@@ -63,13 +63,7 @@ use lunco_usd_bevy_scene::{
 // `StandardMaterial`, `ShaderMaterial` or `Camera3d` (all `bevy_pbr` /
 // `bevy_core_pipeline` → wgpu + naga). `lunco-render-bevy` binds these.
 // See docs/architecture/render-decoupling.md.
-use leafwing_input_manager::prelude::ActionState;
-use lunco_avatar_core::camera::{
-    AdaptiveNearPlane, AvatarFlightSettings, FreeFlightCamera, OrbitCamera, SpringArmCamera,
-};
-use lunco_controller::InputBindingsSettings;
-use lunco_core::architecture::{IntentAnalogState, Port, PortSurface};
-use lunco_core::{Avatar, LocalAvatar};
+use lunco_core::architecture::{Port, PortSurface};
 use lunco_cosim::{avian_queries::RaycastObservation, JointTorqueActuator};
 use lunco_materials::ShaderLook;
 use lunco_mobility::wheel_kinematics::{body_point_velocity, wheel_hub_pose, wheel_roll_rate};
@@ -77,7 +71,7 @@ use lunco_mobility::{
     DifferentialCoupling, DifferentialDriveType, JointedWheelTire, Suspension, SuspensionPiston,
     SuspensionSpring, WheelRaycast,
 };
-use lunco_render::{GraphicsCameraDefaults, PbrLook, SceneCamera};
+use lunco_render::{PbrLook, SceneCamera};
 use lunco_spatial::coords::{GridPos, GridRot, VehicleFrame};
 use lunco_usd_sim_core::{PendingDifferential, UsdSimProcessed, UsdSimSet};
 use openusd::schemas::physics::tokens as ptok;
@@ -348,7 +342,6 @@ impl Plugin for UsdSimPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<lunco_core::RuntimeFaults>();
         app.init_resource::<lunco_core::RuntimeDiagnostics>();
-        app.init_resource::<InputBindingsSettings>();
         crate::shader_ports::build(app);
         app.add_plugins(lunco_usd_sim_celestial::CelestialProjectionPlugin);
         app.configure_sets(
@@ -550,22 +543,11 @@ fn process_usd_sim_prims(
     canonical: NonSend<CanonicalStages>,
     mut topology_index: ResMut<JointTopologyIndex>,
     stage_revision: Res<lunco_usd_bevy_scene::UsdStageRevision>,
-    // The active-scene sun: the avatar camera's exposure is read from the SAME
-    // resource the sun illuminance comes from, so they can't drift (a dimmed
-    // sun under a bright-tuned camera blacked the viewport). `Option` so the
-    // loader still works in a stripped app without `EnvironmentPlugin`.
-    active_sun: Option<Res<lunco_environment::LunarSun>>,
-    input_bindings: Res<InputBindingsSettings>,
     mut runtime_diagnostics: ResMut<lunco_core::RuntimeDiagnostics>,
 ) {
     let started = web_time::Instant::now();
     let mut processed = 0usize;
     let mut authored_diagnostics = Vec::new();
-    let Ok(input_map) = input_bindings.input_map() else {
-        error!("[usd-sim] refusing to create avatar controllers from invalid input bindings");
-        runtime_diagnostics.replace_producer("usd-sim", std::iter::empty());
-        return;
-    };
     // Build (or refresh) each involved stage's immutable topology once. The
     // canonical generation is the authored-composition invalidation signal;
     // waiting for a mesh or another sibling no longer re-scans every spec.
@@ -635,8 +617,6 @@ fn process_usd_sim_prims(
             &q_child_of,
             &grid_components,
             &q_spatial,
-            active_sun.as_deref(),
-            &input_map,
             &mut commands,
             &mut authored_diagnostics,
         );
@@ -837,7 +817,7 @@ fn read_gear_drive_type(
 mod gear_drive_tests {
     use super::{read_gear_drive_type, read_gear_drive_values, DifferentialDriveType};
     use lunco_usd_bevy_core::canonical::CanonicalStage;
-    use lunco_usd_document::recipe::StageRecipe;
+    use lunco_usd_compose::recipe::StageRecipe;
     use openusd::sdf::Path as SdfPath;
 
     const FIXTURE: &str = r#"#usda 1.0
@@ -880,55 +860,6 @@ def PhysxPhysicsGearJoint "Differential" (
         let path = SdfPath::new("/Differential").expect("gear path");
         assert!(read_gear_drive_values(&view, &path).is_err());
     }
-}
-
-fn read_authored_camera_look_at(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
-    path: &SdfPath,
-) -> Result<Option<[f64; 3]>, ()> {
-    if !reader.has_authored_attribute(path, "lunco:cameraLookAt") {
-        return Ok(None);
-    }
-    match read_vec3_f64(reader, path, "lunco:cameraLookAt") {
-        Some(value) if value.iter().all(|value| value.is_finite()) => Ok(Some(value)),
-        _ => Err(()),
-    }
-}
-
-fn read_avatar_flight_settings(
-    reader: &dyn lunco_usd_bevy_core::read::UsdReadObject,
-    path: &SdfPath,
-) -> Result<AvatarFlightSettings, String> {
-    let defaults = AvatarFlightSettings::default();
-    let read = |name: &str, default: f64| -> Result<f64, String> {
-        match reader.real_f32(path, name) {
-            Some(value) if value.is_finite() => Ok(value as f64),
-            Some(_) => Err(format!("{name} must be finite")),
-            None if reader.has_authored_attribute(path, name) => {
-                Err(format!("{name} must be a finite real"))
-            }
-            None => Ok(default),
-        }
-    };
-    let settings = AvatarFlightSettings {
-        speed_mps: read("lunco:avatar:flightSpeed", defaults.speed_mps)?,
-        boost_multiplier: read("lunco:avatar:boostMultiplier", defaults.boost_multiplier)?,
-        boost_threshold: read("lunco:avatar:boostThreshold", defaults.boost_threshold)?,
-        input_deadzone: read("lunco:avatar:inputDeadzone", defaults.input_deadzone)?,
-    };
-    if !settings.speed_mps.is_finite() || settings.speed_mps <= 0.0 {
-        return Err("lunco:avatar:flightSpeed must be finite and greater than zero".into());
-    }
-    if !settings.boost_multiplier.is_finite() || settings.boost_multiplier < 1.0 {
-        return Err("lunco:avatar:boostMultiplier must be finite and at least one".into());
-    }
-    if !settings.boost_threshold.is_finite() || !(0.0..=1.0).contains(&settings.boost_threshold) {
-        return Err("lunco:avatar:boostThreshold must be finite and within [0, 1]".into());
-    }
-    if !settings.input_deadzone.is_finite() || !(0.0..1.0).contains(&settings.input_deadzone) {
-        return Err("lunco:avatar:inputDeadzone must be finite and within [0, 1)".into());
-    }
-    Ok(settings)
 }
 
 fn read_raycast_observation(
@@ -981,7 +912,7 @@ fn push_usd_sim_diagnostic(
 mod raycast_tests {
     use super::read_raycast_observation;
     use lunco_usd_bevy_core::canonical::CanonicalStage;
-    use lunco_usd_document::recipe::StageRecipe;
+    use lunco_usd_compose::recipe::StageRecipe;
     use openusd::sdf::Path as SdfPath;
 
     fn read(source: &str) -> Result<lunco_cosim::avian_queries::RaycastObservation, ()> {
@@ -1051,8 +982,6 @@ fn process_usd_sim_prim_read(
     q_child_of: &Query<&ChildOf>,
     grid_components: &Query<&Grid>,
     q_spatial: &Query<(Option<&CellCoord>, &Transform)>,
-    active_sun: Option<&lunco_environment::LunarSun>,
-    input_map: &leafwing_input_manager::prelude::InputMap<lunco_core::UserIntent>,
     commands: &mut Commands,
     diagnostics: &mut Vec<lunco_core::RuntimeDiagnostic>,
 ) {
@@ -1106,43 +1035,18 @@ fn process_usd_sim_prim_read(
             return;
         }
     }
-    let is_avatar = match read_authored_bool_strict(reader, &sdf_path, "lunco:avatar") {
-        Ok(Some(value)) => value,
-        Ok(None) => false,
-        Err(_) => {
-            push_usd_sim_diagnostic(
-                diagnostics,
-                &prim_path.path,
-                "avatar-attribute",
-                "lunco:avatar must be an authored boolean",
-            );
+    let avatar_intent = match read_avatar_camera_intent(reader, &sdf_path, &existing_tf) {
+        Ok(intent) => intent,
+        Err(error) => {
+            push_usd_sim_diagnostic(diagnostics, &prim_path.path, error.code(), error.message());
             warn!(
-                "USD prim {} has malformed `lunco:avatar`; prim ignored",
-                prim_path.path
+                "USD prim {} has malformed avatar camera contract: {}",
+                prim_path.path,
+                error.message()
             );
             commands.entity(entity).try_insert(UsdSimProcessed);
             return;
         }
-    };
-    let avatar_exposure = if is_avatar {
-        match read_camera_exposure_ev100(reader, &sdf_path) {
-            Ok(exposure) => exposure,
-            Err(_) => {
-                // An invalid authored exposure is a broken camera contract, not
-                // an invitation to replace it with a calibrated value. Mark the
-                // prim complete so the scene does not retry the same bad opinion.
-                push_usd_sim_diagnostic(
-                    diagnostics,
-                    &prim_path.path,
-                    "avatar-exposure",
-                    "avatar camera exposure must be a finite EV100 value",
-                );
-                commands.entity(entity).try_insert(UsdSimProcessed);
-                return;
-            }
-        }
-    } else {
-        None
     };
 
     // --- Network replication policy, derived from USD ---
@@ -1426,188 +1330,19 @@ fn process_usd_sim_prim_read(
     // `lunco-usd-sim-celestial` plugin, not here. Bundling it in this system
     // made a cosim prim, which skips this system, lose its LinkNode.
 
-    // 0. Avatar role and photographic exposure were validated before any
-    // per-prim simulation components were projected.
-    if is_avatar {
+    // Avatar camera behavior is a presentation concern. USD simulation only
+    // projects the authored contract and spatial identity; `lunco-avatar`
+    // realizes movement, input, and camera mode components.
+    if let Some(intent) = avatar_intent {
         info!(
-            "Detected Avatar prim at {}, setting up camera",
+            "Detected Avatar prim at {}, publishing authored camera intent",
             prim_path.path
         );
-        // PRIOR AVATARS are not this code's problem. `LocalAvatar` is singular
-        // by construction (`lunco_core`'s component hook): inserting it below
-        // demotes whatever held it, and `lunco_avatar::demote_former_avatar`
-        // strips that entity's camera/control roles and deactivates its camera.
-        // This used to be a loop right here, which is precisely why the OTHER
-        // ways an avatar appears (an explicit host camera, a recomposed prim)
-        // could leave a second live one.
-        // `token`, per luncoSchema — so `text`, not `scalar::<String>`, which
-        // matches `Value::String` alone and reads every token as `None`.
-        // `LunCoAvatarAPI` declares `freeflight` as the USD schema fallback.
-        // That is an authored semantic default, not a Rust recovery path: a
-        // malformed token must remain an explicit scene error below.
-        let camera_mode = match reader.attr_value(&sdf_path, "lunco:cameraMode") {
-            Some(Value::Token(value)) => {
-                let value = value.to_string();
-                if matches!(value.as_str(), "freeflight" | "orbit" | "springarm") {
-                    value
-                } else {
-                    push_usd_sim_diagnostic(
-                        diagnostics,
-                        &prim_path.path,
-                        "camera-mode",
-                        format!(
-                            "avatar camera mode `{value}` is unsupported; use `freeflight`, `orbit`, or `springarm`"
-                        ),
-                    );
-                    warn!(
-                        "USD avatar {} has unsupported camera mode `{}`; avatar ignored",
-                        prim_path.path, value
-                    );
-                    commands.entity(entity).try_insert(UsdSimProcessed);
-                    return;
-                }
-            }
-            Some(_) => {
-                push_usd_sim_diagnostic(
-                    diagnostics,
-                    &prim_path.path,
-                    "camera-mode",
-                    "lunco:cameraMode must be a token: `freeflight`, `orbit`, or `springarm`",
-                );
-                warn!(
-                    "USD avatar {} has malformed `lunco:cameraMode`; avatar ignored",
-                    prim_path.path
-                );
-                commands.entity(entity).try_insert(UsdSimProcessed);
-                return;
-            }
-            None if reader.has_authored_attribute(&sdf_path, "lunco:cameraMode") => {
-                push_usd_sim_diagnostic(
-                    diagnostics,
-                    &prim_path.path,
-                    "camera-mode",
-                    "authored lunco:cameraMode is malformed",
-                );
-                warn!(
-                    "USD avatar {} has malformed `lunco:cameraMode`; avatar ignored",
-                    prim_path.path
-                );
-                commands.entity(entity).try_insert(UsdSimProcessed);
-                return;
-            }
-            None => "freeflight".to_string(),
-        };
-        let read_camera_real = |name: &str, default_value: f32| -> Result<f32, ()> {
-            match reader.real_f32(&sdf_path, name) {
-                Some(value) if value.is_finite() => Ok(value),
-                Some(_) => Err(()),
-                None if reader.has_authored_attribute(&sdf_path, name) => Err(()),
-                None => Ok(default_value),
-            }
-        };
-        let mut yaw = match read_camera_real("lunco:cameraYaw", std::f32::consts::PI * 0.8) {
-            Ok(value) => value,
-            Err(()) => {
-                push_usd_sim_diagnostic(
-                    diagnostics,
-                    &prim_path.path,
-                    "camera-yaw",
-                    "authored lunco:cameraYaw must be finite",
-                );
-                warn!(
-                    "USD avatar {} has malformed `lunco:cameraYaw`; avatar ignored",
-                    prim_path.path
-                );
-                commands.entity(entity).try_insert(UsdSimProcessed);
-                return;
-            }
-        };
-        let mut pitch = match read_camera_real("lunco:cameraPitch", -0.3) {
-            Ok(value) => value,
-            Err(()) => {
-                push_usd_sim_diagnostic(
-                    diagnostics,
-                    &prim_path.path,
-                    "camera-pitch",
-                    "authored lunco:cameraPitch must be finite",
-                );
-                warn!(
-                    "USD avatar {} has malformed `lunco:cameraPitch`; avatar ignored",
-                    prim_path.path
-                );
-                commands.entity(entity).try_insert(UsdSimProcessed);
-                return;
-            }
-        };
 
-        // `lunco:cameraLookAt` (double3, scene-local): when authored,
-        // derive yaw/pitch so the camera aims from its USD
-        // `xformOp:translate` toward this point on start. Overrides any
-        // authored `lunco:cameraYaw`/`lunco:cameraPitch` — expressing
-        // "look at the main object" as a target point is more maintainable
-        // than hand-tuned angles (move the camera or the object and the
-        // aim stays correct). The math inverts `freeflight_system`'s
-        // `Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0)`, whose forward
-        // is `(-sin(yaw)·cos(pitch), sin(pitch), -cos(yaw)·cos(pitch))`:
-        //   pitch = asin(dir.y),  yaw = atan2(-dir.x, -dir.z).
-        let look_at = match read_authored_camera_look_at(reader, &sdf_path) {
-            Ok(value) => value,
-            Err(()) => {
-                push_usd_sim_diagnostic(
-                    diagnostics,
-                    &prim_path.path,
-                    "camera-look-at",
-                    "authored lunco:cameraLookAt must be a finite double3",
-                );
-                warn!(
-                    "USD avatar {} has malformed `lunco:cameraLookAt`; avatar ignored",
-                    prim_path.path
-                );
-                commands.entity(entity).try_insert(UsdSimProcessed);
-                return;
-            }
-        };
-        if let Some([lx, ly, lz]) = look_at {
-            // The EYE must be the avatar's authored position, not `existing_tf`:
-            // `maybe_tf` is `None` on this path, so `existing_tf` defaults to the
-            // origin, and aiming from (0,0,0) instead of (e.g.) (14,6,12) points the
-            // camera up at the sky. Read `xformOp:translate` directly.
-            let eye = read_vec3_f64(reader, &sdf_path, "xformOp:translate")
-                .map(|[x, y, z]| DVec3::new(x, y, z))
-                .unwrap_or(existing_tf.translation.as_dvec3());
-            let dir = DVec3::new(lx, ly, lz) - eye;
-            if let Some(n) = dir.try_normalize() {
-                pitch = (n.y.clamp(-1.0, 1.0)).asin() as f32;
-                yaw = (-n.x).atan2(-n.z) as f32;
-            }
-        }
-
-        let flight_settings = match read_avatar_flight_settings(reader, &sdf_path) {
-            Ok(settings) => settings,
-            Err(error) => {
-                push_usd_sim_diagnostic(
-                    diagnostics,
-                    &prim_path.path,
-                    "avatar-flight-settings",
-                    error.clone(),
-                );
-                warn!(
-                    "USD avatar {} has malformed flight settings: {}",
-                    prim_path.path, error
-                );
-                commands.entity(entity).try_insert(UsdSimProcessed);
-                return;
-            }
-        };
-
-        // Avatar position from the LIVE composed scene hierarchy. The USD
-        // transform is local to its authored parent (`/Traverse` here). Resolve
-        // the nearest actual Grid in that parent chain: this
-        // is the scene's frame owner (WorldGrid during bootstrap, or the body's
-        // surface grid after celestial placement), never a marker-selected
-        // parallel grid. Resolve the pose directly in that Grid's frame; a
-        // root-world compose followed by an immediate inverse conversion is
-        // both unnecessary and unstable when the distant root is re-pinned.
+        // Avatar position from the live composed scene hierarchy. The USD
+        // transform is local to its authored parent, so resolve the nearest
+        // actual Grid in that parent chain and commit the complete spatial
+        // handoff through the shared migration boundary.
         let (grid_entity, grid) = lunco_spatial::coords::ancestor_grid(
             entity,
             q_child_of,
@@ -1633,140 +1368,16 @@ fn process_usd_sim_prim_read(
             .with_rotation(rotation.as_quat())
             .with_scale(existing_tf.scale);
 
-        // Shared render-look for the avatar camera: SMAA post-process AA,
-        // MSAA off (can't touch shader-internal regolith speckle), and
-        // physical lunar exposure (ev100 15 ≈ SUNLIGHT) to pair with the
-        // ~128k lx sun. Same look as the standard scene camera; without it
-        // a USD-authored Avatar camera renders at Blender-default ev9.7 and
-        // the lunar terrain blows out. Tune live via SetEnvironmentLight.
-        // Render-look for the avatar camera: physical exposure read from the
-        // active-scene `LunarSun` resource — the SAME source as the sun
-        // illuminance, so lux and EV move together (the point of bundling
-        // them). A dimmed sun can therefore never leave the camera mis-
-        // exposed (that mismatch blacked the viewport once).
-        //
-        // NB: NO SMAA here. SMAA is a per-camera post-process whose resolve
-        // does not survive the workbench's full-window-3D + egui-overlay
-        // compositing (egui paints over with `ClearColorConfig::None`), so a
-        // workbench camera with `Smaa` renders a blank/black viewport — and
-        // without the `smaa_luts` feature it additionally drops every frame
-        // on a wgpu bind-group validation error. Both failure modes look like
-        // a lighting/camera bug. Keep workbench cameras SMAA-free; MSAA (from
-        // `SceneCamera`, bound by `lunco-render-bevy`) handles geometry-edge AA.
-        // An authored camera is authoritative over the calibrated scene default.
-        // Both paths use the one USD photographic conversion, so ISO/shutter/
-        // f-stop never acquire a second spelling at the avatar boundary.
-        let ev100 = avatar_exposure
-            .unwrap_or_else(|| active_sun.copied().unwrap_or_default().exposure_ev100);
-        // AgX tonemapping: a filmic curve that rolls off the blown highlights
-        // and lifts the toe of the brutal grazing-sun terminator (vs the hard
-        // clip that read as pure white/black), while keeping the realistic
-        // high-contrast lunar exposure (ev100 stays lunar-calibrated).
-        let camera_look = move || {
-            (
-                bevy::camera::Exposure { ev100 },
-                // Camera INTENT: `lunco-render-bevy` binds `Camera3d` + its
-                // render graph + `Tonemapping::AgX` + MSAA. Render-free here,
-                // and it is what every "which entity is the scene camera?"
-                // query filters on.
-                SceneCamera::agx(),
-                // This avatar camera is renderer-owned intent. The render
-                // binder must keep it synchronized with live Graphics settings
-                // just like canonical USD and native avatar cameras.
-                GraphicsCameraDefaults,
-            )
-        };
-
-        // Build the avatar camera in its explicit scene Grid. BigSpace's
-        // persistent OriginAnchor owns FloatingOrigin; camera role and origin
-        // ownership are separate contracts.
-        match camera_mode.as_str() {
-            "freeflight" => {
-                commands.entity(entity).try_insert((
-                    camera_look(),
-                    FreeFlightCamera {
-                        yaw,
-                        pitch,
-                        damping: None,
-                    },
-                    AdaptiveNearPlane,
-                    avatar_tf,
-                    avatar_cell,
-                    Avatar,
-                    LocalAvatar,
-                    IntentAnalogState::default(),
-                    ActionState::<lunco_core::UserIntent>::default(),
-                    input_map.clone(),
-                ));
-            }
-            "orbit" => {
-                commands.entity(entity).try_insert((
-                    camera_look(),
-                    OrbitCamera {
-                        target: Entity::PLACEHOLDER,
-                        distance: 30.0,
-                        yaw,
-                        pitch,
-                        damping: None,
-                        vertical_offset: 0.0,
-                    },
-                    AdaptiveNearPlane,
-                    avatar_tf,
-                    avatar_cell,
-                    Avatar,
-                    LocalAvatar,
-                    IntentAnalogState::default(),
-                    ActionState::<lunco_core::UserIntent>::default(),
-                    input_map.clone(),
-                ));
-            }
-            "springarm" => {
-                commands.entity(entity).try_insert((
-                    camera_look(),
-                    SpringArmCamera {
-                        target: Entity::PLACEHOLDER,
-                        distance: 15.0,
-                        yaw,
-                        pitch,
-                        damping: None,
-                        vertical_offset: 2.0,
-                        // Authored chase cams target steerable vehicles.
-                        track_heading: true,
-                        attitude: lunco_avatar_core::camera::FollowAttitude::Heading,
-                    },
-                    avian3d::prelude::TranslationInterpolation,
-                    avian3d::prelude::RotationInterpolation,
-                    AdaptiveNearPlane,
-                    avatar_tf,
-                    avatar_cell,
-                    Avatar,
-                    LocalAvatar,
-                    IntentAnalogState::default(),
-                    ActionState::<lunco_core::UserIntent>::default(),
-                    input_map.clone(),
-                ));
-            }
-            _ => {
-                error!(
-                    "Unknown camera mode '{}' for avatar at {}; refusing to create an avatar controller (allowed: freeflight, orbit, springarm)",
-                    camera_mode, prim_path.path
-                );
-                commands.entity(entity).try_insert(UsdSimProcessed);
-                return;
-            }
-        }
-        // This applies to both `def Camera` and `def Xform` avatar prims. The
-        // avatar controller is the sole pose writer; a hierarchy-derived mount
-        // follower must never claim it during an async reload.
-        commands
-            .entity(entity)
-            .try_insert((UsdCameraPose::Avatar, flight_settings));
-        // Keep the camera in the scene's actual frame owner. The nearest Grid
-        // was selected above from the authored parent chain, so this is not a
-        // second celestial frame and does not detach the camera from the rover
-        // scene during bootstrap or body-surface rebranching. The pose was
-        // already composed in that Grid; commit the complete spatial handoff
-        // through the shared migration boundary.
+        // `CameraPoseMode::Interactive` identifies this as an interactive USD
+        // camera for the camera mount/selection systems. It does not select
+        // behavior or read input; the authored intent is realized by the
+        // specialized avatar owner on the next update.
+        commands.entity(entity).try_insert((
+            lunco_camera_core::CameraPoseMode::Interactive,
+            lunco_core::Avatar,
+            lunco_core::LocalAvatar,
+            intent,
+        ));
         lunco_spatial::attach::migrate_to_grid(
             commands,
             entity,
@@ -3457,7 +3068,7 @@ fn activate_dynamic_bodies(
 mod topology_index_tests {
     use super::*;
     use lunco_usd_bevy_core::canonical::CanonicalStage;
-    use lunco_usd_document::recipe::StageRecipe;
+    use lunco_usd_compose::recipe::StageRecipe;
 
     const WHEEL_STAGE: &str = r#"#usda 1.0
 def Xform "Rover" {
@@ -4101,48 +3712,5 @@ mod proxy_wheel_tests {
         );
         // The proxy wheel inherits the chassis orientation.
         assert!(q.angle_between(chassis_rot) < 1e-9, "q={q:?}");
-    }
-}
-
-#[cfg(test)]
-mod authored_camera_tests {
-    use super::*;
-    use lunco_usd_bevy_core::canonical::CanonicalStage;
-    use lunco_usd_document::recipe::StageRecipe;
-
-    fn stage_view(source: &str) -> (CanonicalStage, SdfPath) {
-        let stage = CanonicalStage::from_recipe(&StageRecipe::from_source("camera.usda", source))
-            .expect("camera fixture composes");
-        let path = SdfPath::new("/World/Avatar").expect("camera path");
-        (stage, path)
-    }
-
-    #[test]
-    fn omitted_camera_look_at_does_not_override_authored_angles() {
-        let (stage, path) = stage_view(
-            r#"#usda 1.0
-def Xform "World"
-{
-    def Xform "Avatar" {}
-}
-"#,
-        );
-        assert_eq!(read_authored_camera_look_at(&stage.view(), &path), Ok(None));
-    }
-
-    #[test]
-    fn malformed_authored_camera_look_at_is_rejected() {
-        let (stage, path) = stage_view(
-            r#"#usda 1.0
-def Xform "World"
-{
-    def Xform "Avatar"
-    {
-        string lunco:cameraLookAt = "origin"
-    }
-}
-"#,
-        );
-        assert!(read_authored_camera_look_at(&stage.view(), &path).is_err());
     }
 }

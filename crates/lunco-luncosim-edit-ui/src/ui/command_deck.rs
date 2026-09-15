@@ -6,8 +6,8 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_controller::ControllerLink;
 use lunco_core::{GlobalEntityId, TheLocalAvatar};
+use lunco_cosim_core::ControlLink;
 use lunco_scene_selection::SelectedEntities;
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
@@ -22,7 +22,7 @@ pub fn populate_command_deck_view(
     mut view: ResMut<CommandDeckView>,
     selected: Res<SelectedEntities>,
     local_avatar: Res<TheLocalAvatar>,
-    q_link: Query<&ControllerLink>,
+    q_link: Query<&ControlLink>,
     q_name: Query<&Name>,
     q_callsign: Query<&lunco_core::markers::Callsign>,
     q_catalog_id: Query<&lunco_core::CatalogEntryId>,
@@ -46,9 +46,7 @@ pub fn populate_command_deck_view(
         })
         .unwrap_or_default();
     view.driving = match (selection, local_avatar.0) {
-        (Some(target), Some(avatar)) => q_link
-            .get(avatar)
-            .is_ok_and(|link| link.vessel_entity == target),
+        (Some(target), Some(avatar)) => q_link.get(avatar).is_ok_and(|link| link.target == target),
         _ => false,
     };
 }

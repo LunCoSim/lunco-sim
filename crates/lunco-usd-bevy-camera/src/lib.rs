@@ -8,6 +8,7 @@
 //! consumers name these modules from this package rather than relying on a
 //! facade in `lunco-usd-bevy`.
 
+pub mod avatar;
 pub mod camera;
 pub mod camera_mount;
 pub mod camera_path;
@@ -42,6 +43,7 @@ impl Plugin for UsdCameraPlugin {
             .init_resource::<camera_switch::CameraContractStatus>()
             .init_resource::<camera_switch::StandalonePresentationState>()
             .init_resource::<camera_switch::StandalonePresentationSettings>()
+            .register_type::<lunco_camera_core::CameraPoseMode>()
             .register_type::<camera_track::CameraTrack>()
             .configure_sets(Update, UsdCameraProjectionSet)
             .add_observer(camera_switch::on_activate_camera)

@@ -604,7 +604,7 @@ impl ModelicaDocument {
                 .classes
                 .get(&qualified)
                 .map(|c| super::apply::index_kind_to_class_kind_spec(c.kind))
-                .unwrap_or(crate::pretty::ClassKindSpec::Model);
+                .unwrap_or(lunco_modelica_ast::pretty::ClassKindSpec::Model);
             self.push_change(ModelicaChange::ClassAdded { qualified, kind });
         }
     }

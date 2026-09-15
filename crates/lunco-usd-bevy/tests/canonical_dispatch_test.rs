@@ -17,7 +17,7 @@ use lunco_render::PbrLook;
 use lunco_usd_bevy_core::canonical::{CanonicalStage, CanonicalStages};
 use lunco_usd_bevy_core::UsdStageAsset;
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneProjectionFailed, UsdSceneProjectionQueued};
-use lunco_usd_document::recipe::StageRecipe;
+use lunco_usd_compose::recipe::StageRecipe;
 
 const SCENE: &str = r#"#usda 1.0
 ( defaultPrim = "World", metersPerUnit = 1 )

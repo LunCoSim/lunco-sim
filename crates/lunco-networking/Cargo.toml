@@ -61,6 +61,7 @@ lunco-physics = { path = "../lunco-physics" }
 # Wire substrate needs only the backend-neutral avatar camera and possession
 # contracts; the avatar system implementation is not part of the network edge.
 lunco-avatar-core = { path = "../lunco-avatar-core" }
+lunco-camera-core = { path = "../lunco-camera-core" }
 # `default-features = false`: we read only `ReferenceFrame` (the
 # always-compiled registry component) for snapshot grid parenting — never
 # celestial's egui inspector (`ui` feature). Keeps the headless server egui-free.

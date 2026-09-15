@@ -175,7 +175,7 @@ parsed Modelica contract does not match the authored scene.
   of truth; Rust never reasons about "autopilot" vs "user".
 - The pilot's stick reaches `external_throttle`/`pitch`/… through the vessel's
   intent→port `Controls` scope (next section) when they possess. Camera-follow
-  without taking control: `follow(entity)` (inserts a chase camera, no `ControllerLink`).
+without taking control: `follow(entity)` (inserts a chase camera, no `ControlLink`).
 
 Scene replacement clears possession claims for outgoing USD prims at the shared
 `SceneTeardown` boundary. Because claims use stable `GlobalEntityId` values, a
@@ -184,7 +184,7 @@ driver; persistent non-scene ids are not cleared by that sweep.
 
 `PossessVessel` and `ReleaseVessel` are the single owner of the possession transaction:
 they validate the endpoint and local binding before changing `SessionRegistry` or
-`ControllerLink`. A handoff releases prior claims for that session (except the selected
+`ControlLink`. A handoff releases prior claims for that session (except the selected
 target) and hard-stops each released vessel; release hard-stops the current vessel before
 restoring free flight. Wire-applied commands update host authority only and never bind a
 remote session to the local camera.

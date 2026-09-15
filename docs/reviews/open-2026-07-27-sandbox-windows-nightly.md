@@ -267,7 +267,7 @@ The messages are also disproportionate: "the scene will render unlit" and "every
 
 Two of the three are false positives *by construction*. `crates/lunco-sandbox-edit/src/ui/mod.rs:254` and `:450` register those systems with `every_frame()`, which is literally `|| true` (`:135`). The registration site even says so:
 
-> `// One ControllerLink lookup and three Ref checks on a single entity, then an early return — an O(1) live readout, the sanctioned every_frame shape.`
+> `// One ControlLink lookup and three Ref checks on a single entity, then an early return — an O(1) live readout, the sanctioned every_frame shape.`
 
 `add_view_model` wraps *every* gate in `tracked()` on purpose (":no per-site discipline required, and no way to forget"), which is the right design — but it means a deliberate always-true gate is guaranteed to trip a warning telling the developer to go find what dirties its inputs. Nothing does. The advice is unfollowable, and a diagnostic that cries wolf twice out of three times trains people to skip the third.
 

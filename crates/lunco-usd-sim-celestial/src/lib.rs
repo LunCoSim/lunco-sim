@@ -1074,7 +1074,7 @@ fn any_nested_link_nodes(
 mod tests {
     use super::*;
     use lunco_usd_bevy_core::canonical::CanonicalStage;
-    use lunco_usd_document::recipe::StageRecipe;
+    use lunco_usd_compose::recipe::StageRecipe;
 
     fn view(source: &str) -> (CanonicalStage, SdfPath) {
         let stage = CanonicalStage::from_recipe(&StageRecipe::from_source("scene.usda", source))

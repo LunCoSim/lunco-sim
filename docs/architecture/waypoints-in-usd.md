@@ -135,13 +135,21 @@ safe-stop action cannot be lost to an unrelated point edit.
 ## Interaction
 
 The editor exposes a generic typed scene-pointer context to any registered Rhai
-tool that declares `on_pointer(context)`. The tool owns modifier and button
-semantics: `waypoint_editor` treats Alt+primary-click as append and secondary
-click on a direct route point as its context-menu request. Rust resolves the
-canonical document, prim paths, screen position, modifiers, and world position;
-it does not decide that a click means “waypoint”. The popup host only renders
-authored menu items and dispatches their typed tool hooks, so adding another
-route action does not require an editor-specific Rust branch.
+tool that declares `on_pointer(context)`. Physical pointer chords are resolved
+by the persisted shared `input_bindings.pointer_bindings` settings, which
+publish open-ended semantic names in `context.pointer_intents`; authored tools
+never hardcode Alt, mouse buttons, or modifier combinations. The bundled route
+policy consumes `route.add_point` and `route.context`, so a user can remap
+those names without a Rust rebuild or a waypoint-specific input branch. Rust
+resolves the canonical document, prim paths, screen position, raw diagnostic
+metadata, semantic intents, and coordinates; it does not decide that a click
+means “waypoint”. `world_position` is a typed `point3` map in the
+`active_physics` frame; `render_position` is a separate floating-origin point
+for presentation diagnostics only. `pointer_point(context)` is the standard
+Rhai entry point and returns an explicit error when the active frame is
+unavailable. The popup host only renders authored menu items and dispatches
+their typed tool hooks, so adding another route action does not require an
+editor-specific Rust branch.
 
 ## Presentation
 

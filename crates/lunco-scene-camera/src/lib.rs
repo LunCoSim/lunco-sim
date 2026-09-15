@@ -10,7 +10,9 @@
 
 use bevy::prelude::*;
 use big_space::prelude::Grid;
+use lunco_camera_core::CameraPoseMode;
 use lunco_core::{on_command, register_commands, Command};
+use lunco_render::SceneCamera;
 use lunco_scene_selection::SelectedEntities;
 use lunco_usd_bevy_scene::UsdPrimPath;
 
@@ -129,8 +131,8 @@ pub fn apply_pending_focus(
             &mut Transform,
             &mut big_space::prelude::CellCoord,
             &ChildOf,
-            Option<&mut lunco_avatar_core::camera::FreeFlightCamera>,
-            Has<lunco_avatar_core::camera::OrbitViewReturn>,
+            Option<&mut lunco_camera_core::FreeFlightCamera>,
+            Has<lunco_camera_core::OrbitViewReturn>,
         ),
         (With<lunco_core::Avatar>, With<lunco_core::LocalAvatar>),
     >,
@@ -275,11 +277,11 @@ pub fn apply_pending_focus(
             tf.rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
             commands
                 .entity(avatar_ent)
-                .remove::<lunco_avatar_core::camera::OrbitCamera>()
-                .remove::<lunco_avatar_core::camera::SpringArmCamera>()
-                .remove::<lunco_avatar_core::camera::SurfaceCamera>()
-                .remove::<lunco_avatar_core::camera::SurfaceRelativeMode>()
-                .try_insert(lunco_avatar_core::camera::FreeFlightCamera {
+                .remove::<lunco_camera_core::OrbitCamera>()
+                .remove::<lunco_camera_core::SpringArmCamera>()
+                .remove::<lunco_camera_core::SurfaceCamera>()
+                .remove::<lunco_camera_core::SurfaceRelativeMode>()
+                .try_insert(lunco_camera_core::FreeFlightCamera {
                     yaw,
                     pitch,
                     damping: None,
@@ -292,20 +294,27 @@ pub fn apply_pending_focus(
     );
 }
 
-/// Aim the free-flight avatar camera: place it at `eye` and look at `target`
-/// (both absolute world-space). The flexible primitive — the client computes the
-/// angle (e.g. approach a wheel from its outboard side) and distance.
+/// Aim a scene camera: place it at `eye` and look at `target` (both
+/// absolute world-space). The client computes the angle and distance, so the
+/// same command serves review, instrument, avatar, and cinematic cameras.
 ///
-/// Authoritative: whatever camera mode the avatar is in (orbit focus on a
-/// planet, spring-arm follow, surface mode), this strips it and reinstates a
-/// `FreeFlightCamera` at the requested pose — an API client asking for a
-/// specific view must always get it. `eye` and `target` speak the semantic
-/// [`lunco_spatial::ActivePhysicsFrame`]; the concrete grid is resolved from that
-/// resource so a previous orbit focus or a canonical render-only grid cannot
-/// put the camera in a different frame.
-#[Command(default)]
+/// `camera` is the resolved scene-camera entity. Rhai resolves a USD path with
+/// `find(...)`, while API callers can obtain the same stable entity from the
+/// scene query surface. `eye` and `target` speak the semantic
+/// [`lunco_spatial::ActivePhysicsFrame`]; the concrete grid is resolved from
+/// that resource so camera placement remains in the active physics frame.
+///
+/// The command establishes explicit runtime pose ownership. Authored and
+/// interactive cameras can accept it; mounted and path-driven cameras retain
+/// their authored pose owner and report the conflict instead of acquiring a
+/// second writer.
+#[Command]
 pub struct SetCameraLookAt {
+    /// Scene camera entity to pose.
+    pub camera: Entity,
+    /// Camera position in the active physics frame, metres.
     pub eye: Vec3,
+    /// Camera look-at point in the active physics frame, metres.
     pub target: Vec3,
 }
 
@@ -313,73 +322,61 @@ pub struct SetCameraLookAt {
 #[on_command(SetCameraLookAt)]
 pub fn on_set_camera_look_at(
     trigger: On<SetCameraLookAt>,
-    mut q_avatar: Query<
+    mut q_camera: Query<
         (
-            Entity,
             &mut Transform,
-            &mut big_space::prelude::CellCoord,
+            Option<&mut big_space::prelude::CellCoord>,
             &ChildOf,
-            Option<&mut lunco_avatar_core::camera::FreeFlightCamera>,
+            Option<&mut CameraPoseMode>,
+            Has<lunco_core::Avatar>,
+            Has<lunco_core::LocalAvatar>,
         ),
-        (With<lunco_core::Avatar>, With<lunco_core::LocalAvatar>),
+        With<SceneCamera>,
     >,
     active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
     q_grids: Query<&Grid>,
     mut commands: Commands,
     mut orbital_pin: Option<ResMut<lunco_celestial_spatial::OrbitalViewPin>>,
-    local_avatar: Option<Res<lunco_core::TheLocalAvatar>>,
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
     let cmd = trigger.event();
-    let Some(entity) = local_avatar.as_deref().and_then(|slot| slot.0) else {
-        let message = "no authoritative LocalAvatar is available for SetCameraLookAt".to_string();
+    let entity = cmd.camera;
+    let Ok((mut tf, cell, child_of, pose, is_avatar, is_local_avatar)) =
+        q_camera.get_mut(cmd.camera)
+    else {
+        let message = format!("camera {:?} has no complete spatial pose", cmd.camera);
         warn!("SET_CAMERA: {message}");
         replace_focus_diagnostic(&mut diagnostics, Some(message));
         return;
     };
-    let Ok((entity, mut tf, mut cell, child_of, ff_opt)) = q_avatar.get_mut(entity) else {
-        let message = format!("authoritative LocalAvatar {entity:?} has no complete camera state");
+    let current_pose = pose.as_deref().copied().unwrap_or_default();
+    if matches!(current_pose, CameraPoseMode::Mounted | CameraPoseMode::Path) {
+        let owner = match current_pose {
+            CameraPoseMode::Mounted => "mounted camera follower",
+            CameraPoseMode::Path => "authored camera path",
+            _ => unreachable!(),
+        };
+        let message = format!("camera {entity:?} pose is owned by {owner}");
         warn!("SET_CAMERA: {message}");
         replace_focus_diagnostic(&mut diagnostics, Some(message));
         return;
-    };
+    }
     replace_focus_diagnostic(&mut diagnostics, None);
     // Explicit camera coordinates use the same active physics frame as
     // MoveEntity and route projection. Never select a grid by marker/component
     // type here: render and physics roots may legitimately differ.
-    if let Some(pin) = orbital_pin.as_mut() {
-        pin.active = false;
+    if is_avatar && is_local_avatar {
+        if let Some(pin) = orbital_pin.as_mut() {
+            pin.active = false;
+        }
     }
     let root = active_frame.0;
     let Ok(grid) = q_grids.get(root) else {
-        warn!(
-            ?root,
-            "SET_CAMERA: active physics frame has no Grid component"
-        );
+        let message = format!("active physics frame {root:?} has no Grid component");
+        warn!("SET_CAMERA: {message}");
+        replace_focus_diagnostic(&mut diagnostics, Some(message));
         return;
     };
-    let (new_cell, new_translation) = grid.translation_to_grid(cmd.eye.as_dvec3());
-    if child_of.parent() == root {
-        cell.set_if_neq(new_cell);
-        if tf.translation != new_translation {
-            tf.translation = new_translation;
-        }
-    } else {
-        lunco_spatial::attach::migrate_to_grid(
-            &mut commands,
-            entity,
-            root,
-            new_cell,
-            Transform::from_translation(new_translation).with_rotation(tf.rotation),
-        );
-    }
-    // An explicit world-space camera command starts a new free-flight view; it
-    // does not retain a hidden return transaction or surface gravity binding.
-    commands
-        .entity(entity)
-        .remove::<lunco_avatar_core::camera::OrbitViewReturn>()
-        .remove::<lunco_avatar_core::camera::SurfaceRelativeMode>()
-        .remove::<lunco_environment::GravityBody>();
     let look = cmd.target - cmd.eye;
     let (yaw, pitch) = if look.length() > 1e-4 {
         let d = look.normalize();
@@ -388,27 +385,52 @@ pub fn on_set_camera_look_at(
         let (y, p, _) = tf.rotation.to_euler(EulerRot::YXZ);
         (y, p)
     };
-    if let Some(mut ff) = ff_opt {
-        ff.yaw = yaw;
-        ff.pitch = pitch;
+    let rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
+    let (new_cell, new_translation) = grid.translation_to_grid(cmd.eye.as_dvec3());
+    let new_transform = Transform::from_translation(new_translation).with_rotation(rotation);
+    if child_of.parent() == root {
+        if let Some(mut cell) = cell {
+            cell.set_if_neq(new_cell);
+            tf.set_if_neq(new_transform);
+        } else {
+            lunco_spatial::attach::migrate_to_grid(
+                &mut commands,
+                entity,
+                root,
+                new_cell,
+                new_transform,
+            );
+        }
     } else {
-        commands
-            .entity(entity)
-            .remove::<lunco_avatar_core::camera::OrbitCamera>()
-            .remove::<lunco_avatar_core::camera::OrbitViewReturn>()
-            .remove::<lunco_avatar_core::camera::SpringArmCamera>()
-            .remove::<lunco_avatar_core::camera::SurfaceCamera>()
-            .remove::<lunco_avatar_core::camera::SurfaceRelativeMode>()
-            .remove::<lunco_environment::GravityBody>()
-            .try_insert(lunco_avatar_core::camera::FreeFlightCamera {
-                yaw,
-                pitch,
-                damping: None,
-            });
+        lunco_spatial::attach::migrate_to_grid(
+            &mut commands,
+            entity,
+            root,
+            new_cell,
+            new_transform,
+        );
     }
+
+    // A direct pose command starts an explicit camera view. Clear interactive
+    // mode state and let the generic pose lock fence every competing writer.
+    if let Some(mut pose) = pose {
+        *pose = CameraPoseMode::Explicit;
+    } else {
+        commands.entity(entity).try_insert(CameraPoseMode::Explicit);
+    }
+    commands
+        .entity(entity)
+        .remove::<lunco_camera_core::OrbitViewReturn>()
+        .remove::<lunco_camera_core::OrbitCamera>()
+        .remove::<lunco_camera_core::SpringArmCamera>()
+        .remove::<lunco_camera_core::SurfaceCamera>()
+        .remove::<lunco_camera_core::FreeFlightCamera>()
+        .remove::<lunco_camera_core::SurfaceRelativeMode>()
+        .remove::<lunco_environment::GravityBody>()
+        .try_insert(lunco_core::CameraPoseLock);
     info!(
-        "SET_CAMERA: eye=({:.2},{:.2},{:.2}) target=({:.2},{:.2},{:.2})",
-        cmd.eye.x, cmd.eye.y, cmd.eye.z, cmd.target.x, cmd.target.y, cmd.target.z
+        "SET_CAMERA: camera={:?} eye=({:.2},{:.2},{:.2}) target=({:.2},{:.2},{:.2})",
+        cmd.camera, cmd.eye.x, cmd.eye.y, cmd.eye.z, cmd.target.x, cmd.target.y, cmd.target.z
     );
 }
 
@@ -441,13 +463,13 @@ mod tests {
         let avatar = app
             .world_mut()
             .spawn((
-                lunco_core::Avatar,
-                lunco_core::LocalAvatar,
+                SceneCamera::default(),
+                CameraPoseMode::Authored,
                 CellCoord::ZERO,
                 Transform::default(),
                 GlobalTransform::default(),
                 ChildOf(active_physics_grid),
-                lunco_avatar_core::camera::FreeFlightCamera {
+                lunco_camera_core::FreeFlightCamera {
                     yaw: 0.0,
                     pitch: 0.0,
                     damping: None,
@@ -456,6 +478,7 @@ mod tests {
             .id();
 
         app.world_mut().trigger(SetCameraLookAt {
+            camera: avatar,
             eye: Vec3::new(0.0, 2_500.0, 0.0),
             target: Vec3::ZERO,
         });
@@ -471,6 +494,14 @@ mod tests {
         let composed_y = cell.y as f64 * 2_000.0 + translation.y as f64;
         assert!((composed_y - 2_500.0).abs() < 1.0e-3);
         assert_ne!(canonical_render_grid, active_physics_grid);
+        assert_eq!(
+            app.world().get::<CameraPoseMode>(avatar),
+            Some(&CameraPoseMode::Explicit)
+        );
+        assert!(app
+            .world()
+            .get::<lunco_core::CameraPoseLock>(avatar)
+            .is_some());
     }
 
     #[test]
@@ -509,7 +540,7 @@ mod tests {
                 Transform::from_xyz(4.0, 6.0, 8.0),
                 GlobalTransform::from(Transform::from_xyz(7.0e10, -8.0e10, 9.0e10)),
                 ChildOf(grid),
-                lunco_avatar_core::camera::FreeFlightCamera {
+                lunco_camera_core::FreeFlightCamera {
                     yaw: 0.0,
                     pitch: 0.0,
                     damping: None,
@@ -537,7 +568,7 @@ mod tests {
 
         let freeflight = app
             .world()
-            .get::<lunco_avatar_core::camera::FreeFlightCamera>(avatar)
+            .get::<lunco_camera_core::FreeFlightCamera>(avatar)
             .unwrap();
         let direction = (-offset).normalize();
         assert!((freeflight.yaw - (-direction.x).atan2(-direction.z)).abs() < 1.0e-6);

@@ -9,9 +9,9 @@
 use bevy::prelude::*;
 
 use crate::document::ModelicaOp;
-use crate::pretty::{self, Placement};
 use crate::state::ModelicaDocumentRegistry;
 use crate::ui::commands::AutoArrangeDiagram;
+use lunco_modelica_ast::pretty::{self, Placement};
 
 use super::coords::{canvas_to_modelica, ModelicaPos};
 use super::projection::projection_relevant_source_hash;

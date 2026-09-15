@@ -43,6 +43,8 @@ lunco-time = { path = "../lunco-time" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-camera = { path = "../lunco-usd-bevy-camera" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
+lunco-usd-authoring = { path = "../lunco-usd-authoring" }
+lunco-usd-data = { path = "../lunco-usd-data" }
 lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-document = { path = "../lunco-usd-document" }
 lunco-usd-viewport-ui = { path = "../lunco-usd-viewport-ui" }

@@ -34,10 +34,11 @@
 //! follower; ordinary cameras retain their authored USD hierarchy.
 
 use bevy::prelude::*;
+use lunco_camera_core::CameraPoseMode;
 use openusd::schemas::geom::{self, tokens};
 use openusd::sdf::{Path as SdfPath, Value};
 
-use lunco_usd_document::units::StageMetrics;
+use lunco_usd_data::units::StageMetrics;
 
 /// `UsdGeomCamera` spec defaults (Pixar), so an unauthored attribute matches a
 /// standard ~50 mm full-frame camera rather than Bevy's 45° default FOV.
@@ -48,22 +49,6 @@ const DEFAULT_HORIZONTAL_APERTURE_MM: f32 = 20.955;
 /// introducing an importer-only camera profile.
 const DEFAULT_NEAR: f32 = 1.0;
 const DEFAULT_FAR: f32 = 1.0e6;
-
-/// A USD camera has exactly one writer for its pose. This is projected from
-/// `LunCoAvatarAPI` or `LunCoCameraAPI`; systems dispatch from this explicit
-/// role rather than inferring intent from the prim hierarchy.
-#[derive(Component, Default, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UsdCameraPose {
-    /// USD transform composition and animation own the pose.
-    #[default]
-    Authored,
-    /// The avatar rig owns the grid-local pose interactively.
-    Avatar,
-    /// A rigid follower owns the grid-local pose from the authored parent.
-    Mounted,
-    /// A cinematic path owns the grid-local pose.
-    Path,
-}
 
 /// A camera whose rendered output belongs to an instrument rather than the
 /// main window. It deliberately does not carry [`SceneCamera`].
@@ -198,13 +183,13 @@ pub fn instantiate_camera_prim(
     };
     let has_camera_api = reader.has_api_schema(sdf_path, "LunCoCameraAPI");
     let (is_viewport, is_sensor, pose) = if is_avatar {
-        (true, false, UsdCameraPose::Avatar)
+        (true, false, CameraPoseMode::Interactive)
     } else if !has_camera_api {
         warn!(
             "[usd-bevy] {} Camera has no LunCoCameraAPI; it is not a viewport or sensor camera",
             sdf_path.as_str()
         );
-        (false, false, UsdCameraPose::Authored)
+        (false, false, CameraPoseMode::Authored)
     } else {
         let pose = match read_camera_token(
             reader,
@@ -213,8 +198,8 @@ pub fn instantiate_camera_prim(
             "authored",
             &["authored", "mounted"],
         ) {
-            Some(value) if value == "authored" => UsdCameraPose::Authored,
-            Some(value) if value == "mounted" => UsdCameraPose::Mounted,
+            Some(value) if value == "authored" => CameraPoseMode::Authored,
+            Some(value) if value == "mounted" => CameraPoseMode::Mounted,
             None => return true,
             Some(_) => unreachable!("camera token helper validates its allowed values"),
         };
@@ -222,7 +207,7 @@ pub fn instantiate_camera_prim(
         // that same prim would create two pose authors, so reject the invalid
         // combination at projection rather than silently letting a later system
         // overwrite animation every frame.
-        let invalid_mounted_animation = pose == UsdCameraPose::Mounted
+        let invalid_mounted_animation = pose == CameraPoseMode::Mounted
             && reader
                 .attr_names(sdf_path)
                 .iter()
@@ -636,7 +621,7 @@ mod tests {
 
     #[test]
     fn authored_clipping_range_converts_from_stage_units_to_metres() {
-        let recipe = lunco_usd_document::recipe::StageRecipe::from_source(
+        let recipe = lunco_usd_compose::recipe::StageRecipe::from_source(
             "camera.usda",
             "#usda 1.0\n(\n    metersPerUnit = 0.01\n)\ndef Camera \"Camera\"\n{\n    float2 clippingRange = (10, 1000)\n}\n",
         );
@@ -653,7 +638,7 @@ mod tests {
 
     #[test]
     fn omitted_clipping_range_uses_usd_defaults_in_stage_units() {
-        let recipe = lunco_usd_document::recipe::StageRecipe::from_source(
+        let recipe = lunco_usd_compose::recipe::StageRecipe::from_source(
             "camera.usda",
             "#usda 1.0\n(\n    metersPerUnit = 0.01\n)\ndef Camera \"Camera\"\n{}\n",
         );
@@ -670,7 +655,7 @@ mod tests {
 
     #[test]
     fn invalid_authored_clipping_range_is_rejected() {
-        let recipe = lunco_usd_document::recipe::StageRecipe::from_source(
+        let recipe = lunco_usd_compose::recipe::StageRecipe::from_source(
             "camera.usda",
             "#usda 1.0\ndef Camera \"Camera\"\n{\n    float2 clippingRange = (0, 100)\n}\n",
         );
@@ -682,7 +667,7 @@ mod tests {
 
     #[test]
     fn invalid_authored_focal_length_is_rejected_instead_of_using_a_heuristic_fov() {
-        let recipe = lunco_usd_document::recipe::StageRecipe::from_source(
+        let recipe = lunco_usd_compose::recipe::StageRecipe::from_source(
             "camera.usda",
             "#usda 1.0\ndef Camera \"Camera\"\n{\n    float focalLength = 0\n}\n",
         );
@@ -700,7 +685,7 @@ mod tests {
         ] {
             let source = format!("#usda 1.0\ndef Camera \"Camera\"\n{{\n    {projection}\n}}\n");
             let recipe =
-                lunco_usd_document::recipe::StageRecipe::from_source("camera.usda", &source);
+                lunco_usd_compose::recipe::StageRecipe::from_source("camera.usda", &source);
             let stage = lunco_usd_bevy_core::canonical::CanonicalStage::from_recipe(&recipe)
                 .expect("build camera");
             let path = SdfPath::new("/Camera").unwrap();
@@ -710,7 +695,7 @@ mod tests {
 
     #[test]
     fn omitted_camera_exposure_uses_scene_calibration() {
-        let recipe = lunco_usd_document::recipe::StageRecipe::from_source(
+        let recipe = lunco_usd_compose::recipe::StageRecipe::from_source(
             "camera.usda",
             "#usda 1.0\ndef Camera \"Camera\"\n{\n}\n",
         );
@@ -722,7 +707,7 @@ mod tests {
 
     #[test]
     fn authored_camera_exposure_converts_once_from_usd_fields() {
-        let recipe = lunco_usd_document::recipe::StageRecipe::from_source(
+        let recipe = lunco_usd_compose::recipe::StageRecipe::from_source(
             "camera.usda",
             "#usda 1.0\ndef Camera \"Camera\"\n{\n    float exposure:iso = 200\n    float exposure = 1\n}\n",
         );
@@ -737,7 +722,7 @@ mod tests {
 
     #[test]
     fn invalid_authored_camera_exposure_is_rejected() {
-        let recipe = lunco_usd_document::recipe::StageRecipe::from_source(
+        let recipe = lunco_usd_compose::recipe::StageRecipe::from_source(
             "camera.usda",
             "#usda 1.0\ndef Camera \"Camera\"\n{\n    float exposure:iso = 0\n}\n",
         );
@@ -752,7 +737,7 @@ mod tests {
 
     #[test]
     fn authored_camera_exposure_with_wrong_type_is_rejected() {
-        let recipe = lunco_usd_document::recipe::StageRecipe::from_source(
+        let recipe = lunco_usd_compose::recipe::StageRecipe::from_source(
             "camera.usda",
             "#usda 1.0\ndef Camera \"Camera\"\n{\n    string exposure:iso = \"film\"\n}\n",
         );

@@ -44,6 +44,7 @@ lunco-doc = { path = "../lunco-doc" }
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-api = { path = "../lunco-api" }
 lunco-controller = { path = "../lunco-controller" }
+lunco-camera-core = { path = "../lunco-camera-core" }
 lunco-mobility = { path = "../lunco-mobility" }
 lunco-modelica-ui-core = { path = "../lunco-modelica-ui-core" }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
@@ -65,6 +66,9 @@ lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-avatar-core = { path = "../lunco-avatar-core" }
 lunco-tools = { path = "../lunco-tools" }
 lunco-scripting = { path = "../lunco-scripting" }
+
+[dev-dependencies]
+lunco-usd-compose = { path = "../lunco-usd-compose" }
 
 [lints]
 workspace = true

@@ -50,7 +50,7 @@ How rover sync works when ROS2 is in the loop. Short version:
 
 | ROS2 node role | Our equivalent | Path |
 |---|---|---|
-| **Control node** publishing `/cmd_vel`, joint goals | a controller **possessing** a vessel | bridge subscribes → feeds the **same `SetPorts` / actuator** path as a human pilot (M4/M3). `NetworkAuthority.owner = ros_bridge_session`. |
+| **Control node** publishing `/cmd_vel`, joint goals | a controller claiming an endpoint | bridge claims through `ClaimControl`, then feeds the **same `SetPorts` / actuator** path as a human pilot (M4/M3). `SessionRegistry` records the ROS session owner. |
 | **Perception/observer** consuming `/odom`, `/tf`, sensors | an **observer** | bridge publishes telemetry derived from authoritative state (M2). |
 
 So when a ROS2 node drives the rover, human clients simply see it as
@@ -126,7 +126,8 @@ the rebasing code; we add an axis/units conversion at the boundary.
 
 ## 6. How this stays consistent with the architecture
 - **No new sync mechanism, no new authority model.** ROS = an edge bridge; the
-  bridge holds a `Session` and (when controlling) a `NetworkAuthority`.
+  bridge holds a `Session` and uses `ClaimControl`/`SetPorts` for endpoint
+  authority and actuation.
 - **Selection procedure unchanged** (`SYNC_ARCHITECTURE.md` §9): a new ROS-exposed
   signal is classified internally as usual (telemetry→M2, command→M3/M4); the
   bridge only decides *which topic* mirrors it. "Should this be a ROS topic?" is a

@@ -9,12 +9,12 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_avatar_core::camera::{OrbitCamera, SpringArmCamera};
-use lunco_controller::ControllerLink;
+use lunco_camera_core::{OrbitCamera, SpringArmCamera};
 use lunco_core::{
     entity_display_name, Avatar, CatalogEntryId, GlobalEntityId, LocalAvatar, RuntimeDiagnostics,
     RuntimeFaults, SceneMountState, SceneViewport, TheLocalAvatar,
 };
+use lunco_cosim_core::ControlLink;
 use lunco_render::SceneCamera;
 use lunco_scene_selection::SelectedEntities;
 use lunco_usd_bevy_scene::UsdPrimPath;
@@ -105,7 +105,7 @@ fn target_for_camera(
 #[derive(SystemParam)]
 pub(crate) struct AuthoringReviewQueries<'w, 's> {
     avatar: Query<'w, 's, (), (With<Avatar>, With<LocalAvatar>)>,
-    links: Query<'w, 's, &'static ControllerLink>,
+    links: Query<'w, 's, &'static ControlLink>,
     spring: Query<'w, 's, &'static SpringArmCamera>,
     orbit: Query<'w, 's, &'static OrbitCamera>,
     paths: Query<'w, 's, &'static UsdPrimPath>,
@@ -148,7 +148,7 @@ pub(crate) fn populate_authoring_review_view(
     let controlled = local_avatar
         .0
         .filter(|avatar| q.avatar.get(*avatar).is_ok())
-        .and_then(|avatar| q.links.get(avatar).ok().map(|link| link.vessel_entity));
+        .and_then(|avatar| q.links.get(avatar).ok().map(|link| link.target));
     view.controlled = controlled;
     view.controlled_label = controlled
         .map(|entity| label(entity, &q.names, &q.callsigns, &q.catalog_ids, &q.gids))

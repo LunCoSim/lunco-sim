@@ -21,9 +21,9 @@ use lunco_usd_core::{
     commands::{CommitUsdProposal, ReviewUsdProposal, UsdProposalReviewAction},
     edit_session::{UsdProposalId, UsdProposalState, UsdProposalSummary},
 };
+use lunco_usd_data::usd_data::UsdData;
+use lunco_usd_data::usd_data::UsdDataExt;
 use lunco_usd_document::document::LayerId;
-use lunco_usd_document::usd_data::UsdData;
-use lunco_usd_document::usd_data::UsdDataExt;
 
 use crate::loaded_stages::{UsdBrowserView, UsdStageRow};
 use crate::USD_CONNECTION_CANVAS_PANEL_ID;
