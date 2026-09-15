@@ -64,7 +64,7 @@ use lunco_usd_bevy_scene::{
 // `bevy_core_pipeline` → wgpu + naga). `lunco-render-bevy` binds these.
 // See docs/architecture/render-decoupling.md.
 use leafwing_input_manager::prelude::ActionState;
-use lunco_avatar::{
+use lunco_avatar_core::camera::{
     AdaptiveNearPlane, AvatarFlightSettings, FreeFlightCamera, OrbitCamera, SpringArmCamera,
 };
 use lunco_controller::InputBindingsSettings;
@@ -354,7 +354,7 @@ impl Plugin for UsdSimPlugin {
         app.configure_sets(
             Update,
             (
-                UsdSimSet::Projection.before(lunco_avatar::AvatarSceneHandoffSet),
+                UsdSimSet::Projection.before(lunco_avatar_core::lifecycle::AvatarSceneHandoffSet),
                 UsdSimSet::ActivateDynamicBodies,
                 lunco_usd_sim_celestial::CelestialProjectionSet::Projection
                     .before(UsdSimSet::Projection),
@@ -1732,7 +1732,7 @@ fn process_usd_sim_prim_read(
                         vertical_offset: 2.0,
                         // Authored chase cams target steerable vehicles.
                         track_heading: true,
-                        attitude: lunco_avatar::FollowAttitude::Heading,
+                        attitude: lunco_avatar_core::camera::FollowAttitude::Heading,
                     },
                     avian3d::prelude::TranslationInterpolation,
                     avian3d::prelude::RotationInterpolation,

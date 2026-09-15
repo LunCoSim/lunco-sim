@@ -9,7 +9,7 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_avatar::{OrbitCamera, SpringArmCamera};
+use lunco_avatar_core::camera::{OrbitCamera, SpringArmCamera};
 use lunco_controller::ControllerLink;
 use lunco_core::{
     entity_display_name, Avatar, CatalogEntryId, GlobalEntityId, LocalAvatar, RuntimeDiagnostics,

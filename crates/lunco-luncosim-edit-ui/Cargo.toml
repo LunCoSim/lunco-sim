@@ -61,7 +61,7 @@ lunco-cosim = { path = "../lunco-cosim" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-render = { path = "../lunco-render" }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
-lunco-avatar = { path = "../lunco-avatar", default-features = false }
+lunco-avatar-core = { path = "../lunco-avatar-core" }
 lunco-tools = { path = "../lunco-tools" }
 lunco-scripting = { path = "../lunco-scripting" }
 

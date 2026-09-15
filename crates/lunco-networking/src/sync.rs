@@ -2535,7 +2535,7 @@ fn snap_avatars_to(
             &mut Transform,
             &mut CellCoord,
             &ChildOf,
-            Option<&mut lunco_avatar::FreeFlightCamera>,
+            Option<&mut lunco_avatar_core::camera::FreeFlightCamera>,
         ),
         With<LocalAvatar>,
     >,
@@ -2653,7 +2653,7 @@ mod framed_avatar_pose_tests {
                 &mut Transform,
                 &mut CellCoord,
                 &ChildOf,
-                Option<&mut lunco_avatar::FreeFlightCamera>,
+                Option<&mut lunco_avatar_core::camera::FreeFlightCamera>,
             ),
             With<LocalAvatar>,
         >,
@@ -2826,7 +2826,7 @@ pub fn apply_tutorial_mirroring(
             &mut Transform,
             &mut CellCoord,
             &ChildOf,
-            Option<&mut lunco_avatar::FreeFlightCamera>,
+            Option<&mut lunco_avatar_core::camera::FreeFlightCamera>,
         ),
         With<LocalAvatar>,
     >,
@@ -3088,7 +3088,7 @@ fn validate_client_local_channels(
 
 /// Observer system to handle Profile updates: marks client as authenticated and promotes role.
 fn on_update_profile_rbac(
-    trigger: On<lunco_avatar::UpdateProfile>,
+    trigger: On<lunco_core_session::commands::UpdateProfile>,
     guard: Res<lunco_core_session::SyncApplyGuard>,
     local: Res<LocalSession>,
     mut rbac: ResMut<lunco_core_session::SessionRbac>,

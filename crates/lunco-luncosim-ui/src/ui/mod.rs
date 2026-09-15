@@ -471,7 +471,7 @@ fn on_runtime_ui_action(
                 return;
             }
             if let Ok(target) = q_avatar.single() {
-                commands.trigger(lunco_avatar::ReturnFromOrbit { target });
+                commands.trigger(lunco_avatar_core::commands::ReturnFromOrbit { target });
             }
         }
         runtime_exposure::RuntimeUiActionKind::ViewBodyMoon => {
@@ -564,7 +564,7 @@ fn runtime_focus_body(
         .iter()
         .find(|(_, body)| body.ephemeris_id == ephemeris_id)
     {
-        commands.trigger(lunco_avatar::FocusTarget {
+        commands.trigger(lunco_avatar_core::commands::FocusTarget {
             avatar: None,
             target,
         });

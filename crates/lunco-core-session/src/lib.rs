@@ -9,6 +9,7 @@ extern crate self as lunco_core_session;
 
 use bevy::prelude::*;
 
+pub mod commands;
 pub mod session;
 
 pub use session::*;

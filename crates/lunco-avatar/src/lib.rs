@@ -30,9 +30,19 @@ use big_space::prelude::{CellCoord, Grid};
 use leafwing_input_manager::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use lunco_avatar_core::camera::{
+    AdaptiveNearPlane, AvatarFlightSettings, CameraZoomInput, CurrentRegionArrival,
+    FollowAttitude, FreeFlightCamera, OrbitCamera, OrbitReturnBehavior, OrbitViewReturn,
+    RadialArrival, SpringArmCamera, SurfaceCamera, SurfaceRelativeMode,
+};
+use lunco_avatar_core::commands::{
+    FocusTarget, FollowTarget, PossessVessel, ReleaseVessel, ReturnFromOrbit, SetCameraInput,
+};
+use lunco_avatar_core::lifecycle::AvatarSceneHandoffSet;
 use lunco_controller::{ControllerLink, InputBindingsSettings};
 use lunco_core::{on_command, register_commands, Avatar, CelestialBody, LocalAvatar, Spacecraft};
 use lunco_core_session::{LocalSession, NetworkRole, SessionProfiles};
+use lunco_core_session::commands::UpdateProfile;
 /// Capability test for "**accepts commands**": carries an authored intent→port
 /// binding (`ControlBinding`, from its USD `Controls` scope) or a Modelica actuation
 /// backend (`SimComponent`).
@@ -57,7 +67,7 @@ use lunco_time::{SetTimeTransport, TimeTransport, TransportMode, WorldTime};
 use lunco_usd_bevy_scene::{is_preview_only, is_preview_only_entity, UsdPreviewOnly, UsdPrimPath};
 
 pub mod commands;
-pub use commands::*;
+use commands::ShowNotification;
 // Render-bound screenshots and deterministic offline recording are owned by
 // `lunco-capture`; this crate remains responsible for camera intent,
 // possession, and interaction, without linking the render-world readback pipeline.
@@ -110,38 +120,6 @@ impl Default for AvatarCollisionSettings {
         Self {
             radius_m: 0.35,
             capsule_length_m: 1.1,
-        }
-    }
-}
-
-/// Authored flight-control parameters for an avatar embodiment.
-///
-/// The input names and binding are supplied by the authored `Controls` scope.
-/// This component contains the numeric movement contract so the Rust side only
-/// performs the generic kinematic operation: it reads the authored command
-/// frame, resolves the camera basis, and submits a capsule move to Avian. A
-/// USD avatar receives this component from `LunCoAvatarAPI`; the default is the
-/// constructor value for a native avatar created by `spawn_avatar_camera`.
-#[derive(Component, Reflect, Clone, Copy, Debug, PartialEq)]
-#[reflect(Component)]
-pub struct AvatarFlightSettings {
-    /// Straight-line free-flight speed in stage metres per second.
-    pub speed_mps: f64,
-    /// Multiplier applied while the authored boost command is active.
-    pub boost_multiplier: f64,
-    /// Threshold in the normalized boost command that activates boost.
-    pub boost_threshold: f64,
-    /// Absolute movement-command deadzone.
-    pub input_deadzone: f64,
-}
-
-impl Default for AvatarFlightSettings {
-    fn default() -> Self {
-        Self {
-            speed_mps: 23.1,
-            boost_multiplier: 10.0,
-            boost_threshold: 0.5,
-            input_deadzone: 0.01,
         }
     }
 }
@@ -419,89 +397,6 @@ mod camera_input_settings_tests {
     }
 }
 
-/// Tracks cumulative mouse scroll delta for zoom control.
-///
-/// Per-avatar mouse-wheel zoom accumulator. Fed each frame by
-/// [`collect_camera_zoom`] from Bevy's unit-preserving scroll input (gated on
-/// `EguiFocus.wants_pointer` so scrolling over a panel doesn't zoom the scene);
-/// consumed + reset by whichever camera behavior is active. Lives on the avatar
-/// entity — zoom is per-camera state, not a global — replacing the old global
-/// `CameraScroll` resource and its two bespoke egui→resource bridges.
-#[derive(Component, Default)]
-pub struct CameraZoomInput {
-    /// Accumulated scroll delta since the last camera system consumed it.
-    pub delta: f32,
-    /// A mode transition owns the current wheel gesture until the source has
-    /// been idle for the handoff window. Bevy exposes accumulated wheel input,
-    /// not a wheel-release event, so one neutral frame is not a gesture end.
-    transition_barrier: bool,
-    transition_direction: Option<i8>,
-    neutral_seconds: f32,
-}
-
-impl CameraZoomInput {
-    /// Start a semantic camera-mode handoff. The mode that consumed the
-    /// current gesture must not leak that gesture into its successor.
-    fn begin_mode_transition(&mut self, direction: Option<f32>) {
-        let already_barriered = self.transition_barrier;
-        self.delta = 0.0;
-        self.transition_barrier = true;
-        // A scroll-through requests the directional barrier before its
-        // ReturnFromOrbit observer runs. The observer still performs a mode
-        // handoff, but must not erase the direction that identifies the
-        // gesture being consumed.
-        if !already_barriered || direction.is_some() {
-            self.transition_direction = direction
-                .filter(|delta| delta.abs() > f32::EPSILON)
-                .map(|delta| delta.signum() as i8);
-        }
-        self.neutral_seconds = 0.0;
-    }
-
-    /// Ingest one frame of normalized wheel input. The barrier recognizes a
-    /// new gesture after a real idle window, while an opposite-direction
-    /// gesture can take ownership immediately. This is necessary because the
-    /// accumulated wheel resource has no begin/end event to delimit a gesture.
-    fn ingest(&mut self, delta: f32, accepted: bool, idle_seconds: f32) {
-        if self.transition_barrier {
-            if delta.abs() <= f32::EPSILON {
-                self.neutral_seconds += idle_seconds.max(0.0);
-                if self.neutral_seconds < CAMERA_ZOOM_HANDOFF_IDLE_SECS {
-                    return;
-                }
-                self.transition_barrier = false;
-                self.transition_direction = None;
-            } else {
-                self.neutral_seconds = 0.0;
-                if !accepted {
-                    return;
-                }
-                let direction = delta.signum() as i8;
-                match self.transition_direction {
-                    // A known same-direction packet is still part of the
-                    // gesture that the previous mode consumed.
-                    Some(previous) if previous == direction => return,
-                    // A known opposite-direction packet is an explicit new
-                    // gesture and may take ownership immediately.
-                    Some(_) => {}
-                    // A command-driven handoff has no direction to compare.
-                    // It must therefore wait for the neutral interval instead
-                    // of guessing that the first packet is a new gesture.
-                    None => return,
-                }
-                self.transition_barrier = false;
-                self.transition_direction = None;
-            }
-        }
-        if delta.abs() <= f32::EPSILON {
-            return;
-        }
-        if accepted {
-            self.delta += delta;
-        }
-    }
-}
-
 /// Scroll→zoom sensitivity (unitless; feeds the exponential in
 /// [`apply_scroll_zoom`]).
 ///
@@ -511,11 +406,6 @@ impl CameraZoomInput {
 const ZOOM_SENSITIVITY: f32 = 5.0;
 const ZOOM_FACTOR_MIN: f64 = 0.75;
 const ZOOM_FACTOR_MAX: f64 = 1.25;
-/// Minimum no-wheel interval that closes a mode-transition handoff. The
-/// accumulated Bevy wheel resource has no release event, so this idle window
-/// is the shared boundary between one physical gesture and the next.
-const CAMERA_ZOOM_HANDOFF_IDLE_SECS: f32 = 0.12;
-
 /// Altitude of the orbital zoom's min-distance floor above a celestial body's
 /// surface. Doubles as the scroll-through threshold: one more inward detent
 /// while the arm sits on this floor exits the orbital view to the surface
@@ -583,107 +473,6 @@ fn resolve_camera_arm_length(
 }
 
 // ─── Behavior Components ─────────────────────────────────────────────────────
-
-/// Chase camera: follows a ground vehicle with smooth heading-follow.
-///
-/// How a [`SpringArmCamera`] derives its orientation from the followed body.
-///
-/// The one axis on which the three authored `lunco:cameraFollow` modes differ.
-/// Everything else about the follow — live-target read, fixed-cadence solve,
-/// interpolation-eased render, arm-length easing, obstacle raycast — is shared,
-/// so all vessel cameras behave identically (the reason this is DRY: one
-/// component, one system, one code path). `WorldLocked` / `FullAttitude` are
-/// the 6-DOF flyer + aircraft cases that used to live in the separate
-/// (jittering) `OrbitCamera`/`ChaseCamera` solvers.
-#[derive(Reflect, Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum FollowAttitude {
-    /// Heading-follow: yaw taken from the body's forward (when `track_heading`),
-    /// up = world-Y or surface normal. Ground vehicles (rovers, astronauts).
-    #[default]
-    Heading,
-    /// Stable external frame the body tumbles inside of: ignore the body's
-    /// attitude entirely, orientation is the user's yaw/pitch about world-up.
-    /// 6-DOF flyers (a lander that pitches/rolls freely). Authored `"orbit"`.
-    WorldLocked,
-    /// Cockpit frame: full body orientation (yaw+pitch+roll) times the user's
-    /// yaw/pitch offset — the camera rolls with the craft. Authored `"chase"`.
-    FullAttitude,
-}
-
-/// Unified vessel-follow camera. Position always follows the target; the
-/// [`FollowAttitude`] mode selects how orientation is derived. Solved on the
-/// render cadence (`spring_arm_system`, after `lunco_time::InteractionRenderSet`)
-/// against the target's final render pose, so the camera and the followed body share
-/// ONE motion basis.  The camera is deliberately not `InteractionEased`: easing a
-/// chase camera independently from the body adds a second phase and makes both the
-/// rover and world-anchored overlays oscillate on screen.
-///
-/// Position snaps directly to the desired offset (no lerp), but rotation
-/// slerps smoothly toward the desired attitude + user yaw offset. This creates
-/// the natural "swing-around" feel of a proper spring arm camera.
-#[derive(Component, Reflect, Clone, Debug)]
-#[reflect(Component)]
-#[require(CameraZoomInput)]
-pub struct SpringArmCamera {
-    pub target: Entity,
-    pub distance: f64,
-    pub yaw: f32,
-    pub pitch: f32,
-    pub damping: Option<f32>,
-    pub vertical_offset: f32,
-    /// Whether to derive camera heading from the target's body orientation.
-    ///
-    /// `true` for steerable vehicles (rovers) whose chassis has a meaningful
-    /// "forward". `false` for freely-rolling rigid bodies (a ball, a balloon)
-    /// whose body frame tumbles arbitrarily — reading their rotation would
-    /// whip the camera around as the body spins. When `false`, heading is
-    /// driven solely by the user's yaw (`yaw`); position still follows the
-    /// target. Only consulted for [`FollowAttitude::Heading`].
-    pub track_heading: bool,
-    /// How camera orientation is derived from the followed body.
-    pub attitude: FollowAttitude,
-}
-
-/// Survey camera: orbits a target fixed to the stars.
-///
-/// **Reference Frame**: `Ecliptic` — the camera does NOT rotate with the target.
-/// This keeps stars stationary while the planet rotates beneath you.
-#[derive(Component, Reflect, Clone, Debug)]
-#[reflect(Component)]
-#[require(CameraZoomInput)]
-pub struct OrbitCamera {
-    pub target: Entity,
-    pub distance: f64,
-    pub yaw: f32,
-    pub pitch: f32,
-    pub damping: Option<f32>,
-    pub vertical_offset: f32,
-}
-
-/// Exact pre-orbit camera state, owned by the avatar for the duration of one
-/// orbital-view session.
-///
-/// A view transition is a reference-frame transaction: entering orbit stores
-/// the original grid parent, cell-local pose, camera behavior and gravity
-/// binding; switching Moon/Earth changes only the active orbit target; leaving
-/// orbit restores this snapshot atomically. No exit path infers the old frame
-/// from components that orbit entry has already removed.
-#[derive(Component, Clone, Debug)]
-pub struct OrbitViewReturn {
-    parent_grid: Entity,
-    cell: CellCoord,
-    transform: Transform,
-    behavior: OrbitReturnBehavior,
-    gravity_body: Option<GravityBody>,
-    surface_relative: bool,
-}
-
-#[derive(Clone, Debug)]
-enum OrbitReturnBehavior {
-    SpringArm(SpringArmCamera),
-    Surface(SurfaceCamera),
-    FreeFlight(FreeFlightCamera),
-}
 
 /// One settled user-controlled pose for a celestial body.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -792,34 +581,6 @@ fn remember_orbit_pose_for_body(
 #[derive(Component, Debug, Clone, Copy, Default)]
 struct OrbitUserInput;
 
-/// Marks an `OrbitCamera` whose first pose must face the body's current region.
-/// The orbit writer resolves that direction from the current camera and body
-/// poses in the target's explicit inertial BigSpace grid.
-#[derive(Component, Debug, Clone, Copy)]
-pub struct CurrentRegionArrival;
-
-/// Marks an `OrbitCamera` whose arm should be derived from the camera's
-/// CURRENT position — the pose-preserving arrival of the surface→orbital
-/// scroll-out transit (`scroll_out_to_orbit_system`). The orbit writer resolves
-/// the body and camera through the authoritative BigSpace cell chain into the selected inertial view grid;
-/// the body→camera direction becomes the arm's yaw/pitch and the true range
-/// becomes the arm length, so the camera does not move on mode entry.
-#[derive(Component, Debug, Clone, Copy)]
-pub struct RadialArrival;
-
-/// Free-flight camera: moves independently of any target.
-///
-/// **Reference Frame**: `Ecliptic` — absolute solar system coordinates.
-/// Used for ghost/drone observation and as the default camera state.
-#[derive(Component, Reflect, Clone, Debug)]
-#[reflect(Component)]
-#[require(AvatarFlightSettings)]
-pub struct FreeFlightCamera {
-    pub yaw: f32,
-    pub pitch: f32,
-    pub damping: Option<f32>,
-}
-
 // Camera behavior components are an exclusive sum type at the ECS boundary:
 // an avatar may have one active behavior, never two. The mode systems also
 // express this with `Without<…>` filters, so enforcing it when a component is
@@ -914,39 +675,6 @@ fn register_camera_mode_hooks(app: &mut App) {
         .on_remove(remember_orbit_camera_on_remove);
 }
 
-/// Surface camera: heading + pitch relative to the local surface normal.
-///
-/// Unlike `FreeFlightCamera` which accumulates incremental rotations (prone to
-/// roll drift from system ordering and coordinate frame mismatches), this
-/// component stores absolute heading and pitch angles. The `surface_camera_system`
-/// recomputes the full rotation quaternion from scratch every frame using
-/// `LocalGravityField.local_up`, guaranteeing zero roll.
-///
-/// # Design rationale
-///
-/// The root cause of the surface camera roll bug was threefold:
-/// 1. `global_transform_propagation_system` and `big_space` fight over GlobalTransform
-/// 2. The camera-frame math assumed body-local coordinates while the pose lived
-///    in an explicit BigSpace grid
-///
-/// By recomputing rotation from first principles each frame, the surface camera
-/// has no dependency on a previously propagated render transform. Surface mode
-/// is owned by `SurfaceCamera`; free flight does not carry a second surface path.
-#[derive(Component, Reflect, Clone, Debug)]
-#[reflect(Component)]
-#[require(AvatarFlightSettings)]
-pub struct SurfaceCamera {
-    /// Azimuth from local north, in radians. Positive = counter-clockwise from above.
-    pub heading: f32,
-    /// Elevation from horizon, in radians. Negative = look down, positive = look up.
-    pub pitch: f32,
-}
-
-/// Ensures optical stability by adjusting near plane based on surface proximity.
-#[derive(Component, Reflect, Clone, Debug, Default)]
-#[reflect(Component)]
-pub struct AdaptiveNearPlane;
-
 const CAMERA_NEAR_SURFACE_RATIO: f64 = 0.001;
 const CAMERA_NEAR_MIN_M: f64 = 0.1;
 const CAMERA_NEAR_MAX_M: f64 = 10_000.0;
@@ -1003,17 +731,6 @@ mod camera_clip_tests {
     }
 }
 
-/// Marker component: camera/rover operates in surface-relative mode.
-///
-/// When present, camera systems use `LocalGravityField.local_up` as "up"
-/// instead of the ecliptic Y axis. Movement is tangent to the body surface.
-///
-/// Inserted/removed automatically by `surface_mode_transition_system` based
-/// on altitude thresholds from `SurfaceModeThreshold`.
-#[derive(Component, Reflect, Clone, Debug)]
-#[reflect(Component)]
-pub struct SurfaceRelativeMode;
-
 /// Tunable thresholds for entering/exiting surface-relative camera mode.
 ///
 /// Hysteresis prevents rapid toggling at boundary altitude:
@@ -1041,14 +758,6 @@ impl Default for SurfaceModeThreshold {
 
 /// Plugin for managing local embodiment logic, input processing, and possession.
 pub struct LunCoAvatarPlugin;
-
-/// Update-schedule boundary for the camera handoff from USD projection.
-///
-/// USD projection publishes the authored avatar and site components first;
-/// the camera subsystem then captures the authored pose and commits the
-/// BigSpace migration as one ordered transaction.
-#[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
-pub struct AvatarSceneHandoffSet;
 
 fn trigger_vessel_hard_stop(commands: &mut Commands, vessel_entity: Entity) {
     commands.trigger(lunco_cosim_core::commands::ReleaseControl {
@@ -3207,14 +2916,14 @@ fn freeflight_scroll_transit_system(
                 .expect("surface scroll transit requires one camera behavior");
             let mut entity = commands.entity(avatar_ent);
             entity
-                .try_insert(OrbitViewReturn {
-                    parent_grid: child_of.parent(),
-                    cell: *cell,
-                    transform: *tf,
+                .try_insert(OrbitViewReturn::new(
+                    child_of.parent(),
+                    *cell,
+                    *tf,
                     behavior,
-                    gravity_body: gravity_body.copied(),
+                    gravity_body.copied(),
                     surface_relative,
-                })
+                ))
                 .remove::<SpringArmCamera>()
                 .remove::<FreeFlightCamera>()
                 .remove::<SurfaceCamera>()
@@ -4174,7 +3883,7 @@ fn apply_orbit_return(commands: &mut Commands, avatar: Entity, state: &OrbitView
         .remove::<CurrentRegionArrival>()
         .remove::<OrbitUserInput>();
 
-    match &state.behavior {
+    match state.behavior() {
         OrbitReturnBehavior::SpringArm(spring_arm) => {
             entity.try_insert(spring_arm.clone());
         }
@@ -4185,12 +3894,12 @@ fn apply_orbit_return(commands: &mut Commands, avatar: Entity, state: &OrbitView
             entity.try_insert(freeflight.clone());
         }
     }
-    if let Some(gravity_body) = state.gravity_body {
+    if let Some(gravity_body) = state.gravity_body() {
         entity.try_insert(gravity_body);
     } else {
         entity.remove::<GravityBody>();
     }
-    if state.surface_relative {
+    if state.surface_relative() {
         entity.try_insert(SurfaceRelativeMode);
     } else {
         entity.remove::<SurfaceRelativeMode>();
@@ -4252,16 +3961,16 @@ fn on_return_from_orbit(
     }
     let return_state = return_state.clone();
 
-    if child_of.parent() == return_state.parent_grid {
-        cell.set_if_neq(return_state.cell);
-        transform.set_if_neq(return_state.transform);
+    if child_of.parent() == return_state.parent_grid() {
+        cell.set_if_neq(return_state.cell());
+        transform.set_if_neq(return_state.transform());
     } else {
         migrate_to_grid(
             &mut commands,
             avatar,
-            return_state.parent_grid,
-            return_state.cell,
-            return_state.transform,
+            return_state.parent_grid(),
+            return_state.cell(),
+            return_state.transform(),
         );
     }
     apply_orbit_return(&mut commands, avatar, &return_state);
@@ -4394,26 +4103,26 @@ fn on_release_command(
         }
         let return_state = return_state.cloned();
         if let Some(state) = &return_state {
-            if child_of.parent() == state.parent_grid {
-                cell.set_if_neq(state.cell);
-                tf.set_if_neq(state.transform);
+            if child_of.parent() == state.parent_grid() {
+                cell.set_if_neq(state.cell());
+                tf.set_if_neq(state.transform());
             } else {
                 migrate_to_grid(
                     &mut commands,
                     avatar_ent,
-                    state.parent_grid,
-                    state.cell,
-                    state.transform,
+                    state.parent_grid(),
+                    state.cell(),
+                    state.transform(),
                 );
             }
         }
         let rot = return_state
             .as_ref()
-            .map(|state| state.transform.rotation)
+            .map(|state| state.transform().rotation)
             .unwrap_or(tf.rotation);
         let returning_surface = return_state
             .as_ref()
-            .is_some_and(|state| matches!(state.behavior, OrbitReturnBehavior::Surface(_)));
+            .is_some_and(|state| matches!(state.behavior(), OrbitReturnBehavior::Surface(_)));
         let (y, p) = if surface.is_some() {
             let axes = surface_axes_in_grid(child_of.0, &gravity, &q_parents, &q_grids, &q_spatial);
             axes.map(|(east, north, up)| surface_camera_angles(east, north, up, rot))
@@ -4432,7 +4141,7 @@ fn on_release_command(
             returning_surface || surface.is_some(),
             return_state
                 .as_ref()
-                .map(|state| state.transform.translation)
+                .map(|state| state.transform().translation)
                 .unwrap_or(tf.translation),
             return_state,
         )
@@ -4468,9 +4177,9 @@ fn on_release_command(
 
     if let Some(state) = return_state {
         let mut entity = commands.entity(avatar_ent);
-        match state.behavior {
+        match state.behavior().clone() {
             OrbitReturnBehavior::SpringArm(_) => {
-                let (yaw, pitch, _) = state.transform.rotation.to_euler(EulerRot::YXZ);
+                let (yaw, pitch, _) = state.transform().rotation.to_euler(EulerRot::YXZ);
                 entity.try_insert(FreeFlightCamera {
                     yaw,
                     pitch,
@@ -4484,12 +4193,12 @@ fn on_release_command(
                 entity.try_insert(freeflight);
             }
         }
-        if let Some(gravity_body) = state.gravity_body {
+        if let Some(gravity_body) = state.gravity_body() {
             entity.try_insert(gravity_body);
         } else {
             entity.remove::<GravityBody>();
         }
-        if state.surface_relative {
+        if state.surface_relative() {
             entity.try_insert(SurfaceRelativeMode);
         } else {
             entity.remove::<SurfaceRelativeMode>();
@@ -5266,14 +4975,14 @@ fn on_focus_command(
                 damping: None,
             })
         };
-        ent.try_insert(OrbitViewReturn {
-            parent_grid: cam_parent.parent(),
-            cell: *cam_cell,
-            transform: *cam_tf,
+        ent.try_insert(OrbitViewReturn::new(
+            cam_parent.parent(),
+            *cam_cell,
+            *cam_tf,
             behavior,
-            gravity_body: gravity_body.copied(),
+            gravity_body.copied(),
             surface_relative,
-        });
+        ));
     }
     ent.remove::<SpringArmCamera>()
         .remove::<FreeFlightCamera>()
@@ -6480,66 +6189,6 @@ mod tests {
     }
 
     #[test]
-    fn camera_zoom_mode_transition_consumes_until_neutral() {
-        let mut input = CameraZoomInput::default();
-
-        input.ingest(-1.0, true, 1.0 / 60.0);
-        assert_eq!(input.delta, -1.0);
-
-        input.begin_mode_transition(Some(-1.0));
-        input.ingest(-1.0, true, 1.0 / 60.0);
-        assert_eq!(input.delta, 0.0);
-
-        input.ingest(0.0, true, CAMERA_ZOOM_HANDOFF_IDLE_SECS);
-        input.ingest(1.0, true, 1.0 / 60.0);
-        assert_eq!(input.delta, 1.0);
-    }
-
-    #[test]
-    fn camera_zoom_transition_neutralizes_while_pointer_is_captured() {
-        let mut input = CameraZoomInput::default();
-        input.begin_mode_transition(None);
-
-        input.ingest(1.0, false, 1.0 / 60.0);
-        assert!(input.transition_barrier);
-
-        input.ingest(0.0, false, CAMERA_ZOOM_HANDOFF_IDLE_SECS);
-        input.ingest(1.0, false, 1.0 / 60.0);
-
-        assert_eq!(input.delta, 0.0);
-        assert!(!input.transition_barrier);
-    }
-
-    #[test]
-    fn camera_zoom_undirected_transition_consumes_until_neutral() {
-        let mut input = CameraZoomInput::default();
-        input.begin_mode_transition(None);
-
-        input.ingest(1.0, true, 1.0 / 60.0);
-        assert_eq!(input.delta, 0.0);
-        assert!(input.transition_barrier);
-
-        input.ingest(0.0, true, CAMERA_ZOOM_HANDOFF_IDLE_SECS);
-        input.ingest(1.0, true, 1.0 / 60.0);
-
-        assert_eq!(input.delta, 1.0);
-        assert!(!input.transition_barrier);
-    }
-
-    #[test]
-    fn camera_zoom_return_observer_keeps_scroll_through_direction() {
-        let mut input = CameraZoomInput::default();
-        input.begin_mode_transition(Some(1.0));
-        input.begin_mode_transition(None);
-
-        input.ingest(1.0, true, CAMERA_ZOOM_HANDOFF_IDLE_SECS);
-
-        assert_eq!(input.delta, 0.0);
-        assert!(input.transition_barrier);
-        assert_eq!(input.transition_direction, Some(1));
-    }
-
-    #[test]
     fn clear_follow_ray_keeps_requested_distance_when_target_moves() {
         let final_len = resolve_camera_arm_length(47.0, 50.0, false, 30.0, 0.1, 1.0 / 60.0);
 
@@ -6783,14 +6432,14 @@ mod tests {
                     damping: None,
                     vertical_offset: 0.0,
                 },
-                OrbitViewReturn {
-                    parent_grid: surface_grid,
-                    cell: return_cell,
-                    transform: return_transform,
-                    behavior: OrbitReturnBehavior::Surface(return_surface.clone()),
-                    gravity_body: Some(GravityBody { body_entity: body }),
-                    surface_relative: true,
-                },
+                OrbitViewReturn::new(
+                    surface_grid,
+                    return_cell,
+                    return_transform,
+                    OrbitReturnBehavior::Surface(return_surface.clone()),
+                    Some(GravityBody { body_entity: body }),
+                    true,
+                ),
             ))
             .id();
 
@@ -6886,10 +6535,10 @@ mod tests {
         });
         app.world_mut().flush();
         let first_snapshot = app.world().get::<OrbitViewReturn>(avatar).unwrap().clone();
-        assert_eq!(first_snapshot.parent_grid, surface_grid);
-        assert_eq!(first_snapshot.cell, original_cell);
+        assert_eq!(first_snapshot.parent_grid(), surface_grid);
+        assert_eq!(first_snapshot.cell(), original_cell);
         assert!(matches!(
-            first_snapshot.behavior,
+            first_snapshot.behavior(),
             OrbitReturnBehavior::Surface(_)
         ));
         assert!(
@@ -6903,12 +6552,12 @@ mod tests {
         });
         app.world_mut().flush();
         let second_snapshot = app.world().get::<OrbitViewReturn>(avatar).unwrap();
-        assert_eq!(second_snapshot.parent_grid, first_snapshot.parent_grid);
-        assert_eq!(second_snapshot.cell, first_snapshot.cell);
+        assert_eq!(second_snapshot.parent_grid(), first_snapshot.parent_grid());
+        assert_eq!(second_snapshot.cell(), first_snapshot.cell());
         assert!(second_snapshot
-            .transform
+            .transform()
             .translation
-            .abs_diff_eq(first_snapshot.transform.translation, 1e-6));
+            .abs_diff_eq(first_snapshot.transform().translation, 1e-6));
         assert_eq!(
             app.world().get::<OrbitCamera>(avatar).unwrap().target,
             earth
@@ -7239,7 +6888,10 @@ mod tests {
         });
         app.world_mut().flush();
         assert!(matches!(
-            app.world().get::<OrbitViewReturn>(avatar).unwrap().behavior,
+            app.world()
+                .get::<OrbitViewReturn>(avatar)
+                .unwrap()
+                .behavior(),
             OrbitReturnBehavior::SpringArm(_)
         ));
         assert_eq!(

@@ -10,6 +10,7 @@ members = [
     "crates/lunco-behavior",
     "crates/lunco-controller",
     "crates/lunco-avatar",
+    "crates/lunco-avatar-core",
     "crates/lunco-avatar-ui",
     "crates/lunco-luncosim",
     "crates/lunco-luncosim-core",

@@ -58,10 +58,9 @@ lunco-cosim-core = { path = "../lunco-cosim-core" }
 # Prediction probes use the same solver-resolution owner as luncosim; they must
 # not carry a second hard-coded substep contract.
 lunco-physics = { path = "../lunco-physics" }
-# Wire substrate needs avatar COMPONENTS + commands, never its egui editor UI —
-# `default-features = false` keeps the networked headless server (and this crate)
-# egui/winit-free.
-lunco-avatar = { path = "../lunco-avatar", default-features = false }
+# Wire substrate needs only the backend-neutral avatar camera and possession
+# contracts; the avatar system implementation is not part of the network edge.
+lunco-avatar-core = { path = "../lunco-avatar-core" }
 # `default-features = false`: we read only `ReferenceFrame` (the
 # always-compiled registry component) for snapshot grid parenting — never
 # celestial's egui inspector (`ui` feature). Keeps the headless server egui-free.

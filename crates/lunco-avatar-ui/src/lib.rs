@@ -12,7 +12,7 @@ use lunco_controller::{resolved_input_label, ControllerLink, InputBindingsSettin
 use lunco_core::{Avatar, CameraFollow, ControlBinding, GlobalEntityId, LocalAvatar, UserIntent};
 use lunco_core_session::{SessionProfiles, SessionRegistry};
 
-use lunco_avatar::{FreeFlightCamera, OrbitCamera, SpringArmCamera, SurfaceCamera};
+use lunco_avatar_core::camera::{FreeFlightCamera, OrbitCamera, SpringArmCamera, SurfaceCamera};
 
 /// Register the avatar's Twin-scoped safety policy in the existing Settings
 /// menu. The movement system and this row call the same policy reader, so the

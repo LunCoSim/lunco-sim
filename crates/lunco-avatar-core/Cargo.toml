@@ -1,0 +1,15 @@
+[package]
+name = "lunco-avatar-core"
+version = "0.1.0-dev"
+edition = "2021"
+license.workspace = true
+description = "Backend-neutral avatar camera and possession contracts for LunCoSim"
+
+[dependencies]
+bevy = { workspace = true }
+big_space = { workspace = true }
+lunco-core = { path = "../lunco-core" }
+lunco-environment = { path = "../lunco-environment" }
+
+[lints]
+workspace = true

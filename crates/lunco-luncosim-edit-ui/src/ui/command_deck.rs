@@ -106,11 +106,11 @@ impl Panel for CommandDeck {
         if view.driving {
             if ui.button("Release control").clicked() {
                 if let Some(avatar) = ctx.resource::<TheLocalAvatar>().and_then(|value| value.0) {
-                    ctx.trigger(lunco_avatar::ReleaseVessel { target: avatar });
+                    ctx.trigger(lunco_avatar_core::commands::ReleaseVessel { target: avatar });
                 }
             }
         } else if ui.button("Take control").clicked() {
-            ctx.trigger(lunco_avatar::PossessVessel {
+            ctx.trigger(lunco_avatar_core::commands::PossessVessel {
                 avatar: None,
                 target,
                 bind_camera: true,

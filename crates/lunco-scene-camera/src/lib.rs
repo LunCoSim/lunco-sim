@@ -129,8 +129,8 @@ pub fn apply_pending_focus(
             &mut Transform,
             &mut big_space::prelude::CellCoord,
             &ChildOf,
-            Option<&mut lunco_avatar::FreeFlightCamera>,
-            Has<lunco_avatar::OrbitViewReturn>,
+            Option<&mut lunco_avatar_core::camera::FreeFlightCamera>,
+            Has<lunco_avatar_core::camera::OrbitViewReturn>,
         ),
         (With<lunco_core::Avatar>, With<lunco_core::LocalAvatar>),
     >,
@@ -175,7 +175,7 @@ pub fn apply_pending_focus(
     }
     if is_celestial {
         commands.remove_resource::<PendingFocus>();
-        commands.trigger(lunco_avatar::FocusTarget {
+        commands.trigger(lunco_avatar_core::commands::FocusTarget {
             avatar: None,
             target,
         });
@@ -191,7 +191,7 @@ pub fn apply_pending_focus(
             .get(avatar)
             .is_ok_and(|(_, _, _, _, _, orbit_return)| orbit_return)
         {
-            commands.trigger(lunco_avatar::ReleaseVessel { target: avatar });
+            commands.trigger(lunco_avatar_core::commands::ReleaseVessel { target: avatar });
             info!("FOCUS_ENTITY: restored pre-orbit frame; local focus retries next frame");
             return;
         }
@@ -275,11 +275,11 @@ pub fn apply_pending_focus(
             tf.rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
             commands
                 .entity(avatar_ent)
-                .remove::<lunco_avatar::OrbitCamera>()
-                .remove::<lunco_avatar::SpringArmCamera>()
-                .remove::<lunco_avatar::SurfaceCamera>()
-                .remove::<lunco_avatar::SurfaceRelativeMode>()
-                .try_insert(lunco_avatar::FreeFlightCamera {
+                .remove::<lunco_avatar_core::camera::OrbitCamera>()
+                .remove::<lunco_avatar_core::camera::SpringArmCamera>()
+                .remove::<lunco_avatar_core::camera::SurfaceCamera>()
+                .remove::<lunco_avatar_core::camera::SurfaceRelativeMode>()
+                .try_insert(lunco_avatar_core::camera::FreeFlightCamera {
                     yaw,
                     pitch,
                     damping: None,
@@ -319,7 +319,7 @@ pub fn on_set_camera_look_at(
             &mut Transform,
             &mut big_space::prelude::CellCoord,
             &ChildOf,
-            Option<&mut lunco_avatar::FreeFlightCamera>,
+            Option<&mut lunco_avatar_core::camera::FreeFlightCamera>,
         ),
         (With<lunco_core::Avatar>, With<lunco_core::LocalAvatar>),
     >,
@@ -377,8 +377,8 @@ pub fn on_set_camera_look_at(
     // does not retain a hidden return transaction or surface gravity binding.
     commands
         .entity(entity)
-        .remove::<lunco_avatar::OrbitViewReturn>()
-        .remove::<lunco_avatar::SurfaceRelativeMode>()
+        .remove::<lunco_avatar_core::camera::OrbitViewReturn>()
+        .remove::<lunco_avatar_core::camera::SurfaceRelativeMode>()
         .remove::<lunco_environment::GravityBody>();
     let look = cmd.target - cmd.eye;
     let (yaw, pitch) = if look.length() > 1e-4 {
@@ -394,13 +394,13 @@ pub fn on_set_camera_look_at(
     } else {
         commands
             .entity(entity)
-            .remove::<lunco_avatar::OrbitCamera>()
-            .remove::<lunco_avatar::OrbitViewReturn>()
-            .remove::<lunco_avatar::SpringArmCamera>()
-            .remove::<lunco_avatar::SurfaceCamera>()
-            .remove::<lunco_avatar::SurfaceRelativeMode>()
+            .remove::<lunco_avatar_core::camera::OrbitCamera>()
+            .remove::<lunco_avatar_core::camera::OrbitViewReturn>()
+            .remove::<lunco_avatar_core::camera::SpringArmCamera>()
+            .remove::<lunco_avatar_core::camera::SurfaceCamera>()
+            .remove::<lunco_avatar_core::camera::SurfaceRelativeMode>()
             .remove::<lunco_environment::GravityBody>()
-            .try_insert(lunco_avatar::FreeFlightCamera {
+            .try_insert(lunco_avatar_core::camera::FreeFlightCamera {
                 yaw,
                 pitch,
                 damping: None,
@@ -447,7 +447,7 @@ mod tests {
                 Transform::default(),
                 GlobalTransform::default(),
                 ChildOf(active_physics_grid),
-                lunco_avatar::FreeFlightCamera {
+                lunco_avatar_core::camera::FreeFlightCamera {
                     yaw: 0.0,
                     pitch: 0.0,
                     damping: None,
@@ -509,7 +509,7 @@ mod tests {
                 Transform::from_xyz(4.0, 6.0, 8.0),
                 GlobalTransform::from(Transform::from_xyz(7.0e10, -8.0e10, 9.0e10)),
                 ChildOf(grid),
-                lunco_avatar::FreeFlightCamera {
+                lunco_avatar_core::camera::FreeFlightCamera {
                     yaw: 0.0,
                     pitch: 0.0,
                     damping: None,
@@ -537,7 +537,7 @@ mod tests {
 
         let freeflight = app
             .world()
-            .get::<lunco_avatar::FreeFlightCamera>(avatar)
+            .get::<lunco_avatar_core::camera::FreeFlightCamera>(avatar)
             .unwrap();
         let direction = (-offset).normalize();
         assert!((freeflight.yaw - (-direction.x).atan2(-direction.z)).abs() < 1.0e-6);

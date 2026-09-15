@@ -1278,7 +1278,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Switches the avatar to `OrbitCamera` mode centered on the target.
 
-- *defined in:* `crates/lunco-avatar/src/commands.rs`
+- *defined in:* `crates/lunco-avatar-core/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1296,7 +1296,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  not drive. `PossessVessel` is conceptually `FollowTarget` plus a
  controller binding.
 
-- *defined in:* `crates/lunco-avatar/src/commands.rs`
+- *defined in:* `crates/lunco-avatar-core/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1322,7 +1322,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  Switches the avatar to a vessel-locked camera mode and inserts a
  `ControllerLink` so that input events are forwarded to the vessel.
 
-- *defined in:* `crates/lunco-avatar/src/commands.rs`
+- *defined in:* `crates/lunco-avatar-core/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1337,7 +1337,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  Removes the `ControllerLink` and returns the avatar to free-flight mode.
  Keeps the camera at its current position — no jarring teleport.
 
-- *defined in:* `crates/lunco-avatar/src/commands.rs`
+- *defined in:* `crates/lunco-avatar-core/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1351,7 +1351,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  Unlike [`ReleaseVessel`], this is a presentation transition: it does not
  release control authority or remove a `ControllerLink`.
 
-- *defined in:* `crates/lunco-avatar/src/commands.rs`
+- *defined in:* `crates/lunco-avatar-core/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1366,7 +1366,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
  body-orbit cameras; this command is the API/script boundary for changing it
  without introducing a second transient set of camera constants.
 
-- *defined in:* `crates/lunco-avatar/src/commands.rs`
+- *defined in:* `crates/lunco-avatar-core/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
@@ -1396,7 +1396,7 @@ query("ValidateTwin", #{path: "/work/rover-twin", policy: "error"});
 
  Update the profile name for the active user session.
 
-- *defined in:* `crates/lunco-avatar/src/commands.rs`
+- *defined in:* `crates/lunco-core-session/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
