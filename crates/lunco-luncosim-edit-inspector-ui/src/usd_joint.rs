@@ -12,7 +12,7 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_doc::DocumentId;
-use lunco_usd_bevy_core::{canonical::CanonicalStages, stage_convention, UsdRead, UsdStageAsset};
+use lunco_usd_bevy_core::{UsdRead, UsdStageAsset, canonical::CanonicalStages, stage_convention};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_document::author::normalize_value_literal;
 use lunco_usd_document::document::{LayerId, UsdOp};
@@ -217,7 +217,7 @@ fn scalar_unit(type_name: &str, joint_type: &str, name: &str) -> String {
 /// Rebuild authored joint state for every open preview lease.
 pub fn produce_usd_joint_view(
     selected: Option<Res<lunco_scene_selection::SelectedEntities>>,
-    target: Option<Res<lunco_luncosim_edit_ui::InspectorTarget>>,
+    target: Option<Res<lunco_scene_selection::SelectionTarget>>,
     q: Query<&UsdPrimPath>,
     q_parents: Query<&ChildOf>,
     stages: Res<Assets<UsdStageAsset>>,
@@ -251,10 +251,12 @@ pub fn produce_usd_joint_view(
             continue;
         }
 
-        let Some(entity) = lunco_luncosim_edit_ui::ui::selected_entity_in_preview(
+        let Some(entity) = lunco_usd_viewport_ui::selected_entity_in_preview(
             session,
-            selected.as_deref(),
-            target.as_deref(),
+            selected
+                .as_deref()
+                .and_then(lunco_scene_selection::SelectedEntities::primary),
+            target.as_deref().and_then(|value| value.part),
             &q,
             &q_parents,
         ) else {
@@ -404,7 +406,7 @@ fn preview_body_transform(
         .find(|(entity, prim, _)| {
             prim.stage_handle.id() == session.stage_handle().id()
                 && prim.path == path
-                && lunco_luncosim_edit_ui::ui::is_editor_preview_entity(
+                && lunco_usd_viewport_ui::is_preview_entity(
                     *entity,
                     session.scene_root(),
                     q_parents,
@@ -508,11 +510,7 @@ pub(crate) fn draw_usd_joint_preview_viz(
     let Some(entity) = view.entity else {
         return;
     };
-    if !lunco_luncosim_edit_ui::ui::is_editor_preview_entity(
-        entity,
-        session.scene_root(),
-        &q_parents,
-    ) {
+    if !lunco_usd_viewport_ui::is_preview_entity(entity, session.scene_root(), &q_parents) {
         return;
     }
 

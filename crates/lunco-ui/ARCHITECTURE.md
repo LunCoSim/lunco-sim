@@ -157,11 +157,20 @@ crates/lunco-luncosim-edit-core/
 
 crates/lunco-luncosim-edit-ui/
 └── src/
-    ├── lib.rs              # UI adapters and InspectorTarget
-    └── ui/                 # SceneEditUiPlugin and panels
+    ├── lib.rs              # Interactive UI adapters and selection bridge
+    └── ui/                 # SceneEditUiPlugin and interaction panels
         ├── mod.rs
         ├── spawn_palette.rs
-        └── inspector.rs
+        └── entity_list.rs
+
+crates/lunco-luncosim-edit-inspector-ui/
+└── src/
+    ├── lib.rs              # Inspector and authored USD panel registration
+    └── inspector.rs        # Inspector panel and USD authoring observers
+
+crates/lunco-usd-prim-tree-ui/
+└── src/
+    └── lib.rs              # Reusable composed-USD prim tree panel
 ```
 
 ### 2. Add dependencies
@@ -338,8 +347,14 @@ crates/lunco-luncosim-ui/src/ui/
 crates/lunco-luncosim-edit-ui/src/ui/
 ├── mod.rs                   # SceneEditUiPlugin
 ├── spawn_palette.rs         # Panel impl
-├── inspector.rs             # Panel impl
 └── entity_list.rs           # Panel impl
+
+crates/lunco-luncosim-edit-inspector-ui/src/
+├── lib.rs                   # SceneEditInspectorUiPlugin
+└── inspector.rs             # Inspector and authored USD panels
+
+crates/lunco-usd-prim-tree-ui/src/
+└── lib.rs                   # UsdPrimTreeUiPlugin and panel impl
 
 crates/lunco-modelica-ui/src/ui/
 ├── mod.rs                   # ModelicaUiPlugin

@@ -627,8 +627,10 @@ author, and why a relative `../` escape fails (silently, for `LunCoProgramAPI` s
 > composed asset.
 
 ### Scene Editing Tools (UX Bridge)
-The `lunco-luncosim-edit-core` and `lunco-luncosim-edit-ui` crates provide the
-interactive layer (spawn mechanisms, palette, gizmo, and inspector).
+The `lunco-luncosim-edit-core` and UI packages provide the interactive layer:
+`lunco-luncosim-edit-ui` owns spawn interaction, palette, gizmo, selection, and
+preview interaction; `lunco-luncosim-edit-inspector-ui` owns the Inspector and
+authored USD panels; and `lunco-usd-prim-tree-ui` owns the reusable prim tree.
 - **Spawning**: `SpawnEntity` lowers to `ApplyUsdOp` with `UsdOp::AddPrim { reference: Some(...) }` against its explicit document and parent path.
   A palette spawn mounts the stage's `defaultPrim` via the **empty-path sentinel**
   (`UsdPrimPath { path: "" }`) — the loader resolves and writes back the concrete

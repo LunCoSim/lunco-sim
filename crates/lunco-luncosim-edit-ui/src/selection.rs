@@ -16,7 +16,9 @@ use bevy::math::Isometry3d;
 use lunco_controller::ControllerLink;
 use lunco_core::{on_command, register_commands, Avatar, Command, LocalAvatar};
 use lunco_luncosim_edit_core::SpawnState;
-use lunco_scene_selection::SelectedEntities;
+use lunco_scene_selection::{
+    SelectEntityTarget, SelectedEntities, SelectionIntent, SelectionTarget,
+};
 use lunco_usd_bevy_core::UsdStageAsset;
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_viewport_ui::{UsdPreviewId, UsdViewportState};
@@ -24,22 +26,6 @@ use lunco_usd_viewport_ui::{UsdPreviewId, UsdViewportState};
 /// Component marking an entity as currently selected.
 #[derive(Component)]
 pub struct Selected;
-
-/// The semantic operation represented by one editor selection gesture.
-///
-/// Modifier decoding belongs at the pointer boundary; selection mutation then
-/// consumes this enum so every input surface shares one contract.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SelectionIntent {
-    /// Replace the current selection with the target.
-    Replace,
-    /// Add the target while retaining the current selection.
-    Extend,
-    /// Toggle the target in the current selection.
-    Toggle,
-    /// Remove the target from the current selection.
-    Remove,
-}
 
 /// Decode the viewport modifier chord. Ctrl wins when both modifiers are held,
 /// making Ctrl+Shift a deterministic remove operation rather than an accidental
@@ -76,21 +62,10 @@ fn usd_selection_intent(extend: bool, toggle: bool) -> SelectionIntent {
     }
 }
 
-/// Entity-keyed selection intent emitted by editor panels that already hold
-/// the concrete entity. This preserves the shared selection mutation without
-/// exposing a mutable `World` to UI code.
-#[derive(Event, Clone, Copy)]
-pub struct SelectEntityTarget {
-    /// Entity selected by the editor gesture.
-    pub target: Entity,
-    /// Semantic selection operation to apply.
-    pub intent: SelectionIntent,
-}
-
 pub(crate) fn on_select_entity_target(
     trigger: On<SelectEntityTarget>,
     mut selected: ResMut<SelectedEntities>,
-    mut inspector_target: ResMut<crate::InspectorTarget>,
+    mut inspector_target: ResMut<SelectionTarget>,
     q_old: Query<Entity, With<Selected>>,
     mut commands: Commands,
 ) {
@@ -152,7 +127,8 @@ pub(crate) fn on_usd_viewport_click(
 
     let root = session.scene_root();
     let stage_id = session.stage_handle().id();
-    let filter = |entity: Entity| crate::ui::is_editor_preview_entity(entity, root, &q_parents);
+    let filter =
+        |entity: Entity| lunco_usd_viewport_ui::is_preview_entity(entity, root, &q_parents);
     let settings = MeshRayCastSettings {
         // Preview projection visibility can lag the egui paint by one schedule;
         // the explicit stage/root filter is the authoritative scope here.
@@ -386,7 +362,7 @@ pub fn select_possessed_vessel(
     q_avatar: Query<Ref<ControllerLink>, (With<Avatar>, With<LocalAvatar>)>,
     q_old: Query<Entity, With<Selected>>,
     mut selected: ResMut<SelectedEntities>,
-    mut inspector_target: ResMut<crate::InspectorTarget>,
+    mut inspector_target: ResMut<SelectionTarget>,
     mut commands: Commands,
 ) {
     for link in q_avatar.iter() {
@@ -415,7 +391,7 @@ pub fn on_select_entity(
     trigger: On<SelectEntity>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
     mut selected: ResMut<SelectedEntities>,
-    mut inspector_target: ResMut<crate::InspectorTarget>,
+    mut inspector_target: ResMut<SelectionTarget>,
     q_old: Query<Entity, With<Selected>>,
     mut commands: Commands,
 ) {
@@ -461,7 +437,7 @@ pub fn on_select_usd_prim(
     q_paths: Query<(Entity, &UsdPrimPath)>,
     q_parents: Query<&ChildOf>,
     mut selected: ResMut<SelectedEntities>,
-    mut inspector_target: ResMut<crate::InspectorTarget>,
+    mut inspector_target: ResMut<SelectionTarget>,
     q_old: Query<Entity, With<Selected>>,
     mut commands: Commands,
 ) {
@@ -534,7 +510,7 @@ fn resolve_usd_prim_in_preview(
         .find(|(entity, prim)| {
             prim.stage_handle.id() == stage_id
                 && prim.path == path
-                && crate::ui::is_editor_preview_entity(*entity, preview_root, q_parents)
+                && lunco_usd_viewport_ui::is_preview_entity(*entity, preview_root, q_parents)
         })
         .map(|(entity, _)| entity)
 }
@@ -655,7 +631,7 @@ pub fn on_scene_click_select(
     q_prims: Query<Entity, With<lunco_usd_bevy_scene::UsdPrimPath>>,
     q_parents: Query<&ChildOf>,
     selected: Res<SelectedEntities>,
-    mut inspector_target: ResMut<crate::InspectorTarget>,
+    mut inspector_target: ResMut<SelectionTarget>,
     mut commands: Commands,
 ) {
     let shift_held = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
@@ -758,7 +734,7 @@ pub fn handle_deselect_keys(
     cursor_mode: lunco_core::CursorModeActive,
     q_selected_old: Query<Entity, With<Selected>>,
     mut selected: ResMut<SelectedEntities>,
-    mut inspector_target: ResMut<crate::InspectorTarget>,
+    mut inspector_target: ResMut<SelectionTarget>,
     mut commands: Commands,
 ) {
     if cursor_mode.any() || !cancel.just_pressed() {
@@ -996,7 +972,7 @@ mod tests {
     fn extend_adds_and_remove_only_never_adds() {
         let mut app = App::new();
         app.init_resource::<SelectedEntities>()
-            .init_resource::<crate::InspectorTarget>()
+            .init_resource::<SelectionTarget>()
             .add_observer(on_select_entity_target);
 
         let first = app.world_mut().spawn_empty().id();
@@ -1028,7 +1004,7 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<lunco_api::registry::ApiEntityRegistry>()
             .init_resource::<SelectedEntities>()
-            .init_resource::<crate::InspectorTarget>()
+            .init_resource::<SelectionTarget>()
             .add_observer(on_select_entity);
 
         let first = app.world_mut().spawn_empty().id();
@@ -1223,7 +1199,7 @@ mod tests {
     fn possession_selects_the_controlled_vessel_for_the_inspector() {
         let mut app = App::new();
         app.init_resource::<SelectedEntities>()
-            .init_resource::<crate::InspectorTarget>()
+            .init_resource::<SelectionTarget>()
             .add_systems(Update, select_possessed_vessel);
 
         let previously_selected = app.world_mut().spawn(Selected).id();
@@ -1258,7 +1234,7 @@ mod tests {
     fn toggled_selection_updates_highlights_without_starting_drag() {
         let mut app = App::new();
         app.init_resource::<SelectedEntities>()
-            .init_resource::<crate::InspectorTarget>()
+            .init_resource::<SelectionTarget>()
             .insert_resource(lunco_core::DragModeActive::default())
             .add_observer(on_select_entity_target);
 
@@ -1280,9 +1256,7 @@ mod tests {
             .get::<crate::gizmo::GizmoSelected>(first)
             .is_some());
 
-        app.world_mut()
-            .resource_mut::<crate::InspectorTarget>()
-            .part = Some(first);
+        app.world_mut().resource_mut::<SelectionTarget>().part = Some(first);
 
         app.world_mut().trigger(SelectEntityTarget {
             target: second,
@@ -1294,11 +1268,7 @@ mod tests {
             vec![first, second]
         );
         assert!(app.world().get::<Selected>(second).is_some());
-        assert!(app
-            .world()
-            .resource::<crate::InspectorTarget>()
-            .part
-            .is_none());
+        assert!(app.world().resource::<SelectionTarget>().part.is_none());
 
         app.world_mut().trigger(SelectEntityTarget {
             target: first,

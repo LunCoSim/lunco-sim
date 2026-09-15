@@ -555,7 +555,7 @@ fn preview_drag_owner(
     let prim = q_paths.get(entity).ok()?;
     if prim.stage_handle.id() != session.stage_handle().id()
         || prim.path.is_empty()
-        || !crate::ui::is_editor_preview_entity(entity, session.scene_root(), q_parents)
+        || !lunco_usd_viewport_ui::is_preview_entity(entity, session.scene_root(), q_parents)
     {
         return None;
     }

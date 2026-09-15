@@ -868,6 +868,8 @@ simulation default.
    ├── Panel crates (domain-specific UI)
    │    lunco-modelica-ui/src/ui   lunco-luncosim-edit-ui/src/ui   lunco-mission/ui
    │         │                     │                       │
+   │         │                     ├── lunco-luncosim-edit-inspector-ui
+   │         │                     └── lunco-usd-prim-tree-ui
    │         ▼                     ▼                       ▼
    ├── lunco-status-core  (cross-cutting status/lifecycle contract)
    │     - StatusBus, progress scopes, tracked tasks

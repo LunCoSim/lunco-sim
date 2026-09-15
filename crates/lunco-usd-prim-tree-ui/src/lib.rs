@@ -19,17 +19,32 @@
 //! and body flag, and rebuilds the [`UsdPrimTreeView`] only when the set of prim
 //! paths changes (hash-gated). The panel is pure paint over that resource.
 
+#![forbid(unsafe_code)]
+
 use std::collections::{BTreeSet, HashMap};
 
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_render::SceneCamera;
+use lunco_scene_selection::{SelectEntityTarget, SelectionIntent};
 use lunco_usd_bevy_camera::camera_switch::camera_display_labels;
-use lunco_usd_bevy_core::{canonical::CanonicalStages, UsdRead, UsdStageAsset};
+use lunco_usd_bevy_core::{UsdRead, UsdStageAsset, canonical::CanonicalStages};
 use lunco_usd_bevy_scene::UsdPrimPath;
-use lunco_usd_viewport_ui::{UsdPreviewId, UsdViewportState};
-use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
+use lunco_usd_viewport_ui::{UsdPreviewId, UsdViewportState, is_preview_entity};
+use lunco_workbench_core::view_model::ViewModelAppExt;
+use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot, WorkbenchPanelAppExt};
 use openusd::sdf::Path as SdfPath;
+
+/// Installs the reusable composed-USD prim hierarchy panel.
+pub struct UsdPrimTreeUiPlugin;
+
+impl Plugin for UsdPrimTreeUiPlugin {
+    fn build(&self, app: &mut App) {
+        app.register_panel(UsdPrimTreePanel)
+            .init_resource::<UsdPrimTreeView>()
+            .add_view_model(produce_usd_prim_tree, editor_prim_tree_changed);
+    }
+}
 
 const USD_PRIM_TREE_PANEL_ID: PanelId = PanelId("usd_prim_tree");
 
@@ -119,9 +134,7 @@ pub fn produce_usd_prim_tree(
         // preview root is the document scope; the live simulation is absent.
         let mut entity_of: HashMap<NodeKey, Entity> = HashMap::new();
         for (e, p, _) in q.iter() {
-            if p.stage_handle.id() == stage_id
-                && lunco_luncosim_edit_ui::ui::is_editor_preview_entity(e, preview_root, &q_parents)
-            {
+            if p.stage_handle.id() == stage_id && is_preview_entity(e, preview_root, &q_parents) {
                 entity_of.insert(p.path.clone(), e);
             }
         }
@@ -131,11 +144,7 @@ pub fn produce_usd_prim_tree(
             .filter(|(entity, path, is_camera)| {
                 *is_camera
                     && path.stage_handle.id() == stage_id
-                    && lunco_luncosim_edit_ui::ui::is_editor_preview_entity(
-                        *entity,
-                        preview_root,
-                        &q_parents,
-                    )
+                    && is_preview_entity(*entity, preview_root, &q_parents)
             })
             .map(|(entity, path, _)| (entity, path.path.clone()))
             .collect();
@@ -370,9 +379,9 @@ fn prim_tree_content(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
 
     // Route selection through the shared `apply_selection` (keyed by Entity).
     if let Some(entity) = to_select {
-        ctx.trigger(lunco_luncosim_edit_ui::selection::SelectEntityTarget {
+        ctx.trigger(SelectEntityTarget {
             target: entity,
-            intent: lunco_luncosim_edit_ui::selection::SelectionIntent::Replace,
+            intent: SelectionIntent::Replace,
         });
     }
 }

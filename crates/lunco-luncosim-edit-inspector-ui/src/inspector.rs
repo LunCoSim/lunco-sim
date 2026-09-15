@@ -13,9 +13,9 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_core::ports::PortRegistry;
 use lunco_core::OpId;
-use lunco_cosim::{joint_angle_holder, JOINT_ANGLE_PORT};
+use lunco_core::ports::PortRegistry;
+use lunco_cosim::{JOINT_ANGLE_PORT, joint_angle_holder};
 use lunco_doc::Document;
 use lunco_modelica_ui_core::SetModelicaParameter;
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
@@ -24,7 +24,7 @@ use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 use lunco_materials::{ParamValue, ShaderLook};
 use lunco_render::{PbrLook, SceneCamera};
 
-use lunco_obstacle_field::{plugin::UpdateObstacleFieldSpec, ObstacleFieldSpec, Pattern};
+use lunco_obstacle_field::{ObstacleFieldSpec, Pattern, plugin::UpdateObstacleFieldSpec};
 
 use lunco_scene_selection::SelectedEntities;
 // Doc resolution + material-binding walk: headless-safe, shared verbatim with the
@@ -780,8 +780,8 @@ pub struct InspectorView {
 /// a quiescent scene. All reads are bounded single-entity lookups or small
 /// scans the panel used to do in-paint.
 pub fn populate_inspector_view(world: &mut World) {
-    use bevy::camera::visibility::RenderLayers;
     use bevy::camera::Exposure;
+    use bevy::camera::visibility::RenderLayers;
     use bevy::light::{CascadeShadowConfig, DirectionalLight, GlobalAmbientLight};
     use bevy::post_process::bloom::Bloom;
 
@@ -1752,13 +1752,13 @@ fn inspector_content(_panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelC
     let parts = editable_parts(ctx, entity);
     if !parts.is_empty() {
         let stored = ctx
-            .resource::<lunco_luncosim_edit_ui::InspectorTarget>()
+            .resource::<lunco_scene_selection::SelectionTarget>()
             .and_then(|t| t.part)
             .filter(|p| parts.iter().any(|(e, _)| e == p));
         let mut target = stored.or_else(|| default_part(ctx, &parts));
         if stored.is_none() {
             if let Some(t) = target {
-                ctx.resource_scope::<lunco_luncosim_edit_ui::InspectorTarget, _>(|_, target| {
+                ctx.resource_scope::<lunco_scene_selection::SelectionTarget, _>(|_, target| {
                     target.part = Some(t);
                 });
             }
@@ -1912,7 +1912,7 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
     // set (see `produce_usd_param_view`), else at the primary. Render whenever
     // the view belongs to this inspector context — primary or its drill.
     let part = ctx
-        .resource::<lunco_luncosim_edit_ui::InspectorTarget>()
+        .resource::<lunco_scene_selection::SelectionTarget>()
         .and_then(|t| t.part);
     let (preview, doc, edit_target, target, path, generation, kind, params): (
         lunco_usd_viewport_ui::UsdPreviewId,
@@ -1983,11 +1983,9 @@ fn usd_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity)
                 };
                 ui.label(egui::RichText::new(format!("part: {part_name}")).italics());
                 if ui.small_button("⏶ back to root").clicked() {
-                    ctx.resource_scope::<lunco_luncosim_edit_ui::InspectorTarget, _>(
-                        |_, target| {
-                            target.part = None;
-                        },
-                    );
+                    ctx.resource_scope::<lunco_scene_selection::SelectionTarget, _>(|_, target| {
+                        target.part = None;
+                    });
                 }
             });
             ui.separator();
@@ -3256,7 +3254,7 @@ fn default_part(ctx: &PanelCtx, parts: &[(Entity, String)]) -> Option<Entity> {
 }
 
 /// *Part* dropdown for a multi-part component. Writes the choice into
-/// [`InspectorTarget`](lunco_luncosim_edit_ui::InspectorTarget) (through a scoped resource) and returns the
+/// [`SelectionTarget`](lunco_scene_selection::SelectionTarget) (through a scoped resource) and returns the
 /// new target.
 fn parts_selector(
     ui: &mut egui::Ui,
@@ -3279,7 +3277,7 @@ fn parts_selector(
             }
         });
     if let Some(c) = chosen {
-        ctx.resource_scope::<lunco_luncosim_edit_ui::InspectorTarget, _>(|_, target| {
+        ctx.resource_scope::<lunco_scene_selection::SelectionTarget, _>(|_, target| {
             target.part = Some(c);
         });
         return Some(c);

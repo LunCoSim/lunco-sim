@@ -1399,8 +1399,7 @@ fn reconcile_preview_projection_state(
                 // checking readiness; entities from the live Twin have the
                 // same stage id but are outside this session's ownership.
                 .filter(|(entity, path, ..)| {
-                    path.stage_handle.id() == stage_id
-                        && preview_entity_belongs_to_root(*entity, root, &parents)
+                    path.stage_handle.id() == stage_id && is_preview_entity(*entity, root, &parents)
                 })
                 .all(|(_, _, synced, awaiting, queued, mesh_pending, failed)| {
                     synced && !awaiting && !queued && !mesh_pending && !failed
@@ -1423,7 +1422,12 @@ fn reconcile_preview_projection_state(
     }
 }
 
-fn preview_entity_belongs_to_root(entity: Entity, root: Entity, parents: &Query<&ChildOf>) -> bool {
+/// Return whether an entity belongs to a preview's authoritative hierarchy.
+///
+/// The preview root itself is included. The bounded walk prevents malformed
+/// ECS hierarchies from turning a selection or readiness query into an
+/// unbounded loop.
+pub fn is_preview_entity(entity: Entity, root: Entity, parents: &Query<&ChildOf>) -> bool {
     if entity == root {
         return true;
     }
@@ -1438,6 +1442,28 @@ fn preview_entity_belongs_to_root(entity: Entity, root: Entity, parents: &Query<
         }
     }
     false
+}
+
+/// Resolve an optional sub-selection or primary selection against one preview
+/// lease. The stage handle and hierarchy root both have to match the lease;
+/// entity IDs alone are not stable across preview reloads.
+pub fn selected_entity_in_preview(
+    session: &UsdPreviewSession,
+    selected: Option<Entity>,
+    target: Option<Entity>,
+    q_paths: &Query<&UsdPrimPath>,
+    q_parents: &Query<&ChildOf>,
+) -> Option<Entity> {
+    let belongs = |entity: Entity| {
+        q_paths.get(entity).is_ok_and(|path| {
+            path.stage_handle.id() == session.stage_handle().id()
+                && is_preview_entity(entity, session.scene_root(), q_parents)
+        })
+    };
+
+    target
+        .filter(|entity| belongs(*entity))
+        .or_else(|| selected.filter(|entity| belongs(*entity)))
 }
 
 /// Pointer input emitted by the viewport panel. Camera state and the camera

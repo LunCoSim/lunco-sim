@@ -13,11 +13,3 @@ pub mod physics_viz;
 pub mod script_tools;
 pub mod selection;
 pub mod ui;
-
-/// Which sub-part of [`lunco_scene_selection::SelectedEntities`] the Inspector
-/// edits. `None` means the complete selected object.
-#[derive(bevy::prelude::Resource, Default)]
-pub struct InspectorTarget {
-    /// The targeted sub-part entity, or `None` for the whole object.
-    pub part: Option<bevy::prelude::Entity>,
-}

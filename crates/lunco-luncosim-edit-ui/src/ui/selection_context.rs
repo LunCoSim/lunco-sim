@@ -250,10 +250,11 @@ impl ApiQueryProvider for InspectUsdSelectionProvider {
             (SelectedPaths::Paths(paths.paths), paths.target_path)
         };
 
-        let Some(inspector_target) = world.get_resource::<crate::InspectorTarget>() else {
+        let Some(inspector_target) = world.get_resource::<lunco_scene_selection::SelectionTarget>()
+        else {
             return ApiResponse::error(
                 ApiErrorCode::InternalError,
-                "InspectUsdSelection: InspectorTarget resource is not present",
+                "InspectUsdSelection: SelectionTarget resource is not present",
             );
         };
 
