@@ -553,6 +553,35 @@ separate setting and file path. With the default policy, call
 `assembly_edit::save_document(doc)` only after the human or agent approves the
 visible result.
 
+Component edits are live by default. The document that owns a component is
+updated first; loaded assembly stages that reference its `twin://` layer are
+then refreshed automatically in place, with their existing camera and view
+state retained. This is dependency-scoped and does not flatten or duplicate
+the component. A Twin can override that local presentation policy with the
+generic hook registry:
+
+For a deterministic audit, query `InspectUsdViewport` before and after the
+edit. Its `stage_asset_path` and sorted `recipe_layers` show the exact layer
+closure used by each preview. A file opened from a registered Twin is always
+addressed with that Twin's assigned `twin://` authority; only a file outside a
+registered Twin receives a synthetic viewport authority. This prevents a
+component preview from silently becoming a different asset identity than the
+assembly it is meant to update.
+
+```rhai
+register_hook("usd.component_refresh", "decide_refresh", #"
+    fn decide_refresh(facts) {
+        // Return #{ action: "propagate" }, "defer", or "reject".
+        #{ action: "propagate" }
+    }
+"#);
+```
+
+The hook runs once per dependent stage. A malformed or failing hook is reported
+and that dependent remains on its previous projection; unregistering it returns
+to automatic propagation. This hook does not change save policy: persistence is
+still explicit unless the Twin opts into authored autosave.
+
 ```rhai
 let checked = editor_workflow::after_edit(doc);
 if checked.stage == "projection" {
