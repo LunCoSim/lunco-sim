@@ -12,7 +12,9 @@
 //                                        Nearest, GroundHeight, …) — the read
 //                                        twin of cmd(); physics stays in its
 //                                        owning crate, not in scripting
-//   world_pos(id) -> [x,y,z]      read:  float-origin-correct world position
+//   world_pos(id) -> [x,y,z]      read:  float-origin-correct vector; use
+//                                        world_point(id) at position boundaries
+//   world_point(id) -> point3     read:  position tagged `active_physics`
 //   world_forward(id) -> [x,y,z]  read:  world heading
 //   get(id, "Comp.field")         read:  reflected field; vectors/quats come
 //                                        back as arrays ([x,y,z]/[x,y,z,w]),
@@ -30,11 +32,20 @@
 //   clock_snapshot() -> map       time:  fixed/virtual/physics/mission clocks plus
 //                                        physics_deterministic admission status
 //   emit(name, value)             event: fire a TelemetryEvent
+//   input_key/input_click/...     UI automation: enqueue native Bevy window
+//                                        input; compose gestures in Rhai
 //   on_event(me, evt)             event: receives emit()s AND physics
 //                                        COLLISION_START / COLLISION_END pulses
 //
 // Everything below is POLICY, authored here (hot-reloadable), never compiled
 // into core. Add helpers freely — no Rust rebuild required.
+//
+// Position policy: bare [x,y,z] values are frame-free vectors. Use point3(),
+// world_point(), and pointer_point() when a value crosses a scene, USD, or
+// authoring boundary; those helpers keep the coordinate frame explicit.
+// Pointer policy: scene tools consume pointer_intent(context, "name") from the
+// shared settings-derived semantic surface; they do not inspect raw buttons or
+// modifier flags to define behavior.
 
 /// Resolve an entity's canonical USD topology address.
 ///

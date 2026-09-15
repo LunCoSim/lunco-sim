@@ -375,6 +375,82 @@ Route sequencing, enable/disable state, point edits, and route presentation are
 authored Rhai policy over USD queries and typed commands. There is no native
 `PathFollower` component and no second Rust autopilot path.
 
+### Coordinate points in Rhai
+
+`[x, y, z]` is a frame-free vector. A position crossing a tool, scene, or
+authoring boundary must be a `point3` map:
+
+```rhai
+let rover = world_point(find("/Traverse/Rover"));
+let offset = point_offset(rover, [1.0, 0.0, 0.0]);
+let distance = point_distance(rover, offset);
+```
+
+The map contains `kind: "point3"`, `values: [x, y, z]`, and an explicit
+`frame`. `world_point` and generic scene-pointer `world_position` use the
+`active_physics` frame. Pointer hits also expose `render_position`, tagged
+`render`; it is floating-origin presentation data and must never be sent to a
+placement or USD authoring command. `pointer_point(context)` returns a
+structured `{ ok, point, error }` result and never falls back between frames.
+`point_delta`, `point_distance`, and `point_offset` reject malformed or
+cross-frame values. The Rust boundary performs the one BigSpace conversion;
+Rhai owns policy and frame-safe composition.
+
+### Semantic pointer intents
+
+Scene tools receive the generic `pointer_intents` array in their pointer
+context. It is derived from the persisted `input_bindings` settings, not from
+tool code. A binding is an exact button/modifier chord, for example:
+
+```json
+{
+  "pointer_bindings": {
+    "route.add_point": [{"button": "Left", "alt": true}],
+    "route.context": [{"button": "Right"}]
+  }
+}
+```
+
+Rhai consumes the semantic surface with `pointer_intent(context, name)`:
+
+```rhai
+if pointer_intent(context, "route.add_point") {
+    return on_click(context);
+}
+```
+
+The controller owns only generic chord matching and live settings projection;
+the tool owns the meaning of each name. This keeps Alt+click remappable and
+lets other authored tools introduce their own pointer intents without adding
+Rust branches or a second input map.
+
+### Native UI input automation
+
+Rhai can drive the actual application input path with the generic
+`InjectWindowInput` command and the helpers in `prelude/input.rhai`:
+
+```rhai
+input_key_press("AltLeft");
+input_click("primary", 960.0, 540.0);
+input_key_release("AltLeft");
+```
+
+The Rust mechanism emits the same aggregate `WindowEvent` and typed
+`KeyboardInput`/`CursorMoved`/`MouseButtonInput`/`MouseWheel` messages produced
+by the Bevy winit backend. It does not move the operating-system pointer; the
+injected `CursorMoved` message and the frame-local `Window::cursor_position()`
+projection are the application-level pointer input, avoiding platform-specific
+cursor-lock restrictions.
+That means egui, picking, focus, input bindings, and scene tools all observe
+one canonical path. Rhai owns sequences, chords, drag workflows, and retries;
+Rust owns only event validation and fan-out. The command accepts logical window
+coordinates and is local to the primary window; it is not a direct scene-edit
+or semantic-control shortcut.
+
+Follow-up TODO: harden the frame-local cursor projection against multi-window
+and backend-specific input behavior, with production acceptance on Wayland,
+X11, and Windows before treating automated drag workflows as a stable contract.
+
 ---
 
 ## 6. Determinism & networking
