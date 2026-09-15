@@ -1,18 +1,22 @@
 # lunco-assets
 
-Dataset provisioning and offline asset processing for LunCoSim. The lightweight
-identity, URI, storage, discovery, and embedded-source APIs live in
-[`lunco-assets-core`](../lunco-assets-core); this package is intentionally the
-heavy application/CLI boundary.
+Application-edge dataset provisioning for LunCoSim. The package is deliberately
+small: the manifest/state contract is in
+[`lunco-assets-datasets`](../lunco-assets-datasets), byte transport is in
+[`lunco-assets-transport`](../lunco-assets-transport), manifest-aware download
+and installation is in [`lunco-assets-download`](../lunco-assets-download), and
+native raster/glTF baking is in
+[`lunco-assets-processing`](../lunco-assets-processing). Lightweight asset
+identity, URI, storage, discovery, and embedded-source APIs remain in
+[`lunco-assets-core`](../lunco-assets-core).
 
 ## What This Crate Does
 
-- **Downloads external assets** from `Assets.toml` declarations with SHA-256 verification
-- **Processes textures** — resize/convert source images (JPEG, PNG, TIFF, SVG → PNG)
-- **Processes DEM, map, normal-map, PDS3, GeoTIFF, and glTF products** in the
-  native offline pipeline
-- **Owns the explicit dataset lifecycle** — declaration, user-authorised
-  download, processing, cancellation, and installed status
+- **Composes the explicit dataset lifecycle** — user-authorised download,
+  processing, cancellation, and installed status
+- **Provides the Bevy worker boundary** used by the GUI application
+- **Provides the `lunco-assets` CLI**, which composes the download and processing
+  crates without making ordinary runtime asset readers link them
 
 ## Package boundary
 
@@ -23,10 +27,35 @@ Use `lunco-assets-core` for normal runtime asset access:
 - embedded Modelica, mission, tutorial, and Rhai sources
 - discovery/catalog data and the shared asset-source registration plugin
 
-Use `lunco-assets` only where the application or tool explicitly provisions
-datasets or runs the native processing pipeline. Keeping those consumers out of
-the core package prevents archive, HTTP, raster, SVG, GeoTIFF, and `npx`
-dependencies from propagating through every asset-reading crate.
+Use `lunco-assets` only where the application explicitly provisions datasets.
+Use the smaller packages directly when the owner is narrower:
+
+- `lunco-assets-datasets` for manifests, registry state, artifact identity, and
+  typed request/cancel events; it is safe for headless/browser-safe readers.
+- `lunco-assets-transport` for shared native HTTP retry/resume primitives.
+- `lunco-assets-download` for manifest verification, archive extraction, and
+  atomic installation without Bevy.
+- `lunco-assets-processing` for native decode, raster math, and baking. Its
+  `ProcessorRegistry` is the extension seam for new heavy processors.
+
+This dependency direction keeps HTTP/archive/raster/glTF tool dependencies out
+of ordinary runtime readers and makes changes to worker policy, transport, or
+manifest state recompile only the affected layer.
+
+## Extensible baking contract
+
+`Assets.toml` keeps the shared fields needed for cache identity and atomic
+commit (`kind`, `output`, `output_root`) and flattens additional processor
+parameters into `process.parameters`. A registered native processor receives
+the complete `ProcessConfig`; Rust owns decoding, math, cancellation, staging,
+and commit, while Rhai chooses and sequences authored dataset policy. New
+processors register a `ProcessorSpec` with the explicit sidecars they publish;
+they do not add another central `match`, cache key, or commit path.
+
+Built-in kinds are `texture`, `gltf`, `dem`, `map`, `albedo`, and `normalmap`.
+The reusable Rhai policy library is `assets::scripting::tools::assets` and
+provides dataset listing, selection, request, cancellation, and recommended
+dataset orchestration. It does not perform I/O or duplicate registry state.
 
 ## CLI Usage
 
@@ -58,6 +87,7 @@ dest = "textures/earth_source.jpg"
 # sha256 = ""  # fill after first download for integrity
 
 [earth.process]
+kind = "texture"
 target_resolution = [4096, 2048]
 output = "textures/earth.png"
 
@@ -67,6 +97,7 @@ url = "https://svs.gsfc.nasa.gov/vis/a000000/a004700/a004720/lroc_color_16bit_sr
 dest = "textures/moon_source.tif"
 
 [moon.process]
+kind = "texture"
 target_resolution = [4096, 2048]
 output = "textures/moon.png"
 ```
@@ -102,8 +133,8 @@ configured cap. The in-app Data & libraries panel is the settings editor.
 ## Workflow
 
 ```
-1. download  → 2. process  →  3. use
-   (lunco-assets) (lunco-assets) (lunco-assets-core / Bevy at runtime)
+1. declare → 2. request → 3. download → 4. process → 5. use
+   (Assets.toml) (Rhai/UI/CLI) (download) (processing) (core / Bevy at runtime)
    global cache/           global cache/
    earth_source.jpg        textures/earth.png
    moon_source.tif         textures/moon.png
@@ -113,10 +144,17 @@ configured cap. The in-app Data & libraries panel is the settings editor.
 ## Testing
 
 ```bash
-cargo test -p lunco-assets
+cargo test -p lunco-assets-transport -p lunco-assets-download \
+  -p lunco-assets-processing -p lunco-assets-datasets
 ```
 
-The low-level asset identity and source tests are in the lightweight package:
+The application worker composition is checked separately:
+
+```bash
+cargo check -p lunco-assets
+```
+
+The low-level asset identity and source tests remain in the lightweight package:
 
 ```bash
 cargo test -p lunco-assets-core

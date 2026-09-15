@@ -5,8 +5,8 @@
 # Horizons, so it is declared here as a dataset and downloaded only when a user
 # asks (Settings ▸ Downloadable data). The engine never fetches on its own.
 #
-# `dest` is resolved against the shared engine cache (`lunco_assets::cache_dir`),
-# and must match `lunco_assets::ephemeris_path_for_target` — the loader scans
+# `dest` is resolved against the shared engine cache (`lunco_assets_core::cache_dir`),
+# and must match the `lunco-celestial-ephemeris` path contract — the loader scans
 # `<cache>/ephemeris/target_<naif>_*.csv`, so the date range in the filename is
 # documentation, not a lookup key.
 #

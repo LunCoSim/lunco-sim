@@ -13,6 +13,8 @@ description = "Dataset provisioning and native offline asset processing for LunC
 bevy = { workspace = true, features = ["bevy_asset"] }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-assets-datasets = { path = "../lunco-assets-datasets" }
+lunco-assets-download = { path = "../lunco-assets-download" }
+lunco-assets-processing = { path = "../lunco-assets-processing" }
 lunco-settings = { path = "../lunco-settings" }
 lunco-workspace = { path = "../lunco-workspace" }
 # A broken `Assets.toml` or a failed dataset download has to REACH the user, and
@@ -21,41 +23,10 @@ lunco-workspace = { path = "../lunco-workspace" }
 # `[dependencies]`, not target-gated: `drain_dataset_status` runs on wasm too.
 # No cycle — lunco-core's only path deps are command-macro/hash/hooks.
 lunco-core = { path = "../lunco-core" }
-thiserror = { workspace = true }
-image = { workspace = true }
-sha2 = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
 toml = { workspace = true }
-
-# Desktop-only: HTTP client for asset downloads, tarball extraction, and native
-# processing. These dependencies are absent from `lunco-assets-core`.
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-ureq = { workspace = true }
-# `which` is used by the glb process step to verify that `npx`
-# (Node.js) is on PATH before shelling out to gltf-transform. Native
-# only — the wasm path doesn't run process steps.
-which = "6"
-# Pure-Rust GeoTIFF codec for the `process.kind = "dem"` step — decode a raw
-# LROC/NAC DTM, crop a square ROI, re-encode as a square float32 heightmap.
-# The encoder side (`colortype::Gray32Float`) is what writes the heightmap the
-# `lunco-terrain-bake` DEM reader expects. No GDAL / system dependency.
-tiff = { workspace = true }
-# The georeferencing tags themselves — shared with `lunco-terrain-bake`, which
-# reads what this crate writes. One leaf crate is what stops the writer and the
-# reader disagreeing about the frame.
-lunco-geotiff = { path = "../lunco-geotiff" }
-flate2 = "1.0"
-bzip2 = "0.4"
-tar = { workspace = true }
-# Parallelises the ~2670-file MSL pre-parse across all cores. Native-only
-# (download processing also uses it), so the unbounded default pool is fine —
-# unlike the runtime, which caps rayon to keep cores free for render.
-rayon = { workspace = true }
-resvg = { workspace = true }
-tiny-skia = { workspace = true }
-usvg = { workspace = true }
 
 [lints]
 workspace = true

@@ -11,6 +11,7 @@
 #![warn(missing_docs)]
 
 mod manifest;
+mod plugin;
 mod registry;
 
 pub use manifest::{
@@ -19,6 +20,7 @@ pub use manifest::{
     processed_output_present, source_pool_path, version_marker_path, AssetEntry, AssetManifest,
     ProcessConfig, PROCESS_PIPELINE_VERSION,
 };
+pub use plugin::{DatasetProvisioningActive, DatasetRegistryPlugin};
 pub use registry::{
     dataset_failed, dataset_id, CancelDataset, DatasetEntry, DatasetInstalled, DatasetRegistry,
     DatasetScope, DatasetScopeReady, DatasetScopeRemoved, DatasetState, RequestDataset,

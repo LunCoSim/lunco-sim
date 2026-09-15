@@ -29,241 +29,17 @@ use lunco_assets_datasets::{
     archive_extension, entry_dest_path, install_marker_path, installed_destination_present,
     process_output_path, processed_output_present, AssetEntry, AssetManifest,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use lunco_assets_transport::{download_to_writer, TransferError};
 use lunco_settings::DownloadSettings;
 #[cfg(not(target_arch = "wasm32"))]
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Seek, Write};
 use std::path::{Path, PathBuf};
 
-/// How long to wait for the TCP/TLS connection to come up.
-///
-/// Short on purpose: a host that has not accepted a connection in half a minute
-/// is down, firewalled, or misrouted — waiting longer never turns into bytes.
-#[cfg(not(target_arch = "wasm32"))]
-pub const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-
-/// How long to wait for the request headers to go out on an established
-/// connection.
-#[cfg(not(target_arch = "wasm32"))]
-pub const SEND_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-
-/// How long to wait for the RESPONSE HEADERS after the request is sent.
-///
-/// Generous (2 min) because some sources compute before they answer — a JPL
-/// Horizons vectors query is a server-side job, not a static file — but still
-/// bounded: this phase transfers nothing, so a long wait here is always a
-/// stalled peer, never a big file.
-#[cfg(not(target_arch = "wasm32"))]
-pub const RECV_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
-
-/// Build the opaque scratch-file name used for one download attempt.
-///
-/// Bundle keys include their manifest group (`fonts/dejavu_sans`) so errors
-/// identify the declaration uniquely. They are deliberately not part of this
-/// filename: the key is for diagnostics, while the process/attempt pair is
-/// already the uniqueness contract and works on every filesystem.
 #[cfg(not(target_arch = "wasm32"))]
 fn scratch_name(process_id: u32, attempt: u64) -> String {
     format!("lunco_{process_id}_{attempt}")
 }
-
-/// Returns whether a failed request is worth trying again.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn is_retryable_download_error(error: &ureq::Error) -> bool {
-    match error {
-        ureq::Error::StatusCode(code) => {
-            matches!(code, 408 | 425 | 429 | 500..=599)
-        }
-        ureq::Error::Io(_)
-        | ureq::Error::Timeout(_)
-        | ureq::Error::HostNotFound
-        | ureq::Error::ConnectionFailed
-        | ureq::Error::Protocol(_) => true,
-        _ => false,
-    }
-}
-
-/// Run one retryable operation under the application-wide download policy.
-///
-/// `settings.max_attempts` is the total number of requests, including the
-/// first one. The retry predicate is owned by the transport because HTTP
-/// status classes differ from higher-level errors; attempt count and delay
-/// remain centralized here. `should_continue` is checked while waiting,
-/// allowing an owned download task to cancel promptly; the operation itself
-/// checks cancellation before entering a request/body read.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn retry_with_backoff<T, E, Operation, Retryable, Continue>(
-    settings: &DownloadSettings,
-    mut operation: Operation,
-    mut retryable: Retryable,
-    mut should_continue: Continue,
-) -> Result<T, E>
-where
-    Operation: FnMut() -> Result<T, E>,
-    Retryable: FnMut(&E) -> bool,
-    Continue: FnMut() -> bool,
-{
-    let attempts = settings.max_attempts.max(1);
-    for attempt in 1..=attempts {
-        match operation() {
-            Ok(value) => return Ok(value),
-            Err(error) if attempt < attempts && retryable(&error) => {
-                let delay = settings.retry_delay(attempt);
-                let deadline = std::time::Instant::now() + delay;
-                while std::time::Instant::now() < deadline {
-                    if !should_continue() {
-                        return Err(error);
-                    }
-                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-                    std::thread::sleep(remaining.min(std::time::Duration::from_millis(100)));
-                }
-            }
-            Err(error) => return Err(error),
-        }
-    }
-    unreachable!("download retry policy always performs at least one attempt")
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-enum ResumableDownloadError {
-    Request(ureq::Error),
-    Body(ureq::Error),
-    Write(String),
-    Protocol(String),
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn resumable_error_is_retryable(error: &ResumableDownloadError) -> bool {
-    match error {
-        ResumableDownloadError::Request(error) | ResumableDownloadError::Body(error) => {
-            is_retryable_download_error(error)
-        }
-        ResumableDownloadError::Write(_) | ResumableDownloadError::Protocol(_) => false,
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn content_range_start_and_total(
-    response: &ureq::http::Response<ureq::Body>,
-) -> Option<(u64, Option<u64>)> {
-    let value = response.headers().get("content-range")?.to_str().ok()?;
-    let (range, total) = value.strip_prefix("bytes ")?.split_once('/')?;
-    let (start, _) = range.split_once('-')?;
-    Some((start.parse().ok()?, total.parse().ok()))
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-enum ResumableBytesError {
-    Request(ureq::Error),
-    Body(ureq::Error),
-    Protocol(String),
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn resumable_bytes_error_is_retryable(error: &ResumableBytesError) -> bool {
-    match error {
-        ResumableBytesError::Request(error) | ResumableBytesError::Body(error) => {
-            is_retryable_download_error(error)
-        }
-        ResumableBytesError::Protocol(_) => false,
-    }
-}
-
-/// Fetch a complete response into memory while retaining a received prefix
-/// across retry attempts. This is the shared byte-fetch path for content
-/// addressed network assets that have no destination file yet (for example,
-/// scenario-sync assets). A server that supports HTTP Range resumes at the
-/// prefix; a server that ignores Range returns a complete 200 response, which
-/// is the one case where restarting is safe.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn download_bytes_with_resume(
-    url: &str,
-    settings: &DownloadSettings,
-) -> Result<Vec<u8>, String> {
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_connect(Some(CONNECT_TIMEOUT))
-        .timeout_send_request(Some(SEND_REQUEST_TIMEOUT))
-        .timeout_recv_response(Some(RECV_RESPONSE_TIMEOUT))
-        .timeout_recv_body(Some(BODY_READ_TIMEOUT))
-        .build()
-        .into();
-    let mut bytes = Vec::new();
-    let mut total = 0_u64;
-    let result = retry_with_backoff(
-        settings,
-        || {
-            let downloaded = bytes.len() as u64;
-            let mut request = agent.get(url);
-            if downloaded > 0 {
-                request = request.header("Range", &format!("bytes={downloaded}-"));
-            }
-            let mut response = request.call().map_err(ResumableBytesError::Request)?;
-            let status = response.status().as_u16();
-            if status != 200 && status != 206 {
-                return Err(ResumableBytesError::Protocol(format!(
-                    "HTTP {status} cannot complete byte fetch"
-                )));
-            }
-
-            if status == 206 {
-                let Some((start, response_total)) = content_range_start_and_total(&response) else {
-                    return Err(ResumableBytesError::Protocol(
-                        "206 response omitted a valid Content-Range".into(),
-                    ));
-                };
-                if start != downloaded {
-                    return Err(ResumableBytesError::Protocol(format!(
-                        "server resumed at byte {start}, requested {downloaded}"
-                    )));
-                }
-                total = response_total.unwrap_or_else(|| {
-                    response
-                        .headers()
-                        .get("content-length")
-                        .and_then(|value| value.to_str().ok())
-                        .and_then(|value| value.parse::<u64>().ok())
-                        .map(|length| downloaded.saturating_add(length))
-                        .unwrap_or(0)
-                });
-            } else {
-                bytes.clear();
-                total = response
-                    .headers()
-                    .get("content-length")
-                    .and_then(|value| value.to_str().ok())
-                    .and_then(|value| value.parse::<u64>().ok())
-                    .unwrap_or(0);
-            }
-
-            response
-                .body_mut()
-                .as_reader()
-                .read_to_end(&mut bytes)
-                .map_err(|error| ResumableBytesError::Body(ureq::Error::Io(error)))?;
-            if total != 0 && (bytes.len() as u64) < total {
-                return Err(ResumableBytesError::Body(ureq::Error::Io(
-                    std::io::Error::new(
-                        std::io::ErrorKind::UnexpectedEof,
-                        format!("received {} of {total} bytes", bytes.len()),
-                    ),
-                )));
-            }
-            Ok(())
-        },
-        resumable_bytes_error_is_retryable,
-        || true,
-    );
-    result.map(|()| bytes).map_err(|error| match error {
-        ResumableBytesError::Request(error) | ResumableBytesError::Body(error) => error.to_string(),
-        ResumableBytesError::Protocol(error) => error,
-    })
-}
-
-/// Maximum interval ureq waits for the next body bytes. This is a transport
-/// boundary, not an application-operation timer: a healthy large transfer may
-/// run indefinitely while a peer that stops producing bytes releases the
-/// registry-owned worker.
-#[cfg(not(target_arch = "wasm32"))]
-pub const BODY_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// Downloads an asset from the manifest entry. Equivalent to
 /// [`download_asset_with_control`] with no progress callback and no
@@ -363,19 +139,6 @@ pub fn download_asset_with_control(
         return Err(DownloadError::Cancelled);
     }
 
-    // Download in chunks so progress can tick and cancellation is
-    // responsive (within one chunk's read latency).
-    //
-    // Bound every blocking network phase. `timeout_recv_body` is a per-read
-    // receive deadline in ureq, so a large healthy file may run indefinitely
-    // while a peer that stops producing bytes releases the worker promptly.
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_connect(Some(CONNECT_TIMEOUT))
-        .timeout_send_request(Some(SEND_REQUEST_TIMEOUT))
-        .timeout_recv_response(Some(RECV_RESPONSE_TIMEOUT))
-        .timeout_recv_body(Some(BODY_READ_TIMEOUT))
-        .build()
-        .into();
     // Stream to one temp file, hashing incrementally — never the whole payload
     // in RAM. A failed body read leaves the received prefix in this file. The
     // next policy attempt asks for the remaining range when the server supports
@@ -400,114 +163,47 @@ pub fn download_asset_with_control(
         .map_err(|e| DownloadError::WriteFailed(download_path.clone(), e.to_string()))?;
     let mut download_stage = StagingPath::file(download_path.clone());
     use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    let mut downloaded: u64 = 0;
-    let mut chunk = [0u8; 64 * 1024];
-    let mut total: u64 = 0;
-    let stream_result = retry_with_backoff(
+    let hasher = std::cell::RefCell::new(Sha256::new());
+    let stream_result = download_to_writer(
+        &entry.url,
         settings,
-        || {
-            let mut request = agent.get(&entry.url);
-            if downloaded > 0 {
-                request = request.header("Range", &format!("bytes={downloaded}-"));
-            }
-            let response = request.call().map_err(ResumableDownloadError::Request)?;
-            let status = response.status().as_u16();
-            let resume = status == 206;
-            if status != 200 && status != 206 {
-                return Err(ResumableDownloadError::Protocol(format!(
-                    "HTTP {status} cannot resume from byte {downloaded}"
-                )));
-            }
-            if resume {
-                let Some((start, response_total)) = content_range_start_and_total(&response) else {
-                    return Err(ResumableDownloadError::Protocol(
-                        "206 response omitted a valid Content-Range".into(),
-                    ));
-                };
-                if start != downloaded {
-                    return Err(ResumableDownloadError::Protocol(format!(
-                        "server resumed at byte {start}, requested {downloaded}"
-                    )));
-                }
-                total = response_total.unwrap_or_else(|| {
-                    response
-                        .headers()
-                        .get("content-length")
-                        .and_then(|v| v.to_str().ok())
-                        .and_then(|s| s.parse::<u64>().ok())
-                        .map(|length| downloaded.saturating_add(length))
-                        .unwrap_or(0)
-                });
-                out.seek(SeekFrom::End(0))
-                    .map_err(|e| ResumableDownloadError::Write(e.to_string()))?;
-            } else {
-                out.set_len(0)
-                    .map_err(|e| ResumableDownloadError::Write(e.to_string()))?;
-                out.seek(SeekFrom::Start(0))
-                    .map_err(|e| ResumableDownloadError::Write(e.to_string()))?;
-                hasher = Sha256::new();
-                downloaded = 0;
-                total = response
-                    .headers()
-                    .get("content-length")
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(0);
-            }
-            let mut reader = response.into_body().into_reader();
-            loop {
-                if cancelled() {
-                    return Err(ResumableDownloadError::Protocol("cancelled".into()));
-                }
-                let n = reader
-                    .read(&mut chunk)
-                    .map_err(|e| ResumableDownloadError::Body(ureq::Error::Io(e)))?;
-                if n == 0 {
-                    break;
-                }
-                out.write_all(&chunk[..n])
-                    .map_err(|e| ResumableDownloadError::Write(e.to_string()))?;
-                hasher.update(&chunk[..n]);
-                downloaded += n as u64;
-                if let Some(cb) = control.progress.as_mut() {
-                    cb(downloaded, total);
-                }
-            }
-            if total != 0 && downloaded < total {
-                return Err(ResumableDownloadError::Body(ureq::Error::Io(
-                    std::io::Error::new(
-                        std::io::ErrorKind::UnexpectedEof,
-                        format!("received {downloaded} of {total} bytes"),
-                    ),
-                )));
-            }
+        &mut out,
+        |out| {
+            out.set_len(0).map_err(|error| error.to_string())?;
+            out.seek(std::io::SeekFrom::Start(0))
+                .map_err(|error| error.to_string())?;
+            *hasher.borrow_mut() = Sha256::new();
             Ok(())
         },
-        resumable_error_is_retryable,
+        |chunk, downloaded, total| {
+            hasher.borrow_mut().update(chunk);
+            if let Some(cb) = control.progress.as_mut() {
+                cb(downloaded, total);
+            }
+        },
         || !cancelled(),
     );
     if let Err(error) = stream_result {
-        if cancelled()
-            || matches!(&error, ResumableDownloadError::Protocol(message) if message == "cancelled")
-        {
+        if cancelled() || matches!(error, TransferError::Cancelled) {
             drop(out);
             return Err(DownloadError::Cancelled);
         }
         return Err(match error {
-            ResumableDownloadError::Request(error) => {
-                DownloadError::DownloadFailed(entry.url.clone(), error.to_string())
+            TransferError::Request(error) => {
+                DownloadError::DownloadFailed(entry.url.clone(), error)
             }
-            ResumableDownloadError::Body(error) => DownloadError::ReadFailed(error.to_string()),
-            ResumableDownloadError::Write(error) => {
+            TransferError::Body(error) => DownloadError::ReadFailed(error),
+            TransferError::Write(error) => {
                 DownloadError::WriteFailed(download_stage.path.clone(), error)
             }
-            ResumableDownloadError::Protocol(error) => DownloadError::ReadFailed(error),
+            TransferError::Protocol(error) => DownloadError::ReadFailed(error),
+            TransferError::Cancelled => DownloadError::Cancelled,
         });
     }
     drop(out);
 
     let hash: String = hasher
+        .into_inner()
         .finalize()
         .iter()
         .map(|b| format!("{b:02x}"))
@@ -1010,20 +706,29 @@ pub fn list_group(group: &str) -> Result<(), std::io::Error> {
     )
 }
 
+/// Errors raised while resolving, transferring, extracting, or installing an
+/// asset declaration.
 #[derive(Debug, thiserror::Error)]
 pub enum DownloadError {
+    /// The manifest or one of its paths is invalid.
     #[error("Failed to read manifest: {0}")]
     ManifestFailed(String),
+    /// The remote server rejected or could not serve the request.
     #[error("Failed to download {0}: {1}")]
     DownloadFailed(String, String),
+    /// The response body could not be read to completion.
     #[error("Failed to read response: {0}")]
     ReadFailed(String),
+    /// The staged payload could not be written or installed.
     #[error("Failed to write to {0}: {1}")]
     WriteFailed(PathBuf, String),
+    /// An archive could not be safely unpacked.
     #[error("Failed to extract archive: {0}")]
     ExtractFailed(String),
+    /// The delivered bytes did not match the authored digest.
     #[error("SHA-256 mismatch: expected {0}, got {1}")]
     HashMismatch(String, String),
+    /// The caller cancelled the operation before commit.
     #[error("cancelled by caller")]
     Cancelled,
 }
@@ -1262,132 +967,6 @@ mod tests {
         assert_eq!(scratch, "lunco_10737_0");
         assert!(!scratch.contains('/'));
         assert!(!scratch.contains('\\'));
-    }
-
-    #[test]
-    fn transient_downloads_use_the_shared_settings_policy() {
-        let settings = DownloadSettings::default();
-        assert_eq!(settings.max_attempts, 5);
-        assert_eq!(settings.retry_delay(1), std::time::Duration::from_secs(1));
-        assert_eq!(settings.retry_delay(2), std::time::Duration::from_secs(2));
-        assert_eq!(settings.retry_delay(3), std::time::Duration::from_secs(4));
-        assert_eq!(settings.retry_delay(4), std::time::Duration::from_secs(8));
-        assert_eq!(settings.retry_delay(5), std::time::Duration::from_secs(16));
-        assert_eq!(settings.retry_delay(20), std::time::Duration::from_secs(60));
-        assert!(is_retryable_download_error(&ureq::Error::ConnectionFailed));
-        assert!(is_retryable_download_error(&ureq::Error::StatusCode(503)));
-        assert!(!is_retryable_download_error(&ureq::Error::StatusCode(404)));
-    }
-
-    #[test]
-    fn shared_retry_policy_retries_transient_operations_only_to_success() {
-        let settings = DownloadSettings {
-            max_attempts: 3,
-            retry_initial_delay_secs: 0,
-            ..Default::default()
-        };
-        let mut calls = 0;
-        let value = retry_with_backoff(
-            &settings,
-            || {
-                calls += 1;
-                if calls < 3 {
-                    Err("transient")
-                } else {
-                    Ok(42)
-                }
-            },
-            |error| *error == "transient",
-            || true,
-        )
-        .expect("the final configured attempt succeeds");
-        assert_eq!(value, 42);
-        assert_eq!(calls, 3);
-    }
-
-    #[test]
-    fn shared_retry_policy_stops_on_non_retryable_or_cancelled_errors() {
-        let settings = DownloadSettings {
-            max_attempts: 5,
-            retry_initial_delay_secs: 1,
-            ..Default::default()
-        };
-        let mut non_retryable_calls = 0;
-        let error = retry_with_backoff(
-            &settings,
-            || {
-                non_retryable_calls += 1;
-                Err::<(), _>("permanent")
-            },
-            |_| false,
-            || true,
-        )
-        .expect_err("a permanent error is not retried");
-        assert_eq!(error, "permanent");
-        assert_eq!(non_retryable_calls, 1);
-
-        let mut cancelled_calls = 0;
-        let error = retry_with_backoff(
-            &settings,
-            || {
-                cancelled_calls += 1;
-                Err::<(), _>("transient")
-            },
-            |_| true,
-            || false,
-        )
-        .expect_err("cancellation returns the current operation error");
-        assert_eq!(error, "transient");
-        assert_eq!(cancelled_calls, 1);
-    }
-
-    #[test]
-    fn byte_download_resumes_a_truncated_response() {
-        use std::io::{Read as _, Write as _};
-        use std::net::TcpListener;
-
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
-        let address = listener.local_addr().expect("read test server address");
-        let server = std::thread::spawn(move || {
-            for (index, expected_range) in [None, Some("bytes=3-")].into_iter().enumerate() {
-                let (mut stream, _) = listener.accept().expect("accept byte request");
-                let mut request = Vec::new();
-                loop {
-                    let mut chunk = [0_u8; 256];
-                    let length = stream.read(&mut chunk).expect("read byte request");
-                    request.extend_from_slice(&chunk[..length]);
-                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
-                        break;
-                    }
-                }
-                let request = String::from_utf8_lossy(&request).to_ascii_lowercase();
-                match expected_range {
-                    Some(range) => assert!(request.contains(&format!("range: {range}"))),
-                    None => assert!(!request.contains("range:")),
-                }
-                if index == 0 {
-                    stream
-                        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nabc")
-                        .expect("write truncated response");
-                } else {
-                    stream
-                        .write_all(
-                            b"HTTP/1.1 206 Partial Content\r\nContent-Length: 7\r\nContent-Range: bytes 3-9/10\r\n\r\ndefghij",
-                        )
-                        .expect("write resumed response");
-                }
-            }
-        });
-
-        let settings = DownloadSettings {
-            max_attempts: 2,
-            retry_initial_delay_secs: 0,
-            ..Default::default()
-        };
-        let bytes = download_bytes_with_resume(&format!("http://{address}"), &settings)
-            .expect("truncated body resumes from the received prefix");
-        server.join().expect("resume server completed");
-        assert_eq!(bytes, b"abcdefghij");
     }
 
     #[test]

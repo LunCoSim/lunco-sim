@@ -149,7 +149,7 @@ fn parameter_plan(edit_target, path, parameters) {
 
 // Build the standard authored terrain-material inputs for a stable lunar
 // albedo. The expensive orthophoto decode and illumination-field removal are
-// performed once by the native `lunco-assets` `kind = "albedo"` pipeline. This
+// performed once by the native `lunco-assets-processing` `kind = "albedo"` pipeline. This
 // helper is deliberately policy-only: it validates the logical asset paths and
 // returns ordinary USD SetAttribute operations for the caller's existing
 // generation-checked assembly_edit boundary.

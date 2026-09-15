@@ -1,0 +1,15 @@
+[package]
+name = "lunco-assets-transport"
+version = "0.1.0-dev"
+edition = "2021"
+license.workspace = true
+description = "Small native HTTP transport primitives shared by LunCoSim asset consumers"
+
+[dependencies]
+lunco-settings = { path = "../lunco-settings" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ureq = { workspace = true }
+
+[lints]
+workspace = true

@@ -31,18 +31,17 @@ def Xform "RoutePoint" (
             def Shader "Surface"
             {
                 uniform token info:id = "UsdPreviewSurface"
-                color3f inputs:diffuseColor = (0, 0, 0)
                 color3f inputs:specularColor = (0, 0, 0)
                 float inputs:useSpecularWorkflow = 1
                 float inputs:roughness = 1.0
-                color3f inputs:emissiveColor = (0.12, 1.3, 0.45)
+                color3f inputs:emissiveColor = (0, 0, 0)
                 token outputs:surface
             }
         }
     }
 
-    # Visual-only dome. It is translucent, emissive, and excluded from shadow
-    # maps so a route annotation cannot darken the terrain or a vehicle.
+    # Visual-only dome. It is an opaque, unlit annotation and is excluded from
+    # shadow maps, so its colour does not enter the lighting or shadow passes.
     def Sphere "Dome" (
         prepend apiSchemas = ["MaterialBindingAPI", "LunCoSurfaceAPI"]
     )
@@ -53,9 +52,8 @@ def Xform "RoutePoint" (
         double3 xformOp:translate = (0, 1.5, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
         rel material:binding = </RoutePoint/Looks/Dome_Mat>
-        color3f[] primvars:displayColor = [(0.35, 1.0, 0.6)]
-        float[] primvars:displayOpacity = [0.08]
-        bool lunco:surface:additive = true
+        color3f[] primvars:displayColor = [(1.0, 0.35, 0.02)]
+        bool lunco:surface:unlit = true
         bool primvars:doNotCastShadows = true
     }
 

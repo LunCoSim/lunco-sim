@@ -9,8 +9,9 @@ description = "Lightweight dataset declarations, lifecycle state, and registry c
 bevy = { workspace = true }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-core = { path = "../lunco-core" }
+lunco-settings = { path = "../lunco-settings" }
+lunco-workspace = { path = "../lunco-workspace" }
 serde = { workspace = true }
-serde_json = { workspace = true }
 sha2 = { workspace = true }
 toml = { workspace = true }
 

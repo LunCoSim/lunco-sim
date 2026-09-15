@@ -47,4 +47,4 @@ As a project contributor, I want to define huge 3D assets (like a crater or a ro
 
 **Acceptance Criteria:**
 - The asset pipeline supports Remote URIs for assets (e.g., `crater_tycho = "https://assets.lunco.space/tycho.gltf"`).
-- When resolving dependencies, the engine checks the shared OS cache returned by `lunco_assets::cache_dir()` (for example, `~/.cache/lunco/` on Linux). If missing, it downloads the asset automatically before processing the scene (functioning exactly like a Cargo dependency manager).
+- When resolving dependencies, the explicit provisioning pipeline checks the shared OS cache returned by `lunco_assets_core::cache_dir()` (for example, `~/.cache/lunco/` on Linux). Missing data is downloaded only after an explicit CLI, UI, or Rhai request; scene loading never phones home.

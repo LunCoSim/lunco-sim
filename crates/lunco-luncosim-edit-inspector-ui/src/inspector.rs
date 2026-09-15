@@ -3613,9 +3613,9 @@ fn material_pbr_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity, par
     // same physical quantity. 1.0 = vacuum (no Fresnel), 1.5 = glass and most
     // silicates, 2.33 = where Bevy's derived reflectance saturates.
     //
-    // There is no "Unlit" checkbox: `PbrLook::unlit` is render-only intent for overlay
-    // geometry (trajectory lines, brush rings, labels) with no USD equivalent, so a
-    // checkbox here could only edit a value that silently reverted on reload.
+    // Unlit is a geometry-level `LunCoSurfaceAPI` intent, not a
+    // `UsdPreviewSurface` input. It is deliberately exposed through the generic
+    // property command rather than duplicated as a material checkbox here.
     let ior_changed = ui
         .add(egui::Slider::new(&mut ior, 1.0..=2.33).text("IOR"))
         .changed();

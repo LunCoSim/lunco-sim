@@ -7,7 +7,7 @@
 # every other declared dataset. Without them Earth renders ocean blue and the
 # Moon regolith grey, which is a complete appearance, not a broken one.
 #
-# `dest` is resolved against the shared engine cache (`lunco_assets::cache_dir`)
+# `dest` is resolved against the shared engine cache (`lunco_assets_core::cache_dir`)
 # and holds the SOURCE download; `[*.process]` derives the file the renderer
 # actually samples. The processed files live in the shared user cache and are
 # offered by the first-run resource prompt; they are not release-package data.

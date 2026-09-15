@@ -7090,27 +7090,15 @@ name = "lunco-assets"
 version = "0.1.0"
 dependencies = [
  "bevy",
- "bzip2",
- "flate2",
- "image",
  "lunco-assets-core",
  "lunco-assets-datasets",
+ "lunco-assets-download",
+ "lunco-assets-processing",
  "lunco-core",
- "lunco-geotiff",
  "lunco-settings",
  "lunco-workspace",
- "rayon",
- "resvg",
- "sha2 0.11.0",
- "tar",
  "tempfile",
- "thiserror 2.0.18",
- "tiff",
- "tiny-skia 0.12.0",
  "toml 1.1.2+spec-1.1.0",
- "ureq",
- "usvg",
- "which",
 ]
 
 [[package]]
@@ -7144,10 +7132,54 @@ dependencies = [
  "bevy",
  "lunco-assets-core",
  "lunco-core",
+ "lunco-settings",
+ "lunco-workspace",
  "serde",
- "serde_json",
  "sha2 0.11.0",
  "toml 1.1.2+spec-1.1.0",
+]
+
+[[package]]
+name = "lunco-assets-download"
+version = "0.1.0-dev"
+dependencies = [
+ "bzip2",
+ "flate2",
+ "lunco-assets-core",
+ "lunco-assets-datasets",
+ "lunco-assets-transport",
+ "lunco-settings",
+ "rayon",
+ "sha2 0.11.0",
+ "tar",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "lunco-assets-processing"
+version = "0.1.0-dev"
+dependencies = [
+ "image",
+ "lunco-assets-core",
+ "lunco-assets-datasets",
+ "lunco-core",
+ "lunco-geotiff",
+ "resvg",
+ "tempfile",
+ "tiff",
+ "tiny-skia 0.12.0",
+ "toml 1.1.2+spec-1.1.0",
+ "usvg",
+ "which",
+]
+
+[[package]]
+name = "lunco-assets-transport"
+version = "0.1.0-dev"
+dependencies = [
+ "lunco-settings",
+ "ureq",
 ]
 
 [[package]]
@@ -7483,6 +7515,7 @@ dependencies = [
  "getrandom 0.3.4",
  "js-sys",
  "lunco-api-transport",
+ "lunco-assets",
  "lunco-assets-core",
  "lunco-capture",
  "lunco-celestial-spatial",
@@ -7531,8 +7564,8 @@ dependencies = [
  "bevy",
  "big_space",
  "lunco-api-transport",
- "lunco-assets",
  "lunco-assets-core",
+ "lunco-assets-datasets",
  "lunco-avatar",
  "lunco-celestial-ephemeris",
  "lunco-celestial-spatial",
@@ -7751,9 +7784,9 @@ dependencies = [
  "js-sys",
  "lunco-api",
  "lunco-api-transport",
- "lunco-assets",
  "lunco-assets-core",
  "lunco-assets-datasets",
+ "lunco-assets-transport",
  "lunco-avatar-core",
  "lunco-avatar-ui",
  "lunco-capture",
@@ -8073,8 +8106,8 @@ dependencies = [
  "lightyear_aeronet",
  "lunco-api",
  "lunco-api-transport",
- "lunco-assets",
  "lunco-assets-core",
+ "lunco-assets-transport",
  "lunco-avatar-core",
  "lunco-camera-core",
  "lunco-celestial",

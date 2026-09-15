@@ -1560,7 +1560,7 @@ impl Plugin for LunCoSimCorePlugin {
         // terrain projection consumes this registry in GUI and headless hosts;
         // installing it only in the headless constructor leaves the windowed
         // production app with a missing-resource panic during its first update.
-        app.add_plugins(lunco_assets::datasets::DatasetsPlugin);
+        app.add_plugins(lunco_assets_datasets::DatasetRegistryPlugin);
 
         // Asset and loaded-stage validation is a shared headless/UI service;
         // install it once with the simulator core rather than coupling it to

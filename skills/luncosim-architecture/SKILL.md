@@ -81,7 +81,7 @@ a multi-stage shader pair. See
 [`shader-layers-and-params.md`](../../docs/architecture/shader-layers-and-params.md).
 
 Treat an illumination-bearing grayscale orthophoto as measured imagery, not
-intrinsic reflectance. The native `lunco-assets` `kind = "albedo"` pipeline
+intrinsic reflectance. The native `lunco-assets-processing` `kind = "albedo"` pipeline
 removes its low-frequency illumination field, anchors local detail at a
 neutral material base, and sRGB-encodes the resulting linear colour for the
 8-bit PNG contract. The texture loader decodes that material back to linear;
@@ -171,13 +171,23 @@ gate; do not duplicate these observable assertions in Rust unit tests.
 
 ### Shared asset catalog discovery
 
-Asset enumeration belongs to `lunco_assets::discovery` and runs through the
+Asset enumeration belongs to `lunco_assets_core::discovery` and runs through the
 shared asynchronous catalog listing owned by `lunco-scene-catalog`. USD,
 WGSL, Modelica, and Python projections are published from one root snapshot;
 they must not add a second filesystem walk or a UI-thread scan. A new
 manifest/Twin snapshot advances the listing generation, reopens the USD read
 set, and drops older metadata completions. This keeps a Twin opened during an
 initial scan complete without allowing stale work to populate its catalog.
+
+Asset provisioning follows the same dependency split: `lunco-assets-datasets`
+owns declarations and lifecycle state, `lunco-assets-transport` owns native
+HTTP retry/resume, `lunco-assets-download` owns verification/extraction and
+atomic installation, and `lunco-assets-processing` owns native decode and
+baking. `lunco-assets` is only the explicit Bevy worker/CLI composition root.
+Its `ProcessorRegistry` selects heavy Rust implementations by authored
+`ProcessConfig.kind`; Rhai owns dataset selection and sequencing, with extra
+processor values carried in `process.parameters`. Do not grow a central Rust
+match or make ordinary runtime readers depend on this provisioning stack.
 
 For derived 3D annotations such as a waypoint route, keep one reusable
 presentation tool between authored/runtime facts and presentation consumers.

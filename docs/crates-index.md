@@ -22,7 +22,10 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 | **`lunco-storage`** | I/O abstraction layer (`Storage` trait — Native FS, Memory, future WASM/Remote backends). The single write path; raw `std::fs` is disallowed. |
 | **`lunco-assets-core`** | Lightweight asset identity and resolution: canonical `lunco://`/`twin://` sources, cache/Twin roots, embedded sources, discovery, and storage-facing readers. |
 | **`lunco-assets-datasets`** | Lightweight `Assets.toml` declarations, scoped dataset identity, artifact-path contracts, lifecycle state, and Bevy registry/command events. It has no HTTP, archive, image, GeoTIFF, or native processing dependencies. |
-| **`lunco-assets`** | Explicit dataset provisioning and native offline processing: download workers, texture/DEM/map/albedo/normal-map/glTF pipelines, and the asset-manager CLI. It consumes `lunco-assets-datasets` and `lunco-assets-core`; ordinary asset readers should not depend on this package. The `albedo` pipeline is an offline materialization step for illumination-bearing orthophotos; Rhai assembly selects its standard USD output. |
+| **`lunco-assets-transport`** | Small native HTTP transport boundary: shared timeout, retry/backoff, and resumable byte-transfer primitives. It has no manifest, archive, raster, or Bevy dependency. |
+| **`lunco-assets-download`** | Manifest-aware native download, SHA-256 verification, archive extraction, staging, and atomic source installation. It has no Bevy or raster-processing dependency. |
+| **`lunco-assets-processing`** | Native offline image/DEM/map/albedo/normal-map/glTF processors, with shared staging/commit and an open `ProcessorRegistry` selected by `ProcessConfig.kind`. Heavy decode and raster math live here. |
+| **`lunco-assets`** | Explicit Bevy provisioning workers and the asset-manager CLI. It composes the lightweight dataset contract with the transport, download, and processing crates; ordinary asset readers should not depend on this package. Rhai selects and sequences authored provisioning policy. |
 | **`lunco-modelica-assets`** | Native Modelica asset packaging: bundles MSL source and pre-parsed Rumoca definitions for the web runtime; keeps MSL build-only dependencies out of the generic asset manager. |
 | **`lunco-hash`** | Hashing substrate: Fast tier (FNV-1a) for change/cache keys and CID tier (CIDv1 raw+sha2-256) for on-disk/on-wire content-addressing. Draws a firewall between ephemeral process keys and cross-peer persisted content. |
 | **`lunco-precompute`** | Content-addressed precompute disk cache (`bake_or_load`): runs expensive pure functions once, persists results keyed by content hash (via `lunco-hash` + `lunco-storage`), and loads them on subsequent runs/peers. |
@@ -47,7 +50,7 @@ The "Laws of Nature" — celestial mechanics, environmental state, terrain, obst
 | **`lunco-terrain-globe`** | Whole-body cube-sphere terrain tiling (orbital/planetary scale): quadtree-CDLOD globe, avian heightfield collision ring, `big_space` anchoring; the "globe" projection of the terrain family over the shared `lunco-terrain-core` LOD spine. |
 | **`lunco-terrain-surface`** | Local high-detail DEM ground terrain (surface scale): heightfield colliders, CDLOD tile streaming, `big_space` per-tile anchoring, and the layered color pipeline; the "surface" projection of the terrain family. |
 | **`lunco-terrain-bake`** | Pure (bevy/avian-free) DEM bake pipeline shared verbatim by the native async task and the wasm Web Worker: GeoTIFF decode → crop/resample → crater stamp → `HeightGrid`. Owns the `dem_worker` companion binary + its main-thread client (over `lunco-worker-transport`), moving the ~40 MB decode + crater stamp off the page's main thread on web (coarse-then-full progressive). |
-| **`lunco-geotiff`** | The **geo** half of a GeoTIFF: GeoKey/tie-point/pixel-scale read and write, shared by the writer (`lunco-assets`) and the reader (`lunco-terrain-bake`). A raster states its own extent and projection; nothing restates it in a sidecar. See `docs/architecture/57-dem-georeferencing.md`. |
+| **`lunco-geotiff`** | The **geo** half of a GeoTIFF: GeoKey/tie-point/pixel-scale read and write, shared by the writer (`lunco-assets-processing`) and the reader (`lunco-terrain-bake`). A raster states its own extent and projection; nothing restates it in a sidecar. See `docs/architecture/57-dem-georeferencing.md`. |
 | **`lunco-physics`** | The physics **readiness, backend-admission, determinism, and solver-configuration owner** — `avian_backend` is the single numeric/shape contract for Avian's f64-to-f32 points, AABBs, and compound-child structure; lifecycle bridges decide when to admit it. It decides whether the world is safe to integrate, installs the single cross-platform Avian eight-substep contract, publishes the explicit `PhysicsDeterminism` admission state, and keeps Avian's collider-tree optimization on the owner schedule so async worker joins cannot stall a physics tick. A DEM still baking or a collider ring not yet paged in suspends integration without touching the user's transport clock, so a `Dynamic` body cannot free-fall through a collider that does not exist yet. |
 | **`lunco-obstacle-field`** | Procedural crater + rock field generation (with LOD) for rover testing. |
 | **`lunco-experiments`** | Backend-agnostic experiment / batch-run registry: models a single Fast Run as a first-class artifact (params, bounds, trajectory) with `RunStatus` (`Pending`/`Queued`/`Running`/`Done`/`Failed`/`Cancelled`) and `RunBounds`; the sim backend plugs in via the `ExperimentRunner` trait, parallel runs schedule across a worker pool. |
@@ -252,11 +255,28 @@ and the Bevy registry and command events. It deliberately excludes network,
 archive, image, GeoTIFF, and native processing dependencies so readers and
 domain crates can inspect dataset state without linking the provisioning stack.
 
+**`lunco-assets-transport`**
+The small native byte-transfer boundary. It owns the shared
+`DownloadSettings`-driven timeout/retry/resume mechanism used by asset and
+other native HTTP consumers. It does not know what the bytes mean.
+
+**`lunco-assets-download`**
+The manifest-aware materialization layer. It verifies sources, extracts
+archives, and atomically installs downloaded artifacts using the path/cache
+contracts from `lunco-assets-datasets`. It does not depend on Bevy or image
+processing.
+
+**`lunco-assets-processing`**
+The native baking layer. It owns heavy image/DEM/GeoTIFF/SVG/glTF processing,
+cooperative cancellation, bake keys, staging, and atomic publication. New
+heavy processors register a `ProcessorSpec` in the `ProcessorRegistry`; the
+shared pipeline owns output identity and commit semantics.
+
 **`lunco-assets`**
-The explicit provisioning boundary. It owns user-authorised download and
-cancellation workers, native offline texture/DEM/map/glTF processing, and the
-`lunco-assets` CLI. Applications add it only where dataset management or native
-processing is part of the composition; asset-reading crates depend on
+The explicit application provisioning boundary. It owns user-authorised Bevy
+workers and the `lunco-assets` CLI, composing the dataset contract with the
+transport, download, and processing layers. Applications add it only where
+provisioning is part of the composition; asset readers use
 `lunco-assets-core` or `lunco-assets-datasets` instead.
 
 **`lunco-hash`**

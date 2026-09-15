@@ -8,10 +8,13 @@ rather than scenes.
 
 The implementation is split by change and dependency cost. `lunco-assets-core`
 owns identity, resolution, storage-facing readers, embedded sources, and
-discovery. `lunco-assets` is the opt-in provisioning boundary for manifests,
-downloads, and native offline processing. Runtime readers depend on the core
-package; application composition roots and explicit asset tools add the
-provisioning package.
+discovery. `lunco-assets-datasets` owns the lightweight manifest and lifecycle
+contract. Native provisioning is layered on top: `lunco-assets-transport` owns
+HTTP byte policy, `lunco-assets-download` owns manifest-aware verification and
+atomic installation, `lunco-assets-processing` owns native decode/raster/glTF
+baking, and `lunco-assets` composes those workers for the explicit application
+boundary and CLI. Runtime readers depend on the core/contract packages;
+ordinary readers do not inherit the native baking graph.
 
 ## The rule
 
@@ -193,9 +196,11 @@ supplemented with one Bevy `AssetSource` per storage backend.
 
 `crates/lunco-assets-datasets` is where a *running* app describes and observes
 the manifest. Its `DatasetRegistry` knows what is declared, what is on disk,
-and what a user has asked for. `crates/lunco-assets/src/datasets.rs` is the
-optional provisioning runtime: it owns workers and calls `download.rs` to fetch
-one entry.
+and what a user has asked for. `lunco-assets-datasets::DatasetRegistryPlugin`
+is the lightweight discovery/read-side plugin. The optional
+`lunco-assets::datasets::DatasetProvisioningPlugin` owns worker lifecycle and
+composes `lunco-assets-download` and `lunco-assets-processing`; the GUI adds it
+explicitly, while headless hosts can install only the registry contract.
 
 **The app never reaches the network on its own.** Launch, scene load and twin
 open must not open a connection. `DatasetRegistry::request(key)` is the only
@@ -209,16 +214,19 @@ installed state continue to come from `DatasetRegistry`. This is a rule about
 trust, not bandwidth: a simulator that phones home when you open a file has to
 be *explained* rather than *read*.
 
-That rule is also why fetching lives in this crate and nowhere else. A domain
-crate owning its own downloader inevitably grows a "just fetch it at startup"
-line — the ephemeris crate had exactly that, `ureq` and all, and the guarantee
-dies one crate at a time.
+That rule is also why fetching lives in the explicit provisioning package
+family and nowhere else. A domain crate owning its own downloader inevitably
+grows a "just fetch it at startup" line — the ephemeris crate had exactly that,
+`ureq` and all, and the guarantee dies one crate at a time.
 
 | Concern | Owner |
 |---|---|
 | identity, roots, URI/path resolution, and source readers | `lunco-assets-core` |
 | manifest, URL, cache path, and lifecycle state | `lunco-assets-datasets` |
-| download/process tasks and byte transfer | `lunco-assets` |
+| retry policy and resumable HTTP bytes | `lunco-assets-transport` |
+| manifest verification, extraction, and atomic source installation | `lunco-assets-download` |
+| decode, raster math, external glTF processing, and baked sidecars | `lunco-assets-processing` |
+| Bevy worker lifecycle and CLI composition | `lunco-assets` |
 | declaring datasets + reporting what it loaded | the domain crate |
 | listing and requesting | the UI (knows no dataset by name) |
 

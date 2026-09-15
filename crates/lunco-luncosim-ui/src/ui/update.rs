@@ -119,7 +119,7 @@ impl TimeoutGithubSource {
 
     fn request_text(&self, url: &str, accept: &str) -> Result<String, velopack::Error> {
         let agent = update_http_agent();
-        lunco_assets::download::retry_with_backoff(
+        lunco_assets_transport::retry_with_backoff(
             &self.settings,
             || {
                 let mut response = agent.get(url).header("Accept", accept).call()?;
@@ -287,7 +287,7 @@ fn download_range_with_policy(
     settings: &lunco_settings::DownloadSettings,
 ) -> Result<Vec<u8>, velopack::Error> {
     let mut bytes = Vec::new();
-    lunco_assets::download::retry_with_backoff(
+    lunco_assets_transport::retry_with_backoff(
         settings,
         || {
             let next_start = start.saturating_add(bytes.len() as u64);
@@ -305,7 +305,7 @@ fn download_range_with_policy(
 fn is_retryable_update_error(error: &velopack::Error) -> bool {
     match error {
         velopack::Error::Network(network) => match network.as_ref() {
-            NetworkError::Http(error) => lunco_assets::download::is_retryable_download_error(error),
+            NetworkError::Http(error) => lunco_assets_transport::is_retryable_download_error(error),
             NetworkError::Url(_) => false,
         },
         velopack::Error::Io(_) => true,

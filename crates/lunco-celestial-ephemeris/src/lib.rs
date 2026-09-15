@@ -626,7 +626,7 @@ impl Plugin for EphemerisPlugin {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            // Declaring is `DatasetsPlugin`'s job — it scans
+            // Declaring is `DatasetRegistryPlugin`'s job — it scans
             // `assets/manifests/`, where this crate's datasets live as DATA
             // (`ephemeris.toml`). This crate only ADOPTS: whatever is already
             // cached is picked up on the first `Update`, and anything

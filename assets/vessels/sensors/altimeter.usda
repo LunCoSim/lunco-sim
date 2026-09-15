@@ -178,12 +178,10 @@ def Xform "Altimeter" (
         {
             token outputs:surface.connect = </Altimeter/Looks/Beam_Mat/Surface.outputs:surface>
 
-            # EMISSIVE-ONLY: a constant colour that ignores lights, normals and
-            # shadows. `diffuseColor` 0 + `emissiveColor` C is the USD way to say it —
-            # `UsdPreviewSurface` has no `unlit` input and is right not to, because the
-            # question "how does the sun fall on this?" is a category error for a beam.
-            # The `PbrLook.unlit` flag exists but is render intent for RUST-SPAWNED
-            # overlays (trajectory lines, the brush, labels) and no `.usda` authors it.
+            # This beam intentionally emits visible radiance and is translucent, so
+            # it uses the standard preview-surface emissive and opacity inputs. A
+            # symbol that must merely bypass lighting uses LunCoSurfaceAPI's
+            # `lunco:surface:unlit` gprim property instead; unlit is not emissive.
             #
             # Not cosmetic: the Moon has no atmosphere, so there is no ambient fill and
             # a lit surface facing away from the sun renders PURE BLACK. A lit beam

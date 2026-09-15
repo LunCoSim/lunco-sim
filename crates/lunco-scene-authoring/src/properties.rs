@@ -11,7 +11,7 @@ use lunco_doc_bevy::DocumentRegistry;
 use lunco_materials::{ParamSchema, ParamValue, ShaderLook};
 use lunco_render::{PbrLook, SurfaceAlpha};
 use lunco_usd_bevy_scene::UsdPrimPath;
-use lunco_usd_core::commands::ApplyUsdOp;
+use lunco_usd_core::commands::{ApplyUsdOp, ApplyUsdOps};
 use lunco_usd_document::document::{LayerId, UsdDocument, UsdOp};
 
 /// One wheel-dynamics parameter — **the** single source of truth for it.
@@ -242,9 +242,9 @@ const PBR_LOOK_KEYS: &[&str] = &[
 ///
 /// `double_sided` is deliberately NOT a shader input — it is `uniform bool
 /// doubleSided` on `UsdGeomGprim`, a property of the geometry — so it is authored
-/// on the geom prim instead. `unlit` is render-only intent with no USD equivalent
-/// (see [`lunco_usd_core::material::preview_surface_input`]) — it is the one knob a saved
-/// scene will not carry, deliberately.
+/// on the geom prim instead. `unlit` is likewise a gprim property, registered by
+/// `LunCoSurfaceAPI`, because `UsdPreviewSurface` has no standard input for the
+/// render intent.
 fn author_look_to_usd(commands: &mut Commands, target: Entity, key: &str, look: &PbrLook) {
     let look = look.clone();
     let key = key.to_string();
@@ -256,23 +256,42 @@ fn author_look_to_usd(commands: &mut Commands, target: Entity, key: &str, look: 
             return;
         };
 
-        // `doubleSided` lives on the geometry, not the surface.
-        if key == "double_sided" {
-            world.trigger(ApplyUsdOp {
+        // Geometry-level appearance intents live on the gprim, not the surface.
+        if key == "double_sided" || key == "unlit" {
+            let mut ops = Vec::new();
+            if key == "unlit" {
+                let mut schemas = crate::doc_resolve::geom_api_schemas(world, &prim);
+                if !schemas.iter().any(|schema| schema == "LunCoSurfaceAPI") {
+                    schemas.push("LunCoSurfaceAPI".into());
+                    ops.push(UsdOp::SetApiSchemas {
+                        edit_target: LayerId::root(),
+                        path: prim.path.clone(),
+                        schemas,
+                    });
+                }
+            }
+            let (name, value) = if key == "double_sided" {
+                ("doubleSided", look.double_sided)
+            } else {
+                ("lunco:surface:unlit", look.unlit)
+            };
+            ops.push(UsdOp::SetAttribute {
+                edit_target: LayerId::root(),
+                path: prim.path.clone(),
+                name: name.into(),
+                type_name: "bool".into(),
+                value: value.to_string(),
+            });
+            world.trigger(ApplyUsdOps {
                 doc_id: doc,
                 parent_gen: None,
-                op: UsdOp::SetAttribute {
-                    edit_target: LayerId::root(),
-                    path: prim.path.clone(),
-                    name: "doubleSided".into(),
-                    type_name: "bool".into(),
-                    value: look.double_sided.to_string(),
-                },
+                label: "Update geometry appearance intent".into(),
+                ops,
             });
             return;
         }
         if lunco_usd_core::material::preview_surface_input(&key).is_none() {
-            return; // `unlit` — render-only intent, no USD surface input to write.
+            return;
         }
 
         // An existing bound shader, else create the material.

@@ -94,9 +94,10 @@ lunco-twin-journal = { path = "../lunco-twin-journal", optional = true, features
 lunco-scripting = { path = "../lunco-scripting", optional = true, default-features = false }
 # Scenario asset cache root (`cache_dir()`), for the Phase-3 client-side
 # `scenarios/<id>/` download target. Native + wasm-safe path helper.
-lunco-assets = { path = "../lunco-assets" }
+lunco-assets-transport = { path = "../lunco-assets-transport" }
 lunco-assets-core = { path = "../lunco-assets-core" }
-# Host-side scenario closure: `lunco-assets` owns filesystem traversal; this
+# Host-side scenario closure: `lunco-assets-core` owns canonical asset
+# traversal; this
 # leaf supplies only USD's document test and dependency extraction. A scene's
 # rovers/components can live outside its own folder (`@../../vessels/…@`), so
 # the manifest must include its `subLayers`/`references`/`payload` graph.

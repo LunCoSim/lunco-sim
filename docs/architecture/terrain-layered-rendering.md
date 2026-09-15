@@ -62,7 +62,8 @@ diagnostic replacement:
 
 The existing `terrain_surface.wgsl` and `lunar_brdf.wgsl` modules remain the
 authoritative owners for shared procedural detail and lunar photometry. Heavy
-orthophoto decode/filter work belongs to the native Rust asset processor. The
+orthophoto decode/filter work belongs to the native
+`lunco-assets-processing` Rust asset processor. The
 authored Rhai assembly tools may select the resulting standard `albedo_map`,
 normal, and weight inputs, but must not reproduce the raster math or create a
 second material representation. USD-authored `UsdShade` source and map roles

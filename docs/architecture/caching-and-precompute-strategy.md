@@ -60,7 +60,7 @@ schedule ordering encodes a data dependency. Those look cacheable and are not
 | **Content-addressed disk bake (reference impl)** | `lunco-terrain-surface/src/derived_layers.rs:110` `bake_or_load` | FNV-1a over params + **every height sample** → `<cache_dir>/terrain/derived/<key>/`, load-if-present else bake+write, `CACHE_FORMAT_VERSION` invalidation. **This is the pattern to replicate everywhere.** |
 | In-memory async dedup | **The ECS idiom** — a `Task` *Component* + `Without<BakeTask>` in the spawning query (`lunco-environment/src/horizon.rs:274`, `terrain-surface/src/derived_layers.rs:96`, `celestial/src/trajectories.rs:82`, …) | Entity-keyed load with in-flight dedup **for free** — the query filter *is* the pending set. This is what the codebase actually converged on; see the note below. |
 | I/O chokepoint | `lunco-storage` `atomic_write` / `read_file_sync` | Cross-target, wasm-aware; tmp+fsync+rename. |
-| SHA-256 asset pinning | `lunco-assets/src/download.rs:63` | Integrity + skip-redownload on hash match. |
+| SHA-256 asset pinning | `lunco-assets-download/src/download.rs` | Integrity + skip-redownload on hash match. |
 | rumoca parse cache | `.cache/rumoca/parsed-files/` (content-hash keyed) + `parsed-msl.bin` bincode bundle | Cold-parse avoidance for Modelica. |
 | Structural change-detection | `Added<SimConnection>` (`lunco-cosim/src/lib.rs:252`), USD `Without<Marker>` gates | Recompute-only-on-change is already idiomatic here. |
 | **Real CIDv1 content-address** | `lunco-networking/src/scenario.rs:54-66` `cid_for_content`/`cid_from_bytes` | IPLD CIDv1 (raw `0x55` + sha2-256), `ipfs add`-compatible; incremental fail-closed verify (`scenario_sync.rs:88-94`). **First real content-addressing in the repo** — but scoped to networking. |
