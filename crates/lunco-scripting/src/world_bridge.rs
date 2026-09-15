@@ -36,6 +36,7 @@
 
 #![cfg(feature = "rhai")]
 
+use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 
 use std::sync::Arc;
@@ -153,6 +154,19 @@ fn rhai_to_telemetry(value: &Dynamic) -> TelemetryValue {
         TelemetryValue::I64(i)
     } else if let Ok(b) = value.as_bool() {
         TelemetryValue::Bool(b)
+    } else if let Some(vector) = value.clone().try_cast::<DVec3>() {
+        TelemetryValue::Array(vec![
+            TelemetryValue::F64(vector.x),
+            TelemetryValue::F64(vector.y),
+            TelemetryValue::F64(vector.z),
+        ])
+    } else if let Some(quaternion) = value.clone().try_cast::<DQuat>() {
+        TelemetryValue::Array(vec![
+            TelemetryValue::F64(quaternion.x),
+            TelemetryValue::F64(quaternion.y),
+            TelemetryValue::F64(quaternion.z),
+            TelemetryValue::F64(quaternion.w),
+        ])
     } else if let Some(items) = value.clone().try_cast::<rhai::Array>() {
         TelemetryValue::Array(items.iter().map(rhai_to_telemetry).collect())
     } else if let Some(entries) = value.clone().try_cast::<Map>() {
@@ -195,11 +209,82 @@ fn context_menu_items(value: &Dynamic) -> Option<Vec<crate::ui_bridge::ScriptMen
         .collect()
 }
 
+fn dynamic_to_json(value: &Dynamic) -> Result<serde_json::Value, String> {
+    use serde_json::Value;
+
+    if value.is_unit() {
+        return Ok(Value::Null);
+    }
+    if let Ok(boolean) = value.as_bool() {
+        return Ok(Value::Bool(boolean));
+    }
+    if let Ok(integer) = value.as_int() {
+        return Ok(Value::Number(integer.into()));
+    }
+    if let Ok(float) = value.as_float() {
+        let number = serde_json::Number::from_f64(float)
+            .ok_or_else(|| "JSON cannot represent a non-finite number".to_string())?;
+        return Ok(Value::Number(number));
+    }
+    if value.is_string() {
+        return Ok(Value::String(
+            value
+                .clone()
+                .into_string()
+                .map_err(|_| "invalid Rhai string value".to_string())?,
+        ));
+    }
+    if let Some(vector) = value.clone().try_cast::<DVec3>() {
+        if !vector.is_finite() {
+            return Err("Vec3 contains a non-finite component".to_string());
+        }
+        return Ok(Value::Array(vec![
+            Value::from(vector.x),
+            Value::from(vector.y),
+            Value::from(vector.z),
+        ]));
+    }
+    if let Some(quaternion) = value.clone().try_cast::<DQuat>() {
+        if !quaternion.is_finite() {
+            return Err("Quat contains a non-finite component".to_string());
+        }
+        return Ok(Value::Array(vec![
+            Value::from(quaternion.x),
+            Value::from(quaternion.y),
+            Value::from(quaternion.z),
+            Value::from(quaternion.w),
+        ]));
+    }
+    if let Some(array) = value.clone().try_cast::<rhai::Array>() {
+        return array
+            .iter()
+            .map(dynamic_to_json)
+            .collect::<Result<Vec<_>, _>>()
+            .map(Value::Array);
+    }
+    if let Some(map) = value.clone().try_cast::<Map>() {
+        let mut object = serde_json::Map::with_capacity(map.len());
+        for (key, item) in map {
+            object.insert(key.to_string(), dynamic_to_json(&item)?);
+        }
+        return Ok(Value::Object(object));
+    }
+    Err(format!(
+        "unsupported Rhai value type `{}` at the JSON boundary",
+        value.type_name()
+    ))
+}
+
+fn json_boundary_error(message: String) -> Box<rhai::EvalAltResult> {
+    rhai::EvalAltResult::ErrorRuntime(message.into(), rhai::Position::NONE).into()
+}
+
 /// Convert a rhai params map to the JSON the API command/query layer expects —
 /// the one inherent JSON seam (`cmd`/`query` params are *defined* as JSON).
-fn map_to_json(params: Map) -> serde_json::Value {
-    rhai::serde::from_dynamic::<serde_json::Value>(&Dynamic::from_map(params))
-        .unwrap_or(serde_json::Value::Null)
+/// Native vectors/quaternions lower here exactly once. Unsupported custom
+/// values are errors, never the old silent `null` fallback.
+fn map_to_json(params: Map) -> Result<serde_json::Value, String> {
+    dynamic_to_json(&Dynamic::from_map(params))
 }
 
 /// Walk a rhai [`Dynamic`] into a backend-native value via a [`ValueBuilder`], in
@@ -219,6 +304,19 @@ fn dynamic_to_value<B: ValueBuilder>(b: &B, d: &Dynamic) -> B::Value {
         b.float(f)
     } else if d.is_string() {
         b.string(&d.clone().into_string().unwrap_or_default())
+    } else if let Some(vector) = d.clone().try_cast::<DVec3>() {
+        b.array(vec![
+            b.float(vector.x),
+            b.float(vector.y),
+            b.float(vector.z),
+        ])
+    } else if let Some(quaternion) = d.clone().try_cast::<DQuat>() {
+        b.array(vec![
+            b.float(quaternion.x),
+            b.float(quaternion.y),
+            b.float(quaternion.z),
+            b.float(quaternion.w),
+        ])
     } else if let Some(arr) = d.clone().try_cast::<rhai::Array>() {
         b.array(arr.iter().map(|x| dynamic_to_value(b, x)).collect())
     } else if let Some(m) = d.clone().try_cast::<Map>() {
@@ -236,20 +334,58 @@ fn dynamic_to_value<B: ValueBuilder>(b: &B, d: &Dynamic) -> B::Value {
 
 /// A rhai [`Dynamic`] as `f64` (ints widen); error if it isn't a number.
 fn dyn_f64(v: &Dynamic) -> Result<f64, String> {
-    v.as_float()
+    let value = v
+        .as_float()
         .or_else(|_| v.as_int().map(|i| i as f64))
-        .map_err(|_| "expected a number".to_string())
+        .map_err(|_| "expected a number".to_string())?;
+    value
+        .is_finite()
+        .then_some(value)
+        .ok_or_else(|| "expected a finite number".to_string())
 }
 
 /// A rhai [`Dynamic`] as `i64` (floats truncate); error if it isn't a number.
 fn dyn_i64(v: &Dynamic) -> Result<i64, String> {
-    v.as_int()
-        .or_else(|_| v.as_float().map(|f| f as i64))
-        .map_err(|_| "expected an integer".to_string())
+    if let Ok(value) = v.as_int() {
+        return Ok(value);
+    }
+    let value = v
+        .as_float()
+        .map_err(|_| "expected an integer".to_string())?;
+    value
+        .is_finite()
+        .then_some(value as i64)
+        .ok_or_else(|| "expected a finite integer".to_string())
 }
 
 /// A rhai array of exactly `n` numbers as `f64`s — for glam vec/quat fields.
 fn dyn_f64s(v: &Dynamic, n: usize) -> Result<Vec<f64>, String> {
+    if n == 3 {
+        if let Some(vector) = v.clone().try_cast::<DVec3>() {
+            return [vector.x, vector.y, vector.z]
+                .into_iter()
+                .map(|value| {
+                    value
+                        .is_finite()
+                        .then_some(value)
+                        .ok_or_else(|| "expected finite vector components".to_string())
+                })
+                .collect();
+        }
+    }
+    if n == 4 {
+        if let Some(quaternion) = v.clone().try_cast::<DQuat>() {
+            return [quaternion.x, quaternion.y, quaternion.z, quaternion.w]
+                .into_iter()
+                .map(|value| {
+                    value
+                        .is_finite()
+                        .then_some(value)
+                        .ok_or_else(|| "expected finite quaternion components".to_string())
+                })
+                .collect();
+        }
+    }
     let arr = v
         .clone()
         .try_cast::<rhai::Array>()
@@ -639,9 +775,13 @@ pub fn build_world_engine(sources: lunco_assets_core::script_source::ScriptSourc
     // resolution, and result recording. Terminal results carry status
     // applied/rejected/failed; genuinely deferred work remains pending until
     // command_result(id) observes the owner's result.
-    engine.register_fn("cmd", |name: ImmutableString, params: Map| -> Dynamic {
-        bridge_core::cmd(&RhaiBuilder, name.as_str(), map_to_json(params))
-    });
+    engine.register_fn(
+        "cmd",
+        |name: ImmutableString, params: Map| -> Result<Dynamic, Box<rhai::EvalAltResult>> {
+            let params = map_to_json(params).map_err(json_boundary_error)?;
+            Ok(bridge_core::cmd(&RhaiBuilder, name.as_str(), params))
+        },
+    );
     // cmd(name) -> #{...} — convenience for unit/all-defaulted commands.
     engine.register_fn("cmd", |name: ImmutableString| -> Dynamic {
         bridge_core::cmd(&RhaiBuilder, name.as_str(), serde_json::json!({}))
@@ -683,12 +823,15 @@ pub fn build_world_engine(sources: lunco_assets_core::script_source::ScriptSourc
     // script author a structured value as a native `#{...}` and feed it to a
     // generic command that accepts a serialized payload — keeping the Rust
     // core free of domain-specific authoring (one input shape, one entry point).
-    engine.register_fn("to_json", |m: Map| -> ImmutableString {
-        let v = map_to_json(m);
-        serde_json::to_string(&v)
-            .unwrap_or_else(|_| "null".into())
-            .into()
-    });
+    engine.register_fn(
+        "to_json",
+        |m: Map| -> Result<ImmutableString, Box<rhai::EvalAltResult>> {
+            let value = map_to_json(m).map_err(json_boundary_error)?;
+            serde_json::to_string(&value)
+                .map(Into::into)
+                .map_err(|error| json_boundary_error(error.to_string()))
+        },
+    );
 
     // from_json(text) -> native value — the inverse of to_json for generic
     // structured command payloads. Domain policy may use an existing typed
@@ -715,6 +858,16 @@ pub fn build_world_engine(sources: lunco_assets_core::script_source::ScriptSourc
             ]),
             None => Dynamic::UNIT,
         }
+    });
+
+    // Native counterpart for hot-loop geometry/control code.  Keep
+    // `world_pos`'s array contract stable for existing authored scenarios; new
+    // code opts in explicitly and lowers with `vec3_array` only at a report or
+    // command boundary.
+    engine.register_fn("world_pos3", |id: i64| -> Dynamic {
+        bridge_core::world_pos(id as u64)
+            .map(crate::rhai_math::to_native)
+            .unwrap_or(Dynamic::UNIT)
     });
 
     // geolocation(id) -> #{ lat, lon, height } — where on the BODY the entity
@@ -753,6 +906,12 @@ pub fn build_world_engine(sources: lunco_assets_core::script_source::ScriptSourc
             ]),
             None => Dynamic::UNIT,
         }
+    });
+
+    engine.register_fn("world_forward3", |id: i64| -> Dynamic {
+        bridge_core::world_forward(id as u64)
+            .map(crate::rhai_math::to_native)
+            .unwrap_or(Dynamic::UNIT)
     });
 
     // nav_command(id, target, speed, radius) ->
@@ -795,6 +954,12 @@ pub fn build_world_engine(sources: lunco_assets_core::script_source::ScriptSourc
             ]),
             None => Dynamic::UNIT,
         }
+    });
+
+    engine.register_fn("world_rotation_quat", |id: i64| -> Dynamic {
+        bridge_core::world_rotation_quat(id as u64)
+            .map(Dynamic::from)
+            .unwrap_or(Dynamic::UNIT)
     });
 
     // register_hook(id, entry, src) -> bool — plug a rhai rule into ANY Rust
@@ -1342,15 +1507,18 @@ pub fn build_world_engine(sources: lunco_assets_core::script_source::ScriptSourc
     // converge on one owner. The value is scalar by the command contract.
     engine.register_fn(
         "set_twin_setting",
-        |key: ImmutableString, value: Dynamic| -> bool {
+        |key: ImmutableString,
+         value: Dynamic|
+         -> Result<bool, Box<rhai::EvalAltResult>> {
             let mut params = Map::new();
             params.insert("key".into(), key.into());
             params.insert("value".into(), value);
-            let result = bridge_core::cmd(&RhaiBuilder, "SetTwinSetting", map_to_json(params));
-            result
+            let params = map_to_json(params).map_err(json_boundary_error)?;
+            let result = bridge_core::cmd(&RhaiBuilder, "SetTwinSetting", params);
+            Ok(result
                 .try_cast::<Map>()
                 .and_then(|map| map.get("ok").and_then(|value| value.as_bool().ok()))
-                .unwrap_or(false)
+                .unwrap_or(false))
         },
     );
 
@@ -1420,9 +1588,13 @@ pub fn build_world_engine(sources: lunco_assets_core::script_source::ScriptSourc
     // lunco-mobility); scripting reaches them generically here without taking a
     // physics dependency. Successful no-data is (); failures return an explicit
     // `#{ok:false,error}` value.
-    engine.register_fn("query", |name: ImmutableString, params: Map| -> Dynamic {
-        bridge_core::query(&RhaiBuilder, name.as_str(), map_to_json(params))
-    });
+    engine.register_fn(
+        "query",
+        |name: ImmutableString, params: Map| -> Result<Dynamic, Box<rhai::EvalAltResult>> {
+            let params = map_to_json(params).map_err(json_boundary_error)?;
+            Ok(bridge_core::query(&RhaiBuilder, name.as_str(), params))
+        },
+    );
     engine.register_fn("query", |name: ImmutableString| -> Dynamic {
         bridge_core::query(&RhaiBuilder, name.as_str(), serde_json::json!({}))
     });
@@ -2853,6 +3025,7 @@ mod tests {
     //! calls resolve at runtime, so calling prelude verbs here is fine).
 
     use lunco_core::{Severity, TelemetryEvent, TelemetryValue};
+    use bevy::math::DVec3;
     use rhai::{Dynamic, Map};
 
     /// **H6** — a re-entrant call into the bridge must not take down the app.
@@ -2995,6 +3168,36 @@ mod tests {
                 .and_then(|value| value.clone().into_string().ok()),
             Some("/Mission/Target1".to_string())
         );
+    }
+
+    #[test]
+    fn native_math_values_lower_at_json_and_telemetry_boundaries() {
+        let mut params = Map::new();
+        params.insert(
+            "translation".into(),
+            Dynamic::from(DVec3::new(1.0, 2.0, 3.0)),
+        );
+        let json = super::map_to_json(params).expect("Vec3 is a supported wire value");
+        assert_eq!(
+            json.get("translation")
+                .and_then(serde_json::Value::as_array)
+                .map(Vec::len),
+            Some(3)
+        );
+
+        let telemetry = super::rhai_to_telemetry(&Dynamic::from(DVec3::new(4.0, 5.0, 6.0)));
+        assert!(matches!(telemetry, TelemetryValue::Array(values) if values.len() == 3));
+    }
+
+    #[test]
+    fn unsupported_custom_values_are_rejected_at_json_boundary() {
+        #[derive(Clone)]
+        struct NotAWireType;
+
+        let mut params = Map::new();
+        params.insert("bad".into(), Dynamic::from(NotAWireType));
+        let error = super::map_to_json(params).expect_err("custom values must not become null");
+        assert!(error.contains("unsupported Rhai value type"));
     }
 
     #[test]

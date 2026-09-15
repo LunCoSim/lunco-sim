@@ -4,20 +4,27 @@
 // above directly. query() reaches the spatial providers (avian-backed Raycast /
 // GroundHeight live in lunco-mobility; Nearest / EntitiesInRadius in lunco-api).
 
-/// Linear velocity [vx,vy,vz] of an entity, or () if the entity has no dynamic
+/// Native linear velocity of an entity, or () if the entity has no dynamic
 /// rigid-body velocity. Rigid-body state is exposed by the canonical co-sim
 /// port registry as three scalar ports; there is no reflected `LinearVelocity`
 /// field in that public scripting surface.
-fn velocity(id) {
+fn velocity3(id) {
     let x = get(id, "velocity_x");
     let y = get(id, "velocity_y");
     let z = get(id, "velocity_z");
     if x == () || y == () || z == () { return (); }
-    [x, y, z]
+    vec3(x, y, z)
+}
+
+/// Compatibility array form for APIs and reports.
+fn velocity(id) {
+    let v = velocity3(id);
+    if v == () { return (); }
+    vec3_array(v)
 }
 
 /// Speed in m/s (0.0 if no velocity).
-fn speed(id) { let v = velocity(id); if v == () { 0.0 } else { vlen(v) } }
+fn speed(id) { let v = velocity3(id); if v == () { 0.0 } else { vlen(v) } }
 
 /// Cast a ray in the active simulation frame. Returns
 /// #{hit, entity, distance, point, normal};
@@ -27,8 +34,8 @@ fn raycast(origin, dir, max) { query("Raycast", #{ origin: origin, dir: dir, max
 /// True if a collider is within `dist` straight ahead of `entity` — the basic
 /// obstacle-avoidance probe.
 fn obstacle_ahead(entity, dist) {
-    let p = world_pos(entity);
-    let f = world_forward(entity);
+    let p = world_pos3(entity);
+    let f = world_forward3(entity);
     if p == () || f == () { return false; }
     let r = raycast(p, f, dist);
     if r == () { return false; }

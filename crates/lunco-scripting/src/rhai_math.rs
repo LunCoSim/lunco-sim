@@ -1,8 +1,11 @@
 //! Vector and angle math for scripts, in Rust.
 //!
-//! Scripts exchange directions and positions as `[x, y, z]` float arrays —
-//! whatever `world_pos` and `world_forward` hand back. The operations on them
-//! belong here rather than in the rhai prelude for three reasons:
+//! The engine supports two deliberate representations: native `DVec3`/`DQuat`
+//! values for hot loops, and `[x, y, z]`/`[x, y, z, w]` arrays at JSON/USD/
+//! telemetry boundaries and for existing scenarios. Both routes enter this
+//! module, so the math is implemented once in glam rather than reimplemented in
+//! Rhai. The operations belong here rather than in the Rhai prelude for three
+//! reasons:
 //!
 //! * **Correctness.** `acos` is a partial function, and a dot product of two
 //!   unit vectors leaves its domain by an ulp whenever the vectors are nearly
@@ -12,17 +15,47 @@
 //!   `f64`, next to the operation that needs it, and an unmeasurable angle is
 //!   returned as `()` instead of as a number.
 //! * **Cost.** These run per body per tick. Interpreting `a[0]*b[0] + …` through
-//!   rhai's dynamic dispatch to do what is one `glam` call is work the engine
-//!   should not be doing at 60 Hz.
+//!   Rhai's dynamic dispatch to do what is one `glam` call is work the engine
+//!   should not be doing at 60 Hz; native values avoid that array path entirely.
 //! * **One implementation.** A helper written in the prelude gets copied into
 //!   whichever script needs a variant, and the copies drift.
 //!
-//! Every function is TOTAL: degenerate input yields `()` ("not measurable"),
-//! never a NaN. `()` is falsy in the script's own `== ()` idiom, so a caller
-//! that forgets to check gets a visible type error rather than silent poison.
+//! Array-facing functions retain the scenario contract: degenerate input yields
+//! `()` ("not measurable"), never a NaN. Native constructors and operators are
+//! fallible and raise a script error for invalid values, so a caller cannot
+//! accidentally carry a malformed pose into the simulator. `()` is falsy in
+//! the script's own `== ()` idiom, so a caller that forgets to check gets a
+//! visible type error rather than silent poison.
 
-use bevy::math::DVec3;
-use rhai::{Dynamic, Engine};
+use bevy::math::{DQuat, DVec3, EulerRot};
+use rhai::{Dynamic, Engine, EvalAltResult, Position};
+
+/// Construct a Rhai runtime error for a value that cannot satisfy the native
+/// math type's invariant.  Native vectors/quaternions are deliberately
+/// fallible at this boundary: an invalid pose must stop the authored program,
+/// not become a string, `null`, or a NaN that makes later checks meaningless.
+fn invalid_value(message: impl Into<String>) -> Box<EvalAltResult> {
+    EvalAltResult::ErrorRuntime(message.into().into(), Position::NONE).into()
+}
+
+fn finite_vec3(value: DVec3, label: &str) -> Result<DVec3, Box<EvalAltResult>> {
+    value
+        .is_finite()
+        .then_some(value)
+        .ok_or_else(|| invalid_value(format!("{label} must contain only finite values")))
+}
+
+fn finite_quat(value: DQuat, label: &str) -> Result<DQuat, Box<EvalAltResult>> {
+    if !value.is_finite() {
+        return Err(invalid_value(format!(
+            "{label} must contain only finite values"
+        )));
+    }
+    if value.length_squared() < 1e-24 {
+        return Err(invalid_value(format!("{label} must not have zero length")));
+    }
+    Ok(value.normalize())
+}
 
 /// One numeric element of a script array.
 fn scalar(d: &Dynamic) -> Option<f64> {
@@ -31,7 +64,7 @@ fn scalar(d: &Dynamic) -> Option<f64> {
         .or_else(|| d.as_int().ok().map(|i| i as f64))
 }
 
-/// Read an `[x, y, z]` script value as a vector.
+/// Read a native `Vec3` or `[x, y, z]` script value as a vector.
 ///
 /// Takes `Dynamic`, not `Array`, and that is load-bearing: native functions are
 /// dispatched on argument TYPE, while scripts use `()` as "no value" — the miss
@@ -44,6 +77,9 @@ fn scalar(d: &Dynamic) -> Option<f64> {
 /// orientation. Rejecting non-finite input HERE keeps every operation below
 /// total.
 pub(crate) fn to_vec3(d: &Dynamic) -> Option<DVec3> {
+    if let Some(v) = d.clone().try_cast::<DVec3>() {
+        return v.is_finite().then_some(v);
+    }
     let a = d.read_lock::<rhai::Array>()?;
     if a.len() != 3 {
         return None;
@@ -65,12 +101,131 @@ fn to_array(v: DVec3) -> Dynamic {
     ])
 }
 
+/// Put the engine's native vector into a Rhai value without an intermediate
+/// array.  Arrays remain the wire/telemetry representation; this is the
+/// explicit lowering used by `world_pos3`, `vec3_array`, and telemetry.
+pub(crate) fn to_native(v: DVec3) -> Dynamic {
+    Dynamic::from(v)
+}
+
+fn quat_to_array(q: DQuat) -> Dynamic {
+    Dynamic::from_array(vec![
+        Dynamic::from_float(q.x),
+        Dynamic::from_float(q.y),
+        Dynamic::from_float(q.z),
+        Dynamic::from_float(q.w),
+    ])
+}
+
+fn quat_from_array(d: &Dynamic) -> Option<DQuat> {
+    let a = d.read_lock::<rhai::Array>()?;
+    if a.len() != 4 {
+        return None;
+    }
+    let mut c = [0.0f64; 4];
+    for (slot, value) in c.iter_mut().zip(a.iter()) {
+        *slot = scalar(value)?;
+    }
+    let q = DQuat::from_xyzw(c[0], c[1], c[2], c[3]);
+    (q.is_finite() && q.length_squared() >= 1e-24).then_some(q.normalize())
+}
+
+fn to_quat(d: &Dynamic) -> Option<DQuat> {
+    if let Some(q) = d.clone().try_cast::<DQuat>() {
+        return (q.is_finite() && q.length_squared() >= 1e-24).then_some(q.normalize());
+    }
+    quat_from_array(d)
+}
+
+fn native_add(a: DVec3, b: DVec3) -> Result<DVec3, Box<EvalAltResult>> {
+    finite_vec3(a + b, "vector sum")
+}
+
+fn native_sub(a: DVec3, b: DVec3) -> Result<DVec3, Box<EvalAltResult>> {
+    finite_vec3(a - b, "vector difference")
+}
+
+fn native_scale(a: DVec3, scalar: f64) -> Result<DVec3, Box<EvalAltResult>> {
+    if !scalar.is_finite() {
+        return Err(invalid_value("vector scale must be finite"));
+    }
+    finite_vec3(a * scalar, "scaled vector")
+}
+
+fn native_cross(a: DVec3, b: DVec3) -> Result<DVec3, Box<EvalAltResult>> {
+    finite_vec3(a.cross(b), "vector cross product")
+}
+
+fn native_dot(a: DVec3, b: DVec3) -> Result<f64, Box<EvalAltResult>> {
+    let value = a.dot(b);
+    value
+        .is_finite()
+        .then_some(value)
+        .ok_or_else(|| invalid_value("vector dot product must be finite"))
+}
+
+fn native_normalize(a: DVec3) -> Result<DVec3, Box<EvalAltResult>> {
+    if !a.is_finite() {
+        return Err(invalid_value("vector must contain only finite values"));
+    }
+    let length = a.length();
+    if length < 1e-12 {
+        return Err(invalid_value("cannot normalize a zero-length vector"));
+    }
+    finite_vec3(a / length, "normalized vector")
+}
+
+fn native_rotate(q: DQuat, v: DVec3) -> Result<DVec3, Box<EvalAltResult>> {
+    let q = finite_quat(q, "quaternion")?;
+    finite_vec3(q * v, "rotated vector")
+}
+
+fn native_quat_mul(a: DQuat, b: DQuat) -> Result<DQuat, Box<EvalAltResult>> {
+    let a = finite_quat(a, "left quaternion")?;
+    let b = finite_quat(b, "right quaternion")?;
+    finite_quat(a * b, "quaternion product")
+}
+
+fn native_quat_inverse(q: DQuat) -> Result<DQuat, Box<EvalAltResult>> {
+    let q = finite_quat(q, "quaternion")?;
+    finite_quat(q.inverse(), "quaternion inverse")
+}
+
+fn native_quat_from_euler_xyz_deg(v: DVec3) -> Result<DQuat, Box<EvalAltResult>> {
+    finite_vec3(v, "Euler rotation")?;
+    finite_quat(
+        DQuat::from_euler(
+            EulerRot::XYZ,
+            v.x.to_radians(),
+            v.y.to_radians(),
+            v.z.to_radians(),
+        ),
+        "Euler rotation",
+    )
+}
+
+fn native_quat_to_euler_xyz_deg(q: DQuat) -> Result<DVec3, Box<EvalAltResult>> {
+    let q = finite_quat(q, "quaternion")?;
+    let (x, y, z) = q.to_euler(EulerRot::XYZ);
+    finite_vec3(
+        DVec3::new(x.to_degrees(), y.to_degrees(), z.to_degrees()),
+        "Euler rotation",
+    )
+}
+
 /// Lift a binary vector op, returning `()` on degenerate input.
 fn binary(
     f: impl Fn(DVec3, DVec3) -> DVec3 + Send + Sync + 'static,
 ) -> impl Fn(Dynamic, Dynamic) -> Dynamic + Send + Sync + 'static {
     move |a, b| match (to_vec3(&a), to_vec3(&b)) {
-        (Some(a), Some(b)) => to_array(f(a, b)),
+        (Some(a), Some(b)) => {
+            let result = f(a, b);
+            if result.is_finite() {
+                to_array(result)
+            } else {
+                Dynamic::UNIT
+            }
+        }
         _ => Dynamic::UNIT,
     }
 }
@@ -84,23 +239,105 @@ fn is_direction(v: DVec3) -> bool {
 
 /// Register the math surface on a scripting engine.
 pub fn register(engine: &mut Engine) {
+    // Native glam values are the hot-loop representation.  They are registered
+    // under stable script names, while the underlying types stay the same
+    // `bevy::math` values used by the simulator (no second tuple implementation
+    // and no per-operation array round-trip).  There are intentionally getters
+    // but no setters: construction and every operation validate finiteness so a
+    // script cannot mutate a valid pose into a NaN behind the bridge's back.
+    engine
+        .register_type_with_name::<DVec3>("Vec3")
+        .register_type_with_name::<DQuat>("Quat")
+        .register_fn("vec3", |x: f64, y: f64, z: f64| {
+            finite_vec3(DVec3::new(x, y, z), "vec3")
+        })
+        .register_fn("vec3_from", |value: Dynamic| {
+            to_vec3(&value).ok_or_else(|| invalid_value("expected a finite Vec3 or [x, y, z]"))
+        })
+        .register_fn("vec3_zero", || DVec3::ZERO)
+        .register_fn("vec3_array", to_array)
+        .register_fn("vec3_is_finite", |v: DVec3| v.is_finite())
+        .register_get("x", |v: &mut DVec3| v.x)
+        .register_get("y", |v: &mut DVec3| v.y)
+        .register_get("z", |v: &mut DVec3| v.z)
+        .register_fn("quat", |x: f64, y: f64, z: f64, w: f64| {
+            finite_quat(DQuat::from_xyzw(x, y, z, w), "quat")
+        })
+        .register_fn("quat_from", |value: Dynamic| {
+            to_quat(&value).ok_or_else(|| invalid_value("expected a finite Quat or [x, y, z, w]"))
+        })
+        .register_fn("quat_identity", || DQuat::IDENTITY)
+        .register_fn("quat_array", quat_to_array)
+        .register_fn("quat_is_finite", |q: DQuat| q.is_finite())
+        .register_fn("quat_from_euler_xyz_deg", native_quat_from_euler_xyz_deg)
+        .register_fn("quat_to_euler_xyz_deg", native_quat_to_euler_xyz_deg)
+        .register_fn("quat_inverse", native_quat_inverse)
+        .register_get("x", |q: &mut DQuat| q.x)
+        .register_get("y", |q: &mut DQuat| q.y)
+        .register_get("z", |q: &mut DQuat| q.z)
+        .register_get("w", |q: &mut DQuat| q.w);
+
+    // The familiar names are overloaded for native values as well as the
+    // legacy arrays.  Existing scripts continue to exchange arrays, while new
+    // scripts can keep values native from `world_pos3` through a complete
+    // geometry or control calculation.
+    engine
+        .register_fn("+", native_add)
+        .register_fn("-", native_sub)
+        .register_fn("*", native_quat_mul)
+        .register_fn("vadd", native_add)
+        .register_fn("vsub", native_sub)
+        .register_fn("vscale", native_scale)
+        .register_fn("vcross", native_cross)
+        .register_fn("vdot", native_dot)
+        .register_fn("vlen", |v: DVec3| {
+            let length = v.length();
+            length
+                .is_finite()
+                .then_some(length)
+                .ok_or_else(|| invalid_value("vector length must be finite"))
+        })
+        .register_fn("vnorm", native_normalize)
+        .register_fn("qrot", native_rotate);
+
     engine.register_fn("vadd", binary(|a, b| a + b));
     engine.register_fn("vsub", binary(|a, b| a - b));
     engine.register_fn("vcross", binary(DVec3::cross));
 
     engine.register_fn("vscale", |a: Dynamic, k: f64| match to_vec3(&a) {
-        Some(v) => to_array(v * k),
-        None => Dynamic::UNIT,
+        Some(v) if k.is_finite() => {
+            let result = v * k;
+            if result.is_finite() {
+                to_array(result)
+            } else {
+                Dynamic::UNIT
+            }
+        }
+        _ => Dynamic::UNIT,
     });
 
     engine.register_fn("vlen", |a: Dynamic| match to_vec3(&a) {
-        Some(v) => Dynamic::from_float(v.length()),
-        None => Dynamic::UNIT,
+        Some(v) => {
+            let length = v.length();
+            if length.is_finite() {
+                Dynamic::from_float(length)
+            } else {
+                Dynamic::UNIT
+            }
+        }
+        _ => Dynamic::UNIT,
     });
 
     engine.register_fn("vdot", |a: Dynamic, b: Dynamic| {
         match (to_vec3(&a), to_vec3(&b)) {
-            (Some(a), Some(b)) => Dynamic::from_float(a.dot(b)),
+            (Some(a), Some(b)) => {
+                let value = a.dot(b);
+                if value.is_finite() {
+                    Dynamic::from_float(value)
+                } else {
+                    Dynamic::UNIT
+                }
+            }
             _ => Dynamic::UNIT,
         }
     });
@@ -127,9 +364,13 @@ pub fn register(engine: &mut Engine) {
         },
     );
 
-    // qrot(q, v) — rotate a local vector by an `[x, y, z, w]` quaternion into
-    // world space. The prelude derives every world axis (up, right, …) from this
-    // one operation plus `world_rotation`, so there is no per-axis host read.
+    // qrot(q, v) — rotate a local vector by a native `Quat` (or an
+    // `[x, y, z, w]` quaternion) into world space. The prelude derives every
+    // world axis (up, right, …) from this one operation plus
+    // `world_rotation_quat`, so there is no per-axis host read. The generic
+    // overload intentionally accepts mixed native/array arguments too; this
+    // keeps old scripts interoperable while preserving the array result at
+    // that compatibility boundary.
     //
     // A non-unit quaternion is normalised rather than refused: a quaternion
     // arriving from an animation sample or an interpolated pose is unit only to
@@ -139,24 +380,15 @@ pub fn register(engine: &mut Engine) {
         let Some(v) = to_vec3(&v) else {
             return Dynamic::UNIT;
         };
-        let Some(qa) = q.read_lock::<rhai::Array>() else {
+        let Some(quat) = to_quat(&q) else {
             return Dynamic::UNIT;
         };
-        if qa.len() != 4 {
-            return Dynamic::UNIT;
+        let result = quat * v;
+        if result.is_finite() {
+            to_array(result)
+        } else {
+            Dynamic::UNIT
         }
-        let mut c = [0.0f64; 4];
-        for (slot, value) in c.iter_mut().zip(qa.iter()) {
-            match scalar(value) {
-                Some(f) => *slot = f,
-                None => return Dynamic::UNIT,
-            }
-        }
-        let quat = bevy::math::DQuat::from_xyzw(c[0], c[1], c[2], c[3]);
-        if !quat.is_finite() || quat.length_squared() < 1e-12 {
-            return Dynamic::UNIT;
-        }
-        to_array(quat.normalize() * v)
     });
 
     // Unsigned angle between two directions, in degrees, or `()` when there is
@@ -284,5 +516,76 @@ mod tests {
     fn clamp_rejects_nan() {
         let v = eval("clamp(0.0/0.0, -1.0, 1.0)").as_float().unwrap();
         assert!(v.is_finite(), "clamp must not pass NaN through, got {v}");
+    }
+
+    #[test]
+    fn native_vec3_uses_glam_without_array_round_trip() {
+        let d = eval("let p = vec3(1.0, 2.0, 3.0); vec3_array(vadd(p, vec3(2.0, 0.0, -1.0)))");
+        let a = d.into_array().expect("native vector must lower explicitly");
+        assert_eq!(a.len(), 3);
+        assert_eq!(a[0].as_float().unwrap(), 3.0);
+        assert_eq!(a[1].as_float().unwrap(), 2.0);
+        assert_eq!(a[2].as_float().unwrap(), 2.0);
+    }
+
+    #[test]
+    fn native_vec3_properties_and_quat_rotation_are_typed() {
+        let d = eval("let p = vec3(1.0, 2.0, 3.0); [p.x, p.y, p.z]");
+        let a = d.into_array().expect("vector properties must be readable");
+        assert_eq!(a[0].as_float().unwrap(), 1.0);
+        assert_eq!(a[2].as_float().unwrap(), 3.0);
+
+        let d = eval("vec3_array(qrot(quat(0.0, 0.0, 0.0, 1.0), vec3(4.0, 5.0, 6.0)))");
+        let a = d
+            .into_array()
+            .expect("quaternion rotation must stay native");
+        assert_eq!(a[0].as_float().unwrap(), 4.0);
+        assert_eq!(a[2].as_float().unwrap(), 6.0);
+    }
+
+    #[test]
+    fn native_quaternion_euler_conversion_is_shared_with_usd_xyz() {
+        let d = eval(
+            "let q = quat_from_euler_xyz_deg(vec3(10.0, 20.0, 30.0)); \
+             vec3_array(quat_to_euler_xyz_deg(q))",
+        );
+        let a = d.into_array().expect("Euler conversion must return Vec3");
+        assert!((a[0].as_float().unwrap() - 10.0).abs() < 1e-9);
+        assert!((a[1].as_float().unwrap() - 20.0).abs() < 1e-9);
+        assert!((a[2].as_float().unwrap() - 30.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn native_constructors_reject_non_finite_and_degenerate_values() {
+        assert!(engine().eval::<Dynamic>("vec3(0.0/0.0, 0.0, 0.0)").is_err());
+        assert!(
+            engine()
+                .eval::<Dynamic>("quat(0.0, 0.0, 0.0, 0.0)")
+                .is_err()
+        );
+        assert!(engine().eval::<Dynamic>("vnorm(vec3_zero())").is_err());
+    }
+
+    #[test]
+    fn native_values_are_recognised_by_array_math_without_coercion_in_script() {
+        assert!(!eval("quat_identity() == ()").as_bool().unwrap());
+        let d = eval("vlen(vec3(3.0, 4.0, 0.0))");
+        assert_eq!(d.as_float().unwrap(), 5.0);
+        let d = eval("vlen([3.0, 4.0, 0.0])");
+        assert_eq!(d.as_float().unwrap(), 5.0);
+
+        let d = eval("qrot(quat_identity(), [4.0, 5.0, 6.0])");
+        let a = d.into_array().expect("mixed native/array qrot must work");
+        assert_eq!(a[0].as_float().unwrap(), 4.0);
+    }
+
+    #[test]
+    fn standard_scalar_math_remains_rhai_owned_and_rust_backed() {
+        let d = eval("[sin(PI() / 2.0), cos(0.0), exp(0.0), sqrt(9.0), atan(1.0, 1.0), hypot(3.0, 4.0)]");
+        let values = d.into_array().expect("standard math returns an array");
+        let expected = [1.0, 1.0, 1.0, 3.0, std::f64::consts::FRAC_PI_4, 5.0];
+        for (value, expected) in values.iter().zip(expected) {
+            assert!((value.as_float().unwrap() - expected).abs() < 1e-12);
+        }
     }
 }

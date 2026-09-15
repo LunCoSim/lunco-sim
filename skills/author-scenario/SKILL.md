@@ -96,21 +96,24 @@ in Modelica, and do not turn the recipe into an `on_tick` loop. See the
 - **Scene structure / spawning geometry / wiring** → USD.
 - **Vector and angle math is already NATIVE — never write it in a script.**
   `vadd` `vsub` `vscale` `vlen` `vdot` `vcross` `vnorm` `qrot` `clamp`
-  `angle_deg` `yaw_delta_deg` are Rust (`lunco_scripting::rhai_math`, on glam),
-  operating on the same `[x,y,z]` float arrays `world_pos` / `world_forward`
-  return. Reimplementing one in rhai is how four scripts ended up with four
-  copies of the same broken `acos` guard.
+  `angle_deg` `yaw_delta_deg` are Rust (`lunco_scripting::rhai_math`, on glam).
+  Existing array operands remain supported; hot-loop code should use native
+  `Vec3`/`Quat` from `world_pos3`, `world_forward3`, and
+  `world_rotation_quat`, lowering with `vec3_array`/`quat_array` only at a
+  command, telemetry, or USD-literal boundary. Reimplementing one in rhai is
+  how four scripts ended up with four copies of the same broken `acos` guard.
 - A scenario **senses and decides**; it drives via high-level verbs
   (`nav_to`, `drive`, `cmd`), reacts to events, and sequences phases.
 
 **The two rules that make the math surface safe:**
 
-1. **Every math verb is TOTAL and returns `()` when there is nothing to
-   measure** — a `()` input, a wrong-length array, a degenerate orientation.
-   Check with `== ()`; never accumulate an unchecked result. There is no NaN to
-   guard against, because a partial function's domain is enforced in Rust:
+1. **Array reads preserve the observer contract** and return `()` when there is
+   nothing to measure — a `()` input, a wrong-length array, or a degenerate
+   orientation. Native constructors/operations instead raise a script error
+   for malformed values, so an authored program cannot silently continue with
+   a poisoned native pose:
    ```rhai
-   let d = yaw_delta_deg(this.fprev, world_forward(me));
+   let d = yaw_delta_deg(this.fprev, world_forward3(me));
    if d != () { this.yaw += d; }        // skip the tick, don't poison the sum
    ```
 2. **Angles are PER-TICK DELTAS.** `yaw_delta_deg` saturates at 180°, so a total
@@ -157,7 +160,8 @@ fn on_stop(me)        { brake(me); }                       // hot-reload / detac
 | `cmd(name, #{params})` | **WRITE** — fire any `#[Command]` by name; returns `#{id,ok,data,error}` (`data` carries e.g. a spawned gid) |
 | `query(name, #{params})` | **READ** — any read-only query provider (Raycast, Nearest, GroundHeight, `CausalTrace`, …) |
 | `get(id,"Comp.field")` / `set(id,"Comp.field",v)` | reflected component read / write |
-| `world_pos(id)` / `world_forward(id)` | float-origin-correct pose (use these, never raw `Transform`) |
+| `world_pos(id)` / `world_forward(id)` | float-origin-correct array pose (use these, never raw `Transform`) |
+| `world_pos3(id)` / `world_forward3(id)` / `world_rotation_quat(id)` | native glam `Vec3`/`Quat` pose for hot loops; lower explicitly at wire boundaries |
 | `find(name)` / `name(id)` / `usd_path(id)` / `parent`/`children` | entity lookup + hierarchy; `name` is presentation, `usd_path` is canonical USD topology |
 | `owner_of(id)` / `controller(id)` / `is_controlled(id)` | who's driving (human vs AI vs unowned) |
 | `emit(name, value?)` | fire a `TelemetryEvent` (delivered to `on_event` on the **next scenario pass**; a paused simulation uses the next `Update` pass); scalar, array, and map payloads keep their typed structure |
@@ -174,7 +178,7 @@ reflect — no JSON round-trip.
 `assets/scripting/prelude/*.rhai`, one file per topic. Read them for the full
 list. Highlights:
 - **Nav:** `drive(rover,fwd,steer)`, `brake(rover)`, `nav_to(entity,target,speed,radius)` (returns true on arrival). New missions return task trees. **`goto` is a reserved word — use `nav_to`.**
-- **Sensing:** `distance`, `arrived`, `velocity`/`speed`, `raycast`, `obstacle_ahead`, `ground_height`, `nearest`, `entities_in_radius`.
+- **Sensing:** `distance`, `arrived`, `velocity3`/`velocity`/`speed`, `raycast`, `obstacle_ahead`, `ground_height`, `nearest`, `entities_in_radius`.
 - **Selection:** `all_of_type`, `nearest_where`, `count_where`, `min_by`/`max_by`.
 - **Task tree:** `seq`/`par_all`/`par_race`/`repeat`/`forever`, leaves `step`/`once`/`act_for`/`wait`/`wait_until`/`wait_for`/`wait_for_from`, and failure nodes `check`/`sel`/`retry`/`invert`/`force_ok`/`force_fail`/`reactive_seq`/`reactive_sel`. Return the tree from `task(me)`; the kernel owns event delivery and there is one task progression path.
 - **Testing** (`prelude/auto_tests.rhai`): `t_range` `t_max` `t_true` `t_rel` `t_present` `t_bounded` `t_moved` `report_verdict` `fail_fast` `seg` `find_or_none` `r2`/`r4`.

@@ -23,7 +23,9 @@ fn axis_index(axis) {
 }
 
 fn vector3(value, label) {
-    if value == () || value.len() != 3 {
+    if value == () { return plan_error(label + " must have three components"); }
+    let value = if type_of(value) == "Vec3" { vec3_array(value) } else { value };
+    if type_of(value) != "array" || value.len() != 3 {
         return plan_error(label + " must have three components");
     }
     #{ ok: true, value: value }
@@ -973,6 +975,97 @@ fn cube_shape_plan(edit_target, parent, name, size, scale, collision_enabled) {
     #{ ok: true, kind: "cube_shape", path: shape, ops: ops }
 }
 
+fn _mesh_tuple3(value, label) {
+    if value == () || value.len() != 3 {
+        throw(label + " must have three components");
+    }
+    "(" + value[0].to_string() + ", " + value[1].to_string() + ", "
+        + value[2].to_string() + ")"
+}
+
+fn _mesh_tuple3_array(values, label) {
+    let literal = "[";
+    for index in 0..values.len() {
+        if index > 0 { literal += ", "; }
+        literal += _mesh_tuple3(values[index], label);
+    }
+    literal + "]"
+}
+
+fn _mesh_int_array(values, label) {
+    let literal = "[";
+    for index in 0..values.len() {
+        if index > 0 { literal += ", "; }
+        let value = values[index];
+        if value < 0 { throw(label + " cannot contain negative indices"); }
+        literal += value.to_string();
+    }
+    literal + "]"
+}
+
+// Build a small native UsdGeomMesh from typed topology arrays.  This is the
+// generic escape hatch for faceted panels and housings that cannot be
+// represented honestly by a Cube primitive; callers still submit the result
+// through assembly_edit::batch and the normal USD authoring journal.
+fn mesh_shape_plan(edit_target, parent, name, points, face_counts,
+                   face_indices, color, collision_enabled) {
+    if edit_target == () || parent == () || name == () || name == ""
+        || name.contains("/") {
+        return plan_error("mesh_shape_plan requires an edit target, parent path, and name");
+    }
+    if !parent.starts_with("/") || parent.ends_with("/") && parent != "/" {
+        return plan_error("mesh_shape_plan parent must be an absolute USD path");
+    }
+    if points == () || points.len() == 0 || face_counts == () || face_counts.len() == 0
+        || face_indices == () || face_indices.len() == 0 {
+        return plan_error("mesh_shape_plan requires non-empty points and face topology");
+    }
+    if color == () || color.len() != 3 {
+        return plan_error("mesh_shape_plan color must have three components");
+    }
+    let shape = if parent == "/" { "/" + name } else { parent + "/" + name };
+    let ops = [#{ AddPrim: #{
+        edit_target: edit_target,
+        parent_path: parent,
+        name: name,
+        type_name: "Mesh",
+        reference: (),
+        reference_prim_path: "",
+    }}];
+    ops.push(#{ SetAttribute: #{
+        edit_target: edit_target, path: shape, name: "points",
+        type_name: "point3f[]", value: _mesh_tuple3_array(points, "mesh points"),
+    }});
+    ops.push(#{ SetAttribute: #{
+        edit_target: edit_target, path: shape, name: "faceVertexCounts",
+        type_name: "int[]", value: _mesh_int_array(face_counts, "face counts"),
+    }});
+    ops.push(#{ SetAttribute: #{
+        edit_target: edit_target, path: shape, name: "faceVertexIndices",
+        type_name: "int[]", value: _mesh_int_array(face_indices, "face indices"),
+    }});
+    ops.push(#{ SetAttribute: #{
+        edit_target: edit_target, path: shape, name: "subdivisionScheme",
+        type_name: "token", value: "\"none\"",
+    }});
+    ops.push(#{ SetAttribute: #{
+        edit_target: edit_target, path: shape, name: "purpose",
+        type_name: "token", value: "\"render\"",
+    }});
+    ops.push(#{ SetAttribute: #{
+        edit_target: edit_target, path: shape, name: "primvars:displayColor",
+        type_name: "color3f[]", value: "[" + _mesh_tuple3(color, "mesh color") + "]",
+    }});
+    ops.push(#{ SetApiSchemas: #{
+        edit_target: edit_target, path: shape, schemas: ["PhysicsCollisionAPI"],
+    }});
+    ops.push(#{ SetAttribute: #{
+        edit_target: edit_target, path: shape, name: "physics:collisionEnabled",
+        type_name: "bool", value: collision_enabled.to_string(),
+    }});
+    #{ ok: true, kind: "mesh_shape", path: shape, ops: ops }
+}
+
 /// Build a standard Cylinder shape with explicit dimensions, placement, and
 /// collision ownership. Like `cube_shape_plan`, this never creates a body or
 /// a wrapper frame; a caller must choose whether the shape is physical or
@@ -1055,7 +1148,9 @@ fn bundle_identifier(value, label) {
 }
 
 fn bundle_vector3(value, label, positive) {
-    if value == () || value.len() != 3 {
+    if value == () { return bundle_plan_error(label + " must have three components"); }
+    let value = if type_of(value) == "Vec3" { vec3_array(value) } else { value };
+    if type_of(value) != "array" || value.len() != 3 {
         return bundle_plan_error(label + " must have three components");
     }
     for component in value {
@@ -1099,6 +1194,7 @@ fn bundle_port_name(direction, name) {
 
 fn bundle_value_matches(actual, expected) {
     if actual == () || expected == () { return actual == expected; }
+    let expected = if type_of(expected) == "Vec3" { vec3_array(expected) } else { expected };
     if type_of(expected) == "array" {
         if type_of(actual) != "array" || actual.len() != expected.len() { return false; }
         for i in 0..expected.len() {
@@ -2270,7 +2366,9 @@ fn mount_component(doc, edit_target, host_path, socket_kind, joint_kind,
 // ── Existing-mount frame realignment ───────────────────────────────────────
 
 fn finite_vector3(value, label) {
-    if value == () || value.len() != 3 {
+    if value == () { return plan_error(label + " must have three components"); }
+    let value = if type_of(value) == "Vec3" { vec3_array(value) } else { value };
+    if type_of(value) != "array" || value.len() != 3 {
         return plan_error(label + " must have three components");
     }
     for component in value {
@@ -2281,80 +2379,19 @@ fn finite_vector3(value, label) {
     #{ ok: true, value: value }
 }
 
-// Quaternion multiplication for the [x,y,z,w] representation used by the
-// public qrot() helper. The product has the same convention as Bevy/GLAM:
-// q_mul(a,b) applies b, then a.
-fn mount_quat_mul(a, b) {
-    [
-        a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
-        a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
-        a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
-        a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
-    ]
-}
-
-fn mount_quat_inverse(q) {
-    let length_sq = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
-    [
-        -q[0] / length_sq,
-        -q[1] / length_sq,
-        -q[2] / length_sq,
-        q[3] / length_sq,
-    ]
-}
-
 // USD rotateXYZ is the fixed-axis/extrinsic sequence used by the existing
-// typed SetRotate contract. GLAM expresses it as Rz * Ry * Rx.
+// typed SetRotate contract. The shared Rust conversion owns the exact GLAM
+// Euler convention and its gimbal-lock handling.
 fn mount_quat_from_xyz_deg(rotation) {
-    let half_x = rotation[0] * 0.008726646259971648;
-    let half_y = rotation[1] * 0.008726646259971648;
-    let half_z = rotation[2] * 0.008726646259971648;
-    let qx = [half_x.sin(), 0.0, 0.0, half_x.cos()];
-    let qy = [0.0, half_y.sin(), 0.0, half_y.cos()];
-    let qz = [0.0, 0.0, half_z.sin(), half_z.cos()];
-    mount_quat_mul(qz, mount_quat_mul(qy, qx))
-}
-
-fn mount_atan2(y, x) {
-    let half_pi = 1.5707963267948966;
-    let pi = 3.141592653589793;
-    if x > 0.0 { return (y / x).atan(); }
-    if x < 0.0 && y >= 0.0 { return (y / x).atan() + pi; }
-    if x < 0.0 && y < 0.0 { return (y / x).atan() - pi; }
-    if y > 0.0 { return half_pi; }
-    if y < 0.0 { return -half_pi; }
-    0.0
+    quat_array(quat_from_euler_xyz_deg(vec3_from(rotation)))
 }
 
 // Return the canonical XYZ degrees accepted by SetRotate. This is the same
-// decomposition as GLAM's EulerRot::XYZEx for Rz * Ry * Rx. The gimbal-lock
-// branch chooses zero Z, matching the shared typed transform reader.
+// decomposition as the shared Rust Euler converter. The native implementation
+// owns the gimbal-lock branch so this policy file does not carry a second
+// trigonometric implementation.
 fn mount_xyz_deg_from_quat(q) {
-    let x = q[0];
-    let y = q[1];
-    let z = q[2];
-    let w = q[3];
-    let m00 = 1.0 - 2.0 * (y * y + z * z);
-    let m10 = 2.0 * (x * y + w * z);
-    let m20 = 2.0 * (x * z - w * y);
-    let m21 = 2.0 * (y * z + w * x);
-    let m22 = 1.0 - 2.0 * (x * x + y * y);
-    let cy = (m00 * m00 + m10 * m10).sqrt();
-    let radians_to_degrees = 57.29577951308232;
-    if cy > 1.0e-8 {
-        [
-            mount_atan2(m21, m22) * radians_to_degrees,
-            (-m20).asin() * radians_to_degrees,
-            mount_atan2(m10, m00) * radians_to_degrees,
-        ]
-    } else {
-        [
-            mount_atan2(-2.0 * (x * y - w * z), w * w + x * x - y * y - z * z)
-                * radians_to_degrees,
-            (-m20).asin() * radians_to_degrees,
-            0.0,
-        ]
-    }
+    vec3_array(quat_to_euler_xyz_deg(quat_from(q)))
 }
 
 fn mount_transform_identity() {
@@ -2365,17 +2402,22 @@ fn mount_transform_identity() {
 // mount frames are rigid contracts, so a non-unit scale is rejected before a
 // proposal rather than silently baking scale into a rigid part placement.
 fn mount_transform_compose(a, b) {
+    let a_rotation = quat_from(a.rotation);
+    let b_rotation = quat_from(b.rotation);
+    let a_translation = vec3_from(a.translation);
+    let b_translation = vec3_from(b.translation);
     #{
-        translation: vadd(a.translation, qrot(a.rotation, b.translation)),
-        rotation: mount_quat_mul(a.rotation, b.rotation),
+        translation: vec3_array(vadd(a_translation, qrot(a_rotation, b_translation))),
+        rotation: quat_array(a_rotation * b_rotation),
     }
 }
 
 fn mount_transform_inverse(value) {
-    let inverse_rotation = mount_quat_inverse(value.rotation);
+    let inverse_rotation = quat_inverse(quat_from(value.rotation));
+    let translation = vec3_from(value.translation);
     #{
-        translation: vscale(qrot(inverse_rotation, value.translation), -1.0),
-        rotation: inverse_rotation,
+        translation: vec3_array(vscale(qrot(inverse_rotation, translation), -1.0)),
+        rotation: quat_array(inverse_rotation),
     }
 }
 

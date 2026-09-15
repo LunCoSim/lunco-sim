@@ -32,7 +32,7 @@
 
 use bevy::ecs::reflect::{ReflectComponent, ReflectResource};
 use bevy::ecs::system::SystemState;
-use bevy::math::DVec3;
+use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::*;
 use std::{
@@ -952,11 +952,19 @@ pub fn navigation_command(
 /// Rust fn each. It uses the same active-frame hierarchy sample as
 /// `world_forward`, so surface-up remains +Y below a rotated celestial branch.
 pub fn world_rotation(gid: u64) -> Option<[f64; 4]> {
+    world_rotation_quat(gid).map(|q| [q.x, q.y, q.z, q.w])
+}
+
+/// Native counterpart of [`world_rotation`]. Backends that can retain glam
+/// values should use this path so the pose query does not lower to an array and
+/// immediately reconstruct the same quaternion. Invalid/non-finite samples are
+/// unavailable rather than entering a control calculation.
+pub fn world_rotation_quat(gid: u64) -> Option<DQuat> {
     with_world(|world| {
         let entity = resolve_entity(world, gid)?;
         let mut state: SystemState<lunco_physics::SimulationPoseQuery> = SystemState::new(world);
         let q = state.get(world).ok()?.rotation(entity)?.0;
-        Some([q.x, q.y, q.z, q.w])
+        (q.is_finite() && q.length_squared() >= 1.0e-24).then_some(q.normalize())
     })
     .flatten()
 }
@@ -2035,11 +2043,13 @@ mod tests {
         let position = world_pos(42).expect("position");
         let forward = world_forward(42).expect("forward");
         let rotation = world_rotation(42).expect("rotation");
+        let native_rotation = world_rotation_quat(42).expect("native rotation");
 
         assert!((position - local_position).length() < 1.0e-4);
         assert!((forward - local_rotation * DVec3::NEG_Z).length() < 1.0e-6);
         let rotation = DQuat::from_array(rotation);
         assert!(rotation.angle_between(local_rotation).abs() < 1.0e-6);
+        assert!(native_rotation.angle_between(local_rotation).abs() < 1.0e-6);
     }
 
     /// §3.4: a `cmd()` from a script launched by a remote session is

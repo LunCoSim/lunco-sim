@@ -82,7 +82,7 @@ fn usd_radial_min(path) {
     if type_of(pts) == "()" || pts.len() == 0 { return (); }
     let best = ();
     for p in pts {
-        let d = (p[0] * p[0] + p[2] * p[2]).sqrt();
+        let d = vlen(vec3(p[0], 0.0, p[2]));
         if type_of(best) == "()" || d < best { best = d; }
     }
     return best;

@@ -7,9 +7,6 @@
 // Pass closures as predicates/metrics, e.g.
 //   let weakest = min_by(all_of_type("rover"), |e| get(e.id, "Battery.charge"));
 
-/// Vector × scalar.
-fn vscale(a, s) { [a[0]*s, a[1]*s, a[2]*s] }
-
 /// True if entity `id` currently has component `name` (e.g. "RoverVessel",
 /// "LinearVelocity"). Built on get(), which returns () for an absent component.
 fn has_component(id, name) { get(id, name) != () }
