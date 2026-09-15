@@ -30,12 +30,11 @@ use lunco_core::ports::{PortRegistry, ResolvedPort};
 use lunco_core::RebuildOnChange;
 
 use lunco_cosim_core::{
-    AlgebraicLoopDiagnostic, BrokenConnection, CosimDiagnostics, PortHolds, RealtimeSafe,
-    SimComponent, SimConnection, SimStatus,
+    AlgebraicLoopDiagnostic, BoundConnection, BrokenConnection, CosimDiagnostics, PortHolds,
+    RealtimeSafe, SimComponent, SimConnection, SimStatus,
 };
 
 use crate::avian::is_physics_force_port;
-use crate::binding::BoundConnection;
 
 /// System sets for co-simulation propagation.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]

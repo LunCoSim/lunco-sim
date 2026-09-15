@@ -6,12 +6,14 @@
 //! systems, and the full wiring scheduler remain in [`lunco-cosim`].
 
 pub mod actuation;
+pub mod binding;
 pub mod component;
 pub mod connection;
 pub mod contract;
 pub mod diagnostics;
 
 pub use actuation::{ForceActuator, TorqueActuator};
+pub use binding::{BoundConnection, ConnectionBinding};
 pub use component::*;
 pub use connection::{
     clear_control_write_fence, ControlWriteFence, PortHolds, RealtimeSafe, SimConnection,

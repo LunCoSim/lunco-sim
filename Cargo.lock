@@ -9055,7 +9055,6 @@ dependencies = [
  "bevy",
  "lunco-api",
  "lunco-core",
- "lunco-cosim",
  "lunco-cosim-core",
  "lunco-modelica-runtime",
  "lunco-physics",

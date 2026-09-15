@@ -6,8 +6,8 @@ route named outputs to named inputs, following the FMI/SSP pattern.
 
 The backend-neutral runtime contract is owned by
 [`lunco-cosim-core`](../lunco-cosim-core/): `SimComponent`, `SimStatus`,
-`SimConnection`, connection diagnostics, control holds, and shared connector
-contracts. This crate owns the Avian integration, port backends, binding
+`SimConnection`, `ConnectionBinding`, `BoundConnection`, connection diagnostics,
+control holds, and shared connector contracts. This crate owns the Avian integration, port backends, binding
 transaction, and fixed-step propagation that realize that contract.
 
 ## Architecture at a glance

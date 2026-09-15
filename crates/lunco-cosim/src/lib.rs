@@ -455,6 +455,7 @@ mod binding_lifecycle_tests {
     use super::*;
     use avian3d::prelude::RevoluteJoint;
     use lunco_core::ports::PortDirection;
+    use lunco_cosim_core::{BoundConnection, ConnectionBinding};
 
     #[test]
     fn port_topology_revision_tracks_owner_lifecycle_not_live_values() {

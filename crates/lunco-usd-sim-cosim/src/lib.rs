@@ -31,9 +31,9 @@ use lunco_core::{
     SceneTransitionCompleted, SceneTransitionCoordinator, SceneTransitionFailed,
     SceneTransitionIntent, SceneTransitionRequest,
 };
-use lunco_cosim::ConnectionBinding;
 use lunco_cosim_core::{
-    BindingEpochDirty, DeclaredOutputPorts, SimComponent, SimConnection, SimStatus, UsdSourcedCosim,
+    BindingEpochDirty, ConnectionBinding, DeclaredOutputPorts, SimComponent, SimConnection,
+    SimStatus, UsdSourcedCosim,
 };
 use lunco_doc::DocumentId;
 #[cfg(feature = "python")]

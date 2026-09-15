@@ -9,7 +9,8 @@ use bevy::prelude::*;
 use lunco_core::ports::PortRegistry;
 
 use lunco_cosim_core::{
-    BrokenConnection, CosimDiagnostics, SimComponent, SimConnection, SimStatus,
+    BoundConnection, BrokenConnection, ConnectionBinding, CosimDiagnostics, SimComponent,
+    SimConnection, SimStatus,
 };
 
 /// Runtime lifecycle of a port-owning endpoint.
@@ -20,20 +21,6 @@ pub enum EndpointLifecycle {
     Ready,
     Failed(String),
 }
-
-/// Binding result for an immutable [`SimConnection`] specification.
-#[derive(Component, Debug, Clone, PartialEq, Eq, Default)]
-pub enum ConnectionBinding {
-    #[default]
-    Pending,
-    Bound,
-    Failed,
-}
-
-/// Marker consumed by propagation.  A connection specification without this
-/// marker is topology waiting to bind, never a half-live wire.
-#[derive(Component, Debug, Clone, Copy, Default)]
-pub struct BoundConnection;
 
 /// Records the sealed binding epoch in which a connection received its initial
 /// source sample.  The marker is runtime state, not authored topology: when a

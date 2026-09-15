@@ -10,7 +10,6 @@ avian3d = { workspace = true }
 bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh", "bevy_light"] }
 lunco-api = { path = "../lunco-api" }
 lunco-core = { path = "../lunco-core" }
-lunco-cosim = { path = "../lunco-cosim" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 lunco-physics = { path = "../lunco-physics" }

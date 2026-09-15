@@ -8,9 +8,9 @@ use avian3d::schedule::PhysicsTime;
 use bevy::ecs::query::QueryState;
 use bevy::prelude::*;
 use lunco_core::{Avatar, LocalAvatar};
-use lunco_cosim::ConnectionBinding;
 use lunco_cosim_core::{
-    BindingEpochDirty, SimComponent, SimConnection, SimStatus, UsdSourcedCosim,
+    BindingEpochDirty, BoundConnection, ConnectionBinding, SimComponent, SimConnection, SimStatus,
+    UsdSourcedCosim,
 };
 use lunco_modelica_runtime::ModelicaModel;
 use lunco_render::SceneCamera;
@@ -340,7 +340,7 @@ impl lunco_api::ApiQueryProvider for CausalTraceProvider {
                     Entity,
                     &SimConnection,
                     Option<&ConnectionBinding>,
-                    Has<lunco_cosim::BoundConnection>,
+                    Has<BoundConnection>,
                 ),
                 With<SimConnection>,
             >::try_new(world) else {
@@ -788,8 +788,8 @@ impl lunco_api::ApiQueryProvider for BindingStatusProvider {
             (
                 Entity,
                 &SimConnection,
-                Option<&lunco_cosim::ConnectionBinding>,
-                Has<lunco_cosim::BoundConnection>,
+                Option<&ConnectionBinding>,
+                Has<BoundConnection>,
             ),
             With<SimConnection>,
         >::try_new(world) else {
