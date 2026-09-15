@@ -189,6 +189,7 @@ fn runtime_ui_facts(
     root: Option<Entity>,
     subject: Option<GlobalEntityId>,
     control_owner: &str,
+    control_claimed: bool,
     visibility_mode: &str,
     q_name: &Query<&Name>,
     q_callsign: &Query<&lunco_core::markers::Callsign>,
@@ -347,6 +348,7 @@ fn runtime_ui_facts(
                 .unwrap_or(HookValue::Unit),
         ),
         ("control_owner", HookValue::str(control_owner)),
+        ("control_claimed", HookValue::Bool(control_claimed)),
         ("visibility_mode", HookValue::str(visibility_mode)),
         ("available", HookValue::Bool(root.is_some())),
         ("label", HookValue::str(label)),
@@ -1407,6 +1409,7 @@ pub(crate) struct ExposureRuntime<'w, 's> {
     selected: Res<'w, SelectedEntities>,
     scene_mount: Res<'w, SceneMountState>,
     local_avatar: Res<'w, TheLocalAvatar>,
+    sessions: Res<'w, lunco_core_session::SessionRegistry>,
     bodies: Query<'w, 's, &'static CelestialBody>,
     angular_velocity: Query<'w, 's, &'static AngularVelocity>,
     rotation: Query<'w, 's, &'static Rotation>,
@@ -1534,6 +1537,7 @@ pub(crate) fn publish_exposure(
             &runtime_surface_roots.roots,
             &runtime_surface_roots.retired_surface_ids,
             &runtime.local_avatar,
+            &runtime.sessions,
             &queries.avatar,
         );
         runtime_surface_roots.retired_surface_ids.clear();
@@ -1637,11 +1641,14 @@ pub(crate) fn publish_exposure(
                     } else {
                         "none"
                     };
+                let control_claimed =
+                    subject.is_some_and(|gid| runtime.sessions.owner_of(gid.get()).is_some());
                 let facts = runtime_ui_facts(
                     &surface.surface_id,
                     Some(vessel.entity),
                     subject,
                     control_owner,
+                    control_claimed,
                     &surface.visibility_mode,
                     &queries.name,
                     &queries.callsign,
@@ -2104,6 +2111,7 @@ fn publish_runtime_surface_exposures(
     roots: &[AuthoredRuntimeSurface],
     retired_surface_ids: &[String],
     local_avatar: &TheLocalAvatar,
+    sessions: &lunco_core_session::SessionRegistry,
     q_avatar: &Query<&ControlLink, (With<Avatar>, With<LocalAvatar>)>,
 ) {
     for surface_id in retired_surface_ids {
@@ -2120,6 +2128,7 @@ fn publish_runtime_surface_exposures(
         } else {
             "none"
         };
+        let control_claimed = subject.is_some_and(|gid| sessions.owner_of(gid.get()).is_some());
         let telemetry = resolve_authored_telemetry(root.entity, signals, q_parents, q_channels);
         publish_selected_control_exposure(
             exposures,
@@ -2127,6 +2136,7 @@ fn publish_runtime_surface_exposures(
             Some(root.entity),
             subject,
             control_owner,
+            control_claimed,
             &root.visibility_mode,
             &telemetry,
             q_name,
@@ -2153,6 +2163,7 @@ fn publish_selected_control_exposure(
     root: Option<Entity>,
     subject: Option<GlobalEntityId>,
     control_owner: &str,
+    control_claimed: bool,
     visibility_mode: &str,
     telemetry: &[PublicTelemetryValue],
     q_name: &Query<&Name>,
@@ -2175,6 +2186,7 @@ fn publish_selected_control_exposure(
         root,
         subject,
         control_owner,
+        control_claimed,
         visibility_mode,
         q_name,
         q_callsign,

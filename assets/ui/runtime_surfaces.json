@@ -119,6 +119,7 @@
       "namespace": "vessel-hud",
       "bindings": {
         "label": { "source": "label" },
+        "program_label": { "source": "program_label" },
         "tilt": { "source": "tilt" },
         "tilt_status": { "source": "tilt_status" },
         "tilt_limits": { "source": "tilt_limits" },
@@ -144,7 +145,8 @@
         "comms_display": { "source": "comms_display" },
         "comms_los_display": { "source": "comms_los_display" },
         "comms_color": { "source": "comms_color" },
-        "telemetry_display": { "source": "telemetry_display" }
+        "telemetry_display": { "source": "telemetry_display" },
+        "program_color": { "source": "program_color" }
       },
       "actions": [],
       "visible_in_perspective": "sandbox_view",
@@ -187,14 +189,21 @@
       "setting_default": true,
       "interactive": true,
       "bindings": {
-        "active_label": { "source": "active_label" }
+        "active_label": { "source": "active_label" },
+        "dropdown_width": { "source": "dropdown_width" },
+        "dropdown_max_height": { "source": "dropdown_max_height" }
       },
-      "collections": [
+      "dropdowns": [
         {
+          "id": "camera-selection",
+          "trigger_action": "camera.picker.toggle",
           "source": "camera_items",
-          "container": "camera-list",
-          "template": "ui/camera_status_row.html",
-          "key": "key"
+          "key": "key",
+          "label": "label",
+          "action": "action",
+          "width_source": "dropdown_width",
+          "max_height_source": "dropdown_max_height",
+          "selected_source": "active_name"
         }
       ],
       "visible_in_perspective": "sandbox_view",
@@ -203,8 +212,8 @@
         "mode": "window",
         "anchor": "top_right",
         "offset": [-12.0, 52.0],
-        "width": 260.0,
-        "height": 236.0
+        "width": 196.0,
+        "height": 32.0
       }
     },
     {

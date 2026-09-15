@@ -80,14 +80,20 @@ hosts retain authored row order and own wheel scrolling inside their clipped
 list; Rhai still owns the records, ordering, and actions.
 
 The camera-status card binds the deterministic compact `active_label` projection;
-the full `active_name` remains available to runtime consumers. Rhai turns the
-typed camera facts into ordered `camera_items`, including optional observe-avatar
-and resume-director actions. The generic collection host renders those items
-from `camera_status_row.html`; a row emits its authored semantic action and the
-camera capability executes the resulting typed command. The card and its list
-therefore remain one authored HUI surface rather than an egui popup. Its
-collection host clips long lists and consumes wheel input at the host boundary;
-Rhai remains the owner of the records, order, and actions.
+the full `active_name` remains available to runtime consumers. Its authored HUI
+button is a generic dropdown trigger. The manifest names the typed option-array
+fields (`camera_items`, `key`, `label`, and `action`) and the two Rhai-owned
+dimension properties (`dropdown_width` and `dropdown_max_height`). Rust only
+renders that generic record shape and forwards the selected action; the camera
+policy in Rhai turns those actions into typed camera commands. HUI 0.7 has no
+native select/accessibility tree, so the shared egui dropdown is the low-level
+renderer and is not camera-aware.
+
+Other surfaces can reuse the same dropdown contract for programs, routes,
+telemetry channels, or any other typed option records. The exposure registry
+keeps scalar, array, and map values typed across the Rust/Rhai boundary; HTML
+and CSS can bind the same authored size properties for the trigger while Rhai
+controls the popup dimensions.
 
 The `celestial-view` surface also owns the authored lunar map. Rust resolves the
 local avatar's driven target through `TheLocalAvatar` and `ControlLink`,

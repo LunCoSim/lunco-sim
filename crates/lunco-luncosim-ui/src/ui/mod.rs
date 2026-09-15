@@ -6,11 +6,11 @@
 //! compile this crate.
 
 use bevy::prelude::*;
-use bevy_egui::egui;
+use bevy_egui::{egui, EguiContexts};
 
 use lunco_modelica_ui::{ModelicaUiConfig, ModelicaWorkbenchPlugin};
 use lunco_usd_bevy_camera::camera_switch::{
-    CameraSelectionOwner, CameraSelectionStatus, ObserveAvatar, ResumeCameraDirector, SetUserCamera,
+    CameraSelectionOwner, CameraSelectionStatus, ObserveAvatar, ResumeCameraDirector,
 };
 use lunco_workbench_core::scene::{CurrentSceneName, CurrentScenePath};
 use lunco_workbench_core::{MenuCtx, WorkbenchMenuRegistry, WorkbenchSnapshot};
@@ -44,6 +44,39 @@ mod update;
 /// Typed intent emitted by the authored terrain-progress surface.
 #[derive(Event, Clone, Debug)]
 struct DismissTerrainOverlay;
+
+/// Transient lifecycle for generic authored dropdown controls. The dropdown
+/// identity and option records come from the active runtime UI manifest and
+/// typed exposure snapshot; this resource only controls presentation state.
+#[derive(Resource, Default, Debug, Clone, PartialEq, Eq)]
+struct RuntimeUiDropdownState {
+    open: Option<String>,
+    /// Keep the press that opened the dropdown from immediately closing it
+    /// when the matching pointer release reaches egui on the next frame.
+    ignore_opening_click: bool,
+}
+
+impl RuntimeUiDropdownState {
+    fn toggle(&mut self, key: &str) {
+        if self.open.as_deref() == Some(key) {
+            self.close();
+        } else {
+            self.open = Some(key.to_owned());
+            self.ignore_opening_click = true;
+        }
+    }
+
+    fn close(&mut self) {
+        self.open = None;
+        self.ignore_opening_click = false;
+    }
+
+    fn consume_opening_click(&mut self, clicked: bool) {
+        if self.ignore_opening_click && clicked {
+            self.ignore_opening_click = false;
+        }
+    }
+}
 
 /// The luncosim's interactive layer: egui workbench, bevy_picking, the USD Twin
 /// browser + RTT viewport, the in-scene editor, materials, rover panels, and
@@ -218,7 +251,10 @@ impl Plugin for LunCoSimUiPlugin {
         app.world_mut()
             .resource_mut::<lunco_usd_bevy_camera::camera_switch::StandalonePresentationState>()
             .enabled = true;
-        app.init_resource::<dataset_provisioning::DatasetProvisioningState>()
+        app.init_resource::<RuntimeUiDropdownState>()
+            .add_systems(lunco_core::SceneTeardown, reset_runtime_ui_dropdowns)
+            .add_observer(reset_runtime_ui_dropdowns_on_twin_closed)
+            .init_resource::<dataset_provisioning::DatasetProvisioningState>()
             .add_observer(dataset_provisioning::on_dataset_scope_ready)
             .add_observer(dataset_provisioning::on_dataset_scope_removed)
             .add_systems(Update, dataset_provisioning::poll_dataset_provisioning);
@@ -384,11 +420,16 @@ impl Plugin for LunCoSimUiPlugin {
             // field. Its state still flows through the typed SetClock command.
             .add_systems(
                 bevy_egui::EguiPrimaryContextPass,
-                (celestial_time::draw_celestial_time
-                    .in_set(lunco_workbench_core::ApplicationOverlayRenderSet)
-                    .run_if(not(recording_offline))
-                    .run_if(in_view_perspective)
-                    .run_if(overlays::sky_clock_visible),),
+                (
+                    celestial_time::draw_celestial_time
+                        .in_set(lunco_workbench_core::ApplicationOverlayRenderSet)
+                        .run_if(not(recording_offline))
+                        .run_if(in_view_perspective)
+                        .run_if(overlays::sky_clock_visible),
+                    draw_runtime_ui_dropdowns
+                        .in_set(lunco_workbench_core::ApplicationOverlayRenderSet)
+                        .run_if(not(recording_offline)),
+                ),
             );
 
         // Embed the FULL lunica workbench as the "Design" workspace via the
@@ -459,7 +500,9 @@ fn on_runtime_ui_action(
     q_bodies: Query<(Entity, &lunco_core::CelestialBody)>,
     q_tags: Query<&bevy_hui::prelude::Tags>,
     orbital_pin: Option<Res<lunco_celestial_spatial::OrbitalViewPin>>,
-    camera_status: Option<Res<CameraSelectionStatus>>,
+    manifests: Res<Assets<runtime_exposure::RuntimeUiManifest>>,
+    manifest_state: Res<runtime_exposure::RuntimeUiManifestState>,
+    mut dropdowns: ResMut<RuntimeUiDropdownState>,
     mut commands: Commands,
 ) {
     match &trigger.event().action {
@@ -511,35 +554,9 @@ fn on_runtime_ui_action(
             let Some(action) = action.filter(|action| !action.trim().is_empty()) else {
                 return;
             };
-            if let Some(index) = action.strip_prefix("camera.select.") {
-                let Some(status) = camera_status.as_deref() else {
-                    report_runtime_ui_failure(&mut commands, "camera state is not ready");
-                    return;
-                };
-                let Ok(index) = index.parse::<usize>() else {
-                    report_runtime_ui_failure(&mut commands, "camera action has an invalid index");
-                    return;
-                };
-                let Some(name) = status.cameras.get(index).cloned() else {
-                    report_runtime_ui_failure(
-                        &mut commands,
-                        "camera action selected an unknown camera",
-                    );
-                    return;
-                };
-                commands.trigger(SetUserCamera { name });
+            if let Some(key) = manifest_state.dropdown_key_for_action(&manifests, &action) {
+                dropdowns.toggle(&key);
                 return;
-            }
-            match action.as_str() {
-                "camera.observe.avatar" => {
-                    commands.trigger(ObserveAvatar {});
-                    return;
-                }
-                "camera.resume.director" => {
-                    commands.trigger(ResumeCameraDirector {});
-                    return;
-                }
-                _ => {}
             }
             commands.trigger(lunco_core::TelemetryEvent {
                 name: "runtime.ui.action".to_owned(),
@@ -576,31 +593,218 @@ fn report_runtime_ui_failure(commands: &mut Commands, message: &str) {
     lunco_core::trigger_error(commands, "runtime-ui-action-failed", message);
 }
 
-/// Draw the shared camera list for the workbench Camera menu. The returned
-/// value is always the full authored name.
+fn reset_runtime_ui_dropdowns(mut dropdowns: ResMut<RuntimeUiDropdownState>) {
+    dropdowns.close();
+}
+
+fn reset_runtime_ui_dropdowns_on_twin_closed(
+    _trigger: On<lunco_workspace::TwinClosed>,
+    mut dropdowns: ResMut<RuntimeUiDropdownState>,
+) {
+    dropdowns.close();
+}
+
+/// Labels for the native Camera menu remain authored camera-domain commands.
+/// The in-scene dropdown below is generic and reads its option records from the
+/// runtime exposure snapshot.
 const CAMERA_OBSERVE_AVATAR: &str = "Observe avatar";
 const CAMERA_RESUME_DIRECTOR: &str = "Resume authored director";
 
-fn camera_option_list(ui: &mut egui::Ui, state: &CameraSelectionStatus) -> Option<String> {
-    if state.cameras.is_empty() {
-        ui.label("No authored window camera is available.");
-        ui.label("This scene has no presentation until one is authored.");
+fn runtime_ui_dropdown_options(
+    ui: &mut egui::Ui,
+    exposure: &lunco_core::exposure::ExposureSurface,
+    definition: &runtime_exposure::RuntimeUiDropdownDefinition,
+    selected_key: Option<&str>,
+) -> Option<String> {
+    let Some(lunco_core::exposure::ExposureValue::Array(values)) =
+        exposure.properties.get(&definition.source)
+    else {
+        ui.label("No authored options are available.");
         return None;
-    }
+    };
 
-    ui.label("Operator camera");
-    let labels = lunco_usd_bevy_camera::camera_switch::camera_display_labels(&state.cameras);
     let mut selected = None;
-    for (name, label) in state.cameras.iter().zip(labels) {
-        let active = state.active_name.as_deref() == Some(name.as_str());
-        let response = ui
-            .selectable_label(active, label)
-            .on_hover_text(name.as_str());
-        if response.clicked() {
-            selected = Some(name.clone());
+    for value in values {
+        let Some(fields) = runtime_exposure::collection_item_fields(value, &definition.key) else {
+            continue;
+        };
+        let Some(key) = fields
+            .iter()
+            .find(|(name, _)| name == &definition.key)
+            .map(|(_, value)| value.as_str())
+        else {
+            continue;
+        };
+        let Some(label) = fields
+            .iter()
+            .find(|(name, _)| name == &definition.label)
+            .map(|(_, value)| value.as_str())
+        else {
+            continue;
+        };
+        let Some(action) = fields
+            .iter()
+            .find(|(name, _)| name == &definition.action)
+            .map(|(_, value)| value.as_str())
+        else {
+            continue;
+        };
+        if ui
+            .selectable_label(selected_key == Some(key), label)
+            .on_hover_text(key)
+            .clicked()
+        {
+            selected = Some(action.to_owned());
         }
     }
     selected
+}
+
+fn runtime_ui_dimension(
+    exposure: &lunco_core::exposure::ExposureSurface,
+    source: &str,
+) -> Option<f32> {
+    let value = exposure.properties.get(source)?;
+    let pixels = match value {
+        lunco_core::exposure::ExposureValue::Number(value) => *value as f32,
+        lunco_core::exposure::ExposureValue::Text(value) => value
+            .trim()
+            .strip_suffix("px")?
+            .trim()
+            .parse::<f32>()
+            .ok()?,
+        _ => return None,
+    };
+    pixels
+        .is_finite()
+        .then_some(pixels)
+        .filter(|value| *value > 0.0)
+}
+
+/// Draw every open authored dropdown. This is a generic presentation mechanic:
+/// the active manifest supplies the record field names and Rhai supplies the
+/// records, actions, and dimensions. No camera or other domain state is read.
+fn draw_runtime_ui_dropdowns(
+    mut egui_ctx: EguiContexts,
+    mut dropdowns: ResMut<RuntimeUiDropdownState>,
+    exposures: Res<lunco_core::exposure::EngineExposures>,
+    roots: Query<(&runtime_exposure::RuntimeUiSurface, &Visibility)>,
+    manifest_state: Res<runtime_exposure::RuntimeUiManifestState>,
+    manifests: Res<Assets<runtime_exposure::RuntimeUiManifest>>,
+    layout: Option<Res<WorkbenchSnapshot>>,
+    theme: Option<Res<lunco_theme::Theme>>,
+    mut commands: Commands,
+) {
+    if !layout.is_some_and(|layout| {
+        layout.active_perspective() == Some(lunco_workbench_core::PerspectiveId("sandbox_view"))
+    }) {
+        dropdowns.close();
+        return;
+    }
+    let Some(open_key) = dropdowns.open.clone() else {
+        return;
+    };
+    let Some(manifest) = manifest_state.manifest(&manifests) else {
+        dropdowns.close();
+        return;
+    };
+    let Some((surface_definition, definition)) = manifest.dropdown_for_key(&open_key) else {
+        dropdowns.close();
+        return;
+    };
+    let Some(exposure) = exposures.surfaces.get(&surface_definition.namespace) else {
+        dropdowns.close();
+        return;
+    };
+    let Some(anchor) = roots.iter().find_map(|(surface, visibility)| {
+        (surface.namespace() == surface_definition.namespace
+            && matches!(*visibility, Visibility::Visible)
+            && surface.is_mounted())
+        .then(|| surface.applied_rect())
+        .flatten()
+    }) else {
+        return;
+    };
+    let Ok(ctx) = egui_ctx.ctx_mut() else {
+        return;
+    };
+
+    let theme = theme
+        .map(|theme| theme.clone())
+        .unwrap_or_else(lunco_theme::Theme::dark);
+    let popup_id = egui::Id::new(("runtime_ui_dropdown", open_key.as_str()));
+    let mut open = true;
+    let ignore_opening_click = dropdowns.ignore_opening_click;
+    let selected_key = definition
+        .selected_source
+        .as_deref()
+        .and_then(|source| exposure.properties.get(source))
+        .and_then(lunco_core::exposure::ExposureValue::scalar_render);
+    let width = runtime_ui_dimension(exposure, &definition.width_source);
+    let max_height = runtime_ui_dimension(exposure, &definition.max_height_source);
+    let (Some(width), Some(max_height)) = (width, max_height) else {
+        report_runtime_ui_failure(
+            &mut commands,
+            "authored dropdown dimensions are unavailable or invalid",
+        );
+        dropdowns.close();
+        return;
+    };
+    let mut selected_action = None;
+
+    egui::Popup::new(
+        popup_id,
+        ctx.clone(),
+        anchor,
+        egui::LayerId::new(egui::Order::Foreground, popup_id),
+    )
+    .align(egui::RectAlign::BOTTOM_START)
+    .gap(6.0)
+    .open_bool(&mut open)
+    .close_behavior(if ignore_opening_click {
+        egui::PopupCloseBehavior::IgnoreClicks
+    } else {
+        egui::PopupCloseBehavior::CloseOnClickOutside
+    })
+    .layout(egui::Layout::top_down(egui::Align::Min))
+    .frame(
+        egui::Frame::new()
+            .fill(theme.tokens.overlay_backdrop)
+            .stroke(egui::Stroke::new(1.0, theme.tokens.overlay_border))
+            .corner_radius(6.0)
+            .inner_margin(egui::Margin::same(8)),
+    )
+    .show(|ui| {
+        let viewport_width = ctx.content_rect().width().max(1.0);
+        ui.set_width(width.min(viewport_width));
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+        egui::ScrollArea::vertical()
+            .max_height(max_height)
+            .show(ui, |ui| {
+                selected_action =
+                    runtime_ui_dropdown_options(ui, exposure, definition, selected_key.as_deref());
+            });
+    });
+
+    if selected_action.is_some() {
+        open = false;
+    }
+    if !open {
+        dropdowns.close();
+    }
+    dropdowns.consume_opening_click(ctx.input(|input| input.pointer.any_click()));
+    if !open {
+        dropdowns.close();
+    }
+    if let Some(action) = selected_action {
+        commands.trigger(lunco_core::TelemetryEvent {
+            name: "runtime.ui.action".to_owned(),
+            source: 0,
+            severity: lunco_core::Severity::Info,
+            data: lunco_core::TelemetryValue::String(action),
+            timestamp: 0.0,
+        });
+    }
 }
 
 /// Register an egui-hosted, keyboard-accessible route to the same semantic
@@ -642,9 +846,37 @@ fn register_camera_menu(world: &mut World) {
                 ui.close();
             }
             ui.separator();
-            if let Some(name) = camera_option_list(ui, state) {
-                ctx.trigger(SetUserCamera { name });
-                ui.close();
+            let dropdown = ctx
+                .resource::<runtime_exposure::RuntimeUiManifestState>()
+                .and_then(|state| {
+                    ctx.resource::<Assets<runtime_exposure::RuntimeUiManifest>>()
+                        .and_then(|manifests| state.manifest(manifests))
+                })
+                .and_then(|manifest| {
+                    manifest
+                        .surfaces
+                        .iter()
+                        .find(|surface| surface.namespace == "camera-status")
+                        .and_then(|surface| surface.dropdowns.first())
+                });
+            let exposure = ctx
+                .resource::<lunco_core::exposure::EngineExposures>()
+                .and_then(|exposures| exposures.surfaces.get("camera-status"));
+            if let (Some(dropdown), Some(exposure)) = (dropdown, exposure) {
+                let selected_key = dropdown
+                    .selected_source
+                    .as_deref()
+                    .and_then(|source| exposure.properties.get(source))
+                    .and_then(lunco_core::exposure::ExposureValue::scalar_render);
+                if let Some(action) =
+                    runtime_ui_dropdown_options(ui, exposure, dropdown, selected_key.as_deref())
+                {
+                    ctx.trigger(runtime_exposure::RuntimeUiAction {
+                        action: runtime_exposure::RuntimeUiActionKind::Authored(action),
+                        source: Entity::PLACEHOLDER,
+                    });
+                    ui.close();
+                }
             }
         } else {
             ui.label("Camera state is not ready.");
@@ -1441,35 +1673,39 @@ fn clean_scene_name(stem: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::scenario_registry_diagnostic;
-    use super::scenario_registry_status_message;
-    use lunco_usd_bevy_camera::camera_switch::camera_display_labels;
+    use super::{
+        runtime_ui_dimension, scenario_registry_diagnostic, scenario_registry_status_message,
+        RuntimeUiDropdownState,
+    };
+    use lunco_core::exposure::{ExposureSurface, ExposureValue};
+    use std::collections::HashMap;
 
     #[test]
-    fn camera_display_labels_disambiguate_duplicate_leaf_names() {
-        let names = vec![
-            "/World/Cameras/Overview".to_owned(),
-            "/World/Rovers/Overview".to_owned(),
-            "/World/Cameras/Detail".to_owned(),
-        ];
+    fn authored_dropdown_keeps_open_after_the_trigger_press() {
+        let mut dropdowns = RuntimeUiDropdownState::default();
+        dropdowns.toggle("surface::dropdown");
+        assert_eq!(dropdowns.open.as_deref(), Some("surface::dropdown"));
+        assert!(dropdowns.ignore_opening_click);
 
-        assert_eq!(
-            camera_display_labels(&names),
-            vec!["Overview / Cameras", "Overview / Rovers", "Detail"]
-        );
+        dropdowns.consume_opening_click(true);
+        assert_eq!(dropdowns.open.as_deref(), Some("surface::dropdown"));
+        assert!(!dropdowns.ignore_opening_click);
+
+        dropdowns.close();
+        assert_eq!(dropdowns, RuntimeUiDropdownState::default());
     }
 
     #[test]
-    fn camera_display_labels_extend_context_when_parent_labels_collide() {
-        let names = vec![
-            "/World/Alpha/Views/Overview".to_owned(),
-            "/World/Beta/Views/Overview".to_owned(),
-        ];
-
-        assert_eq!(
-            camera_display_labels(&names),
-            vec!["Overview / Views / Alpha", "Overview / Views / Beta"]
-        );
+    fn authored_dropdown_dimensions_accept_typed_policy_values() {
+        let mut properties = HashMap::new();
+        properties.insert("width".to_owned(), ExposureValue::Text("280px".to_owned()));
+        properties.insert("height".to_owned(), ExposureValue::Number(240.0));
+        let exposure = ExposureSurface {
+            properties,
+            ..default()
+        };
+        assert_eq!(runtime_ui_dimension(&exposure, "width"), Some(280.0));
+        assert_eq!(runtime_ui_dimension(&exposure, "height"), Some(240.0));
     }
 
     #[test]

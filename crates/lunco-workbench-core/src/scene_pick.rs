@@ -152,13 +152,16 @@ fn resolve_scene_target(
     scene_viewport_rect: Option<egui::Rect>,
 ) -> Option<SceneTarget> {
     let pos = egui_state.hover_pos?;
+    // Runtime HUI controls are registered as chrome cards. They must own the
+    // pointer before the full-window scene leaf is considered; the leaf is a
+    // geometry hit target, not an input capture layer.
+    if chrome_cards.iter().any(|(_, card)| card.contains(pos)) {
+        return None;
+    }
     if let Some(target) = scene_leaf {
         return Some(target);
     }
     if egui_state.using_pointer || egui_state.over_egui {
-        return None;
-    }
-    if chrome_cards.iter().any(|(_, card)| card.contains(pos)) {
         return None;
     }
     if scene_viewport_rect.is_some_and(|rect| rect.contains(pos)) {
@@ -322,6 +325,31 @@ mod tests {
                 Some(SceneTarget::MainViewport),
                 &[],
                 Some(rect((0.0, 30.0), (800.0, 400.0))),
+                None,
+            ),
+            Some(SceneTarget::MainViewport)
+        );
+    }
+
+    #[test]
+    fn runtime_ui_control_owns_pointer_over_full_window_scene_leaf() {
+        let control = rect((720.0, 40.0), (860.0, 80.0));
+        assert_eq!(
+            resolve_scene_target(
+                hovering((760.0, 60.0)),
+                Some(SceneTarget::MainViewport),
+                &[(control, control)],
+                None,
+                None,
+            ),
+            None
+        );
+        assert_eq!(
+            resolve_scene_target(
+                hovering((900.0, 60.0)),
+                Some(SceneTarget::MainViewport),
+                &[(control, control)],
+                None,
                 None,
             ),
             Some(SceneTarget::MainViewport)

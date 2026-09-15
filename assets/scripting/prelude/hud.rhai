@@ -91,6 +91,35 @@ fn current_camera_name() {
     if name == () || name == "" { "NO ACTIVE CAMERA" } else { name }
 }
 
+/// Dispatch the authored camera-surface actions through the normal typed
+/// command bridge. The runtime UI layer only transports the action string; it
+/// does not know that these records happen to represent cameras.
+fn handle_camera_ui_action(action) {
+    let prefix = "camera.select.path.";
+    if action.starts_with(prefix) {
+        let result = cmd("SetUserCamera", #{ name: action.sub_string(prefix.len()) });
+        if result == () || result.ok != true {
+            notify_kind("Camera selection failed", "error");
+        }
+        return true;
+    }
+    if action == "camera.observe.avatar" {
+        let result = cmd("ObserveAvatar", #{});
+        if result == () || result.ok != true {
+            notify_kind("Avatar camera is unavailable", "error");
+        }
+        return true;
+    }
+    if action == "camera.resume.director" {
+        let result = cmd("ResumeCameraDirector", #{});
+        if result == () || result.ok != true {
+            notify_kind("Authored camera director is unavailable", "error");
+        }
+        return true;
+    }
+    false
+}
+
 /// Enable/disable a simulation subsystem at runtime (progressive fidelity ramp).
 /// `name` ∈ "thermal" | "comms-degradation" | "obstacle-field" (see lunco-core).
 fn set_subsystem(name, on)     { cmd("SetSubsystemEnabled", #{ name: name, on: on }) }

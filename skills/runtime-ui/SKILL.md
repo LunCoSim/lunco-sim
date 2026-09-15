@@ -58,8 +58,12 @@ available for ordered arrays of typed records; the collection host owns row
 lifecycle only, while Rhai owns the records, labels, ordering, and actions.
 
 Twin-authored actions are open-ended semantic identifiers. The reusable
-`program-browser` and `camera-status` surfaces publish typed arrays of records;
-their HUI row templates are reconciled by the generic keyed collection host.
+`program-browser` surface publishes typed arrays of records; its HUI row
+template is reconciled by the generic keyed collection host. A surface may also
+declare a generic dropdown: the manifest supplies the trigger, option source,
+key/label/action field names, and Rhai-owned width/max-height sources. The
+compact `camera-status` surface is one consumer of that primitive, not a
+camera-specific widget.
 `program_editor` owns selection, editor focus, atomic source switching, and
 creation for any authored program, regardless of whether its owner is a rover,
 lander, route, or another model. Rich source text entry remains in the existing
@@ -246,17 +250,15 @@ dimensions.
 ### 4. Map actions through the existing command path
 
 The HTML callback name is only an authored binding. The manifest maps it to a
-semantic action string; the runtime emits a typed action event; the host
-observer maps that action to an existing typed command/event. A template must
-not mutate resources or call a domain API directly.
+semantic action string; the runtime emits a typed action event; the owning
+Rhai program maps that action to a typed command/event. A template must not
+mutate resources or call a domain API directly.
 
-The camera-status collection uses authored actions such as
-`camera.select.<index>`, `camera.observe.avatar`, and
-`camera.resume.director`. Rhai chooses which rows exist and their order; the
-generic runtime bridge only resolves a selected camera identity and emits the
-existing typed camera command. The HUI collection host owns row creation,
-property updates, ordering, and removal without a fixed row count or a second
-camera registry.
+The generic dropdown mechanic owns only popup lifecycle, typed record
+projection, scrolling, and authored dimensions. It does not parse action
+prefixes or construct options. HUI 0.7 has no native select/accessibility
+tree, so this shared egui primitive is the low-level option. Camera, program,
+route, and future domain policies remain authored in Rhai.
 
 If a new domain action is needed, author its semantic identifier and handle it
 in the owning Rhai program through the existing typed command/query/event
