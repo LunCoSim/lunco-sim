@@ -17,6 +17,69 @@ experiments, not LunCoSim compatibility or real-time guarantees. Its dust model 
 phenomenological. SCM, CRM/DEM excavation, Sensor, dust, ROS 2, HIL, and dataset
 generation are possible follow-ups requiring separate review.
 
+## Rust alternatives: evaluate before adopting Chrono
+
+Source review dated 2026-09-15; candidates have not been built or benchmarked here.
+No complete Rust equivalent of the paper's integrated vehicle/soil/sensor stack
+was established by this review. That does not mean each needed capability requires
+Chrono. Select the smallest missing capability before selecting an engine.
+
+| Option | Evidence and reusable capability | Fit and remaining work |
+|---|---|---|
+| Existing Avian + LunCoSim | Workspace uses Avian 0.7 with f64/Parry; `lunco-mobility` already supplies contact-plane traction, spring/damper suspension, joint wheels, rocker-bogie coupling, and Modelica/oracle reference cases | First baseline for rigid-terrain rover work. Retains USD, ports, frame, and time ownership. Existing tests are not lunar-soil validation |
+| [Rapier](https://github.com/dimforge/rapier) | Rust rigid-body engine with [reduced-coordinate multibody joints](https://rapier.rs/docs/user_guides/rust/joint_constraints), useful for articulated robotics | Evaluate only for a measured joint/solver limitation. Separate state/handles still need projection and ownership work; Rust removes the C++ boundary, not integration cost. Not a turnkey SCM/excavation/sensor stack |
+| [Parry](https://github.com/dimforge/parry) | Rust geometric queries and collision detection; already used through Avian's Parry feature | Reuse geometry capabilities when needed; not a dynamics or soil constitutive solver |
+| [Salva](https://github.com/dimforge/salva) | Particle fluids with DFSPH/IISPH, viscosity, elasticity, optional Rapier coupling, and advertised WASM support | Potential fluid/particle research component. Fluid SPH is not Chrono CRM regolith: plasticity, soil calibration, Avian coupling, precision, and current dependency compatibility need evidence |
+| [Sparkl](https://github.com/dimforge/sparkl) | Rust MPM code with particle/material simulation and a PTX build path | Research candidate for deformable material. Inspect precision, CPU/GPU paths, toolchain, constitutive models, maintenance, and platform support before adoption. Do not assume Rust implies browser or portable GPU support |
+| Focused in-house soil extension | Existing mobility force application, terrain substrate, and Modelica reference machinery | Candidate for bounded pressure-sinkage/shear behavior without a second rigid-body solver. It is a new numerical model requiring calibration, not a small rewrite of all Chrono |
+
+The source inventory is anchored in `Cargo.toml`,
+[`lunco-mobility`](../../crates/lunco-mobility/README.md), and
+[terrain substrate](terrain-substrate.md). The scoped mobility/terrain-core search
+did not identify a Bekker/Janosi/SCM implementation. Inspect wider owners before
+implementation; lack of a name match is not proof that no equivalent exists.
+
+### Bounded Rust implementation candidate
+
+First define the requested output: wheel sinkage and drawbar pull/slip on a
+restricted soil regime, not excavation or arbitrary granular flow. A prototype
+could evaluate Bekker pressure-sinkage and Janosi-Hanamoto shear laws using
+authored soil parameters. The equations are compact; the difficult work includes
+contact-patch integration, persistent soil/shear state, unloading/reloading,
+overlapping wheels, terrain deformation, numerical stability, and calibration.
+Do not estimate complexity from the number of equations or code lines.
+
+Keep Avian as rigid-body owner, terrain state at the terrain owner, and the selected
+wheel/soil force path at mobility. Replace the relevant hard-ground reaction in
+the selected mode instead of adding soil force on top of existing traction or
+collider response. Modelica owns reference equations and suitable continuous
+subsystems; Rust owns spatial queries and hot numerical mechanisms; Rhai owns
+experiment policy. Review this ownership before introducing any state or schema.
+
+Rendering-only improvements (lunar reflectance, shadows, or cosmetic dust) should
+be scoped through existing rendering/material owners. They do not establish
+camera calibration, sensor noise fidelity, or physically validated dust transport.
+No native Rust sensor library equivalent to Chrono::Sensor was established here.
+
+### Required comparison gate
+
+Before choosing Chrono, record a capability gap and compare the existing baseline,
+a bounded Rust extension, relevant Rust libraries, and Chrono on the same authored
+experiment. Evaluate physical error against independent reference data, timestep
+and grid convergence, runtime/memory, f64 and WASM support, ownership complexity,
+license/dependency burden, and maintenance effort. Pin candidate revisions;
+validate current toolchain support rather than treating README claims as tests.
+
+For soil, use plate sinkage and a single-wheel sweep over load/slip with calibrated
+parameters, then a rover case. Predeclare tolerances and negative cases. Agreement
+with Chrono alone is cross-checking, not experimental validation. Approve a focused
+Rust implementation if it meets the required regime and is cheaper to maintain;
+retain Chrono only for a demonstrated capability/accuracy benefit. Large-strain
+excavation, general DEM/MPM/SPH, and calibrated sensors remain substantial projects.
+
+This alternatives review precedes an adoption decision. The existing Chrono P0
+build can supply comparison evidence; a successful build does not select Chrono.
+
 ## Existing owners and extension boundary
 
 | Concern | Existing owner | Proposed relationship |
