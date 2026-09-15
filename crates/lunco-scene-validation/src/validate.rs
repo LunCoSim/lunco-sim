@@ -722,7 +722,13 @@ impl ApiQueryProvider for ValidateSysmlProvider {
                 "warnings": report.warnings,
                 "source_files": report.info.get("source_files").cloned().unwrap_or_else(|| json!([])),
                 "requirements": requirements,
-                "attributes": compact_sysml_attributes(report.info.get("attributes")),
+                // Keep one compact, lossless qualified-name table. A short-name
+                // table cannot represent collisions (for example each
+                // component's `namesSource`) and silently drops owners. The
+                // Rhai bridge resolves qualified names directly; no duplicate
+                // short/qualified maps are serialized through its bounded
+                // value budget.
+                "attributes": json!({}),
                 "attributes_qualified": compact_sysml_attributes(report.info.get("attributes_qualified")),
                 "attribute_collisions": report
                     .info
@@ -772,6 +778,8 @@ impl ApiQueryProvider for ValidateSysmlProvider {
 }
 
 fn compact_sysml_attributes(value: Option<&serde_json::Value>) -> serde_json::Value {
+    // Preserve the qualified identity in every compact record; Rhai uses it
+    // to resolve cross-package source references without short-name guessing.
     let mut output = serde_json::Map::new();
     let Some(serde_json::Value::Object(attributes)) = value else {
         return serde_json::Value::Object(output);
