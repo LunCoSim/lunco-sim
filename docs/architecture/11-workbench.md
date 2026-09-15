@@ -12,6 +12,8 @@
 > `lunco-workbench-guided-ui` is another optional host-level adapter: it consumes
 > the same core/widget contracts for Rhai-driven guided HUDs and coach marks,
 > but does not make the base shell depend on tutorial behavior.
+> `lunco-workbench-file-dialog` owns native and browser file-dialog backends; the
+> shell and domain panels consume its typed request/result events.
 >
 > **Terminology note.** Later sections of this doc (§4 onward) use
 > "workspace" in its original Blender/CATIA sense — a layout preset.
@@ -63,6 +65,8 @@ including persistence and viewport integration. The
 hierarchy-row presentation without depending on the shell. The optional
 `lunco-workbench-guided-ui` crate owns guided HUD, spotlight, coach-mark, and
 recovery presentation without depending on the shell. The optional
+`lunco-workbench-file-dialog` crate owns native/wasm file-dialog and browser-download
+backends without depending on the shell. The optional
 `lunco-workbench-browser` crate builds the reusable Twin and Files navigation
 panels on top of the core/widget contracts. GPU health, adapter capability admission, and
 presentation recovery are owned by the independent
@@ -893,6 +897,11 @@ simulation default.
    │     - depends on core/widget contracts, not the concrete shell
    │         │
    │         ▼
+   ├── lunco-workbench-file-dialog  (optional dialog capability)
+   │     - native rfd and wasm file-dialog/download backends
+   │     - typed request/result events; no shell dependency
+   │         │
+   │         ▼
    ├── lunco-workbench  (concrete app shell — this document)
    │     - Root layout (SidePanel + CentralPanel)
    │     - egui_dock materialization and persistence
@@ -924,6 +933,9 @@ simulation default.
   and hierarchy-row presentation so reusable panels do not depend on docking.
 - `lunco-workbench-guided-ui` owns optional authored guided presentation and is
   installed explicitly by application hosts after the shell.
+- `lunco-workbench-file-dialog` owns the native/wasm dialog backends and typed
+  picker events; the shell installs its plugin, while domain panels depend on
+  the capability directly when they build picker requests.
 - `lunco-workbench` is the concrete app framework — layout, persistence,
   workspace integration, viewport composition, source editing, and panel host.
 - `lunco-workbench-browser` is the optional navigation feature — Twin/Files

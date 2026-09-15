@@ -217,16 +217,18 @@ fn on_save_as_document_ui(
         .and_then(|ws| ws.active_twin)
         .and_then(|id| workspace.as_deref()?.twin(id))
         .map(|twin| lunco_storage::StorageHandle::File(twin.root.clone()));
-    commands.trigger(lunco_workbench::picker::PickHandle {
-        mode: lunco_workbench::picker::PickMode::SaveFile(lunco_workbench::picker::SaveHint {
-            suggested_name: Some(suggested_name),
-            start_dir,
-            filters: vec![lunco_workbench::picker::OpenFilter::new(
-                "USD stages",
-                &["usda", "usdc", "usd"],
-            )],
-        }),
-        on_resolved: lunco_workbench::picker::PickFollowUp::SaveAs(doc),
+    commands.trigger(lunco_workbench_file_dialog::PickHandle {
+        mode: lunco_workbench_file_dialog::PickMode::SaveFile(
+            lunco_workbench_file_dialog::SaveHint {
+                suggested_name: Some(suggested_name),
+                start_dir,
+                filters: vec![lunco_workbench_file_dialog::OpenFilter::new(
+                    "USD stages",
+                    &["usda", "usdc", "usd"],
+                )],
+            },
+        ),
+        on_resolved: lunco_workbench_file_dialog::PickFollowUp::SaveAs(doc),
     });
 }
 
@@ -245,21 +247,23 @@ fn on_save_as_document_ui(
     };
     if target_path.is_empty() {
         let suggested_name = suggested_usd_name(&host.document().origin().display_name());
-        commands.trigger(lunco_workbench::picker::PickHandle {
-            mode: lunco_workbench::picker::PickMode::SaveFile(lunco_workbench::picker::SaveHint {
-                suggested_name: Some(suggested_name),
-                start_dir: None,
-                filters: vec![lunco_workbench::picker::OpenFilter::new(
-                    "USD stages",
-                    &["usda", "usdc", "usd"],
-                )],
-            }),
-            on_resolved: lunco_workbench::picker::PickFollowUp::SaveAs(doc),
+        commands.trigger(lunco_workbench_file_dialog::PickHandle {
+            mode: lunco_workbench_file_dialog::PickMode::SaveFile(
+                lunco_workbench_file_dialog::SaveHint {
+                    suggested_name: Some(suggested_name),
+                    start_dir: None,
+                    filters: vec![lunco_workbench_file_dialog::OpenFilter::new(
+                        "USD stages",
+                        &["usda", "usdc", "usd"],
+                    )],
+                },
+            ),
+            on_resolved: lunco_workbench_file_dialog::PickFollowUp::SaveAs(doc),
         });
         return;
     }
     let source = host.document().source().to_string();
-    lunco_workbench::picker::download_file(&target_path, &source);
+    lunco_workbench_file_dialog::download_file(&target_path, &source);
     if let Some(host) = registry.host_mut(doc) {
         host.document_mut().mark_saved();
     }

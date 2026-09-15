@@ -3,7 +3,7 @@
 //! Storage is the wrong layer for dialog plumbing — it's the I/O
 //! abstraction that loads and saves doc bytes. Picking a path is a UI
 //! concern: a modal native dialog on desktop, a JS prompt on the web.
-//! So the picker lives here in the workbench and just *uses*
+//! So the picker lives in this production capability package and just *uses*
 //! `OpenFilter` / `SaveHint` / `StorageHandle` from `lunco-storage` to
 //! describe the request and the result.
 //!
@@ -18,7 +18,7 @@
 //! event and triggers the matching typed file-workflow command
 //! (`OpenFile { path }`, `SaveAsDocument { doc, path }`, ...).
 //!
-//! This split keeps UI code synchronous (no `async`, no polling), keeps
+//! This package keeps UI code synchronous (no `async`, no polling), keeps
 //! the backend swap a `cfg`-gated observer rather than a call-site
 //! rewrite, and gives HTTP / scripting callers a uniform shape: trigger
 //! the resolved follow-up command directly to skip the dialog, or
@@ -245,7 +245,7 @@ pub struct PickUnsupported {
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
     use bevy::prelude::*;
-    use bevy::tasks::{futures_lite::future, AsyncComputeTaskPool, Task};
+    use bevy::tasks::{AsyncComputeTaskPool, Task, futures_lite::future};
 
     use super::{PickCancelled, PickHandle, PickInFlight, PickMode, PickResolved, StorageHandle};
 
@@ -348,9 +348,9 @@ mod web {
     use std::collections::HashMap;
 
     use bevy::prelude::*;
-    use wasm_bindgen::prelude::*;
     use wasm_bindgen::JsCast;
-    use wasm_bindgen_futures::{spawn_local, JsFuture};
+    use wasm_bindgen::prelude::*;
+    use wasm_bindgen_futures::{JsFuture, spawn_local};
 
     use super::{
         OpenFilter, PickCancelled, PickFollowUp, PickHandle, PickMode, PickResolved,
@@ -579,9 +579,9 @@ pub fn download_file(file_name: &str, content: &str) {
 /// On native: registers the `rfd`-driven observer + poll system. On
 /// wasm: registers the `<input type="file">` observer + drain system.
 ///
-/// `WorkbenchPlugin` adds this automatically; standalone tests that
-/// want picker behaviour without the full workbench shell can install
-/// it directly.
+/// `WorkbenchPlugin` adds this automatically for hosts that compose the
+/// standard shell; hosts that need only the dialog capability can install it
+/// directly.
 pub struct PickerPlugin;
 
 /// Backstop observer for [`PickUnsupported`], installed on every

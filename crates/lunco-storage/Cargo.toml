@@ -7,7 +7,7 @@ description = "I/O abstraction for LunCoSim — Storage trait + backends (FileSt
 
 [dependencies]
 # NOTE: no `rfd` here. File-open/save dialogs are a UI concern and live in
-# `lunco_workbench::picker` (which has its own `rfd`). Keeping the dialog crate
+# `lunco_workbench_file_dialog` (which has its own `rfd`). Keeping the dialog crate
 # out of this widely-depended-on I/O abstraction keeps `rfd`→wayland/ashpd off
 # the headless server and every other non-UI consumer.
 thiserror = { workspace = true }

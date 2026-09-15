@@ -14,7 +14,7 @@
 //! Every externally callable verb is a reflected typed command per `AGENTS.md` § 4.2 — UI
 //! clicks, menu items, keybinds, HTTP API calls, MCP tools, and AI
 //! agents dispatch the same shape. Empty-string path fields fire the
-//! native picker via [`crate::picker::PickHandle`]; non-empty paths skip the
+//! native file dialog via [`lunco_workbench_file_dialog::PickHandle`]; non-empty paths skip the
 //! dialog (recents, drag-drop, automation).
 //!
 //! ## What this module ships
@@ -22,7 +22,7 @@
 //! - Shell-only commands such as [`SaveAll`], [`SaveAsTwin`], and the picker
 //!   requests.
 //! - The picker-resolution router ([`on_pick_resolved`]) that turns a
-//!   [`crate::picker::PickResolved`] event into the matching typed verb with the
+//!   [`lunco_workbench_file_dialog::PickResolved`] event into the matching typed verb with the
 //!   chosen path filled in.
 //! - **Picker seams** for `OpenTwin`, `OpenFolder`, `AddTwin` and
 //!   `AddFolderToWorkspace`. Those verbs and the folder-scan pipeline behind
@@ -47,7 +47,7 @@ use lunco_core::{on_command, register_commands, Command};
 use lunco_doc_bevy::{rename::RenameOpenDocument, SaveAsDocument};
 use lunco_twin::{DocumentKindId, DocumentKindRegistry};
 
-use crate::picker::{PickFollowUp, PickHandle, PickMode, PickResolved};
+use lunco_workbench_file_dialog::{PickFollowUp, PickHandle, PickMode, PickResolved};
 use lunco_workspace::open::{
     drain_pending_twin_opens, AddFolderToWorkspace, AddTwin, CreateTwin, OpenFolder, OpenTwin,
     PendingTwinOpens,
@@ -57,7 +57,7 @@ use lunco_workspace::{rename::RenameTwinEntry, FileRenamed, WorkspaceResource};
 /// Request a system "Open File" dialog.
 ///
 /// Dispatches [`ShowOpenFilePicker`] which triggers the picker via
-/// [`crate::picker::PickHandle`]. On success, the picker resolves to
+/// [`lunco_workbench_file_dialog::PickHandle`]. On success, the file dialog resolves to
 /// [`OpenFile`] with the chosen path.
 #[Command(default)]
 pub struct ShowOpenFilePicker {}
@@ -65,7 +65,7 @@ pub struct ShowOpenFilePicker {}
 /// Request a system "Open Folder" dialog.
 ///
 /// Dispatches [`ShowOpenFolderPicker`] which triggers the picker via
-/// [`crate::picker::PickHandle`]. On success, the picker resolves to
+/// [`lunco_workbench_file_dialog::PickHandle`]. On success, the file dialog resolves to
 /// [`OpenFolder`] with the chosen path.
 #[Command(default)]
 pub struct ShowOpenFolderPicker {}
@@ -152,7 +152,7 @@ fn on_show_open_file_picker(
     registry: Res<DocumentKindRegistry>,
     mut commands: Commands,
 ) {
-    use crate::picker::{PickHandle, PickMode};
+    use lunco_workbench_file_dialog::{PickHandle, PickMode};
     // Collect all unique extensions from every registered kind to
     // build a unified "Supported files" filter.
     let mut extensions: Vec<String> = Vec::new();
@@ -172,14 +172,17 @@ fn on_show_open_file_picker(
 
     let ext_refs: Vec<&str> = extensions.iter().map(|s| s.as_str()).collect();
     commands.trigger(PickHandle {
-        mode: PickMode::OpenFile(crate::picker::OpenFilter::new("Supported files", &ext_refs)),
+        mode: PickMode::OpenFile(lunco_workbench_file_dialog::OpenFilter::new(
+            "Supported files",
+            &ext_refs,
+        )),
         on_resolved: PickFollowUp::OpenFile,
     });
 }
 
 #[on_command(ShowOpenFolderPicker)]
 fn on_show_open_folder_picker(_trigger: On<ShowOpenFolderPicker>, mut commands: Commands) {
-    use crate::picker::{PickHandle, PickMode};
+    use lunco_workbench_file_dialog::{PickHandle, PickMode};
     commands.trigger(PickHandle {
         mode: PickMode::OpenFolder,
         on_resolved: PickFollowUp::OpenFolder,
@@ -214,7 +217,7 @@ fn on_create_twin_pick(trigger: On<CreateTwin>, mut commands: Commands) {
 /// observer. A non-empty path is not this crate's business and is ignored here.
 #[on_command(OpenTwin)]
 fn on_open_twin_pick(trigger: On<OpenTwin>, mut commands: Commands) {
-    use crate::picker::{PickHandle, PickMode};
+    use lunco_workbench_file_dialog::{PickHandle, PickMode};
     if !trigger.event().path.is_empty() {
         return; // handled by `lunco_workspace::open::on_open_twin`
     }
@@ -227,7 +230,7 @@ fn on_open_twin_pick(trigger: On<OpenTwin>, mut commands: Commands) {
 /// Picker seam for [`AddFolderToWorkspace`] — see [`on_open_twin_pick`].
 #[on_command(AddFolderToWorkspace)]
 fn on_add_folder_to_workspace_pick(trigger: On<AddFolderToWorkspace>, mut commands: Commands) {
-    use crate::picker::{PickHandle, PickMode};
+    use lunco_workbench_file_dialog::{PickHandle, PickMode};
     if !trigger.event().path.is_empty() {
         return; // handled by `lunco_workspace::open`
     }
@@ -240,7 +243,7 @@ fn on_add_folder_to_workspace_pick(trigger: On<AddFolderToWorkspace>, mut comman
 /// Picker seam for [`AddTwin`] — see [`on_open_twin_pick`].
 #[on_command(AddTwin)]
 fn on_add_twin_pick(trigger: On<AddTwin>, mut commands: Commands) {
-    use crate::picker::{PickHandle, PickMode};
+    use lunco_workbench_file_dialog::{PickHandle, PickMode};
     if !trigger.event().path.is_empty() {
         return; // handled by `lunco_workspace::open`
     }
@@ -514,7 +517,7 @@ fn on_save_as_twin(
     workspace: Option<Res<WorkspaceResource>>,
     mut commands: Commands,
 ) {
-    use crate::picker::{PickHandle, PickMode};
+    use lunco_workbench_file_dialog::{PickHandle, PickMode};
     let folder = trigger.event().folder.clone();
     if folder.is_empty() {
         commands.trigger(PickHandle {
@@ -674,7 +677,7 @@ mod save_tests {
 /// Translate a [`PickResolved`] event into the matching typed
 /// file-workflow command, with the chosen path filled in.
 ///
-/// Cancellations ([`picker::PickCancelled`]) are silent by design —
+/// Cancellations ([`lunco_workbench_file_dialog::PickCancelled`]) are silent by design —
 /// no observer here for them. Add one if you want telemetry.
 fn on_pick_resolved(trigger: On<PickResolved>, mut commands: Commands) {
     let ev = trigger.event();

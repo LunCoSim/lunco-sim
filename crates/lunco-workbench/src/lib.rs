@@ -90,7 +90,6 @@ pub mod file_ops;
 pub mod input_overlay;
 pub mod perf_hud;
 pub mod perspective_command;
-pub mod picker;
 pub mod theme_command;
 pub mod window_command;
 pub mod window_persistence;
@@ -788,11 +787,10 @@ impl Plugin for WorkbenchPlugin {
         if !app.is_plugin_added::<lunco_twin::DocumentKindRegistryPlugin>() {
             app.add_plugins(lunco_twin::DocumentKindRegistryPlugin);
         }
-        // Native (rfd) / web (FSA, future) file-picker plumbing.
-        // Domain code fires `picker::PickHandle` and observes
-        // `picker::PickResolved` without caring which backend is live.
-        if !app.is_plugin_added::<picker::PickerPlugin>() {
-            app.add_plugins(picker::PickerPlugin);
+        // Native/web file-picker plumbing is a separate production capability.
+        // Domain code fires its typed events without caring which backend is live.
+        if !app.is_plugin_added::<lunco_workbench_file_dialog::PickerPlugin>() {
+            app.add_plugins(lunco_workbench_file_dialog::PickerPlugin);
         }
         // Shell-level picker/file-workflow commands (`ShowOpenFilePicker`,
         // `OpenFolder`, `OpenTwin`, `SaveAll`, `SaveAsTwin`) + the
