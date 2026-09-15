@@ -249,14 +249,47 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `DetachJoint`
 
- Detach a joint by despawning it.
+ Generic entity-detach command. Ordinary non-joint entities are removed by the
+ normal entity path. Targets carrying native or pending joint state are retired
+ through the solver-owned joint lifecycle; they are never directly despawned by
+ the command observer.
 
 - *defined in:* `crates/lunco-scene-commands/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `target` | `Entity` |  The joint entity to despawn. |
-| `intent` | `lunco_core :: EditIntent` |  Persistent (default) authors the joint's removal into the scene's runtime  layer — removing runtime-only prims and deactivating base/composed prims  — so it journals, syncs, and survives reload, before despawning.  Interactive just pops the live joint (a throwaway test), no journal. See  [`lunco_core::EditIntent`]. Omitted by API callers → `Persistent`. |
+| `target` | `Entity` |  Entity to detach. Joint state is classified from its components; malformed joint state without `PhysicsJointLink` is rejected with a visible warning and should be repaired by the authored topology linter. |
+| `intent` | `lunco_core :: EditIntent` |  Persistent (default) authors removal into the scene's runtime layer, using active=false when the prim is base-authored or composed. Interactive removes only the live target (a throwaway test), with no journal. See [`lunco_core::EditIntent`]. Omitted by API callers → `Persistent`. |
+
+#### `FocusEntityById`
+
+ Point the free-flight avatar camera at an entity (by API id), from a fixed
+ side-on-and-above angle at `distance` metres. Lets API clients (MCP tools,
+ automated screenshots) frame a subject — e.g. a wheel — without hand-driving
+ the camera. `entity_id` is the API id from `ListEntities` (a `u64`), same as
+ [`MoveEntity`]/[`SetObjectProperty`].
+
+- *defined in:* `crates/lunco-scene-camera/src/lib.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `entity_id` | `u64` |  API-stable global entity ID from `ListEntities`, resolved to the live  Bevy entity by `ApiEntityRegistry`. |
+| `distance` | `f32` |  Camera distance from the target, metres. `<= 0` → default 6. |
+
+#### `FocusEntityByPath`
+
+ Set the render-free runtime focus to the composed USD prim at `path`.
+
+ This is separate from the editor's `SelectUsdPrim`: a headless
+ recorder has no Inspector, gizmo, or picking state to maintain, but
+ runtime-authored surfaces still need a stable subject for scoped telemetry.
+ The authored USD path remains stable across entity ids and scene reloads.
+
+- *defined in:* `crates/lunco-scene-camera/src/lib.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `path` | `String` |  Absolute composed USD prim path (for example `/World/Lander`). |
 
 #### `MoveEntity`
 

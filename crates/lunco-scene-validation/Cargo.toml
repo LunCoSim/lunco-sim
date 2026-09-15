@@ -24,6 +24,7 @@ lunco-sysml-report = { path = "../lunco-sysml-report" }
 lunco-tools = { path = "../lunco-tools" }
 lunco-twin = { path = "../lunco-twin" }
 lunco-usd-avian-lint = { path = "../lunco-usd-avian-lint" }
+lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }

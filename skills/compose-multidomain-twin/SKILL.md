@@ -21,7 +21,7 @@ A full mission layers cleanly — never blur the layers:
 | Layer ("…") | Owns | Lives in |
 |---|---|---|
 | **Structure + wiring** ("what") | bodies, colliders, mass/inertia, joints, topology, program prims, port connections | **USD** (authored) |
-| **System intent + acceptance contract** | parts/ports/connections, requirements, satisfy/verify traceability | **SysML v2** (`sysml` feature, opt-in) |
+| **System intent + acceptance contract** | parts/ports/connections, requirements, satisfy/verify traceability | **SysML v2** (enabled by default in the production app/core/server) |
 | **Subsystem dynamics** ("how a part behaves") | thrust, propellant, battery, thermal, controllers | **Modelica / rhai** (cosim) |
 | **Substrate + behavior library** ("the laws") | solver, force/joint/port plumbing, parameterized wheel/suspension/friction | **Rust** (reusable, never bespoke) |
 

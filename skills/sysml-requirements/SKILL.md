@@ -22,7 +22,7 @@ Check the feature set and owner before saying that a capability is missing:
 
 | Concern | Authoritative owner | Normal availability | Use it for |
 |---|---|---|---|
-| System structure and requirement intent | standard SysML v2 `.sysml`/`.kerml` | `sysml` feature, opt-in | parts, ports, connections, requirements, satisfy/verify links, scalar literals |
+| System structure and requirement intent | standard SysML v2 `.sysml`/`.kerml` | default in the production app/core/server; `--no-default-features` remains available for a deliberately lean build | parts, ports, connections, requirements, satisfy/verify links, scalar literals |
 | Scene identity, topology, geometry and authored physical facts | USD | standard runtime path | prim paths, schemas, relationships, dimensions, materials, physics topology |
 | Continuous equations and domain state | Modelica | standard domain backend | propulsion, electrical, thermal and other continuous models |
 | Scenario policy, observations, checks and verdicts | Rhai | default scenario backend | runtime observation, actuation, generic requirement evaluation and test policy |
@@ -33,6 +33,13 @@ The source-of-truth rule is strict: SysML states what the system must be and
 why; USD states what is authored and observable; Modelica states equations;
 Rhai executes the observation and policy. A verification registry selects a
 scene and script but does not duplicate requirement text or thresholds.
+
+The existing Rhai lint substrate is part of this path: `RunLint` executes the
+domain policy in `assets/scripting/policy/lint_<domain>.rhai` over Rust-produced
+facts, while Twin verification scripts use
+`assets/scripting/tools/sysml_requirements.rhai` to read the mounted SysML
+snapshot and evaluate composed USD evidence. Keep both in Rhai; Rust supplies
+typed facts and lifecycle, not Griffin- or component-specific assertions.
 
 Relevant implementation and design references:
 
@@ -135,7 +142,8 @@ The current supported subset is source-backed and deterministic:
   memberships;
 - qualified names, typed scalar literal projections, source spans, diagnostics,
   source files, and a deterministic `source_revision`;
-- Twin-indexed source-set discovery through the existing asset manifest;
+- Twin-indexed source-set discovery through the existing asset manifest, with
+  `SysmlPlugin` opening the checked set automatically after `TwinAssetMounted`;
 - a Twin-owned verification registry mapping a qualified SysML verification
   name to one scene, one Rhai observer, and an optional verdict channel;
 - native Rhai maps from `sysml_report()` and
@@ -148,7 +156,7 @@ The current supported subset is source-backed and deterministic:
 It does not provide a full SysML/KerML execution engine. Do not promise or
 silently emulate interface definitions, arbitrary expressions and constraints,
 parametrics, state machines, behaviors, allocations/refinements, a full SysML
-editor, automatic UI source-set discovery, or a SysML-to-USD projection. If a
+editor, full UI source-set browsing, or a SysML-to-USD projection. If a
 request needs one of those, report the exact bounded gap after checking the
 current owner and dependencies.
 
@@ -333,8 +341,10 @@ For a change to a Twin's requirements or verification:
 1. Read the owning source and this skill, then search the current checkout for
    existing SysML vocabulary, evaluator checks, manifest fields, commands and
    tests. Do not add a second parser, registry, or report format.
-2. Confirm the binary feature set. SysML runtime integration is opt-in:
-   `cargo build -p lunco-luncosim --bin luncosim --features sysml -j 4`.
+2. Confirm the binary feature set. SysML is enabled by default in the
+   production app and server:
+   `cargo build -p lunco-luncosim --bin luncosim -j 4`.
+   Use `--no-default-features` only when a deliberately lean build is needed.
    Rhai is the default scenario backend. Python is a separate opt-in
    `python` feature and is not used by this workflow.
 3. Author standard SysML source and put source-set/execution selection in
