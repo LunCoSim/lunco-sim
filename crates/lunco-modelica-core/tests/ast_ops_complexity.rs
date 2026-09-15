@@ -6,8 +6,8 @@
 //! MSL-shaped circuits.
 
 use lunco_doc::{DocumentHost, DocumentId};
+use lunco_modelica_ast::pretty::{ComponentDecl, ConnectEquation, Line, Placement, PortRef};
 use lunco_modelica_core::document::{ModelicaChange, ModelicaDocument, ModelicaOp};
-use lunco_modelica_core::pretty::{ComponentDecl, ConnectEquation, Line, Placement, PortRef};
 
 fn doc(source: &str) -> DocumentHost<ModelicaDocument> {
     DocumentHost::new(ModelicaDocument::new(

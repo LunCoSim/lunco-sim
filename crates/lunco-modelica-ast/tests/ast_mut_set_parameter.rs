@@ -1,4 +1,4 @@
-//! TDD contract tests for [`lunco_modelica_core::ast_mut::set_parameter`].
+//! TDD contract tests for [`lunco_modelica_ast::ast_mut::set_parameter`].
 //!
 //! Shape: parse → mutate → **splice the patch into the source** → reparse →
 //! assert the structural change. The middle step is what ships: a mutation's
@@ -12,8 +12,8 @@
 //! rumoca's parser — testing `IndexMap::insert` in isolation would be testing
 //! rumoca, not us.
 
+use lunco_modelica_ast::ast_mut::{self, AstMutError, Edit};
 use lunco_modelica_ast::parse_to_ast;
-use lunco_modelica_core::ast_mut::{self, AstMutError, Edit};
 
 /// End-to-end harness: parse `source`, run `op` on `class_name`, apply the
 /// splice, reparse, return the post-mutation `Component` of `component_name`.
@@ -22,9 +22,9 @@ fn mutate_and_reparse<F>(
     class_name: &str,
     component_name: &str,
     op: F,
-) -> rumoca_compile::parsing::ast::Component
+) -> rumoca_ir_ast::Component
 where
-    F: FnOnce(&mut rumoca_compile::parsing::ast::ClassDef, &mut Edit<'_>),
+    F: FnOnce(&mut rumoca_ir_ast::ClassDef, &mut Edit<'_>),
 {
     let sd = parse_to_ast(source, "test.mo").expect("first parse");
     let (range, replacement, _) = ast_mut::class_patch(source, &sd, class_name, |c, e| {

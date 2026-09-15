@@ -12,7 +12,7 @@
 
 use std::ops::Range;
 
-use rumoca_compile::parsing::ast::{ClassDef, Component};
+use rumoca_ir_ast::{ClassDef, Component};
 
 /// Visit every *code* byte in `range` — outside string literals and comments —
 /// with its bracket-nesting depth. Return `false` from `f` to stop.
@@ -91,7 +91,7 @@ fn is_ident_byte(b: u8) -> bool {
 }
 
 /// First code byte at or after `from` that isn't whitespace.
-pub fn first_code_byte(source: &str, from: usize) -> Option<usize> {
+pub(super) fn first_code_byte(source: &str, from: usize) -> Option<usize> {
     let mut out = None;
     for_each_code(source, from..source.len(), |i, b, _| {
         if b.is_ascii_whitespace() {
@@ -105,7 +105,7 @@ pub fn first_code_byte(source: &str, from: usize) -> Option<usize> {
 }
 
 /// The bracket group opened at `open`, as a range **including** both brackets.
-pub fn matching_close(source: &str, open: usize) -> Option<Range<usize>> {
+pub(super) fn matching_close(source: &str, open: usize) -> Option<Range<usize>> {
     let mut end = None;
     for_each_code(source, open..source.len(), |i, b, d| {
         if i == open {
@@ -122,7 +122,7 @@ pub fn matching_close(source: &str, open: usize) -> Option<Range<usize>> {
 
 /// The `(...)` group whose `(` is the first code byte at or after `from`.
 /// Returns `None` when the next thing isn't an open paren.
-pub fn paren_group_at(source: &str, from: usize) -> Option<Range<usize>> {
+pub(super) fn paren_group_at(source: &str, from: usize) -> Option<Range<usize>> {
     let start = first_code_byte(source, from)?;
     if source.as_bytes().get(start) != Some(&b'(') {
         return None;
@@ -145,7 +145,7 @@ pub fn statement_end(source: &str, from: usize) -> Option<usize> {
 }
 
 /// First `byte` at nesting depth 0 within `range`.
-pub fn find_byte(source: &str, range: Range<usize>, byte: u8) -> Option<usize> {
+pub(super) fn find_byte(source: &str, range: Range<usize>, byte: u8) -> Option<usize> {
     let mut hit = None;
     for_each_code(source, range, |i, b, d| {
         if d == 0 && b == byte {
@@ -176,7 +176,7 @@ pub fn line_start(source: &str, pos: usize) -> usize {
 /// closing `)` drives the depth negative and the statement's `;` is never seen
 /// at depth 0. Scanning from the start of the line fixes that; the loop guards
 /// the case where an earlier statement shares the line.
-pub fn statement_end_containing(source: &str, anchor: usize) -> Option<usize> {
+pub(super) fn statement_end_containing(source: &str, anchor: usize) -> Option<usize> {
     let mut from = line_start(source, anchor);
     loop {
         let end = statement_end(source, from)?;
@@ -212,7 +212,7 @@ pub fn find_keyword(source: &str, range: Range<usize>, kw: &str) -> Option<usize
 
 /// Top-level comma-separated argument ranges inside `group` (which includes its
 /// brackets). Empty groups yield an empty list.
-pub fn split_args(source: &str, group: Range<usize>) -> Vec<Range<usize>> {
+pub(super) fn split_args(source: &str, group: Range<usize>) -> Vec<Range<usize>> {
     if group.end <= group.start + 1 {
         return Vec::new();
     }
@@ -233,7 +233,7 @@ pub fn split_args(source: &str, group: Range<usize>) -> Vec<Range<usize>> {
 
 /// The leading identifier of an argument — `Placement` in `Placement(...)`,
 /// `points` in `points = {…}`.
-pub fn arg_head(source: &str, arg: Range<usize>) -> &str {
+pub(super) fn arg_head(source: &str, arg: Range<usize>) -> &str {
     let s = source[arg].trim_start();
     let end = s
         .find(|c: char| !(c.is_alphanumeric() || c == '_'))
@@ -242,7 +242,7 @@ pub fn arg_head(source: &str, arg: Range<usize>) -> &str {
 }
 
 /// Index into `args` of the argument whose head identifier is `name`.
-pub fn find_arg(source: &str, args: &[Range<usize>], name: &str) -> Option<usize> {
+pub(super) fn find_arg(source: &str, args: &[Range<usize>], name: &str) -> Option<usize> {
     args.iter()
         .position(|r| arg_head(source, r.clone()) == name)
 }
@@ -266,7 +266,7 @@ const DECL_PREFIXES: &[&str] = &[
 ];
 
 /// Rewind from a type-name token over any declaration prefix keywords.
-pub fn decl_start(source: &str, type_start: usize) -> usize {
+pub(super) fn decl_start(source: &str, type_start: usize) -> usize {
     let src = source.as_bytes();
     let mut i = type_start.min(src.len());
     loop {
@@ -290,7 +290,7 @@ pub fn decl_start(source: &str, type_start: usize) -> usize {
 /// Grow `stmt` to swallow the line it sits on: leading indentation (when only
 /// whitespace precedes it) and one trailing newline. This is the range to
 /// **delete** so removing an element doesn't leave a blank line behind.
-pub fn line_extent(source: &str, stmt: Range<usize>) -> Range<usize> {
+pub(super) fn line_extent(source: &str, stmt: Range<usize>) -> Range<usize> {
     let src = source.as_bytes();
     let mut start = stmt.start;
     while start > 0 && matches!(src[start - 1], b' ' | b'\t') {
@@ -312,25 +312,12 @@ pub fn line_extent(source: &str, stmt: Range<usize>) -> Range<usize> {
 }
 
 /// Indentation of the line containing `pos`.
-pub fn indent_at(source: &str, pos: usize) -> String {
-    let src = source.as_bytes();
-    let mut start = pos.min(src.len());
-    while start > 0 && src[start - 1] != b'\n' {
-        start -= 1;
-    }
-    let mut end = start;
-    while end < src.len() && matches!(src[end], b' ' | b'\t') {
-        end += 1;
-    }
-    source[start..end].to_string()
-}
-
 // ---------------------------------------------------------------------------
 // Component anchors
 // ---------------------------------------------------------------------------
 
 /// Full byte extent of a component declaration: prefixes through the `;`.
-pub fn component_extent(source: &str, comp: &Component) -> Option<Range<usize>> {
+pub(super) fn component_extent(source: &str, comp: &Component) -> Option<Range<usize>> {
     let anchor = comp.location.start as usize;
     let end = statement_end(source, anchor)?;
     Some(decl_start(source, anchor)..end)
@@ -338,7 +325,7 @@ pub fn component_extent(source: &str, comp: &Component) -> Option<Range<usize>> 
 
 /// Byte position just past the component's name and any `[dims]` subscript —
 /// where a modifier list `(...)` would start.
-pub fn component_after_name(source: &str, comp: &Component) -> usize {
+pub(super) fn component_after_name(source: &str, comp: &Component) -> usize {
     let mut pos = comp.name_token.location.end as usize;
     if let Some(i) = first_code_byte(source, pos) {
         if source.as_bytes().get(i) == Some(&b'[') {
@@ -351,7 +338,7 @@ pub fn component_after_name(source: &str, comp: &Component) -> usize {
 }
 
 /// The component's modifier group — the `(...)` right after its name.
-pub fn component_modifier_group(source: &str, comp: &Component) -> Option<Range<usize>> {
+pub(super) fn component_modifier_group(source: &str, comp: &Component) -> Option<Range<usize>> {
     paren_group_at(source, component_after_name(source, comp))
 }
 
@@ -371,7 +358,7 @@ pub fn annotation_clause(source: &str, stmt: Range<usize>) -> Option<(usize, Ran
 ///
 /// `ClassDef::location` starts at the class *name*, so rewind over the kind
 /// keyword and any `partial`/`encapsulated`/`operator` prefix.
-pub fn class_extent(source: &str, class: &ClassDef) -> Option<Range<usize>> {
+pub(super) fn class_extent(source: &str, class: &ClassDef) -> Option<Range<usize>> {
     let src = source.as_bytes();
     let mut i = class.location.start as usize;
     loop {
@@ -412,7 +399,7 @@ pub fn class_extent(source: &str, class: &ClassDef) -> Option<Range<usize>> {
 }
 
 /// Position of the `end` keyword that closes `class`.
-pub fn class_end_keyword(source: &str, class: &ClassDef) -> Option<usize> {
+pub(super) fn class_end_keyword(source: &str, class: &ClassDef) -> Option<usize> {
     let name_tok = class.end_name_token.as_ref()?;
     let src = source.as_bytes();
     let mut i = name_tok.location.start as usize;
@@ -431,7 +418,10 @@ pub fn class_end_keyword(source: &str, class: &ClassDef) -> Option<usize> {
 /// Distinguished from the `annotation(...)` on a *component declaration* by
 /// position: the class annotation is the statement immediately before
 /// `end Name;`, so search only the bytes after the last element.
-pub fn class_annotation_clause(source: &str, class: &ClassDef) -> Option<(usize, Range<usize>)> {
+pub(super) fn class_annotation_clause(
+    source: &str,
+    class: &ClassDef,
+) -> Option<(usize, Range<usize>)> {
     let end_kw = class_end_keyword(source, class)?;
     let last = last_element_end(source, class).unwrap_or(class.location.start as usize);
     let kw = find_keyword(source, last..end_kw, "annotation")?;
@@ -466,7 +456,7 @@ fn last_element_end(source: &str, class: &ClassDef) -> Option<usize> {
 /// Where a new component declaration goes: after the last existing component,
 /// else at the top of the class body (before `equation` / the annotation /
 /// `end`).
-pub fn component_insert_point(source: &str, class: &ClassDef) -> usize {
+pub(super) fn component_insert_point(source: &str, class: &ClassDef) -> usize {
     if let Some(end) = class
         .components
         .values()
@@ -492,7 +482,7 @@ fn class_body_start(class: &ClassDef) -> usize {
 /// the start of the class annotation statement if there is one, else the `end`
 /// keyword. A class annotation must stay the last element before `end Name;`,
 /// so appending (say) an `equation` section after it would not parse.
-pub fn class_tail_anchor(source: &str, class: &ClassDef) -> Option<usize> {
+pub(super) fn class_tail_anchor(source: &str, class: &ClassDef) -> Option<usize> {
     if let Some((kw, _)) = class_annotation_clause(source, class) {
         // Rewind to the start of the annotation's own line so an insertion
         // lands above it rather than mid-line.
@@ -509,7 +499,7 @@ pub fn class_tail_anchor(source: &str, class: &ClassDef) -> Option<usize> {
 /// Where a new equation goes: after the last equation, else just past the
 /// `equation` keyword. `None` when the class has no `equation` section yet —
 /// the caller must create one.
-pub fn equation_insert_point(source: &str, class: &ClassDef) -> Option<usize> {
+pub(super) fn equation_insert_point(source: &str, class: &ClassDef) -> Option<usize> {
     if let Some(end) = class
         .equations
         .iter()

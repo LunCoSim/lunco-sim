@@ -122,7 +122,7 @@ fn source_is_never_regenerated_through_the_rumoca_emitter() {
         "rumoca's `to_modelica()` emitter must not be used to produce source: it drops \
          comments and corrupts declarations that carry both a `start` modifier and a \
          binding. Author the bytes you mean to change as a splice (`ast_mut::Edit`), and \
-         render genuinely NEW nodes with `crate::pretty`. \
+         render genuinely NEW nodes with `lunco_modelica_ast::pretty`. \
          See docs/architecture/29-rumoca-workarounds.md §5.\n\
          Offending sites:\n  {}",
         offenders.join("\n  ")

@@ -9,15 +9,15 @@
 
 use std::ops::Range;
 
-use rumoca_compile::parsing::ast::{ClassDef, Expression};
+use rumoca_ir_ast::{ClassDef, Expression};
 
 use super::clause;
 use super::edit::Edit;
 use super::errors::AstMutError;
 use super::text;
 use super::util::{graphic_entry_arg, is_graphic_entry_named, read_text_spec, render_text_spec};
+use crate::ast_extract::string_literal_value;
 use crate::pretty;
-use lunco_modelica_ast::ast_extract::string_literal_value;
 
 // ---------------------------------------------------------------------------
 // Component placement
@@ -550,8 +550,8 @@ fn nested_array_mut<'a>(
     section_name: &str,
     key: &str,
 ) -> &'a mut Vec<Expression> {
-    use rumoca_compile::parsing::ast::{ComponentRefPart, ComponentReference};
-    use rumoca_compile::parsing::Span;
+    use rumoca_core::Span;
+    use rumoca_ir_ast::{ComponentRefPart, ComponentReference};
     use std::sync::Arc;
 
     let cref = |name: &str| ComponentReference {

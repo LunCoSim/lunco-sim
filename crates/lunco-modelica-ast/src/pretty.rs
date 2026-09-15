@@ -267,6 +267,7 @@ fn fmt_point(x: f32, y: f32) -> String {
     format!("{{{},{}}}", fmt_num(x), fmt_num(y))
 }
 
+/// Render a Modelica array of 2D points.
 pub fn fmt_points(points: &[(f32, f32)]) -> String {
     let parts: Vec<String> = points.iter().map(|(x, y)| fmt_point(*x, *y)).collect();
     format!("{{{}}}", parts.join(","))
@@ -282,11 +283,17 @@ pub fn fmt_points(points: &[(f32, f32)]) -> String {
 /// the same convention every other graphic primitive uses).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct LunCoPlotNodeSpec {
+    /// Left extent coordinate.
     pub x1: f32,
+    /// Bottom extent coordinate.
     pub y1: f32,
+    /// Right extent coordinate.
     pub x2: f32,
+    /// Top extent coordinate.
     pub y2: f32,
+    /// Signal path displayed by the plot node.
     pub signal: String,
+    /// Optional plot title.
     pub title: String,
 }
 
@@ -405,16 +412,24 @@ pub fn connect_equation(eq: &ConnectEquation) -> String {
 /// Modelica class restriction keyword.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ClassKindSpec {
+    /// A Modelica `model` class.
     Model,
+    /// A Modelica `block` class.
     Block,
+    /// A Modelica `connector` class.
     Connector,
+    /// A Modelica `package` class.
     Package,
+    /// A Modelica `record` class.
     Record,
+    /// A Modelica `function` class.
     Function,
+    /// A Modelica `type` class.
     Type,
 }
 
 impl ClassKindSpec {
+    /// Return the Modelica keyword for this class restriction.
     pub fn keyword(self) -> &'static str {
         match self {
             Self::Model => "model",
@@ -432,8 +447,11 @@ impl ClassKindSpec {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum CausalitySpec {
     #[default]
+    /// No `input` or `output` prefix.
     None,
+    /// An `input` variable.
     Input,
+    /// An `output` variable.
     Output,
 }
 
@@ -441,9 +459,13 @@ pub enum CausalitySpec {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum VariabilitySpec {
     #[default]
+    /// A continuous-time variable.
     Continuous,
+    /// A discrete variable.
     Discrete,
+    /// A parameter.
     Parameter,
+    /// A constant.
     Constant,
 }
 
@@ -451,14 +473,22 @@ pub enum VariabilitySpec {
 /// `{prefixes} <Type> <name>(modifications) = <value> "<description>";`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct VariableDecl {
+    /// Variable name.
     pub name: String,
+    /// Declared Modelica type.
     pub type_name: String,
+    /// Input/output role.
     pub causality: CausalitySpec,
+    /// Time variability category.
     pub variability: VariabilitySpec,
+    /// Whether the variable has the `flow` prefix.
     pub flow: bool,
+    /// Modifier arguments rendered inside parentheses.
     pub modifications: Vec<(String, String)>,
     /// RHS of the `= ...` binding (e.g. `"4000"`, `"m_initial"`). `None` omits the binding.
+    /// Optional binding expression.
     pub value: Option<String>,
+    /// Optional source description.
     pub description: String,
 }
 
@@ -466,49 +496,80 @@ pub struct VariableDecl {
 /// statement (e.g. `assert(...)`) without an `=`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct EquationDecl {
+    /// Left-hand side, or `None` for a statement equation.
     pub lhs: Option<String>,
+    /// Right-hand side or complete statement expression.
     pub rhs: String,
 }
 
 /// Modelica diagram graphic primitive (Icon or Diagram layer).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum GraphicSpec {
+    /// A filled rectangle.
     Rectangle {
+        /// Left extent coordinate.
         x1: f32,
+        /// Bottom extent coordinate.
         y1: f32,
+        /// Right extent coordinate.
         x2: f32,
+        /// Top extent coordinate.
         y2: f32,
+        /// RGB line color.
         line_color: [u8; 3],
+        /// RGB fill color.
         fill_color: [u8; 3],
+        /// Fill style.
         fill_pattern: FillPattern,
     },
+    /// A filled polygon.
     Polygon {
+        /// Polygon vertices.
         points: Vec<(f32, f32)>,
+        /// RGB line color.
         line_color: [u8; 3],
+        /// RGB fill color.
         fill_color: [u8; 3],
+        /// Fill style.
         fill_pattern: FillPattern,
     },
+    /// A stroked line.
     Line {
+        /// Line vertices.
         points: Vec<(f32, f32)>,
+        /// RGB line color.
         color: [u8; 3],
+        /// Line width.
         thickness: f32,
+        /// Line style.
         pattern: LinePattern,
     },
+    /// A text label.
     Text {
+        /// Left extent coordinate.
         x1: f32,
+        /// Bottom extent coordinate.
         y1: f32,
+        /// Right extent coordinate.
         x2: f32,
+        /// Top extent coordinate.
         y2: f32,
+        /// Label text.
         text: String,
+        /// RGB text color.
         color: [u8; 3],
+        /// Font size.
         font_size: f32,
     },
 }
 
+/// Fill style for a graphic primitive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum FillPattern {
     #[default]
+    /// No fill.
     None,
+    /// Solid fill.
     Solid,
 }
 
@@ -521,11 +582,15 @@ impl FillPattern {
     }
 }
 
+/// Stroke style for a graphic primitive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum LinePattern {
     #[default]
+    /// Solid stroke.
     Solid,
+    /// Dashed stroke.
     Dash,
+    /// Dotted stroke.
     Dot,
 }
 
@@ -920,8 +985,8 @@ mod tests {
         };
         let body = component_decl(&d);
         let source = format!("model M\n{}end M;\n", body);
-        let ast = lunco_modelica_ast::parse_to_ast(&source, "test.mo")
-            .expect("emitted component decl should parse");
+        let ast =
+            crate::parse_to_ast(&source, "test.mo").expect("emitted component decl should parse");
         let class = ast.classes.get("M").expect("class M");
         assert!(
             class.components.contains_key("x"),
@@ -939,7 +1004,7 @@ mod tests {
         };
         let body = connect_equation(&eq);
         let source = format!("model M\n  Real a;\n  Real b;\nequation\n{}end M;\n", body);
-        let res = lunco_modelica_ast::parse_to_ast(&source, "test.mo");
+        let res = crate::parse_to_ast(&source, "test.mo");
         assert!(res.is_ok(), "connect(...) should parse: {:?}", res.err());
     }
 }

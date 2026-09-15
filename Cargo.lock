@@ -7885,6 +7885,7 @@ dependencies = [
  "rumoca-core",
  "rumoca-ir-ast",
  "rumoca-phase-parse",
+ "serde",
 ]
 
 [[package]]

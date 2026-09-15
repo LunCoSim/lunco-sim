@@ -21,10 +21,10 @@
 //!     .build();
 //! ```
 
-use crate::diagram_model::{ComponentGraph, ComponentPort, EdgeKind, NodeId, NodeKind};
-use rumoca_compile::parsing::ast::{
-    ClassDef, Component, Equation, Expression, Name, StoredDefinition,
+use lunco_modelica_ast::diagram_model::{
+    ComponentGraph, ComponentPort, EdgeKind, NodeId, NodeKind,
 };
+use rumoca_compile::parsing::ast::{ClassDef, Component, Equation, Expression, StoredDefinition};
 use rumoca_compile::parsing::{Causality, ClassType, Variability};
 use std::collections::HashMap;
 
@@ -192,15 +192,16 @@ impl ModelicaComponentBuilder {
                         // so the wire actually gets built. Without
                         // this, every MSL connect from a model-level
                         // connector silently drops out of the diagram.
-                        let resolve_port = |n: &crate::diagram_model::ComponentNode,
-                                            port: &str|
-                         -> Option<usize> {
-                            if port.is_empty() && !n.ports.is_empty() {
-                                Some(0)
-                            } else {
-                                n.port_index(port)
-                            }
-                        };
+                        let resolve_port =
+                            |n: &lunco_modelica_ast::diagram_model::ComponentNode,
+                             port: &str|
+                             -> Option<usize> {
+                                if port.is_empty() && !n.ports.is_empty() {
+                                    Some(0)
+                                } else {
+                                    n.port_index(port)
+                                }
+                            };
                         if let (Some(sp), Some(tp)) = (
                             resolve_port(src_node_ref, &src_port),
                             resolve_port(tgt_node_ref, &tgt_port),
@@ -240,12 +241,12 @@ impl ModelicaComponentBuilder {
                     .map(|port| port.direction);
                 let (source_id, source_port, target_id, target_port) = match (lhs_kind, rhs_kind) {
                     (
-                        Some(crate::diagram_model::PortDirection::Input),
-                        Some(crate::diagram_model::PortDirection::Output),
+                        Some(lunco_modelica_ast::diagram_model::PortDirection::Input),
+                        Some(lunco_modelica_ast::diagram_model::PortDirection::Output),
                     ) => (rhs_id, rhs_port, lhs_id, lhs_port),
                     (
-                        Some(crate::diagram_model::PortDirection::Output),
-                        Some(crate::diagram_model::PortDirection::Input),
+                        Some(lunco_modelica_ast::diagram_model::PortDirection::Output),
+                        Some(lunco_modelica_ast::diagram_model::PortDirection::Input),
                     ) => (lhs_id, lhs_port, rhs_id, rhs_port),
                     _ => continue,
                 };
@@ -565,29 +566,6 @@ pub fn resolve_primary_target(ast: &StoredDefinition) -> Option<String> {
 ///    with the AST's `within` clause, strip it before walking.
 ///    Lets drill-in callers pass `"Modelica.Blocks.Continuous.CriticalDamping"`
 ///    without knowing the file's internal rooting.
-///    Strip the AST's `within` clause prefix from `qualified`, when it
-///    appears at a **segment boundary** (followed by `.`). Returns the
-///    path that's safe to split on `.` and walk against `ast.classes`.
-///
-/// Centralised here so the read path (`find_class_by_qualified_name`)
-/// and the write path (`ast_mut::lookup_class_mut`) can't silently
-/// disagree on within handling — the exact divergence that shipped
-/// the `walk_qualified` bug (string-prefix vs segment-prefix). The
-/// `and_then(strip_prefix('.'))` is the load-bearing part: it
-/// guarantees the prefix match ends at a Modelica name boundary, so
-/// `within = "AnnotatedRocketStage"` does *not* strip the leading
-/// `AnnotatedRocketStage` out of `AnnotatedRocketStageCopy.X`.
-pub fn strip_within_prefix<'a>(qualified: &'a str, within: Option<&Name>) -> &'a str {
-    let Some(within) = within else {
-        return qualified;
-    };
-    let within_str = within.to_string();
-    qualified
-        .strip_prefix(&within_str)
-        .and_then(|s| s.strip_prefix('.'))
-        .unwrap_or(qualified)
-}
-
 pub fn find_class_by_qualified_name<'a>(
     ast: &'a StoredDefinition,
     name: &str,
@@ -604,7 +582,7 @@ pub fn find_class_by_qualified_name<'a>(
         return None;
     }
 
-    let path = strip_within_prefix(name, ast.within.as_ref());
+    let path = lunco_modelica_ast::strip_within_prefix(name, ast.within.as_ref());
     let mut segments = path.split('.');
     let first = segments.next()?;
     let mut current = ast.classes.get(first)?;

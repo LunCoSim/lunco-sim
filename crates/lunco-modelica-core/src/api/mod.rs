@@ -7,14 +7,14 @@ pub mod doc;
 pub mod util;
 
 use crate::document::ModelicaOp;
-use crate::pretty::{
+use bevy::prelude::*;
+use lunco_core::{on_command, register_commands, Ack, Command, OpId};
+use lunco_doc::DocumentId;
+use lunco_modelica_ast::pretty::{
     CausalitySpec, ClassKindSpec, ComponentDecl, ConnectEquation, EquationDecl, FillPattern,
     GraphicSpec, Line, LinePattern, LunCoPlotNodeSpec, Placement, PortRef, VariabilitySpec,
     VariableDecl,
 };
-use bevy::prelude::*;
-use lunco_core::{on_command, register_commands, Ack, Command, OpId};
-use lunco_doc::DocumentId;
 use util::{resolve_doc, strip_same_package_prefix};
 
 /// Plugin that registers the Modelica edit events + observers.

@@ -1,14 +1,14 @@
-//! TDD contract tests for [`lunco_modelica_core::ast_mut::set_placement`].
+//! TDD contract tests for [`lunco_modelica_ast::ast_mut::set_placement`].
 //!
 //! Same shape as `ast_mut_set_parameter.rs`: parse → mutate → **splice** →
 //! reparse → assert. Verifies the patched source carries a `Placement(...)`
 //! annotation on the target component, and that sibling annotations / sibling
 //! components survive.
 
+use lunco_modelica_ast::ast_mut::{self, AstMutError, Edit};
 use lunco_modelica_ast::parse_to_ast;
-use lunco_modelica_core::ast_mut::{self, AstMutError, Edit};
-use lunco_modelica_core::pretty::Placement;
-use rumoca_compile::parsing::ast::{ClassDef, Component, Expression};
+use lunco_modelica_ast::pretty::Placement;
+use rumoca_ir_ast::{ClassDef, Component, Expression};
 
 /// End-to-end harness — parse, run `op`, apply its splice, reparse, return the
 /// post-mutation `Component`.

@@ -2,10 +2,10 @@
 
 use super::util::{parse_port_ref, resolve_doc};
 use crate::document::ModelicaOp;
-use crate::pretty::ConnectEquation;
 use bevy::prelude::*;
 use lunco_core::{on_command, Command};
 use lunco_doc::DocumentId;
+use lunco_modelica_ast::pretty::ConnectEquation;
 
 /// Add a `connect(a.p, b.q)` equation to a class.
 #[Command(default)]

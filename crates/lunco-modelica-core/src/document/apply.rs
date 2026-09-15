@@ -13,7 +13,7 @@ use std::ops::Range;
 
 use super::core::AstCache;
 use super::ops::{FreshAst, ModelicaChange, ModelicaOp};
-use crate::pretty;
+use lunco_modelica_ast::pretty;
 
 /// Map the op-layer's [`pretty::ClassKindSpec`] to the Index's
 /// [`crate::index::ClassKind`].
@@ -60,7 +60,7 @@ pub fn ast_check_no_parse_error(ast: &AstCache) -> Result<(), DocumentError> {
     Ok(())
 }
 
-pub fn ast_mut_to_doc_error(e: crate::ast_mut::AstMutError) -> DocumentError {
+pub fn ast_mut_to_doc_error(e: lunco_modelica_ast::ast_mut::AstMutError) -> DocumentError {
     DocumentError::ValidationFailed(e.to_string())
 }
 
@@ -88,10 +88,11 @@ pub fn op_to_patch(
         ModelicaOp::AddComponent { class, decl } => {
             ast_check_no_parse_error(ast)?;
             let added_name = decl.name.clone();
-            let (r, rp, fresh_ast) = crate::ast_mut::class_patch(source, parsed, &class, |c, e| {
-                crate::ast_mut::add_component(c, e, &decl)
-            })
-            .map_err(ast_mut_to_doc_error)?;
+            let (r, rp, fresh_ast) =
+                lunco_modelica_ast::ast_mut::class_patch(source, parsed, &class, |c, e| {
+                    lunco_modelica_ast::ast_mut::add_component(c, e, &decl)
+                })
+                .map_err(ast_mut_to_doc_error)?;
             let change = ModelicaChange::ComponentAdded {
                 class,
                 name: added_name,
@@ -102,19 +103,21 @@ pub fn op_to_patch(
             ast_check_no_parse_error(ast)?;
             let from = eq.from.clone();
             let to = eq.to.clone();
-            let (r, rp, fresh_ast) = crate::ast_mut::class_patch(source, parsed, &class, |c, e| {
-                crate::ast_mut::add_connection(c, e, &eq)
-            })
-            .map_err(ast_mut_to_doc_error)?;
+            let (r, rp, fresh_ast) =
+                lunco_modelica_ast::ast_mut::class_patch(source, parsed, &class, |c, e| {
+                    lunco_modelica_ast::ast_mut::add_connection(c, e, &eq)
+                })
+                .map_err(ast_mut_to_doc_error)?;
             let change = ModelicaChange::ConnectionAdded { class, from, to };
             Ok((r, rp, change, FreshAst::Mutated(fresh_ast)))
         }
         ModelicaOp::RemoveComponent { class, name } => {
             ast_check_no_parse_error(ast)?;
-            let (r, rp, fresh_ast) = crate::ast_mut::class_patch(source, parsed, &class, |c, e| {
-                crate::ast_mut::remove_component(c, e, &name)
-            })
-            .map_err(ast_mut_to_doc_error)?;
+            let (r, rp, fresh_ast) =
+                lunco_modelica_ast::ast_mut::class_patch(source, parsed, &class, |c, e| {
+                    lunco_modelica_ast::ast_mut::remove_component(c, e, &name)
+                })
+                .map_err(ast_mut_to_doc_error)?;
             let change = ModelicaChange::ComponentRemoved { class, name };
             Ok((r, rp, change, FreshAst::Mutated(fresh_ast)))
         }
@@ -122,10 +125,11 @@ pub fn op_to_patch(
             ast_check_no_parse_error(ast)?;
             let from_c = from.clone();
             let to_c = to.clone();
-            let (r, rp, fresh_ast) = crate::ast_mut::class_patch(source, parsed, &class, |c, e| {
-                crate::ast_mut::remove_connection(c, e, &from_c, &to_c)
-            })
-            .map_err(ast_mut_to_doc_error)?;
+            let (r, rp, fresh_ast) =
+                lunco_modelica_ast::ast_mut::class_patch(source, parsed, &class, |c, e| {
+                    lunco_modelica_ast::ast_mut::remove_connection(c, e, &from_c, &to_c)
+                })
+                .map_err(ast_mut_to_doc_error)?;
             let change = ModelicaChange::ConnectionRemoved { class, from, to };
             Ok((r, rp, change, FreshAst::Mutated(fresh_ast)))
         }
@@ -138,10 +142,11 @@ pub fn op_to_patch(
             ast_check_no_parse_error(ast)?;
             let from_c = from.clone();
             let to_c = to.clone();
-            let (r, rp, fresh_ast) = crate::ast_mut::class_patch(source, parsed, &class, |c, e| {
-                crate::ast_mut::set_connection_line(c, e, &from_c, &to_c, &points)
-            })
-            .map_err(ast_mut_to_doc_error)?;
+            let (r, rp, fresh_ast) =
+                lunco_modelica_ast::ast_mut::class_patch(source, parsed, &class, |c, e| {
+                    lunco_modelica_ast::ast_mut::set_connection_line(c, e, &from_c, &to_c, &points)
+                })
+                .map_err(ast_mut_to_doc_error)?;
             let change = ModelicaChange::ConnectionLineChanged { class, from, to };
             Ok((r, rp, change, FreshAst::Mutated(fresh_ast)))
         }
@@ -156,18 +161,19 @@ pub fn op_to_patch(
             ast_check_no_parse_error(ast)?;
             let from_c = from.clone();
             let to_c = to.clone();
-            let (r, rp, fresh_ast) = crate::ast_mut::class_patch(source, parsed, &class, |c, e| {
-                crate::ast_mut::set_connection_line_style(
-                    c,
-                    e,
-                    &from_c,
-                    &to_c,
-                    color,
-                    thickness,
-                    smooth_bezier,
-                )
-            })
-            .map_err(ast_mut_to_doc_error)?;
+            let (r, rp, fresh_ast) =
+                lunco_modelica_ast::ast_mut::class_patch(source, parsed, &class, |c, e| {
+                    lunco_modelica_ast::ast_mut::set_connection_line_style(
+                        c,
+                        e,
+                        &from_c,
+                        &to_c,
+                        color,
+                        thickness,
+                        smooth_bezier,
+                    )
+                })
+                .map_err(ast_mut_to_doc_error)?;
             let change = ModelicaChange::ConnectionLineStyleChanged { class, from, to };
             Ok((r, rp, change, FreshAst::Mutated(fresh_ast)))
         }
@@ -175,10 +181,11 @@ pub fn op_to_patch(
             ast_check_no_parse_error(ast)?;
             let from_c = from.clone();
             let to_c = to.clone();
-            let (r, rp, fresh_ast) = crate::ast_mut::class_patch(source, parsed, &class, |c, e| {
-                crate::ast_mut::reverse_connection(c, e, &from_c, &to_c)
-            })
-            .map_err(ast_mut_to_doc_error)?;
+            let (r, rp, fresh_ast) =
+                lunco_modelica_ast::ast_mut::class_patch(source, parsed, &class, |c, e| {
+                    lunco_modelica_ast::ast_mut::reverse_connection(c, e, &from_c, &to_c)
+                })
+                .map_err(ast_mut_to_doc_error)?;
             let change = ModelicaChange::ConnectionReversed {
                 class,
                 from: to,
@@ -192,10 +199,11 @@ pub fn op_to_patch(
             placement,
         } => {
             ast_check_no_parse_error(ast)?;
-            let (r, rp, fresh_ast) = crate::ast_mut::class_patch(source, parsed, &class, |c, e| {
-                crate::ast_mut::set_placement(c, e, &name, &placement)
-            })
-            .map_err(ast_mut_to_doc_error)?;
+            let (r, rp, fresh_ast) =
+                lunco_modelica_ast::ast_mut::class_patch(source, parsed, &class, |c, e| {
+                    lunco_modelica_ast::ast_mut::set_placement(c, e, &name, &placement)
+                })
+                .map_err(ast_mut_to_doc_error)?;
             let change = ModelicaChange::PlacementChanged {
                 class,
                 component: name,
@@ -210,10 +218,11 @@ pub fn op_to_patch(
             value,
         } => {
             ast_check_no_parse_error(ast)?;
-            let (r, rp, fresh_ast) = crate::ast_mut::class_patch(source, parsed, &class, |c, e| {
-                crate::ast_mut::set_parameter(c, e, &component, &param, &value)
-            })
-            .map_err(ast_mut_to_doc_error)?;
+            let (r, rp, fresh_ast) =
+                lunco_modelica_ast::ast_mut::class_patch(source, parsed, &class, |c, e| {
+                    lunco_modelica_ast::ast_mut::set_parameter(c, e, &component, &param, &value)
+                })
+                .map_err(ast_mut_to_doc_error)?;
             let change = ModelicaChange::ParameterChanged {
                 class,
                 component,
@@ -224,10 +233,11 @@ pub fn op_to_patch(
         }
         ModelicaOp::AddPlotNode { class, plot } => {
             ast_check_no_parse_error(ast)?;
-            let (r, rp, fresh_ast) = crate::ast_mut::class_patch(source, parsed, &class, |c, e| {
-                crate::ast_mut::add_plot_node(c, e, &plot)
-            })
-            .map_err(ast_mut_to_doc_error)?;
+            let (r, rp, fresh_ast) =
+                lunco_modelica_ast::ast_mut::class_patch(source, parsed, &class, |c, e| {
+                    lunco_modelica_ast::ast_mut::add_plot_node(c, e, &plot)
+                })
+                .map_err(ast_mut_to_doc_error)?;
             Ok((
                 r,
                 rp,
@@ -237,10 +247,11 @@ pub fn op_to_patch(
         }
         ModelicaOp::RemovePlotNode { class, signal_path } => {
             ast_check_no_parse_error(ast)?;
-            let (r, rp, fresh_ast) = crate::ast_mut::class_patch(source, parsed, &class, |c, e| {
-                crate::ast_mut::remove_plot_node(c, e, &signal_path)
-            })
-            .map_err(ast_mut_to_doc_error)?;
+            let (r, rp, fresh_ast) =
+                lunco_modelica_ast::ast_mut::class_patch(source, parsed, &class, |c, e| {
+                    lunco_modelica_ast::ast_mut::remove_plot_node(c, e, &signal_path)
+                })
+                .map_err(ast_mut_to_doc_error)?;
             Ok((
                 r,
                 rp,
@@ -257,10 +268,19 @@ pub fn op_to_patch(
             y2,
         } => {
             ast_check_no_parse_error(ast)?;
-            let (r, rp, fresh_ast) = crate::ast_mut::class_patch(source, parsed, &class, |c, e| {
-                crate::ast_mut::set_plot_node_extent(c, e, &signal_path, x1, y1, x2, y2)
-            })
-            .map_err(ast_mut_to_doc_error)?;
+            let (r, rp, fresh_ast) =
+                lunco_modelica_ast::ast_mut::class_patch(source, parsed, &class, |c, e| {
+                    lunco_modelica_ast::ast_mut::set_plot_node_extent(
+                        c,
+                        e,
+                        &signal_path,
+                        x1,
+                        y1,
+                        x2,
+                        y2,
+                    )
+                })
+                .map_err(ast_mut_to_doc_error)?;
             Ok((
                 r,
                 rp,
@@ -274,10 +294,11 @@ pub fn op_to_patch(
             title,
         } => {
             ast_check_no_parse_error(ast)?;
-            let (r, rp, fresh_ast) = crate::ast_mut::class_patch(source, parsed, &class, |c, e| {
-                crate::ast_mut::set_plot_node_title(c, e, &signal_path, &title)
-            })
-            .map_err(ast_mut_to_doc_error)?;
+            let (r, rp, fresh_ast) =
+                lunco_modelica_ast::ast_mut::class_patch(source, parsed, &class, |c, e| {
+                    lunco_modelica_ast::ast_mut::set_plot_node_title(c, e, &signal_path, &title)
+                })
+                .map_err(ast_mut_to_doc_error)?;
             Ok((
                 r,
                 rp,
@@ -294,10 +315,13 @@ pub fn op_to_patch(
             y2,
         } => {
             ast_check_no_parse_error(ast)?;
-            let (r, rp, fresh_ast) = crate::ast_mut::class_patch(source, parsed, &class, |c, e| {
-                crate::ast_mut::set_diagram_text_extent(c, e, index, x1, y1, x2, y2)
-            })
-            .map_err(ast_mut_to_doc_error)?;
+            let (r, rp, fresh_ast) =
+                lunco_modelica_ast::ast_mut::class_patch(source, parsed, &class, |c, e| {
+                    lunco_modelica_ast::ast_mut::set_diagram_text_extent(
+                        c, e, index, x1, y1, x2, y2,
+                    )
+                })
+                .map_err(ast_mut_to_doc_error)?;
             Ok((
                 r,
                 rp,
@@ -307,10 +331,11 @@ pub fn op_to_patch(
         }
         ModelicaOp::SetDiagramTextString { class, index, text } => {
             ast_check_no_parse_error(ast)?;
-            let (r, rp, fresh_ast) = crate::ast_mut::class_patch(source, parsed, &class, |c, e| {
-                crate::ast_mut::set_diagram_text_string(c, e, index, &text)
-            })
-            .map_err(ast_mut_to_doc_error)?;
+            let (r, rp, fresh_ast) =
+                lunco_modelica_ast::ast_mut::class_patch(source, parsed, &class, |c, e| {
+                    lunco_modelica_ast::ast_mut::set_diagram_text_string(c, e, index, &text)
+                })
+                .map_err(ast_mut_to_doc_error)?;
             Ok((
                 r,
                 rp,
@@ -320,10 +345,11 @@ pub fn op_to_patch(
         }
         ModelicaOp::RemoveDiagramText { class, index } => {
             ast_check_no_parse_error(ast)?;
-            let (r, rp, fresh_ast) = crate::ast_mut::class_patch(source, parsed, &class, |c, e| {
-                crate::ast_mut::remove_diagram_text(c, e, index)
-            })
-            .map_err(ast_mut_to_doc_error)?;
+            let (r, rp, fresh_ast) =
+                lunco_modelica_ast::ast_mut::class_patch(source, parsed, &class, |c, e| {
+                    lunco_modelica_ast::ast_mut::remove_diagram_text(c, e, index)
+                })
+                .map_err(ast_mut_to_doc_error)?;
             Ok((
                 r,
                 rp,
@@ -339,10 +365,19 @@ pub fn op_to_patch(
             partial,
         } => {
             ast_check_no_parse_error(ast)?;
-            let (r, rp, fresh_ast) = crate::ast_mut::document_patch(source, parsed, |sd, e| {
-                crate::ast_mut::add_class(sd, e, &parent, &name, kind, &description, partial)
-            })
-            .map_err(ast_mut_to_doc_error)?;
+            let (r, rp, fresh_ast) =
+                lunco_modelica_ast::ast_mut::document_patch(source, parsed, |sd, e| {
+                    lunco_modelica_ast::ast_mut::add_class(
+                        sd,
+                        e,
+                        &parent,
+                        &name,
+                        kind,
+                        &description,
+                        partial,
+                    )
+                })
+                .map_err(ast_mut_to_doc_error)?;
             let qualified = if parent.is_empty() {
                 name
             } else {
@@ -357,10 +392,11 @@ pub fn op_to_patch(
         }
         ModelicaOp::RemoveClass { qualified } => {
             ast_check_no_parse_error(ast)?;
-            let (r, rp, fresh_ast) = crate::ast_mut::document_patch(source, parsed, |sd, e| {
-                crate::ast_mut::remove_class(sd, e, &qualified)
-            })
-            .map_err(ast_mut_to_doc_error)?;
+            let (r, rp, fresh_ast) =
+                lunco_modelica_ast::ast_mut::document_patch(source, parsed, |sd, e| {
+                    lunco_modelica_ast::ast_mut::remove_class(sd, e, &qualified)
+                })
+                .map_err(ast_mut_to_doc_error)?;
             Ok((
                 r,
                 rp,
@@ -377,19 +413,20 @@ pub fn op_to_patch(
             modifications,
         } => {
             ast_check_no_parse_error(ast)?;
-            let (r, rp, fresh_ast) = crate::ast_mut::document_patch(source, parsed, |sd, e| {
-                crate::ast_mut::add_short_class(
-                    sd,
-                    e,
-                    &parent,
-                    &name,
-                    kind,
-                    &base,
-                    &prefixes,
-                    &modifications,
-                )
-            })
-            .map_err(ast_mut_to_doc_error)?;
+            let (r, rp, fresh_ast) =
+                lunco_modelica_ast::ast_mut::document_patch(source, parsed, |sd, e| {
+                    lunco_modelica_ast::ast_mut::add_short_class(
+                        sd,
+                        e,
+                        &parent,
+                        &name,
+                        kind,
+                        &base,
+                        &prefixes,
+                        &modifications,
+                    )
+                })
+                .map_err(ast_mut_to_doc_error)?;
             let qualified = if parent.is_empty() {
                 name
             } else {
@@ -405,10 +442,11 @@ pub fn op_to_patch(
         ModelicaOp::AddVariable { class, decl } => {
             ast_check_no_parse_error(ast)?;
             let added_name = decl.name.clone();
-            let (r, rp, fresh_ast) = crate::ast_mut::class_patch(source, parsed, &class, |c, e| {
-                crate::ast_mut::add_variable(c, e, &decl)
-            })
-            .map_err(ast_mut_to_doc_error)?;
+            let (r, rp, fresh_ast) =
+                lunco_modelica_ast::ast_mut::class_patch(source, parsed, &class, |c, e| {
+                    lunco_modelica_ast::ast_mut::add_variable(c, e, &decl)
+                })
+                .map_err(ast_mut_to_doc_error)?;
             let change = ModelicaChange::ComponentAdded {
                 class,
                 name: added_name,
@@ -417,19 +455,21 @@ pub fn op_to_patch(
         }
         ModelicaOp::RemoveVariable { class, name } => {
             ast_check_no_parse_error(ast)?;
-            let (r, rp, fresh_ast) = crate::ast_mut::class_patch(source, parsed, &class, |c, e| {
-                crate::ast_mut::remove_component(c, e, &name)
-            })
-            .map_err(ast_mut_to_doc_error)?;
+            let (r, rp, fresh_ast) =
+                lunco_modelica_ast::ast_mut::class_patch(source, parsed, &class, |c, e| {
+                    lunco_modelica_ast::ast_mut::remove_component(c, e, &name)
+                })
+                .map_err(ast_mut_to_doc_error)?;
             let change = ModelicaChange::ComponentRemoved { class, name };
             Ok((r, rp, change, FreshAst::Mutated(fresh_ast)))
         }
         ModelicaOp::AddEquation { class, eq } => {
             ast_check_no_parse_error(ast)?;
-            let (r, rp, fresh_ast) = crate::ast_mut::class_patch(source, parsed, &class, |c, e| {
-                crate::ast_mut::add_equation(c, e, &eq)
-            })
-            .map_err(ast_mut_to_doc_error)?;
+            let (r, rp, fresh_ast) =
+                lunco_modelica_ast::ast_mut::class_patch(source, parsed, &class, |c, e| {
+                    lunco_modelica_ast::ast_mut::add_equation(c, e, &eq)
+                })
+                .map_err(ast_mut_to_doc_error)?;
             Ok((
                 r,
                 rp,
@@ -439,11 +479,12 @@ pub fn op_to_patch(
         }
         ModelicaOp::AddIconGraphic { class, graphic } => {
             ast_check_no_parse_error(ast)?;
-            let graphic_text = crate::pretty::graphic_inner(&graphic);
-            let (r, rp, fresh_ast) = crate::ast_mut::class_patch(source, parsed, &class, |c, e| {
-                crate::ast_mut::add_named_graphic(c, e, "Icon", &graphic_text)
-            })
-            .map_err(ast_mut_to_doc_error)?;
+            let graphic_text = lunco_modelica_ast::pretty::graphic_inner(&graphic);
+            let (r, rp, fresh_ast) =
+                lunco_modelica_ast::ast_mut::class_patch(source, parsed, &class, |c, e| {
+                    lunco_modelica_ast::ast_mut::add_named_graphic(c, e, "Icon", &graphic_text)
+                })
+                .map_err(ast_mut_to_doc_error)?;
             Ok((
                 r,
                 rp,
@@ -453,11 +494,12 @@ pub fn op_to_patch(
         }
         ModelicaOp::AddDiagramGraphic { class, graphic } => {
             ast_check_no_parse_error(ast)?;
-            let graphic_text = crate::pretty::graphic_inner(&graphic);
-            let (r, rp, fresh_ast) = crate::ast_mut::class_patch(source, parsed, &class, |c, e| {
-                crate::ast_mut::add_named_graphic(c, e, "Diagram", &graphic_text)
-            })
-            .map_err(ast_mut_to_doc_error)?;
+            let graphic_text = lunco_modelica_ast::pretty::graphic_inner(&graphic);
+            let (r, rp, fresh_ast) =
+                lunco_modelica_ast::ast_mut::class_patch(source, parsed, &class, |c, e| {
+                    lunco_modelica_ast::ast_mut::add_named_graphic(c, e, "Diagram", &graphic_text)
+                })
+                .map_err(ast_mut_to_doc_error)?;
             Ok((
                 r,
                 rp,
@@ -473,10 +515,13 @@ pub fn op_to_patch(
             interval,
         } => {
             ast_check_no_parse_error(ast)?;
-            let (r, rp, fresh_ast) = crate::ast_mut::class_patch(source, parsed, &class, |c, e| {
-                crate::ast_mut::set_experiment(c, e, start_time, stop_time, tolerance, interval)
-            })
-            .map_err(ast_mut_to_doc_error)?;
+            let (r, rp, fresh_ast) =
+                lunco_modelica_ast::ast_mut::class_patch(source, parsed, &class, |c, e| {
+                    lunco_modelica_ast::ast_mut::set_experiment(
+                        c, e, start_time, stop_time, tolerance, interval,
+                    )
+                })
+                .map_err(ast_mut_to_doc_error)?;
             Ok((
                 r,
                 rp,

@@ -16,7 +16,7 @@ use super::text;
 ///
 /// `group` includes its brackets. `rendered` is the complete argument text
 /// (`Placement(...)`, `points = {…}`).
-pub fn upsert_arg(edit: &mut Edit<'_>, group: Range<usize>, head: &str, rendered: &str) {
+pub(super) fn upsert_arg(edit: &mut Edit<'_>, group: Range<usize>, head: &str, rendered: &str) {
     let source = edit.source();
     let args = text::split_args(source, group.clone());
     match text::find_arg(source, &args, head) {
@@ -30,7 +30,7 @@ pub fn upsert_arg(edit: &mut Edit<'_>, group: Range<usize>, head: &str, rendered
 }
 
 /// Append an entry to an array group `{…}`.
-pub fn append_entry(edit: &mut Edit<'_>, array: Range<usize>, rendered: &str) {
+pub(super) fn append_entry(edit: &mut Edit<'_>, array: Range<usize>, rendered: &str) {
     let source = edit.source();
     let args = text::split_args(source, array.clone());
     match args.last() {
@@ -41,7 +41,7 @@ pub fn append_entry(edit: &mut Edit<'_>, array: Range<usize>, rendered: &str) {
 
 /// Delete `args[index]`, taking one comma separator with it so the list stays
 /// well-formed.
-pub fn remove_entry(edit: &mut Edit<'_>, args: &[Range<usize>], index: usize) {
+pub(super) fn remove_entry(edit: &mut Edit<'_>, args: &[Range<usize>], index: usize) {
     let target = args[index].clone();
     if let Some(next) = args.get(index + 1) {
         // Swallow the comma that follows.
@@ -55,7 +55,7 @@ pub fn remove_entry(edit: &mut Edit<'_>, args: &[Range<usize>], index: usize) {
 }
 
 /// The `(...)` of a `Name(...)` argument inside `group`.
-pub fn call_group(source: &str, group: Range<usize>, name: &str) -> Option<Range<usize>> {
+pub(super) fn call_group(source: &str, group: Range<usize>, name: &str) -> Option<Range<usize>> {
     let args = text::split_args(source, group);
     let i = text::find_arg(source, &args, name)?;
     let arg = args[i].clone();
@@ -64,7 +64,7 @@ pub fn call_group(source: &str, group: Range<usize>, name: &str) -> Option<Range
 }
 
 /// The value range of a `name = <value>` argument inside `group`.
-pub fn arg_value(source: &str, group: Range<usize>, name: &str) -> Option<Range<usize>> {
+pub(super) fn arg_value(source: &str, group: Range<usize>, name: &str) -> Option<Range<usize>> {
     let args = text::split_args(source, group);
     let i = text::find_arg(source, &args, name)?;
     let arg = args[i].clone();

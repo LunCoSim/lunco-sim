@@ -1,5 +1,5 @@
 //! TDD contract tests for batch-3a helpers in
-//! [`lunco_modelica_core::ast_mut`]: `add_variable`, `remove_component`,
+//! [`lunco_modelica_ast::ast_mut`]: `add_variable`, `remove_component`,
 //! `add_class`, `remove_class`.
 //!
 //! Shape: parse → mutate → **splice the patch into the source** → reparse →
@@ -7,10 +7,10 @@
 //! a re-emission of the class (see `ast_mut/edit.rs`). Headless. Integration via
 //! `host.apply` lives in `tests/op_to_patch_batch3a.rs`.
 
+use lunco_modelica_ast::ast_mut::{self, AstMutError, Edit};
 use lunco_modelica_ast::parse_to_ast;
-use lunco_modelica_core::ast_mut::{self, AstMutError, Edit};
-use lunco_modelica_core::pretty::{CausalitySpec, ClassKindSpec, VariabilitySpec, VariableDecl};
-use rumoca_compile::parsing::ast::{ClassDef, StoredDefinition};
+use lunco_modelica_ast::pretty::{CausalitySpec, ClassKindSpec, VariabilitySpec, VariableDecl};
+use rumoca_ir_ast::{ClassDef, StoredDefinition};
 
 fn mutate_class<F>(source: &str, class_name: &str, op: F) -> ClassDef
 where
@@ -106,10 +106,7 @@ fn add_variable_with_parameter_variability_round_trips() {
     // Variability variants carry the keyword Token; match the variant
     // tag without binding the inner.
     assert!(
-        matches!(
-            comp.variability,
-            rumoca_compile::parsing::Variability::Parameter(_)
-        ),
+        matches!(comp.variability, rumoca_core::Variability::Parameter(_)),
         "expected parameter variability, got {:?}",
         comp.variability
     );

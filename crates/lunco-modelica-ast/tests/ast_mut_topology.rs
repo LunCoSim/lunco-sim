@@ -1,5 +1,5 @@
 //! TDD contract tests for the topology helpers in
-//! [`lunco_modelica_core::ast_mut`]: `add_component`, `remove_component`,
+//! [`lunco_modelica_ast::ast_mut`]: `add_component`, `remove_component`,
 //! `add_connection`, `remove_connection`.
 //!
 //! Shape: parse → mutate → **splice the patch into the source** → reparse →
@@ -10,18 +10,14 @@
 //! and `tests/ast_mut_preserves_untouched_source.rs`, which pins what a patch
 //! may *not* touch.
 
+use lunco_modelica_ast::ast_mut::{self, AstMutError, Edit};
 use lunco_modelica_ast::parse_to_ast;
-use lunco_modelica_core::ast_mut::{self, AstMutError, Edit};
-use lunco_modelica_core::pretty::{ComponentDecl, ConnectEquation, PortRef};
-use rumoca_compile::parsing::ast::{ClassDef, Component, Equation};
+use lunco_modelica_ast::pretty::{ComponentDecl, ConnectEquation, PortRef};
+use rumoca_ir_ast::{ClassDef, Component, Equation};
 
 /// Run `op` against `class_name`, apply the resulting splice to `source`, and
 /// reparse — the same route `Document::apply` takes.
-fn mutate_and_reparse_class<F>(
-    source: &str,
-    class_name: &str,
-    op: F,
-) -> rumoca_compile::parsing::ast::ClassDef
+fn mutate_and_reparse_class<F>(source: &str, class_name: &str, op: F) -> rumoca_ir_ast::ClassDef
 where
     F: FnOnce(&mut ClassDef, &mut Edit<'_>) -> Result<(), AstMutError>,
 {

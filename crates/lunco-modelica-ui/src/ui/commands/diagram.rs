@@ -33,7 +33,7 @@ pub fn on_move_component(trigger: On<MoveComponent>, mut commands: Commands) {
     let ev = trigger.event().clone();
     commands.queue(move |world: &mut World| {
         use crate::document::ModelicaOp;
-        use crate::pretty::Placement;
+        use lunco_modelica_ast::pretty::Placement;
         let active_doc = world
             .get_resource::<lunco_workspace::WorkspaceResource>()
             .and_then(|ws| ws.active_document);
@@ -106,7 +106,7 @@ pub fn on_add_canvas_plot(trigger: On<AddCanvasPlot>, mut commands: Commands) {
             bevy::log::warn!("[AddCanvasPlot] could not resolve target class for doc");
             return;
         }
-        let plot = crate::pretty::LunCoPlotNodeSpec {
+        let plot = lunco_modelica_ast::pretty::LunCoPlotNodeSpec {
             x1: ev.x,
             y1: ev.y,
             x2: ev.x + w,

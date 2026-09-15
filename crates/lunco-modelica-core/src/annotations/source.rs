@@ -8,7 +8,8 @@
 //! component annotations; this is not a second annotation grammar.
 
 use super::LineRoute;
-use crate::ast_mut::{parsing::FRAGMENT_CLASS_NAME, text};
+use lunco_modelica_ast::ast_mut::{annotation_clause, find_keyword, line_start, statement_end};
+use lunco_modelica_ast::ast_mut::{parse_stub_cached, FRAGMENT_CLASS_NAME};
 use rumoca_compile::parsing::ast::{ComponentReference, Equation, StoredDefinition};
 use std::collections::HashMap;
 use std::ops::Range;
@@ -45,12 +46,12 @@ pub fn connect_line_routes(
 /// Rumoca exposes for a connect equation.
 pub fn line_route_for_connect(source: &str, location: usize) -> Option<LineRoute> {
     let statement = connect_statement(source, location)?;
-    let (_, annotation_group) = text::annotation_clause(source, statement)?;
+    let (_, annotation_group) = annotation_clause(source, statement)?;
     let annotation_args = &source[annotation_group.start + 1..annotation_group.end - 1];
     let stub = format!(
         "model {FRAGMENT_CLASS_NAME}\n  annotation({annotation_args});\nend {FRAGMENT_CLASS_NAME};\n"
     );
-    let parsed = crate::ast_mut::parsing::parse_stub_cached(&stub)?;
+    let parsed = parse_stub_cached(&stub)?;
     let class = parsed.classes.get(FRAGMENT_CLASS_NAME)?;
     super::extract_line_full(&class.annotation)
 }
@@ -113,10 +114,10 @@ fn endpoint_key(reference: &ComponentReference) -> (String, String) {
 }
 
 fn connect_statement(source: &str, location: usize) -> Option<Range<usize>> {
-    let mut cursor = text::line_start(source, location);
+    let mut cursor = line_start(source, location);
     loop {
-        let keyword = text::find_keyword(source, cursor..source.len(), "connect")?;
-        let end = text::statement_end(source, keyword)?;
+        let keyword = find_keyword(source, cursor..source.len(), "connect")?;
+        let end = statement_end(source, keyword)?;
         if end > location {
             return Some(keyword..end);
         }

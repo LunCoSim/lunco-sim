@@ -83,7 +83,7 @@ pub fn extract_lunco_plot_nodes(annotations: &[Expression]) -> Vec<LunCoPlotNode
 }
 
 fn extract_lunco_plot_node_record(expr: &Expression) -> Option<LunCoPlotNode> {
-    if !is_plot_node_record_call(expr) {
+    if !lunco_modelica_ast::ast_extract::is_plot_node_record_call(expr) {
         return None;
     }
     let args = call_args(expr)?;

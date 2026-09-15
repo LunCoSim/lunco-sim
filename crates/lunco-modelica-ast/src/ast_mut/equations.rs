@@ -1,6 +1,6 @@
 //! Equation mutation helpers.
 
-use rumoca_compile::parsing::ast::ClassDef;
+use rumoca_ir_ast::ClassDef;
 
 use super::connections::insert_equation;
 use super::edit::Edit;

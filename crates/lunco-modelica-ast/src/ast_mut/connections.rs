@@ -9,7 +9,7 @@
 
 use std::ops::Range;
 
-use rumoca_compile::parsing::ast::{ClassDef, Equation};
+use rumoca_ir_ast::{ClassDef, Equation};
 
 use super::clause;
 use super::edit::Edit;

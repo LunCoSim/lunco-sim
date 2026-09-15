@@ -23,9 +23,11 @@ use super::errors::AstMutError;
 
 /// One byte-range replacement against the original source.
 #[derive(Debug, Clone)]
-pub struct Splice {
-    pub range: Range<usize>,
-    pub text: String,
+struct Splice {
+    /// Byte range in the original UTF-8 source to replace.
+    range: Range<usize>,
+    /// Replacement text for [`Self::range`].
+    text: String,
 }
 
 /// Accumulates the splices of a single op, then merges them into one patch.
@@ -35,6 +37,7 @@ pub struct Edit<'a> {
 }
 
 impl<'a> Edit<'a> {
+    /// Start an edit against `source`.
     pub fn new(source: &'a str) -> Self {
         Self {
             source,
@@ -48,6 +51,7 @@ impl<'a> Edit<'a> {
         self.source
     }
 
+    /// Replace a byte range in the original source with `text`.
     pub fn replace(&mut self, range: Range<usize>, text: impl Into<String>) {
         self.splices.push(Splice {
             range,
@@ -55,10 +59,12 @@ impl<'a> Edit<'a> {
         });
     }
 
+    /// Insert `text` at a byte offset in the original source.
     pub fn insert(&mut self, at: usize, text: impl Into<String>) {
         self.replace(at..at, text);
     }
 
+    /// Delete a byte range from the original source.
     pub fn delete(&mut self, range: Range<usize>) {
         self.replace(range, "");
     }

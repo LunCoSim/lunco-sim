@@ -21,8 +21,8 @@
 //! component-keyed connection lookups, BBox caches, anything panels need
 //! to render without traversal.
 
-use crate::pretty::Placement;
 use lunco_doc::{NodeId, TextRange};
+use lunco_modelica_ast::pretty::Placement;
 use rumoca_compile::parsing::ast::{self as ast};
 use rumoca_compile::parsing::{
     Causality as AstCausality, ClassType as AstClassType, Variability as AstVariability,
@@ -338,7 +338,7 @@ pub enum Variability {
     Constant,
 }
 
-// Placement is re-exported from `crate::pretty::Placement` to keep the
+// Placement is re-exported from `lunco_modelica_ast::pretty::Placement` to keep the
 // Index in lockstep with the wire / change-event format. UI panels read
 // `entry.placement: Option<Placement>` directly.
 

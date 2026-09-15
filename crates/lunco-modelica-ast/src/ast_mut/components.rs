@@ -4,7 +4,7 @@
 //! match. It must never re-emit a declaration that already exists in the source
 //! — see [`super::edit`] for what that used to cost.
 
-use rumoca_compile::parsing::ast::ClassDef;
+use rumoca_ir_ast::ClassDef;
 
 use super::clause;
 use super::edit::Edit;
@@ -44,7 +44,7 @@ pub fn set_parameter(
     // Parse first: a bad value must fail before any splice is recorded.
     let expr = parse_value_fragment(value_text)?;
 
-    let span_of = |e: &rumoca_compile::parsing::ast::Expression| {
+    let span_of = |e: &rumoca_ir_ast::Expression| {
         e.get_location()
             .filter(|l| l.end > l.start)
             .map(|l| l.start as usize..l.end as usize)

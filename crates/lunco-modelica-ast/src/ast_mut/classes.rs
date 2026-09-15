@@ -1,6 +1,6 @@
 //! Class definition mutation helpers.
 
-use rumoca_compile::parsing::ast::{ClassDef, StoredDefinition};
+use rumoca_ir_ast::{ClassDef, StoredDefinition};
 
 use super::edit::Edit;
 use super::errors::AstMutError;
@@ -117,8 +117,7 @@ pub fn remove_class(
     if qualified.is_empty() {
         return Err(AstMutError::ClassNotFound(qualified.to_string()));
     }
-    let local: String =
-        crate::diagram::strip_within_prefix(qualified, sd.within.as_ref()).to_string();
+    let local: String = crate::strip_within_prefix(qualified, sd.within.as_ref()).to_string();
 
     let (parent, leaf) = match local.rsplit_once('.') {
         Some((p, l)) => (Some(p.to_string()), l.to_string()),
