@@ -200,6 +200,8 @@ fn finish_sysml_report(
         // response shape stable for generic Rhai consumers.
         "verification_registry": json!([]),
         "verification_registry_errors": json!([]),
+        "components": json!([]),
+        "component_registry_errors": json!([]),
         "source_revision": analysis.source_revision(),
         // Keep a lossless textual form alongside the JSON number. Rhai's
         // bounded value bridge represents JSON numbers as f64, which is not
@@ -337,6 +339,29 @@ pub fn validate_twin(reference: &str, requested_policy: &str) -> TwinValidationR
             subject: finding.subject,
             message: finding.message,
         });
+    }
+    if twin.manifest.as_ref().is_some_and(|manifest| {
+        manifest.sysml.is_some()
+            || manifest.verification.is_some()
+            || !manifest.components.is_empty()
+    }) {
+        if let Err(source_errors) = twin.discover_sysml_sources_checked() {
+            errors.extend(
+                source_errors
+                    .into_iter()
+                    .map(|error| format!("Twin SysML source set: {error}")),
+            );
+        }
+        errors.extend(
+            twin.verification_registry_errors()
+                .into_iter()
+                .map(|error| format!("Twin verification registry: {error}")),
+        );
+        errors.extend(
+            twin.component_registry_errors()
+                .into_iter()
+                .map(|error| format!("Twin component registry: {error}")),
+        );
     }
     TwinValidationReport {
         path: reference.to_string(),
@@ -740,6 +765,8 @@ impl ApiQueryProvider for ValidateSysmlProvider {
                 "verification_records": compact_verification_records(report.info.get("verification_cases")),
                 "verification_registry": report.info.get("verification_registry").cloned().unwrap_or_else(|| json!([])),
                 "verification_registry_errors": report.info.get("verification_registry_errors").cloned().unwrap_or_else(|| json!([])),
+                "components": report.info.get("components").cloned().unwrap_or_else(|| json!([])),
+                "component_registry_errors": report.info.get("component_registry_errors").cloned().unwrap_or_else(|| json!([])),
                 "source_revision": report.info.get("source_revision").cloned().unwrap_or(json!(0)),
                 "source_revision_hex": report.info.get("source_revision_hex").cloned().unwrap_or_else(|| json!("0x0000000000000000")),
             })
@@ -769,6 +796,8 @@ impl ApiQueryProvider for ValidateSysmlProvider {
                 "verification_records": report.info.get("verification_cases").cloned().unwrap_or_else(|| json!([])),
                 "verification_registry": report.info.get("verification_registry").cloned().unwrap_or_else(|| json!([])),
                 "verification_registry_errors": report.info.get("verification_registry_errors").cloned().unwrap_or_else(|| json!([])),
+                "components": report.info.get("components").cloned().unwrap_or_else(|| json!([])),
+                "component_registry_errors": report.info.get("component_registry_errors").cloned().unwrap_or_else(|| json!([])),
                 "source_revision": report.info.get("source_revision").cloned().unwrap_or(json!(0)),
                 "source_revision_hex": report.info.get("source_revision_hex").cloned().unwrap_or_else(|| json!("0x0000000000000000")),
             })
@@ -942,12 +971,18 @@ fn validate_sysml_twin(world: &World, name: &str, reference: &str) -> Validation
             ));
         }
     };
-    let relative_sources = twin.discover_sysml_sources();
-    if relative_sources.is_empty() {
-        return ValidationReport::new(reference, "sysml").error(format!(
-            "Twin `{name}` declares no indexed .sysml or .kerml sources"
-        ));
-    }
+    let relative_sources = match twin.discover_sysml_sources_checked() {
+        Ok(sources) => sources,
+        Err(errors) => {
+            let mut report = ValidationReport::new(reference, "sysml");
+            report.errors.extend(
+                errors
+                    .into_iter()
+                    .map(|error| format!("Twin `{name}` SysML source set: {error}")),
+            );
+            return report.finish();
+        }
+    };
 
     let mut sources = Vec::with_capacity(relative_sources.len());
     let mut revision_input = Vec::new();
@@ -973,8 +1008,11 @@ fn validate_sysml_twin(world: &World, name: &str, reference: &str) -> Validation
     );
     let mut report = finish_sysml_report(reference, &analysis);
     let registry_errors = twin.verification_registry_errors();
+    let component_errors = twin.component_registry_errors();
+    let component_errors_for_info = component_errors.clone();
     let verification_names = qualified_names(report.info.get("verification_cases"));
     let mut binding_errors = registry_errors.clone();
+    binding_errors.extend(component_errors);
     for case in twin.verification_cases() {
         if !verification_names.iter().any(|name| name == &case.name) {
             binding_errors.push(format!(
@@ -991,6 +1029,11 @@ fn validate_sysml_twin(world: &World, name: &str, reference: &str) -> Validation
         info.insert(
             "verification_registry_errors".to_owned(),
             json!(binding_errors),
+        );
+        info.insert("components".to_owned(), json!(twin.components()));
+        info.insert(
+            "component_registry_errors".to_owned(),
+            json!(component_errors_for_info),
         );
     }
     if !binding_errors.is_empty() {
@@ -1108,6 +1151,7 @@ def Xform \"Battery\" (\n\
         let path = temp_sysml(
             "qualified_attributes.sysml",
             "package Example {
+                private import ScalarValues::Real;
                 part def Lander { attribute mass : Real = 1.0; }
                 part def Rover { attribute mass : Real = 2.0; }
             }",
@@ -1131,7 +1175,10 @@ def Xform \"Battery\" (\n\
     fn compact_sysml_projection_keeps_typed_source_identity() {
         let path = temp_sysml(
             "compact_attributes.sysml",
-            "package Example { part def Lander { attribute mass : Real = 1.0; } }",
+            "package Example {
+                private import ScalarValues::Real;
+                part def Lander { attribute mass : Real = 1.0; }
+            }",
         );
         let report = validate_asset(path.to_str().unwrap());
         assert!(report.ok, "{:?}", report.errors);
@@ -1139,6 +1186,30 @@ def Xform \"Battery\" (\n\
         let mass = &compact["Example::Lander::mass"];
         assert_eq!(mass["qualified_name"], "Example::Lander::mass");
         assert_eq!(mass["value"]["kind"], "real");
-        assert_eq!(mass["file"], "compact_attributes.sysml");
+        assert!(mass["file"]
+            .as_str()
+            .is_some_and(|file| file.ends_with("/compact_attributes.sysml")));
+    }
+
+    #[test]
+    fn compact_sysml_projection_does_not_duplicate_short_attribute_map() {
+        let path = temp_sysml(
+            "compact_colliding_attributes.sysml",
+            "package Example {
+                private import ScalarValues::Real;
+                part def Lander { attribute mass : Real = 1.0; }
+                part def Rover { attribute mass : Real = 2.0; }
+            }",
+        );
+        let report = validate_asset(path.to_str().unwrap());
+        assert!(report.ok, "{:?}", report.errors);
+
+        // The compact bridge has one identity-preserving table. Short names
+        // are intentionally empty: emitting both maps doubles every record
+        // and cannot represent colliding component attributes.
+        let compact = compact_sysml_attributes(report.info.get("attributes_qualified"));
+        assert!(compact["Example::Lander::mass"].is_object());
+        assert!(compact["Example::Rover::mass"].is_object());
+        assert!(compact.get("mass").is_none());
     }
 }

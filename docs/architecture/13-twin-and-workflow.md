@@ -295,6 +295,19 @@ suppress_missing_prompt = false
 "ui.camera_status" = true
 ```
 
+For a componentized Twin, add explicit ownership records. Each component owns
+one requirement source and one qualified verification case; the case owns its
+USD fixture and Rhai observer. The loader rejects shared or missing acceptance
+artifacts.
+
+```toml
+[[components]]
+name = "rover.wheels"
+requirements = "requirements/rover_wheels.sysml"
+verification = "RoverWheelRequirements::Verify"
+usd_path = "/World/Rover/Wheels"
+```
+
 Minimal Twin = just `[project]` + `[modelica]` (or whichever domains are
 used). Everything else has sensible defaults.
 

@@ -20,7 +20,7 @@ let result = sysml_requirements::evaluate(source, [
     #{ id: "GV-002", component: "wheel_FL",
        requirement: "Project::gv004", verification: "Project::VerifyVisual",
        kind: "attribute", path: "/Twin/FLIP/Wheel_FL", attr: "radius",
-       expected_attr: "visualWheelRadiusM", tolerance: 0.001 }
+       expected_attr: "Project::Rover::visualWheelRadiusM", tolerance: 0.001 }
 ]);
 report_verdict(result.failures, "VISUAL REQUIREMENTS", "VISUAL_REQUIREMENTS");
 ```
@@ -44,7 +44,20 @@ name = "Project::VerifyVisual"
 scene = "tests/visual.usda"
 script = "scenarios/tests/visual.rhai"
 verdict_channel = "VISUAL_REQUIREMENTS"
+
+[[components]]
+name = "rover.wheels"
+requirements = "requirements/rover_wheels.sysml"
+verification = "RoverWheelRequirements::Verify"
+usd_path = "/World/Rover/Wheels"
 ```
+
+`[[components]]` is the optional ownership layer for a componentized Twin.
+It requires one indexed SysML/KerML requirement document per component and
+binds that document to one unique verification case. The case above owns the
+fixture and Rhai observer, so a component cannot pass by accidentally using a
+sibling's test or by sharing a stale source file. The registry is generic and
+does not add domain names or duplicate thresholds.
 
 `luncosim test --scene tests/visual.usda --verification Project::VerifyVisual`
 checks this registry mapping (qualified SysML name, Twin-relative scene and
@@ -55,12 +68,12 @@ remain in SysML literals.
 Supported observations are `exists`, `children`, `attribute`,
 `attribute_component`, `extent_component`, `bounds_component`,
 `attribute_equals`, `relationship`, and `coverage`. `expected_attr` reads a
-literal SysML attribute by its unique source attribute name, so numeric limits
-are not copied into a Rhai script. The compact bridge uses short attribute
-names; callers must resolve collisions through the full report instead of
-silently choosing one. Every check carries a component and requirement ID,
-producing a per-component evidence record with the source revision and exact
-USD path.
+literal SysML attribute by its qualified source name, so numeric limits are not
+copied into a Rhai script. The compact bridge exposes one qualified attribute
+map and intentionally omits a duplicate short-name map; every collision is
+therefore explicit rather than silently selecting one component's literal.
+Every check carries a component and requirement ID, producing a per-component
+evidence record with the source revision and exact USD path.
 
 This is deliberately a subset of SysML v2 verification semantics: requirement
 definitions/usages, subjects, attributes, and verification-case `verify`

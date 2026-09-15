@@ -98,6 +98,15 @@ pub struct TwinManifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verification: Option<VerificationManifest>,
 
+    /// Component ownership records (`[[components]]`).
+    ///
+    /// A component record points at its normative SysML source and an exact
+    /// qualified verification case.  The case supplies the Twin-relative
+    /// USD fixture and Rhai observer, keeping executable test wiring in one
+    /// registry while making component ownership explicit.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub components: Vec<ComponentManifest>,
+
     /// Modelica domain settings (`[modelica]` section). Holds the Twin's
     /// Modelica search roots and explicitly declared external libraries.
     /// Absent means the domain discovers package roots from the indexed Twin
@@ -357,6 +366,7 @@ impl TwinManifest {
             usd: None,
             sysml: None,
             verification: None,
+            components: Vec::new(),
             modelica: None,
             journal: None,
             downloads: None,
@@ -467,6 +477,26 @@ pub struct VerificationCase {
     pub verdict_channel: Option<String>,
 }
 
+/// One component-owned requirement and verification binding.
+///
+/// This is deliberately domain-neutral: a component may be a vehicle bus,
+/// wheel station, sensor, ramp, or any other authored assembly.  Geometry and
+/// thresholds remain in the component's SysML source; the manifest only
+/// declares ownership and points to the qualified verification case.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ComponentManifest {
+    /// Stable Twin-local component identifier.
+    pub name: String,
+    /// Twin-relative `.sysml` or `.kerml` requirement source owned by this component.
+    pub requirements: PathBuf,
+    /// Exact qualified SysML verification case implemented by the component's Rhai observer.
+    pub verification: String,
+    /// Optional composed USD prim path for the component's review/fixture root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usd_path: Option<String>,
+}
+
 /// The `[sysml]` section of `twin.toml`.
 ///
 /// SysML documents remain ordinary Twin files. This section only records an
@@ -530,6 +560,7 @@ mod tests {
             usd: None,
             sysml: None,
             verification: None,
+            components: Vec::new(),
             modelica: None,
             journal: None,
             downloads: None,
@@ -576,6 +607,12 @@ mod tests {
                     verdict_channel: Some("EXAMPLE".into()),
                 }],
             }),
+            components: vec![ComponentManifest {
+                name: "lander".into(),
+                requirements: "requirements/model.sysml".into(),
+                verification: "Example::VerifyExample".into(),
+                usd_path: Some("/World/Lander".into()),
+            }],
             modelica: Some(ModelicaManifest {
                 paths: vec![".".into()],
                 externals: vec![ModelicaExternal {
@@ -611,6 +648,7 @@ mod tests {
             usd: None,
             sysml: None,
             verification: None,
+            components: Vec::new(),
             modelica: None,
             journal: None,
             downloads: None,
@@ -792,6 +830,7 @@ uuid = "{id}"
             usd: None,
             sysml: None,
             verification: None,
+            components: Vec::new(),
             modelica: None,
             journal: None,
             downloads: None,
