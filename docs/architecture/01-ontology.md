@@ -248,7 +248,7 @@ Runtime plumbing that owns a Document, routes ops from views, records undo histo
 
 ---
 
-## 4d. Workbench Concepts (`lunco-workbench`, `lunco-workbench-browser`)
+## 4d. Workbench Concepts (`lunco-workbench`, `lunco-workbench-guided-ui`, `lunco-workbench-browser`)
 
 The UI application scaffold. See [`11-workbench.md`](11-workbench.md).
 
@@ -259,6 +259,7 @@ avoid the collision:
 | Concept | Our term | Where |
 |---|---|---|
 | Editor shell + dock engine + panel registry | **Workbench** | `lunco-workbench` |
+| Authored guided HUD and coach presentation | **Guided UI** | `lunco-workbench-guided-ui` |
 | Twin and Files navigation feature | **Browser** | `lunco-workbench-browser` |
 | Editor session: open Twins + documents + recents | **Workspace** | `lunco-workspace` (wrapped as `WorkspaceResource` in `lunco-workbench`) |
 | Task-specific UI chrome preset | **Perspective** | `lunco-workbench` (trait) |

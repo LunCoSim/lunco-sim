@@ -61,6 +61,7 @@ use lunco_core::{on_command, register_commands};
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use lunco_theme::ColorAlpha;
 use lunco_workbench_core::commands::{CloseTab, FocusPanel, OpenTab, OpenTabPreserveFocus};
+use lunco_workbench_core::presentation::{HelpAnchors, ViewportPlaceholder};
 use lunco_workbench_core::scene::{CurrentSceneName, CurrentScenePath};
 use lunco_workbench_core::scene_pick::ScenePickGate;
 use lunco_workbench_core::tabs::{EditorTabs, PendingTabCloses};
@@ -86,7 +87,6 @@ mod viewport;
 
 pub mod control_status;
 pub mod file_ops;
-pub mod guided_overlay;
 pub mod input_overlay;
 pub mod perf_hud;
 pub mod perspective_command;
@@ -194,42 +194,6 @@ impl Default for DockSizes {
     }
 }
 
-/// Screen-space rects of named UI landmarks, refreshed each frame
-/// by whoever draws them. Read by feature-tour overlays (e.g. the
-/// Modelica help tour) to spotlight a real widget instead of a
-/// hand-drawn picture.
-///
-/// Convention: short stable keys like `"menu.file"`, `"menu.help"`,
-/// `"menu.perspective.rover_build"`, and `"toolbar.run"`. A missing key just means the widget wasn't
-/// painted this frame (panel closed, perspective inactive); the
-/// overlay falls back to a centred callout.
-#[derive(Resource, Default, Debug, Clone)]
-pub struct HelpAnchors {
-    /// Frame-counter or similar staleness gate is unnecessary —
-    /// readers always check the current frame's data after the
-    /// writers have run (overlay renders late in the same pass).
-    rects: std::collections::HashMap<String, bevy_egui::egui::Rect>,
-}
-
-impl HelpAnchors {
-    /// Publish a widget's screen rect under `key`. Called from any
-    /// UI render fn after laying the widget out (response.rect).
-    pub fn set(&mut self, key: impl Into<String>, rect: bevy_egui::egui::Rect) {
-        self.rects.insert(key.into(), rect);
-    }
-
-    /// Read the most recent rect under `key`, if any.
-    pub fn get(&self, key: &str) -> Option<bevy_egui::egui::Rect> {
-        self.rects.get(key).copied()
-    }
-
-    /// Drop every recorded rect — done once per frame at the start
-    /// of the egui pass so stale rects from a closed panel don't
-    /// linger as overlay targets.
-    pub fn clear(&mut self) {
-        self.rects.clear();
-    }
-}
 /// Name of the binary actually running, for the Help menu's build line.
 ///
 /// This crate is a LIBRARY shared by every workbench app (`luncosim`, `lunica`,
@@ -573,9 +537,7 @@ register_commands!(on_focus_panel,);
 // lives in `lunco-workspace` now — consumers import it from there directly.
 // `session` here is just the workbench-side recents persistence.
 use lunco_workspace::WorkspaceResource;
-pub use viewport::{
-    ViewportPanel, ViewportPlaceholder, WorkbenchEguiHost, WorkbenchViewportPlugin,
-};
+pub use viewport::{ViewportPanel, WorkbenchEguiHost, WorkbenchViewportPlugin};
 
 /// Get the backdrop colour from the active theme.
 fn get_panel_backdrop(theme: &lunco_theme::Theme) -> egui::Color32 {
@@ -773,9 +735,6 @@ impl Plugin for WorkbenchPlugin {
         // Perf HUD (FPS / frame ms / optional physics ms) wired into
         // the right end of the status bar. Off by default; flip via
         // the `TogglePerfHud` typed command.
-        if !app.is_plugin_added::<guided_overlay::GuidedOverlayPlugin>() {
-            app.add_plugins(guided_overlay::GuidedOverlayPlugin);
-        }
         // The blackout badge — "commands are not reaching this vessel". Reads the
         // same `ControlPathRegistry` the authorization gate refuses on, so the
         // indicator and the refusal can never disagree. Draws nothing until a
@@ -783,10 +742,8 @@ impl Plugin for WorkbenchPlugin {
         if !app.is_plugin_added::<control_status::ControlStatusPlugin>() {
             app.add_plugins(control_status::ControlStatusPlugin);
         }
-        // NOTE: guided tours are now driven by rhai scenarios (the coach card is
-        // rendered by `guided_overlay` and advanced by the running scenario's
-        // `on_event`). The old data-driven `tour_driver` (`TourCatalog`/`TourDef`)
-        // had zero registrants once lunica moved to rhai guideds and was removed.
+        // Guided presentation is an optional host-level plugin. The workbench
+        // only publishes the generic render-set and anchor contracts it uses.
         if !app.is_plugin_added::<perf_hud::PerfHudPlugin>() {
             app.add_plugins(perf_hud::PerfHudPlugin);
         }
@@ -3722,7 +3679,7 @@ fn render_layout(
     // so it stays on the background layer *under* the chrome — painting it
     // after the panels would overdraw them.
     let viewport_empty = world
-        .get_resource::<viewport::ViewportPlaceholder>()
+        .get_resource::<ViewportPlaceholder>()
         .is_some_and(|p| p.message.is_some());
     let no_active_scene_camera = !scene_camera_is_rendering(world);
     let needs_full_backdrop = needs_full_backdrop(layout, viewport_empty, no_active_scene_camera);
@@ -4781,7 +4738,7 @@ fn render_layout(
     // is chrome. Centered on the window, which is the viewport region
     // in View mode and close enough in Build.
     let placeholder = world
-        .get_resource::<viewport::ViewportPlaceholder>()
+        .get_resource::<ViewportPlaceholder>()
         .and_then(|p| p.message.clone());
     if let Some(msg) = placeholder {
         let viewport_visible = viewport::layout_is_empty(layout)
@@ -4917,10 +4874,6 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
         .get_resource::<CurrentSceneName>()
         .map(|s| s.0.clone())
         .unwrap_or_default();
-    let guided_title = world
-        .get_resource::<crate::guided_overlay::GuidedOverlay>()
-        .map(|hud| hud.title.clone())
-        .unwrap_or_default();
     let scene_path = world
         .get_resource::<CurrentScenePath>()
         .map(|s| s.0.clone())
@@ -4934,13 +4887,8 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
         // Reserve the exact bounded footprint of every control to the right of
         // the status scope. The controls shrink together on compact windows;
         // the left scope never competes with an unbounded label.
-        let right_widths = status_bar_right_widths(
-            bar_width,
-            perf_enabled,
-            net_active,
-            !guided_title.is_empty(),
-            !scene_name.is_empty(),
-        );
+        let right_widths =
+            status_bar_right_widths(bar_width, perf_enabled, net_active, !scene_name.is_empty());
         let right_reserve = right_widths.total();
 
         let status_width =
@@ -5054,26 +5002,6 @@ fn render_status_bar_inner(ui: &mut egui::Ui, world: &mut World, theme: &lunco_t
                 .clicked()
         {
             egui::Popup::toggle_id(ui.ctx(), popup_id);
-        }
-
-        if !guided_title.is_empty() {
-            ui.separator();
-            ui.allocate_ui_with_layout(
-                egui::vec2(right_widths.guided, 18.0),
-                egui::Layout::left_to_right(egui::Align::Center),
-                |ui| {
-                    ui.add_sized(
-                        [right_widths.guided, 18.0],
-                        egui::Label::new(
-                            egui::RichText::new(format!("Guide: {guided_title}"))
-                                .small()
-                                .strong(),
-                        )
-                        .truncate(),
-                    )
-                    .on_hover_text(format!("Guide: {guided_title}"));
-                },
-            );
         }
 
         if !scene_name.is_empty() {
@@ -5561,7 +5489,6 @@ const STATUS_BAR_NOTIFICATION_POPUP_RATIO: f32 = 0.30;
 const STATUS_BAR_NOTIFICATION_MIN_WIDTH: f32 = 140.0;
 const STATUS_BAR_SEPARATOR_RESERVE: f32 = 12.0;
 const STATUS_BAR_BASE_OVERHEAD: f32 = 16.0;
-const STATUS_BAR_GUIDED_MAX_WIDTH: f32 = 190.0;
 const STATUS_BAR_SCENE_MAX_WIDTH: f32 = 150.0;
 const STATUS_BAR_NET_MAX_WIDTH: f32 = 220.0;
 const STATUS_BAR_PERF_MAX_WIDTH: f32 = 480.0;
@@ -5572,7 +5499,6 @@ const STATUS_BAR_PERF_EDGE_INSET: f32 = 8.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct StatusBarRightWidths {
-    guided: f32,
     scene: f32,
     net: f32,
     perf: f32,
@@ -5581,7 +5507,7 @@ struct StatusBarRightWidths {
 
 impl StatusBarRightWidths {
     fn total(self) -> f32 {
-        self.guided + self.scene + self.net + self.perf + self.overhead
+        self.scene + self.net + self.perf + self.overhead
     }
 }
 
@@ -5700,19 +5626,11 @@ fn status_bar_right_widths(
     available_width: f32,
     perf_enabled: bool,
     net_active: bool,
-    guided_visible: bool,
     scene_visible: bool,
 ) -> StatusBarRightWidths {
-    let separator_count = 2.0
-        + if guided_visible { 1.0 } else { 0.0 }
-        + if scene_visible { 1.0 } else { 0.0 }
-        + if net_active { 1.0 } else { 0.0 };
+    let separator_count =
+        2.0 + if scene_visible { 1.0 } else { 0.0 } + if net_active { 1.0 } else { 0.0 };
     let overhead = STATUS_BAR_BASE_OVERHEAD + separator_count * STATUS_BAR_SEPARATOR_RESERVE;
-    let guided = if guided_visible {
-        STATUS_BAR_GUIDED_MAX_WIDTH
-    } else {
-        0.0
-    };
     let scene = if scene_visible {
         STATUS_BAR_SCENE_MAX_WIDTH
     } else {
@@ -5728,7 +5646,7 @@ fn status_bar_right_widths(
     } else {
         0.0
     };
-    let max_controls = guided + scene + net + perf;
+    let max_controls = scene + net + perf;
     let budget = (available_width - STATUS_BAR_MIN_SCOPE_WIDTH - overhead).max(0.0);
     let perf_proportional = if max_controls > 0.0 {
         (budget * perf / max_controls).min(perf)
@@ -5742,7 +5660,7 @@ fn status_bar_right_widths(
     } else {
         0.0
     };
-    let other_controls = guided + scene + net;
+    let other_controls = scene + net;
     let other_scale = if other_controls > 0.0 {
         ((budget - perf).max(0.0) / other_controls).min(1.0)
     } else {
@@ -5750,7 +5668,6 @@ fn status_bar_right_widths(
     };
 
     StatusBarRightWidths {
-        guided: guided * other_scale,
         scene: scene * other_scale,
         net: net * other_scale,
         perf,
@@ -6890,15 +6807,13 @@ mod tests {
 
     #[test]
     fn status_bar_right_controls_fit_the_reserved_compact_width() {
-        let compact = status_bar_right_widths(960.0, true, true, true, true);
+        let compact = status_bar_right_widths(960.0, true, true, true);
         assert!(compact.total() <= 800.0);
-        assert!(compact.guided <= STATUS_BAR_GUIDED_MAX_WIDTH);
         assert!(compact.scene <= STATUS_BAR_SCENE_MAX_WIDTH);
         assert!(compact.net <= STATUS_BAR_NET_MAX_WIDTH);
         assert!(compact.perf <= STATUS_BAR_PERF_MAX_WIDTH);
 
-        let wide = status_bar_right_widths(1600.0, true, true, true, true);
-        assert_eq!(wide.guided, STATUS_BAR_GUIDED_MAX_WIDTH);
+        let wide = status_bar_right_widths(1600.0, true, true, true);
         assert_eq!(wide.scene, STATUS_BAR_SCENE_MAX_WIDTH);
         assert_eq!(wide.net, STATUS_BAR_NET_MAX_WIDTH);
         assert_eq!(wide.perf, STATUS_BAR_PERF_MAX_WIDTH);
@@ -6950,7 +6865,7 @@ mod tests {
 
     #[test]
     fn status_bar_right_controls_prioritize_readable_perf_metrics() {
-        let compact = status_bar_right_widths(960.0, true, true, true, true);
+        let compact = status_bar_right_widths(960.0, true, true, true);
 
         assert!(compact.perf >= STATUS_BAR_PERF_REQUIRED_WIDTH);
         assert!(compact.total() <= 800.0);

@@ -13,10 +13,10 @@
 //! clear_spotlight();
 //! ```
 //!
-//! Lives in `lunco-workbench` (not a guided-only crate) because both the
-//! luncosim and the lunica Modelica workbench load `WorkbenchPlugin`, so the
-//! same HUD is available to every app. The [`HelpAnchors`](crate::HelpAnchors)
-//! rect registry it spotlights against already lives here too.
+//! This is an optional application-level adapter. Hosts that want guided
+//! presentation add [`GuidedOverlayPlugin`] after `lunco-workbench`; the
+//! reusable anchor registry and viewport placeholder live in
+//! `lunco-workbench-core`.
 //!
 //! Command payloads are single strings (objectives arrive pre-formatted as a
 //! checklist block from the rhai prelude) — the same trivially-marshalled shape
@@ -24,9 +24,10 @@
 
 use bevy::ecs::world::DeferredWorld;
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
-use lunco_core::{on_command, register_commands, Command};
-use lunco_workbench_widgets::{icon_text_button, paint_icon, UiIcon};
+use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
+use lunco_core::{Command, on_command, register_commands};
+use lunco_workbench_core::presentation::{HelpAnchors, ViewportPlaceholder};
+use lunco_workbench_widgets::{UiIcon, icon_text_button, paint_icon};
 
 /// Shared layer for guided presentation. Workbench menus and window controls
 /// use egui's `Foreground` order, so guided HUDs, rings, coach cards, and
@@ -43,17 +44,13 @@ pub const GUIDED_SCRIM_ORDER: egui::Order = egui::Order::Background;
 /// the commands never panic on a missing resource; only the draw is ui-gated.
 #[derive(Resource, Default, Clone, Debug)]
 pub struct GuidedOverlay {
-    /// Display title of the currently running guided. Empty when no lesson
-    /// owns the HUD; the workbench status bar uses this as the primary lesson
-    /// identity and keeps the loaded USD filename as the secondary identity.
-    pub title: String,
     /// One-line instruction shown at the top of the HUD card. Empty = hidden.
     pub hint: String,
     /// Pre-formatted objectives checklist block (one objective per line, with a
     /// leading glyph). Empty = the objectives card is hidden.
     pub objectives: String,
     /// Active spotlight: `(anchor_key, caption)`. `anchor_key` resolves against
-    /// [`HelpAnchors`](crate::HelpAnchors); a named key must resolve to a
+    /// [`HelpAnchors`](lunco_workbench_core::presentation::HelpAnchors); a named key must resolve to a
     /// visible widget. `None` = no spotlight.
     pub spotlight: Option<(String, String)>,
     /// Active guided-tour coach step (lunica-style). When set, the overlay draws
@@ -85,7 +82,7 @@ pub struct GuidedRecovery {
 /// only reports this generic UI contract failure.
 #[derive(Event, Clone, Debug)]
 pub struct GuidedTargetUnavailable {
-    /// The authored [`HelpAnchors`](crate::HelpAnchors) key that was absent.
+    /// The authored [`HelpAnchors`](lunco_workbench_core::presentation::HelpAnchors) key that was absent.
     pub anchor: String,
 }
 
@@ -125,7 +122,7 @@ pub struct SetObjectives {
     pub text: String,
 }
 
-/// Spotlight a workbench widget by its [`HelpAnchors`](crate::HelpAnchors) key,
+/// Spotlight a workbench widget by its [`HelpAnchors`](lunco_workbench_core::presentation::HelpAnchors) key,
 /// dimming everything else. Rhai: `spotlight(anchor, caption)`.
 #[Command(default)]
 pub struct Spotlight {
@@ -482,7 +479,7 @@ fn draw_guided_recovery(
 /// Derive the guided content region from the workbench's published menu-bar
 /// geometry. The menu owns its height; the guided overlay must not duplicate
 /// that layout constant or drift when the chrome changes.
-fn guided_content_rect(ctx: &egui::Context, anchors: &crate::HelpAnchors) -> Option<egui::Rect> {
+fn guided_content_rect(ctx: &egui::Context, anchors: &HelpAnchors) -> Option<egui::Rect> {
     let viewport = ctx.viewport_rect();
     let menu = anchors.get("menu.bar")?;
     Some(egui::Rect::from_min_max(
@@ -491,11 +488,7 @@ fn guided_content_rect(ctx: &egui::Context, anchors: &crate::HelpAnchors) -> Opt
     ))
 }
 
-fn guided_anchor_rect(
-    anchors: &crate::HelpAnchors,
-    key: &str,
-    content: egui::Rect,
-) -> Option<egui::Rect> {
+fn guided_anchor_rect(anchors: &HelpAnchors, key: &str, content: egui::Rect) -> Option<egui::Rect> {
     anchors
         .get(key)
         .map(|rect| {
@@ -544,7 +537,7 @@ fn report_missing_anchor(hud: &mut GuidedOverlay, commands: &mut Commands, ancho
 fn draw_spotlight(
     mut egui_ctx: EguiContexts,
     mut hud: ResMut<GuidedOverlay>,
-    anchors: Res<crate::HelpAnchors>,
+    anchors: Res<HelpAnchors>,
     theme: Option<Res<lunco_theme::Theme>>,
     mut commands: Commands,
 ) {
@@ -746,9 +739,9 @@ fn emit_tour(commands: &mut Commands, name: &str, data: lunco_core::TelemetryVal
 fn draw_tour(
     mut egui_ctx: EguiContexts,
     mut hud: ResMut<GuidedOverlay>,
-    anchors: Res<crate::HelpAnchors>,
+    anchors: Res<HelpAnchors>,
     theme: Option<Res<lunco_theme::Theme>>,
-    placeholder: Option<Res<crate::viewport::ViewportPlaceholder>>,
+    placeholder: Option<Res<ViewportPlaceholder>>,
     scene_viewport: Option<Res<lunco_core::SceneViewport>>,
     mut commands: Commands,
 ) {
@@ -1173,7 +1166,8 @@ fn tour_tail_points(
 /// Adds the [`GuidedOverlay`] resource, its commands, and the ui-gated overlay draw
 /// systems (ordered after [`WorkbenchRenderSet`](lunco_workbench_core::WorkbenchRenderSet) so
 /// panel `HelpAnchors` rects are populated before the spotlight/tour read them).
-/// Idempotent. Registered by [`WorkbenchPlugin`](crate::WorkbenchPlugin).
+/// The host adds this plugin after the workbench render set when guided
+/// presentation is part of the application.
 pub struct GuidedOverlayPlugin;
 
 impl Plugin for GuidedOverlayPlugin {

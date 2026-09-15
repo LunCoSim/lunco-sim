@@ -227,6 +227,7 @@ impl Plugin for LunCoSimUiPlugin {
             // so scene selection / possession / spawn-placement run as click observers.
             .add_plugins(bevy::picking::mesh_picking::MeshPickingPlugin)
             .add_plugins(lunco_workbench::WorkbenchPlugin)
+            .add_plugins(lunco_workbench_guided_ui::GuidedOverlayPlugin)
             .add_plugins(lunco_workbench_browser::TwinBrowserPlugin);
         #[cfg(feature = "avatar-ui")]
         app.add_plugins(lunco_avatar_ui::AvatarUiPlugin);
@@ -305,10 +306,7 @@ impl Plugin for LunCoSimUiPlugin {
                 app.add_observer(models_palette::clear_program_catalog_on_twin_closed);
                 // In-app rhai REPL — runs snippets against the live app through the
                 // API bridge, on web + native. Gated on bridge availability.
-                #[cfg(any(
-                    feature = "api-transport",
-                    feature = "transport-http"
-                ))]
+                #[cfg(any(feature = "api-transport", feature = "transport-http"))]
                 app.register_panel(rhai_repl_panel::RhaiReplPanel::default());
                 app.init_resource::<models_palette::AttachState>();
                 // Disarm on scene teardown — see `AttachState`.
@@ -338,7 +336,7 @@ impl Plugin for LunCoSimUiPlugin {
                 |t: On<lunco_usd_sim_cosim::LoadScene>,
                  current: Option<ResMut<CurrentScenePath>>,
                  current_name: Option<ResMut<CurrentSceneName>>,
-                 hud: Option<ResMut<lunco_workbench::guided_overlay::GuidedOverlay>>| {
+                 hud: Option<ResMut<lunco_workbench_guided_ui::GuidedOverlay>>| {
                     if let Some(mut current) = current {
                         current.0 = t.event().path.clone();
                     }
@@ -385,13 +383,11 @@ impl Plugin for LunCoSimUiPlugin {
             // field. Its state still flows through the typed SetClock command.
             .add_systems(
                 bevy_egui::EguiPrimaryContextPass,
-                (
-                    celestial_time::draw_celestial_time
-                        .in_set(lunco_workbench_core::ApplicationOverlayRenderSet)
-                        .run_if(not(recording_offline))
-                        .run_if(in_view_perspective)
-                        .run_if(overlays::sky_clock_visible),
-                ),
+                (celestial_time::draw_celestial_time
+                    .in_set(lunco_workbench_core::ApplicationOverlayRenderSet)
+                    .run_if(not(recording_offline))
+                    .run_if(in_view_perspective)
+                    .run_if(overlays::sky_clock_visible),),
             );
 
         // Embed the FULL lunica workbench as the "Design" workspace via the

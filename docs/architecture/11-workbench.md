@@ -9,6 +9,9 @@
 > lives. `lunco-workbench-browser` is a separate reusable feature package for
 > Twin and Files navigation; it consumes the core/widget contracts and does
 > not link the concrete shell. The shell itself remains browser-agnostic.
+> `lunco-workbench-guided-ui` is another optional host-level adapter: it consumes
+> the same core/widget contracts for Rhai-driven guided HUDs and coach marks,
+> but does not make the base shell depend on tutorial behavior.
 >
 > **Terminology note.** Later sections of this doc (§4 onward) use
 > "workspace" in its original Blender/CATIA sense — a layout preset.
@@ -58,6 +61,8 @@ the concrete `egui_dock`/`bevy_egui` shell that materializes those contracts,
 including persistence and viewport integration. The
 `lunco-workbench-widgets` crate owns reusable icons, text-editor builders, and
 hierarchy-row presentation without depending on the shell. The optional
+`lunco-workbench-guided-ui` crate owns guided HUD, spotlight, coach-mark, and
+recovery presentation without depending on the shell. The optional
 `lunco-workbench-browser` crate builds the reusable Twin and Files navigation
 panels on top of the core/widget contracts. GPU health, adapter capability admission, and
 presentation recovery are owned by the independent
@@ -220,8 +225,8 @@ the workbench's menu, status, inspector, and window-control boundaries without
 inventing per-window screen offsets. Non-interactive overlays do not become
 input owners; modal behavior belongs to the shared modal host.
 
-Tutorial presentation uses the shared
-`lunco_workbench::guided_overlay::GUIDED_OVERLAY_ORDER`
+Tutorial presentation uses the optional
+`lunco_workbench_guided_ui::GUIDED_OVERLAY_ORDER`
 (`egui::Order::Middle`) for its HUD, ring, coach/recovery card, and completion
 prompt. Its painter/input scrims use the shared
 `GUIDED_SCRIM_ORDER` (`egui::Order::Background`). Workbench menus and window
@@ -883,6 +888,11 @@ simulation default.
    │     - semantic vector icons, text editors, hierarchy rows
    │         │
    │         ▼
+   ├── lunco-workbench-guided-ui  (optional authored guided presentation)
+   │     - Rhai-driven HUD, spotlights, coach marks, recovery surfaces
+   │     - depends on core/widget contracts, not the concrete shell
+   │         │
+   │         ▼
    ├── lunco-workbench  (concrete app shell — this document)
    │     - Root layout (SidePanel + CentralPanel)
    │     - egui_dock materialization and persistence
@@ -912,6 +922,8 @@ simulation default.
   adapter admission, GPU error handling, and the terminal presentation gate.
 - `lunco-workbench-widgets` owns shell-independent icons, text-editor builders,
   and hierarchy-row presentation so reusable panels do not depend on docking.
+- `lunco-workbench-guided-ui` owns optional authored guided presentation and is
+  installed explicitly by application hosts after the shell.
 - `lunco-workbench` is the concrete app framework — layout, persistence,
   workspace integration, viewport composition, source editing, and panel host.
 - `lunco-workbench-browser` is the optional navigation feature — Twin/Files

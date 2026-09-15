@@ -1,0 +1,17 @@
+[package]
+name = "lunco-workbench-guided-ui"
+version = "0.1.0-dev"
+edition = "2024"
+license.workspace = true
+description = "Optional Rhai-driven guided HUD and coach-mark presentation for LunCoSim workbench hosts"
+
+[dependencies]
+bevy = { workspace = true }
+bevy_egui = { workspace = true }
+lunco-core = { path = "../lunco-core" }
+lunco-theme = { path = "../lunco-theme" }
+lunco-workbench-core = { path = "../lunco-workbench-core" }
+lunco-workbench-widgets = { path = "../lunco-workbench-widgets" }
+
+[lints]
+workspace = true
