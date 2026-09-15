@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 use lunco_doc::{Document, DocumentError, DocumentId};
 
-use crate::{UsdDocument, UsdOp};
+use lunco_usd_document::document::{UsdDocument, UsdOp};
 
 /// The explicit semantic target of an Assembly Editor proposal.
 ///
@@ -404,7 +404,7 @@ mod tests {
 
     fn add_prim(name: &str) -> UsdOp {
         UsdOp::AddPrim {
-            edit_target: crate::LayerId::root(),
+            edit_target: LayerId::root(),
             parent_path: "/Assembly".to_owned(),
             name: name.to_owned(),
             type_name: Some("Xform".to_owned()),
@@ -423,7 +423,7 @@ mod tests {
         assert_eq!(validation.generation, 0);
         assert_eq!(validation.affected_paths, vec!["/Assembly/Chassis"]);
         assert!(!document
-            .authored_prim_exists(&crate::LayerId::root(), "/Assembly/Chassis")
+            .authored_prim_exists(&LayerId::root(), "/Assembly/Chassis")
             .unwrap());
     }
 
@@ -442,7 +442,7 @@ mod tests {
             .any(|d| d.contains("stale document")));
 
         let runtime = UsdOp::AddPrim {
-            edit_target: crate::LayerId::runtime(),
+            edit_target: LayerId::runtime(),
             parent_path: "/Assembly".to_owned(),
             name: "RuntimeOnly".to_owned(),
             type_name: Some("Xform".to_owned()),
@@ -466,7 +466,7 @@ mod tests {
         assert!(document.parse_error().is_none());
 
         let instance_override = UsdOp::SetAttribute {
-            edit_target: crate::LayerId::root(),
+            edit_target: LayerId::root(),
             path: "/Assembly/Chassis".to_owned(),
             name: "user:role".to_owned(),
             type_name: "string".to_owned(),

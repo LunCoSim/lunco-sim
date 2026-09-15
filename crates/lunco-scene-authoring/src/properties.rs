@@ -12,7 +12,7 @@ use lunco_materials::{ParamSchema, ParamValue, ShaderLook};
 use lunco_render::{PbrLook, SurfaceAlpha};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_core::commands::ApplyUsdOp;
-use lunco_usd_core::document::{LayerId, UsdDocument, UsdOp};
+use lunco_usd_document::document::{LayerId, UsdDocument, UsdOp};
 
 /// One wheel-dynamics parameter — **the** single source of truth for it.
 ///

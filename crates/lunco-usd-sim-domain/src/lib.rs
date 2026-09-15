@@ -4331,9 +4331,10 @@ mod tests {
 
     #[test]
     fn authored_member_telemetry_owns_the_public_output_identity() {
-        let stage = CanonicalStage::from_recipe(&lunco_usd_core::StageRecipe::from_source(
-            "telemetry-owner.usda",
-            r#"#usda 1.0
+        let stage =
+            CanonicalStage::from_recipe(&lunco_usd_document::recipe::StageRecipe::from_source(
+                "telemetry-owner.usda",
+                r#"#usda 1.0
 def Scope "Rig"
 {
     def Xform "Battery"
@@ -4344,8 +4345,8 @@ def Scope "Rig"
     }
 }
 "#,
-        ))
-        .expect("telemetry owner stage");
+            ))
+            .expect("telemetry owner stage");
         let view = stage.view();
         assert!(has_authored_telemetry_for_output(
             &view,

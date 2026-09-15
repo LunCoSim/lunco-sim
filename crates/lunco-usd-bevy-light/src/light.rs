@@ -134,7 +134,7 @@ pub fn untextured_dome_intensity_sum(
     data: &openusd::sdf::Data,
     exclude: Option<&SdfPath>,
 ) -> Result<f32, LightReadError> {
-    use lunco_usd_core::UsdDataExt;
+    use lunco_usd_document::usd_data::UsdDataExt;
 
     // Collect paths first: `prim_type_name`/`field` re-borrow `data` immutably,
     // which is fine, but iterating while calling them keeps two borrows alive
@@ -504,7 +504,7 @@ fn blackbody_rgb(kelvin: f32) -> Option<Vec3> {
 /// admitting an overflowed or degenerate result.
 fn positive_length(
     value: f32,
-    convention: lunco_usd_bevy_core::units::ConventionTransform,
+    convention: lunco_usd_document::units::ConventionTransform,
     path: &SdfPath,
     name: &str,
 ) -> Result<f32, LightReadError> {
@@ -534,7 +534,7 @@ fn read_positive_length(
     path: &SdfPath,
     name: &str,
     default: f32,
-    convention: lunco_usd_bevy_core::units::ConventionTransform,
+    convention: lunco_usd_document::units::ConventionTransform,
 ) -> Result<f32, LightReadError> {
     let value = read_authored_real(reader, path, name)?.unwrap_or(default);
     positive_length(value, convention, path, name)
@@ -567,7 +567,7 @@ fn read_light_range(
     reader: &impl lunco_usd_bevy_core::UsdRead,
     path: &SdfPath,
     default: f32,
-    convention: lunco_usd_bevy_core::units::ConventionTransform,
+    convention: lunco_usd_document::units::ConventionTransform,
 ) -> Result<(f32, bool), LightReadError> {
     match read_authored_real(reader, path, "lunco:light:range")? {
         None | Some(0.0) => Ok((default, true)),
@@ -604,7 +604,7 @@ fn read_shadow_distance(
     reader: &impl lunco_usd_bevy_core::UsdRead,
     path: &SdfPath,
     default: f32,
-    convention: lunco_usd_bevy_core::units::ConventionTransform,
+    convention: lunco_usd_document::units::ConventionTransform,
 ) -> Result<(f32, bool), LightReadError> {
     match read_authored_real(reader, path, ltok::A_SHADOW_DISTANCE)? {
         Some(d) if d > 0.0 => {
@@ -907,7 +907,7 @@ pub fn instantiate_light_prim(
 
             // ── `inputs:radius` + `inputs:normalize` (UsdLux area semantics) ──────
             //
-            // The spec (`crates/lunco-usd-core/schema/core/usdLux.usda`):
+            // The spec (`crates/lunco-usd-document/schema/core/usdLux.usda`):
             //   * `LightAPI.inputs:intensity` — "scales the brightness of the light
             //     linearly"; `inputs:exposure` — "scales ... exponentially" (2^e).
             //   * `LightAPI.inputs:normalize` (default `0`) — "Controls if the light
@@ -1457,7 +1457,7 @@ mod photometry_tests {
     use super::*;
     use lunco_usd_bevy_core::canonical::CanonicalStage;
     use lunco_usd_bevy_core::read::UsdRead;
-    use lunco_usd_core::StageRecipe;
+    use lunco_usd_document::recipe::StageRecipe;
 
     #[test]
     fn preview_scope_excludes_only_dominant_authored_lights() {

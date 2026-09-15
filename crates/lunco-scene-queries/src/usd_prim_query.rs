@@ -81,8 +81,8 @@ use lunco_usd_bevy_scene::collision::{collision_aabb, prim_geometry_aabb, Object
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_bevy_scene::UsdSceneRoot;
 use lunco_usd_bevy_twin::{canonical_stage_for_document, scene_document_for, DocBackedTwinScenes};
-use lunco_usd_core::author::open_doc_stage;
-use lunco_usd_core::document::UsdDocument;
+use lunco_usd_document::author::open_doc_stage;
+use lunco_usd_document::document::UsdDocument;
 use openusd::sdf::{Path as SdfPath, Value};
 
 /// One attribute, converted to JSON by probing the typed readers in turn.

@@ -85,7 +85,7 @@ package checks after changing skill metadata or packaging.
   `kind`, variants, and `inputs:`/`outputs:`). Introduce a `lunco:` property or
   API only when USD has no suitable owner, first checking the registered schema
   source and maintained readers for an existing LunCo contract. Never add an
-  unregistered `lunco:` field; update `crates/lunco-usd-core/schema/schema.usda` and
+  unregistered `lunco:` field; update `crates/lunco-usd-document/schema/schema.usda` and
   regenerate only when a genuinely missing project semantic is required. Keep
   editor/Rhai tools schema-aware by querying and validating the standard owner
   instead of mirroring facts into custom metadata.

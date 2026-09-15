@@ -16,7 +16,6 @@ lunco-usd-avian-filters = { path = "../lunco-usd-avian-filters" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
-lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-terrain-globe = { path = "../lunco-terrain-globe" }
 
 [features]
@@ -25,6 +24,7 @@ default = ["3d"]
 
 [dev-dependencies]
 big_space = { workspace = true }
+lunco-usd-document = { path = "../lunco-usd-document" }
 
 [lints]
 workspace = true

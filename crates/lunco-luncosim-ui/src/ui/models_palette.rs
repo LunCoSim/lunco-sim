@@ -11,10 +11,8 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_usd_bevy_scene::UsdPrimPath;
-use lunco_usd_core::{
-    program::{ProgramAttachSpec, ProgramInput, ProgramOutput},
-    LayerId,
-};
+use lunco_usd_core::program::{ProgramAttachSpec, ProgramInput, ProgramOutput};
+use lunco_usd_document::document::LayerId;
 use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelSlot};
 
 /// A discovered `.mo` or `.py` source that can be offered by the palette.

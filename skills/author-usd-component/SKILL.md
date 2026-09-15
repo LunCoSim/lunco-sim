@@ -23,7 +23,7 @@ unless the typed owner is missing a generic USD capability.
 
 Frame is fixed: **Y-up, right-handed, −Z-forward, SI metres** (`docs/architecture/41-axes-and-units.md`).
 Author in that frame. `upAxis = "Z"` / `metersPerUnit != 1` are converted once at
-the shared USD boundary (`crates/lunco-usd-core/src/units.rs`; the runtime
+the shared USD boundary (`crates/lunco-usd-document/src/units.rs`; the runtime
 reader adapter is in `lunco-usd-bevy`) — never branch on them.
 
 Background: [`21-domain-usd.md`](../../docs/architecture/21-domain-usd.md),
@@ -549,11 +549,11 @@ A twin is a folder with `twin.toml` (`name`, `[usd] default_scene`), addressed a
 
 A new property is **inert** until it reaches the registered layer:
 
-1. Edit `crates/lunco-usd-core/schema/schema.usda` — the source, **never read at runtime**
+1. Edit `crates/lunco-usd-document/schema/schema.usda` — the source, **never read at runtime**
 2. Run `python3 scripts/gen_schema.py` — regenerates
-   `crates/lunco-usd-core/schema/generatedSchema.usda`, the file actually compiled in
+   `crates/lunco-usd-document/schema/generatedSchema.usda`, the file actually compiled in
    (never hand-edit it)
-3. A new CLASS additionally needs a `crates/lunco-usd-core/schema/plugInfo.json`
+3. A new CLASS additionally needs a `crates/lunco-usd-document/schema/plugInfo.json`
    Types entry (`every_schema_class_is_registered_in_pluginfo` pins this)
 
 Registry tests pin source↔generated class parity and (for the wheel domain)

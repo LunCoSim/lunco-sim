@@ -285,7 +285,7 @@ mod primitive_attribute_tests {
     use openusd::sdf::Path as SdfPath;
 
     fn parse(source: &str) -> CanonicalStage {
-        CanonicalStage::from_recipe(&lunco_usd_core::StageRecipe::from_source(
+        CanonicalStage::from_recipe(&lunco_usd_document::recipe::StageRecipe::from_source(
             "primitive.usda",
             source,
         ))
@@ -355,8 +355,10 @@ mod indexed_mesh_tests {
     use openusd::sdf::Path as SdfPath;
 
     fn parse(usda: &str) -> CanonicalStage {
-        CanonicalStage::from_recipe(&lunco_usd_core::StageRecipe::from_source("t.usda", usda))
-            .expect("build canonical stage")
+        CanonicalStage::from_recipe(&lunco_usd_document::recipe::StageRecipe::from_source(
+            "t.usda", usda,
+        ))
+        .expect("build canonical stage")
     }
 
     /// The collider decode keeps the raw points (4) and fan-triangulates the
@@ -410,8 +412,10 @@ mod stage_metrics_import_tests {
     /// live, PCP-composed stage — which is the ONLY read path now that the
     /// Runtime reads come from the live canonical stage. Tests read what the app reads.
     fn parse(usda: &str) -> CanonicalStage {
-        CanonicalStage::from_recipe(&lunco_usd_core::StageRecipe::from_source("t.usda", usda))
-            .expect("build canonical stage")
+        CanonicalStage::from_recipe(&lunco_usd_document::recipe::StageRecipe::from_source(
+            "t.usda", usda,
+        ))
+        .expect("build canonical stage")
     }
 
     /// An Isaac-Sim-flavoured stage: Z-up, centimetres. `/Tower` sits 3 m up the
@@ -576,12 +580,14 @@ def Xform "World"
         let error = StageMetrics::from_reader(&bogus.view()).expect_err("malformed metadata");
         assert!(matches!(
             error,
-            lunco_usd_bevy_core::units::StageMetricsError::InvalidUpAxis(_)
+            lunco_usd_document::units::StageMetricsError::InvalidUpAxis(_)
         ));
         assert!(stage_convention(&bogus.view()).is_err());
         assert!(matches!(
             StageMetrics::from_stage(bogus.stage()),
-            Err(lunco_usd_bevy_core::units::StageMetricsError::InvalidUpAxis(_))
+            Err(lunco_usd_document::units::StageMetricsError::InvalidUpAxis(
+                _
+            ))
         ));
 
         let malformed_units = parse(
@@ -589,11 +595,11 @@ def Xform "World"
         );
         assert!(matches!(
             StageMetrics::from_reader(&malformed_units.view()),
-            Err(lunco_usd_bevy_core::units::StageMetricsError::InvalidMetersPerUnit(_))
+            Err(lunco_usd_document::units::StageMetricsError::InvalidMetersPerUnit(_))
         ));
         assert!(matches!(
             StageMetrics::from_stage(malformed_units.stage()),
-            Err(lunco_usd_bevy_core::units::StageMetricsError::InvalidMetersPerUnit(_))
+            Err(lunco_usd_document::units::StageMetricsError::InvalidMetersPerUnit(_))
         ));
     }
 }

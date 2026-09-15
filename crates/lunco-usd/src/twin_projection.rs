@@ -17,7 +17,7 @@
 //!    success or failure event.
 //! 2. [`drain_pending_twin_docs`] — once the source asset emits its terminal
 //!    event, allocate a
-//!    [`UsdDocument`](lunco_usd_core::document::UsdDocument) for it (origin = the on-disk path, so Save
+//!    [`UsdDocument`](lunco_usd_document::document::UsdDocument) for it (origin = the on-disk path, so Save
 //!    and dedup work), restore its persisted `.lunco/runtime` overlay, publish
 //!    the composed source as the twin overlay, record it in
 //!    [`DocBackedTwinScenes`] (synced after the canonical stage sink is drained), and only then
@@ -45,7 +45,7 @@
 //! that same doc-first mount. Files inside the active Twin remain document-only;
 //! scheme-qualified scene sources enter the typed `LoadScene` path directly.
 
-use lunco_usd_core::document::UsdDocument;
+use lunco_usd_document::document::UsdDocument;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -65,7 +65,7 @@ use crate::commands::TWIN_SCENE_LOAD_FAILED;
 use lunco_doc::OpenOutcome;
 use lunco_doc_bevy::{DocumentChanged, DocumentRegistry};
 use lunco_usd_core::commands::EmptyViewportReason;
-use lunco_usd_core::document::UsdOp;
+use lunco_usd_document::document::UsdOp;
 
 /// A default-twin-scene document waiting for its base source text to finish
 /// loading through the twin source.
@@ -980,7 +980,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
             let v = if is_string {
                 openusd::sdf::Value::String(value.clone())
             } else {
-                match lunco_usd_core::author::parse_attribute_value(type_name, value) {
+                match lunco_usd_document::author::parse_attribute_value(type_name, value) {
                     Ok(v) => v,
                     Err(e) => {
                         warn!("[twin] parse attribute {path}.{name} ({type_name}): {e}");
@@ -1097,7 +1097,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
             let Ok(sp) = openusd::sdf::Path::new(path) else {
                 return;
             };
-            let v = match lunco_usd_core::author::parse_attribute_value(type_name, value) {
+            let v = match lunco_usd_document::author::parse_attribute_value(type_name, value) {
                 Ok(v) => v,
                 Err(e) => {
                     warn!("[twin] parse keyframe {path}.{name} ({type_name}) @ {time}: {e}");
@@ -1561,7 +1561,7 @@ fn rebuild_scene_from_composed(
     composed_source: &str,
 ) {
     use lunco_usd_bevy_core::canonical::CanonicalStages;
-    use lunco_usd_core::StageRecipe;
+    use lunco_usd_document::recipe::StageRecipe;
     // Recipe = the edited composed source as the root layer + every referenced
     // `.usda` the current stage already loaded (keyed by the same canonical ids).
     let (scene_layer, mut bytes) = {
@@ -1793,7 +1793,7 @@ pub(crate) fn drain_ref_spawns(world: &mut World) {
 mod tests {
     use super::*;
     use lunco_usd_bevy_scene::UsdSceneProjected;
-    use lunco_usd_core::document::{LayerId, UsdOp};
+    use lunco_usd_document::document::{LayerId, UsdOp};
 
     const TINY: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n)\ndef Xform \"World\"\n{\n}\n";
 

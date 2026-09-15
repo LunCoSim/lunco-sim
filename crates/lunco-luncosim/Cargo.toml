@@ -82,7 +82,7 @@ lunco-readiness = { workspace = true }
 lunco-scene-validation = { path = "../lunco-scene-validation" }
 lunco-usd-avian = { path = "../lunco-usd-avian" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
-lunco-usd-core = { path = "../lunco-usd-core" }
+lunco-usd-document = { path = "../lunco-usd-document" }
 lunco-usd-sim = { path = "../lunco-usd-sim" }
 lunco-usd-sim-cosim = { path = "../lunco-usd-sim-cosim" }
 # The production `luncosim test` subcommand uses the editor's selection query
@@ -245,3 +245,6 @@ getrandom = { version = "0.3", features = ["wasm_js"] }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+lunco-workspace = { path = "../lunco-workspace" }

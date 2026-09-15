@@ -40,7 +40,7 @@ you have confirmed against NVIDIA's docs.
 
 **Replace with the verbatim file when a Kit install is available.** Copy
 `extsPhysics/omni.physx/schema.usda` over this one. The drift test
-`physx_vehicle_schemas_register_canonical_properties` in `../src/schema.rs` pins
+`physx_vehicle_schemas_register_canonical_properties` in `../../src/schema.rs` pins
 the property names this codebase reads, including negative assertions for the
 fabricated ones — but note its limit: it catches a *swap* that drops or renames
 something we read; it cannot tell you a name we never questioned was fabricated.
@@ -49,7 +49,7 @@ Only the real file can.
 ## Why they're here
 
 A property's **type**, its **variability** (`uniform`/`varying`) and whether it is
-`custom` are declared by its *schema*, not by whoever authors it. `lunco_usd_core::schema`
+`custom` are declared by its *schema*, not by whoever authors it. `lunco_usd_document::schema`
 is the one place that knows, and it must know core USD too — otherwise a core `uniform`
 property it hasn't been told about gets written `varying`, with no error.
 

@@ -51,7 +51,7 @@ the timeline as data.
 | USD animation sampling | `sample_usd_animation` (`lunco-usd-bevy-animation/src/lib.rs`) reads domain time → evaluates `xformOp:*` / visibility / displayColor `timeSamples` → `Transform` | |
 | Clip span per prim | `animated_time_range(reader, path) -> (f64,f64)` (`lunco-usd-bevy-core/src/animation.rs`) | |
 | Seconds ↔ timecode | `stage_time_codes_per_second` (`lunco-usd-bevy-core/src/read.rs`) | |
-| **Typed reversible keyframe write** | `UsdOp::SetTimeSample` / `RemoveTimeSample` (`lunco-usd-core/src/document.rs`) — each the other's inverse, with first-xform `xformOpOrder` authoring | Editor Inspector and `assembly_edit` use the existing operations; the full timeline remains future work |
+| **Typed reversible keyframe write** | `UsdOp::SetTimeSample` / `RemoveTimeSample` (`lunco-usd-document/src/document.rs`) — each the other's inverse, with first-xform `xformOpOrder` authoring | Editor Inspector and `assembly_edit` use the existing operations; the full timeline remains future work |
 | Journaled/undoable apply | `ApplyUsdOp { doc_id, parent_gen, op }` → `wire_usd_journal_recorders` records lossless (fwd,inv) pair | shared undo (UI+CLI+agent) |
 | Attribute literal → typed value | `parse_attribute_value` (`usd-core/src/author.rs:186`) | UI only supplies a string |
 | Camera switch (single target) | explicit selection (`SetActiveCamera` for the director, `SetUserCamera`/`ObserveAvatar` for the operator) → `ActivateCamera` → `SceneViewport::active_camera`, reconciled each frame (`usd-bevy-camera/src/camera_switch.rs`) | one viewport authority |

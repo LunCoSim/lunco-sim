@@ -30,7 +30,7 @@ use lunco_workbench_core::PanelId;
 
 use lunco_usd_bevy_twin::UsdDocumentUserOwned;
 use lunco_usd_core::commands::{EmptyViewportReason, UsdDocumentReady, USD_DOCUMENT_KIND};
-use lunco_usd_core::document::UsdDocument;
+use lunco_usd_document::document::UsdDocument;
 use lunco_workspace::WorkspaceResource;
 
 pub mod browser_dispatch;
