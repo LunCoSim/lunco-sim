@@ -22,8 +22,16 @@ let result = sysml_requirements::evaluate(source, [
        kind: "attribute", path: "/Twin/FLIP/Wheel_FL", attr: "radius",
        expected_attr: "Project::Rover::visualWheelRadiusM", tolerance: 0.001 }
 ]);
-report_verdict(result.failures, "VISUAL REQUIREMENTS", "VISUAL_REQUIREMENTS");
+report_structured_verdict(result, "VISUAL REQUIREMENTS", "VISUAL_REQUIREMENTS");
 ```
+
+`report_structured_verdict` emits the compatibility `TESTS_OK`/`TESTS_FAIL`
+envelope and a `<CHANNEL>_EVIDENCE` map with `schema_version: 1`. The evidence
+contains the verification key, requirement/check results and failures, the
+source revision in both backward-compatible and explicit `source_revision_hex`
+fields, the ordered `source_files` list, and optional observer `metrics`.
+Component observers should put clock/root/package facts in `metrics`; they
+must not copy requirement thresholds there.
 
 For inspection and tooling, the same snapshot is available as native Rhai
 maps (no stringify/parse round trip):

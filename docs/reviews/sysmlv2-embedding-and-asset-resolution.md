@@ -52,9 +52,9 @@ The first production slice now exists behind the opt-in `sysml` feature:
   observer, and optional verdict channel. `luncosim test --verification`
   validates that mapping before starting the runner.
 - `report_structured_verdict` now preserves the complete per-check result and
-  failure evidence, including verification identity, requirement count, and
-  source revision. `SysmlAnalysis::build_cached` reuses the latest immutable
-  source-set snapshot for repeated queries.
+  failure evidence, including verification identity, requirement count,
+  source revision, ordered source files, and observer metrics. `SysmlAnalysis::build_cached`
+  reuses the latest immutable source-set snapshot for repeated queries.
 - `lunco-luncosim-core`, the GUI shell, and the headless server expose the
   `sysml` feature gate; default builds remain unchanged.
 
@@ -372,10 +372,11 @@ absolute cache path.
 - The runtime plugin does not yet scan `Twin::files()` and open every source
   automatically. A caller still supplies the existing canonical asset/source
   event to `DocumentRegistry::open_file`.
-- No cross-file `RefIndex` adapter, async source-set worker, or requirement
-  verification hook is wired into the production `luncosim test` command yet.
-  The read-only `ValidateSysml` query now accepts either one source or a
-  manifest-aware `twin://name` source set.
+- No cross-file `RefIndex` adapter, async source-set worker, or automatic UI
+  source loader exists yet. The production `luncosim test --verification`
+  command now validates the Twin registry mapping and verdict channel before
+  starting the runner; the read-only `ValidateSysml` query accepts either one
+  source or a manifest-aware `twin://name` source set.
 - The AST projection now exposes typed attributes, subjects, documentation,
   and `verify`/`satisfy`/realization fields for requirement and verification
   records. Full constraint/expression evaluation remains out of scope for the
@@ -386,7 +387,8 @@ absolute cache path.
 - The typed verdict sink remains intentionally small: Rhai emits the structured
   evidence and the compatibility `TESTS_OK`/`TESTS_FAIL` envelope. Durable
   journal persistence and a standard `VerificationCases::VerdictKind` adapter
-  remain future work.
+  remain future work; the current evidence schema is an in-process telemetry
+  contract, not a durable result store.
 - Full SysML constraint/expression evaluation and shadow-mode comparison are
   not implemented. Thresholds are read from SysML literals; measurement,
   actuation, and anti-trivial guards remain Rhai/public-query

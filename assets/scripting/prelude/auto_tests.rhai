@@ -171,8 +171,18 @@ fn report_structured_verdict(report, title, channel) {
     let results = [];
     let verification = "";
     let requirement_count = 0;
+    let source_files = [];
+    let source_revision_hex = "";
+    let metrics = #{};
     if report != () {
         if report.source_revision != () { source_revision = report.source_revision; }
+        if report.source_revision_hex != () {
+            source_revision_hex = report.source_revision_hex;
+        } else {
+            source_revision_hex = source_revision;
+        }
+        if report.source_files != () { source_files = report.source_files; }
+        if report.metrics != () { metrics = report.metrics; }
         if report.results != () {
             result_count = report.results.len();
             // Preserve the complete typed observation table.  The legacy
@@ -202,12 +212,13 @@ fn report_structured_verdict(report, title, channel) {
         }
     }
     if failures.is_empty() && !ok { failures.push("requirement evaluation unavailable"); }
-    let evidence = #{ok: ok, title: title, channel: channel,
+    let evidence = #{schema_version: 1, ok: ok, title: title, channel: channel,
         verdict: if ok { "pass" } else { "fail" },
         verification: verification, requirement_count: requirement_count,
-        source_revision: source_revision, result_count: result_count,
+        source_revision: source_revision, source_revision_hex: source_revision_hex,
+        source_files: source_files, result_count: result_count,
         failure_count: raw_failures.len(), results: results,
-        failures: raw_failures};
+        failures: raw_failures, metrics: metrics};
     emit(channel + "_EVIDENCE", evidence);
     print(channel + "_EVIDENCE source_revision=" + source_revision
         + " results=" + result_count + " failures=" + raw_failures.len());
