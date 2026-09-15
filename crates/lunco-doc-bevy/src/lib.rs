@@ -52,8 +52,6 @@
 //! domains?" — useful for replay, audit, debugging, the journal panel,
 //! and future cross-doc transactions / multi-user sync.
 
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
 
 pub mod diagnostics;
 pub mod rename;

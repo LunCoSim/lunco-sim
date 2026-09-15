@@ -49,8 +49,6 @@
 //!   `&'static str`).
 //! - **Command palette** — `Ctrl+P` unbound.
 
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
 
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};

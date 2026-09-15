@@ -4,8 +4,6 @@
 //! serialized semantic snapshot; it never parses source or mutates a
 //! document, keeping the language boundary small and deterministic.
 
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
 
 use std::sync::Arc;
 

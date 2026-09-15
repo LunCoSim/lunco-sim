@@ -39,6 +39,17 @@ pub struct PhysicsJointLink {
     pub body1: Entity,
 }
 
+/// Requests the physics bridge to retire a live joint through its native
+/// constraint lifecycle.
+///
+/// Scene/document commands must never despawn an Avian joint directly: a
+/// despawn removes several components in an unspecified order and can make the
+/// solver's joint graph and island counters disagree.  The command layer only
+/// writes this marker; [`lunco_usd_avian`] consumes it at its owned lifecycle
+/// boundary and performs one graph retirement transaction before despawning.
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PhysicsJointDetachRequested;
+
 /// Records authored joint paths that were detached from a live physics graph.
 ///
 /// The composed USD topology is immutable for a stage generation, while an

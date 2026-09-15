@@ -86,6 +86,93 @@ pub use openusd::schemas::physics::DriveType;
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct ScenePhysicsOwned;
 
+/// Runtime evidence for one joint-shaped entity, consumed by the generic Rhai
+/// USD lint. The fact is deliberately read-only; it does not create or repair
+/// topology. `linked` is the projection's authoritative endpoint contract,
+/// while `pending`, `native`, and `graph` show which lifecycle stage currently
+/// owns the entity.
+#[derive(Clone, Debug)]
+pub struct RuntimeJointFact {
+    /// Live entity bits, stable for the current process/session.
+    pub entity_bits: u64,
+    /// Authored USD path, when the entity came from a composed stage.
+    pub path: Option<String>,
+    /// Whether the generic `PhysicsJointLink` endpoint contract is present.
+    pub linked: bool,
+    /// Whether the typed joint is waiting for native admission.
+    pub pending: bool,
+    /// Whether Avian has admitted a native joint component.
+    pub native: bool,
+    /// Whether the edge is present in Avian's `JointGraph`.
+    pub graph: bool,
+    /// Whether the Avian joint graph resource was installed for this lint pass.
+    pub graph_available: bool,
+    /// Whether a solver-safe detach was requested.
+    pub detach_requested: bool,
+}
+
+/// Collect runtime joint topology evidence for the loaded stage.
+///
+/// Authored entities are selected by their `UsdPrimPath` stage handle. Runtime
+/// synthesized joints are selected by `ScenePhysicsOwned`, which is the explicit
+/// ownership marker used by scene teardown. No path/name heuristic is used.
+pub fn runtime_joint_facts(
+    world: &World,
+    stage_id: AssetId<UsdStageAsset>,
+) -> Vec<RuntimeJointFact> {
+    let graph_entities: Option<EntityHashSet> = world.get_resource::<JointGraph>().map(|graph| {
+        graph
+            .graph()
+            .all_edge_weights()
+            .map(|edge| edge.entity)
+            .collect()
+    });
+    let graph_available = graph_entities.is_some();
+
+    let mut facts = Vec::new();
+    for entity in world.iter_entities() {
+        let path = entity.get::<UsdPrimPath>().map(|prim| prim.path.clone());
+        let stage_owned = entity
+            .get::<UsdPrimPath>()
+            .is_some_and(|prim| prim.stage_handle.id() == stage_id);
+        let synthesized = entity.get::<ScenePhysicsOwned>().is_some() && path.is_none();
+        if !stage_owned && !synthesized {
+            continue;
+        }
+
+        let linked = entity.get::<lunco_physics::PhysicsJointLink>().is_some();
+        let pending = entity.get::<lunco_physics::PhysicsJointPending>().is_some();
+        let native = entity
+            .get::<avian3d::dynamics::solver::joint_graph::JointComponentId>()
+            .is_some_and(|id| id.id().is_some());
+        let graph = graph_entities
+            .as_ref()
+            .is_some_and(|entities| entities.contains(&entity.id()));
+        let detach_requested = entity
+            .get::<lunco_physics::PhysicsJointDetachRequested>()
+            .is_some();
+        if !(linked || pending || native || graph || detach_requested) {
+            continue;
+        }
+        facts.push(RuntimeJointFact {
+            entity_bits: entity.id().to_bits(),
+            path,
+            linked,
+            pending,
+            native,
+            graph,
+            graph_available,
+            detach_requested,
+        });
+    }
+    facts.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then(left.entity_bits.cmp(&right.entity_bits))
+    });
+    facts
+}
+
 /// Invalidate the one-shot USD physics projection for a prim whose composed
 /// schemas changed after its visual entity was created.
 ///
@@ -112,6 +199,68 @@ pub fn invalidate_usd_physics_projection(world: &mut World, entity: Entity) -> b
 /// USD physics attributes to Avian3D components. The deferred system runs in the
 /// `Update` schedule **after** `sync_usd_visuals` to ensure assets are loaded.
 pub struct UsdAvianPlugin;
+
+/// Retire a set of joint-graph edges before removing their ECS components.
+///
+/// Avian's component hooks remove edges automatically, but a recursive entity
+/// despawn can remove `JointDisabled`, the native joint, and the pair-filter
+/// marker in an order that causes the same island entry to be unlinked twice.
+/// The scene teardown and live detach paths therefore share this one graph
+/// transaction.  The native removal hooks then see an already-retired edge and
+/// become harmless no-ops.
+fn retire_joint_graph_edges(world: &mut World, entities: &[Entity]) {
+    let mut graph_state: SystemState<(
+        ResMut<PhysicsIslands>,
+        ResMut<JointGraph>,
+        Res<ContactGraph>,
+        Query<
+            &'static mut avian3d::dynamics::solver::islands::BodyIslandNode,
+            Or<(With<Disabled>, Without<Disabled>)>,
+        >,
+    )> = SystemState::new(world);
+    {
+        let Ok((mut islands, mut joint_graph, contact_graph, mut body_islands)) =
+            graph_state.get_mut(world)
+        else {
+            error!(
+                "joint graph retirement blocked: Avian graph resources have conflicting access; keeping the topology intact"
+            );
+            return;
+        };
+
+        for &entity in entities {
+            let Some(edge) = joint_graph.get(entity).cloned() else {
+                continue;
+            };
+            let island_id = edge.island.island_id();
+            if island_id != avian3d::dynamics::solver::islands::IslandId::PLACEHOLDER {
+                let Some(island) = islands.get(island_id) else {
+                    warn!(
+                        "joint graph edge {:?} references missing island {:?}; edge is already outside the island list",
+                        entity, island_id
+                    );
+                    joint_graph.remove_joint(entity);
+                    continue;
+                };
+                if island.joint_count() > 0 {
+                    let _ = islands.remove_joint(
+                        edge.id,
+                        &mut body_islands,
+                        &contact_graph,
+                        &mut joint_graph,
+                    );
+                } else {
+                    warn!(
+                        "joint graph edge {:?} has no island joint count; treating it as already retired",
+                        entity
+                    );
+                }
+            }
+            joint_graph.remove_joint(entity);
+        }
+    }
+    graph_state.apply(world);
+}
 
 /// Remove scene physics from Avian's graphs before the scene entities are
 /// despawned.
@@ -170,43 +319,7 @@ fn prepare_scene_physics_teardown(world: &mut World) {
     // Retire constraints before contacts and bodies. The public graph API lets
     // us tolerate an edge whose island was already emptied by an earlier body
     // teardown without asking Avian's observer to unlink it a second time.
-    let mut graph_state: SystemState<(
-        ResMut<PhysicsIslands>,
-        ResMut<JointGraph>,
-        Res<ContactGraph>,
-        Query<
-            &'static mut avian3d::dynamics::solver::islands::BodyIslandNode,
-            Or<(With<Disabled>, Without<Disabled>)>,
-        >,
-    )> = SystemState::new(world);
-    {
-        let (mut islands, mut joint_graph, contact_graph, mut body_islands) = graph_state
-            .get_mut(world)
-            .expect("scene physics teardown parameters must not conflict");
-
-        for entity in graph_joints {
-            let Some(edge) = joint_graph.get(entity).cloned() else {
-                continue;
-            };
-            let island_id = edge.island.island_id();
-            if island_id != avian3d::dynamics::solver::islands::IslandId::PLACEHOLDER {
-                let joint_count = islands
-                    .get(island_id)
-                    .map(|island| island.joint_count())
-                    .unwrap_or(0);
-                if joint_count > 0 {
-                    let _ = islands.remove_joint(
-                        edge.id,
-                        &mut body_islands,
-                        &contact_graph,
-                        &mut joint_graph,
-                    );
-                }
-            }
-            joint_graph.remove_joint(entity);
-        }
-    }
-    graph_state.apply(world);
+    retire_joint_graph_edges(world, &graph_joints);
 
     // Remove the joint component and any marker before despawn. The component
     // removal observer now sees no graph edge, and removing JointComponentId
@@ -225,6 +338,75 @@ fn prepare_scene_physics_teardown(world: &mut World) {
         if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
             entity_mut.remove::<ColliderMarker>();
         }
+    }
+}
+
+/// Complete live joint detach requests at the physics bridge boundary.
+///
+/// A scene command only writes [`lunco_physics::PhysicsJointDetachRequested`].
+/// This exclusive system is the sole owner of the transition from a live
+/// constraint to a disposable entity: it retires the graph edge first, then
+/// removes the native/pending components, releases the transient collision
+/// filter, and finally despawns the joint.  Keeping the whole sequence here
+/// makes component-removal order explicit and prevents a second command path
+/// from touching Avian's island bookkeeping.
+fn retire_requested_joints(world: &mut World) {
+    let requested: Vec<(Entity, Option<ComponentId>)> = {
+        let mut query = world.query_filtered::<(
+            Entity,
+            Option<&avian3d::dynamics::solver::joint_graph::JointComponentId>,
+        ), With<lunco_physics::PhysicsJointDetachRequested>>();
+        query
+            .iter(world)
+            .map(|(entity, id)| (entity, id.and_then(|id| id.id())))
+            .collect()
+    };
+    if requested.is_empty() {
+        return;
+    }
+
+    if world.get_resource::<PhysicsIslands>().is_none()
+        || world.get_resource::<JointGraph>().is_none()
+        || world.get_resource::<ContactGraph>().is_none()
+    {
+        error!(
+            "DETACH_JOINT blocked: Avian physics resources are not installed; add PhysicsPlugins before JointAttachPlugin"
+        );
+        return;
+    }
+
+    let entities: Vec<Entity> = requested.iter().map(|(entity, _)| *entity).collect();
+    retire_joint_graph_edges(world, &entities);
+
+    for (entity, component_id) in requested {
+        let Ok(mut entity_mut) = world.get_entity_mut(entity) else {
+            continue;
+        };
+
+        // The native component hook queues removal of JointComponentId. Remove
+        // the native component first, then clear the id and disabled marker so
+        // no observer can re-admit the retired edge.
+        if let Some(component_id) = component_id {
+            entity_mut.remove_by_id(component_id);
+        }
+        entity_mut
+            .remove::<avian3d::dynamics::solver::joint_graph::JointComponentId>()
+            .remove::<JointDisabled>()
+            .remove::<PendingJoint<RevoluteJoint>>()
+            .remove::<PendingJoint<PrismaticJoint>>()
+            .remove::<PendingJoint<FixedJoint>>()
+            .remove::<PendingJoint<SphericalJoint>>()
+            .remove::<PendingJoint<DistanceJoint>>()
+            .remove::<PendingJointAdmission>()
+            .remove::<lunco_physics::PhysicsJointPending>()
+            .remove::<lunco_physics::PhysicsJointDetachRequested>()
+            .remove::<collision_filters::JointCollisionPair>();
+
+        entity_mut.despawn();
+        info!(
+            "DETACH_JOINT: retired solver edge and despawned {:?}",
+            entity
+        );
     }
 }
 
@@ -3788,6 +3970,10 @@ pub struct JointAdmission;
 impl Plugin for JointAttachPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(collision_filters::on_remove_joint_collision_pair);
+        // Live detach is owned by the same plugin as joint admission.  The
+        // lifecycle marker is consumed before admission, and the graph edge is
+        // retired before any native component removal can reach Avian hooks.
+        app.add_systems(Update, retire_requested_joints.before(JointAdmission));
         // One registration per joint type: the ticket is generic over the
         // constraint it carries, so a new joint kind is one line HERE and
         // nothing else anywhere.

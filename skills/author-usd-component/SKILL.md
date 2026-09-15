@@ -55,6 +55,15 @@ topology/types, dimensional envelope, mass/inertia owner, collision policy,
 parameters/units, public provenance, and any deployment or operating limits.
 Keep public/reference-backed facts separate from Twin study assumptions.
 
+Before authoring any component, use the repository-wide five-phase workflow in
+[`interactive-component-authoring`](../interactive-component-authoring/SKILL.md):
+analyse the USD/Rhai/Modelica/Rust seam, split by ownership, record sources and
+rationale in SysML, build with typed Editor tools, and run component → assembly
+→ whole-system gates. This applies to every mission and model. A missing datum
+or unsupported generic operation is an explicit failing report; this skill does
+not permit invented dimensions, duplicated requirement literals, or a direct
+USDA workaround.
+
 One independently reusable or articulated part gets one explicit component
 root and its own USD file under the Twin's `components/` tree. The component's
 Rhai tool creates typed USD operations and its requirement/test Rhai reads the

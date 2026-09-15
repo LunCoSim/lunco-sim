@@ -42,6 +42,32 @@ must have no composed collision envelope. Unknown roles, duplicate paths,
 missing prims, and incomplete coverage are errors. This is Rhai policy and
 orchestration; it does not add a second collider reader or Rust asset rule.
 
+## Live joint detachment is one lifecycle
+
+`DetachJoint` is the generic entity-detach command. It is deliberately not
+limited to entities carrying `PhysicsJointLink`: an ordinary non-joint target
+uses the normal entity-removal path. A target carrying native or pending joint
+state is classified as a joint and must use the physics lifecycle marker. The
+command records any authored endpoint invalidation and never directly removes a
+native joint. The `JointAttachPlugin` consumes that marker at its Update
+boundary and performs one transaction in this order:
+
+1. retire the Avian `JointGraph` edge and its `PhysicsIslands` entry;
+2. remove the native or pending typed joint and `JointComponentId`;
+3. release the transient joint collision filter;
+4. despawn the now-disposable joint entity.
+
+Scene teardown uses the same graph-retirement helper. This shared owner is what
+prevents a component-removal observer and a recursive despawn from unlinking one
+island edge twice. A command or Twin script must never implement a second joint
+detach path, disable `JointDisabled` as a substitute, or infer joint completion
+from the command acknowledgement; verify that the joint entity is gone and both
+endpoint bodies continue finite stepping. If a target has joint state but no
+`PhysicsJointLink`, the command warns and rejects it; the authored topology
+linter is the repair/diagnostic path. Persistent intent journals the typed USD
+active-state/remove operation separately, while `Interactive` remains a
+throwaway live transition.
+
 When an Editor workflow creates a new moving part, use
 `assembly_edit::rigid_body_plan` for the explicit body schema and mass facts,
 then add the shape, collider, and local transform in the same proposal. Use

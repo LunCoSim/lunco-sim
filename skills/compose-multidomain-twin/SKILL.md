@@ -21,7 +21,7 @@ A full mission layers cleanly — never blur the layers:
 | Layer ("…") | Owns | Lives in |
 |---|---|---|
 | **Structure + wiring** ("what") | bodies, colliders, mass/inertia, joints, topology, program prims, port connections | **USD** (authored) |
-| **System intent + acceptance contract** | parts/ports/connections, requirements, satisfy/verify traceability | **SysML v2** (`sysml` feature, opt-in) |
+| **System intent + acceptance contract** | parts/ports/connections, requirements, satisfy/verify traceability | **SysML v2** (enabled by default in the production app/core/server) |
 | **Subsystem dynamics** ("how a part behaves") | thrust, propellant, battery, thermal, controllers | **Modelica / rhai** (cosim) |
 | **Substrate + behavior library** ("the laws") | solver, force/joint/port plumbing, parameterized wheel/suspension/friction | **Rust** (reusable, never bespoke) |
 
@@ -37,6 +37,15 @@ must never become is a second physics engine. SysML owns requirement intent and
 traceability; Rhai observes the composed stage and emits the executable verdict.
 Rhai is the default scenario backend. Python is optional and is not part of the
 normal Twin workflow.
+
+For mission-level work, apply the generic
+[mission and engineering quality gates](../interactive-component-authoring/references/mission-engineering-quality.md)
+before composing domains. Establish the ConOps and operating modes, allocate
+requirements and interfaces down the product tree, choose fidelity by intended
+use, and define nominal, off-nominal, and recovery scenarios. Verify detached
+components before integration, validate the integrated Twin against ConOps, and
+baseline the exact sources, clocks, solver settings, and seeds used for each
+evidence run.
 
 ## Start with a capability and exemplar audit
 

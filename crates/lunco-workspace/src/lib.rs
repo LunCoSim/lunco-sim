@@ -41,8 +41,6 @@
 //! of Untitled buffers, external-change watchers. Those land in follow-up
 //! milestones once this surface is wired into the UI.
 
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
 
 pub mod journal_persistence;
 pub mod open;

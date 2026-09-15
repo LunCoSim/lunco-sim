@@ -14,6 +14,13 @@ This is the generic guardrail for assembly work. It complements
 [`build-vehicle`](../build-vehicle/SKILL.md); it does not create a second USD
 authoring path.
 
+For a mission or operations-facing assembly, use the
+[mission and engineering quality gates](../interactive-component-authoring/references/mission-engineering-quality.md)
+as the system-level companion: ConOps, interface control, model-fidelity
+limits, fault cases, progressive verification/validation, deterministic replay,
+and configuration baselines are part of assembly readiness, not post-hoc
+documentation.
+
 ## Non-negotiable boundaries
 
 - Never hand-edit `.usd`/`.usda` text, paste a generated USDA replacement, or

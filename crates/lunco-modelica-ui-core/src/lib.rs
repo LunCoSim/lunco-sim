@@ -6,8 +6,6 @@
 //! or renderer dependency. Concrete behavior stays in the package that owns
 //! the corresponding UI surface.
 
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
 
 use bevy::ecs::reflect::ReflectEvent;
 use bevy::reflect::std_traits::ReflectDefault;

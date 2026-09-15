@@ -1,6 +1,6 @@
 # 24 — SysML Domain
 
-> Status: Foundation implemented · Audience: contributors extending SysML v2 structure & requirements
+> Status: Foundation + Twin source/document loading implemented · Audience: contributors extending SysML v2 structure & requirements
 >
 SysML v2 is the source of truth for **system structure and
 requirements** — a peer domain inside a Twin, co-equal with Modelica
@@ -232,20 +232,25 @@ authored runtime verdict:
    source and one qualified verification case. Shared requirement sources,
    scenes, scripts, missing mappings, and unsafe USD prim roots are rejected;
    the case supplies the component's Twin-local USD fixture and Rhai observer.
-5. **Read-only Rhai bridge.** `ValidateSysml`,
+5. **Read-only Rhai bridge and lint.** `ValidateSysml`,
    `sysml_requirements::source()` and the native report helpers expose the
    resolved requirement/verification snapshot and source revision. The generic
    `sysml_requirements::evaluate` tool observes the composed USD stage and
    `report_structured_verdict` emits machine-readable evidence plus the normal
-   test verdict envelope. No requirement-specific Rust assertion is added.
+   test verdict envelope. The explicit `ValidateAsset`/`ValidateSysml` paths
+   also run `lint.sysml` from `assets/scripting/policy/lint_sysml.rhai` over
+   typed AST facts, so missing subjects, empty verification cases, unresolved
+   verification targets, and uncovered requirement usages are reported by
+   reloadable Rhai policy. No requirement-specific Rust assertion is added.
 6. **Production selector.** `luncosim test --scene <PATH> --verification
    QUALIFIED_NAME` validates the Twin mapping before constructing the
    simulation and selects its declared verdict channel. The mapped Rhai
    observer still owns measurement and verdict policy.
 
 The remaining work is bounded follow-up: full KerML expression/constraint
-execution, a full SysML editor, automatic UI source-set discovery, and a
-SysML-to-USD projection are not part of this integration.
+execution, a full SysML editor, and a SysML-to-USD projection are not part of
+this integration. `SysmlPlugin` opens the checked Twin source set after
+`TwinAssetMounted`; a full source browser remains a UI concern.
 
 ### Migration rules
 
@@ -268,14 +273,14 @@ SysML-to-USD projection are not part of this integration.
 
 ## 7. Status
 
-The SysML v2 integration is implemented in the current runtime behind the
-opt-in `sysml` feature: the pure AST projection, Bevy source/document plugin,
+The SysML v2 integration is enabled by default in the production app, core, and
+server (and can be explicitly removed with `--no-default-features`): the pure AST projection, Bevy source/document plugin,
 canonical journal domain, `.sysml`/`.kerml` classification, `[sysml]` Twin
 manifest source roots, manifest-aware source discovery, pre-flight validation,
 read-only Rhai requirement/verification reports, structured evidence,
 verification registry, and CLI selector are available. Full KerML expression
-execution, a full editor, automatic UI source discovery, and automatic
-SysML-to-USD projection remain outside the supported subset.
+execution, a full editor, and automatic SysML-to-USD projection remain outside
+the supported subset.
 
 ## 8. What this does NOT do
 

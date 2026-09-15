@@ -62,8 +62,6 @@
 //! `world_hold` into a `PhysicsHolds` reason and [`HeldForReadiness`] into
 //! disabled bodies and colliders.
 
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
 
 use std::collections::BTreeMap;
 

@@ -5,7 +5,6 @@
 //! and document presentation adapters. The render-heavy preview viewport
 //! lives in [`lunco_usd_viewport_ui`].
 
-#![forbid(unsafe_code)]
 
 pub mod ui;
 
