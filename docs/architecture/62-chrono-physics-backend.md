@@ -129,6 +129,53 @@ Recorded-result visualization may use existing facilities where supported withou
 claiming live execution. No silent Avian substitution or implicit remote upload.
 Remote execution requires a separate connection/authorization design.
 
+## Fork workflow and commit/merge requirements
+
+Develop and validate the integration on a topic branch in a LunCoSim fork, then
+submit reviewed PRs upstream. The existing architecture remains the core simulation
+contract. Fork Chrono itself only if a demonstrated upstream change is necessary;
+otherwise pin and build upstream Chrono externally. Do not copy its checkout into
+LunCoSim. Keep documentation, the P0 experiment, and later runtime adoption as
+separately reviewable changes.
+
+The C++/Rust boundary is a primary engineering risk. P0 must record compiler and
+runtime compatibility, process startup/library discovery, serialization precision,
+ownership/lifetime errors, failure cleanup, and packaging behavior. Process isolation
+avoids exposing C++ ABI types to Rust but does not remove those costs. If a later
+FFI path is proposed, it needs explicit allocation/deallocation and exception
+containment rules and its own evidence. Schedule follow-up work from measured P0
+results rather than assuming that linking two languages is trivial.
+
+For every integration commit and merge:
+
+- Commit source code, documentation, authored textual fixtures, manifests,
+  lockfiles, and reproducible build recipes. Do not commit compiled binaries,
+  generated build/install trees, downloaded payloads, archives, caches, or binary
+  test/benchmark outputs. Git LFS is not an exception to this policy.
+- Generate binaries from pinned source, or obtain external binary assets through
+  the existing `lunco-assets` download/cache system with manifest URLs, hashes,
+  provenance, and license metadata. Follow [asset I/O policy](40-asset-io.md);
+  do not introduce an adapter-specific downloader. Keep asset acquisition separate
+  from trusted executable activation.
+- Put Chrono source downloads in ignored `extern/`, and CMake build/install/output
+  trees under ignored `target/chrono/`. Release payloads belong in release/CI
+  artifact storage, not Git. Commit textual summaries and links to large evidence.
+- Stage explicit source paths and inspect `git diff --cached --stat`,
+  `git diff --cached --numstat`, and the full staged diff. Use descriptive,
+  focused commits with the relevant validation in the PR. Never force-add an
+  ignored artifact to make a build work.
+- Verify ignore rules with `git check-ignore` and inspect all commits in the PR,
+  not only its final tree. `.gitignore` neither untracks existing files nor removes
+  binaries committed earlier. Any introduced artifact must be absent from the
+  proposed commit history before merge; coordinate history changes if needed.
+- Require an automated source/artifact check for the implementation PR, including
+  generated-path and binary-payload detection, and prove a fresh checkout can
+  rebuild/download its inputs. An extension denylist alone is insufficient:
+  executables can be extensionless and textual source can use misleading suffixes.
+
+These are merge requirements, not claims that the future CI gate is implemented.
+Existing unrelated repository binaries are outside this proposal's cleanup scope.
+
 ## P0 evidence gate
 
 Issue #52 owns the executable checklist. P0 must provide:
