@@ -31,7 +31,8 @@
 > `lunco-workbench-browser` is the optional navigation feature without a
 > shell edge. Together they
 > are depended on by ~10 crates
-> (luncosim, lunco-luncosim, lunco-luncosim-edit-core, lunco-luncosim-edit-ui,
+> (luncosim, lunco-luncosim, lunco-luncosim-edit-core,
+> lunco-luncosim-edit-gizmo-ui, lunco-luncosim-edit-ui,
 > lunco-usd-commands, lunco-modelica-ui,
 > lunco-celestial, lunco-avatar, lunco-networking, …).
 
@@ -877,6 +878,7 @@ dependency chain. In particular, `lunco-workbench-state` and
    ├── Panel crates (domain-specific UI)
    │    lunco-modelica-ui/src/ui   lunco-luncosim-edit-ui/src/ui   lunco-mission/ui
    │         │                     │                       │
+   │         │                     ├── lunco-luncosim-edit-gizmo-ui
    │         │                     ├── lunco-luncosim-edit-inspector-ui
    │         │                     └── lunco-usd-prim-tree-ui
    │         ▼                     ▼                       ▼
@@ -972,6 +974,9 @@ dependency chain. In particular, `lunco-workbench-state` and
 - `lunco-workbench-file-dialog` owns the native/wasm dialog backends and typed
   picker events; `lunco-workbench-file-ops` composes those events with the
   existing document/workspace commands.
+- `lunco-luncosim-edit-gizmo-ui` owns the transform-gizmo frontend and pose
+  transaction lifecycle; `lunco-luncosim-edit-ui` composes it with selection,
+  scene tools, panels, and diagnostic visualization.
 - `lunco-workbench-text-editor` owns generic source editing, while
   `lunco-workbench-window` owns OS-window commands and geometry/placement
   persistence. `lunco-workbench-state` owns per-Twin session persistence and

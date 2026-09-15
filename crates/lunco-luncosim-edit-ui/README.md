@@ -2,8 +2,9 @@
 
 Rendered in-scene editing UI for LunCoSim. The headless ECS mechanisms live
 in [`lunco-luncosim-edit-core`](../lunco-luncosim-edit-core); this package
-owns the egui/workbench interaction panels, transform-gizmo adapter, selection
-bridge, and debug visualization layers. The reusable USD prim tree lives in
+owns the egui/workbench interaction panels, selection bridge, and debug
+visualization layers. The focused transform-gizmo adapter lives in
+[`lunco-luncosim-edit-gizmo-ui`](../lunco-luncosim-edit-gizmo-ui). The reusable USD prim tree lives in
 [`lunco-usd-prim-tree-ui`](../lunco-usd-prim-tree-ui), while the domain-heavy
 Inspector and authored USD panels live in
 [`lunco-luncosim-edit-inspector-ui`](../lunco-luncosim-edit-inspector-ui).
@@ -16,7 +17,7 @@ Inspector and authored USD panels live in
 - **Script-authored click tools** — Rhai tool libraries exposing `on_click(context)` appear in the Tools palette and receive the canonical scene click context
 - **Prims Navigation** — provided by `lunco-usd-prim-tree-ui`; a newly selected prim opens its ancestors and scrolls into view while unchanged selections leave manual tree scrolling alone
 - **Authoring inspection** — the Rhai `authoring_inspection` library composes path-based candidate diffs, structured diagnostic groups, exact selection/reveal/frame navigation, and visual/collision/joint/frame/material/provenance evidence
-- **Transform Gizmo** — translate/rotate via `transform-gizmo-bevy`; live entities use BigSpace and the scene command, while USD previews use parent-local projection and `ApplyUsdOps`
+- **Transform Gizmo** — provided by [`lunco-luncosim-edit-gizmo-ui`](../lunco-luncosim-edit-gizmo-ui), using `transform-gizmo-bevy`; live entities use BigSpace and the scene command, while USD previews use parent-local projection and `ApplyUsdOps`
 - **Inspector Panel** — provided by `lunco-luncosim-edit-inspector-ui`; schema-hinted USD fields with units and authored/inherited provenance are prepared as explicit, reviewable USD proposals
 - **Undo** — Ctrl+Z to revert spawns and transform changes
 
@@ -53,7 +54,8 @@ visibility path is introduced.
 
 ### How It Works
 
-The gizmo system uses `transform-gizmo-bevy` as a render-space frontend. Its
+The sibling `lunco-luncosim-edit-gizmo-ui` package uses `transform-gizmo-bevy`
+as a render-space frontend. Its
 `GizmoTarget` lives on an unparented proxy; the real entity is never exposed to
 the library's `&mut Transform` writer. A drag is one transaction with an
 explicit owner: live entities carry an exact f64 pose in `ActivePhysicsFrame`,
@@ -176,12 +178,16 @@ This follows the OpenUSD specification: `PhysicsRigidBodyAPI` on a parent aggreg
 |------|---------|
 | `lib.rs` | Interactive UI adapters and shared selection bridge |
 | `ui/mod.rs` | `SceneEditUiPlugin` and interaction-panel registration |
-| `selection.rs` | Semantic click selection, `GizmoTarget` management |
-| `gizmo.rs` | Kinematic-drive lifecycle and proxy editing |
+| `selection.rs` | Semantic click selection and gizmo-selection marker management |
 | `entity_list.rs` | Clickable list of scene entities |
 | `ui/spawn_palette.rs` | Spawn palette UI |
 | `diagnostic_visuals.rs` | Camera/collider debug leases, generic inspection-layer leases, and visualization commands |
 | `physics_viz.rs`, `physics_gizmo.rs`, `joint_viz.rs` | Rendered physics diagnostics |
+
+The sibling `lunco-luncosim-edit-gizmo-ui` package owns the
+`transform-gizmo-bevy` frontend, render-space proxies, and live/USD pose
+transaction lifecycle. Keeping that external frontend outside this package
+means panel changes do not recompile the gizmo adapter.
 
 The USD-specific panels and prim tree are separate production packages so
 hosts that only need scene interaction do not compile the full authored USD

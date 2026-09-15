@@ -158,7 +158,8 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 | **`lunco-viz`** | Domain-agnostic visualization: `SignalRegistry`, LinePlots, reusable multi-series trajectory plots, and future 3D/Rerun bridges. |
 | **`lunco-canvas`** | Stateful 2D scene editor substrate for diagrams and annotation overlays. |
 | **`lunco-luncosim-edit-core`** | Headless-safe scene-editing mechanisms: spawn and terrain tools, scene picking, typed command registration, and ECS state. |
-| **`lunco-luncosim-edit-ui`** | Rendered scene-editing presentation: egui/workbench panels, transform-gizmo and selection adapters, and physics diagnostics. |
+| **`lunco-luncosim-edit-gizmo-ui`** | Focused rendered transform-gizmo capability: render-space proxies, live/preview pose transactions, camera binding, and kinematic-drive lifecycle. It owns the external `transform-gizmo-bevy` dependency independently of the editor panels. |
+| **`lunco-luncosim-edit-ui`** | Rendered scene-editing presentation: egui/workbench panels, selection and preview adapters, and physics diagnostics. It composes the focused transform-gizmo package. |
 | **`lunco-luncosim-edit-inspector-ui`** | Domain-heavy Inspector and authored USD panels: standard USD joint/animation/mount/variant/parameter view models plus environment/entity authoring surfaces. It is installed explicitly by windowed composition roots. |
 | **`lunco-usd-prim-tree-ui`** | Reusable composed-USD prim hierarchy panel and reactive view model. It is independent of the domain Inspector and its physics/environment authoring dependencies. |
 | **`lunco-render`** | Appearance **intent**, render-free: `PbrLook`, `ProceduralSkybox`, `SceneCamera`, `WorldLabel`, sun/shadow look. Names `Mesh3d`, never `MeshMaterial3d`. |
@@ -752,9 +753,17 @@ the UI tool library.
 
 **`lunco-luncosim-edit-ui`**
 Rendered scene-editing presentation. Implements the egui/workbench panels,
-selection and transform-gizmo adapters, USD preview interaction, and physics
-diagnostic visualization. It depends on `lunco-luncosim-edit-core`; the core
-package does not depend back on this UI package.
+selection and USD preview interaction, and physics diagnostic visualization. It
+depends on `lunco-luncosim-edit-core` and composes the focused
+`lunco-luncosim-edit-gizmo-ui` package; the core package does not depend back on
+either UI package.
+
+**`lunco-luncosim-edit-gizmo-ui`**
+Focused transform-gizmo capability. It owns the `transform-gizmo-bevy`
+frontend, render-space proxy lifecycle, camera binding, and live/preview pose
+transaction conversion into the existing scene/USD command owners. It has no
+panel registration or scene-selection policy, so changes to editor panels do
+not recompile the gizmo adapter.
 
 **`lunco-luncosim-edit-inspector-ui`**
 Domain-heavy Inspector and authored USD panels. It owns USD parameter, variant,

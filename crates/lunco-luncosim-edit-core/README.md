@@ -9,6 +9,8 @@ does not contain egui panels, workbench layout, transform-gizmo integration,
 or immediate-mode debug visualization.
 
 The rendered presentation is provided by the sibling
-[`lunco-luncosim-edit-ui`](../lunco-luncosim-edit-ui) package. Hosts that need
-the editor add `SceneEditPlugin` and `SceneEditUiPlugin` separately; headless
-hosts can use this package without compiling the UI package.
+[`lunco-luncosim-edit-ui`](../lunco-luncosim-edit-ui) package, which composes
+the focused [`lunco-luncosim-edit-gizmo-ui`](../lunco-luncosim-edit-gizmo-ui)
+package. Hosts that need the editor add `SceneEditPlugin` and
+`SceneEditUiPlugin` separately; headless hosts can use this package without
+compiling the UI packages.

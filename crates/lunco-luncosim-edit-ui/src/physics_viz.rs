@@ -4,7 +4,7 @@
 //! layer surface dynamics state: each rigid body that opts in shows
 //! its own arrow, multiple can coexist, drawing happens through an
 //! immediate-mode gizmo pass with no input or hit-testing. Distinct
-//! from the transform gizmo (`gizmo.rs`), which is interactive,
+//! from the transform gizmo (`lunco-luncosim-edit-gizmo-ui`), which is interactive,
 //! singleton, and bound to the active selection.
 //!
 //! ## Scope today
@@ -28,8 +28,8 @@
 //! `lunco-viz` is intentionally physics-agnostic so the modelica
 //! workbench bin doesn't carry avian3d. This module *needs*
 //! avian3d's `LinearVelocity` / `ConstantForce`. Sandbox-edit
-//! already depends on avian3d and hosts the transform-gizmo
-//! integration, so it's the natural home.
+//! already depends on avian3d and composes the transform-gizmo UI package,
+//! so it remains the natural home for this physics-specific visualization.
 
 use crate::diagnostic_visuals::{DiagnosticVisualKind, DiagnosticVisualStore};
 use avian3d::dynamics::integrator::VelocityIntegrationData;

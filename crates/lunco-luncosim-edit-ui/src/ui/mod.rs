@@ -10,6 +10,7 @@ use bevy::prelude::*;
 use lunco_control_core::ControlBinding;
 use lunco_core::{Avatar, InputPorts, SceneMountState, TheLocalAvatar};
 use lunco_cosim_core::ControlLink;
+use lunco_luncosim_edit_gizmo_ui as edit_gizmo;
 use lunco_modelica_ui_core::{DEFAULT_MODELICA_GRAPH_ID, MODELICA_PLOT_KIND_ID};
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_workbench::{
@@ -169,7 +170,7 @@ fn sync_editor_session_selection(
             commands
                 .entity(entity)
                 .remove::<crate::selection::Selected>()
-                .remove::<crate::gizmo::GizmoSelected>();
+                .remove::<edit_gizmo::GizmoSelected>();
         }
         selected.entities.clear();
         inspector_target.part = None;
@@ -199,7 +200,7 @@ fn sync_editor_session_selection(
             for entity in restored {
                 commands
                     .entity(entity)
-                    .try_insert((crate::selection::Selected, crate::gizmo::GizmoSelected));
+                    .try_insert((crate::selection::Selected, edit_gizmo::GizmoSelected));
             }
         } else {
             selected.entities.clone_from(&sessions.live.entities);
@@ -207,7 +208,7 @@ fn sync_editor_session_selection(
             for &entity in &sessions.live.entities {
                 commands
                     .entity(entity)
-                    .try_insert((crate::selection::Selected, crate::gizmo::GizmoSelected));
+                    .try_insert((crate::selection::Selected, edit_gizmo::GizmoSelected));
             }
         }
         *last_preview = focused;
@@ -234,7 +235,7 @@ fn sync_editor_session_selection(
                 commands
                     .entity(entity)
                     .remove::<crate::selection::Selected>()
-                    .remove::<crate::gizmo::GizmoSelected>();
+                    .remove::<edit_gizmo::GizmoSelected>();
             }
             selected.entities = valid;
             if inspector_target.part.is_some_and(|entity| {
@@ -376,13 +377,12 @@ pub struct SceneEditUiPlugin;
 
 impl Plugin for SceneEditUiPlugin {
     fn build(&self, app: &mut App) {
-        // The interaction adapters are UI-owned because they depend on the
-        // rendered viewport and its egui preview lease. The generic editor
-        // mechanisms and command observers are installed by
-        // `lunco-luncosim-edit-core::SceneEditPlugin`.
-        app.add_plugins(transform_gizmo_bevy::TransformGizmoPlugin)
-            .init_resource::<crate::gizmo::GizmoDragSession>()
-            .init_resource::<crate::gizmo::GizmoVisibilityState>()
+        // The transform-gizmo transaction adapter is composed as a focused
+        // sibling package. The remaining panel and scene interaction adapters
+        // are UI-owned because they depend on the rendered viewport and its
+        // egui preview lease. Generic editor mechanisms and command observers
+        // are installed by `lunco-luncosim-edit-core::SceneEditPlugin`.
+        app.add_plugins(edit_gizmo::SceneEditGizmoPlugin)
             .init_resource::<crate::diagnostic_visuals::DiagnosticVisualStore>()
             .init_resource::<scene_context_menu::SceneContextMenuState>()
             .init_resource::<lunco_core::ArmedScriptTool>()
@@ -391,13 +391,7 @@ impl Plugin for SceneEditUiPlugin {
         app.world_mut()
             .resource_mut::<lunco_api::queries::ApiQueryRegistry>()
             .register(crate::diagnostic_visuals::DiagnosticVisualsQueryProvider);
-        app.add_systems(
-            Startup,
-            (
-                crate::gizmo::configure_gizmo_modes,
-                crate::physics_viz::configure_gizmo_overlay,
-            ),
-        );
+        app.add_systems(Startup, crate::physics_viz::configure_gizmo_overlay);
         app.register_type::<crate::physics_viz::PhysicsArrows>();
         app.add_systems(
             lunco_core::SceneTeardown,
@@ -449,47 +443,6 @@ impl Plugin for SceneEditUiPlugin {
         crate::diagnostic_visuals::register_all_commands(app);
         crate::selection::register_all_commands(app);
         app.add_systems(Update, crate::selection::draw_selection_bounds);
-
-        app.add_systems(
-            Last,
-            (
-                crate::gizmo::capture_gizmo_start,
-                crate::gizmo::capture_final_gizmo_pose.after(crate::gizmo::capture_gizmo_start),
-                crate::gizmo::restore_gizmo_dynamic.after(crate::gizmo::capture_final_gizmo_pose),
-            ),
-        );
-        app.add_systems(
-            lunco_time::InteractionSchedule,
-            (
-                crate::gizmo::apply_gizmo_proxy_drag.after(lunco_time::InteractionRestoreSet),
-                lunco_physics::apply_kinematic_drives
-                    .after(crate::gizmo::apply_gizmo_proxy_drag)
-                    .before(lunco_time::InteractionRecordSet),
-            ),
-        );
-        app.add_systems(
-            PostUpdate,
-            crate::gizmo::sync_gizmo_camera
-                .after(lunco_core::SceneViewportSet::Reconcile)
-                .before(bevy::camera::CameraUpdateSystems),
-        );
-        app.add_systems(
-            PostUpdate,
-            (
-                crate::gizmo::spawn_gizmo_proxies,
-                crate::gizmo::despawn_gizmo_proxies,
-            )
-                .chain()
-                .after(bevy::transform::TransformSystems::Propagate),
-        );
-        app.add_systems(
-            PostUpdate,
-            crate::gizmo::sync_gizmo_proxies
-                .after(bevy::transform::TransformSystems::Propagate)
-                .after(crate::gizmo::despawn_gizmo_proxies),
-        );
-        app.add_systems(Update, crate::gizmo::drive_gizmo_drag);
-        app.add_systems(Update, crate::gizmo::sync_gizmo_dragging_marker);
 
         // Camera-path overlay: state + the gizmo pass that draws it, and the
         // tracker that tells the panel's transport which path clock to drive.

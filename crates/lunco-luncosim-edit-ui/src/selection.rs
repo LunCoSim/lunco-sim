@@ -16,6 +16,7 @@ use bevy::math::Isometry3d;
 use lunco_core::{on_command, register_commands, Avatar, Command, LocalAvatar};
 use lunco_cosim_core::ControlLink;
 use lunco_luncosim_edit_core::SpawnState;
+use lunco_luncosim_edit_gizmo_ui::GizmoSelected;
 use lunco_scene_selection::{
     SelectEntityTarget, SelectedEntities, SelectionIntent, SelectionTarget,
 };
@@ -245,8 +246,8 @@ pub struct SelectUsdPrim {
 ///
 /// Keyed by `Entity`, **never** by api_id — multiple instances of one USD asset
 /// can share an api_id, so resolving id→entity returns the wrong instance.
-/// Highlights with `Selected` + a `GizmoTarget` (so the transform gizmo can move
-/// the object) and maintains [`SelectedEntities`].
+/// Highlights with `Selected` + `GizmoSelected` (so the sibling gizmo package
+/// can maintain its render proxy) and maintains [`SelectedEntities`].
 ///
 /// It deliberately does **not** touch [`lunco_core::DragModeActive`]: selecting
 /// only highlights. The shared scene-interaction mode reserves plain clicks
@@ -273,7 +274,7 @@ pub(crate) fn apply_selection(
                 commands
                     .entity(e)
                     .remove::<Selected>()
-                    .remove::<crate::gizmo::GizmoSelected>();
+                    .remove::<GizmoSelected>();
             }
         }
         selected.entities.clear();
@@ -284,20 +285,20 @@ pub(crate) fn apply_selection(
             commands
                 .entity(target)
                 .remove::<Selected>()
-                .remove::<crate::gizmo::GizmoSelected>();
+                .remove::<GizmoSelected>();
             selected.entities.retain(|e| *e != target);
         }
         SelectionIntent::Toggle if selected.entities.contains(&target) => {
             commands
                 .entity(target)
                 .remove::<Selected>()
-                .remove::<crate::gizmo::GizmoSelected>();
+                .remove::<GizmoSelected>();
             selected.entities.retain(|e| *e != target);
         }
         SelectionIntent::Replace | SelectionIntent::Extend | SelectionIntent::Toggle => {
             commands
                 .entity(target)
-                .try_insert((Selected, crate::gizmo::GizmoSelected));
+                .try_insert((Selected, GizmoSelected));
             if !selected.entities.contains(&target) {
                 selected.entities.push(target);
             }
@@ -322,14 +323,14 @@ fn apply_focus(
             commands
                 .entity(entity)
                 .remove::<Selected>()
-                .remove::<crate::gizmo::GizmoSelected>();
+                .remove::<GizmoSelected>();
         }
     }
     selected.entities.clear();
     commands
         .entity(target)
         .try_insert(Selected)
-        .remove::<crate::gizmo::GizmoSelected>();
+        .remove::<GizmoSelected>();
     selected.entities.push(target);
 }
 
@@ -345,7 +346,7 @@ pub(crate) fn clear_selection(
         commands
             .entity(e)
             .remove::<Selected>()
-            .remove::<crate::gizmo::GizmoSelected>();
+            .remove::<GizmoSelected>();
     }
     selected.entities.clear();
 }
@@ -600,7 +601,8 @@ fn find_prim_part(
 /// rejects every chrome click with no hand-rolled gate, no `ScenePointer`, no
 /// manual ray-cast, and no cross-schedule staleness.
 ///
-/// - **Left-click** replaces the selection and attaches a `GizmoTarget`.
+/// - **Left-click** replaces the selection and marks the entity for gizmo
+///   proxy presentation.
 /// - **Shift+left-click** extends the selection without toggling an existing
 ///   member off.
 /// - **Ctrl+left-click** removes only the clicked entity and never adds it.
@@ -737,8 +739,8 @@ pub fn handle_deselect_keys(
     }
     clear_selection(&mut commands, &mut selected, q_selected_old.iter());
     inspector_target.part = None;
-    // `DragModeActive` is driven by `gizmo::sync_gizmo_dragging_marker` from the
-    // gizmo's active state; removing the `GizmoTarget`s above clears it next tick.
+    // `DragModeActive` is driven by the sibling gizmo package from the gizmo's
+    // active state; removing `GizmoSelected` above clears it next tick.
 }
 
 /// Draws an AABB highlight for selected objects using Bevy Gizmos.
@@ -828,7 +830,7 @@ pub fn compute_selection_aabb(
 /// the controlled vessel visible in the Inspector without turning control into
 /// an editor operation or drawing an AABB.
 pub fn draw_selection_bounds(
-    q_selected: Query<(Entity, &GlobalTransform), With<crate::gizmo::GizmoSelected>>,
+    q_selected: Query<(Entity, &GlobalTransform), With<GizmoSelected>>,
     q_aabb: Query<
         (&GlobalTransform, &Aabb),
         (
@@ -1212,9 +1214,7 @@ mod tests {
         assert_eq!(selected.primary(), Some(vessel));
         assert!(app.world().get::<Selected>(vessel).is_some());
         assert!(
-            app.world()
-                .get::<crate::gizmo::GizmoSelected>(vessel)
-                .is_none(),
+            app.world().get::<GizmoSelected>(vessel).is_none(),
             "possession focus must not activate an edit gizmo"
         );
         assert!(app.world().get::<Selected>(previously_selected).is_none());
@@ -1241,10 +1241,7 @@ mod tests {
             vec![first]
         );
         assert!(app.world().get::<Selected>(first).is_some());
-        assert!(app
-            .world()
-            .get::<crate::gizmo::GizmoSelected>(first)
-            .is_some());
+        assert!(app.world().get::<GizmoSelected>(first).is_some());
 
         app.world_mut().resource_mut::<SelectionTarget>().part = Some(first);
 
@@ -1270,10 +1267,7 @@ mod tests {
             vec![second]
         );
         assert!(app.world().get::<Selected>(first).is_none());
-        assert!(app
-            .world()
-            .get::<crate::gizmo::GizmoSelected>(first)
-            .is_none());
+        assert!(app.world().get::<GizmoSelected>(first).is_none());
         assert!(!app.world().resource::<lunco_core::DragModeActive>().active);
     }
 

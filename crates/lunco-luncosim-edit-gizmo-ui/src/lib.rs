@@ -29,7 +29,7 @@ use lunco_doc::DocumentId;
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_document::document::LayerId;
 use lunco_usd_viewport_ui::{
-    UsdPreviewId, UsdViewportState, USD_PREVIEW_VIEW_PANEL_ID, USD_VIEWPORT_PANEL_ID,
+    USD_PREVIEW_VIEW_PANEL_ID, USD_VIEWPORT_PANEL_ID, UsdPreviewId, UsdViewportState,
 };
 use lunco_workbench_core::scene_pick::{ScenePickGate, SceneTarget};
 use lunco_workbench_core::viewport::{PanelRect, PanelRects};
@@ -54,7 +54,7 @@ fn is_scale_mode(mode: GizmoMode) -> bool {
 /// Configure the standard transform-gizmo frontend for the live-scene
 /// contract. USD preview capability is enabled by [`sync_gizmo_camera`] only
 /// when the focused presentation owner is an isolated preview.
-pub fn configure_gizmo_modes(mut options: ResMut<GizmoOptions>) {
+fn configure_gizmo_modes(mut options: ResMut<GizmoOptions>) {
     for mode in SCALE_MODES {
         options.gizmo_modes.remove(mode);
     }
@@ -63,7 +63,7 @@ pub fn configure_gizmo_modes(mut options: ResMut<GizmoOptions>) {
 /// Saves the user's gizmo configuration while orbital presentation owns the
 /// live viewport and the transform frontend is disabled there.
 #[derive(Resource, Default)]
-pub(crate) struct GizmoVisibilityState {
+struct GizmoVisibilityState {
     saved_options: Option<GizmoOptions>,
 }
 
@@ -74,7 +74,7 @@ pub(crate) struct GizmoVisibilityState {
 /// across frames and scene reloads. BigSpace origin ownership remains with the
 /// persistent `OriginAnchor`; a gizmo drag never changes that hierarchy owner.
 #[derive(Resource, Default)]
-pub struct GizmoDragSession {
+struct GizmoDragSession {
     /// Real entities whose pre-drag state is owned by this session.
     targets: HashSet<Entity>,
 }
@@ -85,7 +85,7 @@ pub struct GizmoDragSession {
 /// contract. Isolated USD previews use their explicit document lease and
 /// parent-local Bevy transform; they never enter the live physics path.
 #[derive(Clone, Debug)]
-pub enum GizmoDragOwner {
+enum GizmoDragOwner {
     Live {
         active_frame: Entity,
         original_body: Option<RigidBody>,
@@ -105,7 +105,7 @@ pub enum GizmoDragOwner {
 
 /// Captures the pre-drag pose and its authoritative owner.
 #[derive(Component)]
-pub struct GizmoDragState {
+struct GizmoDragState {
     /// The pose before the drag. Live poses are in `owner`'s active frame;
     /// preview poses are local to the selected USD prim's Bevy parent.
     pub owner: GizmoDragOwner,
@@ -154,42 +154,37 @@ pub struct GizmoSelected;
 /// The proxy is unparented and has no `CellCoord`, so its `Transform` *is* its
 /// render-frame pose — exactly the frame the gizmo assumes.
 #[derive(Component)]
-pub struct GizmoProxy {
+struct GizmoProxy {
     /// The real entity this proxy edits.
     pub target: Entity,
 }
 
-/// Back-reference so a selection can't spawn two proxies.
+/// Marker so a selection can't spawn two proxies.
 #[derive(Component)]
-pub struct HasGizmoProxy {
-    /// The proxy entity.
-    pub proxy: Entity,
-}
+struct HasGizmoProxy;
 
 /// Spawns a [`GizmoProxy`] for each newly selected entity.
-pub fn spawn_gizmo_proxies(
+fn spawn_gizmo_proxies(
     q_new: Query<(Entity, &GlobalTransform), (With<GizmoSelected>, Without<HasGizmoProxy>)>,
     mut commands: Commands,
 ) {
     for (target, global) in &q_new {
         let (scale, rotation, translation) = global.to_scale_rotation_translation();
-        let proxy = commands
-            .spawn((
-                Name::new("GizmoProxy"),
-                Transform::from_translation(translation)
-                    .with_rotation(rotation)
-                    .with_scale(scale),
-                GlobalTransform::default(),
-                GizmoTarget::default(),
-                GizmoProxy { target },
-            ))
-            .id();
-        commands.entity(target).try_insert(HasGizmoProxy { proxy });
+        commands.spawn((
+            Name::new("GizmoProxy"),
+            Transform::from_translation(translation)
+                .with_rotation(rotation)
+                .with_scale(scale),
+            GlobalTransform::default(),
+            GizmoTarget::default(),
+            GizmoProxy { target },
+        ));
+        commands.entity(target).try_insert(HasGizmoProxy);
     }
 }
 
 /// Despawns proxies whose target was deselected or despawned.
-pub fn despawn_gizmo_proxies(
+fn despawn_gizmo_proxies(
     q_proxies: Query<(Entity, &GizmoProxy)>,
     q_selected: Query<(), With<GizmoSelected>>,
     mut commands: Commands,
@@ -211,7 +206,7 @@ pub fn despawn_gizmo_proxies(
 ///
 /// Runs after `TransformSystems::Propagate` (big_space's propagation is in that
 /// set), so the `GlobalTransform` read here is this frame's.
-pub fn sync_gizmo_proxies(
+fn sync_gizmo_proxies(
     mut q_proxies: Query<(&mut Transform, &GizmoProxy, &GizmoTarget)>,
     q_targets: Query<&GlobalTransform, Without<GizmoProxy>>,
     q_drag: Query<&GizmoDragState, Without<GizmoProxy>>,
@@ -329,7 +324,7 @@ fn local_transform_pose(tf: &Transform) -> Option<(DVec3, bevy::math::DQuat)> {
 /// Live poses also drive Avian through `KinematicDrive`; the BigSpace physics
 /// bridge remains the sole live Position/Rotation adapter. Preview poses stay
 /// outside that path and update only their projected local `Transform`.
-pub fn apply_gizmo_proxy_drag(
+fn apply_gizmo_proxy_drag(
     q_proxies: Query<(&Transform, &GizmoProxy, &GizmoTarget)>,
     mut world: ParamSet<(
         Query<(Option<&big_space::prelude::CellCoord>, &Transform), Without<GizmoProxy>>,
@@ -457,7 +452,7 @@ pub fn apply_gizmo_proxy_drag(
 /// proxy pose, so `apply_gizmo_proxy_drag` cannot see that write. Snapshotting
 /// the proxy here keeps the transaction's current pose authoritative without
 /// touching the real entity or adding a competing transform writer.
-pub fn capture_final_gizmo_pose(
+fn capture_final_gizmo_pose(
     q_proxies: Query<(&Transform, &GizmoProxy, &GizmoTarget)>,
     mut q_drag: Query<&mut GizmoDragState, Without<GizmoProxy>>,
     active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
@@ -512,7 +507,7 @@ pub fn capture_final_gizmo_pose(
 /// [`lunco_core::GizmoDragging`] marker, so render/sim crates (e.g. the avatar
 /// camera-follow systems) can react to a drag **without** depending on
 /// `transform-gizmo-bevy`. This is the only place the marker is written.
-pub fn sync_gizmo_dragging_marker(
+fn sync_gizmo_dragging_marker(
     mut commands: Commands,
     q: Query<(&GizmoProxy, &GizmoTarget)>,
     mut drag_mode: ResMut<lunco_core::DragModeActive>,
@@ -569,7 +564,7 @@ fn preview_drag_owner(
 }
 
 /// Makes the selected entity kinematic and freezes the coordinate system when gizmo drag starts.
-pub fn capture_gizmo_start(
+fn capture_gizmo_start(
     gizmo_targets: Query<(&GizmoProxy, &GizmoTarget)>,
     viewport: Option<Res<UsdViewportState>>,
     q_paths: Query<&UsdPrimPath>,
@@ -696,7 +691,7 @@ pub fn capture_gizmo_start(
 /// [`lunco_scene_commands::commands::TransformEntity`] command; USD preview
 /// transactions emit one existing [`lunco_usd_core::commands::ApplyUsdOps`]
 /// change set. Each owner keeps its authoritative persistence boundary.
-pub fn restore_gizmo_dynamic(
+fn restore_gizmo_dynamic(
     gizmo_targets: Query<(&GizmoProxy, &GizmoTarget)>,
     mouse: Option<Res<ButtonInput<MouseButton>>>,
     keys: Option<Res<ButtonInput<KeyCode>>>,
@@ -995,7 +990,7 @@ pub fn restore_gizmo_dynamic(
 /// The raw egui focus flag is global because it protects the live scene; the
 /// focused USD preview is admitted separately only when the scene-pick gate
 /// assigns the pointer to its offscreen surface.
-pub fn drive_gizmo_drag(
+fn drive_gizmo_drag(
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     egui_focus: Res<lunco_control_core::EguiFocus>,
@@ -1061,7 +1056,7 @@ pub fn drive_gizmo_drag(
 /// screen rectangle through `GizmoOptions::viewport_rect`; otherwise
 /// `SceneViewport::active_camera` owns the standard full-window presentation.
 /// This is the same frontend and the same proxy target set in both editors.
-pub(crate) fn sync_gizmo_camera(
+fn sync_gizmo_camera(
     viewport: Res<SceneViewport>,
     windows: Query<&Window, With<PrimaryWindow>>,
     q_cameras: Query<(Entity, &Camera, &RenderTarget), With<Camera3d>>,
@@ -1188,6 +1183,60 @@ fn rect_to_logical(rect: PanelRect, scale_factor: f32) -> Rect {
             rect.origin.y.saturating_add(rect.size.y) as f32 / scale,
         ),
     )
+}
+
+/// Installs the transform-gizmo frontend and its editor transaction lifecycle.
+///
+/// The plugin owns only the render-space proxy and the conversion to the
+/// existing scene/USD command boundaries. Selection, panels, and scene tools
+/// remain in their respective editor packages.
+pub struct SceneEditGizmoPlugin;
+
+impl Plugin for SceneEditGizmoPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_plugins(transform_gizmo_bevy::TransformGizmoPlugin)
+            .init_resource::<GizmoDragSession>()
+            .init_resource::<GizmoVisibilityState>();
+
+        app.add_systems(Startup, configure_gizmo_modes);
+        app.add_systems(
+            Last,
+            (
+                capture_gizmo_start,
+                capture_final_gizmo_pose.after(capture_gizmo_start),
+                restore_gizmo_dynamic.after(capture_final_gizmo_pose),
+            ),
+        );
+        app.add_systems(
+            lunco_time::InteractionSchedule,
+            (
+                apply_gizmo_proxy_drag.after(lunco_time::InteractionRestoreSet),
+                lunco_physics::apply_kinematic_drives
+                    .after(apply_gizmo_proxy_drag)
+                    .before(lunco_time::InteractionRecordSet),
+            ),
+        );
+        app.add_systems(
+            PostUpdate,
+            sync_gizmo_camera
+                .after(lunco_core::SceneViewportSet::Reconcile)
+                .before(bevy::camera::CameraUpdateSystems),
+        );
+        app.add_systems(
+            PostUpdate,
+            (spawn_gizmo_proxies, despawn_gizmo_proxies)
+                .chain()
+                .after(bevy::transform::TransformSystems::Propagate),
+        );
+        app.add_systems(
+            PostUpdate,
+            sync_gizmo_proxies
+                .after(bevy::transform::TransformSystems::Propagate)
+                .after(despawn_gizmo_proxies),
+        );
+        app.add_systems(Update, drive_gizmo_drag);
+        app.add_systems(Update, sync_gizmo_dragging_marker);
+    }
 }
 
 #[cfg(test)]
@@ -1394,9 +1443,11 @@ mod tests {
             ..Transform::IDENTITY
         };
 
-        assert!(preview_global_to_local_transform(&proxy, None)
-            .and_then(|local| local_transform_pose(&local))
-            .is_none());
+        assert!(
+            preview_global_to_local_transform(&proxy, None)
+                .and_then(|local| local_transform_pose(&local))
+                .is_none()
+        );
     }
 
     #[test]
@@ -1462,18 +1513,20 @@ mod tests {
             Some(&RigidBody::Dynamic)
         );
         assert!(app.world().get::<GizmoDragState>(vessel).is_none());
-        assert!(app
-            .world()
-            .get::<lunco_physics::KinematicDrive>(vessel)
-            .is_none());
+        assert!(
+            app.world()
+                .get::<lunco_physics::KinematicDrive>(vessel)
+                .is_none()
+        );
         assert_eq!(
             app.world().get::<LinearVelocity>(vessel).unwrap().0,
             DVec3::ZERO
         );
-        assert!(app
-            .world()
-            .get::<CustomPositionIntegration>(vessel)
-            .is_none());
+        assert!(
+            app.world()
+                .get::<CustomPositionIntegration>(vessel)
+                .is_none()
+        );
     }
 
     /// Dragging a prop that was never a rigid body must not MAKE it one.
@@ -1550,10 +1603,11 @@ mod tests {
              log 'has no mass or inertia' forever"
         );
         assert!(app.world().get::<GizmoDragState>(prop).is_none());
-        assert!(app
-            .world()
-            .get::<lunco_physics::KinematicDrive>(prop)
-            .is_none());
+        assert!(
+            app.world()
+                .get::<lunco_physics::KinematicDrive>(prop)
+                .is_none()
+        );
         assert!(app.world().get::<CustomPositionIntegration>(prop).is_none());
     }
 }
